@@ -21,8 +21,8 @@ pub struct Config {
     pub interval: Option<u64>,
     /// Measure providers less often while nobody uses them (default on).
     pub eco: Option<bool>,
-    /// Whom this machine measures for on a shared board (default: the e-mail an
-    /// installed client is signed in with). Not needed when connected with a code.
+    /// Whom this machine measures for when it delivers with a board token (default:
+    /// whoever created the token). Not needed when connected with a code.
     pub owner: Option<String>,
     pub hub: Option<Hub>,
     pub machine: MachineSettings,

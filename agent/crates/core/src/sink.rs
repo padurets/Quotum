@@ -9,10 +9,24 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Hub;
-use crate::model::{Batch, ErrorKind, Failure, INGEST_VERSION, Machine, Outcome, Owner, Snapshot, now_ms};
+use crate::model::{
+    Batch, ErrorKind, Failure, INGEST_VERSION, Machine, Millis, Outcome, Owner, Provider, Snapshot, now_ms, parse_time,
+};
 
 pub trait Sink {
     fn deliver(&mut self, outcome: &Outcome);
+
+    /// Asks whether this device should measure a subscription now. `Some(until)` means
+    /// another device is on duty: wait until then. Without a hub, always measure.
+    fn checkin(
+        &mut self,
+        _provider: Provider,
+        _account: Option<&str>,
+        _account_name: Option<&str>,
+        _active: bool,
+    ) -> Option<Millis> {
+        None
+    }
 }
 
 /// Discards everything; for running without a hub (the caller logs).
@@ -42,12 +56,12 @@ enum Delivery {
 }
 
 pub struct HubSink {
-    endpoint: String,
+    base: String,
+    /// Cleared when the hub has no check-in endpoint (an older hub): then always measure.
+    checkins: bool,
     token: String,
     machine: Machine,
     owner: Owner,
-    /// A device token already names its owner; a shared board token needs a hint.
-    owner_hints: bool,
     http: ureq::Agent,
     spool_file: PathBuf,
     spool: VecDeque<Item>,
@@ -57,11 +71,11 @@ pub struct HubSink {
 }
 
 impl HubSink {
-    /// `owner`: the configured owner name, if any.
+    /// `owner`: whom the machine measures for, if configured.
     pub fn new(
         hub: &Hub,
         machine: Machine,
-        owner: Option<String>,
+        owner: Owner,
         spool_file: PathBuf,
         log: Box<dyn FnMut(&str) + Send>,
     ) -> HubSink {
@@ -75,11 +89,11 @@ impl HubSink {
             .build()
             .into();
         HubSink {
-            endpoint: format!("{}/v1/ingest", hub.url.trim_end_matches('/')),
+            base: hub.url.trim_end_matches('/').to_string(),
+            checkins: true,
             token: hub.token.clone(),
             machine,
-            owner_hints: !hub.token.starts_with("al_d_"),
-            owner: Owner { name: owner, email: None },
+            owner,
             http,
             spool_file,
             spool,
@@ -93,7 +107,7 @@ impl HubSink {
             version: INGEST_VERSION,
             agent: concat!("agent-limits/", env!("CARGO_PKG_VERSION")).into(),
             machine: self.machine.clone(),
-            owner: if self.owner_hints { self.owner.clone() } else { Owner::default() },
+            owner: self.owner.clone(),
             sent_at: now_ms(),
             snapshots: Vec::new(),
             failures: Vec::new(),
@@ -104,8 +118,11 @@ impl HubSink {
                 Item::Failure(f) => batch.failures.push(f.clone()),
             }
         }
-        let response =
-            self.http.post(&self.endpoint).header("Authorization", &format!("Bearer {}", self.token)).send_json(&batch);
+        let response = self
+            .http
+            .post(&format!("{}/v1/ingest", self.base))
+            .header("Authorization", &format!("Bearer {}", self.token))
+            .send_json(&batch);
         match response {
             Ok(r) if r.status().is_success() => Delivery::Accepted,
             Ok(r) => match r.status().as_u16() {
@@ -142,11 +159,6 @@ impl HubSink {
 
 impl Sink for HubSink {
     fn deliver(&mut self, outcome: &Outcome) {
-        if let Ok(Snapshot { email: Some(email), .. }) = outcome {
-            if self.owner.name.is_none() {
-                self.owner.email = Some(email.clone());
-            }
-        }
         match outcome {
             Ok(snapshot) => self.spool.push_back(Item::Snapshot(snapshot.clone())),
             // What is not installed here is none of the hub's business.
@@ -179,5 +191,40 @@ impl Sink for HubSink {
             self.save_spool();
         }
         self.report(problem);
+    }
+
+    fn checkin(
+        &mut self,
+        provider: Provider,
+        account: Option<&str>,
+        account_name: Option<&str>,
+        active: bool,
+    ) -> Option<Millis> {
+        if !self.checkins {
+            return None;
+        }
+        let request = serde_json::json!({
+            "version": INGEST_VERSION,
+            "agent": concat!("agent-limits/", env!("CARGO_PKG_VERSION")),
+            "machine": self.machine,
+            "owner": self.owner,
+            "subscriptions": [{"provider": provider, "account": account, "accountName": account_name, "active": active}],
+        });
+        let url = format!("{}/v1/checkin", self.base);
+        let mut response =
+            self.http.post(&url).header("Authorization", &format!("Bearer {}", self.token)).send_json(&request).ok()?;
+        if response.status().as_u16() == 404 {
+            self.checkins = false;
+            return None;
+        }
+        if !response.status().is_success() {
+            return None;
+        }
+        let body: serde_json::Value = response.body_mut().read_json().ok()?;
+        let directive = &body["subscriptions"][0];
+        if directive["measure"] != false {
+            return None;
+        }
+        directive["until"].as_str().and_then(parse_time)
     }
 }

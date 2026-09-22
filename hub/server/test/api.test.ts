@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {buildApp} from '../api.js';
 import {config} from '../config.js';
+import {Duty} from '../duty.js';
 import {Ingest} from '../ingest.js';
 import {Pairing} from '../pairing.js';
 import {ResetFeed} from '../sources/resets.js';
@@ -17,7 +18,7 @@ const iso = (ms: number) => new Date(ms).toISOString();
 async function hub() {
   const store = new Store(path.join(mkdtempSync(path.join(tmpdir(), 'agent-limits-api-')), 'db.sqlite'));
   const directory = new Directory(store.db);
-  const ingest = new Ingest(store, directory, [], true);
+  const ingest = new Ingest(store, directory, [], true, new Duty());
   const app = await buildApp({store, directory, pacer: ingest, resets: new ResetFeed(() => {}), ingest, pairing: new Pairing(directory)});
   const cookies = new Map<string, string>();
   const call = async (method: 'GET' | 'POST' | 'DELETE', url: string, options: {as?: string; body?: object; headers?: Record<string, string>} = {}) => {

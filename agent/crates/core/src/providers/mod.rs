@@ -38,6 +38,18 @@ pub trait Adapter: Send {
     fn measure(&mut self, ctx: &Context) -> Outcome;
     /// Files and directories that change when someone uses the agent on this machine.
     fn activity_paths(&self, home: &Path) -> Vec<PathBuf>;
+    /// Whether the client names the account it is signed in to (else the subscription is the owner's).
+    fn identifies_account(&self) -> bool {
+        true
+    }
+    /// The account pseudonym, when it can be read locally without starting the client.
+    fn local_account(&self, _home: &Path) -> Option<String> {
+        None
+    }
+    /// Files that change when the client signs in to another account (metadata only is read).
+    fn identity_paths(&self, _home: &Path) -> Vec<PathBuf> {
+        Vec::new()
+    }
 }
 
 pub fn adapter(provider: Provider) -> Box<dyn Adapter> {

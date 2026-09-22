@@ -7,6 +7,7 @@ import {Collector} from './collector.js';
 import {ResetFeed} from './sources/resets.js';
 import {buildApp} from './api.js';
 import {Ingest} from './ingest.js';
+import {Duty} from './duty.js';
 import {Pairing} from './pairing.js';
 import {Directory} from './store/directory.js';
 
@@ -19,7 +20,7 @@ chmodSync(databaseFile, 0o600);
 const directory = new Directory(store.db);
 
 const collector = collecting ? new Collector(store, new VendorClient()) : null;
-const ingest = new Ingest(store, directory, config.ingest.tokens, !collector);
+const ingest = new Ingest(store, directory, config.ingest.tokens, !collector, new Duty());
 const resets = new ResetFeed();
 const app = await buildApp({store, directory, pacer: collector ?? ingest, resets, ingest, pairing: new Pairing(directory)});
 await app.listen({host: config.http.host, port: config.http.port});

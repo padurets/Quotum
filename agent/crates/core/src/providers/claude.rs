@@ -3,6 +3,7 @@
 //! caches the answer for a minute; no model request is made.
 
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
@@ -72,6 +73,14 @@ impl Adapter for Claude {
     fn activity_paths(&self, home: &Path) -> Vec<PathBuf> {
         vec![home.join(".claude/history.jsonl"), global_config(home)]
     }
+
+    /// The signed-in account from Claude Code's own config (no tokens there): the same
+    /// e-mail and organization `initialize` reports, so the same pseudonym.
+    fn local_account(&self, home: &Path) -> Option<String> {
+        let account = signed_in(home)?;
+        let email = account["emailAddress"].as_str()?;
+        Some(pseudonym(P, &format!("{email}/{}", account["organizationName"].as_str().unwrap_or(""))))
+    }
 }
 
 fn request(client: &mut Client, id: &str, request: Value) -> Result<Value, Failure> {
@@ -82,6 +91,12 @@ fn request(client: &mut Client, id: &str, request: Value) -> Result<Value, Failu
         .wait_for(|m| m["type"] == "control_response" && m["response"]["request_id"] == id)
         .map_err(|e| process_failure(P, e))?;
     Ok(message["response"].clone())
+}
+
+/// The signed-in account as Claude Code's global config records it.
+fn signed_in(home: &Path) -> Option<Value> {
+    let config: Value = serde_json::from_slice(&fs::read(global_config(home)).ok()?).ok()?;
+    Some(config["oauthAccount"].clone()).filter(Value::is_object)
 }
 
 /// Claude Code's global config file (it honours `CLAUDE_CONFIG_DIR`).
@@ -172,7 +187,6 @@ pub fn from_responses(init: &Value, usage: &Value, observed_at: Millis) -> Outco
     Ok(Snapshot {
         provider: P,
         account_name: None,
-        email: account["email"].as_str().map(str::to_lowercase),
         account: stable_id.map(|id| pseudonym(P, &id)),
         plan: body["subscription_type"].as_str().map(str::to_string),
         observed_at,
@@ -230,6 +244,19 @@ mod tests {
         let s = from_responses(&init(), &usage(limits), 1).unwrap();
         let ids: Vec<_> = s.windows.iter().map(|w| (w.id.as_str(), w.used_percent)).collect();
         assert_eq!(ids, [("session", 5.0), ("weekly:fable", 7.0)]);
+    }
+
+    #[test]
+    fn the_local_account_is_the_one_a_measurement_reports() {
+        let home = std::env::temp_dir().join(format!("agent-limits-claude-{}", std::process::id()));
+        fs::create_dir_all(&home).unwrap();
+        let config = json!({"oauthAccount": {"emailAddress": "dev@example.com", "organizationName": "Example", "accountUuid": "u"}});
+        fs::write(home.join(".claude.json"), config.to_string()).unwrap();
+        let local = Claude::default().local_account(&home);
+        let measured = from_responses(&init(), &usage(json!({"five_hour": {"utilization": 1}})), 1).unwrap().account;
+        fs::remove_dir_all(&home).unwrap();
+        assert!(local.is_some());
+        assert_eq!(local, measured);
     }
 
     #[test]

@@ -33,8 +33,8 @@ export type AgentBatch = {
   version: 1;
   agent: string;
   machine: {id: string; name: string; os: string; arch: string};
-  /** Whom the agent measures for: a configured name, or an e-mail an installed client reports. */
-  owner: {name: string | null; email: string | null};
+  /** Whom the agent measures for, if the person running it configured that. */
+  owner: {name: string | null};
   sentAt: number;
   snapshots: AgentSnapshot[];
   failures: AgentFailure[];
@@ -125,19 +125,17 @@ function parseFailure(value: unknown): AgentFailure {
   };
 }
 
-export function parseBatch(body: unknown): AgentBatch {
+/** Who is sending: the part every agent request shares. */
+export type AgentSender = Pick<AgentBatch, 'agent' | 'machine' | 'owner'>;
+
+function parseSender(body: unknown): AgentSender {
   if (!isObject(body)) throw new Invalid('body');
   if (body.version !== 1) throw new Invalid('version');
   const machine = body.machine;
   if (!isObject(machine)) throw new Invalid('machine');
-  const snapshots = list(body.snapshots, 'snapshots', LIMITS.items).map(parseSnapshot);
   const owner = body.owner ?? {};
   if (!isObject(owner)) throw new Invalid('owner');
-  const email = text(owner.email, 'owner email', true);
-  if (email !== null && !/^[^\s@]+@[^\s@]+$/.test(email)) throw new Invalid('owner email');
-  const failures = list(body.failures, 'failures', LIMITS.items).map(parseFailure);
   return {
-    version: 1,
     agent: text(body.agent, 'agent')!,
     machine: {
       id: text(machine.id, 'machine id')!,
@@ -145,11 +143,39 @@ export function parseBatch(body: unknown): AgentBatch {
       os: text(machine.os, 'machine os')!,
       arch: text(machine.arch, 'machine arch')!,
     },
-    owner: {name: text(owner.name, 'owner name', true), email: email?.toLowerCase() ?? null},
-    sentAt: time(body.sentAt, 'sentAt')!,
-    snapshots,
-    failures,
+    owner: {name: text(owner.name, 'owner name', true)},
   };
+}
+
+export function parseBatch(body: unknown): AgentBatch {
+  const sender = parseSender(body);
+  const input = body as Obj;
+  return {
+    version: 1,
+    ...sender,
+    sentAt: time(input.sentAt, 'sentAt')!,
+    snapshots: list(input.snapshots, 'snapshots', LIMITS.items).map(parseSnapshot),
+    failures: list(input.failures, 'failures', LIMITS.items).map(parseFailure),
+  };
+}
+
+/** A check-in: which subscriptions a device could measure now, and whether it is in use. */
+export type Checkin = AgentSender & {
+  subscriptions: {provider: Provider; account: string | null; accountName: string | null; active: boolean}[];
+};
+
+export function parseCheckin(body: unknown): Checkin {
+  const sender = parseSender(body);
+  const subscriptions = list((body as Obj).subscriptions, 'subscriptions', 16).map(value => {
+    if (!isObject(value) || typeof (value.active ?? false) !== 'boolean') throw new Invalid('subscription');
+    return {
+      provider: provider(value.provider),
+      account: text(value.account, 'account', true),
+      accountName: text(value.accountName, 'accountName', true),
+      active: value.active === true,
+    };
+  });
+  return {...sender, subscriptions};
 }
 
 const KIND_LABELS = {session: '5 часов', weekly: 'Неделя'} as const;

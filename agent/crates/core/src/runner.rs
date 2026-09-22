@@ -69,14 +69,18 @@ impl Runner {
         }
     }
 
-    /// Measures on the schedule until `stop` is set. `each` sees every outcome and when
-    /// that provider is measured next.
-    pub fn run(&mut self, sink: &mut dyn Sink, stop: &AtomicBool, mut each: impl FnMut(&Outcome, Millis)) {
+    /// Measures on the schedule until `stop` is set. Before each measurement the device
+    /// checks in with the hub (when there is one): if another device measures the same
+    /// subscription, this one only waits.
+    pub fn run(&mut self, sink: &mut dyn Sink, stop: &AtomicBool, mut each: impl FnMut(Event)) {
         let entries: Vec<(Provider, u64)> =
             self.adapters.iter().map(|a| (a.provider(), self.config.interval_ms(a.provider()))).collect();
         let mut schedule = Schedule::new(&entries, now_ms(), self.config.eco());
         let activity_paths: Vec<Vec<PathBuf>> = self.adapters.iter().map(|a| a.activity_paths(&self.home)).collect();
+        let identity_paths: Vec<Vec<PathBuf>> = self.adapters.iter().map(|a| a.identity_paths(&self.home)).collect();
         let mut seen: Vec<Option<SystemTime>> = vec![None; self.adapters.len()];
+        // The account each provider last reported, and the state of its sign-in files then.
+        let mut accounts: Vec<Option<(Option<String>, Option<SystemTime>)>> = vec![None; self.adapters.len()];
 
         while !stop.load(Ordering::Relaxed) {
             let Some((index, due)) = schedule.next() else { return };
@@ -85,11 +89,38 @@ impl Runner {
                 thread::sleep(Duration::from_millis(wait as u64).min(TICK));
                 continue;
             }
+            let adapter = &self.adapters[index];
+            let provider = adapter.provider();
             let before = seen[index];
             let active = before.is_some() && last_activity(&activity_paths[index]) > before;
+            seen[index] = last_activity(&activity_paths[index]).or(Some(SystemTime::UNIX_EPOCH));
+
+            // Which subscription this is, if known without starting the client.
+            let signed_in = last_activity(&identity_paths[index]);
+            let account = if !adapter.identifies_account() {
+                Some(None)
+            } else if let Some(local) = adapter.local_account(&self.home) {
+                Some(Some(local))
+            } else {
+                accounts[index].clone().filter(|(_, at)| *at == signed_in).map(|(account, _)| account)
+            };
+            if let Some(account) = account {
+                let name = self.config.account_name(provider);
+                if let Some(until) =
+                    sink.checkin(provider, account.as_deref(), name.filter(|_| account.is_none()), active)
+                {
+                    let next = schedule.postpone(index, now_ms(), until);
+                    each(Event::Waiting(provider, next));
+                    continue;
+                }
+            }
+
             let mut outcome = self.measure(index);
             // Taken after the measurement, so the client's own writes do not count as use.
             seen[index] = last_activity(&activity_paths[index]).or(Some(SystemTime::UNIX_EPOCH));
+            if let Ok(snapshot) = &outcome {
+                accounts[index] = Some((snapshot.account.clone(), signed_in));
+            }
 
             let now = now_ms();
             let next = schedule.complete(index, now, &outcome, active, jitter());
@@ -97,7 +128,15 @@ impl Runner {
                 snapshot.stale_after_ms = schedule.stale_after_ms(index, now);
             }
             sink.deliver(&outcome);
-            each(&outcome, next);
+            each(Event::Measured(&outcome, next));
         }
     }
+}
+
+/// What happened to one scheduled slot.
+pub enum Event<'a> {
+    /// Measured (or failed); the next run is due at the given time.
+    Measured(&'a Outcome, Millis),
+    /// Another device measures this subscription; ask again at the given time.
+    Waiting(Provider, Millis),
 }

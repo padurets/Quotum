@@ -30,6 +30,19 @@ export function agentRoutes(app: FastifyInstance, hub: Hub) {
     };
   });
 
+  app.post('/v1/checkin', (request, reply) => {
+    const credential = ingest.authenticate(request.headers.authorization);
+    if (!credential) return reply.code(401).send({error: 'unauthorized'});
+    try {
+      return ingest.checkin(credential, request.body);
+    } catch (error) {
+      if (error instanceof IngestError) return reply.code(403).send({error: error.code});
+      const message = error instanceof Error ? error.message : '';
+      if (message.startsWith('invalid_batch')) return reply.code(400).send({error: 'invalid_request', detail: message.slice('invalid_batch: '.length)});
+      throw error;
+    }
+  });
+
   app.post('/v1/ingest', {bodyLimit: config.ingest.bodyLimit}, (request, reply) => {
     const credential = ingest.authenticate(request.headers.authorization);
     if (!credential) return reply.code(401).send({error: 'unauthorized'});

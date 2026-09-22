@@ -113,9 +113,11 @@ duplicate.
     its own token and belongs to that person;
   - *board token*: created by a member, written once into an image, VM or container
     setup; every machine that starts with it joins the board by itself.
-- **Owner** of a device with a board token: the configured name (`--owner`), else the
-  e-mail a client (Claude Code, Codex) is signed in with — matched to a member when it
-  is one — else the creator of the token.
+- **Owner** of a device: the person who confirmed its code; with a board token the
+  name it declares (`--owner`; a member's e-mail makes it that member's), else the
+  creator of the token. What clients report (their sign-in e-mails) is never used:
+  it is neither stable nor unique — one person's Claude and Codex may use different
+  accounts, and a shared subscription is used by several people.
 - **Subscriptions** are what is measured: a provider account the client identifies is
   one subscription however many devices measure it; a subscription the client does
   not identify (Antigravity) is the owner's own, optionally named in the agent's

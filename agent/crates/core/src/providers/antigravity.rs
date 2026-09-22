@@ -75,6 +75,10 @@ impl Adapter for Antigravity {
         let root = home.join(".gemini/antigravity-cli");
         vec![root.join("history.jsonl"), root.join("conversations")]
     }
+
+    fn identifies_account(&self) -> bool {
+        false
+    }
 }
 
 /// Builds a snapshot from the JSON printed by `agy -p /usage --output-format json`.
@@ -135,7 +139,6 @@ pub fn from_output(output: &str, observed_at: Millis) -> Outcome {
         provider: P,
         account: None,
         account_name: None,
-        email: None,
         plan: None,
         observed_at,
         via: VIA.into(),

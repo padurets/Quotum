@@ -126,6 +126,15 @@ impl Schedule {
         slot.due
     }
 
+    /// Another device measures this provider's subscription: ask again at `until`
+    /// (kept between 30 s and the eco cap from now), without measuring.
+    pub fn postpone(&mut self, index: usize, now: Millis, until: Millis) -> Millis {
+        let slot = &mut self.slots[index];
+        slot.phased = true;
+        slot.due = until.clamp(now + 30_000, now + ECO_CAP_MS as i64);
+        slot.due
+    }
+
     /// How long a measurement taken now stays representative: until the next one is due,
     /// with room for a slow client.
     pub fn stale_after_ms(&self, index: usize, now: Millis) -> u64 {
@@ -146,7 +155,6 @@ mod tests {
             provider: Provider::Codex,
             account: None,
             account_name: None,
-            email: None,
             plan: None,
             observed_at: 0,
             via: String::new(),
@@ -217,6 +225,14 @@ mod tests {
         assert_eq!(s.complete(0, 30 * MIN, &fail(ErrorKind::Timeout), false, 0.0) - 30 * MIN, 4 * MIN);
         assert_eq!(s.complete(0, 34 * MIN, &fail(ErrorKind::Timeout), false, 0.0) - 34 * MIN, 8 * MIN);
         assert_eq!(s.complete(0, 42 * MIN, &measured(1.0, None), false, 0.0) - 42 * MIN, 2 * MIN);
+    }
+
+    #[test]
+    fn waiting_for_another_device_is_bounded() {
+        let mut s = Schedule::new(&all(), 0, true);
+        assert_eq!(s.postpone(0, 0, 5 * MIN), 5 * MIN);
+        assert_eq!(s.postpone(0, 0, 1_000), 30_000, "never a busy loop");
+        assert_eq!(s.postpone(0, 0, 60 * MIN), 15 * MIN, "never longer than the eco cap");
     }
 
     #[test]

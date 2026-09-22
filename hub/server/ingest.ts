@@ -2,7 +2,9 @@ import {createHash, timingSafeEqual} from 'node:crypto';
 import {config} from './config.js';
 import type {CollectorStatus} from './collector.js';
 import {secretKind} from './domain/auth.js';
-import {parseBatch, subscriptionKey, toMeasurement, type AgentBatch} from './domain/ingest.js';
+import {parseBatch, parseCheckin, subscriptionKey, toMeasurement, type AgentSender} from './domain/ingest.js';
+import type {Duty} from './duty.js';
+import type {Provider} from './domain/sources.js';
 import {staleAfter} from './domain/quota.js';
 import {DEFAULT_BOARD} from './domain/sources.js';
 import type {Device, Directory, Token} from './store/directory.js';
@@ -10,8 +12,13 @@ import type {Store} from './store/store.js';
 
 export type IngestResult = {accepted: number; duplicates: number; failures: number; device: {id: string; owner: string}};
 
+export type CheckinResult = {subscriptions: {provider: Provider; measure: boolean; until: string}[]};
+
 /** Who is delivering: a device with its own token, a board token, or a static token of the default board. */
 export type Credential = {kind: 'device'; device: Device} | {kind: 'board'; token: Token} | {kind: 'static'};
+
+/** Subscriptions a client does not identify are keyed by their owner. */
+const ownerKeyOf = (device: Device) => (device.ownerUserId ? `user:${device.ownerUserId}` : `owner:${device.owner.toLowerCase()}`);
 
 export class IngestError extends Error {
   constructor(readonly code: 'device_revoked') {
@@ -38,6 +45,7 @@ export class Ingest {
     private readonly directory: Directory,
     staticTokens: readonly string[],
     private readonly useDefaults: boolean,
+    private readonly duty: Duty,
   ) {
     this.statics = staticTokens.map(digest);
   }
@@ -60,7 +68,7 @@ export class Ingest {
   accept(credential: Credential, body: unknown, now = Date.now()): IngestResult {
     const batch = parseBatch(body);
     const device = this.device(credential, batch, now);
-    const ownerKey = device.ownerUserId ? `user:${device.ownerUserId}` : `owner:${device.owner.toLowerCase()}`;
+    const ownerKey = ownerKeyOf(device);
     const result: IngestResult = {accepted: 0, duplicates: 0, failures: 0, device: {id: device.id, owner: device.owner}};
 
     for (const snapshot of [...batch.snapshots].sort((a, b) => a.observedAt - b.observedAt)) {
@@ -76,6 +84,7 @@ export class Ingest {
       }
       const confidence = snapshot.account ? 'provider' : 'agent-machine';
       if (this.store.record(source, toMeasurement(snapshot), snapshot.observedAt, {scope: account, confidence})) result.accepted++;
+      this.duty.delivered(device.boardId, account, device.id, snapshot.observedAt, snapshot.staleAfterMs, now);
     }
 
     for (const failure of batch.failures) {
@@ -93,12 +102,25 @@ export class Ingest {
     return result;
   }
 
+  /** Tells a device which of its subscriptions to measure now and when to ask again for the rest. */
+  checkin(credential: Credential, body: unknown, now = Date.now()): CheckinResult {
+    const request = parseCheckin(body);
+    const device = this.device(credential, request, now);
+    const ownerKey = ownerKeyOf(device);
+    return {
+      subscriptions: request.subscriptions.map(s => {
+        const directive = this.duty.claim(device.boardId, subscriptionKey(s, ownerKey), device.id, s.active, now);
+        return {provider: s.provider, measure: directive.measure, until: new Date(directive.until).toISOString()};
+      }),
+    };
+  }
+
   /**
    * The device a batch comes from. A device token names it; with a board token the
-   * machine joins the board on first contact, and its owner is the configured name, or
-   * the e-mail a client reports (matched to a member), or whoever created the token.
+   * machine joins the board on first contact and belongs to the owner it declares (a
+   * member when the name is a member's e-mail), else to whoever created the token.
    */
-  private device(credential: Credential, batch: AgentBatch, now: number): Device {
+  private device(credential: Credential, batch: AgentSender, now: number): Device {
     if (credential.kind === 'device') {
       this.directory.touchDevice(credential.device.id, batch.machine, batch.agent, now);
       return credential.device;
@@ -109,7 +131,7 @@ export class Ingest {
     if (credential.kind === 'board') this.directory.touchToken(credential.token.id, now);
 
     const members = this.directory.members(board);
-    const claimed = batch.owner.name ?? batch.owner.email;
+    const claimed = batch.owner.name;
     const member = claimed ? members.find(m => m.email === claimed.toLowerCase()) : undefined;
     const fallback = credential.kind === 'board' ? this.directory.user(credential.token.createdBy) : (members[0] ?? null);
     const owner = member

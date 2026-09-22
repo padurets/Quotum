@@ -1,5 +1,6 @@
 //! `agent-limits`: the subscription limits of the coding agents on this machine.
 
+use std::collections::BTreeMap;
 use std::io::{IsTerminal, Write};
 use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
@@ -11,7 +12,7 @@ use agent_limits_core::model::{
 };
 use agent_limits_core::process::find_program;
 use agent_limits_core::providers::adapter;
-use agent_limits_core::runner::Runner;
+use agent_limits_core::runner::{Event, Runner};
 use agent_limits_core::sink::{Discard, HubSink, Sink};
 use clap::{Parser, Subcommand};
 
@@ -141,7 +142,8 @@ fn run(config: Config, paths: Paths, only: &[Provider]) -> ExitCode {
         Some(hub) => {
             log(&format!("delivering to {}", hub.url));
             let machine = machine(&paths, &config);
-            Box::new(HubSink::new(&hub, machine, config.owner.clone(), paths.state.join("spool.jsonl"), Box::new(log)))
+            let owner = Owner { name: config.owner.clone() };
+            Box::new(HubSink::new(&hub, machine, owner, paths.state.join("spool.jsonl"), Box::new(log)))
         }
         None => {
             log("no hub configured: measuring and logging only");
@@ -153,23 +155,37 @@ fn run(config: Config, paths: Paths, only: &[Provider]) -> ExitCode {
         return fail("every provider is disabled");
     }
     let stop = AtomicBool::new(false);
-    runner.run(sink.as_mut(), &stop, |outcome, next| {
-        let summary = match outcome {
-            Ok(s) => s
-                .windows
-                .iter()
-                .map(|w| format!("{} {}%", window_name(w), fmt_percent(w.remaining())))
-                .collect::<Vec<_>>()
-                .join(", "),
-            Err(f) => {
-                format!("{}{}", f.error.describe(), f.detail.as_ref().map(|d| format!(": {d}")).unwrap_or_default())
+    // Waiting is logged once per change, not on every check-in.
+    let mut waiting: BTreeMap<Provider, bool> = BTreeMap::new();
+    runner.run(sink.as_mut(), &stop, |event| match event {
+        Event::Measured(outcome, next) => {
+            let summary = match outcome {
+                Ok(s) => s
+                    .windows
+                    .iter()
+                    .map(|w| format!("{} {}%", window_name(w), fmt_percent(w.remaining())))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                Err(f) => {
+                    format!("{}{}", f.error.describe(), f.detail.as_ref().map(|d| format!(": {d}")).unwrap_or_default())
+                }
+            };
+            let provider = match outcome {
+                Ok(s) => s.provider,
+                Err(f) => f.provider,
+            };
+            waiting.insert(provider, false);
+            log(&format!("{}: {summary} (next {})", provider.id(), until(next - now_ms())));
+        }
+        Event::Waiting(provider, next) => {
+            if waiting.insert(provider, true) != Some(true) {
+                log(&format!(
+                    "{}: another device measures this subscription; checking again in {}",
+                    provider.id(),
+                    until(next - now_ms())
+                ));
             }
-        };
-        let provider = match outcome {
-            Ok(s) => s.provider,
-            Err(f) => f.provider,
-        };
-        log(&format!("{}: {summary} (next {})", provider.id(), until(next - now_ms())));
+        }
     });
     ExitCode::SUCCESS
 }
@@ -245,7 +261,7 @@ fn show_config(config: &Config, paths: &Paths) -> ExitCode {
     }
     println!(
         "owner         {}",
-        config.owner.as_deref().unwrap_or("not set (an e-mail from a client is used on shared boards)")
+        config.owner.as_deref().unwrap_or("not set (on a board token: whoever created the token)")
     );
     match &config.hub {
         Some(hub) => println!(

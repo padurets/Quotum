@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {Store} from '../store/store.js';
 import {Directory} from '../store/directory.js';
+import {Duty} from '../duty.js';
 import {Ingest, IngestError, type Credential} from '../ingest.js';
 import {parseBatch, windowLabel} from '../domain/ingest.js';
 import {bucketize, edge, series, type Sample} from '../domain/quota.js';
@@ -51,7 +52,7 @@ const batch = (snapshots: unknown[], failures: unknown[] = [], machine = 'machin
 function setup(useDefaults = true) {
   const store = new Store(path.join(mkdtempSync(path.join(tmpdir(), 'agent-limits-ingest-')), 'db.sqlite'), start);
   const directory = new Directory(store.db);
-  return {store, directory, ingest: new Ingest(store, directory, [TOKEN], useDefaults)};
+  return {store, directory, ingest: new Ingest(store, directory, [TOKEN], useDefaults, new Duty())};
 }
 
 test('static, board and device tokens are told apart; anything else is refused', () => {
@@ -72,10 +73,10 @@ test('a malformed batch is refused whole', () => {
   assert.throws(() => parseBatch(batch([snapshot(start, 120)])), /usedPercent/);
   assert.throws(() => parseBatch(batch([snapshot(start, 5, {provider: 'cursor'})])), /provider/);
   assert.throws(() => parseBatch(batch([snapshot(start, 5, {staleAfterMs: 0})])), /staleAfterMs/);
-  assert.throws(() => parseBatch(batch([], [], undefined, {email: 'not-an-email'})), /owner email/);
-  const parsed = parseBatch(batch([snapshot(start, 5)], [], undefined, {email: 'Alice@Example.com'}));
+  assert.throws(() => parseBatch(batch([], [], undefined, {name: 7})), /owner name/);
+  const parsed = parseBatch(batch([snapshot(start, 5)], [], undefined, {name: 'alice'}));
   assert.equal(parsed.snapshots[0].windows[0].resetsAt, start + 5 * 86_400_000);
-  assert.deepEqual(parsed.owner, {name: null, email: 'alice@example.com'});
+  assert.deepEqual(parsed.owner, {name: 'alice'});
 });
 
 test('windows get dashboard labels', () => {
@@ -118,7 +119,7 @@ test('a subscription the client does not name belongs to its owner, not to the m
   assert.deepEqual(used, [12, 50, 90], "alice's two machines share one subscription; bob and alice's named one are separate");
 });
 
-test('with a board token the owner is the configured name, a member matched by e-mail, or the token creator', () => {
+test('with a board token the owner is the declared name (a member when it is their e-mail), else the token creator', () => {
   const {directory, ingest} = setup();
   const alice = directory.createUser('alice@example.com', 'Alice', 'x', start);
   const bob = directory.createUser('bob@example.com', 'Bob', 'x', start);
@@ -129,7 +130,7 @@ test('with a board token the owner is the configured name, a member matched by e
 
   const owner = (machine: string, claimed: object) => ingest.accept(board, batch([snapshot(start, 5)], [], machine, claimed), start).device.owner;
   assert.equal(owner('machine-aaa-0123456789', {name: 'build farm'}), 'build farm');
-  assert.equal(owner('machine-bbb-0123456789', {email: 'BOB@example.com'}), 'Bob');
+  assert.equal(owner('machine-bbb-0123456789', {name: 'BOB@example.com'}), 'Bob');
   assert.equal(owner('machine-ccc-0123456789', {}), 'Alice');
   assert.equal(directory.deviceByMachine(DEFAULT_BOARD, 'machine-bbb-0123456789')?.ownerUserId, bob.id);
 });

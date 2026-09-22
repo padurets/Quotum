@@ -45,19 +45,21 @@ impl Adapter for Codex {
         send(&mut client, json!({"jsonrpc": "2.0", "method": "initialized"}))?;
         send(&mut client, json!({"jsonrpc": "2.0", "id": 2, "method": "account/rateLimits/read"}))?;
         let limits = reply(&mut client, 2)?;
-        // The signed-in e-mail, only as a hint of who owns the machine; optional.
-        send(&mut client, json!({"jsonrpc": "2.0", "id": 3, "method": "account/read", "params": {}}))?;
-        let email =
-            reply(&mut client, 3).ok().and_then(|r| r["result"]["account"]["email"].as_str().map(str::to_lowercase));
         client.finish();
-        let mut snapshot = from_responses(&init, &limits, now_ms())?;
-        snapshot.email = email;
-        Ok(snapshot)
+        from_responses(&init, &limits, now_ms())
     }
 
     fn activity_paths(&self, home: &Path) -> Vec<PathBuf> {
-        vec![env::var_os("CODEX_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".codex"))]
+        vec![codex_home(home)]
     }
+
+    fn identity_paths(&self, home: &Path) -> Vec<PathBuf> {
+        vec![codex_home(home).join("auth.json")]
+    }
+}
+
+fn codex_home(home: &Path) -> PathBuf {
+    env::var_os("CODEX_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".codex"))
 }
 
 /// Builds a snapshot from the `initialize` and `account/rateLimits/read` responses.
@@ -110,7 +112,6 @@ pub fn from_responses(init: &Value, limits: &Value, observed_at: Millis) -> Outc
     Ok(Snapshot {
         provider: P,
         account_name: None,
-        email: None,
         account: result["accountId"].as_str().map(|id| pseudonym(P, id)),
         plan: result["rateLimits"]["planType"].as_str().map(str::to_string),
         observed_at,

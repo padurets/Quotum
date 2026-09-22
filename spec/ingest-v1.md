@@ -11,7 +11,7 @@ delivers with one of:
 | Token | Prefix | How it is obtained | Who the device belongs to |
 |---|---|---|---|
 | Device token | `al_d_` | One-time code confirmed by a signed-in person ([below](#connecting-with-a-one-time-code)) | That person |
-| Board token | `al_b_` | Created on the board by a member, shown once; meant for images, VMs, containers | `owner` of the batch, see [Owner](#owner) |
+| Board token | `al_b_` | Created on the board by a member, shown once; meant for images, VMs, containers | The declared `owner`, else the token's creator, see [Owner](#owner) |
 
 With a board token a machine joins the board on its first batch; its `machine.id`
 identifies it from then on. A device removed from the board cannot come back with
@@ -68,16 +68,14 @@ at most 500 snapshots and 500 failures; a hub may refuse larger bodies.
 
 ### Owner
 
-Optional; used only with a board token. Whom the machine measures for:
-
-| Field | Meaning |
-|---|---|
-| `name` | Configured by the person running the agent (`--owner`, `owner = …`). |
-| `email` | The e-mail an installed client (Claude Code, Codex) is signed in with, sent only when no `name` is configured. |
-
-The hub takes `name`, else `email`; one that matches a board member's e-mail is that
-member; with neither, the device belongs to whoever created the token. Agents with a
-device token send no owner: the device already belongs to someone.
+Optional; used only with a board token. `{"name": "…"}` is whom the machine measures
+for, as the person running the agent configured it (`--owner`, `owner = …`). A name
+that is a board member's e-mail makes the device that member's; any other name is shown
+as given. Without a name the device belongs to whoever created the token — so a person
+uses their own token for their machines, and a token shared by several people goes
+with `--owner`. Agents with a device token send no owner: the device already belongs to
+the person who confirmed its code. The hub never derives owners from what the clients
+report.
 
 ### Snapshot
 
@@ -151,5 +149,5 @@ The OAuth 2.0 device authorization flow (RFC 8628) with JSON bodies:
 
 What never leaves the machine: provider tokens, cookies, account ids, prompts, file
 paths. What is sent: the pseudonym of the account, the plan name, percentages and
-reset times of the windows, the client version, the machine id and name — and, only
-with a board token and no configured owner, the e-mail a client is signed in with.
+reset times of the windows, the client version, the machine id and name, and the
+owner name if one is configured.
