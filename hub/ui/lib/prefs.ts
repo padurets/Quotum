@@ -1,26 +1,31 @@
 import {useSyncExternalStore} from 'react';
 import type {Kind} from './types';
-import {DEFAULT_PLAN, isValidPlan, type WeeklyPlan} from './plan';
 
+/** How far the chart looks ahead: `auto` follows the period. */
+export type Horizon = 'auto' | '1d' | '3d' | '7d';
+
+/**
+ * How this reader looks at the dashboard, whatever the board: the chart's period, window
+ * type and horizon, lines switched off in its legend, and reset announcements. How a
+ * board is arranged is the board's own (lib/view.ts).
+ */
 export type Prefs = {
-  /** Windows the owner removed from their dashboard: hidden in cards, chart and table. */
-  hidden: Record<string, true>;
-  /** Series switched off in the chart legend only. */
+  /** Series switched off in the chart legend. */
   muted: Record<string, true>;
   range: string;
   kind: Kind;
+  horizon: Horizon;
   /** Draw the spending plan on the weekly chart. */
   showPlan: boolean;
   /** Show reset announcements from the community trackers. */
   showResets: boolean;
-  /** Per-source weekly spending plans (percent per day); absent means the default. */
-  plans: Record<string, WeeklyPlan>;
 };
 
 const KEY = 'quotum.prefs';
 const RANGES = ['24h', '7d', '30d'];
 const KINDS: Kind[] = ['weekly', 'session'];
-const DEFAULTS: Prefs = {hidden: {}, muted: {}, range: '24h', kind: 'weekly', showPlan: true, showResets: true, plans: {}};
+export const HORIZONS: Horizon[] = ['auto', '1d', '3d', '7d'];
+const DEFAULTS: Prefs = {muted: {}, range: '24h', kind: 'weekly', horizon: 'auto', showPlan: true, showResets: true};
 
 function read(): Prefs {
   try {
@@ -29,7 +34,8 @@ function read(): Prefs {
     // Whatever the browser kept from another version must still be a valid choice.
     if (!RANGES.includes(stored.range)) stored.range = DEFAULTS.range;
     if (!KINDS.includes(stored.kind)) stored.kind = DEFAULTS.kind;
-    return stored;
+    if (!HORIZONS.includes(stored.horizon)) stored.horizon = DEFAULTS.horizon;
+    return {muted: stored.muted, range: stored.range, kind: stored.kind, horizon: stored.horizon, showPlan: stored.showPlan, showResets: stored.showResets};
   } catch {
     return DEFAULTS;
   }
@@ -60,26 +66,10 @@ export function usePrefs(): Prefs {
   );
 }
 
-const toggle = (map: Record<string, true>, key: string, on: boolean) => {
-  const next = {...map};
-  if (on) next[key] = true;
-  else delete next[key];
-  return next;
-};
-
-export const setHidden = (key: string, hidden: boolean) => setPrefs(prefs => ({hidden: toggle(prefs.hidden, key, hidden)}));
-export const setMuted = (key: string, muted: boolean) => setPrefs(prefs => ({muted: toggle(prefs.muted, key, muted)}));
-
-/** The weekly plan of one source: its own if valid, otherwise the default. */
-export const planOf = (prefs: Prefs, sourceId: string): WeeklyPlan => {
-  const plan = prefs.plans[sourceId];
-  return isValidPlan(plan) ? plan : DEFAULT_PLAN;
-};
-
-export const setPlan = (sourceId: string, plan: WeeklyPlan | null) =>
+export const setMuted = (key: string, muted: boolean) =>
   setPrefs(prefs => {
-    const plans = {...prefs.plans};
-    if (plan) plans[sourceId] = plan;
-    else delete plans[sourceId];
-    return {plans};
+    const next = {...prefs.muted};
+    if (muted) next[key] = true;
+    else delete next[key];
+    return {muted: next};
   });

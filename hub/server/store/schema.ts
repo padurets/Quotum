@@ -23,6 +23,9 @@ const STEPS = [
   CREATE TABLE tokens (
     id TEXT PRIMARY KEY, board_id TEXT NOT NULL, name TEXT NOT NULL, hash TEXT NOT NULL UNIQUE, hint TEXT NOT NULL,
     created_by TEXT NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER, revoked_at INTEGER);
+  -- How a board is arranged (domain/view.ts): widgets' order, hidden ones, spending plans.
+  -- Its owner arranges it; everyone on the board sees it the same way.
+  CREATE TABLE views (board_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_by TEXT NOT NULL, updated_at INTEGER NOT NULL);
 
   -- Machines running an agent (one row per board they deliver to), pending one-time
   -- codes, and the last failure each device reported per provider.
@@ -54,6 +57,9 @@ const STEPS = [
     used REAL NOT NULL, reset_at INTEGER, minutes INTEGER, stale_after_ms INTEGER NOT NULL,
     PRIMARY KEY (source_id, window_id, at)) WITHOUT ROWID;
   CREATE INDEX samples_by_time ON samples (at);
+  -- What happened to a source besides its values: free resets granted (detail: how many).
+  CREATE TABLE events (source_id TEXT NOT NULL, at INTEGER NOT NULL, kind TEXT NOT NULL, detail TEXT,
+    PRIMARY KEY (source_id, at, kind)) WITHOUT ROWID;
   `,
 ];
 

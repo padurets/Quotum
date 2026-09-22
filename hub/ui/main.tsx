@@ -6,14 +6,17 @@ import './style.css';
 import {useHistory, useNow, useOverview} from './lib/api';
 import {usePrefs} from './lib/prefs';
 import {useResets} from './lib/resets';
-import {titled} from './lib/quota';
+import {sourceLabel, titled} from './lib/quota';
 import {usePath} from './lib/router';
 import {boardTitle, rememberBoard, useBoard, useSession, type Board, type Session, type User} from './lib/session';
+import {arranged, cardId, HISTORY, reordered, useView, withHidden} from './lib/view';
 import {t, useLocale} from './i18n';
 import {Header} from './components/Header';
 import {SERVICE} from './components/Kit';
 import {SourceCard} from './components/SourceCard';
 import {History} from './components/History';
+import {Widgets, WidgetsMenu, type Widget} from './components/Widgets';
+import {AccountPanel} from './components/Account';
 import {AuthScreen} from './components/AuthScreen';
 import {DevicePage} from './components/DevicePage';
 import {InvitePage} from './components/InvitePage';
@@ -24,10 +27,12 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
   const [board, selectBoard] = useBoard(boards);
   const boardId = board?.id ?? '';
   const {data, lastOk, reload} = useOverview(boardId);
+  const arrange = useView(data, reload);
   const prefs = usePrefs();
   const history = useHistory(boardId, prefs.range, data ? data.revision : null);
   const {resets, health} = useResets(prefs.showResets);
   const [admin, setAdmin] = useState<AdminTab | null>(null);
+  const [account, setAccount] = useState(false);
   const closeAdmin = useCallback(() => setAdmin(null), []);
 
   // Sources are named from the whole board: owners appear only when they tell sources apart.
@@ -36,26 +41,69 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
   const empty = !!overview && sources.length === 0;
 
   useEffect(() => {
-    document.title = board && !board.personal ? `${boardTitle(board)} · ${SERVICE}` : SERVICE;
+    document.title = board?.name ? `${boardTitle(board)} · ${SERVICE}` : SERVICE;
   }, [board]);
+
+  // Every widget of the board in its order: a card per source, and the history chart.
+  const cards = new Map<string, Widget>(
+    sources.map(source => [
+      cardId(source.id),
+      {
+        id: cardId(source.id),
+        name: sourceLabel(source),
+        content: (
+          <SourceCard
+            source={source}
+            now={now}
+            resets={source.provider === 'claude' || source.provider === 'codex' ? resets[source.provider] : undefined}
+            arrange={arrange}
+          />
+        ),
+      },
+    ]),
+  );
+  const widgets = arranged(arrange.view, [...cards.keys(), HISTORY]).map(
+    (id): Widget =>
+      cards.get(id) ?? {
+        id,
+        name: t('widgets.history'),
+        wide: true,
+        content: <History history={history} overview={overview} resets={resets} now={now} arrange={arrange} />,
+      },
+  );
+  const shown = widgets.filter(widget => !arrange.view.hidden.includes(widget.id));
 
   return (
     <>
       <Header
-        data={overview}
         lastOk={lastOk}
         now={now}
-        trackers={health}
         boards={boards}
         board={board}
         onBoard={selectBoard}
         onBoardsChanged={refresh}
+        widgets={
+          arrange.owner && overview && !empty ? (
+            <WidgetsMenu
+              widgets={widgets}
+              hidden={arrange.view.hidden}
+              shared={!board?.personal}
+              onShow={(id, on) => arrange.update(view => withHidden(view, id, !on))}
+            />
+          ) : null
+        }
         onDevices={() => setAdmin('devices')}
         user={user}
-        onSignedOut={onSignedOut}
+        onAccount={() => setAccount(true)}
       />
       <main>
-        {empty ? (
+        {!overview ? (
+          <div className="widgets" aria-hidden="true">
+            {[0, 1, 2].map(i => (
+              <div key={i} className="card is-loading" />
+            ))}
+          </div>
+        ) : empty ? (
           <section className="panel onboarding">
             <h2>{t('onboarding.title')}</h2>
             <p>{t('onboarding.text')}</p>
@@ -63,28 +111,21 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
               {t('onboarding.connect')}
             </button>
           </section>
+        ) : shown.length ? (
+          <Widgets widgets={shown} movable={arrange.owner} onMove={order => arrange.update(view => reordered(view, order))} />
         ) : (
-          <>
-            <section className="cards" aria-label={t('cards.label')}>
-              {overview
-                ? sources.map(source => (
-                    <SourceCard
-                      key={source.id}
-                      source={source}
-                      now={now}
-                      resets={source.provider === 'claude' || source.provider === 'codex' ? resets[source.provider] : undefined}
-                      board={boardId}
-                      owner={board?.role === 'owner'}
-                      onRemoved={reload}
-                    />
-                  ))
-                : [0, 1, 2].map(i => <div key={i} className="card is-loading" aria-hidden="true" />)}
-            </section>
-            <History history={history} overview={overview} resets={resets} now={now} />
-          </>
+          <section className="panel onboarding">
+            <h2>{t('widgets.allHidden')}</h2>
+            {arrange.owner && (
+              <button type="button" className="button" onClick={() => arrange.update(view => ({...view, hidden: []}))}>
+                {t('widgets.showAll')}
+              </button>
+            )}
+          </section>
         )}
       </main>
       {admin && board && <BoardAdmin board={board} tab={admin} onTab={setAdmin} onClose={closeAdmin} now={now} />}
+      {account && <AccountPanel user={user} trackers={health} onChanged={refresh} onSignedOut={onSignedOut} onClose={() => setAccount(false)} />}
     </>
   );
 }

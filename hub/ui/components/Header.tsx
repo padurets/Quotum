@@ -1,64 +1,9 @@
-import {useState, type FormEvent} from 'react';
-import type {Overview} from '../lib/types';
-import {ago, clock} from '../lib/format';
-import {problemOf, sourceLabel} from '../lib/quota';
-import {GearIcon, Popover, SwitchRow} from './Popover';
-import {setPrefs, usePrefs} from '../lib/prefs';
-import type {TrackerHealth} from '../lib/resets';
+import {useState, type FormEvent, type ReactNode} from 'react';
 import {call} from '../lib/http';
 import {boardTitle, type Board, type User} from '../lib/session';
-import {Brand, ErrorLine, LanguageSelect} from './Kit';
-import {known, rich, t} from '../i18n';
-
-/** Dashboard-wide settings, stored in this browser. */
-function Settings({trackers}: {trackers: TrackerHealth[]}) {
-  const prefs = usePrefs();
-  return (
-    <Popover label={t('settings.title')} icon={<GearIcon />}>
-      <div className="popover-title">{t('settings.title')}</div>
-      <SwitchRow on={prefs.showResets} onChange={on => setPrefs({showResets: on})}>
-        {t('settings.resets')}
-      </SwitchRow>
-      {prefs.showResets && (
-        <div className="trackers">
-          {trackers.map(tracker => (
-            <div key={tracker.name} className="tracker" title={tracker.at ? t('settings.checkedAt', {time: clock(tracker.at)}) : ''}>
-              <i className={`dot ${tracker.ok === true ? 'dot-ok' : tracker.ok === false ? 'dot-warn' : 'dot-idle'}`} />
-              <a href={tracker.url} target="_blank" rel="noopener noreferrer">
-                {tracker.name}
-              </a>
-              <span>{trackerDetail(tracker.detail)}</span>
-            </div>
-          ))}
-        </div>
-      )}
-      <div className="popover-note">
-        {rich('settings.resetsNote', {
-          claude: (
-            <a href="https://claude-resets.com/" target="_blank" rel="noopener noreferrer">
-              claude-resets.com
-            </a>
-          ),
-          codex: (
-            <a href="https://codex-resets.com/" target="_blank" rel="noopener noreferrer">
-              Codex Resets
-            </a>
-          ),
-        })}
-      </div>
-      <div className="popover-title popover-section">{t('common.language')}</div>
-      <div className="popover-pad">
-        <LanguageSelect />
-      </div>
-    </Popover>
-  );
-}
-
-/** The hub reports tracker health as codes; an HTTP status is shown as is. */
-function trackerDetail(detail: string) {
-  const key = `tracker.${detail}`;
-  return known(key) ? t(key) : detail;
-}
+import {Brand, ErrorLine} from './Kit';
+import {Popover} from './Popover';
+import {t} from '../i18n';
 
 const OFFLINE_AFTER = 45_000;
 
@@ -75,8 +20,70 @@ const DevicesIcon = () => (
   </svg>
 );
 
-/** Which board is on screen; a new board is created right here. */
-function BoardSwitcher({boards, board, onSelect, onCreated}: {boards: Board[]; board: Board | null; onSelect: (id: string) => void; onCreated: () => Promise<void>}) {
+const PencilIcon = () => (
+  <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+    <path d="M10.5 3.5l2 2M3 13l.6-2.6L11 3a1.4 1.4 0 0 1 2 2l-7.4 7.4z" />
+  </svg>
+);
+
+/** A board in the list; its owner renames it in place. A personal board left empty takes its default name. */
+function BoardItem({board, current, onSelect, onRenamed}: {board: Board; current: boolean; onSelect: () => void; onRenamed: () => Promise<void>}) {
+  const [name, setName] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
+
+  const rename = async (event: FormEvent) => {
+    event.preventDefault();
+    setError(null);
+    try {
+      await call('POST', `/api/boards/${encodeURIComponent(board.id)}`, {name: name!.trim()});
+      await onRenamed();
+      setName(null);
+    } catch (failure) {
+      setError(failure);
+    }
+  };
+
+  if (name !== null) {
+    return (
+      <form className="board-rename" onSubmit={rename}>
+        <input
+          autoFocus
+          value={name}
+          maxLength={80}
+          placeholder={board.personal ? t('boards.personalName') : ''}
+          aria-label={t('boards.renameLabel')}
+          onChange={event => setName(event.target.value)}
+          onKeyDown={event => {
+            if (event.key !== 'Escape') return;
+            event.stopPropagation();
+            setName(null);
+          }}
+        />
+        <button className="button" disabled={!board.personal && !name.trim()}>
+          {t('boards.save')}
+        </button>
+        <ErrorLine error={error} />
+      </form>
+    );
+  }
+  return (
+    <div className="board-item">
+      <button type="button" className="popover-row board-row" aria-current={current} onClick={onSelect}>
+        <i className={`check ${current ? 'on' : ''}`} />
+        <span>{boardTitle(board)}</span>
+        <b>{t(board.personal ? 'boards.personal' : 'boards.shared')}</b>
+      </button>
+      {board.role === 'owner' && (
+        <button type="button" className="icon-button" aria-label={t('boards.rename', {board: boardTitle(board)})} title={t('boards.rename', {board: boardTitle(board)})} onClick={() => setName(board.name)}>
+          <PencilIcon />
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Which board is on screen; boards are created and renamed right here. */
+function BoardSwitcher({boards, board, onSelect, onChanged}: {boards: Board[]; board: Board | null; onSelect: (id: string) => void; onChanged: () => Promise<void>}) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
   const [error, setError] = useState<unknown>(null);
@@ -87,7 +94,7 @@ function BoardSwitcher({boards, board, onSelect, onCreated}: {boards: Board[]; b
       const created = await call<Board>('POST', '/api/boards', {name: name.trim()});
       setName('');
       setOpen(false);
-      await onCreated();
+      await onChanged();
       onSelect(created.id);
     } catch (failure) {
       setError(failure);
@@ -108,11 +115,7 @@ function BoardSwitcher({boards, board, onSelect, onCreated}: {boards: Board[]; b
     >
       <div className="popover-title">{t('boards.title')}</div>
       {boards.map(b => (
-        <button key={b.id} type="button" className="popover-row board-row" aria-current={b.id === board?.id} onClick={() => (onSelect(b.id), setOpen(false))}>
-          <i className={`check ${b.id === board?.id ? 'on' : ''}`} />
-          <span>{boardTitle(b)}</span>
-          <b>{t(b.personal ? 'boards.personal' : 'boards.shared')}</b>
-        </button>
+        <BoardItem key={b.id} board={b} current={b.id === board?.id} onSelect={() => (onSelect(b.id), setOpen(false))} onRenamed={onChanged} />
       ))}
       <form className="popover-section popover-form" onSubmit={create}>
         <input placeholder={t('boards.newPlaceholder')} value={name} maxLength={80} onChange={e => setName(e.target.value)} aria-label={t('boards.newLabel')} />
@@ -125,82 +128,54 @@ function BoardSwitcher({boards, board, onSelect, onCreated}: {boards: Board[]; b
   );
 }
 
-function Account({user, onSignedOut}: {user: User; onSignedOut: () => void}) {
-  const signOut = async () => {
-    await call('POST', '/api/auth/logout').catch(() => {});
-    onSignedOut();
-  };
-  return (
-    <Popover label={t('account.title')} icon={<span className="avatar">{user.name.slice(0, 1).toUpperCase()}</span>}>
-      <div className="popover-title">{t('account.title')}</div>
-      <div className="account-card">
-        <b>{user.name}</b>
-        <span>{user.email}</span>
-      </div>
-      <button type="button" className="popover-row" onClick={signOut}>
-        <span>{t('account.signOut')}</span>
-      </button>
-    </Popover>
-  );
-}
-
 /**
- * One compact, non-jumping strip: brand and board, how many sources are fresh (and
- * whether the hub answers), devices, settings and account.
+ * One compact strip: brand and board on the left; on the right a word when the hub
+ * cannot be reached, the board's widgets (for its owner), devices, and the person's
+ * own panel behind the avatar.
  */
 export function Header({
-  data,
   lastOk,
   now,
-  trackers,
   boards,
   board,
   onBoard,
   onBoardsChanged,
+  widgets,
   onDevices,
   user,
-  onSignedOut,
+  onAccount,
 }: {
-  data: Overview | null;
   lastOk: number;
   now: number;
-  trackers: TrackerHealth[];
   boards: Board[];
   board: Board | null;
   onBoard: (id: string) => void;
   onBoardsChanged: () => Promise<void>;
+  widgets: ReactNode;
   onDevices: () => void;
   user: User;
-  onSignedOut: () => void;
+  onAccount: () => void;
 }) {
   const offline = !!lastOk && now - lastOk > OFFLINE_AFTER;
-  const sources = data?.sources ?? [];
-  const fresh = sources.filter(source => !source.stale && !source.error).length;
-
-  const sourcesTitle = sources
-    .map(source => `${sourceLabel(source)}: ${problemOf(source) ?? t('source.measured', {ago: ago(source.successAt, now)})}`)
-    .join('\n');
-
   return (
     <header className="topbar">
       <div className="topbar-inner">
         <Brand href="/" />
-        <BoardSwitcher boards={boards} board={board} onSelect={onBoard} onCreated={onBoardsChanged} />
+        <BoardSwitcher boards={boards} board={board} onSelect={onBoard} onChanged={onBoardsChanged} />
         <div className="status">
-          <span
-            className={`sources ${offline || (data && fresh < sources.length) ? 'is-warn' : ''}`}
-            title={offline ? t('common.offline') : sourcesTitle}
-            aria-label={offline ? t('common.offline') : sourcesTitle}
-            role="status"
-          >
-            <i className={`dot dot-${offline || (data && fresh < sources.length) ? 'warn' : 'ok'}`} />
-            <b>{data ? `${fresh}/${sources.length}` : '—'}</b>
-          </span>
+          {offline && (
+            <span className="offline" role="status" title={t('common.offline')}>
+              <i className="dot dot-warn" />
+              <span>{t('common.offline')}</span>
+            </span>
+          )}
+          {widgets}
           <button type="button" className="icon-button" aria-label={t('header.devices')} title={t('header.devices')} onClick={onDevices}>
             <DevicesIcon />
           </button>
-          <Settings trackers={trackers} />
-          <Account user={user} onSignedOut={onSignedOut} />
+          <button type="button" className="avatar-button" aria-label={t('account.open')} title={`${user.name} · ${user.email}`} onClick={onAccount}>
+            <span className="avatar">{user.name.slice(0, 1).toUpperCase()}</span>
+          </button>
         </div>
       </div>
     </header>

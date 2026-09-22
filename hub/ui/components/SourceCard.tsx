@@ -6,17 +6,15 @@ import {errorText, level, problemOf, sourceLabel, windowName} from '../lib/quota
 import {t} from '../i18n';
 import {DEFAULT_PLAN, isValidPlan, PLAN_TOLERANCE, planAt, planTotal, type WeeklyPlan} from '../lib/plan';
 import {PROVIDERS} from '../lib/providers';
-import {planOf, setHidden, setPlan, usePrefs} from '../lib/prefs';
-import {call} from '../lib/http';
+import {cardId, planOf, withHidden, withPlan, withWindowHidden, type Arrange} from '../lib/view';
 import type {ResetStatus} from '../lib/resets';
 import {ResetBanner, ResetNotice} from './ResetNotice';
-import {Popover, SlidersIcon, SwitchRow} from './Popover';
-import {ErrorLine} from './Kit';
+import {EyeOffIcon, Popover, SlidersIcon, SwitchRow} from './Popover';
 
 function Meter({w, now, weekly}: {w: Win; now: number; weekly: WeeklyPlan}) {
   const state = level(w.remaining);
   const plan = planAt(w, now, weekly);
-  const pace = plan && !plan.restDay ? plan.remaining : null;
+  const pace = plan && !plan.done ? plan.remaining : null;
   return (
     <div className="meter" role="progressbar" aria-label={windowName(w)} aria-valuenow={Math.round(w.remaining)} aria-valuemin={0} aria-valuemax={100}>
       <span className="meter-track">
@@ -30,7 +28,7 @@ function Meter({w, now, weekly}: {w: Win; now: number; weekly: WeeklyPlan}) {
 function Limit({w, now, weekly}: {w: Win; now: number; weekly: WeeklyPlan}) {
   const state = level(w.remaining);
   const plan = planAt(w, now, weekly);
-  const delta = plan && !plan.restDay ? w.remaining - plan.remaining : 0;
+  const delta = plan && !plan.done ? w.remaining - plan.remaining : 0;
   return (
     <div className="limit">
       <div className="limit-top">
@@ -49,7 +47,11 @@ function Limit({w, now, weekly}: {w: Win; now: number; weekly: WeeklyPlan}) {
               : t('limit.resetPassed')
             : t('limit.resetUnknown')}
         </span>
-        {plan?.restDay && <span className="plan-note">{t('limit.restDay')}</span>}
+        {plan?.done && (
+          <span className="plan-note" title={t('limit.planDoneHint')}>
+            {t('limit.planDone')}
+          </span>
+        )}
         {delta < -PLAN_TOLERANCE && (
           <span className="ahead" title={t(plan?.weekly ? 'limit.aheadHint' : 'limit.aheadHintReset')}>
             {t('limit.ahead', {value: num(-delta)})}
@@ -67,11 +69,10 @@ function Limit({w, now, weekly}: {w: Win; now: number; weekly: WeeklyPlan}) {
 
 /**
  * The weekly spending plan of one source, one whole percent per day. It is saved only
- * when it adds up to exactly 100%; days at 0 are rest days.
+ * when it adds up to exactly 100%; a day at 0 has no spending planned.
  */
-function PlanEditor({source}: {source: SourceState}) {
-  const prefs = usePrefs();
-  const saved = planOf(prefs, source.id);
+function PlanEditor({source, arrange}: {source: SourceState; arrange: Arrange}) {
+  const saved = planOf(arrange.view, source.id);
   const [draft, setDraft] = useState<WeeklyPlan>(saved);
   useEffect(() => setDraft(saved), [saved.join(',')]);
   const total = planTotal(draft);
@@ -80,14 +81,14 @@ function PlanEditor({source}: {source: SourceState}) {
     const value = Math.max(0, Math.min(100, Math.round(Number(raw) || 0)));
     const next = draft.map((share, i) => (i === day ? value : share));
     setDraft(next);
-    if (isValidPlan(next)) setPlan(source.id, next);
+    if (isValidPlan(next)) arrange.update(view => withPlan(view, source.id, next));
   };
 
   return (
     <div className="plan-editor">
       <div className="plan-days">
         {draft.map((share, day) => (
-          <label key={day} className={share === 0 ? 'is-rest' : ''}>
+          <label key={day} className={share === 0 ? 'is-zero' : ''}>
             <span>{day + 1}</span>
             <input
               type="number"
@@ -104,7 +105,7 @@ function PlanEditor({source}: {source: SourceState}) {
       <div className="plan-foot">
         <span className={total === 100 ? 'muted' : 'v-warn'}>{total === 100 ? t('plan.total') : t('plan.totalWrong', {total})}</span>
         {saved.join() !== DEFAULT_PLAN.join() && (
-          <button type="button" className="link-button" onClick={() => setPlan(source.id, null)}>
+          <button type="button" className="link-button" onClick={() => arrange.update(view => withPlan(view, source.id, null))}>
             {t('plan.default')}
           </button>
         )}
@@ -113,23 +114,11 @@ function PlanEditor({source}: {source: SourceState}) {
   );
 }
 
-/** Per-source settings: which windows to show, the weekly spending plan, and (for the board's owner) removing the source. */
-function SourceSettings({source, board, owner, onRemoved}: {source: SourceState; board: string; owner: boolean; onRemoved: () => void}) {
-  const {hidden} = usePrefs();
-  const [error, setError] = useState<unknown>(null);
-  const hiddenCount = source.windows.filter(w => hidden[windowKey(source.id, w.id)]).length;
+/** How the board's owner sets up a card: which limits it shows, the weekly plan, and hiding it. */
+function SourceSettings({source, arrange}: {source: SourceState; arrange: Arrange}) {
+  const hidden = new Set(arrange.view.windows);
+  const hiddenCount = source.windows.filter(w => hidden.has(windowKey(source.id, w.id))).length;
   const hasWeekly = source.windows.some(w => w.kind === 'weekly');
-
-  const remove = async () => {
-    if (!confirm(t('source.removeConfirm', {source: sourceLabel(source)}))) return;
-    setError(null);
-    try {
-      await call('DELETE', `/api/boards/${board}/sources/${source.id}`);
-      onRemoved();
-    } catch (failure) {
-      setError(failure);
-    }
-  };
 
   return (
     <Popover label={t('source.settings', {source: sourceLabel(source)})} icon={<SlidersIcon />} badge={hiddenCount}>
@@ -139,30 +128,26 @@ function SourceSettings({source, board, owner, onRemoved}: {source: SourceState;
           {source.windows.map(w => {
             const key = windowKey(source.id, w.id);
             return (
-              <SwitchRow key={w.id} on={!hidden[key]} onChange={on => setHidden(key, !on)} value={`${num(w.remaining)}%`}>
+              <SwitchRow key={w.id} on={!hidden.has(key)} onChange={on => arrange.update(view => withWindowHidden(view, key, !on))} value={`${num(w.remaining)}%`}>
                 {windowName(w)}
               </SwitchRow>
             );
           })}
-          <div className="popover-note">{t('source.hiddenNote')}</div>
         </>
       )}
       {hasWeekly && (
         <>
           <div className="popover-title popover-section">{t('source.plan')}</div>
-          <PlanEditor source={source} />
+          <PlanEditor source={source} arrange={arrange} />
           <div className="popover-note">{t('source.planNote')}</div>
         </>
       )}
-      {owner && (
-        <div className="popover-section">
-          <button type="button" className="popover-row is-danger" onClick={remove}>
-            <span>{t('source.remove')}</span>
-          </button>
-          <div className="popover-note">{t('source.removeNote')}</div>
-          <ErrorLine error={error} />
-        </div>
-      )}
+      <div className="popover-section">
+        <button type="button" className="popover-row" onClick={() => arrange.update(view => withHidden(view, cardId(source.id), true))}>
+          <EyeOffIcon />
+          <span>{t('source.hide')}</span>
+        </button>
+      </div>
     </Popover>
   );
 }
@@ -185,27 +170,12 @@ function FreeResets({resets}: {resets: NonNullable<SourceState['resets']>}) {
   );
 }
 
-export function SourceCard({
-  source,
-  now,
-  resets,
-  board,
-  owner,
-  onRemoved,
-}: {
-  source: SourceState;
-  now: number;
-  resets?: ResetStatus;
-  board: string;
-  owner: boolean;
-  onRemoved: () => void;
-}) {
-  const prefs = usePrefs();
-  const {hidden} = prefs;
+export function SourceCard({source, now, resets, arrange}: {source: SourceState; now: number; resets?: ResetStatus; arrange: Arrange}) {
   const meta = PROVIDERS[source.provider];
   const problem = problemOf(source);
-  const visible = source.windows.filter(w => !hidden[windowKey(source.id, w.id)]);
-  const weekly = planOf(prefs, source.id);
+  const hidden = new Set(arrange.view.windows);
+  const visible = source.windows.filter(w => !hidden.has(windowKey(source.id, w.id)));
+  const weekly = planOf(arrange.view, source.id);
   const warn = source.stale || !!problem;
   // How fresh the numbers are lives in the colour of the logo's dot and in its tooltip.
   const status = problem ?? (source.successAt ? t('source.measured', {ago: ago(source.successAt, now)}) : errorText('waiting'));
@@ -222,7 +192,7 @@ export function SourceCard({
           {source.plan && <span className="plan">{source.plan.replace(/^Claude\s+/i, '')}</span>}
         </div>
         {!!source.resets?.available && <FreeResets resets={source.resets} />}
-        {(source.windows.length > 0 || owner) && <SourceSettings source={source} board={board} owner={owner} onRemoved={onRemoved} />}
+        {arrange.owner && <SourceSettings source={source} arrange={arrange} />}
       </div>
 
       <div className="limits">

@@ -19,6 +19,19 @@ export type HistorySeries = {
 
 export type DeviceFailure = {device: string; provider: Provider; error: string; detail: string | null; at: number};
 
+/**
+ * Something that happened to a source, for the chart: its limits came back before their
+ * reset time (a free reset used, or one granted to everyone), or free resets were granted.
+ */
+export type SourceEvent =
+  | {sourceId: string; at: number; kind: 'early_reset'; windows: string[]}
+  | {sourceId: string; at: number; kind: 'resets_granted'; count: number};
+
+/** Early resets of a source's windows closer than this are one event. */
+const SAME_EVENT_MS = 15 * 60_000;
+/** A drop of at least this many points before the window's reset time is a reset, not a correction. */
+const RESET_DROP = 5;
+
 type SampleRow = {
   source_id: string;
   provider: Provider;
@@ -81,23 +94,6 @@ export class Store {
     return id;
   }
 
-  /** Removes a source of a board with everything measured for it; false if there is none. */
-  removeSource(board: string, id: string): boolean {
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      const removed = this.db.prepare('DELETE FROM sources WHERE id = ? AND board_id = ?').run(id, board).changes > 0;
-      if (removed) {
-        for (const table of ['state', 'samples', 'device_sources']) this.db.prepare(`DELETE FROM ${table} WHERE source_id = ?`).run(id);
-      }
-      this.db.exec('COMMIT');
-      if (removed) this.changed(board);
-      return removed;
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
-  }
-
   states(board: string): SourceState[] {
     return this.sources(board).map(source => this.stateOf(source.id, source.provider));
   }
@@ -114,9 +110,11 @@ export class Store {
     return {...(JSON.parse(row.payload) as SourceState), id, provider};
   }
 
-  /** Stores a measurement: a sample per window and the new state of the source. */
+  /** Stores a measurement: a sample per window, the new state of the source, and free resets granted since the last one. */
   record(id: string, measurement: Measurement) {
-    const {provider} = this.state(id);
+    const previous = this.state(id);
+    const {provider} = previous;
+    const granted = (measurement.resets?.available ?? 0) - (previous.resets?.available ?? 0);
     const insert = this.db.prepare(
       'INSERT OR IGNORE INTO samples (source_id, window_id, at, kind, label, used, reset_at, minutes, stale_after_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
@@ -136,6 +134,10 @@ export class Store {
         insert.run(id, w.id, measurement.observedAt, w.kind, w.label, w.used, w.resetAt, w.minutes, measurement.staleAfterMs);
       }
       this.db.prepare('INSERT OR REPLACE INTO state VALUES (?, ?)').run(id, JSON.stringify(state));
+      // The first measurement only says what there is, not that anything was just granted.
+      if (granted > 0 && previous.successAt !== null) {
+        this.db.prepare('INSERT OR IGNORE INTO events VALUES (?, ?, ?, ?)').run(id, measurement.observedAt, 'resets_granted', String(granted));
+      }
       this.db.exec('COMMIT');
     } catch (error) {
       this.db.exec('ROLLBACK');
@@ -183,8 +185,8 @@ export class Store {
     return rows.map(r => ({device: r.device_id, provider: r.provider, error: r.error, detail: r.detail, at: r.at}));
   }
 
-  /** Every source/window series since `from` on a shared grid, ready for the chart and the table. */
-  history(board: string, from: number, cellMs: number): HistorySeries[] {
+  /** Every source/window series since `from` on a shared grid, ready for the chart and the table, and what happened meanwhile. */
+  history(board: string, from: number, cellMs: number): {series: HistorySeries[]; events: SourceEvent[]} {
     const rows = this.db
       .prepare(
         'SELECT samples.*, sources.provider FROM samples JOIN sources ON sources.id = samples.source_id' +
@@ -220,7 +222,7 @@ export class Store {
       return (source < 0 ? states.length : source) * 100 + (window < 0 ? 99 : window);
     };
 
-    return [...groups.values()]
+    const lines = [...groups.values()]
       .sort((a, b) => rank(a[0]) - rank(b[0]))
       .map(samples => {
         const last = samples.at(-1)!;
@@ -236,14 +238,48 @@ export class Store {
           points: onGrid(points, cellMs).map(p => [p.at, Math.round(p.remaining * 100) / 100, p.segment] as const),
         };
       });
+    return {series: lines, events: [...earlyResets([...groups.values()]), ...this.grants(board, from)].sort((a, b) => a.at - b.at)};
   }
 
-  /** Forgets samples older than the retention period. */
+  private grants(board: string, from: number): SourceEvent[] {
+    const rows = this.db
+      .prepare(
+        "SELECT e.source_id, e.at, e.detail FROM events e JOIN sources s ON s.id = e.source_id WHERE s.board_id = ? AND e.kind = 'resets_granted' AND e.at >= ?",
+      )
+      .all(board, from) as {source_id: string; at: number; detail: string}[];
+    return rows.map(r => ({sourceId: r.source_id, at: r.at, kind: 'resets_granted', count: Number(r.detail)}));
+  }
+
+  /** Forgets samples and events older than the retention period. */
   prune(now: number) {
-    this.db.prepare('DELETE FROM samples WHERE at < ?').run(now - config.retention.sampleDays * 86_400_000);
+    const cutoff = now - config.retention.sampleDays * 86_400_000;
+    this.db.prepare('DELETE FROM samples WHERE at < ?').run(cutoff);
+    this.db.prepare('DELETE FROM events WHERE at < ?').run(cutoff);
   }
 
   close() {
     this.db.close();
   }
+}
+
+/**
+ * Windows whose used share dropped well before their reset time: the limits came back
+ * early. Resets of one source close together are one event naming every window.
+ */
+function earlyResets(groups: Sample[][]): SourceEvent[] {
+  const found: {sourceId: string; at: number; window: string}[] = [];
+  for (const samples of groups) {
+    for (let i = 1; i < samples.length; i++) {
+      const [a, b] = [samples[i - 1], samples[i]];
+      if (a.resetAt !== null && b.at < a.resetAt - 60_000 && b.used < a.used - RESET_DROP) found.push({sourceId: b.sourceId, at: b.at, window: b.id});
+    }
+  }
+  const events: (SourceEvent & {kind: 'early_reset'})[] = [];
+  for (const reset of found.sort((a, b) => a.at - b.at)) {
+    const same = events.find(e => e.sourceId === reset.sourceId && reset.at - e.at <= SAME_EVENT_MS);
+    if (same) {
+      if (!same.windows.includes(reset.window)) same.windows.push(reset.window);
+    } else events.push({sourceId: reset.sourceId, at: reset.at, kind: 'early_reset', windows: [reset.window]});
+  }
+  return events;
 }

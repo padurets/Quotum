@@ -5,26 +5,31 @@ import {day, duration, num} from '../lib/format';
 import {level, seriesName, sourceLabel} from '../lib/quota';
 import {PLAN_TOLERANCE, planAt, weeklyPlanLine, type WeeklyPlan} from '../lib/plan';
 import {DASHES, PROVIDERS} from '../lib/providers';
-import {planOf, setMuted, setPrefs, usePrefs, type Prefs} from '../lib/prefs';
+import {HORIZONS, setMuted, setPrefs, usePrefs, type Horizon} from '../lib/prefs';
+import {HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
+import type {View} from '../lib/types';
 import {Chart, type Line, type Marker, type PlanLine} from './Chart';
 import type {Resets} from '../lib/resets';
 import {t, useLocale} from '../i18n';
 import {Segmented} from './Kit';
+import {EyeOffIcon, Popover, SlidersIcon} from './Popover';
 
-/** How much future the chart keeps on its right, per range. */
-const FUTURE: Record<string, number> = {'24h': 4 * 3_600_000, '7d': 86_400_000, '30d': 3 * 86_400_000};
+const DAY = 86_400_000;
+/** How much future the chart keeps on its right when its horizon is `auto`, per range. */
+const FUTURE: Record<string, number> = {'24h': 4 * 3_600_000, '7d': DAY, '30d': 3 * DAY};
+const HORIZON: Record<Exclude<Horizon, 'auto'>, number> = {'1d': DAY, '3d': 3 * DAY, '7d': 7 * DAY};
 
 type Forecast = {text: string; tone: string; title: string};
 
 /**
- * Where the current average pace leads. Weekly windows are judged against the start
- * of the rest day (everything should be spent by then); other windows against reset.
+ * Where the current average pace leads. Weekly windows are judged against the end of
+ * their plan (everything should be spent by then); other windows against their reset.
  */
 function forecast(line: Line, live: Win | undefined, now: number, weekly: WeeklyPlan): Forecast {
   const none = {text: '—', tone: '', title: ''};
   const plan = live ? planAt(live, now, weekly) : null;
   if (!live?.resetAt || live.resetAt <= now) return none;
-  if (plan?.restDay) return {text: t('forecast.restDay'), tone: 'muted', title: t('forecast.restDayHint')};
+  if (plan?.done) return {text: t('forecast.planDone'), tone: 'muted', title: t('forecast.planDoneHint')};
 
   const hours = line.coveredMs / 3_600_000;
   if (hours < 0.5) return {...none, title: t('forecast.needData')};
@@ -40,11 +45,11 @@ function forecast(line: Line, live: Win | undefined, now: number, weekly: Weekly
     }
   }
   const left = Math.max(0, live.remaining - (rate * (deadline - now)) / 3_600_000);
-  if (left < 5) return {text: t(plan?.weekly ? 'forecast.onPaceRestDay' : 'forecast.onPaceReset'), tone: '', title};
-  return {text: t(plan?.weekly ? 'forecast.leftRestDay' : 'forecast.leftReset', {value: num(left)}), tone: plan?.weekly ? 'muted' : '', title};
+  if (left < 5) return {text: t(plan?.weekly ? 'forecast.onPacePlan' : 'forecast.onPaceReset'), tone: '', title};
+  return {text: t(plan?.weekly ? 'forecast.leftPlan' : 'forecast.leftReset', {value: num(left)}), tone: plan?.weekly ? 'muted' : '', title};
 }
 
-function SeriesTable({lines, overview, now, prefs}: {lines: Line[]; overview: Overview | null; now: number; prefs: Prefs}) {
+function SeriesTable({lines, overview, now, view}: {lines: Line[]; overview: Overview | null; now: number; view: View}) {
   return (
     <div className="table-wrap">
       <table>
@@ -60,7 +65,7 @@ function SeriesTable({lines, overview, now, prefs}: {lines: Line[]; overview: Ov
         <tbody>
           {lines.map(line => {
             const live = overview?.sources.find(s => s.id === line.sourceId)?.windows.find(w => w.id === line.windowId);
-            const weekly = planOf(prefs, line.sourceId);
+            const weekly = planOf(view, line.sourceId);
             const plan = live ? planAt(live, now, weekly) : null;
             const delta = plan && live ? live.remaining - plan.remaining : 0;
             const notable = Math.abs(delta) >= PLAN_TOLERANCE;
@@ -101,17 +106,57 @@ function SeriesTable({lines, overview, now, prefs}: {lines: Line[]; overview: Ov
   );
 }
 
+/** The chart's own settings: how far it looks ahead, and (for the board's owner) hiding it. */
+function HistorySettings({arrange}: {arrange: Arrange}) {
+  const {horizon} = usePrefs();
+  return (
+    <Popover label={t('history.settings')} icon={<SlidersIcon />}>
+      <div className="popover-title">{t('history.horizon')}</div>
+      <div className="popover-pad">
+        <Segmented
+          value={horizon}
+          onChange={value => setPrefs({horizon: value})}
+          options={HORIZONS.map(h => [h, h === 'auto' ? t('history.horizonAuto') : t('history.daysShort', {count: parseInt(h)})])}
+          label={t('history.horizon')}
+        />
+      </div>
+      {arrange.owner && (
+        <div className="popover-section">
+          <button type="button" className="popover-row" onClick={() => arrange.update(view => withHidden(view, HISTORY, true))}>
+            <EyeOffIcon />
+            <span>{t('history.hide')}</span>
+          </button>
+        </div>
+      )}
+    </Popover>
+  );
+}
+
 /** Combined history of every selected window, with its own legend and table view. */
-export function History({history, overview, resets, now}: {history: HistoryData | null; overview: Overview | null; resets: Resets; now: number}) {
+export function History({
+  history,
+  overview,
+  resets,
+  now,
+  arrange,
+}: {
+  history: HistoryData | null;
+  overview: Overview | null;
+  resets: Resets;
+  now: number;
+  arrange: Arrange;
+}) {
   const prefs = usePrefs();
+  const {view} = arrange;
   // Series names and markers are text: they are rebuilt when the language changes.
   const locale = useLocale();
 
   const lines: Line[] = useMemo(() => {
     if (!history) return [];
     const perSource: Record<string, number> = {};
+    const hidden = new Set(view.windows);
     return history.series
-      .filter(entry => entry.kind === prefs.kind && entry.points.length && !prefs.hidden[windowKey(entry.sourceId, entry.windowId)])
+      .filter(entry => entry.kind === prefs.kind && entry.points.length && !hidden.has(windowKey(entry.sourceId, entry.windowId)))
       .map(entry => {
         const index = (perSource[entry.sourceId] = (perSource[entry.sourceId] ?? -1) + 1);
         const source = overview?.sources.find(s => s.id === entry.sourceId);
@@ -125,19 +170,19 @@ export function History({history, overview, resets, now}: {history: HistoryData 
           current: live ? live.remaining : entry.points.at(-1)![1],
         };
       });
-  }, [history, overview, prefs.kind, prefs.hidden, locale]);
+  }, [history, overview, prefs.kind, view.windows, locale]);
 
   const visible = useMemo(() => lines.filter(line => !prefs.muted[line.key]), [lines, prefs.muted]);
   const from = history ? Math.max(history.since, history.historyStart) : now - 86_400_000;
   const measuredTo = history?.now ?? now;
-  // Keep some future on the right, stretched to include an announced reset when close.
-  const future = FUTURE[prefs.range] ?? FUTURE['24h'];
   const announced = resets.codex?.scheduled?.scheduledFor ?? null;
-  // The future may take up to ~40% of the width; an announced reset further out is
-  // pointed at from the right edge instead.
+  // On `auto` some future stays on the right, stretched to include an announced reset
+  // when close: it may take up to ~40% of the width, a reset further out is pointed at
+  // from the right edge instead. A chosen horizon is kept as is.
+  const future = prefs.horizon === 'auto' ? (FUTURE[prefs.range] ?? FUTURE['24h']) : HORIZON[prefs.horizon];
   const reach = measuredTo + (measuredTo - from) * 0.75;
   const to =
-    announced && announced > measuredTo && announced + future * 0.25 > measuredTo + future
+    prefs.horizon === 'auto' && announced && announced > measuredTo && announced + future * 0.25 > measuredTo + future
       ? Math.min(reach, announced + future * 0.25)
       : measuredTo + future;
 
@@ -149,15 +194,29 @@ export function History({history, overview, resets, now}: {history: HistoryData 
     const seen = new Set<string>();
     for (const line of visible) {
       const live = overview?.sources.find(s => s.id === line.sourceId)?.windows.find(w => w.id === line.windowId);
-      if (!live?.resetAt || live.resetAt <= measuredTo || live.resetAt > to || !planAt(live, measuredTo, planOf(prefs, line.sourceId))) continue;
+      if (!live?.resetAt || live.resetAt <= measuredTo || live.resetAt > to || !planAt(live, measuredTo, planOf(view, line.sourceId))) continue;
       const key = `${line.sourceId}@${Math.round(live.resetAt / 60_000)}`;
       if (seen.has(key)) continue;
       seen.add(key);
       const source = overview?.sources.find(s => s.id === line.sourceId);
       list.push({key, at: live.resetAt, label: t('chart.reset', {source: source ? sourceLabel(source) : line.provider}), color: line.color});
     }
+    // What happened to the sources on the chart: their limits came back early, or free resets were granted.
+    for (const event of history?.events ?? []) {
+      const shown = visible.filter(line => line.sourceId === event.sourceId && (event.kind !== 'early_reset' || event.windows.includes(line.windowId)));
+      if (event.at < from || !shown.length) continue;
+      const source = overview?.sources.find(s => s.id === event.sourceId);
+      const name = source ? sourceLabel(source) : shown[0].provider;
+      list.push({
+        key: `${event.kind}-${event.sourceId}-${event.at}`,
+        at: event.at,
+        label: event.kind === 'early_reset' ? t('chart.earlyReset', {source: name}) : t('chart.resetsGranted', {count: event.count, source: name}),
+        color: shown[0].color,
+        past: true,
+      });
+    }
     return list;
-  }, [announced, visible, overview, from, to, measuredTo, prefs, locale]);
+  }, [announced, visible, overview, history, from, to, measuredTo, view, locale]);
 
   // One plan line per distinct weekly window; windows of a source that share a reset
   // (e.g. Claude weekly and Fable) share one plan.
@@ -168,7 +227,7 @@ export function History({history, overview, resets, now}: {history: HistoryData 
     for (const line of visible) {
       const live = overview?.sources.find(s => s.id === line.sourceId)?.windows.find(w => w.id === line.windowId);
       // Idle rolling windows (reset = now + 7 days) have not started: no plan to show.
-      if (!live?.resetAt || live.minutes !== 10080 || !planAt(live, now, planOf(prefs, line.sourceId))) continue;
+      if (!live?.resetAt || live.minutes !== 10080 || !planAt(live, now, planOf(view, line.sourceId))) continue;
       const key = `${line.sourceId}@${Math.round(live.resetAt / 3_600_000)}`;
       if (seen.has(key)) continue;
       const source = overview?.sources.find(s => s.id === line.sourceId);
@@ -176,11 +235,11 @@ export function History({history, overview, resets, now}: {history: HistoryData 
         key,
         name: t('chart.plan', {source: source ? sourceLabel(source) : line.provider}),
         color: line.color,
-        runs: weeklyPlanLine(live.resetAt, from, to, planOf(prefs, line.sourceId)),
+        runs: weeklyPlanLine(live.resetAt, from, to, planOf(view, line.sourceId)),
       });
     }
     return [...seen.values()];
-  }, [visible, overview, from, to, now, planAvailable, prefs.showPlan, prefs.plans, locale]);
+  }, [visible, overview, from, to, now, planAvailable, prefs.showPlan, view, locale]);
 
   return (
     <section className="panel history" aria-label={t('history.label')}>
@@ -206,6 +265,7 @@ export function History({history, overview, resets, now}: {history: HistoryData 
             ]}
             label={t('history.range')}
           />
+          <HistorySettings arrange={arrange} />
         </div>
       </div>
 
@@ -243,7 +303,7 @@ export function History({history, overview, resets, now}: {history: HistoryData 
       </div>
 
       {history ? <Chart lines={visible} plans={plans} markers={markers} from={from} now={measuredTo} to={to} cellMs={history.cellMs} /> : <div className="chart chart-loading">{t('history.loading')}</div>}
-      {history && <SeriesTable lines={lines} overview={overview} now={now} prefs={prefs} />}
+      {history && <SeriesTable lines={lines} overview={overview} now={now} view={view} />}
       {history && history.since < history.historyStart && (
         <p className="footnote">{t('history.since', {date: day(history.historyStart)})}</p>
       )}

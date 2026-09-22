@@ -160,9 +160,14 @@ them), kept for 90 days.
 - **The chart** puts every series on one time grid (5 minutes for a day, 30 minutes
   for a week, 2 hours for a month) and shows the lowest value seen in each cell, so
   hovering reads every series at once and a short hiccup doesn't break a line.
-- **The plan** is per source and lives in the browser: whole percents per day of the
-  weekly window (30/25/15/15/10/5/0 by default), days at 0 are rest days. Other windows
-  are planned linearly to their reset.
+- **The plan** is per source and belongs to the board: whole percents per day of the
+  weekly window (30/25/15/15/10/5/0 by default). A day at 0 has no spending planned,
+  wherever it is; the plan ends with its last non-zero day. Other windows are planned
+  linearly to their reset.
+- **Events** mark the chart behind now. An early reset is derived from the samples: a
+  window's used share drops by more than 5 points before its reset time (resets of one
+  source within 15 minutes are one event). Free resets granted are recorded when a
+  measurement reports more of them than the one before.
 
 ## People, boards, devices
 
@@ -171,9 +176,14 @@ them), kept for 90 days.
   log, so only whoever started it can claim it. After that, signing up needs an invite
   link unless the hub is open (`QUOTUM_SIGNUP=open`).
 - **Boards** are what is aggregated and shared: every user has a personal board and can
-  create shared ones. The owner of a board invites people with a link (valid for a
-  week, several uses) and removes sources; every member sees everything on the board
-  and manages their own tokens and devices, the owner manages all of them.
+  create shared ones. The owner of a board names it, invites people with a link (valid
+  for a week, several uses) and arranges it; every member sees everything on the
+  board and manages their own tokens and devices, the owner manages all of them.
+- **The view** of a board is how it is arranged: the order of its widgets (a card per
+  source and the chart), the hidden ones, the windows hidden inside cards and the
+  spending plans. It is stored once per board, like a dashboard in Grafana: the owner
+  changes it and everyone sees the same board. Hiding a widget changes nothing that is
+  measured or stored.
 - **Devices** are running agents. The devices tab shows each one, what it delivers and
   the last failure of each client there (not logged in, too old…). They join a board
   in one of two ways:
@@ -203,7 +213,11 @@ rate-limited.
 
 A single-page React app served by the hub. It reads `/api/overview` every 10 seconds
 and re-reads history only when the overview's `revision` says the board's data changed.
-Preferences (hidden windows, plans, the chosen board and language) stay in the browser.
+The board's view comes with the overview; the owner's changes show at once and are
+saved about half a second later, one request per burst (a drag, typing a plan). What
+is only about how one person looks (the chart's period, window type and horizon, lines
+switched off in the legend, reset announcements, the chosen board and language) stays
+in their browser.
 
 Text is translated through typed catalogs in `hub/ui/i18n`: English is the source,
 every other language must translate all its keys (checked by the type checker and by

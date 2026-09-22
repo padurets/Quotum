@@ -72,17 +72,22 @@ Antigravity   Gemini 5 hours       100%  in 4h 59m
 - **Free resets.** When a provider grants resets of the limits (Codex does now and
   then), the card shows how many you have and until when.
 - **A weekly spending plan.** By default you spend 30 / 25 / 15 / 15 / 10 / 5% on the
-  six days after the reset, and the seventh is a rest day. Each subscription can have
-  its own plan.
-- **A chart of the weekly or the 5-hour windows** over 24 hours, 7 or 30 days, with the
-  plan and the next resets drawn ahead of now.
+  six days after the reset and nothing on the seventh. Each subscription can have its
+  own plan: a day at 0 is a day you don't spend, and it can be any day of the week.
+- **A chart of the weekly or the 5-hour windows** over 24 hours, 7 or 30 days. Ahead of
+  now it draws the plan and the next resets, as far as you choose; behind, it marks
+  when limits came back early and when free resets were granted.
 - **A table with a forecast:** at the current pace, does the window run out before its
-  reset (or before your rest day), and roughly how much will be left.
+  reset (or before your plan ends), and roughly how much will be left.
 - **Reset announcements** from the community trackers [Codex Resets](https://codex-resets.com)
   and [claude-resets.com](https://claude-resets.com), with a link to the source. You
   can turn them off.
+- **Boards made of widgets**, a card per subscription and the chart, like a dashboard
+  in Grafana. The owner of a board drags them around, hides the ones they don't need
+  (the data keeps coming) and sets the plans; everyone on the board sees it arranged
+  the same way.
 - **Boards.** Everyone has a personal board. On a shared board a team sees each
-  other's limits; its owner invites people with a link.
+  other's limits; its owner names it and invites people with a link.
 
 The interface is available in English and Russian.
 

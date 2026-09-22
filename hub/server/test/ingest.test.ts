@@ -121,7 +121,7 @@ test('one account measured by several devices is one source', () => {
   const {store, ingest, board, token} = setup();
   ingest.accept(token, batch([snapshot(start, 5)], [], 'machine-one-0123456789'), start);
   ingest.accept(token, batch([snapshot(start + 120_000, 6)], [], 'machine-two-0123456789'), start + 120_000);
-  const [series] = store.history(board, start - 1, 60_000);
+  const [series] = store.history(board, start - 1, 60_000).series;
   assert.deepEqual([store.states(board).length, series.samples, series.consumed], [1, 2, 1]);
 });
 
@@ -217,7 +217,7 @@ test('stored agent samples carry their staleness into history', () => {
   const {store, ingest, board, token} = setup();
   ingest.accept(token, batch([snapshot(start, 10, {staleAfterMs: 1_080_000})]), start);
   ingest.accept(token, batch([snapshot(start + 900_000, 12, {staleAfterMs: 1_080_000})]), start + 900_000);
-  const [history] = store.history(board, start - 1, 300_000);
+  const [history] = store.history(board, start - 1, 300_000).series;
   assert.equal(history.consumed, 2);
   assert.deepEqual(history.points.map(p => p[2]), [0, 0]);
 });

@@ -12,6 +12,7 @@ import {
 } from '../domain/auth.js';
 import type {Guards, Hub} from '../api.js';
 import type {Board} from '../store/directory.js';
+import {parseView} from '../domain/view.js';
 import {currentUser, Limiter, publicOrigin, sessionSecret, setSession} from '../session.js';
 
 type Body = Record<string, unknown>;
@@ -79,6 +80,37 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
     return {user: found.user, boards: directory.boards(found.user.id), joined: board?.id ?? null};
   });
 
+  /** Changing one's name needs nothing more; a new email or password needs the current password. */
+  app.post<{Body: Body}>('/api/account', async (request, reply) => {
+    const user = guards.user(request, reply);
+    if (!user) return reply;
+    if (!logins.allow(`account:${user.id}`)) return reply.code(429).send({error: 'too_many_attempts'});
+    const body = request.body ?? {};
+    const change: {name?: string; email?: string; passwordHash?: string} = {};
+    if (body.name !== undefined) {
+      const name = str(body.name).trim();
+      if (!validName(name)) return reply.code(400).send({error: 'invalid_input'});
+      change.name = name;
+    }
+    const email = body.email !== undefined ? normalizeEmail(str(body.email)) : undefined;
+    const password = body.password !== undefined ? str(body.password) : undefined;
+    if ((email !== undefined && email !== user.email) || password !== undefined) {
+      const stored = directory.credentials(user.email)!;
+      if (!(await verifyPassword(str(body.currentPassword), stored.password))) return reply.code(403).send({error: 'invalid_credentials'});
+      if (email !== undefined && email !== user.email) {
+        if (!validEmail(email)) return reply.code(400).send({error: 'invalid_input'});
+        if (directory.credentials(email)) return reply.code(409).send({error: 'email_taken'});
+        change.email = email;
+      }
+      if (password !== undefined) {
+        if (!validPassword(password)) return reply.code(400).send({error: 'invalid_input'});
+        change.passwordHash = await hashPassword(password);
+      }
+    }
+    directory.updateUser(user.id, change, sessionSecret(request));
+    return {user: directory.user(user.id)};
+  });
+
   app.post('/api/auth/logout', (request, reply) => {
     const secret = sessionSecret(request);
     if (secret) directory.deleteSession(secret);
@@ -128,13 +160,28 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
     return {board: directory.boards(user.id).find(b => b.id === board.id)};
   });
 
-  // ---------- sources ----------
-
-  app.delete<{Params: {board: string; source: string}}>('/api/boards/:board/sources/:source', (request, reply) => {
+  app.post<{Params: {board: string}; Body: Body}>('/api/boards/:board', (request, reply) => {
     const access = guards.board(request, reply, request.params.board);
     if (!access) return reply;
     if (!isOwner(access.board)) return forbidden(reply);
-    return store.removeSource(access.board.id, request.params.source) ? {ok: true} : notFound(reply);
+    // A personal board may go back to its default name (in the reader's language); a shared one needs a name.
+    const name = str(request.body?.name).trim();
+    if (!(name ? validName(name) : access.board.personal)) return reply.code(400).send({error: 'invalid_name'});
+    directory.renameBoard(access.board.id, name);
+    return {...access.board, name};
+  });
+
+  // ---------- views ----------
+
+  // The owner arranges a board for everyone on it, as a dashboard is in Grafana.
+  app.post<{Params: {board: string}}>('/api/boards/:board/view', (request, reply) => {
+    const access = guards.board(request, reply, request.params.board);
+    if (!access) return reply;
+    if (!isOwner(access.board)) return forbidden(reply);
+    const view = parseView(request.body);
+    if (!view) return reply.code(400).send({error: 'invalid_request'});
+    directory.saveView(access.board.id, view, access.user.id, Date.now());
+    return view;
   });
 
   // ---------- board tokens ----------

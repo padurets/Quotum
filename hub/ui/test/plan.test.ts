@@ -7,7 +7,7 @@ const DAY = 86_400_000;
 const start = Date.UTC(2026, 8, 21);
 const weekly = (change: Partial<Win> = {}): Win => ({id: 'weekly', kind: 'weekly', label: null, used: 0, remaining: 100, resetAt: start + 7 * DAY, minutes: 10080, ...change});
 
-test('the default weekly plan is whole percents, front-loaded, with a rest day', () => {
+test('the default weekly plan is whole percents, front-loaded, ending a day before the reset', () => {
   assert.deepEqual(DEFAULT_PLAN, [30, 25, 15, 15, 10, 5, 0]);
   assert.ok(isValidPlan(DEFAULT_PLAN));
   assert.deepEqual([1, 2, 3, 4, 5, 6, 7].map(day => weeklyPlanRemaining(day * DAY)), [70, 45, 30, 15, 5, 0, 0]);
@@ -22,16 +22,25 @@ test('only seven whole days summing to 100 are accepted as a plan', () => {
   assert.ok(!isValidPlan([-5, 35, 15, 15, 10, 5, 0]));
 });
 
-test('the rest days follow the plan: a custom plan moves the deadline', () => {
+test('the plan ends with its last non-zero day: a custom plan moves the deadline', () => {
   assert.equal(planAt(weekly(), start + DAY)!.remaining, 70);
-  const rest = planAt(weekly(), start + 6.5 * DAY)!;
-  assert.deepEqual([rest.remaining, rest.restDay, rest.deadline], [0, true, start + 6 * DAY]);
+  const ended = planAt(weekly(), start + 6.5 * DAY)!;
+  assert.deepEqual([ended.remaining, ended.done, ended.deadline], [0, true, start + 6 * DAY]);
   const fiveDays = [40, 30, 15, 10, 5, 0, 0];
-  assert.equal(planAt(weekly(), start + 5.5 * DAY, fiveDays)!.restDay, true);
+  assert.equal(planAt(weekly(), start + 5.5 * DAY, fiveDays)!.done, true);
   assert.equal(planAt(weekly(), start + 5.5 * DAY, fiveDays)!.deadline, start + 5 * DAY);
   const everyDay = [15, 15, 15, 15, 15, 15, 10];
-  assert.equal(planAt(weekly(), start + 6.5 * DAY, everyDay)!.restDay, false);
+  assert.equal(planAt(weekly(), start + 6.5 * DAY, everyDay)!.done, false);
   assert.equal(planAt(weekly(), start + 6.5 * DAY, everyDay)!.remaining, 5);
+});
+
+test('a day at 0 can be anywhere: nothing is spent that day, and the plan goes on after it', () => {
+  const gaps = [40, 0, 30, 0, 30, 0, 0];
+  assert.ok(isValidPlan(gaps));
+  const dayOff = planAt(weekly(), start + 1.5 * DAY, gaps)!;
+  assert.deepEqual([dayOff.remaining, dayOff.done, dayOff.deadline], [60, false, start + 5 * DAY]);
+  assert.equal(planAt(weekly(), start + 3.5 * DAY, gaps)!.remaining, 30);
+  assert.equal(planAt(weekly(), start + 5.5 * DAY, gaps)!.done, true);
 });
 
 test('short windows are planned linearly to their reset; idle rolling windows have no plan', () => {

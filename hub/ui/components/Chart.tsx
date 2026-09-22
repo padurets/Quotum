@@ -5,8 +5,14 @@ import type {HistorySeries} from '../lib/types';
 
 export type Line = HistorySeries & {key: string; name: string; color: string; dash: string; current: number};
 
-/** A moment ahead on the time axis: a known window reset, or an announced extra reset. */
-export type Marker = {key: string; at: number; label: string; color: string; strong?: boolean};
+/**
+ * A moment on the time axis: ahead, a known window reset or an announced extra one;
+ * behind (`past`), something that happened to a source, such as an early reset.
+ */
+export type Marker = {key: string; at: number; label: string; color: string; strong?: boolean; past?: boolean};
+
+/** The mark of a past event: a small diamond centred at (x, y). */
+const diamond = (x: number, y: number, r = 4) => `M${x},${y - r}l${r},${r}l${-r},${r}l${-r},${-r}z`;
 
 /** The spending plan of one weekly window, drawn as a faint dotted line in its colour. */
 export type PlanLine = {key: string; name: string; color: string; runs: [number, number][][]};
@@ -189,6 +195,15 @@ export function Chart({
             ) : null;
           }
           const mx = x(marker.at);
+          if (marker.past) {
+            return (
+              <g key={marker.key} className="marker is-event">
+                <line x1={mx} x2={mx} y1={top} y2={height - bottom} stroke={marker.color} />
+                <path d={diamond(mx, top)} fill={marker.color} />
+                <title>{`${marker.label} · ${cellLabel(marker.at, 0)}`}</title>
+              </g>
+            );
+          }
           const nearRight = mx > width - right - 150;
           return (
             <g key={marker.key} className={`marker ${marker.strong ? 'is-strong' : ''}`}>
@@ -244,7 +259,11 @@ export function Chart({
           {markerReadout.map(marker => (
             <div className={`tooltip-row is-marker ${marker.strong ? 'is-strong' : ''}`} key={marker.key}>
               <svg width="14" height="10" aria-hidden="true">
-                <line x1="7" x2="7" y1="0" y2="10" stroke={marker.strong ? 'var(--accent)' : marker.color} strokeWidth="2" />
+                {marker.past ? (
+                  <path d={diamond(7, 5)} fill={marker.color} />
+                ) : (
+                  <line x1="7" x2="7" y1="0" y2="10" stroke={marker.strong ? 'var(--accent)' : marker.color} strokeWidth="2" />
+                )}
               </svg>
               <strong>{clock(marker.at)}</strong>
               <span>{marker.label}</span>

@@ -4,7 +4,7 @@ import {config, serviceName, version} from './config.js';
 import type {Ingest} from './ingest.js';
 import type {Pairing} from './pairing.js';
 import type {ResetFeed} from './resets.js';
-import type {HistorySeries, Store} from './store/store.js';
+import type {HistorySeries, SourceEvent, Store} from './store/store.js';
 import type {Board, Directory, User} from './store/directory.js';
 import {currentUser, publicOrigin} from './session.js';
 import type {Setup} from './setup.js';
@@ -56,7 +56,7 @@ export async function buildApp(hub: Hub) {
   const app = Fastify({logger: false, bodyLimit: 16 * 1024, trustProxy: config.http.trustProxy});
   const hosts = new Set<string>(config.http.hosts);
   const anyHost = hosts.has('*');
-  const historyCache = new Map<string, {key: string; value: HistorySeries[]}>();
+  const historyCache = new Map<string, {key: string; value: {series: HistorySeries[]; events: SourceEvent[]}}>();
 
   app.addHook('onRequest', async (request, reply) => {
     if (!anyHost && !hosts.has(request.hostname.toLowerCase())) return reply.code(403).send({error: 'forbidden_host'});
@@ -121,6 +121,7 @@ export async function buildApp(hub: Hub) {
     }
     return {
       board: access.board,
+      view: directory.view(access.board.id),
       historyStart: store.historyStart,
       /** Changes whenever the board's data changes: the page re-reads history when it does. */
       revision: store.revision(access.board.id),
@@ -146,14 +147,8 @@ export async function buildApp(hub: Hub) {
     if (historyCache.get(slot)?.key !== key) {
       historyCache.set(slot, {key, value: store.history(access.board.id, now - spec.durationMs, spec.cellMs)});
     }
-    return {
-      range,
-      now,
-      since: now - spec.durationMs,
-      cellMs: spec.cellMs,
-      historyStart: store.historyStart,
-      series: historyCache.get(slot)!.value,
-    };
+    const {series, events} = historyCache.get(slot)!.value;
+    return {range, now, since: now - spec.durationMs, cellMs: spec.cellMs, historyStart: store.historyStart, series, events};
   });
 
   accountRoutes(app, hub, guards);

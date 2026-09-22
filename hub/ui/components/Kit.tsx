@@ -4,8 +4,8 @@ import {messageOf} from '../lib/http';
 
 export const SERVICE = 'Quotum';
 
-/** A centered dialog over the page; closes on Escape and on a click outside. */
-export function Modal({title, onClose, children, wide}: {title: string; onClose: () => void; children: ReactNode; wide?: boolean}) {
+/** A dialog over the page, centred or as a panel on its side; closes on Escape and on a click outside. */
+export function Modal({title, onClose, children, wide, side}: {title: string; onClose: () => void; children: ReactNode; wide?: boolean; side?: boolean}) {
   const panel = useRef<HTMLDivElement>(null);
   // The latest handler, so the effect below runs once: focus moves in when the dialog opens and back when it closes.
   const close = useRef(onClose);
@@ -21,8 +21,8 @@ export function Modal({title, onClose, children, wide}: {title: string; onClose:
     };
   }, []);
   return (
-    <div className="overlay" onMouseDown={event => event.target === event.currentTarget && onClose()}>
-      <div className={`dialog ${wide ? 'is-wide' : ''}`} role="dialog" aria-modal="true" aria-label={title} ref={panel} tabIndex={-1}>
+    <div className={`overlay ${side ? 'is-side' : ''}`} onMouseDown={event => event.target === event.currentTarget && onClose()}>
+      <div className={`dialog ${wide ? 'is-wide' : ''} ${side ? 'is-side' : ''}`} role="dialog" aria-modal="true" aria-label={title} ref={panel} tabIndex={-1}>
         <div className="dialog-head">
           <h2>{title}</h2>
           <button type="button" className="icon-button" aria-label={t('common.close')} onClick={onClose}>

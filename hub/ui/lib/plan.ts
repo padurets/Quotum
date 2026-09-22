@@ -6,8 +6,8 @@ const WEEK_MINUTES = 10080;
 /**
  * How a weekly quota is meant to be spent: whole percent per day of the window
  * (providers report whole percents, so finer targets would be false precision).
- * Days with 0 are rest days; everything should be spent by the end of the last
- * non-zero day. Configurable per source in the card settings.
+ * A day at 0 has no spending planned, wherever it is in the week; the plan ends with
+ * its last non-zero day. The board's owner sets it per source in the card settings.
  */
 export type WeeklyPlan = number[];
 export const DEFAULT_PLAN: WeeklyPlan = [30, 25, 15, 15, 10, 5, 0];
@@ -27,16 +27,16 @@ export function isValidPlan(plan: unknown): plan is WeeklyPlan {
   );
 }
 
-/** Days until the plan is fully spent (end of the last day with a non-zero share). */
+/** Days until the plan ends (the end of its last day with a non-zero share). */
 const activeDays = (plan: WeeklyPlan) => plan.reduce((last, share, day) => (share > 0 ? day + 1 : last), 0);
 
 export type PlanPoint = {
   /** Remaining percent the plan expects at that moment. */
   remaining: number;
-  /** When the plan expects the window to be spent (start of the rest days for weekly windows). */
+  /** When the plan expects the window to be spent: the end of the plan for weekly windows, else the reset. */
   deadline: number;
-  /** True on rest days: nothing is expected to be left, nothing to spend. */
-  restDay: boolean;
+  /** The plan has ended: it expects nothing to be left and nothing more to be spent. */
+  done: boolean;
   weekly: boolean;
 };
 
@@ -63,10 +63,10 @@ export function planAt(w: Win, now: number, plan: WeeklyPlan = DEFAULT_PLAN): Pl
   if (elapsed < length * 0.02 || elapsed >= length) return null;
 
   if (w.kind !== 'weekly') {
-    return {remaining: 100 * (1 - elapsed / length), deadline: w.resetAt, restDay: false, weekly: false};
+    return {remaining: 100 * (1 - elapsed / length), deadline: w.resetAt, done: false, weekly: false};
   }
   const deadline = start + activeDays(plan) * DAY;
-  return {remaining: weeklyPlanRemaining(elapsed, plan), deadline, restDay: now >= deadline, weekly: true};
+  return {remaining: weeklyPlanRemaining(elapsed, plan), deadline, done: now >= deadline, weekly: true};
 }
 
 /**

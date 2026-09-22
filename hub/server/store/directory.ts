@@ -1,5 +1,6 @@
 import type {DatabaseSync} from 'node:sqlite';
 import {newId, secretHash} from '../domain/auth.js';
+import {EMPTY_VIEW, type View} from '../domain/view.js';
 
 export type User = {id: string; email: string; name: string; createdAt: number};
 export type Board = {id: string; name: string; personal: boolean; role: 'owner' | 'member'};
@@ -132,6 +133,30 @@ export class Directory {
     this.db.prepare('DELETE FROM sessions WHERE id = ?').run(secretHash(secret));
   }
 
+  /** Changes a person's name, email or password; with a new password their other sessions end. */
+  updateUser(id: string, change: {name?: string; email?: string; passwordHash?: string}, keepSession: string | null) {
+    this.transaction(() => {
+      if (change.name !== undefined) this.db.prepare('UPDATE users SET name = ? WHERE id = ?').run(change.name, id);
+      if (change.email !== undefined) this.db.prepare('UPDATE users SET email = ? WHERE id = ?').run(change.email, id);
+      if (change.passwordHash !== undefined) {
+        this.db.prepare('UPDATE users SET password = ? WHERE id = ?').run(change.passwordHash, id);
+        this.db.prepare('DELETE FROM sessions WHERE user_id = ? AND id IS NOT ?').run(id, keepSession ? secretHash(keepSession) : null);
+      }
+    });
+  }
+
+  // ---------- views ----------
+
+  /** How a board is arranged; the default until its owner changes anything. */
+  view(boardId: string): View {
+    const row = this.db.prepare('SELECT payload FROM views WHERE board_id = ?').get(boardId) as {payload: string} | undefined;
+    return row ? (JSON.parse(row.payload) as View) : EMPTY_VIEW;
+  }
+
+  saveView(boardId: string, view: View, by: string, now: number) {
+    this.db.prepare('INSERT OR REPLACE INTO views VALUES (?, ?, ?, ?)').run(boardId, JSON.stringify(view), by, now);
+  }
+
   // ---------- boards, members, invites ----------
 
   boards(userId: string): Board[] {
@@ -153,6 +178,11 @@ export class Directory {
   membership(boardId: string, userId: string): 'owner' | 'member' | null {
     const row = this.db.prepare('SELECT role FROM members WHERE board_id = ? AND user_id = ?').get(boardId, userId) as {role: 'owner' | 'member'} | undefined;
     return row?.role ?? null;
+  }
+
+  /** A personal board without a name is shown under its default one, in the reader's language. */
+  renameBoard(id: string, name: string) {
+    this.db.prepare('UPDATE boards SET name = ? WHERE id = ?').run(name, id);
   }
 
   createBoard(name: string, userId: string, now: number): Board {

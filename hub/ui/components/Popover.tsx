@@ -88,3 +88,9 @@ export const GearIcon = () => (
     <circle cx="12" cy="12" r="3" />
   </svg>
 );
+
+export const EyeOffIcon = () => (
+  <svg className="row-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+    <path d="M2 8s2.2-4 6-4c1 0 1.9.3 2.7.7M14 8s-2.2 4-6 4c-1 0-1.9-.3-2.7-.7M6.6 9.4a2 2 0 0 1 2.8-2.8M2.5 13.5l11-11" />
+  </svg>
+);

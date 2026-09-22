@@ -1,0 +1,116 @@
+import {useCallback, useEffect, useRef, useState} from 'react';
+import {call} from './http';
+import {DEFAULT_PLAN, isValidPlan, type WeeklyPlan} from './plan';
+import type {Overview, View} from './types';
+
+export const HISTORY = 'history';
+export const cardId = (sourceId: string) => `source:${sourceId}`;
+
+const EMPTY: View = {order: [], hidden: [], windows: [], plans: {}};
+/** Changes in a burst (a drag, typing a plan) are saved once, this long after the last one. */
+const SAVE_AFTER = 600;
+
+/** The widgets in the board's order: the arranged ones first, new ones after them as they come. */
+export function arranged(view: View, ids: string[]): string[] {
+  const position = new Map(view.order.map((id, i) => [id, i]));
+  return ids
+    .map((id, natural) => ({id, rank: position.get(id) ?? view.order.length + natural}))
+    .sort((a, b) => a.rank - b.rank)
+    .map(entry => entry.id);
+}
+
+/** A new order of the shown widgets; hidden ones keep theirs after them. */
+export const reordered = (view: View, shown: string[]): View => ({
+  ...view,
+  order: [...shown, ...view.order.filter(id => !shown.includes(id))],
+});
+
+export const withHidden = (view: View, id: string, hidden: boolean): View => ({
+  ...view,
+  hidden: hidden ? [...new Set([...view.hidden, id])] : view.hidden.filter(other => other !== id),
+});
+
+export const withWindowHidden = (view: View, key: string, hidden: boolean): View => ({
+  ...view,
+  windows: hidden ? [...new Set([...view.windows, key])] : view.windows.filter(other => other !== key),
+});
+
+/** The weekly plan of one source: the board's if valid, otherwise the default. */
+export const planOf = (view: View, sourceId: string): WeeklyPlan => {
+  const plan = view.plans[sourceId];
+  return isValidPlan(plan) ? plan : DEFAULT_PLAN;
+};
+
+export const withPlan = (view: View, sourceId: string, plan: WeeklyPlan | null): View => {
+  const plans = {...view.plans};
+  if (plan && plan.join() !== DEFAULT_PLAN.join()) plans[sourceId] = plan;
+  else delete plans[sourceId];
+  return {...view, plans};
+};
+
+const same = (a: View, b: View) => JSON.stringify(a) === JSON.stringify(b);
+
+export type Arrange = {
+  view: View;
+  /** Only the board's owner arranges it; everyone else sees it this way. */
+  owner: boolean;
+  update: (change: (view: View) => View) => void;
+};
+
+/**
+ * The board's view. The owner's changes show at once and are saved shortly after; the
+ * change stays on screen until the board reports back what was saved, so a poll in
+ * between does not undo it. A save that fails puts the board's own view back.
+ */
+export function useView(overview: Overview | null, reload: () => void): Arrange {
+  const board = overview?.board.id ?? '';
+  const server = overview?.view ?? EMPTY;
+  /** The owner's latest change; `saved` is how the hub stored it, once it has. */
+  const [draft, setDraft] = useState<{board: string; view: View; saved: View | null} | null>(null);
+  const pending = useRef<{board: string; view: View} | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const view = draft?.board === board ? draft.view : server;
+
+  useEffect(() => {
+    if (draft && (draft.board !== board || (draft.saved && same(draft.saved, server)))) setDraft(null);
+  }, [draft, board, server]);
+
+  const update = useCallback(
+    (change: (view: View) => View) => {
+      const next = {board, view: change(pending.current?.board === board ? pending.current.view : view)};
+      pending.current = next;
+      setDraft({...next, saved: null});
+      clearTimeout(timer.current);
+      timer.current = setTimeout(async () => {
+        const saving = pending.current!;
+        pending.current = null;
+        try {
+          const saved = await call<View>('POST', `/api/boards/${encodeURIComponent(saving.board)}/view`, saving.view);
+          setDraft(current => (current?.view === saving.view ? {...current, saved} : current));
+          reload();
+        } catch {
+          setDraft(current => (current?.view === saving.view ? null : current));
+        }
+      }, SAVE_AFTER);
+    },
+    [board, view, reload],
+  );
+
+  // Leaving the page with a change not sent yet: send it on the way out.
+  useEffect(() => {
+    const flush = () => {
+      if (!pending.current) return;
+      const {board, view} = pending.current;
+      void fetch(`/api/boards/${encodeURIComponent(board)}/view`, {
+        method: 'POST',
+        keepalive: true,
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify(view),
+      }).catch(() => {});
+    };
+    window.addEventListener('pagehide', flush);
+    return () => window.removeEventListener('pagehide', flush);
+  }, []);
+
+  return {view, owner: overview?.board.role === 'owner', update};
+}

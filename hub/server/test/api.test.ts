@@ -17,6 +17,7 @@ import {Setup} from '../setup.js';
 const iso = (ms: number) => new Date(ms).toISOString();
 const ORIGIN = 'http://localhost';
 const SETUP = 'BCDF-GHJK';
+const EMPTY = {order: [], hidden: [], windows: [], plans: {}};
 
 async function hub() {
   const store = new Store(path.join(mkdtempSync(path.join(tmpdir(), 'quotum-api-')), 'db.sqlite'));
@@ -173,11 +174,45 @@ test('members manage their own tokens and devices; the owner manages all and rem
   assert.equal((await call('DELETE', `/api/boards/${team}/tokens/${bobs.id}`, {as: 'bob'})).status, 200);
   assert.equal((await call('DELETE', `/api/boards/${team}/tokens/${bobs.id}`, {as: 'alice'})).status, 404, 'already revoked');
 
-  const [source] = (await call('GET', `/api/overview?board=${team}`, {as: 'alice'})).body.sources;
-  assert.equal((await call('DELETE', `/api/boards/${team}/sources/${source.id}`, {as: 'bob'})).status, 403);
-  assert.equal((await call('DELETE', `/api/boards/${team}/sources/${source.id}`, {as: 'alice'})).status, 200);
-  assert.deepEqual((await call('GET', `/api/overview?board=${team}`, {as: 'alice'})).body.sources, []);
+  assert.equal((await call('POST', `/api/boards/${team}`, {as: 'bob', body: {name: 'Mine now'}})).status, 403, 'only the owner renames');
+  assert.equal((await call('POST', `/api/boards/${team}`, {as: 'alice', body: {name: ''}})).status, 400, 'a shared board needs a name');
+  assert.equal((await call('POST', `/api/boards/${team}`, {as: 'alice', body: {name: 'Platform team'}})).body.name, 'Platform team');
   assert.equal((await call('DELETE', `/api/boards/${team}/devices/${alicesBox.id}`, {as: 'alice'})).status, 200);
+});
+
+test('the owner arranges a board, and everyone on it sees it that way', async () => {
+  const {call, person} = await hub();
+  await person('alice');
+  const board = (await call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
+  await person('bob', (await call('POST', `/api/boards/${board}/invites`, {as: 'alice'})).body.url.split('/invite/')[1]);
+  const token = (await call('POST', `/api/boards/${board}/tokens`, {as: 'bob', body: {}})).body.secret;
+  await call('POST', '/v1/ingest', {body: batch('machine-one-0123456789'), headers: {authorization: `Bearer ${token}`}});
+  const overview = (await call('GET', `/api/overview?board=${board}`, {as: 'bob'})).body;
+  assert.deepEqual(overview.view, {order: [], hidden: [], windows: [], plans: {}}, 'nothing arranged yet');
+  const source = overview.sources[0].id;
+  const view = {order: ['history', `source:${source}`], hidden: ['history'], windows: [`${source}/weekly`], plans: {[source]: [50, 50, 0, 0, 0, 0, 0]}};
+  assert.deepEqual((await call('POST', `/api/boards/${board}/view`, {as: 'alice', body: view})).body, view);
+  assert.deepEqual((await call('GET', `/api/overview?board=${board}`, {as: 'bob'})).body.view, view);
+  assert.equal((await call('POST', `/api/boards/${board}/view`, {as: 'bob', body: EMPTY})).status, 403, 'a member only looks');
+  assert.equal((await call('POST', `/api/boards/${board}/view`, {as: 'alice', body: {...view, plans: {[source]: [50, 60, 0, 0, 0, 0, 0]}}})).status, 400);
+  // A personal board can be renamed and given its default name back; a shared one needs a name.
+  const personal = (await call('GET', '/api/session', {as: 'bob'})).body.boards.find((b: any) => b.personal).id;
+  assert.equal((await call('POST', `/api/boards/${personal}`, {as: 'bob', body: {name: 'Work'}})).body.name, 'Work');
+  assert.equal((await call('POST', `/api/boards/${personal}`, {as: 'bob', body: {name: ''}})).body.name, '');
+  assert.equal((await call('POST', `/api/boards/${board}`, {as: 'alice', body: {name: ''}})).status, 400);
+});
+
+test('a person changes their name freely, their email and password only with the current password', async () => {
+  const {call, person} = await hub();
+  await person('alice');
+  await call('POST', '/api/auth/login', {as: 'alice-phone', body: {email: 'alice@example.com', password: 'correct horse'}});
+  assert.equal((await call('POST', '/api/account', {as: 'alice', body: {name: 'Alice L.'}})).body.user.name, 'Alice L.');
+  assert.equal((await call('POST', '/api/account', {as: 'alice', body: {email: 'al@example.com', currentPassword: 'wrong'}})).status, 403);
+  const changed = await call('POST', '/api/account', {as: 'alice', body: {email: 'AL@example.com', password: 'battery staple', currentPassword: 'correct horse'}});
+  assert.equal(changed.body.user.email, 'al@example.com');
+  assert.equal((await call('GET', '/api/session', {as: 'alice'})).body.user?.name, 'Alice L.', 'this session stays');
+  assert.equal((await call('GET', '/api/session', {as: 'alice-phone'})).body.user, null, 'the other ones end with the old password');
+  assert.equal((await call('POST', '/api/auth/login', {body: {email: 'al@example.com', password: 'battery staple'}})).status, 200);
 });
 
 test('a device shows the failures it reports until it delivers again', async () => {

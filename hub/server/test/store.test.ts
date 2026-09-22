@@ -50,12 +50,12 @@ test('history returns one series per source and window, in the order of the card
   store.record(codex, measurement({windows: windows(20)}));
   store.record(codex, measurement({observedAt: start + 240_000, windows: windows(25)}));
   store.record(claude, measurement({windows: [win({used: 5})]}));
-  const history = store.history(BOARD, start - 1, 60_000);
+  const history = store.history(BOARD, start - 1, 60_000).series;
   assert.deepEqual(
     history.map(s => [s.provider, s.windowId, s.kind, s.consumed]),
     [['claude', 'weekly', 'weekly', 0], ['codex', 'weekly', 'weekly', 5], ['codex', 'session', 'session', 10]],
   );
-  assert.deepEqual(store.history('elsewhere', start - 1, 60_000), [], 'boards do not see each other');
+  assert.deepEqual(store.history('elsewhere', start - 1, 60_000).series, [], 'boards do not see each other');
   store.close();
 });
 
@@ -68,9 +68,25 @@ test('every change moves the revision of its board, and only of its board', () =
   store.fail(id, 'timeout');
   assert.equal(store.revision(BOARD), before + 3);
   assert.equal(store.revision('other'), other);
-  assert.ok(store.removeSource(BOARD, id));
-  assert.equal(store.revision(BOARD), before + 4);
-  assert.deepEqual([store.states(BOARD), store.history(BOARD, 0, 60_000)], [[], []], 'nothing of it is left');
+  store.close();
+});
+
+test('limits back before their reset time and free resets granted are events for the chart', () => {
+  const store = new Store(':memory:', start);
+  const id = store.source(BOARD, 'codex', 'account-a', start);
+  const at = (minutes: number) => start + minutes * 60_000;
+  const weekly = (used: number, resetAt = start + 3 * 86_400_000) => win({used, resetAt});
+  const session = (used: number) => win({id: 'session', kind: 'session', minutes: 300, used, resetAt: start + 3 * 3_600_000});
+  store.record(id, measurement({observedAt: at(0), windows: [weekly(90), session(40)], resets: {available: 0, expiresAt: null}}));
+  store.record(id, measurement({observedAt: at(2), windows: [weekly(91), session(41)], resets: {available: 1, expiresAt: at(43_200)}}));
+  // A free reset used: both windows back at zero days before their reset.
+  store.record(id, measurement({observedAt: at(4), windows: [weekly(0, start + 7 * 86_400_000), session(0)], resets: {available: 0, expiresAt: null}}));
+  store.record(id, measurement({observedAt: at(6), windows: [weekly(1, start + 7 * 86_400_000), session(1)], resets: {available: 0, expiresAt: null}}));
+  const {events} = store.history(BOARD, start - 1, 60_000);
+  assert.deepEqual(events, [
+    {sourceId: id, at: at(2), kind: 'resets_granted', count: 1},
+    {sourceId: id, at: at(4), kind: 'early_reset', windows: ['session', 'weekly']},
+  ]);
   store.close();
 });
 
@@ -80,7 +96,7 @@ test('old samples are pruned after the retention period', () => {
   store.record(id, measurement());
   store.record(id, measurement({observedAt: start + 100 * 86_400_000}));
   store.prune(start + 100 * 86_400_000);
-  assert.equal(store.history(BOARD, 0, 60_000)[0].samples, 1);
+  assert.equal(store.history(BOARD, 0, 60_000).series[0].samples, 1);
   store.close();
 });
 

@@ -30,8 +30,23 @@ export type SourceState = {
   title?: string;
 };
 
+/**
+ * How a board is arranged, the same for everyone on it; its owner changes it. Widgets
+ * are `source:<id>` cards and the `history` chart.
+ */
+export type View = {
+  /** Widget ids in order; widgets missing here come after, in the board's order. */
+  order: string[];
+  hidden: string[];
+  /** `windowKey`s of windows hidden from cards and the chart. */
+  windows: string[];
+  /** Weekly spending plans by source id; absent means the default. */
+  plans: Record<string, number[]>;
+};
+
 export type Overview = {
   board: {id: string; name: string; personal: boolean; role: 'owner' | 'member'};
+  view: View;
   historyStart: number;
   /** Changes whenever the board's data changes. */
   revision: number;
@@ -62,7 +77,13 @@ export type History = {
   cellMs: number;
   historyStart: number;
   series: HistorySeries[];
+  events: SourceEvent[];
 };
 
-/** Preferences and chart series are keyed by source + window, never by provider. */
+/** What happened to a source besides its values: limits back before their reset, or free resets granted. */
+export type SourceEvent =
+  | {sourceId: string; at: number; kind: 'early_reset'; windows: string[]}
+  | {sourceId: string; at: number; kind: 'resets_granted'; count: number};
+
+/** Hidden windows and chart series are keyed by source + window, never by provider. */
 export const windowKey = (sourceId: string, windowId: string) => `${sourceId}/${windowId}`;
