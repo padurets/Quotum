@@ -25,7 +25,7 @@ async function hub() {
   const app = await buildApp({
     store,
     directory,
-    resets: new ResetFeed(() => {}),
+    resets: new ResetFeed(undefined, () => {}),
     ingest: new Ingest(store, directory, new Duty()),
     pairing: new Pairing(directory),
     setup: new Setup(true, SETUP),

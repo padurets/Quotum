@@ -176,6 +176,7 @@ export const ru = {
   'chart.plan': 'план · {source}',
   'chart.earlyReset': 'досрочный сброс · {source}',
   'chart.resetsGranted': {one: 'выдан {count} бесплатный сброс · {source}', few: 'выдано {count} бесплатных сброса · {source}', many: 'выдано {count} бесплатных сбросов · {source}', other: 'выдано {count} бесплатного сброса · {source}'},
+  'chart.resetForAll': 'сброс для всех · {source}',
   'chart.ahead': '{label} через {time} →',
   'chart.empty': 'Нечего показать: включите линии в легенде',
 

@@ -15,8 +15,13 @@ export function Modal({title, onClose, children, wide, side}: {title: string; on
     document.addEventListener('keydown', escape);
     const previous = document.activeElement as HTMLElement | null;
     panel.current?.focus();
+    // The page under the dialog stays still: only the dialog scrolls.
+    const page = document.documentElement;
+    const overflow = page.style.overflow;
+    page.style.overflow = 'hidden';
     return () => {
       document.removeEventListener('keydown', escape);
+      page.style.overflow = overflow;
       previous?.focus?.();
     };
   }, []);

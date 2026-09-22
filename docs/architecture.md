@@ -167,7 +167,9 @@ them), kept for 90 days.
 - **Events** mark the chart behind now. An early reset is derived from the samples: a
   window's used share drops by more than 5 points before its reset time (resets of one
   source within 15 minutes are one event). Free resets granted are recorded when a
-  measurement reports more of them than the one before.
+  measurement reports more of them than the one before. Resets for everyone that the
+  community trackers report are kept as the hub sees them (the trackers only tell the
+  latest one), so the chart marks every one of the period.
 
 ## People, boards, devices
 

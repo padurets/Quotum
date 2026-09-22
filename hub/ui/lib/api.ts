@@ -65,8 +65,12 @@ export function useOverview(board: string) {
   return {data: data?.board?.id === board ? data : null, lastOk, reload: () => reload.current()};
 }
 
-/** History of a board, read again when the range changes or the board's data does (`revision`). */
-export function useHistory(board: string, range: string, revision: number | null) {
+/**
+ * History of a board, read again when the range changes or the board's data does
+ * (`revision`). While another range loads, the one on screen stays (`loading`), so the
+ * page keeps its height and does not jump.
+ */
+export function useHistory(board: string, range: string, revision: number | null): {history: History | null; loading: boolean} {
   const [history, setHistory] = useState<History | null>(null);
   const [retry, setRetry] = useState(0);
 
@@ -87,5 +91,6 @@ export function useHistory(board: string, range: string, revision: number | null
     };
   }, [board, range, revision, retry]);
 
-  return history?.range === range && history.board === board ? history : null;
+  const shown = history?.board === board ? history : null;
+  return {history: shown, loading: !!shown && shown.range !== range};
 }

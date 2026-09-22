@@ -29,8 +29,8 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
   const {data, lastOk, reload} = useOverview(boardId);
   const arrange = useView(data, reload);
   const prefs = usePrefs();
-  const history = useHistory(boardId, prefs.range, data ? data.revision : null);
-  const {resets, health} = useResets(prefs.showResets);
+  const {history, loading: historyLoading} = useHistory(boardId, prefs.range, data ? data.revision : null);
+  const {resets, past, health} = useResets(prefs.showResets);
   const [admin, setAdmin] = useState<AdminTab | null>(null);
   const [account, setAccount] = useState(false);
   const closeAdmin = useCallback(() => setAdmin(null), []);
@@ -68,7 +68,7 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
         id,
         name: t('widgets.history'),
         wide: true,
-        content: <History history={history} overview={overview} resets={resets} now={now} arrange={arrange} />,
+        content: <History history={history} loading={historyLoading} overview={overview} resets={resets} past={past} now={now} arrange={arrange} />,
       },
   );
   const shown = widgets.filter(widget => !arrange.view.hidden.includes(widget.id));

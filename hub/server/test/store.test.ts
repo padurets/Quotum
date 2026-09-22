@@ -100,6 +100,19 @@ test('old samples are pruned after the retention period', () => {
   store.close();
 });
 
+test('resets the trackers report are kept, once each, until the retention period ends', () => {
+  const store = new Store(':memory:', start);
+  const grant = {at: start, url: 'https://example.com/1', text: 'A banked reset for everyone'};
+  store.announce('codex', grant);
+  store.announce('codex', grant);
+  store.announce('claude', {...grant, at: start + 3_600_000});
+  assert.deepEqual(store.announcements(start - 1), {codex: [grant], claude: [{...grant, at: start + 3_600_000}]});
+  assert.deepEqual(store.announcements(start + 1), {claude: [{...grant, at: start + 3_600_000}]});
+  store.prune(start + 100 * 86_400_000);
+  assert.deepEqual(store.announcements(0), {});
+  store.close();
+});
+
 test('a new database gets the current layout; one from a newer version is refused', () => {
   const file = path.join(mkdtempSync(path.join(tmpdir(), 'quotum-')), 'db.sqlite');
   const store = new Store(file, start);

@@ -1,5 +1,5 @@
 import {config, version} from './config.js';
-import {CLAUDE_RESETS, CODEX_RESETS, fromClaudeResets, fromCodexResets, type ResetProvider, type ResetStatus} from './domain/resets.js';
+import {CLAUDE_RESETS, CODEX_RESETS, fromClaudeResets, fromCodexResets, type ResetEvent, type ResetProvider, type ResetStatus} from './domain/resets.js';
 
 export type TrackerHealth = {name: string; url: string; ok: boolean | null; detail: string; at: number | null};
 
@@ -31,7 +31,8 @@ async function getJson(url: string): Promise<unknown> {
 /**
  * Polls both trackers in the background and keeps the last good status per provider.
  * Codex Resets is preferred for Codex (it knows about *scheduled* resets); the Codex
- * part of claude-resets.com is the fallback for executed ones. Nothing on the
+ * part of claude-resets.com is the fallback for executed ones. Every reset reported as
+ * done is handed to `remember`: the trackers only tell the latest one. Nothing on the
  * dashboard waits on this feed.
  */
 export class ResetFeed {
@@ -40,7 +41,10 @@ export class ResetFeed {
   private timer?: NodeJS.Timeout;
   private closing = false;
 
-  constructor(private readonly log: (event: object) => void = event => console.log(JSON.stringify(event))) {}
+  constructor(
+    private readonly remember: (provider: ResetProvider, reset: ResetEvent) => void = () => {},
+    private readonly log: (event: object) => void = event => console.log(JSON.stringify(event)),
+  ) {}
 
   snapshot() {
     return {resets: this.resets, trackers: this.health};
@@ -67,6 +71,9 @@ export class ResetFeed {
     if (catalogue.status === 'fulfilled') Object.assign(next, catalogue.value);
     if (codex.status === 'fulfilled') next.codex = codex.value;
     this.resets = next;
+    for (const [provider, status] of Object.entries(next) as [ResetProvider, ResetStatus][]) {
+      if (status.latest) this.remember(provider, {at: status.latest.at, url: status.latest.url, text: status.latest.text});
+    }
 
     const report = (tracker: {name: string; url: string}, result: PromiseSettledResult<unknown>): TrackerHealth =>
       result.status === 'fulfilled'

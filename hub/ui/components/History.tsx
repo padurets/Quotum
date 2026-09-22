@@ -9,7 +9,7 @@ import {HORIZONS, setMuted, setPrefs, usePrefs, type Horizon} from '../lib/prefs
 import {HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
 import type {View} from '../lib/types';
 import {Chart, type Line, type Marker, type PlanLine} from './Chart';
-import type {Resets} from '../lib/resets';
+import type {PastResets, Resets} from '../lib/resets';
 import {t, useLocale} from '../i18n';
 import {Segmented} from './Kit';
 import {EyeOffIcon, Popover, SlidersIcon} from './Popover';
@@ -135,14 +135,19 @@ function HistorySettings({arrange}: {arrange: Arrange}) {
 /** Combined history of every selected window, with its own legend and table view. */
 export function History({
   history,
+  loading,
   overview,
   resets,
+  past,
   now,
   arrange,
 }: {
   history: HistoryData | null;
+  /** Another period is loading; `history` is the previous one until it comes. */
+  loading: boolean;
   overview: Overview | null;
   resets: Resets;
+  past: PastResets;
   now: number;
   arrange: Arrange;
 }) {
@@ -215,8 +220,23 @@ export function History({
         past: true,
       });
     }
+    // Resets for everyone the trackers reported, on the providers the chart shows.
+    for (const [provider, reported] of Object.entries(past)) {
+      const line = visible.find(l => l.provider === provider);
+      for (const reset of reported ?? []) {
+        if (!line || reset.at < from || reset.at > measuredTo) continue;
+        list.push({
+          key: `announced-${provider}-${reset.at}`,
+          at: reset.at,
+          label: t('chart.resetForAll', {source: PROVIDERS[provider]?.name ?? provider}),
+          detail: reset.text,
+          color: line.color,
+          past: true,
+        });
+      }
+    }
     return list;
-  }, [announced, visible, overview, history, from, to, measuredTo, view, locale]);
+  }, [announced, visible, overview, history, past, from, to, measuredTo, view, locale]);
 
   // One plan line per distinct weekly window; windows of a source that share a reset
   // (e.g. Claude weekly and Fable) share one plan.
@@ -242,7 +262,7 @@ export function History({
   }, [visible, overview, from, to, now, planAvailable, prefs.showPlan, view, locale]);
 
   return (
-    <section className="panel history" aria-label={t('history.label')}>
+    <section className={`panel history ${loading ? 'is-loading' : ''}`} aria-label={t('history.label')} aria-busy={loading}>
       <div className="panel-head">
         <h2>{t('history.title')}</h2>
         <div className="controls">

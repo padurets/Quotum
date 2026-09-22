@@ -180,6 +180,7 @@ export const en = {
   'chart.plan': 'plan · {source}',
   'chart.earlyReset': 'limits reset early · {source}',
   'chart.resetsGranted': {one: '{count} free reset granted · {source}', other: '{count} free resets granted · {source}'},
+  'chart.resetForAll': 'reset for everyone · {source}',
   'chart.ahead': '{label} in {time} →',
   'chart.empty': 'Nothing to show: turn lines on in the legend',
 

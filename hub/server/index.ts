@@ -18,7 +18,7 @@ const store = new Store(databaseFile);
 chmodSync(databaseFile, 0o600);
 const directory = new Directory(store.db);
 
-const resets = new ResetFeed();
+const resets = new ResetFeed((provider, reset) => store.announce(provider, reset));
 const setup = new Setup(directory.userCount() === 0, config.auth.setupCode);
 const app = await buildApp({store, directory, resets, ingest: new Ingest(store, directory, new Duty()), pairing: new Pairing(directory), setup});
 await app.listen({host: config.http.host, port: config.http.port});

@@ -9,7 +9,7 @@ export type Line = HistorySeries & {key: string; name: string; color: string; da
  * A moment on the time axis: ahead, a known window reset or an announced extra one;
  * behind (`past`), something that happened to a source, such as an early reset.
  */
-export type Marker = {key: string; at: number; label: string; color: string; strong?: boolean; past?: boolean};
+export type Marker = {key: string; at: number; label: string; color: string; strong?: boolean; past?: boolean; detail?: string};
 
 /** The mark of a past event: a small diamond centred at (x, y). */
 const diamond = (x: number, y: number, r = 4) => `M${x},${y - r}l${r},${r}l${-r},${r}l${-r},${-r}z`;
@@ -200,7 +200,7 @@ export function Chart({
               <g key={marker.key} className="marker is-event">
                 <line x1={mx} x2={mx} y1={top} y2={height - bottom} stroke={marker.color} />
                 <path d={diamond(mx, top)} fill={marker.color} />
-                <title>{`${marker.label} · ${cellLabel(marker.at, 0)}`}</title>
+                <title>{[`${marker.label} · ${cellLabel(marker.at, 0)}`, marker.detail].filter(Boolean).join('\n')}</title>
               </g>
             );
           }
@@ -267,6 +267,7 @@ export function Chart({
               </svg>
               <strong>{clock(marker.at)}</strong>
               <span>{marker.label}</span>
+              {marker.detail && <small className="tooltip-detail">{marker.detail}</small>}
             </div>
           ))}
           {planReadout.length > 0 && <div className="tooltip-sep" />}

@@ -10,6 +10,13 @@ import {SwitchRow} from './Popover';
 
 type Status = {busy?: boolean; done?: boolean; error?: unknown};
 
+/**
+ * These forms change the account; nothing is filled in by the browser or a password
+ * manager. Browsers ignore `off` on password fields but leave `new-password` empty.
+ */
+const blank = {autoComplete: 'off', 'data-1p-ignore': '', 'data-lpignore': 'true'};
+const blankPassword = {...blank, autoComplete: 'new-password'};
+
 /** Name and email; a new email needs the current password. */
 function Profile({user, onChanged}: {user: User; onChanged: () => Promise<void>}) {
   const [name, setName] = useState(user.name);
@@ -35,8 +42,8 @@ function Profile({user, onChanged}: {user: User; onChanged: () => Promise<void>}
   return (
     <form className="drawer-section" onSubmit={save}>
       <h3>{t('account.profile')}</h3>
-      <Field label={t('auth.name')} hint={t('auth.nameHint')} value={name} maxLength={80} required autoComplete="name" onChange={e => (setName(e.target.value), setStatus({}))} />
-      <Field label={t('auth.email')} type="email" value={email} required autoComplete="email" onChange={e => (setEmail(e.target.value), setStatus({}))} />
+      <Field label={t('auth.name')} hint={t('auth.nameHint')} value={name} maxLength={80} required {...blank} onChange={e => (setName(e.target.value), setStatus({}))} />
+      <Field label={t('auth.email')} type="email" value={email} required {...blank} onChange={e => (setEmail(e.target.value), setStatus({}))} />
       {newEmail && (
         <Field
           label={t('account.currentPassword')}
@@ -44,7 +51,7 @@ function Profile({user, onChanged}: {user: User; onChanged: () => Promise<void>}
           type="password"
           value={password}
           required
-          autoComplete="current-password"
+          {...blankPassword}
           onChange={e => setPassword(e.target.value)}
         />
       )}
@@ -60,7 +67,7 @@ function Profile({user, onChanged}: {user: User; onChanged: () => Promise<void>}
 }
 
 /** A new password; every other session of the person ends with the old one. */
-function Password({user}: {user: User}) {
+function Password() {
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const [status, setStatus] = useState<Status>({});
@@ -81,9 +88,7 @@ function Password({user}: {user: User}) {
   return (
     <form className="drawer-section" onSubmit={save}>
       <h3>{t('account.password')}</h3>
-      {/* Lets a password manager tell whose password changes. */}
-      <input type="email" autoComplete="username" value={user.email} readOnly hidden />
-      <Field label={t('account.currentPassword')} type="password" value={current} required autoComplete="current-password" onChange={e => (setCurrent(e.target.value), setStatus({}))} />
+      <Field label={t('account.currentPassword')} type="password" value={current} required {...blankPassword} onChange={e => (setCurrent(e.target.value), setStatus({}))} />
       <Field
         label={t('account.newPassword')}
         hint={t('auth.passwordHint')}
@@ -91,7 +96,7 @@ function Password({user}: {user: User}) {
         value={next}
         required
         minLength={8}
-        autoComplete="new-password"
+        {...blankPassword}
         onChange={e => (setNext(e.target.value), setStatus({}))}
       />
       <ErrorLine error={status.error} />
@@ -158,7 +163,13 @@ function Browser({trackers}: {trackers: TrackerHealth[]}) {
   );
 }
 
-/** The person's own things, in a panel on the side: profile, password, this browser's settings, signing out. */
+const SignOutIcon = () => (
+  <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+    <path d="M6 2.5H3.5a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1H6M10.5 11l3-3-3-3M13.5 8H6" />
+  </svg>
+);
+
+/** The person's own things, in a panel on the side: who is signed in (and signing out), profile, password, this browser's settings. */
 export function AccountPanel({
   user,
   trackers,
@@ -184,13 +195,14 @@ export function AccountPanel({
           <b>{user.name}</b>
           <span>{user.email}</span>
         </div>
+        <button type="button" className="sign-out" onClick={signOut}>
+          <SignOutIcon />
+          {t('account.signOut')}
+        </button>
       </div>
       <Profile user={user} onChanged={onChanged} />
-      <Password user={user} />
+      <Password />
       <Browser trackers={trackers} />
-      <button type="button" className="button drawer-signout" onClick={signOut}>
-        {t('account.signOut')}
-      </button>
     </Modal>
   );
 }

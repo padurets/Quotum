@@ -13,15 +13,16 @@ type Drag = {
   pointer: Point;
   /** Where the widget was grabbed, from its top-left corner. */
   grab: Point;
-  /** The widget's shift from its place in the grid. */
+  /** How far the dragged widget is from its place in the grid. */
   offset: Point;
   active: boolean;
   order: string[];
-  /** The widget just swapped with: not a target again until the pointer leaves it. */
-  skip: string | null;
   frame: number;
   stop: () => void;
 };
+
+/** A widget's place in the grid, in the grid's coordinates; slides of other widgets do not move it. */
+type Place = {id: string; left: number; top: number; right: number; bottom: number; full: boolean};
 
 /** A press becomes a drag after moving this far, so a click on the handle is not a drag. */
 const DRAG_AFTER = 4;
@@ -35,18 +36,49 @@ const moved = (order: string[], id: string, to: number) => {
   return next;
 };
 const still = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
-const inside = (rect: DOMRect, p: Point) => p.x >= rect.left && p.x <= rect.right && p.y >= rect.top && p.y <= rect.bottom;
+
+/**
+ * Where a dragged widget goes among the others, which are laid out in rows. Next to a
+ * row that is one widget as wide as the grid (the chart, or any card on a phone), or
+ * when the dragged widget is that wide itself, it goes before or after the whole row,
+ * by the half of the row the pointer is in; it never takes one card's place in a row of
+ * three. Inside a row of cards it goes before the first card whose middle is right of
+ * the pointer. The pointer between or beyond rows counts for the nearest one.
+ */
+export function dropIndex(others: Place[], pointer: Point, wide: boolean): number {
+  const rows: {top: number; bottom: number; items: Place[]}[] = [];
+  for (const place of others) {
+    const row = rows.at(-1);
+    if (row && !place.full && !row.items[0].full && Math.abs(row.top - place.top) < 2) {
+      row.items.push(place);
+      row.bottom = Math.max(row.bottom, place.bottom);
+    } else rows.push({top: place.top, bottom: place.bottom, items: [place]});
+  }
+  if (!rows.length) return 0;
+  const away = (row: {top: number; bottom: number}) => Math.max(row.top - pointer.y, pointer.y - row.bottom, 0);
+  const row = rows.reduce((best, next) => (away(next) < away(best) ? next : best));
+  const first = others.indexOf(row.items[0]);
+  const last = others.indexOf(row.items.at(-1)!);
+  if (wide || row.items[0].full || away(row) > 0) return pointer.y < (row.top + row.bottom) / 2 ? first : last + 1;
+  const next = row.items.find(place => pointer.x < (place.left + place.right) / 2);
+  return next ? others.indexOf(next) : last + 1;
+}
 
 /**
  * The board's widgets on a grid, in the board's order. Its owner moves them by the
- * handle at the top of each: with a pointer, the page scrolling near its edges, or with
- * the arrow keys. The others slide to their new places.
+ * handle at the top of each: with a pointer (the place it will land stays outlined, the
+ * page scrolls near its edges, Escape puts it back) or with the arrow keys. The others
+ * slide to their new places.
  */
 export function Widgets({widgets, movable, onMove}: {widgets: Widget[]; movable: boolean; onMove: (order: string[]) => void}) {
-  const nodes = useRef(new Map<string, HTMLDivElement>());
+  const grid = useRef<HTMLDivElement>(null);
+  /** Each widget's place in the grid; it slides as a whole when the order changes. */
+  const places = useRef(new Map<string, HTMLDivElement>());
+  /** What is dragged: the widget's content, while its place stays outlined. */
+  const bodies = useRef(new Map<string, HTMLDivElement>());
   const handles = useRef(new Map<string, HTMLButtonElement>());
   const drag = useRef<Drag | null>(null);
-  /** Where every widget was before the order changed, to slide them from there. */
+  /** Where every widget was seen before the order changed, to slide them from there. */
   const before = useRef<Map<string, DOMRect> | null>(null);
   const refocus = useRef<string | null>(null);
   const [preview, setPreview] = useState<{id: string; order: string[]} | null>(null);
@@ -60,32 +92,36 @@ export function Widgets({widgets, movable, onMove}: {widgets: Widget[]; movable:
   const order = preview ? preview.order.filter(id => byId.has(id)) : widgets.map(widget => widget.id);
 
   const remember = () => {
-    before.current = new Map([...nodes.current].map(([id, node]) => [id, node.getBoundingClientRect()]));
+    before.current = new Map([...places.current].map(([id, node]) => [id, node.getBoundingClientRect()]));
   };
 
-  /** Keeps the dragged widget under the pointer, wherever the grid has put its place. */
+  const placeOf = (id: string): Place => {
+    const node = places.current.get(id)!;
+    const full = node.offsetWidth >= grid.current!.clientWidth - 1;
+    return {id, left: node.offsetLeft, top: node.offsetTop, right: node.offsetLeft + node.offsetWidth, bottom: node.offsetTop + node.offsetHeight, full};
+  };
+
+  /** Keeps the dragged content under the pointer, wherever the grid has put its place. */
   const follow = () => {
     const current = drag.current;
-    const node = current && nodes.current.get(current.id);
-    if (!current || !node) return;
-    const rect = node.getBoundingClientRect();
-    const x = current.pointer.x - current.grab.x - (rect.left - current.offset.x);
-    const y = current.pointer.y - current.grab.y - (rect.top - current.offset.y);
+    const place = current && places.current.get(current.id);
+    const body = current && bodies.current.get(current.id);
+    if (!current || !place || !body) return;
+    const rect = place.getBoundingClientRect();
+    const x = current.pointer.x - current.grab.x - rect.left;
+    const y = current.pointer.y - current.grab.y - rect.top;
     current.offset = {x, y};
-    node.style.transform = `translate(${x}px, ${y}px)`;
+    body.style.transform = `translate(${x}px, ${y}px)`;
   };
 
-  /** Moves the dragged widget into the place of the one under the pointer. */
+  /** Moves the dragged widget's place to where the pointer says. */
   const retarget = () => {
     const current = drag.current!;
-    let over: string | null = null;
-    for (const [id, node] of nodes.current) {
-      if (id !== current.id && inside(node.getBoundingClientRect(), current.pointer)) over = id;
-    }
-    if (current.skip && over !== current.skip) current.skip = null;
-    if (!over || over === current.skip) return;
-    current.order = moved(current.order, current.id, current.order.indexOf(over));
-    current.skip = over;
+    const box = grid.current!.getBoundingClientRect();
+    const others = current.order.filter(id => id !== current.id).map(placeOf);
+    const to = dropIndex(others, {x: current.pointer.x - box.left, y: current.pointer.y - box.top}, placeOf(current.id).full);
+    if (current.order.indexOf(current.id) === to) return;
+    current.order = moved(current.order, current.id, to);
     remember();
     setPreview({id: current.id, order: current.order});
   };
@@ -96,8 +132,8 @@ export function Widgets({widgets, movable, onMove}: {widgets: Widget[]; movable:
     const {y} = current.pointer;
     const scroll = y < EDGE ? y - EDGE : y > innerHeight - EDGE ? y - innerHeight + EDGE : 0;
     if (scroll) window.scrollBy(0, scroll / 4);
-    follow();
     retarget();
+    follow();
     current.frame = requestAnimationFrame(frame);
   };
 
@@ -109,26 +145,22 @@ export function Widgets({widgets, movable, onMove}: {widgets: Widget[]; movable:
     cancelAnimationFrame(current.frame);
     document.body.classList.remove('is-dragging');
     if (!current.active) return;
-    const node = nodes.current.get(current.id);
+    const body = bodies.current.get(current.id);
     const {widgets, onMove} = latest.current;
-    if (drop) {
-      // It lands in the place it has been shown in all along.
-      if (node) {
-        node.style.transform = '';
-        if (!still()) node.animate([{transform: `translate(${current.offset.x}px, ${current.offset.y}px)`}, {transform: 'none'}], SLIDE);
-      }
-      if (current.order.join() !== widgets.map(widget => widget.id).join()) onMove(current.order);
-    } else {
-      // Everything, the dragged one too, slides back from where it is.
-      remember();
-      if (node) node.style.transform = '';
+    if (body) {
+      // It settles into its outlined place from where it was let go.
+      body.style.transform = '';
+      if (!still()) body.animate([{transform: `translate(${current.offset.x}px, ${current.offset.y}px)`}, {transform: 'none'}], SLIDE);
     }
+    if (drop) {
+      if (current.order.join() !== widgets.map(widget => widget.id).join()) onMove(current.order);
+    } else remember();
     setPreview(null);
   };
 
   const press = (id: string) => (event: ReactPointerEvent<HTMLButtonElement>) => {
     if (!event.isPrimary || event.button !== 0 || drag.current) return;
-    const rect = nodes.current.get(id)!.getBoundingClientRect();
+    const rect = places.current.get(id)!.getBoundingClientRect();
     const pointer = {x: event.clientX, y: event.clientY};
     // The grid reorders the page's nodes under the pointer, which ends a pointer
     // capture: the window follows the drag instead.
@@ -158,7 +190,6 @@ export function Widgets({widgets, movable, onMove}: {widgets: Widget[]; movable:
       offset: {x: 0, y: 0},
       active: false,
       order,
-      skip: null,
       frame: 0,
       stop: () => {
         window.removeEventListener('pointermove', move);
@@ -188,10 +219,10 @@ export function Widgets({widgets, movable, onMove}: {widgets: Widget[]; movable:
     const was = before.current;
     before.current = null;
     if (was && !still()) {
-      for (const [id, node] of nodes.current) {
+      for (const [id, node] of places.current) {
         const from = was.get(id);
         if (!from || id === drag.current?.id) continue;
-        // `from` is where it is seen now, mid-slide or not; `to` is its place without any slide.
+        // `from` is where it was seen, mid-slide or not; `to` is its place without any slide.
         for (const animation of node.getAnimations()) animation.cancel();
         const to = node.getBoundingClientRect();
         const dx = from.left - to.left;
@@ -207,7 +238,7 @@ export function Widgets({widgets, movable, onMove}: {widgets: Widget[]; movable:
   useLayoutEffect(() => () => finish(false), []);
 
   return (
-    <div className="widgets">
+    <div className="widgets" ref={grid}>
       {order.map(id => {
         const widget = byId.get(id)!;
         return (
@@ -215,30 +246,38 @@ export function Widgets({widgets, movable, onMove}: {widgets: Widget[]; movable:
             key={id}
             className={`widget ${widget.wide ? 'is-wide' : ''} ${preview?.id === id ? 'is-lifted' : ''}`}
             ref={node => {
-              if (node) nodes.current.set(id, node);
-              else nodes.current.delete(id);
+              if (node) places.current.set(id, node);
+              else places.current.delete(id);
             }}
           >
-            {movable && (
-              <button
-                type="button"
-                className="drag-handle"
-                aria-label={t('widgets.move', {name: widget.name})}
-                aria-describedby={hint}
-                title={t('widgets.moveHint')}
-                onPointerDown={press(id)}
-                onKeyDown={key(id)}
-                ref={node => {
-                  if (node) handles.current.set(id, node);
-                  else handles.current.delete(id);
-                }}
-              >
-                <svg viewBox="0 0 20 8" width="20" height="8" aria-hidden="true">
-                  {[3, 8, 13].map(x => [2, 6].map(y => <circle key={`${x}-${y}`} cx={x + 2} cy={y} r="1.1" />))}
-                </svg>
-              </button>
-            )}
-            {widget.content}
+            <div
+              className="widget-body"
+              ref={node => {
+                if (node) bodies.current.set(id, node);
+                else bodies.current.delete(id);
+              }}
+            >
+              {movable && (
+                <button
+                  type="button"
+                  className="drag-handle"
+                  aria-label={t('widgets.move', {name: widget.name})}
+                  aria-describedby={hint}
+                  title={t('widgets.moveHint')}
+                  onPointerDown={press(id)}
+                  onKeyDown={key(id)}
+                  ref={node => {
+                    if (node) handles.current.set(id, node);
+                    else handles.current.delete(id);
+                  }}
+                >
+                  <svg viewBox="0 0 20 8" width="20" height="8" aria-hidden="true">
+                    {[3, 8, 13].map(x => [2, 6].map(y => <circle key={`${x}-${y}`} cx={x + 2} cy={y} r="1.1" />))}
+                  </svg>
+                </button>
+              )}
+              {widget.content}
+            </div>
           </div>
         );
       })}

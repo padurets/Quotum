@@ -60,6 +60,10 @@ const STEPS = [
   -- What happened to a source besides its values: free resets granted (detail: how many).
   CREATE TABLE events (source_id TEXT NOT NULL, at INTEGER NOT NULL, kind TEXT NOT NULL, detail TEXT,
     PRIMARY KEY (source_id, at, kind)) WITHOUT ROWID;
+  -- Resets for everyone that the community trackers reported (server/resets.ts). The
+  -- trackers only tell the latest one; the chart marks every one of the period.
+  CREATE TABLE announcements (provider TEXT NOT NULL, at INTEGER NOT NULL, url TEXT NOT NULL, text TEXT NOT NULL,
+    PRIMARY KEY (provider, at)) WITHOUT ROWID;
   `,
 ];
 

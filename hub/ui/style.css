@@ -25,6 +25,8 @@
   -moz-osx-font-smoothing: grayscale;
 }
 * { box-sizing: border-box; }
+/* The scrollbar's room is kept when a dialog stops the page from scrolling, so nothing shifts. */
+html { scrollbar-gutter: stable; }
 body {
   margin: 0;
   min-height: 100vh;
@@ -66,12 +68,15 @@ button { font: inherit; color: inherit; cursor: pointer; }
 main { max-width: 1240px; margin: 0 auto; padding: 28px 28px 56px; display: flex; flex-direction: column; gap: 20px; }
 
 /* ---------- widgets ---------- */
-.widgets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.widgets { position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 .widget { position: relative; display: flex; flex-direction: column; min-width: 0; }
-.widget > .card, .widget > .panel { flex: 1; }
+.widget-body { position: relative; flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.widget-body > .card, .widget-body > .panel { flex: 1; }
 .widget.is-wide { grid-column: 1 / -1; }
+/* While dragged, the widget's place stays outlined: that is where it lands. */
 .widget.is-lifted { z-index: 30; }
-.widget.is-lifted > .card, .widget.is-lifted > .panel { background: var(--surface); border-color: #b3b9ff40; box-shadow: inset 0 1px 0 #ffffff0a, 0 30px 60px -20px #000; }
+.widget.is-lifted::before { content: ''; position: absolute; inset: 0; border: 1.5px dashed #b3b9ff59; border-radius: 14px; background: #b3b9ff08; }
+.widget.is-lifted .card, .widget.is-lifted .panel { background: var(--surface); border-color: #b3b9ff40; box-shadow: inset 0 1px 0 #ffffff0a, 0 30px 60px -20px #000; }
 /* The handle a board's owner moves a widget by: at the top edge, shown on hover. */
 .drag-handle {
   position: absolute; top: 3px; left: 50%; z-index: 2; transform: translateX(-50%);
@@ -212,6 +217,8 @@ td.muted, small.muted { color: var(--text-3); }
 .legend-empty { font-size: 12.5px; color: var(--text-4); padding: 4px 0; }
 
 .chart { position: relative; margin-top: 10px; }
+.history .chart, .history .table-wrap { transition: opacity .2s; }
+.history.is-loading .chart, .history.is-loading .table-wrap { opacity: .5; }
 .chart > svg { display: block; width: 100%; height: auto; touch-action: pan-y; overflow: visible; }
 .chart-loading, .chart-empty { min-height: 220px; display: grid; place-items: center; color: var(--text-3); font-size: 13px; }
 .chart-empty { position: absolute; inset: 0; min-height: 0; pointer-events: none; }
@@ -241,6 +248,8 @@ td.muted, small.muted { color: var(--text-3); }
 }
 .tooltip-time { color: var(--text-3); margin-bottom: 5px; font-family: var(--mono); font-size: 11px; }
 .tooltip-row { display: flex; align-items: center; gap: 9px; padding: 2px 0; white-space: nowrap; }
+.tooltip-row.is-marker { flex-wrap: wrap; }
+.tooltip-detail { flex-basis: 100%; max-width: 300px; padding-left: 23px; white-space: normal; font-size: 11px; color: var(--text-3); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .tooltip-row strong { min-width: 36px; font-weight: 500; }
 .tooltip-row span { color: var(--text-2); }
 .tooltip-row.is-plan strong, .tooltip-row.is-plan span { color: var(--text-3); font-weight: 450; }
@@ -282,7 +291,10 @@ td:first-child { color: var(--text); }
 .avatar { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: #b3b9ff26; color: var(--accent); font-size: 11px; font-weight: 600; }
 .avatar.is-large { width: 40px; height: 40px; font-size: 16px; flex-shrink: 0; }
 .account-card { display: flex; align-items: center; gap: 12px; font-size: 14px; }
-.account-card div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.account-card div { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.sign-out { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; height: 30px; padding: 0 10px; border: 1px solid transparent; border-radius: 8px; background: none; color: var(--text-3); font-size: 12.5px; transition: color .15s, background .15s, border-color .15s; }
+.sign-out:hover { color: var(--crit); background: #f36a6214; border-color: #f36a6233; }
+.sign-out svg { fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
 .account-card div span { color: var(--text-3); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; }
 
 /* ---------- forms ---------- */
@@ -320,12 +332,12 @@ code { font-family: var(--mono); font-size: .92em; color: var(--text-2); }
 .device-facts dd { margin: 0; color: var(--text); }
 
 /* ---------- dialogs ---------- */
-.overlay { position: fixed; inset: 0; z-index: 50; display: grid; place-items: start center; padding: 72px 16px 24px; background: #05060acc; backdrop-filter: blur(6px); overflow-y: auto; }
+.overlay { position: fixed; inset: 0; z-index: 50; display: grid; place-items: start center; padding: 72px 16px 24px; background: #05060acc; backdrop-filter: blur(6px); overflow-y: auto; overscroll-behavior: contain; }
 .dialog { width: 100%; max-width: 520px; display: flex; flex-direction: column; gap: 16px; padding: 22px 24px 24px; background: #10121b; border: 1px solid var(--hair-2); border-radius: 16px; box-shadow: 0 40px 80px -30px #000; outline: none; }
 .dialog.is-wide { max-width: 760px; }
 /* A panel on the right edge, for the person's own settings. */
 .overlay.is-side { display: flex; justify-content: flex-end; padding: 0; overflow: hidden; }
-.dialog.is-side { max-width: 400px; height: 100dvh; gap: 20px; padding: 20px 24px 28px; border-width: 0 0 0 1px; border-radius: 0; overflow-y: auto; animation: slide-in .22s cubic-bezier(.2, .7, .2, 1); }
+.dialog.is-side { max-width: 400px; height: 100dvh; gap: 20px; padding: 20px 24px 28px; border-width: 0 0 0 1px; border-radius: 0; overflow-y: auto; overscroll-behavior: contain; animation: slide-in .22s cubic-bezier(.2, .7, .2, 1); }
 @keyframes slide-in { from { transform: translateX(28px); opacity: 0; } }
 .drawer-section { display: flex; flex-direction: column; gap: 12px; padding-top: 18px; border-top: 1px solid var(--hair); }
 .drawer-section h3 { margin: 0; font-size: 10.5px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--text-4); }
@@ -334,7 +346,6 @@ code { font-family: var(--mono); font-size: .92em; color: var(--text-2); }
 .drawer-switch { margin: 0 -8px; }
 .drawer-note { margin: 6px 8px 0; font-size: 11.5px; color: var(--text-4); }
 .drawer-note a { color: var(--text-3); }
-.drawer-signout { align-self: flex-start; }
 .dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .dialog-head h2 { margin: 0; font-size: 16px; font-weight: 580; }
 .dialog-head .icon-button svg { stroke-width: 1.6; }

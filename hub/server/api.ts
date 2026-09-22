@@ -106,7 +106,8 @@ export async function buildApp(hub: Hub) {
   };
 
   app.get('/health', () => ({status: 'ok', service: serviceName, version}));
-  app.get('/api/resets', () => resets.snapshot());
+  // With the resets the trackers reported over the longest period the chart shows.
+  app.get('/api/resets', () => ({...resets.snapshot(), past: store.announcements(Date.now() - 31 * 86_400_000)}));
 
   app.get<{Querystring: {board?: string}}>('/api/overview', (request, reply) => {
     const access = guards.board(request, reply, request.query.board);

@@ -19,6 +19,9 @@ export type HistorySeries = {
 
 export type DeviceFailure = {device: string; provider: Provider; error: string; detail: string | null; at: number};
 
+/** A reset for everyone as a community tracker reported it. */
+export type Announcement = {at: number; url: string; text: string};
+
 /**
  * Something that happened to a source, for the chart: its limits came back before their
  * reset time (a free reset used, or one granted to everyone), or free resets were granted.
@@ -250,11 +253,25 @@ export class Store {
     return rows.map(r => ({sourceId: r.source_id, at: r.at, kind: 'resets_granted', count: Number(r.detail)}));
   }
 
-  /** Forgets samples and events older than the retention period. */
+  /** Keeps a reset the trackers reported; the same one reported again is kept once. */
+  announce(provider: string, announcement: Announcement) {
+    this.db.prepare('INSERT OR IGNORE INTO announcements VALUES (?, ?, ?, ?)').run(provider, announcement.at, announcement.url, announcement.text);
+  }
+
+  /** Resets the trackers reported since `from`, by provider, oldest first. */
+  announcements(from: number): Record<string, Announcement[]> {
+    const rows = this.db.prepare('SELECT * FROM announcements WHERE at >= ? ORDER BY at').all(from) as ({provider: string} & Announcement)[];
+    const byProvider: Record<string, Announcement[]> = {};
+    for (const {provider, at, url, text} of rows) (byProvider[provider] ??= []).push({at, url, text});
+    return byProvider;
+  }
+
+  /** Forgets samples, events and announcements older than the retention period. */
   prune(now: number) {
     const cutoff = now - config.retention.sampleDays * 86_400_000;
     this.db.prepare('DELETE FROM samples WHERE at < ?').run(cutoff);
     this.db.prepare('DELETE FROM events WHERE at < ?').run(cutoff);
+    this.db.prepare('DELETE FROM announcements WHERE at < ?').run(cutoff);
   }
 
   close() {
