@@ -77,13 +77,14 @@ Antigravity   Gemini 5 hours       100%  in 4h 59m
 - **A chart of the weekly or the 5-hour windows** over 24 hours, 7 or 30 days. Ahead of
   now it draws the plan and the next resets, as far as you choose; behind, it marks
   when limits came back early and when free resets were granted.
-- **A table with a forecast:** at the current pace, does the window run out before its
-  reset (or before your plan ends), and roughly how much will be left.
+- **A table of every limit with a forecast:** what the period spent and, at that pace,
+  whether the window runs out before its reset (or before your plan ends) and roughly
+  how much will be left.
 - **Reset announcements** from the community trackers [Codex Resets](https://codex-resets.com)
   and [claude-resets.com](https://claude-resets.com), with a link to the source. You
   can turn them off.
-- **Boards made of widgets**, a card per subscription and the chart, like a dashboard
-  in Grafana. The owner of a board drags them around, hides the ones they don't need
+- **Boards made of widgets** (a card per subscription, the chart, the table), like a
+  dashboard in Grafana. The owner of a board drags them around, hides the ones they don't need
   (the data keeps coming) and sets the plans; everyone on the board sees it arranged
   the same way.
 - **Boards.** Everyone has a personal board. On a shared board a team sees each

@@ -9,12 +9,13 @@ import {useResets} from './lib/resets';
 import {sourceLabel, titled} from './lib/quota';
 import {usePath} from './lib/router';
 import {boardTitle, rememberBoard, useBoard, useSession, type Board, type Session, type User} from './lib/session';
-import {arranged, cardId, HISTORY, reordered, useView, withHidden} from './lib/view';
+import {arranged, cardId, FORECAST, HISTORY, reordered, useView, withHidden} from './lib/view';
 import {t, useLocale} from './i18n';
 import {Header} from './components/Header';
 import {SERVICE} from './components/Kit';
 import {SourceCard} from './components/SourceCard';
 import {History} from './components/History';
+import {Forecast} from './components/Forecast';
 import {Widgets, WidgetsMenu, type Widget} from './components/Widgets';
 import {AccountPanel} from './components/Account';
 import {AuthScreen} from './components/AuthScreen';
@@ -44,7 +45,7 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
     document.title = board?.name ? `${boardTitle(board)} · ${SERVICE}` : SERVICE;
   }, [board]);
 
-  // Every widget of the board in its order: a card per source, and the history chart.
+  // Every widget of the board in its order: a card per source, the chart and the table.
   const cards = new Map<string, Widget>(
     sources.map(source => [
       cardId(source.id),
@@ -62,15 +63,27 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
       },
     ]),
   );
-  const widgets = arranged(arrange.view, [...cards.keys(), HISTORY]).map(
-    (id): Widget =>
-      cards.get(id) ?? {
-        id,
+  const panels = new Map<string, Widget>([
+    [
+      HISTORY,
+      {
+        id: HISTORY,
         name: t('widgets.history'),
         wide: true,
         content: <History history={history} loading={historyLoading} overview={overview} resets={resets} past={past} now={now} arrange={arrange} />,
       },
-  );
+    ],
+    [
+      FORECAST,
+      {
+        id: FORECAST,
+        name: t('forecast.title'),
+        wide: true,
+        content: <Forecast history={history} loading={historyLoading} overview={overview} now={now} arrange={arrange} />,
+      },
+    ],
+  ]);
+  const widgets = arranged(arrange.view, [...cards.keys(), ...panels.keys()]).map(id => (cards.get(id) ?? panels.get(id))!);
   const shown = widgets.filter(widget => !arrange.view.hidden.includes(widget.id));
 
   return (

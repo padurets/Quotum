@@ -3,20 +3,28 @@ import {call} from './http';
 import {DEFAULT_PLAN, isValidPlan, type WeeklyPlan} from './plan';
 import type {Overview, View} from './types';
 
+/** Widget ids: the chart, the table of every limit, and a card per source. */
 export const HISTORY = 'history';
+export const FORECAST = 'forecast';
 export const cardId = (sourceId: string) => `source:${sourceId}`;
 
 const EMPTY: View = {order: [], hidden: [], windows: [], plans: {}};
 /** Changes in a burst (a drag, typing a plan) are saved once, this long after the last one. */
 const SAVE_AFTER = 600;
 
-/** The widgets in the board's order: the arranged ones first, new ones after them as they come. */
+/**
+ * The widgets in the board's order. One the order does not know yet (a new source's
+ * card, a new kind of widget) goes right after its neighbour in `ids`, the natural
+ * order, rather than to the end of the board.
+ */
 export function arranged(view: View, ids: string[]): string[] {
-  const position = new Map(view.order.map((id, i) => [id, i]));
-  return ids
-    .map((id, natural) => ({id, rank: position.get(id) ?? view.order.length + natural}))
-    .sort((a, b) => a.rank - b.rank)
-    .map(entry => entry.id);
+  const order = view.order.filter(id => ids.includes(id));
+  ids.forEach((id, i) => {
+    if (order.includes(id)) return;
+    const before = ids.slice(0, i).reverse().find(other => order.includes(other));
+    order.splice(before === undefined ? 0 : order.indexOf(before) + 1, 0, id);
+  });
+  return order;
 }
 
 /** A new order of the shown widgets; hidden ones keep theirs after them. */

@@ -9,7 +9,7 @@ import {PROVIDERS} from '../lib/providers';
 import {cardId, planOf, withHidden, withPlan, withWindowHidden, type Arrange} from '../lib/view';
 import type {ResetStatus} from '../lib/resets';
 import {ResetBanner, ResetNotice} from './ResetNotice';
-import {EyeOffIcon, Popover, SlidersIcon, SwitchRow} from './Popover';
+import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
 
 function Meter({w, now, weekly}: {w: Win; now: number; weekly: WeeklyPlan}) {
   const state = level(w.remaining);
@@ -142,12 +142,7 @@ function SourceSettings({source, arrange}: {source: SourceState; arrange: Arrang
           <div className="popover-note">{t('source.planNote')}</div>
         </>
       )}
-      <div className="popover-section">
-        <button type="button" className="popover-row" onClick={() => arrange.update(view => withHidden(view, cardId(source.id), true))}>
-          <EyeOffIcon />
-          <span>{t('source.hide')}</span>
-        </button>
-      </div>
+      <HideRow onHide={() => arrange.update(view => withHidden(view, cardId(source.id), true))}>{t('source.hide')}</HideRow>
     </Popover>
   );
 }

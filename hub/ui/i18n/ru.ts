@@ -159,6 +159,11 @@ export const ru = {
   'table.aheadBy': 'Опережает план на {value} п.п.',
   'table.points': '{value} п.п.',
   'table.unused': 'не расходовался',
+  
+  'forecast.title': 'Расход и прогноз',
+  'forecast.settings': 'Настройки таблицы',
+  'forecast.hide': 'Скрыть таблицу',
+  'forecast.empty': 'За этот период нет замеров',
 
   'forecast.needData': 'Нужно хотя бы 30 минут непрерывных замеров',
   'forecast.planDone': 'план пройден',

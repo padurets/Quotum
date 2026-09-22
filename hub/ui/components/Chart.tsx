@@ -1,9 +1,7 @@
 import {useEffect, useMemo, useRef, useState, type PointerEvent} from 'react';
 import {clock, duration, num, shortDay} from '../lib/format';
 import {t} from '../i18n';
-import type {HistorySeries} from '../lib/types';
-
-export type Line = HistorySeries & {key: string; name: string; color: string; dash: string; current: number};
+import type {Line} from '../lib/lines';
 
 /**
  * A moment on the time axis: ahead, a known window reset or an announced extra one;

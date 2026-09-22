@@ -182,7 +182,7 @@ them), kept for 90 days.
   for a week, several uses) and arranges it; every member sees everything on the
   board and manages their own tokens and devices, the owner manages all of them.
 - **The view** of a board is how it is arranged: the order of its widgets (a card per
-  source and the chart), the hidden ones, the windows hidden inside cards and the
+  source, the chart and the table), the hidden ones, the windows hidden inside cards and the
   spending plans. It is stored once per board, like a dashboard in Grafana: the owner
   changes it and everyone sees the same board. Hiding a widget changes nothing that is
   measured or stored.

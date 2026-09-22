@@ -217,8 +217,9 @@ td.muted, small.muted { color: var(--text-3); }
 .legend-empty { font-size: 12.5px; color: var(--text-4); padding: 4px 0; }
 
 .chart { position: relative; margin-top: 10px; }
-.history .chart, .history .table-wrap { transition: opacity .2s; }
-.history.is-loading .chart, .history.is-loading .table-wrap { opacity: .5; }
+.panel .chart, .panel .table-wrap { transition: opacity .2s; }
+.panel.is-loading .chart, .panel.is-loading .table-wrap { opacity: .5; }
+.panel-loading, .panel-empty { margin: 18px 0 0; min-height: 96px; display: grid; place-items: center; color: var(--text-3); font-size: 13px; }
 .chart > svg { display: block; width: 100%; height: auto; touch-action: pan-y; overflow: visible; }
 .chart-loading, .chart-empty { min-height: 220px; display: grid; place-items: center; color: var(--text-3); font-size: 13px; }
 .chart-empty { position: absolute; inset: 0; min-height: 0; pointer-events: none; }
@@ -402,7 +403,7 @@ code { font-family: var(--mono); font-size: .92em; color: var(--text-2); }
   .offline span { display: none; }
   .panel { padding: 18px 16px; }
   .controls { width: 100%; flex-direction: column; align-items: stretch; }
-  .history .controls .picker { position: absolute; top: 14px; right: 12px; }
+  .history .controls .picker, .forecast .controls .picker { position: absolute; top: 14px; right: 12px; }
   .controls .segmented { flex: 1; }
   .controls .segmented button { flex: 1; padding: 6px; }
   th:nth-child(4), td:nth-child(4) { display: none; }

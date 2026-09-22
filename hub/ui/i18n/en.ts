@@ -163,6 +163,11 @@ export const en = {
   'table.aheadBy': 'Ahead of the plan by {value} pp',
   'table.points': '{value} pp',
   'table.unused': 'not used',
+  
+  'forecast.title': 'Spending and forecast',
+  'forecast.settings': 'Table settings',
+  'forecast.hide': 'Hide the table',
+  'forecast.empty': 'No measurements in this period',
 
   'forecast.needData': 'Needs at least 30 minutes of continuous measurements',
   'forecast.planDone': 'plan done',

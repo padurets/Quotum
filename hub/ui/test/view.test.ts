@@ -7,12 +7,14 @@ import type {View} from '../lib/types';
 const EMPTY: View = {order: [], hidden: [], windows: [], plans: {}};
 const board = ['source:a', 'source:b', 'source:c', 'history'];
 
-test('widgets follow the board’s order, and new ones come after the arranged ones', () => {
+test('widgets follow the board’s order; a new one comes next to its natural neighbour', () => {
   assert.deepEqual(arranged(EMPTY, board), board, 'nothing arranged: the board’s own order');
-  const view = {...EMPTY, order: ['history', 'source:c']};
-  assert.deepEqual(arranged(view, board), ['history', 'source:c', 'source:a', 'source:b']);
-  assert.deepEqual(arranged(view, [...board, 'source:d']).at(-1), 'source:d');
-  assert.deepEqual(arranged({...EMPTY, order: ['source:gone', 'source:b']}, board), ['source:b', 'source:a', 'source:c', 'history']);
+  const view = {...EMPTY, order: ['history', 'source:c', 'source:a', 'source:b']};
+  assert.deepEqual(arranged(view, board), view.order);
+  assert.deepEqual(arranged(view, [...board, 'forecast']), ['history', 'forecast', 'source:c', 'source:a', 'source:b'], 'the table after the chart');
+  const card = ['source:a', 'source:b', 'source:c', 'source:d', 'history'];
+  assert.deepEqual(arranged(view, card), ['history', 'source:c', 'source:d', 'source:a', 'source:b'], 'a new card after the one before it');
+  assert.deepEqual(arranged({...EMPTY, order: ['source:gone', 'source:b']}, board), ['source:a', 'source:b', 'source:c', 'history']);
 });
 
 test('moving the shown widgets keeps the hidden ones behind them', () => {
