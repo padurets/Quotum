@@ -1,143 +1,197 @@
 # Architecture
 
-Agent Limits shows the subscription limits of coding agents — Claude Code, Codex,
-Antigravity — on one page: for one person on one machine, or for a team across many
-machines and accounts.
+Quotum shows the subscription limits of coding agents (Claude Code, Codex, Antigravity)
+on one page: for one person on one machine, or for a team across many machines and
+accounts. This document explains how the parts work and why they are built this way.
 
 ## Parts
 
 ```
- each machine                                    hub (self-hosted or shared)
-┌──────────────────────────────┐   HTTPS POST   ┌──────────────────────────────┐
-│ agent (Rust)                 │  /v1/ingest    │ ingest ─► rules ─► SQLite    │
-│  claude  -p stream-json      │ ─────────────► │                   │          │
-│  codex   app-server          │  device token  │ personal & team pages (React)│
-│  agy     -p /usage           │                └──────────────────────────────┘
-│  schedule · spool · pseudonym│
-└──────────────────────────────┘
+ each machine                                     hub (self-hosted)
+┌───────────────────────────────┐  HTTPS         ┌──────────────────────────────┐
+│ agent (Rust)                  │  /v1/checkin   │ duty: who measures what      │
+│  claude  -p stream-json       │  /v1/ingest    │ ingest ─► rules ─► SQLite    │
+│  codex   app-server           │ ─────────────► │                   │          │
+│  agy     -p /usage            │  device or     │ dashboard (React)◄┘          │
+│  schedule · spool · pseudonym │  board token   └──────────────────────────────┘
+└───────────────────────────────┘
 ```
 
-- **agent/** — a small native program (Rust, one static binary per platform). It measures
-  limits through each agent's own command-line client and its machine-readable
-  interface, and delivers normalized values to a hub in the [ingest format](../spec/ingest-v1.md).
-- **hub/** — the dashboard service (Node 24, Fastify, SQLite; React UI). It stores
-  measurements, applies the consumption rules (what counts as spending, what is a
-  reset, what is a gap) and serves the dashboard. Today it can also collect by itself
-  through CodexBar; that path goes away once the agent has replaced it.
-- **spec/** — the ingest format, the contract between the two.
+- **agent/** — a small native program: Rust, one binary per platform, about 3 MB. It
+  measures limits through each agent's own command-line client and delivers them to a
+  hub in the [ingest format](../spec/ingest-v1.md).
+- **hub/** — the dashboard service: Node 24, Fastify, the SQLite built into Node, a
+  React UI. It decides which device measures which subscription, stores measurements,
+  applies the rules (what counts as spending, what is a reset, what is a gap) and
+  serves the dashboard. It never talks to providers itself.
+- **spec/** — the ingest format, the contract between the two. Anything that speaks it
+  can deliver to a hub.
 
-## Three ways to run it
+## Ways to run it
 
-1. **Desktop app (planned).** Agent and dashboard in one application with a tray icon and
-   a settings window, built with Tauri: the Rust core plus the same React UI. It keeps
-   history locally and needs no hub, no token and no server. This is the default for a
-   person with one machine.
-2. **Agent + hub.** The agent runs headless (a user service: systemd, launchd, Windows
-   autostart) on every machine where agents work — laptops, servers, cloud dev
-   environments — and delivers to a hub. One page shows all machines and accounts of a
-   person or a team.
-3. **One-off check.** `npx agent-limits` (or the installed binary) prints the current
-   limits of this machine and exits.
+1. **Agent + hub.** The agent runs in the background (a systemd user service, launchd,
+   Windows autostart) on every machine where agents work: laptops, servers, cloud dev
+   environments, containers. It delivers to a hub, and one page shows every machine
+   and account of a person or a team.
+2. **One-off check.** `quotum` prints the current limits of this machine and exits.
+3. **Desktop app (planned).** The agent and the dashboard in one application with a
+   tray icon and a settings window, built with Tauri: the Rust core plus the same
+   React UI, history kept locally, no hub and no server. This will be the default for
+   a person with one machine.
 
-The domain rules (consumption, resets, gaps, the time grid of the chart) must behave
-the same in the hub and in the desktop app. They live in the hub today; when the
-desktop app is built they move into the Rust core, and the hub either uses that core
-or is checked against shared test fixtures. Which of the two is decided then.
+The rules of the domain (spending, resets, gaps, the chart's time grid) must behave the
+same in the hub and in the desktop app. They live in the hub today; when the desktop
+app is built they either move into the Rust core or are checked against shared test
+fixtures.
 
 ## Measuring
 
 Each provider has an adapter that asks the agent's own client, never the provider's
-endpoints directly:
+endpoints:
 
 | Provider | Interface | Notes |
 |---|---|---|
-| Claude Code | `claude -p --input-format stream-json …`, control request `get_usage` (Agent SDK protocol) | No MCP servers, hooks, plugins, skills or saved session. Claude Code caches the answer for 60 s. |
-| Codex | `codex app-server`, JSON-RPC `account/rateLimits/read` (the protocol of the IDE extensions) | Plan and per-model limits, account id. |
-| Antigravity | `agy -p /usage --output-format json` (agy 1.1.11+) | Answered locally. The agent redirects agy's log to its own file; otherwise agy writes a new log file per run. |
+| Claude Code | `claude -p --input-format stream-json …`, control request `get_usage` (the Agent SDK protocol) | No MCP servers, hooks, plugins, skills or saved session. Claude Code caches the answer for 60 s. |
+| Codex | `codex app-server`, JSON-RPC `account/rateLimits/read` (the protocol of the IDE extensions) | Plan, per-model limits, account id. |
+| Antigravity | `agy -p /usage --output-format json` (agy 1.1.11+) | The agent sends agy's log to its own file; otherwise agy writes a new log file on every run. |
 
-Consequences:
+What follows from this:
 
 - The agent never reads tokens or cookies and never refreshes them: the client does
   that itself, as when a person uses it. No model request is made.
-- A changed provider API is fixed by updating the client, not the agent.
-- Measured on one machine (2026-09-22): Claude 1.0 s CPU / ~230 MB peak, Codex 0.8 s /
-  ~100 MB, Antigravity 0.9 s / ~170 MB. The agent itself idles at ~5 MB.
+- When a provider changes its API, updating the client fixes it, not the agent.
+- It costs little, and the cost is known. Measured on one machine: Claude 1.0 s of CPU
+  and ~230 MB at peak, Codex 0.8 s and ~100 MB, Antigravity 0.9 s and ~170 MB. The
+  agent itself idles at about 5 MB.
 
-Identity: Claude reports the signed-in e-mail and organization in its `initialize`
-response, Codex the account id; both become a pseudonym before anything leaves the
-machine, the same on every machine. Antigravity does not say which account it is, so
-the hub keeps it per machine.
+**Which account.** Claude reports the signed-in email and organization when it starts,
+Codex the account id. Both become a pseudonym (a truncated SHA-256, see the spec)
+before anything leaves the machine, the same on every machine. Antigravity does not say
+which account it is: its measurements belong to the owner of the device, and a person
+with two Antigravity subscriptions names them in the agent's settings
+(`[providers.antigravity] account = "work"`).
 
 ## Scheduling
 
 Clients are expensive to start, so the schedule is about starting as few as possible,
-never at the same time:
+and never several at once:
 
-- **One at a time.** Measurements run strictly one after another, so the peak is one
-  client, not three.
-- **Interval per provider**, configurable, at least 60 s (below that Claude Code answers
-  from its cache anyway), 120 s by default.
+- **One at a time.** Measurements run strictly one after another, so at any moment at
+  most one client is running.
+- **An interval per provider**, configurable, at least 60 s (below that Claude Code
+  answers from its cache anyway), 120 s by default.
 - **Spread.** After the first round (all providers right away, one after another) each
-  provider is offset by an equal share of its interval, plus ±10 % jitter so machines
-  of a team do not synchronize. After sleep or suspend the spread is re-established
-  instead of catching up missed runs.
-- **Eco mode** (on by default): while a provider's values do not change and nobody uses
-  it on this machine (its history and state files are untouched), its interval doubles
-  up to 15 minutes; any change or use snaps it back. A known reset pulls the next run
-  to 30 s after it.
-- **Failures back off**: a missing client is checked every 30 minutes, a signed-out one
+  provider is offset by an equal share of its interval, plus ±10% jitter so the machines
+  of a team don't fall into step. After sleep or suspend the spread is set up again
+  instead of catching up on missed runs.
+- **Eco mode** (on by default): while a provider's values don't change and nobody uses
+  it on this machine (its history and state files are untouched), its interval doubles,
+  up to 15 minutes. Any change or use brings it straight back. A known reset pulls the
+  next run to 30 s after it.
+- **Failures back off:** a missing client is checked every 30 minutes, a signed-out one
   every 15, other errors double the interval up to 15 minutes.
-- Clients run at low priority (nice 10, below-normal on Windows), in an empty working
-  directory, and are killed with their process tree after 60 s.
+- Clients run at low priority (nice 10, below normal on Windows), in an empty working
+  directory, and are killed with their whole process tree after 60 s.
 
-Every measurement carries `staleAfterMs` — when the next one is due plus a margin — so
-the hub knows a sparse eco-mode series is continuous and a missing measurement is a gap.
+Every measurement carries `staleAfterMs`: when the next one is due, plus a margin. That
+is how the hub knows a sparse eco-mode series is continuous and a missing measurement
+is a gap.
+
+## One measurer per subscription
+
+The same subscription is often signed in on several machines: a laptop and a couple of
+dev environments, or a whole team's containers. Measuring it everywhere would multiply
+the cost for the same numbers, so the hub keeps one device **on duty** per
+subscription:
+
+- Before measuring, a device checks in (`POST /v1/checkin`) with the subscription and
+  whether someone is using the client on this machine right now.
+- The first device to ask gets duty. It keeps it while it delivers: each measurement
+  extends duty until the measurement goes stale.
+- The others are told to wait and when to ask again: in a minute if someone works on
+  that machine, otherwise in up to ten minutes.
+- Duty moves to a device where someone works if the holder has been idle for ten
+  minutes, so the numbers come from where the subscription is actually being used.
+- A holder that goes quiet (asleep, switched off) loses duty when its last measurement
+  goes stale, and the next device to ask takes over.
+
+Duty is kept in memory; after a restart of the hub the first devices to check in take
+it again. An agent talking to a hub without the endpoint simply measures.
 
 ## Delivery
 
 The agent posts each measurement right away. When the hub is unreachable, measurements
 wait in a spool file (at most 5,000, about two days) and go out oldest first when it
-answers again. Resending is safe: the hub treats a measurement it already has as a
+answers again. Resending is safe: a measurement the hub already has counts as a
 duplicate.
+
+## Storage and the rules
+
+One SQLite file (WAL). A **source** is one subscription on one board, keyed by the
+account pseudonym, or by the owner for clients that don't name their account. Each
+source has its last state (what the card shows) and samples: one row per window per
+measurement, kept for 90 days.
+
+- **Spending** is only an increase of the used percentage between two consecutive
+  samples of the same window, inside one reset window, with no gap between them.
+  Resets, corrections by the provider and gaps (a sample arriving later than the
+  previous one promised) are excluded. An idle rolling window whose reset time drifts
+  forward is not a reset.
+- **The chart** puts every series on one time grid (5 minutes for a day, 30 minutes
+  for a week, 2 hours for a month) and shows the lowest value seen in each cell, so
+  hovering reads every series at once and a short hiccup doesn't break a line.
+- **The plan** is per source and lives in the browser: whole percents per day of the
+  weekly window (30/25/15/15/10/5/0 by default), days at 0 are rest days. Other windows
+  are planned linearly to their reset.
 
 ## People, boards, devices
 
-- **Users** sign in to the hub with e-mail and password. The first one on a hub is its
-  admin and takes over everything collected before accounts existed. After that,
-  sign-up needs an invite link unless the hub is open (`AGENT_LIMITS_SIGNUP=open`).
+- **Users** sign in to the hub with an email and a password. The first user of a hub is
+  its admin and takes over the default board, which static ingest tokens deliver to.
+  After that, signing up needs an invite link unless the hub is open
+  (`QUOTUM_SIGNUP=open`).
 - **Boards** are what is aggregated and shared: every user has a personal board and can
-  create shared ones and invite people with a link (valid a week, several uses).
+  create shared ones and invite people with a link (valid for a week, several uses).
 - **Devices** are running agents. They join a board in one of two ways:
-  - *one-time code* (RFC 8628 device flow): `agent-limits connect <hub>` shows a code, a
+  - *a one-time code* (the RFC 8628 device flow): `quotum connect <hub>` shows a code, a
     signed-in person confirms it in the browser and picks the board; the device gets
     its own token and belongs to that person;
-  - *board token*: created by a member, written once into an image, VM or container
-    setup; every machine that starts with it joins the board by itself.
-- **Owner** of a device: the person who confirmed its code; with a board token the
-  name it declares (`--owner`; a member's e-mail makes it that member's), else the
-  creator of the token. What clients report (their sign-in e-mails) is never used:
-  it is neither stable nor unique — one person's Claude and Codex may use different
-  accounts, and a shared subscription is used by several people.
-- **Subscriptions** are what is measured: a provider account the client identifies is
-  one subscription however many devices measure it; a subscription the client does
-  not identify (Antigravity) is the owner's own, optionally named in the agent's
-  settings (`[providers.antigravity] account = "work"`).
+  - *a board token*: created by a member and written once into an image, VM or
+    container setup; every machine that starts with it joins the board by itself.
+- **The owner** of a device is the person who confirmed its code. With a board token it
+  is the name the device declares (`--owner`; a member's email makes it that member's),
+  else the creator of the token. What the clients report (their sign-in emails) is never
+  used for this: it is neither stable nor unique. One person's Claude and Codex may be
+  different accounts, and a shared subscription is used by several people.
+- **Subscriptions** are what is measured. An account the client identifies is one
+  subscription however many devices measure it. A subscription the client does not
+  identify (Antigravity) is its owner's, optionally named in the agent's settings.
 
 Secrets (sessions, tokens, codes, invites) are random, prefixed by kind (`qt_s_`,
 `qt_b_`, `qt_d_`, `qt_c_`, `qt_i_`) and stored only as SHA-256 hashes; passwords as
 scrypt hashes. Changes made with a session cookie are accepted only from the hub's own
-pages (Origin check, SameSite cookie); sign-in and code lookups are rate-limited.
+pages (Origin check, SameSite cookie). Sign-in, sign-up and code lookups are
+rate-limited.
+
+## The dashboard
+
+A single-page React app served by the hub. It reads `/api/overview` every 10 seconds
+and re-reads history only when the overview's `revision` says the data changed.
+Preferences (hidden windows, plans, the chosen board and language) stay in the browser.
+
+Text is translated through typed catalogs in `hub/ui/i18n`: English is the source,
+every other language must translate all its keys (checked by the type checker and by
+tests, together with placeholders and plural forms). The hub stores nothing in a
+particular language: window kinds and error states are codes, and personal boards have
+no name of their own, so each reader sees "My limits" in their language.
 
 ## Roadmap
 
-1. ~~Ingest format, agent MVP (three providers, schedule, spool), hub ingest.~~
+1. ~~Ingest format, the agent (three providers, schedule, spool), hub ingest.~~
 2. ~~Users, boards, board tokens, devices; connecting with a one-time code.~~
-3. One measurer per subscription: devices check in with the hub before measuring,
-   the hub picks one live device per subscription (preferring one in use) and the
-   others wait; failover when it goes quiet.
-4. Board pages: a people × providers table on shared boards, per-person views.
-5. Run the agent next to CodexBar for a few days, compare, move the dashboard to agent
-   data (window ids of the old collector map to the agent's) and remove CodexBar.
-6. Distribution: `npx agent-limits` (npm package with per-platform binaries),
-   `curl … | sh` / PowerShell installers, autostart registration.
-7. Desktop app (Tauri): tray, settings, local dashboard.
+3. ~~One measurer per subscription.~~
+4. ~~The dashboard fed by agents only (CodexBar removed); English and Russian.~~
+5. A team view on shared boards: people × providers.
+6. Distribution: `npx quotum` (an npm package with per-platform binaries),
+   `curl … | sh` and PowerShell installers, autostart registration.
+7. The desktop app (Tauri): tray, settings, local dashboard.

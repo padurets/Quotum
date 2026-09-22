@@ -1,180 +1,254 @@
-# Agent Limits
+# Quotum
 
-One page with the subscription limits of every coding agent you use — Claude Code,
-OpenAI Codex, Google Antigravity: how much of each 5-hour and weekly window is left,
-when it resets, whether you spend it faster than planned, and the history of all of
-them on one chart.
+**English** · [Русский](README.ru.md)
 
-> Status: early. The hub (`hub/`) has accounts, personal and shared boards, and takes
-> measurements from the native agent (`agent/`), connected with a one-time code or a
-> board token. Next: one measurer per subscription, team pages, packaging
-> (`npx agent-limits`) and a desktop app. See [docs/architecture.md](docs/architecture.md).
+Quotum shows how much of your coding-agent subscriptions is left — Claude Code, Codex
+and Antigravity — on every machine you work on, in one place.
 
-The dashboard interface is in Russian for now.
+![The Quotum dashboard](docs/dashboard.png)
 
-## Quick look
+## Why I made it
 
-```sh
-cd agent && cargo build --release
-./target/release/agent-limits
-```
+I pay for several coding agents at once, and each has its own limits: a five-hour
+window, a weekly one, sometimes a separate weekly window for a particular model. To know
+where I stood I had to open each tool, type `/usage` and do the maths in my head: at
+this pace, will the weekly limit last until the weekend? On top of that I don't work on
+one machine. There is a laptop, a few remote dev environments and some containers, and
+the same subscriptions are signed in on several of them.
 
-```
-                                   left  resets
-Codex pro     weekly                 6%  in 3d 19h
-Claude max    5 hours               95%  in 1h 43m
-              weekly                90%  in 5d 11h
-              Fable weekly         100%  in 5d 11h
-Antigravity   Gemini 5 hours       100%  in 5h 0m
-              Gemini weekly       96.3%  in 1d 3h
-```
+I wanted one page that answers the questions I actually have:
 
-The agent asks each agent's own command-line client (`claude`, `codex`, `agy`) through
-its machine-readable interface. It never reads tokens and makes no model requests.
+- how much is left in each window, and when does it reset;
+- am I spending faster than I planned for this week;
+- what did the last few days look like.
 
-## What it shows
-
-- **A card per account** with one meter per window. Meters use fixed status colours:
-  above 30% is fine, 30% and below is a warning, under 10% is critical. A tick marks
-  where the spending plan expects the window to be now.
-- **A spending plan** for weekly windows: whole percent per day, by default
-  30 / 25 / 15 / 15 / 10 / 5 / 0 (the seventh day is a rest day). Each account can
-  have its own plan; other windows are planned linearly to their reset.
-- **One combined chart** of every window over 24 h / 7 d / 30 d on a shared time grid,
-  so a hover reads all series at once. The right edge shows a bit of the future: the
-  plan ahead and the next resets.
-- **A table** with the plan, consumption and a forecast of whether a window runs out
-  before its reset.
-- **Reset announcements** from community trackers ([Codex Resets](https://codex-resets.com),
-  [claude-resets.com](https://claude-resets.com)), shown with credit and a link to the
-  source post. Can be turned off in the settings.
+I looked around first. What I found either lives on a single machine (the dashboard
+started out reading from [CodexBar](https://github.com/steipete/CodexBar), a nice macOS
+menu-bar app), or wants your provider tokens or browser cookies so it can call the
+providers' APIs for you. The first didn't match how I work, and I didn't want to do the
+second. So I wrote Quotum.
 
 ## How it works
 
-```
-agent (every machine)  ── POST /v1/ingest ──►  hub: rules ─► SQLite ─► dashboard
-  claude · codex · agy                              ▲
-                                  reset trackers ───┘
-```
+There are two parts:
 
-- **Agent** (`agent/`, Rust): measures through the clients, one at a time, on a
-  per-provider interval (at least a minute, 2 minutes by default, stretched up to 15
-  while idle), and delivers in the [ingest format](spec/ingest-v1.md) with a spool
-  for offline periods. Account ids leave the machine only as pseudonyms.
-- **Hub** (`hub/`, Node 24 + Fastify + SQLite, React UI): stores measurements, applies
-  the consumption rules and serves the dashboard. It can also collect by itself
-  through a local [CodexBar](https://github.com/steipete/CodexBar) — the path the agent
-  is replacing.
-- **Sources, not providers.** Everything is keyed by a *source* — one provider
-  account. The same account measured on two machines is one source.
-- **Consumption.** Only increases of the used percentage within the same account and
-  the same reset window count as consumption. Resets, corrections, account changes
-  and gaps (a measurement arriving later than the previous one promised) are
-  excluded. An idle rolling window whose reset time drifts forward is not a reset.
-- **Privacy.** The hub stores percentages, reset times, plan names and account
-  pseudonyms. Never tokens, cookies, raw payloads or e-mail addresses. Browser
-  preferences stay in the browser.
-
-Code layout:
+- **The agent** is a small native program (Rust, a single binary of about 3 MB). It
+  runs on each machine where you use coding agents and asks their own command-line
+  clients for the limits, the same numbers you see when you type `/usage`. It doesn't
+  read tokens, make model requests or call provider APIs itself: the client does
+  exactly what it does when you use it.
+- **The hub** is a small web service (Node.js and SQLite) with the dashboard. Agents
+  send it what they measured; it keeps the history and draws it.
 
 ```
-agent/crates/core/         adapters (claude, codex, antigravity), schedule, config, delivery
-agent/crates/cli/          the `agent-limits` command (status, run, connect, config)
-spec/ingest-v1.md          what the agent sends to the hub
-hub/server/domain/         sources, quota windows and consumption rules, ingest, reset feeds
-hub/server/store/          SQLite schema, migrations and queries (node:sqlite, WAL)
-hub/server/ingest.ts       POST /v1/ingest: devices, owners, subscriptions
-hub/server/pairing.ts      connecting a device with a one-time code
-hub/server/routes/         sign-in, boards, invites, tokens, devices; agent endpoints
-hub/server/store/directory.ts  users, sessions, boards, tokens, devices
-hub/server/collector.ts    the CodexBar collection cycle (optional)
-hub/server/api.ts          HTTP API and security headers
-hub/ui/                    React UI: formatting, plan, preferences, cards, chart
+ laptop ──┐
+ dev VM ──┼── quotum agent ── HTTPS ──►  hub  ──►  dashboard
+ box    ──┘   claude · codex · agy       SQLite
 ```
 
-## Running
+If one subscription is signed in on several machines, they don't all measure it. The hub
+puts one machine on duty per subscription (preferably the one you're working on), the
+others wait, and duty moves on when that machine goes quiet.
+
+The agent also works on its own: run `quotum` and it prints the limits of this machine.
+
+```
+$ quotum
+                                   left  resets
+Codex pro     weekly                 4%  in 3d 16h
+Claude max    5 hours               98%  in 4h 27m
+              weekly                89%  in 5d 9h
+              Fable weekly         100%  in 5d 9h
+Antigravity   Gemini 5 hours       100%  in 4h 59m
+              Gemini weekly         96%  in 1d 3h
+```
+
+## What the dashboard shows
+
+- **A card per subscription**, one meter per window: green above 30%, amber at 30% and below,
+  red under 10%. A tick on the meter shows where your spending plan expects you to be
+  right now.
+- **A weekly spending plan.** By default you spend 30 / 25 / 15 / 15 / 10 / 5% on the
+  six days after the reset, and the seventh is a rest day. Each subscription can have
+  its own plan.
+- **One chart of all windows** over 24 hours, 7 or 30 days, with the plan and the next
+  resets drawn ahead of now.
+- **A table with a forecast:** at the current pace, does the window run out before its
+  reset (or before your rest day), and roughly how much will be left.
+- **Reset announcements** from the community trackers [Codex Resets](https://codex-resets.com)
+  and [claude-resets.com](https://claude-resets.com), with a link to the source. You
+  can turn them off.
+- **Boards.** Everyone has a personal board. Shared boards let a team see each other's
+  limits; people join by an invite link.
+
+The interface is available in English and Russian.
+
+## What I paid attention to
+
+It's a pet project, but I wanted a tool I'd be comfortable running on every machine all
+day, not a script thrown together over a weekend. In practice that meant:
+
+- **It stays out of the way.** The agent idles at about 5 MB of memory. The expensive
+  part is starting an agent's client (around a second of CPU and 100–230 MB of memory
+  for that second), so Quotum starts as few of them as it can. They run one at a time,
+  every two minutes by default. When nothing changes and nobody uses a client, that
+  client is measured less often, down to once every 15 minutes. And only one machine
+  measures each subscription.
+- **Your credentials stay where they are.** Quotum never reads, stores or sends provider
+  tokens or cookies. What leaves the machine: percentages, reset times, plan names and a
+  one-way hash of the account id, so the hub can tell two machines share one account
+  ([details](spec/ingest-v1.md#privacy)).
+- **The numbers mean what they say.** Only a real increase inside one reset window
+  counts as spending. Resets, corrections and gaps in the data never show up as
+  consumption. The agent says when its next measurement is due, so a sparse series isn't
+  mistaken for a gap.
+- **Few moving parts.** The agent has a handful of dependencies. The hub is Fastify and
+  the SQLite built into Node, and the UI is plain React with about 90 KB of gzipped
+  JavaScript. There are no external services and no telemetry.
+- **Written down and tested.** The protocol between the agent and the hub is a spec
+  ([spec/ingest-v1.md](spec/ingest-v1.md)). About 75 tests cover the spending rules,
+  resets, duty, device pairing and the translations. The TypeScript is strict and the
+  Rust passes `clippy`.
+
+## Status
+
+It works: I use it every day. For now you build it from source. `npx quotum`, installers
+and a desktop app are next ([roadmap](#roadmap)).
+
+- Clients: Claude Code, Codex CLI, Antigravity CLI (`agy` 1.1.11 or newer).
+- Platforms: I run it on Linux. The agent is written for macOS and Windows too, but
+  they haven't had much use yet — issues are welcome.
+
+## Getting started
+
+You need Node.js 24+ for the hub and Rust 1.85+ to build the agent.
+
+**1. Start the hub.**
+
+```sh
+git clone https://github.com/padurets/quotum && cd quotum/hub
+npm ci && npm run build
+npm start                     # http://127.0.0.1:8080
+```
+
+Open it and create an account. The first account becomes the admin.
+
+**2. Build the agent and look at this machine.**
+
+```sh
+cd ../agent && cargo build --release
+./target/release/quotum       # measures once and prints a table
+```
+
+**3. Connect the machine to the hub and keep it measuring.**
+
+```sh
+./target/release/quotum connect http://127.0.0.1:8080
+./target/release/quotum run
+```
+
+`connect` shows a code: confirm it in the browser and pick a board. `run` keeps
+measuring and delivering, so start it the way you run background programs (a systemd
+user service, launchd, Windows autostart).
+
+**Many machines at once** (images, VMs, containers): create a board token in the
+dashboard (*Devices → Connect*), then start every machine with it. Each one shows up on
+the board by itself:
+
+```sh
+quotum run --hub https://quotum.example.com --token qt_b_… [--owner alice]
+```
+
+Machines connected with a board token belong to whoever created the token. If several
+people share one token, `--owner` says whose machine it is: a board member's email links
+it to that member, any other name is shown as given.
+
+## Configuration
 
 ### Agent
 
-```sh
-cd agent && cargo build --release        # Rust 1.85+
-agent-limits                             # measure once and print
-agent-limits --json                      # the same in the ingest format
-agent-limits connect https://hub.example # connect to a hub with a one-time code
-agent-limits run                         # keep measuring; deliver when connected
-agent-limits run --hub URL --token qt_b_… [--owner alice]   # or with a board token
-agent-limits config                      # where settings live, which clients were found
-```
-
-Settings (`~/.config/agent-limits/config.toml` on Linux; all optional):
+Everything is optional. On Linux the file is `~/.config/quotum/config.toml`;
+`quotum config` shows where it is on your system and what is in effect.
 
 ```toml
-interval = 120          # seconds between measurements of one provider, at least 60
+interval = 120          # seconds between two measurements of one client, at least 60
 eco = true              # measure less often while nothing changes
-owner = "alice"         # whom this machine measures for on a shared board (board tokens)
+owner = "alice"         # whose machine this is, with a shared board token
+
+[machine]
+name = "work-laptop"    # how the machine appears on the hub (default: host name)
 
 [hub]
-url = "https://limits.example.com"
-token = "…"
+url = "https://quotum.example.com"
+token = "qt_b_…"
 
 [providers.antigravity]
 interval = 300
-account = "work"        # names a subscription the client does not identify
+account = "work"        # tells two Antigravity subscriptions apart (agy doesn't say which one it is)
 # enabled = false
 # path = "/opt/agy/bin/agy"
 ```
 
-`AGENT_LIMITS_HUB_URL`, `AGENT_LIMITS_HUB_TOKEN`, `AGENT_LIMITS_OWNER`,
-`AGENT_LIMITS_INTERVAL`, `AGENT_LIMITS_CONFIG` and `AGENT_LIMITS_STATE_DIR` override the
-file. `connect` keeps its device token in the state directory (readable by the user only).
+The environment variables `QUOTUM_HUB_URL`, `QUOTUM_HUB_TOKEN`, `QUOTUM_OWNER`,
+`QUOTUM_INTERVAL`, `QUOTUM_CONFIG` and `QUOTUM_STATE_DIR` override the file. Other
+commands: `quotum --json` (one measurement in the ingest format), `quotum --only codex`,
+`quotum disconnect`.
 
 ### Hub
 
-Requirements: Node.js 24+.
-
-```sh
-cd hub
-npm ci
-npm run build
-npm test
-npm start   # http://127.0.0.1:8080 — the first account created becomes the admin
-```
-
-Configuration (environment):
-
 | Variable | Default | Meaning |
 |---|---|---|
-| `AGENT_LIMITS_BIND` | `127.0.0.1` | Listen address |
-| `AGENT_LIMITS_PORT` | `8080` | Listen port |
-| `AGENT_LIMITS_ALLOWED_HOSTS` | `127.0.0.1,localhost` | Host names the service answers to; others get 403 |
-| `AGENT_LIMITS_FRAME_ANCESTORS` | — | Extra origins allowed to embed the page |
-| `AGENT_LIMITS_DATA_DIR` | `./data` | Where the SQLite database lives |
-| `AGENT_LIMITS_SIGNUP` | `invite` | `open` lets anyone sign up; otherwise only the first user and people with an invite |
-| `AGENT_LIMITS_PUBLIC_URL` | from the request | Address shown to agents and in invite links |
-| `AGENT_LIMITS_INGEST_TOKENS` | — | Extra static tokens (16+ characters) that deliver to the first user's board |
-| `AGENT_LIMITS_VENDOR_TOKEN` | — | Token of a local `codexbar serve`; enables the built-in CodexBar collector |
-| `AGENT_LIMITS_CLAUDE_PROFILE` | `~/.claude.json` | CodexBar collector only: Claude Code profile, read for the account id |
+| `QUOTUM_BIND` | `127.0.0.1` | Address to listen on |
+| `QUOTUM_PORT` | `8080` | Port to listen on |
+| `QUOTUM_ALLOWED_HOSTS` | `127.0.0.1,localhost` | Host names the hub answers to; other hosts get 403 |
+| `QUOTUM_PUBLIC_URL` | taken from the request | The address shown to agents and used in invite links |
+| `QUOTUM_DATA_DIR` | `./data` | Where the SQLite database lives |
+| `QUOTUM_SIGNUP` | `invite` | `open` lets anyone sign up; otherwise only the first person and people with an invite |
+| `QUOTUM_INGEST_TOKENS` | — | Static tokens (16+ characters) that deliver to the first user's board: handy when the hub and one agent run side by side |
+| `QUOTUM_FRAME_ANCESTORS` | — | Extra origins allowed to embed the dashboard |
 
-People sign in with e-mail and password; devices connect from the board's
-«Устройства» panel: a one-time code for machines people work at, a board token for
-images, VMs and containers ([spec](spec/ingest-v1.md)). Serve the hub over HTTPS (behind
-a TLS-terminating proxy is fine): sessions are cookies, tokens are bearer secrets.
+If other people or machines reach the hub over a network, put it behind HTTPS (a
+TLS-terminating proxy is fine): sessions are cookies and tokens are bearer secrets.
 
-API: `/health`; for people `/api/session`, `/api/auth/*`, `/api/overview?board=`,
-`/api/history?board=&range=24h|7d|30d`, `/api/boards/*` (members, invites, tokens,
-devices), `/api/device` (approving codes), `/api/resets`; for agents `/v1/device/code`,
-`/v1/device/token`, `/v1/ingest`. Add `?preview=reset` to the page URL to see a sample
-reset announcement.
+## More
+
+- [docs/architecture.md](docs/architecture.md): how the parts fit, how measuring and
+  scheduling work, people, boards and devices.
+- [spec/ingest-v1.md](spec/ingest-v1.md): what the agent sends to the hub; anything can
+  implement it.
+
+Project layout:
+
+```
+agent/crates/core     adapters for each client, schedule, settings, delivery to the hub
+agent/crates/cli      the `quotum` command
+spec/                 the protocol between the agent and the hub
+hub/server/domain     the rules: windows, spending, resets, ingest format
+hub/server/store      SQLite: layout, measurements, people and devices
+hub/server/*.ts       HTTP API, ingest, duty, device pairing
+hub/ui                the dashboard (React), translations in hub/ui/i18n
+```
+
+### Adding a language
+
+The dashboard's text lives in `hub/ui/i18n`. Copy `en.ts` to a new file, translate
+the strings, and add one line to `LOCALES` in `index.ts`. `npm test` checks that every
+key is translated, the `{placeholders}` match and plural forms exist for every form
+your language has.
 
 ## Roadmap
 
-1. One measurer per subscription across all devices of a board.
-2. Team pages: people × providers on shared boards.
-3. Move the dashboard fully to agent data and drop the CodexBar collector.
-4. One-line start: `npx agent-limits` (npm package with per-platform binaries),
-   `curl … | sh` and PowerShell installers, autostart.
-5. Desktop app (Tauri): agent and dashboard in one, tray icon and settings, no server.
+1. A team view on shared boards: people × providers at a glance.
+2. One-line start: `npx quotum`, `curl … | sh` and PowerShell installers, autostart.
+3. A desktop app (Tauri) with the agent and the dashboard in one window and a tray
+   icon, no server needed.
 
-## License
+## Credits and license
 
-MIT, see [LICENSE](LICENSE). Third-party notices: [NOTICE.md](NOTICE.md).
+Thanks to [CodexBar](https://github.com/steipete/CodexBar) for showing the way and for
+being the first data source of this dashboard, and to the people behind
+[Codex Resets](https://codex-resets.com) and [claude-resets.com](https://claude-resets.com).
+Provider icons come from [LobeHub Icons](https://github.com/lobehub/lobe-icons). Quotum
+is not affiliated with Anthropic, OpenAI or Google.
+
+MIT, see [LICENSE](LICENSE). Third-party notices are in [NOTICE.md](NOTICE.md).

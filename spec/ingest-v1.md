@@ -1,7 +1,7 @@
 # Ingest format v1
 
-How an agent connects to a hub and delivers measurements. Any collector may
-implement it; the reference implementation is `agent/` (Rust).
+How an agent connects to a hub, asks whether to measure, and delivers measurements.
+Anything may implement it; the reference implementation is `agent/` (Rust).
 
 ## Tokens
 
@@ -29,7 +29,7 @@ Content-Type: application/json
 ```json
 {
   "version": 1,
-  "agent": "agent-limits/0.1.0",
+  "agent": "quotum/0.1.0",
   "machine": {"id": "3f9a…", "name": "workstation", "os": "linux", "arch": "x86_64"},
   "owner": {"name": "alice"},
   "sentAt": "2026-09-22T18:43:45.120Z",
@@ -84,7 +84,7 @@ One successful measurement of one provider account on one machine.
 | Field | Meaning |
 |---|---|
 | `provider` | `claude`, `codex` or `antigravity`. |
-| `account` | Pseudonym of the account: the first 24 hex characters of `sha256("agent-limits/account/v1\n<provider>\n<stable account id, lower-case>")`. The same account on two machines gets the same pseudonym. Absent when the client does not say which account it is (Antigravity); the hub then keeps the account per machine. |
+| `account` | Pseudonym of the account: the first 24 hex characters of `sha256("quotum/account/v1\n<provider>\n<stable account id, trimmed, lower-case>")`. For example, Claude's `user@example.com` is `a9065ccd9f3d50fc4e5fe3c6`. The same account on two machines gets the same pseudonym. Absent when the client does not say which account it is (Antigravity); see [Subscriptions](#subscriptions). |
 | `accountName` | For a client that does not identify its account: a name the owner gave this subscription, to tell two of them apart. |
 | `plan` | The provider's plan name (`max`, `pro`), if reported. |
 | `observedAt` | When the client answered. |
@@ -108,15 +108,17 @@ One successful measurement of one provider account on one machine.
 
 A measurement that did not succeed. `error` is one of `not_logged_in`, `unsupported`
 (the client cannot report plan limits: too old, API-key login), `timeout`,
-`invalid_output`, `failed`. `detail` is free text for people, at most 200 characters.
-Agents do not report providers whose client is not installed.
+`invalid_output`, `failed`, `not_installed`. `detail` is free text for people, at most
+200 characters. The reference agent does not report clients that are not installed.
+A hub shows a failure only once the subscription has had no good measurement for as
+long as the last one stays representative: another device may be measuring it fine.
 
 ### Subscriptions
 
 The hub files snapshots under *subscriptions* of the board: by `account` when the
 client names it (one account measured on many machines is one subscription), else as
-the owner's own subscription of that provider (plus `accountName`, if given) — never
-per machine.
+the owner's own subscription of that provider (plus `accountName`, if given), never
+per machine. The same keys decide duty in check-ins.
 
 ## Response
 
@@ -132,11 +134,56 @@ duplicate, so resending a batch after a lost answer is safe.
 | `413` | Body too large | Drop it |
 | `5xx`, network errors | Hub unavailable | Keep the data, retry later |
 
+## Asking whether to measure
+
+The same subscription is often signed in on several machines. Before measuring, an agent
+asks the hub whether it is on duty for it; the hub lets one device per subscription
+measure and tells the others when to ask again.
+
+```
+POST /v1/checkin
+Authorization: Bearer <token>
+```
+
+```json
+{
+  "version": 1,
+  "agent": "quotum/0.1.0",
+  "machine": {"id": "3f9a…", "name": "workstation", "os": "linux", "arch": "x86_64"},
+  "owner": {"name": "alice"},
+  "subscriptions": [
+    {"provider": "claude", "account": "9c1e5a0b7d2f4e6a8b0c1d2e", "active": true},
+    {"provider": "antigravity", "accountName": "work", "active": false}
+  ]
+}
+```
+
+`machine` and `owner` are as in a batch; `account` and `accountName` are as in a
+snapshot, as far as the agent knows them before measuring. `active` says whether someone
+is using that client on this machine right now. At most 16 subscriptions.
+
+`200` with, in the same order:
+
+```json
+{"subscriptions": [
+  {"provider": "claude", "measure": true, "until": "2026-09-22T18:43:45Z"},
+  {"provider": "antigravity", "measure": false, "until": "2026-09-22T18:52:10Z"}
+]}
+```
+
+`measure: true` means measure now and deliver. `measure: false` means another device is
+on duty: don't measure this subscription before `until`, then ask again. The device on
+duty keeps it while it delivers; a device where someone is working takes over from a
+holder that has been idle for a while; a holder that stops delivering loses duty when
+its last measurement goes stale. Errors are as for ingest (`400 invalid_request`, `401`,
+`403 device_revoked`). An agent that gets `404` (a hub without check-ins) or cannot reach
+the hub measures anyway.
+
 ## Connecting with a one-time code
 
 The OAuth 2.0 device authorization flow (RFC 8628) with JSON bodies:
 
-1. `POST /v1/device/code` with `{"machine": {…}, "agent": "agent-limits/0.1.0"}` →
+1. `POST /v1/device/code` with `{"machine": {…}, "agent": "quotum/0.1.0"}` →
    `{"deviceCode", "userCode": "HVJG-XS8V", "verificationUri", "verificationUriComplete", "expiresIn": 600, "interval": 5}`.
 2. The agent shows `userCode` and `verificationUriComplete`; a signed-in person opens it,
    sees the machine and picks a board.
