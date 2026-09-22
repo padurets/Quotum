@@ -19,12 +19,24 @@ export type Measurement = {
   plan: string;
   identity: string | null;
   windows: Win[];
+  /** How long this measurement stays representative; unset means `retention.freshMs`. */
+  staleAfterMs?: number | null;
 };
 
 /** A stored window value. `scope` is the identity segment it belongs to. */
-export type Sample = Win & {sourceId: string; provider: Provider; scope: string; sourceAt: number; observedAt: number};
+export type Sample = Win & {
+  sourceId: string;
+  provider: Provider;
+  scope: string;
+  sourceAt: number;
+  observedAt: number;
+  staleAfterMs?: number | null;
+};
 
-export type Confidence = 'provider' | 'local-profile' | 'local-id-token' | 'credential-boundary' | 'unknown';
+/** How long after a sample the next one must arrive for the two to count as continuous. */
+export const staleAfter = (sample: {staleAfterMs?: number | null}) => sample.staleAfterMs ?? config.retention.freshMs;
+
+export type Confidence = 'provider' | 'local-profile' | 'local-id-token' | 'credential-boundary' | 'agent-machine' | 'unknown';
 
 export type SourceState = {
   id: string;
@@ -37,6 +49,7 @@ export type SourceState = {
   attemptAt: number;
   error: string | null;
   windows: Win[];
+  staleAfterMs?: number | null;
 };
 
 export function kindOf(minutes: number | null, label: string): Kind {
@@ -62,7 +75,7 @@ export function edge(a: Sample, b: Sample): Edge {
   if (a.sourceId !== b.sourceId || a.scope !== b.scope || a.id !== b.id) return no('scope');
 
   const elapsed = b.sourceAt - a.sourceAt;
-  if (elapsed <= 0 || elapsed > config.retention.freshMs) return no('gap');
+  if (elapsed <= 0 || elapsed > staleAfter(a)) return no('gap');
 
   if (a.resetAt === null || b.resetAt === null) {
     return Math.abs(b.used - a.used) < 0.05 ? {valid: true, delta: 0, reason: 'continuous'} : no('unknown-reset');
@@ -78,7 +91,7 @@ export function edge(a: Sample, b: Sample): Edge {
   return {valid: true, delta: Math.max(0, b.used - a.used), reason: 'continuous'};
 }
 
-export type Point = {at: number; used: number; remaining: number; segment: number; scope: string};
+export type Point = {at: number; used: number; remaining: number; segment: number; scope: string; staleAfterMs?: number | null};
 
 /**
  * Chart continuity breaks only where data is missing or the account changed; a reset
@@ -98,7 +111,7 @@ export function series(samples: Sample[]) {
       }
       if (step.reason === 'gap' || step.reason === 'scope') segment++;
     }
-    return {at: sample.sourceAt, used: sample.used, remaining: sample.remaining, segment, scope: sample.scope};
+    return {at: sample.sourceAt, used: sample.used, remaining: sample.remaining, segment, scope: sample.scope, staleAfterMs: sample.staleAfterMs};
   });
   return {points, consumed, coveredMs, samples: samples.length};
 }
@@ -111,6 +124,7 @@ export function series(samples: Sample[]) {
 export function bucketize(points: Point[], bucketMs: number): Point[] {
   const buckets: Point[] = [];
   let segment = 0;
+  let previous: Point | undefined;
   for (const point of points) {
     const at = Math.floor(point.at / bucketMs) * bucketMs;
     const current = buckets.at(-1);
@@ -119,10 +133,13 @@ export function bucketize(points: Point[], bucketMs: number): Point[] {
         current.remaining = point.remaining;
         current.used = point.used;
       }
+      previous = point;
       continue;
     }
-    if (current && (at - current.at > Math.max(bucketMs, config.retention.freshMs) || point.scope !== current.scope)) segment++;
+    const gap = previous ? at - Math.floor(previous.at / bucketMs) * bucketMs > Math.max(bucketMs, staleAfter(previous)) : false;
+    if (current && (gap || point.scope !== current.scope)) segment++;
     buckets.push({...point, at, segment});
+    previous = point;
   }
   return buckets;
 }

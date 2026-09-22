@@ -52,6 +52,11 @@ export const ERRORS: Record<string, string> = {
   limits_unavailable: 'Лимиты не пришли',
   invalid_response: 'Непонятный ответ источника',
   missing_provider: 'Источник не вернул провайдера',
+  agent_not_logged_in: 'Клиент агента не авторизован',
+  agent_unsupported: 'Клиент агента не сообщает лимиты',
+  agent_timeout: 'Клиент агента не ответил вовремя',
+  agent_invalid_output: 'Непонятный ответ клиента агента',
+  agent_failed: 'Клиент агента не смог получить лимиты',
 };
 
 export const problemOf = (source: SourceState) =>

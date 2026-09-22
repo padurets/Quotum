@@ -1,6 +1,6 @@
 import type {DatabaseSync} from 'node:sqlite';
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 const V1 = `
   CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -33,6 +33,21 @@ const V2 = `
     SELECT DISTINCT provider, provider, 'default', ${'$'}{now} FROM samples;
 `;
 
+/**
+ * v3 lets each measurement say how long it stays representative (agents measure on
+ * their own schedule), and maps agent accounts and machines to sources.
+ */
+const V3 = `
+  ALTER TABLE samples ADD COLUMN stale_after_ms INTEGER;
+  CREATE TABLE IF NOT EXISTS agent_accounts (
+    provider TEXT NOT NULL, account TEXT NOT NULL, source_id TEXT NOT NULL, created_at INTEGER NOT NULL,
+    PRIMARY KEY (provider, account));
+  CREATE TABLE IF NOT EXISTS agent_machines (
+    machine_id TEXT NOT NULL, provider TEXT NOT NULL, source_id TEXT NOT NULL, name TEXT NOT NULL,
+    agent TEXT NOT NULL, seen_at INTEGER NOT NULL,
+    PRIMARY KEY (machine_id, provider));
+`;
+
 /** Applies pending migrations inside one transaction and records the new version. */
 export function migrate(db: DatabaseSync, now: number) {
   db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
@@ -41,6 +56,7 @@ export function migrate(db: DatabaseSync, now: number) {
   try {
     if (current < 1) db.exec(V1);
     if (current < 2) db.exec(V2.replaceAll('${now}', String(now)));
+    if (current < 3) db.exec(V3);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec('COMMIT');
   } catch (error) {

@@ -1,6 +1,6 @@
 {
   "name": "agent-limits",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "private": true,
   "license": "MIT",
   "description": "One page with the subscription limits of every coding agent: Claude Code, Codex, Antigravity.",

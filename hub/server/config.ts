@@ -31,6 +31,17 @@ export const config = {
     token: process.env.AGENT_LIMITS_VENDOR_TOKEN,
   },
 
+  /** Agents push measurements (spec/ingest-v1.md) with one of these bearer tokens. None: no ingest. */
+  ingest: {
+    tokens: (process.env.AGENT_LIMITS_INGEST_TOKENS ?? '')
+      .split(',')
+      .map(token => token.trim())
+      .filter(token => token.length >= 16),
+    bodyLimit: 1024 * 1024,
+    /** The agents' default interval; the header ring follows it. */
+    intervalMs: 120_000,
+  },
+
   collection: {
     intervalMs: 120_000,
     /** One cycle may never outlive the interval it belongs to. */
@@ -75,5 +86,5 @@ export const config = {
   },
 } as const;
 
-export const version = '2.1.0';
+export const version = '2.2.0';
 export const serviceName = 'Agent Limits';
