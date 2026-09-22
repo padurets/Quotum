@@ -97,6 +97,7 @@ export class Store {
       error: null,
       windows: measurement.windows,
       staleAfterMs: measurement.staleAfterMs ?? null,
+      resets: measurement.resets ?? null,
     };
     this.db.exec('BEGIN IMMEDIATE');
     try {

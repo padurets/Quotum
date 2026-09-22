@@ -145,6 +145,7 @@ pub fn from_output(output: &str, observed_at: Millis) -> Outcome {
         client: None,
         stale_after_ms: 0,
         windows,
+        resets: None,
     })
 }
 

@@ -161,6 +161,7 @@ mod tests {
             client: None,
             stale_after_ms: 0,
             windows: vec![Window::new("weekly", Some(10_080), None, used, resets_at)],
+            resets: None,
         })
     }
 

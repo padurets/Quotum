@@ -156,6 +156,20 @@ pub struct Snapshot {
     /// How long this measurement stays representative: the next one is due before then.
     pub stale_after_ms: u64,
     pub windows: Vec<Window>,
+    /// Free resets of the limits the account holds, when the client reports them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resets: Option<Resets>,
+}
+
+/// Free resets of the plan's limits (providers grant them now and then): how many can be
+/// used, and when the first of them expires. Reported, never used: using one takes an
+/// explicit action in the client.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Resets {
+    pub available: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "ts::option")]
+    pub expires_at: Option<Millis>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -334,9 +348,11 @@ mod tests {
             client: None,
             stale_after_ms: 300_000,
             windows: vec![Window::new("weekly", Some(WEEK_MINUTES), None, 8.0, Some(ms))],
+            resets: Some(Resets { available: 1, expires_at: Some(ms) }),
         };
         let json = serde_json::to_value(&snapshot).unwrap();
         assert_eq!(json["observedAt"], "2026-09-22T20:20:00.77Z");
+        assert_eq!(json["resets"], serde_json::json!({"available": 1, "expiresAt": "2026-09-22T20:20:00.77Z"}));
         assert_eq!(json["windows"][0]["usedPercent"], 8.0);
         assert_eq!(serde_json::from_value::<Snapshot>(json).unwrap(), snapshot);
     }

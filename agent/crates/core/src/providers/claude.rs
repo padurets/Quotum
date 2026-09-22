@@ -10,8 +10,8 @@ use serde_json::{Value, json};
 
 use super::{Adapter, Context, VersionCache, locate, process_failure};
 use crate::model::{
-    ErrorKind, Failure, Millis, Outcome, Provider, SESSION_MINUTES, Snapshot, WEEK_MINUTES, Window, now_ms, parse_time,
-    pseudonym,
+    ErrorKind, Failure, Millis, Outcome, Provider, Resets, SESSION_MINUTES, Snapshot, WEEK_MINUTES, Window, now_ms,
+    parse_time, pseudonym,
 };
 use crate::process::Client;
 
@@ -194,7 +194,19 @@ pub fn from_responses(init: &Value, usage: &Value, observed_at: Millis) -> Outco
         client: None,
         stale_after_ms: 0,
         windows,
+        resets: free_resets(&limits["cedar_ember"]),
     })
+}
+
+/// Free resets of the limits (`cedar_ember`: grants with the resets left in each). Claude
+/// Code fills this block only when it asks for it explicitly, which `get_usage` does not
+/// do yet; until then it is null and nothing is reported.
+fn free_resets(value: &Value) -> Option<Resets> {
+    let grants = value["grants"].as_array()?;
+    let usable: Vec<&Value> = grants.iter().filter(|g| g["paused"] != true).collect();
+    let available = usable.iter().filter_map(|g| g["resets_left"].as_u64()).sum::<u64>() as u32;
+    let expires_at = usable.iter().filter_map(|g| g["ends_at"].as_str().and_then(parse_time)).min();
+    Some(Resets { available, expires_at })
 }
 
 fn slug(name: &str) -> String {
@@ -229,6 +241,18 @@ mod tests {
         assert_eq!(s.plan.as_deref(), Some("max"));
         assert_eq!(s.account, Some(pseudonym(P, "dev@example.com/Example")));
         assert_eq!(s.windows[0].resets_at, parse_time("2026-09-22T20:20:00.770Z"));
+        assert_eq!(s.resets, None, "get_usage leaves the reset block empty");
+    }
+
+    #[test]
+    fn free_resets_are_read_when_the_client_reports_them() {
+        let grant = |left: u64, ends: &str, paused: bool| json!({"id": "g", "label": "Reset", "resets_total": 1, "resets_left": left, "ends_at": ends, "paused": paused, "usable_now": true});
+        let limits = json!({
+            "five_hour": {"utilization": 100, "resets_at": null},
+            "cedar_ember": {"eligible": true, "grants": [grant(1, "2026-10-20T00:00:00Z", false), grant(2, "2026-10-10T00:00:00Z", true)]}
+        });
+        let s = from_responses(&init(), &usage(limits), 1).unwrap();
+        assert_eq!(s.resets, Some(Resets { available: 1, expires_at: parse_time("2026-10-20T00:00:00Z") }));
     }
 
     #[test]

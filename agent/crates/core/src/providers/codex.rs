@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 use super::{Adapter, Context, locate, process_failure, version_in};
-use crate::model::{ErrorKind, Failure, Kind, Millis, Outcome, Provider, Snapshot, Window, now_ms, pseudonym};
+use crate::model::{ErrorKind, Failure, Kind, Millis, Outcome, Provider, Resets, Snapshot, Window, now_ms, pseudonym};
 use crate::process::Client;
 
 const P: Provider = Provider::Codex;
@@ -119,7 +119,19 @@ pub fn from_responses(init: &Value, limits: &Value, observed_at: Millis) -> Outc
         client: init["result"]["userAgent"].as_str().and_then(version_in),
         stale_after_ms: 0,
         windows,
+        resets: reset_credits(&result["rateLimitResetCredits"]),
     })
+}
+
+/// Free rate-limit resets the account holds (`rateLimitResetCredits`): the available
+/// ones and the earliest of their expiry times.
+fn reset_credits(value: &Value) -> Option<Resets> {
+    let credits = value["credits"].as_array();
+    let available: Vec<&Value> = credits.into_iter().flatten().filter(|c| c["status"] == "available").collect();
+    let count =
+        value["availableCount"].as_u64().map(|n| n as u32).or_else(|| credits.map(|_| available.len() as u32))?;
+    let expires_at = available.iter().filter_map(|c| c["expiresAt"].as_i64()).min().map(|s| s * 1000);
+    Some(Resets { available: count, expires_at })
 }
 
 #[cfg(test)]
@@ -143,6 +155,19 @@ mod tests {
         assert_eq!(s.windows[0].resets_at, Some(1_790_429_819_000));
         assert_eq!((s.plan.as_deref(), s.client.as_deref()), (Some("pro"), Some("0.154.0")));
         assert_eq!(s.account, Some(pseudonym(P, "acc-1")));
+        assert_eq!(s.resets, None, "an older client does not report resets");
+    }
+
+    #[test]
+    fn free_resets_are_counted_with_the_earliest_expiry() {
+        let weekly = json!({"usedPercent": 96, "windowDurationMins": 10080, "resetsAt": 1790429819});
+        let credit = |id: &str, status: &str, expires: i64| json!({"id": id, "resetType": "codexRateLimits", "status": status, "grantedAt": 1790110321, "expiresAt": expires, "title": "Full reset"});
+        let credits = json!({"availableCount": 2, "credits": [credit("a", "available", 1792702321), credit("b", "used", 1791000000), credit("c", "available", 1792000000)]});
+        let limits = json!({"id": 2, "result": {"rateLimits": {"primary": weekly, "planType": "pro"}, "rateLimitResetCredits": credits}});
+        let s = from_responses(&init(), &limits, 1).unwrap();
+        assert_eq!(s.resets, Some(Resets { available: 2, expires_at: Some(1_792_000_000_000) }));
+        let none = json!({"id": 2, "result": {"rateLimits": {"primary": weekly}, "rateLimitResetCredits": {"availableCount": 0, "credits": []}}});
+        assert_eq!(from_responses(&init(), &none, 1).unwrap().resets, Some(Resets { available: 0, expires_at: None }));
     }
 
     #[test]

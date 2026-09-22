@@ -18,6 +18,8 @@ export type SourceState = {
   error: string | null;
   stale: boolean;
   windows: Win[];
+  /** Free resets of the limits the account holds, when its client reports them. */
+  resets?: {available: number; expiresAt: number | null} | null;
   /** Owners of the devices that measure this source. */
   owners?: string[];
   /** How the dashboard names the source (set by the client from the whole board). */

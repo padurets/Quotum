@@ -13,11 +13,16 @@ export type Win = {
   minutes: number | null;
 };
 
+/** Free resets of the limits an account holds: how many, and when the first expires. */
+export type FreeResets = {available: number; expiresAt: number | null};
+
 /** One measurement of a source: every window the client reported at one moment. */
 export type Measurement = {
   sourceAt: number;
   plan: string;
   windows: Win[];
+  /** Absent when the client does not report free resets. */
+  resets?: FreeResets | null;
   /** How long this measurement stays representative; unset means `retention.freshMs`. */
   staleAfterMs?: number | null;
 };
@@ -44,6 +49,7 @@ export type SourceState = {
   error: string | null;
   windows: Win[];
   staleAfterMs?: number | null;
+  resets?: FreeResets | null;
 };
 
 export function kindOf(minutes: number | null, label: string): Kind {

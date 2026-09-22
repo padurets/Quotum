@@ -1,7 +1,7 @@
 import React, {useEffect, useState} from 'react';
 import type {SourceState, Win} from '../lib/types';
 import {windowKey} from '../lib/types';
-import {ago, duration, fullStamp, num} from '../lib/format';
+import {ago, day, duration, fullStamp, num} from '../lib/format';
 import {errorText, level, problemOf, sourceLabel, windowName} from '../lib/quota';
 import {t} from '../i18n';
 import {DEFAULT_PLAN, isValidPlan, planAt, planTotal, type WeeklyPlan} from '../lib/plan';
@@ -171,6 +171,16 @@ export function SourceCard({source, now, resets}: {source: SourceState; now: num
         </span>
         {source.windows.length > 0 && <SourceSettings source={source} />}
       </div>
+
+      {!!source.resets?.available && (
+        <div className="free-resets" title={t('card.freeResetsHint')}>
+          <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">
+            <path d="M3 12a9 9 0 0 1 15.5-6.2L21 8M21 3v5h-5M21 12a9 9 0 0 1-15.5 6.2L3 16M3 21v-5h5" />
+          </svg>
+          <b>{t('card.freeResets', {count: source.resets.available})}</b>
+          {source.resets.expiresAt && <span>· {t('card.freeResetsUntil', {date: day(source.resets.expiresAt)})}</span>}
+        </div>
+      )}
 
       <div className="limits">
         {visible.map(w => <Limit key={w.id} w={w} now={now} weekly={weekly} />)}

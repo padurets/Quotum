@@ -314,6 +314,11 @@ fn print_outcome(outcome: &Outcome, style: &Style) {
                     style.dim(&resets)
                 );
             }
+            if let Some(free) = snapshot.resets.as_ref().filter(|r| r.available > 0) {
+                let expires =
+                    free.expires_at.map(|at| format!("expires in {}", until(at - now_ms()))).unwrap_or_default();
+                println!("{}{:<20}{:>4}   {}", " ".repeat(14), "free resets", free.available, style.dim(&expires));
+            }
         }
         Err(failure) => {
             let text = match failure.error {

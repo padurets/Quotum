@@ -1,5 +1,5 @@
 import {providers, type Provider} from './sources.js';
-import type {Measurement, Win} from './quota.js';
+import type {FreeResets, Measurement, Win} from './quota.js';
 
 /**
  * Ingest format v1 (spec/ingest-v1.md): what an agent sends. Parsing is strict; a
@@ -25,6 +25,7 @@ export type AgentSnapshot = {
   client: string | null;
   staleAfterMs: number;
   windows: AgentWindow[];
+  resets: FreeResets | null;
 };
 
 export type AgentFailure = {provider: Provider; observedAt: number; error: string; detail: string | null};
@@ -95,6 +96,14 @@ function parseWindow(value: unknown): AgentWindow {
   };
 }
 
+function parseResets(value: unknown): FreeResets | null {
+  if (value === undefined || value === null) return null;
+  if (!isObject(value) || !Number.isInteger(value.available) || (value.available as number) < 0 || (value.available as number) > 1000) {
+    throw new Invalid('resets');
+  }
+  return {available: value.available as number, expiresAt: time(value.expiresAt, 'resets expiresAt', true)};
+}
+
 function parseSnapshot(value: unknown): AgentSnapshot {
   if (!isObject(value)) throw new Invalid('snapshot');
   const stale = value.staleAfterMs;
@@ -111,6 +120,7 @@ function parseSnapshot(value: unknown): AgentSnapshot {
     client: text(value.client, 'client', true),
     staleAfterMs: stale as number,
     windows,
+    resets: parseResets(value.resets),
   };
 }
 
@@ -210,5 +220,5 @@ export function toMeasurement(snapshot: AgentSnapshot): Measurement {
     resetAt: w.resetsAt,
     minutes: w.minutes,
   }));
-  return {sourceAt: snapshot.observedAt, plan: snapshot.plan ?? '', windows, staleAfterMs: snapshot.staleAfterMs};
+  return {sourceAt: snapshot.observedAt, plan: snapshot.plan ?? '', windows, staleAfterMs: snapshot.staleAfterMs, resets: snapshot.resets};
 }

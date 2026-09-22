@@ -92,6 +92,9 @@ export const en = {
   'limit.behind': 'behind plan · {value} pp',
   'limit.behindHint': 'Spending slower than planned: part of the limit may go unused',
   'card.allHidden': 'All limits are hidden',
+  'card.freeResets': {one: '{count} free reset', other: '{count} free resets'},
+  'card.freeResetsUntil': 'use by {date}',
+  'card.freeResetsHint': 'The provider has granted resets of the limits. Quotum only shows them; you use one in the client itself.',
 
   'source.settings': 'Settings · {source}',
   'source.show': 'Show limits',

@@ -170,6 +170,9 @@ td.muted, small.muted { color: var(--text-3); }
 .reset-main b { font-weight: 600; color: #a29cff; text-shadow: 0 0 14px #7b6fff80; }
 .reset-announce.is-watch .reset-main b { color: var(--text); text-shadow: none; }
 .reset-main:hover b { text-decoration: underline; text-underline-offset: 2px; }
+.free-resets { display: flex; align-items: center; gap: 6px; margin: -6px 0 2px; font-size: 12.5px; color: var(--text-3); }
+.free-resets svg { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+.free-resets b { font-weight: 500; color: var(--accent); }
 .reset-notice { margin-top: auto; display: flex; align-items: center; gap: 8px; padding-top: 14px; border-top: 1px solid var(--hair); font-size: 12.5px; color: var(--text-2); }
 .reset-notice a { color: inherit; text-decoration: none; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .reset-notice a:hover { color: var(--text); }

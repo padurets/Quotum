@@ -88,6 +88,9 @@ export const ru = {
   'limit.behind': 'отстаёт от плана · {value} п.п.',
   'limit.behindHint': 'Расход отстаёт от плана: часть лимита может остаться неиспользованной',
   'card.allHidden': 'Все лимиты скрыты',
+  'card.freeResets': {one: '{count} бесплатный сброс', few: '{count} бесплатных сброса', many: '{count} бесплатных сбросов', other: '{count} бесплатного сброса'},
+  'card.freeResetsUntil': 'использовать до {date}',
+  'card.freeResetsHint': 'Провайдер выдал сбросы лимитов. Quotum их только показывает; использовать сброс можно в самом клиенте.',
 
   'source.settings': 'Настройки · {source}',
   'source.show': 'Показывать лимиты',

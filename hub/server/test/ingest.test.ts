@@ -80,6 +80,7 @@ test('a malformed batch is refused whole', () => {
   assert.throws(() => parseBatch(batch([snapshot(start, 120)])), /usedPercent/);
   assert.throws(() => parseBatch(batch([snapshot(start, 5, {provider: 'cursor'})])), /provider/);
   assert.throws(() => parseBatch(batch([snapshot(start, 5, {staleAfterMs: 0})])), /staleAfterMs/);
+  assert.throws(() => parseBatch(batch([snapshot(start, 5, {resets: {available: -1}})])), /resets/);
   assert.throws(() => parseBatch(batch([], [], undefined, {name: 7})), /owner name/);
   const parsed = parseBatch(batch([snapshot(start, 5)], [], undefined, {name: 'alice'}));
   assert.equal(parsed.snapshots[0].windows[0].resetsAt, start + 5 * 86_400_000);
@@ -103,6 +104,15 @@ test('every account of a provider is a source of its own, with a stable id', () 
   assert.ok(states.every(s => /^codex:[0-9a-f]{8}$/.test(s.id)));
   assert.equal(store.source(DEFAULT_BOARD, 'codex', 'a1b2c3d4e5f6a1b2c3d4e5f6', start), states[0].id);
   assert.notEqual(store.source('team', 'codex', 'a1b2c3d4e5f6a1b2c3d4e5f6', start), states[0].id, 'another board has its own');
+});
+
+test('free resets the client reports are kept with the source until it stops reporting them', () => {
+  const {store, ingest} = setup();
+  const expiresAt = start + 30 * 86_400_000;
+  ingest.accept(STATIC, batch([snapshot(start, 5, {resets: {available: 1, expiresAt: iso(expiresAt)}})]), start);
+  assert.deepEqual(only(store, 'codex').resets, {available: 1, expiresAt});
+  ingest.accept(STATIC, batch([snapshot(start + 60_000, 5)]), start + 60_000);
+  assert.equal(only(store, 'codex').resets, null);
 });
 
 test('one account measured by several devices is one source', () => {

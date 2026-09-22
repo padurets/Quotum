@@ -92,6 +92,7 @@ One successful measurement of one provider account on one machine.
 | `client` | Version of the agent's client that answered. |
 | `staleAfterMs` | How long this measurement stays representative. The agent promises the next measurement of this provider before then; a later one is a gap. At most 24 h. |
 | `windows` | At least one window. |
+| `resets` | Free resets of the limits the account holds, if the client reports them: `{"available": 1, "expiresAt": "2026-10-26T12:52:01Z"}` (`expiresAt`: when the first of them expires, if known). Only reported, never used. |
 
 ### Window
 
