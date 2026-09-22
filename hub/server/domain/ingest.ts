@@ -1,5 +1,5 @@
 import {providers, type Provider} from './sources.js';
-import type {FreeResets, Measurement, Win} from './quota.js';
+import type {FreeResets, Kind, Measurement, Win} from './quota.js';
 
 /**
  * Ingest format v1 (spec/ingest-v1.md): what an agent sends. Parsing is strict; a
@@ -7,7 +7,7 @@ import type {FreeResets, Measurement, Win} from './quota.js';
  */
 export type AgentWindow = {
   id: string;
-  kind: 'session' | 'weekly' | 'other';
+  kind: Kind;
   minutes: number | null;
   label: string | null;
   usedPercent: number;
@@ -45,10 +45,20 @@ export const AGENT_ERRORS = ['not_logged_in', 'unsupported', 'timeout', 'invalid
 
 const LIMITS = {items: 500, windows: 32, text: 120, staleAfterMs: 24 * 3_600_000};
 
-class Invalid extends Error {
-  constructor(what: string) {
-    super(`invalid_batch: ${what}`);
+/** A request that does not match the format; `what` names the first field that is wrong. */
+export class Invalid extends Error {
+  constructor(readonly what: string) {
+    super(`invalid: ${what}`);
   }
+}
+
+/** Account pseudonyms: 24 lower-case hex characters (spec: Snapshot `account`). */
+const PSEUDONYM = /^[0-9a-f]{24}$/;
+
+function account(value: unknown): string | null {
+  const given = text(value, 'account', true);
+  if (given !== null && !PSEUDONYM.test(given)) throw new Invalid('account');
+  return given;
 }
 
 type Obj = Record<string, unknown>;
@@ -112,7 +122,7 @@ function parseSnapshot(value: unknown): AgentSnapshot {
   if (!windows.length) throw new Invalid('windows');
   return {
     provider: provider(value.provider),
-    account: text(value.account, 'account', true),
+    account: account(value.account),
     accountName: text(value.accountName, 'accountName', true),
     plan: text(value.plan, 'plan', true),
     observedAt: time(value.observedAt, 'observedAt')!,
@@ -138,23 +148,25 @@ function parseFailure(value: unknown): AgentFailure {
 /** Who is sending: the part every agent request shares. */
 export type AgentSender = Pick<AgentBatch, 'agent' | 'machine' | 'owner'>;
 
+/** The machine an agent runs on, as every agent request describes it. */
+export function parseMachine(machine: unknown): AgentBatch['machine'] {
+  if (!isObject(machine)) throw new Invalid('machine');
+  return {
+    id: text(machine.id, 'machine id')!,
+    name: text(machine.name, 'machine name')!,
+    os: text(machine.os, 'machine os')!,
+    arch: text(machine.arch, 'machine arch')!,
+  };
+}
+
+export const parseAgent = (value: unknown) => text(value, 'agent')!;
+
 function parseSender(body: unknown): AgentSender {
   if (!isObject(body)) throw new Invalid('body');
   if (body.version !== 1) throw new Invalid('version');
-  const machine = body.machine;
-  if (!isObject(machine)) throw new Invalid('machine');
   const owner = body.owner ?? {};
   if (!isObject(owner)) throw new Invalid('owner');
-  return {
-    agent: text(body.agent, 'agent')!,
-    machine: {
-      id: text(machine.id, 'machine id')!,
-      name: text(machine.name, 'machine name')!,
-      os: text(machine.os, 'machine os')!,
-      arch: text(machine.arch, 'machine arch')!,
-    },
-    owner: {name: text(owner.name, 'owner name', true)},
-  };
+  return {agent: parseAgent(body.agent), machine: parseMachine(body.machine), owner: {name: text(owner.name, 'owner name', true)}};
 }
 
 export function parseBatch(body: unknown): AgentBatch {
@@ -180,24 +192,12 @@ export function parseCheckin(body: unknown): Checkin {
     if (!isObject(value) || typeof (value.active ?? false) !== 'boolean') throw new Invalid('subscription');
     return {
       provider: provider(value.provider),
-      account: text(value.account, 'account', true),
+      account: account(value.account),
       accountName: text(value.accountName, 'accountName', true),
       active: value.active === true,
     };
   });
   return {...sender, subscriptions};
-}
-
-const KIND_LABELS = {session: '5 hours', weekly: 'Weekly'} as const;
-
-/**
- * The stored label of a window: the scope the provider names ("Fable", "Gemini"), or
- * else the window's kind ("Weekly"). Labels are stored in English and never shown as
- * is for a kind: the dashboard names kinds in the reader's language.
- */
-export function windowLabel(w: AgentWindow): string {
-  if (w.label) return w.label;
-  return w.kind === 'other' ? (w.minutes ? `${w.minutes} min` : 'Window') : KIND_LABELS[w.kind];
 }
 
 /**
@@ -214,11 +214,12 @@ export function subscriptionKey(snapshot: Pick<AgentSnapshot, 'account' | 'accou
 export function toMeasurement(snapshot: AgentSnapshot): Measurement {
   const windows: Win[] = snapshot.windows.map(w => ({
     id: w.id,
-    label: windowLabel(w),
+    kind: w.kind,
+    label: w.label,
     used: w.usedPercent,
     remaining: 100 - w.usedPercent,
     resetAt: w.resetsAt,
     minutes: w.minutes,
   }));
-  return {sourceAt: snapshot.observedAt, plan: snapshot.plan ?? '', windows, staleAfterMs: snapshot.staleAfterMs, resets: snapshot.resets};
+  return {observedAt: snapshot.observedAt, plan: snapshot.plan ?? '', windows, staleAfterMs: snapshot.staleAfterMs, resets: snapshot.resets};
 }

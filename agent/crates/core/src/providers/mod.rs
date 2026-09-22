@@ -73,6 +73,7 @@ pub(crate) fn process_failure(provider: Provider, error: ProcError) -> Failure {
     match error {
         ProcError::NotFound => Failure::new(provider, ErrorKind::NotInstalled, ""),
         ProcError::Timeout => Failure::new(provider, ErrorKind::Timeout, ""),
+        ProcError::Stopped => Failure::new(provider, ErrorKind::Failed, "the agent is stopping"),
         ProcError::Closed => Failure::new(provider, ErrorKind::Failed, "the client exited before answering"),
         ProcError::Io(e) => Failure::new(provider, ErrorKind::Failed, e.to_string()),
     }

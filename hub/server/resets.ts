@@ -1,5 +1,5 @@
-import {config, version} from '../config.js';
-import {CLAUDE_RESETS, CODEX_RESETS, fromClaudeResets, fromCodexResets, type ResetProvider, type ResetStatus} from '../domain/resets.js';
+import {config, version} from './config.js';
+import {CLAUDE_RESETS, CODEX_RESETS, fromClaudeResets, fromCodexResets, type ResetProvider, type ResetStatus} from './domain/resets.js';
 
 export type TrackerHealth = {name: string; url: string; ok: boolean | null; detail: string; at: number | null};
 
@@ -36,7 +36,7 @@ async function getJson(url: string): Promise<unknown> {
  */
 export class ResetFeed {
   private resets: Partial<Record<ResetProvider, ResetStatus>> = {};
-  private health: TrackerHealth[] = [CODEX_RESETS, CLAUDE_RESETS].map(t => ({...t, ok: null, detail: 'checking', at: null}));
+  private health: TrackerHealth[] = config.resets.enabled ? [CODEX_RESETS, CLAUDE_RESETS].map(t => ({...t, ok: null, detail: 'checking', at: null})) : [];
   private timer?: NodeJS.Timeout;
   private closing = false;
 
@@ -46,8 +46,9 @@ export class ResetFeed {
     return {resets: this.resets, trackers: this.health};
   }
 
+  /** Starts polling, unless the trackers are turned off (`QUOTUM_RESETS=off`). */
   start() {
-    void this.poll();
+    if (config.resets.enabled) void this.poll();
   }
 
   stop() {

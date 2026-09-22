@@ -1,47 +1,18 @@
 import {useCallback, useEffect, useState} from 'react';
-import {known, t} from '../i18n';
+import {t} from '../i18n';
+import {call, UNAUTHORIZED} from './http';
 
-export type User = {id: string; email: string; name: string; role: 'admin' | 'user'};
+export type User = {id: string; email: string; name: string};
 export type Board = {id: string; name: string; personal: boolean; role: 'owner' | 'member'};
 export type Session = {user: User | null; boards: Board[]; signup: {first: boolean; open: boolean}};
-
-/** Fired whenever the hub answers 401: the session ended, so the page asks again. */
-export const UNAUTHORIZED = 'quotum:unauthorized';
-
-export class ApiError extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-  ) {
-    super(code);
-  }
-}
-
-export async function call<T>(method: 'GET' | 'POST' | 'DELETE', url: string, body?: unknown): Promise<T> {
-  const response = await fetch(url, {
-    method,
-    cache: 'no-store',
-    headers: body === undefined ? undefined : {'content-type': 'application/json'},
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    if (response.status === 401 && !url.startsWith('/api/auth/')) window.dispatchEvent(new Event(UNAUTHORIZED));
-    throw new ApiError(response.status, data.error ?? String(response.status));
-  }
-  return data as T;
-}
-
-/** What went wrong, in the reader's language. */
-export function messageOf(error: unknown) {
-  if (!(error instanceof ApiError)) return t('common.offline');
-  const key = `api.${error.code}`;
-  return t(known(key) ? key : 'api.unknown');
-}
 
 /** Personal boards have no name of their own: each reader sees theirs in their language. */
 export const boardTitle = (board: {name: string}) => board.name || t('boards.personalName');
 
+/**
+ * Who is signed in and to which boards. While the hub cannot be reached the page keeps
+ * asking, sooner when the browser comes back online or the tab becomes visible.
+ */
 export function useSession() {
   const [session, setSession] = useState<Session | null>(null);
   const [failed, setFailed] = useState(false);
@@ -62,16 +33,45 @@ export function useSession() {
     return () => window.removeEventListener(UNAUTHORIZED, again);
   }, [refresh]);
 
+  useEffect(() => {
+    if (!failed) return;
+    let delay = 2000;
+    let timer: ReturnType<typeof setTimeout>;
+    const retry = () => {
+      timer = setTimeout(async () => {
+        await refresh();
+        delay = Math.min(30_000, delay * 2);
+        retry();
+      }, delay);
+    };
+    retry();
+    const now = () => document.visibilityState === 'visible' && void refresh();
+    window.addEventListener('online', now);
+    document.addEventListener('visibilitychange', now);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('online', now);
+      document.removeEventListener('visibilitychange', now);
+    };
+  }, [failed, refresh]);
+
   return {session, failed, refresh, setSession};
 }
 
 const BOARD_KEY = 'quotum.board';
-/** Where the board was remembered before the project was renamed; read once, until 0.2. */
-const LEGACY_BOARD_KEY = 'agent-limits.board';
+
+/** Opens this board next time the page is opened in this browser. */
+export function rememberBoard(id: string) {
+  try {
+    localStorage.setItem(BOARD_KEY, id);
+  } catch {
+    /* no storage: the personal board opens */
+  }
+}
 
 function remembered(): string | null {
   try {
-    return new URLSearchParams(location.search).get('board') ?? localStorage.getItem(BOARD_KEY) ?? localStorage.getItem(LEGACY_BOARD_KEY);
+    return new URLSearchParams(location.search).get('board') ?? localStorage.getItem(BOARD_KEY);
   } catch {
     return null;
   }
@@ -83,25 +83,7 @@ export function useBoard(boards: Board[]): [Board | null, (id: string) => void] 
   const board = boards.find(b => b.id === id) ?? boards[0] ?? null;
   const select = useCallback((next: string) => {
     setId(next);
-    try {
-      localStorage.setItem(BOARD_KEY, next);
-    } catch {}
+    rememberBoard(next);
   }, []);
   return [board, select];
-}
-
-/** Moves to another page of the client without a reload. */
-export function navigate(path: string) {
-  history.pushState(null, '', path);
-  window.dispatchEvent(new PopStateEvent('popstate'));
-}
-
-export function usePath() {
-  const [path, setPath] = useState(location.pathname);
-  useEffect(() => {
-    const update = () => setPath(location.pathname);
-    window.addEventListener('popstate', update);
-    return () => window.removeEventListener('popstate', update);
-  }, []);
-  return path;
 }

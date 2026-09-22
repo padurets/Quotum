@@ -12,11 +12,10 @@ const STEPS = [
 
   -- People, boards and the ways to join them.
   CREATE TABLE users (
-    id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT NOT NULL, password TEXT NOT NULL,
-    role TEXT NOT NULL, created_at INTEGER NOT NULL);
+    id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT NOT NULL, password TEXT NOT NULL, created_at INTEGER NOT NULL);
   CREATE TABLE sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
   -- Personal boards have no name: the dashboard names them in the reader's language.
-  CREATE TABLE boards (id TEXT PRIMARY KEY, name TEXT NOT NULL, personal INTEGER NOT NULL, created_by TEXT, created_at INTEGER NOT NULL);
+  CREATE TABLE boards (id TEXT PRIMARY KEY, name TEXT NOT NULL, personal INTEGER NOT NULL, created_by TEXT NOT NULL, created_at INTEGER NOT NULL);
   CREATE TABLE members (
     board_id TEXT NOT NULL, user_id TEXT NOT NULL, role TEXT NOT NULL, joined_at INTEGER NOT NULL,
     PRIMARY KEY (board_id, user_id));
@@ -25,7 +24,8 @@ const STEPS = [
     id TEXT PRIMARY KEY, board_id TEXT NOT NULL, name TEXT NOT NULL, hash TEXT NOT NULL UNIQUE, hint TEXT NOT NULL,
     created_by TEXT NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER, revoked_at INTEGER);
 
-  -- Machines running an agent (one row per board they deliver to) and pending one-time codes.
+  -- Machines running an agent (one row per board they deliver to), pending one-time
+  -- codes, and the last failure each device reported per provider.
   CREATE TABLE devices (
     id TEXT PRIMARY KEY, board_id TEXT NOT NULL, machine_id TEXT NOT NULL, name TEXT NOT NULL, os TEXT NOT NULL,
     arch TEXT NOT NULL, agent TEXT NOT NULL, owner TEXT NOT NULL, owner_user_id TEXT, token_id TEXT,
@@ -34,6 +34,9 @@ const STEPS = [
   CREATE TABLE device_codes (
     id TEXT PRIMARY KEY, user_code TEXT NOT NULL UNIQUE, machine TEXT NOT NULL, created_at INTEGER NOT NULL,
     expires_at INTEGER NOT NULL, polled_at INTEGER, status TEXT NOT NULL, board_id TEXT, user_id TEXT);
+  CREATE TABLE device_failures (
+    device_id TEXT NOT NULL, provider TEXT NOT NULL, error TEXT NOT NULL, detail TEXT, at INTEGER NOT NULL,
+    PRIMARY KEY (device_id, provider));
 
   -- Subscriptions on boards (domain/sources.ts), and which device last delivered each.
   CREATE TABLE sources (
@@ -47,12 +50,10 @@ const STEPS = [
   -- ever measured, for the history chart and the spending totals.
   CREATE TABLE state (source_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
   CREATE TABLE samples (
-    source_id TEXT NOT NULL, bucket TEXT NOT NULL, at INTEGER NOT NULL, label TEXT NOT NULL, used REAL NOT NULL,
-    reset_at INTEGER, minutes INTEGER, stale_after_ms INTEGER,
-    PRIMARY KEY (source_id, bucket, at)) WITHOUT ROWID;
+    source_id TEXT NOT NULL, window_id TEXT NOT NULL, at INTEGER NOT NULL, kind TEXT NOT NULL, label TEXT,
+    used REAL NOT NULL, reset_at INTEGER, minutes INTEGER, stale_after_ms INTEGER NOT NULL,
+    PRIMARY KEY (source_id, window_id, at)) WITHOUT ROWID;
   CREATE INDEX samples_by_time ON samples (at);
-
-  INSERT INTO boards VALUES ('default', '', 1, NULL, \${now});
   `,
 ];
 
@@ -66,9 +67,9 @@ export function migrate(db: DatabaseSync, now: number) {
   if (current === SCHEMA_VERSION) return;
   db.exec('BEGIN IMMEDIATE');
   try {
-    for (const step of STEPS.slice(current)) db.exec(step.replaceAll('${now}', String(now)));
+    for (const step of STEPS.slice(current)) db.exec(step);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
-    db.prepare('INSERT OR IGNORE INTO meta VALUES (?, ?)').run('collectionStart', String(now));
+    db.prepare('INSERT OR IGNORE INTO meta VALUES (?, ?)').run('historyStart', String(now));
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');

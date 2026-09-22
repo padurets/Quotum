@@ -1,29 +1,18 @@
-import React, {useMemo} from 'react';
+import {useMemo} from 'react';
 import type {History as HistoryData, Kind, Overview, Win} from '../lib/types';
 import {windowKey} from '../lib/types';
 import {day, duration, num} from '../lib/format';
 import {level, seriesName, sourceLabel} from '../lib/quota';
-import {planAt, weeklyPlanLine, type WeeklyPlan} from '../lib/plan';
+import {PLAN_TOLERANCE, planAt, weeklyPlanLine, type WeeklyPlan} from '../lib/plan';
 import {DASHES, PROVIDERS} from '../lib/providers';
 import {planOf, setMuted, setPrefs, usePrefs, type Prefs} from '../lib/prefs';
 import {Chart, type Line, type Marker, type PlanLine} from './Chart';
 import type {Resets} from '../lib/resets';
 import {t, useLocale} from '../i18n';
+import {Segmented} from './Kit';
 
 /** How much future the chart keeps on its right, per range. */
 const FUTURE: Record<string, number> = {'24h': 4 * 3_600_000, '7d': 86_400_000, '30d': 3 * 86_400_000};
-
-function Segmented({value, onChange, options, label}: {value: string; onChange: (value: string) => void; options: [string, string][]; label: string}) {
-  return (
-    <div className="segmented" role="group" aria-label={label}>
-      {options.map(([option, text]) => (
-        <button key={option} aria-pressed={value === option} onClick={() => onChange(option)}>
-          {text}
-        </button>
-      ))}
-    </div>
-  );
-}
 
 type Forecast = {text: string; tone: string; title: string};
 
@@ -70,10 +59,11 @@ function SeriesTable({lines, overview, now, prefs}: {lines: Line[]; overview: Ov
         </thead>
         <tbody>
           {lines.map(line => {
-            const live = overview?.sources.find(s => s.id === line.sourceId)?.windows.find(w => w.id === line.bucket);
+            const live = overview?.sources.find(s => s.id === line.sourceId)?.windows.find(w => w.id === line.windowId);
             const weekly = planOf(prefs, line.sourceId);
             const plan = live ? planAt(live, now, weekly) : null;
             const delta = plan && live ? live.remaining - plan.remaining : 0;
+            const notable = Math.abs(delta) >= PLAN_TOLERANCE;
             const outlook = forecast(line, live, now, weekly);
             return (
               <tr key={line.key}>
@@ -81,12 +71,18 @@ function SeriesTable({lines, overview, now, prefs}: {lines: Line[]; overview: Ov
                   <span className="swatch" style={{background: line.color}} />
                   {line.name}
                 </td>
-                <td className={line.current !== null ? `v-${level(line.current)}` : ''}>{line.current !== null ? `${num(line.current)}%` : '—'}</td>
-                <td title={plan ? t(delta >= 0 ? 'table.behindBy' : 'table.aheadBy', {value: num(Math.abs(delta))}) : ''}>
+                <td className={`v-${level(line.current)}`}>{num(line.current)}%</td>
+                <td title={plan && notable ? t(delta >= 0 ? 'table.behindBy' : 'table.aheadBy', {value: num(Math.abs(delta))}) : ''}>
                   {plan ? (
                     <>
                       {num(plan.remaining)}%
-                      {Math.abs(delta) >= 3 && <small className={delta < 0 ? 'v-warn' : 'muted'}> {delta > 0 ? '+' : '−'}{num(Math.abs(delta))}</small>}
+                      {notable && (
+                        <small className={delta < 0 ? 'v-warn' : 'muted'}>
+                          {' '}
+                          {delta > 0 ? '+' : '−'}
+                          {num(Math.abs(delta))}
+                        </small>
+                      )}
                     </>
                   ) : (
                     '—'
@@ -115,15 +111,15 @@ export function History({history, overview, resets, now}: {history: HistoryData 
     if (!history) return [];
     const perSource: Record<string, number> = {};
     return history.series
-      .filter(entry => entry.kind === prefs.kind && entry.points.length && !prefs.hidden[windowKey(entry.sourceId, entry.bucket)])
+      .filter(entry => entry.kind === prefs.kind && entry.points.length && !prefs.hidden[windowKey(entry.sourceId, entry.windowId)])
       .map(entry => {
         const index = (perSource[entry.sourceId] = (perSource[entry.sourceId] ?? -1) + 1);
         const source = overview?.sources.find(s => s.id === entry.sourceId);
-        const live = source?.windows.find(w => w.id === entry.bucket);
+        const live = source?.windows.find(w => w.id === entry.windowId);
         return {
           ...entry,
-          key: windowKey(entry.sourceId, entry.bucket),
-          name: seriesName(source ?? {provider: entry.provider}, entry.bucket, entry.label, entry.minutes),
+          key: windowKey(entry.sourceId, entry.windowId),
+          name: seriesName(source ?? {provider: entry.provider}, entry),
           color: PROVIDERS[entry.provider]?.color ?? '#8b90b5',
           dash: DASHES[index % DASHES.length],
           current: live ? live.remaining : entry.points.at(-1)![1],
@@ -132,7 +128,7 @@ export function History({history, overview, resets, now}: {history: HistoryData 
   }, [history, overview, prefs.kind, prefs.hidden, locale]);
 
   const visible = useMemo(() => lines.filter(line => !prefs.muted[line.key]), [lines, prefs.muted]);
-  const from = history ? Math.max(history.since, history.collectionStart) : now - 86_400_000;
+  const from = history ? Math.max(history.since, history.historyStart) : now - 86_400_000;
   const measuredTo = history?.now ?? now;
   // Keep some future on the right, stretched to include an announced reset when close.
   const future = FUTURE[prefs.range] ?? FUTURE['24h'];
@@ -152,7 +148,7 @@ export function History({history, overview, resets, now}: {history: HistoryData 
     }
     const seen = new Set<string>();
     for (const line of visible) {
-      const live = overview?.sources.find(s => s.id === line.sourceId)?.windows.find(w => w.id === line.bucket);
+      const live = overview?.sources.find(s => s.id === line.sourceId)?.windows.find(w => w.id === line.windowId);
       if (!live?.resetAt || live.resetAt <= measuredTo || live.resetAt > to || !planAt(live, measuredTo, planOf(prefs, line.sourceId))) continue;
       const key = `${line.sourceId}@${Math.round(live.resetAt / 60_000)}`;
       if (seen.has(key)) continue;
@@ -170,7 +166,7 @@ export function History({history, overview, resets, now}: {history: HistoryData 
     if (!planAvailable || !prefs.showPlan) return [];
     const seen = new Map<string, PlanLine>();
     for (const line of visible) {
-      const live = overview?.sources.find(s => s.id === line.sourceId)?.windows.find(w => w.id === line.bucket);
+      const live = overview?.sources.find(s => s.id === line.sourceId)?.windows.find(w => w.id === line.windowId);
       // Idle rolling windows (reset = now + 7 days) have not started: no plan to show.
       if (!live?.resetAt || live.minutes !== 10080 || !planAt(live, now, planOf(prefs, line.sourceId))) continue;
       const key = `${line.sourceId}@${Math.round(live.resetAt / 3_600_000)}`;
@@ -217,6 +213,7 @@ export function History({history, overview, resets, now}: {history: HistoryData 
         {lines.map(line => (
           <button
             key={line.key}
+            type="button"
             className="legend-item"
             aria-pressed={!prefs.muted[line.key]}
             onClick={() => setMuted(line.key, !prefs.muted[line.key])}
@@ -225,12 +222,13 @@ export function History({history, overview, resets, now}: {history: HistoryData 
               <line x1="1" x2="17" y1="3" y2="3" stroke={line.color} strokeWidth="2.5" strokeLinecap="round" strokeDasharray={line.dash || undefined} />
             </svg>
             <span>{line.name}</span>
-            {line.current !== null && <b>{num(line.current)}%</b>}
+            <b>{num(line.current)}%</b>
           </button>
         ))}
         {!lines.length && <span className="legend-empty">{t('history.noLines')}</span>}
         {planAvailable && (
           <button
+            type="button"
             className="legend-item legend-plan"
             aria-pressed={prefs.showPlan}
             title={t('history.planLegendHint')}
@@ -244,10 +242,10 @@ export function History({history, overview, resets, now}: {history: HistoryData 
         )}
       </div>
 
-      {history ? <Chart lines={visible} plans={plans} markers={markers} from={from} now={measuredTo} to={to} bucketMs={history.bucketMs} /> : <div className="chart chart-loading">{t('history.loading')}</div>}
+      {history ? <Chart lines={visible} plans={plans} markers={markers} from={from} now={measuredTo} to={to} cellMs={history.cellMs} /> : <div className="chart chart-loading">{t('history.loading')}</div>}
       {history && <SeriesTable lines={lines} overview={overview} now={now} prefs={prefs} />}
-      {history && history.since < history.collectionStart && (
-        <p className="footnote">{t('history.since', {date: day(history.collectionStart)})}</p>
+      {history && history.since < history.historyStart && (
+        <p className="footnote">{t('history.since', {date: day(history.historyStart)})}</p>
       )}
     </section>
   );

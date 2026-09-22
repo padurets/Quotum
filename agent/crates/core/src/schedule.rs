@@ -2,7 +2,7 @@
 //! own interval (at least a minute), and providers are spread evenly across it so
 //! their starts never pile up. Pure logic: the caller supplies time and randomness.
 
-use crate::model::{ErrorKind, Millis, Outcome, Provider};
+use crate::model::{ErrorKind, Millis, Outcome};
 
 /// Claude Code caches its answer for a minute; nothing changes faster than that.
 pub const MIN_INTERVAL_MS: u64 = 60_000;
@@ -16,7 +16,6 @@ const JITTER: f64 = 0.1;
 
 #[derive(Clone, Debug)]
 struct Slot {
-    provider: Provider,
     base_ms: u64,
     due: Millis,
     /// Current multiple of the base interval (eco mode doubles it while nothing happens).
@@ -44,13 +43,13 @@ pub struct Schedule {
 impl Schedule {
     /// All providers are measured right away, one after another; afterwards each keeps
     /// its own rhythm, offset by an equal share of its interval.
-    pub fn new(entries: &[(Provider, u64)], now: Millis, eco: bool) -> Schedule {
-        let count = entries.len().max(1) as f64;
-        let slots = entries
+    /// One slot per interval, in the order the runner keeps its providers.
+    pub fn new(intervals: &[u64], now: Millis, eco: bool) -> Schedule {
+        let count = intervals.len().max(1) as f64;
+        let slots = intervals
             .iter()
             .enumerate()
-            .map(|(i, &(provider, interval))| Slot {
-                provider,
+            .map(|(i, &interval)| Slot {
                 base_ms: interval.max(MIN_INTERVAL_MS),
                 due: now,
                 stretch: 1,
@@ -61,14 +60,6 @@ impl Schedule {
             })
             .collect();
         Schedule { slots, eco }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.slots.is_empty()
-    }
-
-    pub fn provider(&self, index: usize) -> Provider {
-        self.slots[index].provider
     }
 
     /// The slot to run next and when; ties go to the earlier-listed provider.
@@ -146,7 +137,7 @@ impl Schedule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Failure, Snapshot, Window};
+    use crate::model::{Failure, Provider, Snapshot, Window};
 
     const MIN: i64 = 60_000;
 
@@ -165,8 +156,8 @@ mod tests {
         })
     }
 
-    fn all() -> Vec<(Provider, u64)> {
-        Provider::ALL.iter().map(|&p| (p, 120_000)).collect()
+    fn all() -> Vec<u64> {
+        vec![120_000; Provider::ALL.len()]
     }
 
     #[test]
@@ -186,13 +177,13 @@ mod tests {
 
     #[test]
     fn intervals_never_go_below_a_minute() {
-        let mut s = Schedule::new(&[(Provider::Claude, 10_000)], 0, false);
+        let mut s = Schedule::new(&[10_000], 0, false);
         assert_eq!(s.complete(0, 0, &measured(1.0, None), false, -1.0), 60_000);
     }
 
     #[test]
     fn eco_mode_stretches_idle_providers_and_snaps_back_on_activity() {
-        let mut s = Schedule::new(&[(Provider::Codex, 120_000)], 0, true);
+        let mut s = Schedule::new(&[120_000], 0, true);
         let mut now = 0;
         let mut gaps = Vec::new();
         for round in 0..6 {
@@ -207,20 +198,20 @@ mod tests {
 
     #[test]
     fn a_change_resets_the_stretch_and_a_known_reset_pulls_the_next_run_in() {
-        let mut s = Schedule::new(&[(Provider::Codex, 120_000)], 0, true);
+        let mut s = Schedule::new(&[120_000], 0, true);
         s.complete(0, 0, &measured(5.0, None), false, 0.0);
         s.complete(0, 2 * MIN, &measured(5.0, None), false, 0.0);
         let due = s.complete(0, 6 * MIN, &measured(6.0, None), false, 0.0);
         assert_eq!(due - 6 * MIN, 2 * MIN);
         // Idle and stretched to 15 minutes, but the window resets in 3.
-        let mut s = Schedule::new(&[(Provider::Codex, 900_000)], 0, false);
+        let mut s = Schedule::new(&[900_000], 0, false);
         let due = s.complete(0, 0, &measured(5.0, Some(3 * MIN)), false, 0.0);
         assert_eq!(due, 3 * MIN + 30_000);
     }
 
     #[test]
     fn failures_back_off_by_kind() {
-        let mut s = Schedule::new(&[(Provider::Antigravity, 120_000)], 0, false);
+        let mut s = Schedule::new(&[120_000], 0, false);
         let fail = |kind| Err(Failure::new(Provider::Antigravity, kind, ""));
         assert_eq!(s.complete(0, 0, &fail(ErrorKind::NotInstalled), false, 0.0), 30 * MIN);
         assert_eq!(s.complete(0, 30 * MIN, &fail(ErrorKind::Timeout), false, 0.0) - 30 * MIN, 4 * MIN);

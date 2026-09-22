@@ -1,8 +1,7 @@
 import type {DatabaseSync} from 'node:sqlite';
 import {newId, secretHash} from '../domain/auth.js';
-import {DEFAULT_BOARD} from '../domain/sources.js';
 
-export type User = {id: string; email: string; name: string; role: 'admin' | 'user'; createdAt: number};
+export type User = {id: string; email: string; name: string; createdAt: number};
 export type Board = {id: string; name: string; personal: boolean; role: 'owner' | 'member'};
 export type Token = {id: string; boardId: string; name: string; hint: string; createdBy: string; createdAt: number; lastUsedAt: number | null};
 export type Machine = {id: string; name: string; os: string; arch: string};
@@ -21,6 +20,8 @@ export type Device = {
   ownerUserId: string | null;
   /** The board token it joined with; null for devices connected with a code. */
   tokenId: string | null;
+  /** Connected with a one-time code: it has a token of its own. */
+  byCode: boolean;
   createdAt: number;
   lastSeenAt: number | null;
 };
@@ -37,7 +38,7 @@ export type DeviceCode = {
   userId: string | null;
 };
 
-const user = (row: any): User => ({id: row.id, email: row.email, name: row.name, role: row.role, createdAt: row.created_at});
+const user = (row: any): User => ({id: row.id, email: row.email, name: row.name, createdAt: row.created_at});
 
 const device = (row: any): Device => ({
   id: row.id,
@@ -50,6 +51,7 @@ const device = (row: any): Device => ({
   owner: row.owner,
   ownerUserId: row.owner_user_id,
   tokenId: row.token_id,
+  byCode: row.token_hash !== null && row.token_id === null,
   createdAt: row.created_at,
   lastSeenAt: row.last_seen_at,
 });
@@ -92,18 +94,13 @@ export class Directory {
     return (this.db.prepare('SELECT count(*) AS n FROM users').get() as {n: number}).n;
   }
 
-  /**
-   * Creates a user with a personal board. The very first user becomes the admin and
-   * takes over the default board with everything collected before accounts existed.
-   */
+  /** Creates a user with their personal board. */
   createUser(email: string, name: string, passwordHash: string, now: number): User {
     return this.transaction(() => {
-      const first = this.userCount() === 0;
       const id = newId();
-      this.db.prepare('INSERT INTO users VALUES (?, ?, ?, ?, ?, ?)').run(id, email, name, passwordHash, first ? 'admin' : 'user', now);
-      const board = first ? DEFAULT_BOARD : newId();
-      if (first) this.db.prepare('UPDATE boards SET created_by = ? WHERE id = ?').run(id, DEFAULT_BOARD);
-      else this.db.prepare('INSERT INTO boards VALUES (?, ?, 1, ?, ?)').run(board, '', id, now);
+      const board = newId();
+      this.db.prepare('INSERT INTO users VALUES (?, ?, ?, ?, ?)').run(id, email, name, passwordHash, now);
+      this.db.prepare('INSERT INTO boards VALUES (?, ?, 1, ?, ?)').run(board, '', id, now);
       this.db.prepare('INSERT INTO members VALUES (?, ?, ?, ?)').run(board, id, 'owner', now);
       return this.user(id)!;
     });
@@ -239,9 +236,10 @@ export class Directory {
 
   // ---------- devices ----------
 
-  deviceBySecret(secret: string): Device | null {
-    const row = this.db.prepare('SELECT * FROM devices WHERE token_hash = ? AND revoked_at IS NULL').get(secretHash(secret));
-    return row ? device(row) : null;
+  /** The device a device token belongs to, with whether it was removed from its board. */
+  deviceBySecret(secret: string): (Device & {revoked: boolean}) | null {
+    const row = this.db.prepare('SELECT * FROM devices WHERE token_hash = ?').get(secretHash(secret)) as any;
+    return row ? {...device(row), revoked: row.revoked_at !== null} : null;
   }
 
   /** A device of a board by the agent's machine id, with whether it was revoked. */
@@ -290,10 +288,15 @@ export class Directory {
     return this.db.prepare('UPDATE devices SET revoked_at = ? WHERE id = ? AND board_id = ? AND revoked_at IS NULL').run(now, id, boardId).changes > 0;
   }
 
+  /** Forgets sessions, invites and device codes that expired a day ago or earlier. */
+  prune(now: number) {
+    const cutoff = now - 86_400_000;
+    for (const table of ['sessions', 'invites', 'device_codes']) this.db.prepare(`DELETE FROM ${table} WHERE expires_at < ?`).run(cutoff);
+  }
+
   // ---------- device codes ----------
 
   createCode(secret: string, userCode: string, machine: Machine & {agent: string}, now: number, ttlMs: number) {
-    this.db.prepare('DELETE FROM device_codes WHERE expires_at < ?').run(now - 86_400_000);
     this.db
       .prepare('INSERT INTO device_codes VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, NULL)')
       .run(secretHash(secret), userCode, JSON.stringify(machine), now, now + ttlMs, 'pending');

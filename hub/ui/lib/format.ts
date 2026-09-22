@@ -25,7 +25,8 @@ export function ago(time: number | null, now: number) {
   const seconds = Math.max(0, Math.round((now - time) / 1000));
   if (seconds < 45) return t('time.justNow');
   if (seconds < 3600) return t('time.minutesAgo', {n: Math.round(seconds / 60)});
-  return t('time.hoursAgo', {n: Math.floor(seconds / 3600)});
+  if (seconds < 86_400) return t('time.hoursAgo', {n: Math.floor(seconds / 3600)});
+  return t('time.daysAgo', {n: Math.floor(seconds / 86_400)});
 }
 
 export const clock = (time: number) => new Date(time).toLocaleTimeString(formatLocale(), {hour: '2-digit', minute: '2-digit'});

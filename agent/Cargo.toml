@@ -7,6 +7,12 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 rust-version = "1.85"
+authors = ["Sergey Padurets"]
+description = "Subscription limits of your coding agents (Claude Code, Codex, Antigravity), measured through their own command-line clients."
+homepage = "https://github.com/padurets/quotum"
+repository = "https://github.com/padurets/quotum"
+keywords = ["claude-code", "codex", "limits", "usage", "cli"]
+categories = ["command-line-utilities"]
 
 [profile.release]
 lto = true

@@ -5,7 +5,7 @@ import type {Win} from '../lib/types';
 
 const DAY = 86_400_000;
 const start = Date.UTC(2026, 8, 21);
-const weekly = (change: Partial<Win> = {}): Win => ({id: 'weekly', label: 'Weekly', used: 0, remaining: 100, resetAt: start + 7 * DAY, minutes: 10080, ...change});
+const weekly = (change: Partial<Win> = {}): Win => ({id: 'weekly', kind: 'weekly', label: null, used: 0, remaining: 100, resetAt: start + 7 * DAY, minutes: 10080, ...change});
 
 test('the default weekly plan is whole percents, front-loaded, with a rest day', () => {
   assert.deepEqual(DEFAULT_PLAN, [30, 25, 15, 15, 10, 5, 0]);
@@ -35,7 +35,7 @@ test('the rest days follow the plan: a custom plan moves the deadline', () => {
 });
 
 test('short windows are planned linearly to their reset; idle rolling windows have no plan', () => {
-  const session: Win = {id: 'session', label: '5 hours', used: 0, remaining: 100, resetAt: start + 5 * 3_600_000, minutes: 300};
+  const session: Win = {id: 'session', kind: 'session', label: null, used: 0, remaining: 100, resetAt: start + 5 * 3_600_000, minutes: 300};
   assert.ok(Math.abs(planAt(session, start + 2.5 * 3_600_000)!.remaining - 50) < 1e-6);
   assert.equal(planAt(weekly(), start + 1000), null, 'a window that has not really started');
   assert.equal(planAt(weekly({resetAt: null}), start + DAY), null);

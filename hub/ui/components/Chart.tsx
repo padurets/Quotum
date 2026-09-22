@@ -1,9 +1,9 @@
-import React, {useEffect, useMemo, useRef, useState} from 'react';
+import {useEffect, useMemo, useRef, useState, type PointerEvent} from 'react';
 import {clock, duration, num, shortDay} from '../lib/format';
 import {t} from '../i18n';
 import type {HistorySeries} from '../lib/types';
 
-export type Line = HistorySeries & {key: string; name: string; color: string; dash: string; current: number | null};
+export type Line = HistorySeries & {key: string; name: string; color: string; dash: string; current: number};
 
 /** A moment ahead on the time axis: a known window reset, or an announced extra reset. */
 export type Marker = {key: string; at: number; label: string; color: string; strong?: boolean};
@@ -35,15 +35,15 @@ function niceTicks(from: number, to: number, count: number) {
   return {ticks, daily: step >= 86_400_000};
 }
 
-function bucketLabel(at: number, bucketMs: number) {
+function cellLabel(at: number, cellMs: number) {
   const date = shortDay(at);
-  return bucketMs ? `${date}, ${clock(at)}–${clock(at + bucketMs)}` : `${date}, ${clock(at)}`;
+  return cellMs ? `${date}, ${clock(at)}–${clock(at + cellMs)}` : `${date}, ${clock(at)}`;
 }
 
 /**
  * Remaining quota over time for every selected window. All series share one time
- * grid, so hovering anywhere snaps to a bucket and reads every series for it — no
- * pixel hunting. Lines break only where a whole bucket is empty.
+ * grid, so hovering anywhere snaps to a cell and reads every series for it — no
+ * pixel hunting. Lines break only where a whole cell is empty.
  */
 export function Chart({
   lines,
@@ -52,7 +52,7 @@ export function Chart({
   from,
   now,
   to,
-  bucketMs,
+  cellMs,
 }: {
   lines: Line[];
   plans?: PlanLine[];
@@ -61,11 +61,11 @@ export function Chart({
   /** Where measurements end; everything right of it is the future. */
   now: number;
   to: number;
-  bucketMs: number;
+  cellMs: number;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(900);
-  /** Start of the hovered bucket. */
+  /** Start of the hovered cell. */
   const [hover, setHover] = useState<number | null>(null);
 
   useEffect(() => {
@@ -82,8 +82,8 @@ export function Chart({
   const bottom = 28;
   const span = Math.max(60_000, to - from);
   const x = (at: number) => left + ((Math.min(to, Math.max(from, at)) - from) / span) * (width - left - right);
-  /** A bucket is drawn at its middle (the last, partial one at "now"). */
-  const bx = (bucket: number) => x(Math.min(now, bucket + bucketMs / 2));
+  /** A cell is drawn at its middle (the last, partial one at "now"). */
+  const bx = (cell: number) => x(Math.min(now, cell + cellMs / 2));
   const y = (value: number) => top + (1 - value / 100) * (height - top - bottom);
   const {ticks, daily} = niceTicks(from, to, width < 560 ? 4 : 7);
 
@@ -94,7 +94,7 @@ export function Chart({
         let segment = -1;
         let previousX = -1;
         for (const [at, remaining, group] of line.points) {
-          if (at + bucketMs < from) continue;
+          if (at + cellMs < from) continue;
           const px = bx(at);
           const py = y(remaining);
           if (group !== segment) {
@@ -110,7 +110,7 @@ export function Chart({
           last: runs.at(-1)?.at(-1) ?? null,
         };
       }),
-    [lines, from, span, width, height, bucketMs],
+    [lines, from, span, width, height, cellMs],
   );
 
   const byBucket = useMemo(() => lines.map(line => new Map(line.points.map(([at, value]) => [at, value]))), [lines]);
@@ -121,24 +121,24 @@ export function Chart({
           const value = byBucket[i].get(hover);
           return value === undefined ? [] : [{line, value}];
         });
-  const markerReadout = hover === null ? [] : markers.filter(m => m.at >= hover && m.at < hover + bucketMs);
+  const markerReadout = hover === null ? [] : markers.filter(m => m.at >= hover && m.at < hover + cellMs);
   const planReadout =
     hover === null
       ? []
       : plans.flatMap(plan => {
-          const value = valueAt(plan.runs, Math.min(to, hover + bucketMs / 2));
+          const value = valueAt(plan.runs, Math.min(to, hover + cellMs / 2));
           return value === undefined ? [] : [{plan, value}];
         });
 
-  const move = (event: React.PointerEvent<SVGSVGElement>) => {
+  const move = (event: PointerEvent<SVGSVGElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     const px = ((event.clientX - rect.left) / rect.width) * width;
     if (px < left || px > width - right) return setHover(null);
     const at = from + ((px - left) / (width - left - right)) * span;
-    setHover(Math.floor(at / bucketMs) * bucketMs);
+    setHover(Math.floor(at / cellMs) * cellMs);
   };
   const hoverX = hover === null ? 0 : bx(hover);
-  const bandWidth = Math.max(1, x(Math.min(to, (hover ?? 0) + bucketMs)) - x(hover ?? 0));
+  const bandWidth = Math.max(1, x(Math.min(to, (hover ?? 0) + cellMs)) - x(hover ?? 0));
 
   return (
     <div className="chart" ref={box}>
@@ -200,7 +200,7 @@ export function Chart({
               ) : (
                 <circle cx={mx} cy={y(100)} r={3} fill={marker.color} />
               )}
-              <title>{`${marker.label} · ${bucketLabel(marker.at, 0)}`}</title>
+              <title>{`${marker.label} · ${cellLabel(marker.at, 0)}`}</title>
             </g>
           );
         })}
@@ -229,7 +229,7 @@ export function Chart({
 
       {hover !== null && readout.length + planReadout.length + markerReadout.length > 0 && (
         <div className="tooltip" style={{left: hoverX, transform: `translateX(${hoverX > width * 0.6 ? 'calc(-100% - 12px)' : '12px'})`}}>
-          <div className="tooltip-time">{bucketLabel(hover, bucketMs)}</div>
+          <div className="tooltip-time">{cellLabel(hover, cellMs)}</div>
           {[...readout]
             .sort((a, b) => a.value - b.value)
             .map(row => (

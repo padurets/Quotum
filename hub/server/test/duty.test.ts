@@ -4,7 +4,9 @@ import {mkdtempSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {Duty} from '../duty.js';
-import {Ingest} from '../ingest.js';
+import {Ingest, type Credential} from '../ingest.js';
+import {Invalid} from '../domain/ingest.js';
+import {newSecret} from '../domain/auth.js';
 import {Store} from '../store/store.js';
 import {Directory} from '../store/directory.js';
 
@@ -46,6 +48,14 @@ test('a device in use takes duty from an idle holder, never from a busy one', ()
   assert.equal(duty.holder('b', 'acc'), 'laptop');
 });
 
+test('a holder that keeps asking but never delivers does not keep duty', () => {
+  const duty = new Duty();
+  duty.claim('b', 'acc', 'broken', false, t0);
+  for (let minute = 1; minute < 5; minute++) duty.claim('b', 'acc', 'broken', false, t0 + minute * MIN);
+  assert.equal(duty.claim('b', 'acc', 'server', false, t0 + 4 * MIN).measure, false, 'still within its first lease');
+  assert.equal(duty.claim('b', 'acc', 'server', false, t0 + 5 * MIN + 1).measure, true, 'the lease ran out despite the asking');
+});
+
 test('an idle waiting device asks again in at most ten minutes', () => {
   const duty = new Duty();
   duty.claim('b', 'acc', 'server', false, t0);
@@ -55,13 +65,16 @@ test('an idle waiting device asks again in at most ten minutes', () => {
 
 test('check-ins are resolved per subscription, the owner’s own ones included', () => {
   const store = new Store(path.join(mkdtempSync(path.join(tmpdir(), 'quotum-duty-')), 'db.sqlite'), t0);
-  const ingest = new Ingest(store, new Directory(store.db), ['static-token-0123456789'], new Duty());
+  const directory = new Directory(store.db);
+  const ingest = new Ingest(store, directory, new Duty());
+  const alice = directory.createUser('alice@example.com', 'Alice', 'x', t0);
+  const secret = newSecret('qt_b');
+  directory.createToken(secret, '…', directory.boards(alice.id)[0].id, 'images', alice.id, t0);
+  const token = ingest.authenticate(`Bearer ${secret}`) as Credential;
   const checkin = (machine: string, subscriptions: object[]) =>
-    ingest.checkin(
-      {kind: 'static'},
-      {version: 1, agent: 'quotum/0.1.0', machine: {id: machine, name: machine, os: 'linux', arch: 'x86_64'}, owner: {name: 'alice'}, subscriptions},
-      t0,
-    ).subscriptions.map(s => [s.provider, s.measure]);
+    ingest
+      .checkin(token, {version: 1, agent: 'quotum/0.1.0', machine: {id: machine, name: machine, os: 'linux', arch: 'x86_64'}, subscriptions}, t0)
+      .subscriptions.map(s => [s.provider, s.measure]);
   const subs = [
     {provider: 'claude', account: 'a1b2c3d4e5f6a1b2c3d4e5f6', active: false},
     {provider: 'antigravity', account: null, active: false},
@@ -71,5 +84,5 @@ test('check-ins are resolved per subscription, the owner’s own ones included',
   assert.deepEqual(checkin('machine-two-0123456789', subs), [['claude', false], ['antigravity', false]]);
   // A differently named Antigravity subscription of the same owner is separate.
   assert.deepEqual(checkin('machine-two-0123456789', [{provider: 'antigravity', account: null, accountName: 'work', active: false}]), [['antigravity', true]]);
-  assert.throws(() => ingest.checkin({kind: 'static'}, {version: 1}, t0), /invalid_batch/);
+  assert.throws(() => ingest.checkin(token, {version: 1}, t0), Invalid);
 });

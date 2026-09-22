@@ -13,10 +13,17 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
+use crate::stop;
+
+/// How often a wait for output looks whether the agent is stopping.
+const STOP_CHECK: Duration = Duration::from_millis(250);
+
 #[derive(Debug)]
 pub enum ProcError {
     NotFound,
     Timeout,
+    /// The agent is stopping (see `stop`).
+    Stopped,
     /// Output ended (the process exited) before the expected message.
     Closed,
     Io(std::io::Error),
@@ -27,6 +34,7 @@ impl std::fmt::Display for ProcError {
         match self {
             ProcError::NotFound => f.write_str("not found"),
             ProcError::Timeout => f.write_str("timed out"),
+            ProcError::Stopped => f.write_str("stopped"),
             ProcError::Closed => f.write_str("exited early"),
             ProcError::Io(e) => write!(f, "{e}"),
         }
@@ -57,7 +65,7 @@ fn is_executable(path: &Path) -> bool {
 }
 
 /// A running client. Its stdout is read line by line on a helper thread so every read
-/// can respect the deadline. Dropping it kills the process tree.
+/// can respect the deadline and a stop. Dropping it kills the process tree.
 pub struct Client {
     child: Child,
     stdin: Option<ChildStdin>,
@@ -114,11 +122,19 @@ impl Client {
 
     /// The next line of output, or `None` when the output has ended.
     pub fn line(&mut self) -> Result<Option<String>, ProcError> {
-        let left = self.deadline.saturating_duration_since(Instant::now());
-        match self.lines.recv_timeout(left) {
-            Ok(line) => Ok(Some(line)),
-            Err(RecvTimeoutError::Timeout) => Err(ProcError::Timeout),
-            Err(RecvTimeoutError::Disconnected) => Ok(None),
+        loop {
+            if stop::requested() {
+                return Err(ProcError::Stopped);
+            }
+            let left = self.deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(ProcError::Timeout);
+            }
+            match self.lines.recv_timeout(left.min(STOP_CHECK)) {
+                Ok(line) => return Ok(Some(line)),
+                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Disconnected) => return Ok(None),
+            }
         }
     }
 
@@ -159,11 +175,10 @@ impl Client {
 }
 
 impl Drop for Client {
+    /// Kills the whole tree, even when the client itself has exited: whatever it
+    /// started in the background must not outlive the measurement.
     fn drop(&mut self) {
         self.stdin = None;
-        if let Ok(Some(_)) = self.child.try_wait() {
-            return;
-        }
         kill_tree(&mut self.child);
         let _ = self.child.wait();
     }
@@ -223,6 +238,19 @@ mod tests {
         assert!(matches!(client.line(), Err(ProcError::Timeout)));
         drop(client);
         assert!(started.elapsed() < Duration::from_secs(2), "killed instead of waiting for sleep");
+    }
+
+    #[test]
+    fn what_a_client_leaves_running_is_killed_with_it() {
+        let sh = Path::new("/bin/sh");
+        let dir = env::temp_dir();
+        let mut client =
+            Client::spawn(sh, &["-c", "sleep 30 & echo \"{\\\"pid\\\": $!}\""], &[], &dir, Duration::from_secs(5))
+                .unwrap();
+        let pid = client.wait_for(|v| v["pid"].is_u64()).unwrap()["pid"].as_u64().unwrap();
+        client.finish();
+        thread::sleep(Duration::from_millis(100));
+        assert!(!Path::new(&format!("/proc/{pid}")).exists(), "the background sleep outlived its client");
     }
 
     #[test]

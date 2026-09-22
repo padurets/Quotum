@@ -13,7 +13,5 @@ export const PROVIDERS: Record<string, {name: string; icon: string; color: strin
   antigravity: {name: 'Antigravity', icon: antigravityIcon, color: '#d264b0'},
 };
 
-export const KNOWN_PROVIDERS = Object.keys(PROVIDERS);
-
 /** Windows of one source are distinguished by dash pattern within its colour. */
 export const DASHES = ['', '7 5', '2 4', '10 3 2 3'];

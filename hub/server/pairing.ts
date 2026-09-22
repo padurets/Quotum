@@ -1,5 +1,6 @@
 import {config} from './config.js';
 import {newSecret, newUserCode, normalizeUserCode} from './domain/auth.js';
+import {Invalid, parseAgent, parseMachine} from './domain/ingest.js';
 import type {Device, DeviceCode, Directory, Machine} from './store/directory.js';
 
 export type CodeRequest = {deviceCode: string; userCode: string; expiresIn: number; interval: number};
@@ -8,8 +9,6 @@ export type CodeRequest = {deviceCode: string; userCode: string; expiresIn: numb
 export type Waiting = 'authorization_pending' | 'slow_down' | 'access_denied' | 'expired_token';
 
 export type Connected = {token: string; device: Device; board: {id: string; name: string}};
-
-const text = (value: unknown, max = 120) => (typeof value === 'string' && value.length > 0 && value.length <= max ? value : null);
 
 /**
  * Connecting a machine with a one-time code: the agent asks for a code, a signed-in
@@ -20,15 +19,19 @@ export class Pairing {
 
   /** Starts a request for an agent; null if the machine description is unusable. */
   start(body: unknown, now = Date.now()): CodeRequest | null {
-    const input = (body ?? {}) as {machine?: Record<string, unknown>; agent?: unknown};
-    const m = input.machine ?? {};
-    const machine = {id: text(m.id), name: text(m.name), os: text(m.os, 40), arch: text(m.arch, 40), agent: text(input.agent)};
-    if (Object.values(machine).some(v => v === null)) return null;
+    const input = (body ?? {}) as {machine?: unknown; agent?: unknown};
+    let machine: Machine & {agent: string};
+    try {
+      machine = {...parseMachine(input.machine), agent: parseAgent(input.agent)};
+    } catch (error) {
+      if (error instanceof Invalid) return null;
+      throw error;
+    }
     const deviceCode = newSecret('qt_c');
     for (let attempt = 0; ; attempt++) {
       const userCode = newUserCode();
       try {
-        this.directory.createCode(deviceCode, userCode, machine as Machine & {agent: string}, now, config.auth.codeTtlMs);
+        this.directory.createCode(deviceCode, userCode, machine, now, config.auth.codeTtlMs);
         return {deviceCode, userCode, expiresIn: config.auth.codeTtlMs / 1000, interval: config.auth.codeIntervalS};
       } catch (error) {
         if (attempt >= 4) throw error; // a user code collision is astronomically rare; retry a few times

@@ -3,7 +3,6 @@
 use std::collections::BTreeMap;
 use std::io::{IsTerminal, Write};
 use std::process::ExitCode;
-use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
@@ -13,6 +12,7 @@ use quotum_core::process::find_program;
 use quotum_core::providers::adapter;
 use quotum_core::runner::{Event, Runner};
 use quotum_core::sink::{Discard, HubSink, Sink};
+use quotum_core::stop;
 
 #[derive(Parser)]
 #[command(
@@ -137,10 +137,14 @@ fn status(config: Config, paths: Paths, only: &[Provider], json: bool) -> ExitCo
 fn run(config: Config, paths: Paths, only: &[Provider]) -> ExitCode {
     let log = |line: &str| eprintln!("{} {line}", clock(now_ms()));
     let mut sink: Box<dyn Sink> = match config.hub_or_connected(&paths) {
-        Some(hub) => {
+        Some((hub, by_code)) => {
             log(&format!("delivering to {}", hub.url));
+            if insecure(&hub.url) {
+                log("warning: the hub is reached over plain http; its token travels unencrypted");
+            }
             let machine = machine(&paths, &config);
-            let owner = Owner { name: config.owner.clone() };
+            // A device connected with a code belongs to whoever confirmed the code.
+            let owner = Owner { name: if by_code { None } else { config.owner.clone() } };
             Box::new(HubSink::new(&hub, machine, owner, paths.state.join("spool.jsonl"), Box::new(log)))
         }
         None => {
@@ -152,10 +156,10 @@ fn run(config: Config, paths: Paths, only: &[Provider]) -> ExitCode {
     if runner.providers().is_empty() {
         return fail("every provider is disabled");
     }
-    let stop = AtomicBool::new(false);
+    stop::on_signals();
     // Waiting is logged once per change, not on every check-in.
     let mut waiting: BTreeMap<Provider, bool> = BTreeMap::new();
-    runner.run(sink.as_mut(), &stop, |event| match event {
+    let refused = runner.run(sink.as_mut(), |event| match event {
         Event::Measured(outcome, next) => {
             let summary = match outcome {
                 Ok(s) => s
@@ -185,7 +189,16 @@ fn run(config: Config, paths: Paths, only: &[Provider]) -> ExitCode {
             }
         }
     });
-    ExitCode::SUCCESS
+    match refused {
+        Some(reason) => fail(&format!("stopped: {reason}")),
+        None => ExitCode::SUCCESS,
+    }
+}
+
+/// Plain http to anything but this machine: the bearer token can be read on the way.
+fn insecure(url: &str) -> bool {
+    let rest = url.strip_prefix("http://");
+    rest.is_some_and(|host| !["localhost", "127.0.0.1", "[::1]"].iter().any(|local| host.starts_with(local)))
 }
 
 /// The device-code flow: ask the hub for a code, show it, wait until a person confirms it.
@@ -205,7 +218,7 @@ fn connect(config: &Config, paths: &Paths, url: &str) -> ExitCode {
         Err(e) => return fail(&format!("{url} is unreachable: {e}")),
     };
     let (Some(device_code), Some(user_code)) = (started["deviceCode"].as_str(), started["userCode"].as_str()) else {
-        return fail(&format!("{url} does not look like an Quotum hub"));
+        return fail(&format!("{url} does not look like a Quotum hub"));
     };
     let style = Style::detect();
     println!("Open this page and confirm the code:\n");
@@ -213,8 +226,10 @@ fn connect(config: &Config, paths: &Paths, url: &str) -> ExitCode {
     println!("  code {}\n", style.bold(user_code));
     println!("{}", style.dim("Waiting for confirmation… (Ctrl+C to cancel)"));
 
-    let mut interval = started["interval"].as_u64().unwrap_or(5).max(1);
-    let deadline = std::time::Instant::now() + Duration::from_secs(started["expiresIn"].as_u64().unwrap_or(600));
+    // Whatever the hub says, poll every 1 to 60 seconds for at most an hour.
+    let mut interval = started["interval"].as_u64().unwrap_or(5).clamp(1, 60);
+    let deadline =
+        std::time::Instant::now() + Duration::from_secs(started["expiresIn"].as_u64().unwrap_or(600).min(3600));
     while std::time::Instant::now() < deadline {
         std::thread::sleep(Duration::from_secs(interval));
         let answer =
@@ -223,9 +238,12 @@ fn connect(config: &Config, paths: &Paths, url: &str) -> ExitCode {
         let ok = response.status().is_success();
         let body: serde_json::Value = response.body_mut().read_json().unwrap_or_default();
         if ok {
+            let Some(token) = body["token"].as_str().filter(|t| !t.is_empty()) else {
+                return fail(&format!("{url} confirmed the code but sent no token"));
+            };
             let credentials = Credentials {
                 url: url.to_string(),
-                token: body["token"].as_str().unwrap_or_default().to_string(),
+                token: token.to_string(),
                 board: body["board"]["name"].as_str().unwrap_or_default().to_string(),
                 owner: body["device"]["owner"].as_str().unwrap_or_default().to_string(),
             };
@@ -233,12 +251,17 @@ fn connect(config: &Config, paths: &Paths, url: &str) -> ExitCode {
                 return fail(&format!("could not save the connection: {e}"));
             }
             println!("Connected to {} as {}.", board_title(&credentials.board), credentials.owner);
+            if config.hub.is_some() {
+                println!(
+                    "Note: a hub in the settings or QUOTUM_HUB_URL/QUOTUM_HUB_TOKEN takes precedence over this connection."
+                );
+            }
             println!("Start measuring with `quotum run`.");
             return ExitCode::SUCCESS;
         }
         match body["error"].as_str() {
             Some("authorization_pending") => {}
-            Some("slow_down") => interval += 5,
+            Some("slow_down") => interval = (interval + 5).min(60),
             Some("access_denied") => return fail("the connection was declined"),
             Some("expired_token") => return fail("the code expired; run `quotum connect` again"),
             _ => {}

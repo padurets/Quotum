@@ -27,6 +27,11 @@ pub trait Sink {
     ) -> Option<Millis> {
         None
     }
+
+    /// Why the hub will never take anything from this device again, once it said so.
+    fn refused(&self) -> Option<&str> {
+        None
+    }
 }
 
 /// Discards everything; for running without a hub (the caller logs).
@@ -46,32 +51,40 @@ enum Item {
 /// Keeps about two days of measurements of three providers every two minutes.
 const SPOOL_LIMIT: usize = 5_000;
 const CHUNK: usize = 200;
+/// After a failed delivery the hub is left alone for a while, longer each time.
+const RETRY_FIRST_MS: i64 = 60_000;
+const RETRY_LAST_MS: i64 = 3_600_000;
 
 enum Delivery {
     Accepted,
     /// The hub will never take this batch (malformed, too large): drop it.
     Rejected(String),
+    /// The hub will never take anything from this device again.
+    Refused(String),
     /// Try again later (network, hub down, token not accepted yet).
     Later(String),
 }
 
 pub struct HubSink {
     base: String,
-    /// Cleared when the hub has no check-in endpoint (an older hub): then always measure.
-    checkins: bool,
     token: String,
     machine: Machine,
     owner: Owner,
     http: ureq::Agent,
     spool_file: PathBuf,
     spool: VecDeque<Item>,
+    /// No request before this time, after failures in a row.
+    retry_at: Millis,
+    failures: u32,
+    refused: Option<String>,
     /// The last problem reported, so a long outage is logged once.
     problem: Option<String>,
     log: Box<dyn FnMut(&str) + Send>,
 }
 
 impl HubSink {
-    /// `owner`: whom the machine measures for, if configured.
+    /// `owner`: whom the machine measures for, sent only with a board token (a device
+    /// connected with a code belongs to whoever confirmed it).
     pub fn new(
         hub: &Hub,
         machine: Machine,
@@ -90,13 +103,15 @@ impl HubSink {
             .into();
         HubSink {
             base: hub.url.trim_end_matches('/').to_string(),
-            checkins: true,
             token: hub.token.clone(),
             machine,
             owner,
             http,
             spool_file,
             spool,
+            retry_at: 0,
+            failures: 0,
+            refused: None,
             problem: None,
             log,
         }
@@ -125,8 +140,9 @@ impl HubSink {
             .send_json(&batch);
         match response {
             Ok(r) if r.status().is_success() => Delivery::Accepted,
-            Ok(r) => match r.status().as_u16() {
-                401 | 403 => Delivery::Later("the hub does not accept this token".into()),
+            Ok(mut r) => match r.status().as_u16() {
+                401 => Delivery::Later("the hub does not accept this token".into()),
+                403 => Delivery::Refused(refusal(r.body_mut().read_json().ok())),
                 400 | 413 | 422 => {
                     Delivery::Rejected(format!("the hub refused the data (HTTP {})", r.status().as_u16()))
                 }
@@ -136,13 +152,20 @@ impl HubSink {
         }
     }
 
-    fn save_spool(&self) {
-        if self.spool.is_empty() {
-            let _ = fs::remove_file(&self.spool_file);
-            return;
+    /// Written to a new file that then replaces the old one, so a crash never leaves half a spool.
+    fn save_spool(&mut self) {
+        let result = if self.spool.is_empty() {
+            fs::remove_file(&self.spool_file)
+                .or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) })
+        } else {
+            let text: String =
+                self.spool.iter().filter_map(|i| serde_json::to_string(i).ok()).map(|line| line + "\n").collect();
+            let next = self.spool_file.with_extension("jsonl.new");
+            fs::write(&next, text).and_then(|_| fs::rename(&next, &self.spool_file))
+        };
+        if let Err(e) = result {
+            (self.log)(&format!("delivery: cannot keep measurements in {}: {e}", self.spool_file.display()));
         }
-        let text: String = self.spool.iter().filter_map(|i| serde_json::to_string(i).ok()).map(|l| l + "\n").collect();
-        let _ = fs::write(&self.spool_file, text);
     }
 
     fn report(&mut self, problem: Option<String>) {
@@ -154,6 +177,23 @@ impl HubSink {
             }
             self.problem = problem;
         }
+    }
+
+    /// The hub did not answer as hoped: leave it alone for longer each time.
+    fn back_off(&mut self) {
+        self.failures += 1;
+        let wait = (RETRY_FIRST_MS << self.failures.min(6).saturating_sub(1)).min(RETRY_LAST_MS);
+        self.retry_at = now_ms() + wait;
+    }
+}
+
+/// What a 403 means: the device was removed from its board, or the machine is connected with a code already.
+fn refusal(body: Option<serde_json::Value>) -> String {
+    match body.as_ref().and_then(|b| b["error"].as_str()) {
+        Some("device_conflict") => {
+            "this machine is connected to the board with a code already; stop this agent or `quotum disconnect` the other".into()
+        }
+        _ => "this device was removed from its board; connect it again to deliver".into(),
     }
 }
 
@@ -168,6 +208,10 @@ impl Sink for HubSink {
         while self.spool.len() > SPOOL_LIMIT {
             self.spool.pop_front();
         }
+        if self.refused.is_some() || now_ms() < self.retry_at {
+            self.save_spool();
+            return;
+        }
         let had_backlog = self.spool.len() > 1;
         let mut problem = None;
         while !self.spool.is_empty() {
@@ -176,13 +220,19 @@ impl Sink for HubSink {
             match self.post(&chunk) {
                 Delivery::Accepted => {
                     self.spool.drain(..count);
+                    self.failures = 0;
                 }
                 Delivery::Rejected(reason) => {
                     self.spool.drain(..count);
                     (self.log)(&format!("delivery: {reason}; dropped {count} measurements"));
                 }
+                Delivery::Refused(reason) => {
+                    self.refused = Some(reason);
+                    break;
+                }
                 Delivery::Later(reason) => {
                     problem = Some(reason);
+                    self.back_off();
                     break;
                 }
             }
@@ -200,7 +250,8 @@ impl Sink for HubSink {
         account_name: Option<&str>,
         active: bool,
     ) -> Option<Millis> {
-        if !self.checkins {
+        // While the hub is not answering, measure without asking: nothing is lost by it.
+        if self.refused.is_some() || now_ms() < self.retry_at {
             return None;
         }
         let request = serde_json::json!({
@@ -212,9 +263,15 @@ impl Sink for HubSink {
         });
         let url = format!("{}/v1/checkin", self.base);
         let mut response =
-            self.http.post(&url).header("Authorization", &format!("Bearer {}", self.token)).send_json(&request).ok()?;
-        if response.status().as_u16() == 404 {
-            self.checkins = false;
+            match self.http.post(&url).header("Authorization", &format!("Bearer {}", self.token)).send_json(&request) {
+                Ok(response) => response,
+                Err(_) => {
+                    self.back_off();
+                    return None;
+                }
+            };
+        if response.status().as_u16() == 403 {
+            self.refused = Some(refusal(response.body_mut().read_json().ok()));
             return None;
         }
         if !response.status().is_success() {
@@ -226,5 +283,9 @@ impl Sink for HubSink {
             return None;
         }
         directive["until"].as_str().and_then(parse_time)
+    }
+
+    fn refused(&self) -> Option<&str> {
+        self.refused.as_deref()
     }
 }

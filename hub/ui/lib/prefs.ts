@@ -18,14 +18,18 @@ export type Prefs = {
 };
 
 const KEY = 'quotum.prefs';
-/** Where preferences were kept before the project was renamed; read once, until 0.2. */
-const LEGACY_KEY = 'agent-limits.prefs';
+const RANGES = ['24h', '7d', '30d'];
+const KINDS: Kind[] = ['weekly', 'session'];
 const DEFAULTS: Prefs = {hidden: {}, muted: {}, range: '24h', kind: 'weekly', showPlan: true, showResets: true, plans: {}};
 
 function read(): Prefs {
   try {
-    const raw = localStorage.getItem(KEY) ?? localStorage.getItem(LEGACY_KEY);
-    return raw ? {...DEFAULTS, ...(JSON.parse(raw) as Partial<Prefs>)} : DEFAULTS;
+    const raw = localStorage.getItem(KEY);
+    const stored = {...DEFAULTS, ...(raw ? (JSON.parse(raw) as Partial<Prefs>) : {})};
+    // Whatever the browser kept from another version must still be a valid choice.
+    if (!RANGES.includes(stored.range)) stored.range = DEFAULTS.range;
+    if (!KINDS.includes(stored.kind)) stored.kind = DEFAULTS.kind;
+    return stored;
   } catch {
     return DEFAULTS;
   }

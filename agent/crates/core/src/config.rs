@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::{Machine, Provider, now_ms};
+use crate::model::{Machine, Provider, TEXT_LIMIT, clean_text, now_ms};
 use crate::schedule::{DEFAULT_INTERVAL_MS, MIN_INTERVAL_MS};
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
@@ -66,7 +66,30 @@ impl Config {
             Err(e) => return Err(format!("{}: {e}", path.display())),
         };
         config.apply_env(|key| env::var(key).ok().filter(|v| !v.is_empty()));
+        config.check().map_err(|e| format!("{}: {e}", path.display()))?;
         Ok(config)
+    }
+
+    /// Refuses settings a hub would not take, rather than sending them and losing data.
+    fn check(&self) -> Result<(), String> {
+        let interval = |what: &str, seconds: Option<u64>| match seconds {
+            Some(s) if !(60..=86_400).contains(&s) => Err(format!("{what}: {s} is not between 60 and 86400 seconds")),
+            _ => Ok(()),
+        };
+        let name = |what: &str, value: Option<&str>| match value {
+            Some(v) if v.trim().is_empty() || v.chars().count() > TEXT_LIMIT => {
+                Err(format!("{what}: a name is 1 to {TEXT_LIMIT} characters"))
+            }
+            _ => Ok(()),
+        };
+        interval("interval", self.interval)?;
+        name("owner", self.owner.as_deref())?;
+        name("machine.name", self.machine.name.as_deref())?;
+        for (provider, settings) in &self.providers {
+            interval(&format!("providers.{}.interval", provider.id()), settings.interval)?;
+            name(&format!("providers.{}.account", provider.id()), settings.account.as_deref())?;
+        }
+        Ok(())
     }
 
     fn apply_env(&mut self, var: impl Fn(&str) -> Option<String>) {
@@ -132,19 +155,22 @@ impl Credentials {
         serde_json::from_slice(&fs::read(Self::file(paths)).ok()?).ok()
     }
 
-    /// Written readable by the user only.
+    /// Written readable by the user only, to a new file that then replaces the old one.
     pub fn save(&self, paths: &Paths) -> io::Result<()> {
         let file = Self::file(paths);
+        let next = file.with_extension("json.new");
         let text = serde_json::to_vec_pretty(self).map_err(io::Error::other)?;
+        let _ = fs::remove_file(&next);
         #[cfg(unix)]
         {
             use std::io::Write;
             use std::os::unix::fs::OpenOptionsExt;
-            let mut out = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&file)?;
-            out.write_all(&text)
+            let mut out = fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&next)?;
+            out.write_all(&text)?;
         }
         #[cfg(not(unix))]
-        fs::write(file, text)
+        fs::write(&next, text)?;
+        fs::rename(next, file)
     }
 
     pub fn remove(paths: &Paths) -> bool {
@@ -153,9 +179,13 @@ impl Credentials {
 }
 
 impl Config {
-    /// The hub to deliver to: from the settings or environment, else the one connected with a code.
-    pub fn hub_or_connected(&self, paths: &Paths) -> Option<Hub> {
-        self.hub.clone().or_else(|| Credentials::load(paths).map(|c| Hub { url: c.url, token: c.token }))
+    /// The hub to deliver to, and whether this device was connected to it with a code:
+    /// from the settings or environment, else the one connected with a code.
+    pub fn hub_or_connected(&self, paths: &Paths) -> Option<(Hub, bool)> {
+        self.hub
+            .clone()
+            .map(|hub| (hub, false))
+            .or_else(|| Credentials::load(paths).map(|c| (Hub { url: c.url, token: c.token }, true)))
     }
 }
 
@@ -210,7 +240,9 @@ pub fn machine(paths: &Paths, config: &Config) -> Machine {
         });
     Machine {
         id,
-        name: config.machine.name.clone().unwrap_or_else(hostname),
+        name: clean_text(config.machine.name.clone())
+            .or_else(|| clean_text(Some(hostname())))
+            .unwrap_or_else(|| "machine".into()),
         os: env::consts::OS.into(),
         arch: env::consts::ARCH.into(),
     }
@@ -288,6 +320,17 @@ mod tests {
             toml::from_str::<Config>("[providers.cursor]\nenabled = true").is_err(),
             "unknown providers are errors"
         );
+    }
+
+    #[test]
+    fn settings_a_hub_would_not_take_are_refused_at_load() {
+        let check = |text: &str| toml::from_str::<Config>(text).unwrap().check();
+        assert!(check("interval = 120\nowner = \"alice\"").is_ok());
+        assert!(check("interval = 30").unwrap_err().contains("interval"));
+        assert!(check("[providers.codex]\ninterval = 200000").is_err());
+        assert!(check("owner = \"  \"").unwrap_err().contains("owner"));
+        assert!(check(&format!("[machine]\nname = \"{}\"", "m".repeat(121))).is_err());
+        assert!(check("[providers.antigravity]\naccount = \"\"").is_err());
     }
 
     #[test]

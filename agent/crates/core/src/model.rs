@@ -224,6 +224,42 @@ impl Failure {
 
 pub type Outcome = Result<Snapshot, Failure>;
 
+/// The longest text a hub takes in a name, label or id (spec: limits).
+pub const TEXT_LIMIT: usize = 120;
+/// At most this many windows per snapshot, and this long a measurement stays representative.
+const WINDOW_LIMIT: usize = 32;
+const STALE_LIMIT_MS: u64 = 24 * 3_600_000;
+
+/// Text as a hub takes it: trimmed, not empty, at most [`TEXT_LIMIT`] characters.
+pub fn clean_text(value: Option<String>) -> Option<String> {
+    let value = value?;
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.chars().take(TEXT_LIMIT).collect())
+}
+
+impl Snapshot {
+    /// Makes what a client reported fit the ingest format, so one odd value never gets a
+    /// whole batch refused: empty names dropped, long ones cut, zero lengths unknown,
+    /// repeated window ids merged.
+    pub fn tidy(&mut self) {
+        self.account_name = clean_text(self.account_name.take());
+        self.plan = clean_text(self.plan.take());
+        self.client = clean_text(self.client.take());
+        self.stale_after_ms = self.stale_after_ms.min(STALE_LIMIT_MS);
+        let mut seen = std::collections::HashSet::new();
+        self.windows.retain_mut(|w| {
+            w.id = clean_text(Some(std::mem::take(&mut w.id))).unwrap_or_else(|| "window".into());
+            w.label = clean_text(w.label.take());
+            w.minutes = w.minutes.filter(|m| *m > 0);
+            seen.insert(w.id.clone())
+        });
+        self.windows.truncate(WINDOW_LIMIT);
+        if let Some(resets) = &mut self.resets {
+            resets.available = resets.available.min(1000);
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Machine {
@@ -322,8 +358,8 @@ mod tests {
         let a = pseudonym(Provider::Claude, " User@Example.com ");
         assert_eq!(a, pseudonym(Provider::Claude, "user@example.com"));
         assert_ne!(a, pseudonym(Provider::Codex, "user@example.com"));
-        // Pinned: the ingest spec documents this example; hubs rely on the value.
-        assert_eq!(a, "a9065ccd9f3d50fc4e5fe3c6");
+        // Pinned: the ingest spec documents this example (Claude's stable id is email/organization).
+        assert_eq!(pseudonym(Provider::Claude, "user@example.com/Example"), "73d68562e0a4449082684fee");
     }
 
     #[test]
@@ -332,6 +368,36 @@ mod tests {
         assert_eq!((w.kind, w.used_percent), (Kind::Weekly, 12.35));
         assert_eq!(Window::new("x", Some(60), None, 140.0, None).used_percent, 100.0);
         assert_eq!(Kind::Other.slug(Some(60)), "window-60");
+    }
+
+    #[test]
+    fn a_snapshot_is_tidied_into_what_a_hub_takes() {
+        let window = |id: &str, minutes: Option<u32>, label: Option<&str>| {
+            Window::new(id, minutes, label.map(str::to_string), 10.0, None)
+        };
+        let mut snapshot = Snapshot {
+            provider: Provider::Codex,
+            account: None,
+            account_name: Some("  ".into()),
+            plan: Some("x".repeat(300)),
+            observed_at: 0,
+            via: "codex/app-server".into(),
+            client: Some(String::new()),
+            stale_after_ms: 90 * 3_600_000,
+            windows: vec![
+                window("weekly", Some(10_080), None),
+                window("weekly", Some(0), Some("")),
+                window("spark", Some(0), Some(" Spark ")),
+            ],
+            resets: Some(Resets { available: 5_000, expires_at: None }),
+        };
+        snapshot.tidy();
+        assert_eq!((snapshot.account_name, snapshot.client), (None, None));
+        assert_eq!(snapshot.plan.map(|p| p.chars().count()), Some(TEXT_LIMIT));
+        assert_eq!(snapshot.stale_after_ms, 24 * 3_600_000);
+        let windows: Vec<_> = snapshot.windows.iter().map(|w| (w.id.as_str(), w.minutes, w.label.as_deref())).collect();
+        assert_eq!(windows, [("weekly", Some(10_080), None), ("spark", None, Some("Spark"))]);
+        assert_eq!(snapshot.resets.map(|r| r.available), Some(1000));
     }
 
     #[test]

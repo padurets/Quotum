@@ -1,12 +1,7 @@
-import {createHash} from 'node:crypto';
+import {sha256} from './auth.js';
 
 export const providers = ['claude', 'codex', 'antigravity'] as const;
 export type Provider = (typeof providers)[number];
-
-export const hash = (value: string) => createHash('sha256').update(value).digest('hex');
-
-/** The board of a new hub: static ingest tokens deliver to it, and the first person to sign up takes it. */
-export const DEFAULT_BOARD = 'default';
 
 /**
  * A source is one subscription on one board. `account` says which: the pseudonym of an
@@ -16,4 +11,4 @@ export const DEFAULT_BOARD = 'default';
  */
 export type Source = {id: string; provider: Provider; account: string};
 
-export const sourceId = (board: string, provider: Provider, account: string) => `${provider}:${hash(`${board}\n${account}`).slice(0, 8)}`;
+export const sourceId = (board: string, provider: Provider, account: string) => `${provider}:${sha256(`${board}\n${account}`).slice(0, 12)}`;

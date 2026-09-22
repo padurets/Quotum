@@ -1,7 +1,6 @@
 //! Drives the adapters: once for a status check, or continuously on the schedule.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
@@ -10,11 +9,12 @@ use crate::model::{Millis, Outcome, Provider, now_ms};
 use crate::providers::{Adapter, Context, adapter, last_activity};
 use crate::schedule::Schedule;
 use crate::sink::Sink;
+use crate::stop;
 
 /// A single measurement may take this long before the client is killed.
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(60);
 /// The loop wakes at least this often, to notice a stop request or a jump of the clock.
-const TICK: Duration = Duration::from_secs(5);
+const TICK: Duration = Duration::from_secs(1);
 
 pub struct Runner {
     config: Config,
@@ -54,6 +54,7 @@ impl Runner {
             if snapshot.account.is_none() {
                 snapshot.account_name = self.config.account_name(provider).map(str::to_string);
             }
+            snapshot.tidy();
         }
         outcome
     }
@@ -69,21 +70,24 @@ impl Runner {
         }
     }
 
-    /// Measures on the schedule until `stop` is set. Before each measurement the device
-    /// checks in with the hub (when there is one): if another device measures the same
+    /// Measures on the schedule until a stop is requested or the hub refuses this device
+    /// for good (then its reason is returned). Before each measurement the device checks
+    /// in with the hub (when there is one): if another device measures the same
     /// subscription, this one only waits.
-    pub fn run(&mut self, sink: &mut dyn Sink, stop: &AtomicBool, mut each: impl FnMut(Event)) {
-        let entries: Vec<(Provider, u64)> =
-            self.adapters.iter().map(|a| (a.provider(), self.config.interval_ms(a.provider()))).collect();
-        let mut schedule = Schedule::new(&entries, now_ms(), self.config.eco());
+    pub fn run(&mut self, sink: &mut dyn Sink, mut each: impl FnMut(Event)) -> Option<String> {
+        let intervals: Vec<u64> = self.adapters.iter().map(|a| self.config.interval_ms(a.provider())).collect();
+        let mut schedule = Schedule::new(&intervals, now_ms(), self.config.eco());
         let activity_paths: Vec<Vec<PathBuf>> = self.adapters.iter().map(|a| a.activity_paths(&self.home)).collect();
         let identity_paths: Vec<Vec<PathBuf>> = self.adapters.iter().map(|a| a.identity_paths(&self.home)).collect();
         let mut seen: Vec<Option<SystemTime>> = vec![None; self.adapters.len()];
         // The account each provider last reported, and the state of its sign-in files then.
         let mut accounts: Vec<Option<(Option<String>, Option<SystemTime>)>> = vec![None; self.adapters.len()];
 
-        while !stop.load(Ordering::Relaxed) {
-            let Some((index, due)) = schedule.next() else { return };
+        while !stop::requested() {
+            if let Some(reason) = sink.refused() {
+                return Some(reason.to_string());
+            }
+            let (index, due) = schedule.next()?;
             let wait = due - now_ms();
             if wait > 0 {
                 thread::sleep(Duration::from_millis(wait as u64).min(TICK));
@@ -92,8 +96,9 @@ impl Runner {
             let adapter = &self.adapters[index];
             let provider = adapter.provider();
             let before = seen[index];
-            let active = before.is_some() && last_activity(&activity_paths[index]) > before;
-            seen[index] = last_activity(&activity_paths[index]).or(Some(SystemTime::UNIX_EPOCH));
+            let latest = last_activity(&activity_paths[index]);
+            let active = before.is_some() && latest > before;
+            seen[index] = latest.or(Some(SystemTime::UNIX_EPOCH));
 
             // Which subscription this is, if known without starting the client.
             let signed_in = last_activity(&identity_paths[index]);
@@ -116,6 +121,9 @@ impl Runner {
             }
 
             let mut outcome = self.measure(index);
+            if stop::requested() {
+                break;
+            }
             // Taken after the measurement, so the client's own writes do not count as use.
             seen[index] = last_activity(&activity_paths[index]).or(Some(SystemTime::UNIX_EPOCH));
             if let Ok(snapshot) = &outcome {
@@ -130,6 +138,7 @@ impl Runner {
             sink.deliver(&outcome);
             each(Event::Measured(&outcome, next));
         }
+        None
     }
 }
 

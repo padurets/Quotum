@@ -1,14 +1,15 @@
-import React, {useState} from 'react';
-import {call, messageOf, type Board, type Session, type User} from '../lib/session';
-import {Brand, ErrorLine, Field, LanguagePicker, Tabs} from './Kit';
+import {useState, type FormEvent} from 'react';
+import {call} from '../lib/http';
+import type {Board, Session, User} from '../lib/session';
+import {Brand, ErrorLine, Field, LanguageSelect, Segmented} from './Kit';
 import {t} from '../i18n';
 
 type Mode = 'login' | 'signup';
 
 /**
- * Signing in or up. The very first person to sign up on a hub becomes its admin and
- * takes over the data collected so far; after that, sign-up needs an invite unless the
- * hub is open.
+ * Signing in or up. The first person on a hub signs up without an invitation; after
+ * that, sign-up needs an invite unless the hub is open. With an invite, signing up or in
+ * also joins its board (`joined`).
  */
 export function AuthScreen({
   session,
@@ -17,28 +18,29 @@ export function AuthScreen({
   note,
 }: {
   session: Session;
-  onSignedIn: (session: Session) => void;
+  onSignedIn: (session: Session, joined: string | null) => void;
   invite?: {secret: string; board: string};
   note?: string;
 }) {
   const canSignUp = session.signup.open || !!invite;
-  const [mode, setMode] = useState<Mode>(session.signup.first || (invite && canSignUp) ? 'signup' : 'login');
+  const [mode, setMode] = useState<Mode>(session.signup.first || invite ? 'signup' : 'login');
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
+  const [setupCode, setSetupCode] = useState('');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
 
-  const submit = async (event: React.FormEvent) => {
+  const submit = async (event: FormEvent) => {
     event.preventDefault();
     setBusy(true);
     setError(null);
     try {
-      const body = mode === 'signup' ? {email, name, password, invite: invite?.secret} : {email, password};
-      const result = await call<{user: User; boards: Board[]}>('POST', `/api/auth/${mode}`, body);
-      onSignedIn({...session, ...result});
+      const body = mode === 'signup' ? {email, name, password, invite: invite?.secret, setupCode} : {email, password, invite: invite?.secret};
+      const result = await call<{user: User; boards: Board[]; joined: string | null}>('POST', `/api/auth/${mode}`, body);
+      onSignedIn({...session, user: result.user, boards: result.boards}, result.joined);
     } catch (failure) {
-      setError(messageOf(failure));
+      setError(failure);
     } finally {
       setBusy(false);
     }
@@ -52,22 +54,34 @@ export function AuthScreen({
         <h1>{heading}</h1>
         {invite && <p className="auth-note">{t('auth.invited', {board: invite.board})}</p>}
         {note && <p className="auth-note">{note}</p>}
-        {session.signup.first && <p className="auth-note">{t('auth.firstNote')}</p>}
         {canSignUp && !session.signup.first && (
-          <Tabs
+          <Segmented
             label={t('auth.mode')}
             value={mode}
             onChange={next => {
               setMode(next);
               setError(null);
             }}
-            tabs={[
+            options={[
               ['login', t('auth.signIn')],
               ['signup', t('auth.signUp')],
             ]}
           />
         )}
-        <Field label={t('auth.email')} type="email" autoComplete="email" required value={email} onChange={e => setEmail(e.target.value)} autoFocus />
+        {session.signup.first && (
+          <Field
+            label={t('auth.setupCode')}
+            required
+            autoComplete="off"
+            spellCheck={false}
+            value={setupCode}
+            onChange={e => setSetupCode(e.target.value)}
+            hint={t('auth.setupCodeHint')}
+            className="code-input"
+            autoFocus
+          />
+        )}
+        <Field label={t('auth.email')} type="email" autoComplete="email" required value={email} onChange={e => setEmail(e.target.value)} autoFocus={!session.signup.first} />
         {mode === 'signup' && (
           <Field label={t('auth.name')} autoComplete="name" required maxLength={80} value={name} onChange={e => setName(e.target.value)} hint={t('auth.nameHint')} />
         )}
@@ -81,13 +95,13 @@ export function AuthScreen({
           onChange={e => setPassword(e.target.value)}
           hint={mode === 'signup' ? t('auth.passwordHint') : undefined}
         />
-        <ErrorLine message={error} />
-        <button className="button primary" disabled={busy}>
+        <ErrorLine error={error} />
+        <button type="submit" className="button primary" disabled={busy}>
           {busy ? '…' : mode === 'signup' ? t('auth.createAccount') : t('auth.submit')}
         </button>
         {!canSignUp && <p className="auth-foot">{t('auth.noAccount')}</p>}
       </form>
-      <LanguagePicker />
+      <LanguageSelect />
     </div>
   );
 }

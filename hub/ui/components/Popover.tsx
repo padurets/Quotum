@@ -1,4 +1,4 @@
-import React, {useEffect, useRef, useState, type ReactNode} from 'react';
+import {useEffect, useRef, useState, type ReactNode} from 'react';
 
 /** A button with an anchored panel; closes on outside click and Escape. */
 export function Popover({
@@ -43,7 +43,14 @@ export function Popover({
 
   return (
     <div className="picker" ref={box}>
-      <button className={trigger ? 'text-button' : 'icon-button'} aria-expanded={open} aria-label={label} title={label} onClick={() => setOpen(!open)}>
+      <button
+        type="button"
+        className={trigger ? 'text-button' : 'icon-button'}
+        aria-expanded={open}
+        aria-label={trigger ? undefined : label}
+        title={label}
+        onClick={() => setOpen(!open)}
+      >
         {trigger ?? icon}
         {!!badge && <i className="badge">{badge}</i>}
       </button>
@@ -59,7 +66,7 @@ export function Popover({
 /** A labelled on/off row for popovers. */
 export function SwitchRow({on, onChange, children, value}: {on: boolean; onChange: (on: boolean) => void; children: ReactNode; value?: ReactNode}) {
   return (
-    <button className="popover-row" role="switch" aria-checked={on} onClick={() => onChange(!on)}>
+    <button type="button" className="popover-row" role="switch" aria-checked={on} onClick={() => onChange(!on)}>
       <i className={`switch ${on ? 'on' : ''}`} />
       <span>{children}</span>
       {value !== undefined && <b>{value}</b>}

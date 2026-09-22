@@ -1,4 +1,3 @@
-import React from 'react';
 import {duration, soon, stamp} from '../lib/format';
 import type {ResetStatus} from '../lib/resets';
 import {t} from '../i18n';
@@ -39,7 +38,7 @@ export function ResetBanner({status, now}: {status: ResetStatus | undefined; now
   return (
     <div
       className={`reset-notice reset-announce ${scheduled ? 'is-scheduled' : 'is-watch'}`}
-      title={status.preview ? t('reset.preview', {hint}) : hint}
+      title={hint}
     >
       <svg className="reset-icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
         <path d="M3 12a9 9 0 0 1 15.5-6.2L21 8M21 3v5h-5M21 12a9 9 0 0 1-15.5 6.2L3 16M3 21v-5h5" />

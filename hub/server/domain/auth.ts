@@ -32,8 +32,11 @@ export async function verifyPassword(password: string, stored: string): Promise<
 /** Prefixes make a leaked secret recognizable: session, board token, device token, device code, invite. */
 export type SecretKind = 'qt_s' | 'qt_b' | 'qt_d' | 'qt_c' | 'qt_i';
 
+export const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
+
 export const newSecret = (kind: SecretKind) => `${kind}_${randomBytes(24).toString('base64url')}`;
-export const secretHash = (secret: string) => createHash('sha256').update(secret).digest('hex');
+/** Secrets are stored and looked up by this hash only. */
+export const secretHash = sha256;
 export const secretKind = (secret: string) => secret.slice(0, 4) as SecretKind;
 /** The last characters of a secret, enough to recognise it in a list. */
 export const secretHint = (secret: string) => `…${secret.slice(-4)}`;

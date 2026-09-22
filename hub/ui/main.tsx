@@ -1,4 +1,4 @@
-import React, {useEffect, useMemo, useState} from 'react';
+import {useCallback, useEffect, useMemo, useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import '@fontsource-variable/geist';
 import '@fontsource-variable/geist-mono';
@@ -7,9 +7,11 @@ import {useHistory, useNow, useOverview} from './lib/api';
 import {usePrefs} from './lib/prefs';
 import {useResets} from './lib/resets';
 import {titled} from './lib/quota';
-import {useBoard, usePath, useSession, type Board, type Session, type User} from './lib/session';
+import {usePath} from './lib/router';
+import {boardTitle, rememberBoard, useBoard, useSession, type Board, type Session, type User} from './lib/session';
 import {t, useLocale} from './i18n';
-import {Header, SERVICE} from './components/Header';
+import {Header} from './components/Header';
+import {SERVICE} from './components/Kit';
 import {SourceCard} from './components/SourceCard';
 import {History} from './components/History';
 import {AuthScreen} from './components/AuthScreen';
@@ -21,11 +23,12 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
   const now = useNow();
   const [board, selectBoard] = useBoard(boards);
   const boardId = board?.id ?? '';
-  const {data, lastOk} = useOverview(boardId);
+  const {data, lastOk, reload} = useOverview(boardId);
   const prefs = usePrefs();
-  const history = useHistory(boardId, prefs.range, data ? String(data.revision) : 'wait');
+  const history = useHistory(boardId, prefs.range, data ? data.revision : null);
   const {resets, health} = useResets(prefs.showResets);
   const [admin, setAdmin] = useState<AdminTab | null>(null);
+  const closeAdmin = useCallback(() => setAdmin(null), []);
 
   // Sources are named from the whole board: owners appear only when they tell sources apart.
   const overview = useMemo(() => (data ? {...data, sources: titled(data.sources)} : null), [data]);
@@ -33,7 +36,7 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
   const empty = !!overview && sources.length === 0;
 
   useEffect(() => {
-    document.title = board && !board.personal ? `${board.name} · ${SERVICE}` : SERVICE;
+    document.title = board && !board.personal ? `${boardTitle(board)} · ${SERVICE}` : SERVICE;
   }, [board]);
 
   return (
@@ -56,7 +59,7 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
           <section className="panel onboarding">
             <h2>{t('onboarding.title')}</h2>
             <p>{t('onboarding.text')}</p>
-            <button className="button primary" onClick={() => setAdmin('connect')}>
+            <button type="button" className="button primary" onClick={() => setAdmin('connect')}>
               {t('onboarding.connect')}
             </button>
           </section>
@@ -65,7 +68,15 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
             <section className="cards" aria-label={t('cards.label')}>
               {overview
                 ? sources.map(source => (
-                    <SourceCard key={source.id} source={source} now={now} resets={source.provider === 'claude' || source.provider === 'codex' ? resets[source.provider] : undefined} />
+                    <SourceCard
+                      key={source.id}
+                      source={source}
+                      now={now}
+                      resets={source.provider === 'claude' || source.provider === 'codex' ? resets[source.provider] : undefined}
+                      board={boardId}
+                      owner={board?.role === 'owner'}
+                      onRemoved={reload}
+                    />
                   ))
                 : [0, 1, 2].map(i => <div key={i} className="card is-loading" aria-hidden="true" />)}
             </section>
@@ -73,7 +84,7 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
           </>
         )}
       </main>
-      {admin && board && <BoardAdmin board={board} tab={admin} onTab={setAdmin} onClose={() => setAdmin(null)} now={now} />}
+      {admin && board && <BoardAdmin board={board} tab={admin} onTab={setAdmin} onClose={closeAdmin} now={now} />}
     </>
   );
 }
@@ -83,14 +94,13 @@ function App() {
   useLocale();
   const {session, failed, refresh, setSession} = useSession();
   const path = usePath();
-  const [, remember] = useBoard(session?.boards ?? []);
 
   if (!session) return <div className="splash">{failed ? t('app.reconnecting') : ''}</div>;
   const signedIn = (next: Session) => setSession(next);
 
   if (path === '/device') return <DevicePage session={session} onSession={signedIn} />;
   const invite = path.match(/^\/invite\/([\w-]+)$/);
-  if (invite) return <InvitePage secret={invite[1]} session={session} onSession={signedIn} onJoined={id => (remember(id), void refresh())} />;
+  if (invite) return <InvitePage secret={invite[1]} session={session} onSession={signedIn} onJoined={id => (rememberBoard(id), void refresh())} />;
   if (!session.user) return <AuthScreen session={session} onSignedIn={signedIn} />;
   return <Dashboard user={session.user} boards={session.boards} refresh={refresh} onSignedOut={() => void refresh()} />;
 }

@@ -7,18 +7,22 @@ const COOKIE = 'quotum_session';
 function readCookie(request: FastifyRequest, name: string): string | null {
   for (const part of (request.headers.cookie ?? '').split(';')) {
     const [key, ...value] = part.trim().split('=');
-    if (key === name) return decodeURIComponent(value.join('='));
+    if (key !== name) continue;
+    try {
+      return decodeURIComponent(value.join('='));
+    } catch {
+      return null;
+    }
   }
   return null;
 }
 
-/** Behind a TLS-terminating proxy the request itself is plain HTTP. */
-export const isSecure = (request: FastifyRequest) =>
-  request.protocol === 'https' || String(request.headers['x-forwarded-proto'] ?? '').split(',')[0].trim() === 'https';
-
-/** The address people open this hub at, for links handed to agents. */
+/**
+ * The address people open this hub at: the configured public URL, else what the
+ * request says (through a proxy only when `QUOTUM_TRUST_PROXY` allows it).
+ */
 export function publicOrigin(request: FastifyRequest): string {
-  return config.auth.publicUrl ?? `${isSecure(request) ? 'https' : 'http'}://${request.headers.host}`;
+  return new URL(config.auth.publicUrl ?? `${request.protocol}://${request.host}`).origin;
 }
 
 export function sessionSecret(request: FastifyRequest): string | null {
@@ -28,7 +32,7 @@ export function sessionSecret(request: FastifyRequest): string | null {
 export function setSession(request: FastifyRequest, reply: FastifyReply, secret: string | null) {
   const maxAge = secret ? Math.floor(config.auth.sessionTtlMs / 1000) : 0;
   const parts = [`${COOKIE}=${secret ?? ''}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${maxAge}`];
-  if (isSecure(request)) parts.push('Secure');
+  if (publicOrigin(request).startsWith('https:')) parts.push('Secure');
   reply.header('Set-Cookie', parts.join('; '));
 }
 
@@ -55,7 +59,12 @@ export class Limiter {
     }
     recent.push(now);
     this.hits.set(key, recent);
-    if (this.hits.size > 10_000) this.hits.clear();
+    if (this.hits.size > 10_000) this.forget(now);
     return true;
+  }
+
+  /** Drops keys with no attempt left in the window. */
+  private forget(now: number) {
+    for (const [key, times] of this.hits) if (!times.some(at => now - at < this.windowMs)) this.hits.delete(key);
   }
 }

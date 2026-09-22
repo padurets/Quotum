@@ -1,4 +1,4 @@
-import type {FastifyInstance} from 'fastify';
+import type {FastifyInstance, FastifyReply} from 'fastify';
 import {config} from '../config.js';
 import {
   hashPassword,
@@ -11,14 +11,22 @@ import {
   verifyPassword,
 } from '../domain/auth.js';
 import type {Guards, Hub} from '../api.js';
-import {Limiter, publicOrigin, sessionSecret, setSession} from '../session.js';
+import type {Board} from '../store/directory.js';
+import {currentUser, Limiter, publicOrigin, sessionSecret, setSession} from '../session.js';
 
 type Body = Record<string, unknown>;
 const str = (value: unknown) => (typeof value === 'string' ? value : '');
+const isOwner = (board: Board) => board.role === 'owner';
+const forbidden = (reply: FastifyReply) => reply.code(403).send({error: 'forbidden'});
+const notFound = (reply: FastifyReply) => reply.code(404).send({error: 'not_found'});
 
-/** Signing up and in, boards and their members, invites, tokens and devices, approving device codes. */
+/**
+ * Signing up and in, boards and their members, invites, tokens and devices, approving
+ * device codes. On a board every member sees everything and manages their own tokens
+ * and devices; the owner manages everything, invites people and removes sources.
+ */
 export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
-  const {directory, store, pairing} = hub;
+  const {directory, store, pairing, setup} = hub;
   const logins = new Limiter(10, 15 * 60_000);
   const signups = new Limiter(10, 60 * 60_000);
   const lookups = new Limiter(30, 60_000);
@@ -30,14 +38,9 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
   };
 
   app.get('/api/session', request => {
-    const secret = sessionSecret(request);
-    const user = secret ? directory.sessionUser(secret, Date.now()) : null;
+    const user = currentUser(request, directory);
     const first = directory.userCount() === 0;
-    return {
-      user,
-      boards: user ? directory.boards(user.id) : [],
-      signup: {first, open: first || config.auth.signup === 'open'},
-    };
+    return {user, boards: user ? directory.boards(user.id) : [], signup: {first, open: first || config.auth.signup === 'open'}};
   });
 
   app.post<{Body: Body}>('/api/auth/signup', async (request, reply) => {
@@ -51,13 +54,15 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
     const board = invite ? directory.inviteBoard(invite, now) : null;
     if (invite && !board) return reply.code(400).send({error: 'invalid_invite'});
     const first = directory.userCount() === 0;
+    if (first && !setup.matches(request.body?.setupCode)) return reply.code(403).send({error: 'invalid_setup_code'});
     if (!first && config.auth.signup !== 'open' && !board) return reply.code(403).send({error: 'signup_closed'});
     if (directory.credentials(email)) return reply.code(409).send({error: 'email_taken'});
 
     const user = directory.createUser(email, name, await hashPassword(password), now);
+    if (first) setup.done();
     if (board) directory.addMember(board.id, user.id, now);
     signIn(request, reply, user.id);
-    return {user, boards: directory.boards(user.id)};
+    return {user, boards: directory.boards(user.id), joined: board?.id ?? null};
   });
 
   app.post<{Body: Body}>('/api/auth/login', async (request, reply) => {
@@ -66,8 +71,12 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
     const found = directory.credentials(email);
     const valid = found ? await verifyPassword(str(request.body?.password), found.password) : false;
     if (!found || !valid) return reply.code(401).send({error: 'invalid_credentials'});
+    // Signing in from an invite link joins the board at once.
+    const now = Date.now();
+    const board = str(request.body?.invite) ? directory.inviteBoard(str(request.body?.invite), now) : null;
+    if (board) directory.addMember(board.id, found.user.id, now);
     signIn(request, reply, found.user.id);
-    return {user: found.user, boards: directory.boards(found.user.id)};
+    return {user: found.user, boards: directory.boards(found.user.id), joined: board?.id ?? null};
   });
 
   app.post('/api/auth/logout', (request, reply) => {
@@ -83,7 +92,7 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
     const user = guards.user(request, reply);
     if (!user) return reply;
     const name = str(request.body?.name).trim();
-    if (!validName(name)) return reply.code(400).send({error: 'invalid_input'});
+    if (!validName(name)) return reply.code(400).send({error: 'invalid_name'});
     return directory.createBoard(name, user.id, Date.now());
   });
 
@@ -96,6 +105,7 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
   app.post<{Params: {board: string}}>('/api/boards/:board/invites', (request, reply) => {
     const access = guards.board(request, reply, request.params.board);
     if (!access) return reply;
+    if (!isOwner(access.board) || access.board.personal) return forbidden(reply);
     const secret = newSecret('qt_i');
     const now = Date.now();
     directory.createInvite(secret, access.board.id, access.user.id, now, config.auth.inviteTtlMs);
@@ -118,29 +128,45 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
     return {board: directory.boards(user.id).find(b => b.id === board.id)};
   });
 
+  // ---------- sources ----------
+
+  app.delete<{Params: {board: string; source: string}}>('/api/boards/:board/sources/:source', (request, reply) => {
+    const access = guards.board(request, reply, request.params.board);
+    if (!access) return reply;
+    if (!isOwner(access.board)) return forbidden(reply);
+    return store.removeSource(access.board.id, request.params.source) ? {ok: true} : notFound(reply);
+  });
+
   // ---------- board tokens ----------
 
   app.get<{Params: {board: string}}>('/api/boards/:board/tokens', (request, reply) => {
     const access = guards.board(request, reply, request.params.board);
     if (!access) return reply;
-    return directory.tokens(access.board.id);
+    return directory
+      .tokens(access.board.id)
+      .map(({createdBy, boardId, ...token}) => ({...token, mine: createdBy === access.user.id}));
   });
 
   app.post<{Params: {board: string}; Body: Body}>('/api/boards/:board/tokens', (request, reply) => {
     const access = guards.board(request, reply, request.params.board);
     if (!access) return reply;
-    const name = str(request.body?.name).trim() || 'Token';
-    if (!validName(name)) return reply.code(400).send({error: 'invalid_input'});
+    // A token without a name is shown under a default one in the reader's language.
+    const name = str(request.body?.name).trim();
+    if (name && !validName(name)) return reply.code(400).send({error: 'invalid_name'});
     const secret = newSecret('qt_b');
-    const token = directory.createToken(secret, secretHint(secret), access.board.id, name, access.user.id, Date.now());
+    const {createdBy, boardId, ...token} = directory.createToken(secret, secretHint(secret), access.board.id, name, access.user.id, Date.now());
     // The secret is shown once; only its hash is kept.
-    return {...token, createdByName: access.user.name, secret};
+    return {...token, createdByName: access.user.name, mine: true, secret};
   });
 
   app.delete<{Params: {board: string; token: string}}>('/api/boards/:board/tokens/:token', (request, reply) => {
     const access = guards.board(request, reply, request.params.board);
     if (!access) return reply;
-    return directory.revokeToken(access.board.id, request.params.token, Date.now()) ? {ok: true} : reply.code(404).send({error: 'not_found'});
+    const token = directory.tokens(access.board.id).find(t => t.id === request.params.token);
+    if (!token) return notFound(reply);
+    if (!isOwner(access.board) && token.createdBy !== access.user.id) return forbidden(reply);
+    directory.revokeToken(access.board.id, token.id, Date.now());
+    return {ok: true};
   });
 
   // ---------- devices ----------
@@ -149,17 +175,30 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
     const access = guards.board(request, reply, request.params.board);
     if (!access) return reply;
     const delivered = store.deviceSources(access.board.id);
+    const failures = store.deviceFailures(access.board.id);
     return directory.devices(access.board.id).map(device => ({
-      ...device,
-      via: device.tokenId ? 'token' : 'code',
+      id: device.id,
+      name: device.name,
+      os: device.os,
+      arch: device.arch,
+      agent: device.agent,
+      owner: device.owner,
+      via: device.byCode ? 'code' : 'token',
+      lastSeenAt: device.lastSeenAt,
+      mine: device.ownerUserId === access.user.id,
       sources: delivered.filter(d => d.device === device.id).map(({provider, source, seenAt}) => ({provider, source, seenAt})),
+      failures: failures.filter(f => f.device === device.id).map(({provider, error, detail, at}) => ({provider, error, detail, at})),
     }));
   });
 
   app.delete<{Params: {board: string; device: string}}>('/api/boards/:board/devices/:device', (request, reply) => {
     const access = guards.board(request, reply, request.params.board);
     if (!access) return reply;
-    return directory.revokeDevice(access.board.id, request.params.device, Date.now()) ? {ok: true} : reply.code(404).send({error: 'not_found'});
+    const device = directory.devices(access.board.id).find(d => d.id === request.params.device);
+    if (!device) return notFound(reply);
+    if (!isOwner(access.board) && device.ownerUserId !== access.user.id) return forbidden(reply);
+    directory.revokeDevice(access.board.id, device.id, Date.now());
+    return {ok: true};
   });
 
   // ---------- approving a device code ----------
@@ -173,16 +212,14 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
     return {userCode: pending.userCode, machine: pending.machine, expiresAt: pending.expiresAt, boards: directory.boards(user.id)};
   });
 
-  app.post<{Body: Body}>('/api/device/approve', (request, reply) => {
+  app.post<{Body: Body}>('/api/device/:decision', (request, reply) => {
     const user = guards.user(request, reply);
     if (!user) return reply;
-    const ok = pairing.decide(request.body?.code, true, user.id, str(request.body?.board) || null);
+    const decision = (request.params as {decision: string}).decision;
+    if (decision !== 'approve' && decision !== 'deny') return notFound(reply);
+    if (!lookups.allow(`user:${user.id}`)) return reply.code(429).send({error: 'too_many_attempts'});
+    const approve = decision === 'approve';
+    const ok = pairing.decide(request.body?.code, approve, user.id, approve ? str(request.body?.board) || null : null);
     return ok ? {ok: true} : reply.code(400).send({error: 'invalid_code'});
-  });
-
-  app.post<{Body: Body}>('/api/device/deny', (request, reply) => {
-    const user = guards.user(request, reply);
-    if (!user) return reply;
-    return pairing.decide(request.body?.code, false, user.id, null) ? {ok: true} : reply.code(400).send({error: 'invalid_code'});
   });
 }

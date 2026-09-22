@@ -65,8 +65,6 @@ export function setLocale(next: Locale) {
   for (const listener of listeners) listener();
 }
 
-export const getLocale = () => locale;
-
 /** The current language; a component that calls it re-renders when the language changes. */
 export function useLocale(): Locale {
   return useSyncExternalStore(

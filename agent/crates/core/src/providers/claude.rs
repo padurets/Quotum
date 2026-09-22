@@ -5,6 +5,8 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::SystemTime;
 
 use serde_json::{Value, json};
 
@@ -42,6 +44,8 @@ const ENV: &[(&str, &str)] = &[("DISABLE_AUTOUPDATER", "1")];
 #[derive(Default)]
 pub struct Claude {
     version: VersionCache,
+    /// The account read from Claude Code's config, kept until the file changes (it can be large).
+    account: Mutex<Option<(SystemTime, Option<String>)>>,
 }
 
 impl Adapter for Claude {
@@ -77,9 +81,17 @@ impl Adapter for Claude {
     /// The signed-in account from Claude Code's own config (no tokens there): the same
     /// e-mail and organization `initialize` reports, so the same pseudonym.
     fn local_account(&self, home: &Path) -> Option<String> {
-        let account = signed_in(home)?;
-        let email = account["emailAddress"].as_str()?;
-        Some(pseudonym(P, &format!("{email}/{}", account["organizationName"].as_str().unwrap_or(""))))
+        let changed = fs::metadata(global_config(home)).and_then(|m| m.modified()).ok()?;
+        let mut cached = self.account.lock().ok()?;
+        if let Some((_, account)) = cached.as_ref().filter(|(at, _)| *at == changed) {
+            return account.clone();
+        }
+        let account = signed_in(home).and_then(|account| {
+            let email = account["emailAddress"].as_str()?;
+            Some(pseudonym(P, &format!("{email}/{}", account["organizationName"].as_str().unwrap_or(""))))
+        });
+        *cached = Some((changed, account.clone()));
+        account
     }
 }
 

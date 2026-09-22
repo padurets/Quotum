@@ -34,7 +34,9 @@ export class Duty {
     const activeAt = active ? now : mine ? holder!.activeAt : 0;
 
     if (!holder || mine || holder.until <= now) {
-      this.holders.set(key, {device, until: Math.max(mine ? holder!.until : 0, now + FIRST_LEASE_MS), activeAt});
+      // Asking again does not extend a lease: only delivering does.
+      const until = mine && holder!.until > now ? holder!.until : now + FIRST_LEASE_MS;
+      this.holders.set(key, {device, until, activeAt});
       return {measure: true, until: now};
     }
     if (active && now - holder.activeAt > HANDOVER_IDLE_MS) {

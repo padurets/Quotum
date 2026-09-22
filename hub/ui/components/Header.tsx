@@ -1,13 +1,13 @@
-import React, {useState} from 'react';
+import {useState, type FormEvent} from 'react';
 import type {Overview} from '../lib/types';
-import {ago} from '../lib/format';
+import {ago, clock} from '../lib/format';
 import {problemOf, sourceLabel} from '../lib/quota';
 import {GearIcon, Popover, SwitchRow} from './Popover';
 import {setPrefs, usePrefs} from '../lib/prefs';
 import type {TrackerHealth} from '../lib/resets';
-import {clock} from '../lib/format';
-import {boardTitle, call, messageOf, type Board, type User} from '../lib/session';
-import {ErrorLine, LanguagePicker} from './Kit';
+import {call} from '../lib/http';
+import {boardTitle, type Board, type User} from '../lib/session';
+import {Brand, ErrorLine, LanguageSelect} from './Kit';
 import {known, rich, t} from '../i18n';
 
 /** Dashboard-wide settings, stored in this browser. */
@@ -48,7 +48,7 @@ function Settings({trackers}: {trackers: TrackerHealth[]}) {
       </div>
       <div className="popover-title popover-section">{t('common.language')}</div>
       <div className="popover-pad">
-        <LanguagePicker />
+        <LanguageSelect />
       </div>
     </Popover>
   );
@@ -61,18 +61,6 @@ function trackerDetail(detail: string) {
 }
 
 const OFFLINE_AFTER = 45_000;
-export const SERVICE = 'Quotum';
-
-function Logo() {
-  return (
-    <svg className="logo" viewBox="0 0 32 32" aria-hidden="true">
-      <rect x="1" y="1" width="30" height="30" rx="9" className="logo-bg" />
-      <rect x="8" y="17" width="4" height="8" rx="2" className="logo-bar a" />
-      <rect x="14" y="12" width="4" height="13" rx="2" className="logo-bar b" />
-      <rect x="20" y="7" width="4" height="18" rx="2" className="logo-bar c" />
-    </svg>
-  );
-}
 
 const ChevronIcon = () => (
   <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
@@ -91,9 +79,10 @@ const DevicesIcon = () => (
 function BoardSwitcher({boards, board, onSelect, onCreated}: {boards: Board[]; board: Board | null; onSelect: (id: string) => void; onCreated: () => Promise<void>}) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const create = async (event: React.FormEvent) => {
+  const [error, setError] = useState<unknown>(null);
+  const create = async (event: FormEvent) => {
     event.preventDefault();
+    setError(null);
     try {
       const created = await call<Board>('POST', '/api/boards', {name: name.trim()});
       setName('');
@@ -101,7 +90,7 @@ function BoardSwitcher({boards, board, onSelect, onCreated}: {boards: Board[]; b
       await onCreated();
       onSelect(created.id);
     } catch (failure) {
-      setError(messageOf(failure));
+      setError(failure);
     }
   };
   return (
@@ -119,7 +108,7 @@ function BoardSwitcher({boards, board, onSelect, onCreated}: {boards: Board[]; b
     >
       <div className="popover-title">{t('boards.title')}</div>
       {boards.map(b => (
-        <button key={b.id} className="popover-row board-row" role="menuitemradio" aria-checked={b.id === board?.id} onClick={() => (onSelect(b.id), setOpen(false))}>
+        <button key={b.id} type="button" className="popover-row board-row" aria-current={b.id === board?.id} onClick={() => (onSelect(b.id), setOpen(false))}>
           <i className={`check ${b.id === board?.id ? 'on' : ''}`} />
           <span>{boardTitle(b)}</span>
           <b>{t(b.personal ? 'boards.personal' : 'boards.shared')}</b>
@@ -131,7 +120,7 @@ function BoardSwitcher({boards, board, onSelect, onCreated}: {boards: Board[]; b
           {t('boards.create')}
         </button>
       </form>
-      <ErrorLine message={error} />
+      <ErrorLine error={error} />
     </Popover>
   );
 }
@@ -148,7 +137,7 @@ function Account({user, onSignedOut}: {user: User; onSignedOut: () => void}) {
         <b>{user.name}</b>
         <span>{user.email}</span>
       </div>
-      <button className="popover-row" onClick={signOut}>
+      <button type="button" className="popover-row" onClick={signOut}>
         <span>{t('account.signOut')}</span>
       </button>
     </Popover>
@@ -189,23 +178,25 @@ export function Header({
   const fresh = sources.filter(source => !source.stale && !source.error).length;
 
   const sourcesTitle = sources
-    .map(source => `${sourceLabel(source)}: ${problemOf(source) ?? t('header.measured', {ago: ago(source.successAt, now)})}`)
+    .map(source => `${sourceLabel(source)}: ${problemOf(source) ?? t('source.measured', {ago: ago(source.successAt, now)})}`)
     .join('\n');
 
   return (
     <header className="topbar">
       <div className="topbar-inner">
-        <a className="brand" href="/" aria-label={SERVICE}>
-          <Logo />
-          <span>{SERVICE}</span>
-        </a>
+        <Brand href="/" />
         <BoardSwitcher boards={boards} board={board} onSelect={onBoard} onCreated={onBoardsChanged} />
-        <div className="status" data-testid="connection">
-          <span className={`sources ${offline || (data && fresh < sources.length) ? 'is-warn' : ''}`} title={offline ? t('common.offline') : sourcesTitle}>
+        <div className="status">
+          <span
+            className={`sources ${offline || (data && fresh < sources.length) ? 'is-warn' : ''}`}
+            title={offline ? t('common.offline') : sourcesTitle}
+            aria-label={offline ? t('common.offline') : sourcesTitle}
+            role="status"
+          >
             <i className={`dot dot-${offline || (data && fresh < sources.length) ? 'warn' : 'ok'}`} />
             <b>{data ? `${fresh}/${sources.length}` : '—'}</b>
           </span>
-          <button className="icon-button" aria-label={t('header.devices')} title={t('header.devices')} onClick={onDevices}>
+          <button type="button" className="icon-button" aria-label={t('header.devices')} title={t('header.devices')} onClick={onDevices}>
             <DevicesIcon />
           </button>
           <Settings trackers={trackers} />

@@ -8,3 +8,4 @@ pub mod providers;
 pub mod runner;
 pub mod schedule;
 pub mod sink;
+pub mod stop;

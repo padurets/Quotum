@@ -1,34 +1,35 @@
 import {DatabaseSync} from 'node:sqlite';
 import {config} from '../config.js';
-import {DEFAULT_BOARD, providers, sourceId, type Provider, type Source} from '../domain/sources.js';
-import {bucketize, kindOf, series, type Measurement, type Sample, type SourceState} from '../domain/quota.js';
+import {providers, sourceId, type Provider, type Source} from '../domain/sources.js';
+import {onGrid, series, type Kind, type Measurement, type Sample, type SourceState} from '../domain/quota.js';
 import {migrate} from './schema.js';
-
-export {DEFAULT_BOARD};
 
 export type HistorySeries = {
   sourceId: string;
   provider: Provider;
-  bucket: string;
-  label: string;
+  windowId: string;
+  kind: Kind;
+  label: string | null;
   minutes: number | null;
-  kind: ReturnType<typeof kindOf>;
   consumed: number;
   coveredMs: number;
   samples: number;
   points: (readonly [number, number, number])[];
 };
 
+export type DeviceFailure = {device: string; provider: Provider; error: string; detail: string | null; at: number};
+
 type SampleRow = {
   source_id: string;
   provider: Provider;
-  bucket: string;
+  window_id: string;
   at: number;
-  label: string;
+  kind: Kind;
+  label: string | null;
   used: number;
   reset_at: number | null;
   minutes: number | null;
-  stale_after_ms: number | null;
+  stale_after_ms: number;
 };
 
 /**
@@ -38,20 +39,34 @@ type SampleRow = {
  */
 export class Store {
   readonly db: DatabaseSync;
-  readonly collectionStart: number;
-  /** Changes whenever something the dashboard shows changes; history is cached by it. */
-  revision = Date.now();
+  /** Since when history is kept: the creation of this database. */
+  readonly historyStart: number;
+  private readonly revisions = new Map<string, number>();
+  private readonly started = Date.now();
 
   constructor(file: string, now = Date.now()) {
     this.db = new DatabaseSync(file);
     migrate(this.db, now);
-    this.collectionStart = Number((this.db.prepare('SELECT value FROM meta WHERE key = ?').get('collectionStart') as {value: string}).value);
+    this.historyStart = Number((this.db.prepare("SELECT value FROM meta WHERE key = 'historyStart'").get() as {value: string}).value);
+  }
+
+  /** Changes whenever something a board shows changes; its history is cached by it. */
+  revision(board: string): number {
+    return this.revisions.get(board) ?? this.started;
+  }
+
+  private changed(board: string) {
+    this.revisions.set(board, this.revision(board) + 1);
+  }
+
+  private boardOf(source: string): string {
+    return (this.db.prepare('SELECT board_id FROM sources WHERE id = ?').get(source) as {board_id: string}).board_id;
   }
 
   /** The sources of a board: by provider, then in the order they appeared. */
   sources(board: string): Source[] {
     const rows = this.db.prepare('SELECT id, provider, account FROM sources WHERE board_id = ? ORDER BY created_at, rowid').all(board) as Source[];
-    return rows.filter(s => providers.includes(s.provider)).sort((a, b) => providers.indexOf(a.provider) - providers.indexOf(b.provider));
+    return rows.sort((a, b) => providers.indexOf(a.provider) - providers.indexOf(b.provider));
   }
 
   /** The source of a subscription on a board, created the first time it is seen. */
@@ -62,8 +77,25 @@ export class Store {
     if (row) return row.id;
     const id = sourceId(board, provider, account);
     this.db.prepare('INSERT INTO sources VALUES (?, ?, ?, ?, ?)').run(id, board, provider, account, now);
-    this.revision++;
+    this.changed(board);
     return id;
+  }
+
+  /** Removes a source of a board with everything measured for it; false if there is none. */
+  removeSource(board: string, id: string): boolean {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const removed = this.db.prepare('DELETE FROM sources WHERE id = ? AND board_id = ?').run(id, board).changes > 0;
+      if (removed) {
+        for (const table of ['state', 'samples', 'device_sources']) this.db.prepare(`DELETE FROM ${table} WHERE source_id = ?`).run(id);
+      }
+      this.db.exec('COMMIT');
+      if (removed) this.changed(board);
+      return removed;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   states(board: string): SourceState[] {
@@ -78,7 +110,7 @@ export class Store {
 
   private stateOf(id: string, provider: Provider): SourceState {
     const row = this.db.prepare('SELECT payload FROM state WHERE source_id = ?').get(id) as {payload: string} | undefined;
-    if (!row) return {id, provider, plan: '', successAt: null, attemptAt: 0, error: 'waiting', windows: []};
+    if (!row) return {id, provider, plan: '', successAt: null, error: 'waiting', windows: [], staleAfterMs: null, resets: null};
     return {...(JSON.parse(row.payload) as SourceState), id, provider};
   }
 
@@ -86,23 +118,22 @@ export class Store {
   record(id: string, measurement: Measurement) {
     const {provider} = this.state(id);
     const insert = this.db.prepare(
-      'INSERT OR IGNORE INTO samples (source_id, bucket, at, label, used, reset_at, minutes, stale_after_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT OR IGNORE INTO samples (source_id, window_id, at, kind, label, used, reset_at, minutes, stale_after_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
     const state: SourceState = {
       id,
       provider,
       plan: measurement.plan,
-      successAt: measurement.sourceAt,
-      attemptAt: measurement.sourceAt,
+      successAt: measurement.observedAt,
       error: null,
       windows: measurement.windows,
-      staleAfterMs: measurement.staleAfterMs ?? null,
-      resets: measurement.resets ?? null,
+      staleAfterMs: measurement.staleAfterMs,
+      resets: measurement.resets,
     };
     this.db.exec('BEGIN IMMEDIATE');
     try {
       for (const w of measurement.windows) {
-        insert.run(id, w.id, measurement.sourceAt, w.label, w.used, w.resetAt, w.minutes, measurement.staleAfterMs ?? null);
+        insert.run(id, w.id, measurement.observedAt, w.kind, w.label, w.used, w.resetAt, w.minutes, measurement.staleAfterMs);
       }
       this.db.prepare('INSERT OR REPLACE INTO state VALUES (?, ?)').run(id, JSON.stringify(state));
       this.db.exec('COMMIT');
@@ -110,19 +141,19 @@ export class Store {
       this.db.exec('ROLLBACK');
       throw error;
     }
-    this.revision++;
+    this.changed(this.boardOf(id));
   }
 
   /** Records a failed attempt; the last good values stay on screen. */
-  fail(id: string, error: string, at: number) {
-    const previous = this.state(id);
-    this.db.prepare('INSERT OR REPLACE INTO state VALUES (?, ?)').run(id, JSON.stringify({...previous, attemptAt: at, error}));
-    this.revision++;
+  fail(id: string, error: string) {
+    this.db.prepare('INSERT OR REPLACE INTO state VALUES (?, ?)').run(id, JSON.stringify({...this.state(id), error}));
+    this.changed(this.boardOf(id));
   }
 
-  /** Remembers which source a device last delivered for a provider (its failures go there). */
+  /** Remembers which source a device last delivered for a provider; its failures for the provider are over. */
   seenDevice(device: string, provider: Provider, source: string, at: number) {
     this.db.prepare('INSERT OR REPLACE INTO device_sources VALUES (?, ?, ?, ?)').run(device, provider, source, at);
+    this.db.prepare('DELETE FROM device_failures WHERE device_id = ? AND provider = ?').run(device, provider);
   }
 
   deviceSource(device: string, provider: Provider): string | null {
@@ -140,26 +171,39 @@ export class Store {
     return rows.map(r => ({device: r.device_id, provider: r.provider, source: r.source_id, seenAt: r.seen_at}));
   }
 
+  /** The last failure a device reported for a provider, kept until it delivers for it again. */
+  deviceFailed(device: string, provider: Provider, error: string, detail: string | null, at: number) {
+    this.db.prepare('INSERT OR REPLACE INTO device_failures VALUES (?, ?, ?, ?, ?)').run(device, provider, error, detail, at);
+  }
+
+  deviceFailures(board: string): DeviceFailure[] {
+    const rows = this.db
+      .prepare('SELECT f.* FROM device_failures f JOIN devices d ON d.id = f.device_id WHERE d.board_id = ?')
+      .all(board) as {device_id: string; provider: Provider; error: string; detail: string | null; at: number}[];
+    return rows.map(r => ({device: r.device_id, provider: r.provider, error: r.error, detail: r.detail, at: r.at}));
+  }
+
   /** Every source/window series since `from` on a shared grid, ready for the chart and the table. */
-  history(board: string, from: number, bucketMs: number): HistorySeries[] {
+  history(board: string, from: number, cellMs: number): HistorySeries[] {
     const rows = this.db
       .prepare(
         'SELECT samples.*, sources.provider FROM samples JOIN sources ON sources.id = samples.source_id' +
-          ' WHERE sources.board_id = ? AND samples.at >= ? ORDER BY samples.source_id, samples.bucket, samples.at',
+          ' WHERE sources.board_id = ? AND samples.at >= ? ORDER BY samples.source_id, samples.window_id, samples.at',
       )
       .all(board, from) as SampleRow[];
 
     const groups = new Map<string, Sample[]>();
     for (const row of rows) {
-      const key = `${row.source_id} ${row.bucket}`;
+      const key = `${row.source_id} ${row.window_id}`;
       let group = groups.get(key);
       if (!group) groups.set(key, (group = []));
       group.push({
         sourceId: row.source_id,
         provider: row.provider,
-        id: row.bucket,
+        id: row.window_id,
+        kind: row.kind,
         label: row.label,
-        sourceAt: row.at,
+        at: row.at,
         used: row.used,
         remaining: 100 - row.used,
         resetAt: row.reset_at,
@@ -184,12 +228,12 @@ export class Store {
         return {
           sourceId: last.sourceId,
           provider: last.provider,
-          bucket: last.id,
+          windowId: last.id,
+          kind: last.kind,
           label: last.label,
           minutes: last.minutes,
-          kind: kindOf(last.minutes, last.label),
           ...summary,
-          points: bucketize(points, bucketMs).map(p => [p.at, Math.round(p.remaining * 100) / 100, p.segment] as const),
+          points: onGrid(points, cellMs).map(p => [p.at, Math.round(p.remaining * 100) / 100, p.segment] as const),
         };
       });
   }

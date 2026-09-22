@@ -1,5 +1,4 @@
 import type {Win} from './types';
-import {kindOf} from './kind';
 
 const DAY = 86_400_000;
 const WEEK_MINUTES = 10080;
@@ -13,6 +12,8 @@ const WEEK_MINUTES = 10080;
 export type WeeklyPlan = number[];
 export const DEFAULT_PLAN: WeeklyPlan = [30, 25, 15, 15, 10, 5, 0];
 export const PLAN_DAYS = 7;
+/** Gap (in percentage points) between actual and planned remaining that is worth a word. */
+export const PLAN_TOLERANCE = 3;
 
 export const planTotal = (plan: WeeklyPlan) => plan.reduce((sum, share) => sum + share, 0);
 
@@ -61,7 +62,7 @@ export function planAt(w: Win, now: number, plan: WeeklyPlan = DEFAULT_PLAN): Pl
   const elapsed = now - start;
   if (elapsed < length * 0.02 || elapsed >= length) return null;
 
-  if (kindOf(w.minutes, w.label) !== 'weekly') {
+  if (w.kind !== 'weekly') {
     return {remaining: 100 * (1 - elapsed / length), deadline: w.resetAt, restDay: false, weekly: false};
   }
   const deadline = start + activeDays(plan) * DAY;

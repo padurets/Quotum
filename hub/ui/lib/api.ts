@@ -1,38 +1,26 @@
-import {useEffect, useState} from 'react';
+import {useEffect, useRef, useState} from 'react';
 import type {History, Overview} from './types';
-import {UNAUTHORIZED} from './session';
+import {call} from './http';
 
-async function getJson<T>(url: string, timeoutMs = 12000): Promise<T> {
-  const controller = new AbortController();
-  const deadline = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, {signal: controller.signal, cache: 'no-store'});
-    if (response.status === 401) window.dispatchEvent(new Event(UNAUTHORIZED));
-    if (!response.ok) throw new Error(String(response.status));
-    return (await response.json()) as T;
-  } finally {
-    clearTimeout(deadline);
-  }
-}
-
-/** A ticking clock for countdowns and freshness labels. */
-export function useNow(stepMs = 1000) {
+/** A clock ticking every second, for freshness labels and countdowns. */
+export function useNow() {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), stepMs);
+    const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, [stepMs]);
+  }, []);
   return now;
 }
 
 /**
- * Values change once per collection, so a calm 10 s poll is enough. A single failed
- * request is normal through the proxy and is never shown: data stays on screen and
- * only the age of the last good answer decides whether we look disconnected.
+ * The board's current state, read every 10 seconds (sooner when the tab comes back).
+ * A single failed request is never shown: data stays on screen and only the age of the
+ * last good answer decides whether the page looks disconnected.
  */
 export function useOverview(board: string) {
   const [data, setData] = useState<Overview | null>(null);
   const [lastOk, setLastOk] = useState(0);
+  const reload = useRef(() => {});
 
   useEffect(() => {
     setData(null);
@@ -46,7 +34,7 @@ export function useOverview(board: string) {
       clearTimeout(timer);
       busy = true;
       try {
-        const overview = await getJson<Overview>(`/api/overview?board=${encodeURIComponent(board)}`);
+        const overview = await call<Overview>('GET', `/api/overview?board=${encodeURIComponent(board)}`);
         if (!done) {
           setData(overview);
           setLastOk(Date.now());
@@ -62,6 +50,7 @@ export function useOverview(board: string) {
     const wake = () => {
       if (document.visibilityState === 'visible') void poll();
     };
+    reload.current = () => void poll();
     document.addEventListener('visibilitychange', wake);
     window.addEventListener('online', wake);
     void poll();
@@ -73,18 +62,19 @@ export function useOverview(board: string) {
     };
   }, [board]);
 
-  return {data: data?.board?.id === board ? data : null, lastOk};
+  return {data: data?.board?.id === board ? data : null, lastOk, reload: () => reload.current()};
 }
 
-/** History is re-read when the range changes or new data arrives (`revision`). */
-export function useHistory(board: string, range: string, revision: string) {
+/** History of a board, read again when the range changes or the board's data does (`revision`). */
+export function useHistory(board: string, range: string, revision: number | null) {
   const [history, setHistory] = useState<History | null>(null);
   const [retry, setRetry] = useState(0);
 
   useEffect(() => {
+    if (revision === null) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
-    getJson<History>(`/api/history?board=${encodeURIComponent(board)}&range=${range}`)
+    call<History>('GET', `/api/history?board=${encodeURIComponent(board)}&range=${range}`)
       .then(data => {
         if (!cancelled) setHistory({...data, board});
       })

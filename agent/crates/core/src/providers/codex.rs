@@ -37,7 +37,8 @@ impl Adapter for Codex {
             .map_err(|e| process_failure(P, e))?;
         let send = |client: &mut Client, message: Value| client.send(&message).map_err(|e| process_failure(P, e));
         let reply =
-            |client: &mut Client, id: u64| client.wait_for(|m| m["id"] == id).map_err(|e| process_failure(P, e));
+            // A reply carries our id and no method; a request of the server may carry the same id.
+            |client: &mut Client, id: u64| client.wait_for(|m| m["id"] == id && m.get("method").is_none()).map_err(|e| process_failure(P, e));
 
         let info = json!({"name": "quotum", "title": "Quotum", "version": env!("CARGO_PKG_VERSION")});
         send(&mut client, json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"clientInfo": info}}))?;

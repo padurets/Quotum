@@ -1,10 +1,7 @@
 import type {Kind, SourceState} from './types';
 import {known, t} from '../i18n';
 import {PROVIDERS} from './providers';
-import {kindOf} from './kind';
 import {duration} from './format';
-
-export {kindOf};
 
 export type Level = 'ok' | 'warn' | 'crit';
 
@@ -16,24 +13,10 @@ const kindText = (kind: Exclude<Kind, 'other'>) => t(kind === 'session' ? 'kind.
 /** A kind on its own: "Weekly". */
 const kindTitle = (kind: Exclude<Kind, 'other'>) => t(kind === 'session' ? 'kind.title.session' : 'kind.title.weekly');
 
-/** The model pool a window covers, when the provider splits its quota. */
-export function scopeOf(bucket: string, label: string) {
-  if (bucket === 'session' || bucket === 'weekly') return '';
-  if (/gemini/i.test(bucket)) return 'Gemini';
-  if (/-3p-/.test(bucket)) return 'Claude / GPT';
-  if (/spark/i.test(bucket)) return 'Spark';
-  const scoped = bucket.match(/scoped-([a-z0-9]+)/i);
-  if (scoped) return scoped[1][0].toUpperCase() + scoped[1].slice(1);
-  // Labels that only name the window's kind or length are no scope.
-  return label.replace(/\b(5[- ]hours?|weekly|only|window|\d+ min)\b/gi, '').trim();
-}
-
-/** "Weekly" or "Gemini · weekly" — how a window is named inside its own card. */
-export function windowName(bucket: string, label: string, minutes: number | null) {
-  const kind = kindOf(minutes, label);
-  const scope = scopeOf(bucket, label);
-  if (kind === 'other') return scope || (minutes ? duration(minutes * 60_000) : label);
-  return scope ? `${scope} · ${kindText(kind)}` : kindTitle(kind);
+/** "Weekly", "Gemini · weekly" or "1h" — how a window is named inside its own card. */
+export function windowName(w: {kind: Kind; label: string | null; minutes: number | null}) {
+  if (w.kind === 'other') return [w.label, w.minutes ? duration(w.minutes * 60_000) : ''].filter(Boolean).join(' · ');
+  return w.label ? `${w.label} · ${kindText(w.kind)}` : kindTitle(w.kind);
 }
 
 export const sourceLabel = (source: {provider: string; title?: string}) =>
@@ -54,12 +37,9 @@ export function titled<T extends {provider: string; owners?: string[]}>(sources:
   });
 }
 
-/** Fully qualified series name: source, model pool, window length. */
-export function seriesName(source: {provider: string; title?: string}, bucket: string, label: string, minutes: number | null) {
-  const kind = kindOf(minutes, label);
-  const parts = [sourceLabel(source), scopeOf(bucket, label), kind === 'other' ? '' : kindText(kind)];
-  return parts.filter(Boolean).join(' · ') || label;
-}
+/** Fully qualified series name: source, then the window. */
+export const seriesName = (source: {provider: string; title?: string}, w: {kind: Kind; label: string | null; minutes: number | null}) =>
+  `${sourceLabel(source)} · ${w.kind === 'other' ? windowName(w) : [w.label, kindText(w.kind)].filter(Boolean).join(' · ')}`;
 
 /** What a source's error code means, in the reader's language. */
 export function errorText(code: string) {

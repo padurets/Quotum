@@ -1,9 +1,23 @@
+# Dependencies and builds
 node_modules/
 dist/
+target/
+npm/dist/
+*.tsbuildinfo
+coverage/
+
+# Data and logs of a running hub or agent
 data/
 *.sqlite
 *.sqlite-*
 *.log
+
+# Local settings
 .env
 .env.*
-target/
+!.env.example
+
+# Editors and systems
+.DS_Store
+.idea/
+.vscode/
