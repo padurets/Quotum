@@ -1,9 +1,11 @@
 name: CI
 
+# Every push and pull request; a release runs it first (release.yml).
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read
@@ -26,8 +28,13 @@ jobs:
       - run: npm test
       - run: npm run build
 
+  # On every system the agent ships for: its process handling differs between them.
   agent:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     defaults:
       run:
         working-directory: agent
@@ -39,6 +46,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: agent
-      - run: cargo fmt --check
+      - if: runner.os == 'Linux'
+        run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked

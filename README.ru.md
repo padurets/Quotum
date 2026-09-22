@@ -180,8 +180,11 @@ QUOTUM_HUB_URL=https://quotum.example.com QUOTUM_HUB_TOKEN=qt_b_… npx quotum r
 почта участника доски привязывает её к этому участнику, любое другое имя показывается
 как есть.
 
-**Из исходников:** `cd agent && cargo build --release` (Rust 1.85 или новее) даёт
-`target/release/quotum`.
+**Без Node.js:** в каждом [релизе](https://github.com/padurets/quotum/releases) есть
+агент для Linux, macOS и Windows одним файлом, с контрольными суммами и
+[подтверждением сборки](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations)
+(`gh attestation verify <файл> -R padurets/quotum`). **Из исходников:**
+`cd agent && cargo build --release` (Rust 1.85 или новее) даёт `target/release/quotum`.
 
 ## Настройки
 
@@ -247,7 +250,7 @@ agent/crates/core     адаптеры клиентов, расписание, �
 agent/crates/cli      команда `quotum`
 npm/                  пакеты npm: запускалка и готовый бинарник под каждую платформу
 deploy/               запуск хаба через Docker Compose за Caddy (HTTPS)
-.github/workflows     тесты на каждый push; образ хаба на каждый тег релиза
+.github/workflows     тесты на каждый push; весь релиз по тегу версии
 spec/                 протокол между агентом и хабом
 hub/server/domain     правила: окна, расход, сбросы, формат замеров
 hub/server/store      SQLite: схема, замеры, люди и устройства
@@ -260,6 +263,22 @@ hub/ui                дашборд (React), переводы в hub/ui/i18n
 проверяют всё; CI запускает их на каждый push. `node npm/build.mjs` собирает пакеты
 npm (нужны cargo-zigbuild и zig, подробности в самом скрипте), `docker build hub` —
 образ хаба.
+
+### Как выпустить релиз
+
+Поставьте новую версию в `agent/Cargo.toml` (`[workspace.package]`) и
+`hub/package.json`, закоммитьте и повесьте тег с описанием релиза в сообщении:
+
+```sh
+git tag -a v0.2.0 -m "Что изменилось"
+git push origin v0.2.0
+```
+
+[release.yml](.github/workflows/release.yml) ещё раз всё проверит, соберёт агент под
+все платформы, опубликует пакеты npm и образ хаба и создаст релиз на GitHub с бинарями.
+npm принимает пакеты только от этого workflow и без токена (trusted publishing). Новый
+пакет npm, например для новой платформы, один раз публикуется вручную, а потом
+получает доверие командой `node npm/trust.mjs`.
 
 ### Как добавить язык
 

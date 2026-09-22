@@ -179,8 +179,11 @@ Machines connected with a board token belong to whoever created the token. If se
 people share one token, `QUOTUM_OWNER` (or `--owner`) says whose machine it is: a board
 member's email links it to that member, any other name is shown as given.
 
-**From source:** `cd agent && cargo build --release` (Rust 1.85 or newer) gives
-`target/release/quotum`.
+**Without Node.js:** every [release](https://github.com/padurets/quotum/releases) has
+the agent for Linux, macOS and Windows as a single file, with checksums and
+[build provenance](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations)
+(`gh attestation verify <file> -R padurets/quotum`). **From source:**
+`cd agent && cargo build --release` (Rust 1.85 or newer) gives `target/release/quotum`.
 
 ## Configuration
 
@@ -247,7 +250,7 @@ agent/crates/core     adapters for each client, schedule, settings, delivery to 
 agent/crates/cli      the `quotum` command
 npm/                  the npm packages: a launcher and a prebuilt binary per platform
 deploy/               running the hub with Docker Compose behind Caddy (HTTPS)
-.github/workflows     tests on every push; the hub's image on every release tag
+.github/workflows     tests on every push; everything released from a version tag
 spec/                 the protocol between the agent and the hub
 hub/server/domain     the rules: windows, spending, resets, the ingest format
 hub/server/store      SQLite: layout, measurements, people and devices
@@ -260,6 +263,22 @@ hub/ui                the dashboard (React), translations in hub/ui/i18n
 `agent/` check everything; CI runs them on every push. `node npm/build.mjs` builds the
 npm packages (it needs cargo-zigbuild and zig; see the script), `docker build hub` the
 hub's image.
+
+### Releasing
+
+Set the new version in `agent/Cargo.toml` (`[workspace.package]`) and
+`hub/package.json`, commit, then tag it with the release notes as the message:
+
+```sh
+git tag -a v0.2.0 -m "What changed"
+git push origin v0.2.0
+```
+
+[release.yml](.github/workflows/release.yml) checks everything again, builds the agent
+for every platform, publishes the npm packages and the hub's image, and creates the
+GitHub release with the binaries. npm accepts the packages from that workflow alone,
+without a token (trusted publishing). A new npm package, for a new platform, is
+published once by hand and then trusted with `node npm/trust.mjs`.
 
 ### Adding a language
 

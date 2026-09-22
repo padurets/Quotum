@@ -2,7 +2,8 @@
 /**
  * Publishes what `node npm/build.mjs` put into npm/dist: the platform packages first,
  * then `quotum`, which depends on them. Versions already on the registry are skipped,
- * so an interrupted run can simply be repeated. Extra arguments go to every
+ * so an interrupted run can simply be repeated. The release workflow runs it with no
+ * token (npm trusts the workflow, see trust.mjs); by hand, extra arguments go to every
  * `npm publish` (for example `--dry-run`, or `--otp=123456` with two-factor auth).
  */
 import {execFileSync} from 'node:child_process';
