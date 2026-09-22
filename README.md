@@ -56,14 +56,14 @@ codexbar serve (loopback) ──► collector ──► SQLite ──► HTTP AP
 Code layout:
 
 ```
-server/config.ts           every tunable, environment overrides
-server/domain/             sources, quota windows and consumption rules, normalization, reset feeds
-server/identity/           account pseudonyms (Google ID-token verification, local metadata)
-server/sources/            CodexBar client, reset tracker client
-server/store/              SQLite schema, migrations and queries (node:sqlite, WAL)
-server/collector.ts        the scheduled collection cycle and backoff
-server/api.ts              read-only HTTP API and security headers
-ui/lib/, ui/components/    React UI: formatting, plan, preferences, cards, chart
+hub/server/config.ts       every tunable, environment overrides
+hub/server/domain/         sources, quota windows and consumption rules, normalization, reset feeds
+hub/server/identity/       account pseudonyms (Google ID-token verification, local metadata)
+hub/server/sources/        CodexBar client, reset tracker client
+hub/server/store/          SQLite schema, migrations and queries (node:sqlite, WAL)
+hub/server/collector.ts    the scheduled collection cycle and backoff
+hub/server/api.ts          read-only HTTP API and security headers
+hub/ui/                    React UI: formatting, plan, preferences, cards, chart
 ```
 
 ## Running
@@ -72,6 +72,7 @@ Requirements: Node.js 24+, a running `codexbar serve` with the providers you use
 enabled and logged in.
 
 ```sh
+cd hub
 npm ci
 npm run build
 npm test
