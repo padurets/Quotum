@@ -12,9 +12,7 @@ export type Win = {
 export type SourceState = {
   id: string;
   provider: string;
-  accountKey: string;
   plan: string;
-  confidence: string;
   successAt: number | null;
   attemptAt: number;
   error: string | null;
@@ -30,10 +28,8 @@ export type Overview = {
   board: {id: string; name: string; personal: boolean; role: string};
   now: number;
   collectionStart: number;
-  collecting: boolean;
-  nextAt: number;
-  cycle: number;
-  intervalMs: number;
+  /** Changes whenever the data changes. */
+  revision: number;
   sources: SourceState[];
 };
 

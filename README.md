@@ -102,7 +102,7 @@ agent-limits                             # measure once and print
 agent-limits --json                      # the same in the ingest format
 agent-limits connect https://hub.example # connect to a hub with a one-time code
 agent-limits run                         # keep measuring; deliver when connected
-agent-limits run --hub URL --token al_b_… [--owner alice]   # or with a board token
+agent-limits run --hub URL --token qt_b_… [--owner alice]   # or with a board token
 agent-limits config                      # where settings live, which clients were found
 ```
 

@@ -1,12 +1,9 @@
 import {createHash, timingSafeEqual} from 'node:crypto';
-import {config} from './config.js';
-import type {CollectorStatus} from './collector.js';
 import {secretKind} from './domain/auth.js';
 import {parseBatch, parseCheckin, subscriptionKey, toMeasurement, type AgentSender} from './domain/ingest.js';
 import type {Duty} from './duty.js';
-import type {Provider} from './domain/sources.js';
 import {staleAfter} from './domain/quota.js';
-import {DEFAULT_BOARD} from './domain/sources.js';
+import {DEFAULT_BOARD, type Provider} from './domain/sources.js';
 import type {Device, Directory, Token} from './store/directory.js';
 import type {Store} from './store/store.js';
 
@@ -36,15 +33,11 @@ const digest = (value: string) => createHash('sha256').update(value).digest();
  */
 export class Ingest {
   private readonly statics: Buffer[];
-  private batches = 0;
-  private lastAt = 0;
 
-  /** `useDefaults`: the first account of a provider on the default board takes its default source. */
   constructor(
     private readonly store: Store,
     private readonly directory: Directory,
     staticTokens: readonly string[],
-    private readonly useDefaults: boolean,
     private readonly duty: Duty,
   ) {
     this.statics = staticTokens.map(digest);
@@ -53,11 +46,11 @@ export class Ingest {
   authenticate(header: string | undefined): Credential | null {
     const secret = /^Bearer (\S+)$/.exec(header ?? '')?.[1];
     if (!secret) return null;
-    if (secretKind(secret) === 'al_d') {
+    if (secretKind(secret) === 'qt_d') {
       const device = this.directory.deviceBySecret(secret);
       return device ? {kind: 'device', device} : null;
     }
-    if (secretKind(secret) === 'al_b') {
+    if (secretKind(secret) === 'qt_b') {
       const token = this.directory.tokenBySecret(secret);
       return token ? {kind: 'board', token} : null;
     }
@@ -73,17 +66,16 @@ export class Ingest {
 
     for (const snapshot of [...batch.snapshots].sort((a, b) => a.observedAt - b.observedAt)) {
       const account = subscriptionKey(snapshot, ownerKey);
-      const source = this.store.agentSource(device.boardId, snapshot.provider, account, this.useDefaults, now);
+      const source = this.store.source(device.boardId, snapshot.provider, account, now);
       this.store.seenDevice(device.id, snapshot.provider, source, now);
-      const state = this.store.state(source);
+      const {successAt} = this.store.state(source);
       // Resent after a lost answer, or already delivered by another device of the same account.
-      const known = state.scope === account && state.successAt !== null && snapshot.observedAt <= state.successAt;
-      if (known || snapshot.observedAt > now + 60_000) {
+      if ((successAt !== null && snapshot.observedAt <= successAt) || snapshot.observedAt > now + 60_000) {
         result.duplicates++;
         continue;
       }
-      const confidence = snapshot.account ? 'provider' : 'agent-machine';
-      if (this.store.record(source, toMeasurement(snapshot), snapshot.observedAt, {scope: account, confidence})) result.accepted++;
+      this.store.record(source, toMeasurement(snapshot));
+      result.accepted++;
       this.duty.delivered(device.boardId, account, device.id, snapshot.observedAt, snapshot.staleAfterMs, now);
     }
 
@@ -93,12 +85,10 @@ export class Ingest {
       const state = this.store.state(source);
       // Another device may measure the same account fine; only a source gone quiet shows the problem.
       if (state.successAt !== null && failure.observedAt - state.successAt <= staleAfter(state)) continue;
-      this.store.fail(source, `agent_${failure.error}`, failure.observedAt);
+      this.store.fail(source, failure.error, failure.observedAt);
       result.failures++;
     }
 
-    this.batches++;
-    this.lastAt = now;
     return result;
   }
 
@@ -143,10 +133,5 @@ export class Ingest {
           : {owner: batch.machine.name, ownerUserId: null};
     const tokenId = credential.kind === 'board' ? credential.token.id : null;
     return this.directory.saveDevice({boardId: board, machine: batch.machine, agent: batch.agent, ...owner, tokenId}, now);
-  }
-
-  status(now = Date.now()): CollectorStatus {
-    const intervalMs = config.ingest.intervalMs;
-    return {collecting: false, cycle: this.batches, intervalMs, nextAt: (this.lastAt || now) + intervalMs};
   }
 }

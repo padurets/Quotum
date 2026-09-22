@@ -8,6 +8,7 @@ import {usePrefs} from './lib/prefs';
 import {useResets} from './lib/resets';
 import {titled} from './lib/quota';
 import {useBoard, usePath, useSession, type Board, type Session, type User} from './lib/session';
+import {t, useLocale} from './i18n';
 import {Header, SERVICE} from './components/Header';
 import {SourceCard} from './components/SourceCard';
 import {History} from './components/History';
@@ -22,7 +23,7 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
   const boardId = board?.id ?? '';
   const {data, lastOk} = useOverview(boardId);
   const prefs = usePrefs();
-  const history = useHistory(boardId, prefs.range, data && !data.collecting ? String(data.cycle) : 'wait');
+  const history = useHistory(boardId, prefs.range, data ? String(data.revision) : 'wait');
   const {resets, health} = useResets(prefs.showResets);
   const [admin, setAdmin] = useState<AdminTab | null>(null);
 
@@ -53,18 +54,15 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
       <main>
         {empty ? (
           <section className="panel onboarding">
-            <h2>На доске пока нет данных</h2>
-            <p>
-              Подключите машину, где работают Claude Code, Codex или Antigravity: агент измерит лимиты через их собственные клиенты и начнёт присылать
-              их сюда через минуту. Токены провайдеров не покидают машину.
-            </p>
+            <h2>{t('onboarding.title')}</h2>
+            <p>{t('onboarding.text')}</p>
             <button className="button primary" onClick={() => setAdmin('connect')}>
-              Подключить устройство
+              {t('onboarding.connect')}
             </button>
           </section>
         ) : (
           <>
-            <section className="cards" aria-label="Текущие лимиты">
+            <section className="cards" aria-label={t('cards.label')}>
               {overview
                 ? sources.map(source => (
                     <SourceCard key={source.id} source={source} now={now} resets={source.provider === 'claude' || source.provider === 'codex' ? resets[source.provider] : undefined} />
@@ -81,11 +79,13 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
 }
 
 function App() {
+  // Everything below reads the language while rendering: a change re-renders the page.
+  useLocale();
   const {session, failed, refresh, setSession} = useSession();
   const path = usePath();
   const [, remember] = useBoard(session?.boards ?? []);
 
-  if (!session) return <div className="splash">{failed ? 'Нет связи с сервисом — пробуем снова…' : ''}</div>;
+  if (!session) return <div className="splash">{failed ? t('app.reconnecting') : ''}</div>;
   const signedIn = (next: Session) => setSession(next);
 
   if (path === '/device') return <DevicePage session={session} onSession={signedIn} />;

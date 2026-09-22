@@ -1,5 +1,6 @@
 import React, {useEffect, useMemo, useRef, useState} from 'react';
-import {clock, duration, num} from '../lib/format';
+import {clock, duration, num, shortDay} from '../lib/format';
+import {t} from '../i18n';
 import type {HistorySeries} from '../lib/types';
 
 export type Line = HistorySeries & {key: string; name: string; color: string; dash: string; current: number | null};
@@ -35,7 +36,7 @@ function niceTicks(from: number, to: number, count: number) {
 }
 
 function bucketLabel(at: number, bucketMs: number) {
-  const date = new Date(at).toLocaleDateString('ru-RU', {day: 'numeric', month: 'short'});
+  const date = shortDay(at);
   return bucketMs ? `${date}, ${clock(at)}–${clock(at + bucketMs)}` : `${date}, ${clock(at)}`;
 }
 
@@ -144,7 +145,7 @@ export function Chart({
       <svg
         viewBox={`0 0 ${width} ${height}`}
         role="img"
-        aria-label="Остаток лимитов во времени, проценты"
+        aria-label={t('chart.label')}
         onPointerMove={move}
         onPointerLeave={() => setHover(null)}
       >
@@ -166,7 +167,7 @@ export function Chart({
         ))}
         {ticks.map(tick => (
           <text key={tick} x={x(tick)} y={height - 8} textAnchor="middle" className="tick">
-            {daily ? new Date(tick).toLocaleDateString('ru-RU', {day: 'numeric', month: 'short'}) : clock(tick)}
+            {daily ? shortDay(tick) : clock(tick)}
           </text>
         ))}
 
@@ -183,7 +184,7 @@ export function Chart({
             // Beyond the visible future: an arrow at the right edge, with the distance.
             return marker.strong ? (
               <text key={marker.key} x={width - right} y={height - bottom - 8} textAnchor="end" className="marker-label">
-                {marker.label} через {duration(marker.at - now, true)} →
+                {t('chart.ahead', {label: marker.label, time: duration(marker.at - now, true)})}
               </text>
             ) : null;
           }
@@ -261,7 +262,7 @@ export function Chart({
           ))}
         </div>
       )}
-      {!lines.length && <div className="chart-empty">Выберите лимиты в легенде или в карточках сверху</div>}
+      {!lines.length && <div className="chart-empty">{t('chart.empty')}</div>}
     </div>
   );
 }

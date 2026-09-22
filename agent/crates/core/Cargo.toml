@@ -1,5 +1,5 @@
 [package]
-name = "agent-limits-core"
+name = "quotum-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

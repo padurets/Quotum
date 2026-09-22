@@ -2,53 +2,66 @@ import React, {useState} from 'react';
 import type {Overview} from '../lib/types';
 import {ago} from '../lib/format';
 import {problemOf, sourceLabel} from '../lib/quota';
-import {TimerRing} from './TimerRing';
 import {GearIcon, Popover, SwitchRow} from './Popover';
 import {setPrefs, usePrefs} from '../lib/prefs';
 import type {TrackerHealth} from '../lib/resets';
 import {clock} from '../lib/format';
-import {call, messageOf, type Board, type User} from '../lib/session';
-import {ErrorLine} from './Kit';
+import {boardTitle, call, messageOf, type Board, type User} from '../lib/session';
+import {ErrorLine, LanguagePicker} from './Kit';
+import {known, rich, t} from '../i18n';
 
 /** Dashboard-wide settings, stored in this browser. */
 function Settings({trackers}: {trackers: TrackerHealth[]}) {
   const prefs = usePrefs();
   return (
-    <Popover label="Настройки" icon={<GearIcon />}>
-      <div className="popover-title">Настройки</div>
+    <Popover label={t('settings.title')} icon={<GearIcon />}>
+      <div className="popover-title">{t('settings.title')}</div>
       <SwitchRow on={prefs.showResets} onChange={on => setPrefs({showResets: on})}>
-        Уведомления о сбросах лимитов
+        {t('settings.resets')}
       </SwitchRow>
       {prefs.showResets && (
         <div className="trackers">
           {trackers.map(tracker => (
-            <div key={tracker.name} className="tracker" title={tracker.at ? `Проверено в ${clock(tracker.at)}` : ''}>
+            <div key={tracker.name} className="tracker" title={tracker.at ? t('settings.checkedAt', {time: clock(tracker.at)}) : ''}>
               <i className={`dot ${tracker.ok === true ? 'dot-ok' : tracker.ok === false ? 'dot-warn' : 'dot-idle'}`} />
               <a href={tracker.url} target="_blank" rel="noopener noreferrer">
                 {tracker.name}
               </a>
-              <span>{tracker.detail}</span>
+              <span>{trackerDetail(tracker.detail)}</span>
             </div>
           ))}
         </div>
       )}
       <div className="popover-note">
-        Внеплановые сбросы Claude и Codex по данным{' '}
-        <a href="https://claude-resets.com/" target="_blank" rel="noopener noreferrer">
-          claude-resets.com
-        </a>{' '}
-        и{' '}
-        <a href="https://codex-resets.com/" target="_blank" rel="noopener noreferrer">
-          Codex Resets
-        </a>
-        . Настройки хранятся в этом браузере.
+        {rich('settings.resetsNote', {
+          claude: (
+            <a href="https://claude-resets.com/" target="_blank" rel="noopener noreferrer">
+              claude-resets.com
+            </a>
+          ),
+          codex: (
+            <a href="https://codex-resets.com/" target="_blank" rel="noopener noreferrer">
+              Codex Resets
+            </a>
+          ),
+        })}
+      </div>
+      <div className="popover-title popover-section">{t('common.language')}</div>
+      <div className="popover-pad">
+        <LanguagePicker />
       </div>
     </Popover>
   );
 }
 
+/** The hub reports tracker health as codes; an HTTP status is shown as is. */
+function trackerDetail(detail: string) {
+  const key = `tracker.${detail}`;
+  return known(key) ? t(key) : detail;
+}
+
 const OFFLINE_AFTER = 45_000;
-export const SERVICE = 'Agent Limits';
+export const SERVICE = 'Quotum';
 
 function Logo() {
   return (
@@ -93,29 +106,29 @@ function BoardSwitcher({boards, board, onSelect, onCreated}: {boards: Board[]; b
   };
   return (
     <Popover
-      label="Доски"
+      label={t('boards.title')}
       open={open}
       onOpenChange={setOpen}
       trigger={
         <span className="board-name">
-          {board?.name ?? '—'}
+          {board ? boardTitle(board) : '—'}
           <ChevronIcon />
         </span>
       }
       align="left"
     >
-      <div className="popover-title">Доски</div>
+      <div className="popover-title">{t('boards.title')}</div>
       {boards.map(b => (
         <button key={b.id} className="popover-row board-row" role="menuitemradio" aria-checked={b.id === board?.id} onClick={() => (onSelect(b.id), setOpen(false))}>
           <i className={`check ${b.id === board?.id ? 'on' : ''}`} />
-          <span>{b.name}</span>
-          <b>{b.personal ? 'личная' : 'общая'}</b>
+          <span>{boardTitle(b)}</span>
+          <b>{t(b.personal ? 'boards.personal' : 'boards.shared')}</b>
         </button>
       ))}
       <form className="popover-section popover-form" onSubmit={create}>
-        <input placeholder="Новая общая доска" value={name} maxLength={80} onChange={e => setName(e.target.value)} aria-label="Название новой доски" />
+        <input placeholder={t('boards.newPlaceholder')} value={name} maxLength={80} onChange={e => setName(e.target.value)} aria-label={t('boards.newLabel')} />
         <button className="button" disabled={!name.trim()}>
-          Создать
+          {t('boards.create')}
         </button>
       </form>
       <ErrorLine message={error} />
@@ -129,22 +142,22 @@ function Account({user, onSignedOut}: {user: User; onSignedOut: () => void}) {
     onSignedOut();
   };
   return (
-    <Popover label="Аккаунт" icon={<span className="avatar">{user.name.slice(0, 1).toUpperCase()}</span>}>
-      <div className="popover-title">Аккаунт</div>
+    <Popover label={t('account.title')} icon={<span className="avatar">{user.name.slice(0, 1).toUpperCase()}</span>}>
+      <div className="popover-title">{t('account.title')}</div>
       <div className="account-card">
         <b>{user.name}</b>
         <span>{user.email}</span>
       </div>
       <button className="popover-row" onClick={signOut}>
-        <span>Выйти</span>
+        <span>{t('account.signOut')}</span>
       </button>
     </Popover>
   );
 }
 
 /**
- * One compact, non-jumping strip: brand and board, how many sources are fresh, a ring
- * that fills toward the next measurement, devices, settings and account.
+ * One compact, non-jumping strip: brand and board, how many sources are fresh (and
+ * whether the hub answers), devices, settings and account.
  */
 export function Header({
   data,
@@ -176,7 +189,7 @@ export function Header({
   const fresh = sources.filter(source => !source.stale && !source.error).length;
 
   const sourcesTitle = sources
-    .map(source => `${sourceLabel(source)}: ${problemOf(source) ?? `измерено ${ago(source.successAt, now)}`}`)
+    .map(source => `${sourceLabel(source)}: ${problemOf(source) ?? t('header.measured', {ago: ago(source.successAt, now)})}`)
     .join('\n');
 
   return (
@@ -188,12 +201,11 @@ export function Header({
         </a>
         <BoardSwitcher boards={boards} board={board} onSelect={onBoard} onCreated={onBoardsChanged} />
         <div className="status" data-testid="connection">
-          <span className={`sources ${offline || (data && fresh < sources.length) ? 'is-warn' : ''}`} title={offline ? 'Нет связи с сервисом' : sourcesTitle}>
+          <span className={`sources ${offline || (data && fresh < sources.length) ? 'is-warn' : ''}`} title={offline ? t('common.offline') : sourcesTitle}>
             <i className={`dot dot-${offline || (data && fresh < sources.length) ? 'warn' : 'ok'}`} />
             <b>{data ? `${fresh}/${sources.length}` : '—'}</b>
           </span>
-          <TimerRing data={data} now={now} offline={offline} />
-          <button className="icon-button" aria-label="Устройства и подключение" title="Устройства и подключение" onClick={onDevices}>
+          <button className="icon-button" aria-label={t('header.devices')} title={t('header.devices')} onClick={onDevices}>
             <DevicesIcon />
           </button>
           <Settings trackers={trackers} />

@@ -76,8 +76,8 @@ export function useOverview(board: string) {
   return {data: data?.board?.id === board ? data : null, lastOk};
 }
 
-/** History is re-read when the range changes or a collection cycle completes. */
-export function useHistory(board: string, range: string, cycleKey: string) {
+/** History is re-read when the range changes or new data arrives (`revision`). */
+export function useHistory(board: string, range: string, revision: string) {
   const [history, setHistory] = useState<History | null>(null);
   const [retry, setRetry] = useState(0);
 
@@ -95,7 +95,7 @@ export function useHistory(board: string, range: string, cycleKey: string) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [board, range, cycleKey, retry]);
+  }, [board, range, revision, retry]);
 
   return history?.range === range && history.board === board ? history : null;
 }

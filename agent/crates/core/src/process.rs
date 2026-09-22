@@ -227,12 +227,12 @@ mod tests {
 
     #[test]
     fn a_missing_program_is_reported_as_such() {
-        let missing = Path::new("/nonexistent/agent-limits-test");
+        let missing = Path::new("/nonexistent/quotum-test");
         assert!(matches!(
             Client::spawn::<&str>(missing, &[], &[], &env::temp_dir(), Duration::from_secs(1)),
             Err(ProcError::NotFound)
         ));
-        assert!(find_program("agent-limits-surely-missing", &[]).is_none());
+        assert!(find_program("quotum-surely-missing", &[]).is_none());
         assert!(find_program("sh", &[]).is_some());
     }
 }

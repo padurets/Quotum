@@ -17,12 +17,14 @@ export type Prefs = {
   plans: Record<string, WeeklyPlan>;
 };
 
-const KEY = 'agent-limits.prefs';
+const KEY = 'quotum.prefs';
+/** Where preferences were kept before the project was renamed; read once, until 0.2. */
+const LEGACY_KEY = 'agent-limits.prefs';
 const DEFAULTS: Prefs = {hidden: {}, muted: {}, range: '24h', kind: 'weekly', showPlan: true, showResets: true, plans: {}};
 
 function read(): Prefs {
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = localStorage.getItem(KEY) ?? localStorage.getItem(LEGACY_KEY);
     return raw ? {...DEFAULTS, ...(JSON.parse(raw) as Partial<Prefs>)} : DEFAULTS;
   } catch {
     return DEFAULTS;

@@ -1,13 +1,14 @@
 import React from 'react';
 import {duration, soon, stamp} from '../lib/format';
 import type {ResetStatus} from '../lib/resets';
+import {t} from '../i18n';
 
 const RECENT_RESET_MS = 48 * 3_600_000;
 const RECENT_POLICY_MS = 72 * 3_600_000;
 
 function Credit({status}: {status: ResetStatus}) {
   return (
-    <a className="reset-credit" href={status.credit.url} target="_blank" rel="noopener noreferrer" title={`Data from ${status.credit.name}`}>
+    <a className="reset-credit" href={status.credit.url} target="_blank" rel="noopener noreferrer" title={t('reset.credit', {name: status.credit.name})}>
       {status.credit.name}
     </a>
   );
@@ -27,18 +28,18 @@ export function ResetBanner({status, now}: {status: ResetStatus | undefined; now
 
   const lead = scheduled
     ? upcoming
-      ? `${scheduled.kind === 'banked' ? 'Сброс из запаса' : 'Сброс'} через ${duration(at! - now, true)}`
+      ? t(scheduled.kind === 'banked' ? 'reset.bankedIn' : 'reset.in', {time: duration(at! - now, true)})
       : at === null
-        ? 'Объявлен сброс'
-        : 'Сброс: ждём подтверждения'
-    : `Возможен сброс${status.watch!.chance !== null ? ` · ${status.watch!.chance}%` : ''}`;
+        ? t('reset.announced')
+        : t('reset.awaiting')
+    : `${t('reset.possible')}${status.watch!.chance !== null ? ` · ${status.watch!.chance}%` : ''}`;
   const when = at !== null && upcoming ? soon(at, now) : '';
-  const hint = [scheduled ? 'Объявлен внеплановый сброс' : 'Возможен внеплановый сброс', at !== null ? `до ${stamp(at)}` : '', event.text].filter(Boolean).join('. ');
+  const hint = [t(scheduled ? 'reset.hintScheduled' : 'reset.hintWatch'), at !== null ? t('reset.until', {time: stamp(at)}) : '', event.text].filter(Boolean).join('. ');
 
   return (
     <div
       className={`reset-notice reset-announce ${scheduled ? 'is-scheduled' : 'is-watch'}`}
-      title={status.preview ? `Пример (?preview=reset). ${hint}` : hint}
+      title={status.preview ? t('reset.preview', {hint}) : hint}
     >
       <svg className="reset-icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
         <path d="M3 12a9 9 0 0 1 15.5-6.2L21 8M21 3v5h-5M21 12a9 9 0 0 1-15.5 6.2L3 16M3 21v-5h5" />
@@ -61,10 +62,10 @@ export function ResetNotice({status, now}: {status: ResetStatus | undefined; now
   let event;
   let tone: string;
   if (latest && now - latest.at < RECENT_RESET_MS) {
-    [label, event, tone] = ['Сброс прошёл', latest, 'done'];
+    [label, event, tone] = [t('reset.done'), latest, 'done'];
     detail = [stamp(latest.at), latest.scope && latest.scope !== 'all' ? latest.scope : ''].filter(Boolean).join(' · ');
   } else if (policy && now - policy.at < RECENT_POLICY_MS) {
-    [label, event, tone, detail] = ['Изменены лимиты', policy, 'policy', stamp(policy.at)];
+    [label, event, tone, detail] = [t('reset.policy'), policy, 'policy', stamp(policy.at)];
   } else return null;
 
   return (

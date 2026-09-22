@@ -54,12 +54,12 @@ test('an idle waiting device asks again in at most ten minutes', () => {
 });
 
 test('check-ins are resolved per subscription, the owner’s own ones included', () => {
-  const store = new Store(path.join(mkdtempSync(path.join(tmpdir(), 'agent-limits-duty-')), 'db.sqlite'), t0);
-  const ingest = new Ingest(store, new Directory(store.db), ['static-token-0123456789'], true, new Duty());
+  const store = new Store(path.join(mkdtempSync(path.join(tmpdir(), 'quotum-duty-')), 'db.sqlite'), t0);
+  const ingest = new Ingest(store, new Directory(store.db), ['static-token-0123456789'], new Duty());
   const checkin = (machine: string, subscriptions: object[]) =>
     ingest.checkin(
       {kind: 'static'},
-      {version: 1, agent: 'agent-limits/0.1.0', machine: {id: machine, name: machine, os: 'linux', arch: 'x86_64'}, owner: {name: 'alice'}, subscriptions},
+      {version: 1, agent: 'quotum/0.1.0', machine: {id: machine, name: machine, os: 'linux', arch: 'x86_64'}, owner: {name: 'alice'}, subscriptions},
       t0,
     ).subscriptions.map(s => [s.provider, s.measure]);
   const subs = [

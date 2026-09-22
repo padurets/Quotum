@@ -85,7 +85,7 @@ impl HubSink {
         let http: ureq::Agent = ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_secs(20)))
             .http_status_as_error(false)
-            .user_agent(concat!("agent-limits/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("quotum/", env!("CARGO_PKG_VERSION")))
             .build()
             .into();
         HubSink {
@@ -105,7 +105,7 @@ impl HubSink {
     fn post(&self, items: &[Item]) -> Delivery {
         let mut batch = Batch {
             version: INGEST_VERSION,
-            agent: concat!("agent-limits/", env!("CARGO_PKG_VERSION")).into(),
+            agent: concat!("quotum/", env!("CARGO_PKG_VERSION")).into(),
             machine: self.machine.clone(),
             owner: self.owner.clone(),
             sent_at: now_ms(),
@@ -205,7 +205,7 @@ impl Sink for HubSink {
         }
         let request = serde_json::json!({
             "version": INGEST_VERSION,
-            "agent": concat!("agent-limits/", env!("CARGO_PKG_VERSION")),
+            "agent": concat!("quotum/", env!("CARGO_PKG_VERSION")),
             "machine": self.machine,
             "owner": self.owner,
             "subscriptions": [{"provider": provider, "account": account, "accountName": account_name, "active": active}],

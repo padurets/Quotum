@@ -248,7 +248,7 @@ mod tests {
 
     #[test]
     fn the_local_account_is_the_one_a_measurement_reports() {
-        let home = std::env::temp_dir().join(format!("agent-limits-claude-{}", std::process::id()));
+        let home = std::env::temp_dir().join(format!("quotum-claude-{}", std::process::id()));
         fs::create_dir_all(&home).unwrap();
         let config = json!({"oauthAccount": {"emailAddress": "dev@example.com", "organizationName": "Example", "accountUuid": "u"}});
         fs::write(home.join(".claude.json"), config.to_string()).unwrap();

@@ -2,6 +2,7 @@ import React, {useEffect, useState} from 'react';
 import {call, messageOf, navigate, type Board, type Session} from '../lib/session';
 import {AuthScreen} from './AuthScreen';
 import {Brand, ErrorLine} from './Kit';
+import {t} from '../i18n';
 
 /** An invite link: sign up or in, then join the board. */
 export function InvitePage({secret, session, onSession, onJoined}: {secret: string; session: Session; onSession: (s: Session) => void; onJoined: (board: string) => void}) {
@@ -47,17 +48,17 @@ export function InvitePage({secret, session, onSession, onJoined}: {secret: stri
     <div className="auth">
       <div className="auth-card">
         <Brand />
-        <h1>Приглашение</h1>
-        {board ? <p className="auth-note">Вас пригласили на доску «{board}». Её участники видят лимиты друг друга.</p> : !error && <p className="auth-note">Проверяем приглашение…</p>}
+        <h1>{t('invite.title')}</h1>
+        {board ? <p className="auth-note">{t('invite.text', {board})}</p> : !error && <p className="auth-note">{t('invite.checking')}</p>}
         <ErrorLine message={error} />
         {board && session.user && (
           <button className="button primary" disabled={busy} onClick={join}>
-            Присоединиться как {session.user.name}
+            {t('invite.join', {name: session.user.name})}
           </button>
         )}
         {error && (
           <button className="button" onClick={() => navigate('/')}>
-            На главную
+            {t('common.backHome')}
           </button>
         )}
       </div>

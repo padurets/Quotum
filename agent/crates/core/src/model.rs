@@ -240,7 +240,7 @@ impl Owner {
 #[serde(rename_all = "camelCase")]
 pub struct Batch {
     pub version: u32,
-    /// `agent-limits/<version>`.
+    /// `quotum/<version>`.
     pub agent: String,
     pub machine: Machine,
     #[serde(default, skip_serializing_if = "Owner::is_empty")]
@@ -257,8 +257,7 @@ pub struct Batch {
 /// machine; the same account measured on two machines gets the same pseudonym, so a
 /// hub can tell they are one account.
 pub fn pseudonym(provider: Provider, stable_id: &str) -> String {
-    let digest =
-        Sha256::digest(format!("agent-limits/account/v1\n{}\n{}", provider.id(), stable_id.trim().to_lowercase()));
+    let digest = Sha256::digest(format!("quotum/account/v1\n{}\n{}", provider.id(), stable_id.trim().to_lowercase()));
     digest[..12].iter().map(|b| format!("{b:02x}")).collect()
 }
 
@@ -309,7 +308,8 @@ mod tests {
         let a = pseudonym(Provider::Claude, " User@Example.com ");
         assert_eq!(a, pseudonym(Provider::Claude, "user@example.com"));
         assert_ne!(a, pseudonym(Provider::Codex, "user@example.com"));
-        assert_eq!(a.len(), 24);
+        // Pinned: the ingest spec documents this example; hubs rely on the value.
+        assert_eq!(a, "a9065ccd9f3d50fc4e5fe3c6");
     }
 
     #[test]

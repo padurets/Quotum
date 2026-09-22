@@ -1,11 +1,12 @@
 import {useCallback, useEffect, useState} from 'react';
+import {known, t} from '../i18n';
 
 export type User = {id: string; email: string; name: string; role: 'admin' | 'user'};
 export type Board = {id: string; name: string; personal: boolean; role: 'owner' | 'member'};
 export type Session = {user: User | null; boards: Board[]; signup: {first: boolean; open: boolean}};
 
 /** Fired whenever the hub answers 401: the session ended, so the page asks again. */
-export const UNAUTHORIZED = 'agent-limits:unauthorized';
+export const UNAUTHORIZED = 'quotum:unauthorized';
 
 export class ApiError extends Error {
   constructor(
@@ -31,19 +32,15 @@ export async function call<T>(method: 'GET' | 'POST' | 'DELETE', url: string, bo
   return data as T;
 }
 
-const MESSAGES: Record<string, string> = {
-  invalid_credentials: 'Неверная почта или пароль',
-  email_taken: 'Эта почта уже зарегистрирована — войдите',
-  signup_closed: 'Регистрация только по приглашению',
-  invalid_input: 'Проверьте поля: почта, имя и пароль не короче 8 символов',
-  invalid_invite: 'Приглашение недействительно или истекло',
-  too_many_attempts: 'Слишком много попыток, попробуйте позже',
-  invalid_code: 'Код не найден или истёк',
-  board_not_found: 'Доска не найдена',
-};
+/** What went wrong, in the reader's language. */
+export function messageOf(error: unknown) {
+  if (!(error instanceof ApiError)) return t('common.offline');
+  const key = `api.${error.code}`;
+  return t(known(key) ? key : 'api.unknown');
+}
 
-export const messageOf = (error: unknown) =>
-  error instanceof ApiError ? (MESSAGES[error.code] ?? 'Что-то пошло не так') : 'Нет связи с сервисом';
+/** Personal boards have no name of their own: each reader sees theirs in their language. */
+export const boardTitle = (board: {name: string}) => board.name || t('boards.personalName');
 
 export function useSession() {
   const [session, setSession] = useState<Session | null>(null);
@@ -68,11 +65,13 @@ export function useSession() {
   return {session, failed, refresh, setSession};
 }
 
-const BOARD_KEY = 'agent-limits.board';
+const BOARD_KEY = 'quotum.board';
+/** Where the board was remembered before the project was renamed; read once, until 0.2. */
+const LEGACY_BOARD_KEY = 'agent-limits.board';
 
 function remembered(): string | null {
   try {
-    return new URLSearchParams(location.search).get('board') ?? localStorage.getItem(BOARD_KEY);
+    return new URLSearchParams(location.search).get('board') ?? localStorage.getItem(BOARD_KEY) ?? localStorage.getItem(LEGACY_BOARD_KEY);
   } catch {
     return null;
   }

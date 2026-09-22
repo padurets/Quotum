@@ -70,13 +70,13 @@ impl Config {
     }
 
     fn apply_env(&mut self, var: impl Fn(&str) -> Option<String>) {
-        if let Some(seconds) = var("AGENT_LIMITS_INTERVAL").and_then(|v| v.parse().ok()) {
+        if let Some(seconds) = var("QUOTUM_INTERVAL").and_then(|v| v.parse().ok()) {
             self.interval = Some(seconds);
         }
-        if let Some(owner) = var("AGENT_LIMITS_OWNER") {
+        if let Some(owner) = var("QUOTUM_OWNER") {
             self.owner = Some(owner);
         }
-        match (var("AGENT_LIMITS_HUB_URL"), var("AGENT_LIMITS_HUB_TOKEN")) {
+        match (var("QUOTUM_HUB_URL"), var("QUOTUM_HUB_TOKEN")) {
             (Some(url), Some(token)) => self.hub = Some(Hub { url, token }),
             (Some(url), None) => {
                 if let Some(hub) = &mut self.hub {
@@ -114,7 +114,7 @@ impl Config {
     }
 }
 
-/// What `agent-limits connect` receives from a hub: its address and this device's token.
+/// What `quotum connect` receives from a hub: its address and this device's token.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Credentials {
     pub url: String,
@@ -171,14 +171,14 @@ pub struct Paths {
 
 impl Paths {
     pub fn resolve() -> Paths {
-        let config = env::var_os("AGENT_LIMITS_CONFIG").map(PathBuf::from).unwrap_or_else(|| {
-            dirs::config_dir().unwrap_or_else(|| home().join(".config")).join("agent-limits").join("config.toml")
+        let config = env::var_os("QUOTUM_CONFIG").map(PathBuf::from).unwrap_or_else(|| {
+            dirs::config_dir().unwrap_or_else(|| home().join(".config")).join("quotum").join("config.toml")
         });
-        let state = env::var_os("AGENT_LIMITS_STATE_DIR").map(PathBuf::from).unwrap_or_else(|| {
+        let state = env::var_os("QUOTUM_STATE_DIR").map(PathBuf::from).unwrap_or_else(|| {
             dirs::state_dir()
                 .or_else(dirs::data_local_dir)
                 .unwrap_or_else(|| home().join(".local/state"))
-                .join("agent-limits")
+                .join("quotum")
         });
         let work = state.join("work");
         Paths { config, state, work }
@@ -260,7 +260,7 @@ mod tests {
 
     #[test]
     fn a_missing_file_means_defaults() {
-        let config = Config::load(Path::new("/nonexistent/agent-limits.toml")).unwrap();
+        let config = Config::load(Path::new("/nonexistent/quotum.toml")).unwrap();
         assert!(config.enabled(Provider::Claude) && config.eco());
         assert_eq!(config.interval_ms(Provider::Codex), DEFAULT_INTERVAL_MS);
     }
@@ -294,9 +294,9 @@ mod tests {
     fn the_environment_can_point_the_agent_at_a_hub() {
         let mut config = Config::default();
         config.apply_env(|key| match key {
-            "AGENT_LIMITS_HUB_URL" => Some("https://hub.example".into()),
-            "AGENT_LIMITS_HUB_TOKEN" => Some("secret".into()),
-            "AGENT_LIMITS_INTERVAL" => Some("90".into()),
+            "QUOTUM_HUB_URL" => Some("https://hub.example".into()),
+            "QUOTUM_HUB_TOKEN" => Some("secret".into()),
+            "QUOTUM_INTERVAL" => Some("90".into()),
             _ => None,
         });
         assert_eq!(config.hub, Some(Hub { url: "https://hub.example".into(), token: "secret".into() }));

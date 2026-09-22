@@ -178,15 +178,16 @@ export function parseCheckin(body: unknown): Checkin {
   return {...sender, subscriptions};
 }
 
-const KIND_LABELS = {session: '5 часов', weekly: 'Неделя'} as const;
+const KIND_LABELS = {session: '5 hours', weekly: 'Weekly'} as const;
 
 /**
  * The stored label of a window: the scope the provider names ("Fable", "Gemini"), or
- * else the window's kind ("Неделя"). The dashboard adds the kind to a scope itself.
+ * else the window's kind ("Weekly"). Labels are stored in English and never shown as
+ * is for a kind: the dashboard names kinds in the reader's language.
  */
 export function windowLabel(w: AgentWindow): string {
   if (w.label) return w.label;
-  return w.kind === 'other' ? (w.minutes ? `${w.minutes} мин` : 'Окно') : KIND_LABELS[w.kind];
+  return w.kind === 'other' ? (w.minutes ? `${w.minutes} min` : 'Window') : KIND_LABELS[w.kind];
 }
 
 /**
@@ -209,12 +210,5 @@ export function toMeasurement(snapshot: AgentSnapshot): Measurement {
     resetAt: w.resetsAt,
     minutes: w.minutes,
   }));
-  return {
-    provider: snapshot.provider,
-    sourceAt: snapshot.observedAt,
-    plan: snapshot.plan ?? '',
-    identity: snapshot.account,
-    windows,
-    staleAfterMs: snapshot.staleAfterMs,
-  };
+  return {sourceAt: snapshot.observedAt, plan: snapshot.plan ?? '', windows, staleAfterMs: snapshot.staleAfterMs};
 }

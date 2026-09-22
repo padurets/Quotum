@@ -1,12 +1,12 @@
 [package]
-name = "agent-limits"
+name = "quotum"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-agent-limits-core = { version = "0.1.0", path = "../core" }
+quotum-core = { version = "0.1.0", path = "../core" }
 clap = { version = "4.6.7", features = ["derive"] }
 serde_json = "1.0.151"
 ureq = { version = "3.4.2", features = ["json"] }

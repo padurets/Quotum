@@ -1,8 +1,9 @@
 import React, {useEffect, useState} from 'react';
 import type {SourceState, Win} from '../lib/types';
 import {windowKey} from '../lib/types';
-import {ago, duration, num} from '../lib/format';
-import {ERRORS, level, problemOf, sourceLabel, windowName} from '../lib/quota';
+import {ago, duration, fullStamp, num} from '../lib/format';
+import {errorText, level, problemOf, sourceLabel, windowName} from '../lib/quota';
+import {t} from '../i18n';
 import {DEFAULT_PLAN, isValidPlan, planAt, planTotal, type WeeklyPlan} from '../lib/plan';
 import {PROVIDERS} from '../lib/providers';
 import {planOf, setHidden, setPlan, usePrefs} from '../lib/prefs';
@@ -23,7 +24,7 @@ function Meter({w, now, weekly}: {w: Win; now: number; weekly: WeeklyPlan}) {
       <span className="meter-track">
         <i className={`fill fill-${state}`} style={{width: `${Math.max(w.remaining, 1)}%`}} />
       </span>
-      {pace !== null && <b className="pace" style={{left: `${pace}%`}} title={`По плану сейчас должно остаться ${num(pace)}%`} />}
+      {pace !== null && <b className="pace" style={{left: `${pace}%`}} title={t('limit.paceHint', {value: num(pace)})} />}
     </div>
   );
 }
@@ -43,17 +44,23 @@ function Limit({w, now, weekly}: {w: Win; now: number; weekly: WeeklyPlan}) {
       </div>
       <Meter w={w} now={now} weekly={weekly} />
       <div className="limit-bottom">
-        <span title={w.resetAt ? new Date(w.resetAt).toLocaleString('ru-RU') : ''}>
+        <span title={w.resetAt ? fullStamp(w.resetAt) : ''}>
           {w.resetAt
             ? w.resetAt > now
-              ? `сброс через ${duration(w.resetAt - now)}`
-              : 'окно сброшено, ждём замер'
-            : 'время сброса неизвестно'}
+              ? t('limit.resetsIn', {time: duration(w.resetAt - now)})
+              : t('limit.resetPassed')
+            : t('limit.resetUnknown')}
         </span>
-        {plan?.restDay && <span className="plan-note">выходной</span>}
-        {delta < -PLAN_TOLERANCE && <span className="ahead" title="Расход опережает план: лимит может закончиться раньше выходного">быстрее плана · {num(-delta)} п.п.</span>}
+        {plan?.restDay && <span className="plan-note">{t('limit.restDay')}</span>}
+        {delta < -PLAN_TOLERANCE && (
+          <span className="ahead" title={t('limit.aheadHint')}>
+            {t('limit.ahead', {value: num(-delta)})}
+          </span>
+        )}
         {plan?.weekly && delta > PLAN_TOLERANCE && (
-          <span className="plan-note" title="Расход отстаёт от плана: часть лимита может остаться неиспользованной">отстаёт от плана · {num(delta)} п.п.</span>
+          <span className="plan-note" title={t('limit.behindHint')}>
+            {t('limit.behind', {value: num(delta)})}
+          </span>
         )}
       </div>
     </div>
@@ -90,7 +97,7 @@ function PlanEditor({source}: {source: SourceState}) {
               min={0}
               max={100}
               value={share}
-              aria-label={`День ${day + 1}, процентов`}
+              aria-label={t('plan.day', {day: day + 1})}
               onChange={event => change(day, event.target.value)}
             />
           </label>
@@ -98,11 +105,11 @@ function PlanEditor({source}: {source: SourceState}) {
       </div>
       <div className="plan-foot">
         <span className={total === 100 ? 'muted' : 'v-warn'}>
-          {total === 100 ? 'сумма 100%' : `сумма ${total}% — нужно 100%, не сохранено`}
+          {total === 100 ? t('plan.total') : t('plan.totalWrong', {total})}
         </span>
         {saved.join() !== DEFAULT_PLAN.join() && (
           <button className="link-button" onClick={() => setPlan(source.id, null)}>
-            по умолчанию
+            {t('plan.default')}
           </button>
         )}
       </div>
@@ -116,10 +123,10 @@ function SourceSettings({source}: {source: SourceState}) {
   const hiddenCount = source.windows.filter(w => hidden[windowKey(source.id, w.id)]).length;
   const hasWeekly = source.windows.some(w => w.minutes === 10080);
   return (
-    <Popover label={`Настройки · ${sourceLabel(source)}`} icon={<SlidersIcon />} badge={hiddenCount}>
+    <Popover label={t('source.settings', {source: sourceLabel(source)})} icon={<SlidersIcon />} badge={hiddenCount}>
       {source.windows.length > 1 && (
         <>
-          <div className="popover-title">Показывать лимиты</div>
+          <div className="popover-title">{t('source.show')}</div>
           {source.windows.map(w => {
             const key = windowKey(source.id, w.id);
             return (
@@ -128,14 +135,14 @@ function SourceSettings({source}: {source: SourceState}) {
               </SwitchRow>
             );
           })}
-          <div className="popover-note">Скрытые лимиты исчезают и с графика.</div>
+          <div className="popover-note">{t('source.hiddenNote')}</div>
         </>
       )}
       {hasWeekly && (
         <>
-          <div className="popover-title popover-section">План расхода недели, % по дням</div>
+          <div className="popover-title popover-section">{t('source.plan')}</div>
           <PlanEditor source={source} />
-          <div className="popover-note">День 1 — первый день после сброса. 0 — выходной: к нему всё должно быть потрачено.</div>
+          <div className="popover-note">{t('source.planNote')}</div>
         </>
       )}
     </Popover>
@@ -167,8 +174,8 @@ export function SourceCard({source, now, resets}: {source: SourceState; now: num
 
       <div className="limits">
         {visible.map(w => <Limit key={w.id} w={w} now={now} weekly={weekly} />)}
-        {!source.windows.length && <div className="card-empty">{ERRORS[source.error ?? 'waiting'] ?? 'Ждём данные'}</div>}
-        {!!source.windows.length && !visible.length && <div className="card-empty">Все лимиты скрыты</div>}
+        {!source.windows.length && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
+        {!!source.windows.length && !visible.length && <div className="card-empty">{t('card.allHidden')}</div>}
       </div>
       <ResetBanner status={resets} now={now} />
       <ResetNotice status={resets} now={now} />

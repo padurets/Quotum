@@ -39,7 +39,7 @@ impl Adapter for Codex {
         let reply =
             |client: &mut Client, id: u64| client.wait_for(|m| m["id"] == id).map_err(|e| process_failure(P, e));
 
-        let info = json!({"name": "agent-limits", "title": "Agent Limits", "version": env!("CARGO_PKG_VERSION")});
+        let info = json!({"name": "quotum", "title": "Quotum", "version": env!("CARGO_PKG_VERSION")});
         send(&mut client, json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"clientInfo": info}}))?;
         let init = reply(&mut client, 1)?;
         send(&mut client, json!({"jsonrpc": "2.0", "method": "initialized"}))?;
@@ -127,7 +127,7 @@ mod tests {
     use super::*;
 
     fn init() -> Value {
-        json!({"id": 1, "result": {"userAgent": "agent-limits/0.154.0 (Ubuntu 24.4.0; x86_64) xterm (agent-limits; 0.1.0)"}})
+        json!({"id": 1, "result": {"userAgent": "quotum/0.154.0 (Ubuntu 24.4.0; x86_64) xterm (quotum; 0.1.0)"}})
     }
 
     #[test]

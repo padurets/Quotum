@@ -5,40 +5,15 @@ export type Provider = (typeof providers)[number];
 
 export const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 
-/**
- * A *source* is one provider account we collect from. Today every provider has a
- * single account (`accountKey: 'default'`), but ids, storage and the API are already
- * keyed by source, so a second Claude subscription only needs another source row —
- * no change to history, preferences or chart identity of the existing ones.
- */
-export type Source = {id: string; provider: Provider; accountKey: string; label: string};
-
-export const DEFAULT_ACCOUNT = 'default';
-
-/** The board of everything collected before boards existed, and of the built-in collector. */
+/** The board of a new hub: static ingest tokens deliver to it, and the first person to sign up takes it. */
 export const DEFAULT_BOARD = 'default';
 
-/** Stable, human-readable id. Preferences and chart series are keyed by it. */
-export function sourceId(provider: Provider, accountKey = DEFAULT_ACCOUNT): string {
-  return accountKey === DEFAULT_ACCOUNT ? provider : `${provider}:${accountKey}`;
-}
+/**
+ * A source is one subscription on one board. `account` says which: the pseudonym of an
+ * account the provider identifies, or `<owner>/<provider>[/<name>]` for one it does not
+ * (see `subscriptionKey` in domain/ingest.ts). Preferences and chart series are keyed
+ * by the source id, so it never changes.
+ */
+export type Source = {id: string; provider: Provider; account: string};
 
-export function parseSourceId(id: string): {provider: Provider; accountKey: string} | null {
-  const [provider, accountKey = DEFAULT_ACCOUNT] = id.split(':');
-  return providers.includes(provider as Provider) ? {provider: provider as Provider, accountKey} : null;
-}
-
-export const PROVIDER_LABELS: Record<Provider, string> = {
-  claude: 'Claude',
-  codex: 'Codex',
-  antigravity: 'Antigravity',
-};
-
-export function describeSource(provider: Provider, accountKey = DEFAULT_ACCOUNT): Source {
-  return {
-    id: sourceId(provider, accountKey),
-    provider,
-    accountKey,
-    label: accountKey === DEFAULT_ACCOUNT ? PROVIDER_LABELS[provider] : `${PROVIDER_LABELS[provider]} · ${accountKey}`,
-  };
-}
+export const sourceId = (board: string, provider: Provider, account: string) => `${provider}:${hash(`${board}\n${account}`).slice(0, 8)}`;

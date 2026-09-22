@@ -10,8 +10,8 @@ delivers with one of:
 
 | Token | Prefix | How it is obtained | Who the device belongs to |
 |---|---|---|---|
-| Device token | `al_d_` | One-time code confirmed by a signed-in person ([below](#connecting-with-a-one-time-code)) | That person |
-| Board token | `al_b_` | Created on the board by a member, shown once; meant for images, VMs, containers | The declared `owner`, else the token's creator, see [Owner](#owner) |
+| Device token | `qt_d_` | One-time code confirmed by a signed-in person ([below](#connecting-with-a-one-time-code)) | That person |
+| Board token | `qt_b_` | Created on the board by a member, shown once; meant for images, VMs, containers | The declared `owner`, else the token's creator, see [Owner](#owner) |
 
 With a board token a machine joins the board on its first batch; its `machine.id`
 identifies it from then on. A device removed from the board cannot come back with
@@ -142,7 +142,7 @@ The OAuth 2.0 device authorization flow (RFC 8628) with JSON bodies:
    sees the machine and picks a board.
 3. The agent polls `POST /v1/device/token` with `{"deviceCode"}` every `interval` seconds:
    `400 {"error": "authorization_pending" | "slow_down" | "access_denied" | "expired_token"}`
-   until `200 {"token": "al_d_…", "device": {"id", "name", "owner"}, "board": {"id", "name"}}`.
+   until `200 {"token": "qt_d_…", "device": {"id", "name", "owner"}, "board": {"id", "name"}}`.
    A code gives one token; `slow_down` asks to poll 5 s less often.
 
 ## Privacy

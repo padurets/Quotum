@@ -1,7 +1,6 @@
 import Fastify, {type FastifyReply, type FastifyRequest} from 'fastify';
 import staticFiles from '@fastify/static';
 import {config, serviceName, version} from './config.js';
-import type {CollectorStatus} from './collector.js';
 import type {Ingest} from './ingest.js';
 import type {Pairing} from './pairing.js';
 import type {ResetFeed} from './sources/resets.js';
@@ -16,10 +15,7 @@ const CSP =
   "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self';" +
   ` img-src 'self' data:; font-src 'self'; frame-ancestors ${["'self'", ...config.http.frameAncestors].join(' ')}`;
 
-/** Whatever paces the data: the CodexBar collector, or agents pushing measurements. */
-export type Pacer = {status(): CollectorStatus};
-
-export type Hub = {store: Store; directory: Directory; pacer: Pacer; resets: ResetFeed; ingest: Ingest; pairing: Pairing};
+export type Hub = {store: Store; directory: Directory; resets: ResetFeed; ingest: Ingest; pairing: Pairing};
 
 /** Route helpers shared by the route modules. */
 export type Guards = {
@@ -32,7 +28,7 @@ export type Guards = {
  * `/v1` (device codes, ingest). Everything else is the single-page client.
  */
 export async function buildApp(hub: Hub) {
-  const {store, directory, pacer, resets} = hub;
+  const {store, directory, resets} = hub;
   const app = Fastify({logger: false, bodyLimit: 16 * 1024});
   const hosts = new Set<string>(config.http.hosts);
   const historyCache = new Map<string, {key: string; value: HistorySeries[]}>();
@@ -84,14 +80,13 @@ export async function buildApp(hub: Hub) {
     },
   };
 
-  app.get('/health', () => ({status: 'ok', service: serviceName, version, ...pacer.status()}));
+  app.get('/health', () => ({status: 'ok', service: serviceName, version}));
   app.get('/api/resets', () => resets.snapshot());
 
   app.get<{Querystring: {board?: string}}>('/api/overview', (request, reply) => {
     const access = guards.board(request, reply, request.query.board);
     if (!access) return reply;
     const now = Date.now();
-    const {intervalMs, ...status} = pacer.status();
     // Who delivers each source: the owners of the devices that measure it.
     const owners = new Map<string, Set<string>>();
     const devices = new Map(directory.devices(access.board.id).map(d => [d.id, d.owner]));
@@ -100,13 +95,12 @@ export async function buildApp(hub: Hub) {
       if (owner) owners.set(source, (owners.get(source) ?? new Set()).add(owner));
     }
     return {
-      service: serviceName,
       board: access.board,
       now,
       collectionStart: store.collectionStart,
-      intervalMs,
-      ...status,
-      sources: store.states(access.board.id).map(({scope, ...state}) => ({
+      /** Changes whenever the data changes: the page re-reads history when it does. */
+      revision: store.revision,
+      sources: store.states(access.board.id).map(state => ({
         ...state,
         owners: [...(owners.get(state.id) ?? [])].sort(),
         stale: state.successAt === null || now - state.successAt > staleAfter(state),
@@ -122,10 +116,9 @@ export async function buildApp(hub: Hub) {
     if (!spec) return reply.code(400).send({error: 'invalid_query'});
 
     const now = Date.now();
-    const status = pacer.status();
-    const key = `${status.cycle}:${status.collecting}`;
     const slot = `${access.board.id}:${range}`;
-    // History only changes when a measurement is stored; reuse it until then.
+    // History changes when a measurement is stored or the grid moves on; reuse it until then.
+    const key = `${store.revision}:${Math.floor(now / spec.bucketMs)}`;
     if (historyCache.get(slot)?.key !== key) {
       historyCache.set(slot, {key, value: store.history(access.board.id, now - spec.durationMs, spec.bucketMs)});
     }

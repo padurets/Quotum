@@ -1,6 +1,7 @@
 import React, {useState} from 'react';
 import {call, messageOf, type Board, type Session, type User} from '../lib/session';
-import {Brand, ErrorLine, Field, Tabs} from './Kit';
+import {Brand, ErrorLine, Field, LanguagePicker, Tabs} from './Kit';
+import {t} from '../i18n';
 
 type Mode = 'login' | 'signup';
 
@@ -43,47 +44,50 @@ export function AuthScreen({
     }
   };
 
-  const heading = session.signup.first ? 'Создайте первый аккаунт' : mode === 'signup' ? 'Регистрация' : 'Вход';
+  const heading = session.signup.first ? t('auth.first') : mode === 'signup' ? t('auth.signUp') : t('auth.signIn');
   return (
     <div className="auth">
       <form className="auth-card" onSubmit={submit}>
         <Brand />
         <h1>{heading}</h1>
-        {invite && <p className="auth-note">Вас пригласили на доску «{invite.board}».</p>}
+        {invite && <p className="auth-note">{t('auth.invited', {board: invite.board})}</p>}
         {note && <p className="auth-note">{note}</p>}
-        {session.signup.first && <p className="auth-note">Он станет администратором и получит уже собранные данные.</p>}
+        {session.signup.first && <p className="auth-note">{t('auth.firstNote')}</p>}
         {canSignUp && !session.signup.first && (
           <Tabs
-            label="Вход или регистрация"
+            label={t('auth.mode')}
             value={mode}
             onChange={next => {
               setMode(next);
               setError(null);
             }}
             tabs={[
-              ['login', 'Вход'],
-              ['signup', 'Регистрация'],
+              ['login', t('auth.signIn')],
+              ['signup', t('auth.signUp')],
             ]}
           />
         )}
-        <Field label="Почта" type="email" autoComplete="email" required value={email} onChange={e => setEmail(e.target.value)} autoFocus />
-        {mode === 'signup' && <Field label="Имя" autoComplete="name" required maxLength={80} value={name} onChange={e => setName(e.target.value)} hint="Так вас увидят на общих досках" />}
+        <Field label={t('auth.email')} type="email" autoComplete="email" required value={email} onChange={e => setEmail(e.target.value)} autoFocus />
+        {mode === 'signup' && (
+          <Field label={t('auth.name')} autoComplete="name" required maxLength={80} value={name} onChange={e => setName(e.target.value)} hint={t('auth.nameHint')} />
+        )}
         <Field
-          label="Пароль"
+          label={t('auth.password')}
           type="password"
           autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
           required
           minLength={mode === 'signup' ? 8 : undefined}
           value={password}
           onChange={e => setPassword(e.target.value)}
-          hint={mode === 'signup' ? 'Не короче 8 символов' : undefined}
+          hint={mode === 'signup' ? t('auth.passwordHint') : undefined}
         />
         <ErrorLine message={error} />
         <button className="button primary" disabled={busy}>
-          {busy ? '…' : mode === 'signup' ? 'Создать аккаунт' : 'Войти'}
+          {busy ? '…' : mode === 'signup' ? t('auth.createAccount') : t('auth.submit')}
         </button>
-        {!canSignUp && <p className="auth-foot">Нет аккаунта? Попросите приглашение у владельца доски.</p>}
+        {!canSignUp && <p className="auth-foot">{t('auth.noAccount')}</p>}
       </form>
+      <LanguagePicker />
     </div>
   );
 }

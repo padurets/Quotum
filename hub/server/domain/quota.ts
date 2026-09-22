@@ -13,55 +13,49 @@ export type Win = {
   minutes: number | null;
 };
 
+/** One measurement of a source: every window the client reported at one moment. */
 export type Measurement = {
-  provider: Provider;
   sourceAt: number;
   plan: string;
-  identity: string | null;
   windows: Win[];
   /** How long this measurement stays representative; unset means `retention.freshMs`. */
   staleAfterMs?: number | null;
 };
 
-/** A stored window value. `scope` is the identity segment it belongs to. */
+/** A stored window value. */
 export type Sample = Win & {
   sourceId: string;
   provider: Provider;
-  scope: string;
   sourceAt: number;
-  observedAt: number;
   staleAfterMs?: number | null;
 };
 
 /** How long after a sample the next one must arrive for the two to count as continuous. */
 export const staleAfter = (sample: {staleAfterMs?: number | null}) => sample.staleAfterMs ?? config.retention.freshMs;
 
-export type Confidence = 'provider' | 'local-profile' | 'local-id-token' | 'credential-boundary' | 'agent-machine' | 'unknown';
-
+/** What a card shows: the last measurement of a source and how the latest attempt went. */
 export type SourceState = {
   id: string;
   provider: Provider;
-  accountKey: string;
   plan: string;
-  confidence: Confidence;
-  scope: string;
   successAt: number | null;
   attemptAt: number;
+  /** `waiting` before the first measurement, else what the agent reported (spec: Failure). */
   error: string | null;
   windows: Win[];
   staleAfterMs?: number | null;
 };
 
 export function kindOf(minutes: number | null, label: string): Kind {
-  if (minutes === 300 || /5[- ]?h|5 час/i.test(label)) return 'session';
-  if (minutes === 10080 || /week|недел/i.test(label)) return 'weekly';
+  if (minutes === 300 || /5[- ]?h/i.test(label)) return 'session';
+  if (minutes === 10080 || /week/i.test(label)) return 'weekly';
   return 'other';
 }
 
 export type Edge = {
   valid: boolean;
   delta: number;
-  reason: 'continuous' | 'gap' | 'scope' | 'reset' | 'correction' | 'unknown-reset';
+  reason: 'continuous' | 'gap' | 'other' | 'reset' | 'correction' | 'unknown-reset';
 };
 
 const RESET_TOLERANCE = 60_000;
@@ -72,7 +66,7 @@ const RESET_TOLERANCE = 60_000;
  */
 export function edge(a: Sample, b: Sample): Edge {
   const no = (reason: Edge['reason']): Edge => ({valid: false, delta: 0, reason});
-  if (a.sourceId !== b.sourceId || a.scope !== b.scope || a.id !== b.id) return no('scope');
+  if (a.sourceId !== b.sourceId || a.id !== b.id) return no('other');
 
   const elapsed = b.sourceAt - a.sourceAt;
   if (elapsed <= 0 || elapsed > staleAfter(a)) return no('gap');
@@ -91,11 +85,11 @@ export function edge(a: Sample, b: Sample): Edge {
   return {valid: true, delta: Math.max(0, b.used - a.used), reason: 'continuous'};
 }
 
-export type Point = {at: number; used: number; remaining: number; segment: number; scope: string; staleAfterMs?: number | null};
+export type Point = {at: number; used: number; remaining: number; segment: number; staleAfterMs?: number | null};
 
 /**
- * Chart continuity breaks only where data is missing or the account changed; a reset
- * is a real movement of the quota and is drawn as such. Consumption uses `edge`.
+ * Chart continuity breaks only where data is missing; a reset is a real movement of
+ * the quota and is drawn as such. Consumption uses `edge`.
  */
 export function series(samples: Sample[]) {
   let consumed = 0;
@@ -109,9 +103,9 @@ export function series(samples: Sample[]) {
         consumed += step.delta;
         coveredMs += sample.sourceAt - previous.sourceAt;
       }
-      if (step.reason === 'gap' || step.reason === 'scope') segment++;
+      if (step.reason === 'gap') segment++;
     }
-    return {at: sample.sourceAt, used: sample.used, remaining: sample.remaining, segment, scope: sample.scope, staleAfterMs: sample.staleAfterMs};
+    return {at: sample.sourceAt, used: sample.used, remaining: sample.remaining, segment, staleAfterMs: sample.staleAfterMs};
   });
   return {points, consumed, coveredMs, samples: samples.length};
 }
@@ -119,7 +113,7 @@ export function series(samples: Sample[]) {
 /**
  * Put a series on a shared time grid. A bucket shows the *lowest* remaining value seen
  * in it (the conservative reading). On the grid a line breaks only where a whole
- * bucket is empty or the account changed; shorter hiccups are below its resolution.
+ * bucket is empty; shorter hiccups are below its resolution.
  */
 export function bucketize(points: Point[], bucketMs: number): Point[] {
   const buckets: Point[] = [];
@@ -128,7 +122,7 @@ export function bucketize(points: Point[], bucketMs: number): Point[] {
   for (const point of points) {
     const at = Math.floor(point.at / bucketMs) * bucketMs;
     const current = buckets.at(-1);
-    if (current?.at === at && point.scope === current.scope) {
+    if (current?.at === at) {
       if (point.remaining < current.remaining) {
         current.remaining = point.remaining;
         current.used = point.used;
@@ -137,7 +131,7 @@ export function bucketize(points: Point[], bucketMs: number): Point[] {
       continue;
     }
     const gap = previous ? at - Math.floor(previous.at / bucketMs) * bucketMs > Math.max(bucketMs, staleAfter(previous)) : false;
-    if (current && (gap || point.scope !== current.scope)) segment++;
+    if (current && gap) segment++;
     buckets.push({...point, at, segment});
     previous = point;
   }

@@ -8,6 +8,7 @@ import {DASHES, PROVIDERS} from '../lib/providers';
 import {planOf, setMuted, setPrefs, usePrefs, type Prefs} from '../lib/prefs';
 import {Chart, type Line, type Marker, type PlanLine} from './Chart';
 import type {Resets} from '../lib/resets';
+import {t, useLocale} from '../i18n';
 
 /** How much future the chart keeps on its right, per range. */
 const FUTURE: Record<string, number> = {'24h': 4 * 3_600_000, '7d': 86_400_000, '30d': 3 * 86_400_000};
@@ -34,25 +35,24 @@ function forecast(line: Line, live: Win | undefined, now: number, weekly: Weekly
   const none = {text: '—', tone: '', title: ''};
   const plan = live ? planAt(live, now, weekly) : null;
   if (!live?.resetAt || live.resetAt <= now) return none;
-  if (plan?.restDay) return {text: 'выходной', tone: 'muted', title: 'Рабочие дни окна закончились, лимит не планируется'};
+  if (plan?.restDay) return {text: t('forecast.restDay'), tone: 'muted', title: t('forecast.restDayHint')};
 
   const hours = line.coveredMs / 3_600_000;
-  if (hours < 0.5) return {...none, title: 'Нужно хотя бы 30 минут непрерывных замеров'};
+  if (hours < 0.5) return {...none, title: t('forecast.needData')};
   const rate = line.consumed / hours;
-  const title = `Средний темп за период: ${rate < 0.05 ? '≈ 0' : num(rate, 1)} п.п./ч`;
+  const title = t('forecast.rate', {rate: rate < 0.05 ? '≈ 0' : num(rate, 1)});
   const deadline = plan?.deadline ?? live.resetAt;
-  const target = plan?.weekly ? 'к выходному' : 'к сбросу';
 
   if (rate > 0.01) {
     const untilEmpty = (live.remaining / rate) * 3_600_000;
     const untilDeadline = deadline - now;
     if (untilEmpty < untilDeadline) {
-      return {text: `закончится через ${duration(untilEmpty, true)}`, tone: untilEmpty < untilDeadline / 2 ? 'v-crit' : 'v-warn', title};
+      return {text: t('forecast.runsOut', {time: duration(untilEmpty, true)}), tone: untilEmpty < untilDeadline / 2 ? 'v-crit' : 'v-warn', title};
     }
   }
   const left = Math.max(0, live.remaining - (rate * (deadline - now)) / 3_600_000);
-  if (left < 5) return {text: `уложится ${target}`, tone: '', title};
-  return {text: `${target} останется ~${num(left)}%`, tone: plan?.weekly ? 'muted' : '', title};
+  if (left < 5) return {text: t(plan?.weekly ? 'forecast.onPaceRestDay' : 'forecast.onPaceReset'), tone: '', title};
+  return {text: t(plan?.weekly ? 'forecast.leftRestDay' : 'forecast.leftReset', {value: num(left)}), tone: plan?.weekly ? 'muted' : '', title};
 }
 
 function SeriesTable({lines, overview, now, prefs}: {lines: Line[]; overview: Overview | null; now: number; prefs: Prefs}) {
@@ -61,11 +61,11 @@ function SeriesTable({lines, overview, now, prefs}: {lines: Line[]; overview: Ov
       <table>
         <thead>
           <tr>
-            <th>Лимит</th>
-            <th>Сейчас</th>
-            <th title="Сколько должно оставаться сейчас по плану расхода">План</th>
-            <th>Расход за период</th>
-            <th>Прогноз</th>
+            <th>{t('table.limit')}</th>
+            <th>{t('table.now')}</th>
+            <th title={t('table.planHint')}>{t('table.plan')}</th>
+            <th>{t('table.spent')}</th>
+            <th>{t('table.forecast')}</th>
           </tr>
         </thead>
         <tbody>
@@ -82,7 +82,7 @@ function SeriesTable({lines, overview, now, prefs}: {lines: Line[]; overview: Ov
                   {line.name}
                 </td>
                 <td className={line.current !== null ? `v-${level(line.current)}` : ''}>{line.current !== null ? `${num(line.current)}%` : '—'}</td>
-                <td title={plan ? `${delta >= 0 ? 'Отстаёт от плана' : 'Опережает план'} на ${num(Math.abs(delta))} п.п.` : ''}>
+                <td title={plan ? t(delta >= 0 ? 'table.behindBy' : 'table.aheadBy', {value: num(Math.abs(delta))}) : ''}>
                   {plan ? (
                     <>
                       {num(plan.remaining)}%
@@ -92,7 +92,7 @@ function SeriesTable({lines, overview, now, prefs}: {lines: Line[]; overview: Ov
                     '—'
                   )}
                 </td>
-                <td>{line.consumed > 0 ? `${num(line.consumed, 1)} п.п.` : line.coveredMs ? 'не расходовался' : '—'}</td>
+                <td>{line.consumed > 0 ? t('table.points', {value: num(line.consumed, 1)}) : line.coveredMs ? t('table.unused') : '—'}</td>
                 <td className={outlook.tone} title={outlook.title}>
                   {outlook.text}
                 </td>
@@ -108,6 +108,8 @@ function SeriesTable({lines, overview, now, prefs}: {lines: Line[]; overview: Ov
 /** Combined history of every selected window, with its own legend and table view. */
 export function History({history, overview, resets, now}: {history: HistoryData | null; overview: Overview | null; resets: Resets; now: number}) {
   const prefs = usePrefs();
+  // Series names and markers are text: they are rebuilt when the language changes.
+  const locale = useLocale();
 
   const lines: Line[] = useMemo(() => {
     if (!history) return [];
@@ -121,13 +123,13 @@ export function History({history, overview, resets, now}: {history: HistoryData 
         return {
           ...entry,
           key: windowKey(entry.sourceId, entry.bucket),
-          name: seriesName(source ?? {provider: entry.provider, accountKey: 'default'}, entry.bucket, entry.label, entry.minutes),
+          name: seriesName(source ?? {provider: entry.provider}, entry.bucket, entry.label, entry.minutes),
           color: PROVIDERS[entry.provider]?.color ?? '#8b90b5',
           dash: DASHES[index % DASHES.length],
           current: live ? live.remaining : entry.points.at(-1)![1],
         };
       });
-  }, [history, overview, prefs.kind, prefs.hidden]);
+  }, [history, overview, prefs.kind, prefs.hidden, locale]);
 
   const visible = useMemo(() => lines.filter(line => !prefs.muted[line.key]), [lines, prefs.muted]);
   const from = history ? Math.max(history.since, history.collectionStart) : now - 86_400_000;
@@ -146,7 +148,7 @@ export function History({history, overview, resets, now}: {history: HistoryData 
   const markers: Marker[] = useMemo(() => {
     const list: Marker[] = [];
     if (announced && announced > from) {
-      list.push({key: 'announced-codex', at: announced, label: 'объявлен сброс Codex', color: 'var(--accent)', strong: true});
+      list.push({key: 'announced-codex', at: announced, label: t('chart.announcedCodex'), color: 'var(--accent)', strong: true});
     }
     const seen = new Set<string>();
     for (const line of visible) {
@@ -156,10 +158,10 @@ export function History({history, overview, resets, now}: {history: HistoryData 
       if (seen.has(key)) continue;
       seen.add(key);
       const source = overview?.sources.find(s => s.id === line.sourceId);
-      list.push({key, at: live.resetAt, label: `сброс · ${source ? sourceLabel(source) : line.provider}`, color: line.color});
+      list.push({key, at: live.resetAt, label: t('chart.reset', {source: source ? sourceLabel(source) : line.provider}), color: line.color});
     }
     return list;
-  }, [announced, visible, overview, from, to, measuredTo, prefs]);
+  }, [announced, visible, overview, from, to, measuredTo, prefs, locale]);
 
   // One plan line per distinct weekly window; windows of a source that share a reset
   // (e.g. Claude weekly and Fable) share one plan.
@@ -176,30 +178,37 @@ export function History({history, overview, resets, now}: {history: HistoryData 
       const source = overview?.sources.find(s => s.id === line.sourceId);
       seen.set(key, {
         key,
-        name: `план · ${source ? sourceLabel(source) : line.provider}`,
+        name: t('chart.plan', {source: source ? sourceLabel(source) : line.provider}),
         color: line.color,
         runs: weeklyPlanLine(live.resetAt, from, to, planOf(prefs, line.sourceId)),
       });
     }
     return [...seen.values()];
-  }, [visible, overview, from, to, now, planAvailable, prefs.showPlan, prefs.plans]);
+  }, [visible, overview, from, to, now, planAvailable, prefs.showPlan, prefs.plans, locale]);
 
   return (
-    <section className="panel history" aria-label="История">
+    <section className="panel history" aria-label={t('history.label')}>
       <div className="panel-head">
-        <h2>История остатка</h2>
+        <h2>{t('history.title')}</h2>
         <div className="controls">
           <Segmented
             value={prefs.kind}
             onChange={value => setPrefs({kind: value as Kind})}
-            options={[['weekly', 'Недельные'], ['session', '5-часовые']]}
-            label="Тип окна"
+            options={[
+              ['weekly', t('history.weekly')],
+              ['session', t('history.session')],
+            ]}
+            label={t('history.kind')}
           />
           <Segmented
             value={prefs.range}
             onChange={value => setPrefs({range: value})}
-            options={[['24h', '24 ч'], ['7d', '7 дней'], ['30d', '30 дней']]}
-            label="Период"
+            options={[
+              ['24h', t('history.hours', {count: 24})],
+              ['7d', t('history.days', {count: 7})],
+              ['30d', t('history.days', {count: 30})],
+            ]}
+            label={t('history.range')}
           />
         </div>
       </div>
@@ -219,26 +228,26 @@ export function History({history, overview, resets, now}: {history: HistoryData 
             {line.current !== null && <b>{num(line.current)}%</b>}
           </button>
         ))}
-        {!lines.length && <span className="legend-empty">Нет выбранных лимитов этого типа</span>}
+        {!lines.length && <span className="legend-empty">{t('history.noLines')}</span>}
         {planAvailable && (
           <button
             className="legend-item legend-plan"
             aria-pressed={prefs.showPlan}
-            title="План расхода недели по дням; настраивается в карточке провайдера"
+            title={t('history.planLegendHint')}
             onClick={() => setPrefs({showPlan: !prefs.showPlan})}
           >
             <svg width="18" height="6" aria-hidden="true">
               <line x1="1" x2="17" y1="3" y2="3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeDasharray="1 4" />
             </svg>
-            <span>План расхода</span>
+            <span>{t('history.planLegend')}</span>
           </button>
         )}
       </div>
 
-      {history ? <Chart lines={visible} plans={plans} markers={markers} from={from} now={measuredTo} to={to} bucketMs={history.bucketMs} /> : <div className="chart chart-loading">Загружаем историю…</div>}
+      {history ? <Chart lines={visible} plans={plans} markers={markers} from={from} now={measuredTo} to={to} bucketMs={history.bucketMs} /> : <div className="chart chart-loading">{t('history.loading')}</div>}
       {history && <SeriesTable lines={lines} overview={overview} now={now} prefs={prefs} />}
       {history && history.since < history.collectionStart && (
-        <p className="footnote">История ведётся с {day(history.collectionStart)}. Разрыв линии — период без замеров.</p>
+        <p className="footnote">{t('history.since', {date: day(history.collectionStart)})}</p>
       )}
     </section>
   );

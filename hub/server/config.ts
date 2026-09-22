@@ -1,4 +1,3 @@
-import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 
@@ -14,35 +13,29 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 export const appRoot = path.resolve(here, path.basename(path.dirname(here)) === 'dist' ? '../..' : '..');
 
 export const config = {
-  dataDir: process.env.AGENT_LIMITS_DATA_DIR || path.join(appRoot, 'data'),
-  databaseFile: 'agent-limits.sqlite',
+  dataDir: process.env.QUOTUM_DATA_DIR || path.join(appRoot, 'data'),
+  databaseFile: 'quotum.sqlite',
   clientRoot: path.join(appRoot, 'dist/client'),
-  home: os.homedir(),
 
   http: {
-    host: process.env.AGENT_LIMITS_BIND || '127.0.0.1',
-    port: Number(process.env.AGENT_LIMITS_PORT || 8080),
+    host: process.env.QUOTUM_BIND || '127.0.0.1',
+    port: Number(process.env.QUOTUM_PORT || 8080),
     /** The dashboard answers only to these host names (comma-separated); anything else is 403. */
-    hosts: list(process.env.AGENT_LIMITS_ALLOWED_HOSTS, ['127.0.0.1', 'localhost']),
+    hosts: list(process.env.QUOTUM_ALLOWED_HOSTS, ['127.0.0.1', 'localhost']),
     /** Origins allowed to embed the dashboard in a frame, besides itself. */
-    frameAncestors: list(process.env.AGENT_LIMITS_FRAME_ANCESTORS, []),
-  },
-
-  vendor: {
-    baseUrl: 'http://127.0.0.1:18081',
-    token: process.env.AGENT_LIMITS_VENDOR_TOKEN,
+    frameAncestors: list(process.env.QUOTUM_FRAME_ANCESTORS, []),
   },
 
   auth: {
     /** Who may sign up after the first user (who always may): `invite` (default) or `open`. */
-    signup: process.env.AGENT_LIMITS_SIGNUP === 'open' ? ('open' as const) : ('invite' as const),
+    signup: process.env.QUOTUM_SIGNUP === 'open' ? ('open' as const) : ('invite' as const),
     sessionTtlMs: 30 * 86_400_000,
     inviteTtlMs: 7 * 86_400_000,
     /** Device codes: how long one is valid, and how often an agent may ask about it. */
     codeTtlMs: 10 * 60_000,
     codeIntervalS: 5,
     /** The address people open, for links shown to agents; derived from the request when unset. */
-    publicUrl: process.env.AGENT_LIMITS_PUBLIC_URL?.replace(/\/+$/, '') || null,
+    publicUrl: process.env.QUOTUM_PUBLIC_URL?.replace(/\/+$/, '') || null,
   },
 
   /**
@@ -50,26 +43,16 @@ export const config = {
    * static tokens (comma-separated) additionally deliver to the default board.
    */
   ingest: {
-    tokens: (process.env.AGENT_LIMITS_INGEST_TOKENS ?? '')
+    tokens: (process.env.QUOTUM_INGEST_TOKENS ?? '')
       .split(',')
       .map(token => token.trim())
       .filter(token => token.length >= 16),
     bodyLimit: 1024 * 1024,
-    /** The agents' default interval; the header ring follows it. */
-    intervalMs: 120_000,
-  },
-
-  collection: {
-    intervalMs: 120_000,
-    /** One cycle may never outlive the interval it belongs to. */
-    timeoutMs: 105_000,
-    /** Backoff multipliers applied after consecutive fully failed cycles. */
-    maxBackoff: 4,
   },
 
   retention: {
     sampleDays: 90,
-    /** Data older than this is "not a measurement of now" for the UI and for edges. */
+    /** How long a measurement stays current when its agent does not say (agents always do). */
     freshMs: 330_000,
   },
 
@@ -86,15 +69,6 @@ export const config = {
     } as Record<string, {durationMs: number; bucketMs: number}>,
   },
 
-  /** Read-only mounts Agent Limits may inspect for account identity (metadata only). */
-  identityFiles: {
-    claudeProfile: process.env.AGENT_LIMITS_CLAUDE_PROFILE || path.join(os.homedir(), '.claude.json'),
-    antigravityToken: '.gemini/antigravity-cli/antigravity-oauth-token',
-    claudeCredentials: '.claude/.credentials.json',
-  },
-
-  googleJwksUrl: 'https://www.googleapis.com/oauth2/v3/certs',
-
   /** Community reset trackers (see domain/resets.ts); credited wherever shown. */
   resets: {
     codexApi: 'https://codex-resets.com/api/v1/status',
@@ -103,5 +77,5 @@ export const config = {
   },
 } as const;
 
-export const version = '2.4.0';
-export const serviceName = 'Agent Limits';
+export const version = '0.1.0';
+export const serviceName = 'Quotum';

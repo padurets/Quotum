@@ -1,24 +1,10 @@
 import {DatabaseSync} from 'node:sqlite';
-import {randomUUID} from 'node:crypto';
 import {config} from '../config.js';
-import {DEFAULT_ACCOUNT, DEFAULT_BOARD, describeSource, hash, parseSourceId, providers, sourceId, type Provider, type Source} from '../domain/sources.js';
-import {
-  bucketize,
-  kindOf,
-  series,
-  type Confidence,
-  type Measurement,
-  type Sample,
-  type SourceState,
-} from '../domain/quota.js';
+import {DEFAULT_BOARD, providers, sourceId, type Provider, type Source} from '../domain/sources.js';
+import {bucketize, kindOf, series, type Measurement, type Sample, type SourceState} from '../domain/quota.js';
 import {migrate} from './schema.js';
 
-export type Guard = {scope: string; confidence: Confidence};
-
 export {DEFAULT_BOARD};
-
-/** A provider's default account is listed before its other accounts. */
-const accountOrder = (source: Source) => (source.accountKey === DEFAULT_ACCOUNT ? 0 : 1);
 
 export type HistorySeries = {
   sourceId: string;
@@ -33,157 +19,104 @@ export type HistorySeries = {
   points: (readonly [number, number, number])[];
 };
 
+type SampleRow = {
+  source_id: string;
+  provider: Provider;
+  bucket: string;
+  at: number;
+  label: string;
+  used: number;
+  reset_at: number | null;
+  minutes: number | null;
+  stale_after_ms: number | null;
+};
+
 /**
- * All persistence in one place: measurements, per-source state, identity guards and
- * failed attempts. One writer, prepared statements, WAL.
+ * Sources, their last state and every measured value, in one SQLite file (WAL, one
+ * writer, prepared statements). People and devices live in the same file, see
+ * directory.ts.
  */
 export class Store {
   readonly db: DatabaseSync;
   readonly collectionStart: number;
+  /** Changes whenever something the dashboard shows changes; history is cached by it. */
+  revision = Date.now();
 
-  /**
-   * `legacyDefaults`: the built-in collector feeds the default board, so that board
-   * always lists every provider's default source, even before its first measurement.
-   */
-  constructor(
-    file: string,
-    now = Date.now(),
-    private readonly options: {legacyDefaults?: boolean} = {},
-  ) {
+  constructor(file: string, now = Date.now()) {
     this.db = new DatabaseSync(file);
     migrate(this.db, now);
-    this.collectionStart = Number((this.db.prepare('SELECT value FROM meta WHERE key = ?').get('collectionStart') as any).value);
+    this.collectionStart = Number((this.db.prepare('SELECT value FROM meta WHERE key = ?').get('collectionStart') as {value: string}).value);
   }
 
-  /** The sources of a board, in provider order. */
-  sources(board = DEFAULT_BOARD): Source[] {
-    const rows = this.db.prepare('SELECT id FROM sources WHERE board_id = ?').all(board) as {id: string}[];
-    const legacy = board === DEFAULT_BOARD && this.options.legacyDefaults ? providers.map(p => sourceId(p)) : [];
-    const ids = new Set([...legacy, ...rows.map(r => r.id)]);
-    return [...ids]
-      .map(id => {
-        const parsed = parseSourceId(id);
-        return parsed ? describeSource(parsed.provider, parsed.accountKey) : null;
-      })
-      .filter((s): s is Source => s !== null)
-      .sort((a, b) => providers.indexOf(a.provider) - providers.indexOf(b.provider) || accountOrder(a) - accountOrder(b) || a.accountKey.localeCompare(b.accountKey));
+  /** The sources of a board: by provider, then in the order they appeared. */
+  sources(board: string): Source[] {
+    const rows = this.db.prepare('SELECT id, provider, account FROM sources WHERE board_id = ? ORDER BY created_at, rowid').all(board) as Source[];
+    return rows.filter(s => providers.includes(s.provider)).sort((a, b) => providers.indexOf(a.provider) - providers.indexOf(b.provider));
   }
 
-  register(source: Source, now: number, board = DEFAULT_BOARD) {
-    this.db
-      .prepare('INSERT OR IGNORE INTO sources (id, provider, account_key, created_at, board_id) VALUES (?, ?, ?, ?, ?)')
-      .run(source.id, source.provider, source.accountKey, now, board);
+  /** The source of a subscription on a board, created the first time it is seen. */
+  source(board: string, provider: Provider, account: string, now: number): string {
+    const row = this.db.prepare('SELECT id FROM sources WHERE board_id = ? AND provider = ? AND account = ?').get(board, provider, account) as
+      | {id: string}
+      | undefined;
+    if (row) return row.id;
+    const id = sourceId(board, provider, account);
+    this.db.prepare('INSERT INTO sources VALUES (?, ?, ?, ?, ?)').run(id, board, provider, account, now);
+    this.revision++;
+    return id;
   }
 
-  states(board = DEFAULT_BOARD): SourceState[] {
-    return this.sources(board).map(source => this.stateOf(source));
+  states(board: string): SourceState[] {
+    return this.sources(board).map(source => this.stateOf(source.id, source.provider));
   }
 
   state(id: string): SourceState {
-    const parsed = parseSourceId(id)!;
-    return this.stateOf(describeSource(parsed.provider, parsed.accountKey));
+    const row = this.db.prepare('SELECT provider FROM sources WHERE id = ?').get(id) as {provider: Provider} | undefined;
+    if (!row) throw new Error(`unknown source ${id}`);
+    return this.stateOf(id, row.provider);
   }
 
-  private stateOf(source: Source): SourceState {
-    const row = this.db.prepare('SELECT payload FROM state WHERE source_id = ?').get(source.id) as {payload: string} | undefined;
-    if (!row) {
-      return {
-        id: source.id,
-        provider: source.provider,
-        accountKey: source.accountKey,
-        plan: '',
-        confidence: 'unknown' as Confidence,
-        scope: '',
-        successAt: null,
-        attemptAt: 0,
-        error: 'waiting',
-        windows: [],
-      };
-    }
-    return {...(JSON.parse(row.payload) as SourceState), id: source.id, provider: source.provider, accountKey: source.accountKey};
+  private stateOf(id: string, provider: Provider): SourceState {
+    const row = this.db.prepare('SELECT payload FROM state WHERE source_id = ?').get(id) as {payload: string} | undefined;
+    if (!row) return {id, provider, plan: '', successAt: null, attemptAt: 0, error: 'waiting', windows: []};
+    return {...(JSON.parse(row.payload) as SourceState), id, provider};
   }
 
-  /**
-   * Which identity segment a measurement belongs to. A verified provider account wins;
-   * otherwise unchanged credential metadata keeps the previous segment and any change
-   * starts a new one, so two accounts never merge into one history.
-   */
-  scope(id: string, identity: string | null, signature: string | null): Guard {
-    if (identity) return {scope: identity, confidence: 'provider'};
-    if (!signature) return {scope: randomUUID(), confidence: 'unknown'};
-    const row = this.db.prepare('SELECT * FROM guards WHERE source_id = ?').get(id) as {signature: string; scope: string} | undefined;
-    if (row?.signature === signature) return {scope: row.scope, confidence: 'credential-boundary'};
-    const scope = randomUUID();
-    this.db.prepare('INSERT OR REPLACE INTO guards VALUES (?, ?, ?)').run(id, signature, scope);
-    return {scope, confidence: 'credential-boundary'};
-  }
-
-  /** Stores a measurement; returns false when the source merely repeated itself. */
-  record(id: string, measurement: Measurement, observedAt: number, guard: Guard): boolean {
-    const previous = this.state(id);
-    if (previous.scope === guard.scope && previous.successAt !== null && measurement.sourceAt <= previous.successAt) {
-      this.fail(id, 'stale_source', observedAt);
-      return false;
-    }
-    const parsed = parseSourceId(id)!;
+  /** Stores a measurement: a sample per window and the new state of the source. */
+  record(id: string, measurement: Measurement) {
+    const {provider} = this.state(id);
+    const insert = this.db.prepare(
+      'INSERT OR IGNORE INTO samples (source_id, bucket, at, label, used, reset_at, minutes, stale_after_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    );
+    const state: SourceState = {
+      id,
+      provider,
+      plan: measurement.plan,
+      successAt: measurement.sourceAt,
+      attemptAt: measurement.sourceAt,
+      error: null,
+      windows: measurement.windows,
+      staleAfterMs: measurement.staleAfterMs ?? null,
+    };
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      // Sources the built-in collector writes need no explicit registration.
-      this.db
-        .prepare('INSERT OR IGNORE INTO sources (id, provider, account_key, created_at, board_id) VALUES (?, ?, ?, ?, ?)')
-        .run(id, parsed.provider, parsed.accountKey, observedAt, DEFAULT_BOARD);
-      const insert = this.db.prepare(
-        'INSERT OR IGNORE INTO samples' +
-          ' (provider, scope, bucket, source_at, observed_at, label, used, reset_at, minutes, source_id, stale_after_ms)' +
-          ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      );
       for (const w of measurement.windows) {
-        insert.run(
-          parsed.provider, guard.scope, w.id, measurement.sourceAt, observedAt,
-          w.label, w.used, w.resetAt, w.minutes, id, measurement.staleAfterMs ?? null,
-        );
+        insert.run(id, w.id, measurement.sourceAt, w.label, w.used, w.resetAt, w.minutes, measurement.staleAfterMs ?? null);
       }
-      const state: SourceState = {
-        id,
-        provider: parsed.provider,
-        accountKey: parsed.accountKey,
-        plan: measurement.plan,
-        ...guard,
-        successAt: measurement.sourceAt,
-        attemptAt: observedAt,
-        error: null,
-        windows: measurement.windows,
-        staleAfterMs: measurement.staleAfterMs ?? null,
-      };
       this.db.prepare('INSERT OR REPLACE INTO state VALUES (?, ?)').run(id, JSON.stringify(state));
-      this.db.prepare('INSERT INTO attempts (source_id, at, error) VALUES (?, ?, NULL)').run(id, observedAt);
       this.db.exec('COMMIT');
-      return true;
     } catch (error) {
       this.db.exec('ROLLBACK');
       throw error;
     }
+    this.revision++;
   }
 
-  /** Records a failed attempt; the last successful values stay on screen. */
-  /**
-   * The source a subscription account of a board is stored under, created on first
-   * sight. On the default board the first account of a provider takes the provider's
-   * default source when `useDefault` is set (no collector writes there), so existing
-   * history and preferences carry on. Other ids are stable hashes of board and account.
-   */
-  agentSource(board: string, provider: Provider, account: string, useDefault: boolean, now: number): string {
-    const row = this.db
-      .prepare('SELECT source_id FROM agent_accounts WHERE board_id = ? AND provider = ? AND account = ?')
-      .get(board, provider, account) as {source_id: string} | undefined;
-    if (row) return row.source_id;
-    const fallback = sourceId(provider);
-    const taken = this.db.prepare('SELECT 1 FROM agent_accounts WHERE source_id = ?').get(fallback);
-    const id = board === DEFAULT_BOARD && useDefault && !taken ? fallback : sourceId(provider, hash(`${board}\n${account}`).slice(0, 8));
-    this.db.prepare('INSERT INTO agent_accounts VALUES (?, ?, ?, ?, ?)').run(board, provider, account, id, now);
-    const parsed = parseSourceId(id)!;
-    this.register(describeSource(parsed.provider, parsed.accountKey), now, board);
-    return id;
+  /** Records a failed attempt; the last good values stay on screen. */
+  fail(id: string, error: string, at: number) {
+    const previous = this.state(id);
+    this.db.prepare('INSERT OR REPLACE INTO state VALUES (?, ?)').run(id, JSON.stringify({...previous, attemptAt: at, error}));
+    this.revision++;
   }
 
   /** Remembers which source a device last delivered for a provider (its failures go there). */
@@ -200,44 +133,32 @@ export class Store {
 
   /** Which sources each device of a board delivers to. */
   deviceSources(board: string): {device: string; provider: Provider; source: string; seenAt: number}[] {
-    return (
-      this.db
-        .prepare(
-          'SELECT d.device_id, d.provider, d.source_id, d.seen_at FROM device_sources d JOIN sources s ON s.id = d.source_id WHERE s.board_id = ?',
-        )
-        .all(board) as {device_id: string; provider: Provider; source_id: string; seen_at: number}[]
-    ).map(r => ({device: r.device_id, provider: r.provider, source: r.source_id, seenAt: r.seen_at}));
-  }
-
-  fail(id: string, error: string, at: number) {
-    const previous = this.state(id);
-    this.db.prepare('INSERT OR REPLACE INTO state VALUES (?, ?)').run(id, JSON.stringify({...previous, attemptAt: at, error}));
-    this.db.prepare('INSERT INTO attempts (source_id, at, error) VALUES (?, ?, ?)').run(id, at, error);
+    const rows = this.db
+      .prepare('SELECT d.device_id, d.provider, d.source_id, d.seen_at FROM device_sources d JOIN sources s ON s.id = d.source_id WHERE s.board_id = ?')
+      .all(board) as {device_id: string; provider: Provider; source_id: string; seen_at: number}[];
+    return rows.map(r => ({device: r.device_id, provider: r.provider, source: r.source_id, seenAt: r.seen_at}));
   }
 
   /** Every source/window series since `from` on a shared grid, ready for the chart and the table. */
   history(board: string, from: number, bucketMs: number): HistorySeries[] {
     const rows = this.db
       .prepare(
-        'SELECT samples.* FROM samples JOIN sources ON sources.id = samples.source_id' +
-          ' WHERE sources.board_id = ? AND samples.source_at >= ? ORDER BY samples.source_id, samples.bucket, samples.source_at',
+        'SELECT samples.*, sources.provider FROM samples JOIN sources ON sources.id = samples.source_id' +
+          ' WHERE sources.board_id = ? AND samples.at >= ? ORDER BY samples.source_id, samples.bucket, samples.at',
       )
-      .all(board, from) as any[];
+      .all(board, from) as SampleRow[];
 
     const groups = new Map<string, Sample[]>();
     for (const row of rows) {
-      const id = row.source_id || row.provider;
-      const key = `${id} ${row.bucket}`;
-      const group = groups.get(key) ?? [];
-      if (!group.length) groups.set(key, group);
+      const key = `${row.source_id} ${row.bucket}`;
+      let group = groups.get(key);
+      if (!group) groups.set(key, (group = []));
       group.push({
-        sourceId: id,
+        sourceId: row.source_id,
         provider: row.provider,
-        scope: row.scope,
         id: row.bucket,
         label: row.label,
-        sourceAt: row.source_at,
-        observedAt: row.observed_at,
+        sourceAt: row.at,
         used: row.used,
         remaining: 100 - row.used,
         resetAt: row.reset_at,
@@ -246,6 +167,7 @@ export class Store {
       });
     }
 
+    // Series follow the cards: sources in board order, windows in the order the source reports them.
     const states = this.states(board);
     const rank = (sample: Sample) => {
       const source = states.findIndex(s => s.id === sample.sourceId);
@@ -271,10 +193,9 @@ export class Store {
       });
   }
 
+  /** Forgets samples older than the retention period. */
   prune(now: number) {
-    const cutoff = now - config.retention.sampleDays * 86_400_000;
-    this.db.prepare('DELETE FROM samples WHERE source_at < ?').run(cutoff);
-    this.db.prepare('DELETE FROM attempts WHERE at < ?').run(cutoff);
+    this.db.prepare('DELETE FROM samples WHERE at < ?').run(now - config.retention.sampleDays * 86_400_000);
   }
 
   close() {

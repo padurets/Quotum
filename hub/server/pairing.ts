@@ -24,7 +24,7 @@ export class Pairing {
     const m = input.machine ?? {};
     const machine = {id: text(m.id), name: text(m.name), os: text(m.os, 40), arch: text(m.arch, 40), agent: text(input.agent)};
     if (Object.values(machine).some(v => v === null)) return null;
-    const deviceCode = newSecret('al_c');
+    const deviceCode = newSecret('qt_c');
     for (let attempt = 0; ; attempt++) {
       const userCode = newUserCode();
       try {
@@ -48,7 +48,7 @@ export class Pairing {
     if (!this.directory.useCode(request.id)) return 'expired_token';
     const user = this.directory.user(request.userId!)!;
     const board = this.directory.board(request.boardId!)!;
-    const token = newSecret('al_d');
+    const token = newSecret('qt_d');
     const {agent, ...machine} = request.machine;
     const device = this.directory.saveDevice(
       {boardId: board.id, machine, agent, owner: user.name, ownerUserId: user.id, tokenId: null, secret: token},

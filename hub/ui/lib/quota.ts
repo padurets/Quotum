@@ -1,6 +1,8 @@
 import type {Kind, SourceState} from './types';
+import {known, t} from '../i18n';
 import {PROVIDERS} from './providers';
 import {kindOf} from './kind';
+import {duration} from './format';
 
 export {kindOf};
 
@@ -9,8 +11,10 @@ export type Level = 'ok' | 'warn' | 'crit';
 /** Canonical traffic light on the remaining share of a quota. */
 export const level = (remaining: number): Level => (remaining < 10 ? 'crit' : remaining <= 30 ? 'warn' : 'ok');
 
-export const KIND_TEXT: Record<Kind, string> = {session: '5 часов', weekly: 'Неделя', other: ''};
-
+/** A kind inside a longer name: "Gemini · weekly". */
+const kindText = (kind: Exclude<Kind, 'other'>) => t(kind === 'session' ? 'kind.session' : 'kind.weekly');
+/** A kind on its own: "Weekly". */
+const kindTitle = (kind: Exclude<Kind, 'other'>) => t(kind === 'session' ? 'kind.title.session' : 'kind.title.weekly');
 
 /** The model pool a window covers, when the provider splits its quota. */
 export function scopeOf(bucket: string, label: string) {
@@ -20,18 +24,19 @@ export function scopeOf(bucket: string, label: string) {
   if (/spark/i.test(bucket)) return 'Spark';
   const scoped = bucket.match(/scoped-([a-z0-9]+)/i);
   if (scoped) return scoped[1][0].toUpperCase() + scoped[1].slice(1);
-  return label.replace(/\b(5[- ]hour|weekly|only)\b/gi, '').trim();
+  // Labels that only name the window's kind or length are no scope.
+  return label.replace(/\b(5[- ]hours?|weekly|only|window|\d+ min)\b/gi, '').trim();
 }
 
-/** "Неделя" or "Gemini · неделя" — how a window is named inside its own card. */
+/** "Weekly" or "Gemini · weekly" — how a window is named inside its own card. */
 export function windowName(bucket: string, label: string, minutes: number | null) {
   const kind = kindOf(minutes, label);
   const scope = scopeOf(bucket, label);
-  if (kind === 'other') return scope || label;
-  return scope ? `${scope} · ${KIND_TEXT[kind].toLowerCase()}` : KIND_TEXT[kind];
+  if (kind === 'other') return scope || (minutes ? duration(minutes * 60_000) : label);
+  return scope ? `${scope} · ${kindText(kind)}` : kindTitle(kind);
 }
 
-export const sourceLabel = (source: {provider: string; accountKey: string; title?: string}) =>
+export const sourceLabel = (source: {provider: string; title?: string}) =>
   source.title ?? PROVIDERS[source.provider]?.name ?? source.provider;
 
 /**
@@ -50,27 +55,16 @@ export function titled<T extends {provider: string; owners?: string[]}>(sources:
 }
 
 /** Fully qualified series name: source, model pool, window length. */
-export function seriesName(source: {provider: string; accountKey: string}, bucket: string, label: string, minutes: number | null) {
+export function seriesName(source: {provider: string; title?: string}, bucket: string, label: string, minutes: number | null) {
   const kind = kindOf(minutes, label);
-  const parts = [sourceLabel(source), scopeOf(bucket, label), kind === 'other' ? '' : KIND_TEXT[kind].toLowerCase()];
+  const parts = [sourceLabel(source), scopeOf(bucket, label), kind === 'other' ? '' : kindText(kind)];
   return parts.filter(Boolean).join(' · ') || label;
 }
 
-export const ERRORS: Record<string, string> = {
-  waiting: 'Ждём первое измерение',
-  stale_source: 'Источник вернул устаревшие данные',
-  identity_changed: 'Сменилась авторизация',
-  source_unavailable: 'Источник недоступен',
-  provider_unavailable: 'Провайдер не ответил',
-  limits_unavailable: 'Лимиты не пришли',
-  invalid_response: 'Непонятный ответ источника',
-  missing_provider: 'Источник не вернул провайдера',
-  agent_not_logged_in: 'Клиент агента не авторизован',
-  agent_unsupported: 'Клиент агента не сообщает лимиты',
-  agent_timeout: 'Клиент агента не ответил вовремя',
-  agent_invalid_output: 'Непонятный ответ клиента агента',
-  agent_failed: 'Клиент агента не смог получить лимиты',
-};
+/** What a source's error code means, in the reader's language. */
+export function errorText(code: string) {
+  const key = `error.${code}`;
+  return t(known(key) ? key : 'error.failed');
+}
 
-export const problemOf = (source: SourceState) =>
-  source.error && source.error !== 'waiting' ? (ERRORS[source.error] ?? 'Источник недоступен') : null;
+export const problemOf = (source: SourceState) => (source.error && source.error !== 'waiting' ? errorText(source.error) : null);

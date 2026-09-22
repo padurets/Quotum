@@ -1,4 +1,4 @@
-//! `agent-limits`: the subscription limits of the coding agents on this machine.
+//! `quotum`: the subscription limits of the coding agents on this machine.
 
 use std::collections::BTreeMap;
 use std::io::{IsTerminal, Write};
@@ -6,19 +6,17 @@ use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
-use agent_limits_core::config::{Config, Credentials, Hub, Paths, machine};
-use agent_limits_core::model::{
-    Batch, ErrorKind, INGEST_VERSION, Kind, Millis, Outcome, Owner, Provider, Window, now_ms,
-};
-use agent_limits_core::process::find_program;
-use agent_limits_core::providers::adapter;
-use agent_limits_core::runner::{Event, Runner};
-use agent_limits_core::sink::{Discard, HubSink, Sink};
 use clap::{Parser, Subcommand};
+use quotum_core::config::{Config, Credentials, Hub, Paths, machine};
+use quotum_core::model::{Batch, ErrorKind, INGEST_VERSION, Kind, Millis, Outcome, Owner, Provider, Window, now_ms};
+use quotum_core::process::find_program;
+use quotum_core::providers::adapter;
+use quotum_core::runner::{Event, Runner};
+use quotum_core::sink::{Discard, HubSink, Sink};
 
 #[derive(Parser)]
 #[command(
-    name = "agent-limits",
+    name = "quotum",
     version,
     about = "Subscription limits of your coding agents: Claude Code, Codex, Antigravity."
 )]
@@ -101,7 +99,7 @@ fn main() -> ExitCode {
 }
 
 fn fail(message: &str) -> ExitCode {
-    eprintln!("agent-limits: {message}");
+    eprintln!("quotum: {message}");
     ExitCode::FAILURE
 }
 
@@ -124,7 +122,7 @@ fn status(config: Config, paths: Paths, only: &[Provider], json: bool) -> ExitCo
         let (snapshots, failures) = outcomes.into_iter().partition::<Vec<_>, _>(|o| o.is_ok());
         let batch = Batch {
             version: INGEST_VERSION,
-            agent: concat!("agent-limits/", env!("CARGO_PKG_VERSION")).into(),
+            agent: concat!("quotum/", env!("CARGO_PKG_VERSION")).into(),
             machine,
             owner: Owner::default(),
             sent_at: now_ms(),
@@ -196,17 +194,18 @@ fn connect(config: &Config, paths: &Paths, url: &str) -> ExitCode {
     let http: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(20)))
         .http_status_as_error(false)
-        .user_agent(concat!("agent-limits/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("quotum/", env!("CARGO_PKG_VERSION")))
         .build()
         .into();
-    let request = serde_json::json!({"machine": machine(paths, config), "agent": concat!("agent-limits/", env!("CARGO_PKG_VERSION"))});
+    let request =
+        serde_json::json!({"machine": machine(paths, config), "agent": concat!("quotum/", env!("CARGO_PKG_VERSION"))});
     let started: serde_json::Value = match http.post(&format!("{url}/v1/device/code")).send_json(&request) {
         Ok(mut r) if r.status().is_success() => r.body_mut().read_json().unwrap_or_default(),
         Ok(r) => return fail(&format!("{url} answered HTTP {}", r.status().as_u16())),
         Err(e) => return fail(&format!("{url} is unreachable: {e}")),
     };
     let (Some(device_code), Some(user_code)) = (started["deviceCode"].as_str(), started["userCode"].as_str()) else {
-        return fail(&format!("{url} does not look like an Agent Limits hub"));
+        return fail(&format!("{url} does not look like an Quotum hub"));
     };
     let style = Style::detect();
     println!("Open this page and confirm the code:\n");
@@ -233,19 +232,24 @@ fn connect(config: &Config, paths: &Paths, url: &str) -> ExitCode {
             if let Err(e) = credentials.save(paths) {
                 return fail(&format!("could not save the connection: {e}"));
             }
-            println!("Connected to board «{}» as {}.", credentials.board, credentials.owner);
-            println!("Start measuring with `agent-limits run`.");
+            println!("Connected to {} as {}.", board_title(&credentials.board), credentials.owner);
+            println!("Start measuring with `quotum run`.");
             return ExitCode::SUCCESS;
         }
         match body["error"].as_str() {
             Some("authorization_pending") => {}
             Some("slow_down") => interval += 5,
             Some("access_denied") => return fail("the connection was declined"),
-            Some("expired_token") => return fail("the code expired; run `agent-limits connect` again"),
+            Some("expired_token") => return fail("the code expired; run `quotum connect` again"),
             _ => {}
         }
     }
-    fail("the code expired; run `agent-limits connect` again")
+    fail("the code expired; run `quotum connect` again")
+}
+
+/// Personal boards have no name of their own; the dashboard names them.
+fn board_title(name: &str) -> String {
+    if name.is_empty() { "your personal board".into() } else { format!("board \"{name}\"") }
 }
 
 fn show_config(config: &Config, paths: &Paths) -> ExitCode {
@@ -257,7 +261,7 @@ fn show_config(config: &Config, paths: &Paths) -> ExitCode {
     println!("state         {}", paths.state.display());
     let connected = Credentials::load(paths);
     if let (None, Some(c)) = (&config.hub, &connected) {
-        println!("connected     {} · board «{}» as {}", c.url, c.board, c.owner);
+        println!("connected     {} · {} as {}", c.url, board_title(&c.board), c.owner);
     }
     println!(
         "owner         {}",
@@ -270,10 +274,10 @@ fn show_config(config: &Config, paths: &Paths) -> ExitCode {
             hub.token.chars().rev().take(4).collect::<String>().chars().rev().collect::<String>()
         ),
         None if connected.is_some() => {}
-        None => println!("hub           none: `agent-limits run` only logs; `agent-limits connect <url>` to connect"),
+        None => println!("hub           none: `quotum run` only logs; `quotum connect <url>` to connect"),
     }
     println!("eco mode      {}", if config.eco() { "on" } else { "off" });
-    let home = agent_limits_core::config::home();
+    let home = quotum_core::config::home();
     for provider in Provider::ALL {
         let a = adapter(provider);
         let client = config
@@ -353,7 +357,7 @@ fn until(ms: Millis) -> String {
 
 /// Log timestamps: UTC, RFC 3339, to the second.
 fn clock(ms: Millis) -> String {
-    agent_limits_core::model::ts::format(ms - ms.rem_euclid(1000))
+    quotum_core::model::ts::format(ms - ms.rem_euclid(1000))
 }
 
 struct Style {

@@ -1,8 +1,9 @@
 import React, {useCallback, useEffect, useState} from 'react';
 import {ago} from '../lib/format';
 import {PROVIDERS} from '../lib/providers';
-import {call, messageOf, type Board} from '../lib/session';
+import {boardTitle, call, messageOf, type Board} from '../lib/session';
 import {CopyField, ErrorLine, Field, Modal, Tabs} from './Kit';
+import {rich, t} from '../i18n';
 
 export type AdminTab = 'devices' | 'connect' | 'members';
 
@@ -31,7 +32,7 @@ function Devices({board, now}: {board: Board; now: number}) {
   useEffect(load, [load]);
 
   const revoke = async (device: Device) => {
-    if (!confirm(`Отключить ${device.name}? Оно перестанет присылать данные на эту доску.`)) return;
+    if (!confirm(t('devices.confirmRevoke', {name: device.name}))) return;
     try {
       await call('DELETE', `/api/boards/${board.id}/devices/${device.id}`);
       load();
@@ -41,17 +42,17 @@ function Devices({board, now}: {board: Board; now: number}) {
   };
 
   if (!devices) return <ErrorLine message={error} />;
-  if (!devices.length) return <p className="admin-empty">Пока ни одного устройства. Подключите первое на вкладке «Подключить».</p>;
+  if (!devices.length) return <p className="admin-empty">{t('devices.empty')}</p>;
   return (
     <div className="table-wrap">
       <ErrorLine message={error} />
       <table className="admin-table">
         <thead>
           <tr>
-            <th>Устройство</th>
-            <th>Владелец</th>
-            <th>Агенты</th>
-            <th>На связи</th>
+            <th>{t('devices.device')}</th>
+            <th>{t('devices.owner')}</th>
+            <th>{t('devices.agents')}</th>
+            <th>{t('devices.seen')}</th>
             <th />
           </tr>
         </thead>
@@ -61,7 +62,7 @@ function Devices({board, now}: {board: Board; now: number}) {
               <td>
                 {device.name}
                 <small>
-                  {device.os} · {device.via === 'code' ? 'по коду' : 'по токену'}
+                  {device.os} · {t(device.via === 'code' ? 'devices.viaCode' : 'devices.viaToken')}
                 </small>
               </td>
               <td>{device.owner}</td>
@@ -75,7 +76,7 @@ function Devices({board, now}: {board: Board; now: number}) {
               <td>{device.lastSeenAt ? ago(device.lastSeenAt, now) : '—'}</td>
               <td>
                 <button className="link-button danger" onClick={() => revoke(device)}>
-                  Отключить
+                  {t('devices.revoke')}
                 </button>
               </td>
             </tr>
@@ -99,7 +100,7 @@ function Connect({board, now}: {board: Board; now: number}) {
   const create = async (event: React.FormEvent) => {
     event.preventDefault();
     try {
-      const token = await call<Token & {secret: string}>('POST', `/api/boards/${board.id}/tokens`, {name: name.trim() || 'Автоматика'});
+      const token = await call<Token & {secret: string}>('POST', `/api/boards/${board.id}/tokens`, {name: name.trim() || t('connect.tokenDefault')});
       setCreated({secret: token.secret, name: token.name});
       setName('');
       load();
@@ -109,7 +110,7 @@ function Connect({board, now}: {board: Board; now: number}) {
   };
 
   const revoke = async (token: Token) => {
-    if (!confirm(`Отозвать токен «${token.name}»? Устройства, подключённые по нему, перестанут присылать данные.`)) return;
+    if (!confirm(t('connect.confirmRevoke', {name: token.name}))) return;
     try {
       await call('DELETE', `/api/boards/${board.id}/tokens/${token.id}`);
       if (created) setCreated(null);
@@ -122,30 +123,26 @@ function Connect({board, now}: {board: Board; now: number}) {
   return (
     <div className="connect">
       <section className="connect-way">
-        <h3>Своя машина — по одноразовому коду</h3>
-        <p>Запустите на машине, где работают агенты. Команда покажет код — подтвердите его в браузере, и устройство будет присылать лимиты от вашего имени.</p>
-        <CopyField value={`agent-limits connect ${origin()}`} />
+        <h3>{t('connect.codeTitle')}</h3>
+        <p>{t('connect.codeText')}</p>
+        <CopyField value={`quotum connect ${origin()}`} />
       </section>
 
       <section className="connect-way">
-        <h3>Много машин — токен доски</h3>
-        <p>
-          Для образов, виртуальных машин и контейнеров: пропишите токен один раз, и каждая запущенная машина сама появится на доске. Машины
-          принадлежат тому, кто создал токен; если токен общий на несколько человек, передавайте владельца через <code>--owner</code> (имя или
-          почта участника доски).
-        </p>
+        <h3>{t('connect.tokenTitle')}</h3>
+        <p>{rich('connect.tokenText', {flag: <code>--owner</code>})}</p>
         {created ? (
           <div className="token-created">
-            <CopyField label={`Токен «${created.name}» — показывается один раз`} value={created.secret} secret />
-            <CopyField label="Запуск" value={`agent-limits run --hub ${origin()} --token ${created.secret}`} />
+            <CopyField label={t('connect.tokenShownOnce', {name: created.name})} value={created.secret} secret />
+            <CopyField label={t('connect.run')} value={`quotum run --hub ${origin()} --token ${created.secret}`} />
             <button className="link-button" onClick={() => setCreated(null)}>
-              Готово
+              {t('connect.done')}
             </button>
           </div>
         ) : (
           <form className="inline-form" onSubmit={create}>
-            <Field label="Название" placeholder="например, «Образы разработки»" value={name} onChange={e => setName(e.target.value)} maxLength={80} />
-            <button className="button primary">Создать токен</button>
+            <Field label={t('connect.name')} placeholder={t('connect.namePlaceholder')} value={name} onChange={e => setName(e.target.value)} maxLength={80} />
+            <button className="button primary">{t('connect.create')}</button>
           </form>
         )}
         <ErrorLine message={error} />
@@ -157,10 +154,10 @@ function Connect({board, now}: {board: Board; now: number}) {
                   <b>{token.name}</b> <span className="mono">{token.hint}</span>
                 </span>
                 <small>
-                  {token.createdByName} · {token.lastUsedAt ? `использован ${ago(token.lastUsedAt, now)}` : 'ещё не использован'}
+                  {token.createdByName} · {token.lastUsedAt ? t('connect.used', {ago: ago(token.lastUsedAt, now)}) : t('connect.unused')}
                 </small>
                 <button className="link-button danger" onClick={() => revoke(token)}>
-                  Отозвать
+                  {t('connect.revoke')}
                 </button>
               </li>
             ))}
@@ -195,18 +192,18 @@ function Members({board}: {board: Board}) {
             <span>
               <b>{m.name}</b> <span className="mono">{m.email}</span>
             </span>
-            <small>{m.role === 'owner' ? 'владелец' : 'участник'}</small>
+            <small>{t(m.role === 'owner' ? 'members.owner' : 'members.member')}</small>
           </li>
         ))}
       </ul>
       <section className="connect-way">
-        <h3>Пригласить</h3>
-        <p>Ссылка действует неделю и подходит нескольким людям. Участники видят лимиты друг друга и могут подключать устройства.</p>
+        <h3>{t('members.invite')}</h3>
+        <p>{t('members.inviteText')}</p>
         {invite ? (
           <CopyField value={invite} />
         ) : (
           <button className="button" onClick={create}>
-            Создать ссылку
+            {t('members.createLink')}
           </button>
         )}
         <ErrorLine message={error} />
@@ -218,13 +215,13 @@ function Members({board}: {board: Board}) {
 /** Devices, ways to connect new ones, and members of the board on screen. */
 export function BoardAdmin({board, tab, onTab, onClose, now}: {board: Board; tab: AdminTab; onTab: (tab: AdminTab) => void; onClose: () => void; now: number}) {
   const tabs: [AdminTab, string][] = [
-    ['devices', 'Устройства'],
-    ['connect', 'Подключить'],
+    ['devices', t('admin.devices')],
+    ['connect', t('admin.connect')],
   ];
-  if (!board.personal) tabs.push(['members', 'Участники']);
+  if (!board.personal) tabs.push(['members', t('admin.members')]);
   return (
-    <Modal title={board.name} onClose={onClose} wide>
-      <Tabs label="Разделы доски" tabs={tabs} value={tab} onChange={onTab} />
+    <Modal title={boardTitle(board)} onClose={onClose} wide>
+      <Tabs label={t('admin.sections')} tabs={tabs} value={tab} onChange={onTab} />
       <div className="dialog-body">
         {tab === 'devices' && <Devices board={board} now={now} />}
         {tab === 'connect' && <Connect board={board} now={now} />}

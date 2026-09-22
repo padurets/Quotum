@@ -3,19 +3,23 @@ import {CLAUDE_RESETS, CODEX_RESETS, fromClaudeResets, fromCodexResets, type Res
 
 export type TrackerHealth = {name: string; url: string; ok: boolean | null; detail: string; at: number | null};
 
-/** Why a tracker could not be read, in terms the owner can act on. */
+/**
+ * How a tracker is doing, as a code the dashboard translates: `checking`, `ok`, or why
+ * it could not be read — `challenge` (Cloudflare's bot check stops the server),
+ * `timeout`, `format`, `network`, or the HTTP status as is ("HTTP 503").
+ */
 export function describeFailure(error: unknown): string {
   const message = error instanceof Error ? error.message : '';
-  if (message === 'challenge') return 'Cloudflare не пропускает сервер (проверка на бота)';
+  if (message === 'challenge') return 'challenge';
   if (/^HTTP \d+$/.test(message)) return message;
-  if (error instanceof DOMException && error.name === 'TimeoutError') return 'нет ответа';
-  if (message.startsWith('invalid_')) return 'неожиданный формат ответа';
-  return 'сеть недоступна';
+  if (error instanceof DOMException && error.name === 'TimeoutError') return 'timeout';
+  if (message.startsWith('invalid_')) return 'format';
+  return 'network';
 }
 
 async function getJson(url: string): Promise<unknown> {
   const response = await fetch(url, {
-    headers: {Accept: 'application/json', 'User-Agent': `agent-limits/${version}`},
+    headers: {Accept: 'application/json', 'User-Agent': `quotum/${version}`},
     signal: AbortSignal.timeout(10_000),
   });
   if (response.headers.get('cf-mitigated') === 'challenge') throw new Error('challenge');
@@ -32,7 +36,7 @@ async function getJson(url: string): Promise<unknown> {
  */
 export class ResetFeed {
   private resets: Partial<Record<ResetProvider, ResetStatus>> = {};
-  private health: TrackerHealth[] = [CODEX_RESETS, CLAUDE_RESETS].map(t => ({...t, ok: null, detail: 'проверяем…', at: null}));
+  private health: TrackerHealth[] = [CODEX_RESETS, CLAUDE_RESETS].map(t => ({...t, ok: null, detail: 'checking', at: null}));
   private timer?: NodeJS.Timeout;
   private closing = false;
 
@@ -65,7 +69,7 @@ export class ResetFeed {
 
     const report = (tracker: {name: string; url: string}, result: PromiseSettledResult<unknown>): TrackerHealth =>
       result.status === 'fulfilled'
-        ? {...tracker, ok: true, detail: 'данные получены', at: now}
+        ? {...tracker, ok: true, detail: 'ok', at: now}
         : {...tracker, ok: false, detail: describeFailure(result.reason), at: now};
     this.health = [report(CODEX_RESETS, codex), report(CLAUDE_RESETS, catalogue)];
     this.log({event: 'resets', codex: codex.status, claude: catalogue.status});

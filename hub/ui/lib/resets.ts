@@ -1,4 +1,5 @@
 import {useEffect, useState} from 'react';
+import {t} from '../i18n';
 
 /**
  * Reset announcements as collected by the service from the community trackers
@@ -35,7 +36,7 @@ function withPreview(resets: Resets): Resets {
     codex: {
       scheduled: {
         url: 'https://codex-resets.com/',
-        text: 'Пример объявления: так будет выглядеть анонс внепланового сброса.',
+        text: t('reset.previewText'),
         at: now - 3 * 3_600_000,
         scheduledFor: Math.ceil((now + 15 * 3_600_000) / 1_800_000) * 1_800_000,
         kind: 'regular',

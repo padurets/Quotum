@@ -1,14 +1,15 @@
 import React, {useEffect, useState} from 'react';
-import {call, messageOf, navigate, type Board, type Session} from '../lib/session';
+import {boardTitle, call, messageOf, navigate, type Board, type Session} from '../lib/session';
 import {AuthScreen} from './AuthScreen';
 import {Brand, ErrorLine, Field} from './Kit';
+import {rich, t} from '../i18n';
 
 type Pending = {userCode: string; machine: {name: string; os: string; arch: string; agent: string}; expiresAt: number; boards: Board[]};
 
 const OS: Record<string, string> = {linux: 'Linux', macos: 'macOS', windows: 'Windows'};
 
 /**
- * Where a person confirms a code shown by `agent-limits connect`: the machine is
+ * Where a person confirms a code shown by `quotum connect`: the machine is
  * described, a board is chosen, and the agent receives its own token.
  */
 export function DevicePage({session, onSession}: {session: Session; onSession: (session: Session) => void}) {
@@ -38,7 +39,7 @@ export function DevicePage({session, onSession}: {session: Session; onSession: (
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.user]);
 
-  if (!session.user) return <AuthScreen session={session} onSignedIn={onSession} note="Войдите, чтобы подключить устройство." />;
+  if (!session.user) return <AuthScreen session={session} onSignedIn={onSession} note={t('device.signIn')} />;
 
   const decide = async (approve: boolean) => {
     setBusy(true);
@@ -53,64 +54,61 @@ export function DevicePage({session, onSession}: {session: Session; onSession: (
     }
   };
 
-  const boardName = pending?.boards.find(b => b.id === board)?.name;
+  const chosen = pending?.boards.find(b => b.id === board);
   return (
     <div className="auth">
       <div className="auth-card">
         <Brand />
         {done === 'approved' ? (
           <>
-            <h1>Устройство подключено</h1>
-            <p className="auth-note">
-              {pending!.machine.name} присылает лимиты на доску «{boardName}». Первые данные появятся через минуту; в терминале можно
-              закрыть окно подтверждения.
-            </p>
+            <h1>{t('device.connected')}</h1>
+            <p className="auth-note">{t('device.connectedText', {machine: pending!.machine.name, board: chosen ? boardTitle(chosen) : ''})}</p>
             <button className="button primary" onClick={() => navigate('/')}>
-              Открыть доску
+              {t('device.openBoard')}
             </button>
           </>
         ) : done === 'denied' ? (
           <>
-            <h1>Подключение отклонено</h1>
-            <p className="auth-note">Устройство не получит доступ. Код больше не действует.</p>
+            <h1>{t('device.denied')}</h1>
+            <p className="auth-note">{t('device.deniedText')}</p>
             <button className="button" onClick={() => navigate('/')}>
-              На главную
+              {t('common.backHome')}
             </button>
           </>
         ) : pending ? (
           <>
-            <h1>Подключить устройство?</h1>
+            <h1>{t('device.confirm')}</h1>
             <dl className="device-facts">
-              <dt>Устройство</dt>
+              <dt>{t('device.device')}</dt>
               <dd>{pending.machine.name}</dd>
-              <dt>Система</dt>
+              <dt>{t('device.system')}</dt>
               <dd>
                 {OS[pending.machine.os] ?? pending.machine.os} · {pending.machine.arch}
               </dd>
-              <dt>Агент</dt>
+              <dt>{t('device.agent')}</dt>
               <dd className="mono">{pending.machine.agent}</dd>
-              <dt>Код</dt>
+              <dt>{t('device.code')}</dt>
               <dd className="mono">{pending.userCode}</dd>
             </dl>
             <label className="field">
-              <span>Доска</span>
+              <span>{t('device.board')}</span>
               <select value={board} onChange={e => setBoard(e.target.value)}>
                 {pending.boards.map(b => (
                   <option key={b.id} value={b.id}>
-                    {b.name}
+                    {boardTitle(b)}
                   </option>
                 ))}
               </select>
-              <small>Устройство будет присылать лимиты от вашего имени.</small>
+              <small>{t('device.asYou')}</small>
             </label>
-            <p className="auth-note">Подключайте, только если код показала команда, которую вы запустили сами.</p>
+            <p className="auth-note">{t('device.warning')}</p>
             <ErrorLine message={error} />
             <div className="button-row">
               <button className="button" disabled={busy} onClick={() => decide(false)}>
-                Отклонить
+                {t('device.decline')}
               </button>
               <button className="button primary" disabled={busy || !board} onClick={() => decide(true)}>
-                Подключить
+                {t('device.connect')}
               </button>
             </div>
           </>
@@ -121,12 +119,12 @@ export function DevicePage({session, onSession}: {session: Session; onSession: (
               void look();
             }}
           >
-            <h1>Подключение устройства</h1>
-            <p className="auth-note">Введите код, который показала команда <code>agent-limits connect</code>.</p>
-            <Field label="Код" value={code} onChange={e => setCode(e.target.value)} placeholder="XXXX-XXXX" autoFocus autoComplete="off" spellCheck={false} className="code-input" />
+            <h1>{t('device.title')}</h1>
+            <p className="auth-note">{rich('device.enterCode', {command: <code>quotum connect</code>})}</p>
+            <Field label={t('device.code')} value={code} onChange={e => setCode(e.target.value)} placeholder="XXXX-XXXX" autoFocus autoComplete="off" spellCheck={false} className="code-input" />
             <ErrorLine message={error} />
             <button className="button primary" disabled={busy || !code.trim()}>
-              Продолжить
+              {t('device.continue')}
             </button>
           </form>
         )}

@@ -2,7 +2,7 @@ import type {FastifyReply, FastifyRequest} from 'fastify';
 import {config} from './config.js';
 import type {Directory, User} from './store/directory.js';
 
-const COOKIE = 'al_session';
+const COOKIE = 'quotum_session';
 
 function readCookie(request: FastifyRequest, name: string): string | null {
   for (const part of (request.headers.cookie ?? '').split(';')) {

@@ -103,7 +103,7 @@ export class Directory {
       this.db.prepare('INSERT INTO users VALUES (?, ?, ?, ?, ?, ?)').run(id, email, name, passwordHash, first ? 'admin' : 'user', now);
       const board = first ? DEFAULT_BOARD : newId();
       if (first) this.db.prepare('UPDATE boards SET created_by = ? WHERE id = ?').run(id, DEFAULT_BOARD);
-      else this.db.prepare('INSERT INTO boards VALUES (?, ?, 1, ?, ?)').run(board, 'Мои лимиты', id, now);
+      else this.db.prepare('INSERT INTO boards VALUES (?, ?, 1, ?, ?)').run(board, '', id, now);
       this.db.prepare('INSERT INTO members VALUES (?, ?, ?, ?)').run(board, id, 'owner', now);
       return this.user(id)!;
     });

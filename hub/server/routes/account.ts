@@ -24,7 +24,7 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
   const lookups = new Limiter(30, 60_000);
 
   const signIn = (request: Parameters<typeof setSession>[0], reply: Parameters<typeof setSession>[1], userId: string) => {
-    const secret = newSecret('al_s');
+    const secret = newSecret('qt_s');
     directory.createSession(secret, userId, Date.now(), config.auth.sessionTtlMs);
     setSession(request, reply, secret);
   };
@@ -96,7 +96,7 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
   app.post<{Params: {board: string}}>('/api/boards/:board/invites', (request, reply) => {
     const access = guards.board(request, reply, request.params.board);
     if (!access) return reply;
-    const secret = newSecret('al_i');
+    const secret = newSecret('qt_i');
     const now = Date.now();
     directory.createInvite(secret, access.board.id, access.user.id, now, config.auth.inviteTtlMs);
     return {url: `${publicOrigin(request)}/invite/${secret}`, expiresAt: now + config.auth.inviteTtlMs};
@@ -129,9 +129,9 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
   app.post<{Params: {board: string}; Body: Body}>('/api/boards/:board/tokens', (request, reply) => {
     const access = guards.board(request, reply, request.params.board);
     if (!access) return reply;
-    const name = str(request.body?.name).trim() || 'Автоматика';
+    const name = str(request.body?.name).trim() || 'Token';
     if (!validName(name)) return reply.code(400).send({error: 'invalid_input'});
-    const secret = newSecret('al_b');
+    const secret = newSecret('qt_b');
     const token = directory.createToken(secret, secretHint(secret), access.board.id, name, access.user.id, Date.now());
     // The secret is shown once; only its hash is kept.
     return {...token, createdByName: access.user.name, secret};

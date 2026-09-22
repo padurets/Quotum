@@ -123,8 +123,8 @@ duplicate.
   not identify (Antigravity) is the owner's own, optionally named in the agent's
   settings (`[providers.antigravity] account = "work"`).
 
-Secrets (sessions, tokens, codes, invites) are random, prefixed by kind (`al_s_`,
-`al_b_`, `al_d_`, `al_c_`, `al_i_`) and stored only as SHA-256 hashes; passwords as
+Secrets (sessions, tokens, codes, invites) are random, prefixed by kind (`qt_s_`,
+`qt_b_`, `qt_d_`, `qt_c_`, `qt_i_`) and stored only as SHA-256 hashes; passwords as
 scrypt hashes. Changes made with a session cookie are accepted only from the hub's own
 pages (Origin check, SameSite cookie); sign-in and code lookups are rate-limited.
 

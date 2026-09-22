@@ -16,10 +16,10 @@ import {hashPassword, normalizeUserCode, verifyPassword} from '../domain/auth.js
 const iso = (ms: number) => new Date(ms).toISOString();
 
 async function hub() {
-  const store = new Store(path.join(mkdtempSync(path.join(tmpdir(), 'agent-limits-api-')), 'db.sqlite'));
+  const store = new Store(path.join(mkdtempSync(path.join(tmpdir(), 'quotum-api-')), 'db.sqlite'));
   const directory = new Directory(store.db);
-  const ingest = new Ingest(store, directory, [], true, new Duty());
-  const app = await buildApp({store, directory, pacer: ingest, resets: new ResetFeed(() => {}), ingest, pairing: new Pairing(directory)});
+  const ingest = new Ingest(store, directory, [], new Duty());
+  const app = await buildApp({store, directory, resets: new ResetFeed(() => {}), ingest, pairing: new Pairing(directory)});
   const cookies = new Map<string, string>();
   const call = async (method: 'GET' | 'POST' | 'DELETE', url: string, options: {as?: string; body?: object; headers?: Record<string, string>} = {}) => {
     const response = await app.inject({
@@ -45,7 +45,7 @@ const snapshot = (at: number) => ({
   windows: [{id: 'weekly', kind: 'weekly', minutes: 10080, usedPercent: 8, resetsAt: iso(at + 86_400_000)}],
 });
 const machine = (id: string) => ({id, name: 'build-01', os: 'linux', arch: 'x86_64'});
-const batch = (id: string) => ({version: 1, agent: 'agent-limits/0.1.0', machine: machine(id), sentAt: iso(Date.now()), snapshots: [snapshot(Date.now() - 1000)]});
+const batch = (id: string) => ({version: 1, agent: 'quotum/0.1.0', machine: machine(id), sentAt: iso(Date.now()), snapshots: [snapshot(Date.now() - 1000)]});
 
 test('passwords are salted scrypt hashes; typed codes are forgiving', async () => {
   const stored = await hashPassword('correct horse');
@@ -64,18 +64,18 @@ test('the first person to sign up owns the default board; later ones need an inv
 
   const signup = await call('POST', '/api/auth/signup', {as: 'alice', body: {email: 'Alice@Example.com', name: 'Alice', password: 'correct horse'}});
   assert.equal(signup.status, 200);
-  assert.match(String(signup.cookie), /al_session=al_s_.+; Path=\/; HttpOnly; SameSite=Lax/);
+  assert.match(String(signup.cookie), /quotum_session=qt_s_.+; Path=\/; HttpOnly; SameSite=Lax/);
   assert.deepEqual(signup.body.boards.map((b: any) => [b.id, b.role]), [['default', 'owner']]);
   assert.equal(signup.body.user.role, 'admin');
 
   assert.equal((await call('POST', '/api/auth/signup', {as: 'bob', body: {email: 'bob@example.com', name: 'Bob', password: 'correct horse'}})).body.error, 'signup_closed');
 
-  const team = await call('POST', '/api/boards', {as: 'alice', body: {name: 'Команда'}});
+  const team = await call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}});
   const invite = await call('POST', `/api/boards/${team.body.id}/invites`, {as: 'alice'});
   const secret = invite.body.url.split('/invite/')[1];
-  assert.equal((await call('GET', `/api/invites/${secret}`)).body.board.name, 'Команда');
+  assert.equal((await call('GET', `/api/invites/${secret}`)).body.board.name, 'Team');
   const bob = await call('POST', '/api/auth/signup', {as: 'bob', body: {email: 'bob@example.com', name: 'Bob', password: 'correct horse', invite: secret}});
-  assert.deepEqual(bob.body.boards.map((b: any) => [b.name, b.personal]), [['Мои лимиты', true], ['Команда', false]]);
+  assert.deepEqual(bob.body.boards.map((b: any) => [b.name, b.personal]), [['', true], ['Team', false]]);
   assert.equal((await call('GET', '/api/overview?board=default', {as: 'bob'})).status, 404, "bob cannot read alice's board");
 
   assert.equal((await call('POST', '/api/auth/login', {body: {email: 'alice@example.com', password: 'wrong'}})).status, 401);
@@ -87,8 +87,8 @@ test('the first person to sign up owns the default board; later ones need an inv
 test('a board token lets any number of machines deliver; revoking it disconnects them', async () => {
   const {call} = await hub();
   await call('POST', '/api/auth/signup', {as: 'alice', body: {email: 'alice@example.com', name: 'Alice', password: 'correct horse'}});
-  const token = await call('POST', '/api/boards/default/tokens', {as: 'alice', body: {name: 'Образы'}});
-  assert.match(token.body.secret, /^al_b_/);
+  const token = await call('POST', '/api/boards/default/tokens', {as: 'alice', body: {name: 'Dev images'}});
+  assert.match(token.body.secret, /^qt_b_/);
   assert.equal((await call('GET', '/api/boards/default/tokens', {as: 'alice'})).body[0].secret, undefined, 'shown once');
 
   const auth = {authorization: `Bearer ${token.body.secret}`};
@@ -97,9 +97,10 @@ test('a board token lets any number of machines deliver; revoking it disconnects
     assert.deepEqual([delivered.status, delivered.body.accepted + delivered.body.duplicates, delivered.body.device.owner], [200, 1, 'Alice']);
   }
   const devices = (await call('GET', '/api/boards/default/devices', {as: 'alice'})).body;
-  assert.deepEqual(devices.map((d: any) => [d.via, d.sources.map((s: any) => s.source)]), [['token', ['codex']], ['token', ['codex']]]);
   const overview = (await call('GET', '/api/overview', {as: 'alice'})).body;
-  assert.deepEqual(overview.sources.map((s: any) => [s.id, s.windows[0].remaining]), [['codex', 92]]);
+  const [codex] = overview.sources;
+  assert.deepEqual([overview.sources.length, codex.provider, codex.windows[0].remaining, codex.owners], [1, 'codex', 92, ['Alice']]);
+  assert.deepEqual(devices.map((d: any) => [d.via, d.sources.map((s: any) => s.source)]), [['token', [codex.id]], ['token', [codex.id]]]);
 
   await call('DELETE', `/api/boards/default/tokens/${token.body.id}`, {as: 'alice'});
   assert.equal((await call('POST', '/v1/ingest', {body: batch('machine-one-0123456789'), headers: auth})).status, 401);
@@ -109,7 +110,7 @@ test('a board token lets any number of machines deliver; revoking it disconnects
 test('a machine connects with a one-time code approved by a signed-in person', async () => {
   const {call} = await hub();
   await call('POST', '/api/auth/signup', {as: 'alice', body: {email: 'alice@example.com', name: 'Alice', password: 'correct horse'}});
-  const started = await call('POST', '/v1/device/code', {body: {machine: machine('laptop-0123456789ab'), agent: 'agent-limits/0.1.0'}});
+  const started = await call('POST', '/v1/device/code', {body: {machine: machine('laptop-0123456789ab'), agent: 'quotum/0.1.0'}});
   assert.match(started.body.userCode, /^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
   assert.equal(started.body.verificationUriComplete, `http://localhost:80/device?code=${started.body.userCode}`);
   const poll = () => call('POST', '/v1/device/token', {body: {deviceCode: started.body.deviceCode}});
@@ -123,7 +124,7 @@ test('a machine connects with a one-time code approved by a signed-in person', a
   assert.equal((await call('POST', '/api/device/approve', {as: 'alice', body: {code: typed, board: 'default'}})).status, 200);
 
   const connected = await call('POST', '/v1/device/token', {body: {deviceCode: started.body.deviceCode}});
-  assert.match(connected.body.token, /^al_d_/);
+  assert.match(connected.body.token, /^qt_d_/);
   assert.deepEqual([connected.body.board.id, connected.body.device.owner], ['default', 'Alice']);
   assert.equal((await poll()).body.error, 'expired_token', 'a code gives one device');
 

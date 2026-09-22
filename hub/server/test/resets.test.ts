@@ -54,7 +54,7 @@ test('the claude-resets catalogue yields the latest reset and policy change per 
 });
 
 test('tracker failures are described in terms the owner can act on', () => {
-  assert.match(describeFailure(new Error('challenge')), /Cloudflare/);
+  assert.equal(describeFailure(new Error('challenge')), 'challenge');
   assert.equal(describeFailure(new Error('HTTP 503')), 'HTTP 503');
-  assert.equal(describeFailure(new Error('invalid_reset_status')), 'неожиданный формат ответа');
+  assert.equal(describeFailure(new Error('invalid_reset_status')), 'format');
 });

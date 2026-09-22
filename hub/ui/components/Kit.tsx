@@ -1,4 +1,5 @@
 import React, {useEffect, useRef, useState, type ReactNode} from 'react';
+import {LOCALES, setLocale, t, useLocale, type Locale} from '../i18n';
 
 /** A centered dialog over the page; closes on Escape and on a click outside. */
 export function Modal({title, onClose, children, wide}: {title: string; onClose: () => void; children: ReactNode; wide?: boolean}) {
@@ -18,7 +19,7 @@ export function Modal({title, onClose, children, wide}: {title: string; onClose:
       <div className={`dialog ${wide ? 'is-wide' : ''}`} role="dialog" aria-modal="true" aria-label={title} ref={panel} tabIndex={-1}>
         <div className="dialog-head">
           <h2>{title}</h2>
-          <button className="icon-button" aria-label="Закрыть" onClick={onClose}>
+          <button className="icon-button" aria-label={t('common.close')} onClick={onClose}>
             <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
               <path d="M4 4l8 8M12 4l-8 8" />
             </svg>
@@ -55,7 +56,7 @@ export function CopyField({value, label, secret}: {value: string; label?: string
       {label && <span className="copy-label">{label}</span>}
       <code>{value}</code>
       <button className="copy-button" onClick={copy}>
-        {copied ? 'Скопировано' : 'Копировать'}
+        {copied ? t('common.copied') : t('common.copy')}
       </button>
     </div>
   );
@@ -91,7 +92,21 @@ export function Brand() {
         <rect x="14" y="12" width="4" height="13" rx="2" className="logo-bar b" />
         <rect x="20" y="7" width="4" height="18" rx="2" className="logo-bar c" />
       </svg>
-      <span>Agent Limits</span>
+      <span>Quotum</span>
     </span>
+  );
+}
+
+/** The dashboard's languages; the choice is kept in this browser. */
+export function LanguagePicker() {
+  const locale = useLocale();
+  return (
+    <div className="segmented language" role="group" aria-label={t('common.language')}>
+      {(Object.keys(LOCALES) as Locale[]).map(code => (
+        <button key={code} lang={code} aria-pressed={code === locale} onClick={() => setLocale(code)}>
+          {LOCALES[code].name}
+        </button>
+      ))}
+    </div>
   );
 }
