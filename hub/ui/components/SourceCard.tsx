@@ -5,7 +5,7 @@ import {ago, day, duration, fullStamp, num} from '../lib/format';
 import {errorText, level, problemOf, sourceLabel, windowName} from '../lib/quota';
 import {t} from '../i18n';
 import {DEFAULT_PLAN, isValidPlan, PLAN_TOLERANCE, planAt, planTotal, type WeeklyPlan} from '../lib/plan';
-import {PROVIDERS} from '../lib/providers';
+import {LOGOS} from './logos';
 import {cardId, planOf, withHidden, withPlan, withWindowHidden, type Arrange} from '../lib/view';
 import type {ResetStatus} from '../lib/resets';
 import {ResetBanner, ResetNotice} from './ResetNotice';
@@ -166,7 +166,6 @@ function FreeResets({resets}: {resets: NonNullable<SourceState['resets']>}) {
 }
 
 export function SourceCard({source, now, resets, arrange}: {source: SourceState; now: number; resets?: ResetStatus; arrange: Arrange}) {
-  const meta = PROVIDERS[source.provider];
   const problem = problemOf(source);
   const hidden = new Set(arrange.view.windows);
   const visible = source.windows.filter(w => !hidden.has(windowKey(source.id, w.id)));
@@ -179,7 +178,7 @@ export function SourceCard({source, now, resets, arrange}: {source: SourceState;
     <article className="card">
       <div className="card-head">
         <span className={`provider-mark ${warn ? 'is-warn' : ''}`} title={status} aria-label={status} role="img">
-          <img className="provider-logo" src={meta?.icon} alt="" />
+          <img className="provider-logo" src={LOGOS[source.provider]} alt="" />
           <i className={`dot dot-${warn ? 'warn' : 'ok'}`} />
         </span>
         <div className="card-title">

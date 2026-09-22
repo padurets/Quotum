@@ -1,6 +1,7 @@
 import {useCallback, useEffect, useState, type FormEvent} from 'react';
 import {ago} from '../lib/format';
 import {PROVIDERS} from '../lib/providers';
+import {LOGOS} from './logos';
 import {errorText} from '../lib/quota';
 import {call} from '../lib/http';
 import {boardTitle, type Board} from '../lib/session';
@@ -41,7 +42,7 @@ function Agents({device}: {device: Device}) {
         const title = [meta?.name ?? provider, failure && errorText(failure.error), failure?.detail].filter(Boolean).join(' — ');
         return (
           <span key={provider} className={`agent-icon ${failure ? 'is-failing' : ''}`} title={title}>
-            <img src={meta?.icon} alt={title} />
+            <img src={LOGOS[provider]} alt={title} />
           </span>
         );
       })}
