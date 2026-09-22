@@ -9,7 +9,9 @@ function list(value: string | undefined, fallback: string[]): string[] {
 }
 
 /** Every tunable the deployment owns, in one place. */
-export const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const here = path.dirname(fileURLToPath(import.meta.url));
+/** The hub directory: two levels up from `dist/server` when built, one from `server` in source. */
+export const appRoot = path.resolve(here, path.basename(path.dirname(here)) === 'dist' ? '../..' : '..');
 
 export const config = {
   dataDir: process.env.AGENT_LIMITS_DATA_DIR || path.join(appRoot, 'data'),
@@ -31,7 +33,22 @@ export const config = {
     token: process.env.AGENT_LIMITS_VENDOR_TOKEN,
   },
 
-  /** Agents push measurements (spec/ingest-v1.md) with one of these bearer tokens. None: no ingest. */
+  auth: {
+    /** Who may sign up after the first user (who always may): `invite` (default) or `open`. */
+    signup: process.env.AGENT_LIMITS_SIGNUP === 'open' ? ('open' as const) : ('invite' as const),
+    sessionTtlMs: 30 * 86_400_000,
+    inviteTtlMs: 7 * 86_400_000,
+    /** Device codes: how long one is valid, and how often an agent may ask about it. */
+    codeTtlMs: 10 * 60_000,
+    codeIntervalS: 5,
+    /** The address people open, for links shown to agents; derived from the request when unset. */
+    publicUrl: process.env.AGENT_LIMITS_PUBLIC_URL?.replace(/\/+$/, '') || null,
+  },
+
+  /**
+   * Agents push measurements (spec/ingest-v1.md) with a device or board token. These
+   * static tokens (comma-separated) additionally deliver to the default board.
+   */
   ingest: {
     tokens: (process.env.AGENT_LIMITS_INGEST_TOKENS ?? '')
       .split(',')
@@ -86,5 +103,5 @@ export const config = {
   },
 } as const;
 
-export const version = '2.2.0';
+export const version = '2.3.0';
 export const serviceName = 'Agent Limits';

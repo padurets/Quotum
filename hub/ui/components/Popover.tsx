@@ -1,8 +1,29 @@
 import React, {useEffect, useRef, useState, type ReactNode} from 'react';
 
-/** An icon button with an anchored panel; closes on outside click and Escape. */
-export function Popover({label, icon, badge, children}: {label: string; icon: ReactNode; badge?: number; children: ReactNode}) {
-  const [open, setOpen] = useState(false);
+/** A button with an anchored panel; closes on outside click and Escape. */
+export function Popover({
+  label,
+  icon,
+  trigger,
+  badge,
+  children,
+  open: controlled,
+  onOpenChange,
+  align = 'right',
+}: {
+  label: string;
+  icon?: ReactNode;
+  /** A text trigger instead of an icon button. */
+  trigger?: ReactNode;
+  badge?: number;
+  children: ReactNode;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  align?: 'left' | 'right';
+}) {
+  const [own, setOwn] = useState(false);
+  const open = controlled ?? own;
+  const setOpen = (next: boolean) => (onOpenChange ? onOpenChange(next) : setOwn(next));
   const box = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -17,16 +38,17 @@ export function Popover({label, icon, badge, children}: {label: string; icon: Re
       document.removeEventListener('mousedown', close);
       document.removeEventListener('keydown', escape);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   return (
     <div className="picker" ref={box}>
-      <button className="icon-button" aria-expanded={open} aria-label={label} title={label} onClick={() => setOpen(!open)}>
-        {icon}
+      <button className={trigger ? 'text-button' : 'icon-button'} aria-expanded={open} aria-label={label} title={label} onClick={() => setOpen(!open)}>
+        {trigger ?? icon}
         {!!badge && <i className="badge">{badge}</i>}
       </button>
       {open && (
-        <div className="popover" role="dialog" aria-label={label}>
+        <div className={`popover ${align === 'left' ? 'is-left' : ''}`} role="dialog" aria-label={label}>
           {children}
         </div>
       )}

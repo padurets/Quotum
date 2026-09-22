@@ -31,10 +31,23 @@ export function windowName(bucket: string, label: string, minutes: number | null
   return scope ? `${scope} · ${KIND_TEXT[kind].toLowerCase()}` : KIND_TEXT[kind];
 }
 
-export const sourceLabel = (source: {provider: string; accountKey: string}) => {
-  const name = PROVIDERS[source.provider]?.name ?? source.provider;
-  return source.accountKey === 'default' ? name : `${name} · ${source.accountKey}`;
-};
+export const sourceLabel = (source: {provider: string; accountKey: string; title?: string}) =>
+  source.title ?? PROVIDERS[source.provider]?.name ?? source.provider;
+
+/**
+ * Names every source of a board: the provider, plus whose it is when that is not
+ * obvious — several accounts of one provider, or a board of several people.
+ */
+export function titled<T extends {provider: string; owners?: string[]}>(sources: T[]): (T & {title: string})[] {
+  const people = new Set(sources.flatMap(s => s.owners ?? []));
+  return sources.map(source => {
+    const name = PROVIDERS[source.provider]?.name ?? source.provider;
+    const siblings = sources.filter(s => s.provider === source.provider).length;
+    const owners = source.owners ?? [];
+    const whose = (people.size > 1 || siblings > 1) && owners.length ? ` · ${owners.join(', ')}` : '';
+    return {...source, title: name + whose};
+  });
+}
 
 /** Fully qualified series name: source, model pool, window length. */
 export function seriesName(source: {provider: string; accountKey: string}, bucket: string, label: string, minutes: number | null) {

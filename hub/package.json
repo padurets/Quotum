@@ -1,12 +1,12 @@
 {
   "name": "agent-limits",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "private": true,
   "license": "MIT",
   "description": "One page with the subscription limits of every coding agent: Claude Code, Codex, Antigravity.",
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.server.json && tsc -p tsconfig.app.json && vite build",
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.server.json && tsc -p tsconfig.app.json && vite build",
     "test": "tsx --test server/test/*.test.ts ui/test/*.test.ts",
     "start": "node dist/server/index.js"
   },

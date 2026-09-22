@@ -1,7 +1,7 @@
 import {DatabaseSync} from 'node:sqlite';
 import {randomUUID} from 'node:crypto';
 import {config} from '../config.js';
-import {describeSource, parseSourceId, providers, sourceId, type Provider, type Source} from '../domain/sources.js';
+import {DEFAULT_ACCOUNT, DEFAULT_BOARD, describeSource, hash, parseSourceId, providers, sourceId, type Provider, type Source} from '../domain/sources.js';
 import {
   bucketize,
   kindOf,
@@ -14,6 +14,11 @@ import {
 import {migrate} from './schema.js';
 
 export type Guard = {scope: string; confidence: Confidence};
+
+export {DEFAULT_BOARD};
+
+/** A provider's default account is listed before its other accounts. */
+const accountOrder = (source: Source) => (source.accountKey === DEFAULT_ACCOUNT ? 0 : 1);
 
 export type HistorySeries = {
   sourceId: string;
@@ -36,54 +41,66 @@ export class Store {
   readonly db: DatabaseSync;
   readonly collectionStart: number;
 
-  constructor(file: string, now = Date.now()) {
+  /**
+   * `legacyDefaults`: the built-in collector feeds the default board, so that board
+   * always lists every provider's default source, even before its first measurement.
+   */
+  constructor(
+    file: string,
+    now = Date.now(),
+    private readonly options: {legacyDefaults?: boolean} = {},
+  ) {
     this.db = new DatabaseSync(file);
     migrate(this.db, now);
     this.collectionStart = Number((this.db.prepare('SELECT value FROM meta WHERE key = ?').get('collectionStart') as any).value);
   }
 
-  /** Sources we have data for, plus the configured default of every provider. */
-  sources(): Source[] {
-    const rows = this.db.prepare('SELECT id FROM sources ORDER BY provider, account_key').all() as {id: string}[];
-    const ids = new Set([...providers.map(p => sourceId(p)), ...rows.map(r => r.id)]);
+  /** The sources of a board, in provider order. */
+  sources(board = DEFAULT_BOARD): Source[] {
+    const rows = this.db.prepare('SELECT id FROM sources WHERE board_id = ?').all(board) as {id: string}[];
+    const legacy = board === DEFAULT_BOARD && this.options.legacyDefaults ? providers.map(p => sourceId(p)) : [];
+    const ids = new Set([...legacy, ...rows.map(r => r.id)]);
     return [...ids]
       .map(id => {
         const parsed = parseSourceId(id);
         return parsed ? describeSource(parsed.provider, parsed.accountKey) : null;
       })
       .filter((s): s is Source => s !== null)
-      .sort((a, b) => providers.indexOf(a.provider) - providers.indexOf(b.provider) || a.accountKey.localeCompare(b.accountKey));
+      .sort((a, b) => providers.indexOf(a.provider) - providers.indexOf(b.provider) || accountOrder(a) - accountOrder(b) || a.accountKey.localeCompare(b.accountKey));
   }
 
-  register(source: Source, now: number) {
+  register(source: Source, now: number, board = DEFAULT_BOARD) {
     this.db
-      .prepare('INSERT OR IGNORE INTO sources (id, provider, account_key, created_at) VALUES (?, ?, ?, ?)')
-      .run(source.id, source.provider, source.accountKey, now);
+      .prepare('INSERT OR IGNORE INTO sources (id, provider, account_key, created_at, board_id) VALUES (?, ?, ?, ?, ?)')
+      .run(source.id, source.provider, source.accountKey, now, board);
   }
 
-  states(): SourceState[] {
-    return this.sources().map(source => {
-      const row = this.db.prepare('SELECT payload FROM state WHERE source_id = ?').get(source.id) as {payload: string} | undefined;
-      if (!row) {
-        return {
-          id: source.id,
-          provider: source.provider,
-          accountKey: source.accountKey,
-          plan: '',
-          confidence: 'unknown' as Confidence,
-          scope: '',
-          successAt: null,
-          attemptAt: 0,
-          error: 'waiting',
-          windows: [],
-        };
-      }
-      return {...(JSON.parse(row.payload) as SourceState), id: source.id, provider: source.provider, accountKey: source.accountKey};
-    });
+  states(board = DEFAULT_BOARD): SourceState[] {
+    return this.sources(board).map(source => this.stateOf(source));
   }
 
   state(id: string): SourceState {
-    return this.states().find(s => s.id === id)!;
+    const parsed = parseSourceId(id)!;
+    return this.stateOf(describeSource(parsed.provider, parsed.accountKey));
+  }
+
+  private stateOf(source: Source): SourceState {
+    const row = this.db.prepare('SELECT payload FROM state WHERE source_id = ?').get(source.id) as {payload: string} | undefined;
+    if (!row) {
+      return {
+        id: source.id,
+        provider: source.provider,
+        accountKey: source.accountKey,
+        plan: '',
+        confidence: 'unknown' as Confidence,
+        scope: '',
+        successAt: null,
+        attemptAt: 0,
+        error: 'waiting',
+        windows: [],
+      };
+    }
+    return {...(JSON.parse(row.payload) as SourceState), id: source.id, provider: source.provider, accountKey: source.accountKey};
   }
 
   /**
@@ -111,6 +128,10 @@ export class Store {
     const parsed = parseSourceId(id)!;
     this.db.exec('BEGIN IMMEDIATE');
     try {
+      // Sources the built-in collector writes need no explicit registration.
+      this.db
+        .prepare('INSERT OR IGNORE INTO sources (id, provider, account_key, created_at, board_id) VALUES (?, ?, ?, ?, ?)')
+        .run(id, parsed.provider, parsed.accountKey, observedAt, DEFAULT_BOARD);
       const insert = this.db.prepare(
         'INSERT OR IGNORE INTO samples' +
           ' (provider, scope, bucket, source_at, observed_at, label, used, reset_at, minutes, source_id, stale_after_ms)' +
@@ -146,33 +167,46 @@ export class Store {
 
   /** Records a failed attempt; the last successful values stay on screen. */
   /**
-   * The source an agent account delivers to, created on first sight. The first account
-   * of a provider takes the provider's default source when `useDefault` is set (no
-   * other collector writes there), so existing history and preferences carry on.
+   * The source a subscription account of a board is stored under, created on first
+   * sight. On the default board the first account of a provider takes the provider's
+   * default source when `useDefault` is set (no collector writes there), so existing
+   * history and preferences carry on. Other ids are stable hashes of board and account.
    */
-  agentSource(provider: Provider, account: string, useDefault: boolean, now: number): string {
-    const row = this.db.prepare('SELECT source_id FROM agent_accounts WHERE provider = ? AND account = ?').get(provider, account) as
-      | {source_id: string}
-      | undefined;
+  agentSource(board: string, provider: Provider, account: string, useDefault: boolean, now: number): string {
+    const row = this.db
+      .prepare('SELECT source_id FROM agent_accounts WHERE board_id = ? AND provider = ? AND account = ?')
+      .get(board, provider, account) as {source_id: string} | undefined;
     if (row) return row.source_id;
-    const taken = this.db.prepare('SELECT 1 FROM agent_accounts WHERE source_id = ?').get(sourceId(provider));
-    const id = useDefault && !taken ? sourceId(provider) : sourceId(provider, account.slice(0, 8));
-    this.db.prepare('INSERT INTO agent_accounts VALUES (?, ?, ?, ?)').run(provider, account, id, now);
+    const fallback = sourceId(provider);
+    const taken = this.db.prepare('SELECT 1 FROM agent_accounts WHERE source_id = ?').get(fallback);
+    const id = board === DEFAULT_BOARD && useDefault && !taken ? fallback : sourceId(provider, hash(`${board}\n${account}`).slice(0, 8));
+    this.db.prepare('INSERT INTO agent_accounts VALUES (?, ?, ?, ?, ?)').run(board, provider, account, id, now);
     const parsed = parseSourceId(id)!;
-    this.register(describeSource(parsed.provider, parsed.accountKey), now);
+    this.register(describeSource(parsed.provider, parsed.accountKey), now, board);
     return id;
   }
 
-  /** Remembers which source a machine last delivered for a provider (failures go there). */
-  seenMachine(machine: {id: string; name: string}, agent: string, provider: Provider, source: string, at: number) {
-    this.db.prepare('INSERT OR REPLACE INTO agent_machines VALUES (?, ?, ?, ?, ?, ?)').run(machine.id, provider, source, machine.name, agent, at);
+  /** Remembers which source a device last delivered for a provider (its failures go there). */
+  seenDevice(device: string, provider: Provider, source: string, at: number) {
+    this.db.prepare('INSERT OR REPLACE INTO device_sources VALUES (?, ?, ?, ?)').run(device, provider, source, at);
   }
 
-  machineSource(machineId: string, provider: Provider): string | null {
-    const row = this.db.prepare('SELECT source_id FROM agent_machines WHERE machine_id = ? AND provider = ?').get(machineId, provider) as
+  deviceSource(device: string, provider: Provider): string | null {
+    const row = this.db.prepare('SELECT source_id FROM device_sources WHERE device_id = ? AND provider = ?').get(device, provider) as
       | {source_id: string}
       | undefined;
     return row?.source_id ?? null;
+  }
+
+  /** Which sources each device of a board delivers to. */
+  deviceSources(board: string): {device: string; provider: Provider; source: string; seenAt: number}[] {
+    return (
+      this.db
+        .prepare(
+          'SELECT d.device_id, d.provider, d.source_id, d.seen_at FROM device_sources d JOIN sources s ON s.id = d.source_id WHERE s.board_id = ?',
+        )
+        .all(board) as {device_id: string; provider: Provider; source_id: string; seen_at: number}[]
+    ).map(r => ({device: r.device_id, provider: r.provider, source: r.source_id, seenAt: r.seen_at}));
   }
 
   fail(id: string, error: string, at: number) {
@@ -182,10 +216,13 @@ export class Store {
   }
 
   /** Every source/window series since `from` on a shared grid, ready for the chart and the table. */
-  history(from: number, bucketMs: number): HistorySeries[] {
+  history(board: string, from: number, bucketMs: number): HistorySeries[] {
     const rows = this.db
-      .prepare('SELECT * FROM samples WHERE source_at >= ? ORDER BY source_id, bucket, source_at')
-      .all(from) as any[];
+      .prepare(
+        'SELECT samples.* FROM samples JOIN sources ON sources.id = samples.source_id' +
+          ' WHERE sources.board_id = ? AND samples.source_at >= ? ORDER BY samples.source_id, samples.bucket, samples.source_at',
+      )
+      .all(board, from) as any[];
 
     const groups = new Map<string, Sample[]>();
     for (const row of rows) {
@@ -209,7 +246,7 @@ export class Store {
       });
     }
 
-    const states = this.states();
+    const states = this.states(board);
     const rank = (sample: Sample) => {
       const source = states.findIndex(s => s.id === sample.sourceId);
       const window = states[source]?.windows.findIndex(w => w.id === sample.id) ?? -1;

@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {Store} from '../store/store.js';
 import {SCHEMA_VERSION} from '../store/schema.js';
-import {sourceId} from '../domain/sources.js';
+import {DEFAULT_BOARD, sourceId} from '../domain/sources.js';
 import type {Measurement, Win} from '../domain/quota.js';
 
 const start = 1_800_000_000_000;
@@ -38,7 +38,7 @@ test('repeated source responses and failures keep the last good data without ext
   assert.equal(state.successAt, start);
   assert.equal(state.windows[0].used, 20);
   assert.equal(state.error, 'source_unavailable');
-  assert.equal(store.history(start - 1, 60_000)[0].samples, 1);
+  assert.equal(store.history(DEFAULT_BOARD, start - 1, 60_000)[0].samples, 1);
   store.close();
 });
 
@@ -53,7 +53,7 @@ test('history returns one series per source and window, and short failures do no
     start + 240_000,
     guard,
   );
-  const history = store.history(start - 1, 60_000);
+  const history = store.history(DEFAULT_BOARD, start - 1, 60_000);
   assert.deepEqual(history.map(s => [s.bucket, s.kind, s.consumed]), [['weekly', 'weekly', 5], ['session', 'session', 30]]);
   assert.equal(history[0].points[1][2], 0, 'a single failed attempt is not a chart break');
   store.close();
@@ -70,7 +70,7 @@ test('a second account of the same provider keeps its own state and history', ()
   assert.deepEqual(store.sources().map(s => s.id).filter(id => id.startsWith('codex')), ['codex', 'codex:work']);
   assert.equal(store.state('codex').windows[0].used, 20);
   assert.equal(store.state(work).windows[0].used, 70);
-  const history = store.history(start - 1, 60_000);
+  const history = store.history(DEFAULT_BOARD, start - 1, 60_000);
   assert.deepEqual(
     history.filter(s => s.provider === 'codex').map(s => [s.sourceId, s.points.at(-1)![1]]),
     [['codex', 80], ['codex:work', 30]],
@@ -110,9 +110,9 @@ test('a v1 database migrates to source-keyed storage without losing samples', ()
   const store = new Store(file, start + 300_000);
   assert.equal(Number((store.db.prepare('PRAGMA user_version').get() as any).user_version), SCHEMA_VERSION);
   assert.equal(store.collectionStart, start, 'collection start survives the migration');
-  const [series] = store.history(start - 1, 60_000);
+  const [series] = store.history(DEFAULT_BOARD, start - 1, 60_000);
   assert.deepEqual([series.sourceId, series.samples, series.consumed], ['codex', 2, 4]);
   store.record('codex', measurement({sourceAt: start + 240_000, windows: [win({used: 26})]}), start + 240_000, {scope: 'a', confidence: 'provider'});
-  assert.equal(store.history(start - 1, 60_000)[0].samples, 3);
+  assert.equal(store.history(DEFAULT_BOARD, start - 1, 60_000)[0].samples, 3);
   store.close();
 });

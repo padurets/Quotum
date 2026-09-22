@@ -1,4 +1,4 @@
-import {hash, providers, type Provider} from './sources.js';
+import {providers, type Provider} from './sources.js';
 import type {Measurement, Win} from './quota.js';
 
 /**
@@ -17,6 +17,8 @@ export type AgentWindow = {
 export type AgentSnapshot = {
   provider: Provider;
   account: string | null;
+  /** A name the owner gave a subscription whose client does not identify it. */
+  accountName: string | null;
   plan: string | null;
   observedAt: number;
   via: string;
@@ -31,6 +33,8 @@ export type AgentBatch = {
   version: 1;
   agent: string;
   machine: {id: string; name: string; os: string; arch: string};
+  /** Whom the agent measures for: a configured name, or an e-mail an installed client reports. */
+  owner: {name: string | null; email: string | null};
   sentAt: number;
   snapshots: AgentSnapshot[];
   failures: AgentFailure[];
@@ -100,6 +104,7 @@ function parseSnapshot(value: unknown): AgentSnapshot {
   return {
     provider: provider(value.provider),
     account: text(value.account, 'account', true),
+    accountName: text(value.accountName, 'accountName', true),
     plan: text(value.plan, 'plan', true),
     observedAt: time(value.observedAt, 'observedAt')!,
     via: text(value.via, 'via')!,
@@ -126,6 +131,10 @@ export function parseBatch(body: unknown): AgentBatch {
   const machine = body.machine;
   if (!isObject(machine)) throw new Invalid('machine');
   const snapshots = list(body.snapshots, 'snapshots', LIMITS.items).map(parseSnapshot);
+  const owner = body.owner ?? {};
+  if (!isObject(owner)) throw new Invalid('owner');
+  const email = text(owner.email, 'owner email', true);
+  if (email !== null && !/^[^\s@]+@[^\s@]+$/.test(email)) throw new Invalid('owner email');
   const failures = list(body.failures, 'failures', LIMITS.items).map(parseFailure);
   return {
     version: 1,
@@ -136,6 +145,7 @@ export function parseBatch(body: unknown): AgentBatch {
       os: text(machine.os, 'machine os')!,
       arch: text(machine.arch, 'machine arch')!,
     },
+    owner: {name: text(owner.name, 'owner name', true), email: email?.toLowerCase() ?? null},
     sentAt: time(body.sentAt, 'sentAt')!,
     snapshots,
     failures,
@@ -144,18 +154,24 @@ export function parseBatch(body: unknown): AgentBatch {
 
 const KIND_LABELS = {session: '5 часов', weekly: 'Неделя'} as const;
 
-/** How the dashboard names a window: "Неделя", "Fable · Неделя", "Gemini · 5 часов". */
+/**
+ * The stored label of a window: the scope the provider names ("Fable", "Gemini"), or
+ * else the window's kind ("Неделя"). The dashboard adds the kind to a scope itself.
+ */
 export function windowLabel(w: AgentWindow): string {
-  const kind = w.kind === 'other' ? (w.minutes ? `${w.minutes} мин` : 'Окно') : KIND_LABELS[w.kind];
-  return w.label ? `${w.label} · ${kind}` : kind;
+  if (w.label) return w.label;
+  return w.kind === 'other' ? (w.minutes ? `${w.minutes} мин` : 'Окно') : KIND_LABELS[w.kind];
 }
 
 /**
- * Where a snapshot belongs. Accounts are identified by the agent's pseudonym; a
- * provider that does not name its account (Antigravity) is kept per machine.
+ * Which subscription a snapshot belongs to. Clients that identify the account give
+ * its pseudonym; otherwise the subscription is the owner's own (optionally one of
+ * several, by the name the owner gave it), never the machine's.
  */
-export function accountKey(snapshot: Pick<AgentSnapshot, 'account'>, machineId: string): string {
-  return snapshot.account ?? `machine-${hash(machineId).slice(0, 24)}`;
+export function subscriptionKey(snapshot: Pick<AgentSnapshot, 'account' | 'accountName' | 'provider'>, ownerKey: string): string {
+  if (snapshot.account) return snapshot.account;
+  const name = snapshot.accountName ? `/${snapshot.accountName.trim().toLowerCase()}` : '';
+  return `${ownerKey}/${snapshot.provider}${name}`;
 }
 
 export function toMeasurement(snapshot: AgentSnapshot): Measurement {

@@ -20,9 +20,14 @@ export type SourceState = {
   error: string | null;
   stale: boolean;
   windows: Win[];
+  /** Owners of the devices that measure this source. */
+  owners?: string[];
+  /** How the dashboard names the source (set by the client from the whole board). */
+  title?: string;
 };
 
 export type Overview = {
+  board: {id: string; name: string; personal: boolean; role: string};
   now: number;
   collectionStart: number;
   collecting: boolean;
@@ -46,6 +51,8 @@ export type HistorySeries = {
 };
 
 export type History = {
+  /** Set by the client: which board the history was read for. */
+  board?: string;
   range: string;
   now: number;
   since: number;

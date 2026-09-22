@@ -1,11 +1,13 @@
 import {useEffect, useState} from 'react';
 import type {History, Overview} from './types';
+import {UNAUTHORIZED} from './session';
 
 async function getJson<T>(url: string, timeoutMs = 12000): Promise<T> {
   const controller = new AbortController();
   const deadline = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, {signal: controller.signal, cache: 'no-store'});
+    if (response.status === 401) window.dispatchEvent(new Event(UNAUTHORIZED));
     if (!response.ok) throw new Error(String(response.status));
     return (await response.json()) as T;
   } finally {
@@ -28,11 +30,12 @@ export function useNow(stepMs = 1000) {
  * request is normal through the proxy and is never shown: data stays on screen and
  * only the age of the last good answer decides whether we look disconnected.
  */
-export function useOverview() {
+export function useOverview(board: string) {
   const [data, setData] = useState<Overview | null>(null);
   const [lastOk, setLastOk] = useState(0);
 
   useEffect(() => {
+    setData(null);
     let done = false;
     let busy = false;
     let failures = 0;
@@ -43,7 +46,7 @@ export function useOverview() {
       clearTimeout(timer);
       busy = true;
       try {
-        const overview = await getJson<Overview>('/api/overview');
+        const overview = await getJson<Overview>(`/api/overview?board=${encodeURIComponent(board)}`);
         if (!done) {
           setData(overview);
           setLastOk(Date.now());
@@ -68,22 +71,22 @@ export function useOverview() {
       document.removeEventListener('visibilitychange', wake);
       window.removeEventListener('online', wake);
     };
-  }, []);
+  }, [board]);
 
-  return {data, lastOk};
+  return {data: data?.board?.id === board ? data : null, lastOk};
 }
 
 /** History is re-read when the range changes or a collection cycle completes. */
-export function useHistory(range: string, cycleKey: string) {
+export function useHistory(board: string, range: string, cycleKey: string) {
   const [history, setHistory] = useState<History | null>(null);
   const [retry, setRetry] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
-    getJson<History>(`/api/history?range=${range}`)
+    getJson<History>(`/api/history?board=${encodeURIComponent(board)}&range=${range}`)
       .then(data => {
-        if (!cancelled) setHistory(data);
+        if (!cancelled) setHistory({...data, board});
       })
       .catch(() => {
         if (!cancelled) timer = setTimeout(() => setRetry(n => n + 1), 15000);
@@ -92,7 +95,7 @@ export function useHistory(range: string, cycleKey: string) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [range, cycleKey, retry]);
+  }, [board, range, cycleKey, retry]);
 
-  return history?.range === range ? history : null;
+  return history?.range === range && history.board === board ? history : null;
 }

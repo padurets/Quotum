@@ -15,6 +15,9 @@ export type Source = {id: string; provider: Provider; accountKey: string; label:
 
 export const DEFAULT_ACCOUNT = 'default';
 
+/** The board of everything collected before boards existed, and of the built-in collector. */
+export const DEFAULT_BOARD = 'default';
+
 /** Stable, human-readable id. Preferences and chart series are keyed by it. */
 export function sourceId(provider: Provider, accountKey = DEFAULT_ACCOUNT): string {
   return accountKey === DEFAULT_ACCOUNT ? provider : `${provider}:${accountKey}`;

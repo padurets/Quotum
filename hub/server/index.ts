@@ -5,24 +5,25 @@ import {Store} from './store/store.js';
 import {VendorClient} from './sources/vendor.js';
 import {Collector} from './collector.js';
 import {ResetFeed} from './sources/resets.js';
-import {buildApp, type Pacer} from './api.js';
+import {buildApp} from './api.js';
 import {Ingest} from './ingest.js';
+import {Pairing} from './pairing.js';
+import {Directory} from './store/directory.js';
 
 mkdirSync(config.dataDir, {recursive: true, mode: 0o700});
 const databaseFile = path.join(config.dataDir, config.databaseFile);
-const store = new Store(databaseFile);
+// The built-in CodexBar collector runs only when its token is present; agents can always push.
+const collecting = !!config.vendor.token;
+const store = new Store(databaseFile, Date.now(), {legacyDefaults: collecting});
 chmodSync(databaseFile, 0o600);
+const directory = new Directory(store.db);
 
-// CodexBar is collected only when its token is present; agents push when ingest tokens are set.
-const collector = config.vendor.token ? new Collector(store, new VendorClient()) : null;
-const ingest = config.ingest.tokens.length ? new Ingest(store, config.ingest.tokens, !collector) : null;
-const idle: Pacer = {
-  status: () => ({collecting: false, cycle: 0, nextAt: Date.now() + config.collection.intervalMs, intervalMs: config.collection.intervalMs}),
-};
+const collector = collecting ? new Collector(store, new VendorClient()) : null;
+const ingest = new Ingest(store, directory, config.ingest.tokens, !collector);
 const resets = new ResetFeed();
-const app = await buildApp(store, collector ?? ingest ?? idle, resets, ingest);
+const app = await buildApp({store, directory, pacer: collector ?? ingest, resets, ingest, pairing: new Pairing(directory)});
 await app.listen({host: config.http.host, port: config.http.port});
-console.log(JSON.stringify({event: 'start', collector: !!collector, ingest: !!ingest}));
+console.log(JSON.stringify({event: 'start', collector: !!collector, users: directory.userCount()}));
 collector?.start();
 resets.start();
 
