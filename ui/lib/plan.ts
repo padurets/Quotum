@@ -1,0 +1,95 @@
+import type {Win} from './types';
+import {kindOf} from './kind';
+
+const DAY = 86_400_000;
+const WEEK_MINUTES = 10080;
+
+/**
+ * How a weekly quota is meant to be spent: whole percent per day of the window
+ * (providers report whole percents, so finer targets would be false precision).
+ * Days with 0 are rest days; everything should be spent by the end of the last
+ * non-zero day. Configurable per source in the card settings.
+ */
+export type WeeklyPlan = number[];
+export const DEFAULT_PLAN: WeeklyPlan = [30, 25, 15, 15, 10, 5, 0];
+export const PLAN_DAYS = 7;
+
+export const planTotal = (plan: WeeklyPlan) => plan.reduce((sum, share) => sum + share, 0);
+
+/** A usable plan: seven whole, non-negative days summing to exactly 100. */
+export function isValidPlan(plan: unknown): plan is WeeklyPlan {
+  return (
+    Array.isArray(plan) &&
+    plan.length === PLAN_DAYS &&
+    plan.every(share => Number.isInteger(share) && share >= 0 && share <= 100) &&
+    planTotal(plan) === 100
+  );
+}
+
+/** Days until the plan is fully spent (end of the last day with a non-zero share). */
+const activeDays = (plan: WeeklyPlan) => plan.reduce((last, share, day) => (share > 0 ? day + 1 : last), 0);
+
+export type PlanPoint = {
+  /** Remaining percent the plan expects at that moment. */
+  remaining: number;
+  /** When the plan expects the window to be spent (start of the rest days for weekly windows). */
+  deadline: number;
+  /** True on rest days: nothing is expected to be left, nothing to spend. */
+  restDay: boolean;
+  weekly: boolean;
+};
+
+/** Planned remaining percent `elapsed` ms into a weekly window. */
+export function weeklyPlanRemaining(elapsed: number, plan: WeeklyPlan = DEFAULT_PLAN): number {
+  const days = Math.max(0, elapsed / DAY);
+  const full = Math.min(plan.length, Math.floor(days));
+  let used = plan.slice(0, full).reduce((sum, share) => sum + share, 0);
+  if (full < plan.length) used += (days - full) * plan[full];
+  return Math.max(0, 100 - used);
+}
+
+/**
+ * The planned remaining share of a window at `now`. Weekly windows follow the per-day
+ * plan; other windows are spent linearly until their reset. Returns null while the
+ * window has not really started (idle rolling windows report "now + length") or its
+ * timing is unknown.
+ */
+export function planAt(w: Win, now: number, plan: WeeklyPlan = DEFAULT_PLAN): PlanPoint | null {
+  if (!w.resetAt || !w.minutes) return null;
+  const length = w.minutes * 60_000;
+  const start = w.resetAt - length;
+  const elapsed = now - start;
+  if (elapsed < length * 0.02 || elapsed >= length) return null;
+
+  if (kindOf(w.minutes, w.label) !== 'weekly') {
+    return {remaining: 100 * (1 - elapsed / length), deadline: w.resetAt, restDay: false, weekly: false};
+  }
+  const deadline = start + activeDays(plan) * DAY;
+  return {remaining: weeklyPlanRemaining(elapsed, plan), deadline, restDay: now >= deadline, weekly: true};
+}
+
+/**
+ * The plan as a line over [from, to] for a weekly window that resets at `resetAt`.
+ * Other weeks are assumed to follow the same seven-day rhythm, so the line jumps back
+ * to 100% at each reset. Returns runs of [time, remaining]; a new run starts at every
+ * reset.
+ */
+export function weeklyPlanLine(resetAt: number, from: number, to: number, plan: WeeklyPlan = DEFAULT_PLAN): [number, number][][] {
+  const week = WEEK_MINUTES * 60_000;
+  const runs: [number, number][][] = [];
+  let start = resetAt - week * Math.ceil((resetAt - from) / week);
+  for (; start < to; start += week) {
+    const begin = Math.max(from, start);
+    const end = Math.min(to, start + week);
+    if (end <= begin) continue;
+    const run: [number, number][] = [];
+    const push = (t: number) => run.push([t, weeklyPlanRemaining(t - start, plan)]);
+    // Plan corners (day boundaries) must be exact; in between the plan is linear.
+    const corners = Array.from({length: PLAN_DAYS + 1}, (_, day) => start + day * DAY).filter(t => t > begin && t < end);
+    push(begin);
+    for (const corner of corners) push(corner);
+    push(end - (end === start + week ? 1 : 0));
+    runs.push(run);
+  }
+  return runs;
+}

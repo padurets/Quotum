@@ -1,0 +1,51 @@
+import type {DatabaseSync} from 'node:sqlite';
+
+export const SCHEMA_VERSION = 2;
+
+const V1 = `
+  CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS state (provider TEXT PRIMARY KEY, payload TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS guards (provider TEXT PRIMARY KEY, signature TEXT NOT NULL, scope TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS samples (
+    provider TEXT NOT NULL, scope TEXT NOT NULL, bucket TEXT NOT NULL,
+    source_at INTEGER NOT NULL, observed_at INTEGER NOT NULL, label TEXT NOT NULL,
+    used REAL NOT NULL, reset_at INTEGER, minutes INTEGER,
+    PRIMARY KEY (provider, scope, bucket, source_at));
+  CREATE INDEX IF NOT EXISTS history ON samples (provider, bucket, source_at);
+  CREATE TABLE IF NOT EXISTS attempts (id INTEGER PRIMARY KEY, provider TEXT NOT NULL, at INTEGER NOT NULL, error TEXT);
+`;
+
+/**
+ * v2 keys everything by *source* (one provider account) instead of by provider, so a
+ * second subscription of the same provider becomes another row rather than a schema
+ * change. Existing rows belong to the single default account of their provider.
+ */
+const V2 = `
+  ALTER TABLE samples ADD COLUMN source_id TEXT NOT NULL DEFAULT '';
+  UPDATE samples SET source_id = provider WHERE source_id = '';
+  CREATE INDEX IF NOT EXISTS samples_by_source ON samples (source_id, bucket, source_at);
+  ALTER TABLE state RENAME COLUMN provider TO source_id;
+  ALTER TABLE guards RENAME COLUMN provider TO source_id;
+  ALTER TABLE attempts RENAME COLUMN provider TO source_id;
+  CREATE TABLE IF NOT EXISTS sources (
+    id TEXT PRIMARY KEY, provider TEXT NOT NULL, account_key TEXT NOT NULL, created_at INTEGER NOT NULL);
+  INSERT OR IGNORE INTO sources (id, provider, account_key, created_at)
+    SELECT DISTINCT provider, provider, 'default', ${'$'}{now} FROM samples;
+`;
+
+/** Applies pending migrations inside one transaction and records the new version. */
+export function migrate(db: DatabaseSync, now: number) {
+  db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
+  const current = Number((db.prepare('PRAGMA user_version').get() as any).user_version ?? 0);
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    if (current < 1) db.exec(V1);
+    if (current < 2) db.exec(V2.replaceAll('${now}', String(now)));
+    db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+  db.prepare('INSERT OR IGNORE INTO meta VALUES (?, ?)').run('collectionStart', String(now));
+}
