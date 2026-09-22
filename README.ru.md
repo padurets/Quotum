@@ -80,7 +80,7 @@ Antigravity   Gemini 5 hours       100%  in 4h 59m
 - **Таблица всех лимитов с прогнозом:** сколько потрачено за период и, если тратить
   так же, хватит ли окна до сброса (или до конца плана) и сколько примерно останется.
 - **Объявления о сбросах** из общественных трекеров [Codex Resets](https://codex-resets.com)
-  и [claude-resets.com](https://claude-resets.com), со ссылкой на источник. Их можно
+  и [Claude Resets](https://claude-resets.com), со ссылкой на источник. Их можно
   выключить.
 - **Доска из виджетов** (карточка на каждую подписку, график, таблица), как дашборд в
   Grafana.
@@ -300,7 +300,7 @@ npm принимает пакеты только от этого workflow и б�
 
 Спасибо [CodexBar](https://github.com/steipete/CodexBar) за пример и за то, что был
 первым источником данных для этого дашборда, и авторам
-[Codex Resets](https://codex-resets.com) и [claude-resets.com](https://claude-resets.com).
+[Codex Resets](https://codex-resets.com) и [Claude Resets](https://claude-resets.com).
 Иконки провайдеров — из [LobeHub Icons](https://github.com/lobehub/lobe-icons). Quotum не
 связан с Anthropic, OpenAI или Google.
 

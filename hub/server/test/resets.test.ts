@@ -31,7 +31,7 @@ test('an expired watch is dropped; anything but the v1 shape is refused', () => 
   assert.throws(() => fromCodexResets('<html>Just a moment…</html>', now), /invalid_reset_status/);
 });
 
-test('the claude-resets catalogue yields the latest reset and policy change per provider', () => {
+test('the Claude Resets catalogue yields the latest reset and policy change per provider', () => {
   const catalogue = {
     providers: {
       claude: {
@@ -48,7 +48,7 @@ test('the claude-resets catalogue yields the latest reset and policy change per 
   const claude = fromClaudeResets(catalogue, 'claude');
   assert.deepEqual([claude.latest?.at, claude.latest?.scope, claude.policy?.text], [Date.parse('2026-09-04T20:08:45Z'), 'Max', 'Weekly limit +25%.']);
   assert.equal(claude.scheduled, null);
-  assert.equal(claude.credit.name, 'claude-resets.com');
+  assert.equal(claude.credit.name, 'Claude Resets');
   assert.equal(fromClaudeResets(catalogue, 'codex').credit.name, 'Codex Resets', 'the Codex catalogue originates from Codex Resets');
   assert.throws(() => fromClaudeResets({}, 'claude'), /invalid_reset_catalogue/);
 });

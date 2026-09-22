@@ -31,7 +31,7 @@ async function getJson(url: string): Promise<unknown> {
 /**
  * Polls both trackers in the background and keeps the last good status per provider.
  * Codex Resets is preferred for Codex (it knows about *scheduled* resets); the Codex
- * part of claude-resets.com is the fallback for executed ones. Every reset reported as
+ * part of Claude Resets is the fallback for executed ones. Every reset reported as
  * done is handed to `remember`: the trackers only tell the latest one. Nothing on the
  * dashboard waits on this feed.
  */

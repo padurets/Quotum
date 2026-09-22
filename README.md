@@ -81,7 +81,7 @@ Antigravity   Gemini 5 hours       100%  in 4h 59m
   whether the window runs out before its reset (or before your plan ends) and roughly
   how much will be left.
 - **Reset announcements** from the community trackers [Codex Resets](https://codex-resets.com)
-  and [claude-resets.com](https://claude-resets.com), with a link to the source. You
+  and [Claude Resets](https://claude-resets.com), with a link to the source. You
   can turn them off.
 - **Boards made of widgets** (a card per subscription, the chart, the table), like a
   dashboard in Grafana. The owner of a board drags them around, hides the ones they don't need
@@ -300,7 +300,7 @@ language has is there.
 
 Thanks to [CodexBar](https://github.com/steipete/CodexBar) for showing the way and for
 being the first data source of this dashboard, and to the people behind
-[Codex Resets](https://codex-resets.com) and [claude-resets.com](https://claude-resets.com).
+[Codex Resets](https://codex-resets.com) and [Claude Resets](https://claude-resets.com).
 Provider icons come from [LobeHub Icons](https://github.com/lobehub/lobe-icons). Quotum
 is not affiliated with Anthropic, OpenAI or Google.
 

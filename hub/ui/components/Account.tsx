@@ -148,7 +148,7 @@ function Browser({trackers}: {trackers: TrackerHealth[]}) {
           {rich('settings.resetsNote', {
             claude: (
               <a href="https://claude-resets.com/" target="_blank" rel="noopener noreferrer">
-                claude-resets.com
+                Claude Resets
               </a>
             ),
             codex: (

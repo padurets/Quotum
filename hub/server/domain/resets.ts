@@ -4,13 +4,13 @@
  *
  * - Codex Resets — https://codex-resets.com/api/v1/status: executed, *scheduled* and
  *   possible Codex resets. Free, keyless; credit with a link wherever shown.
- * - claude-resets.com — https://claude-resets.com/api/resets: executed Claude resets
+ * - Claude Resets — https://claude-resets.com/api/resets: executed Claude resets
  *   and limit-policy changes, plus the Codex catalogue mirrored from Codex Resets.
  *
  * Both are classified catalogues of public posts, not vendor commitments.
  */
 export const CODEX_RESETS = {name: 'Codex Resets', url: 'https://codex-resets.com/'};
-export const CLAUDE_RESETS = {name: 'claude-resets.com', url: 'https://claude-resets.com/'};
+export const CLAUDE_RESETS = {name: 'Claude Resets', url: 'https://claude-resets.com/'};
 
 export type ResetProvider = 'claude' | 'codex';
 export type ResetEvent = {url: string; text: string; at: number};
@@ -65,7 +65,7 @@ export function fromCodexResets(payload: unknown, now: number): ResetStatus {
   };
 }
 
-/** One provider of claude-resets.com's catalogue → ResetStatus (executed events only). */
+/** One provider of Claude Resets' catalogue → ResetStatus (executed events only). */
 export function fromClaudeResets(payload: unknown, provider: ResetProvider): ResetStatus {
   const events = (payload as any)?.providers?.[provider]?.events;
   if (!Array.isArray(events)) throw new Error('invalid_reset_catalogue');

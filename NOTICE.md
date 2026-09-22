@@ -9,7 +9,7 @@ Quotum is MIT-licensed (see `LICENSE`). It includes or relies on:
 - **Fonts**: Geist and Geist Mono (SIL Open Font License 1.1), bundled from the
   `@fontsource-variable/*` npm packages.
 - **Reset announcements** are read from the public APIs of [Codex Resets](https://codex-resets.com)
-  and [claude-resets.com](https://claude-resets.com) and credited with a link wherever
+  and [Claude Resets](https://claude-resets.com) and credited with a link wherever
   they are shown, as their terms ask.
 - **CodexBar** ([steipete/CodexBar](https://github.com/steipete/CodexBar)) was the data
   source of the first versions of the dashboard. Nothing of it is bundled or used now.

@@ -84,13 +84,18 @@ export function History({
   const from = history ? Math.max(history.since, history.historyStart) : now - 86_400_000;
   const measuredTo = history?.now ?? now;
   const announced = resets.codex?.scheduled?.scheduledFor ?? null;
-  // On `auto` some future stays on the right, stretched to include an announced reset
-  // when close: it may take up to ~40% of the width, a reset further out is pointed at
-  // from the right edge instead. A chosen horizon is kept as is.
+  // The spending plan applies to weekly windows; the days ahead are there for it.
+  const planAvailable = prefs.kind === 'weekly' && visible.length > 0;
+  const planShown = planAvailable && prefs.showPlan;
+  // Without the plan the chart ends now (an announced reset is pointed at from the right
+  // edge). With it, on `auto` some future stays on the right, stretched to include an
+  // announced reset when close: it may take up to ~40% of the width, a reset further
+  // out is pointed at from the edge instead. A chosen horizon is kept as is.
   const future = prefs.horizon === 'auto' ? (FUTURE[prefs.range] ?? FUTURE['24h']) : HORIZON[prefs.horizon];
   const reach = measuredTo + (measuredTo - from) * 0.75;
-  const to =
-    prefs.horizon === 'auto' && announced && announced > measuredTo && announced + future * 0.25 > measuredTo + future
+  const to = !planShown
+    ? measuredTo
+    : prefs.horizon === 'auto' && announced && announced > measuredTo && announced + future * 0.25 > measuredTo + future
       ? Math.min(reach, announced + future * 0.25)
       : measuredTo + future;
 
@@ -143,9 +148,8 @@ export function History({
 
   // One plan line per distinct weekly window; windows of a source that share a reset
   // (e.g. Claude weekly and Fable) share one plan.
-  const planAvailable = prefs.kind === 'weekly' && visible.length > 0;
   const plans: PlanLine[] = useMemo(() => {
-    if (!planAvailable || !prefs.showPlan) return [];
+    if (!planShown) return [];
     const seen = new Map<string, PlanLine>();
     for (const line of visible) {
       const live = overview?.sources.find(s => s.id === line.sourceId)?.windows.find(w => w.id === line.windowId);
@@ -162,7 +166,7 @@ export function History({
       });
     }
     return [...seen.values()];
-  }, [visible, overview, from, to, now, planAvailable, prefs.showPlan, view, locale]);
+  }, [visible, overview, from, to, now, planShown, view, locale]);
 
   return (
     <section className={`panel history ${loading ? 'is-loading' : ''}`} aria-label={t('history.label')} aria-busy={loading}>
