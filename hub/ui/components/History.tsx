@@ -37,6 +37,22 @@ function HistorySettings({arrange}: {arrange: Arrange}) {
   );
 }
 
+/** Weekly or 5-hour windows, in the chart and the table: one choice for both, kept in this browser. */
+export function KindSwitch() {
+  const {kind} = usePrefs();
+  return (
+    <Segmented
+      value={kind}
+      onChange={value => setPrefs({kind: value as Kind})}
+      options={[
+        ['weekly', t('history.weekly')],
+        ['session', t('history.session')],
+      ]}
+      label={t('history.kind')}
+    />
+  );
+}
+
 /** The period of the chart and the table: one choice for both, kept in this browser. */
 export function PeriodSwitch() {
   const {range} = usePrefs();
@@ -173,15 +189,7 @@ export function History({
       <div className="panel-head">
         <h2>{t('history.title')}</h2>
         <div className="controls">
-          <Segmented
-            value={prefs.kind}
-            onChange={value => setPrefs({kind: value as Kind})}
-            options={[
-              ['weekly', t('history.weekly')],
-              ['session', t('history.session')],
-            ]}
-            label={t('history.kind')}
-          />
+          <KindSwitch />
           <PeriodSwitch />
           <HistorySettings arrange={arrange} />
         </div>

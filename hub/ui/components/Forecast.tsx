@@ -5,9 +5,10 @@ import {level} from '../lib/quota';
 import {PLAN_TOLERANCE, planAt, type WeeklyPlan} from '../lib/plan';
 import {FORECAST, planOf, withHidden, type Arrange} from '../lib/view';
 import {linesOf, type Line} from '../lib/lines';
+import {usePrefs} from '../lib/prefs';
 import {t, useLocale} from '../i18n';
 import {HideRow, Popover, SlidersIcon} from './Popover';
-import {PeriodSwitch} from './History';
+import {KindSwitch, PeriodSwitch} from './History';
 
 type Outlook = {text: string; tone: string; title: string};
 
@@ -41,8 +42,8 @@ function outlook(line: Line, live: Win | undefined, now: number, weekly: WeeklyP
 }
 
 /**
- * Every window of the board, weekly and 5-hour alike: what is left, what the plan
- * expects, what the period spent, and where that pace leads.
+ * The windows of the chosen kind, as in the chart: what is left, what the plan expects,
+ * what the period spent, and where that pace leads.
  */
 export function Forecast({
   history,
@@ -59,15 +60,17 @@ export function Forecast({
   arrange: Arrange;
 }) {
   const {view} = arrange;
+  const {kind} = usePrefs();
   // Window names are text: they are rebuilt when the language changes.
   const locale = useLocale();
-  const lines = useMemo(() => linesOf(history, overview, view, null), [history, overview, view.windows, locale]);
+  const lines = useMemo(() => linesOf(history, overview, view, kind), [history, overview, view.windows, kind, locale]);
 
   return (
     <section className={`panel forecast ${loading ? 'is-loading' : ''}`} aria-label={t('forecast.title')} aria-busy={loading}>
       <div className="panel-head">
         <h2>{t('forecast.title')}</h2>
         <div className="controls">
+          <KindSwitch />
           <PeriodSwitch />
           {arrange.owner && (
             <Popover label={t('forecast.settings')} icon={<SlidersIcon />}>
