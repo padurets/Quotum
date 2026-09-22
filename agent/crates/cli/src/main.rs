@@ -3,9 +3,12 @@
 use std::io::{IsTerminal, Write};
 use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
+use std::time::Duration;
 
-use agent_limits_core::config::{Config, Paths, machine};
-use agent_limits_core::model::{Batch, ErrorKind, INGEST_VERSION, Kind, Millis, Outcome, Provider, Window, now_ms};
+use agent_limits_core::config::{Config, Credentials, Hub, Paths, machine};
+use agent_limits_core::model::{
+    Batch, ErrorKind, INGEST_VERSION, Kind, Millis, Outcome, Owner, Provider, Window, now_ms,
+};
 use agent_limits_core::process::find_program;
 use agent_limits_core::providers::adapter;
 use agent_limits_core::runner::Runner;
@@ -34,7 +37,24 @@ enum Command {
     /// Measure once and show the limits (the default).
     Status,
     /// Keep measuring on the schedule and deliver to the hub, if one is configured.
-    Run,
+    Run {
+        /// Hub address, instead of the settings or `connect`.
+        #[arg(long)]
+        hub: Option<String>,
+        /// A board token (or device token) for that hub.
+        #[arg(long)]
+        token: Option<String>,
+        /// Whom this machine measures for on a shared board.
+        #[arg(long)]
+        owner: Option<String>,
+    },
+    /// Connect this machine to a hub with a one-time code confirmed in the browser.
+    Connect {
+        /// The hub's address, e.g. https://limits.example.com
+        url: String,
+    },
+    /// Forget the hub this machine was connected to with `connect`.
+    Disconnect,
     /// Show where the settings live and what is in effect.
     Config,
 }
@@ -58,7 +78,23 @@ fn main() -> ExitCode {
     }
     match cli.command.unwrap_or(Command::Status) {
         Command::Status => status(config, paths, &only, cli.json),
-        Command::Run => run(config, paths, &only),
+        Command::Run { hub, token, owner } => {
+            let mut config = config;
+            match (hub, token) {
+                (Some(url), Some(token)) => config.hub = Some(Hub { url, token }),
+                (None, None) => {}
+                _ => return fail("--hub and --token go together"),
+            }
+            if owner.is_some() {
+                config.owner = owner;
+            }
+            run(config, paths, &only)
+        }
+        Command::Connect { url } => connect(&config, &paths, &url),
+        Command::Disconnect => {
+            println!("{}", if Credentials::remove(&paths) { "disconnected" } else { "not connected" });
+            ExitCode::SUCCESS
+        }
         Command::Config => show_config(&config, &paths),
     }
 }
@@ -89,6 +125,7 @@ fn status(config: Config, paths: Paths, only: &[Provider], json: bool) -> ExitCo
             version: INGEST_VERSION,
             agent: concat!("agent-limits/", env!("CARGO_PKG_VERSION")).into(),
             machine,
+            owner: Owner::default(),
             sent_at: now_ms(),
             snapshots: snapshots.into_iter().filter_map(Result::ok).collect(),
             failures: failures.into_iter().filter_map(Result::err).collect(),
@@ -100,10 +137,11 @@ fn status(config: Config, paths: Paths, only: &[Provider], json: bool) -> ExitCo
 
 fn run(config: Config, paths: Paths, only: &[Provider]) -> ExitCode {
     let log = |line: &str| eprintln!("{} {line}", clock(now_ms()));
-    let mut sink: Box<dyn Sink> = match &config.hub {
+    let mut sink: Box<dyn Sink> = match config.hub_or_connected(&paths) {
         Some(hub) => {
             log(&format!("delivering to {}", hub.url));
-            Box::new(HubSink::new(hub, machine(&paths, &config), paths.state.join("spool.jsonl"), Box::new(log)))
+            let machine = machine(&paths, &config);
+            Box::new(HubSink::new(&hub, machine, config.owner.clone(), paths.state.join("spool.jsonl"), Box::new(log)))
         }
         None => {
             log("no hub configured: measuring and logging only");
@@ -136,6 +174,64 @@ fn run(config: Config, paths: Paths, only: &[Provider]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// The device-code flow: ask the hub for a code, show it, wait until a person confirms it.
+fn connect(config: &Config, paths: &Paths, url: &str) -> ExitCode {
+    let url = url.trim_end_matches('/');
+    let http: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(20)))
+        .http_status_as_error(false)
+        .user_agent(concat!("agent-limits/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .into();
+    let request = serde_json::json!({"machine": machine(paths, config), "agent": concat!("agent-limits/", env!("CARGO_PKG_VERSION"))});
+    let started: serde_json::Value = match http.post(&format!("{url}/v1/device/code")).send_json(&request) {
+        Ok(mut r) if r.status().is_success() => r.body_mut().read_json().unwrap_or_default(),
+        Ok(r) => return fail(&format!("{url} answered HTTP {}", r.status().as_u16())),
+        Err(e) => return fail(&format!("{url} is unreachable: {e}")),
+    };
+    let (Some(device_code), Some(user_code)) = (started["deviceCode"].as_str(), started["userCode"].as_str()) else {
+        return fail(&format!("{url} does not look like an Agent Limits hub"));
+    };
+    let style = Style::detect();
+    println!("Open this page and confirm the code:\n");
+    println!("  {}", started["verificationUriComplete"].as_str().unwrap_or(url));
+    println!("  code {}\n", style.bold(user_code));
+    println!("{}", style.dim("Waiting for confirmation… (Ctrl+C to cancel)"));
+
+    let mut interval = started["interval"].as_u64().unwrap_or(5).max(1);
+    let deadline = std::time::Instant::now() + Duration::from_secs(started["expiresIn"].as_u64().unwrap_or(600));
+    while std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_secs(interval));
+        let answer =
+            http.post(&format!("{url}/v1/device/token")).send_json(serde_json::json!({"deviceCode": device_code}));
+        let Ok(mut response) = answer else { continue };
+        let ok = response.status().is_success();
+        let body: serde_json::Value = response.body_mut().read_json().unwrap_or_default();
+        if ok {
+            let credentials = Credentials {
+                url: url.to_string(),
+                token: body["token"].as_str().unwrap_or_default().to_string(),
+                board: body["board"]["name"].as_str().unwrap_or_default().to_string(),
+                owner: body["device"]["owner"].as_str().unwrap_or_default().to_string(),
+            };
+            if let Err(e) = credentials.save(paths) {
+                return fail(&format!("could not save the connection: {e}"));
+            }
+            println!("Connected to board «{}» as {}.", credentials.board, credentials.owner);
+            println!("Start measuring with `agent-limits run`.");
+            return ExitCode::SUCCESS;
+        }
+        match body["error"].as_str() {
+            Some("authorization_pending") => {}
+            Some("slow_down") => interval += 5,
+            Some("access_denied") => return fail("the connection was declined"),
+            Some("expired_token") => return fail("the code expired; run `agent-limits connect` again"),
+            _ => {}
+        }
+    }
+    fail("the code expired; run `agent-limits connect` again")
+}
+
 fn show_config(config: &Config, paths: &Paths) -> ExitCode {
     println!(
         "config file   {}{}",
@@ -143,13 +239,22 @@ fn show_config(config: &Config, paths: &Paths) -> ExitCode {
         if paths.config.exists() { "" } else { " (not created; defaults apply)" }
     );
     println!("state         {}", paths.state.display());
+    let connected = Credentials::load(paths);
+    if let (None, Some(c)) = (&config.hub, &connected) {
+        println!("connected     {} · board «{}» as {}", c.url, c.board, c.owner);
+    }
+    println!(
+        "owner         {}",
+        config.owner.as_deref().unwrap_or("not set (an e-mail from a client is used on shared boards)")
+    );
     match &config.hub {
         Some(hub) => println!(
             "hub           {} (token …{})",
             hub.url,
             hub.token.chars().rev().take(4).collect::<String>().chars().rev().collect::<String>()
         ),
-        None => println!("hub           none: `agent-limits run` only logs"),
+        None if connected.is_some() => {}
+        None => println!("hub           none: `agent-limits run` only logs; `agent-limits connect <url>` to connect"),
     }
     println!("eco mode      {}", if config.eco() { "on" } else { "off" });
     let home = agent_limits_core::config::home();

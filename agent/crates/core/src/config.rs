@@ -21,6 +21,9 @@ pub struct Config {
     pub interval: Option<u64>,
     /// Measure providers less often while nobody uses them (default on).
     pub eco: Option<bool>,
+    /// Whom this machine measures for on a shared board (default: the e-mail an
+    /// installed client is signed in with). Not needed when connected with a code.
+    pub owner: Option<String>,
     pub hub: Option<Hub>,
     pub machine: MachineSettings,
     pub providers: BTreeMap<Provider, ProviderSettings>,
@@ -49,6 +52,9 @@ pub struct ProviderSettings {
     pub interval: Option<u64>,
     /// Path to the client, when it is not on PATH.
     pub path: Option<PathBuf>,
+    /// A name for this subscription when the client does not identify the account
+    /// (Antigravity), to tell two subscriptions of one owner apart.
+    pub account: Option<String>,
 }
 
 impl Config {
@@ -66,6 +72,9 @@ impl Config {
     fn apply_env(&mut self, var: impl Fn(&str) -> Option<String>) {
         if let Some(seconds) = var("AGENT_LIMITS_INTERVAL").and_then(|v| v.parse().ok()) {
             self.interval = Some(seconds);
+        }
+        if let Some(owner) = var("AGENT_LIMITS_OWNER") {
+            self.owner = Some(owner);
         }
         match (var("AGENT_LIMITS_HUB_URL"), var("AGENT_LIMITS_HUB_TOKEN")) {
             (Some(url), Some(token)) => self.hub = Some(Hub { url, token }),
@@ -98,6 +107,55 @@ impl Config {
 
     pub fn program(&self, provider: Provider) -> Option<&Path> {
         self.providers.get(&provider).and_then(|p| p.path.as_deref())
+    }
+
+    pub fn account_name(&self, provider: Provider) -> Option<&str> {
+        self.providers.get(&provider).and_then(|p| p.account.as_deref())
+    }
+}
+
+/// What `agent-limits connect` receives from a hub: its address and this device's token.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+pub struct Credentials {
+    pub url: String,
+    pub token: String,
+    pub board: String,
+    pub owner: String,
+}
+
+impl Credentials {
+    fn file(paths: &Paths) -> PathBuf {
+        paths.state.join("credentials.json")
+    }
+
+    pub fn load(paths: &Paths) -> Option<Credentials> {
+        serde_json::from_slice(&fs::read(Self::file(paths)).ok()?).ok()
+    }
+
+    /// Written readable by the user only.
+    pub fn save(&self, paths: &Paths) -> io::Result<()> {
+        let file = Self::file(paths);
+        let text = serde_json::to_vec_pretty(self).map_err(io::Error::other)?;
+        #[cfg(unix)]
+        {
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut out = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&file)?;
+            out.write_all(&text)
+        }
+        #[cfg(not(unix))]
+        fs::write(file, text)
+    }
+
+    pub fn remove(paths: &Paths) -> bool {
+        fs::remove_file(Self::file(paths)).is_ok()
+    }
+}
+
+impl Config {
+    /// The hub to deliver to: from the settings or environment, else the one connected with a code.
+    pub fn hub_or_connected(&self, paths: &Paths) -> Option<Hub> {
+        self.hub.clone().or_else(|| Credentials::load(paths).map(|c| Hub { url: c.url, token: c.token }))
     }
 }
 

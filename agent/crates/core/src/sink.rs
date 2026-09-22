@@ -9,7 +9,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Hub;
-use crate::model::{Batch, ErrorKind, Failure, INGEST_VERSION, Machine, Outcome, Snapshot, now_ms};
+use crate::model::{Batch, ErrorKind, Failure, INGEST_VERSION, Machine, Outcome, Owner, Snapshot, now_ms};
 
 pub trait Sink {
     fn deliver(&mut self, outcome: &Outcome);
@@ -45,6 +45,9 @@ pub struct HubSink {
     endpoint: String,
     token: String,
     machine: Machine,
+    owner: Owner,
+    /// A device token already names its owner; a shared board token needs a hint.
+    owner_hints: bool,
     http: ureq::Agent,
     spool_file: PathBuf,
     spool: VecDeque<Item>,
@@ -54,7 +57,14 @@ pub struct HubSink {
 }
 
 impl HubSink {
-    pub fn new(hub: &Hub, machine: Machine, spool_file: PathBuf, log: Box<dyn FnMut(&str) + Send>) -> HubSink {
+    /// `owner`: the configured owner name, if any.
+    pub fn new(
+        hub: &Hub,
+        machine: Machine,
+        owner: Option<String>,
+        spool_file: PathBuf,
+        log: Box<dyn FnMut(&str) + Send>,
+    ) -> HubSink {
         let spool = fs::read_to_string(&spool_file)
             .map(|text| text.lines().filter_map(|line| serde_json::from_str(line).ok()).collect())
             .unwrap_or_default();
@@ -68,6 +78,8 @@ impl HubSink {
             endpoint: format!("{}/v1/ingest", hub.url.trim_end_matches('/')),
             token: hub.token.clone(),
             machine,
+            owner_hints: !hub.token.starts_with("al_d_"),
+            owner: Owner { name: owner, email: None },
             http,
             spool_file,
             spool,
@@ -81,6 +93,7 @@ impl HubSink {
             version: INGEST_VERSION,
             agent: concat!("agent-limits/", env!("CARGO_PKG_VERSION")).into(),
             machine: self.machine.clone(),
+            owner: if self.owner_hints { self.owner.clone() } else { Owner::default() },
             sent_at: now_ms(),
             snapshots: Vec::new(),
             failures: Vec::new(),
@@ -129,6 +142,11 @@ impl HubSink {
 
 impl Sink for HubSink {
     fn deliver(&mut self, outcome: &Outcome) {
+        if let Ok(Snapshot { email: Some(email), .. }) = outcome {
+            if self.owner.name.is_none() {
+                self.owner.email = Some(email.clone());
+            }
+        }
         match outcome {
             Ok(snapshot) => self.spool.push_back(Item::Snapshot(snapshot.clone())),
             // What is not installed here is none of the hub's business.

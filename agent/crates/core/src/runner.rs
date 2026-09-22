@@ -49,7 +49,13 @@ impl Runner {
             program: self.config.program(provider),
             timeout: CLIENT_TIMEOUT,
         };
-        adapter.measure(&ctx)
+        let mut outcome = adapter.measure(&ctx);
+        if let Ok(snapshot) = &mut outcome {
+            if snapshot.account.is_none() {
+                snapshot.account_name = self.config.account_name(provider).map(str::to_string);
+            }
+        }
+        outcome
     }
 
     /// Measures every provider once, one after another, reporting each as it finishes.

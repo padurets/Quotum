@@ -1,7 +1,22 @@
 # Ingest format v1
 
-How an agent delivers measurements to a hub. Any collector may implement it; the
-reference implementation is `agent/` (Rust).
+How an agent connects to a hub and delivers measurements. Any collector may
+implement it; the reference implementation is `agent/` (Rust).
+
+## Tokens
+
+A hub organizes data in **boards** (a person's own, or a shared one). An agent
+delivers with one of:
+
+| Token | Prefix | How it is obtained | Who the device belongs to |
+|---|---|---|---|
+| Device token | `al_d_` | One-time code confirmed by a signed-in person ([below](#connecting-with-a-one-time-code)) | That person |
+| Board token | `al_b_` | Created on the board by a member, shown once; meant for images, VMs, containers | `owner` of the batch, see [Owner](#owner) |
+
+With a board token a machine joins the board on its first batch; its `machine.id`
+identifies it from then on. A device removed from the board cannot come back with
+the same board token; revoking a board token disconnects every device that joined
+with it.
 
 ## Request
 
@@ -16,6 +31,7 @@ Content-Type: application/json
   "version": 1,
   "agent": "agent-limits/0.1.0",
   "machine": {"id": "3f9a…", "name": "workstation", "os": "linux", "arch": "x86_64"},
+  "owner": {"name": "alice"},
   "sentAt": "2026-09-22T18:43:45.120Z",
   "snapshots": [
     {
@@ -50,6 +66,19 @@ at most 500 snapshots and 500 failures; a hub may refuse larger bodies.
 | `name` | Display name, the host name by default (configurable). |
 | `os`, `arch` | As reported by the agent's runtime (`linux`, `macos`, `windows`; `x86_64`, `aarch64`). |
 
+### Owner
+
+Optional; used only with a board token. Whom the machine measures for:
+
+| Field | Meaning |
+|---|---|
+| `name` | Configured by the person running the agent (`--owner`, `owner = …`). |
+| `email` | The e-mail an installed client (Claude Code, Codex) is signed in with, sent only when no `name` is configured. |
+
+The hub takes `name`, else `email`; one that matches a board member's e-mail is that
+member; with neither, the device belongs to whoever created the token. Agents with a
+device token send no owner: the device already belongs to someone.
+
 ### Snapshot
 
 One successful measurement of one provider account on one machine.
@@ -58,6 +87,7 @@ One successful measurement of one provider account on one machine.
 |---|---|
 | `provider` | `claude`, `codex` or `antigravity`. |
 | `account` | Pseudonym of the account: the first 24 hex characters of `sha256("agent-limits/account/v1\n<provider>\n<stable account id, lower-case>")`. The same account on two machines gets the same pseudonym. Absent when the client does not say which account it is (Antigravity); the hub then keeps the account per machine. |
+| `accountName` | For a client that does not identify its account: a name the owner gave this subscription, to tell two of them apart. |
 | `plan` | The provider's plan name (`max`, `pro`), if reported. |
 | `observedAt` | When the client answered. |
 | `via` | How the value was obtained (`claude-code/get_usage`, `codex/app-server`, `agy/usage`). |
@@ -83,22 +113,43 @@ A measurement that did not succeed. `error` is one of `not_logged_in`, `unsuppor
 `invalid_output`, `failed`. `detail` is free text for people, at most 200 characters.
 Agents do not report providers whose client is not installed.
 
+### Subscriptions
+
+The hub files snapshots under *subscriptions* of the board: by `account` when the
+client names it (one account measured on many machines is one subscription), else as
+the owner's own subscription of that provider (plus `accountName`, if given) — never
+per machine.
+
 ## Response
 
-`200` with `{"accepted": n, "duplicates": n, "failures": n}`. A snapshot the hub already
-has (same account, not newer than the last one) counts as a duplicate, so resending a
-batch after a lost answer is safe.
+`200` with `{"accepted": n, "duplicates": n, "failures": n, "device": {"id": …, "owner": …}}`.
+A snapshot the hub already has (same account, not newer than the last one) counts as a
+duplicate, so resending a batch after a lost answer is safe.
 
 | Status | Meaning | Agent behaviour |
 |---|---|---|
 | `400` | The batch does not match this format (`{"error": "invalid_batch", "detail": …}`) | Drop it |
-| `401` | Unknown token | Keep the data, retry later |
+| `401` | Unknown or revoked token | Keep the data, retry later |
+| `403` | `device_revoked`: this machine was removed from the board | Keep the data, retry later |
 | `413` | Body too large | Drop it |
 | `5xx`, network errors | Hub unavailable | Keep the data, retry later |
 
+## Connecting with a one-time code
+
+The OAuth 2.0 device authorization flow (RFC 8628) with JSON bodies:
+
+1. `POST /v1/device/code` with `{"machine": {…}, "agent": "agent-limits/0.1.0"}` →
+   `{"deviceCode", "userCode": "HVJG-XS8V", "verificationUri", "verificationUriComplete", "expiresIn": 600, "interval": 5}`.
+2. The agent shows `userCode` and `verificationUriComplete`; a signed-in person opens it,
+   sees the machine and picks a board.
+3. The agent polls `POST /v1/device/token` with `{"deviceCode"}` every `interval` seconds:
+   `400 {"error": "authorization_pending" | "slow_down" | "access_denied" | "expired_token"}`
+   until `200 {"token": "al_d_…", "device": {"id", "name", "owner"}, "board": {"id", "name"}}`.
+   A code gives one token; `slow_down` asks to poll 5 s less often.
+
 ## Privacy
 
-What never leaves the machine: tokens, cookies, e-mail addresses, account ids,
-prompts, file paths. What is sent: the pseudonym of the account, the plan name,
-percentages and reset times of the windows, the client version, the machine id and
-name.
+What never leaves the machine: provider tokens, cookies, account ids, prompts, file
+paths. What is sent: the pseudonym of the account, the plan name, percentages and
+reset times of the windows, the client version, the machine id and name — and, only
+with a board token and no configured owner, the e-mail a client is signed in with.

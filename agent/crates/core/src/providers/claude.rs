@@ -171,6 +171,8 @@ pub fn from_responses(init: &Value, usage: &Value, observed_at: Millis) -> Outco
         account["email"].as_str().map(|email| format!("{email}/{}", account["organization"].as_str().unwrap_or("")));
     Ok(Snapshot {
         provider: P,
+        account_name: None,
+        email: account["email"].as_str().map(str::to_lowercase),
         account: stable_id.map(|id| pseudonym(P, &id)),
         plan: body["subscription_type"].as_str().map(str::to_string),
         observed_at,

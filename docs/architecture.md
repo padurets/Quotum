@@ -100,15 +100,42 @@ wait in a spool file (at most 5,000, about two days) and go out oldest first whe
 answers again. Resending is safe: the hub treats a measurement it already has as a
 duplicate.
 
-The hub resolves a snapshot to a *source* (one provider account) by its pseudonym. The
-same account measured from two machines is one source; its history is one line.
+## People, boards, devices
+
+- **Users** sign in to the hub with e-mail and password. The first one on a hub is its
+  admin and takes over everything collected before accounts existed. After that,
+  sign-up needs an invite link unless the hub is open (`AGENT_LIMITS_SIGNUP=open`).
+- **Boards** are what is aggregated and shared: every user has a personal board and can
+  create shared ones and invite people with a link (valid a week, several uses).
+- **Devices** are running agents. They join a board in one of two ways:
+  - *one-time code* (RFC 8628 device flow): `agent-limits connect <hub>` shows a code, a
+    signed-in person confirms it in the browser and picks the board; the device gets
+    its own token and belongs to that person;
+  - *board token*: created by a member, written once into an image, VM or container
+    setup; every machine that starts with it joins the board by itself.
+- **Owner** of a device with a board token: the configured name (`--owner`), else the
+  e-mail a client (Claude Code, Codex) is signed in with — matched to a member when it
+  is one — else the creator of the token.
+- **Subscriptions** are what is measured: a provider account the client identifies is
+  one subscription however many devices measure it; a subscription the client does
+  not identify (Antigravity) is the owner's own, optionally named in the agent's
+  settings (`[providers.antigravity] account = "work"`).
+
+Secrets (sessions, tokens, codes, invites) are random, prefixed by kind (`al_s_`,
+`al_b_`, `al_d_`, `al_c_`, `al_i_`) and stored only as SHA-256 hashes; passwords as
+scrypt hashes. Changes made with a session cookie are accepted only from the hub's own
+pages (Origin check, SameSite cookie); sign-in and code lookups are rate-limited.
 
 ## Roadmap
 
 1. ~~Ingest format, agent MVP (three providers, schedule, spool), hub ingest.~~
-2. Run the agent next to CodexBar for a few days and compare; then remove CodexBar.
-3. Distribution: `npx agent-limits` (npm package with per-platform binaries),
-   `curl … | sh` / PowerShell installers, `agent-limits connect <code>` pairing with a
-   one-time code, autostart registration.
-4. Hub multi-tenancy: users, device tokens, teams, a team page.
-5. Desktop app (Tauri): tray, settings, local dashboard.
+2. ~~Users, boards, board tokens, devices; connecting with a one-time code.~~
+3. One measurer per subscription: devices check in with the hub before measuring,
+   the hub picks one live device per subscription (preferring one in use) and the
+   others wait; failover when it goes quiet.
+4. Board pages: a people × providers table on shared boards, per-person views.
+5. Run the agent next to CodexBar for a few days, compare, move the dashboard to agent
+   data (window ids of the old collector map to the agent's) and remove CodexBar.
+6. Distribution: `npx agent-limits` (npm package with per-platform binaries),
+   `curl … | sh` / PowerShell installers, autostart registration.
+7. Desktop app (Tauri): tray, settings, local dashboard.

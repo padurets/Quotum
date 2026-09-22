@@ -141,6 +141,13 @@ pub struct Snapshot {
     /// Pseudonym of the account ([`pseudonym`]); absent when the client does not say.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
+    /// The owner's name for a subscription the client does not identify (configured).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_name: Option<String>,
+    /// The signed-in e-mail the client reported. Never part of a snapshot on the wire;
+    /// a hub may get it once, as a hint of who owns the machine (see [`Owner`]).
+    #[serde(skip)]
+    pub email: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
     #[serde(with = "ts")]
@@ -217,6 +224,22 @@ pub struct Machine {
     pub arch: String,
 }
 
+/// Whom a machine measures for, when it joins a board with a shared token: the
+/// configured name, else an e-mail one of its clients is signed in with.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Owner {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+}
+
+impl Owner {
+    pub fn is_empty(&self) -> bool {
+        self.name.is_none() && self.email.is_none()
+    }
+}
+
 /// One request to a hub.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -225,6 +248,8 @@ pub struct Batch {
     /// `agent-limits/<version>`.
     pub agent: String,
     pub machine: Machine,
+    #[serde(default, skip_serializing_if = "Owner::is_empty")]
+    pub owner: Owner,
     #[serde(with = "ts")]
     pub sent_at: Millis,
     #[serde(default)]
@@ -307,6 +332,8 @@ mod tests {
         let snapshot = Snapshot {
             provider: Provider::Codex,
             account: None,
+            account_name: None,
+            email: Some("dev@example.com".into()),
             plan: Some("pro".into()),
             observed_at: ms,
             via: "codex/app-server".into(),
@@ -317,6 +344,7 @@ mod tests {
         let json = serde_json::to_value(&snapshot).unwrap();
         assert_eq!(json["observedAt"], "2026-09-22T20:20:00.77Z");
         assert_eq!(json["windows"][0]["usedPercent"], 8.0);
-        assert_eq!(serde_json::from_value::<Snapshot>(json).unwrap(), snapshot);
+        assert!(json.get("email").is_none(), "the e-mail never travels with a snapshot");
+        assert_eq!(serde_json::from_value::<Snapshot>(json).unwrap(), Snapshot { email: None, ..snapshot });
     }
 }

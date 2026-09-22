@@ -15,6 +15,7 @@ dependencies = [
  "agent-limits-core",
  "clap",
  "serde_json",
+ "ureq",
 ]
 
 [[package]]

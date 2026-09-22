@@ -5,9 +5,10 @@ OpenAI Codex, Google Antigravity: how much of each 5-hour and weekly window is l
 when it resets, whether you spend it faster than planned, and the history of all of
 them on one chart.
 
-> Status: early. The dashboard (`hub/`) runs; the native agent (`agent/`) measures all
-> three agents and delivers to the hub. Next: packaging (`npx agent-limits`), team
-> pages and a desktop app. See [docs/architecture.md](docs/architecture.md).
+> Status: early. The hub (`hub/`) has accounts, personal and shared boards, and takes
+> measurements from the native agent (`agent/`), connected with a one-time code or a
+> board token. Next: one measurer per subscription, team pages, packaging
+> (`npx agent-limits`) and a desktop app. See [docs/architecture.md](docs/architecture.md).
 
 The dashboard interface is in Russian for now.
 
@@ -78,11 +79,14 @@ Code layout:
 
 ```
 agent/crates/core/         adapters (claude, codex, antigravity), schedule, config, delivery
-agent/crates/cli/          the `agent-limits` command
+agent/crates/cli/          the `agent-limits` command (status, run, connect, config)
 spec/ingest-v1.md          what the agent sends to the hub
 hub/server/domain/         sources, quota windows and consumption rules, ingest, reset feeds
 hub/server/store/          SQLite schema, migrations and queries (node:sqlite, WAL)
-hub/server/ingest.ts       POST /v1/ingest
+hub/server/ingest.ts       POST /v1/ingest: devices, owners, subscriptions
+hub/server/pairing.ts      connecting a device with a one-time code
+hub/server/routes/         sign-in, boards, invites, tokens, devices; agent endpoints
+hub/server/store/directory.ts  users, sessions, boards, tokens, devices
 hub/server/collector.ts    the CodexBar collection cycle (optional)
 hub/server/api.ts          HTTP API and security headers
 hub/ui/                    React UI: formatting, plan, preferences, cards, chart
@@ -96,7 +100,9 @@ hub/ui/                    React UI: formatting, plan, preferences, cards, chart
 cd agent && cargo build --release        # Rust 1.85+
 agent-limits                             # measure once and print
 agent-limits --json                      # the same in the ingest format
-agent-limits run                         # keep measuring; deliver when a hub is set
+agent-limits connect https://hub.example # connect to a hub with a one-time code
+agent-limits run                         # keep measuring; deliver when connected
+agent-limits run --hub URL --token al_b_… [--owner alice]   # or with a board token
 agent-limits config                      # where settings live, which clients were found
 ```
 
@@ -105,6 +111,7 @@ Settings (`~/.config/agent-limits/config.toml` on Linux; all optional):
 ```toml
 interval = 120          # seconds between measurements of one provider, at least 60
 eco = true              # measure less often while nothing changes
+owner = "alice"         # whom this machine measures for on a shared board (board tokens)
 
 [hub]
 url = "https://limits.example.com"
@@ -112,12 +119,14 @@ token = "…"
 
 [providers.antigravity]
 interval = 300
+account = "work"        # names a subscription the client does not identify
 # enabled = false
 # path = "/opt/agy/bin/agy"
 ```
 
-`AGENT_LIMITS_HUB_URL`, `AGENT_LIMITS_HUB_TOKEN`, `AGENT_LIMITS_INTERVAL`,
-`AGENT_LIMITS_CONFIG` and `AGENT_LIMITS_STATE_DIR` override the file.
+`AGENT_LIMITS_HUB_URL`, `AGENT_LIMITS_HUB_TOKEN`, `AGENT_LIMITS_OWNER`,
+`AGENT_LIMITS_INTERVAL`, `AGENT_LIMITS_CONFIG` and `AGENT_LIMITS_STATE_DIR` override the
+file. `connect` keeps its device token in the state directory (readable by the user only).
 
 ### Hub
 
@@ -128,7 +137,7 @@ cd hub
 npm ci
 npm run build
 npm test
-AGENT_LIMITS_INGEST_TOKENS="$(openssl rand -hex 24)" npm start   # http://127.0.0.1:8080
+npm start   # http://127.0.0.1:8080 — the first account created becomes the admin
 ```
 
 Configuration (environment):
@@ -140,26 +149,31 @@ Configuration (environment):
 | `AGENT_LIMITS_ALLOWED_HOSTS` | `127.0.0.1,localhost` | Host names the service answers to; others get 403 |
 | `AGENT_LIMITS_FRAME_ANCESTORS` | — | Extra origins allowed to embed the page |
 | `AGENT_LIMITS_DATA_DIR` | `./data` | Where the SQLite database lives |
-| `AGENT_LIMITS_INGEST_TOKENS` | — | Comma-separated tokens agents may deliver with (16+ characters each); enables `POST /v1/ingest` |
+| `AGENT_LIMITS_SIGNUP` | `invite` | `open` lets anyone sign up; otherwise only the first user and people with an invite |
+| `AGENT_LIMITS_PUBLIC_URL` | from the request | Address shown to agents and in invite links |
+| `AGENT_LIMITS_INGEST_TOKENS` | — | Extra static tokens (16+ characters) that deliver to the first user's board |
 | `AGENT_LIMITS_VENDOR_TOKEN` | — | Token of a local `codexbar serve`; enables the built-in CodexBar collector |
 | `AGENT_LIMITS_CLAUDE_PROFILE` | `~/.claude.json` | CodexBar collector only: Claude Code profile, read for the account id |
 
-Without an authenticating proxy in front, keep the hub on loopback: the dashboard
-itself has no login yet. Apart from `POST /v1/ingest` it is read-only
-(`GET`/`HEAD`) and sets a strict CSP.
+People sign in with e-mail and password; devices connect from the board's
+«Устройства» panel: a one-time code for machines people work at, a board token for
+images, VMs and containers ([spec](spec/ingest-v1.md)). Serve the hub over HTTPS (behind
+a TLS-terminating proxy is fine): sessions are cookies, tokens are bearer secrets.
 
-API: `/health`, `/api/overview` (current state per source), `/api/history?range=24h|7d|30d`
-(every series on a shared grid), `/api/resets` (reset announcements and tracker health),
-`POST /v1/ingest` ([spec](spec/ingest-v1.md)). Add `?preview=reset` to the page URL to
-see a sample reset announcement.
+API: `/health`; for people `/api/session`, `/api/auth/*`, `/api/overview?board=`,
+`/api/history?board=&range=24h|7d|30d`, `/api/boards/*` (members, invites, tokens,
+devices), `/api/device` (approving codes), `/api/resets`; for agents `/v1/device/code`,
+`/v1/device/token`, `/v1/ingest`. Add `?preview=reset` to the page URL to see a sample
+reset announcement.
 
 ## Roadmap
 
-1. Run the agent next to the CodexBar collector and compare, then drop CodexBar.
-2. One-line start: `npx agent-limits` (npm package with per-platform binaries),
-   `curl … | sh` and PowerShell installers, pairing with a one-time code, autostart.
-3. Hub for teams: users, device tokens, a team page.
-4. Desktop app (Tauri): agent and dashboard in one, tray icon and settings, no server.
+1. One measurer per subscription across all devices of a board.
+2. Team pages: people × providers on shared boards.
+3. Move the dashboard fully to agent data and drop the CodexBar collector.
+4. One-line start: `npx agent-limits` (npm package with per-platform binaries),
+   `curl … | sh` and PowerShell installers, autostart.
+5. Desktop app (Tauri): agent and dashboard in one, tray icon and settings, no server.
 
 ## License
 

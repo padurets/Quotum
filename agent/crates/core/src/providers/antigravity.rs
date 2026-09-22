@@ -134,6 +134,8 @@ pub fn from_output(output: &str, observed_at: Millis) -> Outcome {
     Ok(Snapshot {
         provider: P,
         account: None,
+        account_name: None,
+        email: None,
         plan: None,
         observed_at,
         via: VIA.into(),
@@ -143,11 +145,11 @@ pub fn from_output(output: &str, observed_at: Millis) -> Outcome {
     })
 }
 
-/// "Gemini Models" → "Gemini", "Claude and GPT models" → "Claude/GPT".
+/// "Gemini Models" → "Gemini", "Claude and GPT models" → "Claude / GPT".
 fn short_group(name: &str) -> String {
     let name = name.trim();
     let name = name.strip_suffix(" models").or_else(|| name.strip_suffix(" Models")).unwrap_or(name);
-    name.replace(" and ", "/")
+    name.replace(" and ", " / ")
 }
 
 #[cfg(test)]
@@ -173,8 +175,8 @@ mod tests {
             [
                 ("gemini:session", 0.0, Some("Gemini")),
                 ("gemini:weekly", 3.72, Some("Gemini")),
-                ("3p:session", 50.0, Some("Claude/GPT")),
-                ("3p:weekly", 0.0, Some("Claude/GPT")),
+                ("3p:session", 50.0, Some("Claude / GPT")),
+                ("3p:weekly", 0.0, Some("Claude / GPT")),
             ]
         );
         assert_eq!(s.windows[1].resets_at, parse_time("2026-09-23T21:54:08Z"));

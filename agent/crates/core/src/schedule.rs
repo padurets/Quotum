@@ -145,6 +145,8 @@ mod tests {
         Ok(Snapshot {
             provider: Provider::Codex,
             account: None,
+            account_name: None,
+            email: None,
             plan: None,
             observed_at: 0,
             via: String::new(),
