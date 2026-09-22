@@ -1,0 +1,15 @@
+{
+  "name": "quotum",
+  "version": "0.0.0",
+  "description": "See how much of your coding-agent subscriptions is left (Claude Code, Codex, Antigravity) on every machine, in one place.",
+  "keywords": ["claude-code", "codex", "antigravity", "usage", "limits", "quota", "cli"],
+  "homepage": "https://github.com/padurets/quotum",
+  "bugs": "https://github.com/padurets/quotum/issues",
+  "repository": {"type": "git", "url": "git+https://github.com/padurets/quotum.git", "directory": "npm/quotum"},
+  "license": "MIT",
+  "author": "Sergey Padurets",
+  "bin": {"quotum": "bin/quotum.js"},
+  "files": ["bin"],
+  "engines": {"node": ">=18"},
+  "optionalDependencies": {}
+}

@@ -32,8 +32,10 @@ accounts. This document explains how the parts work and why they are built this 
 1. **Agent + hub.** The agent runs in the background (a systemd user service, launchd,
    Windows autostart) on every machine where agents work: laptops, servers, cloud dev
    environments, containers. It delivers to a hub, and one page shows every machine
-   and account of a person or a team.
-2. **One-off check.** `quotum` prints the current limits of this machine and exits.
+   and account of a person or a team. The hub is one Docker image that needs no
+   settings (`ghcr.io/padurets/quotum-hub`); `deploy/compose.yaml` puts it behind
+   Caddy for HTTPS.
+2. **One-off check.** `npx quotum` prints the current limits of this machine and exits.
 3. **Desktop app (planned).** The agent and the dashboard in one application with a
    tray icon and a settings window, built with Tauri: the Rust core plus the same
    React UI, history kept locally, no hub and no server. This will be the default for
@@ -71,6 +73,12 @@ which account it is: its measurements belong to the owner of the device, and a p
 with two Antigravity subscriptions names them in the agent's settings
 (`[providers.antigravity] account = "work"`).
 
+**What the agent reads itself.** To check in before starting Claude Code (see duty
+below), the agent reads the signed-in account (`oauthAccount`: email and organization)
+from `~/.claude.json`, which holds no tokens. Of every other file of the clients it
+reads only the time of the last change, to tell whether someone uses a client on this
+machine. Credential files are never opened.
+
 ## Scheduling
 
 Clients are expensive to start, so the schedule is about starting as few as possible,
@@ -91,7 +99,10 @@ and never several at once:
 - **Failures back off:** a missing client is checked every 30 minutes, a signed-out one
   every 15, other errors double the interval up to 15 minutes.
 - Clients run at low priority (nice 10, below normal on Windows), in an empty working
-  directory, and are killed with their whole process tree after 60 s.
+  directory, in a process group of their own. After a measurement, or after 60 s at
+  most, the whole group is killed, so nothing a client starts in the background
+  outlives it. (On Windows only the client process itself is killed for now.)
+- `SIGINT` and `SIGTERM` stop the agent at once, a running measurement included.
 
 Every measurement carries `staleAfterMs`: when the next one is due, plus a margin. That
 is how the hub knows a sparse eco-mode series is continuous and a missing measurement
@@ -107,7 +118,8 @@ subscription:
 - Before measuring, a device checks in (`POST /v1/checkin`) with the subscription and
   whether someone is using the client on this machine right now.
 - The first device to ask gets duty. It keeps it while it delivers: each measurement
-  extends duty until the measurement goes stale.
+  extends duty until the measurement goes stale. Only delivering extends it; a holder
+  that keeps asking but never delivers loses duty after five minutes.
 - The others are told to wait and when to ask again: in a minute if someone works on
   that machine, otherwise in up to ten minutes.
 - Duty moves to a device where someone works if the holder has been idle for ten
@@ -116,21 +128,29 @@ subscription:
   goes stale, and the next device to ask takes over.
 
 Duty is kept in memory; after a restart of the hub the first devices to check in take
-it again. An agent talking to a hub without the endpoint simply measures.
+it again. An agent that cannot ask simply measures.
 
 ## Delivery
 
 The agent posts each measurement right away. When the hub is unreachable, measurements
-wait in a spool file (at most 5,000, about two days) and go out oldest first when it
-answers again. Resending is safe: a measurement the hub already has counts as a
-duplicate.
+wait in a spool file (at most 5,000, about two days, rewritten atomically) and go out
+oldest first when it answers again; meanwhile the agent tries again after a minute,
+then less and less often, up to once an hour, and measures without checking in. Resending
+is safe: a measurement the hub already has counts as a duplicate. When the hub says
+the device was removed from its board, the agent stops.
+
+Before sending, the agent makes every measurement fit the format (text cut to the
+length a hub takes, empty names dropped, repeated windows merged), so one odd value from
+a client never gets a whole batch refused. The hub moves the times of a batch whose
+agent clock is off by more than 30 seconds.
 
 ## Storage and the rules
 
 One SQLite file (WAL). A **source** is one subscription on one board, keyed by the
 account pseudonym, or by the owner for clients that don't name their account. Each
 source has its last state (what the card shows) and samples: one row per window per
-measurement, kept for 90 days.
+measurement (value, reset time, the window's kind and scope as the agent reported
+them), kept for 90 days.
 
 - **Spending** is only an increase of the used percentage between two consecutive
   samples of the same window, inside one reset window, with no gap between them.
@@ -146,18 +166,24 @@ measurement, kept for 90 days.
 
 ## People, boards, devices
 
-- **Users** sign in to the hub with an email and a password. The first user of a hub is
-  its admin and takes over the default board, which static ingest tokens deliver to.
-  After that, signing up needs an invite link unless the hub is open
-  (`QUOTUM_SIGNUP=open`).
+- **Users** sign in to the hub with an email and a password. The first person on a hub
+  signs up without an invitation but with its setup code: a new hub prints one to its
+  log, so only whoever started it can claim it. After that, signing up needs an invite
+  link unless the hub is open (`QUOTUM_SIGNUP=open`).
 - **Boards** are what is aggregated and shared: every user has a personal board and can
-  create shared ones and invite people with a link (valid for a week, several uses).
-- **Devices** are running agents. They join a board in one of two ways:
+  create shared ones. The owner of a board invites people with a link (valid for a
+  week, several uses) and removes sources; every member sees everything on the board
+  and manages their own tokens and devices, the owner manages all of them.
+- **Devices** are running agents. The devices tab shows each one, what it delivers and
+  the last failure of each client there (not logged in, too old…). They join a board
+  in one of two ways:
   - *a one-time code* (the RFC 8628 device flow): `quotum connect <hub>` shows a code, a
     signed-in person confirms it in the browser and picks the board; the device gets
     its own token and belongs to that person;
   - *a board token*: created by a member and written once into an image, VM or
-    container setup; every machine that starts with it joins the board by itself.
+    container setup; every machine that starts with it joins the board by itself. A
+    machine connected with a code keeps its own token: a board token cannot take it
+    over.
 - **The owner** of a device is the person who confirmed its code. With a board token it
   is the name the device declares (`--owner`; a member's email makes it that member's),
   else the creator of the token. What the clients report (their sign-in emails) is never
@@ -176,7 +202,7 @@ rate-limited.
 ## The dashboard
 
 A single-page React app served by the hub. It reads `/api/overview` every 10 seconds
-and re-reads history only when the overview's `revision` says the data changed.
+and re-reads history only when the overview's `revision` says the board's data changed.
 Preferences (hidden windows, plans, the chosen board and language) stay in the browser.
 
 Text is translated through typed catalogs in `hub/ui/i18n`: English is the source,
@@ -192,6 +218,7 @@ no name of their own, so each reader sees "My limits" in their language.
 3. ~~One measurer per subscription.~~
 4. ~~The dashboard fed by agents only (CodexBar removed); English and Russian.~~
 5. A team view on shared boards: people × providers.
-6. Distribution: `npx quotum` (an npm package with per-platform binaries),
-   `curl … | sh` and PowerShell installers, autostart registration.
+6. ~~Distribution through npm: `npx quotum`, a launcher with a prebuilt binary per
+   platform (npm/build.mjs cross-compiles them all on one Linux machine).~~
+   Next: `curl … | sh` and PowerShell installers, autostart registration.
 7. The desktop app (Tauri): tray, settings, local dashboard.

@@ -1,0 +1,85 @@
+#!/usr/bin/env node
+/**
+ * Builds the npm packages of the agent into npm/dist/:
+ *
+ *   quotum                 the `quotum` command: a launcher that runs the binary below
+ *   @quotum/<os>-<cpu>     one package per platform with the prebuilt binary; `quotum`
+ *                          lists them as optional dependencies and npm installs only the
+ *                          one matching `os` and `cpu`
+ *
+ * Binaries are cross-compiled with cargo-zigbuild, so one Linux machine builds them all:
+ * it needs `cargo install cargo-zigbuild`, zig on PATH and the Rust targets below
+ * (`rustup target add …`). Linux builds are static (musl) and run on any distribution.
+ *
+ *   node npm/build.mjs            build every platform
+ *   node npm/build.mjs linux-x64  build some of them (the others are left out of `quotum`)
+ *
+ * The version is the agent's (agent/Cargo.toml). Publish with `node npm/publish.mjs`.
+ */
+import {execFileSync} from 'node:child_process';
+import {chmodSync, copyFileSync, cpSync, mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(here, '..');
+const agent = path.join(root, 'agent');
+const dist = path.join(here, 'dist');
+
+export const PLATFORMS = [
+  {name: 'linux-x64', os: 'linux', cpu: 'x64', target: 'x86_64-unknown-linux-musl', title: 'Linux x64'},
+  {name: 'linux-arm64', os: 'linux', cpu: 'arm64', target: 'aarch64-unknown-linux-musl', title: 'Linux arm64'},
+  {name: 'darwin-x64', os: 'darwin', cpu: 'x64', target: 'x86_64-apple-darwin', title: 'macOS (Intel)'},
+  {name: 'darwin-arm64', os: 'darwin', cpu: 'arm64', target: 'aarch64-apple-darwin', title: 'macOS (Apple silicon)'},
+  {name: 'win32-x64', os: 'win32', cpu: 'x64', target: 'x86_64-pc-windows-gnu', title: 'Windows x64', exe: '.exe'},
+];
+
+const version = /\[workspace\.package\][^[]*?\nversion = "([^"]+)"/.exec(readFileSync(path.join(agent, 'Cargo.toml'), 'utf8'))?.[1];
+if (!version) throw new Error('no version in agent/Cargo.toml');
+
+const launcher = readFileSync(path.join(here, 'quotum/bin/quotum.js'), 'utf8');
+const listed = JSON.parse(/const SUPPORTED = (\[[^\]]*\])/.exec(launcher)?.[1].replaceAll("'", '"') ?? '[]');
+if (listed.join() !== PLATFORMS.map(p => p.name).join()) throw new Error('npm/quotum/bin/quotum.js: SUPPORTED differs from PLATFORMS');
+
+const wanted = process.argv.slice(2);
+const platforms = wanted.length ? PLATFORMS.filter(p => wanted.includes(p.name)) : PLATFORMS;
+if (platforms.length !== (wanted.length || PLATFORMS.length)) throw new Error(`unknown platform in: ${wanted.join(', ')}`);
+
+const main = JSON.parse(readFileSync(path.join(here, 'quotum/package.json'), 'utf8'));
+const shared = {license: main.license, author: main.author, homepage: main.homepage, bugs: main.bugs};
+const write = (file, value) => writeFileSync(file, typeof value === 'string' ? value : `${JSON.stringify(value, null, 2)}\n`);
+
+rmSync(dist, {recursive: true, force: true});
+
+for (const p of platforms) {
+  console.log(`building ${p.name} (${p.target})`);
+  execFileSync('cargo', ['zigbuild', '--release', '--locked', '--target', p.target, '-p', 'quotum'], {cwd: agent, stdio: 'inherit'});
+  const dir = path.join(dist, `quotum-${p.name}`);
+  mkdirSync(path.join(dir, 'bin'), {recursive: true});
+  const binary = path.join(dir, 'bin', `quotum${p.exe ?? ''}`);
+  copyFileSync(path.join(agent, 'target', p.target, 'release', `quotum${p.exe ?? ''}`), binary);
+  chmodSync(binary, 0o755);
+  copyFileSync(path.join(root, 'LICENSE'), path.join(dir, 'LICENSE'));
+  write(path.join(dir, 'README.md'), `# @quotum/${p.name}\n\nThe [Quotum](${main.homepage}) agent built for ${p.title}. Install \`quotum\` instead: it picks this package when it matches your platform.\n`);
+  write(path.join(dir, 'package.json'), {
+    name: `@quotum/${p.name}`,
+    version,
+    description: `The Quotum agent for ${p.title}; installed by \`quotum\`.`,
+    ...shared,
+    repository: {...main.repository, directory: 'agent'},
+    os: [p.os],
+    cpu: [p.cpu],
+    files: ['bin'],
+    preferUnplugged: true,
+  });
+}
+
+const dir = path.join(dist, 'quotum');
+cpSync(path.join(here, 'quotum'), dir, {recursive: true});
+copyFileSync(path.join(root, 'LICENSE'), path.join(dir, 'LICENSE'));
+write(path.join(dir, 'package.json'), {
+  ...main,
+  version,
+  optionalDependencies: Object.fromEntries(platforms.map(p => [`@quotum/${p.name}`, version])),
+});
+console.log(`npm/dist: quotum ${version} with ${platforms.map(p => p.name).join(', ')}`);

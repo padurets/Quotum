@@ -1,0 +1,27 @@
+# The hub behind Caddy, which gets and renews an HTTPS certificate by itself.
+# Point a domain at this machine, then:  QUOTUM_DOMAIN=quotum.example.com docker compose up -d
+# The setup code for the first account:  docker compose logs hub
+services:
+  hub:
+    image: ghcr.io/padurets/quotum-hub:latest
+    restart: unless-stopped
+    environment:
+      QUOTUM_PUBLIC_URL: https://${QUOTUM_DOMAIN:?set QUOTUM_DOMAIN to the hub's domain}
+      # Only Caddy reaches the hub: believe it about the client's address and protocol.
+      QUOTUM_TRUST_PROXY: "true"
+    volumes:
+      - quotum:/data
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    command: caddy reverse-proxy --from ${QUOTUM_DOMAIN} --to hub:8080
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy:/data
+
+volumes:
+  quotum:
+  caddy:
