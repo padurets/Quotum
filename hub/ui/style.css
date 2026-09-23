@@ -145,19 +145,26 @@ body.is-resizing, body.is-resizing * { cursor: ew-resize !important; user-select
  * How fresh the numbers are, in the card's colour (the colour of its lines): full when
  * just measured, fading to grey; never a warning.
  */
+/* No transitions: --fresh changes in steps half a minute apart, and the page stays idle in between. */
 .dot-fresh {
   --fresh-mix: calc(var(--fresh) * 100%);
   --fresh-color: var(--card-color, var(--ok));
   background: color-mix(in oklab, var(--fresh-color) var(--fresh-mix), var(--text-4));
   box-shadow: 0 0 8px color-mix(in oklab, var(--fresh-color) calc(var(--fresh) * 60%), transparent);
-  transition: background 1s linear, box-shadow 1s linear;
 }
-.dot-fresh.is-pulsing { animation: fresh-pulse 1.6s ease-out infinite; }
+/*
+ * The pulse is a ring animated by transform and opacity only, so the compositor draws it
+ * without repainting the page; three waves say "just measured" and then the page rests.
+ */
+.dot-fresh.is-pulsing::after {
+  content: ''; position: absolute; inset: 0; border-radius: 50%; background: var(--fresh-color); opacity: 0;
+  animation: fresh-pulse 1.6s ease-out 3;
+}
 @keyframes fresh-pulse {
-  0% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--fresh-color) 65%, transparent), 0 0 8px color-mix(in oklab, var(--fresh-color) 60%, transparent); }
-  100% { box-shadow: 0 0 0 7px transparent, 0 0 8px color-mix(in oklab, var(--fresh-color) 60%, transparent); }
+  from { transform: scale(1); opacity: .6; }
+  to { transform: scale(2.8); opacity: 0; }
 }
-@media (prefers-reduced-motion: reduce) { .dot-fresh.is-pulsing { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .dot-fresh.is-pulsing::after { animation: none; opacity: 0; } }
 .card-title { margin-right: auto; }
 
 /* ---------- popovers ---------- */
@@ -215,8 +222,9 @@ body.is-resizing, body.is-resizing * { cursor: ew-resize !important; user-select
 .color-steps button { flex: 1; height: 8px; padding: 0; border: 0; border-radius: 2px; }
 .color-steps button:first-child { border-radius: 4px 2px 2px 4px; }
 .color-steps button:last-child { border-radius: 2px 4px 4px 2px; }
-.color-steps button[aria-pressed=true] { outline: 1.5px solid var(--text-2); outline-offset: 2px; }
-.color-choice[aria-pressed=true] { outline: 1.5px solid var(--text-2); outline-offset: 2px; }
+.color-steps button[aria-pressed=true] { box-shadow: 0 0 0 2px #16161c, 0 0 0 3.5px var(--text-2); }
+.color-choice[aria-pressed=true] { box-shadow: 0 0 0 2px #16161c, 0 0 0 3.5px var(--text-2); }
+.color-choice:focus-visible, .color-steps button:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
 .plan-editor { padding: 2px 8px 0; }
 .plan-days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
 .plan-days label { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 10.5px; color: var(--text-4); }
@@ -283,7 +291,7 @@ td.muted, small.muted { color: var(--text-3); }
 .card-name input { width: 100%; }
 
 /* ---------- history ---------- */
-.panel { padding: 20px 22px 22px; }
+.panel { --panel-pad: 22px; padding: 20px var(--panel-pad) 22px; }
 .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .panel-head h2 { margin: 0; font-size: 15px; font-weight: 560; letter-spacing: -.01em; }
 .controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -349,7 +357,7 @@ tbody tr:hover td { background: #ffffff04; }
 /* Rows run the full width of their panel or dialog; the outer cells keep its padding. */
 th:first-child, td:first-child { padding-left: var(--table-edge, 12px); }
 th:last-child, td:last-child { padding-right: var(--table-edge, 12px); }
-.panel .table-wrap { --table-edge: 22px; margin-inline: -22px; }
+.panel .table-wrap { --table-edge: var(--panel-pad); margin-inline: calc(-1 * var(--panel-pad)); }
 .dialog .table-wrap { --table-edge: 24px; margin-inline: -24px; }
 td:first-child { color: var(--text); }
 /* A row's colour, marked like the card it belongs to. */
@@ -511,7 +519,7 @@ tr:hover .device-name .icon-button, .device-name .icon-button:focus-visible { op
   main { padding: 16px 16px 32px; gap: 16px; }
   .widget, .widgets > .card.is-loading { grid-column: span 12; }
   .offline span { display: none; }
-  .panel { padding: 18px 16px; }
+  .panel { --panel-pad: 16px; padding: 18px var(--panel-pad); }
   .controls { width: 100%; flex-direction: column; align-items: stretch; }
   .history .controls .picker, .forecast .controls .picker { position: absolute; top: 14px; right: 12px; }
   .controls .segmented { flex: 1; }

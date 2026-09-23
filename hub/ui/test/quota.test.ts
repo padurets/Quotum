@@ -11,3 +11,11 @@ test('a card’s dot is fresh for half a minute, then fades to grey over five', 
   assert.equal(freshness(15 * 60_000), 0, 'a quarter of an hour in eco mode is grey, not a warning');
   assert.equal(freshness(Infinity), 0);
 });
+
+test('the fade goes in half-minute steps, so the page is idle in between', () => {
+  const step = (seconds: number) => freshness(PULSE_FOR + seconds * 1000);
+  assert.equal(step(1), step(29), 'one step for half a minute');
+  assert.ok(step(31) < step(29), 'the next one after it');
+  const values = new Set(Array.from({length: 301}, (_, s) => step(s)));
+  assert.ok(values.size <= 11, `at most ten steps and grey, not ${values.size}`);
+});

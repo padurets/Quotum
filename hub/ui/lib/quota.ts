@@ -58,6 +58,8 @@ export const problemOf = (source: SourceState) => (source.error && source.error 
 export const PULSE_FOR = 30_000;
 /** How long the dot takes to fade from fresh to grey after that. */
 const FADE_FOR = 5 * 60_000;
+/** The fade goes in this many steps, one every half a minute: in between, nothing on the page changes. */
+const FADE_STEPS = 10;
 
 /**
  * How fresh a source's numbers are, from 1 (just measured) to 0 (a while ago). It only
@@ -66,6 +68,6 @@ const FADE_FOR = 5 * 60_000;
  */
 export function freshness(age: number): number {
   if (age <= PULSE_FOR) return 1;
-  const left = 1 - (age - PULSE_FOR) / FADE_FOR;
+  const left = Math.ceil((1 - (age - PULSE_FOR) / FADE_FOR) * FADE_STEPS) / FADE_STEPS;
   return left <= 0 ? 0 : left * left;
 }
