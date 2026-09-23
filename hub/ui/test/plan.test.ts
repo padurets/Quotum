@@ -79,12 +79,17 @@ test('a window past its reset has no plan until it is measured again', () => {
   assert.equal(planAt(weekly(), start + 6 * DAY, start + 7 * DAY + 60_000), null);
 });
 
-test('the plan line repeats weekly and restarts at every reset inside the range', () => {
+test('the plan line starts with the current week and restarts at its reset', () => {
   const resetAt = start + 7 * DAY;
   const runs = weeklyPlanLine(resetAt, start - 2 * DAY, start + 3 * DAY);
-  assert.equal(runs.length, 2, 'previous week tail + current week');
-  assert.deepEqual(runs[0][0], [start - 2 * DAY, 5], 'day six of the previous week');
-  assert.deepEqual(runs[1].map(([t, v]) => [(t - start) / DAY, v]), [[0, 100], [1, 70], [2, 45], [3, 30]]);
+  assert.equal(runs.length, 1, 'no plan for the week before');
+  assert.deepEqual(runs[0].map(([t, v]) => [(t - start) / DAY, v]), [[0, 100], [1, 70], [2, 45], [3, 30]]);
+  // An early reset an hour ago: the old week's plan is gone, the new one starts at 100%.
+  const early = weeklyPlanLine(start + 3_600_000 + 7 * DAY, start - DAY, start + 2 * 3_600_000);
+  assert.deepEqual(early.map(run => run[0]), [[start + 3_600_000, 100]]);
+  // Past the reset the next week starts over.
+  const next = weeklyPlanLine(resetAt, start + 6 * DAY, start + 8 * DAY);
+  assert.deepEqual(next.map(run => run[0]), [[start + 6 * DAY, 0], [resetAt, 100]]);
   const custom = weeklyPlanLine(resetAt, start, start + 2 * DAY, [50, 50, 0, 0, 0, 0, 0]);
   assert.deepEqual(custom[0].map(([, v]) => v), [100, 50, 0]);
 });

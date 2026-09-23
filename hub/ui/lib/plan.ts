@@ -78,16 +78,16 @@ export function planAt(w: Win, measuredAt: number | null, now: number, plan: Wee
 }
 
 /**
- * The plan as a line over [from, to] for a weekly window that resets at `resetAt`.
- * Other weeks are assumed to follow the same seven-day rhythm, so the line jumps back
- * to 100% at each reset. Returns runs of [time, remaining]; a new run starts at every
- * reset.
+ * The plan as a line over [from, to] for a weekly window that resets at `resetAt`. It
+ * starts with the current window: earlier weeks may have been cut short by an early
+ * reset or started late after idle time, so a plan drawn for them would be made up.
+ * Past the reset the next week is assumed to start right away, and the line jumps back
+ * to 100%. Returns runs of [time, remaining]; a new run starts at every reset.
  */
 export function weeklyPlanLine(resetAt: number, from: number, to: number, plan: WeeklyPlan = DEFAULT_PLAN): [number, number][][] {
   const week = WEEK_MINUTES * 60_000;
   const runs: [number, number][][] = [];
-  let start = resetAt - week * Math.ceil((resetAt - from) / week);
-  for (; start < to; start += week) {
+  for (let start = resetAt - week; start < to; start += week) {
     const begin = Math.max(from, start);
     const end = Math.min(to, start + week);
     if (end <= begin) continue;
