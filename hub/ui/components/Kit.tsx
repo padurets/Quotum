@@ -38,7 +38,7 @@ export function Modal({title, onClose, children, wide, side}: {title: string; on
   }, []);
   return createPortal(
     <div className={`overlay ${side ? 'is-side' : ''}`} onMouseDown={event => event.target === event.currentTarget && onClose()}>
-      <div className={`dialog ${wide ? 'is-wide' : ''} ${side ? 'is-side' : ''}`} role="dialog" aria-modal="true" aria-label={title} ref={panel} tabIndex={-1}>
+      <div className={`dialog glass ${wide ? 'is-wide' : ''} ${side ? 'is-side' : ''}`} role="dialog" aria-modal="true" aria-label={title} ref={panel} tabIndex={-1}>
         <div className="dialog-head">
           <h2>{title}</h2>
           <button type="button" className="icon-button" aria-label={t('common.close')} onClick={onClose}>
@@ -79,12 +79,14 @@ export function CopyField({value, label, secret}: {value: string; label?: string
     }
   };
   return (
-    <div className={`copy ${secret ? 'is-secret' : ''}`}>
+    <div className="copy-field">
       {label && <span className="copy-label">{label}</span>}
-      <code>{value}</code>
-      <button type="button" className="copy-button" onClick={copy}>
-        {copied ? t('common.copied') : t('common.copy')}
-      </button>
+      <div className={`copy ${secret ? 'is-secret' : ''}`}>
+        <code>{value}</code>
+        <button type="button" className="copy-button" onClick={copy}>
+          {copied ? t('common.copied') : t('common.copy')}
+        </button>
+      </div>
     </div>
   );
 }

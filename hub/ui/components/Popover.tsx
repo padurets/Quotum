@@ -62,7 +62,7 @@ export function Popover({
         {!!badge && <i className="badge">{badge}</i>}
       </button>
       {open && (
-        <div className={`popover ${align === 'left' ? 'is-left' : ''}`} role="dialog" aria-label={label}>
+        <div className={`popover glass ${align === 'left' ? 'is-left' : ''}`} role="dialog" aria-label={label}>
           {children}
         </div>
       )}

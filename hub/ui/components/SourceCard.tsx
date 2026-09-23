@@ -322,7 +322,7 @@ export function SourceCard({
   const status = problem ?? (source.successAt ? t('source.measured', {ago: ago(source.successAt, now)}) : errorText('waiting'));
 
   return (
-    <article className="card">
+    <article className="card" style={{'--card-color': colorOf(arrange.view, source.id, source.provider)} as CSSProperties}>
       <div className="card-head">
         <span className={`provider-mark ${warn ? 'is-warn' : ''}`} title={status} aria-label={status} role="img">
           <img className="provider-logo" src={LOGOS[source.provider]} alt="" />
@@ -333,7 +333,6 @@ export function SourceCard({
           )}
         </span>
         <div className="card-title">
-          <span className="card-swatch" style={{background: colorOf(arrange.view, source.id, source.provider)}} aria-hidden="true" />
           <h2>{sourceLabel(source)}</h2>
           {source.plan && <span className="plan">{source.plan.replace(/^Claude\s+/i, '')}</span>}
         </div>

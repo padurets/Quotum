@@ -252,7 +252,7 @@ export function Chart({
       </svg>
 
       {hover !== null && readout.length + planReadout.length + markerReadout.length > 0 && (
-        <div className="tooltip" ref={tip} style={{left: tipLeft}}>
+        <div className="tooltip glass" ref={tip} style={{left: tipLeft}}>
           <div className="tooltip-time">{cellLabel(hover, cellMs)}</div>
           {[...readout]
             .sort((a, b) => a.value - b.value)
