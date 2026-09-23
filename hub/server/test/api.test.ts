@@ -231,7 +231,10 @@ test('people share their subscriptions with a shared board; its owner arranges, 
   assert.deepEqual((await call('GET', `/api/overview?board=${team}`, {as: 'bob'})).body.view, view);
   assert.equal((await call('POST', `/api/boards/${team}/view`, {as: 'bob', body: EMPTY})).status, 403, 'a member only looks');
   assert.equal((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {...view, plans: {[source]: [50, 60, 0, 0, 0, 0, 0]}}})).status, 400);
-  assert.equal((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {...view, sizes: {history: 2}}})).status, 400, 'a quarter of the grid at least');
+  assert.equal((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {...view, sizes: {history: 13}}})).status, 400, 'no wider than the grid');
+  const narrow = await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {...view, sizes: {history: 3}}});
+  assert.deepEqual(narrow.body.sizes, {history: 4}, 'a third of the grid at least: narrower ones, saved before, are taken as that');
+  await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: view});
 
   assert.equal((await call('DELETE', `/api/boards/${team}/shares/${source}`, {as: 'alice'})).status, 200, 'the owner takes anything off');
   assert.deepEqual((await call('GET', `/api/overview?board=${team}`, {as: 'bob'})).body.sources, []);

@@ -22,9 +22,9 @@ export type View = {
 
 export const EMPTY_VIEW: View = {order: [], sizes: {}, names: {}, hidden: [], windows: [], plans: {}};
 
-/** The grid has twelve columns; a widget spans a quarter of it at least. */
+/** The grid has twelve columns; a widget spans a third of it at least. */
 export const COLUMNS = 12;
-export const MIN_SPAN = 3;
+export const MIN_SPAN = 4;
 const LIMITS = {widgets: 200, windows: 500, id: 120, name: 60};
 
 const ids = (value: unknown, max: number): string[] | null =>
@@ -41,7 +41,8 @@ function byId<T>(value: unknown, valid: (entry: unknown) => entry is T): Record<
   return Object.fromEntries(entries) as Record<string, T>;
 }
 
-const isSpan = (value: unknown): value is number => Number.isInteger(value) && (value as number) >= MIN_SPAN && (value as number) <= COLUMNS;
+// A width narrower than the least a widget has now (saved by an earlier version) is taken as that least.
+const isSpan = (value: unknown): value is number => Number.isInteger(value) && (value as number) >= 1 && (value as number) <= COLUMNS;
 const isName = (value: unknown): value is string => typeof value === 'string' && value.trim() === value && value.length > 0 && value.length <= LIMITS.name;
 
 /** A view as a page sent it, or null when anything in it is off. */
@@ -55,5 +56,6 @@ export function parseView(body: unknown): View | null {
   const names = byId(input.names, isName);
   const plans = byId(input.plans, isValidPlan);
   if (!order || !hidden || !windows || !sizes || !names || !plans) return null;
-  return {order, sizes, names, hidden, windows, plans};
+  const spans = Object.fromEntries(Object.entries(sizes).map(([id, span]) => [id, Math.max(MIN_SPAN, span)]));
+  return {order, sizes: spans, names, hidden, windows, plans};
 }

@@ -10,16 +10,20 @@ export const cardId = (sourceId: string) => `source:${sourceId}`;
 
 const EMPTY: View = {order: [], sizes: {}, names: {}, hidden: [], windows: [], plans: {}};
 
-/** The grid has twelve columns: a card takes a third by default, the chart and the table all of it. */
+/**
+ * The grid has twelve columns: a card takes half of it by default, so two stand side by
+ * side, and a third at least, so three at most; the chart and the table take all of it.
+ */
 export const COLUMNS = 12;
-export const MIN_SPAN = 3;
-export const defaultSpan = (id: string) => (id.startsWith('source:') ? 4 : COLUMNS);
-export const spanOf = (view: View, id: string) => view.sizes[id] ?? defaultSpan(id);
+export const MIN_SPAN = 4;
+export const defaultSpan = (id: string) => (id.startsWith('source:') ? COLUMNS / 2 : COLUMNS);
+const clamped = (span: number) => Math.max(MIN_SPAN, Math.min(COLUMNS, Math.round(span)));
+export const spanOf = (view: View, id: string) => clamped(view.sizes[id] ?? defaultSpan(id));
 
 export const withSpan = (view: View, id: string, span: number): View => {
   const sizes = {...view.sizes};
-  if (span === defaultSpan(id)) delete sizes[id];
-  else sizes[id] = Math.max(MIN_SPAN, Math.min(COLUMNS, Math.round(span)));
+  if (clamped(span) === defaultSpan(id)) delete sizes[id];
+  else sizes[id] = clamped(span);
   return {...view, sizes};
 };
 

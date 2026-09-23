@@ -71,7 +71,8 @@ export function dropIndex(others: Place[], pointer: Point, wide: boolean): numbe
  * them by the handle at the top of each: with a pointer (the place it will land stays
  * outlined, the page scrolls near its edges, Escape puts it back) or with the arrow
  * keys; the others slide to their new places. The owner also makes a widget wider or
- * narrower by its right edge, a column at a time; its height always follows its
+ * narrower by its right edge: it follows the pointer, and its place snaps to whole
+ * columns, from a third of the grid to its right edge. Its height always follows its
  * content, so nothing scrolls inside a widget.
  */
 export function Widgets({
@@ -98,6 +99,7 @@ export function Widgets({
   const [preview, setPreview] = useState<{id: string; order: string[]} | null>(null);
   /** A widget being resized, at the width it would have now. */
   const [resizing, setResizing] = useState<{id: string; span: number} | null>(null);
+  const resized = useRef<string | null>(null);
   const [said, say] = useState('');
   const hint = useId();
   // Handlers attached to the window for a drag read the latest props from here.
@@ -229,26 +231,50 @@ export function Widgets({
     say(t('widgets.moved', {name: byId.get(id)!.name, position: to + 1, count: order.length}));
   };
 
-  /** The span a pointer at `x` gives a widget whose left edge is at `left`: whole columns, a quarter of the grid at least. */
-  const spanAt = (left: number, x: number) => {
+  /**
+   * The grid's columns as a widget sees them: how wide `span` columns are, the span a
+   * width comes closest to, and how many columns there are from the widget's left edge
+   * to the grid's right one (a widget grows only that far, as in Grafana).
+   */
+  const columns = (id: string) => {
     const box = grid.current!;
     const gap = parseFloat(getComputedStyle(box).columnGap) || 0;
     const column = (box.clientWidth - gap * (COLUMNS - 1)) / COLUMNS;
-    return Math.max(MIN_SPAN, Math.min(COLUMNS, Math.round((x - left + gap) / (column + gap))));
+    const from = places.current.get(id)!.getBoundingClientRect().left - box.getBoundingClientRect().left;
+    const room = Math.max(MIN_SPAN, Math.min(COLUMNS, Math.round((box.clientWidth - from + gap) / (column + gap))));
+    const width = (span: number) => span * column + (span - 1) * gap;
+    const nearest = (px: number) => Math.max(MIN_SPAN, Math.min(room, Math.round((px + gap) / (column + gap))));
+    return {room, width, nearest};
   };
 
+  /**
+   * Resizing by the right edge: the widget follows the pointer smoothly, its place in
+   * the grid (outlined) snaps to whole columns and the others make room for it; let go,
+   * it settles into its place.
+   */
   const resizeStart = (id: string) => (event: ReactPointerEvent<HTMLButtonElement>) => {
     if (!event.isPrimary || event.button !== 0 || drag.current) return;
     event.preventDefault();
-    const left = places.current.get(id)!.getBoundingClientRect().left;
+    const body = bodies.current.get(id)!;
+    const {room, width, nearest} = columns(id);
+    const left = body.getBoundingClientRect().left;
+    // Where on the handle it was taken, so the edge does not jump to the pointer.
+    const grab = event.clientX - body.getBoundingClientRect().right;
     const start = byId.get(id)!.span;
     let span = start;
+    let px = body.getBoundingClientRect().width;
     document.body.classList.add('is-resizing');
+    resized.current = id;
+    body.style.width = `${px}px`;
     setResizing({id, span});
     const move = (e: PointerEvent) => {
       if (e.pointerId !== event.pointerId) return;
-      const next = spanAt(left, e.clientX);
-      if (next !== span) setResizing({id, span: (span = next)});
+      px = Math.max(width(MIN_SPAN), Math.min(width(room), e.clientX - grab - left));
+      body.style.width = `${px}px`;
+      const next = nearest(px);
+      if (next === span) return;
+      remember();
+      setResizing({id, span: (span = next)});
     };
     const end = (e: PointerEvent, keep: boolean) => {
       if (e.pointerId !== event.pointerId) return;
@@ -256,6 +282,11 @@ export function Widgets({
       window.removeEventListener('pointerup', up);
       window.removeEventListener('pointercancel', cancel);
       document.body.classList.remove('is-resizing');
+      resized.current = null;
+      const final = keep ? span : start;
+      body.style.width = '';
+      if (!still()) body.animate([{width: `${px}px`}, {width: `${width(final)}px`}], SLIDE);
+      if (final !== span) remember();
       setResizing(null);
       if (keep && span !== start) latest.current.onResize(id, span);
     };
@@ -271,8 +302,9 @@ export function Widgets({
     if (!step) return;
     event.preventDefault();
     const widget = byId.get(id)!;
-    const span = Math.max(MIN_SPAN, Math.min(COLUMNS, widget.span + step));
+    const span = Math.max(MIN_SPAN, Math.min(columns(id).room, widget.span + step));
     if (span === widget.span) return;
+    remember();
     onResize(id, span);
     say(t('widgets.resized', {name: widget.name, span, count: COLUMNS}));
   };
@@ -285,7 +317,7 @@ export function Widgets({
     if (was && !still()) {
       for (const [id, node] of places.current) {
         const from = was.get(id);
-        if (!from || id === drag.current?.id) continue;
+        if (!from || id === drag.current?.id || id === resized.current) continue;
         // `from` is where it was seen, mid-slide or not; `to` is its place without any slide.
         for (const animation of node.getAnimations()) animation.cancel();
         const to = node.getBoundingClientRect();
@@ -297,7 +329,7 @@ export function Widgets({
     follow();
     if (refocus.current) handles.current.get(refocus.current)?.focus();
     refocus.current = null;
-  }, [order.join()]);
+  }, [order.join(), resizing?.span, widgets.map(widget => widget.span).join()]);
 
   useLayoutEffect(() => () => finish(false), []);
 
@@ -381,12 +413,42 @@ const LayoutIcon = () => (
   </svg>
 );
 
-/** Which widgets the board shows; the owner brings hidden ones back here. */
-export function WidgetsMenu({widgets, hidden, shared, onShow}: {widgets: {id: string; name: string}[]; hidden: string[]; shared: boolean; onShow: (id: string, shown: boolean) => void}) {
+const LockIcon = ({open = false}: {open?: boolean}) => (
+  <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+    <rect x="3" y="7" width="10" height="7" rx="1.6" />
+    <path d={open ? 'M5.5 7V5a2.5 2.5 0 0 1 4.9-.7' : 'M5.5 7V5a2.5 2.5 0 0 1 5 0v2'} />
+  </svg>
+);
+
+/**
+ * Which widgets the board shows, and whether they stay in place: locked, they have no
+ * handles to move or resize them, so a pointer passing over the board catches nothing.
+ * The owner brings hidden widgets back here.
+ */
+export function WidgetsMenu({
+  widgets,
+  hidden,
+  shared,
+  locked,
+  onShow,
+  onLock,
+}: {
+  widgets: {id: string; name: string}[];
+  hidden: string[];
+  shared: boolean;
+  locked: boolean;
+  onShow: (id: string, shown: boolean) => void;
+  onLock: (locked: boolean) => void;
+}) {
   const count = widgets.filter(widget => hidden.includes(widget.id)).length;
   return (
-    <Popover label={t('widgets.title')} icon={<LayoutIcon />} badge={count}>
+    <Popover label={t(locked ? 'widgets.titleLocked' : 'widgets.title')} icon={locked ? <LockIcon /> : <LayoutIcon />} badge={count}>
       <div className="popover-title">{t('widgets.title')}</div>
+      <SwitchRow className="is-lock" on={locked} onChange={onLock}>
+        <LockIcon open={!locked} />
+        {t('widgets.lock')}
+      </SwitchRow>
+      <div className="popover-sep" />
       {widgets.map(widget => (
         <SwitchRow key={widget.id} on={!hidden.includes(widget.id)} onChange={on => onShow(widget.id, on)}>
           {widget.name}

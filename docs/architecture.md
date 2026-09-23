@@ -231,8 +231,8 @@ and re-reads history only when the overview's `revision` says the board's data c
 The board's view comes with the overview; the owner's changes show at once and are
 saved about half a second later, one request per burst (a drag, typing a plan). What
 is only about how one person looks (the chart's period, window type and horizon, lines
-switched off in the legend, reset announcements, the chosen board and language) stays
-in their browser.
+switched off in the legend, reset announcements, the lock on the widgets, the chosen
+board and language) stays in their browser.
 
 Text is translated through typed catalogs in `hub/ui/i18n`: English is the source,
 every other language must translate all its keys (checked by the type checker and by

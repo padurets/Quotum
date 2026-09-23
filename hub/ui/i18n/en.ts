@@ -67,6 +67,8 @@ export const en = {
   'onboarding.share': 'Add my subscriptions',
   'onboarding.invite': 'Invite people',
   'widgets.title': 'Widgets',
+  'widgets.titleLocked': 'Widgets (locked in place)',
+  'widgets.lock': 'Lock moving and resizing',
   'widgets.history': 'History chart',
   'widgets.note': 'Hidden widgets keep their data and come back as they were.',
   'widgets.sharedNote': 'Hidden widgets keep their data. Everyone on the board sees it the way you arrange it.',

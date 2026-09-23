@@ -7,7 +7,7 @@ export type Horizon = 'auto' | '1d' | '3d' | '7d';
 /**
  * How this reader looks at the dashboard, whatever the board: the chart's period, window
  * type and horizon, lines switched off in its legend, the table's own period and window
- * type, and reset announcements. How a board is arranged is the board's own
+ * type, reset announcements, and whether the widgets are locked in place. How a board is arranged is the board's own
  * (lib/view.ts).
  */
 export type Prefs = {
@@ -23,13 +23,15 @@ export type Prefs = {
   showPlan: boolean;
   /** Show reset announcements from the community trackers. */
   showResets: boolean;
+  /** The widgets stay where they are: no handles to move or resize them. */
+  locked: boolean;
 };
 
 const KEY = 'quotum.prefs';
 const RANGES = ['24h', '7d', '30d'];
 const KINDS: Kind[] = ['weekly', 'session'];
 export const HORIZONS: Horizon[] = ['auto', '1d', '3d', '7d'];
-const DEFAULTS: Prefs = {muted: {}, range: '24h', kind: 'weekly', horizon: 'auto', tableRange: '24h', tableKind: 'weekly', showPlan: true, showResets: true};
+const DEFAULTS: Prefs = {muted: {}, range: '24h', kind: 'weekly', horizon: 'auto', tableRange: '24h', tableKind: 'weekly', showPlan: true, showResets: true, locked: false};
 
 function read(): Prefs {
   try {
@@ -41,8 +43,8 @@ function read(): Prefs {
     if (!RANGES.includes(stored.tableRange)) stored.tableRange = DEFAULTS.tableRange;
     if (!KINDS.includes(stored.tableKind)) stored.tableKind = DEFAULTS.tableKind;
     if (!HORIZONS.includes(stored.horizon)) stored.horizon = DEFAULTS.horizon;
-    const {muted, range, kind, horizon, tableRange, tableKind, showPlan, showResets} = stored;
-    return {muted, range, kind, horizon, tableRange, tableKind, showPlan, showResets};
+    const {muted, range, kind, horizon, tableRange, tableKind, showPlan, showResets, locked} = stored;
+    return {muted, range, kind, horizon, tableRange, tableKind, showPlan, showResets, locked: locked === true};
   } catch {
     return DEFAULTS;
   }

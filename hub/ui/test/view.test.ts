@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {arranged, planOf, reordered, withHidden, withPlan, withWindowHidden} from '../lib/view';
+import {arranged, planOf, reordered, spanOf, withHidden, withPlan, withSpan, withWindowHidden} from '../lib/view';
 import {DEFAULT_PLAN} from '../lib/plan';
 import type {View} from '../lib/types';
 
@@ -32,4 +32,11 @@ test('hidden windows and plans belong to the view; the default plan is not store
   assert.deepEqual(planOf(planned, 'b'), DEFAULT_PLAN);
   assert.deepEqual(withPlan(planned, 'a', [...DEFAULT_PLAN]).plans, {});
   assert.deepEqual(planOf({...EMPTY, plans: {a: [50, 60, 0, 0, 0, 0, 0]}}, 'a'), DEFAULT_PLAN, 'a broken plan is not used');
+});
+
+test('a card is half the grid wide by default, a third at least and the whole grid at most', () => {
+  const view = {...EMPTY, sizes: {'source:old': 3, 'source:wide': 12}};
+  assert.deepEqual([spanOf(view, 'source:new'), spanOf(view, 'history'), spanOf(view, 'source:old'), spanOf(view, 'source:wide')], [6, 12, 4, 12]);
+  assert.deepEqual(withSpan(view, 'source:wide', 6).sizes, {'source:old': 3}, 'the default is not stored');
+  assert.deepEqual(withSpan(EMPTY, 'source:new', 2).sizes, {'source:new': 4});
 });

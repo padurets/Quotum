@@ -4,7 +4,7 @@ import '@fontsource-variable/geist';
 import '@fontsource-variable/geist-mono';
 import './style.css';
 import {useHistory, useNow, useOverview} from './lib/api';
-import {usePrefs} from './lib/prefs';
+import {setPrefs, usePrefs} from './lib/prefs';
 import {useResets} from './lib/resets';
 import {sourceLabel, titled} from './lib/quota';
 import {usePath} from './lib/router';
@@ -115,7 +115,9 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
               widgets={widgets}
               hidden={arrange.view.hidden}
               shared={!board?.personal}
+              locked={prefs.locked}
               onShow={(id, on) => arrange.update(view => withHidden(view, id, !on))}
+              onLock={locked => setPrefs({locked})}
             />
           ) : null
         }
@@ -157,7 +159,7 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
         ) : shown.length ? (
           <Widgets
             widgets={shown}
-            movable={arrange.owner}
+            movable={arrange.owner && !prefs.locked}
             onMove={order => arrange.update(view => reordered(view, order))}
             onResize={(id, span) => arrange.update(view => withSpan(view, id, span))}
           />
