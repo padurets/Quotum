@@ -6,8 +6,8 @@ import {errorText, level, problemOf, sourceLabel, windowName} from '../lib/quota
 import {t} from '../i18n';
 import {DEFAULT_PLAN, isValidPlan, PLAN_TOLERANCE, planAt, planTotal, type WeeklyPlan} from '../lib/plan';
 import {LOGOS} from './logos';
-import {cardId, planOf, weeklyPlanOf, withColor, withHidden, withName, withPlan, withPlanned, withWindowHidden, type Arrange} from '../lib/view';
-import {CARD_COLORS, FALLBACK_COLOR, PROVIDERS} from '../lib/providers';
+import {cardId, colorOf, planOf, weeklyPlanOf, withColor, withHidden, withName, withPlan, withPlanned, withWindowHidden, type Arrange} from '../lib/view';
+import {CARD_COLORS, MIDDLE_STEP, PROVIDERS} from '../lib/providers';
 import {call} from '../lib/http';
 import type {Board} from '../lib/session';
 import type {ResetStatus} from '../lib/resets';
@@ -149,37 +149,53 @@ function CardName({source, arrange}: {source: SourceState; arrange: Arrange}) {
 }
 
 /**
- * A card's colour on the chart and in the table: its provider's, or one of a grid of a
- * few hues (columns) in steps of lightness (rows, light to dark).
+ * A card's colour on the chart and in the table: a row of hues, and under it the steps
+ * of lightness of the chosen one. The provider's colour is where the card starts; picking
+ * it again, or resetting, gives the card back the provider's.
  */
 function CardColor({source, arrange}: {source: SourceState; arrange: Arrange}) {
+  const own = PROVIDERS[source.provider]?.color;
   const chosen = arrange.view.colors[source.id];
-  const choose = (color: string | null) => arrange.update(view => withColor(view, source.id, color));
-  const steps = CARD_COLORS[0].map((_, step) => CARD_COLORS.map(hue => hue[step]));
+  const current = chosen ?? own;
+  const hue = CARD_COLORS.findIndex(steps => current !== undefined && steps.includes(current));
+  const choose = (color: string) => arrange.update(view => withColor(view, source.id, color === own ? null : color));
   return (
-    <div className="popover-pad color-choices">
-      <button
-        type="button"
-        className="color-choice"
-        style={{background: PROVIDERS[source.provider]?.color ?? FALLBACK_COLOR}}
-        aria-pressed={!chosen}
-        aria-label={t('source.colorProvider')}
-        title={t('source.colorProvider')}
-        onClick={() => choose(null)}
-      />
-      <div className="color-grid" role="group" aria-label={t('source.color')}>
-        {steps.flat().map(color => (
-          <button
-            key={color}
-            type="button"
-            className="color-choice"
-            style={{background: color}}
-            aria-pressed={chosen === color}
-            aria-label={t('source.colorChoice', {color})}
-            onClick={() => choose(color)}
-          />
-        ))}
+    <div className="popover-pad">
+      <div className="color-hues">
+        {CARD_COLORS.map((steps, i) => {
+          const color = i === hue ? current! : steps[MIDDLE_STEP];
+          return (
+            <button
+              key={steps[MIDDLE_STEP]}
+              type="button"
+              className="color-choice"
+              style={{background: color}}
+              aria-pressed={i === hue}
+              aria-label={t('source.colorChoice', {color})}
+              onClick={() => choose(color)}
+            />
+          );
+        })}
+        {chosen && (
+          <button type="button" className="link-button" onClick={() => arrange.update(view => withColor(view, source.id, null))}>
+            {t('source.colorReset')}
+          </button>
+        )}
       </div>
+      {hue >= 0 && (
+        <div className="color-steps" role="group" aria-label={t('source.colorSteps')}>
+          {CARD_COLORS[hue].map(color => (
+            <button
+              key={color}
+              type="button"
+              style={{background: color}}
+              aria-pressed={color === current}
+              aria-label={t('source.colorChoice', {color})}
+              onClick={() => choose(color)}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -312,6 +328,7 @@ export function SourceCard({
           <i className={`dot dot-${warn ? 'warn' : 'ok'}`} />
         </span>
         <div className="card-title">
+          <span className="card-swatch" style={{background: colorOf(arrange.view, source.id, source.provider)}} aria-hidden="true" />
           <h2>{sourceLabel(source)}</h2>
           {source.plan && <span className="plan">{source.plan.replace(/^Claude\s+/i, '')}</span>}
         </div>

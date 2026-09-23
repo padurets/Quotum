@@ -20,6 +20,7 @@ export const FALLBACK_COLOR = '#8b90b5';
  * clear of the status ones and tell apart on the dark chart surface; a fifth, Antigravity's
  * pink, would be too close to the purple. Every step keeps 3:1 contrast with the surface.
  */
+export const MIDDLE_STEP = 2;
 export const CARD_COLORS: string[][] = [
   ['#a6c5ff', '#7eaaff', '#5b8ff5', '#4779dd', '#3363c5'],
   ['#63dcce', '#45c2b5', '#1fa89c', '#099186', '#067a71'],
