@@ -368,7 +368,6 @@ th:last-child, td:last-child { padding-right: var(--table-edge, 12px); }
 td:first-child { color: var(--text); }
 /* A row's colour, marked like the card it belongs to. */
 .swatch { display: inline-block; width: 3px; height: 13px; border-radius: 2px; margin-right: 10px; vertical-align: -2px; }
-.footnote { margin: 14px 0 0; font-size: 12px; color: var(--text-4); }
 
 /* ---------- boards, account ---------- */
 .text-button { display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 1px solid transparent; border-radius: 8px; background: none; color: var(--text-2); font-size: 13px; transition: color .15s, background .15s, border-color .15s; }

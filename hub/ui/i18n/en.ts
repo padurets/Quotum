@@ -175,7 +175,6 @@ export const en = {
   'history.planLegend': 'Spending plan',
   'history.planLegendHint': 'Set in each subscription widget’s settings',
   'history.loading': 'Loading history…',
-  'history.since': 'History is kept since {date}. A gap in a line is a time without measurements.',
   'history.settings': 'Chart settings',
   'history.horizon': 'Look ahead',
   'history.horizonAuto': 'auto',

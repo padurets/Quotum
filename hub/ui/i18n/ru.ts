@@ -171,7 +171,6 @@ export const ru = {
   'history.planLegend': 'План расхода',
   'history.planLegendHint': 'Задаётся в настройках виджета подписки',
   'history.loading': 'Загружаем историю…',
-  'history.since': 'История ведётся с {date}. Разрыв линии — период без замеров.',
   'history.settings': 'Настройки графика',
   'history.horizon': 'Горизонт',
   'history.horizonAuto': 'авто',

@@ -1,6 +1,6 @@
 import {useMemo} from 'react';
 import type {History as HistoryData, Kind, Overview} from '../lib/types';
-import {day, num} from '../lib/format';
+import {num} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
 import {planAt, started, weeklyPlanLine} from '../lib/plan';
 import {PROVIDERS} from '../lib/providers';
@@ -250,9 +250,6 @@ export function History({
       </div>
 
       {history ? <Chart lines={visible} plans={plans} markers={markers} from={from} now={measuredTo} to={to} cellMs={history.cellMs} empty={lines.length ? t('chart.empty') : null} onSelect={setTimeRange} /> : <div className="chart chart-loading">{t('history.loading')}</div>}
-      {history && history.since < history.historyStart && (
-        <p className="footnote">{t('history.since', {date: day(history.historyStart)})}</p>
-      )}
     </section>
   );
 }
