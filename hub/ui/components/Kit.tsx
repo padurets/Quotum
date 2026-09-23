@@ -99,13 +99,22 @@ export function Segmented<K extends string>({options, value, onChange, label}: {
   );
 }
 
+/**
+ * The Quotum mark: a Q that is also a magnifier, dark on the accent colour. The
+ * favicon (public/favicon.svg) is the same Q in the accent colour on a dark tile.
+ */
 export function Logo() {
   return (
     <svg className="logo" viewBox="0 0 32 32" aria-hidden="true">
-      <rect x="1" y="1" width="30" height="30" rx="9" className="logo-bg" />
-      <rect x="8" y="17" width="4" height="8" rx="2" className="logo-bar a" />
-      <rect x="14" y="12" width="4" height="13" rx="2" className="logo-bar b" />
-      <rect x="20" y="7" width="4" height="18" rx="2" className="logo-bar c" />
+      <defs>
+        <linearGradient id="quotum-logo-tile" x1="0" y1="0" x2="0" y2="32" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stopColor="#b8bdff" />
+          <stop offset="1" stopColor="#7c83f2" />
+        </linearGradient>
+      </defs>
+      <rect x="1" y="1" width="30" height="30" rx="9" fill="url(#quotum-logo-tile)" />
+      <circle cx="15.2" cy="15.2" r="7.4" className="logo-mark" />
+      <path d="M18.3 18.3L23.4 23.4" className="logo-mark" />
     </svg>
   );
 }

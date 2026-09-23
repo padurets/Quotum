@@ -50,10 +50,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .topbar-inner { max-width: 1240px; margin: 0 auto; padding: 0 28px; height: 60px; display: flex; align-items: center; gap: 24px; }
 .brand { display: flex; align-items: center; gap: 11px; color: var(--text); text-decoration: none; font-weight: 560; font-size: 15px; letter-spacing: -.01em; white-space: nowrap; }
 .logo { width: 26px; height: 26px; }
-.logo-bg { fill: #ffffff08; stroke: var(--hair-2); }
-.logo-bar.a { fill: #6f68e8; }
-.logo-bar.b { fill: #8f8cf6; }
-.logo-bar.c { fill: #c9cbff; }
+.logo-mark { fill: none; stroke: #0c0d18; stroke-width: 3.4; stroke-linecap: round; }
 .status { margin-left: auto; display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--text-2); min-width: 0; }
 .mono { font-family: var(--mono); font-size: .92em; color: var(--text-2); }
 .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
