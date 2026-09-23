@@ -10,6 +10,8 @@ homepage.workspace = true
 repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
+# Released as binaries and through npm, never on crates.io.
+publish = false
 
 [dependencies]
 dirs = "7.0.0"
