@@ -283,7 +283,7 @@ npm (нужны cargo-zigbuild и zig, подробности в самом ск
 # agent/Cargo.toml: version = "0.2.0"
 (cd agent && cargo check)                            # Cargo.lock
 git commit -am "Version 0.2.0" && git push origin main
-git tag -a v0.2.0 -F notes.md                        # аннотированный: его сообщение — описание релиза
+git tag -a v0.2.0 -F notes.md --cleanup=verbatim   # аннотированный, сообщение целиком: описание релиза
 git push origin v0.2.0
 ```
 

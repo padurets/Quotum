@@ -284,7 +284,7 @@ tag's message:
 # agent/Cargo.toml: version = "0.2.0"
 (cd agent && cargo check)                            # Cargo.lock
 git commit -am "Version 0.2.0" && git push origin main
-git tag -a v0.2.0 -F notes.md                        # annotated: its message is the release notes
+git tag -a v0.2.0 -F notes.md --cleanup=verbatim   # annotated, its message kept whole: the release notes
 git push origin v0.2.0
 ```
 
