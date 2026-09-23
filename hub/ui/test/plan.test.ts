@@ -48,6 +48,8 @@ test('short windows are planned linearly to their reset', () => {
   assert.ok(Math.abs(planAt(session, start + 2.5 * 3_600_000, start + 2.5 * 3_600_000)!.remaining - 50) < 1e-6);
   assert.equal(planAt(weekly({resetAt: null}), start + DAY, start + DAY), null);
   assert.equal(planAt(weekly(), null, start + DAY), null, 'never measured');
+  assert.equal(planAt(weekly(), start + DAY, start + DAY, null), null, 'the plan is switched off');
+  assert.equal(planAt(session, start + 2.5 * 3_600_000, start + 2.5 * 3_600_000, null), null, 'for every window');
 });
 
 test('an idle rolling window has no plan: its start is the moment it was measured', () => {

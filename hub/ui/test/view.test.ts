@@ -1,10 +1,11 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {arranged, planOf, reordered, spanOf, withHidden, withPlan, withSpan, withWindowHidden} from '../lib/view';
+import {arranged, colorOf, planOf, reordered, spanOf, weeklyPlanOf, withColor, withHidden, withPlan, withPlanned, withSpan, withWindowHidden} from '../lib/view';
+import {PROVIDERS} from '../lib/providers';
 import {DEFAULT_PLAN} from '../lib/plan';
 import type {View} from '../lib/types';
 
-const EMPTY: View = {order: [], sizes: {}, names: {}, hidden: [], windows: [], plans: {}};
+const EMPTY: View = {order: [], sizes: {}, names: {}, hidden: [], windows: [], plans: {}, unplanned: [], colors: {}};
 const board = ['source:a', 'source:b', 'source:c', 'history'];
 
 test('widgets follow the board’s order; a new one comes next to its natural neighbour', () => {
@@ -32,6 +33,23 @@ test('hidden windows and plans belong to the view; the default plan is not store
   assert.deepEqual(planOf(planned, 'b'), DEFAULT_PLAN);
   assert.deepEqual(withPlan(planned, 'a', [...DEFAULT_PLAN]).plans, {});
   assert.deepEqual(planOf({...EMPTY, plans: {a: [50, 60, 0, 0, 0, 0, 0]}}, 'a'), DEFAULT_PLAN, 'a broken plan is not used');
+});
+
+test('a plan switched off is kept for when it is switched on again', () => {
+  const planned = withPlan(EMPTY, 'a', [40, 0, 30, 0, 30, 0, 0]);
+  const off = withPlanned(planned, 'a', false);
+  assert.equal(planOf(off, 'a'), null);
+  assert.deepEqual(weeklyPlanOf(off, 'a'), [40, 0, 30, 0, 30, 0, 0], 'the editor still has it');
+  assert.deepEqual(planOf(off, 'b'), DEFAULT_PLAN, 'other sources keep theirs');
+  assert.deepEqual(withPlanned(withPlanned(off, 'a', false), 'a', true), planned);
+});
+
+test('a card has its provider’s colour until the board gives it another', () => {
+  assert.equal(colorOf(EMPTY, 'a', 'codex'), PROVIDERS.codex.color);
+  const teal = withColor(EMPTY, 'a', '#1fa89c');
+  assert.equal(colorOf(teal, 'a', 'codex'), '#1fa89c');
+  assert.equal(colorOf(teal, 'b', 'codex'), PROVIDERS.codex.color);
+  assert.deepEqual(withColor(teal, 'a', null).colors, {});
 });
 
 test('a card is half the grid wide by default, a third at least and the whole grid at most', () => {

@@ -48,6 +48,10 @@ export type View = {
   windows: string[];
   /** Weekly spending plans by source id; absent means the default. */
   plans: Record<string, number[]>;
+  /** Source ids whose plan is switched off on this board. */
+  unplanned: string[];
+  /** Colours given to cards, by source id, instead of the provider's. */
+  colors: Record<string, string>;
 };
 
 export type Overview = {

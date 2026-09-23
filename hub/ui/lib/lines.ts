@@ -1,8 +1,8 @@
 import type {History, HistorySeries, Kind, Overview, View} from './types';
 import {windowKey} from './types';
 import {seriesName} from './quota';
-import {DASHES, PROVIDERS} from './providers';
-import {cardId} from './view';
+import {DASHES} from './providers';
+import {cardId, colorOf} from './view';
 
 /** A series of the history as the chart and the table show it: named, coloured, with its value now. */
 export type Line = HistorySeries & {key: string; name: string; color: string; dash: string; current: number};
@@ -27,7 +27,7 @@ export function linesOf(history: History | null, overview: Overview | null, view
         ...entry,
         key: windowKey(entry.sourceId, entry.windowId),
         name: seriesName(source, entry),
-        color: PROVIDERS[entry.provider]?.color ?? '#8b90b5',
+        color: colorOf(view, entry.sourceId, entry.provider),
         dash: DASHES[index % DASHES.length],
         current: live.remaining,
       },

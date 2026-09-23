@@ -6,7 +6,8 @@ import {errorText, level, problemOf, sourceLabel, windowName} from '../lib/quota
 import {t} from '../i18n';
 import {DEFAULT_PLAN, isValidPlan, PLAN_TOLERANCE, planAt, planTotal, type WeeklyPlan} from '../lib/plan';
 import {LOGOS} from './logos';
-import {cardId, planOf, withHidden, withName, withPlan, withWindowHidden, type Arrange} from '../lib/view';
+import {cardId, colorOf, planOf, weeklyPlanOf, withColor, withHidden, withName, withPlan, withPlanned, withWindowHidden, type Arrange} from '../lib/view';
+import {CARD_COLORS, PROVIDERS} from '../lib/providers';
 import {call} from '../lib/http';
 import type {Board} from '../lib/session';
 import type {ResetStatus} from '../lib/resets';
@@ -14,7 +15,7 @@ import {ResetBanner, ResetNotice} from './ResetNotice';
 import {HideRow, Popover, SlidersIcon, SwitchRow, TakeOffIcon} from './Popover';
 import {ErrorLine} from './Kit';
 
-function Meter({w, measuredAt, now, weekly}: {w: Win; measuredAt: number | null; now: number; weekly: WeeklyPlan}) {
+function Meter({w, measuredAt, now, weekly}: {w: Win; measuredAt: number | null; now: number; weekly: WeeklyPlan | null}) {
   const state = level(w.remaining);
   const plan = planAt(w, measuredAt, now, weekly);
   const pace = plan && !plan.done ? plan.remaining : null;
@@ -28,7 +29,7 @@ function Meter({w, measuredAt, now, weekly}: {w: Win; measuredAt: number | null;
   );
 }
 
-function Limit({w, measuredAt, now, weekly}: {w: Win; measuredAt: number | null; now: number; weekly: WeeklyPlan}) {
+function Limit({w, measuredAt, now, weekly}: {w: Win; measuredAt: number | null; now: number; weekly: WeeklyPlan | null}) {
   const state = level(w.remaining);
   const plan = planAt(w, measuredAt, now, weekly);
   // A limit used up is past any plan: how far ahead of it says nothing more.
@@ -76,7 +77,7 @@ function Limit({w, measuredAt, now, weekly}: {w: Win; measuredAt: number | null;
  * when it adds up to exactly 100%; a day at 0 has no spending planned.
  */
 function PlanEditor({source, arrange}: {source: SourceState; arrange: Arrange}) {
-  const saved = planOf(arrange.view, source.id);
+  const saved = weeklyPlanOf(arrange.view, source.id);
   const [draft, setDraft] = useState<WeeklyPlan>(saved);
   useEffect(() => setDraft(saved), [saved.join(',')]);
   const total = planTotal(draft);
@@ -147,9 +148,35 @@ function CardName({source, arrange}: {source: SourceState; arrange: Arrange}) {
   );
 }
 
+/** A card's colour on the chart and in the table: its provider's, or one of a few more. */
+function CardColor({source, arrange}: {source: SourceState; arrange: Arrange}) {
+  const own = PROVIDERS[source.provider]?.color;
+  const current = colorOf(arrange.view, source.id, source.provider);
+  const choices = [null, ...CARD_COLORS.filter(color => color !== own)];
+  return (
+    <div className="popover-pad color-choices">
+      {choices.map(color => {
+        const shown = color ?? colorOf({...arrange.view, colors: {}}, source.id, source.provider);
+        return (
+          <button
+            key={color ?? 'provider'}
+            type="button"
+            className="color-choice"
+            style={{background: shown}}
+            aria-pressed={shown === current}
+            aria-label={color ? t('source.colorChoice', {color}) : t('source.colorProvider')}
+            title={color ? undefined : t('source.colorProvider')}
+            onClick={() => arrange.update(view => withColor(view, source.id, color))}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
 /**
- * A card's menu. The board's owner names the card, picks its limits, sets the weekly
- * plan, hides it; on a shared board the owner, or whoever's devices measure it, also
+ * A card's menu. The board's owner names the card, gives it a colour, picks its limits,
+ * sets the weekly plan or switches it off, hides it; on a shared board the owner, or whoever's devices measure it, also
  * takes it off the board.
  */
 function SourceSettings({source, arrange, board, onChanged}: {source: SourceState; arrange: Arrange; board: Board; onChanged: () => void}) {
@@ -157,6 +184,7 @@ function SourceSettings({source, arrange, board, onChanged}: {source: SourceStat
   const hidden = new Set(arrange.view.windows);
   const hiddenCount = source.windows.filter(w => hidden.has(windowKey(source.id, w.id))).length;
   const hasWeekly = source.windows.some(w => w.kind === 'weekly');
+  const planned = planOf(arrange.view, source.id) !== null;
   const owner = arrange.owner;
   const takeOff = !board.personal && (owner || source.mine);
 
@@ -191,12 +219,24 @@ function SourceSettings({source, arrange, board, onChanged}: {source: SourceStat
           })}
         </>
       )}
-      {owner && hasWeekly && (
+      {owner && (
         <>
-          <div className="popover-title popover-section">{t('source.plan')}</div>
-          <PlanEditor source={source} arrange={arrange} />
-          <div className="popover-note">{t('source.planNote')}</div>
+          <div className="popover-title popover-section">{t('source.color')}</div>
+          <CardColor source={source} arrange={arrange} />
         </>
+      )}
+      {owner && (
+        <div className="popover-section">
+          <SwitchRow on={planned} onChange={on => arrange.update(view => withPlanned(view, source.id, on))}>
+            {t('source.plan')}
+          </SwitchRow>
+          {planned && hasWeekly && (
+            <>
+              <PlanEditor source={source} arrange={arrange} />
+              <div className="popover-note">{t('source.planNote')}</div>
+            </>
+          )}
+        </div>
       )}
       {owner && <HideRow onHide={() => arrange.update(view => withHidden(view, cardId(source.id), true))}>{t('widget.hide')}</HideRow>}
       {takeOff && (

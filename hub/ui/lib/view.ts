@@ -2,13 +2,14 @@ import {useCallback, useEffect, useRef, useState} from 'react';
 import {call} from './http';
 import {DEFAULT_PLAN, isValidPlan, type WeeklyPlan} from './plan';
 import type {Overview, View} from './types';
+import {FALLBACK_COLOR, PROVIDERS} from './providers';
 
 /** Widget ids: the chart, the table of every limit, and a card per source. */
 export const HISTORY = 'history';
 export const FORECAST = 'forecast';
 export const cardId = (sourceId: string) => `source:${sourceId}`;
 
-const EMPTY: View = {order: [], sizes: {}, names: {}, hidden: [], windows: [], plans: {}};
+const EMPTY: View = {order: [], sizes: {}, names: {}, hidden: [], windows: [], plans: {}, unplanned: [], colors: {}};
 
 /**
  * The grid has twelve columns: a card takes half of it by default, so two stand side by
@@ -69,10 +70,32 @@ export const withWindowHidden = (view: View, key: string, hidden: boolean): View
   windows: hidden ? [...new Set([...view.windows, key])] : view.windows.filter(other => other !== key),
 });
 
-/** The weekly plan of one source: the board's if valid, otherwise the default. */
-export const planOf = (view: View, sourceId: string): WeeklyPlan => {
+/** The weekly plan set for one source: the board's if valid, otherwise the default. */
+export const weeklyPlanOf = (view: View, sourceId: string): WeeklyPlan => {
   const plan = view.plans[sourceId];
   return isValidPlan(plan) ? plan : DEFAULT_PLAN;
+};
+
+/** The plan the board follows for one source; null when it is switched off there. */
+export const planOf = (view: View, sourceId: string): WeeklyPlan | null =>
+  view.unplanned.includes(sourceId) ? null : weeklyPlanOf(view, sourceId);
+
+/** Switching a source's plan off keeps the plan itself, so switching it on brings it back. */
+export const withPlanned = (view: View, sourceId: string, planned: boolean): View => ({
+  ...view,
+  unplanned: planned ? view.unplanned.filter(id => id !== sourceId) : [...new Set([...view.unplanned, sourceId])],
+});
+
+/** A card's colour: the board's choice, otherwise its provider's. */
+export const colorOf = (view: View, sourceId: string, provider: string): string =>
+  view.colors[sourceId] ?? PROVIDERS[provider]?.color ?? FALLBACK_COLOR;
+
+/** A colour for a card; null gives it back its provider's. */
+export const withColor = (view: View, sourceId: string, color: string | null): View => {
+  const colors = {...view.colors};
+  if (color) colors[sourceId] = color;
+  else delete colors[sourceId];
+  return {...view, colors};
 };
 
 export const withPlan = (view: View, sourceId: string, plan: WeeklyPlan | null): View => {

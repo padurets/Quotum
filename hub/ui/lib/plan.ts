@@ -61,10 +61,11 @@ const IDLE_TOLERANCE = 2 * 60_000;
  * window has not started or its timing is unknown. An idle rolling window reports
  * "now + length" as its reset, so it has not started when its start is the moment it
  * was measured (`measuredAt`); a window that has started keeps its start, and its plan
- * shows from then on, right after a reset too.
+ * shows from then on, right after a reset too. A source whose plan is switched off
+ * (`plan` null) has none, for any window.
  */
-export function planAt(w: Win, measuredAt: number | null, now: number, plan: WeeklyPlan = DEFAULT_PLAN): PlanPoint | null {
-  if (!w.resetAt || !w.minutes || measuredAt === null) return null;
+export function planAt(w: Win, measuredAt: number | null, now: number, plan: WeeklyPlan | null = DEFAULT_PLAN): PlanPoint | null {
+  if (!plan || !w.resetAt || !w.minutes || measuredAt === null) return null;
   const length = w.minutes * 60_000;
   const start = w.resetAt - length;
   const elapsed = now - start;

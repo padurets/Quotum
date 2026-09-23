@@ -170,15 +170,16 @@ export function History({
     for (const line of visible) {
       const source = overview?.sources.find(s => s.id === line.sourceId);
       const live = source?.windows.find(w => w.id === line.windowId);
+      const plan = planOf(view, line.sourceId);
       // Idle rolling windows (reset = now + 7 days) have not started: no plan to show.
-      if (!live?.resetAt || live.minutes !== 10080 || !planAt(live, source?.successAt ?? null, now, planOf(view, line.sourceId))) continue;
+      if (!plan || !live?.resetAt || live.minutes !== 10080 || !planAt(live, source?.successAt ?? null, now, plan)) continue;
       const key = `${line.sourceId}@${Math.round(live.resetAt / 3_600_000)}`;
       if (seen.has(key)) continue;
       seen.set(key, {
         key,
         name: t('chart.plan', {source: source ? sourceLabel(source) : line.provider}),
         color: line.color,
-        runs: weeklyPlanLine(live.resetAt, from, to, planOf(view, line.sourceId)),
+        runs: weeklyPlanLine(live.resetAt, from, to, plan),
       });
     }
     return [...seen.values()];

@@ -17,7 +17,7 @@ type Outlook = {text: string; tone: string; title: string};
  * end of their plan (everything should be spent by then); other windows against their
  * reset.
  */
-function outlook(line: Line, live: Win | undefined, measuredAt: number | null, now: number, weekly: WeeklyPlan): Outlook {
+function outlook(line: Line, live: Win | undefined, measuredAt: number | null, now: number, weekly: WeeklyPlan | null): Outlook {
   const none = {text: '—', tone: '', title: ''};
   const plan = live ? planAt(live, measuredAt, now, weekly) : null;
   if (live && live.remaining <= 0) return {text: t('forecast.usedUp'), tone: 'v-crit', title: ''};

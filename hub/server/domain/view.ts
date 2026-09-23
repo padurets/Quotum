@@ -3,7 +3,8 @@ import {isValidPlan} from './plan.js';
 /**
  * How a board is arranged: the order of its widgets (a card per source, the history
  * chart and the table), how wide each is, the names given to cards, the hidden widgets,
- * the windows hidden inside cards, and the weekly spending plan per source. The owner
+ * the windows hidden inside cards, the weekly spending plan per source (or none) and the
+ * colours given to cards. The owner
  * arranges it and everyone on the board sees it this way. Nothing here changes what is
  * measured or stored.
  */
@@ -18,9 +19,13 @@ export type View = {
   /** `<source id>/<window id>` of windows hidden from cards and the chart. */
   windows: string[];
   plans: Record<string, number[]>;
+  /** Source ids whose plan is switched off on this board. */
+  unplanned: string[];
+  /** Colours given to cards, by source id, instead of the provider's. */
+  colors: Record<string, string>;
 };
 
-export const EMPTY_VIEW: View = {order: [], sizes: {}, names: {}, hidden: [], windows: [], plans: {}};
+export const EMPTY_VIEW: View = {order: [], sizes: {}, names: {}, hidden: [], windows: [], plans: {}, unplanned: [], colors: {}};
 
 /** The grid has twelve columns; a widget spans a third of it at least. */
 export const COLUMNS = 12;
@@ -44,6 +49,7 @@ function byId<T>(value: unknown, valid: (entry: unknown) => entry is T): Record<
 // A width narrower than the least a widget has now (saved by an earlier version) is taken as that least.
 const isSpan = (value: unknown): value is number => Number.isInteger(value) && (value as number) >= 1 && (value as number) <= COLUMNS;
 const isName = (value: unknown): value is string => typeof value === 'string' && value.trim() === value && value.length > 0 && value.length <= LIMITS.name;
+const isColor = (value: unknown): value is string => typeof value === 'string' && /^#[0-9a-f]{6}$/.test(value);
 
 /** A view as a page sent it, or null when anything in it is off. */
 export function parseView(body: unknown): View | null {
@@ -55,7 +61,9 @@ export function parseView(body: unknown): View | null {
   const sizes = byId(input.sizes, isSpan);
   const names = byId(input.names, isName);
   const plans = byId(input.plans, isValidPlan);
-  if (!order || !hidden || !windows || !sizes || !names || !plans) return null;
+  const unplanned = ids(input.unplanned ?? [], LIMITS.widgets);
+  const colors = byId(input.colors, isColor);
+  if (!order || !hidden || !windows || !sizes || !names || !plans || !unplanned || !colors) return null;
   const spans = Object.fromEntries(Object.entries(sizes).map(([id, span]) => [id, Math.max(MIN_SPAN, span)]));
-  return {order, sizes: spans, names, hidden, windows, plans};
+  return {order, sizes: spans, names, hidden, windows, plans, unplanned, colors};
 }

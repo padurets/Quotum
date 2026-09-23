@@ -168,7 +168,9 @@ them), kept for 90 days.
 - **The plan** is per source and belongs to the board's view: whole percents per day of the
   weekly window (30/25/15/15/10/5/0 by default). A day at 0 has no spending planned,
   wherever it is; the plan ends with its last non-zero day. Other windows are planned
-  linearly to their reset.
+  linearly to their reset. The board's owner can switch a source's plan off: then none
+  of its windows is planned on that board. The chart draws the plan of the current week
+  only.
 - **Events** mark the chart behind now. An early reset is derived from the samples: a
   window's used share drops by more than 5 points before its reset time (resets of one
   source within 15 minutes are one event). Free resets granted are recorded when a
@@ -212,8 +214,9 @@ them), kept for 90 days.
   more (its last holder left or was removed). Deleting a board deletes its sharing and
   its view, never the measurements.
 - **The view** of a board is how it is arranged: the order of its widgets (a card per
-  source, the chart and the table), their widths on a twelve-column grid, names given
-  to cards, the hidden widgets, the windows hidden inside cards and the spending plans.
+  source, the chart and the table), their widths on a twelve-column grid, names and
+  colours given to cards, the hidden widgets, the windows hidden inside cards and the
+  spending plans, or that a card has none.
   It is stored once per board, like a dashboard in Grafana: the owner arranges it and
   names the cards the way the team calls them, and everyone sees the same board. Nothing
   in the view changes what is measured or stored.
