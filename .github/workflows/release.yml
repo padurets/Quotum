@@ -1,13 +1,16 @@
 name: Release
 
-# A version tag (`git tag -a v0.2.0`) releases everything from one commit:
+# An annotated version tag (`git tag -a v0.2.0`) releases everything from one commit:
 #   - the agent's binaries on a GitHub release, with checksums and build provenance;
-#   - the npm packages `quotum` and `@quotum/<platform>`, published by this workflow
-#     itself: npm trusts it (trusted publishing), so no token is stored anywhere;
-#   - the hub's image ghcr.io/<owner>/quotum-hub for linux/amd64 and linux/arm64.
-# The tag's message becomes the release notes. The release is created last, only when
-# everything else went through; a failed job can be re-run, anything already published
+#   - the hub's image ghcr.io/<owner>/quotum-hub for linux/amd64 and linux/arm64;
+#   - the npm packages `quotum` and `@quotum/<platform>`, published without any token:
+#     npm trusts this workflow's `npm` job (trusted publishing, bound to the `npm`
+#     environment), and only that job can publish.
+# The tag's message becomes the release notes. npm goes after the image, since an npm
+# version can never be published twice; the GitHub release comes last, only when
+# everything else went through. A failed job can be re-run: what is already published
 # is skipped. Run by hand, the workflow builds and checks it all and publishes nothing.
+# Third-party actions are pinned by commit.
 on:
   push:
     tags: ['v*']
@@ -32,15 +35,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - id: version
-        name: One version everywhere
+        name: One version everywhere, on an annotated tag
         run: |
           agent=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' agent/Cargo.toml)
+          lock=$(awk '/^name = "quotum"$/ {getline; gsub(/version = |"/, ""); print}' agent/Cargo.lock)
           hub=$(node -p "require('./hub/package.json').version")
-          if [ "$agent" != "$hub" ]; then
-            echo "::error::agent/Cargo.toml has $agent, hub/package.json has $hub"; exit 1
-          fi
-          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$agent" ]; then
-            echo "::error::the tag $GITHUB_REF_NAME is not v$agent"; exit 1
+          hublock=$(node -p "require('./hub/package-lock.json').version")
+          for other in "$lock" "$hub" "$hublock"; do
+            if [ "$other" != "$agent" ]; then
+              echo "::error::versions differ: agent/Cargo.toml $agent, agent/Cargo.lock $lock, hub/package.json $hub, hub/package-lock.json $hublock"; exit 1
+            fi
+          done
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            if [ "$GITHUB_REF_NAME" != "v$agent" ]; then echo "::error::the tag $GITHUB_REF_NAME is not v$agent"; exit 1; fi
+            # A lightweight tag would put the last commit's message into the release notes.
+            if [ "$(git cat-file -t "$GITHUB_REF")" != tag ]; then echo "::error::$GITHUB_REF_NAME is a lightweight tag; use git tag -a"; exit 1; fi
           fi
           echo "version=$agent" >> "$GITHUB_OUTPUT"
 
@@ -55,16 +64,17 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
+          toolchain: stable
           targets: x86_64-unknown-linux-musl, aarch64-unknown-linux-musl, x86_64-apple-darwin, aarch64-apple-darwin, x86_64-pc-windows-gnu
-      - uses: mlugg/setup-zig@v2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: 0.14.1
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@dfae9bf3d6f6c6f20ef4ebb3486c01a51341ff12 # v2.87.18
         with:
           tool: cargo-zigbuild
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: agent
       - run: node npm/build.mjs
@@ -99,11 +109,13 @@ jobs:
           path: npm-dist.tgz
 
   npm:
-    needs: agent
+    needs: [agent, image]
     runs-on: ubuntu-latest
+    # npm trusts this environment alone (npm/trust.mjs), not the whole workflow.
+    environment: npm
     permissions:
       contents: read
-      id-token: write # the registry checks this workflow's identity instead of a token
+      id-token: write # the registry checks this job's identity instead of a token
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -138,6 +150,15 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+          labels: |
+            org.opencontainers.image.title=Quotum hub
+            org.opencontainers.image.description=The dashboard of coding-agent subscription limits: agents on your machines push measurements, the hub keeps and shows them.
+          annotations: |
+            org.opencontainers.image.title=Quotum hub
+            org.opencontainers.image.description=The dashboard of coding-agent subscription limits: agents on your machines push measurements, the hub keeps and shows them.
+        env:
+          # A multi-arch image shows its description on GHCR from the index.
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
       - uses: docker/build-push-action@v7
         with:
           context: hub
@@ -145,6 +166,7 @@ jobs:
           push: ${{ env.PUBLISH == 'true' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
