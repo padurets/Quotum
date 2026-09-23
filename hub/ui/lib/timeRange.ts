@@ -4,32 +4,43 @@ import {clock, shortDay} from './format';
 /** A period selected on the chart, in milliseconds. */
 export type TimeRange = {from: number; to: number};
 
-/** The shortest period the hub reads (config.history.minSpanMs). */
+/** The shortest and longest periods the hub reads (config.history.minSpanMs, maxSpanMs). */
 export const MIN_TIME_RANGE = 15 * 60_000;
+const MAX_TIME_RANGE = 31 * 86_400_000;
 const DAY = 86_400_000;
 
 /**
- * The selection lives in the address (`?from=…&to=…`): a reload keeps it, and a link to
- * a burst of work can be shared with the others on the board. Back undoes a selection.
+ * The selection lives in the address (`?from=…&to=…`, with the board it was selected on):
+ * a reload keeps it, a link to a burst of work can be shared with the others on the
+ * board, and Back undoes a selection.
  */
-function read(): TimeRange | null {
-  const params = new URLSearchParams(location.search);
-  const from = Number(params.get('from'));
-  const to = Number(params.get('to'));
-  return Number.isSafeInteger(from) && Number.isSafeInteger(to) && from > 0 && to - from >= MIN_TIME_RANGE ? {from, to} : null;
+export function parseTimeRange(search: string, now: number): TimeRange | null {
+  const params = new URLSearchParams(search);
+  const [from, to] = [params.get('from'), params.get('to')].map(value => (value && /^\d{1,15}$/.test(value) ? Number(value) : NaN));
+  const end = Math.min(to, now);
+  return end - from >= MIN_TIME_RANGE && to - from <= MAX_TIME_RANGE ? {from, to} : null;
 }
 
 // Tests import the helpers below without a page.
 const page = typeof location !== 'undefined';
-let current = page ? read() : null;
+let current = page ? parseTimeRange(location.search, Date.now()) : null;
 let search = page ? location.search : '';
+let board = '';
 const listeners = new Set<() => void>();
 
 function changed() {
   if (location.search === search) return;
   search = location.search;
-  current = read();
+  current = parseTimeRange(search, Date.now());
   for (const listener of listeners) listener();
+}
+
+function go(params: URLSearchParams, push: boolean) {
+  const query = params.toString();
+  const url = `${location.pathname}${query ? `?${query}` : ''}${location.hash}`;
+  if (push) history.pushState(null, '', url);
+  else history.replaceState(null, '', url);
+  changed();
 }
 
 export function setTimeRange(selected: TimeRange | null) {
@@ -37,20 +48,44 @@ export function setTimeRange(selected: TimeRange | null) {
   if (selected) {
     params.set('from', String(selected.from));
     params.set('to', String(selected.to));
+    if (board) params.set('board', board);
   } else {
     params.delete('from');
     params.delete('to');
   }
-  const query = params.toString();
-  history.pushState(null, '', `${location.pathname}${query ? `?${query}` : ''}${location.hash}`);
-  changed();
+  go(params, true);
+}
+
+/** Forgets a selection the hub will not read (older than it keeps history), without a step back to it. */
+export function dropTimeRange() {
+  const params = new URLSearchParams(location.search);
+  params.delete('from');
+  params.delete('to');
+  go(params, false);
+}
+
+/**
+ * The board on screen. A selected range is shared together with it, and an address that
+ * names a board follows another one chosen, so a reload does not go back to the first.
+ */
+export function showBoard(id: string) {
+  board = id;
+  const params = new URLSearchParams(location.search);
+  if (id && params.has('board') && params.get('board') !== id) {
+    params.set('board', id);
+    go(params, false);
+  }
 }
 
 export function useTimeRange(): TimeRange | null {
   return useSyncExternalStore(
     listener => {
       listeners.add(listener);
-      if (listeners.size === 1) window.addEventListener('popstate', changed);
+      if (listeners.size === 1) {
+        window.addEventListener('popstate', changed);
+        // The address may have changed while nothing was listening.
+        changed();
+      }
       return () => {
         listeners.delete(listener);
         if (!listeners.size) window.removeEventListener('popstate', changed);

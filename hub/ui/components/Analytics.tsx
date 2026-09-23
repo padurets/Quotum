@@ -1,3 +1,4 @@
+import {useRef} from 'react';
 import type {Kind} from '../lib/types';
 import {setPrefs, usePrefs} from '../lib/prefs';
 import {setTimeRange, timeRangeLabel, useTimeRange} from '../lib/timeRange';
@@ -28,19 +29,31 @@ const PERIODS = ['24h', '7d', '30d'];
  */
 function PeriodSwitch({value, onChange}: {value: string; onChange: (range: string) => void}) {
   const selected = useTimeRange();
+  const group = useRef<HTMLDivElement>(null);
   const choose = (range: string) => {
     if (selected) setTimeRange(null);
     onChange(range);
   };
+  // The cleared range's button goes away: focus moves to the period that comes back.
+  const clear = () => {
+    setTimeRange(null);
+    requestAnimationFrame(() => group.current?.querySelector<HTMLButtonElement>('[aria-pressed=true]')?.focus());
+  };
   return (
-    <div className="segmented" role="group" aria-label={t('history.range')}>
+    <div className="segmented" role="group" aria-label={t('history.range')} ref={group}>
       {PERIODS.map(range => (
         <button key={range} type="button" aria-pressed={!selected && range === value} onClick={() => choose(range)}>
           {range === '24h' ? t('history.hours', {count: 24}) : t('history.days', {count: parseInt(range)})}
         </button>
       ))}
       {selected && (
-        <button type="button" className="segmented-range" aria-pressed="true" title={t('history.rangeClear')} onClick={() => setTimeRange(null)}>
+        <button
+          type="button"
+          className="segmented-range is-on"
+          aria-label={`${timeRangeLabel(selected)}. ${t('history.rangeClear')}`}
+          title={t('history.rangeClear')}
+          onClick={clear}
+        >
           {timeRangeLabel(selected)}
           <svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true">
             <path d="M4 4l8 8M12 4l-8 8" />

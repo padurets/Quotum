@@ -5,7 +5,7 @@ import '@fontsource-variable/geist-mono';
 import './style.css';
 import {useHistory, useNow, useOverview} from './lib/api';
 import {setPrefs, usePrefs} from './lib/prefs';
-import {useTimeRange} from './lib/timeRange';
+import {showBoard, useTimeRange} from './lib/timeRange';
 import {useResets} from './lib/resets';
 import {sourceLabel, titled} from './lib/quota';
 import {usePath} from './lib/router';
@@ -54,6 +54,7 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
   useEffect(() => {
     document.title = board?.name ? `${boardTitle(board)} · ${SERVICE}` : SERVICE;
   }, [board]);
+  useEffect(() => showBoard(boardId), [boardId]);
 
   // Every widget of the board in its order: a card per source, the chart and the table.
   const cards = new Map<string, Widget>(

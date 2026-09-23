@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {linesOf} from '../lib/lines';
+import {linesOf, valueIn} from '../lib/lines';
 import type {History, HistorySeries, Overview, SourceState, View} from '../lib/types';
 
 const view: View = {order: [], sizes: {}, names: {}, hidden: [], windows: [], plans: {}, unplanned: [], colors: {}};
@@ -16,4 +16,18 @@ test('the chart and the table show only what the cards show', () => {
   assert.deepEqual(linesOf(history, overview, {...view, windows: ['codex:1/weekly']}, 'weekly'), [], 'nor one hidden on the board');
   assert.deepEqual(linesOf(history, overview, {...view, hidden: ['source:codex:1']}, 'weekly'), [], 'nor any of a hidden card');
   assert.deepEqual(linesOf(history, null, view, 'weekly'), [], 'nothing before the board is known');
+});
+
+test('a line reads its last value in cells without a measurement of their own, until it breaks', () => {
+  const points: [number, number, number][] = [
+    [0, 90, 0],
+    [120_000, 88, 0],
+    [600_000, 80, 1],
+  ];
+  assert.equal(valueIn(points, 120_000, 1_000_000), 88, 'its own');
+  assert.equal(valueIn(points, 60_000, 1_000_000), 90, 'held from the cell before');
+  assert.equal(valueIn(points, 300_000, 1_000_000), undefined, 'a break in the line');
+  assert.equal(valueIn(points, 900_000, 1_000_000), 80, 'the latest, up to now');
+  assert.equal(valueIn(points, 1_200_000, 1_000_000), undefined, 'nothing ahead of now');
+  assert.equal(valueIn(points, -60_000, 1_000_000), undefined);
 });

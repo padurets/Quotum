@@ -165,9 +165,11 @@ them), kept for 90 days.
 - **The chart** puts every series on one time grid (5 minutes for a day, 30 minutes
   for a week, 2 hours for a month) and shows the lowest value seen in each cell, so
   hovering reads every series at once and a short hiccup doesn't break a line. A time
-  range dragged across the chart gets the finest cell that keeps it within 360 cells
-  (a minute for an hour, as dense as the fixed periods for longer ones), at least 15
-  minutes of it. The range is in the past, so the table reads it from its edges: what
+  range dragged across the chart, from 15 minutes to a month, gets the finest cell that
+  keeps it within 360 cells (a minute for an hour, as dense as the fixed periods for
+  longer ones); where measurements come less often than cells, hovering reads the last
+  value before. Putting a month together takes a busy board a good part of a second, so
+  such an answer is reused for a quarter of its cell after the data changed. The range is in the past, so the table reads it from its edges: what
   was left at its first and last measurement, what it spent and how fast.
 - **The plan** is per source and belongs to the board's view: whole percents per day of the
   weekly window (30/25/15/15/10/5/0 by default). A day at 0 has no spending planned,

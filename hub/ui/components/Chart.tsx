@@ -1,7 +1,7 @@
 import {useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent} from 'react';
 import {clock, duration, num, shortDay} from '../lib/format';
 import {t} from '../i18n';
-import type {Line} from '../lib/lines';
+import {valueIn, type Line} from '../lib/lines';
 import {draggedRange, type TimeRange} from '../lib/timeRange';
 
 /**
@@ -9,6 +9,9 @@ import {draggedRange, type TimeRange} from '../lib/timeRange';
  * behind (`past`), something that happened to a source, such as an early reset.
  */
 export type Marker = {key: string; at: number; label: string; color: string; strong?: boolean; past?: boolean; detail?: string};
+
+/** How long a finger rests on the chart before it starts a range. */
+const HOLD_MS = 450;
 
 /** The mark of a past event: a small diamond centred at (x, y). */
 const diamond = (x: number, y: number, r = 4) => `M${x},${y - r}l${r},${r}l${-r},${r}l${-r},${-r}z`;
@@ -80,6 +83,9 @@ export function Chart({
   const [hover, setHover] = useState<number | null>(null);
   /** Where a drag across the chart started and where it is now, in chart pixels. */
   const [drag, setDrag] = useState<{start: number; end: number} | null>(null);
+  /** A finger held on the chart, before it starts a range. */
+  const holding = useRef<{px: number; timer: ReturnType<typeof setTimeout>} | null>(null);
+  useEffect(() => () => cancelHold(), []);
 
   useEffect(() => {
     if (!box.current) return;
@@ -126,12 +132,11 @@ export function Chart({
     [lines, from, span, width, height, cellMs],
   );
 
-  const byBucket = useMemo(() => lines.map(line => new Map(line.points.map(([at, value]) => [at, value]))), [lines]);
   const readout =
     hover === null
       ? []
-      : lines.flatMap((line, i) => {
-          const value = byBucket[i].get(hover);
+      : lines.flatMap(line => {
+          const value = valueIn(line.points, hover, now);
           return value === undefined ? [] : [{line, value}];
         });
   const markerReadout = hover === null ? [] : markers.filter(m => m.at >= hover && m.at < hover + cellMs);
@@ -150,18 +155,36 @@ export function Chart({
   const timeAt = (px: number) => from + ((px - left) / (width - left - right)) * span;
   const move = (event: PointerEvent<SVGSVGElement>) => {
     const px = toChart(event);
+    const held = holding.current;
+    // A finger that moves before the hold is up reads values instead.
+    if (held && Math.abs(px - held.px) > 8) cancelHold();
     if (drag) setDrag({...drag, end: Math.min(width - right, Math.max(left, px))});
     if (px < left || px > width - right) return setHover(null);
     setHover(Math.floor(timeAt(px) / cellMs) * cellMs);
   };
+  const cancelHold = () => {
+    if (holding.current) clearTimeout(holding.current.timer);
+    holding.current = null;
+  };
+  // A mouse or a pen drags a range at once. A finger sliding along the chart reads its
+  // values, as it always did; holding it still for a moment starts a range instead.
   const press = (event: PointerEvent<SVGSVGElement>) => {
     const px = toChart(event);
     if (!onSelect || event.button !== 0 || px < left || px > width - right) return;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    setDrag({start: px, end: px});
+    const svg = event.currentTarget;
+    const {pointerId} = event;
+    const start = () => {
+      holding.current = null;
+      svg.setPointerCapture(pointerId);
+      setDrag({start: px, end: px});
+    };
+    if (event.pointerType !== 'touch') return start();
+    cancelHold();
+    holding.current = {px, timer: setTimeout(start, HOLD_MS)};
   };
   // A drag of a few pixels is a click.
   const release = () => {
+    cancelHold();
     if (!drag || !onSelect) return;
     setDrag(null);
     const range = Math.abs(drag.end - drag.start) >= 6 ? draggedRange(timeAt(drag.start), timeAt(drag.end), now) : null;
@@ -189,7 +212,12 @@ export function Chart({
         onPointerLeave={() => setHover(null)}
         onPointerDown={press}
         onPointerUp={release}
-        onPointerCancel={() => setDrag(null)}
+        onPointerCancel={() => {
+          cancelHold();
+          setDrag(null);
+        }}
+        // A held finger starts a range, not the page's menu.
+        onContextMenu={event => (holding.current || drag) && event.preventDefault()}
       >
         {to > now && (
           <g className="future">

@@ -1,7 +1,7 @@
 import {useEffect, useRef, useState} from 'react';
 import type {History, Overview} from './types';
 import {ApiError, call} from './http';
-import {timeRangeKey, type TimeRange} from './timeRange';
+import {dropTimeRange, timeRangeKey, type TimeRange} from './timeRange';
 
 /** A clock ticking every second, for freshness labels and countdowns. */
 export function useNow() {
@@ -96,8 +96,12 @@ export function useHistory(board: string, period: string | TimeRange, revision: 
       .then(data => {
         if (!cancelled) setHistory({...data, board});
       })
-      .catch(() => {
-        if (!cancelled) timer = setTimeout(() => setRetry(n => n + 1), 15000);
+      .catch(error => {
+        if (cancelled) return;
+        // A selected range the hub will not read (say, a link older than the history it keeps)
+        // cannot succeed later: the chosen period comes back instead.
+        if (selected && error instanceof ApiError && error.status === 400) return dropTimeRange();
+        timer = setTimeout(() => setRetry(n => n + 1), 15000);
       });
     return () => {
       cancelled = true;

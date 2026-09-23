@@ -97,7 +97,7 @@ Antigravity   Gemini 5 hours       100%  in 4h 59m
 - **A chart of the weekly or the 5-hour windows** over 24 hours, 7 or 30 days. Ahead of
   now it draws the plan and the next resets, as far as you choose; behind, it marks
   when limits came back early and when free resets were granted. Drag across it to
-  zoom into a burst of work.
+  zoom into a burst of work (on a phone, hold a finger on it first).
 - **A table with a forecast:** what the period spent and, at that pace, whether the
   window runs out before its reset (or before your plan ends) and roughly how much
   will be left. Over a range dragged on the chart it shows what that range cost: what
