@@ -253,5 +253,8 @@ no name of their own, so each reader sees "My limits" in their language.
 5. A team view on shared boards: people × providers.
 6. ~~Distribution through npm: `npx quotum`, a launcher with a prebuilt binary per
    platform (npm/build.mjs cross-compiles them all on one Linux machine).~~
-   Next: `curl … | sh` and PowerShell installers, autostart registration.
+   ~~Installers (`curl … | sh`, PowerShell) and `quotum update`: each release also has a
+   bare binary per platform, which they fetch and check against `SHA256SUMS`; the
+   latest version is read from where `releases/latest` redirects, one request with no
+   API behind it.~~ Next: autostart registration.
 7. The desktop app (Tauri): tray, settings, local dashboard.

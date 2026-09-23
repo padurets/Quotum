@@ -146,10 +146,10 @@ Antigravity   Gemini 5 hours       100%  in 4h 59m
 
 ## Статус
 
-Работает: я пользуюсь им каждый день. Агент опубликован в npm как `quotum`, с готовыми
-бинарниками для Linux (x64 и arm64, любой дистрибутив), macOS и Windows; хаб — это
-Docker-образ (`ghcr.io/padurets/quotum-hub`, amd64 и arm64). Дальше — установщики,
-автозапуск и десктопное приложение ([планы](#планы)).
+Работает: я пользуюсь им каждый день. Агент ставится одной командой или запускается
+через npm как `quotum`, с готовыми бинарниками для Linux (x64 и arm64, любой
+дистрибутив), macOS и Windows; хаб — это Docker-образ (`ghcr.io/padurets/quotum-hub`,
+amd64 и arm64). Дальше — автозапуск и десктопное приложение ([планы](#планы)).
 
 - Клиенты: Claude Code, Codex CLI, Antigravity CLI (`agy` 1.1.11 или новее).
 - Платформы: сам я запускаю на Linux. Бинарники для macOS и Windows собраны
@@ -173,17 +173,26 @@ docker logs quotum            # покажет код установки для 
 Без Docker: склонируйте репозиторий, затем `cd hub && npm ci && npm run build && npm start` (Node.js 24 или новее) —
 хаб слушает `127.0.0.1:8080` и печатает код установки в терминал.
 
-**2. Посмотрите лимиты этой машины** (для `npx` нужен Node.js 18 или новее).
+**2. Поставьте агент и посмотрите лимиты этой машины.**
 
 ```sh
-npx quotum
+curl -fsSL https://github.com/padurets/quotum/releases/latest/download/install.sh | sh    # Linux, macOS
+irm https://github.com/padurets/quotum/releases/latest/download/install.ps1 | iex         # Windows (PowerShell)
+quotum
 ```
+
+Установщик кладёт `quotum` в `~/.local/bin` (в Windows — в
+`%LOCALAPPDATA%\Programs\quotum` и добавляет его в PATH), сверив с контрольными суммами
+релиза; `QUOTUM_INSTALL_DIR` и `QUOTUM_VERSION` меняют, куда и какую версию. `quotum update`
+держит его свежим: когда нового нет, это один маленький запрос, так что dev-окружение
+может запускать его при каждом старте. С Node.js 18 или новее `npx quotum` работает без
+установки, а обновляет его npm.
 
 **3. Подключите машину к хабу и оставьте её мерить.**
 
 ```sh
-npx quotum connect http://127.0.0.1:8080
-npx quotum start
+quotum connect http://127.0.0.1:8080
+quotum start
 ```
 
 `connect` покажет код: подтвердите его в браузере, и машина станет вашей; то, что она
@@ -191,14 +200,22 @@ npx quotum start
 в каталоге состояния; `quotum` покажет, работает ли агент, а `quotum stop` остановит
 его. После перезагрузки машины он сам не поднимется: для этого пусть система запускает
 `quotum run` — то же самое на переднем плане (пользовательский сервис systemd, launchd,
-автозапуск Windows). После `npm install -g quotum` команда называется просто `quotum`.
+автозапуск Windows). С npx ставьте `npx` перед каждой командой.
 
 **Много машин сразу** (образы, виртуалки, контейнеры): создайте токен машин в дашборде
 (*Мои машины → Подключить*) и запускайте с ним каждую машину — она сама подключится как
 ваша:
 
 ```sh
-QUOTUM_HUB_URL=https://quotum.example.com QUOTUM_HUB_TOKEN=qt_m_… npx quotum run
+QUOTUM_HUB_URL=https://quotum.example.com QUOTUM_HUB_TOKEN=qt_m_… quotum run
+```
+
+В dev-окружении, которое часто стартует (Coder, Codespaces, devcontainer), скрипт старта
+может обновить агент и запустить его в фоне:
+
+```sh
+quotum update || true         # быстро, когда нового нет; без сети сдаётся за секунды
+QUOTUM_HUB_URL=https://quotum.example.com QUOTUM_HUB_TOKEN=qt_m_… quotum start
 ```
 
 Токен машин принадлежит одному человеку: каждый в команде создаёт свой. Имена машинам
@@ -208,8 +225,10 @@ QUOTUM_HUB_URL=https://quotum.example.com QUOTUM_HUB_TOKEN=qt_m_… npx quotum r
 поделитесь с ней своими подписками (*Люди и подписки → Подписки*). Убрать свою подписку
 можно в любой момент; владелец доски может убрать с неё любую карточку.
 
-**Без Node.js:** в каждом [релизе](https://github.com/padurets/quotum/releases) есть
-агент для Linux, macOS и Windows одним файлом, с контрольными суммами и
+**Вручную:** в каждом [релизе](https://github.com/padurets/quotum/releases) есть агент для
+Linux, macOS и Windows архивом (`quotum-cli-<версия>-<платформа>`, с лицензиями) и голым
+бинарником (`quotum-cli-<платформа>` — его берут установщики и `quotum update`), с
+контрольными суммами (`SHA256SUMS`) и
 [подтверждением сборки](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations)
 (`gh attestation verify <файл> -R padurets/quotum`). **Из исходников:**
 `cd agent && cargo build --release` (Rust 1.85 или новее) даёт `target/release/quotum`.
@@ -242,7 +261,9 @@ account = "work"        # различает две подписки Antigravity
 Переменные окружения `QUOTUM_HUB_URL`, `QUOTUM_HUB_TOKEN`,
 `QUOTUM_INTERVAL`, `QUOTUM_CONFIG` и `QUOTUM_STATE_DIR` переопределяют файл. Ещё команды:
 `quotum --json` (один замер в формате хаба), `quotum --only codex`,
-`quotum start` / `quotum stop`, `quotum disconnect`.
+`quotum start` / `quotum stop`, `quotum disconnect`, `quotum update` (`--check` только
+скажет, есть ли версия новее; `QUOTUM_RELEASES_URL` направит его на зеркало). Агент,
+работающий в фоне, остаётся на своей версии, пока его не запустят заново.
 
 ### Хаб
 
@@ -328,7 +349,7 @@ npm принимает пакеты только от этого workflow и б�
 ## Планы
 
 1. Командный вид на общих досках: люди × провайдеры на одном экране.
-2. Установщики (`curl … | sh`, PowerShell) и автозапуск.
+2. Автозапуск: пользовательский сервис systemd, launchd, Windows.
 3. Десктопное приложение (Tauri): агент и дашборд в одном окне, иконка в трее, без
    сервера.
 

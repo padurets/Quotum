@@ -146,10 +146,10 @@ day, not a script thrown together over a weekend. In practice that meant:
 
 ## Status
 
-It works: I use it every day. The agent is on npm as `quotum`, with prebuilt binaries
-for Linux (x64 and arm64, any distribution), macOS and Windows; the hub is a Docker image
-(`ghcr.io/padurets/quotum-hub`, amd64 and arm64). Installers, autostart and a desktop app
-are next ([roadmap](#roadmap)).
+It works: I use it every day. The agent installs with one command, or runs through npm
+as `quotum`, with prebuilt binaries for Linux (x64 and arm64, any distribution), macOS
+and Windows; the hub is a Docker image (`ghcr.io/padurets/quotum-hub`, amd64 and arm64).
+Autostart and a desktop app are next ([roadmap](#roadmap)).
 
 - Clients: Claude Code, Codex CLI, Antigravity CLI (`agy` 1.1.11 or newer).
 - Platforms: I run it on Linux. The macOS and Windows binaries are cross-compiled and
@@ -173,17 +173,26 @@ runs the hub behind Caddy, which gets the certificate by itself:
 Without Docker: clone the repository, then `cd hub && npm ci && npm run build && npm start` (Node.js 24 or newer),
 which listens on `127.0.0.1:8080` and prints the setup code to the terminal.
 
-**2. Look at this machine's limits** (Node.js 18 or newer for `npx`).
+**2. Install the agent and look at this machine's limits.**
 
 ```sh
-npx quotum
+curl -fsSL https://github.com/padurets/quotum/releases/latest/download/install.sh | sh    # Linux, macOS
+irm https://github.com/padurets/quotum/releases/latest/download/install.ps1 | iex         # Windows (PowerShell)
+quotum
 ```
+
+The installer puts `quotum` in `~/.local/bin` (on Windows in
+`%LOCALAPPDATA%\Programs\quotum`, added to your PATH), checked against the release's
+checksums; `QUOTUM_INSTALL_DIR` and `QUOTUM_VERSION` change where and what. `quotum update`
+keeps it up to date: with nothing new it is one small request, so a dev environment can
+run it on every start. With Node.js 18 or newer, `npx quotum` works without installing
+anything, and npm keeps it up to date.
 
 **3. Connect the machine to the hub and keep it measuring.**
 
 ```sh
-npx quotum connect http://127.0.0.1:8080
-npx quotum start
+quotum connect http://127.0.0.1:8080
+quotum start
 ```
 
 `connect` shows a code: confirm it in the browser, and the machine is yours; what it
@@ -191,15 +200,22 @@ measures shows on your board. `start` keeps measuring and delivering in the back
 with its log in the state directory; `quotum` shows whether it runs and `quotum stop`
 stops it. It does not come back by itself after a restart of the machine: for that,
 have your system start `quotum run`, the same in the foreground (a systemd user
-service, launchd, Windows autostart). With `npm install -g quotum` the command is just
-`quotum`.
+service, launchd, Windows autostart). With npx, put `npx` before every command.
 
 **Many machines at once** (images, VMs, containers): create a machine token in the
 dashboard (*My machines → Connect*) and start every machine with it. Each one joins as
 yours by itself:
 
 ```sh
-QUOTUM_HUB_URL=https://quotum.example.com QUOTUM_HUB_TOKEN=qt_m_… npx quotum run
+QUOTUM_HUB_URL=https://quotum.example.com QUOTUM_HUB_TOKEN=qt_m_… quotum run
+```
+
+In a dev environment that starts often (Coder, Codespaces, a devcontainer), its start
+script can bring the agent up to date and start it in the background:
+
+```sh
+quotum update || true         # quick when there is nothing new; offline, it gives up in seconds
+QUOTUM_HUB_URL=https://quotum.example.com QUOTUM_HUB_TOKEN=qt_m_… quotum start
 ```
 
 A machine token is one person's: every teammate creates their own. Machines are named
@@ -209,8 +225,10 @@ in *My machines*, so an image doesn't need a name per copy.
 your subscriptions with it (*People and subscriptions → Subscriptions*). You can take
 yours off again at any time; the board's owner can take any card off their board.
 
-**Without Node.js:** every [release](https://github.com/padurets/quotum/releases) has
-the agent for Linux, macOS and Windows as a single file, with checksums and
+**By hand:** every [release](https://github.com/padurets/quotum/releases) has the agent
+for Linux, macOS and Windows as an archive (`quotum-cli-<version>-<platform>`, with the
+licences) and as a bare binary (`quotum-cli-<platform>`, what the installers and
+`quotum update` fetch), with checksums (`SHA256SUMS`) and
 [build provenance](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations)
 (`gh attestation verify <file> -R padurets/quotum`). **From source:**
 `cd agent && cargo build --release` (Rust 1.85 or newer) gives `target/release/quotum`.
@@ -243,7 +261,9 @@ account = "work"        # tells two Antigravity subscriptions apart (agy doesn't
 The environment variables `QUOTUM_HUB_URL`, `QUOTUM_HUB_TOKEN`,
 `QUOTUM_INTERVAL`, `QUOTUM_CONFIG` and `QUOTUM_STATE_DIR` override the file. Other
 commands: `quotum --json` (one measurement in the ingest format), `quotum --only codex`,
-`quotum start` / `quotum stop`, `quotum disconnect`.
+`quotum start` / `quotum stop`, `quotum disconnect`, `quotum update` (`--check` only
+says whether there is a newer release; `QUOTUM_RELEASES_URL` points it at a mirror). An
+agent running in the background keeps its version until it is started again.
 
 ### Hub
 
@@ -328,7 +348,7 @@ language has is there.
 ## Roadmap
 
 1. A team view on shared boards: people × providers at a glance.
-2. Installers (`curl … | sh`, PowerShell) and autostart.
+2. Autostart: a systemd user service, launchd, Windows.
 3. A desktop app (Tauri) with the agent and the dashboard in one window and a tray
    icon, no server needed.
 
