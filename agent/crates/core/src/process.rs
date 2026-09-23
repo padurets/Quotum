@@ -303,6 +303,57 @@ fn lower_priority(command: &mut Command) {
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+/// Takes a process started with `command` out of this terminal's session, so closing the
+/// terminal does not end it (`quotum start`).
+#[cfg(unix)]
+pub fn detach(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    // SAFETY: setsid(2) is async-signal-safe and touches nothing of the parent.
+    unsafe {
+        command.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+}
+
+/// Starts it without a console, in a process group of its own, so closing the window
+/// does not end it.
+#[cfg(windows)]
+pub fn detach(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+}
+
+#[cfg(not(any(unix, windows)))]
+pub fn detach(_: &mut Command) {}
+
+/// Ends a process outright, with whatever it started (`quotum stop`, when asking was not enough).
+#[cfg(unix)]
+pub fn kill(pid: u32) {
+    // SAFETY: plain kill(2) of a process id.
+    unsafe {
+        libc::kill(pid as libc::pid_t, libc::SIGKILL);
+    }
+}
+
+#[cfg(windows)]
+pub fn kill(pid: u32) {
+    use std::os::windows::process::CommandExt;
+    let _ = Command::new("taskkill")
+        .args(["/T", "/F", "/PID", &pid.to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .status();
+}
+
+#[cfg(not(any(unix, windows)))]
+pub fn kill(_: u32) {}
+
 #[cfg(windows)]
 fn lower_priority(command: &mut Command) {
     use std::os::windows::process::CommandExt;

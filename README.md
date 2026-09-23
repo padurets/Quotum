@@ -163,13 +163,16 @@ npx quotum
 
 ```sh
 npx quotum connect http://127.0.0.1:8080
-npx quotum run
+npx quotum start
 ```
 
 `connect` shows a code: confirm it in the browser, and the machine is yours; what it
-measures shows on your board. `run` keeps measuring and delivering, so start it the way you run background programs (a systemd
-user service, launchd, Windows autostart). With `npm install -g quotum` the command is
-just `quotum`.
+measures shows on your board. `start` keeps measuring and delivering in the background,
+with its log in the state directory; `quotum` shows whether it runs and `quotum stop`
+stops it. It does not come back by itself after a restart of the machine: for that,
+have your system start `quotum run`, the same in the foreground (a systemd user
+service, launchd, Windows autostart). With `npm install -g quotum` the command is just
+`quotum`.
 
 **Many machines at once** (images, VMs, containers): create a machine token in the
 dashboard (*My machines → Connect*) and start every machine with it. Each one joins as
@@ -220,7 +223,7 @@ account = "work"        # tells two Antigravity subscriptions apart (agy doesn't
 The environment variables `QUOTUM_HUB_URL`, `QUOTUM_HUB_TOKEN`,
 `QUOTUM_INTERVAL`, `QUOTUM_CONFIG` and `QUOTUM_STATE_DIR` override the file. Other
 commands: `quotum --json` (one measurement in the ingest format), `quotum --only codex`,
-`quotum disconnect`.
+`quotum start` / `quotum stop`, `quotum disconnect`.
 
 ### Hub
 

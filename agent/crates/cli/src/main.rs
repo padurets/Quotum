@@ -1,13 +1,18 @@
 //! `quotum`: the subscription limits of the coding agents on this machine.
 
 use std::collections::BTreeMap;
+use std::fs;
 use std::io::{IsTerminal, Write};
-use std::process::ExitCode;
+use std::path::{Path, PathBuf};
+use std::process::{Command as Process, ExitCode, Stdio};
+use std::sync::OnceLock;
+use std::thread;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use quotum_core::config::{Config, Credentials, Hub, Paths, machine};
 use quotum_core::model::{Batch, ErrorKind, INGEST_VERSION, Kind, Millis, Outcome, Provider, Window, now_ms};
+use quotum_core::process::{detach, kill};
 use quotum_core::providers::{adapter, find_client};
 use quotum_core::runner::{Event, Runner};
 use quotum_core::sink::{self, Discard, HubSink, Sink, not_the_hub};
@@ -43,7 +48,22 @@ enum Command {
         /// machine can read it in the process list: prefer QUOTUM_HUB_TOKEN or the config file.
         #[arg(long)]
         token: Option<String>,
+        /// Write the log to this file instead of stderr (`quotum start` does).
+        #[arg(long, hide = true)]
+        log: Option<PathBuf>,
     },
+    /// Run in the background, as `run` does, with the log in a file; `quotum stop` stops it.
+    Start {
+        /// Hub address, instead of the settings or `connect`.
+        #[arg(long)]
+        hub: Option<String>,
+        /// Your machine token (qt_m_…) or a device token for that hub; handed over to the
+        /// background agent privately, not in its command line.
+        #[arg(long)]
+        token: Option<String>,
+    },
+    /// Stop the agent running on this machine, in the background or not.
+    Stop,
     /// Connect this machine to your account on a hub with a one-time code confirmed in the browser.
     Connect {
         /// The hub's address, e.g. https://quotum.example.com
@@ -80,7 +100,10 @@ fn main() -> ExitCode {
     }
     match cli.command.unwrap_or(Command::Status) {
         Command::Status => status(config, paths, &only, cli.json),
-        Command::Run { hub, token } => {
+        Command::Run { hub, token, log: file } => {
+            if let Some(file) = file {
+                let _ = LOG_FILE.set(file);
+            }
             let mut config = config;
             match (hub, token) {
                 (Some(url), Some(token)) => {
@@ -93,6 +116,8 @@ fn main() -> ExitCode {
             }
             run(config, paths, &only)
         }
+        Command::Start { hub, token } => start(&config, &paths, &cli.only, hub, token),
+        Command::Stop => stop_running(&paths),
         Command::Connect { url } => connect(&config, &paths, &url),
         Command::Disconnect => {
             println!("{}", if Credentials::remove(&paths) { "disconnected" } else { "not connected" });
@@ -107,14 +132,131 @@ fn fail(message: &str) -> ExitCode {
     ExitCode::FAILURE
 }
 
-/// A line of the agent's log: UTC time, then the message, on stderr.
+/// The file the log goes to instead of stderr, for an agent started in the background.
+static LOG_FILE: OnceLock<PathBuf> = OnceLock::new();
+/// A log file this large is moved to `<name>.1` (replacing the one before) and started anew.
+const LOG_LIMIT: u64 = 1 << 20;
+
+/// A line of the agent's log: UTC time, then the message, on stderr or in the log file.
 fn log(line: &str) {
-    eprintln!("{} {line}", clock(now_ms()));
+    let line = format!("{} {line}", clock(now_ms()));
+    let Some(file) = LOG_FILE.get() else {
+        eprintln!("{line}");
+        return;
+    };
+    if fs::metadata(file).is_ok_and(|m| m.len() > LOG_LIMIT) {
+        let _ = fs::rename(file, file.with_extension("log.1"));
+    }
+    let written = fs::OpenOptions::new().create(true).append(true).open(file).and_then(|mut f| writeln!(f, "{line}"));
+    if written.is_err() {
+        eprintln!("{line}");
+    }
+}
+
+/// `quotum start`: `quotum run` as a process of its own, detached from this terminal, with
+/// its log in the state directory. It is started once it holds the state directory.
+fn start(config: &Config, paths: &Paths, only: &[String], hub: Option<String>, token: Option<String>) -> ExitCode {
+    if let Some(pid) = paths.running() {
+        return fail(&format!("the agent runs already{}; `quotum stop` stops it", pid_text(pid)));
+    }
+    let target = match (&hub, &token) {
+        (Some(url), Some(_)) => Some(url.clone()),
+        (None, None) => config.hub_or_connected(paths).map(|hub| hub.url),
+        _ => return fail("--hub and --token go together"),
+    };
+    let log_file = paths.log_file();
+    let program = match std::env::current_exe() {
+        Ok(program) => program,
+        Err(e) => return fail(&format!("cannot find this program to start it again: {e}")),
+    };
+    // What the agent prints before its log is set up (or when it dies) goes to the log too.
+    let errors = match fs::OpenOptions::new().create(true).append(true).open(&log_file) {
+        Ok(file) => file,
+        Err(e) => return fail(&format!("{}: {e}", log_file.display())),
+    };
+    let mut command = Process::new(program);
+    command.arg("run").arg("--log").arg(&log_file).stdin(Stdio::null()).stdout(Stdio::null()).stderr(errors);
+    if !only.is_empty() {
+        command.arg("--only").arg(only.join(","));
+    }
+    if let (Some(url), Some(token)) = (hub, token) {
+        command.env("QUOTUM_HUB_URL", url).env("QUOTUM_HUB_TOKEN", token);
+    }
+    detach(&mut command);
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(e) => return fail(&format!("could not start the agent: {e}")),
+    };
+    // Started once it holds the state directory; stopped at once, it says why in its log.
+    for _ in 0..50 {
+        thread::sleep(Duration::from_millis(100));
+        if let Ok(Some(status)) = child.try_wait() {
+            return fail(&format!(
+                "the agent stopped at once ({status}); the end of its log, {}:\n{}",
+                log_file.display(),
+                tail(&log_file, 5)
+            ));
+        }
+        if paths.running() == Some(Some(child.id())) {
+            break;
+        }
+    }
+    let delivering = target.map_or_else(|| "measuring without a hub".to_string(), |url| format!("delivering to {url}"));
+    println!("Quotum runs in the background (pid {}), {delivering}.", child.id());
+    println!("Log: {}", log_file.display());
+    println!("`quotum stop` stops it. It does not start again by itself after a restart of the machine.");
+    ExitCode::SUCCESS
+}
+
+/// `quotum stop`: asks the agent on this state directory to stop, as Ctrl-C would, and
+/// ends it outright if it has not stopped after a while.
+fn stop_running(paths: &Paths) -> ExitCode {
+    let Some(pid) = paths.running() else {
+        println!("The agent is not running.");
+        return ExitCode::SUCCESS;
+    };
+    if let Err(e) = fs::write(paths.stop_file(), "") {
+        return fail(&format!("{}: {e}", paths.stop_file().display()));
+    }
+    let stopped = |seconds: u64| {
+        (0..seconds * 10).any(|_| {
+            thread::sleep(Duration::from_millis(100));
+            paths.running().is_none()
+        })
+    };
+    if stopped(15) {
+        println!("Stopped{}.", pid_text(pid));
+        return ExitCode::SUCCESS;
+    }
+    let Some(pid) = pid else {
+        return fail("the agent did not stop within 15 s, and it did not say which process it is");
+    };
+    kill(pid);
+    let _ = fs::remove_file(paths.stop_file());
+    if stopped(5) {
+        println!("Stopped (pid {pid}): it did not stop within 15 s, so it was ended outright.");
+        ExitCode::SUCCESS
+    } else {
+        fail(&format!("the agent (pid {pid}) does not stop"))
+    }
+}
+
+fn pid_text(pid: Option<u32>) -> String {
+    pid.map(|pid| format!(" (pid {pid})")).unwrap_or_default()
+}
+
+/// The last `lines` lines of a file.
+fn tail(file: &Path, lines: usize) -> String {
+    let text = fs::read_to_string(file).unwrap_or_default();
+    let all: Vec<&str> = text.lines().collect();
+    all[all.len().saturating_sub(lines)..].join("\n")
 }
 
 fn status(config: Config, paths: Paths, only: &[Provider], json: bool) -> ExitCode {
     let machine = json.then(|| machine(&paths, &config));
     let connected = Credentials::load(&paths).filter(|_| config.hub.is_none());
+    let running = paths.running();
+    let paths_log = Some(paths.log_file());
     let mut runner = Runner::new(config, paths, only);
     let style = Style::detect();
     let mut outcomes = Vec::new();
@@ -130,6 +272,11 @@ fn status(config: Config, paths: Paths, only: &[Provider], json: bool) -> ExitCo
     });
     if let (false, Some(credentials)) = (json, &connected) {
         println!("\n{}", style.dim(&format!("connected {}", connected_to(credentials))));
+    }
+    if let (false, Some(pid)) = (json, running) {
+        let log =
+            paths_log.filter(|file| file.exists()).map(|file| format!(" · log {}", file.display())).unwrap_or_default();
+        println!("{}", style.dim(&format!("agent running{}{log} · `quotum stop` stops it", pid_text(pid))));
     }
     if let Some(machine) = machine {
         let (snapshots, failures) = outcomes.into_iter().partition::<Vec<_>, _>(|o| o.is_ok());
@@ -166,11 +313,13 @@ fn run(config: Config, paths: Paths, only: &[Provider]) -> ExitCode {
             Box::new(Discard)
         }
     };
+    let stop_file = paths.stop_file();
     let mut runner = Runner::new(config, paths, only);
     if runner.providers().is_empty() {
         return fail("every provider is disabled");
     }
     stop::on_signals();
+    stop::on_file(stop_file);
     // Waiting is logged once per change, not on every check-in; a failure that repeats
     // itself is logged once too.
     let mut waiting: BTreeMap<Provider, bool> = BTreeMap::new();

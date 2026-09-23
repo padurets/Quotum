@@ -229,16 +229,56 @@ impl Paths {
     }
 
     /// Keeps a second `quotum run` off this state directory, whose spool only one can
-    /// own. The lock lasts while the returned file is open and ends with the process.
-    pub fn lock_run(&self) -> Result<fs::File, String> {
+    /// own. The lock lasts while the returned guard lives and ends with the process; the
+    /// guard also names the process in `run.pid`, for `quotum stop`.
+    pub fn lock_run(&self) -> Result<RunLock, String> {
         let path = self.state.join("run.lock");
-        lock(&path).map_err(|e| match e.kind() {
+        let file = lock(&path).map_err(|e| match e.kind() {
             io::ErrorKind::WouldBlock => format!(
-                "another `quotum run` uses {} already; stop it first, or give this one its own QUOTUM_STATE_DIR",
+                "another `quotum run` uses {} already; stop it first (`quotum stop`), or give this one its own QUOTUM_STATE_DIR",
                 self.state.display()
             ),
             _ => format!("{}: {e}", path.display()),
-        })
+        })?;
+        let pid = self.state.join("run.pid");
+        let _ = fs::write(&pid, std::process::id().to_string());
+        // A stop asked of an earlier run that never saw it is not meant for this one.
+        let _ = fs::remove_file(self.stop_file());
+        Ok(RunLock { _file: file, pid })
+    }
+
+    /// The process of the `quotum run` on this state directory, if one runs: `Some(None)`
+    /// when it runs but did not say which process it is.
+    pub fn running(&self) -> Option<Option<u32>> {
+        match lock(&self.state.join("run.lock")) {
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                Some(fs::read_to_string(self.state.join("run.pid")).ok().and_then(|pid| pid.trim().parse().ok()))
+            }
+            _ => None,
+        }
+    }
+
+    /// Asks the `quotum run` on this state directory to stop: it looks for this file.
+    pub fn stop_file(&self) -> PathBuf {
+        self.state.join("run.stop")
+    }
+
+    /// Where `quotum start` has the agent write its log.
+    pub fn log_file(&self) -> PathBuf {
+        self.state.join("agent.log")
+    }
+}
+
+/// A `quotum run` holding its state directory; its pid file goes with it.
+#[derive(Debug)]
+pub struct RunLock {
+    _file: fs::File,
+    pid: PathBuf,
+}
+
+impl Drop for RunLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.pid);
     }
 }
 
@@ -413,8 +453,10 @@ mod tests {
         let state = env::temp_dir().join(format!("quotum-lock-{}", std::process::id()));
         fs::create_dir_all(&state).unwrap();
         let paths = Paths { config: state.join("config.toml"), work: state.join("work"), state: state.clone() };
+        assert_eq!(paths.running(), None);
         let first = paths.lock_run().unwrap();
         assert!(paths.lock_run().unwrap_err().contains("another `quotum run`"));
+        assert_eq!(paths.running(), Some(Some(std::process::id())), "it says which process holds it");
         drop(first);
         let again = paths.lock_run().map(drop);
         fs::remove_dir_all(&state).unwrap();
