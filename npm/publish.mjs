@@ -22,7 +22,9 @@ const published = (name, version) => {
   }
 };
 
-for (const dir of [...readdirSync(dist).filter(name => name !== 'quotum').sort(), 'quotum']) {
+// Every package is a directory; the notices next to them are not one.
+const platforms = readdirSync(dist, {withFileTypes: true}).filter(entry => entry.isDirectory() && entry.name !== 'quotum');
+for (const dir of [...platforms.map(entry => entry.name).sort(), 'quotum']) {
   const {name, version} = JSON.parse(readFileSync(path.join(dist, dir, 'package.json'), 'utf8'));
   if (published(name, version)) {
     console.log(`${name}@${version} is already published`);

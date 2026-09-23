@@ -2,6 +2,14 @@
 
 Quotum is MIT-licensed (see `LICENSE`). It includes or relies on:
 
+- **Rust crates** compiled into the agent, each under its own license. Their license
+  texts are in `THIRD_PARTY_LICENSES.md`, written by `npm/licenses.mjs` when the agent
+  is built and shipped with every binary (the npm packages and the release archives).
+- **JavaScript packages** bundled into the dashboard (React and a few more). Their
+  license texts are written by the build next to it: every hub serves them at
+  `/third-party-licenses.md`. The hub's server packages keep their own license files
+  in the image's `node_modules`.
+
 - **Provider icons** in `hub/ui/icons/` come from [LobeHub Icons](https://github.com/lobehub/lobe-icons)
   (MIT). Claude, Codex and Antigravity names and logos are trademarks of their
   respective owners; they are used only to label the data shown for each provider.

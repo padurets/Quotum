@@ -22,6 +22,7 @@ import {chmodSync, copyFileSync, cpSync, mkdirSync, readFileSync, rmSync, writeF
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {PLATFORMS} from './platforms.mjs';
+import {thirdPartyLicenses} from './licenses.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
@@ -44,6 +45,10 @@ const shared = {license: main.license, author: main.author, homepage: main.homep
 const write = (file, value) => writeFileSync(file, typeof value === 'string' ? value : `${JSON.stringify(value, null, 2)}\n`);
 
 rmSync(dist, {recursive: true, force: true});
+mkdirSync(dist, {recursive: true});
+// The same notices for every platform: the crates any of the builds links.
+const notices = path.join(dist, 'THIRD_PARTY_LICENSES.md');
+write(notices, thirdPartyLicenses(agent, PLATFORMS.map(p => p.target)));
 
 for (const p of platforms) {
   console.log(`building ${p.name} (${p.target})`);
@@ -54,6 +59,7 @@ for (const p of platforms) {
   copyFileSync(path.join(agent, 'target', p.target, 'release', `quotum${p.exe ?? ''}`), binary);
   chmodSync(binary, 0o755);
   copyFileSync(path.join(root, 'LICENSE'), path.join(dir, 'LICENSE'));
+  copyFileSync(notices, path.join(dir, 'THIRD_PARTY_LICENSES.md'));
   write(path.join(dir, 'README.md'), `# @quotum/${p.name}\n\nThe [Quotum](${main.homepage}) agent built for ${p.title}. Install \`quotum\` instead: it picks this package when it matches your platform.\n`);
   write(path.join(dir, 'package.json'), {
     name: `@quotum/${p.name}`,
@@ -63,7 +69,7 @@ for (const p of platforms) {
     repository: {...main.repository, directory: 'agent'},
     os: [p.os],
     cpu: [p.cpu],
-    files: ['bin'],
+    files: ['bin', 'THIRD_PARTY_LICENSES.md'],
     preferUnplugged: true,
   });
 }

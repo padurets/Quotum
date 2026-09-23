@@ -87,8 +87,8 @@ jobs:
             platform=${dir#npm/dist/quotum-}
             name=quotum-$VERSION-$(echo "$platform" | sed 's/^darwin/macos/; s/^win32/windows/')
             case $platform in
-              win32-*) zip -j "release/$name.zip" "$dir/bin/quotum.exe" LICENSE ;;
-              *) tar -czf "release/$name.tar.gz" -C "$dir/bin" quotum -C "$GITHUB_WORKSPACE" LICENSE ;;
+              win32-*) zip -j "release/$name.zip" "$dir/bin/quotum.exe" LICENSE "$dir/THIRD_PARTY_LICENSES.md" ;;
+              *) tar -czf "release/$name.tar.gz" -C "$dir/bin" quotum -C "$GITHUB_WORKSPACE" LICENSE -C "$GITHUB_WORKSPACE/$dir" THIRD_PARTY_LICENSES.md ;;
             esac
           done
           (cd release && sha256sum -- * > SHA256SUMS)
