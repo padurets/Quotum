@@ -15,10 +15,14 @@ export function Modal({title, onClose, children, wide, side}: {title: string; on
   // The latest handler, so the effect below runs once: focus moves in when the dialog opens and back when it closes.
   const close = useRef(onClose);
   close.current = onClose;
+  // Taken while rendering: a field of the dialog with autoFocus would be it by the effect.
+  const [previous] = useState(() => document.activeElement as HTMLElement | null);
   useEffect(() => {
     const escape = (event: KeyboardEvent) => event.key === 'Escape' && close.current();
     document.addEventListener('keydown', escape);
-    const previous = document.activeElement as HTMLElement | null;
+    // Tab stays in the dialog: the page under it is out of reach.
+    const root = document.getElementById('root');
+    if (root) root.inert = true;
     // Into the dialog, unless a field of it already took the focus (autoFocus).
     if (!panel.current?.contains(document.activeElement)) panel.current?.focus();
     // The page under the dialog stays still: only the dialog scrolls.
@@ -28,7 +32,8 @@ export function Modal({title, onClose, children, wide, side}: {title: string; on
     return () => {
       document.removeEventListener('keydown', escape);
       page.style.overflow = overflow;
-      previous?.focus?.();
+      if (root) root.inert = false;
+      if (previous?.isConnected) previous.focus();
     };
   }, []);
   return createPortal(

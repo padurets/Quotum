@@ -1,7 +1,7 @@
 import {createHash, randomBytes, randomInt, scrypt, timingSafeEqual, type ScryptOptions} from 'node:crypto';
 
 /**
- * Secrets and passwords. Every secret handed out (session, board token, device token,
+ * Secrets and passwords. Every secret handed out (session, machine token, device token,
  * device code, invite) is random and stored only as a SHA-256 hash; passwords are
  * stored as scrypt hashes.
  */
@@ -29,8 +29,8 @@ export async function verifyPassword(password: string, stored: string): Promise<
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
-/** Prefixes make a leaked secret recognizable: session, board token, device token, device code, invite. */
-export type SecretKind = 'qt_s' | 'qt_b' | 'qt_d' | 'qt_c' | 'qt_i';
+/** Prefixes make a leaked secret recognizable: session, machine token, device token, device code, invite. */
+export type SecretKind = 'qt_s' | 'qt_m' | 'qt_d' | 'qt_c' | 'qt_i';
 
 export const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
 

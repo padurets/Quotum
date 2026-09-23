@@ -60,7 +60,18 @@ export class ResetFeed {
     clearTimeout(this.timer);
   }
 
+  /** One round of both trackers. Nothing here may stop the next round or the hub: the feed is optional. */
   private async poll() {
+    try {
+      await this.round();
+    } catch (error) {
+      this.log({event: 'resets', error: String((error as Error)?.message ?? error)});
+    } finally {
+      if (!this.closing) this.timer = setTimeout(() => void this.poll(), config.resets.intervalMs);
+    }
+  }
+
+  private async round() {
     const now = Date.now();
     const [codex, catalogue] = await Promise.allSettled([
       getJson(config.resets.codexApi).then(payload => fromCodexResets(payload, now)),
@@ -81,7 +92,5 @@ export class ResetFeed {
         : {...tracker, ok: false, detail: describeFailure(result.reason), at: now};
     this.health = [report(CODEX_RESETS, codex), report(CLAUDE_RESETS, catalogue)];
     this.log({event: 'resets', codex: codex.status, claude: catalogue.status});
-
-    if (!this.closing) this.timer = setTimeout(() => void this.poll(), config.resets.intervalMs);
   }
 }

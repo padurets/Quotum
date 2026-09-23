@@ -6,10 +6,13 @@ import {errorText, level, problemOf, sourceLabel, windowName} from '../lib/quota
 import {t} from '../i18n';
 import {DEFAULT_PLAN, isValidPlan, PLAN_TOLERANCE, planAt, planTotal, type WeeklyPlan} from '../lib/plan';
 import {LOGOS} from './logos';
-import {cardId, planOf, withHidden, withPlan, withWindowHidden, type Arrange} from '../lib/view';
+import {cardId, planOf, withHidden, withName, withPlan, withWindowHidden, type Arrange} from '../lib/view';
+import {call} from '../lib/http';
+import type {Board} from '../lib/session';
 import type {ResetStatus} from '../lib/resets';
 import {ResetBanner, ResetNotice} from './ResetNotice';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
+import {ErrorLine} from './Kit';
 
 function Meter({w, now, weekly}: {w: Win; now: number; weekly: WeeklyPlan}) {
   const state = level(w.remaining);
@@ -114,17 +117,61 @@ function PlanEditor({source, arrange}: {source: SourceState; arrange: Arrange}) 
   );
 }
 
-/** How the board's owner sets up a card: which limits it shows, the weekly plan, and hiding it. */
-function SourceSettings({source, arrange}: {source: SourceState; arrange: Arrange}) {
+/** A card's name as the board's owner sets it; empty gives back the automatic one. */
+function CardName({source, arrange}: {source: SourceState; arrange: Arrange}) {
+  const saved = arrange.view.names[source.id] ?? '';
+  const [name, setName] = useState(saved);
+  useEffect(() => setName(saved), [saved]);
+  const save = () => name.trim() !== saved && arrange.update(view => withName(view, source.id, name));
+  return (
+    <div className="popover-pad card-name">
+      <input
+        value={name}
+        maxLength={60}
+        placeholder={t('source.namePlaceholder')}
+        aria-label={t('source.name')}
+        onChange={event => setName(event.target.value)}
+        onBlur={save}
+        onKeyDown={event => event.key === 'Enter' && save()}
+      />
+    </div>
+  );
+}
+
+/**
+ * A card's menu. The board's owner names the card, picks its limits, sets the weekly
+ * plan, hides it; on a shared board the owner, or whoever's devices measure it, also
+ * takes it off the board.
+ */
+function SourceSettings({source, arrange, board, onChanged}: {source: SourceState; arrange: Arrange; board: Board; onChanged: () => void}) {
+  const [error, setError] = useState<unknown>(null);
   const hidden = new Set(arrange.view.windows);
   const hiddenCount = source.windows.filter(w => hidden.has(windowKey(source.id, w.id))).length;
   const hasWeekly = source.windows.some(w => w.kind === 'weekly');
+  const owner = arrange.owner;
+  const takeOff = !board.personal && (owner || source.mine);
+
+  const unshare = async () => {
+    setError(null);
+    try {
+      await call('DELETE', `/api/boards/${encodeURIComponent(board.id)}/shares/${encodeURIComponent(source.id)}`);
+      onChanged();
+    } catch (failure) {
+      setError(failure);
+    }
+  };
 
   return (
-    <Popover label={t('source.settings', {source: sourceLabel(source)})} icon={<SlidersIcon />} badge={hiddenCount}>
-      {source.windows.length > 1 && (
+    <Popover label={t('source.settings', {source: sourceLabel(source)})} icon={<SlidersIcon />} badge={owner ? hiddenCount : 0}>
+      {owner && (
         <>
-          <div className="popover-title">{t('source.show')}</div>
+          <div className="popover-title">{t('source.name')}</div>
+          <CardName source={source} arrange={arrange} />
+        </>
+      )}
+      {owner && source.windows.length > 1 && (
+        <>
+          <div className="popover-title popover-section">{t('source.show')}</div>
           {source.windows.map(w => {
             const key = windowKey(source.id, w.id);
             return (
@@ -135,14 +182,22 @@ function SourceSettings({source, arrange}: {source: SourceState; arrange: Arrang
           })}
         </>
       )}
-      {hasWeekly && (
+      {owner && hasWeekly && (
         <>
           <div className="popover-title popover-section">{t('source.plan')}</div>
           <PlanEditor source={source} arrange={arrange} />
           <div className="popover-note">{t('source.planNote')}</div>
         </>
       )}
-      <HideRow onHide={() => arrange.update(view => withHidden(view, cardId(source.id), true))}>{t('source.hide')}</HideRow>
+      {owner && <HideRow onHide={() => arrange.update(view => withHidden(view, cardId(source.id), true))}>{t('source.hide')}</HideRow>}
+      {takeOff && (
+        <div className={owner ? '' : 'popover-section'}>
+          <button type="button" className="popover-row is-danger" onClick={unshare}>
+            <span>{t('source.takeOff')}</span>
+          </button>
+          <ErrorLine error={error} />
+        </div>
+      )}
     </Popover>
   );
 }
@@ -165,7 +220,21 @@ function FreeResets({resets}: {resets: NonNullable<SourceState['resets']>}) {
   );
 }
 
-export function SourceCard({source, now, resets, arrange}: {source: SourceState; now: number; resets?: ResetStatus; arrange: Arrange}) {
+export function SourceCard({
+  source,
+  now,
+  resets,
+  arrange,
+  board,
+  onChanged,
+}: {
+  source: SourceState;
+  now: number;
+  resets?: ResetStatus;
+  arrange: Arrange;
+  board: Board | null;
+  onChanged: () => void;
+}) {
   const problem = problemOf(source);
   const hidden = new Set(arrange.view.windows);
   const visible = source.windows.filter(w => !hidden.has(windowKey(source.id, w.id)));
@@ -186,9 +255,10 @@ export function SourceCard({source, now, resets, arrange}: {source: SourceState;
           {source.plan && <span className="plan">{source.plan.replace(/^Claude\s+/i, '')}</span>}
         </div>
         {!!source.resets?.available && <FreeResets resets={source.resets} />}
-        {arrange.owner && <SourceSettings source={source} arrange={arrange} />}
+        {board && (arrange.owner || (!board.personal && source.mine)) && <SourceSettings source={source} arrange={arrange} board={board} onChanged={onChanged} />}
       </div>
 
+      {warn && <p className="card-status">{status}</p>}
       <div className="limits">
         {visible.map(w => (
           <Limit key={w.id} w={w} now={now} weekly={weekly} />

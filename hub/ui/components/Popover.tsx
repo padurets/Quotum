@@ -25,13 +25,19 @@ export function Popover({
   const open = controlled ?? own;
   const setOpen = (next: boolean) => (onOpenChange ? onOpenChange(next) : setOwn(next));
   const box = useRef<HTMLDivElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!open) return;
     const close = (event: Event) => {
       if (!box.current?.contains(event.target as Node)) setOpen(false);
     };
-    const escape = (event: KeyboardEvent) => event.key === 'Escape' && setOpen(false);
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      // Focus inside the panel would fall to the page's start; it goes back to the button.
+      if (box.current?.contains(document.activeElement)) button.current?.focus();
+      setOpen(false);
+    };
     document.addEventListener('mousedown', close);
     document.addEventListener('keydown', escape);
     return () => {
@@ -47,6 +53,7 @@ export function Popover({
         type="button"
         className={trigger ? 'text-button' : 'icon-button'}
         aria-expanded={open}
+        ref={button}
         aria-label={trigger ? undefined : label}
         title={label}
         onClick={() => setOpen(!open)}
@@ -79,13 +86,6 @@ export const SlidersIcon = () => (
     <path d="M2 4.5h6M11.5 4.5H14M2 11.5h2.5M8 11.5h6" />
     <circle cx="9.75" cy="4.5" r="1.75" />
     <circle cx="6.25" cy="11.5" r="1.75" />
-  </svg>
-);
-
-export const GearIcon = () => (
-  <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" style={{strokeWidth: 1.6}}>
-    <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" strokeLinejoin="round" />
-    <circle cx="12" cy="12" r="3" />
   </svg>
 );
 

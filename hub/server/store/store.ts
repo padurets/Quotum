@@ -48,10 +48,15 @@ type SampleRow = {
   stale_after_ms: number;
 };
 
+/** A source as a board shows it: with the people who measure it and whether they shared it here. */
+export type BoardSource = Source & {holders: string[]; sharedBy: string | null};
+
 /**
  * Sources, their last state and every measured value, in one SQLite file (WAL, one
- * writer, prepared statements). People and devices live in the same file, see
- * directory.ts.
+ * writer, prepared statements). People, boards and devices live in the same file, see
+ * directory.ts. A source is kept once; boards show sources: a personal board every
+ * source its person holds (their devices measure it), a shared board those shared
+ * with it.
  */
 export class Store {
   readonly db: DatabaseSync;
@@ -71,31 +76,105 @@ export class Store {
     return this.revisions.get(board) ?? this.started;
   }
 
-  private changed(board: string) {
-    this.revisions.set(board, this.revision(board) + 1);
+  /** Something on these boards changed. */
+  changed(...boards: string[]) {
+    for (const board of boards) this.revisions.set(board, this.revision(board) + 1);
   }
 
-  private boardOf(source: string): string {
-    return (this.db.prepare('SELECT board_id FROM sources WHERE id = ?').get(source) as {board_id: string}).board_id;
+  /** The boards a source shows on: the personal boards of its holders and the boards it is shared with. */
+  boardsOf(source: string): string[] {
+    const rows = this.db
+      .prepare(
+        'SELECT boards.id FROM holders JOIN boards ON boards.created_by = holders.user_id AND boards.personal = 1 WHERE holders.source_id = ?' +
+          ' UNION SELECT board_id FROM shares WHERE source_id = ?',
+      )
+      .all(source, source) as {id: string}[];
+    return rows.map(r => r.id);
   }
 
-  /** The sources of a board: by provider, then in the order they appeared. */
-  sources(board: string): Source[] {
-    const rows = this.db.prepare('SELECT id, provider, account FROM sources WHERE board_id = ? ORDER BY created_at, rowid').all(board) as Source[];
-    return rows.sort((a, b) => providers.indexOf(a.provider) - providers.indexOf(b.provider));
+  /** What a board shows, by provider, then in the order it came to the board. */
+  sources(board: string): BoardSource[] {
+    const kind = this.db.prepare('SELECT personal, created_by FROM boards WHERE id = ?').get(board) as {personal: number; created_by: string} | undefined;
+    if (!kind) return [];
+    const rows = (
+      kind.personal
+        ? this.db
+            .prepare('SELECT s.id, s.provider, s.account, NULL AS shared_by FROM holders h JOIN sources s ON s.id = h.source_id WHERE h.user_id = ? ORDER BY h.since, s.rowid')
+            .all(kind.created_by)
+        : this.db
+            .prepare('SELECT s.id, s.provider, s.account, sh.shared_by FROM shares sh JOIN sources s ON s.id = sh.source_id WHERE sh.board_id = ? ORDER BY sh.shared_at, s.rowid')
+            .all(board)
+    ) as {id: string; provider: Provider; account: string; shared_by: string | null}[];
+    const holders = this.db.prepare('SELECT user_id FROM holders WHERE source_id = ? ORDER BY since, user_id');
+    return rows
+      .map(r => ({
+        id: r.id,
+        provider: r.provider,
+        account: r.account,
+        sharedBy: r.shared_by,
+        holders: (holders.all(r.id) as {user_id: string}[]).map(h => h.user_id),
+      }))
+      .sort((a, b) => providers.indexOf(a.provider) - providers.indexOf(b.provider));
   }
 
-  /** The source of a subscription on a board, created the first time it is seen. */
-  source(board: string, provider: Provider, account: string, now: number): string {
-    const row = this.db.prepare('SELECT id FROM sources WHERE board_id = ? AND provider = ? AND account = ?').get(board, provider, account) as
-      | {id: string}
-      | undefined;
+  /** The sources a person's devices measure. */
+  held(userId: string): Source[] {
+    return this.db
+      .prepare('SELECT s.id, s.provider, s.account FROM holders h JOIN sources s ON s.id = h.source_id WHERE h.user_id = ? ORDER BY h.since, s.rowid')
+      .all(userId) as Source[];
+  }
+
+  holds(userId: string, source: string): boolean {
+    return !!this.db.prepare('SELECT 1 FROM holders WHERE user_id = ? AND source_id = ?').get(userId, source);
+  }
+
+  /** The source of a subscription, created the first time anyone measures it. */
+  source(provider: Provider, account: string, now: number): string {
+    const row = this.db.prepare('SELECT id FROM sources WHERE provider = ? AND account = ?').get(provider, account) as {id: string} | undefined;
     if (row) return row.id;
-    const id = sourceId(board, provider, account);
-    this.db.prepare('INSERT INTO sources VALUES (?, ?, ?, ?, ?)').run(id, board, provider, account, now);
-    this.changed(board);
+    const id = sourceId(provider, account);
+    this.db.prepare('INSERT INTO sources VALUES (?, ?, ?, ?)').run(id, provider, account, now);
     return id;
   }
+
+  /** A person's device measures a source: it is theirs to see and share from now on. */
+  hold(source: string, userId: string, now: number) {
+    if (this.db.prepare('INSERT OR IGNORE INTO holders VALUES (?, ?, ?)').run(source, userId, now).changes) {
+      const personal = this.db.prepare('SELECT id FROM boards WHERE created_by = ? AND personal = 1').get(userId) as {id: string} | undefined;
+      if (personal) this.changed(personal.id);
+    }
+  }
+
+  // ---------- sharing ----------
+
+  share(board: string, source: string, userId: string, now: number) {
+    if (this.db.prepare('INSERT OR IGNORE INTO shares VALUES (?, ?, ?, ?)').run(board, source, userId, now).changes) this.changed(board);
+  }
+
+  unshare(board: string, source: string): boolean {
+    const removed = this.db.prepare('DELETE FROM shares WHERE board_id = ? AND source_id = ?').run(board, source).changes > 0;
+    if (removed) this.changed(board);
+    return removed;
+  }
+
+  /** Takes off a board what none of its remaining members holds: someone who left takes their data along. */
+  unshareOrphans(board: string) {
+    const removed = this.db
+      .prepare(
+        'DELETE FROM shares WHERE board_id = ? AND source_id NOT IN' +
+          ' (SELECT h.source_id FROM holders h JOIN members m ON m.user_id = h.user_id WHERE m.board_id = ?)',
+      )
+      .run(board, board).changes;
+    if (removed) this.changed(board);
+  }
+
+  /** Forgets what a deleted board showed; the sources stay with their people (Directory.deleteBoard does the rest). */
+  removeBoard(board: string) {
+    this.db.prepare('DELETE FROM shares WHERE board_id = ?').run(board);
+    this.revisions.delete(board);
+  }
+
+  // ---------- measurements ----------
 
   states(board: string): SourceState[] {
     return this.sources(board).map(source => this.stateOf(source.id, source.provider));
@@ -113,11 +192,16 @@ export class Store {
     return {...(JSON.parse(row.payload) as SourceState), id, provider};
   }
 
-  /** Stores a measurement: a sample per window, the new state of the source, and free resets granted since the last one. */
+  /**
+   * Stores a measurement: a sample per window, the new state of the source, and free
+   * resets granted since the last one. A savepoint keeps it whole on its own and inside
+   * a batch's transaction alike.
+   */
   record(id: string, measurement: Measurement) {
     const previous = this.state(id);
     const {provider} = previous;
-    const granted = (measurement.resets?.available ?? 0) - (previous.resets?.available ?? 0);
+    // Only when both measurements report free resets: one that does not say nothing about them.
+    const granted = measurement.resets && previous.resets ? measurement.resets.available - previous.resets.available : 0;
     const insert = this.db.prepare(
       'INSERT OR IGNORE INTO samples (source_id, window_id, at, kind, label, used, reset_at, minutes, stale_after_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
@@ -131,36 +215,28 @@ export class Store {
       staleAfterMs: measurement.staleAfterMs,
       resets: measurement.resets,
     };
-    this.db.exec('BEGIN IMMEDIATE');
+    this.db.exec('SAVEPOINT record');
     try {
       for (const w of measurement.windows) {
         insert.run(id, w.id, measurement.observedAt, w.kind, w.label, w.used, w.resetAt, w.minutes, measurement.staleAfterMs);
       }
       this.db.prepare('INSERT OR REPLACE INTO state VALUES (?, ?)').run(id, JSON.stringify(state));
-      // The first measurement only says what there is, not that anything was just granted.
       if (granted > 0 && previous.successAt !== null) {
         this.db.prepare('INSERT OR IGNORE INTO events VALUES (?, ?, ?, ?)').run(id, measurement.observedAt, 'resets_granted', String(granted));
       }
-      this.db.exec('COMMIT');
+      this.db.exec('RELEASE record');
     } catch (error) {
-      this.db.exec('ROLLBACK');
+      this.db.exec('ROLLBACK TO record');
+      this.db.exec('RELEASE record');
       throw error;
     }
-    this.changed(this.boardOf(id));
-  }
-
-  /** Forgets the sources of a deleted board and everything measured for them (Directory.deleteBoard does the rest). */
-  removeBoard(board: string) {
-    const sources = 'SELECT id FROM sources WHERE board_id = ?';
-    for (const table of ['samples', 'state', 'events', 'device_sources']) this.db.prepare(`DELETE FROM ${table} WHERE source_id IN (${sources})`).run(board);
-    this.db.prepare('DELETE FROM sources WHERE board_id = ?').run(board);
-    this.revisions.delete(board);
+    this.changed(...this.boardsOf(id));
   }
 
   /** Records a failed attempt; the last good values stay on screen. */
   fail(id: string, error: string) {
     this.db.prepare('INSERT OR REPLACE INTO state VALUES (?, ?)').run(id, JSON.stringify({...this.state(id), error}));
-    this.changed(this.boardOf(id));
+    this.changed(...this.boardsOf(id));
   }
 
   /** Remembers which source a device last delivered for a provider; its failures for the provider are over. */
@@ -176,11 +252,11 @@ export class Store {
     return row?.source_id ?? null;
   }
 
-  /** Which sources each device of a board delivers to. */
-  deviceSources(board: string): {device: string; provider: Provider; source: string; seenAt: number}[] {
+  /** Which sources each device of a person delivers to. */
+  deviceSources(userId: string): {device: string; provider: Provider; source: string; seenAt: number}[] {
     const rows = this.db
-      .prepare('SELECT d.device_id, d.provider, d.source_id, d.seen_at FROM device_sources d JOIN sources s ON s.id = d.source_id WHERE s.board_id = ?')
-      .all(board) as {device_id: string; provider: Provider; source_id: string; seen_at: number}[];
+      .prepare('SELECT d.device_id, d.provider, d.source_id, d.seen_at FROM device_sources d JOIN devices ON devices.id = d.device_id WHERE devices.user_id = ?')
+      .all(userId) as {device_id: string; provider: Provider; source_id: string; seen_at: number}[];
     return rows.map(r => ({device: r.device_id, provider: r.provider, source: r.source_id, seenAt: r.seen_at}));
   }
 
@@ -189,21 +265,22 @@ export class Store {
     this.db.prepare('INSERT OR REPLACE INTO device_failures VALUES (?, ?, ?, ?, ?)').run(device, provider, error, detail, at);
   }
 
-  deviceFailures(board: string): DeviceFailure[] {
+  deviceFailures(userId: string): DeviceFailure[] {
     const rows = this.db
-      .prepare('SELECT f.* FROM device_failures f JOIN devices d ON d.id = f.device_id WHERE d.board_id = ?')
-      .all(board) as {device_id: string; provider: Provider; error: string; detail: string | null; at: number}[];
+      .prepare('SELECT f.* FROM device_failures f JOIN devices d ON d.id = f.device_id WHERE d.user_id = ?')
+      .all(userId) as {device_id: string; provider: Provider; error: string; detail: string | null; at: number}[];
     return rows.map(r => ({device: r.device_id, provider: r.provider, error: r.error, detail: r.detail, at: r.at}));
   }
 
   /** Every source/window series since `from` on a shared grid, ready for the chart and the table, and what happened meanwhile. */
   history(board: string, from: number, cellMs: number): {series: HistorySeries[]; events: SourceEvent[]} {
+    const ids = JSON.stringify(this.sources(board).map(s => s.id));
     const rows = this.db
       .prepare(
         'SELECT samples.*, sources.provider FROM samples JOIN sources ON sources.id = samples.source_id' +
-          ' WHERE sources.board_id = ? AND samples.at >= ? ORDER BY samples.source_id, samples.window_id, samples.at',
+          ' WHERE samples.source_id IN (SELECT value FROM json_each(?)) AND samples.at >= ? ORDER BY samples.source_id, samples.window_id, samples.at',
       )
-      .all(board, from) as SampleRow[];
+      .all(ids, from) as SampleRow[];
 
     const groups = new Map<string, Sample[]>();
     for (const row of rows) {
@@ -249,15 +326,13 @@ export class Store {
           points: onGrid(points, cellMs).map(p => [p.at, Math.round(p.remaining * 100) / 100, p.segment] as const),
         };
       });
-    return {series: lines, events: [...earlyResets([...groups.values()]), ...this.grants(board, from)].sort((a, b) => a.at - b.at)};
+    return {series: lines, events: [...earlyResets([...groups.values()]), ...this.grants(ids, from)].sort((a, b) => a.at - b.at)};
   }
 
-  private grants(board: string, from: number): SourceEvent[] {
+  private grants(ids: string, from: number): SourceEvent[] {
     const rows = this.db
-      .prepare(
-        "SELECT e.source_id, e.at, e.detail FROM events e JOIN sources s ON s.id = e.source_id WHERE s.board_id = ? AND e.kind = 'resets_granted' AND e.at >= ?",
-      )
-      .all(board, from) as {source_id: string; at: number; detail: string}[];
+      .prepare("SELECT source_id, at, detail FROM events WHERE source_id IN (SELECT value FROM json_each(?)) AND kind = 'resets_granted' AND at >= ?")
+      .all(ids, from) as {source_id: string; at: number; detail: string}[];
     return rows.map(r => ({sourceId: r.source_id, at: r.at, kind: 'resets_granted', count: Number(r.detail)}));
   }
 

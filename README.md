@@ -84,11 +84,13 @@ Antigravity   Gemini 5 hours       100%  in 4h 59m
   and [Claude Resets](https://claude-resets.com), with a link to the source. You
   can turn them off.
 - **Boards made of widgets** (a card per subscription, the chart, the table), like a
-  dashboard in Grafana. The owner of a board drags them around, hides the ones they don't need
-  (the data keeps coming) and sets the plans; everyone on the board sees it arranged
-  the same way.
-- **Boards.** Everyone has a personal board. On a shared board a team sees each
-  other's limits; its owner names it and invites people with a link.
+  dashboard in Grafana. The owner of a board drags them around, makes them wider or
+  narrower, names the cards, hides the ones they don't need (the data keeps coming) and
+  sets the plans; everyone on the board sees it arranged the same way.
+- **Your data, shared when you choose.** Everything your machines measure is on your
+  personal board. On a shared board a team sees the limits its members share with it:
+  each person decides which of their subscriptions it shows. A team subscription
+  measured by several people is one card.
 
 The interface is available in English and Russian.
 
@@ -113,12 +115,12 @@ day, not a script thrown together over a weekend. In practice that meant:
   consumption. The agent says when its next measurement is due, so a sparse series isn't
   mistaken for a gap.
 - **Few moving parts.** The agent has nine direct dependencies. The hub is Fastify and
-  the SQLite built into Node, and the UI is plain React with about 90 KB of gzipped
+  the SQLite built into Node, and the UI is plain React with about 100 KB of gzipped
   JavaScript. There is no telemetry; the only requests the hub makes on its own are to
   the two reset trackers, every ten minutes, and `QUOTUM_RESETS=off` turns them off.
 - **Written down and tested.** The protocol between the agent and the hub is a spec
-  ([spec/ingest-v1.md](spec/ingest-v1.md)). Nearly 90 tests cover the spending rules,
-  resets, duty, scheduling, permissions, device pairing, the clients' answers and the
+  ([spec/ingest-v1.md](spec/ingest-v1.md)). About 120 tests cover the spending rules,
+  resets, duty, scheduling, permissions, sharing, device pairing, the clients' answers and the
   translations. The TypeScript is strict and the Rust passes `clippy`.
 
 ## Status
@@ -163,22 +165,25 @@ npx quotum connect http://127.0.0.1:8080
 npx quotum run
 ```
 
-`connect` shows a code: confirm it in the browser and pick a board. `run` keeps
-measuring and delivering, so start it the way you run background programs (a systemd
+`connect` shows a code: confirm it in the browser, and the machine is yours; what it
+measures shows on your board. `run` keeps measuring and delivering, so start it the way you run background programs (a systemd
 user service, launchd, Windows autostart). With `npm install -g quotum` the command is
 just `quotum`.
 
-**Many machines at once** (images, VMs, containers): create a board token in the
-dashboard (*Devices → Connect*) and start every machine with it. Each one shows up on
-the board by itself:
+**Many machines at once** (images, VMs, containers): create a machine token in the
+dashboard (*My machines → Connect*) and start every machine with it. Each one joins as
+yours by itself:
 
 ```sh
-QUOTUM_HUB_URL=https://quotum.example.com QUOTUM_HUB_TOKEN=qt_b_… npx quotum run
+QUOTUM_HUB_URL=https://quotum.example.com QUOTUM_HUB_TOKEN=qt_m_… npx quotum run
 ```
 
-Machines connected with a board token belong to whoever created the token. If several
-people share one token, `QUOTUM_OWNER` (or `--owner`) says whose machine it is: a board
-member's email links it to that member, any other name is shown as given.
+A machine token is one person's: every teammate creates their own. Machines are named
+in *My machines*, so an image doesn't need a name per copy.
+
+**Sharing with a team.** Create a shared board, invite people with a link, and share
+your subscriptions with it (*People and subscriptions → Subscriptions*). You can take
+yours off again at any time; the board's owner can take any card off their board.
 
 **Without Node.js:** every [release](https://github.com/padurets/quotum/releases) has
 the agent for Linux, macOS and Windows as a single file, with checksums and
@@ -196,14 +201,13 @@ Everything is optional. On Linux the file is `~/.config/quotum/config.toml`;
 ```toml
 interval = 120          # seconds between two measurements of one client, 60 to 86400
 eco = true              # measure less often while nothing changes
-owner = "alice"         # whose machine this is, with a shared board token
 
 [machine]
-name = "work-laptop"    # how the machine appears on the hub (default: host name)
+name = "work-laptop"    # the name the machine reports (default: host name); renaming it on the hub wins
 
 [hub]
 url = "https://quotum.example.com"
-token = "qt_b_…"
+token = "qt_m_…"
 
 [providers.antigravity]
 interval = 300
@@ -212,7 +216,7 @@ account = "work"        # tells two Antigravity subscriptions apart (agy doesn't
 # path = "/opt/agy/bin/agy"
 ```
 
-The environment variables `QUOTUM_HUB_URL`, `QUOTUM_HUB_TOKEN`, `QUOTUM_OWNER`,
+The environment variables `QUOTUM_HUB_URL`, `QUOTUM_HUB_TOKEN`,
 `QUOTUM_INTERVAL`, `QUOTUM_CONFIG` and `QUOTUM_STATE_DIR` override the file. Other
 commands: `quotum --json` (one measurement in the ingest format), `quotum --only codex`,
 `quotum disconnect`.
@@ -267,17 +271,23 @@ hub's image.
 
 ### Releasing
 
-Set the new version in `agent/Cargo.toml` (`[workspace.package]`) and
-`hub/package.json`, commit, then tag it with the release notes as the message:
+Set the new version in `agent/Cargo.toml` (`[workspace.package]`) and `hub/package.json`,
+let the lock files follow, push the commit, then tag it with the release notes as the
+tag's message:
 
 ```sh
-git tag -a v0.2.0 -m "What changed"
+(cd hub && npm version 0.2.0 --no-git-tag-version)   # package.json and package-lock.json
+# agent/Cargo.toml: version = "0.2.0"
+(cd agent && cargo check)                            # Cargo.lock
+git commit -am "Version 0.2.0" && git push origin main
+git tag -a v0.2.0 -F notes.md                        # annotated: its message is the release notes
 git push origin v0.2.0
 ```
 
-[release.yml](.github/workflows/release.yml) checks everything again, builds the agent
-for every platform, publishes the npm packages and the hub's image, and creates the
-GitHub release with the binaries. npm accepts the packages from that workflow alone,
+[release.yml](.github/workflows/release.yml) refuses a tag that is not annotated or
+whose version differs from any of those four files. It checks everything again, builds
+the agent for every platform, publishes the hub's image and the npm packages, and
+creates the GitHub release with the binaries. npm accepts the packages from that workflow alone,
 without a token (trusted publishing). A new npm package, for a new platform, is
 published once by hand and then trusted with `node npm/trust.mjs`.
 

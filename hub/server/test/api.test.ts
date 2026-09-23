@@ -17,7 +17,7 @@ import {Setup} from '../setup.js';
 const iso = (ms: number) => new Date(ms).toISOString();
 const ORIGIN = 'http://localhost';
 const SETUP = 'BCDF-GHJK';
-const EMPTY = {order: [], hidden: [], windows: [], plans: {}};
+const EMPTY = {order: [], sizes: {}, names: {}, hidden: [], windows: [], plans: {}};
 
 async function hub() {
   const store = new Store(path.join(mkdtempSync(path.join(tmpdir(), 'quotum-api-')), 'db.sqlite'));
@@ -129,110 +129,128 @@ test('someone with an account who signs in from an invite link joins the board',
   assert.equal(carol.body.joined, team.body.id);
 });
 
-test('a board token lets any number of machines deliver; revoking it disconnects them', async () => {
+test('a machine token lets any number of machines deliver as its person; revoking it disconnects them and tells them so', async () => {
   const {call, person} = await hub();
-  const board = await person('alice');
-  const token = await call('POST', `/api/boards/${board}/tokens`, {as: 'alice', body: {name: 'Dev images'}});
-  assert.match(token.body.secret, /^qt_b_/);
-  const listed = (await call('GET', `/api/boards/${board}/tokens`, {as: 'alice'})).body;
-  assert.deepEqual([listed[0].secret, listed[0].mine, listed[0].createdBy], [undefined, true, undefined], 'shown once, no user ids');
+  await person('alice');
+  const token = await call('POST', '/api/tokens', {as: 'alice', body: {name: 'Dev images'}});
+  assert.match(token.body.secret, /^qt_m_/);
+  const listed = (await call('GET', '/api/tokens', {as: 'alice'})).body;
+  assert.deepEqual([listed[0].secret, listed[0].name, listed[0].userId], [undefined, 'Dev images', undefined], 'shown once, no user ids');
 
   const auth = {authorization: `Bearer ${token.body.secret}`};
   for (const id of ['machine-one-0123456789', 'machine-two-0123456789']) {
     const delivered = await call('POST', '/v1/ingest', {body: batch(id), headers: auth});
-    assert.deepEqual([delivered.status, delivered.body.accepted + delivered.body.duplicates, delivered.body.device.owner], [200, 1, 'Alice']);
+    assert.deepEqual([delivered.status, delivered.body.accepted + delivered.body.duplicates], [200, 1]);
   }
-  const devices = (await call('GET', `/api/boards/${board}/devices`, {as: 'alice'})).body;
+  const devices = (await call('GET', '/api/devices', {as: 'alice'})).body;
   const overview = (await call('GET', '/api/overview', {as: 'alice'})).body;
   const [codex] = overview.sources;
   assert.deepEqual([overview.sources.length, codex.provider, codex.windows[0].remaining, codex.windows[0].kind, codex.owners], [1, 'codex', 92, 'weekly', ['Alice']]);
-  assert.deepEqual(devices.map((d: any) => [d.via, d.mine, d.sources.map((s: any) => s.source)]), [['token', true, [codex.id]], ['token', true, [codex.id]]]);
+  assert.deepEqual(devices.map((d: any) => [d.via, d.sources.map((s: any) => s.source)]), [['token', [codex.id]], ['token', [codex.id]]]);
   assert.equal(devices[0].machineId, undefined, 'machine ids stay on the hub');
 
-  await call('DELETE', `/api/boards/${board}/tokens/${token.body.id}`, {as: 'alice'});
-  assert.equal((await call('POST', '/v1/ingest', {body: batch('machine-one-0123456789'), headers: auth})).status, 401);
-  assert.deepEqual((await call('GET', `/api/boards/${board}/devices`, {as: 'alice'})).body, []);
+  await call('DELETE', `/api/tokens/${token.body.id}`, {as: 'alice'});
+  const refused = await call('POST', '/v1/ingest', {body: batch('machine-one-0123456789'), headers: auth});
+  assert.deepEqual([refused.status, refused.body.error], [403, 'device_revoked'], 'the agent hears it and stops');
+  assert.deepEqual((await call('GET', '/api/devices', {as: 'alice'})).body, []);
 });
 
-test('members manage their own tokens and devices; the owner manages all and removes sources', async () => {
+test('people see and manage only their own machines and tokens; a device is named on the hub', async () => {
   const {call, person} = await hub();
   await person('alice');
   const team = (await call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
-  const secret = (await call('POST', `/api/boards/${team}/invites`, {as: 'alice'})).body.url.split('/invite/')[1];
-  await person('bob', secret);
-
-  const alices = (await call('POST', `/api/boards/${team}/tokens`, {as: 'alice', body: {}})).body;
-  const bobs = (await call('POST', `/api/boards/${team}/tokens`, {as: 'bob', body: {name: 'laptops'}})).body;
+  await person('bob', (await call('POST', `/api/boards/${team}/invites`, {as: 'alice'})).body.url.split('/invite/')[1]);
+  const alices = (await call('POST', '/api/tokens', {as: 'alice', body: {}})).body;
   assert.equal(alices.name, '', 'no name: the dashboard shows a default in its language');
-  await call('POST', '/v1/ingest', {body: batch('bobs-laptop-0123456789'), headers: {authorization: `Bearer ${bobs.secret}`}});
   await call('POST', '/v1/ingest', {body: batch('alices-box-0123456789'), headers: {authorization: `Bearer ${alices.secret}`}});
-  const devices = (await call('GET', `/api/boards/${team}/devices`, {as: 'bob'})).body;
-  const alicesBox = devices.find((d: any) => d.owner === 'Alice');
+  const [box] = (await call('GET', '/api/devices', {as: 'alice'})).body;
+  assert.deepEqual([box.name, box.reported], ['build-01', 'build-01']);
 
-  assert.equal((await call('DELETE', `/api/boards/${team}/tokens/${alices.id}`, {as: 'bob'})).status, 403);
-  assert.equal((await call('DELETE', `/api/boards/${team}/devices/${alicesBox.id}`, {as: 'bob'})).status, 403);
-  assert.equal((await call('DELETE', `/api/boards/${team}/tokens/${bobs.id}`, {as: 'bob'})).status, 200);
-  assert.equal((await call('DELETE', `/api/boards/${team}/tokens/${bobs.id}`, {as: 'alice'})).status, 404, 'already revoked');
+  assert.deepEqual((await call('GET', '/api/devices', {as: 'bob'})).body, []);
+  assert.deepEqual((await call('GET', '/api/tokens', {as: 'bob'})).body, []);
+  assert.equal((await call('DELETE', `/api/tokens/${alices.id}`, {as: 'bob'})).status, 404);
+  assert.equal((await call('DELETE', `/api/devices/${box.id}`, {as: 'bob'})).status, 404);
+  assert.equal((await call('POST', `/api/devices/${box.id}`, {as: 'bob', body: {name: 'mine'}})).status, 404);
+
+  assert.equal((await call('POST', `/api/devices/${box.id}`, {as: 'alice', body: {name: 'Build server'}})).status, 200);
+  assert.deepEqual((await call('GET', '/api/devices', {as: 'alice'})).body.map((d: any) => [d.name, d.reported]), [['Build server', 'build-01']]);
+  await call('POST', '/v1/ingest', {body: batch('alices-box-0123456789'), headers: {authorization: `Bearer ${alices.secret}`}});
+  assert.equal((await call('GET', '/api/devices', {as: 'alice'})).body[0].name, 'Build server', 'the machine reporting its name again does not undo it');
+  await call('POST', `/api/devices/${box.id}`, {as: 'alice', body: {name: ''}});
+  assert.equal((await call('GET', '/api/devices', {as: 'alice'})).body[0].name, 'build-01', 'an empty name gives back the reported one');
+  assert.equal((await call('DELETE', `/api/devices/${box.id}`, {as: 'alice'})).status, 200);
+});
+
+test('people share their subscriptions with a shared board; its owner arranges, names, hides and takes them off', async () => {
+  const {call, person} = await hub();
+  await person('alice');
+  const team = (await call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
+  await person('bob', (await call('POST', `/api/boards/${team}/invites`, {as: 'alice'})).body.url.split('/invite/')[1]);
+  const bobs = (await call('POST', '/api/tokens', {as: 'bob', body: {}})).body.secret;
+  await call('POST', '/v1/ingest', {body: batch('bobs-laptop-0123456789'), headers: {authorization: `Bearer ${bobs}`}});
+
+  assert.equal((await call('GET', '/api/overview', {as: 'bob'})).body.sources.length, 1, 'on his own board at once');
+  assert.deepEqual((await call('GET', `/api/overview?board=${team}`, {as: 'bob'})).body.sources, [], 'on a shared board only when shared');
+  const offer = (await call('GET', `/api/boards/${team}/shares`, {as: 'bob'})).body;
+  const source = offer.mine[0].source;
+  assert.deepEqual([offer.shared, offer.mine[0].shared], [[], false]);
+  assert.equal((await call('POST', `/api/boards/${team}/shares`, {as: 'alice', body: {source}})).status, 404, 'only those who measure it share it');
+  assert.equal((await call('POST', `/api/boards/${team}/shares`, {as: 'bob', body: {source}})).status, 200);
+  const shared = (await call('GET', `/api/overview?board=${team}`, {as: 'alice'})).body;
+  assert.deepEqual(shared.sources.map((s: any) => [s.id, s.owners]), [[source, ['Bob']]]);
+  assert.deepEqual((await call('GET', `/api/boards/${team}/shares`, {as: 'alice'})).body.shared, [{source, provider: 'codex', sharedBy: 'Bob', mine: false}]);
+
+  assert.deepEqual(shared.view, EMPTY, 'nothing arranged yet');
+  const view = {...EMPTY, order: ['history', `source:${source}`], sizes: {[`source:${source}`]: 6}, names: {[source]: 'Bob’s Codex'}, hidden: ['forecast'], windows: [`${source}/weekly`], plans: {[source]: [50, 50, 0, 0, 0, 0, 0]}};
+  assert.deepEqual((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: view})).body, view);
+  assert.deepEqual((await call('GET', `/api/overview?board=${team}`, {as: 'bob'})).body.view, view);
+  assert.equal((await call('POST', `/api/boards/${team}/view`, {as: 'bob', body: EMPTY})).status, 403, 'a member only looks');
+  assert.equal((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {...view, plans: {[source]: [50, 60, 0, 0, 0, 0, 0]}}})).status, 400);
+  assert.equal((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {...view, sizes: {history: 2}}})).status, 400, 'a quarter of the grid at least');
+
+  assert.equal((await call('DELETE', `/api/boards/${team}/shares/${source}`, {as: 'alice'})).status, 200, 'the owner takes anything off');
+  assert.deepEqual((await call('GET', `/api/overview?board=${team}`, {as: 'bob'})).body.sources, []);
+  assert.equal((await call('GET', '/api/overview', {as: 'bob'})).body.sources.length, 1, 'it stays on his own board');
 
   assert.equal((await call('POST', `/api/boards/${team}`, {as: 'bob', body: {name: 'Mine now'}})).status, 403, 'only the owner renames');
   assert.equal((await call('POST', `/api/boards/${team}`, {as: 'alice', body: {name: ''}})).status, 400, 'a shared board needs a name');
-  assert.equal((await call('POST', `/api/boards/${team}`, {as: 'alice', body: {name: 'Platform team'}})).body.name, 'Platform team');
-  assert.equal((await call('DELETE', `/api/boards/${team}/devices/${alicesBox.id}`, {as: 'alice'})).status, 200);
-});
-
-test('the owner arranges a board, and everyone on it sees it that way', async () => {
-  const {call, person} = await hub();
-  await person('alice');
-  const board = (await call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
-  await person('bob', (await call('POST', `/api/boards/${board}/invites`, {as: 'alice'})).body.url.split('/invite/')[1]);
-  const token = (await call('POST', `/api/boards/${board}/tokens`, {as: 'bob', body: {}})).body.secret;
-  await call('POST', '/v1/ingest', {body: batch('machine-one-0123456789'), headers: {authorization: `Bearer ${token}`}});
-  const overview = (await call('GET', `/api/overview?board=${board}`, {as: 'bob'})).body;
-  assert.deepEqual(overview.view, {order: [], hidden: [], windows: [], plans: {}}, 'nothing arranged yet');
-  const source = overview.sources[0].id;
-  const view = {order: ['history', `source:${source}`], hidden: ['history'], windows: [`${source}/weekly`], plans: {[source]: [50, 50, 0, 0, 0, 0, 0]}};
-  assert.deepEqual((await call('POST', `/api/boards/${board}/view`, {as: 'alice', body: view})).body, view);
-  assert.deepEqual((await call('GET', `/api/overview?board=${board}`, {as: 'bob'})).body.view, view);
-  assert.equal((await call('POST', `/api/boards/${board}/view`, {as: 'bob', body: EMPTY})).status, 403, 'a member only looks');
-  assert.equal((await call('POST', `/api/boards/${board}/view`, {as: 'alice', body: {...view, plans: {[source]: [50, 60, 0, 0, 0, 0, 0]}}})).status, 400);
-  // A personal board can be renamed and given its default name back; a shared one needs a name.
   const personal = (await call('GET', '/api/session', {as: 'bob'})).body.boards.find((b: any) => b.personal).id;
   assert.equal((await call('POST', `/api/boards/${personal}`, {as: 'bob', body: {name: 'Work'}})).body.name, 'Work');
-  assert.equal((await call('POST', `/api/boards/${personal}`, {as: 'bob', body: {name: ''}})).body.name, '');
-  assert.equal((await call('POST', `/api/boards/${board}`, {as: 'alice', body: {name: ''}})).status, 400);
+  assert.equal((await call('POST', `/api/boards/${personal}`, {as: 'bob', body: {name: ''}})).body.name, '', 'a personal board gets its default name back');
+  assert.equal((await call('GET', `/api/boards/${personal}/shares`, {as: 'bob'})).status, 403, 'a personal board shows everything of its person by itself');
 });
 
-test('the owner deletes a shared board with everything on it; a member leaves one', async () => {
-  const {call, person, store} = await hub();
+test('the owner removes people and resets invite links; what someone shared leaves with them; deleting a board keeps the data', async () => {
+  const {call, person} = await hub();
   const personal = await person('alice');
   const board = (await call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
   const invite = async () => (await call('POST', `/api/boards/${board}/invites`, {as: 'alice'})).body.url.split('/invite/')[1];
-  await person('bob', await invite());
-  await person('carol', await invite());
-  const send = (token: string, machine: string) => call('POST', '/v1/ingest', {body: batch(machine), headers: {authorization: `Bearer ${token}`}});
-  const bobs = (await call('POST', `/api/boards/${board}/tokens`, {as: 'bob', body: {}})).body.secret;
-  const alices = (await call('POST', `/api/boards/${board}/tokens`, {as: 'alice', body: {}})).body.secret;
-  assert.equal((await send(bobs, 'machine-bob-0123456789')).status, 200);
-  assert.equal((await send(alices, 'machine-alice-0123456789')).status, 200);
+  const bob = await person('bob', await invite());
+  const link = await invite();
+  await person('carol', link);
+  const bobs = (await call('POST', '/api/tokens', {as: 'bob', body: {}})).body.secret;
+  await call('POST', '/v1/ingest', {body: batch('machine-bob-0123456789'), headers: {authorization: `Bearer ${bobs}`}});
+  const source = (await call('GET', `/api/boards/${board}/shares`, {as: 'bob'})).body.mine[0].source;
+  await call('POST', `/api/boards/${board}/shares`, {as: 'bob', body: {source}});
+  const members = (await call('GET', `/api/boards/${board}/members`, {as: 'alice'})).body;
+  const bobId = members.find((m: any) => m.name === 'Bob').id;
+
+  assert.equal((await call('DELETE', `/api/boards/${board}/members/${bobId}`, {as: 'carol'})).status, 403, 'only the owner removes people');
+  assert.equal((await call('DELETE', `/api/boards/${board}/members/${bobId}`, {as: 'alice'})).status, 200);
+  assert.equal((await call('GET', `/api/overview?board=${board}`, {as: 'bob'})).status, 404);
+  assert.deepEqual((await call('GET', `/api/overview?board=${board}`, {as: 'alice'})).body.sources, [], 'what he shared left with him');
+  assert.equal((await call('GET', '/api/overview', {as: 'bob'})).body.sources.length, 1, 'and stays his');
+  void bob;
+
+  assert.deepEqual((await call('DELETE', `/api/boards/${board}/invites`, {as: 'alice'})).body, {revoked: 2});
+  assert.equal((await call('GET', `/api/invites/${link}`)).status, 404, 'links given out stop working');
 
   assert.equal((await call('POST', `/api/boards/${board}/leave`, {as: 'alice'})).status, 403, 'the owner deletes it instead');
-  assert.equal((await call('POST', `/api/boards/${board}/leave`, {as: 'bob'})).status, 200);
-  assert.equal((await call('GET', `/api/overview?board=${board}`, {as: 'bob'})).status, 404);
-  assert.equal((await send(bobs, 'machine-bob-0123456789')).status, 401, 'what he connected stops with him');
-  assert.equal((await send(alices, 'machine-alice-0123456789')).status, 200, 'the rest goes on');
-
+  assert.equal((await call('POST', `/api/boards/${board}/leave`, {as: 'carol'})).status, 200);
   assert.equal((await call('DELETE', `/api/boards/${personal}`, {as: 'alice'})).status, 403, 'a personal board stays');
-  assert.equal((await call('DELETE', `/api/boards/${board}`, {as: 'carol'})).status, 403, 'only its owner deletes it');
   assert.equal((await call('DELETE', `/api/boards/${board}`, {as: 'alice'})).status, 200);
   assert.deepEqual((await call('GET', '/api/session', {as: 'carol'})).body.boards.map((b: any) => b.personal), [true]);
-  assert.equal((await send(alices, 'machine-alice-0123456789')).status, 401);
-  const left = (sql: string) => (store.db.prepare(sql).get(board) as {n: number}).n;
-  assert.equal(left('SELECT count(*) n FROM sources WHERE board_id = ?'), 0);
-  for (const table of ['samples', 'state']) {
-    assert.equal((store.db.prepare(`SELECT count(*) n FROM ${table} WHERE source_id NOT IN (SELECT id FROM sources)`).get() as {n: number}).n, 0, `no ${table} left behind`);
-  }
-  assert.equal(left('SELECT count(*) n FROM members WHERE board_id = ?'), 0);
-  assert.equal(left('SELECT count(*) n FROM devices WHERE board_id = ? AND revoked_at IS NULL'), 0);
+  assert.equal((await call('GET', '/api/overview', {as: 'bob'})).body.sources.length, 1, 'measurements belong to their people, not to boards');
 });
 
 test('a person changes their name freely, their email and password only with the current password', async () => {
@@ -240,7 +258,8 @@ test('a person changes their name freely, their email and password only with the
   await person('alice');
   await call('POST', '/api/auth/login', {as: 'alice-phone', body: {email: 'alice@example.com', password: 'correct horse'}});
   assert.equal((await call('POST', '/api/account', {as: 'alice', body: {name: 'Alice L.'}})).body.user.name, 'Alice L.');
-  assert.equal((await call('POST', '/api/account', {as: 'alice', body: {email: 'al@example.com', currentPassword: 'wrong'}})).status, 403);
+  const wrong = await call('POST', '/api/account', {as: 'alice', body: {email: 'al@example.com', currentPassword: 'wrong'}});
+  assert.deepEqual([wrong.status, wrong.body.error], [403, 'wrong_password']);
   const changed = await call('POST', '/api/account', {as: 'alice', body: {email: 'AL@example.com', password: 'battery staple', currentPassword: 'correct horse'}});
   assert.equal(changed.body.user.email, 'al@example.com');
   assert.equal((await call('GET', '/api/session', {as: 'alice'})).body.user?.name, 'Alice L.', 'this session stays');
@@ -248,21 +267,30 @@ test('a person changes their name freely, their email and password only with the
   assert.equal((await call('POST', '/api/auth/login', {body: {email: 'al@example.com', password: 'battery staple'}})).status, 200);
 });
 
+test('only failed sign-ins count against the limit', async () => {
+  const {call, person} = await hub();
+  await person('alice');
+  const signIn = (password: string) => call('POST', '/api/auth/login', {body: {email: 'alice@example.com', password}});
+  for (let i = 0; i < 12; i++) assert.equal((await signIn('correct horse')).status, 200, 'a team behind one address signs in freely');
+  for (let i = 0; i < 10; i++) assert.equal((await signIn('wrong horse')).status, 401);
+  assert.equal((await signIn('correct horse')).status, 429);
+});
+
 test('a device shows the failures it reports until it delivers again', async () => {
   const {call, person} = await hub();
-  const board = await person('alice');
-  const token = (await call('POST', `/api/boards/${board}/tokens`, {as: 'alice', body: {}})).body;
+  await person('alice');
+  const token = (await call('POST', '/api/tokens', {as: 'alice', body: {}})).body;
   const auth = {authorization: `Bearer ${token.secret}`};
   const failure = {provider: 'claude', observedAt: iso(Date.now()), error: 'not_logged_in', detail: 'run claude and /login'};
   await call('POST', '/v1/ingest', {body: {...batch('machine-one-0123456789', [failure]), snapshots: []}, headers: auth});
-  const [device] = (await call('GET', `/api/boards/${board}/devices`, {as: 'alice'})).body;
+  const [device] = (await call('GET', '/api/devices', {as: 'alice'})).body;
   assert.deepEqual(device.failures.map((f: any) => [f.provider, f.error, f.detail]), [['claude', 'not_logged_in', 'run claude and /login']]);
 });
 
-test('a machine connects with a one-time code approved by a signed-in person', async () => {
+test('a machine connects with a one-time code approved by a signed-in person, and becomes theirs', async () => {
   const {call, person} = await hub();
-  const board = await person('alice');
-  const started = await call('POST', '/v1/device/code', {body: {machine: machine('laptop-0123456789ab'), agent: 'quotum/0.1.0'}});
+  await person('alice');
+  const started = await call('POST', '/v1/device/code', {body: {machine: machine('laptop-0123456789ab'), agent: 'quotum/0.2.0'}});
   assert.match(started.body.userCode, /^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
   assert.equal(started.body.verificationUriComplete, `${ORIGIN}/device?code=${started.body.userCode}`);
   const poll = () => call('POST', '/v1/device/token', {body: {deviceCode: started.body.deviceCode}});
@@ -271,28 +299,25 @@ test('a machine connects with a one-time code approved by a signed-in person', a
 
   const typed = started.body.userCode.toLowerCase().replace('-', ' ');
   const pending = await call('GET', `/api/device?code=${encodeURIComponent(typed)}`, {as: 'alice'});
-  assert.deepEqual([pending.body.machine.name, pending.body.boards.map((b: any) => b.id)], ['build-01', [board]]);
-  assert.equal((await call('POST', '/api/device/approve', {as: 'alice', body: {code: typed, board: 'nope'}})).status, 400);
-  const other = (await call('POST', '/api/boards', {as: 'alice', body: {name: 'Other'}})).body.id;
-  const mallory = await person('mallory', (await call('POST', `/api/boards/${other}/invites`, {as: 'alice'})).body.url.split('/invite/')[1]);
-  assert.equal((await call('POST', '/api/device/approve', {as: 'alice', body: {code: typed, board: mallory}})).status, 400, 'only to a board of the approver');
-  assert.equal((await call('POST', '/api/device/approve', {as: 'alice', body: {code: typed, board}})).status, 200);
+  assert.equal(pending.body.machine.name, 'build-01');
+  assert.equal((await call('POST', '/api/device/approve', {as: 'alice', body: {code: 'BCDF-GHJK'}})).status, 400);
+  assert.equal((await call('POST', '/api/device/approve', {as: 'alice', body: {code: typed}})).status, 200);
 
   const connected = await call('POST', '/v1/device/token', {body: {deviceCode: started.body.deviceCode}});
   assert.match(connected.body.token, /^qt_d_/);
-  assert.deepEqual([connected.body.board.id, connected.body.device.owner], [board, 'Alice']);
+  assert.deepEqual([connected.body.account, connected.body.device.name, connected.body.board], [{name: 'Alice'}, 'build-01', undefined]);
   assert.equal((await poll()).body.error, 'expired_token', 'a code gives one device');
 
   const device = {authorization: `Bearer ${connected.body.token}`};
   assert.equal((await call('POST', '/v1/ingest', {body: batch('laptop-0123456789ab'), headers: device})).status, 200);
-  // A board token cannot take over the machine connected with a code.
-  const boardToken = (await call('POST', `/api/boards/${board}/tokens`, {as: 'alice', body: {}})).body.secret;
-  const takeover = await call('POST', '/v1/ingest', {body: batch('laptop-0123456789ab'), headers: {authorization: `Bearer ${boardToken}`}});
+  // A machine token cannot take over the machine connected with a code.
+  const machines = (await call('POST', '/api/tokens', {as: 'alice', body: {}})).body.secret;
+  const takeover = await call('POST', '/v1/ingest', {body: batch('laptop-0123456789ab'), headers: {authorization: `Bearer ${machines}`}});
   assert.deepEqual([takeover.status, takeover.body.error], [403, 'device_conflict']);
 
-  const [listed] = (await call('GET', `/api/boards/${board}/devices`, {as: 'alice'})).body;
-  assert.deepEqual([listed.via, listed.owner, listed.mine], ['code', 'Alice', true]);
-  await call('DELETE', `/api/boards/${board}/devices/${listed.id}`, {as: 'alice'});
+  const [listed] = (await call('GET', '/api/devices', {as: 'alice'})).body;
+  assert.equal(listed.via, 'code');
+  await call('DELETE', `/api/devices/${listed.id}`, {as: 'alice'});
   const removed = await call('POST', '/v1/ingest', {body: batch('laptop-0123456789ab'), headers: device});
   assert.deepEqual([removed.status, removed.body.error], [403, 'device_revoked']);
   assert.equal((await call('POST', '/v1/checkin', {body: {version: 1}, headers: device})).status, 403);
@@ -300,11 +325,11 @@ test('a machine connects with a one-time code approved by a signed-in person', a
 
 test('agents get errors in the spec’s terms', async () => {
   const {call, person} = await hub();
-  const board = await person('alice');
-  const auth = {authorization: `bearer ${(await call('POST', `/api/boards/${board}/tokens`, {as: 'alice', body: {}})).body.secret}`};
-  const checkin = await call('POST', '/v1/checkin', {body: {version: 1, agent: 'quotum/0.1.0', machine: machine('m-0123456789ab')}, headers: auth});
+  await person('alice');
+  const auth = {authorization: `bearer ${(await call('POST', '/api/tokens', {as: 'alice', body: {}})).body.secret}`};
+  const checkin = await call('POST', '/v1/checkin', {body: {version: 1, agent: 'quotum/0.2.0', machine: machine('m-0123456789ab')}, headers: auth});
   assert.deepEqual([checkin.status, checkin.body.subscriptions], [200, []], 'the scheme is case-insensitive');
-  const bad = await call('POST', '/v1/checkin', {body: {version: 1, agent: 'quotum/0.1.0', machine: machine('m-0123456789ab'), subscriptions: [{provider: 'claude', account: 'someone@example.com'}]}, headers: auth});
+  const bad = await call('POST', '/v1/checkin', {body: {version: 1, agent: 'quotum/0.2.0', machine: machine('m-0123456789ab'), subscriptions: [{provider: 'claude', account: 'someone@example.com'}]}, headers: auth});
   assert.deepEqual([bad.status, bad.body], [400, {error: 'invalid_request', detail: 'account'}], 'accounts are pseudonyms, never raw ids');
   const broken = await call('POST', '/v1/ingest', {body: '{"version": 1,', headers: auth});
   assert.deepEqual([broken.status, broken.body], [400, {error: 'invalid_batch'}]);
@@ -323,6 +348,7 @@ test('changes from another origin, unknown hosts and other methods are refused',
   assert.equal((await call('GET', '/api/history?range=1y', {as: 'alice'})).status, 400);
   assert.equal((await call('DELETE', '/v1/ingest')).status, 405);
   assert.equal((await call('POST', '/v1/ingest', {body: batch('x-0123456789abcdef')})).status, 401);
+  assert.equal((await call('GET', '/health', {headers: {host: 'evil.example'}})).status, 200, 'the health check answers any host');
   if (existsSync(path.join(config.clientRoot, 'index.html'))) {
     assert.equal((await call('GET', '/device')).status, 200, 'client pages are served by the single-page client');
   }

@@ -38,11 +38,7 @@ export function agentRoutes(app: FastifyInstance, hub: Hub) {
   app.post<{Body: {deviceCode?: unknown}}>('/v1/device/token', (request, reply) => {
     const result = pairing.poll(request.body?.deviceCode);
     if (typeof result === 'string') return reply.code(400).send({error: result});
-    return {
-      token: result.token,
-      device: {id: result.device.id, name: result.device.name, owner: result.device.owner},
-      board: result.board,
-    };
+    return {token: result.token, device: {id: result.device.id, name: result.device.label ?? result.device.name}, account: result.account};
   });
 
   app.post('/v1/checkin', (request, reply) => asAgent(request, reply, 'invalid_request', credential => ingest.checkin(credential, request.body)));

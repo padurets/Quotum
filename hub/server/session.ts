@@ -50,16 +50,27 @@ export class Limiter {
     private readonly windowMs: number,
   ) {}
 
+  private recent(key: string, now: number): number[] {
+    const recent = (this.hits.get(key) ?? []).filter(at => now - at < this.windowMs);
+    this.hits.set(key, recent);
+    return recent;
+  }
+
+  /** Whether the key has used up its window. */
+  blocked(key: string, now = Date.now()): boolean {
+    return this.recent(key, now).length >= this.max;
+  }
+
+  /** Counts an attempt against the key: a failed sign-in, say, but not a successful one. */
+  record(key: string, now = Date.now()) {
+    this.recent(key, now).push(now);
+    if (this.hits.size > 10_000) this.forget(now);
+  }
+
   /** Records an attempt; false once the key has used up its window. */
   allow(key: string, now = Date.now()): boolean {
-    const recent = (this.hits.get(key) ?? []).filter(at => now - at < this.windowMs);
-    if (recent.length >= this.max) {
-      this.hits.set(key, recent);
-      return false;
-    }
-    recent.push(now);
-    this.hits.set(key, recent);
-    if (this.hits.size > 10_000) this.forget(now);
+    if (this.blocked(key, now)) return false;
+    this.record(key, now);
     return true;
   }
 

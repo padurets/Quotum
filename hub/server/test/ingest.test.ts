@@ -7,7 +7,7 @@ import {Store} from '../store/store.js';
 import {Directory} from '../store/directory.js';
 import {Duty} from '../duty.js';
 import {Ingest, IngestError, type Credential} from '../ingest.js';
-import {parseBatch} from '../domain/ingest.js';
+import {Invalid, parseBatch} from '../domain/ingest.js';
 import {edge, onGrid, series, type Sample} from '../domain/quota.js';
 import {newSecret} from '../domain/auth.js';
 
@@ -36,26 +36,25 @@ const agy = (at: number, used: number, accountName?: string) =>
     windows: [{id: 'gemini:weekly', kind: 'weekly', minutes: 10080, label: 'Gemini', usedPercent: used, resetsAt: null}],
   });
 
-const batch = (snapshots: unknown[], failures: unknown[] = [], machine = 'machine-one-0123456789', owner: object = {}) => ({
+const batch = (snapshots: unknown[], failures: unknown[] = [], machine = 'machine-one-0123456789') => ({
   version: 1,
   agent: 'quotum/0.1.0',
   machine: {id: machine, name: `host-${machine.slice(8, 11)}`, os: 'linux', arch: 'x86_64'},
-  owner,
   // Agents send right after measuring: the clock at sending is the last measurement's.
   sentAt: iso(Math.max(start, ...[...snapshots, ...failures].map((item: any) => Date.parse(item.observedAt)))),
   snapshots,
   failures,
 });
 
-/** A hub with Alice, her personal board and a board token of hers. */
+/** A hub with Alice, her personal board and a machine token of hers. */
 function setup() {
   const store = new Store(path.join(mkdtempSync(path.join(tmpdir(), 'quotum-ingest-')), 'db.sqlite'), start);
   const directory = new Directory(store.db);
   const ingest = new Ingest(store, directory, new Duty());
   const alice = directory.createUser('alice@example.com', 'Alice', 'x', start);
   const board = directory.boards(alice.id)[0].id;
-  const secret = newSecret('qt_b');
-  const tokenRow = directory.createToken(secret, '…', board, 'images', alice.id, start);
+  const secret = newSecret('qt_m');
+  const tokenRow = directory.createToken(secret, '…', alice.id, 'images', start);
   const token = ingest.authenticate(`Bearer ${secret}`) as Credential;
   return {store, directory, ingest, alice, board, secret, tokenRow, token};
 }
@@ -67,10 +66,10 @@ const only = (store: Store, board: string, provider: string) => {
   return states[0];
 };
 
-test('board and device tokens are told apart; anything else is refused', () => {
+test('machine and device tokens are told apart; anything else is refused', () => {
   const {ingest, secret} = setup();
-  assert.equal((ingest.authenticate(`Bearer ${secret}`) as Credential).kind, 'board');
-  assert.equal((ingest.authenticate(`bearer ${secret}`) as Credential).kind, 'board', 'the scheme is case-insensitive');
+  assert.equal((ingest.authenticate(`Bearer ${secret}`) as Credential).kind, 'token');
+  assert.equal((ingest.authenticate(`bearer ${secret}`) as Credential).kind, 'token', 'the scheme is case-insensitive');
   assert.equal(ingest.authenticate(`Bearer ${secret}x`), null);
   assert.equal(ingest.authenticate(`Bearer ${newSecret('qt_d')}`), null);
   assert.equal(ingest.authenticate('Bearer test-token-0123456789abcdef'), null);
@@ -85,10 +84,8 @@ test('a malformed batch is refused whole', () => {
   assert.throws(() => parseBatch(batch([snapshot(start, 5, {provider: 'cursor'})])), /provider/);
   assert.throws(() => parseBatch(batch([snapshot(start, 5, {staleAfterMs: 0})])), /staleAfterMs/);
   assert.throws(() => parseBatch(batch([snapshot(start, 5, {resets: {available: -1}})])), /resets/);
-  assert.throws(() => parseBatch(batch([], [], undefined, {name: 7})), /owner name/);
-  const parsed = parseBatch(batch([snapshot(start, 5)], [], undefined, {name: 'alice'}));
+  const parsed = parseBatch(batch([snapshot(start, 5)]));
   assert.equal(parsed.snapshots[0].windows[0].resetsAt, start + 5 * 86_400_000);
-  assert.deepEqual(parsed.owner, {name: 'alice'});
 });
 
 test('a window keeps its kind and the scope label the agent gave, nothing else', () => {
@@ -104,8 +101,7 @@ test('every account of a provider is a source of its own, with a stable id', () 
   const states = store.states(board);
   assert.deepEqual(states.map(s => s.windows[0]?.used), [5, 7]);
   assert.ok(states.every(s => /^codex:[0-9a-f]{12}$/.test(s.id)));
-  assert.equal(store.source(board, 'codex', 'a1b2c3d4e5f6a1b2c3d4e5f6', start), states[0].id);
-  assert.notEqual(store.source('team', 'codex', 'a1b2c3d4e5f6a1b2c3d4e5f6', start), states[0].id, 'another board has its own');
+  assert.equal(store.source('codex', 'a1b2c3d4e5f6a1b2c3d4e5f6', start), states[0].id);
 });
 
 test('free resets the client reports are kept with the source until it stops reporting them', () => {
@@ -125,38 +121,53 @@ test('one account measured by several devices is one source', () => {
   assert.deepEqual([store.states(board).length, series.samples, series.consumed], [1, 2, 1]);
 });
 
-test('a subscription the client does not name belongs to its owner, not to the machine', () => {
-  const {store, ingest, board, token} = setup();
-  const alice = {name: 'alice'};
-  ingest.accept(token, batch([agy(start, 10)], [], 'machine-one-0123456789', alice), start);
-  ingest.accept(token, batch([agy(start + 60_000, 12)], [], 'machine-two-0123456789', alice), start + 60_000);
-  ingest.accept(token, batch([agy(start + 60_000, 50)], [], 'machine-six-0123456789', {name: 'bob'}), start + 60_000);
-  ingest.accept(token, batch([agy(start + 60_000, 90, 'Work')], [], 'machine-one-0123456789', alice), start + 60_000);
+test('a subscription the client does not name is its person\'s, not the machine\'s', () => {
+  const {store, directory, ingest, board, token} = setup();
+  ingest.accept(token, batch([agy(start, 10)], [], 'machine-one-0123456789'), start);
+  ingest.accept(token, batch([agy(start + 60_000, 12)], [], 'machine-two-0123456789'), start + 60_000);
+  ingest.accept(token, batch([agy(start + 60_000, 90, 'Work')], [], 'machine-one-0123456789'), start + 60_000);
   const used = store.states(board).map(s => s.windows[0].used).sort((a, b) => a - b);
-  assert.deepEqual(used, [12, 50, 90], "alice's two machines share one subscription; bob and alice's named one are separate");
-});
-
-test('with a board token the owner is the declared name (a member when it is their email), else the token creator', () => {
-  const {directory, ingest, board, token} = setup();
+  assert.deepEqual(used, [12, 90], "alice's two machines share one subscription; her named one is separate");
+  // Bob's unnamed Antigravity is his own, even measured the same way.
   const bob = directory.createUser('bob@example.com', 'Bob', 'x', start);
-  directory.addMember(board, bob.id, start);
-
-  const owner = (machine: string, claimed: object) => ingest.accept(token, batch([snapshot(start, 5)], [], machine, claimed), start).device.owner;
-  assert.equal(owner('machine-aaa-0123456789', {name: 'build farm'}), 'build farm');
-  assert.equal(owner('machine-bbb-0123456789', {name: 'BOB@example.com'}), 'Bob');
-  assert.equal(owner('machine-ccc-0123456789', {}), 'Alice');
-  assert.equal(directory.deviceByMachine(board, 'machine-bbb-0123456789')?.ownerUserId, bob.id);
+  const secret = newSecret('qt_m');
+  directory.createToken(secret, '…', bob.id, 'laptop', start);
+  ingest.accept(ingest.authenticate(`Bearer ${secret}`) as Credential, batch([agy(start + 60_000, 50)], [], 'machine-bob-0123456789'), start + 60_000);
+  assert.equal(store.states(board).length, 2);
+  assert.deepEqual(store.states(directory.boards(bob.id)[0].id).map(s => s.windows[0].used), [50]);
 });
 
-test('a revoked device cannot come back with the board token; revoking the token disconnects its devices', () => {
-  const {directory, ingest, board, secret, tokenRow, token} = setup();
+test('an account measured by two people is one source on both of their boards', () => {
+  const {store, directory, ingest, board, token} = setup();
+  const bob = directory.createUser('bob@example.com', 'Bob', 'x', start);
+  const secret = newSecret('qt_m');
+  directory.createToken(secret, '…', bob.id, 'laptop', start);
+  ingest.accept(token, batch([snapshot(start, 5)]), start);
+  ingest.accept(ingest.authenticate(`Bearer ${secret}`) as Credential, batch([snapshot(start + 120_000, 6)], [], 'machine-bob-0123456789'), start + 120_000);
+  const bobs = directory.boards(bob.id)[0].id;
+  assert.deepEqual([store.states(board)[0].id, store.states(board)[0].windows[0].used], [store.states(bobs)[0].id, 6]);
+});
+
+test('a machine disconnected by hand stays out with its token; a new token takes it back; a revoked token is told so', () => {
+  const {directory, ingest, alice, secret, tokenRow, token} = setup();
   const {device} = ingest.accept(token, batch([snapshot(start, 5)]), start);
-  directory.revokeDevice(board, device.id, start);
-  assert.throws(() => ingest.accept(token, batch([snapshot(start + 60_000, 6)]), start + 60_000), IngestError);
-  ingest.accept(token, batch([snapshot(start, 5)], [], 'machine-new-0123456789'), start);
-  directory.revokeToken(board, tokenRow.id, start);
-  assert.equal(ingest.authenticate(`Bearer ${secret}`), null);
-  assert.deepEqual(directory.devices(board), []);
+  directory.revokeDevice(alice.id, device.id, start);
+  assert.throws(() => ingest.accept(token, batch([snapshot(start + 60_000, 6)]), start + 60_000), (e: unknown) => e instanceof IngestError && e.code === 'device_revoked');
+  // A leaked token is rotated: machines set up with the new one come back.
+  const fresh = newSecret('qt_m');
+  directory.createToken(fresh, '…', alice.id, 'images', start);
+  const rotated = ingest.authenticate(`Bearer ${fresh}`) as Credential;
+  assert.equal(ingest.accept(rotated, batch([snapshot(start + 120_000, 7)]), start + 120_000).device.id, device.id);
+  directory.revokeToken(alice.id, tokenRow.id, start);
+  assert.equal(ingest.authenticate(`Bearer ${secret}`), 'revoked', 'the agent hears it was disconnected and stops');
+  directory.revokeToken(alice.id, directory.tokens(alice.id)[0].id, start);
+  assert.deepEqual(directory.devices(alice.id), [], 'revoking a token disconnects the machines that joined with it');
+});
+
+test('a measurement from the future is refused, so it cannot hide the real ones after it', () => {
+  const {ingest, token} = setup();
+  const future = {...batch([snapshot(start + 365 * 86_400_000, 5)]), sentAt: iso(start)};
+  assert.throws(() => ingest.accept(token, future, start), Invalid);
 });
 
 test('an agent whose clock is off has its times moved by the difference', () => {

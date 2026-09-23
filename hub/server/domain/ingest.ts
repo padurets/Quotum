@@ -34,8 +34,6 @@ export type AgentBatch = {
   version: 1;
   agent: string;
   machine: {id: string; name: string; os: string; arch: string};
-  /** Whom the agent measures for, if the person running it configured that. */
-  owner: {name: string | null};
   sentAt: number;
   snapshots: AgentSnapshot[];
   failures: AgentFailure[];
@@ -146,7 +144,7 @@ function parseFailure(value: unknown): AgentFailure {
 }
 
 /** Who is sending: the part every agent request shares. */
-export type AgentSender = Pick<AgentBatch, 'agent' | 'machine' | 'owner'>;
+export type AgentSender = Pick<AgentBatch, 'agent' | 'machine'>;
 
 /** The machine an agent runs on, as every agent request describes it. */
 export function parseMachine(machine: unknown): AgentBatch['machine'] {
@@ -164,9 +162,7 @@ export const parseAgent = (value: unknown) => text(value, 'agent')!;
 function parseSender(body: unknown): AgentSender {
   if (!isObject(body)) throw new Invalid('body');
   if (body.version !== 1) throw new Invalid('version');
-  const owner = body.owner ?? {};
-  if (!isObject(owner)) throw new Invalid('owner');
-  return {agent: parseAgent(body.agent), machine: parseMachine(body.machine), owner: {name: text(owner.name, 'owner name', true)}};
+  return {agent: parseAgent(body.agent), machine: parseMachine(body.machine)};
 }
 
 export function parseBatch(body: unknown): AgentBatch {
@@ -202,13 +198,14 @@ export function parseCheckin(body: unknown): Checkin {
 
 /**
  * Which subscription a snapshot belongs to. Clients that identify the account give
- * its pseudonym; otherwise the subscription is the owner's own (optionally one of
- * several, by the name the owner gave it), never the machine's.
+ * its pseudonym, the same whoever measures it; otherwise the subscription is the
+ * device's person's own (optionally one of several, by the name they gave it), never
+ * the machine's.
  */
-export function subscriptionKey(snapshot: Pick<AgentSnapshot, 'account' | 'accountName' | 'provider'>, ownerKey: string): string {
+export function subscriptionKey(snapshot: Pick<AgentSnapshot, 'account' | 'accountName' | 'provider'>, userId: string): string {
   if (snapshot.account) return snapshot.account;
   const name = snapshot.accountName ? `/${snapshot.accountName.trim().toLowerCase()}` : '';
-  return `${ownerKey}/${snapshot.provider}${name}`;
+  return `user:${userId}/${snapshot.provider}${name}`;
 }
 
 export function toMeasurement(snapshot: AgentSnapshot): Measurement {

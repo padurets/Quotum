@@ -4,7 +4,7 @@ import {arranged, planOf, reordered, withHidden, withPlan, withWindowHidden} fro
 import {DEFAULT_PLAN} from '../lib/plan';
 import type {View} from '../lib/types';
 
-const EMPTY: View = {order: [], hidden: [], windows: [], plans: {}};
+const EMPTY: View = {order: [], sizes: {}, names: {}, hidden: [], windows: [], plans: {}};
 const board = ['source:a', 'source:b', 'source:c', 'history'];
 
 test('widgets follow the board’s order; a new one comes next to its natural neighbour', () => {

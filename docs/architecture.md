@@ -13,7 +13,7 @@ accounts. This document explains how the parts work and why they are built this 
 │  claude  -p stream-json       │  /v1/ingest    │ ingest ─► rules ─► SQLite    │
 │  codex   app-server           │ ─────────────► │                   │          │
 │  agy     -p /usage            │  device or     │ dashboard (React)◄┘          │
-│  schedule · spool · pseudonym │  board token   └──────────────────────────────┘
+│  schedule · spool · pseudonym │  machine token └──────────────────────────────┘
 └───────────────────────────────┘
 ```
 
@@ -69,7 +69,7 @@ What follows from this:
 **Which account.** Claude reports the signed-in email and organization when it starts,
 Codex the account id. Both become a pseudonym (a truncated SHA-256, see the spec)
 before anything leaves the machine, the same on every machine. Antigravity does not say
-which account it is: its measurements belong to the owner of the device, and a person
+which account it is: its measurements belong to the person the device belongs to, and a person
 with two Antigravity subscriptions names them in the agent's settings
 (`[providers.antigravity] account = "work"`).
 
@@ -137,18 +137,23 @@ wait in a spool file (at most 5,000, about two days, rewritten atomically) and g
 oldest first when it answers again; meanwhile the agent tries again after a minute,
 then less and less often, up to once an hour, and measures without checking in. Resending
 is safe: a measurement the hub already has counts as a duplicate. When the hub says
-the device was removed from its board, the agent stops.
+the device was removed or its token revoked, the agent stops; any other refusal only
+makes it wait. A sign-in page in front of the hub (a redirect, or a web page where the
+API answers with JSON) is named as such in the log, and the data waits for the hub.
 
 Before sending, the agent makes every measurement fit the format (text cut to the
 length a hub takes, empty names dropped, repeated windows merged), so one odd value from
-a client never gets a whole batch refused. The hub moves the times of a batch whose
-agent clock is off by more than 30 seconds.
+a client rarely gets a batch refused. If the hub refuses one anyway, the agent halves
+it until it finds the measurement at fault, drops that one and delivers the rest. The
+hub moves the times of a batch whose agent clock is off by more than 30 seconds; the
+agent moves its own schedule back when the machine's clock is set back.
 
 ## Storage and the rules
 
-One SQLite file (WAL). A **source** is one subscription on one board, keyed by the
-account pseudonym, or by the owner for clients that don't name their account. Each
-source has its last state (what the card shows) and samples: one row per window per
+One SQLite file (WAL). A **source** is one subscription, kept once for the whole hub:
+keyed by the account pseudonym, or by the device's person for clients that don't name
+their account. Which boards show it is recorded apart from it (see below). Each source
+has its last state (what the card shows) and samples: one row per window per
 measurement (value, reset time, the window's kind and scope as the agent reported
 them), kept for 90 days.
 
@@ -160,7 +165,7 @@ them), kept for 90 days.
 - **The chart** puts every series on one time grid (5 minutes for a day, 30 minutes
   for a week, 2 hours for a month) and shows the lowest value seen in each cell, so
   hovering reads every series at once and a short hiccup doesn't break a line.
-- **The plan** is per source and belongs to the board: whole percents per day of the
+- **The plan** is per source and belongs to the board's view: whole percents per day of the
   weekly window (30/25/15/15/10/5/0 by default). A day at 0 has no spending planned,
   wherever it is; the plan ends with its last non-zero day. Other windows are planned
   linearly to their reset.
@@ -177,41 +182,46 @@ them), kept for 90 days.
   signs up without an invitation but with its setup code: a new hub prints one to its
   log, so only whoever started it can claim it. After that, signing up needs an invite
   link unless the hub is open (`QUOTUM_SIGNUP=open`).
-- **Boards** are what is aggregated and shared: every user has a personal board and can
-  create shared ones. The owner of a board names it, invites people with a link (valid
-  for a week, several uses), arranges it and can delete it; every member sees
-  everything on the board, manages their own tokens and devices (the owner manages all
-  of them) and can leave. What goes with a deleted board, or with a member who left,
-  is revoked rather than forgotten: an agent still sending to it is told it was
-  disconnected and stops.
-- **The view** of a board is how it is arranged: the order of its widgets (a card per
-  source, the chart and the table), the hidden ones, the windows hidden inside cards and the
-  spending plans. It is stored once per board, like a dashboard in Grafana: the owner
-  changes it and everyone sees the same board. Hiding a widget changes nothing that is
-  measured or stored.
-- **Devices** are running agents. The devices tab shows each one, what it delivers and
-  the last failure of each client there (not logged in, too old…). They join a board
-  in one of two ways:
+- **Devices** are running agents, and each belongs to a person. The *Machines* dialog
+  shows a person's devices, what each delivers and the last failure of each client
+  there (not logged in, too old…); the person names them there. A device connects in
+  one of two ways:
   - *a one-time code* (the RFC 8628 device flow): `quotum connect <hub>` shows a code, a
-    signed-in person confirms it in the browser and picks the board; the device gets
-    its own token and belongs to that person;
-  - *a board token*: created by a member and written once into an image, VM or
-    container setup; every machine that starts with it joins the board by itself. A
-    machine connected with a code keeps its own token: a board token cannot take it
-    over.
-- **The owner** of a device is the person who confirmed its code. With a board token it
-  is the name the device declares (`--owner`; a member's email makes it that member's),
-  else the creator of the token. What the clients report (their sign-in emails) is never
-  used for this: it is neither stable nor unique. One person's Claude and Codex may be
-  different accounts, and a shared subscription is used by several people.
+    signed-in person confirms it in the browser; the device gets its own token and
+    belongs to that person;
+  - *a machine token*: a person creates one and writes it once into an image, VM or
+    container setup; every machine that starts with it becomes that person's by
+    itself. A machine connected with a code keeps its own token: a machine token cannot
+    take it over. Revoking a token disconnects its machines; a machine removed by hand
+    comes back only with a new token.
+
+  Who a device belongs to is decided by the token alone. What the clients report (their
+  sign-in emails) is never used for it: it is neither stable nor unique. One person's
+  Claude and Codex may be different accounts, and a team subscription is used by
+  several people.
 - **Subscriptions** are what is measured. An account the client identifies is one
-  subscription however many devices measure it. A subscription the client does not
-  identify (Antigravity) is its owner's, optionally named in the agent's settings.
+  subscription however many devices, of however many people, measure it; each of those
+  people **holds** it. A subscription the client does not identify (Antigravity) is its
+  person's own, optionally named in the agent's settings.
+- **Boards** are what is shown. Everyone has a personal board: it shows every
+  subscription they hold, by itself. Anyone can create shared boards; the owner names
+  one and invites people with a link (valid for a week, several uses). On a shared
+  board people **share** what they hold: the data belongs to whoever measures it, and
+  only they decide whether a board shows it. A card leaves a shared board when whoever
+  shared it takes it off, when the board's owner does, or when no member holds it any
+  more (its last holder left or was removed). Deleting a board deletes its sharing and
+  its view, never the measurements.
+- **The view** of a board is how it is arranged: the order of its widgets (a card per
+  source, the chart and the table), their widths on a twelve-column grid, names given
+  to cards, the hidden widgets, the windows hidden inside cards and the spending plans.
+  It is stored once per board, like a dashboard in Grafana: the owner arranges it and
+  names the cards the way the team calls them, and everyone sees the same board. Nothing
+  in the view changes what is measured or stored.
 
 Secrets (sessions, tokens, codes, invites) are random, prefixed by kind (`qt_s_`,
-`qt_b_`, `qt_d_`, `qt_c_`, `qt_i_`) and stored only as SHA-256 hashes; passwords as
+`qt_m_`, `qt_d_`, `qt_c_`, `qt_i_`) and stored only as SHA-256 hashes; passwords as
 scrypt hashes. Changes made with a session cookie are accepted only from the hub's own
-pages (Origin check, SameSite cookie). Sign-in, sign-up and code lookups are
+pages (Origin check, SameSite cookie). Failed sign-ins and sign-ups and code lookups are
 rate-limited.
 
 ## The dashboard
@@ -233,7 +243,8 @@ no name of their own, so each reader sees "My limits" in their language.
 ## Roadmap
 
 1. ~~Ingest format, the agent (three providers, schedule, spool), hub ingest.~~
-2. ~~Users, boards, board tokens, devices; connecting with a one-time code.~~
+2. ~~Users, boards, devices, machine tokens; connecting with a one-time code;
+   subscriptions held by people and shared with boards.~~
 3. ~~One measurer per subscription.~~
 4. ~~The dashboard fed by agents only (CodexBar removed); English and Russian.~~
 5. A team view on shared boards: people × providers.

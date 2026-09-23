@@ -9,7 +9,7 @@ import {useResets} from './lib/resets';
 import {sourceLabel, titled} from './lib/quota';
 import {usePath} from './lib/router';
 import {boardTitle, rememberBoard, useBoard, useSession, type Board, type Session, type User} from './lib/session';
-import {arranged, cardId, FORECAST, HISTORY, reordered, useView, withHidden} from './lib/view';
+import {arranged, cardId, FORECAST, HISTORY, reordered, spanOf, useView, withHidden, withSpan} from './lib/view';
 import {t, useLocale} from './i18n';
 import {Header} from './components/Header';
 import {SERVICE} from './components/Kit';
@@ -21,13 +21,15 @@ import {AccountPanel} from './components/Account';
 import {AuthScreen} from './components/AuthScreen';
 import {DevicePage} from './components/DevicePage';
 import {InvitePage} from './components/InvitePage';
-import {BoardAdmin, type AdminTab} from './components/BoardAdmin';
+import {MachinesDialog, type MachinesTab} from './components/Machines';
+import {BoardDialog, type BoardTab} from './components/BoardDialog';
 
 function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Board[]; refresh: () => Promise<void>; onSignedOut: () => void}) {
   const now = useNow();
   const [board, selectBoard] = useBoard(boards);
   const boardId = board?.id ?? '';
-  const {data, lastOk, reload} = useOverview(boardId);
+  // A board deleted meanwhile, or one the reader was removed from: the list of boards is read again.
+  const {data, lastOk, reload} = useOverview(boardId, refresh);
   const arrange = useView(data, reload);
   const prefs = usePrefs();
   const revision = data ? data.revision : null;
@@ -38,12 +40,15 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
   const own = useHistory(boardId, prefs.tableRange, sameRange ? null : revision);
   const table = sameRange ? {history, loading: historyLoading} : own.history ? own : {history, loading: true};
   const {resets, past, health} = useResets(prefs.showResets);
-  const [admin, setAdmin] = useState<AdminTab | null>(null);
+  const [machines, setMachines] = useState<MachinesTab | null>(null);
+  const [people, setPeople] = useState<BoardTab | null>(null);
   const [account, setAccount] = useState(false);
-  const closeAdmin = useCallback(() => setAdmin(null), []);
+  const closeMachines = useCallback(() => setMachines(null), []);
 
-  // Sources are named from the whole board: owners appear only when they tell sources apart.
-  const overview = useMemo(() => (data ? {...data, sources: titled(data.sources)} : null), [data]);
+  // Sources are named from the whole board (owners appear only when they tell sources
+  // apart), or as the board's owner named them.
+  const names = arrange.view.names;
+  const overview = useMemo(() => (data ? {...data, sources: titled(data.sources, names)} : null), [data, names]);
   const sources = overview?.sources ?? [];
   const empty = !!overview && sources.length === 0;
 
@@ -58,12 +63,15 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
       {
         id: cardId(source.id),
         name: sourceLabel(source),
+        span: spanOf(arrange.view, cardId(source.id)),
         content: (
           <SourceCard
             source={source}
             now={now}
             resets={source.provider === 'claude' || source.provider === 'codex' ? resets[source.provider] : undefined}
             arrange={arrange}
+            board={board}
+            onChanged={reload}
           />
         ),
       },
@@ -75,7 +83,7 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
       {
         id: HISTORY,
         name: t('widgets.history'),
-        wide: true,
+        span: spanOf(arrange.view, HISTORY),
         content: <History history={history} loading={historyLoading} overview={overview} resets={resets} past={past} now={now} arrange={arrange} />,
       },
     ],
@@ -84,7 +92,7 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
       {
         id: FORECAST,
         name: t('forecast.title'),
-        wide: true,
+        span: spanOf(arrange.view, FORECAST),
         content: <Forecast history={table.history} loading={table.loading} overview={overview} now={now} arrange={arrange} />,
       },
     ],
@@ -111,7 +119,8 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
             />
           ) : null
         }
-        onDevices={() => setAdmin('devices')}
+        onDevices={() => setMachines('devices')}
+        onPeople={board && !board.personal ? () => setPeople('shares') : null}
         user={user}
         onAccount={() => setAccount(true)}
       />
@@ -122,16 +131,36 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
               <div key={i} className="card is-loading" />
             ))}
           </div>
-        ) : empty ? (
+        ) : empty && board?.personal ? (
           <section className="panel onboarding">
             <h2>{t('onboarding.title')}</h2>
             <p>{t('onboarding.text')}</p>
-            <button type="button" className="button primary" onClick={() => setAdmin('connect')}>
+            <button type="button" className="button primary" onClick={() => setMachines('connect')}>
               {t('onboarding.connect')}
             </button>
           </section>
+        ) : empty ? (
+          <section className="panel onboarding">
+            <h2>{t('onboarding.sharedTitle')}</h2>
+            <p>{t('onboarding.sharedText')}</p>
+            <div className="button-row is-start">
+              <button type="button" className="button primary" onClick={() => setPeople('shares')}>
+                {t('onboarding.share')}
+              </button>
+              {board?.role === 'owner' && (
+                <button type="button" className="button" onClick={() => setPeople('members')}>
+                  {t('onboarding.invite')}
+                </button>
+              )}
+            </div>
+          </section>
         ) : shown.length ? (
-          <Widgets widgets={shown} movable={arrange.owner} onMove={order => arrange.update(view => reordered(view, order))} />
+          <Widgets
+            widgets={shown}
+            movable={arrange.owner}
+            onMove={order => arrange.update(view => reordered(view, order))}
+            onResize={(id, span) => arrange.update(view => withSpan(view, id, span))}
+          />
         ) : (
           <section className="panel onboarding">
             <h2>{t('widgets.allHidden')}</h2>
@@ -143,7 +172,18 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
           </section>
         )}
       </main>
-      {admin && board && <BoardAdmin board={board} tab={admin} onTab={setAdmin} onClose={closeAdmin} now={now} />}
+      {machines && <MachinesDialog tab={machines} onTab={setMachines} onClose={closeMachines} now={now} />}
+      {people && board && !board.personal && (
+        <BoardDialog
+          board={board}
+          userId={user.id}
+          tab={people}
+          titles={new Map(sources.map(source => [source.id, sourceLabel(source)]))}
+          onTab={setPeople}
+          onClose={() => setPeople(null)}
+          onChanged={reload}
+        />
+      )}
       {account && <AccountPanel user={user} trackers={health} onChanged={refresh} onSignedOut={onSignedOut} onClose={() => setAccount(false)} />}
     </>
   );

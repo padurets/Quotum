@@ -20,6 +20,13 @@ const DevicesIcon = () => (
   </svg>
 );
 
+const PeopleIcon = () => (
+  <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+    <circle cx="6" cy="5.5" r="2.3" />
+    <path d="M1.8 13.2c.5-2.3 2.2-3.6 4.2-3.6s3.7 1.3 4.2 3.6M10.6 3.4a2.2 2.2 0 0 1 0 4.2M11.8 9.8c1.3.4 2.1 1.6 2.4 3.4" />
+  </svg>
+);
+
 const PencilIcon = () => (
   <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
     <path d="M10.5 3.5l2 2M3 13l.6-2.6L11 3a1.4 1.4 0 0 1 2 2l-7.4 7.4z" />
@@ -171,9 +178,12 @@ function BoardSwitcher({boards, board, onSelect, onChanged}: {boards: Board[]; b
   const [open, setOpen] = useState(false);
   const [deleting, setDeleting] = useState<Board | null>(null);
   const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const create = async (event: FormEvent) => {
     event.preventDefault();
+    if (busy) return;
+    setBusy(true);
     setError(null);
     try {
       const created = await call<Board>('POST', '/api/boards', {name: name.trim()});
@@ -183,6 +193,8 @@ function BoardSwitcher({boards, board, onSelect, onChanged}: {boards: Board[]; b
       onSelect(created.id);
     } catch (failure) {
       setError(failure);
+    } finally {
+      setBusy(false);
     }
   };
   return (
@@ -193,7 +205,7 @@ function BoardSwitcher({boards, board, onSelect, onChanged}: {boards: Board[]; b
       onOpenChange={setOpen}
       trigger={
         <span className="board-name">
-          {board ? boardTitle(board) : '—'}
+          <span className="board-name-text">{board ? boardTitle(board) : '—'}</span>
           <ChevronIcon />
         </span>
       }
@@ -212,7 +224,7 @@ function BoardSwitcher({boards, board, onSelect, onChanged}: {boards: Board[]; b
       ))}
       <form className="popover-section popover-form" onSubmit={create}>
         <input placeholder={t('boards.newPlaceholder')} value={name} maxLength={80} onChange={e => setName(e.target.value)} aria-label={t('boards.newLabel')} />
-        <button className="button" disabled={!name.trim()}>
+        <button className="button" disabled={busy || !name.trim()}>
           {t('boards.create')}
         </button>
       </form>
@@ -237,6 +249,7 @@ export function Header({
   onBoardsChanged,
   widgets,
   onDevices,
+  onPeople,
   user,
   onAccount,
 }: {
@@ -248,6 +261,8 @@ export function Header({
   onBoardsChanged: () => Promise<void>;
   widgets: ReactNode;
   onDevices: () => void;
+  /** A shared board's people and what they share; null on a personal board. */
+  onPeople: (() => void) | null;
   user: User;
   onAccount: () => void;
 }) {
@@ -265,6 +280,11 @@ export function Header({
             </span>
           )}
           {widgets}
+          {onPeople && (
+            <button type="button" className="icon-button" aria-label={t('header.people')} title={t('header.people')} onClick={onPeople}>
+              <PeopleIcon />
+            </button>
+          )}
           <button type="button" className="icon-button" aria-label={t('header.devices')} title={t('header.devices')} onClick={onDevices}>
             <DevicesIcon />
           </button>

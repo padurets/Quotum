@@ -59,7 +59,8 @@ export async function buildApp(hub: Hub) {
   const historyCache = new Map<string, {key: string; value: {series: HistorySeries[]; events: SourceEvent[]}}>();
 
   app.addHook('onRequest', async (request, reply) => {
-    if (!anyHost && !hosts.has(request.hostname.toLowerCase())) return reply.code(403).send({error: 'forbidden_host'});
+    // The health check answers any host: a container asks it at 127.0.0.1 whatever the hub's own address.
+    if (!anyHost && !hosts.has(request.hostname.toLowerCase()) && request.url !== '/health') return reply.code(403).send({error: 'forbidden_host'});
     if (request.method === 'GET' || request.method === 'HEAD') return;
     const path = request.url.split('?')[0];
     const api = path.startsWith('/api/');
@@ -113,24 +114,24 @@ export async function buildApp(hub: Hub) {
     const access = guards.board(request, reply, request.query.board);
     if (!access) return reply;
     const now = Date.now();
-    // Who delivers each source: the owners of the devices that measure it.
-    const owners = new Map<string, Set<string>>();
-    const devices = new Map(directory.devices(access.board.id).map(d => [d.id, d.owner]));
-    for (const {device, source} of store.deviceSources(access.board.id)) {
-      const owner = devices.get(device);
-      if (owner) owners.set(source, (owners.get(source) ?? new Set()).add(owner));
-    }
+    // Whose each source is: the people on this board whose devices measure it.
+    const members = new Map(directory.members(access.board.id).map(m => [m.id, m.name]));
     return {
       board: access.board,
       view: directory.view(access.board.id),
       historyStart: store.historyStart,
       /** Changes whenever the board's data changes: the page re-reads history when it does. */
       revision: store.revision(access.board.id),
-      sources: store.states(access.board.id).map(state => ({
-        ...state,
-        owners: [...(owners.get(state.id) ?? [])].sort(),
-        stale: state.successAt === null || state.staleAfterMs === null || now - state.successAt > state.staleAfterMs,
-      })),
+      sources: store.sources(access.board.id).map(source => {
+        const state = store.state(source.id);
+        return {
+          ...state,
+          owners: source.holders.flatMap(id => members.get(id) ?? []).sort(),
+          /** Measured by the reader's devices: theirs to take off a shared board. */
+          mine: source.holders.includes(access.user.id),
+          stale: state.successAt === null || state.staleAfterMs === null || now - state.successAt > state.staleAfterMs,
+        };
+      }),
     };
   });
 

@@ -5,8 +5,9 @@ import type {DatabaseSync} from 'node:sqlite';
  * the version it reached, so an upgrade runs only the steps it has not seen, all inside
  * one transaction.
  */
-const STEPS = [
-  // 1 — the layout of 0.1.
+export const STEPS = [
+  // 1 — the layout of 0.2. A released step never changes (test/schema.test.ts); a new
+  // layout is a new step.
   `
   CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
@@ -20,31 +21,41 @@ const STEPS = [
     board_id TEXT NOT NULL, user_id TEXT NOT NULL, role TEXT NOT NULL, joined_at INTEGER NOT NULL,
     PRIMARY KEY (board_id, user_id));
   CREATE TABLE invites (id TEXT PRIMARY KEY, board_id TEXT NOT NULL, created_by TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
-  CREATE TABLE tokens (
-    id TEXT PRIMARY KEY, board_id TEXT NOT NULL, name TEXT NOT NULL, hash TEXT NOT NULL UNIQUE, hint TEXT NOT NULL,
-    created_by TEXT NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER, revoked_at INTEGER);
-  -- How a board is arranged (domain/view.ts): widgets' order, hidden ones, spending plans.
+  -- How a board is arranged (domain/view.ts): widgets' order, sizes, names, hidden ones, plans.
   -- Its owner arranges it; everyone on the board sees it the same way.
   CREATE TABLE views (board_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_by TEXT NOT NULL, updated_at INTEGER NOT NULL);
 
-  -- Machines running an agent (one row per board they deliver to), pending one-time
-  -- codes, and the last failure each device reported per provider.
+  -- Machines running an agent, each a person's; the tokens with which many machines
+  -- join as that person; pending one-time codes; the last failure each device reported
+  -- per provider. A device's name is what the machine reports; its label, what people
+  -- named it on the hub.
+  CREATE TABLE tokens (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, hash TEXT NOT NULL UNIQUE, hint TEXT NOT NULL,
+    created_at INTEGER NOT NULL, last_used_at INTEGER, revoked_at INTEGER);
   CREATE TABLE devices (
-    id TEXT PRIMARY KEY, board_id TEXT NOT NULL, machine_id TEXT NOT NULL, name TEXT NOT NULL, os TEXT NOT NULL,
-    arch TEXT NOT NULL, agent TEXT NOT NULL, owner TEXT NOT NULL, owner_user_id TEXT, token_id TEXT,
-    token_hash TEXT UNIQUE, created_at INTEGER NOT NULL, last_seen_at INTEGER, revoked_at INTEGER);
-  CREATE UNIQUE INDEX devices_by_machine ON devices (board_id, machine_id);
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, machine_id TEXT NOT NULL, name TEXT NOT NULL, label TEXT, os TEXT NOT NULL,
+    arch TEXT NOT NULL, agent TEXT NOT NULL, token_id TEXT, token_hash TEXT UNIQUE, created_at INTEGER NOT NULL,
+    last_seen_at INTEGER, revoked_at INTEGER);
+  CREATE UNIQUE INDEX devices_by_machine ON devices (user_id, machine_id);
   CREATE TABLE device_codes (
     id TEXT PRIMARY KEY, user_code TEXT NOT NULL UNIQUE, machine TEXT NOT NULL, created_at INTEGER NOT NULL,
-    expires_at INTEGER NOT NULL, polled_at INTEGER, status TEXT NOT NULL, board_id TEXT, user_id TEXT);
+    expires_at INTEGER NOT NULL, polled_at INTEGER, status TEXT NOT NULL, user_id TEXT);
   CREATE TABLE device_failures (
     device_id TEXT NOT NULL, provider TEXT NOT NULL, error TEXT NOT NULL, detail TEXT, at INTEGER NOT NULL,
     PRIMARY KEY (device_id, provider));
 
-  -- Subscriptions on boards (domain/sources.ts), and which device last delivered each.
+  -- Subscriptions (domain/sources.ts), each kept once however many devices measure it;
+  -- the people whose devices measure it (they see it on their personal board and may
+  -- share it); the shared boards it is shared with; which device last delivered each.
   CREATE TABLE sources (
-    id TEXT PRIMARY KEY, board_id TEXT NOT NULL, provider TEXT NOT NULL, account TEXT NOT NULL, created_at INTEGER NOT NULL,
-    UNIQUE (board_id, provider, account));
+    id TEXT PRIMARY KEY, provider TEXT NOT NULL, account TEXT NOT NULL, created_at INTEGER NOT NULL,
+    UNIQUE (provider, account));
+  CREATE TABLE holders (source_id TEXT NOT NULL, user_id TEXT NOT NULL, since INTEGER NOT NULL,
+    PRIMARY KEY (source_id, user_id)) WITHOUT ROWID;
+  CREATE INDEX holders_by_user ON holders (user_id);
+  CREATE TABLE shares (board_id TEXT NOT NULL, source_id TEXT NOT NULL, shared_by TEXT NOT NULL, shared_at INTEGER NOT NULL,
+    PRIMARY KEY (board_id, source_id)) WITHOUT ROWID;
+  CREATE INDEX shares_by_source ON shares (source_id);
   CREATE TABLE device_sources (
     device_id TEXT NOT NULL, provider TEXT NOT NULL, source_id TEXT NOT NULL, seen_at INTEGER NOT NULL,
     PRIMARY KEY (device_id, provider));
@@ -74,6 +85,10 @@ export function migrate(db: DatabaseSync, now: number) {
   db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
   const current = Number((db.prepare('PRAGMA user_version').get() as {user_version: number}).user_version);
   if (current > SCHEMA_VERSION) throw new Error(`the database has layout ${current}; this version of the hub knows up to ${SCHEMA_VERSION}`);
+  // Hubs before 0.2 were never released, and their layout was numbered 1 as well.
+  if (current >= 1 && !db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'holders'").get()) {
+    throw new Error('the database comes from a development version of the hub before 0.2, which cannot be upgraded; move it aside to start afresh');
+  }
   if (current === SCHEMA_VERSION) return;
   db.exec('BEGIN IMMEDIATE');
   try {

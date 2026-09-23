@@ -1,6 +1,6 @@
 import {useEffect, useRef, useState} from 'react';
 import type {History, Overview} from './types';
-import {call} from './http';
+import {ApiError, call} from './http';
 
 /** A clock ticking every second, for freshness labels and countdowns. */
 export function useNow() {
@@ -17,7 +17,9 @@ export function useNow() {
  * A single failed request is never shown: data stays on screen and only the age of the
  * last good answer decides whether the page looks disconnected.
  */
-export function useOverview(board: string) {
+export function useOverview(board: string, onGone: () => void) {
+  const gone = useRef(onGone);
+  gone.current = onGone;
   const [data, setData] = useState<Overview | null>(null);
   const [lastOk, setLastOk] = useState(0);
   const reload = useRef(() => {});
@@ -40,7 +42,13 @@ export function useOverview(board: string) {
           setLastOk(Date.now());
         }
         failures = 0;
-      } catch {
+      } catch (error) {
+        // Not a lost connection: the board is gone, or the reader is no longer on it.
+        if (error instanceof ApiError && (error.status === 404 || error.status === 403)) {
+          busy = false;
+          if (!done) gone.current();
+          return;
+        }
         failures++;
       }
       busy = false;

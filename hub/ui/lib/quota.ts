@@ -23,17 +23,22 @@ export const sourceLabel = (source: {provider: string; title?: string}) =>
   source.title ?? PROVIDERS[source.provider]?.name ?? source.provider;
 
 /**
- * Names every source of a board: the provider, plus whose it is when that is not
- * obvious — several accounts of one provider, or a board of several people.
+ * Names every source of a board: the provider, plus whose it is when the board is
+ * several people's, plus a number when that still leaves two alike (two accounts of one
+ * person). The board's owner can give any card a name of its own instead.
  */
-export function titled<T extends {provider: string; owners?: string[]}>(sources: T[]): (T & {title: string})[] {
+export function titled<T extends {id: string; provider: string; owners?: string[]}>(sources: T[], names: Record<string, string> = {}): (T & {title: string})[] {
   const people = new Set(sources.flatMap(s => s.owners ?? []));
-  return sources.map(source => {
+  const automatic = sources.map(source => {
     const name = PROVIDERS[source.provider]?.name ?? source.provider;
-    const siblings = sources.filter(s => s.provider === source.provider).length;
     const owners = source.owners ?? [];
-    const whose = (people.size > 1 || siblings > 1) && owners.length ? ` · ${owners.join(', ')}` : '';
-    return {...source, title: name + whose};
+    return people.size > 1 && owners.length ? `${name} · ${owners.join(', ')}` : name;
+  });
+  const seen = new Map<string, number>();
+  return sources.map((source, i) => {
+    const count = (seen.get(automatic[i]) ?? 0) + 1;
+    seen.set(automatic[i], count);
+    return {...source, title: names[source.id] ?? (count > 1 ? `${automatic[i]} ${count}` : automatic[i])};
   });
 }
 

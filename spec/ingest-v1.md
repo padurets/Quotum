@@ -5,18 +5,20 @@ Anything may implement it; the reference implementation is `agent/` (Rust).
 
 ## Tokens
 
-A hub organizes data in **boards** (a person's own, or a shared one). An agent
-delivers with one of:
+Every device belongs to a person on the hub. An agent delivers with one of:
 
 | Token | Prefix | How it is obtained | Who the device belongs to |
 |---|---|---|---|
 | Device token | `qt_d_` | One-time code confirmed by a signed-in person ([below](#connecting-with-a-one-time-code)) | That person |
-| Board token | `qt_b_` | Created on the board by a member, shown once; meant for images, VMs, containers | The declared `owner`, else the token's creator, see [Owner](#owner) |
+| Machine token | `qt_m_` | Created by a person in the dashboard, shown once; meant for images, VMs, containers | Whoever created it |
 
-With a board token a machine joins the board on its first batch; its `machine.id`
-identifies it from then on. A device removed from the board cannot come back with
-the same board token; revoking a board token disconnects every device that joined
-with it.
+With a machine token a machine joins on its first request; its `machine.id` tells it
+from the person's other machines from then on. A machine removed in the dashboard
+cannot come back with the same token, only with a new one; revoking a token
+disconnects every machine that joined with it.
+
+Nothing in this format picks a board. What a person's devices measure shows on that
+person's own board; they share it with shared boards in the dashboard.
 
 ## Request
 
@@ -29,9 +31,8 @@ Content-Type: application/json
 ```json
 {
   "version": 1,
-  "agent": "quotum/0.1.0",
+  "agent": "quotum/0.2.0",
   "machine": {"id": "3f9a…", "name": "workstation", "os": "linux", "arch": "x86_64"},
-  "owner": {"name": "alice"},
   "sentAt": "2026-09-22T18:43:45.120Z",
   "snapshots": [
     {
@@ -55,7 +56,8 @@ Content-Type: application/json
 }
 ```
 
-Timestamps are RFC 3339 strings. Optional fields may be omitted or `null`.
+Timestamps are RFC 3339 strings. Optional fields may be omitted or `null`. A hub
+ignores fields it does not know (older agents sent an `owner`).
 
 **Limits.** Text fields (names, ids, labels, plan, versions) are 1 to 120 characters.
 A batch holds at most 500 snapshots and 500 failures, a snapshot at most 32 windows. A
@@ -64,26 +66,16 @@ what it sends fit (the reference agent trims and cuts before sending).
 
 **Clocks.** `sentAt` is the agent's clock at sending. When it differs from the hub's by
 more than 30 seconds, the hub moves every time of the batch by the difference, so a
-machine with a wrong clock still lands in the right place.
+machine with a wrong clock still lands in the right place. A measurement that is still
+more than 30 seconds in the future after that makes the batch invalid.
 
 ### Machine
 
 | Field | Meaning |
 |---|---|
 | `id` | Random id generated once per installation. Not derived from hardware. |
-| `name` | Display name, the host name by default (configurable). |
+| `name` | The name the machine reports, the host name by default (configurable). Its person can rename the machine in the dashboard; that name wins. |
 | `os`, `arch` | As reported by the agent's runtime (`linux`, `macos`, `windows`; `x86_64`, `aarch64`). |
-
-### Owner
-
-Optional; used only with a board token. `{"name": "…"}` is whom the machine measures
-for, as the person running the agent configured it (`--owner`, `owner = …`). A name
-that is a board member's e-mail makes the device that member's; any other name is shown
-as given. Without a name the device belongs to whoever created the token — so a person
-uses their own token for their machines, and a token shared by several people goes
-with `--owner`. With a device token the owner is ignored: the device already belongs to
-the person who confirmed its code. The hub never derives owners from what the clients
-report.
 
 ### Snapshot
 
@@ -93,7 +85,7 @@ One successful measurement of one provider account on one machine.
 |---|---|
 | `provider` | `claude`, `codex` or `antigravity`. |
 | `account` | Pseudonym of the account: the first 24 hex characters of `sha256("quotum/account/v1\n<provider>\n<stable account id, trimmed, lower-case>")`, see [Stable account ids](#stable-account-ids). The same account on two machines gets the same pseudonym. Absent when the client does not say which account it is (Antigravity); see [Subscriptions](#subscriptions). |
-| `accountName` | For a client that does not identify its account: a name the owner gave this subscription, to tell two of them apart. |
+| `accountName` | For a client that does not identify its account: a name the device's person gave this subscription, to tell two of them apart. |
 | `plan` | The provider's plan name (`max`, `pro`), if reported. |
 | `observedAt` | When the client answered. |
 | `via` | How the value was obtained (`claude-code/get_usage`, `codex/app-server`, `agy/usage`). |
@@ -137,26 +129,29 @@ long as the last one stays representative: another device may be measuring it fi
 
 ### Subscriptions
 
-The hub files snapshots under *subscriptions* of the board: by `account` when the
-client names it (one account measured on many machines is one subscription), else as
-the owner's own subscription of that provider (plus `accountName`, if given), never
-per machine. The same keys decide duty in check-ins.
+The hub files snapshots under *subscriptions*: by `account` when the client names it
+(one account measured on many machines, by one person or several, is one subscription),
+else as the device's person's own subscription of that provider (plus `accountName`, if
+given), never per machine. The same keys decide duty in check-ins.
 
 ## Response
 
-`200` with `{"accepted": n, "duplicates": n, "failures": n, "device": {"id": …, "owner": …}}`.
+`200` with `{"accepted": n, "duplicates": n, "failures": n, "device": {"id": …}}`.
 A snapshot the hub already has (same account, not newer than the last one) counts as a
 duplicate, so resending a batch after a lost answer is safe.
 
 | Status | Meaning | Agent behaviour |
 |---|---|---|
-| `400` | The batch does not match this format (`{"error": "invalid_batch", "detail": "<field>"}`) | Drop it |
-| `401` | Unknown or revoked board token | Keep the data, retry later, less and less often |
-| `403` | `device_revoked`: this device was removed from the board. `device_conflict`: the machine is connected to the board with a code already, and a board token cannot take it over | Stop: nothing will be accepted from it again |
-| `413` | Body too large | Drop it |
+| `400` | The batch does not match this format (`{"error": "invalid_batch", "detail": "<field>"}`) | Drop what the hub will not take: the reference agent halves the batch until it finds the measurement at fault and delivers the rest |
+| `401` | Unknown token | Keep the data, retry later, less and less often |
+| `403` | `device_revoked`: this device was removed, or the token it delivers with was revoked. `device_conflict`: the machine is connected with a code already, and a machine token cannot take it over | Stop: nothing will be accepted from it again |
+| `403` with another code | Something in front of the hub refused the request | Keep the data, retry later |
+| `413` | Body too large | Drop it, or split it as for `400` |
 | `5xx`, network errors | Hub unavailable | Keep the data, retry later, less and less often |
 
-Errors always come as `{"error": "<code>"}`, never with internal messages.
+Errors always come as `{"error": "<code>"}`, never with internal messages. The API never
+redirects and always answers with JSON: a redirect or a web page means something else
+answered, usually a sign-in page in front of the hub, and the agent should say so.
 
 ## Asking whether to measure
 
@@ -172,9 +167,8 @@ Authorization: Bearer <token>
 ```json
 {
   "version": 1,
-  "agent": "quotum/0.1.0",
+  "agent": "quotum/0.2.0",
   "machine": {"id": "3f9a…", "name": "workstation", "os": "linux", "arch": "x86_64"},
-  "owner": {"name": "alice"},
   "subscriptions": [
     {"provider": "claude", "account": "9c1e5a0b7d2f4e6a8b0c1d2e", "active": true},
     {"provider": "antigravity", "accountName": "work", "active": false}
@@ -182,7 +176,7 @@ Authorization: Bearer <token>
 }
 ```
 
-`machine` and `owner` are as in a batch; `account` and `accountName` are as in a
+`machine` is as in a batch; `account` and `accountName` are as in a
 snapshot, as far as the agent knows them before measuring. `active` says whether someone
 is using that client on this machine right now. At most 16 subscriptions.
 
@@ -208,14 +202,15 @@ devices measure the same subscription for a while.
 
 The OAuth 2.0 device authorization flow (RFC 8628) with JSON bodies:
 
-1. `POST /v1/device/code` with `{"machine": {…}, "agent": "quotum/0.1.0"}` →
+1. `POST /v1/device/code` with `{"machine": {…}, "agent": "quotum/0.2.0"}` →
    `{"deviceCode", "userCode": "HVJG-XS8V", "verificationUri", "verificationUriComplete", "expiresIn": 600, "interval": 5}`,
    or `429 {"error": "too_many_attempts"}` when one address asks for too many codes.
 2. The agent shows `userCode` and `verificationUriComplete`; a signed-in person opens it,
-   sees the machine and picks a board.
+   sees the machine and confirms it. The machine becomes that person's.
 3. The agent polls `POST /v1/device/token` with `{"deviceCode"}` every `interval` seconds:
    `400 {"error": "authorization_pending" | "slow_down" | "access_denied" | "expired_token"}`
-   until `200 {"token": "qt_d_…", "device": {"id", "name", "owner"}, "board": {"id", "name"}}`.
+   until `200 {"token": "qt_d_…", "device": {"id", "name"}, "account": {"name"}}`
+   (`account.name`: the display name of the person the device now belongs to).
    A code gives one token; `slow_down` asks to poll 5 s less often.
 
 ## Privacy
@@ -225,6 +220,6 @@ prompts, file contents, file paths.
 
 What is sent: the pseudonym of each account, the plan name, percentages and reset times
 of the windows, free resets, the client's version, the machine's random id, its name
-(the host name unless configured) and operating system, the owner name and
-subscription names if configured, and for a failed measurement its kind and a short
+(the host name unless configured) and operating system, subscription names if
+configured, and for a failed measurement its kind and a short
 message of the client (at most 200 characters).

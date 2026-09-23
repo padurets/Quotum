@@ -8,11 +8,12 @@ export type CodeRequest = {deviceCode: string; userCode: string; expiresIn: numb
 /** Answers while an agent waits, as in OAuth 2.0 device authorization (RFC 8628). */
 export type Waiting = 'authorization_pending' | 'slow_down' | 'access_denied' | 'expired_token';
 
-export type Connected = {token: string; device: Device; board: {id: string; name: string}};
+export type Connected = {token: string; device: Device; account: {name: string}};
 
 /**
  * Connecting a machine with a one-time code: the agent asks for a code, a signed-in
- * person enters it and picks a board, the agent receives its own device token.
+ * person enters it, the machine becomes theirs and the agent receives its own device
+ * token. What it measures shows on that person's board; they share it further.
  */
 export class Pairing {
   constructor(private readonly directory: Directory) {}
@@ -50,14 +51,10 @@ export class Pairing {
 
     if (!this.directory.useCode(request.id)) return 'expired_token';
     const user = this.directory.user(request.userId!)!;
-    const board = this.directory.board(request.boardId!)!;
     const token = newSecret('qt_d');
     const {agent, ...machine} = request.machine;
-    const device = this.directory.saveDevice(
-      {boardId: board.id, machine, agent, owner: user.name, ownerUserId: user.id, tokenId: null, secret: token},
-      now,
-    );
-    return {token, device, board: {id: board.id, name: board.name}};
+    const device = this.directory.saveDevice({userId: user.id, machine, agent, tokenId: null, secret: token}, now);
+    return {token, device, account: {name: user.name}};
   }
 
   /** A pending request as the approving person sees it. */
@@ -67,11 +64,10 @@ export class Pairing {
     return request && request.status === 'pending' && request.expiresAt > now ? request : null;
   }
 
-  /** Approves (to a board the person is a member of) or denies a pending request. */
-  decide(userCode: unknown, approve: boolean, userId: string, boardId: string | null, now = Date.now()): boolean {
+  /** Approves (the machine becomes the approving person's) or denies a pending request. */
+  decide(userCode: unknown, approve: boolean, userId: string, now = Date.now()): boolean {
     const request = this.pending(userCode, now);
     if (!request) return false;
-    if (approve && (!boardId || !this.directory.membership(boardId, userId))) return false;
-    return this.directory.decide(request.userCode, approve, userId, approve ? boardId : null, now);
+    return this.directory.decide(request.userCode, approve, userId, now);
   }
 }

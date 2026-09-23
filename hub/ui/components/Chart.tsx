@@ -1,4 +1,4 @@
-import {useEffect, useMemo, useRef, useState, type PointerEvent} from 'react';
+import {useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent} from 'react';
 import {clock, duration, num, shortDay} from '../lib/format';
 import {t} from '../i18n';
 import type {Line} from '../lib/lines';
@@ -57,6 +57,7 @@ export function Chart({
   now,
   to,
   cellMs,
+  empty,
 }: {
   lines: Line[];
   plans?: PlanLine[];
@@ -66,6 +67,8 @@ export function Chart({
   now: number;
   to: number;
   cellMs: number;
+  /** Said over an empty chart; none when the legend already says it. */
+  empty: string | null;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(900);
@@ -141,7 +144,15 @@ export function Chart({
     const at = from + ((px - left) / (width - left - right)) * span;
     setHover(Math.floor(at / cellMs) * cellMs);
   };
-  const hoverX = hover === null ? 0 : bx(hover);
+  // A cell ahead of now is read at its middle; the one holding now, at now.
+  const hoverX = hover === null ? 0 : hover > now ? x(Math.min(to, hover + cellMs / 2)) : bx(hover);
+  // The tooltip sits right of the pointer, or left of it when it would leave the chart.
+  const tip = useRef<HTMLDivElement>(null);
+  const [tipWidth, setTipWidth] = useState(200);
+  useLayoutEffect(() => {
+    if (tip.current) setTipWidth(tip.current.offsetWidth);
+  }, [hover]);
+  const tipLeft = hoverX + 12 + tipWidth <= width ? hoverX + 12 : Math.max(0, hoverX - 12 - tipWidth);
   const bandWidth = Math.max(1, x(Math.min(to, (hover ?? 0) + cellMs)) - x(hover ?? 0));
 
   return (
@@ -241,7 +252,7 @@ export function Chart({
       </svg>
 
       {hover !== null && readout.length + planReadout.length + markerReadout.length > 0 && (
-        <div className="tooltip" style={{left: hoverX, transform: `translateX(${hoverX > width * 0.6 ? 'calc(-100% - 12px)' : '12px'})`}}>
+        <div className="tooltip" ref={tip} style={{left: tipLeft}}>
           <div className="tooltip-time">{cellLabel(hover, cellMs)}</div>
           {[...readout]
             .sort((a, b) => a.value - b.value)
@@ -280,7 +291,7 @@ export function Chart({
           ))}
         </div>
       )}
-      {!lines.length && <div className="chart-empty">{t('chart.empty')}</div>}
+      {!lines.length && empty && <div className="chart-empty">{empty}</div>}
     </div>
   );
 }

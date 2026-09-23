@@ -19,7 +19,7 @@ const FUTURE: Record<string, number> = {'24h': 4 * 3_600_000, '7d': DAY, '30d': 
 const HORIZON: Record<Exclude<Horizon, 'auto'>, number> = {'1d': DAY, '3d': 3 * DAY, '7d': 7 * DAY};
 
 /** The chart's own settings: how far it looks ahead, and (for the board's owner) hiding it. */
-function HistorySettings({arrange}: {arrange: Arrange}) {
+function HistorySettings({arrange, planShown}: {arrange: Arrange; planShown: boolean}) {
   const {horizon} = usePrefs();
   return (
     <Popover label={t('history.settings')} icon={<SlidersIcon />}>
@@ -32,6 +32,7 @@ function HistorySettings({arrange}: {arrange: Arrange}) {
           label={t('history.horizon')}
         />
       </div>
+      {!planShown && <div className="popover-note">{t('history.horizonNote')}</div>}
       {arrange.owner && <HideRow onHide={() => arrange.update(view => withHidden(view, HISTORY, true))}>{t('history.hide')}</HideRow>}
     </Popover>
   );
@@ -92,12 +93,13 @@ export function History({
   // Series names and markers are text: they are rebuilt when the language changes.
   const locale = useLocale();
 
-  const lines = useMemo(() => linesOf(history, overview, view, prefs.kind), [history, overview, prefs.kind, view.windows, locale]);
+  const lines = useMemo(() => linesOf(history, overview, view, prefs.kind), [history, overview, prefs.kind, view.windows, view.hidden, locale]);
 
   const visible = useMemo(() => lines.filter(line => !prefs.muted[line.key]), [lines, prefs.muted]);
   const from = history ? Math.max(history.since, history.historyStart) : now - 86_400_000;
   const measuredTo = history?.now ?? now;
-  const announced = resets.codex?.scheduled?.scheduledFor ?? null;
+  // An announced Codex reset matters only where Codex is on the chart.
+  const announced = visible.some(line => line.provider === 'codex') ? (resets.codex?.scheduled?.scheduledFor ?? null) : null;
   // The spending plan applies to weekly windows; the days ahead are there for it.
   const planAvailable = prefs.kind === 'weekly' && visible.length > 0;
   const planShown = planAvailable && prefs.showPlan;
@@ -189,7 +191,7 @@ export function History({
         <div className="controls">
           <KindSwitch value={prefs.kind} onChange={kind => setPrefs({kind})} />
           <PeriodSwitch value={prefs.range} onChange={range => setPrefs({range})} />
-          <HistorySettings arrange={arrange} />
+          <HistorySettings arrange={arrange} planShown={planShown} />
         </div>
       </div>
 
@@ -226,7 +228,7 @@ export function History({
         )}
       </div>
 
-      {history ? <Chart lines={visible} plans={plans} markers={markers} from={from} now={measuredTo} to={to} cellMs={history.cellMs} /> : <div className="chart chart-loading">{t('history.loading')}</div>}
+      {history ? <Chart lines={visible} plans={plans} markers={markers} from={from} now={measuredTo} to={to} cellMs={history.cellMs} empty={lines.length ? t('chart.empty') : null} /> : <div className="chart chart-loading">{t('history.loading')}</div>}
       {history && history.since < history.historyStart && (
         <p className="footnote">{t('history.since', {date: day(history.historyStart)})}</p>
       )}

@@ -24,19 +24,25 @@ export type SourceState = {
   windows: Win[];
   /** Free resets of the limits the account holds, when its client reports them. */
   resets: FreeResets | null;
-  /** Owners of the devices that measure this source. */
+  /** The people on the board whose devices measure this source. */
   owners: string[];
+  /** Measured by the reader's own devices: theirs to take off a shared board. */
+  mine: boolean;
   /** How the dashboard names the source (set by the client from the whole board). */
   title?: string;
 };
 
 /**
  * How a board is arranged, the same for everyone on it; its owner changes it. Widgets
- * are `source:<id>` cards and the `history` chart.
+ * are `source:<id>` cards, the `history` chart and the `forecast` table.
  */
 export type View = {
   /** Widget ids in order; widgets missing here come after, in the board's order. */
   order: string[];
+  /** Columns of the twelve a widget spans, where not its default. */
+  sizes: Record<string, number>;
+  /** Names the board's owner gave cards, by source id. */
+  names: Record<string, string>;
   hidden: string[];
   /** `windowKey`s of windows hidden from cards and the chart. */
   windows: string[];

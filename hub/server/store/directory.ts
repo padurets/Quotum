@@ -4,22 +4,23 @@ import {EMPTY_VIEW, type View} from '../domain/view.js';
 
 export type User = {id: string; email: string; name: string; createdAt: number};
 export type Board = {id: string; name: string; personal: boolean; role: 'owner' | 'member'};
-export type Token = {id: string; boardId: string; name: string; hint: string; createdBy: string; createdAt: number; lastUsedAt: number | null};
+/** A machine token: machines started with it join as its person. */
+export type Token = {id: string; userId: string; name: string; hint: string; createdAt: number; lastUsedAt: number | null};
 export type Machine = {id: string; name: string; os: string; arch: string};
 
 export type Device = {
   id: string;
-  boardId: string;
+  /** Whose machine it is: the person who confirmed its code, or the owner of its token. */
+  userId: string;
   machineId: string;
+  /** What the machine calls itself (its host name, unless its agent is told otherwise). */
   name: string;
+  /** What people named it on the hub; shown instead of the name when set. */
+  label: string | null;
   os: string;
   arch: string;
   agent: string;
-  /** Whom the device measures for, as shown on the board. */
-  owner: string;
-  /** Set when the owner is a user of this hub (always for devices connected with a code). */
-  ownerUserId: string | null;
-  /** The board token it joined with; null for devices connected with a code. */
+  /** The machine token it joined with; null for devices connected with a code. */
   tokenId: string | null;
   /** Connected with a one-time code: it has a token of its own. */
   byCode: boolean;
@@ -35,7 +36,6 @@ export type DeviceCode = {
   expiresAt: number;
   polledAt: number | null;
   status: 'pending' | 'approved' | 'denied' | 'used';
-  boardId: string | null;
   userId: string | null;
 };
 
@@ -43,14 +43,13 @@ const user = (row: any): User => ({id: row.id, email: row.email, name: row.name,
 
 const device = (row: any): Device => ({
   id: row.id,
-  boardId: row.board_id,
+  userId: row.user_id,
   machineId: row.machine_id,
   name: row.name,
+  label: row.label,
   os: row.os,
   arch: row.arch,
   agent: row.agent,
-  owner: row.owner,
-  ownerUserId: row.owner_user_id,
   tokenId: row.token_id,
   byCode: row.token_hash !== null && row.token_id === null,
   createdAt: row.created_at,
@@ -65,13 +64,14 @@ const code = (row: any): DeviceCode => ({
   expiresAt: row.expires_at,
   polledAt: row.polled_at,
   status: row.status,
-  boardId: row.board_id,
   userId: row.user_id,
 });
 
+const token = (r: any): Token => ({id: r.id, userId: r.user_id, name: r.name, hint: r.hint, createdAt: r.created_at, lastUsedAt: r.last_used_at});
+
 /**
- * People, boards and the machines that report to them: users and sessions, boards with
- * members and invites, board tokens, devices and pending device codes. Secrets are
+ * People and what is theirs: users and sessions, boards with members and invites, the
+ * machines of each person (devices, machine tokens, pending device codes). Secrets are
  * stored as hashes only.
  */
 export class Directory {
@@ -151,7 +151,8 @@ export class Directory {
   /** How a board is arranged; the default until its owner changes anything. */
   view(boardId: string): View {
     const row = this.db.prepare('SELECT payload FROM views WHERE board_id = ?').get(boardId) as {payload: string} | undefined;
-    return row ? (JSON.parse(row.payload) as View) : EMPTY_VIEW;
+    // A view saved before a field existed gets that field's default.
+    return row ? {...EMPTY_VIEW, ...(JSON.parse(row.payload) as Partial<View>)} : EMPTY_VIEW;
   }
 
   saveView(boardId: string, view: View, by: string, now: number) {
@@ -181,34 +182,20 @@ export class Directory {
     return row?.role ?? null;
   }
 
-  /** A personal board without a name is shown under its default one, in the reader's language. */
   /**
-   * Deletes a shared board and what belongs to it: members, invites, its view, pending
-   * codes for it. Its devices and tokens stay behind as revoked, so an agent still
-   * sending to it hears that it was disconnected, and stops, instead of retrying. The
-   * store forgets the board's measurements (Store.removeBoard): call both in one
-   * transaction.
+   * Deletes a shared board with its members, invites and view (the store forgets what
+   * was shared with it: call both in one transaction). The sources on it stay with the
+   * people who measure them.
    */
-  deleteBoard(id: string, now: number) {
-    this.db.prepare('UPDATE devices SET revoked_at = coalesce(revoked_at, ?) WHERE board_id = ?').run(now, id);
-    this.db.prepare('UPDATE tokens SET revoked_at = coalesce(revoked_at, ?) WHERE board_id = ?').run(now, id);
-    this.db.prepare('DELETE FROM device_failures WHERE device_id IN (SELECT id FROM devices WHERE board_id = ?)').run(id);
-    for (const table of ['members', 'invites', 'views', 'device_codes', 'boards']) {
+  deleteBoard(id: string) {
+    for (const table of ['members', 'invites', 'views', 'boards']) {
       this.db.prepare(`DELETE FROM ${table} WHERE ${table === 'boards' ? 'id' : 'board_id'} = ?`).run(id);
     }
   }
 
-  /** A member leaves a board: the devices and tokens they connected to it are revoked with them. */
-  leaveBoard(boardId: string, userId: string, now: number) {
-    this.transaction(() => {
-      this.db.prepare('DELETE FROM members WHERE board_id = ? AND user_id = ?').run(boardId, userId);
-      this.db.prepare('UPDATE devices SET revoked_at = ? WHERE board_id = ? AND owner_user_id = ? AND revoked_at IS NULL').run(now, boardId, userId);
-      const tokens = this.db.prepare('SELECT id FROM tokens WHERE board_id = ? AND created_by = ? AND revoked_at IS NULL').all(boardId, userId) as {id: string}[];
-      for (const {id} of tokens) {
-        this.db.prepare('UPDATE tokens SET revoked_at = ? WHERE id = ?').run(now, id);
-        this.db.prepare('UPDATE devices SET revoked_at = ? WHERE token_id = ? AND revoked_at IS NULL').run(now, id);
-      }
-    });
+  /** Someone leaves a board, or its owner removes them. What they shared goes with them (Store.unshareOrphans). */
+  removeMember(boardId: string, userId: string) {
+    this.db.prepare("DELETE FROM members WHERE board_id = ? AND user_id = ? AND role <> 'owner'").run(boardId, userId);
   }
 
   renameBoard(id: string, name: string) {
@@ -248,47 +235,37 @@ export class Directory {
     return row ?? null;
   }
 
-  // ---------- board tokens ----------
+  /** Every invite link of a board stops working. */
+  revokeInvites(boardId: string): number {
+    return Number(this.db.prepare('DELETE FROM invites WHERE board_id = ?').run(boardId).changes);
+  }
 
-  createToken(secret: string, hint: string, boardId: string, name: string, userId: string, now: number): Token {
+  // ---------- machine tokens ----------
+
+  createToken(secret: string, hint: string, userId: string, name: string, now: number): Token {
     const id = newId();
-    this.db.prepare('INSERT INTO tokens VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)').run(id, boardId, name, secretHash(secret), hint, userId, now);
-    return {id, boardId, name, hint, createdBy: userId, createdAt: now, lastUsedAt: null};
+    this.db.prepare('INSERT INTO tokens VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)').run(id, userId, name, secretHash(secret), hint, now);
+    return {id, userId, name, hint, createdAt: now, lastUsedAt: null};
   }
 
-  tokens(boardId: string): (Token & {createdByName: string})[] {
-    return (
-      this.db
-        .prepare(
-          'SELECT tokens.*, users.name AS creator FROM tokens LEFT JOIN users ON users.id = tokens.created_by' +
-            ' WHERE tokens.board_id = ? AND tokens.revoked_at IS NULL ORDER BY tokens.created_at',
-        )
-        .all(boardId) as any[]
-    ).map(r => ({
-      id: r.id,
-      boardId: r.board_id,
-      name: r.name,
-      hint: r.hint,
-      createdBy: r.created_by,
-      createdByName: r.creator ?? '',
-      createdAt: r.created_at,
-      lastUsedAt: r.last_used_at,
-    }));
+  tokens(userId: string): Token[] {
+    return (this.db.prepare('SELECT * FROM tokens WHERE user_id = ? AND revoked_at IS NULL ORDER BY created_at').all(userId) as any[]).map(token);
   }
 
-  tokenBySecret(secret: string): Token | null {
-    const r = this.db.prepare('SELECT * FROM tokens WHERE hash = ? AND revoked_at IS NULL').get(secretHash(secret)) as any;
-    return r ? {id: r.id, boardId: r.board_id, name: r.name, hint: r.hint, createdBy: r.created_by, createdAt: r.created_at, lastUsedAt: r.last_used_at} : null;
+  /** The token a secret belongs to, with whether it was revoked: machines still using it are told so. */
+  tokenBySecret(secret: string): (Token & {revoked: boolean}) | null {
+    const r = this.db.prepare('SELECT * FROM tokens WHERE hash = ?').get(secretHash(secret)) as any;
+    return r ? {...token(r), revoked: r.revoked_at !== null} : null;
   }
 
   touchToken(id: string, now: number) {
     this.db.prepare('UPDATE tokens SET last_used_at = ? WHERE id = ?').run(now, id);
   }
 
-  /** Revoking a board token also disconnects every device that joined with it. */
-  revokeToken(boardId: string, id: string, now: number): boolean {
+  /** Revoking a machine token also disconnects every device that joined with it. */
+  revokeToken(userId: string, id: string, now: number): boolean {
     return this.transaction(() => {
-      const changed = this.db.prepare('UPDATE tokens SET revoked_at = ? WHERE id = ? AND board_id = ? AND revoked_at IS NULL').run(now, id, boardId).changes;
+      const changed = this.db.prepare('UPDATE tokens SET revoked_at = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL').run(now, id, userId).changes;
       if (changed) this.db.prepare('UPDATE devices SET revoked_at = ? WHERE token_id = ? AND revoked_at IS NULL').run(now, id);
       return changed > 0;
     });
@@ -296,38 +273,40 @@ export class Directory {
 
   // ---------- devices ----------
 
-  /** The device a device token belongs to, with whether it was removed from its board. */
+  /** The device a device token belongs to, with whether it was disconnected. */
   deviceBySecret(secret: string): (Device & {revoked: boolean}) | null {
     const row = this.db.prepare('SELECT * FROM devices WHERE token_hash = ?').get(secretHash(secret)) as any;
     return row ? {...device(row), revoked: row.revoked_at !== null} : null;
   }
 
-  /** A device of a board by the agent's machine id, with whether it was revoked. */
-  deviceByMachine(boardId: string, machineId: string): (Device & {revoked: boolean}) | null {
-    const row = this.db.prepare('SELECT * FROM devices WHERE board_id = ? AND machine_id = ?').get(boardId, machineId) as any;
+  /** A person's device by the agent's machine id, with whether it was disconnected. */
+  deviceByMachine(userId: string, machineId: string): (Device & {revoked: boolean}) | null {
+    const row = this.db.prepare('SELECT * FROM devices WHERE user_id = ? AND machine_id = ?').get(userId, machineId) as any;
     return row ? {...device(row), revoked: row.revoked_at !== null} : null;
   }
 
-  /** Registers a machine on a board, or updates it: an approved code also un-revokes and gets a new secret. */
-  saveDevice(
-    input: {boardId: string; machine: Machine; agent: string; owner: string; ownerUserId: string | null; tokenId: string | null; secret?: string},
-    now: number,
-  ): Device {
-    const existing = this.deviceByMachine(input.boardId, input.machine.id);
+  /**
+   * Registers a person's machine, or updates it. Registering connects it again: an
+   * approved code gives it a new secret of its own; joining with a machine token drops
+   * any secret it had, so a secret it was disconnected for never works again (the
+   * ingest decides when a token may take a machine back).
+   */
+  saveDevice(input: {userId: string; machine: Machine; agent: string; tokenId: string | null; secret?: string}, now: number): Device {
+    const existing = this.deviceByMachine(input.userId, input.machine.id);
     const hashed = input.secret ? secretHash(input.secret) : null;
     if (existing) {
       this.db
         .prepare(
-          'UPDATE devices SET name = ?, os = ?, arch = ?, agent = ?, owner = ?, owner_user_id = ?, token_id = ?,' +
-            ' token_hash = coalesce(?, token_hash), revoked_at = CASE WHEN ? IS NULL THEN revoked_at ELSE NULL END, last_seen_at = ? WHERE id = ?',
+          'UPDATE devices SET name = ?, os = ?, arch = ?, agent = ?, token_id = ?, token_hash = ?,' +
+            ' revoked_at = NULL, last_seen_at = ? WHERE id = ?',
         )
-        .run(input.machine.name, input.machine.os, input.machine.arch, input.agent, input.owner, input.ownerUserId, input.tokenId, hashed, hashed, now, existing.id);
+        .run(input.machine.name, input.machine.os, input.machine.arch, input.agent, input.tokenId, hashed, now, existing.id);
       return this.deviceById(existing.id)!;
     }
     const id = newId();
     this.db
-      .prepare('INSERT INTO devices VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)')
-      .run(id, input.boardId, input.machine.id, input.machine.name, input.machine.os, input.machine.arch, input.agent, input.owner, input.ownerUserId, input.tokenId, hashed, now, now);
+      .prepare('INSERT INTO devices VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, NULL)')
+      .run(id, input.userId, input.machine.id, input.machine.name, input.machine.os, input.machine.arch, input.agent, input.tokenId, hashed, now, now);
     return this.deviceById(id)!;
   }
 
@@ -340,12 +319,17 @@ export class Directory {
     this.db.prepare('UPDATE devices SET name = ?, os = ?, arch = ?, agent = ?, last_seen_at = ? WHERE id = ?').run(machine.name, machine.os, machine.arch, agent, now, id);
   }
 
-  devices(boardId: string): Device[] {
-    return (this.db.prepare('SELECT * FROM devices WHERE board_id = ? AND revoked_at IS NULL ORDER BY last_seen_at DESC').all(boardId) as any[]).map(device);
+  devices(userId: string): Device[] {
+    return (this.db.prepare('SELECT * FROM devices WHERE user_id = ? AND revoked_at IS NULL ORDER BY last_seen_at DESC').all(userId) as any[]).map(device);
   }
 
-  revokeDevice(boardId: string, id: string, now: number): boolean {
-    return this.db.prepare('UPDATE devices SET revoked_at = ? WHERE id = ? AND board_id = ? AND revoked_at IS NULL').run(now, id, boardId).changes > 0;
+  /** Names a device on the hub; an empty name gives it back the name the machine reports. */
+  renameDevice(userId: string, id: string, label: string): boolean {
+    return this.db.prepare('UPDATE devices SET label = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL').run(label || null, id, userId).changes > 0;
+  }
+
+  revokeDevice(userId: string, id: string, now: number): boolean {
+    return this.db.prepare('UPDATE devices SET revoked_at = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL').run(now, id, userId).changes > 0;
   }
 
   /** Forgets sessions, invites and device codes that expired a day ago or earlier. */
@@ -358,7 +342,7 @@ export class Directory {
 
   createCode(secret: string, userCode: string, machine: Machine & {agent: string}, now: number, ttlMs: number) {
     this.db
-      .prepare('INSERT INTO device_codes VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, NULL)')
+      .prepare('INSERT INTO device_codes VALUES (?, ?, ?, ?, ?, NULL, ?, NULL)')
       .run(secretHash(secret), userCode, JSON.stringify(machine), now, now + ttlMs, 'pending');
   }
 
@@ -376,12 +360,12 @@ export class Directory {
     this.db.prepare('UPDATE device_codes SET polled_at = ? WHERE id = ?').run(now, id);
   }
 
-  /** Approves or denies a pending code; false if it is no longer pending. */
-  decide(userCode: string, approve: boolean, userId: string, boardId: string | null, now: number): boolean {
+  /** Approves (for the approving person) or denies a pending code; false if it is no longer pending. */
+  decide(userCode: string, approve: boolean, userId: string, now: number): boolean {
     return (
       this.db
-        .prepare("UPDATE device_codes SET status = ?, user_id = ?, board_id = ? WHERE user_code = ? AND status = 'pending' AND expires_at > ?")
-        .run(approve ? 'approved' : 'denied', userId, boardId, userCode, now).changes > 0
+        .prepare("UPDATE device_codes SET status = ?, user_id = ? WHERE user_code = ? AND status = 'pending' AND expires_at > ?")
+        .run(approve ? 'approved' : 'denied', userId, userCode, now).changes > 0
     );
   }
 

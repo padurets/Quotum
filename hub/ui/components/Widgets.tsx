@@ -1,8 +1,10 @@
-import {useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode} from 'react';
+import {useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode} from 'react';
 import {t} from '../i18n';
 import {Popover, SwitchRow} from './Popover';
+import {COLUMNS, MIN_SPAN} from '../lib/view';
 
-export type Widget = {id: string; name: string; wide?: boolean; content: ReactNode};
+/** A widget on the grid: `span` columns of the twelve wide; its height follows its content. */
+export type Widget = {id: string; name: string; span: number; content: ReactNode};
 
 type Point = {x: number; y: number};
 
@@ -65,12 +67,24 @@ export function dropIndex(others: Place[], pointer: Point, wide: boolean): numbe
 }
 
 /**
- * The board's widgets on a grid, in the board's order. Its owner moves them by the
- * handle at the top of each: with a pointer (the place it will land stays outlined, the
- * page scrolls near its edges, Escape puts it back) or with the arrow keys. The others
- * slide to their new places.
+ * The board's widgets on a twelve-column grid, in the board's order. Its owner moves
+ * them by the handle at the top of each: with a pointer (the place it will land stays
+ * outlined, the page scrolls near its edges, Escape puts it back) or with the arrow
+ * keys; the others slide to their new places. The owner also makes a widget wider or
+ * narrower by its right edge, a column at a time; its height always follows its
+ * content, so nothing scrolls inside a widget.
  */
-export function Widgets({widgets, movable, onMove}: {widgets: Widget[]; movable: boolean; onMove: (order: string[]) => void}) {
+export function Widgets({
+  widgets,
+  movable,
+  onMove,
+  onResize,
+}: {
+  widgets: Widget[];
+  movable: boolean;
+  onMove: (order: string[]) => void;
+  onResize: (id: string, span: number) => void;
+}) {
   const grid = useRef<HTMLDivElement>(null);
   /** Each widget's place in the grid; it slides as a whole when the order changes. */
   const places = useRef(new Map<string, HTMLDivElement>());
@@ -82,11 +96,13 @@ export function Widgets({widgets, movable, onMove}: {widgets: Widget[]; movable:
   const before = useRef<Map<string, DOMRect> | null>(null);
   const refocus = useRef<string | null>(null);
   const [preview, setPreview] = useState<{id: string; order: string[]} | null>(null);
+  /** A widget being resized, at the width it would have now. */
+  const [resizing, setResizing] = useState<{id: string; span: number} | null>(null);
   const [said, say] = useState('');
   const hint = useId();
   // Handlers attached to the window for a drag read the latest props from here.
-  const latest = useRef({widgets, onMove});
-  latest.current = {widgets, onMove};
+  const latest = useRef({widgets, onMove, onResize});
+  latest.current = {widgets, onMove, onResize};
 
   const byId = new Map(widgets.map(widget => [widget.id, widget]));
   const order = preview ? preview.order.filter(id => byId.has(id)) : widgets.map(widget => widget.id);
@@ -213,6 +229,54 @@ export function Widgets({widgets, movable, onMove}: {widgets: Widget[]; movable:
     say(t('widgets.moved', {name: byId.get(id)!.name, position: to + 1, count: order.length}));
   };
 
+  /** The span a pointer at `x` gives a widget whose left edge is at `left`: whole columns, a quarter of the grid at least. */
+  const spanAt = (left: number, x: number) => {
+    const box = grid.current!;
+    const gap = parseFloat(getComputedStyle(box).columnGap) || 0;
+    const column = (box.clientWidth - gap * (COLUMNS - 1)) / COLUMNS;
+    return Math.max(MIN_SPAN, Math.min(COLUMNS, Math.round((x - left + gap) / (column + gap))));
+  };
+
+  const resizeStart = (id: string) => (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (!event.isPrimary || event.button !== 0 || drag.current) return;
+    event.preventDefault();
+    const left = places.current.get(id)!.getBoundingClientRect().left;
+    const start = byId.get(id)!.span;
+    let span = start;
+    document.body.classList.add('is-resizing');
+    setResizing({id, span});
+    const move = (e: PointerEvent) => {
+      if (e.pointerId !== event.pointerId) return;
+      const next = spanAt(left, e.clientX);
+      if (next !== span) setResizing({id, span: (span = next)});
+    };
+    const end = (e: PointerEvent, keep: boolean) => {
+      if (e.pointerId !== event.pointerId) return;
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', cancel);
+      document.body.classList.remove('is-resizing');
+      setResizing(null);
+      if (keep && span !== start) latest.current.onResize(id, span);
+    };
+    const up = (e: PointerEvent) => end(e, true);
+    const cancel = (e: PointerEvent) => end(e, false);
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', cancel);
+  };
+
+  const resizeKey = (id: string) => (event: KeyboardEvent<HTMLButtonElement>) => {
+    const step = {ArrowLeft: -1, ArrowDown: -1, ArrowRight: 1, ArrowUp: 1}[event.key as string];
+    if (!step) return;
+    event.preventDefault();
+    const widget = byId.get(id)!;
+    const span = Math.max(MIN_SPAN, Math.min(COLUMNS, widget.span + step));
+    if (span === widget.span) return;
+    onResize(id, span);
+    say(t('widgets.resized', {name: widget.name, span, count: COLUMNS}));
+  };
+
   // After the order changed: the others slide from where they were, the dragged one
   // stays under the pointer, and a widget moved with the keyboard keeps the focus.
   useLayoutEffect(() => {
@@ -241,10 +305,14 @@ export function Widgets({widgets, movable, onMove}: {widgets: Widget[]; movable:
     <div className="widgets" ref={grid}>
       {order.map(id => {
         const widget = byId.get(id)!;
+        const span = resizing?.id === id ? resizing.span : widget.span;
+        // On narrower screens the grid shows half or whole widths only.
+        const style = {'--span': span, '--span-md': span <= COLUMNS / 2 ? COLUMNS / 2 : COLUMNS} as CSSProperties;
         return (
           <div
             key={id}
-            className={`widget ${widget.wide ? 'is-wide' : ''} ${preview?.id === id ? 'is-lifted' : ''}`}
+            className={`widget ${preview?.id === id ? 'is-lifted' : ''} ${resizing?.id === id ? 'is-resizing' : ''}`}
+            style={style}
             ref={node => {
               if (node) places.current.set(id, node);
               else places.current.delete(id);
@@ -277,6 +345,16 @@ export function Widgets({widgets, movable, onMove}: {widgets: Widget[]; movable:
                 </button>
               )}
               {widget.content}
+              {movable && (
+                <button
+                  type="button"
+                  className="resize-handle"
+                  aria-label={t('widgets.resize', {name: widget.name})}
+                  title={t('widgets.resizeHint')}
+                  onPointerDown={resizeStart(id)}
+                  onKeyDown={resizeKey(id)}
+                />
+              )}
             </div>
           </div>
         );

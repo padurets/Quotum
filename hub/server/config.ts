@@ -9,14 +9,28 @@ function list(value: string | undefined, fallback: string[]): string[] {
 }
 
 /**
- * Which proxies to believe about the client's address and protocol: unset for none,
- * `true` for any, a number of hops, or addresses and CIDR ranges (comma-separated).
+ * Which proxies to believe about the client's address and protocol: unset (or `false`,
+ * `0`) for none, `true` for any, a number of hops, or addresses and CIDR ranges
+ * (comma-separated).
  */
 function trustProxy(value: string | undefined): boolean | string[] | ((address: string, hop: number) => boolean) {
-  if (!value) return false;
+  if (!value || value === 'false' || value === '0') return false;
   if (value === 'true') return true;
   if (/^\d+$/.test(value)) return (_address, hop) => hop < Number(value);
   return list(value, []);
+}
+
+/** The hub's public address, checked at start: a typo here would break every sign-in later. */
+function publicUrl(value: string | undefined): string | null {
+  if (!value) return null;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`QUOTUM_PUBLIC_URL must be a full address like https://quotum.example.com, not "${value}"`);
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error(`QUOTUM_PUBLIC_URL must start with https:// or http://, not "${value}"`);
+  return url.origin;
 }
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -48,12 +62,12 @@ export const config = {
     codeTtlMs: 10 * 60_000,
     codeIntervalS: 5,
     /** The address people open, for links shown to agents; derived from the request when unset. */
-    publicUrl: process.env.QUOTUM_PUBLIC_URL?.replace(/\/+$/, '') || null,
+    publicUrl: publicUrl(process.env.QUOTUM_PUBLIC_URL),
     /** The code the first account needs while the hub has none; a random one is printed at start when unset. */
     setupCode: process.env.QUOTUM_SETUP_CODE || null,
   },
 
-  /** Agents push measurements (spec/ingest-v1.md) with a device or board token. */
+  /** Agents push measurements (spec/ingest-v1.md) with a device or machine token. */
   ingest: {
     bodyLimit: 1024 * 1024,
   },

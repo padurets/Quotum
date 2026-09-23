@@ -8,7 +8,29 @@ export const HISTORY = 'history';
 export const FORECAST = 'forecast';
 export const cardId = (sourceId: string) => `source:${sourceId}`;
 
-const EMPTY: View = {order: [], hidden: [], windows: [], plans: {}};
+const EMPTY: View = {order: [], sizes: {}, names: {}, hidden: [], windows: [], plans: {}};
+
+/** The grid has twelve columns: a card takes a third by default, the chart and the table all of it. */
+export const COLUMNS = 12;
+export const MIN_SPAN = 3;
+export const defaultSpan = (id: string) => (id.startsWith('source:') ? 4 : COLUMNS);
+export const spanOf = (view: View, id: string) => view.sizes[id] ?? defaultSpan(id);
+
+export const withSpan = (view: View, id: string, span: number): View => {
+  const sizes = {...view.sizes};
+  if (span === defaultSpan(id)) delete sizes[id];
+  else sizes[id] = Math.max(MIN_SPAN, Math.min(COLUMNS, Math.round(span)));
+  return {...view, sizes};
+};
+
+/** A card's own name; empty gives it back the automatic one. */
+export const withName = (view: View, sourceId: string, name: string): View => {
+  const names = {...view.names};
+  const trimmed = name.trim().slice(0, 60);
+  if (trimmed) names[sourceId] = trimmed;
+  else delete names[sourceId];
+  return {...view, names};
+};
 /** Changes in a burst (a drag, typing a plan) are saved once, this long after the last one. */
 const SAVE_AFTER = 600;
 
