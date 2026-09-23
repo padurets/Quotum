@@ -191,6 +191,7 @@ export const ru = {
   'forecast.planDone': 'план пройден',
   'forecast.planDoneHint': 'План на эту неделю закончился',
   'forecast.rate': 'Средний темп за период: {rate} п.п./ч',
+  'forecast.usedUp': 'исчерпан до сброса',
   'forecast.runsOut': 'закончится через {time}',
   'forecast.onPaceReset': 'уложится к сбросу',
   'forecast.onPacePlan': 'уложится в план',

@@ -6,7 +6,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crate::config::{Config, Paths, home, jitter};
 use crate::model::{Millis, Outcome, Provider, STALE_LIMIT_MS, now_ms};
-use crate::providers::{Adapter, Context, adapter, last_activity};
+use crate::providers::{Adapter, Context, adapter, find_client, last_activity};
 use crate::schedule::Schedule;
 use crate::sink::Sink;
 use crate::stop;
@@ -82,6 +82,16 @@ impl Runner {
         outcome
     }
 
+    /// Whether the provider's client is on this machine: a device checks in only for
+    /// what it can measure, or it would keep duty from one that can.
+    fn installed(&self, index: usize) -> bool {
+        let adapter = &self.adapters[index];
+        match self.config.program(adapter.provider()) {
+            Some(path) => path.exists(),
+            None => find_client(adapter.as_ref(), &self.home).is_some(),
+        }
+    }
+
     /// Measures every provider once, one after another, reporting each as it finishes.
     pub fn measure_all(&mut self, mut each: impl FnMut(&Outcome)) {
         for index in 0..self.adapters.len() {
@@ -132,7 +142,10 @@ impl Runner {
 
             // Which subscription this is, if known without starting the client.
             let signed_in = last_activity(&identity_paths[index]);
-            let account = if !adapter.identifies_account() {
+            let account = if !self.installed(index) {
+                // Measured right away: it fails without starting anything and is asked less often.
+                None
+            } else if !adapter.identifies_account() {
                 Some(None)
             } else if let Some(local) = adapter.local_account(&self.home) {
                 Some(Some(local))
@@ -221,7 +234,9 @@ mod tests {
 
     #[test]
     fn a_device_refused_at_check_in_starts_no_client() {
-        let config: Config = toml::from_str("[providers.antigravity]\npath = \"/nonexistent/agy\"").unwrap();
+        // Any file that exists stands for the client: it is never started.
+        let client = std::env::current_exe().unwrap();
+        let config: Config = toml::from_str(&format!("[providers.antigravity]\npath = {:?}", client)).unwrap();
         let state = std::env::temp_dir().join("quotum-runner-refused");
         let paths = Paths { config: state.join("config.toml"), work: state.join("work"), state };
         let mut runner = Runner::new(config, paths, &[Provider::Antigravity]);
@@ -229,5 +244,38 @@ mod tests {
         let mut events = 0;
         assert_eq!(runner.run(&mut sink, |_| events += 1).as_deref(), Some("removed"));
         assert_eq!((events, sink.delivered), (0, 0));
+    }
+
+    /// Counts check-ins; the first delivery ends the run.
+    #[derive(Default)]
+    struct Counting {
+        checkins: usize,
+        refused: Option<String>,
+    }
+
+    impl Sink for Counting {
+        fn deliver(&mut self, _: &Outcome) {
+            self.refused = Some("done".into());
+        }
+
+        fn checkin(&mut self, _: Provider, _: Option<&str>, _: Option<&str>, _: bool) -> Option<Millis> {
+            self.checkins += 1;
+            None
+        }
+
+        fn refused(&self) -> Option<&str> {
+            self.refused.as_deref()
+        }
+    }
+
+    #[test]
+    fn a_client_that_is_not_there_is_not_checked_in_for() {
+        let config: Config = toml::from_str("[providers.antigravity]\npath = \"/nonexistent/agy\"").unwrap();
+        let state = std::env::temp_dir().join("quotum-runner-missing");
+        let paths = Paths { config: state.join("config.toml"), work: state.join("work"), state };
+        let mut runner = Runner::new(config, paths, &[Provider::Antigravity]);
+        let mut sink = Counting::default();
+        assert_eq!(runner.run(&mut sink, |_| {}).as_deref(), Some("done"));
+        assert_eq!(sink.checkins, 0, "no duty is claimed for a client this machine lacks");
     }
 }

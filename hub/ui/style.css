@@ -207,7 +207,7 @@ td.muted, small.muted { color: var(--text-3); }
 .reset-notice.is-done .reset-dot { background: var(--ok); box-shadow: 0 0 8px #5fd4a499; }
 .reset-credit { margin-left: auto; flex-shrink: 0; font-size: 11px; color: var(--text-4) !important; }
 .card-empty { color: var(--text-3); font-size: 13px; padding: 12px 0; }
-.card-status { margin: -10px 0 0; font-size: 12.5px; color: var(--warn); }
+.card-status { margin: -8px 0 0; font-size: 12.5px; color: var(--warn); }
 .card-name input { width: 100%; }
 
 /* ---------- history ---------- */

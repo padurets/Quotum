@@ -330,7 +330,8 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
   app.delete<{Params: {device: string}}>('/api/devices/:device', (request, reply) => {
     const user = guards.user(request, reply);
     if (!user) return reply;
-    return directory.revokeDevice(user.id, request.params.device, Date.now()) ? {ok: true} : notFound(reply);
+    const revoked = directory.transaction(() => directory.revokeDevice(user.id, request.params.device, Date.now()) && (store.releaseRevoked(user.id), true));
+    return revoked ? {ok: true} : notFound(reply);
   });
 
   app.get('/api/tokens', (request, reply) => {
@@ -354,7 +355,9 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
   app.delete<{Params: {token: string}}>('/api/tokens/:token', (request, reply) => {
     const user = guards.user(request, reply);
     if (!user) return reply;
-    return directory.revokeToken(user.id, request.params.token, Date.now()) ? {ok: true} : notFound(reply);
+    // Its machines are disconnected with it, and take along what only they measured.
+    const revoked = directory.transaction(() => directory.revokeToken(user.id, request.params.token, Date.now()) && (store.releaseRevoked(user.id), true));
+    return revoked ? {ok: true} : notFound(reply);
   });
 
   // ---------- approving a device code ----------

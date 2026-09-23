@@ -31,7 +31,8 @@ function Meter({w, now, weekly}: {w: Win; now: number; weekly: WeeklyPlan}) {
 function Limit({w, now, weekly}: {w: Win; now: number; weekly: WeeklyPlan}) {
   const state = level(w.remaining);
   const plan = planAt(w, now, weekly);
-  const delta = plan && !plan.done ? w.remaining - plan.remaining : 0;
+  // A limit used up is past any plan: how far ahead of it says nothing more.
+  const delta = plan && !plan.done && w.remaining > 0 ? w.remaining - plan.remaining : 0;
   return (
     <div className="limit">
       <div className="limit-top">
@@ -240,7 +241,8 @@ export function SourceCard({
   const visible = source.windows.filter(w => !hidden.has(windowKey(source.id, w.id)));
   const weekly = planOf(arrange.view, source.id);
   const warn = source.stale || !!problem;
-  // How fresh the numbers are lives in the colour of the logo's dot and in its tooltip.
+  // How fresh the numbers are lives in the colour of the logo's dot and in its tooltip;
+  // trouble is also told under the limits, where it moves no meter out of line.
   const status = problem ?? (source.successAt ? t('source.measured', {ago: ago(source.successAt, now)}) : errorText('waiting'));
 
   return (
@@ -258,7 +260,6 @@ export function SourceCard({
         {board && (arrange.owner || (!board.personal && source.mine)) && <SourceSettings source={source} arrange={arrange} board={board} onChanged={onChanged} />}
       </div>
 
-      {warn && <p className="card-status">{status}</p>}
       <div className="limits">
         {visible.map(w => (
           <Limit key={w.id} w={w} now={now} weekly={weekly} />
@@ -266,6 +267,7 @@ export function SourceCard({
         {!source.windows.length && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
         {!!source.windows.length && !visible.length && <div className="card-empty">{t('card.allHidden')}</div>}
       </div>
+      {warn && !!source.windows.length && <p className="card-status">{status}</p>}
       <ResetBanner status={resets} now={now} />
       <ResetNotice status={resets} now={now} />
     </article>

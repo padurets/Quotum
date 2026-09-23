@@ -20,6 +20,7 @@ type Outlook = {text: string; tone: string; title: string};
 function outlook(line: Line, live: Win | undefined, now: number, weekly: WeeklyPlan): Outlook {
   const none = {text: '—', tone: '', title: ''};
   const plan = live ? planAt(live, now, weekly) : null;
+  if (live && live.remaining <= 0) return {text: t('forecast.usedUp'), tone: 'v-crit', title: ''};
   if (!live?.resetAt || live.resetAt <= now) return none;
   if (plan?.done) return {text: t('forecast.planDone'), tone: 'muted', title: t('forecast.planDoneHint')};
 
@@ -100,7 +101,7 @@ export function Forecast({
                 const live = overview?.sources.find(s => s.id === line.sourceId)?.windows.find(w => w.id === line.windowId);
                 const weekly = planOf(view, line.sourceId);
                 const plan = live ? planAt(live, now, weekly) : null;
-                const delta = plan && live ? live.remaining - plan.remaining : 0;
+                const delta = plan && live && live.remaining > 0 ? live.remaining - plan.remaining : 0;
                 const notable = Math.abs(delta) >= PLAN_TOLERANCE;
                 const ahead = outlook(line, live, now, weekly);
                 return (

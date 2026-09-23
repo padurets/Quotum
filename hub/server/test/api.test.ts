@@ -181,6 +181,31 @@ test('people see and manage only their own machines and tokens; a device is name
   assert.equal((await call('DELETE', `/api/devices/${box.id}`, {as: 'alice'})).status, 200);
 });
 
+test('a disconnected machine takes along what only it measured, from every board', async () => {
+  const {call, person} = await hub();
+  await person('alice');
+  const team = (await call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
+  const laptop = (await call('POST', '/api/tokens', {as: 'alice', body: {}})).body;
+  const images = (await call('POST', '/api/tokens', {as: 'alice', body: {}})).body;
+  await call('POST', '/v1/ingest', {body: batch('alices-laptop-0123456789'), headers: {authorization: `Bearer ${laptop.secret}`}});
+  await call('POST', '/v1/ingest', {body: batch('alices-image-0123456789'), headers: {authorization: `Bearer ${images.secret}`}});
+  const [source] = (await call('GET', '/api/overview', {as: 'alice'})).body.sources;
+  await call('POST', `/api/boards/${team}/shares`, {as: 'alice', body: {source: source.id}});
+  const shown = async () => [
+    (await call('GET', '/api/overview', {as: 'alice'})).body.sources.length,
+    (await call('GET', `/api/overview?board=${team}`, {as: 'alice'})).body.sources.length,
+  ];
+
+  await call('DELETE', `/api/tokens/${laptop.id}`, {as: 'alice'});
+  assert.deepEqual(await shown(), [1, 1], 'another machine of hers still measures it');
+  const [image] = (await call('GET', '/api/devices', {as: 'alice'})).body;
+  await call('DELETE', `/api/devices/${image.id}`, {as: 'alice'});
+  assert.deepEqual(await shown(), [0, 0], 'no machine does any more: gone from her board and the team');
+
+  await call('POST', '/v1/ingest', {body: batch('alices-laptop-0123456789'), headers: {authorization: `Bearer ${(await call('POST', '/api/tokens', {as: 'alice', body: {}})).body.secret}`}});
+  assert.deepEqual(await shown(), [1, 0], 'measured again, it is hers again; sharing it is up to her');
+});
+
 test('people share their subscriptions with a shared board; its owner arranges, names, hides and takes them off', async () => {
   const {call, person} = await hub();
   await person('alice');

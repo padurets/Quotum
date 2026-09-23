@@ -196,6 +196,7 @@ export const en = {
   'forecast.planDoneHint': 'The plan for this week is over',
   'forecast.rate': 'Average pace over the period: {rate} pp/h',
   'forecast.runsOut': 'runs out in {time}',
+  'forecast.usedUp': 'used up until the reset',
   'forecast.onPaceReset': 'on pace for the reset',
   'forecast.onPacePlan': 'on pace for the plan',
   'forecast.leftPlan': '~{value}% left when the plan ends',

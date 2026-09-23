@@ -145,6 +145,28 @@ export class Store {
     }
   }
 
+  /**
+   * A person disconnected devices: what only those devices measured for them is no
+   * longer theirs. It leaves their personal board, and the shared boards where no other
+   * member measures it. Its history stays: a device that measures it again brings it back.
+   */
+  releaseRevoked(userId: string) {
+    const orphans = this.db
+      .prepare(
+        'SELECT DISTINCT ds.source_id FROM device_sources ds JOIN devices d ON d.id = ds.device_id' +
+          ' WHERE d.user_id = ? AND d.revoked_at IS NOT NULL AND ds.source_id NOT IN' +
+          ' (SELECT ds2.source_id FROM device_sources ds2 JOIN devices d2 ON d2.id = ds2.device_id WHERE d2.user_id = ? AND d2.revoked_at IS NULL)',
+      )
+      .all(userId, userId) as {source_id: string}[];
+    for (const {source_id: source} of orphans) {
+      if (!this.db.prepare('DELETE FROM holders WHERE source_id = ? AND user_id = ?').run(source, userId).changes) continue;
+      const personal = this.db.prepare('SELECT id FROM boards WHERE created_by = ? AND personal = 1').get(userId) as {id: string} | undefined;
+      if (personal) this.changed(personal.id);
+      const shared = this.db.prepare('SELECT board_id FROM shares WHERE source_id = ?').all(source) as {board_id: string}[];
+      for (const {board_id: board} of shared) this.unshareOrphans(board);
+    }
+  }
+
   // ---------- sharing ----------
 
   share(board: string, source: string, userId: string, now: number) {

@@ -77,8 +77,9 @@ const token = (r: any): Token => ({id: r.id, userId: r.user_id, name: r.name, hi
 export class Directory {
   constructor(private readonly db: DatabaseSync) {}
 
-  /** Runs `work` as one write transaction of the hub's database, which the store shares. */
+  /** Runs `work` as one write transaction of the hub's database, which the store shares; inside one already, as part of it. */
   transaction<T>(work: () => T): T {
+    if (this.db.isTransaction) return work();
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const result = work();
