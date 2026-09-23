@@ -1,10 +1,15 @@
 import {useEffect, useId, useRef, useState, type InputHTMLAttributes, type ReactNode} from 'react';
+import {createPortal} from 'react-dom';
 import {LOCALES, setLocale, t, useLocale, type Locale} from '../i18n';
 import {messageOf} from '../lib/http';
 
 export const SERVICE = 'Quotum';
 
-/** A dialog over the page, centred or as a panel on its side; closes on Escape and on a click outside. */
+/**
+ * A dialog over the page, centred or as a panel on its side; closes on Escape and on a
+ * click outside. It is placed in <body>, so a header with a backdrop filter or a moved
+ * widget it was opened from cannot box it in.
+ */
 export function Modal({title, onClose, children, wide, side}: {title: string; onClose: () => void; children: ReactNode; wide?: boolean; side?: boolean}) {
   const panel = useRef<HTMLDivElement>(null);
   // The latest handler, so the effect below runs once: focus moves in when the dialog opens and back when it closes.
@@ -14,7 +19,8 @@ export function Modal({title, onClose, children, wide, side}: {title: string; on
     const escape = (event: KeyboardEvent) => event.key === 'Escape' && close.current();
     document.addEventListener('keydown', escape);
     const previous = document.activeElement as HTMLElement | null;
-    panel.current?.focus();
+    // Into the dialog, unless a field of it already took the focus (autoFocus).
+    if (!panel.current?.contains(document.activeElement)) panel.current?.focus();
     // The page under the dialog stays still: only the dialog scrolls.
     const page = document.documentElement;
     const overflow = page.style.overflow;
@@ -25,7 +31,7 @@ export function Modal({title, onClose, children, wide, side}: {title: string; on
       previous?.focus?.();
     };
   }, []);
-  return (
+  return createPortal(
     <div className={`overlay ${side ? 'is-side' : ''}`} onMouseDown={event => event.target === event.currentTarget && onClose()}>
       <div className={`dialog ${wide ? 'is-wide' : ''} ${side ? 'is-side' : ''}`} role="dialog" aria-modal="true" aria-label={title} ref={panel} tabIndex={-1}>
         <div className="dialog-head">
@@ -38,7 +44,8 @@ export function Modal({title, onClose, children, wide, side}: {title: string; on
         </div>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

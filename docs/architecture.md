@@ -179,8 +179,11 @@ them), kept for 90 days.
   link unless the hub is open (`QUOTUM_SIGNUP=open`).
 - **Boards** are what is aggregated and shared: every user has a personal board and can
   create shared ones. The owner of a board names it, invites people with a link (valid
-  for a week, several uses) and arranges it; every member sees everything on the
-  board and manages their own tokens and devices, the owner manages all of them.
+  for a week, several uses), arranges it and can delete it; every member sees
+  everything on the board, manages their own tokens and devices (the owner manages all
+  of them) and can leave. What goes with a deleted board, or with a member who left,
+  is revoked rather than forgotten: an agent still sending to it is told it was
+  disconnected and stops.
 - **The view** of a board is how it is arranged: the order of its widgets (a card per
   source, the chart and the table), the hidden ones, the windows hidden inside cards and the
   spending plans. It is stored once per board, like a dashboard in Grafana: the owner

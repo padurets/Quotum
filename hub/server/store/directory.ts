@@ -77,7 +77,8 @@ const code = (row: any): DeviceCode => ({
 export class Directory {
   constructor(private readonly db: DatabaseSync) {}
 
-  private transaction<T>(work: () => T): T {
+  /** Runs `work` as one write transaction of the hub's database, which the store shares. */
+  transaction<T>(work: () => T): T {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const result = work();
@@ -181,6 +182,35 @@ export class Directory {
   }
 
   /** A personal board without a name is shown under its default one, in the reader's language. */
+  /**
+   * Deletes a shared board and what belongs to it: members, invites, its view, pending
+   * codes for it. Its devices and tokens stay behind as revoked, so an agent still
+   * sending to it hears that it was disconnected, and stops, instead of retrying. The
+   * store forgets the board's measurements (Store.removeBoard): call both in one
+   * transaction.
+   */
+  deleteBoard(id: string, now: number) {
+    this.db.prepare('UPDATE devices SET revoked_at = coalesce(revoked_at, ?) WHERE board_id = ?').run(now, id);
+    this.db.prepare('UPDATE tokens SET revoked_at = coalesce(revoked_at, ?) WHERE board_id = ?').run(now, id);
+    this.db.prepare('DELETE FROM device_failures WHERE device_id IN (SELECT id FROM devices WHERE board_id = ?)').run(id);
+    for (const table of ['members', 'invites', 'views', 'device_codes', 'boards']) {
+      this.db.prepare(`DELETE FROM ${table} WHERE ${table === 'boards' ? 'id' : 'board_id'} = ?`).run(id);
+    }
+  }
+
+  /** A member leaves a board: the devices and tokens they connected to it are revoked with them. */
+  leaveBoard(boardId: string, userId: string, now: number) {
+    this.transaction(() => {
+      this.db.prepare('DELETE FROM members WHERE board_id = ? AND user_id = ?').run(boardId, userId);
+      this.db.prepare('UPDATE devices SET revoked_at = ? WHERE board_id = ? AND owner_user_id = ? AND revoked_at IS NULL').run(now, boardId, userId);
+      const tokens = this.db.prepare('SELECT id FROM tokens WHERE board_id = ? AND created_by = ? AND revoked_at IS NULL').all(boardId, userId) as {id: string}[];
+      for (const {id} of tokens) {
+        this.db.prepare('UPDATE tokens SET revoked_at = ? WHERE id = ?').run(now, id);
+        this.db.prepare('UPDATE devices SET revoked_at = ? WHERE token_id = ? AND revoked_at IS NULL').run(now, id);
+      }
+    });
+  }
+
   renameBoard(id: string, name: string) {
     this.db.prepare('UPDATE boards SET name = ? WHERE id = ?').run(name, id);
   }

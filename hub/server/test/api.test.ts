@@ -54,7 +54,7 @@ async function hub() {
     assert.equal(signup.status, 200, JSON.stringify(signup.body));
     return signup.body.boards.find((b: any) => b.personal).id as string;
   };
-  return {app, call, person};
+  return {app, call, person, store};
 }
 
 const snapshot = (at: number) => ({
@@ -200,6 +200,39 @@ test('the owner arranges a board, and everyone on it sees it that way', async ()
   assert.equal((await call('POST', `/api/boards/${personal}`, {as: 'bob', body: {name: 'Work'}})).body.name, 'Work');
   assert.equal((await call('POST', `/api/boards/${personal}`, {as: 'bob', body: {name: ''}})).body.name, '');
   assert.equal((await call('POST', `/api/boards/${board}`, {as: 'alice', body: {name: ''}})).status, 400);
+});
+
+test('the owner deletes a shared board with everything on it; a member leaves one', async () => {
+  const {call, person, store} = await hub();
+  const personal = await person('alice');
+  const board = (await call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
+  const invite = async () => (await call('POST', `/api/boards/${board}/invites`, {as: 'alice'})).body.url.split('/invite/')[1];
+  await person('bob', await invite());
+  await person('carol', await invite());
+  const send = (token: string, machine: string) => call('POST', '/v1/ingest', {body: batch(machine), headers: {authorization: `Bearer ${token}`}});
+  const bobs = (await call('POST', `/api/boards/${board}/tokens`, {as: 'bob', body: {}})).body.secret;
+  const alices = (await call('POST', `/api/boards/${board}/tokens`, {as: 'alice', body: {}})).body.secret;
+  assert.equal((await send(bobs, 'machine-bob-0123456789')).status, 200);
+  assert.equal((await send(alices, 'machine-alice-0123456789')).status, 200);
+
+  assert.equal((await call('POST', `/api/boards/${board}/leave`, {as: 'alice'})).status, 403, 'the owner deletes it instead');
+  assert.equal((await call('POST', `/api/boards/${board}/leave`, {as: 'bob'})).status, 200);
+  assert.equal((await call('GET', `/api/overview?board=${board}`, {as: 'bob'})).status, 404);
+  assert.equal((await send(bobs, 'machine-bob-0123456789')).status, 401, 'what he connected stops with him');
+  assert.equal((await send(alices, 'machine-alice-0123456789')).status, 200, 'the rest goes on');
+
+  assert.equal((await call('DELETE', `/api/boards/${personal}`, {as: 'alice'})).status, 403, 'a personal board stays');
+  assert.equal((await call('DELETE', `/api/boards/${board}`, {as: 'carol'})).status, 403, 'only its owner deletes it');
+  assert.equal((await call('DELETE', `/api/boards/${board}`, {as: 'alice'})).status, 200);
+  assert.deepEqual((await call('GET', '/api/session', {as: 'carol'})).body.boards.map((b: any) => b.personal), [true]);
+  assert.equal((await send(alices, 'machine-alice-0123456789')).status, 401);
+  const left = (sql: string) => (store.db.prepare(sql).get(board) as {n: number}).n;
+  assert.equal(left('SELECT count(*) n FROM sources WHERE board_id = ?'), 0);
+  for (const table of ['samples', 'state']) {
+    assert.equal((store.db.prepare(`SELECT count(*) n FROM ${table} WHERE source_id NOT IN (SELECT id FROM sources)`).get() as {n: number}).n, 0, `no ${table} left behind`);
+  }
+  assert.equal(left('SELECT count(*) n FROM members WHERE board_id = ?'), 0);
+  assert.equal(left('SELECT count(*) n FROM devices WHERE board_id = ? AND revoked_at IS NULL'), 0);
 });
 
 test('a person changes their name freely, their email and password only with the current password', async () => {

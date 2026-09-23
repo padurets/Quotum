@@ -8,6 +8,7 @@ export const ru = {
   'common.copied': 'Скопировано',
   'common.backHome': 'На главную',
   'common.language': 'Язык',
+  'common.cancel': 'Отмена',
 
   'app.reconnecting': 'Нет связи с сервисом — пробуем снова…',
 
@@ -86,7 +87,14 @@ export const ru = {
   'boards.newPlaceholder': 'Новая общая доска',
   'boards.newLabel': 'Название новой доски',
   'boards.create': 'Создать',
-  'boards.rename': 'Переименовать «{board}»',
+  'boards.edit': 'Изменить «{board}»',
+  'boards.delete': 'Удалить доску…',
+  'boards.deleteTitle': 'Удалить доску «{board}»?',
+  'boards.deleteText': 'Вместе с ней удалятся история лимитов, приглашения и токены, а подключённые к ней устройства перестанут отправлять данные. Отменить это нельзя.',
+  'boards.deleteConfirm': 'Введите «{board}», чтобы подтвердить',
+  'boards.deleteButton': 'Удалить доску',
+  'boards.leave': 'Покинуть «{board}»',
+  'boards.confirmLeave': 'Покинуть доску «{board}»? Устройства и токены, которые вы к ней подключили, перестанут отправлять на неё данные.',
   'boards.renameLabel': 'Название доски',
   'boards.save': 'Сохранить',
 

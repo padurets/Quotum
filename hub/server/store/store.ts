@@ -149,6 +149,14 @@ export class Store {
     this.changed(this.boardOf(id));
   }
 
+  /** Forgets the sources of a deleted board and everything measured for them (Directory.deleteBoard does the rest). */
+  removeBoard(board: string) {
+    const sources = 'SELECT id FROM sources WHERE board_id = ?';
+    for (const table of ['samples', 'state', 'events', 'device_sources']) this.db.prepare(`DELETE FROM ${table} WHERE source_id IN (${sources})`).run(board);
+    this.db.prepare('DELETE FROM sources WHERE board_id = ?').run(board);
+    this.revisions.delete(board);
+  }
+
   /** Records a failed attempt; the last good values stay on screen. */
   fail(id: string, error: string) {
     this.db.prepare('INSERT OR REPLACE INTO state VALUES (?, ?)').run(id, JSON.stringify({...this.state(id), error}));

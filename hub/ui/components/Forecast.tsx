@@ -5,7 +5,7 @@ import {level} from '../lib/quota';
 import {PLAN_TOLERANCE, planAt, type WeeklyPlan} from '../lib/plan';
 import {FORECAST, planOf, withHidden, type Arrange} from '../lib/view';
 import {linesOf, type Line} from '../lib/lines';
-import {usePrefs} from '../lib/prefs';
+import {setPrefs, usePrefs} from '../lib/prefs';
 import {t, useLocale} from '../i18n';
 import {HideRow, Popover, SlidersIcon} from './Popover';
 import {KindSwitch, PeriodSwitch} from './History';
@@ -42,8 +42,8 @@ function outlook(line: Line, live: Win | undefined, now: number, weekly: WeeklyP
 }
 
 /**
- * The windows of the chosen kind, as in the chart: what is left, what the plan expects,
- * what the period spent, and where that pace leads.
+ * The windows of one kind: what is left, what the plan expects, what the period spent,
+ * and where that pace leads. Its period and kind are its own, not the chart's.
  */
 export function Forecast({
   history,
@@ -60,7 +60,7 @@ export function Forecast({
   arrange: Arrange;
 }) {
   const {view} = arrange;
-  const {kind} = usePrefs();
+  const {tableKind: kind, tableRange} = usePrefs();
   // Window names are text: they are rebuilt when the language changes.
   const locale = useLocale();
   const lines = useMemo(() => linesOf(history, overview, view, kind), [history, overview, view.windows, kind, locale]);
@@ -70,8 +70,8 @@ export function Forecast({
       <div className="panel-head">
         <h2>{t('forecast.title')}</h2>
         <div className="controls">
-          <KindSwitch />
-          <PeriodSwitch />
+          <KindSwitch value={kind} onChange={tableKind => setPrefs({tableKind})} />
+          <PeriodSwitch value={tableRange} onChange={next => setPrefs({tableRange: next})} />
           {arrange.owner && (
             <Popover label={t('forecast.settings')} icon={<SlidersIcon />}>
               <HideRow onHide={() => arrange.update(next => withHidden(next, FORECAST, true))}>{t('forecast.hide')}</HideRow>

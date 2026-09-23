@@ -6,8 +6,9 @@ export type Horizon = 'auto' | '1d' | '3d' | '7d';
 
 /**
  * How this reader looks at the dashboard, whatever the board: the chart's period, window
- * type and horizon, lines switched off in its legend, and reset announcements. How a
- * board is arranged is the board's own (lib/view.ts).
+ * type and horizon, lines switched off in its legend, the table's own period and window
+ * type, and reset announcements. How a board is arranged is the board's own
+ * (lib/view.ts).
  */
 export type Prefs = {
   /** Series switched off in the chart legend. */
@@ -15,6 +16,9 @@ export type Prefs = {
   range: string;
   kind: Kind;
   horizon: Horizon;
+  /** The table's period and window type, independent of the chart's. */
+  tableRange: string;
+  tableKind: Kind;
   /** Draw the spending plan on the weekly chart. */
   showPlan: boolean;
   /** Show reset announcements from the community trackers. */
@@ -25,7 +29,7 @@ const KEY = 'quotum.prefs';
 const RANGES = ['24h', '7d', '30d'];
 const KINDS: Kind[] = ['weekly', 'session'];
 export const HORIZONS: Horizon[] = ['auto', '1d', '3d', '7d'];
-const DEFAULTS: Prefs = {muted: {}, range: '24h', kind: 'weekly', horizon: 'auto', showPlan: true, showResets: true};
+const DEFAULTS: Prefs = {muted: {}, range: '24h', kind: 'weekly', horizon: 'auto', tableRange: '24h', tableKind: 'weekly', showPlan: true, showResets: true};
 
 function read(): Prefs {
   try {
@@ -34,8 +38,11 @@ function read(): Prefs {
     // Whatever the browser kept from another version must still be a valid choice.
     if (!RANGES.includes(stored.range)) stored.range = DEFAULTS.range;
     if (!KINDS.includes(stored.kind)) stored.kind = DEFAULTS.kind;
+    if (!RANGES.includes(stored.tableRange)) stored.tableRange = DEFAULTS.tableRange;
+    if (!KINDS.includes(stored.tableKind)) stored.tableKind = DEFAULTS.tableKind;
     if (!HORIZONS.includes(stored.horizon)) stored.horizon = DEFAULTS.horizon;
-    return {muted: stored.muted, range: stored.range, kind: stored.kind, horizon: stored.horizon, showPlan: stored.showPlan, showResets: stored.showResets};
+    const {muted, range, kind, horizon, tableRange, tableKind, showPlan, showResets} = stored;
+    return {muted, range, kind, horizon, tableRange, tableKind, showPlan, showResets};
   } catch {
     return DEFAULTS;
   }

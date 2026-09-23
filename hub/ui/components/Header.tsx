@@ -1,7 +1,7 @@
 import {useState, type FormEvent, type ReactNode} from 'react';
 import {call} from '../lib/http';
 import {boardTitle, type Board, type User} from '../lib/session';
-import {Brand, ErrorLine} from './Kit';
+import {Brand, ErrorLine, Field, Modal} from './Kit';
 import {Popover} from './Popover';
 import {t} from '../i18n';
 
@@ -26,18 +26,53 @@ const PencilIcon = () => (
   </svg>
 );
 
-/** A board in the list; its owner renames it in place. A personal board left empty takes its default name. */
-function BoardItem({board, current, onSelect, onRenamed}: {board: Board; current: boolean; onSelect: () => void; onRenamed: () => Promise<void>}) {
+const LeaveIcon = () => (
+  <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+    <path d="M6 2.5H3.5a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1H6M10.5 11l3-3-3-3M13.5 8H6" />
+  </svg>
+);
+
+/**
+ * A board in the list. Its owner renames it in place (a personal board left empty, or
+ * with its default name, keeps the default in every language) and deletes a shared one;
+ * a member leaves a shared one.
+ */
+function BoardItem({
+  board,
+  current,
+  onSelect,
+  onChanged,
+  onDelete,
+}: {
+  board: Board;
+  current: boolean;
+  onSelect: () => void;
+  onChanged: () => Promise<void>;
+  onDelete: () => void;
+}) {
   const [name, setName] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const owner = board.role === 'owner';
 
   const rename = async (event: FormEvent) => {
     event.preventDefault();
     setError(null);
+    const typed = name!.trim();
     try {
-      await call('POST', `/api/boards/${encodeURIComponent(board.id)}`, {name: name!.trim()});
-      await onRenamed();
+      await call('POST', `/api/boards/${encodeURIComponent(board.id)}`, {name: board.personal && typed === t('boards.personalName') ? '' : typed});
+      await onChanged();
       setName(null);
+    } catch (failure) {
+      setError(failure);
+    }
+  };
+
+  const leave = async () => {
+    if (!confirm(t('boards.confirmLeave', {board: boardTitle(board)}))) return;
+    setError(null);
+    try {
+      await call('POST', `/api/boards/${encodeURIComponent(board.id)}/leave`);
+      await onChanged();
     } catch (failure) {
       setError(failure);
     }
@@ -62,6 +97,11 @@ function BoardItem({board, current, onSelect, onRenamed}: {board: Board; current
         <button className="button" disabled={!board.personal && !name.trim()}>
           {t('boards.save')}
         </button>
+        {!board.personal && (
+          <button type="button" className="link-button danger" onClick={onDelete}>
+            {t('boards.delete')}
+          </button>
+        )}
         <ErrorLine error={error} />
       </form>
     );
@@ -73,18 +113,63 @@ function BoardItem({board, current, onSelect, onRenamed}: {board: Board; current
         <span>{boardTitle(board)}</span>
         <b>{t(board.personal ? 'boards.personal' : 'boards.shared')}</b>
       </button>
-      {board.role === 'owner' && (
-        <button type="button" className="icon-button" aria-label={t('boards.rename', {board: boardTitle(board)})} title={t('boards.rename', {board: boardTitle(board)})} onClick={() => setName(board.name)}>
+      {owner ? (
+        <button type="button" className="icon-button" aria-label={t('boards.edit', {board: boardTitle(board)})} title={t('boards.edit', {board: boardTitle(board)})} onClick={() => setName(boardTitle(board))}>
           <PencilIcon />
         </button>
+      ) : (
+        !board.personal && (
+          <button type="button" className="icon-button" aria-label={t('boards.leave', {board: boardTitle(board)})} title={t('boards.leave', {board: boardTitle(board)})} onClick={leave}>
+            <LeaveIcon />
+          </button>
+        )
       )}
+      <ErrorLine error={error} />
     </div>
+  );
+}
+
+/** Deleting a shared board: its name typed out, since nothing of it can come back. */
+function DeleteBoard({board, onClose, onDeleted}: {board: Board; onClose: () => void; onDeleted: () => Promise<void>}) {
+  const [typed, setTyped] = useState('');
+  const [error, setError] = useState<unknown>(null);
+  const [busy, setBusy] = useState(false);
+  const remove = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await call('DELETE', `/api/boards/${encodeURIComponent(board.id)}`);
+      await onDeleted();
+      onClose();
+    } catch (failure) {
+      setError(failure);
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal title={t('boards.deleteTitle', {board: board.name})} onClose={onClose}>
+      <form className="dialog-form" onSubmit={remove}>
+        <p className="dialog-text">{t('boards.deleteText')}</p>
+        <Field label={t('boards.deleteConfirm', {board: board.name})} value={typed} autoComplete="off" autoFocus onChange={e => setTyped(e.target.value)} />
+        <ErrorLine error={error} />
+        <div className="button-row">
+          <button type="button" className="button" onClick={onClose}>
+            {t('common.cancel')}
+          </button>
+          <button className="button danger" disabled={typed.trim() !== board.name || busy}>
+            {t('boards.deleteButton')}
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
 /** Which board is on screen; boards are created and renamed right here. */
 function BoardSwitcher({boards, board, onSelect, onChanged}: {boards: Board[]; board: Board | null; onSelect: (id: string) => void; onChanged: () => Promise<void>}) {
   const [open, setOpen] = useState(false);
+  const [deleting, setDeleting] = useState<Board | null>(null);
   const [name, setName] = useState('');
   const [error, setError] = useState<unknown>(null);
   const create = async (event: FormEvent) => {
@@ -101,6 +186,7 @@ function BoardSwitcher({boards, board, onSelect, onChanged}: {boards: Board[]; b
     }
   };
   return (
+    <>
     <Popover
       label={t('boards.title')}
       open={open}
@@ -115,7 +201,14 @@ function BoardSwitcher({boards, board, onSelect, onChanged}: {boards: Board[]; b
     >
       <div className="popover-title">{t('boards.title')}</div>
       {boards.map(b => (
-        <BoardItem key={b.id} board={b} current={b.id === board?.id} onSelect={() => (onSelect(b.id), setOpen(false))} onRenamed={onChanged} />
+        <BoardItem
+          key={b.id}
+          board={b}
+          current={b.id === board?.id}
+          onSelect={() => (onSelect(b.id), setOpen(false))}
+          onChanged={onChanged}
+          onDelete={() => (setOpen(false), setDeleting(b))}
+        />
       ))}
       <form className="popover-section popover-form" onSubmit={create}>
         <input placeholder={t('boards.newPlaceholder')} value={name} maxLength={80} onChange={e => setName(e.target.value)} aria-label={t('boards.newLabel')} />
@@ -125,6 +218,8 @@ function BoardSwitcher({boards, board, onSelect, onChanged}: {boards: Board[]; b
       </form>
       <ErrorLine error={error} />
     </Popover>
+    {deleting && <DeleteBoard board={deleting} onClose={() => setDeleting(null)} onDeleted={onChanged} />}
+    </>
   );
 }
 

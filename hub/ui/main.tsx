@@ -30,7 +30,13 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
   const {data, lastOk, reload} = useOverview(boardId);
   const arrange = useView(data, reload);
   const prefs = usePrefs();
-  const {history, loading: historyLoading} = useHistory(boardId, prefs.range, data ? data.revision : null);
+  const revision = data ? data.revision : null;
+  const {history, loading: historyLoading} = useHistory(boardId, prefs.range, revision);
+  // The table has its own period: the same one is read once; another one shows the
+  // chart's history, dimmed, until it comes.
+  const sameRange = prefs.tableRange === prefs.range;
+  const own = useHistory(boardId, prefs.tableRange, sameRange ? null : revision);
+  const table = sameRange ? {history, loading: historyLoading} : own.history ? own : {history, loading: true};
   const {resets, past, health} = useResets(prefs.showResets);
   const [admin, setAdmin] = useState<AdminTab | null>(null);
   const [account, setAccount] = useState(false);
@@ -79,7 +85,7 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
         id: FORECAST,
         name: t('forecast.title'),
         wide: true,
-        content: <Forecast history={history} loading={historyLoading} overview={overview} now={now} arrange={arrange} />,
+        content: <Forecast history={table.history} loading={table.loading} overview={overview} now={now} arrange={arrange} />,
       },
     ],
   ]);

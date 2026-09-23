@@ -12,6 +12,7 @@ export const en = {
   'common.copied': 'Copied',
   'common.backHome': 'Back to the dashboard',
   'common.language': 'Language',
+  'common.cancel': 'Cancel',
 
   'app.reconnecting': 'Can’t reach the hub — trying again…',
 
@@ -90,7 +91,14 @@ export const en = {
   'boards.newPlaceholder': 'New shared board',
   'boards.newLabel': 'Name of the new board',
   'boards.create': 'Create',
-  'boards.rename': 'Rename “{board}”',
+  'boards.edit': 'Edit “{board}”',
+  'boards.delete': 'Delete board…',
+  'boards.deleteTitle': 'Delete “{board}”?',
+  'boards.deleteText': 'Its history, invitations and tokens go with it, and the devices connected to it stop sending. This cannot be undone.',
+  'boards.deleteConfirm': 'Type “{board}” to confirm',
+  'boards.deleteButton': 'Delete board',
+  'boards.leave': 'Leave “{board}”',
+  'boards.confirmLeave': 'Leave “{board}”? Devices and tokens you connected to it stop sending to it.',
   'boards.renameLabel': 'Board name',
   'boards.save': 'Save',
 

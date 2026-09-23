@@ -24,7 +24,7 @@ const notFound = (reply: FastifyReply) => reply.code(404).send({error: 'not_foun
 /**
  * Signing up and in, boards and their members, invites, tokens and devices, approving
  * device codes. On a board every member sees everything and manages their own tokens
- * and devices; the owner manages everything, invites people and removes sources.
+ * and devices; the owner manages everything, invites people, names and deletes the board.
  */
 export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
   const {directory, store, pairing, setup} = hub;
@@ -169,6 +169,28 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
     if (!(name ? validName(name) : access.board.personal)) return reply.code(400).send({error: 'invalid_name'});
     directory.renameBoard(access.board.id, name);
     return {...access.board, name};
+  });
+
+  // Everyone has a personal board, so only a shared one can go, by its owner's hand.
+  app.delete<{Params: {board: string}}>('/api/boards/:board', (request, reply) => {
+    const access = guards.board(request, reply, request.params.board);
+    if (!access) return reply;
+    if (!isOwner(access.board) || access.board.personal) return forbidden(reply);
+    const id = access.board.id;
+    directory.transaction(() => {
+      store.removeBoard(id);
+      directory.deleteBoard(id, Date.now());
+    });
+    return {ok: true};
+  });
+
+  // A member leaves a shared board; its owner deletes it instead.
+  app.post<{Params: {board: string}}>('/api/boards/:board/leave', (request, reply) => {
+    const access = guards.board(request, reply, request.params.board);
+    if (!access) return reply;
+    if (isOwner(access.board) || access.board.personal) return forbidden(reply);
+    directory.leaveBoard(access.board.id, access.user.id, Date.now());
+    return {ok: true};
   });
 
   // ---------- views ----------
