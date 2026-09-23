@@ -12,8 +12,10 @@ const WEEK_MINUTES = 10080;
 export type WeeklyPlan = number[];
 export const DEFAULT_PLAN: WeeklyPlan = [30, 25, 15, 15, 10, 5, 0];
 export const PLAN_DAYS = 7;
-/** Gap (in percentage points) between actual and planned remaining that is worth a word. */
+/** Gap (in percentage points) between actual and planned remaining that the table marks. */
 export const PLAN_TOLERANCE = 3;
+/** A gap this wide or wider is worth a word under a card's limit; a smaller one is noise there. */
+export const PLAN_NOTE_FROM = 10;
 
 export const planTotal = (plan: WeeklyPlan) => plan.reduce((sum, share) => sum + share, 0);
 

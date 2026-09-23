@@ -4,7 +4,7 @@ import {windowKey} from '../lib/types';
 import {ago, day, duration, fullStamp, num} from '../lib/format';
 import {errorText, freshness, level, problemOf, PULSE_FOR, sourceLabel, windowName} from '../lib/quota';
 import {t} from '../i18n';
-import {DEFAULT_PLAN, isValidPlan, PLAN_TOLERANCE, planAt, planTotal, type WeeklyPlan} from '../lib/plan';
+import {DEFAULT_PLAN, isValidPlan, PLAN_NOTE_FROM, planAt, planTotal, type WeeklyPlan} from '../lib/plan';
 import {LOGOS} from './logos';
 import {cardId, colorOf, planOf, weeklyPlanOf, withColor, withHidden, withName, withPlan, withPlanned, withWindowHidden, type Arrange} from '../lib/view';
 import {CARD_COLORS, MIDDLE_STEP, PROVIDERS} from '../lib/providers';
@@ -57,12 +57,12 @@ function Limit({w, measuredAt, now, weekly}: {w: Win; measuredAt: number | null;
             {t('limit.planDone')}
           </span>
         )}
-        {delta < -PLAN_TOLERANCE && (
+        {Math.round(-delta) >= PLAN_NOTE_FROM && (
           <span className="ahead" title={t(plan?.weekly ? 'limit.aheadHint' : 'limit.aheadHintReset')}>
             {t('limit.ahead', {value: num(-delta)})}
           </span>
         )}
-        {plan?.weekly && delta > PLAN_TOLERANCE && (
+        {plan?.weekly && Math.round(delta) >= PLAN_NOTE_FROM && (
           <span className="plan-note" title={t('limit.behindHint')}>
             {t('limit.behind', {value: num(delta)})}
           </span>
