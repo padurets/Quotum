@@ -114,7 +114,6 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
             <WidgetsMenu
               widgets={widgets}
               hidden={arrange.view.hidden}
-              shared={!board?.personal}
               locked={prefs.locked}
               onShow={(id, on) => arrange.update(view => withHidden(view, id, !on))}
               onLock={locked => setPrefs({locked})}

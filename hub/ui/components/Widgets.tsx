@@ -428,14 +428,12 @@ const LockIcon = ({open = false}: {open?: boolean}) => (
 export function WidgetsMenu({
   widgets,
   hidden,
-  shared,
   locked,
   onShow,
   onLock,
 }: {
   widgets: {id: string; name: string}[];
   hidden: string[];
-  shared: boolean;
   locked: boolean;
   onShow: (id: string, shown: boolean) => void;
   onLock: (locked: boolean) => void;
@@ -454,7 +452,6 @@ export function WidgetsMenu({
           {widget.name}
         </SwitchRow>
       ))}
-      <div className="popover-note">{t(shared ? 'widgets.sharedNote' : 'widgets.note')}</div>
     </Popover>
   );
 }

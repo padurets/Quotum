@@ -33,7 +33,7 @@ function HistorySettings({arrange, planShown}: {arrange: Arrange; planShown: boo
         />
       </div>
       {!planShown && <div className="popover-note">{t('history.horizonNote')}</div>}
-      {arrange.owner && <HideRow onHide={() => arrange.update(view => withHidden(view, HISTORY, true))}>{t('history.hide')}</HideRow>}
+      {arrange.owner && <HideRow onHide={() => arrange.update(view => withHidden(view, HISTORY, true))}>{t('widget.hide')}</HideRow>}
     </Popover>
   );
 }

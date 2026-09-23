@@ -75,7 +75,7 @@ export function Forecast({
           <PeriodSwitch value={tableRange} onChange={next => setPrefs({tableRange: next})} />
           {arrange.owner && (
             <Popover label={t('forecast.settings')} icon={<SlidersIcon />}>
-              <HideRow onHide={() => arrange.update(next => withHidden(next, FORECAST, true))}>{t('forecast.hide')}</HideRow>
+              <HideRow onHide={() => arrange.update(next => withHidden(next, FORECAST, true))}>{t('widget.hide')}</HideRow>
             </Popover>
           )}
         </div>

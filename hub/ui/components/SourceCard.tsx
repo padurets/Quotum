@@ -11,7 +11,7 @@ import {call} from '../lib/http';
 import type {Board} from '../lib/session';
 import type {ResetStatus} from '../lib/resets';
 import {ResetBanner, ResetNotice} from './ResetNotice';
-import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
+import {HideRow, Popover, SlidersIcon, SwitchRow, TakeOffIcon} from './Popover';
 import {ErrorLine} from './Kit';
 
 function Meter({w, measuredAt, now, weekly}: {w: Win; measuredAt: number | null; now: number; weekly: WeeklyPlan}) {
@@ -198,10 +198,11 @@ function SourceSettings({source, arrange, board, onChanged}: {source: SourceStat
           <div className="popover-note">{t('source.planNote')}</div>
         </>
       )}
-      {owner && <HideRow onHide={() => arrange.update(view => withHidden(view, cardId(source.id), true))}>{t('source.hide')}</HideRow>}
+      {owner && <HideRow onHide={() => arrange.update(view => withHidden(view, cardId(source.id), true))}>{t('widget.hide')}</HideRow>}
       {takeOff && (
         <div className={owner ? '' : 'popover-section'}>
           <button type="button" className="popover-row is-danger" onClick={unshare}>
+            <TakeOffIcon />
             <span>{t('source.takeOff')}</span>
           </button>
           <ErrorLine error={error} />
