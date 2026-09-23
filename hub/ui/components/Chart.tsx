@@ -136,7 +136,7 @@ export function Chart({
     hover === null
       ? []
       : lines.flatMap(line => {
-          const value = valueIn(line.points, hover, now);
+          const value = valueIn(line.points, hover, now, Math.max(cellMs, line.staleAfterMs));
           return value === undefined ? [] : [{line, value}];
         });
   const markerReadout = hover === null ? [] : markers.filter(m => m.at >= hover && m.at < hover + cellMs);

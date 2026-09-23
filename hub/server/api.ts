@@ -72,30 +72,37 @@ export async function buildApp(hub: Hub) {
   const hosts = new Set<string>(config.http.hosts);
   const anyHost = hosts.has('*');
   type Answer = {series: HistorySeries[]; events: SourceEvent[]};
+  type Kept = {cell: number; revision: number; sources: string; at: number; costly: boolean; value: Answer};
   /**
-   * An answer is reused while the grid stays on the same cell and the board's data has not
-   * changed. A costly one (a month of a busy board takes a good part of a second) is also
-   * reused for a quarter of a cell after the data changed: a month is drawn in 2-hour
-   * cells, where half an hour of news does not show. The fixed ranges are kept per board;
-   * of the periods selected on charts, the latest few.
+   * An answer is reused while the grid stays on the same cell, the board has the same
+   * sources and their data has not changed. A costly one (a month of a busy board takes a
+   * good part of a second) is also reused for a quarter of a cell after new data came: a
+   * month is drawn in 2-hour cells, where half an hour of news does not show. Such an
+   * answer says when a newer one will be ready (`refreshInMs`), so the page asks again
+   * then. The fixed ranges are kept per board; of the periods selected on charts, the
+   * latest few.
    */
-  const fixedHistory = new Map<string, {cell: number; revision: number; at: number; costly: boolean; value: Answer}>();
-  const selectedHistory: typeof fixedHistory = new Map();
+  const fixedHistory = new Map<string, Kept>();
+  const selectedHistory = new Map<string, Kept>();
   const SELECTED_KEPT = 32;
-  const COSTLY_MS = 50;
-  const reused = (cache: typeof fixedHistory, slot: string, board: string, cellMs: number, end: number, read: () => Answer) => {
+  const reused = (cache: Map<string, Kept>, slot: string, board: string, cellMs: number, end: number, read: () => Answer) => {
     const now = Date.now();
     const cell = Math.floor(end / cellMs);
     const revision = store.revision(board);
+    const sources = store.sources(board).map(s => s.id).join(' ');
     const hit = cache.get(slot);
-    if (hit && hit.cell === cell && (hit.revision === revision || (hit.costly && now - hit.at < cellMs / 4))) return hit.value;
+    if (hit && hit.cell === cell && hit.sources === sources) {
+      if (hit.revision === revision) return {...hit.value, refreshInMs: null};
+      const left = hit.at + cellMs / 4 - now;
+      if (hit.costly && left > 0) return {...hit.value, refreshInMs: Math.ceil(left)};
+    }
     const value = read();
-    const costly = Date.now() - now >= COSTLY_MS;
+    const costly = Date.now() - now >= config.history.costlyMs;
     // Map order is insertion order: the entry read last goes to the end, the oldest is dropped.
     cache.delete(slot);
-    cache.set(slot, {cell, revision, at: now, costly, value});
+    cache.set(slot, {cell, revision, sources, at: now, costly, value});
     if (cache === selectedHistory && cache.size > SELECTED_KEPT) cache.delete(cache.keys().next().value!);
-    return value;
+    return {...value, refreshInMs: null};
   };
 
   app.addHook('onRequest', async (request, reply) => {
@@ -186,17 +193,17 @@ export async function buildApp(hub: Hub) {
       if (!span) return reply.code(400).send({error: 'invalid_request'});
       const board = access.board.id;
       const slot = `${board}:${span.since}:${span.to}`;
-      const {series, events} = reused(selectedHistory, slot, board, span.cellMs, span.to, () => store.history(board, span.since, span.cellMs, span.to));
+      const answer = reused(selectedHistory, slot, board, span.cellMs, span.to, () => store.history(board, span.since, span.cellMs, span.to));
       // Named as asked, so the page knows its answer even when the end was cut to now.
-      return {range: `${from}-${to}`, now, since: span.since, to: span.to, cellMs: span.cellMs, historyStart: store.historyStart, series, events};
+      return {range: `${from}-${to}`, now, since: span.since, to: span.to, cellMs: span.cellMs, historyStart: store.historyStart, ...answer};
     }
     const range = request.query.range ?? '24h';
     const spec = Object.hasOwn(config.history.ranges, range) ? config.history.ranges[range] : null;
     if (!spec) return reply.code(400).send({error: 'invalid_request'});
 
     const board = access.board.id;
-    const {series, events} = reused(fixedHistory, `${board}:${range}`, board, spec.cellMs, now, () => store.history(board, now - spec.durationMs, spec.cellMs));
-    return {range, now, since: now - spec.durationMs, to: now, cellMs: spec.cellMs, historyStart: store.historyStart, series, events};
+    const answer = reused(fixedHistory, `${board}:${range}`, board, spec.cellMs, now, () => store.history(board, now - spec.durationMs, spec.cellMs));
+    return {range, now, since: now - spec.durationMs, to: now, cellMs: spec.cellMs, historyStart: store.historyStart, ...answer};
   });
 
   accountRoutes(app, hub, guards);

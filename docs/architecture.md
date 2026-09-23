@@ -169,7 +169,9 @@ them), kept for 90 days.
   keeps it within 360 cells (a minute for an hour, as dense as the fixed periods for
   longer ones); where measurements come less often than cells, hovering reads the last
   value before. Putting a month together takes a busy board a good part of a second, so
-  such an answer is reused for a quarter of its cell after the data changed. The range is in the past, so the table reads it from its edges: what
+  such an answer is reused for a quarter of its cell after the data changed, and says
+  when a newer one will be ready for the page to ask again; a source joining or leaving
+  the board is never served from it. The range is in the past, so the table reads it from its edges: what
   was left at its first and last measurement, what it spent and how fast.
 - **The plan** is per source and belongs to the board's view: whole percents per day of the
   weekly window (30/25/15/15/10/5/0 by default). A day at 0 has no spending planned,

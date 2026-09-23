@@ -97,6 +97,8 @@ export const config = {
     minSpanMs: 15 * 60_000,
     /** As long as the longest fixed range (dragged on it, a little longer). */
     maxSpanMs: 31 * 86_400_000,
+    /** A history that takes this long to put together is reused a while after new data (see api.ts). */
+    costlyMs: 50,
   },
 
   /** Community reset trackers (see domain/resets.ts); credited wherever shown. `QUOTUM_RESETS=off` turns them off. */

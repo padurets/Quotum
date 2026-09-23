@@ -384,6 +384,35 @@ test('history reads a period selected on the chart, up to a month, on a grid fin
   }
 });
 
+test('a costly history is reused a while after new data, says when a newer one is ready, and never outlives a change of sources', async () => {
+  const {call, person} = await hub();
+  await person('alice');
+  const team = (await call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
+  const token = (await call('POST', '/api/tokens', {as: 'alice', body: {}})).body.secret;
+  const ingest = (at: number) =>
+    call('POST', '/v1/ingest', {body: {...batch('alices-laptop-0123456789'), snapshots: [snapshot(at)]}, headers: {authorization: `Bearer ${token}`}});
+  await ingest(Date.now() - 60_000);
+  const [source] = (await call('GET', '/api/overview', {as: 'alice'})).body.sources;
+  await call('POST', `/api/boards/${team}/shares`, {as: 'alice', body: {source: source.id}});
+  const read = async () => (await call('GET', `/api/history?board=${team}&range=30d`, {as: 'alice'})).body;
+  // Every answer costly, however small the board (the settings are read-only only to the type checker).
+  const history = config.history as {costlyMs: number};
+  const costly = history.costlyMs;
+  history.costlyMs = 0;
+  try {
+    const first = await read();
+    assert.equal(first.refreshInMs, null);
+    await ingest(Date.now() - 1_000);
+    const kept = await read();
+    assert.ok(kept.refreshInMs > 0, 'reused, and it says when a newer one is ready');
+    assert.equal(kept.series[0].samples, first.series[0].samples);
+    await call('DELETE', `/api/boards/${team}/shares/${source.id}`, {as: 'alice'});
+    assert.deepEqual((await read()).series, [], 'a source taken off the board is gone at once');
+  } finally {
+    history.costlyMs = costly;
+  }
+});
+
 test('changes from another origin, unknown hosts and other methods are refused', async () => {
   const {call, person} = await hub();
   await person('alice');

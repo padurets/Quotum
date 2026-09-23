@@ -38,9 +38,10 @@ export function linesOf(history: History | null, overview: Overview | null, view
 /**
  * A line's value in the cell that starts at `cell`: its own, or else the last one before
  * it while the line goes on unbroken. Measurements may come less often than the cells of
- * a short period, and a value holds until the next one.
+ * a short period, and a value holds until the next one; the last one, only as long as it
+ * is fresh (`holdMs`), as a gap between two would be.
  */
-export function valueIn(points: Line['points'], cell: number, now: number): number | undefined {
+export function valueIn(points: Line['points'], cell: number, now: number, holdMs: number): number | undefined {
   if (cell > now) return undefined;
   let low = 0;
   let high = points.length - 1;
@@ -55,5 +56,6 @@ export function valueIn(points: Line['points'], cell: number, now: number): numb
   if (found < 0) return undefined;
   const [at, value, segment] = points[found];
   const next = points[found + 1];
-  return at === cell || !next || next[2] === segment ? value : undefined;
+  if (at === cell) return value;
+  return next ? (next[2] === segment ? value : undefined) : cell - at <= holdMs ? value : undefined;
 }

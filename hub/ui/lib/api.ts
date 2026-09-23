@@ -94,7 +94,10 @@ export function useHistory(board: string, period: string | TimeRange, revision: 
     let timer: ReturnType<typeof setTimeout>;
     call<History>('GET', `/api/history?board=${encodeURIComponent(board)}&${query}`)
       .then(data => {
-        if (!cancelled) setHistory({...data, board});
+        if (cancelled) return;
+        setHistory({...data, board});
+        // A costly history is put together again a while after new data came: asked for then.
+        if (data.refreshInMs !== null) timer = setTimeout(() => setRetry(n => n + 1), data.refreshInMs + 1_000);
       })
       .catch(error => {
         if (cancelled) return;

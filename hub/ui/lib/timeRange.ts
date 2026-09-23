@@ -77,18 +77,24 @@ export function showBoard(id: string) {
   }
 }
 
+/** Back and Forward may bring back the address of another board than the one on screen: it follows the screen. */
+function popped() {
+  changed();
+  if (board) showBoard(board);
+}
+
 export function useTimeRange(): TimeRange | null {
   return useSyncExternalStore(
     listener => {
       listeners.add(listener);
       if (listeners.size === 1) {
-        window.addEventListener('popstate', changed);
+        window.addEventListener('popstate', popped);
         // The address may have changed while nothing was listening.
         changed();
       }
       return () => {
         listeners.delete(listener);
-        if (!listeners.size) window.removeEventListener('popstate', changed);
+        if (!listeners.size) window.removeEventListener('popstate', popped);
       };
     },
     () => current,

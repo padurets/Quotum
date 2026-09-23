@@ -5,9 +5,9 @@ import type {History, HistorySeries, Overview, SourceState, View} from '../lib/t
 
 const view: View = {order: [], sizes: {}, names: {}, hidden: [], windows: [], plans: {}, unplanned: [], colors: {}};
 const series = (windowId: string, kind: 'weekly' | 'session' = 'weekly'): HistorySeries => ({
-  sourceId: 'codex:1', provider: 'codex', windowId, kind, label: null, minutes: 10080, consumed: 0, coveredMs: 0, samples: 1, remainingAtStart: 50, remainingAtEnd: 50, points: [[0, 50, 0]],
+  sourceId: 'codex:1', provider: 'codex', windowId, kind, label: null, minutes: 10080, consumed: 0, coveredMs: 0, samples: 1, remainingAtStart: 50, remainingAtEnd: 50, staleAfterMs: 300_000, points: [[0, 50, 0]],
 });
-const history = {range: '24h', now: 0, since: 0, to: 0, cellMs: 60_000, historyStart: 0, events: [], series: [series('weekly'), series('spark'), series('session', 'session')]} as History;
+const history = {range: '24h', now: 0, since: 0, to: 0, cellMs: 60_000, historyStart: 0, events: [], refreshInMs: null, series: [series('weekly'), series('spark'), series('session', 'session')]} as History;
 const source = {id: 'codex:1', provider: 'codex', windows: [{id: 'weekly', kind: 'weekly', label: null, used: 40, remaining: 60, resetAt: null, minutes: 10080}]} as unknown as SourceState;
 const overview = {sources: [source]} as unknown as Overview;
 
@@ -24,10 +24,12 @@ test('a line reads its last value in cells without a measurement of their own, u
     [120_000, 88, 0],
     [600_000, 80, 1],
   ];
-  assert.equal(valueIn(points, 120_000, 1_000_000), 88, 'its own');
-  assert.equal(valueIn(points, 60_000, 1_000_000), 90, 'held from the cell before');
-  assert.equal(valueIn(points, 300_000, 1_000_000), undefined, 'a break in the line');
-  assert.equal(valueIn(points, 900_000, 1_000_000), 80, 'the latest, up to now');
-  assert.equal(valueIn(points, 1_200_000, 1_000_000), undefined, 'nothing ahead of now');
-  assert.equal(valueIn(points, -60_000, 1_000_000), undefined);
+  const read = (cell: number) => valueIn(points, cell, 1_000_000, 300_000);
+  assert.equal(read(120_000), 88, 'its own');
+  assert.equal(read(60_000), 90, 'held from the cell before');
+  assert.equal(read(300_000), undefined, 'a break in the line');
+  assert.equal(read(840_000), 80, 'the latest, while it is fresh');
+  assert.equal(valueIn(points, 960_000, 2_000_000, 300_000), undefined, 'not a line that ended long ago');
+  assert.equal(read(1_200_000), undefined, 'nothing ahead of now');
+  assert.equal(read(-60_000), undefined);
 });

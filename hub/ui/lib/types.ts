@@ -76,6 +76,8 @@ export type HistorySeries = {
   /** What was left at the first and the last measurement of the period. */
   remainingAtStart: number | null;
   remainingAtEnd: number | null;
+  /** How long its last value holds without a newer one before a gap begins. */
+  staleAfterMs: number;
   /** [cell start, remaining percent, line segment] */
   points: [number, number, number][];
 };
@@ -94,6 +96,8 @@ export type History = {
   historyStart: number;
   series: HistorySeries[];
   events: SourceEvent[];
+  /** The board has newer data than this answer; a newer answer is ready in this long. */
+  refreshInMs: number | null;
 };
 
 /** What happened to a source besides its values: limits back before their reset, or free resets granted. */

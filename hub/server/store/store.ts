@@ -16,6 +16,8 @@ export type HistorySeries = {
   samples: number;
   remainingAtStart: number | null;
   remainingAtEnd: number | null;
+  /** How long its last value holds without a newer one before a gap begins. */
+  staleAfterMs: number;
   points: (readonly [number, number, number])[];
 };
 
@@ -348,6 +350,7 @@ export class Store {
           kind: last.kind,
           label: last.label,
           minutes: last.minutes,
+          staleAfterMs: last.staleAfterMs,
           ...summary,
           points: onGrid(points, cellMs).map(p => [p.at, Math.round(p.remaining * 100) / 100, p.segment] as const),
         };
