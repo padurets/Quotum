@@ -143,6 +143,9 @@ function CardName({source, arrange}: {source: SourceState; arrange: Arrange}) {
   );
 }
 
+/** The hues of CARD_COLORS, in its order. */
+const HUE_NAMES = ['source.hue.blue', 'source.hue.teal', 'source.hue.purple', 'source.hue.orange', 'source.hue.grey'] as const;
+
 /**
  * A card's colour on the chart and in the table: a row of hues, and under it the steps
  * of lightness of the chosen one. The provider's colour is where the card starts; picking
@@ -156,7 +159,7 @@ function CardColor({source, arrange}: {source: SourceState; arrange: Arrange}) {
   const choose = (color: string) => arrange.update(view => withColor(view, source.id, color === own ? null : color));
   return (
     <div className="popover-pad">
-      <div className="color-hues">
+      <div className="color-hues" role="group" aria-label={t('source.color')}>
         {CARD_COLORS.map((steps, i) => {
           const color = i === hue ? current! : steps[MIDDLE_STEP];
           return (
@@ -166,7 +169,7 @@ function CardColor({source, arrange}: {source: SourceState; arrange: Arrange}) {
               className="color-choice"
               style={{background: color}}
               aria-pressed={i === hue}
-              aria-label={t('source.colorChoice', {color})}
+              aria-label={t(HUE_NAMES[i])}
               onClick={() => choose(color)}
             />
           );
@@ -179,13 +182,13 @@ function CardColor({source, arrange}: {source: SourceState; arrange: Arrange}) {
       </div>
       {hue >= 0 && (
         <div className="color-steps" role="group" aria-label={t('source.colorSteps')}>
-          {CARD_COLORS[hue].map(color => (
+          {CARD_COLORS[hue].map((color, step) => (
             <button
               key={color}
               type="button"
               style={{background: color}}
               aria-pressed={color === current}
-              aria-label={t('source.colorChoice', {color})}
+              aria-label={t('source.colorStep', {step: step + 1, count: CARD_COLORS[hue].length})}
               onClick={() => choose(color)}
             />
           ))}
