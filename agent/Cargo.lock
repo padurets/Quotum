@@ -693,6 +693,7 @@ dependencies = [
  "clap",
  "quotum-core",
  "serde_json",
+ "sha2",
  "ureq",
 ]
 

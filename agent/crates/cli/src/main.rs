@@ -1,5 +1,7 @@
 //! `quotum`: the subscription limits of the coding agents on this machine.
 
+mod update;
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{IsTerminal, Write};
@@ -73,10 +75,22 @@ enum Command {
     Disconnect,
     /// Show where the settings live and what is in effect.
     Config,
+    /// Replace this program with the latest release, if there is a newer one. Quick when
+    /// there is not: one small request.
+    Update {
+        /// Only say whether there is a newer release.
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    // Before the settings are read: an update needs none of them, and should work even
+    // when they are broken.
+    if let Some(Command::Update { check }) = cli.command {
+        return self_update(check);
+    }
     let mut only = Vec::new();
     for name in &cli.only {
         match Provider::parse(name.trim()) {
@@ -124,6 +138,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Command::Config => show_config(&config, &paths),
+        Command::Update { .. } => unreachable!("handled before the settings are read"),
     }
 }
 
@@ -205,6 +220,37 @@ fn start(config: &Config, paths: &Paths, only: &[String], hub: Option<String>, t
     println!("Quotum runs in the background (pid {}), {delivering}.", child.id());
     println!("Log: {}", log_file.display());
     println!("`quotum stop` stops it. It does not start again by itself after a restart of the machine.");
+    ExitCode::SUCCESS
+}
+
+/// `quotum update`: this program replaced by the latest release, when there is a newer one.
+fn self_update(check: bool) -> ExitCode {
+    // The file itself, not a link to it (~/.local/bin/quotum may be one).
+    let program = match std::env::current_exe().and_then(fs::canonicalize) {
+        Ok(program) => program,
+        Err(e) => return fail(&format!("cannot find this program to update it: {e}")),
+    };
+    update::tidy(&program);
+    match update::update(&update::releases(), &program, check, update::reports) {
+        Ok(update::Outcome::Latest(version)) => println!("quotum {version} is the latest release."),
+        Ok(update::Outcome::Available { current, latest }) => {
+            println!("quotum {latest} is out (this is {current}); `quotum update` installs it.")
+        }
+        Ok(update::Outcome::Updated { from, to, program }) => {
+            println!("quotum updated: {from} → {to} ({}).", program.display());
+            if let Some(pid) = Paths::resolve().running() {
+                println!(
+                    "The agent running in the background{} is still {from}: restart it the way you started it \
+                     (`quotum stop`, then `quotum start`).",
+                    pid_text(pid)
+                );
+            }
+        }
+        Ok(update::Outcome::Npm) => println!(
+            "quotum was installed with npm, which updates it: `npm install -g quotum@latest` (npx takes the latest by itself)."
+        ),
+        Err(e) => return fail(&e),
+    }
     ExitCode::SUCCESS
 }
 
