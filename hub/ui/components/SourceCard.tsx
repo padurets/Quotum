@@ -1,4 +1,4 @@
-import {useEffect, useState} from 'react';
+import {useEffect, useRef, useState} from 'react';
 import type {SourceState, Win} from '../lib/types';
 import {windowKey} from '../lib/types';
 import {ago, day, duration, fullStamp, num} from '../lib/format';
@@ -123,7 +123,15 @@ function CardName({source, arrange}: {source: SourceState; arrange: Arrange}) {
   const saved = arrange.view.names[source.id] ?? '';
   const [name, setName] = useState(saved);
   useEffect(() => setName(saved), [saved]);
-  const save = () => name.trim() !== saved && arrange.update(view => withName(view, source.id, name));
+  // A click outside closes the panel before the field blurs: what was typed is also
+  // saved when the field goes away with it.
+  const latest = useRef({name, saved, arrange});
+  latest.current = {name, saved, arrange};
+  const save = () => {
+    const {name, saved, arrange} = latest.current;
+    if (name.trim() !== saved) arrange.update(view => withName(view, source.id, name));
+  };
+  useEffect(() => save, []);
   return (
     <div className="popover-pad card-name">
       <input
