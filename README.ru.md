@@ -70,7 +70,8 @@ npx quotum start
 каждую подписку одну дежурную машину (по возможности ту, за которой вы сейчас
 работаете), остальные ждут, а если дежурная замолкает, дежурство переходит к другой.
 
-Агент работает и сам по себе: `npx quotum` печатает лимиты этой машины.
+Агент работает и сам по себе: `npx quotum` печатает лимиты этой машины и запущенных на
+ней агентов: работают они или простаивают.
 
 ```
 $ npx quotum
@@ -82,6 +83,10 @@ Claude max    5 hours               98%  in 4h 27m
               Fable weekly         100%  in 5d 9h
 Antigravity   Gemini 5 hours       100%  in 4h 59m
               Gemini weekly         96%  in 1d 3h
+
+running here: 2 · 1 working
+Claude        quotum              working  for 3h 39m
+Codex         api                 idle     for 25m
 ```
 
 ## Что показывает дашборд
