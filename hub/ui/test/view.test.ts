@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {arranged, colorOf, planOf, reordered, spanOf, weeklyPlanOf, withColor, withHidden, withPlan, withPlanned, withSpan, withWindowHidden} from '../lib/view';
-import {PROVIDERS} from '../lib/providers';
+import {CARD_COLORS, PROVIDERS} from '../lib/providers';
 import {DEFAULT_PLAN} from '../lib/plan';
 import type {View} from '../lib/types';
 
@@ -50,6 +50,14 @@ test('a card has its provider’s colour until the board gives it another', () =
   assert.equal(colorOf(teal, 'a', 'codex'), '#1fa89c');
   assert.equal(colorOf(teal, 'b', 'codex'), PROVIDERS.codex.color);
   assert.deepEqual(withColor(teal, 'a', null).colors, {});
+});
+
+test('the colour grid is five hues in five steps, each a colour the hub takes', () => {
+  assert.deepEqual(CARD_COLORS.map(hue => hue.length), [5, 5, 5, 5, 5]);
+  const all = CARD_COLORS.flat();
+  assert.equal(new Set(all).size, all.length);
+  assert.ok(all.every(color => /^#[0-9a-f]{6}$/.test(color)));
+  assert.equal(CARD_COLORS[0][2], PROVIDERS.codex.color, 'the middle step is the hue itself');
 });
 
 test('a card is half the grid wide by default, a third at least and the whole grid at most', () => {

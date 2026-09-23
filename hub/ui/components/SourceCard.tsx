@@ -6,8 +6,8 @@ import {errorText, level, problemOf, sourceLabel, windowName} from '../lib/quota
 import {t} from '../i18n';
 import {DEFAULT_PLAN, isValidPlan, PLAN_TOLERANCE, planAt, planTotal, type WeeklyPlan} from '../lib/plan';
 import {LOGOS} from './logos';
-import {cardId, colorOf, planOf, weeklyPlanOf, withColor, withHidden, withName, withPlan, withPlanned, withWindowHidden, type Arrange} from '../lib/view';
-import {CARD_COLORS, PROVIDERS} from '../lib/providers';
+import {cardId, planOf, weeklyPlanOf, withColor, withHidden, withName, withPlan, withPlanned, withWindowHidden, type Arrange} from '../lib/view';
+import {CARD_COLORS, FALLBACK_COLOR, PROVIDERS} from '../lib/providers';
 import {call} from '../lib/http';
 import type {Board} from '../lib/session';
 import type {ResetStatus} from '../lib/resets';
@@ -148,28 +148,38 @@ function CardName({source, arrange}: {source: SourceState; arrange: Arrange}) {
   );
 }
 
-/** A card's colour on the chart and in the table: its provider's, or one of a few more. */
+/**
+ * A card's colour on the chart and in the table: its provider's, or one of a grid of a
+ * few hues (columns) in steps of lightness (rows, light to dark).
+ */
 function CardColor({source, arrange}: {source: SourceState; arrange: Arrange}) {
-  const own = PROVIDERS[source.provider]?.color;
-  const current = colorOf(arrange.view, source.id, source.provider);
-  const choices = [null, ...CARD_COLORS.filter(color => color !== own)];
+  const chosen = arrange.view.colors[source.id];
+  const choose = (color: string | null) => arrange.update(view => withColor(view, source.id, color));
+  const steps = CARD_COLORS[0].map((_, step) => CARD_COLORS.map(hue => hue[step]));
   return (
     <div className="popover-pad color-choices">
-      {choices.map(color => {
-        const shown = color ?? colorOf({...arrange.view, colors: {}}, source.id, source.provider);
-        return (
+      <button
+        type="button"
+        className="color-choice"
+        style={{background: PROVIDERS[source.provider]?.color ?? FALLBACK_COLOR}}
+        aria-pressed={!chosen}
+        aria-label={t('source.colorProvider')}
+        title={t('source.colorProvider')}
+        onClick={() => choose(null)}
+      />
+      <div className="color-grid" role="group" aria-label={t('source.color')}>
+        {steps.flat().map(color => (
           <button
-            key={color ?? 'provider'}
+            key={color}
             type="button"
             className="color-choice"
-            style={{background: shown}}
-            aria-pressed={shown === current}
-            aria-label={color ? t('source.colorChoice', {color}) : t('source.colorProvider')}
-            title={color ? undefined : t('source.colorProvider')}
-            onClick={() => arrange.update(view => withColor(view, source.id, color))}
+            style={{background: color}}
+            aria-pressed={chosen === color}
+            aria-label={t('source.colorChoice', {color})}
+            onClick={() => choose(color)}
           />
-        );
-      })}
+        ))}
+      </div>
     </div>
   );
 }

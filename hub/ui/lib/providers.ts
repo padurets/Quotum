@@ -15,11 +15,18 @@ export const FALLBACK_COLOR = '#8b90b5';
 
 /**
  * Colours a board's owner can give cards, so subscriptions of one provider can be told
- * apart. Also clear of the status hues; validated on the dark chart surface over every
- * pair (colour-vision deficiency sits at the floor between blue and violet, which is
- * why the legend and the tooltip name every line).
+ * apart: a few hues, each in five steps of OKLCH lightness from light to dark, the
+ * middle one the hue itself (Codex's blue and Claude's orange among them). The hues are
+ * clear of the status ones and tell apart on the dark chart surface; a fifth, Antigravity's
+ * pink, would be too close to the purple. Every step keeps 3:1 contrast with the surface.
  */
-export const CARD_COLORS = ['#5b8ff5', '#1fa89c', '#c06ad0', '#df6f4a'];
+export const CARD_COLORS: string[][] = [
+  ['#a6c5ff', '#7eaaff', '#5b8ff5', '#4779dd', '#3363c5'],
+  ['#63dcce', '#45c2b5', '#1fa89c', '#099186', '#067a71'],
+  ['#f0a2fe', '#da83eb', '#c06ad0', '#a954b9', '#933fa3'],
+  ['#ffb096', '#fb8863', '#df6f4a', '#c75934', '#af441d'],
+  ['#cdd3e8', '#b4b9ce', '#9ba0b4', '#868b9e', '#717689'],
+];
 
 /** Windows of one source are distinguished by dash pattern within its colour. */
 export const DASHES = ['', '7 5', '2 4', '10 3 2 3'];

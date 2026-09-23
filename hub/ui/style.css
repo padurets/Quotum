@@ -150,8 +150,9 @@ body.is-resizing, body.is-resizing * { cursor: ew-resize !important; user-select
 .popover-section:first-child { margin-top: 0; border-top: 0; padding-top: 4px; }
 .popover-pad { padding: 0 4px 4px; }
 .popover-pad .segmented button { flex: 1; }
-.color-choices { display: flex; gap: 10px; padding: 2px 8px 6px; }
-.color-choice { width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; }
+.color-choices { display: flex; align-items: flex-start; gap: 14px; padding: 2px 8px 6px; }
+.color-grid { display: grid; grid-template-columns: repeat(5, 16px); gap: 7px; }
+.color-choice { width: 16px; height: 16px; padding: 0; border: 0; border-radius: 50%; }
 .color-choice[aria-pressed=true] { box-shadow: 0 0 0 2px #10121b, 0 0 0 3.5px var(--text-2); }
 .plan-editor { padding: 2px 8px 0; }
 .plan-days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
