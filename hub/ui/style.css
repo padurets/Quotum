@@ -79,6 +79,13 @@ main { max-width: 1240px; margin: 0 auto; padding: 28px 28px 56px; display: flex
 
 /* ---------- widgets ---------- */
 .widgets { position: relative; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 16px; }
+
+/* The analytics under the cards: one head with the filters of the chart and the table,
+   which stays under the top bar while they scroll by. */
+.analytics { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
+.analytics-head { position: sticky; top: 60px; z-index: 5; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 10px 0; }
+.analytics-head::before { content: ''; position: absolute; inset: 0 -28px; z-index: -1; background: #0b0b0ecc; -webkit-backdrop-filter: blur(16px) saturate(140%); backdrop-filter: blur(16px) saturate(140%); }
+.analytics-head h2 { margin: 0; font-size: 17px; font-weight: 560; letter-spacing: -.015em; }
 .widget { position: relative; display: flex; flex-direction: column; min-width: 0; grid-column: span var(--span, 4); }
 .widgets > .card.is-loading { grid-column: span 4; }
 .widget-body { position: relative; flex: 1; display: flex; flex-direction: column; min-width: 0; }
@@ -514,6 +521,9 @@ tr:hover .device-name .icon-button, .device-name .icon-button:focus-visible { op
   .resize-handle { display: none; }
 }
 @media (max-width: 680px) {
+  /* On a phone the filters take two rows: they scroll with the page. */
+  .analytics-head { position: static; }
+  .analytics-head::before { display: none; }
   .topbar-inner { padding: 0 16px; gap: 12px; }
   .board-name { max-width: 120px; }
   .inline-form { flex-direction: column; align-items: stretch; }
@@ -526,7 +536,6 @@ tr:hover .device-name .icon-button, .device-name .icon-button:focus-visible { op
   .offline span { display: none; }
   .panel { --panel-pad: 16px; padding: 18px var(--panel-pad); }
   .controls { width: 100%; flex-direction: column; align-items: stretch; }
-  .history .controls .picker, .forecast .controls .picker { position: absolute; top: 14px; right: 12px; }
   .controls .segmented { flex: 1; }
   .controls .segmented button { flex: 1; padding: 6px; }
   /* A selected time range takes a row of its own under the fixed periods. */

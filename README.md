@@ -106,7 +106,8 @@ Antigravity   Gemini 5 hours       100%  in 4h 59m
   and [Claude Resets](https://claude-resets.com), with a link to the source. You
   can turn them off.
 - **Boards made of widgets** (a card per subscription, the chart, the table), like a
-  dashboard in Grafana. The owner of a board drags them around, makes them wider or
+  dashboard in Grafana: the cards show what is left now, the chart and the table under
+  them share one set of filters. The owner of a board drags them around, makes them wider or
   narrower, names the cards, hides the ones they don't need (the data keeps coming) and
   sets the plans; everyone on the board sees it arranged the same way. Once it's set,
   a lock keeps the widgets from moving under a passing pointer.

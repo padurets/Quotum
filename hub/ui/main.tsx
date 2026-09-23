@@ -17,6 +17,7 @@ import {SERVICE} from './components/Kit';
 import {SourceCard} from './components/SourceCard';
 import {History} from './components/History';
 import {Forecast} from './components/Forecast';
+import {AnalyticsHead} from './components/Analytics';
 import {Widgets, WidgetsMenu, type Widget} from './components/Widgets';
 import {AccountPanel} from './components/Account';
 import {AuthScreen} from './components/AuthScreen';
@@ -34,14 +35,9 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
   const arrange = useView(data, reload);
   const prefs = usePrefs();
   const revision = data ? data.revision : null;
-  // A time range selected on the chart is the period of both the chart and the table.
+  // The chart and the table show one period: a time range selected on the chart, else the chosen one.
   const selected = useTimeRange();
   const {history, loading: historyLoading} = useHistory(boardId, selected ?? prefs.range, revision);
-  // Otherwise the table has its own period: the same one is read once; another one shows
-  // the chart's history, dimmed, until it comes.
-  const sameRange = selected !== null || prefs.tableRange === prefs.range;
-  const own = useHistory(boardId, prefs.tableRange, sameRange ? null : revision);
-  const table = sameRange ? {history, loading: historyLoading} : own.history ? own : {history, loading: true};
   const {resets, past, health} = useResets(prefs.showResets);
   const [machines, setMachines] = useState<MachinesTab | null>(null);
   const [people, setPeople] = useState<BoardTab | null>(null);
@@ -96,12 +92,25 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
         id: FORECAST,
         name: t('forecast.title'),
         span: spanOf(arrange.view, FORECAST),
-        content: <Forecast history={table.history} loading={table.loading} overview={overview} now={now} arrange={arrange} />,
+        content: <Forecast history={history} loading={historyLoading} overview={overview} now={now} arrange={arrange} />,
       },
     ],
   ]);
   const widgets = arranged(arrange.view, [...cards.keys(), ...panels.keys()]).map(id => (cards.get(id) ?? panels.get(id))!);
   const shown = widgets.filter(widget => !arrange.view.hidden.includes(widget.id));
+  // The cards are about now; the chart and the table below them, with their filters, are the analytics.
+  // Each area is arranged on its own grid.
+  const shownCards = shown.filter(widget => cards.has(widget.id));
+  const shownPanels = shown.filter(widget => panels.has(widget.id));
+  const ids = (list: Widget[]) => list.map(widget => widget.id);
+  const grid = (list: Widget[], onMove: (order: string[]) => void) => (
+    <Widgets
+      widgets={list}
+      movable={arrange.owner && !prefs.locked}
+      onMove={onMove}
+      onResize={(id, span) => arrange.update(view => withSpan(view, id, span))}
+    />
+  );
 
   return (
     <>
@@ -159,12 +168,15 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
             </div>
           </section>
         ) : shown.length ? (
-          <Widgets
-            widgets={shown}
-            movable={arrange.owner && !prefs.locked}
-            onMove={order => arrange.update(view => reordered(view, order))}
-            onResize={(id, span) => arrange.update(view => withSpan(view, id, span))}
-          />
+          <>
+            {shownCards.length > 0 && grid(shownCards, order => arrange.update(view => reordered(view, [...order, ...ids(shownPanels)])))}
+            {shownPanels.length > 0 && (
+              <section className="analytics" aria-label={t('analytics.title')}>
+                <AnalyticsHead />
+                {grid(shownPanels, order => arrange.update(view => reordered(view, [...ids(shownCards), ...order])))}
+              </section>
+            )}
+          </>
         ) : (
           <section className="panel onboarding">
             <h2>{t('widgets.allHidden')}</h2>

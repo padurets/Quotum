@@ -167,6 +167,7 @@ export const en = {
   'history.kind': 'Window type',
   'history.weekly': 'Weekly',
   'history.session': '5-hour',
+  'analytics.title': 'Analytics',
   'history.range': 'Period',
   'history.rangeClear': 'Clear the selection and go back to the period',
   'history.hours': '{count}h',

@@ -5,11 +5,10 @@ import {level} from '../lib/quota';
 import {PLAN_TOLERANCE, planAt, type WeeklyPlan} from '../lib/plan';
 import {FORECAST, planOf, withHidden, type Arrange} from '../lib/view';
 import {linesOf, type Line} from '../lib/lines';
-import {setPrefs, usePrefs} from '../lib/prefs';
+import {usePrefs} from '../lib/prefs';
 import {useTimeRange} from '../lib/timeRange';
 import {t, useLocale} from '../i18n';
 import {HideRow, Popover, SlidersIcon} from './Popover';
-import {KindSwitch, PeriodSwitch} from './History';
 
 type Outlook = {text: string; tone: string; title: string};
 
@@ -49,7 +48,7 @@ const PACE_FROM = 10 * 60_000;
 
 /**
  * The windows of one kind: what is left, what the plan expects, what the period spent,
- * and where that pace leads. Its period and kind are its own, not the chart's. Over a
+ * and where that pace leads. Its period and window type are the analytics', as the chart's. Over a
  * time range selected on the chart, which is in the past, it shows that range instead:
  * what was left at its start and its end, what it spent and how fast.
  */
@@ -68,7 +67,7 @@ export function Forecast({
   arrange: Arrange;
 }) {
   const {view} = arrange;
-  const {tableKind: kind, tableRange} = usePrefs();
+  const {kind} = usePrefs();
   const selected = useTimeRange() !== null;
   // Window names are text: they are rebuilt when the language changes.
   const locale = useLocale();
@@ -78,15 +77,11 @@ export function Forecast({
     <section className={`panel forecast ${selected ? 'is-range' : ''} ${loading ? 'is-loading' : ''}`} aria-label={t('forecast.title')} aria-busy={loading}>
       <div className="panel-head">
         <h2>{t('forecast.title')}</h2>
-        <div className="controls">
-          <KindSwitch value={kind} onChange={tableKind => setPrefs({tableKind})} />
-          <PeriodSwitch value={tableRange} onChange={next => setPrefs({tableRange: next})} />
-          {arrange.owner && (
-            <Popover label={t('forecast.settings')} icon={<SlidersIcon />}>
-              <HideRow onHide={() => arrange.update(next => withHidden(next, FORECAST, true))}>{t('widget.hide')}</HideRow>
-            </Popover>
-          )}
-        </div>
+        {arrange.owner && (
+          <Popover label={t('forecast.settings')} icon={<SlidersIcon />}>
+            <HideRow onHide={() => arrange.update(next => withHidden(next, FORECAST, true))}>{t('widget.hide')}</HideRow>
+          </Popover>
+        )}
       </div>
       {!history ? (
         <div className="panel-loading">{t('history.loading')}</div>

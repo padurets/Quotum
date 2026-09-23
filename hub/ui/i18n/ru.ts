@@ -163,6 +163,7 @@ export const ru = {
   'history.kind': 'Тип окна',
   'history.weekly': 'Недельные',
   'history.session': '5-часовые',
+  'analytics.title': 'Аналитика',
   'history.range': 'Период',
   'history.rangeClear': 'Снять выделение и вернуться к периоду',
   'history.hours': '{count} ч',

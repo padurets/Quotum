@@ -235,12 +235,15 @@ rate-limited.
 
 A single-page React app served by the hub. It reads `/api/overview` every 10 seconds
 and re-reads history only when the overview's `revision` says the board's data changed.
+A board has two areas: the cards, which are about now and show every window, and under
+them the analytics, the chart and the table, which show one window type over one period
+chosen in the analytics' own head. Each area is arranged on its own grid.
 The board's view comes with the overview; the owner's changes show at once and are
 saved about half a second later, one request per burst (a drag, typing a plan). What
-is only about how one person looks (the chart's period, window type and horizon, lines
-switched off in the legend, reset announcements, the lock on the widgets, the chosen
-board and language) stays in their browser. A time range selected on the chart is the
-period of both the chart and the table; it lives in the page's address (`?from=&to=`),
+is only about how one person looks (the analytics' period and window type, the chart's
+horizon, lines switched off in the legend, reset announcements, the lock on the widgets,
+the chosen board and language) stays in their browser. A time range selected on the
+chart becomes the analytics' period; it lives in the page's address (`?from=&to=`),
 so a reload keeps it, Back undoes it and a link to it can be shared on the board.
 
 Text is translated through typed catalogs in `hub/ui/i18n`: English is the source,

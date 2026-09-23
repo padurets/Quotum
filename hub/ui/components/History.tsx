@@ -1,11 +1,11 @@
 import {useMemo} from 'react';
-import type {History as HistoryData, Kind, Overview} from '../lib/types';
+import type {History as HistoryData, Overview} from '../lib/types';
 import {num} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
 import {planAt, started, weeklyPlanLine} from '../lib/plan';
 import {PROVIDERS} from '../lib/providers';
 import {HORIZONS, setMuted, setPrefs, usePrefs, type Horizon} from '../lib/prefs';
-import {setTimeRange, timeRangeLabel, useTimeRange} from '../lib/timeRange';
+import {setTimeRange, useTimeRange} from '../lib/timeRange';
 import {HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
 import {linesOf} from '../lib/lines';
 import {Chart, type Marker, type PlanLine} from './Chart';
@@ -36,53 +36,6 @@ function HistorySettings({arrange, planShown}: {arrange: Arrange; planShown: boo
       {!planShown && <div className="popover-note">{t('history.horizonNote')}</div>}
       {arrange.owner && <HideRow onHide={() => arrange.update(view => withHidden(view, HISTORY, true))}>{t('widget.hide')}</HideRow>}
     </Popover>
-  );
-}
-
-/** Weekly or 5-hour windows. */
-export function KindSwitch({value, onChange}: {value: Kind; onChange: (kind: Kind) => void}) {
-  return (
-    <Segmented
-      value={value}
-      onChange={onChange}
-      options={[
-        ['weekly', t('history.weekly')],
-        ['session', t('history.session')],
-      ]}
-      label={t('history.kind')}
-    />
-  );
-}
-
-const PERIODS = ['24h', '7d', '30d'];
-
-/**
- * The last 24 hours, 7 or 30 days, and a time range selected on the chart when there is
- * one: it is the period of both the chart and the table until it is cleared or a fixed
- * period is chosen.
- */
-export function PeriodSwitch({value, onChange}: {value: string; onChange: (range: string) => void}) {
-  const selected = useTimeRange();
-  const choose = (range: string) => {
-    if (selected) setTimeRange(null);
-    onChange(range);
-  };
-  return (
-    <div className="segmented" role="group" aria-label={t('history.range')}>
-      {PERIODS.map(range => (
-        <button key={range} type="button" aria-pressed={!selected && range === value} onClick={() => choose(range)}>
-          {range === '24h' ? t('history.hours', {count: 24}) : t('history.days', {count: parseInt(range)})}
-        </button>
-      ))}
-      {selected && (
-        <button type="button" className="segmented-range" aria-pressed="true" title={t('history.rangeClear')} onClick={() => setTimeRange(null)}>
-          {timeRangeLabel(selected)}
-          <svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true">
-            <path d="M4 4l8 8M12 4l-8 8" />
-          </svg>
-        </button>
-      )}
-    </div>
   );
 }
 
@@ -209,11 +162,7 @@ export function History({
     <section className={`panel history ${loading ? 'is-loading' : ''}`} aria-label={t('history.label')} aria-busy={loading}>
       <div className="panel-head">
         <h2>{t('history.title')}</h2>
-        <div className="controls">
-          <KindSwitch value={prefs.kind} onChange={kind => setPrefs({kind})} />
-          <PeriodSwitch value={prefs.range} onChange={range => setPrefs({range})} />
-          <HistorySettings arrange={arrange} planShown={planShown} />
-        </div>
+        <HistorySettings arrange={arrange} planShown={planShown} />
       </div>
 
       <div className="legend">
