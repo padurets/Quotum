@@ -69,6 +69,12 @@ fn main() -> ExitCode {
         Ok(config) => config,
         Err(e) => return fail(&e),
     };
+    if config.owner.is_some() {
+        log(&format!(
+            "note: `owner` in {} is no longer used: a machine belongs to the person whose token it uses",
+            paths.config.display()
+        ));
+    }
     if let Err(e) = paths.ensure() {
         return fail(&format!("{}: {e}", paths.state.display()));
     }

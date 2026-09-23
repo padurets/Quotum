@@ -24,6 +24,10 @@ pub struct Config {
     pub hub: Option<Hub>,
     pub machine: MachineSettings,
     pub providers: BTreeMap<Provider, ProviderSettings>,
+    /// Whom the machine measured for, before 0.2. A machine now belongs to the person
+    /// whose token it uses; the key is still read so an older file keeps working.
+    #[serde(skip_serializing)]
+    pub owner: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -370,7 +374,7 @@ mod tests {
         assert!(check("[providers.codex]\ninterval = 200000").is_err());
         assert!(check(&format!("[machine]\nname = \"{}\"", "m".repeat(121))).is_err());
         assert!(check("[providers.antigravity]\naccount = \"\"").is_err());
-        assert!(toml::from_str::<Config>("owner = \"alice\"").is_err(), "machines belong to the token's owner now");
+        assert!(check("owner = \"alice\"").is_ok(), "the key of older versions is ignored, not refused");
     }
 
     #[test]
