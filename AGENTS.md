@@ -67,8 +67,9 @@ requests, but it does start the real clients.
   styling its own.
 - Widgets on the board are a `.card` (a source) or a `.panel` (the chart, the table).
 - Colours come from the tokens at the top of `hub/ui/style.css`, and the colours of
-  series from `hub/ui/lib/providers.ts`; status colours (ok, warn, crit) mean only how
-  much of a limit is left.
+  series from `hub/ui/lib/providers.ts`. Status colours (ok, warn, crit) are for status
+  only: how much of a limit is left, a source or device in trouble, a destructive
+  action; never decoration or a series.
 
 ## Code and commits
 
