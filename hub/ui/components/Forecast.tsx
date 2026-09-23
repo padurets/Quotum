@@ -65,7 +65,7 @@ export function Forecast({
   const {tableKind: kind, tableRange} = usePrefs();
   // Window names are text: they are rebuilt when the language changes.
   const locale = useLocale();
-  const lines = useMemo(() => linesOf(history, overview, view, kind), [history, overview, view.windows, view.hidden, kind, locale]);
+  const lines = useMemo(() => linesOf(history, overview, view, kind), [history, overview, view.windows, view.hidden, view.colors, kind, locale]);
 
   return (
     <section className={`panel forecast ${loading ? 'is-loading' : ''}`} aria-label={t('forecast.title')} aria-busy={loading}>

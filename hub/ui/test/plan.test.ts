@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {DEFAULT_PLAN, isValidPlan, planAt, weeklyPlanLine, weeklyPlanRemaining} from '../lib/plan';
+import {DEFAULT_PLAN, isValidPlan, planAt, started, weeklyPlanLine, weeklyPlanRemaining} from '../lib/plan';
 import type {Win} from '../lib/types';
 
 const DAY = 86_400_000;
@@ -74,6 +74,14 @@ test('the plan starts with the window, right after a reset', () => {
   // The same for a five-hour window.
   const session: Win = {id: 'session', kind: 'session', label: null, used: 2, remaining: 98, resetAt: start + 5 * 3_600_000, minutes: 300};
   assert.equal(planAt(session, start + 10 * 60_000, start + 15 * 60_000)!.remaining, 95);
+});
+
+test('whether a window has started does not depend on its plan', () => {
+  assert.equal(started(weekly(), start + 3_600_000), true);
+  assert.equal(planAt(weekly(), start + 3_600_000, start + 3_600_000, null), null, 'its plan is switched off');
+  assert.equal(started(weekly(), start), false, 'idle: it starts when measured');
+  assert.equal(started(weekly({resetAt: null}), start + DAY), false);
+  assert.equal(started(weekly(), null), false);
 });
 
 test('a window past its reset has no plan until it is measured again', () => {

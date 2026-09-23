@@ -2,7 +2,7 @@ import {useMemo} from 'react';
 import type {History as HistoryData, Kind, Overview} from '../lib/types';
 import {day, num} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
-import {planAt, weeklyPlanLine} from '../lib/plan';
+import {planAt, started, weeklyPlanLine} from '../lib/plan';
 import {PROVIDERS} from '../lib/providers';
 import {HORIZONS, setMuted, setPrefs, usePrefs, type Horizon} from '../lib/prefs';
 import {HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
@@ -93,15 +93,15 @@ export function History({
   // Series names and markers are text: they are rebuilt when the language changes.
   const locale = useLocale();
 
-  const lines = useMemo(() => linesOf(history, overview, view, prefs.kind), [history, overview, prefs.kind, view.windows, view.hidden, locale]);
+  const lines = useMemo(() => linesOf(history, overview, view, prefs.kind), [history, overview, prefs.kind, view.windows, view.hidden, view.colors, locale]);
 
   const visible = useMemo(() => lines.filter(line => !prefs.muted[line.key]), [lines, prefs.muted]);
   const from = history ? Math.max(history.since, history.historyStart) : now - 86_400_000;
   const measuredTo = history?.now ?? now;
   // An announced Codex reset matters only where Codex is on the chart.
   const announced = visible.some(line => line.provider === 'codex') ? (resets.codex?.scheduled?.scheduledFor ?? null) : null;
-  // The spending plan applies to weekly windows; the days ahead are there for it.
-  const planAvailable = prefs.kind === 'weekly' && visible.length > 0;
+  // The spending plan applies to weekly windows; the days ahead are there for it, when a line on the chart has a plan.
+  const planAvailable = prefs.kind === 'weekly' && visible.some(line => planOf(view, line.sourceId) !== null);
   const planShown = planAvailable && prefs.showPlan;
   // Without the plan the chart ends now (an announced reset is pointed at from the right
   // edge). With it, on `auto` some future stays on the right, stretched to include an
@@ -124,7 +124,8 @@ export function History({
     for (const line of visible) {
       const source = overview?.sources.find(s => s.id === line.sourceId);
       const live = source?.windows.find(w => w.id === line.windowId);
-      if (!live?.resetAt || live.resetAt <= measuredTo || live.resetAt > to || !planAt(live, source?.successAt ?? null, measuredTo, planOf(view, line.sourceId))) continue;
+      // A reset is marked for a window that has started, whether or not the board plans it.
+      if (!live?.resetAt || live.resetAt <= measuredTo || live.resetAt > to || !started(live, source?.successAt ?? null)) continue;
       const key = `${line.sourceId}@${Math.round(live.resetAt / 60_000)}`;
       if (seen.has(key)) continue;
       seen.add(key);
