@@ -12,7 +12,9 @@
  *   node npm/trust.mjs --otp=123456                   every package
  *   node npm/trust.mjs --otp=123456 @quotum/win32-x64  only these (after a code expired)
  *
- * Options such as `--otp` go to every `npm trust`.
+ * Options such as `--otp` go to every `npm trust`. The registry wants to be told what a
+ * trust allows (publishing), which only npm 12 and newer can say: the script runs that
+ * npm's `trust` whatever npm is installed.
  */
 import {execFileSync} from 'node:child_process';
 import {readFileSync} from 'node:fs';
@@ -32,11 +34,14 @@ const all = [...PLATFORMS.map(p => `@quotum/${p.name}`), 'quotum'];
 const unknown = chosen.filter(name => !all.includes(name));
 if (unknown.length) throw new Error(`not a package of Quotum: ${unknown.join(', ')}`);
 
+// `npm trust` of npm 12, which says what the trust allows (`--allow-publish`).
+const npm = ['exec', '--yes', '--package=npm@12', '--', 'npm'];
 const failed = [];
 for (const name of chosen.length ? chosen : all) {
   console.log(`trusting ${repository} release.yml to publish ${name}`);
   try {
-    execFileSync('npm', ['trust', 'github', name, '--file', 'release.yml', '--repository', repository, '--environment', 'npm', '--yes', ...options], {stdio: 'inherit'});
+    const trust = ['trust', 'github', name, '--file', 'release.yml', '--repository', repository, '--environment', 'npm', '--allow-publish', '--yes'];
+    execFileSync('npm', [...npm, ...trust, ...options], {stdio: 'inherit'});
   } catch {
     failed.push(name);
   }
