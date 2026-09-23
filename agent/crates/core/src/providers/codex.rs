@@ -27,8 +27,15 @@ impl Adapter for Codex {
         "codex"
     }
 
+    /// Its own installer's place, then the clients the Codex app and the editor extensions
+    /// carry: whoever uses only those has no command-line client to install.
     fn install_dirs(&self, home: &Path) -> Vec<PathBuf> {
-        vec![home.join(".codex/bin")]
+        let mut dirs = vec![home.join(".codex/bin")];
+        if cfg!(target_os = "linux") {
+            dirs.push(PathBuf::from("/usr/lib/chatgpt/resources"));
+        }
+        dirs.extend(extension_clients(home));
+        dirs
     }
 
     fn measure(&mut self, ctx: &Context) -> Outcome {
@@ -57,6 +64,30 @@ impl Adapter for Codex {
     fn identity_paths(&self, home: &Path) -> Vec<PathBuf> {
         vec![codex_home(home).join("auth.json")]
     }
+}
+
+/// The directories holding the client of the Codex extension (`openai.chatgpt-<version>-<platform>`)
+/// in VS Code, its server and its forks, the newest version first.
+fn extension_clients(home: &Path) -> Vec<PathBuf> {
+    let version = |dir: &Path| -> Vec<u32> {
+        let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+        let version = name.trim_start_matches("openai.chatgpt-").split('-').next().unwrap_or_default();
+        version.split('.').map(|part| part.parse().unwrap_or(0)).collect()
+    };
+    let mut extensions: Vec<PathBuf> = [".vscode", ".vscode-server", ".vscode-insiders", ".cursor", ".windsurf"]
+        .iter()
+        .filter_map(|editor| std::fs::read_dir(home.join(editor).join("extensions")).ok())
+        .flatten()
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .filter(|dir| dir.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("openai.chatgpt-")))
+        .collect();
+    extensions.sort_by_key(|dir| std::cmp::Reverse(version(dir)));
+    // Inside: bin/<platform>/codex.
+    extensions
+        .iter()
+        .filter_map(|dir| std::fs::read_dir(dir.join("bin")).ok())
+        .flat_map(|entries| entries.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_dir()).collect::<Vec<_>>())
+        .collect()
 }
 
 fn codex_home(home: &Path) -> PathBuf {
@@ -141,6 +172,29 @@ mod tests {
 
     fn init() -> Value {
         json!({"id": 1, "result": {"userAgent": "quotum/0.154.0 (Ubuntu 24.4.0; x86_64) xterm (quotum; 0.1.0)"}})
+    }
+
+    #[test]
+    fn the_clients_of_editor_extensions_are_found_newest_first() {
+        let home = env::temp_dir().join(format!("quotum-codex-{}", std::process::id()));
+        for dir in [
+            ".vscode/extensions/openai.chatgpt-26.9.1-linux-x64/bin/linux-x86_64",
+            ".vscode/extensions/openai.chatgpt-26.10.2-linux-x64/bin/linux-x86_64",
+            ".cursor/extensions/openai.chatgpt-25.1.0-linux-x64/bin/linux-x86_64",
+            ".vscode/extensions/someone.else-1.0.0/bin/linux-x86_64",
+        ] {
+            std::fs::create_dir_all(home.join(dir)).unwrap();
+        }
+        let found = extension_clients(&home);
+        let _ = std::fs::remove_dir_all(&home);
+        let versions: Vec<String> = found
+            .iter()
+            .map(|dir| dir.parent().unwrap().parent().unwrap().file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            versions,
+            ["openai.chatgpt-26.10.2-linux-x64", "openai.chatgpt-26.9.1-linux-x64", "openai.chatgpt-25.1.0-linux-x64"]
+        );
     }
 
     #[test]
