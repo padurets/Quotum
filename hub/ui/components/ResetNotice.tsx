@@ -2,7 +2,8 @@ import {duration, soon, stamp} from '../lib/format';
 import type {ResetStatus} from '../lib/resets';
 import {t} from '../i18n';
 
-const RECENT_RESET_MS = 48 * 3_600_000;
+/** A reset is news on a card for a day; the chart keeps marking it. */
+const RECENT_RESET_MS = 24 * 3_600_000;
 const RECENT_POLICY_MS = 72 * 3_600_000;
 
 function Credit({status}: {status: ResetStatus}) {
