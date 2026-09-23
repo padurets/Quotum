@@ -688,7 +688,7 @@ dependencies = [
 
 [[package]]
 name = "quotum"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "quotum-core",
@@ -698,7 +698,7 @@ dependencies = [
 
 [[package]]
 name = "quotum-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "dirs",
  "jiff",
