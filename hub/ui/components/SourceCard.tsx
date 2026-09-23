@@ -52,11 +52,6 @@ function Limit({w, measuredAt, now, weekly}: {w: Win; measuredAt: number | null;
               : t('limit.resetPassed')
             : t('limit.resetUnknown')}
         </span>
-        {plan?.done && (
-          <span className="plan-note" title={t('limit.planDoneHint')}>
-            {t('limit.planDone')}
-          </span>
-        )}
         {Math.round(-delta) >= PLAN_NOTE_FROM && (
           <span className="ahead" title={t(plan?.weekly ? 'limit.aheadHint' : 'limit.aheadHintReset')}>
             {t('limit.ahead', {value: num(-delta)})}

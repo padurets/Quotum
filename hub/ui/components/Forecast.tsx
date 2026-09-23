@@ -14,21 +14,22 @@ type Outlook = {text: string; tone: string; title: string};
 
 /**
  * Where the average pace over the period leads. Weekly windows are judged against the
- * end of their plan (everything should be spent by then); other windows against their
- * reset.
+ * end of their plan (everything should be spent by then); other windows, and a week past
+ * the end of its plan, against their reset.
  */
 function outlook(line: Line, live: Win | undefined, measuredAt: number | null, now: number, weekly: WeeklyPlan | null): Outlook {
   const none = {text: '—', tone: '', title: ''};
   const plan = live ? planAt(live, measuredAt, now, weekly) : null;
   if (live && live.remaining <= 0) return {text: t('forecast.usedUp'), tone: 'v-crit', title: ''};
   if (!live?.resetAt || live.resetAt <= now) return none;
-  if (plan?.done) return {text: t('forecast.planDone'), tone: 'muted', title: t('forecast.planDoneHint')};
 
   const hours = line.coveredMs / 3_600_000;
   if (hours < 0.5) return {...none, title: t('forecast.needData')};
   const rate = line.consumed / hours;
   const title = t('forecast.rate', {rate: rate < 0.05 ? '≈ 0' : num(rate, 1)});
-  const deadline = plan?.deadline ?? live.resetAt;
+  // Past the end of its plan a week has only its reset ahead.
+  const planned = plan?.weekly && !plan.done;
+  const deadline = planned ? plan.deadline : live.resetAt;
 
   if (rate > 0.01) {
     const untilEmpty = (live.remaining / rate) * 3_600_000;
@@ -38,8 +39,8 @@ function outlook(line: Line, live: Win | undefined, measuredAt: number | null, n
     }
   }
   const left = Math.max(0, live.remaining - (rate * (deadline - now)) / 3_600_000);
-  if (left < 5) return {text: t(plan?.weekly ? 'forecast.onPacePlan' : 'forecast.onPaceReset'), tone: '', title};
-  return {text: t(plan?.weekly ? 'forecast.leftPlan' : 'forecast.leftReset', {value: num(left)}), tone: plan?.weekly ? 'muted' : '', title};
+  if (left < 5) return {text: t(planned ? 'forecast.onPacePlan' : 'forecast.onPaceReset'), tone: '', title};
+  return {text: t(planned ? 'forecast.leftPlan' : 'forecast.leftReset', {value: num(left)}), tone: planned ? 'muted' : '', title};
 }
 
 /**

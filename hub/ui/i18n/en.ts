@@ -130,8 +130,6 @@ export const en = {
   'limit.resetsIn': 'resets in {time}',
   'limit.resetPassed': 'window reset, waiting for a measurement',
   'limit.resetUnknown': 'reset time unknown',
-  'limit.planDone': 'plan done',
-  'limit.planDoneHint': 'By the plan everything is spent by now; what is left is extra',
   'limit.ahead': 'ahead of plan · {value} pp',
   'limit.aheadHint': 'Spending faster than planned: the limit may run out before the plan ends',
   'limit.aheadHintReset': 'Spending faster than an even pace: the limit may run out before it resets',
@@ -194,8 +192,6 @@ export const en = {
   'forecast.empty': 'No measurements in this period',
 
   'forecast.needData': 'Needs at least 30 minutes of continuous measurements',
-  'forecast.planDone': 'plan done',
-  'forecast.planDoneHint': 'The plan for this week is over',
   'forecast.rate': 'Average pace over the period: {rate} pp/h',
   'forecast.runsOut': 'runs out in {time}',
   'forecast.usedUp': 'used up until the reset',

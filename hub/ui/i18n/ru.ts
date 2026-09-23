@@ -126,8 +126,6 @@ export const ru = {
   'limit.resetsIn': 'сброс через {time}',
   'limit.resetPassed': 'окно сброшено, ждём замер',
   'limit.resetUnknown': 'время сброса неизвестно',
-  'limit.planDone': 'план пройден',
-  'limit.planDoneHint': 'По плану к этому времени всё потрачено; остаток — сверх плана',
   'limit.ahead': 'опережает план · {value} п.п.',
   'limit.aheadHint': 'Расход опережает план: лимит может закончиться раньше конца плана',
   'limit.aheadHintReset': 'Расход быстрее равномерного: лимит может закончиться раньше сброса',
@@ -190,8 +188,6 @@ export const ru = {
   'forecast.empty': 'За этот период нет замеров',
 
   'forecast.needData': 'Нужно хотя бы 30 минут непрерывных замеров',
-  'forecast.planDone': 'план пройден',
-  'forecast.planDoneHint': 'План на эту неделю закончился',
   'forecast.rate': 'Средний темп за период: {rate} п.п./ч',
   'forecast.usedUp': 'исчерпан до сброса',
   'forecast.runsOut': 'закончится через {time}',
