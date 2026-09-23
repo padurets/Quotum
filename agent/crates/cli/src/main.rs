@@ -12,7 +12,8 @@ use std::thread;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
-use quotum_core::config::{Config, Credentials, Hub, Paths, machine};
+use quotum_core::activity::{Activity, Session};
+use quotum_core::config::{Config, Credentials, Hub, Paths, home, machine};
 use quotum_core::model::{Batch, ErrorKind, INGEST_VERSION, Kind, Millis, Outcome, Provider, Window, now_ms};
 use quotum_core::process::{detach, kill};
 use quotum_core::providers::{adapter, find_client};
@@ -309,6 +310,12 @@ fn status(config: Config, paths: Paths, only: &[Provider], json: bool) -> ExitCo
     if !json {
         println!("{}", style.dim(&format!("{:<14}{:<20}{:>5}  {}", "", "", "left", "resets")));
     }
+    // The agents running here are looked at before and after measuring: the CPU time they
+    // spent meanwhile tells which of them work, with no wait of its own.
+    let mut activity = (!json).then(|| Activity::new(home()));
+    if let Some(activity) = activity.as_mut() {
+        activity.look();
+    }
     runner.measure_all(|outcome| {
         if !json {
             print_outcome(outcome, &style);
@@ -316,6 +323,9 @@ fn status(config: Config, paths: Paths, only: &[Provider], json: bool) -> ExitCo
         }
         outcomes.push(outcome.clone());
     });
+    if let Some(activity) = activity.as_mut() {
+        print_sessions(&activity.look(), &style);
+    }
     if let (false, Some(credentials)) = (json, &connected) {
         println!("\n{}", style.dim(&format!("connected {}", connected_to(credentials))));
     }
@@ -571,6 +581,25 @@ fn print_outcome(outcome: &Outcome, style: &Style) {
             };
             println!("{}{}", style.bold(&format!("{:<14}", failure.provider.name())), style.dim(&text));
         }
+    }
+}
+
+/// The coding agents running on this machine, and which of them work.
+fn print_sessions(sessions: &[Session], style: &Style) {
+    if sessions.is_empty() {
+        return;
+    }
+    let working = sessions.iter().filter(|s| s.working == Some(true)).count();
+    println!("\n{}", style.dim(&format!("running here: {} · {working} working", sessions.len())));
+    for session in sessions {
+        let state = match session.working {
+            Some(true) => style.bold("working"),
+            Some(false) => style.dim("idle   "),
+            None => " ".repeat(7),
+        };
+        let project = session.project.as_deref().unwrap_or("");
+        let since = style.dim(&format!("for {}", until(now_ms() - session.started_at)));
+        println!("{:<14}{project:<20}{state}  {since}", session.provider.name());
     }
 }
 

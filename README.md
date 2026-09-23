@@ -70,7 +70,8 @@ If one subscription is signed in on several machines, they don't all measure it.
 puts one machine on duty per subscription (preferably the one you're working on), the
 others wait, and duty moves on when that machine goes quiet.
 
-The agent also works on its own: `npx quotum` prints the limits of this machine.
+The agent also works on its own: `npx quotum` prints the limits of this machine and the
+coding agents running on it, working or idle.
 
 ```
 $ npx quotum
@@ -82,6 +83,10 @@ Claude max    5 hours               98%  in 4h 27m
               Fable weekly         100%  in 5d 9h
 Antigravity   Gemini 5 hours       100%  in 4h 59m
               Gemini weekly         96%  in 1d 3h
+
+running here: 2 · 1 working
+Claude        quotum              working  for 3h 39m
+Codex         api                 idle     for 25m
 ```
 
 ## What the dashboard shows

@@ -79,6 +79,17 @@ from `~/.claude.json`, which holds no tokens. Of every other file of the clients
 reads only the time of the last change, to tell whether someone uses a client on this
 machine. Credential files are never opened.
 
+**Which agents run.** The agent also looks at the process list: which `claude`, `codex`
+and `agy` processes run, since when, in which folder (its name only; not the home or
+the temporary folder), and whether they work. A session works while it and what it
+started (tools, builds, tests) spend more than 3% of a CPU core: an idle client waits
+for input and spends next to nothing, a working one streams, redraws its progress and
+runs tools. Nothing else of the client is read, its settings are not changed, and no
+program is started for it; the clients the agent starts to measure are not counted. A
+look is one pass over the process list for names and parents, then the times of the
+clients' own processes: about 20 µs per process on Linux. Windows does not tell another
+process's folder.
+
 ## Scheduling
 
 Clients are expensive to start, so the schedule is about starting as few as possible,
