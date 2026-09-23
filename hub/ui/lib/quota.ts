@@ -53,3 +53,19 @@ export function errorText(code: string) {
 }
 
 export const problemOf = (source: SourceState) => (source.error && source.error !== 'waiting' ? errorText(source.error) : null);
+
+/** A measurement this recent is news: the card's dot pulses. */
+export const PULSE_FOR = 30_000;
+/** How long the dot takes to fade from fresh to grey after that. */
+const FADE_FOR = 5 * 60_000;
+
+/**
+ * How fresh a source's numbers are, from 1 (just measured) to 0 (a while ago). It only
+ * says how old they are, not that anything is wrong: in eco mode a quiet subscription
+ * is measured every quarter of an hour, and that is fine. Trouble has its own colour.
+ */
+export function freshness(age: number): number {
+  if (age <= PULSE_FOR) return 1;
+  const left = 1 - (age - PULSE_FOR) / FADE_FOR;
+  return left <= 0 ? 0 : left * left;
+}

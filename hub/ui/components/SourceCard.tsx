@@ -1,8 +1,8 @@
-import {useEffect, useRef, useState} from 'react';
+import {useEffect, useRef, useState, type CSSProperties} from 'react';
 import type {SourceState, Win} from '../lib/types';
 import {windowKey} from '../lib/types';
 import {ago, day, duration, fullStamp, num} from '../lib/format';
-import {errorText, level, problemOf, sourceLabel, windowName} from '../lib/quota';
+import {errorText, freshness, level, problemOf, PULSE_FOR, sourceLabel, windowName} from '../lib/quota';
 import {t} from '../i18n';
 import {DEFAULT_PLAN, isValidPlan, PLAN_TOLERANCE, planAt, planTotal, type WeeklyPlan} from '../lib/plan';
 import {LOGOS} from './logos';
@@ -316,6 +316,7 @@ export function SourceCard({
   const visible = source.windows.filter(w => !hidden.has(windowKey(source.id, w.id)));
   const weekly = planOf(arrange.view, source.id);
   const warn = source.stale || !!problem;
+  const age = source.successAt === null ? Infinity : now - source.successAt;
   // How fresh the numbers are lives in the colour of the logo's dot and in its tooltip;
   // trouble is also told under the limits, where it moves no meter out of line.
   const status = problem ?? (source.successAt ? t('source.measured', {ago: ago(source.successAt, now)}) : errorText('waiting'));
@@ -325,7 +326,11 @@ export function SourceCard({
       <div className="card-head">
         <span className={`provider-mark ${warn ? 'is-warn' : ''}`} title={status} aria-label={status} role="img">
           <img className="provider-logo" src={LOGOS[source.provider]} alt="" />
-          <i className={`dot dot-${warn ? 'warn' : 'ok'}`} />
+          {warn ? (
+            <i className="dot dot-warn" />
+          ) : (
+            <i className={`dot dot-fresh ${age < PULSE_FOR ? 'is-pulsing' : ''}`} style={{'--fresh': freshness(age)} as CSSProperties} />
+          )}
         </span>
         <div className="card-title">
           <span className="card-swatch" style={{background: colorOf(arrange.view, source.id, source.provider)}} aria-hidden="true" />
