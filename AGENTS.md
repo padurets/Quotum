@@ -58,6 +58,18 @@ requests, but it does start the real clients.
 - **Docs describe the current system.** Update `docs/`, the READMEs and the spec with the
   change that makes them wrong; no changelogs or history in them.
 
+## Dashboard UI
+
+- **Build from the shared pieces.** A menu, dropdown or any panel that opens from a
+  button is a `Popover` (`hub/ui/components/Popover.tsx`); a dialog or side panel is a
+  `Modal` (`hub/ui/components/Kit.tsx`). They are glass: the `glass` class and its
+  tokens in `hub/ui/style.css`. A new floating surface uses one of them rather than
+  styling its own.
+- Widgets on the board are a `.card` (a source) or a `.panel` (the chart, the table).
+- Colours come from the tokens at the top of `hub/ui/style.css`, and the colours of
+  series from `hub/ui/lib/providers.ts`; status colours (ok, warn, crit) mean only how
+  much of a limit is left.
+
 ## Code and commits
 
 - Match the surrounding code: its naming, comment density and idiom. Comments explain
