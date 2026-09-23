@@ -1,0 +1,30 @@
+name: Something doesn't work
+description: A wrong number, an error, a crash, anything that looks broken
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: "`quotum --version`, the hub's version (`/health` shows it), and the client if it is about one (`claude --version`, `codex --version`, `agy --version`)"
+      placeholder: quotum 0.2.0, hub 0.2.0, codex 0.154.0
+    validations:
+      required: true
+  - type: dropdown
+    id: system
+    attributes:
+      label: Where the agent runs
+      multiple: true
+      options: [Linux, macOS, Windows, a container, not about the agent]
+  - type: textarea
+    id: log
+    attributes:
+      label: What the agent says
+      description: The lines of `quotum run` (or `agent.log` of `quotum start`) around the problem, and `quotum config`. They hold no tokens, but look before you paste.
+      render: text

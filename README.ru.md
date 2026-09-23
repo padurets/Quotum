@@ -2,10 +2,30 @@
 
 [English](README.md) · **Русский**
 
+[![Release](https://img.shields.io/github/v/release/padurets/quotum)](https://github.com/padurets/quotum/releases/latest)
+[![npm](https://img.shields.io/npm/v/quotum)](https://www.npmjs.com/package/quotum)
+[![CI](https://github.com/padurets/quotum/actions/workflows/ci.yml/badge.svg)](https://github.com/padurets/quotum/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/github/license/padurets/quotum)](LICENSE)
+
 Quotum показывает, сколько осталось от подписок на кодинг-агентов — Claude Code, Codex
-и Antigravity — на всех машинах, где вы работаете, в одном месте.
+и Antigravity — на всех машинах, где вы работаете, в одном месте: для вас одного или
+для всей команды. Он работает на вашем сервере и не трогает токены провайдеров.
 
 ![Дашборд Quotum](docs/dashboard.ru.png)
+
+**Быстрый старт**
+
+```sh
+# Хаб; `docker logs quotum` покажет код для первого аккаунта
+docker run -d --name quotum -p 8080:8080 -v quotum:/data ghcr.io/padurets/quotum-hub
+
+# На каждой машине: подтвердите код в браузере, затем агент мерит в фоне
+npx quotum connect http://<хаб>:8080
+npx quotum start
+```
+
+Просто `npx quotum` покажет лимиты этой машины без всякого хаба. Подробнее — в разделе
+[Как запустить](#как-запустить).
 
 ## Зачем я это сделал
 
@@ -250,6 +270,8 @@ Caddy. За своим прокси сообщите хабу его адрес 
   устроены замеры и расписание, люди, доски и устройства (на английском).
 - [spec/ingest-v1.md](spec/ingest-v1.md) — что агент отправляет хабу; реализовать это
   может кто угодно.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — как проверить изменение и что учесть (на английском);
+  [SECURITY.md](SECURITY.md) — как сообщить об уязвимости, не публикуя её.
 
 Структура проекта:
 

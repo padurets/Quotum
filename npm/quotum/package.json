@@ -1,8 +1,8 @@
 {
   "name": "quotum",
   "version": "0.0.0",
-  "description": "See how much of your coding-agent subscriptions is left (Claude Code, Codex, Antigravity) on every machine, in one place.",
-  "keywords": ["claude-code", "codex", "antigravity", "usage", "limits", "quota", "cli"],
+  "description": "How much of your Claude Code, Codex and Antigravity limits is left, on every machine: the agent of a self-hosted dashboard for you or your team.",
+  "keywords": ["claude-code", "claude", "anthropic", "codex", "openai", "antigravity", "gemini", "coding-agents", "usage", "usage-limits", "rate-limit", "limits", "quota", "monitoring", "dashboard", "self-hosted", "cli"],
   "homepage": "https://github.com/padurets/quotum",
   "bugs": "https://github.com/padurets/quotum/issues",
   "repository": {"type": "git", "url": "git+https://github.com/padurets/quotum.git", "directory": "npm/quotum"},

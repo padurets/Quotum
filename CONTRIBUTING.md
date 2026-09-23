@@ -1,0 +1,34 @@
+# Contributing
+
+Issues and pull requests are welcome, in English or Russian. For anything bigger than a
+fix, open an issue first so we can agree on the approach before you spend time on it.
+
+## Checking a change
+
+```sh
+cd hub && npm ci && npm run typecheck && npm test && npm run build
+cd agent && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+```
+
+CI runs the same on every push, the agent on Linux, macOS and Windows. `npm start` in
+`hub/` serves the built dashboard on `127.0.0.1:8080`; `cargo run -p quotum` in `agent/`
+measures this machine once.
+
+Tests never start a real Claude Code, Codex or Antigravity client: they use recorded
+answers and stand-in programs, so they cost nothing and don't depend on your accounts.
+
+## What to keep in mind
+
+- **The dashboard speaks English and Russian.** Every new string goes into both catalogs
+  in `hub/ui/i18n`; the type checker and the tests will tell you if one is missing.
+- **Both READMEs say the same thing.** A change to `README.md` goes into `README.ru.md` too.
+- **The protocol is a spec.** Anything that changes what the agent sends or what the hub
+  answers goes into [spec/ingest-v1.md](spec/ingest-v1.md) in the same change.
+- **A released database layout never changes.** A new layout is a new step at the end of
+  `hub/server/store/schema.ts`; `hub/server/test/schema.test.ts` guards the released ones.
+- **The agent stays out of the way and out of your secrets.** It never reads provider
+  tokens or cookies, never makes a model request and starts clients as rarely as it can.
+  A new provider is an adapter in `agent/crates/core/src/providers/` that asks the
+  provider's own command-line client, the way the existing three do.
+
+[docs/architecture.md](docs/architecture.md) explains how the parts fit together.

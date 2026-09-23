@@ -2,10 +2,30 @@
 
 **English** · [Русский](README.ru.md)
 
+[![Release](https://img.shields.io/github/v/release/padurets/quotum)](https://github.com/padurets/quotum/releases/latest)
+[![npm](https://img.shields.io/npm/v/quotum)](https://www.npmjs.com/package/quotum)
+[![CI](https://github.com/padurets/quotum/actions/workflows/ci.yml/badge.svg)](https://github.com/padurets/quotum/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/github/license/padurets/quotum)](LICENSE)
+
 Quotum shows how much of your coding-agent subscriptions is left — Claude Code, Codex
-and Antigravity — on every machine you work on, in one place.
+and Antigravity — on every machine you work on, in one place: for you alone or for a
+whole team. You host it yourself, and it never touches your provider tokens.
 
 ![The Quotum dashboard](docs/dashboard.png)
+
+**Quick start**
+
+```sh
+# The hub; `docker logs quotum` shows the setup code of the first account
+docker run -d --name quotum -p 8080:8080 -v quotum:/data ghcr.io/padurets/quotum-hub
+
+# On every machine: confirm the code in the browser, then keep measuring in the background
+npx quotum connect http://<the hub>:8080
+npx quotum start
+```
+
+`npx quotum` alone prints this machine's limits without any hub. More in
+[Getting started](#getting-started).
 
 ## Why I made it
 
@@ -251,6 +271,8 @@ Caddy. Behind a proxy of your own, tell the hub its address and trust the proxy:
   scheduling work, people, boards and devices.
 - [spec/ingest-v1.md](spec/ingest-v1.md): what the agent sends to the hub; anything can
   implement it.
+- [CONTRIBUTING.md](CONTRIBUTING.md): checking a change and what to keep in mind;
+  [SECURITY.md](SECURITY.md): reporting a vulnerability privately.
 
 Project layout:
 
