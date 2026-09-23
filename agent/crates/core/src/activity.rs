@@ -13,12 +13,22 @@ use std::time::Instant;
 
 use crate::model::{Millis, Provider};
 
-/// A share of one CPU core above which a session counts as working. An idle client waits
-/// for input and spends next to nothing; a working one streams, redraws its progress and
-/// runs tools.
-pub const WORKING_SHARE: f64 = 0.03;
+/// How much of one CPU core a client spends while working, at least. An idle client
+/// waits for input and spends little (measured: Claude Code 1–3%, redrawing its screen;
+/// Codex under 1%; Antigravity 1–2%); a working one streams, redraws its progress and runs
+/// tools (Claude Code 10–25%, Codex 5–10%, Antigravity far more, in bursts).
+fn working_share(provider: Provider) -> f64 {
+    match provider {
+        Provider::Claude => 0.06,
+        Provider::Codex => 0.03,
+        Provider::Antigravity => 0.04,
+    }
+}
 /// A shorter look than this cannot tell working from idle.
 const MIN_LOOK_MS: u128 = 1_000;
+/// A session stays working this long after it last spent like one: a model's pause between
+/// two steps is not idleness, and the state does not flicker.
+const HOLD_MS: u128 = 60_000;
 
 /// A running client: a coding agent's session on this machine.
 #[derive(Clone, Debug, PartialEq)]
@@ -40,12 +50,22 @@ pub struct Proc {
     pub name: String,
 }
 
+/// What the last look saw of a session.
+struct Seen {
+    /// CPU time of its tree, and when that was read.
+    cpu: u64,
+    at: Instant,
+    /// When it last spent like a working session.
+    busy_at: Option<Instant>,
+    working: Option<bool>,
+}
+
 /// Looks at the running clients again and again; working or idle is told by the CPU time
 /// spent between two looks.
 pub struct Activity {
     home: PathBuf,
-    /// CPU time of each session's tree at the last look, by pid and start (pids are reused).
-    last: HashMap<(u32, Millis), (u64, Instant)>,
+    /// Each session at the last look, by pid and start (pids are reused).
+    last: HashMap<(u32, Millis), Seen>,
 }
 
 impl Activity {
@@ -59,15 +79,16 @@ impl Activity {
         let mut seen = HashMap::new();
         let sessions = sessions(&procs, std::process::id())
             .into_iter()
+            // Other people's clients on a shared machine are theirs, and on their accounts.
+            .filter(|&(_, pid, _)| sys::mine(pid))
             .filter_map(|(provider, pid, tree)| {
                 let (started_at, _) = sys::times(pid)?;
+                // What the tree spent, with what its finished processes spent (as far as the system keeps that).
                 let cpu: u64 = tree.iter().filter_map(|&p| sys::times(p)).map(|(_, cpu)| cpu).sum();
                 let key = (pid, started_at);
-                let working = self.last.get(&key).and_then(|&(before, at)| {
-                    let wall = now.duration_since(at).as_millis();
-                    (wall >= MIN_LOOK_MS).then(|| cpu.saturating_sub(before) as f64 / wall as f64 >= WORKING_SHARE)
-                });
-                seen.insert(key, (cpu, now));
+                let next = judged(self.last.get(&key), cpu, now, working_share(provider));
+                let working = next.working;
+                seen.insert(key, next);
                 let project = sys::cwd(pid).and_then(|dir| project(&dir, &self.home));
                 Some(Session { provider, pid, started_at, project, working })
             })
@@ -75,6 +96,21 @@ impl Activity {
         self.last = seen;
         sessions
     }
+}
+
+/// A session seen again with its tree at `cpu` ms: working when it spent at least `share`
+/// of a core since the look before, and for `HOLD_MS` after.
+fn judged(before: Option<&Seen>, cpu: u64, now: Instant, share: f64) -> Seen {
+    let Some(before) = before else { return Seen { cpu, at: now, busy_at: None, working: None } };
+    let wall = now.duration_since(before.at).as_millis();
+    if wall < MIN_LOOK_MS {
+        // Looked again too soon: it stays as it was, measured from the earlier look.
+        return Seen { cpu: before.cpu, at: before.at, busy_at: before.busy_at, working: before.working };
+    }
+    let busy = cpu.saturating_sub(before.cpu) as f64 / wall as f64 >= share;
+    let busy_at = if busy { Some(now) } else { before.busy_at };
+    let working = busy_at.is_some_and(|at| now.duration_since(at).as_millis() < HOLD_MS);
+    Seen { cpu, at: now, busy_at, working: Some(working) }
 }
 
 /// The client a program name belongs to: the native `claude`, `codex` and `agy`.
@@ -184,18 +220,27 @@ mod sys {
             .collect()
     }
 
-    /// When it started and how much CPU time it has spent, in milliseconds.
+    /// When it started and how much CPU time it and its finished children have spent, in
+    /// milliseconds.
     pub fn times(pid: u32) -> Option<(Millis, u64)> {
         let (_, fields) = stat(pid)?;
         let tick = ticks_per_second();
-        // utime and stime are fields 14 and 15 of stat, starttime field 22 (ticks after boot).
-        let cpu = (fields.get(11)? + fields.get(12)?) * 1000 / tick;
+        // utime, stime, cutime and cstime are fields 14–17 of stat, starttime field 22 (ticks after boot).
+        let cpu = fields.get(11..15)?.iter().sum::<u64>() * 1000 / tick;
         let started = boot_time()? * 1000 + (fields.get(19)? * 1000 / tick) as Millis;
         Some((started, cpu))
     }
 
     pub fn cwd(pid: u32) -> Option<PathBuf> {
         fs::read_link(format!("/proc/{pid}/cwd")).ok()
+    }
+
+    /// Whether this user runs it.
+    pub fn mine(pid: u32) -> bool {
+        use std::os::unix::fs::MetadataExt;
+        // SAFETY: getuid cannot fail.
+        let me = unsafe { libc::getuid() };
+        fs::metadata(format!("/proc/{pid}")).is_ok_and(|m| m.uid() == me)
     }
 
     fn ticks_per_second() -> u64 {
@@ -265,12 +310,25 @@ mod sys {
 
     pub fn times(pid: u32) -> Option<(Millis, u64)> {
         let bsd: libc::proc_bsdinfo = info(pid, libc::PROC_PIDTBSDINFO)?;
-        let task: libc::proc_taskinfo = info(pid, libc::PROC_PIDTASKINFO)?;
         let started = bsd.pbi_start_tvsec as Millis * 1000 + bsd.pbi_start_tvusec as Millis / 1000;
-        // CPU times are in mach time units: nanoseconds on Intel, not on Apple silicon.
+        // SAFETY: the call fills a plain struct of the version asked for.
+        let usage = unsafe {
+            let mut usage: libc::rusage_info_v2 = mem::zeroed();
+            let asked = libc::proc_pid_rusage(pid as c_int, libc::RUSAGE_INFO_V2, (&raw mut usage).cast());
+            (asked == 0).then_some(usage)
+        }?;
+        // With what its finished children spent. The times are in mach time units:
+        // nanoseconds on Intel, not on Apple silicon.
+        let total = usage.ri_user_time + usage.ri_system_time + usage.ri_child_user_time + usage.ri_child_system_time;
         let (numer, denom) = timebase();
-        let cpu = (task.pti_total_user + task.pti_total_system) as u128 * numer as u128 / denom as u128 / 1_000_000;
-        Some((started, cpu as u64))
+        Some((started, (total as u128 * numer as u128 / denom as u128 / 1_000_000) as u64))
+    }
+
+    /// Whether this user runs it.
+    pub fn mine(pid: u32) -> bool {
+        // SAFETY: getuid cannot fail.
+        let me = unsafe { libc::getuid() };
+        info::<libc::proc_bsdinfo>(pid, libc::PROC_PIDTBSDINFO).is_some_and(|bsd| bsd.pbi_uid == me)
     }
 
     pub fn cwd(pid: u32) -> Option<PathBuf> {
@@ -310,6 +368,7 @@ mod sys {
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
     };
+    use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
     use windows_sys::Win32::System::Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
 
     use super::Proc;
@@ -337,6 +396,7 @@ mod sys {
         list
     }
 
+    /// Windows keeps no time of finished children: what a tool spent is counted while it runs.
     pub fn times(pid: u32) -> Option<(Millis, u64)> {
         let as_100ns = |t: FILETIME| (t.dwHighDateTime as u64) << 32 | t.dwLowDateTime as u64;
         // SAFETY: the handle is closed below; the times are plain structs.
@@ -359,6 +419,16 @@ mod sys {
     pub fn cwd(_: u32) -> Option<PathBuf> {
         None
     }
+
+    /// Whether it runs in this user's logon session.
+    pub fn mine(pid: u32) -> bool {
+        let session = |pid: u32| {
+            let mut id = u32::MAX;
+            // SAFETY: writes one u32.
+            (unsafe { ProcessIdToSessionId(pid, &mut id) } != 0).then_some(id)
+        };
+        session(pid).is_some_and(|id| Some(id) == session(std::process::id()))
+    }
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
@@ -376,6 +446,9 @@ mod sys {
     }
     pub fn cwd(_: u32) -> Option<PathBuf> {
         None
+    }
+    pub fn mine(_: u32) -> bool {
+        false
     }
 }
 
@@ -445,6 +518,28 @@ mod tests {
         assert_eq!(project(Path::new("/home/ann"), home), None);
         assert_eq!(project(Path::new("/"), home), None);
         assert_eq!(project(&std::env::temp_dir().join("scratch"), home), None);
+    }
+
+    #[test]
+    fn a_session_works_while_it_spends_and_a_minute_after() {
+        use std::time::Duration;
+        let start = Instant::now();
+        let at = |s: u64| start + Duration::from_secs(s);
+        let first = judged(None, 1_000, at(0), 0.05);
+        assert_eq!(first.working, None, "one look cannot tell");
+        // 15 s at 10% of a core: working.
+        let busy = judged(Some(&first), 2_500, at(15), 0.05);
+        assert_eq!(busy.working, Some(true));
+        assert_eq!(
+            judged(Some(&busy), 2_600, at(15) + Duration::from_millis(300), 0.05).working,
+            Some(true),
+            "too soon to tell anew"
+        );
+        // Then quiet: still working for a minute, idle after.
+        let pause = judged(Some(&busy), 2_510, at(45), 0.05);
+        assert_eq!(pause.working, Some(true));
+        let quiet = judged(Some(&pause), 2_520, at(80), 0.05);
+        assert_eq!(quiet.working, Some(false));
     }
 
     #[test]
