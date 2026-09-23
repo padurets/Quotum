@@ -39,7 +39,8 @@ body {
 }
 /* A sparse dot grid under the top bar, fading out towards the middle: texture for the glass to blur, never a pattern to read through. */
 body::after {
-  content: ''; position: fixed; inset: 0; pointer-events: none; z-index: -1;
+  /* Below the widgets' frosting (z-index -1), so they blur it. */
+  content: ''; position: fixed; inset: 0; pointer-events: none; z-index: -2;
   background-image: radial-gradient(#ffffff26 1px, transparent 1.3px);
   background-size: 22px 22px;
   -webkit-mask-image: radial-gradient(1100px 520px at 50% -60px, #000 25%, transparent 75%);
