@@ -125,7 +125,7 @@ body.is-resizing, body.is-resizing * { cursor: ew-resize !important; user-select
 /* Frosted through a ::before, not the widget itself, so a Popover opened from it stays glass: see .glass. */
 .card::before, .panel::before {
   content: ''; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none;
-  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
 }
 /* A breath of the card's own colour in its corner, where its logo is. */
 .card {
