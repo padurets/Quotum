@@ -73,6 +73,16 @@ test('history returns one series per source and window, in the order of the card
   store.close();
 });
 
+test('a period of history ends where it is asked to and is read from its edges', () => {
+  const store = fresh();
+  const codex = seen(store, 'codex', 'account-a');
+  for (const [minutes, used] of [[0, 20], [4, 25], [8, 31]]) store.record(codex, measurement({observedAt: start + minutes * 60_000, windows: [win({used})]}));
+  const [series] = store.history(BOARD, start - 1, 60_000, start + 5 * 60_000).series;
+  assert.deepEqual([series.samples, series.consumed, series.remainingAtStart, series.remainingAtEnd], [2, 5, 80, 75]);
+  assert.equal(series.points.at(-1)![0], start + 4 * 60_000, 'nothing after its end');
+  store.close();
+});
+
 test('every change moves the revision of its board, and only of its board', () => {
   const store = fresh();
   const before = store.revision(BOARD);

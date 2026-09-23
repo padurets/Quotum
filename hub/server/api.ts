@@ -48,6 +48,20 @@ function errorCode(status: number, path: string): string {
 }
 
 /**
+ * A period from `from` to `to` (milliseconds) within the kept history, with the cell it
+ * is drawn on; null when it is not one. Its end is at most now.
+ */
+function selected(from: string | undefined, to: string | undefined, now: number): {since: number; to: number; cellMs: number} | null {
+  if (!from || !to || !/^\d{1,15}$/.test(from) || !/^\d{1,15}$/.test(to)) return null;
+  const since = Number(from);
+  const end = Math.min(Number(to), now);
+  if (end - since < config.history.minSpanMs || since < now - config.retention.sampleDays * 86_400_000) return null;
+  const {cells, maxCells} = config.history;
+  const cellMs = cells.find(cell => (end - since) / cell <= maxCells) ?? cells.at(-1)!;
+  return {since, to: end, cellMs};
+}
+
+/**
  * The HTTP surface. People sign in and read their boards under `/api`; agents talk to
  * `/v1` (device codes, check-ins, ingest). Everything else is the single-page client.
  */
@@ -135,14 +149,23 @@ export async function buildApp(hub: Hub) {
     };
   });
 
-  app.get<{Querystring: {range?: string; board?: string}}>('/api/history', (request, reply) => {
+  app.get<{Querystring: {range?: string; from?: string; to?: string; board?: string}}>('/api/history', (request, reply) => {
     const access = guards.board(request, reply, request.query.board);
     if (!access) return reply;
+    const now = Date.now();
+    const {from, to} = request.query;
+    if (from !== undefined || to !== undefined) {
+      // A period selected on the chart: measurements do not change once taken, so it is read as it is asked.
+      const span = selected(from, to, now);
+      if (!span) return reply.code(400).send({error: 'invalid_request'});
+      const {series, events} = store.history(access.board.id, span.since, span.cellMs, span.to);
+      // Named as asked, so the page knows its answer even when the end was cut to now.
+      return {range: `${from}-${to}`, now, since: span.since, to: span.to, cellMs: span.cellMs, historyStart: store.historyStart, series, events};
+    }
     const range = request.query.range ?? '24h';
     const spec = Object.hasOwn(config.history.ranges, range) ? config.history.ranges[range] : null;
     if (!spec) return reply.code(400).send({error: 'invalid_request'});
 
-    const now = Date.now();
     const slot = `${access.board.id}:${range}`;
     // History changes when a measurement is stored or the grid moves on; reuse it until then.
     const key = `${store.revision(access.board.id)}:${Math.floor(now / spec.cellMs)}`;
@@ -150,7 +173,7 @@ export async function buildApp(hub: Hub) {
       historyCache.set(slot, {key, value: store.history(access.board.id, now - spec.durationMs, spec.cellMs)});
     }
     const {series, events} = historyCache.get(slot)!.value;
-    return {range, now, since: now - spec.durationMs, cellMs: spec.cellMs, historyStart: store.historyStart, series, events};
+    return {range, now, since: now - spec.durationMs, to: now, cellMs: spec.cellMs, historyStart: store.historyStart, series, events};
   });
 
   accountRoutes(app, hub, guards);

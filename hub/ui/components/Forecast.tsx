@@ -6,6 +6,7 @@ import {PLAN_TOLERANCE, planAt, type WeeklyPlan} from '../lib/plan';
 import {FORECAST, planOf, withHidden, type Arrange} from '../lib/view';
 import {linesOf, type Line} from '../lib/lines';
 import {setPrefs, usePrefs} from '../lib/prefs';
+import {useTimeRange} from '../lib/timeRange';
 import {t, useLocale} from '../i18n';
 import {HideRow, Popover, SlidersIcon} from './Popover';
 import {KindSwitch, PeriodSwitch} from './History';
@@ -43,9 +44,14 @@ function outlook(line: Line, live: Win | undefined, measuredAt: number | null, n
   return {text: t(planned ? 'forecast.leftPlan' : 'forecast.leftReset', {value: num(left)}), tone: planned ? 'muted' : '', title};
 }
 
+/** How long a line must have been measured without gaps for its pace to mean something. */
+const PACE_FROM = 10 * 60_000;
+
 /**
  * The windows of one kind: what is left, what the plan expects, what the period spent,
- * and where that pace leads. Its period and kind are its own, not the chart's.
+ * and where that pace leads. Its period and kind are its own, not the chart's. Over a
+ * time range selected on the chart, which is in the past, it shows that range instead:
+ * what was left at its start and its end, what it spent and how fast.
  */
 export function Forecast({
   history,
@@ -63,12 +69,13 @@ export function Forecast({
 }) {
   const {view} = arrange;
   const {tableKind: kind, tableRange} = usePrefs();
+  const selected = useTimeRange() !== null;
   // Window names are text: they are rebuilt when the language changes.
   const locale = useLocale();
   const lines = useMemo(() => linesOf(history, overview, view, kind), [history, overview, view.windows, view.hidden, view.colors, kind, locale]);
 
   return (
-    <section className={`panel forecast ${loading ? 'is-loading' : ''}`} aria-label={t('forecast.title')} aria-busy={loading}>
+    <section className={`panel forecast ${selected ? 'is-range' : ''} ${loading ? 'is-loading' : ''}`} aria-label={t('forecast.title')} aria-busy={loading}>
       <div className="panel-head">
         <h2>{t('forecast.title')}</h2>
         <div className="controls">
@@ -89,16 +96,45 @@ export function Forecast({
         <div className="table-wrap">
           <table>
             <thead>
-              <tr>
-                <th>{t('table.limit')}</th>
-                <th>{t('table.now')}</th>
-                <th title={t('table.planHint')}>{t('table.plan')}</th>
-                <th>{t('table.spent')}</th>
-                <th>{t('table.forecast')}</th>
-              </tr>
+              {selected ? (
+                <tr>
+                  <th>{t('table.limit')}</th>
+                  <th>{t('table.atStart')}</th>
+                  <th>{t('table.atEnd')}</th>
+                  <th>{t('table.spentInRange')}</th>
+                  <th title={t('table.paceHint')}>{t('table.pace')}</th>
+                </tr>
+              ) : (
+                <tr>
+                  <th>{t('table.limit')}</th>
+                  <th>{t('table.now')}</th>
+                  <th title={t('table.planHint')}>{t('table.plan')}</th>
+                  <th>{t('table.spent')}</th>
+                  <th>{t('table.forecast')}</th>
+                </tr>
+              )}
             </thead>
             <tbody>
               {lines.map(line => {
+                const name = (
+                  <td>
+                    <span className="swatch" style={{background: line.color}} />
+                    {line.name}
+                  </td>
+                );
+                const spent = <td>{line.consumed > 0 ? t('table.points', {value: num(line.consumed, 1)}) : line.coveredMs ? t('table.unused') : '—'}</td>;
+                if (selected) {
+                  const edge = (value: number | null) => (value === null ? <td>—</td> : <td className={`v-${level(value)}`}>{num(value)}%</td>);
+                  return (
+                    <tr key={line.key}>
+                      {name}
+                      {edge(line.remainingAtStart)}
+                      {edge(line.remainingAtEnd)}
+                      {spent}
+                      <td>{line.coveredMs >= PACE_FROM ? t('table.perHour', {value: num(line.consumed / (line.coveredMs / 3_600_000), 1)}) : '—'}</td>
+                    </tr>
+                  );
+                }
                 const source = overview?.sources.find(s => s.id === line.sourceId);
                 const live = source?.windows.find(w => w.id === line.windowId);
                 const measuredAt = source?.successAt ?? null;
@@ -109,10 +145,7 @@ export function Forecast({
                 const ahead = outlook(line, live, measuredAt, now, weekly);
                 return (
                   <tr key={line.key}>
-                    <td>
-                      <span className="swatch" style={{background: line.color}} />
-                      {line.name}
-                    </td>
+                    {name}
                     <td className={`v-${level(line.current)}`}>{num(line.current)}%</td>
                     <td title={plan && notable ? t(delta >= 0 ? 'table.behindBy' : 'table.aheadBy', {value: num(Math.abs(delta))}) : ''}>
                       {plan ? (
@@ -130,7 +163,7 @@ export function Forecast({
                         '—'
                       )}
                     </td>
-                    <td>{line.consumed > 0 ? t('table.points', {value: num(line.consumed, 1)}) : line.coveredMs ? t('table.unused') : '—'}</td>
+                    {spent}
                     <td className={ahead.tone} title={ahead.title}>
                       {ahead.text}
                     </td>

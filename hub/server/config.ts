@@ -87,6 +87,14 @@ export const config = {
       '7d': {durationMs: 7 * 86_400_000, cellMs: 30 * 60_000},
       '30d': {durationMs: 30 * 86_400_000, cellMs: 2 * 3_600_000},
     } as Record<string, {durationMs: number; cellMs: number}>,
+    /**
+     * A period selected on the chart gets the finest of these cells that keeps it
+     * within `maxCells`, the same density as the fixed ranges. Shorter than
+     * `minSpanMs` it would show a handful of measurements.
+     */
+    cells: [1, 5, 15, 30, 60, 120, 360, 720].map(minutes => minutes * 60_000),
+    maxCells: 360,
+    minSpanMs: 15 * 60_000,
   },
 
   /** Community reset trackers (see domain/resets.ts); credited wherever shown. `QUOTUM_RESETS=off` turns them off. */

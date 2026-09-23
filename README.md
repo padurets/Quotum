@@ -96,10 +96,12 @@ Antigravity   Gemini 5 hours       100%  in 4h 59m
   own plan: a day at 0 is a day you don't spend, and it can be any day of the week.
 - **A chart of the weekly or the 5-hour windows** over 24 hours, 7 or 30 days. Ahead of
   now it draws the plan and the next resets, as far as you choose; behind, it marks
-  when limits came back early and when free resets were granted.
+  when limits came back early and when free resets were granted. Drag across it to
+  zoom into a burst of work.
 - **A table with a forecast:** what the period spent and, at that pace, whether the
   window runs out before its reset (or before your plan ends) and roughly how much
-  will be left.
+  will be left. Over a range dragged on the chart it shows what that range cost: what
+  was left at its start and end, what it spent and how fast.
 - **Reset announcements** from the community trackers [Codex Resets](https://codex-resets.com)
   and [Claude Resets](https://claude-resets.com), with a link to the source. You
   can turn them off.

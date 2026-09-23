@@ -366,6 +366,22 @@ test('agents get errors in the spec’s terms', async () => {
   assert.deepEqual([wrong.status, wrong.body], [400, {error: 'invalid_batch', detail: 'version'}]);
 });
 
+test('history reads a period selected on the chart, on a grid fine enough for it', async () => {
+  const {call, person} = await hub();
+  await person('alice');
+  const now = Date.now();
+  const read = (query: string) => call('GET', `/api/history?${query}`, {as: 'alice'});
+  const hour = await read(`from=${now - 3_600_000}&to=${now - 1_800_000}`);
+  assert.deepEqual([hour.status, hour.body.since, hour.body.to, hour.body.cellMs], [200, now - 3_600_000, now - 1_800_000, 60_000]);
+  const week = await read(`from=${now - 7 * 86_400_000}&to=${now}`);
+  assert.equal(week.body.cellMs, 30 * 60_000, 'as dense as the fixed ranges');
+  const ahead = await read(`from=${now - 3_600_000}&to=${now + 86_400_000}`);
+  assert.ok(ahead.body.to <= Date.now(), 'it ends now at the latest');
+  for (const query of [`from=${now - 600_000}&to=${now}`, `from=${now - 100 * 86_400_000}&to=${now}`, `from=${now - 3_600_000}`, 'from=abc&to=def']) {
+    assert.equal((await read(query)).status, 400, query);
+  }
+});
+
 test('changes from another origin, unknown hosts and other methods are refused', async () => {
   const {call, person} = await hub();
   await person('alice');

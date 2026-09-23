@@ -300,6 +300,9 @@ td.muted, small.muted { color: var(--text-3); }
 .segmented button { white-space: nowrap; border: 0; background: none; color: var(--text-3); padding: 5px 12px; border-radius: 7px; font-size: 12.5px; transition: color .15s, background .15s; }
 .segmented button:hover { color: var(--text-2); }
 .segmented button[aria-pressed=true] { background: #ffffff12; color: var(--text); box-shadow: inset 0 1px 0 #ffffff0d; }
+.segmented .segmented-range { display: inline-flex; align-items: center; gap: 7px; font-variant-numeric: tabular-nums; }
+.segmented-range svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; opacity: .55; }
+.segmented-range:hover svg { opacity: 1; }
 
 .legend { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 18px 0 4px; }
 .legend-item { display: flex; align-items: center; gap: 8px; padding: 4px 0; border: 0; background: none; font-size: 12.5px; color: var(--text-2); transition: opacity .15s; }
@@ -333,6 +336,9 @@ td.muted, small.muted { color: var(--text-3); }
 .hover-band { fill: #ffffff06; }
 .crosshair line { stroke: var(--text-3); stroke-width: 1; stroke-dasharray: 2 3; }
 .crosshair circle { stroke: var(--bg); stroke-width: 2; }
+/* A time range is dragged across the chart; vertical swipes still scroll the page. */
+.chart svg.is-selectable { cursor: crosshair; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
+.selection { fill: color-mix(in oklab, var(--accent) 14%, transparent); stroke: color-mix(in oklab, var(--accent) 50%, transparent); stroke-width: 1; }
 .tooltip {
   position: absolute; top: 8px; pointer-events: none; min-width: 190px; max-width: min(320px, 100%);
   border-radius: 10px; padding: 9px 11px; font-size: 12px;
@@ -524,7 +530,13 @@ tr:hover .device-name .icon-button, .device-name .icon-button:focus-visible { op
   .history .controls .picker, .forecast .controls .picker { position: absolute; top: 14px; right: 12px; }
   .controls .segmented { flex: 1; }
   .controls .segmented button { flex: 1; padding: 6px; }
+  /* A selected time range takes a row of its own under the fixed periods. */
+  .controls .segmented { flex-wrap: wrap; }
+  .controls .segmented .segmented-range { flex-basis: 100%; justify-content: center; }
   .forecast th:nth-child(4), .forecast td:nth-child(4) { display: none; }
+  /* Over a selected time range what it spent matters most; its pace goes instead. */
+  .forecast.is-range th:nth-child(4), .forecast.is-range td:nth-child(4) { display: table-cell; }
+  .forecast.is-range th:nth-child(5), .forecast.is-range td:nth-child(5) { display: none; }
   td:first-child { white-space: normal; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }

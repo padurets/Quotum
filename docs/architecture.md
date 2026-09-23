@@ -164,7 +164,11 @@ them), kept for 90 days.
   forward is not a reset.
 - **The chart** puts every series on one time grid (5 minutes for a day, 30 minutes
   for a week, 2 hours for a month) and shows the lowest value seen in each cell, so
-  hovering reads every series at once and a short hiccup doesn't break a line.
+  hovering reads every series at once and a short hiccup doesn't break a line. A time
+  range dragged across the chart gets the finest cell that keeps it within 360 cells
+  (a minute for an hour, as dense as the fixed periods for longer ones), at least 15
+  minutes of it. The range is in the past, so the table reads it from its edges: what
+  was left at its first and last measurement, what it spent and how fast.
 - **The plan** is per source and belongs to the board's view: whole percents per day of the
   weekly window (30/25/15/15/10/5/0 by default). A day at 0 has no spending planned,
   wherever it is; the plan ends with its last non-zero day. Other windows are planned
@@ -235,7 +239,9 @@ The board's view comes with the overview; the owner's changes show at once and a
 saved about half a second later, one request per burst (a drag, typing a plan). What
 is only about how one person looks (the chart's period, window type and horizon, lines
 switched off in the legend, reset announcements, the lock on the widgets, the chosen
-board and language) stays in their browser.
+board and language) stays in their browser. A time range selected on the chart is the
+period of both the chart and the table; it lives in the page's address (`?from=&to=`),
+so a reload keeps it, Back undoes it and a link to it can be shared on the board.
 
 Text is translated through typed catalogs in `hub/ui/i18n`: English is the source,
 every other language must translate all its keys (checked by the type checker and by

@@ -2,6 +2,7 @@ import {useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent
 import {clock, duration, num, shortDay} from '../lib/format';
 import {t} from '../i18n';
 import type {Line} from '../lib/lines';
+import {draggedRange, type TimeRange} from '../lib/timeRange';
 
 /**
  * A moment on the time axis: ahead, a known window reset or an announced extra one;
@@ -58,6 +59,7 @@ export function Chart({
   to,
   cellMs,
   empty,
+  onSelect,
 }: {
   lines: Line[];
   plans?: PlanLine[];
@@ -69,11 +71,15 @@ export function Chart({
   cellMs: number;
   /** Said over an empty chart; none when the legend already says it. */
   empty: string | null;
+  /** A time range dragged across the chart, as in Grafana. */
+  onSelect?: (range: TimeRange) => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(900);
   /** Start of the hovered cell. */
   const [hover, setHover] = useState<number | null>(null);
+  /** Where a drag across the chart started and where it is now, in chart pixels. */
+  const [drag, setDrag] = useState<{start: number; end: number} | null>(null);
 
   useEffect(() => {
     if (!box.current) return;
@@ -137,12 +143,29 @@ export function Chart({
           return value === undefined ? [] : [{plan, value}];
         });
 
-  const move = (event: PointerEvent<SVGSVGElement>) => {
+  const toChart = (event: PointerEvent<SVGSVGElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
-    const px = ((event.clientX - rect.left) / rect.width) * width;
+    return ((event.clientX - rect.left) / rect.width) * width;
+  };
+  const timeAt = (px: number) => from + ((px - left) / (width - left - right)) * span;
+  const move = (event: PointerEvent<SVGSVGElement>) => {
+    const px = toChart(event);
+    if (drag) setDrag({...drag, end: Math.min(width - right, Math.max(left, px))});
     if (px < left || px > width - right) return setHover(null);
-    const at = from + ((px - left) / (width - left - right)) * span;
-    setHover(Math.floor(at / cellMs) * cellMs);
+    setHover(Math.floor(timeAt(px) / cellMs) * cellMs);
+  };
+  const press = (event: PointerEvent<SVGSVGElement>) => {
+    const px = toChart(event);
+    if (!onSelect || event.button !== 0 || px < left || px > width - right) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDrag({start: px, end: px});
+  };
+  // A drag of a few pixels is a click.
+  const release = () => {
+    if (!drag || !onSelect) return;
+    setDrag(null);
+    const range = Math.abs(drag.end - drag.start) >= 6 ? draggedRange(timeAt(drag.start), timeAt(drag.end), now) : null;
+    if (range) onSelect(range);
   };
   // A cell ahead of now is read at its middle; the one holding now, at now.
   const hoverX = hover === null ? 0 : hover > now ? x(Math.min(to, hover + cellMs / 2)) : bx(hover);
@@ -161,8 +184,12 @@ export function Chart({
         viewBox={`0 0 ${width} ${height}`}
         role="img"
         aria-label={t('chart.label')}
+        className={onSelect ? 'is-selectable' : undefined}
         onPointerMove={move}
         onPointerLeave={() => setHover(null)}
+        onPointerDown={press}
+        onPointerUp={release}
+        onPointerCancel={() => setDrag(null)}
       >
         {to > now && (
           <g className="future">
@@ -240,6 +267,9 @@ export function Chart({
               </g>
             ) : null,
           )}
+        {drag && (
+          <rect x={Math.min(drag.start, drag.end)} width={Math.abs(drag.end - drag.start)} y={top} height={height - top - bottom} className="selection" />
+        )}
         {hover !== null && (
           <g className="crosshair">
             <rect x={x(hover)} width={bandWidth} y={top} height={height - top - bottom} className="hover-band" />
@@ -251,7 +281,7 @@ export function Chart({
         )}
       </svg>
 
-      {hover !== null && readout.length + planReadout.length + markerReadout.length > 0 && (
+      {hover !== null && !drag && readout.length + planReadout.length + markerReadout.length > 0 && (
         <div className="tooltip glass" ref={tip} style={{left: tipLeft}}>
           <div className="tooltip-time">{cellLabel(hover, cellMs)}</div>
           {[...readout]

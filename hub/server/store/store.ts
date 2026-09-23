@@ -14,6 +14,8 @@ export type HistorySeries = {
   consumed: number;
   coveredMs: number;
   samples: number;
+  remainingAtStart: number | null;
+  remainingAtEnd: number | null;
   points: (readonly [number, number, number])[];
 };
 
@@ -294,15 +296,15 @@ export class Store {
     return rows.map(r => ({device: r.device_id, provider: r.provider, error: r.error, detail: r.detail, at: r.at}));
   }
 
-  /** Every source/window series since `from` on a shared grid, ready for the chart and the table, and what happened meanwhile. */
-  history(board: string, from: number, cellMs: number): {series: HistorySeries[]; events: SourceEvent[]} {
+  /** Every source/window series from `from` to `to` on a shared grid, ready for the chart and the table, and what happened meanwhile. */
+  history(board: string, from: number, cellMs: number, to = Number.MAX_SAFE_INTEGER): {series: HistorySeries[]; events: SourceEvent[]} {
     const ids = JSON.stringify(this.sources(board).map(s => s.id));
     const rows = this.db
       .prepare(
         'SELECT samples.*, sources.provider FROM samples JOIN sources ON sources.id = samples.source_id' +
-          ' WHERE samples.source_id IN (SELECT value FROM json_each(?)) AND samples.at >= ? ORDER BY samples.source_id, samples.window_id, samples.at',
+          ' WHERE samples.source_id IN (SELECT value FROM json_each(?)) AND samples.at BETWEEN ? AND ? ORDER BY samples.source_id, samples.window_id, samples.at',
       )
-      .all(ids, from) as SampleRow[];
+      .all(ids, from, to) as SampleRow[];
 
     const groups = new Map<string, Sample[]>();
     for (const row of rows) {
@@ -348,13 +350,13 @@ export class Store {
           points: onGrid(points, cellMs).map(p => [p.at, Math.round(p.remaining * 100) / 100, p.segment] as const),
         };
       });
-    return {series: lines, events: [...earlyResets([...groups.values()]), ...this.grants(ids, from)].sort((a, b) => a.at - b.at)};
+    return {series: lines, events: [...earlyResets([...groups.values()]), ...this.grants(ids, from, to)].sort((a, b) => a.at - b.at)};
   }
 
-  private grants(ids: string, from: number): SourceEvent[] {
+  private grants(ids: string, from: number, to: number): SourceEvent[] {
     const rows = this.db
-      .prepare("SELECT source_id, at, detail FROM events WHERE source_id IN (SELECT value FROM json_each(?)) AND kind = 'resets_granted' AND at >= ?")
-      .all(ids, from) as {source_id: string; at: number; detail: string}[];
+      .prepare("SELECT source_id, at, detail FROM events WHERE source_id IN (SELECT value FROM json_each(?)) AND kind = 'resets_granted' AND at BETWEEN ? AND ?")
+      .all(ids, from, to) as {source_id: string; at: number; detail: string}[];
     return rows.map(r => ({sourceId: r.source_id, at: r.at, kind: 'resets_granted', count: Number(r.detail)}));
   }
 

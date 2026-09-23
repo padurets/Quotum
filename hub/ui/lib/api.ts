@@ -1,6 +1,7 @@
 import {useEffect, useRef, useState} from 'react';
 import type {History, Overview} from './types';
 import {ApiError, call} from './http';
+import {timeRangeKey, type TimeRange} from './timeRange';
 
 /** A clock ticking every second, for freshness labels and countdowns. */
 export function useNow() {
@@ -74,19 +75,24 @@ export function useOverview(board: string, onGone: () => void) {
 }
 
 /**
- * History of a board, read again when the range changes or the board's data does
- * (`revision`). While another range loads, the one on screen stays (`loading`), so the
- * page keeps its height and does not jump.
+ * History of a board over a fixed range ('24h', …) or a time range selected on the chart,
+ * read again when that changes or, for a range, when the board's data does
+ * (`revision`); a selected one is in the past and stays as read. While another one loads, the
+ * one on screen stays (`loading`), so the page keeps its height and does not jump.
  */
-export function useHistory(board: string, range: string, revision: number | null): {history: History | null; loading: boolean} {
+export function useHistory(board: string, period: string | TimeRange, revision: number | null): {history: History | null; loading: boolean} {
   const [history, setHistory] = useState<History | null>(null);
   const [retry, setRetry] = useState(0);
+  const selected = typeof period === 'string' ? null : period;
+  const key = selected ? timeRangeKey(selected) : (period as string);
+  const query = selected ? `from=${selected.from}&to=${selected.to}` : `range=${key}`;
+  const version = selected && revision !== null ? 0 : revision;
 
   useEffect(() => {
-    if (revision === null) return;
+    if (version === null) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
-    call<History>('GET', `/api/history?board=${encodeURIComponent(board)}&range=${range}`)
+    call<History>('GET', `/api/history?board=${encodeURIComponent(board)}&${query}`)
       .then(data => {
         if (!cancelled) setHistory({...data, board});
       })
@@ -97,8 +103,8 @@ export function useHistory(board: string, range: string, revision: number | null
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [board, range, revision, retry]);
+  }, [board, query, version, retry]);
 
   const shown = history?.board === board ? history : null;
-  return {history: shown, loading: !!shown && shown.range !== range};
+  return {history: shown, loading: !!shown && shown.range !== key};
 }

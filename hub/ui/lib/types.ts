@@ -73,6 +73,9 @@ export type HistorySeries = {
   consumed: number;
   coveredMs: number;
   samples: number;
+  /** What was left at the first and the last measurement of the period. */
+  remainingAtStart: number | null;
+  remainingAtEnd: number | null;
   /** [cell start, remaining percent, line segment] */
   points: [number, number, number][];
 };
@@ -80,9 +83,12 @@ export type HistorySeries = {
 export type History = {
   /** Set by the client: which board the history was read for. */
   board?: string;
+  /** '24h', '7d', '30d', or `from-to` of a span selected on the chart. */
   range: string;
   now: number;
   since: number;
+  /** Where the period ends: now for a range, the end of a span. */
+  to: number;
   /** Width of the shared time grid every series is placed on. */
   cellMs: number;
   historyStart: number;

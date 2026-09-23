@@ -5,6 +5,7 @@ import '@fontsource-variable/geist-mono';
 import './style.css';
 import {useHistory, useNow, useOverview} from './lib/api';
 import {setPrefs, usePrefs} from './lib/prefs';
+import {useTimeRange} from './lib/timeRange';
 import {useResets} from './lib/resets';
 import {sourceLabel, titled} from './lib/quota';
 import {usePath} from './lib/router';
@@ -33,10 +34,12 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
   const arrange = useView(data, reload);
   const prefs = usePrefs();
   const revision = data ? data.revision : null;
-  const {history, loading: historyLoading} = useHistory(boardId, prefs.range, revision);
-  // The table has its own period: the same one is read once; another one shows the
-  // chart's history, dimmed, until it comes.
-  const sameRange = prefs.tableRange === prefs.range;
+  // A time range selected on the chart is the period of both the chart and the table.
+  const selected = useTimeRange();
+  const {history, loading: historyLoading} = useHistory(boardId, selected ?? prefs.range, revision);
+  // Otherwise the table has its own period: the same one is read once; another one shows
+  // the chart's history, dimmed, until it comes.
+  const sameRange = selected !== null || prefs.tableRange === prefs.range;
   const own = useHistory(boardId, prefs.tableRange, sameRange ? null : revision);
   const table = sameRange ? {history, loading: historyLoading} : own.history ? own : {history, loading: true};
   const {resets, past, health} = useResets(prefs.showResets);

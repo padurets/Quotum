@@ -104,7 +104,8 @@ export function series(samples: Sample[]) {
     }
     return {at: sample.at, used: sample.used, remaining: sample.remaining, segment, staleAfterMs: sample.staleAfterMs};
   });
-  return {points, consumed, coveredMs, samples: samples.length};
+  // What was left at the first and the last measurement: a selected period is read from its edges.
+  return {points, consumed, coveredMs, samples: samples.length, remainingAtStart: samples[0]?.remaining ?? null, remainingAtEnd: samples.at(-1)?.remaining ?? null};
 }
 
 /**

@@ -5,6 +5,7 @@ import {sourceLabel} from '../lib/quota';
 import {planAt, started, weeklyPlanLine} from '../lib/plan';
 import {PROVIDERS} from '../lib/providers';
 import {HORIZONS, setMuted, setPrefs, usePrefs, type Horizon} from '../lib/prefs';
+import {setTimeRange, timeRangeLabel, useTimeRange} from '../lib/timeRange';
 import {HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
 import {linesOf} from '../lib/lines';
 import {Chart, type Marker, type PlanLine} from './Chart';
@@ -53,19 +54,35 @@ export function KindSwitch({value, onChange}: {value: Kind; onChange: (kind: Kin
   );
 }
 
-/** The last 24 hours, 7 or 30 days. */
+const PERIODS = ['24h', '7d', '30d'];
+
+/**
+ * The last 24 hours, 7 or 30 days, and a time range selected on the chart when there is
+ * one: it is the period of both the chart and the table until it is cleared or a fixed
+ * period is chosen.
+ */
 export function PeriodSwitch({value, onChange}: {value: string; onChange: (range: string) => void}) {
+  const selected = useTimeRange();
+  const choose = (range: string) => {
+    if (selected) setTimeRange(null);
+    onChange(range);
+  };
   return (
-    <Segmented
-      value={value}
-      onChange={onChange}
-      options={[
-        ['24h', t('history.hours', {count: 24})],
-        ['7d', t('history.days', {count: 7})],
-        ['30d', t('history.days', {count: 30})],
-      ]}
-      label={t('history.range')}
-    />
+    <div className="segmented" role="group" aria-label={t('history.range')}>
+      {PERIODS.map(range => (
+        <button key={range} type="button" aria-pressed={!selected && range === value} onClick={() => choose(range)}>
+          {range === '24h' ? t('history.hours', {count: 24}) : t('history.days', {count: parseInt(range)})}
+        </button>
+      ))}
+      {selected && (
+        <button type="button" className="segmented-range" aria-pressed="true" title={t('history.rangeClear')} onClick={() => setTimeRange(null)}>
+          {timeRangeLabel(selected)}
+          <svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true">
+            <path d="M4 4l8 8M12 4l-8 8" />
+          </svg>
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -96,10 +113,12 @@ export function History({
   const lines = useMemo(() => linesOf(history, overview, view, prefs.kind), [history, overview, prefs.kind, view.windows, view.hidden, view.colors, locale]);
 
   const visible = useMemo(() => lines.filter(line => !prefs.muted[line.key]), [lines, prefs.muted]);
+  // A time range selected on the chart is in the past: the chart shows just it, without the future.
+  const selected = useTimeRange() !== null;
   const from = history ? Math.max(history.since, history.historyStart) : now - 86_400_000;
-  const measuredTo = history?.now ?? now;
+  const measuredTo = history?.to ?? now;
   // An announced Codex reset matters only where Codex is on the chart.
-  const announced = visible.some(line => line.provider === 'codex') ? (resets.codex?.scheduled?.scheduledFor ?? null) : null;
+  const announced = !selected && visible.some(line => line.provider === 'codex') ? (resets.codex?.scheduled?.scheduledFor ?? null) : null;
   // The spending plan applies to weekly windows; the days ahead are there for it, when a line on the chart has a plan.
   const planAvailable = prefs.kind === 'weekly' && visible.some(line => planOf(view, line.sourceId) !== null);
   const planShown = planAvailable && prefs.showPlan;
@@ -109,7 +128,7 @@ export function History({
   // out is pointed at from the edge instead. A chosen horizon is kept as is.
   const future = prefs.horizon === 'auto' ? (FUTURE[prefs.range] ?? FUTURE['24h']) : HORIZON[prefs.horizon];
   const reach = measuredTo + (measuredTo - from) * 0.75;
-  const to = !planShown
+  const to = !planShown || selected
     ? measuredTo
     : prefs.horizon === 'auto' && announced && announced > measuredTo && announced + future * 0.25 > measuredTo + future
       ? Math.min(reach, announced + future * 0.25)
@@ -230,7 +249,7 @@ export function History({
         )}
       </div>
 
-      {history ? <Chart lines={visible} plans={plans} markers={markers} from={from} now={measuredTo} to={to} cellMs={history.cellMs} empty={lines.length ? t('chart.empty') : null} /> : <div className="chart chart-loading">{t('history.loading')}</div>}
+      {history ? <Chart lines={visible} plans={plans} markers={markers} from={from} now={measuredTo} to={to} cellMs={history.cellMs} empty={lines.length ? t('chart.empty') : null} onSelect={setTimeRange} /> : <div className="chart chart-loading">{t('history.loading')}</div>}
       {history && history.since < history.historyStart && (
         <p className="footnote">{t('history.since', {date: day(history.historyStart)})}</p>
       )}
