@@ -299,35 +299,37 @@ export class Store {
   /** Every source/window series from `from` to `to` on a shared grid, ready for the chart and the table, and what happened meanwhile. */
   history(board: string, from: number, cellMs: number, to = Number.MAX_SAFE_INTEGER): {series: HistorySeries[]; events: SourceEvent[]} {
     const ids = JSON.stringify(this.sources(board).map(s => s.id));
-    const rows = this.db
-      .prepare(
-        'SELECT samples.*, sources.provider FROM samples JOIN sources ON sources.id = samples.source_id' +
-          ' WHERE samples.source_id IN (SELECT value FROM json_each(?)) AND samples.at BETWEEN ? AND ? ORDER BY samples.source_id, samples.window_id, samples.at',
-      )
-      .all(ids, from, to) as SampleRow[];
-
+    const states = this.states(board);
+    // One window at a time: the primary key (source, window, time) finds just the period,
+    // already in order. A window its source no longer reports is not shown, so not read.
+    const read = this.db.prepare('SELECT at, used, reset_at, stale_after_ms FROM samples WHERE source_id = ? AND window_id = ? AND at BETWEEN ? AND ? ORDER BY at');
     const groups = new Map<string, Sample[]>();
-    for (const row of rows) {
-      const key = `${row.source_id} ${row.window_id}`;
-      let group = groups.get(key);
-      if (!group) groups.set(key, (group = []));
-      group.push({
-        sourceId: row.source_id,
-        provider: row.provider,
-        id: row.window_id,
-        kind: row.kind,
-        label: row.label,
-        at: row.at,
-        used: row.used,
-        remaining: 100 - row.used,
-        resetAt: row.reset_at,
-        minutes: row.minutes,
-        staleAfterMs: row.stale_after_ms,
-      });
+    for (const state of states) {
+      for (const window of state.windows) {
+        // Only what changes from sample to sample; what a window is comes from its state.
+        const rows = read.all(state.id, window.id, from, to) as Pick<SampleRow, 'at' | 'used' | 'reset_at' | 'stale_after_ms'>[];
+        if (!rows.length) continue;
+        const {id, kind, label, minutes} = window;
+        groups.set(
+          `${state.id} ${id}`,
+          rows.map(row => ({
+            sourceId: state.id,
+            provider: state.provider,
+            id,
+            kind,
+            label,
+            at: row.at,
+            used: row.used,
+            remaining: 100 - row.used,
+            resetAt: row.reset_at,
+            minutes,
+            staleAfterMs: row.stale_after_ms,
+          })),
+        );
+      }
     }
 
     // Series follow the cards: sources in board order, windows in the order the source reports them.
-    const states = this.states(board);
     const rank = (sample: Sample) => {
       const source = states.findIndex(s => s.id === sample.sourceId);
       const window = states[source]?.windows.findIndex(w => w.id === sample.id) ?? -1;
@@ -405,5 +407,7 @@ function earlyResets(groups: Sample[][]): SourceEvent[] {
       if (!same.windows.includes(reset.window)) same.windows.push(reset.window);
     } else events.push({sourceId: reset.sourceId, at: reset.at, kind: 'early_reset', windows: [reset.window]});
   }
+  // Named the same way whatever order the windows were read in.
+  for (const event of events) event.windows.sort();
   return events;
 }

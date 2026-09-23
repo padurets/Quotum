@@ -366,7 +366,7 @@ test('agents get errors in the spec’s terms', async () => {
   assert.deepEqual([wrong.status, wrong.body], [400, {error: 'invalid_batch', detail: 'version'}]);
 });
 
-test('history reads a period selected on the chart, on a grid fine enough for it', async () => {
+test('history reads a period selected on the chart, up to a month, on a grid fine enough for it', async () => {
   const {call, person} = await hub();
   await person('alice');
   const now = Date.now();
@@ -377,7 +377,9 @@ test('history reads a period selected on the chart, on a grid fine enough for it
   assert.equal(week.body.cellMs, 30 * 60_000, 'as dense as the fixed ranges');
   const ahead = await read(`from=${now - 3_600_000}&to=${now + 86_400_000}`);
   assert.ok(ahead.body.to <= Date.now(), 'it ends now at the latest');
-  for (const query of [`from=${now - 600_000}&to=${now}`, `from=${now - 100 * 86_400_000}&to=${now}`, `from=${now - 3_600_000}`, 'from=abc&to=def']) {
+  const fixed = await read('range=24h');
+  assert.equal(fixed.body.to, fixed.body.now, 'a fixed range ends now');
+  for (const query of [`from=${now - 600_000}&to=${now}`, `from=${now - 40 * 86_400_000}&to=${now}`, `from=${now - 100 * 86_400_000}&to=${now - 90 * 86_400_000}`, `from=${now - 3_600_000}`, 'from=abc&to=def']) {
     assert.equal((await read(query)).status, 400, query);
   }
 });

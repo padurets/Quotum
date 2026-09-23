@@ -95,6 +95,8 @@ export const config = {
     cells: [1, 5, 15, 30, 60, 120, 360, 720].map(minutes => minutes * 60_000),
     maxCells: 360,
     minSpanMs: 15 * 60_000,
+    /** As long as the longest fixed range (dragged on it, a little longer). */
+    maxSpanMs: 31 * 86_400_000,
   },
 
   /** Community reset trackers (see domain/resets.ts); credited wherever shown. `QUOTUM_RESETS=off` turns them off. */

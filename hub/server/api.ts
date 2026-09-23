@@ -48,14 +48,15 @@ function errorCode(status: number, path: string): string {
 }
 
 /**
- * A period from `from` to `to` (milliseconds) within the kept history, with the cell it
- * is drawn on; null when it is not one. Its end is at most now.
+ * A period from `from` to `to` (milliseconds) within the kept history, from 15 minutes to
+ * a month long, with the cell it is drawn on; null when it is not one. Its end is at most now.
  */
 function selected(from: string | undefined, to: string | undefined, now: number): {since: number; to: number; cellMs: number} | null {
   if (!from || !to || !/^\d{1,15}$/.test(from) || !/^\d{1,15}$/.test(to)) return null;
   const since = Number(from);
   const end = Math.min(Number(to), now);
-  if (end - since < config.history.minSpanMs || since < now - config.retention.sampleDays * 86_400_000) return null;
+  const span = end - since;
+  if (span < config.history.minSpanMs || span > config.history.maxSpanMs || since < now - config.retention.sampleDays * 86_400_000) return null;
   const {cells, maxCells} = config.history;
   const cellMs = cells.find(cell => (end - since) / cell <= maxCells) ?? cells.at(-1)!;
   return {since, to: end, cellMs};
@@ -70,7 +71,32 @@ export async function buildApp(hub: Hub) {
   const app = Fastify({logger: false, bodyLimit: 16 * 1024, trustProxy: config.http.trustProxy});
   const hosts = new Set<string>(config.http.hosts);
   const anyHost = hosts.has('*');
-  const historyCache = new Map<string, {key: string; value: {series: HistorySeries[]; events: SourceEvent[]}}>();
+  type Answer = {series: HistorySeries[]; events: SourceEvent[]};
+  /**
+   * An answer is reused while the grid stays on the same cell and the board's data has not
+   * changed. A costly one (a month of a busy board takes a good part of a second) is also
+   * reused for a quarter of a cell after the data changed: a month is drawn in 2-hour
+   * cells, where half an hour of news does not show. The fixed ranges are kept per board;
+   * of the periods selected on charts, the latest few.
+   */
+  const fixedHistory = new Map<string, {cell: number; revision: number; at: number; costly: boolean; value: Answer}>();
+  const selectedHistory: typeof fixedHistory = new Map();
+  const SELECTED_KEPT = 32;
+  const COSTLY_MS = 50;
+  const reused = (cache: typeof fixedHistory, slot: string, board: string, cellMs: number, end: number, read: () => Answer) => {
+    const now = Date.now();
+    const cell = Math.floor(end / cellMs);
+    const revision = store.revision(board);
+    const hit = cache.get(slot);
+    if (hit && hit.cell === cell && (hit.revision === revision || (hit.costly && now - hit.at < cellMs / 4))) return hit.value;
+    const value = read();
+    const costly = Date.now() - now >= COSTLY_MS;
+    // Map order is insertion order: the entry read last goes to the end, the oldest is dropped.
+    cache.delete(slot);
+    cache.set(slot, {cell, revision, at: now, costly, value});
+    if (cache === selectedHistory && cache.size > SELECTED_KEPT) cache.delete(cache.keys().next().value!);
+    return value;
+  };
 
   app.addHook('onRequest', async (request, reply) => {
     // The health check answers any host: a container asks it at 127.0.0.1 whatever the hub's own address.
@@ -155,10 +181,12 @@ export async function buildApp(hub: Hub) {
     const now = Date.now();
     const {from, to} = request.query;
     if (from !== undefined || to !== undefined) {
-      // A period selected on the chart: measurements do not change once taken, so it is read as it is asked.
+      // A period selected on the chart, as long as a month at most.
       const span = selected(from, to, now);
       if (!span) return reply.code(400).send({error: 'invalid_request'});
-      const {series, events} = store.history(access.board.id, span.since, span.cellMs, span.to);
+      const board = access.board.id;
+      const slot = `${board}:${span.since}:${span.to}`;
+      const {series, events} = reused(selectedHistory, slot, board, span.cellMs, span.to, () => store.history(board, span.since, span.cellMs, span.to));
       // Named as asked, so the page knows its answer even when the end was cut to now.
       return {range: `${from}-${to}`, now, since: span.since, to: span.to, cellMs: span.cellMs, historyStart: store.historyStart, series, events};
     }
@@ -166,13 +194,8 @@ export async function buildApp(hub: Hub) {
     const spec = Object.hasOwn(config.history.ranges, range) ? config.history.ranges[range] : null;
     if (!spec) return reply.code(400).send({error: 'invalid_request'});
 
-    const slot = `${access.board.id}:${range}`;
-    // History changes when a measurement is stored or the grid moves on; reuse it until then.
-    const key = `${store.revision(access.board.id)}:${Math.floor(now / spec.cellMs)}`;
-    if (historyCache.get(slot)?.key !== key) {
-      historyCache.set(slot, {key, value: store.history(access.board.id, now - spec.durationMs, spec.cellMs)});
-    }
-    const {series, events} = historyCache.get(slot)!.value;
+    const board = access.board.id;
+    const {series, events} = reused(fixedHistory, `${board}:${range}`, board, spec.cellMs, now, () => store.history(board, now - spec.durationMs, spec.cellMs));
     return {range, now, since: now - spec.durationMs, to: now, cellMs: spec.cellMs, historyStart: store.historyStart, series, events};
   });
 
