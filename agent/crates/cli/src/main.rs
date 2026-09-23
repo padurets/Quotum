@@ -12,7 +12,7 @@ use std::thread;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
-use quotum_core::activity::{Activity, Session};
+use quotum_core::activity::{Activity, Origin, Session};
 use quotum_core::config::{Config, Credentials, Hub, Paths, home, machine};
 use quotum_core::model::{Batch, ErrorKind, INGEST_VERSION, Kind, Millis, Outcome, Provider, Window, now_ms};
 use quotum_core::process::{detach, kill};
@@ -598,7 +598,11 @@ fn print_sessions(sessions: &[Session], style: &Style) {
             None => " ".repeat(7),
         };
         let project = session.project.as_deref().unwrap_or("");
-        let since = style.dim(&format!("for {}", until(now_ms() - session.started_at)));
+        let origin = match session.origin {
+            Origin::Terminal => String::new(),
+            other => format!(" · {}", other.id()),
+        };
+        let since = style.dim(&format!("for {}{origin}", until(now_ms() - session.started_at)));
         println!("{:<14}{project:<20}{state}  {since}", session.provider.name());
     }
 }

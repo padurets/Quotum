@@ -40,6 +40,26 @@ pub struct Session {
     pub project: Option<String>,
     /// Whether it is working, idle, or not yet known (seen once so far).
     pub working: Option<bool>,
+    pub origin: Origin,
+}
+
+/// Where a session runs. An editor or the app runs one client per window for all its chats,
+/// so there a session is a window, idle while it is only open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Origin {
+    Terminal,
+    Editor,
+    App,
+}
+
+impl Origin {
+    pub fn id(self) -> &'static str {
+        match self {
+            Origin::Terminal => "terminal",
+            Origin::Editor => "editor",
+            Origin::App => "app",
+        }
+    }
 }
 
 /// A process as the list of all of them tells it.
@@ -80,8 +100,8 @@ impl Activity {
         let sessions = sessions(&procs, std::process::id())
             .into_iter()
             // Other people's clients on a shared machine are theirs, and on their accounts.
-            .filter(|&(_, pid, _)| sys::mine(pid))
-            .filter_map(|(provider, pid, tree)| {
+            .filter(|found| sys::mine(found.pid))
+            .filter_map(|Found { provider, pid, origin, tree }| {
                 let (started_at, _) = sys::times(pid)?;
                 // What the tree spent, with what its finished processes spent (as far as the system keeps that).
                 let cpu: u64 = tree.iter().filter_map(|&p| sys::times(p)).map(|(_, cpu)| cpu).sum();
@@ -90,7 +110,7 @@ impl Activity {
                 let working = next.working;
                 seen.insert(key, next);
                 let project = sys::cwd(pid).and_then(|dir| project(&dir, &self.home));
-                Some(Session { provider, pid, started_at, project, working })
+                Some(Session { provider, pid, started_at, project, working, origin })
             })
             .collect();
         self.last = seen;
@@ -113,10 +133,11 @@ fn judged(before: Option<&Seen>, cpu: u64, now: Instant, share: f64) -> Seen {
     Seen { cpu, at: now, busy_at, working: Some(working) }
 }
 
-/// The client a program name belongs to: the native `claude`, `codex` and `agy`.
+/// The client a program name belongs to: `claude`, `codex` and `agy` as they are named,
+/// in lower case. The windows of desktop apps are named in capitals (`Claude`, `Codex`)
+/// and are not sessions: the client an app starts for its chats is.
 fn provider_of(name: &str) -> Option<Provider> {
-    let name = name.strip_suffix(".exe").unwrap_or(name).to_ascii_lowercase();
-    match name.as_str() {
+    match name.strip_suffix(".exe").unwrap_or(name) {
         "claude" => Some(Provider::Claude),
         "codex" => Some(Provider::Codex),
         "agy" | "antigravity" => Some(Provider::Antigravity),
@@ -124,12 +145,11 @@ fn provider_of(name: &str) -> Option<Provider> {
     }
 }
 
-/// The sessions among `procs`, each with the pids of its tree (itself and what it
-/// started). Not sessions: clients started by the agent itself to measure (below this
+/// The sessions among `procs`. Not sessions: clients started by the agent itself to measure (below this
 /// process `own` or any `quotum`), and a client under another of the same kind (a
 /// launcher and the program it runs). A session under a session of another kind is its
 /// own, and its tree is not counted in the one above.
-pub fn sessions(procs: &[Proc], own: u32) -> Vec<(Provider, u32, Vec<u32>)> {
+pub fn sessions(procs: &[Proc], own: u32) -> Vec<Found> {
     let by_pid: HashMap<u32, &Proc> = procs.iter().map(|p| (p.pid, p)).collect();
     let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
     for p in procs {
@@ -145,18 +165,18 @@ pub fn sessions(procs: &[Proc], own: u32) -> Vec<(Provider, u32, Vec<u32>)> {
         }
         list
     };
-    let session = |p: &Proc| -> Option<Provider> {
+    let session = |p: &Proc| -> Option<(Provider, Origin)> {
         let provider = provider_of(&p.name)?;
-        let above = ancestors(p.pid);
-        let measuring = above.iter().any(|&a| a == own || by_pid.get(&a).is_some_and(|q| is_quotum(&q.name)));
-        let launched = above.iter().filter_map(|a| by_pid.get(a)).find_map(|q| provider_of(&q.name)) == Some(provider);
-        (!measuring && !launched && p.pid != own).then_some(provider)
+        let above: Vec<&Proc> = ancestors(p.pid).iter().filter_map(|a| by_pid.get(a).copied()).collect();
+        let measuring = p.pid == own || above.iter().any(|q| q.pid == own || is_quotum(&q.name));
+        let launched = above.iter().find_map(|q| provider_of(&q.name)) == Some(provider);
+        (!measuring && !launched).then(|| (provider, origin(&above)))
     };
-    let found: HashMap<u32, Provider> = procs.iter().filter_map(|p| Some((p.pid, session(p)?))).collect();
+    let found: HashMap<u32, (Provider, Origin)> = procs.iter().filter_map(|p| Some((p.pid, session(p)?))).collect();
 
-    let mut list: Vec<(Provider, u32, Vec<u32>)> = found
+    let mut list: Vec<Found> = found
         .iter()
-        .map(|(&pid, &provider)| {
+        .map(|(&pid, &(provider, origin))| {
             let mut tree = vec![pid];
             let mut i = 0;
             while i < tree.len() && tree.len() < 4096 {
@@ -167,11 +187,42 @@ pub fn sessions(procs: &[Proc], own: u32) -> Vec<(Provider, u32, Vec<u32>)> {
                 }
                 i += 1;
             }
-            (provider, pid, tree)
+            Found { provider, pid, origin, tree }
         })
         .collect();
-    list.sort_by_key(|(provider, pid, _)| (*provider, *pid));
+    list.sort_by_key(|found| (found.provider, found.pid));
     list
+}
+
+/// A session found in the process list, with the pids of its tree (itself and what it started).
+#[derive(Debug, PartialEq)]
+pub struct Found {
+    pub provider: Provider,
+    pub pid: u32,
+    pub origin: Origin,
+    pub tree: Vec<u32>,
+}
+
+/// Where a client runs, from the programs above it: an editor, the desktop app of its
+/// provider, or else a terminal (a shell, a multiplexer, ssh).
+fn origin(above: &[&Proc]) -> Origin {
+    above
+        .iter()
+        .find_map(|p| {
+            let name = p.name.strip_suffix(".exe").unwrap_or(&p.name).to_ascii_lowercase();
+            if ["code", "code-insiders", "codium", "cursor", "windsurf"].contains(&name.as_str())
+                || name.starts_with("code helper")
+                || name.starts_with("cursor helper")
+            {
+                Some(Origin::Editor)
+            } else if ["chatgpt", "codex", "claude", "antigravity"].contains(&name.as_str()) && p.name != name {
+                // A capitalised name of a provider: its desktop app (a client of the same name is lower case).
+                Some(Origin::App)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(Origin::Terminal)
 }
 
 fn is_quotum(name: &str) -> bool {
@@ -461,7 +512,11 @@ mod tests {
     }
 
     fn found(procs: &[Proc]) -> Vec<(Provider, u32, Vec<u32>)> {
-        sessions(procs, 900)
+        sessions(procs, 900).into_iter().map(|f| (f.provider, f.pid, f.tree)).collect()
+    }
+
+    fn origins(procs: &[Proc]) -> Vec<(u32, Origin)> {
+        sessions(procs, 900).into_iter().map(|f| (f.pid, f.origin)).collect()
     }
 
     #[test]
@@ -472,7 +527,7 @@ mod tests {
             p(11, 10, "claude"),
             p(12, 11, "node"),
             p(13, 12, "cargo"),
-            p(20, 1, "Codex.exe"),
+            p(20, 1, "codex.exe"),
             p(30, 1, "agy"),
             p(40, 1, "claudette"),
         ];
@@ -509,6 +564,30 @@ mod tests {
     fn stale_parents_in_a_cycle_end_the_walk() {
         let procs = [p(10, 11, "sh"), p(11, 10, "sh"), p(12, 11, "claude")];
         assert_eq!(found(&procs), vec![(Provider::Claude, 12, vec![12])]);
+    }
+
+    /// Codex on one Linux machine: in terminals, in VS Code windows and in the desktop app.
+    #[test]
+    fn terminal_editor_and_app_sessions_are_told_apart() {
+        let procs = [
+            p(1, 0, "systemd"),
+            p(16333, 1, "herdr"),
+            p(17822, 16333, "zsh"),
+            p(19988, 17822, "codex"),
+            p(23452, 19988, "MainThread"),
+            p(4400, 1, "code"),
+            p(7146, 4400, "code"),
+            p(10195, 7146, "codex"),
+            p(1097639, 1, "ChatGPT"),
+            p(1097652, 1097639, "ChatGPT"),
+            p(1098247, 1097639, "codex"),
+            p(1114779, 1098247, "codex-code-mode"),
+            p(3000, 1, "Claude"),
+            p(3001, 3000, "Claude"),
+        ];
+        assert_eq!(origins(&procs), vec![(10195, Origin::Editor), (19988, Origin::Terminal), (1098247, Origin::App)]);
+        let app = sessions(&procs, 900).into_iter().find(|f| f.pid == 1098247).unwrap();
+        assert_eq!(app.tree, vec![1098247, 1114779], "the app's windows are not counted in its client");
     }
 
     #[test]
