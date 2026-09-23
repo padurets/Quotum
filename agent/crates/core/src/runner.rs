@@ -2,10 +2,10 @@
 
 use std::path::PathBuf;
 use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::config::{Config, Paths, home, jitter};
-use crate::model::{Millis, Outcome, Provider, now_ms};
+use crate::model::{Millis, Outcome, Provider, STALE_LIMIT_MS, now_ms};
 use crate::providers::{Adapter, Context, adapter, last_activity};
 use crate::schedule::Schedule;
 use crate::sink::Sink;
@@ -15,6 +15,29 @@ use crate::stop;
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(60);
 /// The loop wakes at least this often, to notice a stop request or a jump of the clock.
 const TICK: Duration = Duration::from_secs(1);
+/// A wall clock set back by less than this is not worth correcting for.
+const CLOCK_SLACK_MS: Millis = 2_000;
+
+/// The wall clock as last seen, with the monotonic clock at that moment.
+struct Clock {
+    at: Instant,
+    wall: Millis,
+}
+
+impl Clock {
+    fn new(wall: Millis) -> Clock {
+        Clock { at: Instant::now(), wall }
+    }
+
+    /// How far the wall clock went back since the last look, measured against the
+    /// monotonic clock; 0 when it did not. A jump forward is left alone: after a
+    /// sleep everything is overdue anyway.
+    fn went_back(&mut self, wall: Millis) -> Millis {
+        let back = self.at.elapsed().as_millis() as Millis - (wall - self.wall);
+        *self = Clock::new(wall);
+        if back > CLOCK_SLACK_MS { back } else { 0 }
+    }
+}
 
 pub struct Runner {
     config: Config,
@@ -64,7 +87,7 @@ impl Runner {
         for index in 0..self.adapters.len() {
             let mut outcome = self.measure(index);
             if let Ok(snapshot) = &mut outcome {
-                snapshot.stale_after_ms = self.config.interval_ms(snapshot.provider);
+                snapshot.stale_after_ms = self.config.interval_ms(snapshot.provider).min(STALE_LIMIT_MS);
             }
             each(&outcome);
         }
@@ -82,10 +105,17 @@ impl Runner {
         let mut seen: Vec<Option<SystemTime>> = vec![None; self.adapters.len()];
         // The account each provider last reported, and the state of its sign-in files then.
         let mut accounts: Vec<Option<(Option<String>, Option<SystemTime>)>> = vec![None; self.adapters.len()];
+        let mut clock = Clock::new(now_ms());
 
         while !stop::requested() {
             if let Some(reason) = sink.refused() {
                 return Some(reason.to_string());
+            }
+            // A clock set back (by hand, or synced after a wrong start) would leave every
+            // due time far ahead: move them back with it.
+            let back = clock.went_back(now_ms());
+            if back > 0 {
+                schedule.shift(-back);
             }
             let (index, due) = schedule.next()?;
             let wait = due - now_ms();
@@ -111,9 +141,12 @@ impl Runner {
             };
             if let Some(account) = account {
                 let name = self.config.account_name(provider);
-                if let Some(until) =
-                    sink.checkin(provider, account.as_deref(), name.filter(|_| account.is_none()), active)
-                {
+                let waiting = sink.checkin(provider, account.as_deref(), name.filter(|_| account.is_none()), active);
+                // Refused just now: measuring would only start a client for nothing.
+                if let Some(reason) = sink.refused() {
+                    return Some(reason.to_string());
+                }
+                if let Some(until) = waiting {
                     let next = schedule.postpone(index, now_ms(), until);
                     each(Event::Waiting(provider, next));
                     continue;
@@ -148,4 +181,53 @@ pub enum Event<'a> {
     Measured(&'a Outcome, Millis),
     /// Another device measures this subscription; ask again at the given time.
     Waiting(Provider, Millis),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_clock_set_back_is_noticed_and_a_jump_forward_is_not() {
+        let start = 10 * 3_600_000;
+        let mut clock = Clock::new(start);
+        assert_eq!(clock.went_back(start + 5), 0);
+        let back = clock.went_back(start - 3_600_000);
+        assert!((3_600_000..3_601_000).contains(&back), "{back}");
+        assert_eq!(clock.went_back(start + 3_600_000), 0);
+    }
+
+    /// A hub that refuses the device at its first check-in.
+    #[derive(Default)]
+    struct Refusing {
+        delivered: usize,
+        refused: Option<String>,
+    }
+
+    impl Sink for Refusing {
+        fn deliver(&mut self, _: &Outcome) {
+            self.delivered += 1;
+        }
+
+        fn checkin(&mut self, _: Provider, _: Option<&str>, _: Option<&str>, _: bool) -> Option<Millis> {
+            self.refused = Some("removed".into());
+            None
+        }
+
+        fn refused(&self) -> Option<&str> {
+            self.refused.as_deref()
+        }
+    }
+
+    #[test]
+    fn a_device_refused_at_check_in_starts_no_client() {
+        let config: Config = toml::from_str("[providers.antigravity]\npath = \"/nonexistent/agy\"").unwrap();
+        let state = std::env::temp_dir().join("quotum-runner-refused");
+        let paths = Paths { config: state.join("config.toml"), work: state.join("work"), state };
+        let mut runner = Runner::new(config, paths, &[Provider::Antigravity]);
+        let mut sink = Refusing::default();
+        let mut events = 0;
+        assert_eq!(runner.run(&mut sink, |_| events += 1).as_deref(), Some("removed"));
+        assert_eq!((events, sink.delivered), (0, 0));
+    }
 }

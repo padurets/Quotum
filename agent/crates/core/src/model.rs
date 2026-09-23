@@ -226,9 +226,10 @@ pub type Outcome = Result<Snapshot, Failure>;
 
 /// The longest text a hub takes in a name, label or id (spec: limits).
 pub const TEXT_LIMIT: usize = 120;
-/// At most this many windows per snapshot, and this long a measurement stays representative.
+/// At most this many windows per snapshot.
 const WINDOW_LIMIT: usize = 32;
-const STALE_LIMIT_MS: u64 = 24 * 3_600_000;
+/// The longest a hub lets a measurement stay representative.
+pub const STALE_LIMIT_MS: u64 = 24 * 3_600_000;
 
 /// Text as a hub takes it: trimmed, not empty, at most [`TEXT_LIMIT`] characters.
 pub fn clean_text(value: Option<String>) -> Option<String> {
@@ -270,21 +271,6 @@ pub struct Machine {
     pub arch: String,
 }
 
-/// Whom a machine measures for, when it joins a board with a board token: the name
-/// the person running the agent configured. Without it the hub attributes the machine
-/// to whoever created the token.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct Owner {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-}
-
-impl Owner {
-    pub fn is_empty(&self) -> bool {
-        self.name.is_none()
-    }
-}
-
 /// One request to a hub.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -293,8 +279,6 @@ pub struct Batch {
     /// `quotum/<version>`.
     pub agent: String,
     pub machine: Machine,
-    #[serde(default, skip_serializing_if = "Owner::is_empty")]
-    pub owner: Owner,
     #[serde(with = "ts")]
     pub sent_at: Millis,
     #[serde(default)]

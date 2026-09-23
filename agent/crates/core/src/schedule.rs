@@ -2,7 +2,7 @@
 //! own interval (at least a minute), and providers are spread evenly across it so
 //! their starts never pile up. Pure logic: the caller supplies time and randomness.
 
-use crate::model::{ErrorKind, Millis, Outcome};
+use crate::model::{ErrorKind, Millis, Outcome, STALE_LIMIT_MS};
 
 /// Claude Code caches its answer for a minute; nothing changes faster than that.
 pub const MIN_INTERVAL_MS: u64 = 60_000;
@@ -126,11 +126,18 @@ impl Schedule {
         slot.due
     }
 
+    /// Moves every due time by `ms`, after the wall clock jumped by as much.
+    pub fn shift(&mut self, ms: i64) {
+        for slot in &mut self.slots {
+            slot.due += ms;
+        }
+    }
+
     /// How long a measurement taken now stays representative: until the next one is due,
-    /// with room for a slow client.
+    /// with room for a slow client, but never beyond what a hub takes.
     pub fn stale_after_ms(&self, index: usize, now: Millis) -> u64 {
         let until_next = (self.slots[index].due - now).max(0) as u64;
-        until_next + until_next / 5 + 60_000
+        (until_next + until_next / 5 + 60_000).min(STALE_LIMIT_MS)
     }
 }
 
@@ -239,5 +246,24 @@ mod tests {
         let dues: Vec<_> = (0..3).map(|i| s.complete(i, wake, &measured(1.0, None), false, 0.0) - wake).collect();
         assert_eq!(dues, [120_000, 160_000, 200_000]);
         assert_eq!(s.stale_after_ms(0, wake), 120_000 + 24_000 + 60_000);
+    }
+
+    #[test]
+    fn a_day_long_interval_stays_within_what_a_hub_takes() {
+        let day = 24 * 60 * MIN;
+        let mut s = Schedule::new(&[day as u64], 0, false);
+        s.complete(0, 0, &measured(1.0, None), false, 1.0);
+        assert_eq!(s.stale_after_ms(0, 0), STALE_LIMIT_MS);
+    }
+
+    #[test]
+    fn a_clock_set_back_moves_every_due_time_with_it() {
+        let mut s = Schedule::new(&all(), 0, false);
+        for _ in 0..3 {
+            let (i, _) = s.next().unwrap();
+            s.complete(i, 0, &measured(1.0, None), false, 0.0);
+        }
+        s.shift(-60 * MIN);
+        assert_eq!(s.next(), Some((0, 120_000 - 60 * MIN)));
     }
 }

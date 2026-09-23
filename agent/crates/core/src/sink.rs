@@ -4,13 +4,16 @@
 use std::collections::VecDeque;
 use std::fs;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use ureq::http::Response;
+use ureq::{Body, ResponseExt};
 
 use crate::config::Hub;
 use crate::model::{
-    Batch, ErrorKind, Failure, INGEST_VERSION, Machine, Millis, Outcome, Owner, Provider, Snapshot, now_ms, parse_time,
+    Batch, ErrorKind, Failure, INGEST_VERSION, Machine, Millis, Outcome, Provider, Snapshot, now_ms, parse_time,
 };
 
 pub trait Sink {
@@ -51,13 +54,16 @@ enum Item {
 /// Keeps about two days of measurements of three providers every two minutes.
 const SPOOL_LIMIT: usize = 5_000;
 const CHUNK: usize = 200;
+/// Requests in one delivery: enough for a full spool, few when the hub refuses piece after piece.
+const ROUND_REQUESTS: usize = 64;
 /// After a failed delivery the hub is left alone for a while, longer each time.
-const RETRY_FIRST_MS: i64 = 60_000;
-const RETRY_LAST_MS: i64 = 3_600_000;
+const RETRY_FIRST: Duration = Duration::from_secs(60);
+const RETRY_LAST: Duration = Duration::from_secs(3600);
+const AGENT: &str = concat!("quotum/", env!("CARGO_PKG_VERSION"));
 
-enum Delivery {
-    Accepted,
-    /// The hub will never take this batch (malformed, too large): drop it.
+/// Why the hub did not take a request.
+enum Trouble {
+    /// The hub will never take this batch (malformed, too large): split it or drop it.
     Rejected(String),
     /// The hub will never take anything from this device again.
     Refused(String),
@@ -65,16 +71,98 @@ enum Delivery {
     Later(String),
 }
 
+/// An HTTP client for a hub. It follows no redirects: a hub's API does not redirect,
+/// a sign-in page in front of it does (see [`not_the_hub`]).
+pub fn http() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(20)))
+        .http_status_as_error(false)
+        .max_redirects(0)
+        .user_agent(AGENT)
+        .build()
+        .into()
+}
+
+/// Says so when something other than the hub's API answers: a sign-in page in front of
+/// the hub (Cloudflare Access, oauth2-proxy, a private port of a dev environment) with a
+/// redirect or a web page where the API answers with JSON, or a redirect to https.
+pub fn not_the_hub(response: &Response<Body>) -> Option<String> {
+    let status = response.status();
+    let header = |name: &str| response.headers().get(name).and_then(|v| v.to_str().ok());
+    let answer = if status.is_redirection() {
+        let location = header("location").unwrap_or_default();
+        let target = destination(location);
+        let uri = response.get_uri();
+        let same_host = uri.host().is_some_and(|host| target.split(':').next() == Some(host));
+        if uri.scheme_str() == Some("http") && location.starts_with("https://") && same_host {
+            return Some(format!("the hub answers on https: use https://{target} as its address"));
+        }
+        format!("it sends the agent to {}", if target.is_empty() { "another page" } else { &target })
+    } else if header("content-type").is_some_and(|t| t.contains("text/html"))
+        && (status.is_success() || [401, 403].contains(&status.as_u16()))
+    {
+        "it answers with a web page instead of JSON".into()
+    } else {
+        return None;
+    };
+    Some(format!(
+        "a sign-in page stands in front of the hub ({answer}); the agent needs direct access to the hub: a public port or an address of its own"
+    ))
+}
+
+/// The host a redirect leads to, or its path when it stays on the hub's address.
+fn destination(location: &str) -> String {
+    let rest = location.split_once("://").map(|(_, rest)| rest).or_else(|| location.strip_prefix("//"));
+    match rest {
+        Some(rest) => rest.split(['/', '?', '#']).next().unwrap_or(rest).to_string(),
+        None => location.split(['?', '#']).next().unwrap_or(location).to_string(),
+    }
+}
+
+/// What an answer of the hub other than plain success means; `None` for success.
+fn trouble(response: &mut Response<Body>) -> Option<Trouble> {
+    if let Some(why) = not_the_hub(response) {
+        return Some(Trouble::Later(why));
+    }
+    let status = response.status().as_u16();
+    if response.status().is_success() {
+        return None;
+    }
+    let body: Value = response.body_mut().read_json().unwrap_or_default();
+    let code = body["error"].as_str();
+    let named = |what: &str| match (code, body["detail"].as_str()) {
+        (Some(code), Some(detail)) => format!("{what} (HTTP {status}, {code}: {detail})"),
+        (Some(code), None) => format!("{what} (HTTP {status}, {code})"),
+        _ => format!("{what} (HTTP {status})"),
+    };
+    Some(match (status, code) {
+        (403, Some("device_revoked")) => Trouble::Refused(
+            "this device was removed from the hub or its token was revoked; connect it again to deliver".into(),
+        ),
+        (403, Some("device_conflict")) => Trouble::Refused(
+            "this machine is connected with a code already, and a machine token cannot take it over; stop this agent or `quotum disconnect` the other".into(),
+        ),
+        (401, _) => Trouble::Later(named("the hub does not accept this token")),
+        (400 | 413 | 422, _) => Trouble::Rejected(named("the hub refused the data")),
+        _ => Trouble::Later(named("the hub did not take the request")),
+    })
+}
+
+/// 1, 2, 4 … 32 minutes, then an hour, after `failures` failed attempts in a row.
+fn retry_wait(failures: u32) -> Duration {
+    RETRY_FIRST.saturating_mul(1 << (failures.clamp(1, 7) - 1)).min(RETRY_LAST)
+}
+
 pub struct HubSink {
     base: String,
     token: String,
     machine: Machine,
-    owner: Owner,
     http: ureq::Agent,
     spool_file: PathBuf,
     spool: VecDeque<Item>,
-    /// No request before this time, after failures in a row.
-    retry_at: Millis,
+    /// No request before this moment, after failures in a row (monotonic: a clock set
+    /// back must not silence the hub for as long).
+    retry_at: Option<Instant>,
     failures: u32,
     refused: Option<String>,
     /// The last problem reported, so a long outage is logged once.
@@ -83,33 +171,18 @@ pub struct HubSink {
 }
 
 impl HubSink {
-    /// `owner`: whom the machine measures for, sent only with a board token (a device
-    /// connected with a code belongs to whoever confirmed it).
-    pub fn new(
-        hub: &Hub,
-        machine: Machine,
-        owner: Owner,
-        spool_file: PathBuf,
-        log: Box<dyn FnMut(&str) + Send>,
-    ) -> HubSink {
+    pub fn new(hub: &Hub, machine: Machine, spool_file: PathBuf, log: Box<dyn FnMut(&str) + Send>) -> HubSink {
         let spool = fs::read_to_string(&spool_file)
             .map(|text| text.lines().filter_map(|line| serde_json::from_str(line).ok()).collect())
             .unwrap_or_default();
-        let http: ureq::Agent = ureq::Agent::config_builder()
-            .timeout_global(Some(Duration::from_secs(20)))
-            .http_status_as_error(false)
-            .user_agent(concat!("quotum/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .into();
         HubSink {
             base: hub.url.trim_end_matches('/').to_string(),
             token: hub.token.clone(),
             machine,
-            owner,
-            http,
+            http: http(),
             spool_file,
             spool,
-            retry_at: 0,
+            retry_at: None,
             failures: 0,
             refused: None,
             problem: None,
@@ -117,12 +190,11 @@ impl HubSink {
         }
     }
 
-    fn post(&self, items: &[Item]) -> Delivery {
+    fn post(&self, items: &[Item]) -> Result<(), Trouble> {
         let mut batch = Batch {
             version: INGEST_VERSION,
-            agent: concat!("quotum/", env!("CARGO_PKG_VERSION")).into(),
+            agent: AGENT.into(),
             machine: self.machine.clone(),
-            owner: self.owner.clone(),
             sent_at: now_ms(),
             snapshots: Vec::new(),
             failures: Vec::new(),
@@ -139,16 +211,8 @@ impl HubSink {
             .header("Authorization", &format!("Bearer {}", self.token))
             .send_json(&batch);
         match response {
-            Ok(r) if r.status().is_success() => Delivery::Accepted,
-            Ok(mut r) => match r.status().as_u16() {
-                401 => Delivery::Later("the hub does not accept this token".into()),
-                403 => Delivery::Refused(refusal(r.body_mut().read_json().ok())),
-                400 | 413 | 422 => {
-                    Delivery::Rejected(format!("the hub refused the data (HTTP {})", r.status().as_u16()))
-                }
-                code => Delivery::Later(format!("the hub answered HTTP {code}")),
-            },
-            Err(e) => Delivery::Later(format!("the hub is unreachable: {e}")),
+            Ok(mut response) => trouble(&mut response).map_or(Ok(()), Err),
+            Err(e) => Err(Trouble::Later(format!("the hub is unreachable: {e}"))),
         }
     }
 
@@ -179,21 +243,15 @@ impl HubSink {
         }
     }
 
+    /// Whether the hub is being left alone after failures.
+    fn resting(&self) -> bool {
+        self.retry_at.is_some_and(|at| Instant::now() < at)
+    }
+
     /// The hub did not answer as hoped: leave it alone for longer each time.
     fn back_off(&mut self) {
         self.failures += 1;
-        let wait = (RETRY_FIRST_MS << self.failures.min(6).saturating_sub(1)).min(RETRY_LAST_MS);
-        self.retry_at = now_ms() + wait;
-    }
-}
-
-/// What a 403 means: the device was removed from its board, or the machine is connected with a code already.
-fn refusal(body: Option<serde_json::Value>) -> String {
-    match body.as_ref().and_then(|b| b["error"].as_str()) {
-        Some("device_conflict") => {
-            "this machine is connected to the board with a code already; stop this agent or `quotum disconnect` the other".into()
-        }
-        _ => "this device was removed from its board; connect it again to deliver".into(),
+        self.retry_at = Some(Instant::now() + retry_wait(self.failures));
     }
 }
 
@@ -208,34 +266,47 @@ impl Sink for HubSink {
         while self.spool.len() > SPOOL_LIMIT {
             self.spool.pop_front();
         }
-        if self.refused.is_some() || now_ms() < self.retry_at {
+        if self.refused.is_some() || self.resting() {
             self.save_spool();
             return;
         }
         let had_backlog = self.spool.len() > 1;
         let mut problem = None;
-        while !self.spool.is_empty() {
-            let count = self.spool.len().min(CHUNK);
+        // A refused piece is halved until the measurement the hub will not take is
+        // found and dropped alone; accepted pieces grow back to the full size.
+        let mut size = CHUNK;
+        let mut dropped: Option<(usize, String)> = None;
+        for _ in 0..ROUND_REQUESTS {
+            if self.spool.is_empty() {
+                break;
+            }
+            let count = self.spool.len().min(size);
             let chunk: Vec<Item> = self.spool.iter().take(count).cloned().collect();
             match self.post(&chunk) {
-                Delivery::Accepted => {
+                Ok(()) => {
                     self.spool.drain(..count);
                     self.failures = 0;
+                    size = (size * 2).min(CHUNK);
                 }
-                Delivery::Rejected(reason) => {
-                    self.spool.drain(..count);
-                    (self.log)(&format!("delivery: {reason}; dropped {count} measurements"));
+                Err(Trouble::Rejected(_)) if count > 1 => size = count / 2,
+                Err(Trouble::Rejected(reason)) => {
+                    self.spool.pop_front();
+                    dropped = Some((dropped.map_or(0, |(n, _)| n) + 1, reason));
                 }
-                Delivery::Refused(reason) => {
+                Err(Trouble::Refused(reason)) => {
                     self.refused = Some(reason);
                     break;
                 }
-                Delivery::Later(reason) => {
+                Err(Trouble::Later(reason)) => {
                     problem = Some(reason);
                     self.back_off();
                     break;
                 }
             }
+        }
+        if let Some((count, reason)) = dropped {
+            let plural = if count == 1 { "" } else { "s" };
+            (self.log)(&format!("delivery: {reason}; dropped {count} measurement{plural} it will never take"));
         }
         if had_backlog || !self.spool.is_empty() {
             self.save_spool();
@@ -251,33 +322,39 @@ impl Sink for HubSink {
         active: bool,
     ) -> Option<Millis> {
         // While the hub is not answering, measure without asking: nothing is lost by it.
-        if self.refused.is_some() || now_ms() < self.retry_at {
+        if self.refused.is_some() || self.resting() {
             return None;
         }
         let request = serde_json::json!({
             "version": INGEST_VERSION,
-            "agent": concat!("quotum/", env!("CARGO_PKG_VERSION")),
+            "agent": AGENT,
             "machine": self.machine,
-            "owner": self.owner,
             "subscriptions": [{"provider": provider, "account": account, "accountName": account_name, "active": active}],
         });
         let url = format!("{}/v1/checkin", self.base);
-        let mut response =
-            match self.http.post(&url).header("Authorization", &format!("Bearer {}", self.token)).send_json(&request) {
-                Ok(response) => response,
-                Err(_) => {
-                    self.back_off();
-                    return None;
-                }
-            };
-        if response.status().as_u16() == 403 {
-            self.refused = Some(refusal(response.body_mut().read_json().ok()));
-            return None;
+        let answer =
+            self.http.post(&url).header("Authorization", &format!("Bearer {}", self.token)).send_json(&request);
+        let mut response = match answer {
+            Ok(response) => response,
+            Err(e) => {
+                self.report(Some(format!("the hub is unreachable: {e}")));
+                self.back_off();
+                return None;
+            }
+        };
+        match trouble(&mut response) {
+            None => {}
+            Some(Trouble::Refused(reason)) => {
+                self.refused = Some(reason);
+                return None;
+            }
+            Some(Trouble::Rejected(reason) | Trouble::Later(reason)) => {
+                self.report(Some(reason));
+                self.back_off();
+                return None;
+            }
         }
-        if !response.status().is_success() {
-            return None;
-        }
-        let body: serde_json::Value = response.body_mut().read_json().ok()?;
+        let body: Value = response.body_mut().read_json().ok()?;
         let directive = &body["subscriptions"][0];
         if directive["measure"] != false {
             return None;
@@ -287,5 +364,186 @@ impl Sink for HubSink {
 
     fn refused(&self) -> Option<&str> {
         self.refused.as_deref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
+    use std::{env, thread};
+
+    use serde_json::json;
+
+    use super::*;
+
+    /// Status, header lines and body of an answer.
+    type Answer = (u16, &'static str, String);
+    type Seen = Arc<Mutex<Vec<(String, Value)>>>;
+
+    fn json(status: u16, body: Value) -> Answer {
+        (status, "content-type: application/json\r\n", body.to_string())
+    }
+
+    /// A hub on a local port: `answer` gets the path and JSON body of each request (`{hub}`
+    /// in its headers stands for the hub's host and port); the requests are kept.
+    fn hub(answer: impl Fn(&str, &Value) -> Answer + Send + 'static) -> (String, Seen) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        let url = format!("http://{address}");
+        let seen = Seen::default();
+        let requests = seen.clone();
+        thread::spawn(move || {
+            for mut stream in listener.incoming().filter_map(Result::ok) {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let path = line.split(' ').nth(1).unwrap_or_default().to_string();
+                let mut length = 0;
+                loop {
+                    let mut header = String::new();
+                    reader.read_line(&mut header).unwrap();
+                    match header.split_once(':') {
+                        Some((name, value)) if name.eq_ignore_ascii_case("content-length") => {
+                            length = value.trim().parse().unwrap()
+                        }
+                        _ if header.trim().is_empty() => break,
+                        _ => {}
+                    }
+                }
+                let mut body = vec![0; length];
+                reader.read_exact(&mut body).unwrap();
+                let body: Value = serde_json::from_slice(&body).unwrap_or_default();
+                let (status, headers, text) = answer(&path, &body);
+                let headers = headers.replace("{hub}", &address);
+                requests.lock().unwrap().push((path, body));
+                let length = text.len();
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status} X\r\n{headers}content-length: {length}\r\nconnection: close\r\n\r\n{text}"
+                );
+            }
+        });
+        (url, seen)
+    }
+
+    fn sink(url: &str, name: &str) -> (HubSink, Arc<Mutex<Vec<String>>>) {
+        let spool = env::temp_dir().join(format!("quotum-spool-{}-{name}.jsonl", std::process::id()));
+        let _ = fs::remove_file(&spool);
+        let machine =
+            Machine { id: "0123456789abcdef".into(), name: "test".into(), os: "linux".into(), arch: "x86_64".into() };
+        let lines = Arc::new(Mutex::new(Vec::new()));
+        let log = lines.clone();
+        let hub = Hub { url: url.into(), token: "qt_d_test".into() };
+        let sink =
+            HubSink::new(&hub, machine, spool, Box::new(move |line: &str| log.lock().unwrap().push(line.into())));
+        (sink, lines)
+    }
+
+    fn failed(detail: &str) -> Outcome {
+        Err(Failure::new(Provider::Codex, ErrorKind::Failed, detail))
+    }
+
+    #[test]
+    fn a_refused_batch_is_split_so_one_bad_measurement_does_not_take_the_rest_along() {
+        let bad = |body: &Value| body["failures"].as_array().into_iter().flatten().any(|f| f["detail"] == "bad");
+        let (url, seen) = hub(move |_, body| {
+            if bad(body) {
+                json(400, json!({"error": "invalid_batch", "detail": "failures.0.detail"}))
+            } else {
+                json(200, json!({"accepted": 0}))
+            }
+        });
+        let (mut sink, log) = sink(&url, "split");
+        for i in 0..9 {
+            let detail = if i == 6 { "bad" } else { "fine" };
+            sink.spool.push_back(Item::Failure(Failure::new(Provider::Codex, ErrorKind::Failed, detail)));
+        }
+        sink.deliver(&failed("fine"));
+        let _ = fs::remove_file(&sink.spool_file);
+
+        let seen = seen.lock().unwrap();
+        let taken: usize =
+            seen.iter().filter(|(_, b)| !bad(b)).map(|(_, b)| b["failures"].as_array().unwrap().len()).sum();
+        assert_eq!(taken, 9, "everything but the bad one arrived");
+        assert!(seen.len() < 12, "{} requests", seen.len());
+        assert!(sink.spool.is_empty());
+        assert_eq!(
+            log.lock().unwrap().as_slice(),
+            [
+                "delivery: the hub refused the data (HTTP 400, invalid_batch: failures.0.detail); dropped 1 measurement it will never take"
+            ]
+        );
+    }
+
+    #[test]
+    fn only_a_removed_or_conflicting_device_stops_for_good() {
+        let (url, _) = hub(|_, _| json(403, json!({"error": "forbidden"})));
+        let (mut forbidden, log) = sink(&url, "forbidden");
+        forbidden.deliver(&failed("x"));
+        let _ = fs::remove_file(&forbidden.spool_file);
+        assert!(forbidden.refused().is_none());
+        assert_eq!(forbidden.spool.len(), 1, "kept for later");
+        assert!(log.lock().unwrap()[0].contains("(HTTP 403, forbidden)"), "{:?}", log.lock().unwrap());
+
+        for code in ["device_revoked", "device_conflict"] {
+            let (url, _) = hub(move |_, _| json(403, json!({"error": code})));
+            let (mut stopped, _) = sink(&url, code);
+            assert_eq!(stopped.checkin(Provider::Antigravity, None, Some("work"), false), None);
+            assert!(stopped.refused().is_some(), "{code}");
+        }
+    }
+
+    #[test]
+    fn a_sign_in_page_in_front_of_the_hub_is_named_and_nothing_is_lost() {
+        let (url, seen) = hub(|path, _| match path {
+            "/v1/checkin" => (
+                302,
+                "location: https://team.cloudflareaccess.com/cdn-cgi/access/login?redirect_url=%2F\r\n",
+                String::new(),
+            ),
+            _ => (200, "content-type: text/html; charset=utf-8\r\n", "<!doctype html><title>Sign in</title>".into()),
+        });
+        let (mut sink, log) = sink(&url, "sign-in");
+        assert_eq!(sink.checkin(Provider::Claude, Some("a"), None, true), None, "measures anyway");
+        sink.retry_at = None;
+        sink.deliver(&failed("x"));
+        let _ = fs::remove_file(&sink.spool_file);
+
+        assert_eq!(seen.lock().unwrap().len(), 2, "the redirect was not followed");
+        assert_eq!(sink.spool.len(), 1, "a web page is no receipt");
+        assert!(sink.refused().is_none());
+        let log = log.lock().unwrap();
+        assert!(
+            log[0].contains(
+                "a sign-in page stands in front of the hub (it sends the agent to team.cloudflareaccess.com)"
+            )
+        );
+        assert!(log[1].contains("(it answers with a web page instead of JSON)"), "{log:?}");
+        assert!(log.iter().all(|line| line.contains("direct access")));
+    }
+
+    #[test]
+    fn a_hub_that_moved_to_https_is_not_taken_for_a_sign_in_page() {
+        let (url, _) = hub(|_, _| (308, "location: https://{hub}/v1/ingest\r\n", String::new()));
+        let (mut sink, log) = sink(&url, "https");
+        sink.deliver(&failed("x"));
+        let _ = fs::remove_file(&sink.spool_file);
+        let https = url.replace("http://", "https://");
+        assert!(log.lock().unwrap()[0].contains(&format!("the hub answers on https: use {https} as its address")));
+    }
+
+    #[test]
+    fn a_redirect_is_described_by_where_it_leads() {
+        assert_eq!(destination("https://coder.example.com/api/v2/applications/auth-redirect?x=1"), "coder.example.com");
+        assert_eq!(destination("//login.example.com/start"), "login.example.com");
+        assert_eq!(destination("/oauth2/start?rd=%2Fv1%2Fingest"), "/oauth2/start");
+    }
+
+    #[test]
+    fn delivery_backs_off_from_a_minute_to_an_hour() {
+        let minutes: Vec<u64> = (1..=9).map(|n| retry_wait(n).as_secs() / 60).collect();
+        assert_eq!(minutes, [1, 2, 4, 8, 16, 32, 60, 60, 60]);
     }
 }

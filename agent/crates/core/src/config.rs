@@ -21,9 +21,6 @@ pub struct Config {
     pub interval: Option<u64>,
     /// Measure providers less often while nobody uses them (default on).
     pub eco: Option<bool>,
-    /// Whom this machine measures for when it delivers with a board token (default:
-    /// whoever created the token). Not needed when connected with a code.
-    pub owner: Option<String>,
     pub hub: Option<Hub>,
     pub machine: MachineSettings,
     pub providers: BTreeMap<Provider, ProviderSettings>,
@@ -59,45 +56,41 @@ pub struct ProviderSettings {
 
 impl Config {
     /// Reads `path` (a missing file means defaults) and applies environment overrides.
+    /// An error names where the bad value came from: the file or a variable.
     pub fn load(path: &Path) -> Result<Config, String> {
         let mut config = match fs::read_to_string(path) {
             Ok(text) => toml::from_str::<Config>(&text).map_err(|e| format!("{}: {e}", path.display()))?,
             Err(e) if e.kind() == io::ErrorKind::NotFound => Config::default(),
             Err(e) => return Err(format!("{}: {e}", path.display())),
         };
-        config.apply_env(|key| env::var(key).ok().filter(|v| !v.is_empty()));
         config.check().map_err(|e| format!("{}: {e}", path.display()))?;
+        config.apply_env(|key| env::var(key).ok().filter(|v| !v.is_empty()))?;
         Ok(config)
     }
 
     /// Refuses settings a hub would not take, rather than sending them and losing data.
     fn check(&self) -> Result<(), String> {
-        let interval = |what: &str, seconds: Option<u64>| match seconds {
-            Some(s) if !(60..=86_400).contains(&s) => Err(format!("{what}: {s} is not between 60 and 86400 seconds")),
-            _ => Ok(()),
-        };
         let name = |what: &str, value: Option<&str>| match value {
             Some(v) if v.trim().is_empty() || v.chars().count() > TEXT_LIMIT => {
                 Err(format!("{what}: a name is 1 to {TEXT_LIMIT} characters"))
             }
             _ => Ok(()),
         };
-        interval("interval", self.interval)?;
-        name("owner", self.owner.as_deref())?;
+        check_interval("interval", self.interval)?;
         name("machine.name", self.machine.name.as_deref())?;
         for (provider, settings) in &self.providers {
-            interval(&format!("providers.{}.interval", provider.id()), settings.interval)?;
+            check_interval(&format!("providers.{}.interval", provider.id()), settings.interval)?;
             name(&format!("providers.{}.account", provider.id()), settings.account.as_deref())?;
         }
         Ok(())
     }
 
-    fn apply_env(&mut self, var: impl Fn(&str) -> Option<String>) {
-        if let Some(seconds) = var("QUOTUM_INTERVAL").and_then(|v| v.parse().ok()) {
+    fn apply_env(&mut self, var: impl Fn(&str) -> Option<String>) -> Result<(), String> {
+        if let Some(value) = var("QUOTUM_INTERVAL") {
+            let seconds =
+                value.trim().parse().map_err(|_| format!("QUOTUM_INTERVAL: \"{value}\" is not a number of seconds"))?;
+            check_interval("QUOTUM_INTERVAL", Some(seconds))?;
             self.interval = Some(seconds);
-        }
-        if let Some(owner) = var("QUOTUM_OWNER") {
-            self.owner = Some(owner);
         }
         match (var("QUOTUM_HUB_URL"), var("QUOTUM_HUB_TOKEN")) {
             (Some(url), Some(token)) => self.hub = Some(Hub { url, token }),
@@ -113,6 +106,7 @@ impl Config {
             }
             (None, None) => {}
         }
+        Ok(())
     }
 
     pub fn enabled(&self, provider: Provider) -> bool {
@@ -137,13 +131,23 @@ impl Config {
     }
 }
 
+/// Keeps an interval within what a hub takes; `what` names where the value came from.
+fn check_interval(what: &str, seconds: Option<u64>) -> Result<(), String> {
+    match seconds {
+        Some(s) if !(60..=86_400).contains(&s) => Err(format!("{what}: {s} is not between 60 and 86400 seconds")),
+        _ => Ok(()),
+    }
+}
+
 /// What `quotum connect` receives from a hub: its address and this device's token.
+/// Files of older versions also name a board and an owner; those are ignored.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Credentials {
     pub url: String,
     pub token: String,
-    pub board: String,
-    pub owner: String,
+    /// Display name of the person the device belongs to (empty in older files).
+    #[serde(default)]
+    pub account: String,
 }
 
 impl Credentials {
@@ -179,13 +183,9 @@ impl Credentials {
 }
 
 impl Config {
-    /// The hub to deliver to, and whether this device was connected to it with a code:
-    /// from the settings or environment, else the one connected with a code.
-    pub fn hub_or_connected(&self, paths: &Paths) -> Option<(Hub, bool)> {
-        self.hub
-            .clone()
-            .map(|hub| (hub, false))
-            .or_else(|| Credentials::load(paths).map(|c| (Hub { url: c.url, token: c.token }, true)))
+    /// The hub to deliver to: from the settings or environment, else the one connected with a code.
+    pub fn hub_or_connected(&self, paths: &Paths) -> Option<Hub> {
+        self.hub.clone().or_else(|| Credentials::load(paths).map(|c| Hub { url: c.url, token: c.token }))
     }
 }
 
@@ -223,6 +223,46 @@ impl Paths {
         }
         Ok(())
     }
+
+    /// Keeps a second `quotum run` off this state directory, whose spool only one can
+    /// own. The lock lasts while the returned file is open and ends with the process.
+    pub fn lock_run(&self) -> Result<fs::File, String> {
+        let path = self.state.join("run.lock");
+        lock(&path).map_err(|e| match e.kind() {
+            io::ErrorKind::WouldBlock => format!(
+                "another `quotum run` uses {} already; stop it first, or give this one its own QUOTUM_STATE_DIR",
+                self.state.display()
+            ),
+            _ => format!("{}: {e}", path.display()),
+        })
+    }
+}
+
+/// `path` opened and locked exclusively, or `WouldBlock` when someone else holds it.
+#[cfg(unix)]
+fn lock(path: &Path) -> io::Result<fs::File> {
+    use std::os::unix::io::AsRawFd;
+    let file = fs::OpenOptions::new().write(true).create(true).truncate(false).open(path)?;
+    // SAFETY: flock(2) on a descriptor owned by `file`, which outlives the call.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(file)
+}
+
+/// Opened without sharing: every other open of the file fails while this one lasts.
+#[cfg(windows)]
+fn lock(path: &Path) -> io::Result<fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+    fs::OpenOptions::new().write(true).create(true).truncate(false).share_mode(0).open(path).map_err(|e| {
+        if e.raw_os_error() == Some(ERROR_SHARING_VIOLATION) { io::ErrorKind::WouldBlock.into() } else { e }
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn lock(path: &Path) -> io::Result<fs::File> {
+    fs::OpenOptions::new().write(true).create(true).truncate(false).open(path)
 }
 
 pub fn home() -> PathBuf {
@@ -304,7 +344,7 @@ mod tests {
             interval = 300
             eco = false
             [hub]
-            url = "https://limits.example.com"
+            url = "https://quotum.example.com"
             token = "t"
             [providers.claude]
             interval = 10
@@ -325,25 +365,56 @@ mod tests {
     #[test]
     fn settings_a_hub_would_not_take_are_refused_at_load() {
         let check = |text: &str| toml::from_str::<Config>(text).unwrap().check();
-        assert!(check("interval = 120\nowner = \"alice\"").is_ok());
+        assert!(check("interval = 120\n[providers.antigravity]\naccount = \"work\"").is_ok());
         assert!(check("interval = 30").unwrap_err().contains("interval"));
         assert!(check("[providers.codex]\ninterval = 200000").is_err());
-        assert!(check("owner = \"  \"").unwrap_err().contains("owner"));
         assert!(check(&format!("[machine]\nname = \"{}\"", "m".repeat(121))).is_err());
         assert!(check("[providers.antigravity]\naccount = \"\"").is_err());
+        assert!(toml::from_str::<Config>("owner = \"alice\"").is_err(), "machines belong to the token's owner now");
     }
 
     #[test]
     fn the_environment_can_point_the_agent_at_a_hub() {
         let mut config = Config::default();
-        config.apply_env(|key| match key {
-            "QUOTUM_HUB_URL" => Some("https://hub.example".into()),
-            "QUOTUM_HUB_TOKEN" => Some("secret".into()),
-            "QUOTUM_INTERVAL" => Some("90".into()),
-            _ => None,
-        });
+        config
+            .apply_env(|key| match key {
+                "QUOTUM_HUB_URL" => Some("https://hub.example".into()),
+                "QUOTUM_HUB_TOKEN" => Some("secret".into()),
+                "QUOTUM_INTERVAL" => Some("90".into()),
+                _ => None,
+            })
+            .unwrap();
         assert_eq!(config.hub, Some(Hub { url: "https://hub.example".into(), token: "secret".into() }));
         assert_eq!(config.interval_ms(Provider::Claude), 90_000);
+    }
+
+    #[test]
+    fn a_bad_interval_in_the_environment_is_blamed_on_the_variable() {
+        let interval = |value: &'static str| {
+            Config::default().apply_env(move |key| (key == "QUOTUM_INTERVAL").then(|| value.to_string()))
+        };
+        assert_eq!(interval("5m").unwrap_err(), "QUOTUM_INTERVAL: \"5m\" is not a number of seconds");
+        assert_eq!(interval("30").unwrap_err(), "QUOTUM_INTERVAL: 30 is not between 60 and 86400 seconds");
+    }
+
+    #[test]
+    fn credentials_of_older_versions_still_connect() {
+        let old = r#"{"url": "https://quotum.example.com", "token": "qt_d_x", "board": "", "owner": "alice"}"#;
+        let credentials: Credentials = serde_json::from_str(old).unwrap();
+        assert_eq!((credentials.url.as_str(), credentials.account.as_str()), ("https://quotum.example.com", ""));
+    }
+
+    #[test]
+    fn only_one_run_holds_a_state_directory() {
+        let state = env::temp_dir().join(format!("quotum-lock-{}", std::process::id()));
+        fs::create_dir_all(&state).unwrap();
+        let paths = Paths { config: state.join("config.toml"), work: state.join("work"), state: state.clone() };
+        let first = paths.lock_run().unwrap();
+        assert!(paths.lock_run().unwrap_err().contains("another `quotum run`"));
+        drop(first);
+        let again = paths.lock_run().map(drop);
+        fs::remove_dir_all(&state).unwrap();
+        assert!(again.is_ok(), "the lock ends with the run that held it");
     }
 
     #[test]

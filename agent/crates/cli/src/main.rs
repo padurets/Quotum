@@ -7,11 +7,10 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use quotum_core::config::{Config, Credentials, Hub, Paths, machine};
-use quotum_core::model::{Batch, ErrorKind, INGEST_VERSION, Kind, Millis, Outcome, Owner, Provider, Window, now_ms};
-use quotum_core::process::find_program;
-use quotum_core::providers::adapter;
+use quotum_core::model::{Batch, ErrorKind, INGEST_VERSION, Kind, Millis, Outcome, Provider, Window, now_ms};
+use quotum_core::providers::{adapter, find_client};
 use quotum_core::runner::{Event, Runner};
-use quotum_core::sink::{Discard, HubSink, Sink};
+use quotum_core::sink::{self, Discard, HubSink, Sink, not_the_hub};
 use quotum_core::stop;
 
 #[derive(Parser)]
@@ -40,16 +39,14 @@ enum Command {
         /// Hub address, instead of the settings or `connect`.
         #[arg(long)]
         hub: Option<String>,
-        /// A board token (or device token) for that hub.
+        /// Your machine token (qt_m_…) or a device token for that hub. Other users of this
+        /// machine can read it in the process list: prefer QUOTUM_HUB_TOKEN or the config file.
         #[arg(long)]
         token: Option<String>,
-        /// Whom this machine measures for on a shared board.
-        #[arg(long)]
-        owner: Option<String>,
     },
-    /// Connect this machine to a hub with a one-time code confirmed in the browser.
+    /// Connect this machine to your account on a hub with a one-time code confirmed in the browser.
     Connect {
-        /// The hub's address, e.g. https://limits.example.com
+        /// The hub's address, e.g. https://quotum.example.com
         url: String,
     },
     /// Forget the hub this machine was connected to with `connect`.
@@ -77,15 +74,16 @@ fn main() -> ExitCode {
     }
     match cli.command.unwrap_or(Command::Status) {
         Command::Status => status(config, paths, &only, cli.json),
-        Command::Run { hub, token, owner } => {
+        Command::Run { hub, token } => {
             let mut config = config;
             match (hub, token) {
-                (Some(url), Some(token)) => config.hub = Some(Hub { url, token }),
+                (Some(url), Some(token)) => {
+                    log("warning: --token shows the token to everyone on this machine who can list processes; \
+                         put it in QUOTUM_HUB_TOKEN or the config file (`quotum config` shows where) instead");
+                    config.hub = Some(Hub { url, token });
+                }
                 (None, None) => {}
                 _ => return fail("--hub and --token go together"),
-            }
-            if owner.is_some() {
-                config.owner = owner;
             }
             run(config, paths, &only)
         }
@@ -103,8 +101,14 @@ fn fail(message: &str) -> ExitCode {
     ExitCode::FAILURE
 }
 
+/// A line of the agent's log: UTC time, then the message, on stderr.
+fn log(line: &str) {
+    eprintln!("{} {line}", clock(now_ms()));
+}
+
 fn status(config: Config, paths: Paths, only: &[Provider], json: bool) -> ExitCode {
     let machine = json.then(|| machine(&paths, &config));
+    let connected = Credentials::load(&paths).filter(|_| config.hub.is_none());
     let mut runner = Runner::new(config, paths, only);
     let style = Style::detect();
     let mut outcomes = Vec::new();
@@ -118,13 +122,15 @@ fn status(config: Config, paths: Paths, only: &[Provider], json: bool) -> ExitCo
         }
         outcomes.push(outcome.clone());
     });
+    if let (false, Some(credentials)) = (json, &connected) {
+        println!("\n{}", style.dim(&format!("connected {}", connected_to(credentials))));
+    }
     if let Some(machine) = machine {
         let (snapshots, failures) = outcomes.into_iter().partition::<Vec<_>, _>(|o| o.is_ok());
         let batch = Batch {
             version: INGEST_VERSION,
             agent: concat!("quotum/", env!("CARGO_PKG_VERSION")).into(),
             machine,
-            owner: Owner::default(),
             sent_at: now_ms(),
             snapshots: snapshots.into_iter().filter_map(Result::ok).collect(),
             failures: failures.into_iter().filter_map(Result::err).collect(),
@@ -135,17 +141,19 @@ fn status(config: Config, paths: Paths, only: &[Provider], json: bool) -> ExitCo
 }
 
 fn run(config: Config, paths: Paths, only: &[Provider]) -> ExitCode {
-    let log = |line: &str| eprintln!("{} {line}", clock(now_ms()));
+    // Held until the agent exits: two runs on one state directory would share its spool.
+    let _lock = match paths.lock_run() {
+        Ok(lock) => lock,
+        Err(e) => return fail(&e),
+    };
     let mut sink: Box<dyn Sink> = match config.hub_or_connected(&paths) {
-        Some((hub, by_code)) => {
+        Some(hub) => {
             log(&format!("delivering to {}", hub.url));
             if insecure(&hub.url) {
                 log("warning: the hub is reached over plain http; its token travels unencrypted");
             }
             let machine = machine(&paths, &config);
-            // A device connected with a code belongs to whoever confirmed the code.
-            let owner = Owner { name: if by_code { None } else { config.owner.clone() } };
-            Box::new(HubSink::new(&hub, machine, owner, paths.state.join("spool.jsonl"), Box::new(log)))
+            Box::new(HubSink::new(&hub, machine, paths.state.join("spool.jsonl"), Box::new(log)))
         }
         None => {
             log("no hub configured: measuring and logging only");
@@ -157,27 +165,33 @@ fn run(config: Config, paths: Paths, only: &[Provider]) -> ExitCode {
         return fail("every provider is disabled");
     }
     stop::on_signals();
-    // Waiting is logged once per change, not on every check-in.
+    // Waiting is logged once per change, not on every check-in; a failure that repeats
+    // itself is logged once too.
     let mut waiting: BTreeMap<Provider, bool> = BTreeMap::new();
+    let mut failing: BTreeMap<Provider, String> = BTreeMap::new();
     let refused = runner.run(sink.as_mut(), |event| match event {
         Event::Measured(outcome, next) => {
-            let summary = match outcome {
-                Ok(s) => s
-                    .windows
-                    .iter()
-                    .map(|w| format!("{} {}%", window_name(w), fmt_percent(w.remaining())))
-                    .collect::<Vec<_>>()
-                    .join(", "),
+            let (provider, summary, repeated) = match outcome {
+                Ok(s) => {
+                    failing.remove(&s.provider);
+                    let windows: Vec<String> = s
+                        .windows
+                        .iter()
+                        .map(|w| format!("{} {}%", window_name(w), fmt_percent(w.remaining())))
+                        .collect();
+                    (s.provider, windows.join(", "), false)
+                }
                 Err(f) => {
-                    format!("{}{}", f.error.describe(), f.detail.as_ref().map(|d| format!(": {d}")).unwrap_or_default())
+                    let detail = f.detail.as_ref().map(|d| format!(": {d}")).unwrap_or_default();
+                    let summary = format!("{}{detail}", f.error.describe());
+                    let repeated = failing.insert(f.provider, summary.clone()).as_ref() == Some(&summary);
+                    (f.provider, summary, repeated)
                 }
             };
-            let provider = match outcome {
-                Ok(s) => s.provider,
-                Err(f) => f.provider,
-            };
             waiting.insert(provider, false);
-            log(&format!("{}: {summary} (next {})", provider.id(), until(next - now_ms())));
+            if !repeated {
+                log(&format!("{}: {summary} (next {})", provider.id(), until(next - now_ms())));
+            }
         }
         Event::Waiting(provider, next) => {
             if waiting.insert(provider, true) != Some(true) {
@@ -204,19 +218,22 @@ fn insecure(url: &str) -> bool {
 /// The device-code flow: ask the hub for a code, show it, wait until a person confirms it.
 fn connect(config: &Config, paths: &Paths, url: &str) -> ExitCode {
     let url = url.trim_end_matches('/');
-    let http: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(20)))
-        .http_status_as_error(false)
-        .user_agent(concat!("quotum/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .into();
+    let http = sink::http();
     let request =
         serde_json::json!({"machine": machine(paths, config), "agent": concat!("quotum/", env!("CARGO_PKG_VERSION"))});
-    let started: serde_json::Value = match http.post(&format!("{url}/v1/device/code")).send_json(&request) {
-        Ok(mut r) if r.status().is_success() => r.body_mut().read_json().unwrap_or_default(),
-        Ok(r) => return fail(&format!("{url} answered HTTP {}", r.status().as_u16())),
+    let mut response = match http.post(&format!("{url}/v1/device/code")).send_json(&request) {
+        Ok(response) => response,
         Err(e) => return fail(&format!("{url} is unreachable: {e}")),
     };
+    if let Some(why) = not_the_hub(&response) {
+        return fail(&format!("{url}: {why}"));
+    }
+    let status = response.status();
+    let started: serde_json::Value = response.body_mut().read_json().unwrap_or_default();
+    if !status.is_success() {
+        let code = started["error"].as_str().map(|code| format!(" ({code})")).unwrap_or_default();
+        return fail(&format!("{url} answered HTTP {}{code}", status.as_u16()));
+    }
     let (Some(device_code), Some(user_code)) = (started["deviceCode"].as_str(), started["userCode"].as_str()) else {
         return fail(&format!("{url} does not look like a Quotum hub"));
     };
@@ -235,6 +252,9 @@ fn connect(config: &Config, paths: &Paths, url: &str) -> ExitCode {
         let answer =
             http.post(&format!("{url}/v1/device/token")).send_json(serde_json::json!({"deviceCode": device_code}));
         let Ok(mut response) = answer else { continue };
+        if let Some(why) = not_the_hub(&response) {
+            return fail(&format!("{url}: {why}"));
+        }
         let ok = response.status().is_success();
         let body: serde_json::Value = response.body_mut().read_json().unwrap_or_default();
         if ok {
@@ -244,13 +264,12 @@ fn connect(config: &Config, paths: &Paths, url: &str) -> ExitCode {
             let credentials = Credentials {
                 url: url.to_string(),
                 token: token.to_string(),
-                board: body["board"]["name"].as_str().unwrap_or_default().to_string(),
-                owner: body["device"]["owner"].as_str().unwrap_or_default().to_string(),
+                account: body["account"]["name"].as_str().unwrap_or_default().trim().to_string(),
             };
             if let Err(e) = credentials.save(paths) {
                 return fail(&format!("could not save the connection: {e}"));
             }
-            println!("Connected to {} as {}.", board_title(&credentials.board), credentials.owner);
+            println!("This machine is connected to {}.", connected_to(&credentials));
             if config.hub.is_some() {
                 println!(
                     "Note: a hub in the settings or QUOTUM_HUB_URL/QUOTUM_HUB_TOKEN takes precedence over this connection."
@@ -270,9 +289,13 @@ fn connect(config: &Config, paths: &Paths, url: &str) -> ExitCode {
     fail("the code expired; run `quotum connect` again")
 }
 
-/// Personal boards have no name of their own; the dashboard names them.
-fn board_title(name: &str) -> String {
-    if name.is_empty() { "your personal board".into() } else { format!("board \"{name}\"") }
+/// "<url> as <account>", or only the address when the hub did not name the account
+/// (credentials of older versions).
+fn connected_to(credentials: &Credentials) -> String {
+    match credentials.account.as_str() {
+        "" => credentials.url.clone(),
+        account => format!("{} as {account}", credentials.url),
+    }
 }
 
 fn show_config(config: &Config, paths: &Paths) -> ExitCode {
@@ -284,12 +307,8 @@ fn show_config(config: &Config, paths: &Paths) -> ExitCode {
     println!("state         {}", paths.state.display());
     let connected = Credentials::load(paths);
     if let (None, Some(c)) = (&config.hub, &connected) {
-        println!("connected     {} · {} as {}", c.url, board_title(&c.board), c.owner);
+        println!("connected     {}", connected_to(c));
     }
-    println!(
-        "owner         {}",
-        config.owner.as_deref().unwrap_or("not set (on a board token: whoever created the token)")
-    );
     match &config.hub {
         Some(hub) => println!(
             "hub           {} (token …{})",
@@ -302,11 +321,8 @@ fn show_config(config: &Config, paths: &Paths) -> ExitCode {
     println!("eco mode      {}", if config.eco() { "on" } else { "off" });
     let home = quotum_core::config::home();
     for provider in Provider::ALL {
-        let a = adapter(provider);
-        let client = config
-            .program(provider)
-            .map(|p| p.to_path_buf())
-            .or_else(|| find_program(a.program(), &a.install_dirs(&home)));
+        let client =
+            config.program(provider).map(|p| p.to_path_buf()).or_else(|| find_client(&*adapter(provider), &home));
         println!(
             "{:<13} {}, every {}s, client {}",
             provider.id(),
