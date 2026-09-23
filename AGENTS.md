@@ -1,0 +1,69 @@
+# Agent instructions
+
+Instructions for coding agents (Claude Code, Codex, Antigravity and others) working on
+Quotum. They add to [CONTRIBUTING.md](CONTRIBUTING.md), which applies to everyone; read
+it first.
+
+## What this is
+
+Quotum shows how much of coding-agent subscriptions (Claude Code, Codex, Antigravity) is
+left, across machines. Two parts and a contract between them:
+
+- `agent/` — Rust workspace: `crates/core` (a provider adapter per client, schedule,
+  settings, delivery), `crates/cli` (the `quotum` command).
+- `hub/` — Node 24, Fastify, the SQLite built into Node, a React dashboard:
+  `server/domain` (the rules), `server/store` (SQLite), `server/routes`, `ui/`.
+- `spec/ingest-v1.md` — the protocol between them.
+
+Also `npm/` (the npm packages and the build that cross-compiles the agent), `deploy/`
+(Compose behind Caddy), `.github/workflows` (CI; releases from a version tag).
+[docs/architecture.md](docs/architecture.md) explains how it all works and why; read the
+relevant part before changing behaviour.
+
+## Checking a change
+
+```sh
+cd hub && npm ci && npm run typecheck && npm test && npm run build
+cd agent && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked
+```
+
+Run the checks of every part you touched; a change is done when they pass. CI also runs
+the agent on macOS and Windows: if you change process handling (`process.rs`, `stop.rs`)
+and can check only one system, say so.
+
+`npm start` in `hub/` serves the built dashboard on `127.0.0.1:8080` (a new hub prints
+the setup code of the first account to its log). `cargo run -p quotum` in `agent/`
+measures this machine once through the clients installed on it; that makes no model
+requests, but it does start the real clients.
+
+## Rules
+
+- **Tests never start a real client.** They use recorded answers and stand-in programs.
+  Keep it that way: no test may depend on an account, the network or an installed
+  Claude Code, Codex or Antigravity.
+- **The agent never touches secrets.** It never reads provider tokens, cookies or
+  credential files, never makes a model request and never calls provider APIs. A new
+  provider is an adapter in `agent/crates/core/src/providers/` that asks the provider's
+  own command-line client.
+- **The protocol is a spec.** A change to what the agent sends or the hub answers goes
+  into `spec/ingest-v1.md` in the same commit, including its Privacy section.
+- **Released database layouts are frozen.** A new layout is a new step at the end of
+  `hub/server/store/schema.ts`; never edit a released step.
+- **Two languages everywhere.** Every UI string goes into every catalog in
+  `hub/ui/i18n`; every change to `README.md` goes into `README.ru.md` too.
+- **One version.** `agent/Cargo.toml`, `agent/Cargo.lock`, `hub/package.json` and
+  `hub/package-lock.json` always carry the same version; see *Releasing* in the README.
+- **Releases are the maintainer's.** Never create or push a version tag, run the release
+  workflow or publish packages or images unless the maintainer asked for that release.
+- **Docs describe the current system.** Update `docs/`, the READMEs and the spec with the
+  change that makes them wrong; no changelogs or history in them.
+
+## Code and commits
+
+- Match the surrounding code: its naming, comment density and idiom. Comments explain
+  why, in plain sentences.
+- Keep dependencies few; adding one needs a reason.
+- Commit messages are short English sentences about the result, without conventional
+  prefixes: `Agent: quotum start runs it in the background`. One logical change per
+  commit.
+- Never commit secrets, `.env` files, hub data (`data/`, `*.sqlite`) or build output.
