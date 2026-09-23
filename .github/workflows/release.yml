@@ -1,7 +1,10 @@
 name: Release
 
 # An annotated version tag (`git tag -a v0.2.0`) releases everything from one commit:
-#   - the agent's binaries on a GitHub release, with checksums and build provenance;
+#   - the agent on a GitHub release, with checksums and build provenance: archives
+#     (quotum-cli-<version>-<platform>) for people, and bare binaries
+#     (quotum-cli-<platform>) with the installers (install.sh, install.ps1) for
+#     `curl … | sh`, PowerShell and `quotum update`, which fetch one file each;
 #   - the hub's image ghcr.io/<owner>/quotum-hub for linux/amd64 and linux/arm64;
 #   - the npm packages `quotum` and `@quotum/<platform>`, published without any token:
 #     npm trusts this workflow's `npm` job (trusted publishing, bound to the `npm`
@@ -84,13 +87,20 @@ jobs:
         run: |
           mkdir release
           for dir in npm/dist/quotum-*-*; do
-            platform=${dir#npm/dist/quotum-}
-            name=quotum-$VERSION-$(echo "$platform" | sed 's/^darwin/macos/; s/^win32/windows/')
+            platform=$(echo "${dir#npm/dist/quotum-}" | sed 's/^darwin/macos/; s/^win32/windows/')
+            archive=quotum-cli-$VERSION-$platform
+            # The names of the bare binaries carry no version: installers and `quotum update`
+            # build them from the platform alone (see agent/crates/cli/src/update.rs).
             case $platform in
-              win32-*) zip -j "release/$name.zip" "$dir/bin/quotum.exe" LICENSE "$dir/THIRD_PARTY_LICENSES.md" ;;
-              *) tar -czf "release/$name.tar.gz" -C "$dir/bin" quotum -C "$GITHUB_WORKSPACE" LICENSE -C "$GITHUB_WORKSPACE/$dir" THIRD_PARTY_LICENSES.md ;;
+              windows-*)
+                zip -j "release/$archive.zip" "$dir/bin/quotum.exe" LICENSE "$dir/THIRD_PARTY_LICENSES.md"
+                cp "$dir/bin/quotum.exe" "release/quotum-cli-$platform.exe" ;;
+              *)
+                tar -czf "release/$archive.tar.gz" -C "$dir/bin" quotum -C "$GITHUB_WORKSPACE" LICENSE -C "$GITHUB_WORKSPACE/$dir" THIRD_PARTY_LICENSES.md
+                cp "$dir/bin/quotum" "release/quotum-cli-$platform" ;;
             esac
           done
+          cp install/install.sh install/install.ps1 release/
           (cd release && sha256sum -- * > SHA256SUMS)
           cat release/SHA256SUMS
           # Artifacts lose file modes; a tarball keeps the binaries executable.
@@ -98,7 +108,9 @@ jobs:
       - if: env.PUBLISH == 'true'
         uses: actions/attest-build-provenance@v4
         with:
-          subject-path: release/quotum-*
+          subject-path: |
+            release/quotum-cli-*
+            release/install.*
       - uses: actions/upload-artifact@v7
         with:
           name: release
