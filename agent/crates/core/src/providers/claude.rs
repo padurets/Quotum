@@ -58,7 +58,7 @@ impl Adapter for Claude {
     }
 
     fn install_dirs(&self, home: &Path) -> Vec<PathBuf> {
-        vec![home.join(".local/bin"), home.join(".claude/local")]
+        vec![home.join(".claude/local")]
     }
 
     fn measure(&mut self, ctx: &Context) -> Outcome {

@@ -28,7 +28,7 @@ impl Adapter for Codex {
     }
 
     fn install_dirs(&self, home: &Path) -> Vec<PathBuf> {
-        vec![home.join(".local/bin"), home.join(".codex/bin")]
+        vec![home.join(".codex/bin")]
     }
 
     fn measure(&mut self, ctx: &Context) -> Outcome {

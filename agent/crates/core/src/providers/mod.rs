@@ -15,7 +15,7 @@ pub use claude::Claude;
 pub use codex::Codex;
 
 use crate::model::{ErrorKind, Failure, Outcome, Provider};
-use crate::process::{Client, ProcError, find_program};
+use crate::process::{Client, ProcError, find_program, usual_dirs};
 
 /// Everything an adapter needs from the agent for one measurement.
 pub struct Context<'a> {
@@ -33,7 +33,7 @@ pub trait Adapter: Send {
     fn provider(&self) -> Provider;
     /// Executable name of the client.
     fn program(&self) -> &'static str;
-    /// Usual install locations besides PATH.
+    /// The client's own install locations, besides PATH and [`usual_dirs`].
     fn install_dirs(&self, home: &Path) -> Vec<PathBuf>;
     fn measure(&mut self, ctx: &Context) -> Outcome;
     /// Files and directories that change when someone uses the agent on this machine.
@@ -60,12 +60,20 @@ pub fn adapter(provider: Provider) -> Box<dyn Adapter> {
     }
 }
 
+/// The adapter's client: on PATH, in its own install locations, or where installers
+/// and package managers put programs.
+pub fn find_client(adapter: &dyn Adapter, home: &Path) -> Option<PathBuf> {
+    find_program(adapter.program(), &[adapter.install_dirs(home), usual_dirs(home)].concat())
+}
+
 pub(crate) fn locate(adapter: &dyn Adapter, ctx: &Context) -> Result<PathBuf, Failure> {
     if let Some(path) = ctx.program {
         return Ok(path.to_path_buf());
     }
-    find_program(adapter.program(), &adapter.install_dirs(ctx.home)).ok_or_else(|| {
-        Failure::new(adapter.provider(), ErrorKind::NotInstalled, format!("`{}` is not on PATH", adapter.program()))
+    find_client(adapter, ctx.home).ok_or_else(|| {
+        let program = adapter.program();
+        let detail = format!("`{program}` is neither on PATH nor in the usual install directories");
+        Failure::new(adapter.provider(), ErrorKind::NotInstalled, detail)
     })
 }
 
@@ -111,6 +119,11 @@ impl VersionCache {
         let version = version_in(&client.output().ok()?)?;
         self.value = Some((program.to_path_buf(), version.clone(), Instant::now()));
         Some(version)
+    }
+
+    /// Makes the next `get` ask the client again.
+    pub fn forget(&mut self) {
+        self.value = None;
     }
 }
 
