@@ -50,17 +50,25 @@ export function weeklyPlanRemaining(elapsed: number, plan: WeeklyPlan = DEFAULT_
 }
 
 /**
+ * How far a window's start may be from the moment it was measured and still be that
+ * moment: the client's clock, the provider's and the time a measurement takes.
+ */
+const IDLE_TOLERANCE = 2 * 60_000;
+
+/**
  * The planned remaining share of a window at `now`. Weekly windows follow the per-day
  * plan; other windows are spent linearly until their reset. Returns null while the
- * window has not really started (idle rolling windows report "now + length") or its
- * timing is unknown.
+ * window has not started or its timing is unknown. An idle rolling window reports
+ * "now + length" as its reset, so it has not started when its start is the moment it
+ * was measured (`measuredAt`); a window that has started keeps its start, and its plan
+ * shows from then on, right after a reset too.
  */
-export function planAt(w: Win, now: number, plan: WeeklyPlan = DEFAULT_PLAN): PlanPoint | null {
-  if (!w.resetAt || !w.minutes) return null;
+export function planAt(w: Win, measuredAt: number | null, now: number, plan: WeeklyPlan = DEFAULT_PLAN): PlanPoint | null {
+  if (!w.resetAt || !w.minutes || measuredAt === null) return null;
   const length = w.minutes * 60_000;
   const start = w.resetAt - length;
   const elapsed = now - start;
-  if (elapsed < length * 0.02 || elapsed >= length) return null;
+  if (start >= measuredAt - IDLE_TOLERANCE || elapsed >= length) return null;
 
   if (w.kind !== 'weekly') {
     return {remaining: 100 * (1 - elapsed / length), deadline: w.resetAt, done: false, weekly: false};

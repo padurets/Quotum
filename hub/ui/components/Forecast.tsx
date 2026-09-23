@@ -17,9 +17,9 @@ type Outlook = {text: string; tone: string; title: string};
  * end of their plan (everything should be spent by then); other windows against their
  * reset.
  */
-function outlook(line: Line, live: Win | undefined, now: number, weekly: WeeklyPlan): Outlook {
+function outlook(line: Line, live: Win | undefined, measuredAt: number | null, now: number, weekly: WeeklyPlan): Outlook {
   const none = {text: '—', tone: '', title: ''};
-  const plan = live ? planAt(live, now, weekly) : null;
+  const plan = live ? planAt(live, measuredAt, now, weekly) : null;
   if (live && live.remaining <= 0) return {text: t('forecast.usedUp'), tone: 'v-crit', title: ''};
   if (!live?.resetAt || live.resetAt <= now) return none;
   if (plan?.done) return {text: t('forecast.planDone'), tone: 'muted', title: t('forecast.planDoneHint')};
@@ -98,12 +98,14 @@ export function Forecast({
             </thead>
             <tbody>
               {lines.map(line => {
-                const live = overview?.sources.find(s => s.id === line.sourceId)?.windows.find(w => w.id === line.windowId);
+                const source = overview?.sources.find(s => s.id === line.sourceId);
+                const live = source?.windows.find(w => w.id === line.windowId);
+                const measuredAt = source?.successAt ?? null;
                 const weekly = planOf(view, line.sourceId);
-                const plan = live ? planAt(live, now, weekly) : null;
+                const plan = live ? planAt(live, measuredAt, now, weekly) : null;
                 const delta = plan && live && live.remaining > 0 ? live.remaining - plan.remaining : 0;
                 const notable = Math.abs(delta) >= PLAN_TOLERANCE;
-                const ahead = outlook(line, live, now, weekly);
+                const ahead = outlook(line, live, measuredAt, now, weekly);
                 return (
                   <tr key={line.key}>
                     <td>

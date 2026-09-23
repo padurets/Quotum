@@ -14,9 +14,9 @@ import {ResetBanner, ResetNotice} from './ResetNotice';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
 import {ErrorLine} from './Kit';
 
-function Meter({w, now, weekly}: {w: Win; now: number; weekly: WeeklyPlan}) {
+function Meter({w, measuredAt, now, weekly}: {w: Win; measuredAt: number | null; now: number; weekly: WeeklyPlan}) {
   const state = level(w.remaining);
-  const plan = planAt(w, now, weekly);
+  const plan = planAt(w, measuredAt, now, weekly);
   const pace = plan && !plan.done ? plan.remaining : null;
   return (
     <div className="meter" role="progressbar" aria-label={windowName(w)} aria-valuenow={Math.round(w.remaining)} aria-valuemin={0} aria-valuemax={100}>
@@ -28,9 +28,9 @@ function Meter({w, now, weekly}: {w: Win; now: number; weekly: WeeklyPlan}) {
   );
 }
 
-function Limit({w, now, weekly}: {w: Win; now: number; weekly: WeeklyPlan}) {
+function Limit({w, measuredAt, now, weekly}: {w: Win; measuredAt: number | null; now: number; weekly: WeeklyPlan}) {
   const state = level(w.remaining);
-  const plan = planAt(w, now, weekly);
+  const plan = planAt(w, measuredAt, now, weekly);
   // A limit used up is past any plan: how far ahead of it says nothing more.
   const delta = plan && !plan.done && w.remaining > 0 ? w.remaining - plan.remaining : 0;
   return (
@@ -42,7 +42,7 @@ function Limit({w, now, weekly}: {w: Win; now: number; weekly: WeeklyPlan}) {
           <small>%</small>
         </span>
       </div>
-      <Meter w={w} now={now} weekly={weekly} />
+      <Meter w={w} measuredAt={measuredAt} now={now} weekly={weekly} />
       <div className="limit-bottom">
         <span title={w.resetAt ? fullStamp(w.resetAt) : ''}>
           {w.resetAt
@@ -262,7 +262,7 @@ export function SourceCard({
 
       <div className="limits">
         {visible.map(w => (
-          <Limit key={w.id} w={w} now={now} weekly={weekly} />
+          <Limit key={w.id} w={w} measuredAt={source.successAt} now={now} weekly={weekly} />
         ))}
         {!source.windows.length && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
         {!!source.windows.length && !visible.length && <div className="card-empty">{t('card.allHidden')}</div>}

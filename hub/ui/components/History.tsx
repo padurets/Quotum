@@ -122,12 +122,12 @@ export function History({
     }
     const seen = new Set<string>();
     for (const line of visible) {
-      const live = overview?.sources.find(s => s.id === line.sourceId)?.windows.find(w => w.id === line.windowId);
-      if (!live?.resetAt || live.resetAt <= measuredTo || live.resetAt > to || !planAt(live, measuredTo, planOf(view, line.sourceId))) continue;
+      const source = overview?.sources.find(s => s.id === line.sourceId);
+      const live = source?.windows.find(w => w.id === line.windowId);
+      if (!live?.resetAt || live.resetAt <= measuredTo || live.resetAt > to || !planAt(live, source?.successAt ?? null, measuredTo, planOf(view, line.sourceId))) continue;
       const key = `${line.sourceId}@${Math.round(live.resetAt / 60_000)}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      const source = overview?.sources.find(s => s.id === line.sourceId);
       list.push({key, at: live.resetAt, label: t('chart.reset', {source: source ? sourceLabel(source) : line.provider}), color: line.color});
     }
     // What happened to the sources on the chart: their limits came back early, or free resets were granted.
@@ -168,12 +168,12 @@ export function History({
     if (!planShown) return [];
     const seen = new Map<string, PlanLine>();
     for (const line of visible) {
-      const live = overview?.sources.find(s => s.id === line.sourceId)?.windows.find(w => w.id === line.windowId);
+      const source = overview?.sources.find(s => s.id === line.sourceId);
+      const live = source?.windows.find(w => w.id === line.windowId);
       // Idle rolling windows (reset = now + 7 days) have not started: no plan to show.
-      if (!live?.resetAt || live.minutes !== 10080 || !planAt(live, now, planOf(view, line.sourceId))) continue;
+      if (!live?.resetAt || live.minutes !== 10080 || !planAt(live, source?.successAt ?? null, now, planOf(view, line.sourceId))) continue;
       const key = `${line.sourceId}@${Math.round(live.resetAt / 3_600_000)}`;
       if (seen.has(key)) continue;
-      const source = overview?.sources.find(s => s.id === line.sourceId);
       seen.set(key, {
         key,
         name: t('chart.plan', {source: source ? sourceLabel(source) : line.provider}),
