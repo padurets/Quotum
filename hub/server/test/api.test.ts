@@ -372,10 +372,19 @@ test('history reads a period selected on the chart, up to a month, on a grid fin
   await person('alice');
   const now = Date.now();
   const read = (query: string) => call('GET', `/api/history?${query}`, {as: 'alice'});
+  const minute = 60_000;
   const hour = await read(`from=${now - 3_600_000}&to=${now - 1_800_000}`);
-  assert.deepEqual([hour.status, hour.body.since, hour.body.to, hour.body.cellMs], [200, now - 3_600_000, now - 1_800_000, 60_000]);
+  assert.deepEqual(
+    [hour.status, hour.body.since, hour.body.to, hour.body.cellMs],
+    [200, Math.floor((now - 3_600_000) / minute) * minute, Math.ceil((now - 1_800_000) / minute) * minute, minute],
+    'out to whole cells',
+  );
+  const nearly = await read(`from=${now - 3_600_000 + 1}&to=${now - 1_800_000 - 1}`);
+  assert.deepEqual([nearly.body.since, nearly.body.to], [hour.body.since, hour.body.to], 'less than a cell apart: one answer');
   const week = await read(`from=${now - 7 * 86_400_000}&to=${now}`);
   assert.equal(week.body.cellMs, 30 * 60_000, 'as dense as the fixed ranges');
+  const month = await read(`from=${now - 31 * 86_400_000 + 3_600_000}&to=${now}`);
+  assert.equal(month.body.cellMs, 2 * 3_600_000, 'a day over a month keeps the grid of a month');
   const ahead = await read(`from=${now - 3_600_000}&to=${now + 86_400_000}`);
   assert.ok(ahead.body.to <= Date.now(), 'it ends now at the latest');
   const fixed = await read('range=24h');
@@ -449,6 +458,10 @@ test('agents report the coding agents running on their machines; the cards of th
 
   const wrong = await report([{...codex, origin: 'browser'}]);
   assert.deepEqual([wrong.status, wrong.body], [400, {error: 'invalid_request', detail: 'origin'}]);
+  // As many as a list may hold, every name at its longest, fit in one request.
+  const longest = {...codex, project: 'p'.repeat(120)};
+  const full = await report(Array.from({length: 200}, () => longest));
+  assert.equal(full.status, 200, JSON.stringify(full.body));
   assert.equal((await call('POST', '/v1/sessions', {body: {version: 1}})).status, 401);
 });
 
@@ -458,10 +471,6 @@ test('changes from another origin, unknown hosts and other methods are refused',
   assert.equal((await call('POST', '/api/boards', {as: 'alice', body: {name: 'x'}, headers: {origin: 'https://evil.example'}})).status, 403);
   assert.equal((await call('POST', '/api/boards', {as: 'alice', body: {name: 'x'}, headers: {origin: 'http://localhost:9999'}})).status, 403, 'the port is part of the origin');
   assert.equal((await call('POST', '/api/boards', {as: 'alice', body: {name: 'x'}, headers: {origin: ORIGIN}})).status, 200);
-  // As many as a list may hold, every name at its longest, fit in one request.
-  const longest = {...codex, project: 'p'.repeat(120)};
-  const full = await report(Array.from({length: 200}, () => longest));
-  assert.equal(full.status, 200, JSON.stringify(full.body));
   assert.equal((await call('GET', '/api/session', {headers: {host: 'evil.example'}})).status, 403);
   assert.equal((await call('GET', '/api/session', {headers: {cookie: 'quotum_session=%E0%A4%A'}})).body.user, null, 'a malformed cookie is no session');
   assert.equal((await call('GET', '/api/history?range=1y', {as: 'alice'})).status, 400);

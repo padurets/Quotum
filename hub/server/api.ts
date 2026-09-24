@@ -49,17 +49,20 @@ function errorCode(status: number, path: string): string {
 
 /**
  * A period from `from` to `to` (milliseconds) within the kept history, from 15 minutes to
- * a month long, with the cell it is drawn on; null when it is not one. Its end is at most now.
+ * a month long, with the cell it is drawn on; null when it is not one. Its end is at most
+ * now; its edges go out to whole cells, so periods that differ by less than a cell are
+ * one answer (and one entry of the cache).
  */
 function selected(from: string | undefined, to: string | undefined, now: number): {since: number; to: number; cellMs: number} | null {
   if (!from || !to || !/^\d{1,15}$/.test(from) || !/^\d{1,15}$/.test(to)) return null;
-  const since = Number(from);
+  const start = Number(from);
   const end = Math.min(Number(to), now);
-  const span = end - since;
-  if (span < config.history.minSpanMs || span > config.history.maxSpanMs || since < now - config.retention.sampleDays * 86_400_000) return null;
+  const span = end - start;
+  if (span < config.history.minSpanMs || span > config.history.maxSpanMs || start < now - config.retention.sampleDays * 86_400_000) return null;
   const {cells, maxCells} = config.history;
-  const cellMs = cells.find(cell => (end - since) / cell <= maxCells) ?? cells.at(-1)!;
-  return {since, to: end, cellMs};
+  // A little over the count, rather than a three times coarser grid for a day over a month.
+  const cellMs = cells.find(cell => span / cell <= maxCells * 1.05) ?? cells.at(-1)!;
+  return {since: Math.floor(start / cellMs) * cellMs, to: Math.min(Math.ceil(end / cellMs) * cellMs, now), cellMs};
 }
 
 /**
@@ -198,7 +201,8 @@ export async function buildApp(hub: Hub) {
       const span = selected(from, to, now);
       if (!span) return reply.code(400).send({error: 'invalid_request'});
       const board = access.board.id;
-      const slot = `${board}:${span.since}:${span.to}`;
+      // A period up to now keeps its entry as now moves on; `reused` tells when it is stale.
+      const slot = `${board}:${span.since}:${span.to === now ? 'now' : span.to}`;
       const answer = reused(selectedHistory, slot, board, span.cellMs, span.to, () => store.history(board, span.since, span.cellMs, span.to));
       // Named as asked, so the page knows its answer even when the end was cut to now.
       return {range: `${from}-${to}`, now, since: span.since, to: span.to, cellMs: span.cellMs, historyStart: store.historyStart, ...answer};
