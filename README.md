@@ -85,8 +85,8 @@ Antigravity   Gemini 5 hours       100%  in 4h 59m
               Gemini weekly         96%  in 1d 3h
 
 running here: 2 · 1 working
-Claude        quotum              working  for 3h 39m
-Codex         api                 idle     for 25m
+Claude        quotum              working  started 3h 39m ago
+Codex         api                 idle     started 25m ago · editor
 ```
 
 ## What the dashboard shows

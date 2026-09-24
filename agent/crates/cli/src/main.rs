@@ -589,8 +589,15 @@ fn print_sessions(sessions: &[Session], style: &Style) {
     if sessions.is_empty() {
         return;
     }
+    // Working or idle is known only when the look before measuring was long enough ago.
+    let known = sessions.iter().all(|s| s.working.is_some());
     let working = sessions.iter().filter(|s| s.working == Some(true)).count();
-    println!("\n{}", style.dim(&format!("running here: {} · {working} working", sessions.len())));
+    let head = if known {
+        format!("running here: {} · {working} working", sessions.len())
+    } else {
+        format!("running here: {}", sessions.len())
+    };
+    println!("\n{}", style.dim(&head));
     for session in sessions {
         let state = match session.working {
             Some(true) => style.bold("working"),
@@ -602,8 +609,8 @@ fn print_sessions(sessions: &[Session], style: &Style) {
             Origin::Terminal => String::new(),
             other => format!(" · {}", other.id()),
         };
-        let since = style.dim(&format!("for {}{origin}", until(now_ms() - session.started_at)));
-        println!("{:<14}{project:<20}{state}  {since}", session.provider.name());
+        let started = style.dim(&format!("started {} ago{origin}", until(now_ms() - session.started_at)));
+        println!("{:<14}{project:<20}{state}  {started}", session.provider.name());
     }
 }
 

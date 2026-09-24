@@ -68,6 +68,8 @@ pub struct Proc {
     pub pid: u32,
     pub parent: u32,
     pub name: String,
+    /// Its start and CPU time, when the list gives them at no extra cost (Linux).
+    pub times: Option<(Millis, u64)>,
 }
 
 /// What the last look saw of a session.
@@ -83,33 +85,45 @@ struct Seen {
 /// Looks at the running clients again and again; working or idle is told by the CPU time
 /// spent between two looks.
 pub struct Activity {
-    home: PathBuf,
+    /// Folders that are not projects, as given and as the system resolves them.
+    homes: Vec<PathBuf>,
+    temps: Vec<PathBuf>,
     /// Each session at the last look, by pid and start (pids are reused).
     last: HashMap<(u32, Millis), Seen>,
 }
 
 impl Activity {
     pub fn new(home: PathBuf) -> Activity {
-        Activity { home, last: HashMap::new() }
+        // A client's folder comes resolved (/private/var/… on macOS for /var/…).
+        let both = |dir: PathBuf| [dir.canonicalize().ok(), Some(dir)].into_iter().flatten().collect::<Vec<_>>();
+        let mut temps = both(std::env::temp_dir());
+        temps.extend(["/tmp", "/private/tmp", "/var/tmp"].map(PathBuf::from));
+        Activity { homes: both(home), temps, last: HashMap::new() }
     }
 
     pub fn look(&mut self) -> Vec<Session> {
         let now = Instant::now();
         let procs = sys::processes();
+        let listed: HashMap<u32, Option<(Millis, u64)>> = procs.iter().map(|p| (p.pid, p.times)).collect();
+        let times = |pid: u32| listed.get(&pid).copied().flatten().or_else(|| sys::times(pid));
         let mut seen = HashMap::new();
         let sessions = sessions(&procs, std::process::id())
             .into_iter()
             // Other people's clients on a shared machine are theirs, and on their accounts.
             .filter(|found| sys::mine(found.pid))
             .filter_map(|Found { provider, pid, origin, tree }| {
-                let (started_at, _) = sys::times(pid)?;
-                // What the tree spent, with what its finished processes spent (as far as the system keeps that).
-                let cpu: u64 = tree.iter().filter_map(|&p| sys::times(p)).map(|(_, cpu)| cpu).sum();
+                // What the tree spent, with what its finished processes spent (as far as the
+                // system keeps that). A session of another kind it started and that ended
+                // shows up there too, for a minute: rare, since the one that started it is
+                // working on its result then.
+                let measured: Vec<Option<(Millis, u64)>> = tree.iter().map(|&p| times(p)).collect();
+                let (started_at, _) = (*measured.first()?)?;
+                let cpu: u64 = measured.iter().flatten().map(|&(_, cpu)| cpu).sum();
                 let key = (pid, started_at);
                 let next = judged(self.last.get(&key), cpu, now, working_share(provider));
                 let working = next.working;
                 seen.insert(key, next);
-                let project = sys::cwd(pid).and_then(|dir| project(&dir, &self.home));
+                let project = sys::cwd(pid).and_then(|dir| project(&dir, &self.homes, &self.temps));
                 Some(Session { provider, pid, started_at, project, working, origin })
             })
             .collect();
@@ -140,7 +154,8 @@ fn provider_of(name: &str) -> Option<Provider> {
     match name.strip_suffix(".exe").unwrap_or(name) {
         "claude" => Some(Provider::Claude),
         "codex" => Some(Provider::Codex),
-        "agy" | "antigravity" => Some(Provider::Antigravity),
+        // `antigravity` is the editor, not the client.
+        "agy" => Some(Provider::Antigravity),
         _ => None,
     }
 }
@@ -180,8 +195,10 @@ pub fn sessions(procs: &[Proc], own: u32) -> Vec<Found> {
             let mut tree = vec![pid];
             let mut i = 0;
             while i < tree.len() && tree.len() < 4096 {
+                // Each process has one parent, so going down reaches a process again only
+                // through a cycle back to the session itself, which is in `found`.
                 for &child in children.get(&tree[i]).into_iter().flatten() {
-                    if !found.contains_key(&child) && !tree.contains(&child) {
+                    if !found.contains_key(&child) {
                         tree.push(child);
                     }
                 }
@@ -206,16 +223,17 @@ pub struct Found {
 /// Where a client runs, from the programs above it: an editor, the desktop app of its
 /// provider, or else a terminal (a shell, a multiplexer, ssh).
 fn origin(above: &[&Proc]) -> Origin {
+    const EDITORS: [&str; 6] = ["code", "code-insiders", "codium", "cursor", "windsurf", "antigravity"];
+    const HELPERS: [&str; 5] =
+        ["code helper", "code - insiders", "cursor helper", "windsurf helper", "antigravity helper"];
     above
         .iter()
         .find_map(|p| {
-            let name = p.name.strip_suffix(".exe").unwrap_or(&p.name).to_ascii_lowercase();
-            if ["code", "code-insiders", "codium", "cursor", "windsurf"].contains(&name.as_str())
-                || name.starts_with("code helper")
-                || name.starts_with("cursor helper")
-            {
+            let bare = p.name.strip_suffix(".exe").unwrap_or(&p.name);
+            let name = bare.to_ascii_lowercase();
+            if EDITORS.contains(&name.as_str()) || HELPERS.iter().any(|helper| name.starts_with(helper)) {
                 Some(Origin::Editor)
-            } else if ["chatgpt", "codex", "claude", "antigravity"].contains(&name.as_str()) && p.name != name {
+            } else if ["chatgpt", "codex", "claude"].contains(&name.as_str()) && bare != name {
                 // A capitalised name of a provider: its desktop app (a client of the same name is lower case).
                 Some(Origin::App)
             } else {
@@ -225,14 +243,28 @@ fn origin(above: &[&Proc]) -> Origin {
         .unwrap_or(Origin::Terminal)
 }
 
+/// The client a program is, told by its path, where its name is not the client's: macOS
+/// names a process after the file a link leads to (the Claude Code installer links
+/// `claude` to `…/claude/versions/2.1.281`, Homebrew links `codex` to `codex-aarch64-apple-darwin`).
+pub fn client_by_path(path: &str) -> Option<&'static str> {
+    let file = path.rsplit('/').next().unwrap_or(path);
+    if path.contains("/claude/versions/") {
+        Some("claude")
+    } else if file.starts_with("codex-") && !file.starts_with("codex-code-mode") {
+        Some("codex")
+    } else {
+        None
+    }
+}
+
 fn is_quotum(name: &str) -> bool {
     name.strip_suffix(".exe").unwrap_or(name).eq_ignore_ascii_case("quotum")
 }
 
-/// The folder's name, when it is a project: not the home folder, anything above it or
-/// the temporary folder.
-fn project(dir: &Path, home: &Path) -> Option<String> {
-    if home.starts_with(dir) || dir.starts_with(std::env::temp_dir()) {
+/// The folder's name, when it is a project: not a home folder, anything above it or a
+/// temporary folder.
+fn project(dir: &Path, homes: &[PathBuf], temps: &[PathBuf]) -> Option<String> {
+    if homes.iter().any(|home| home.starts_with(dir)) || temps.iter().any(|temp| dir.starts_with(temp)) {
         return None;
     }
     dir.file_name().map(|name| name.to_string_lossy().into_owned())
@@ -249,37 +281,32 @@ mod sys {
     use super::Proc;
     use crate::model::Millis;
 
-    /// A process's name, parent and the fields after them in /proc/<pid>/stat.
-    fn stat(pid: u32) -> Option<(String, Vec<u64>)> {
+    /// A process from /proc/<pid>/stat: its name, parent, start and the CPU time it and its
+    /// finished children have spent, in milliseconds.
+    fn stat(pid: u32) -> Option<Proc> {
         let text = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
         // The name is in parentheses and may itself hold spaces and parentheses.
         let (open, close) = (text.find('(')?, text.rfind(')')?);
-        let name = text.get(open + 1..close)?.to_string();
-        // After the name: state, then numbers; the state letter is kept as 0.
-        let fields = text.get(close + 2..)?.split(' ').map(|f| f.parse().unwrap_or(0)).collect();
-        Some((name, fields))
+        let name = text.get(open + 1..close)?;
+        // After the name come fields 3 (state), 4 (parent), …, 14–17 (utime, stime, cutime,
+        // cstime) and 22 (start, in ticks after boot).
+        let mut fields = text.get(close + 2..)?.split(' ').skip(1).map(|field| field.parse::<u64>().ok());
+        let parent = fields.next()??;
+        let cpu = [fields.nth(9)??, fields.next()??, fields.next()??, fields.next()??].iter().sum::<u64>();
+        let start = fields.nth(4)??;
+        let tick = ticks_per_second();
+        let started = boot_time().map(|boot| boot * 1000 + (start * 1000 / tick) as Millis);
+        let times = started.map(|at| (at, cpu * 1000 / tick));
+        Some(Proc { pid, parent: parent as u32, name: name.to_string(), times })
     }
 
     pub fn processes() -> Vec<Proc> {
         let Ok(entries) = fs::read_dir("/proc") else { return Vec::new() };
-        entries
-            .filter_map(|e| e.ok()?.file_name().to_str()?.parse::<u32>().ok())
-            .filter_map(|pid| {
-                let (name, fields) = stat(pid)?;
-                Some(Proc { pid, parent: *fields.get(1)? as u32, name })
-            })
-            .collect()
+        entries.filter_map(|e| e.ok()?.file_name().to_str()?.parse::<u32>().ok()).filter_map(stat).collect()
     }
 
-    /// When it started and how much CPU time it and its finished children have spent, in
-    /// milliseconds.
     pub fn times(pid: u32) -> Option<(Millis, u64)> {
-        let (_, fields) = stat(pid)?;
-        let tick = ticks_per_second();
-        // utime, stime, cutime and cstime are fields 14–17 of stat, starttime field 22 (ticks after boot).
-        let cpu = fields.get(11..15)?.iter().sum::<u64>() * 1000 / tick;
-        let started = boot_time()? * 1000 + (fields.get(19)? * 1000 / tick) as Millis;
-        Some((started, cpu))
+        stat(pid)?.times
     }
 
     pub fn cwd(pid: u32) -> Option<PathBuf> {
@@ -353,8 +380,14 @@ mod sys {
                 // pbi_name is the longer name; pbi_comm is cut at 16 bytes.
                 let raw = if bsd.pbi_name[0] != 0 { &bsd.pbi_name[..] } else { &bsd.pbi_comm[..] };
                 // SAFETY: both are NUL-terminated within their arrays (zeroed first).
-                let name = unsafe { CStr::from_ptr(raw.as_ptr()) }.to_string_lossy().into_owned();
-                Some(Proc { pid: pid as u32, parent: bsd.pbi_ppid, name })
+                let mut name = unsafe { CStr::from_ptr(raw.as_ptr()) }.to_string_lossy().into_owned();
+                // A name the file a link led to gave (a version, a platform): the path tells the client.
+                if (name.starts_with(|c: char| c.is_ascii_digit()) || name.starts_with("codex-"))
+                    && let Some(client) = path(pid as u32).as_deref().and_then(super::client_by_path)
+                {
+                    name = client.to_string();
+                }
+                Some(Proc { pid: pid as u32, parent: bsd.pbi_ppid, name, times: None })
             })
             .collect()
     }
@@ -380,6 +413,14 @@ mod sys {
         // SAFETY: getuid cannot fail.
         let me = unsafe { libc::getuid() };
         info::<libc::proc_bsdinfo>(pid, libc::PROC_PIDTBSDINFO).is_some_and(|bsd| bsd.pbi_uid == me)
+    }
+
+    /// The path of its program.
+    fn path(pid: u32) -> Option<String> {
+        let mut buffer = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+        // SAFETY: writes at most the buffer's size.
+        let written = unsafe { libc::proc_pidpath(pid as c_int, buffer.as_mut_ptr().cast(), buffer.len() as u32) };
+        (written > 0).then(|| String::from_utf8_lossy(&buffer[..written as usize]).into_owned())
     }
 
     pub fn cwd(pid: u32) -> Option<PathBuf> {
@@ -439,7 +480,7 @@ mod sys {
             while more {
                 let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
                 let name = String::from_utf16_lossy(&entry.szExeFile[..len]);
-                list.push(Proc { pid: entry.th32ProcessID, parent: entry.th32ParentProcessID, name });
+                list.push(Proc { pid: entry.th32ProcessID, parent: entry.th32ParentProcessID, name, times: None });
                 more = Process32NextW(snapshot, &mut entry) != 0;
             }
             CloseHandle(snapshot);
@@ -471,7 +512,8 @@ mod sys {
         None
     }
 
-    /// Whether it runs in this user's logon session.
+    /// Whether it runs in this user's logon session (another account's process started in it,
+    /// say with runas, counts too).
     pub fn mine(pid: u32) -> bool {
         let session = |pid: u32| {
             let mut id = u32::MAX;
@@ -508,7 +550,7 @@ mod tests {
     use super::*;
 
     fn p(pid: u32, parent: u32, name: &str) -> Proc {
-        Proc { pid, parent, name: name.into() }
+        Proc { pid, parent, name: name.into(), times: None }
     }
 
     fn found(procs: &[Proc]) -> Vec<(Provider, u32, Vec<u32>)> {
@@ -592,11 +634,65 @@ mod tests {
 
     #[test]
     fn only_project_folders_are_named() {
-        let home = Path::new("/home/ann");
-        assert_eq!(project(Path::new("/home/ann/dev/quotum"), home), Some("quotum".into()));
-        assert_eq!(project(Path::new("/home/ann"), home), None);
-        assert_eq!(project(Path::new("/"), home), None);
-        assert_eq!(project(&std::env::temp_dir().join("scratch"), home), None);
+        let activity = Activity::new(PathBuf::from("/home/ann"));
+        let named = |dir: &str| project(Path::new(dir), &activity.homes, &activity.temps);
+        assert_eq!(named("/home/ann/dev/quotum"), Some("quotum".into()));
+        assert_eq!(named("/home/ann"), None);
+        assert_eq!(named("/"), None);
+        assert_eq!(named("/private/tmp/scratch"), None, "a temporary folder, resolved");
+        assert_eq!(project(&std::env::temp_dir().join("scratch"), &activity.homes, &activity.temps), None);
+    }
+
+    #[test]
+    fn the_antigravity_editor_is_an_editor_and_agy_in_it_a_session() {
+        let procs =
+            [p(1, 0, "init"), p(10, 1, "antigravity"), p(11, 10, "antigravity"), p(12, 11, "zsh"), p(13, 12, "agy")];
+        assert_eq!(origins(&procs), vec![(13, Origin::Editor)]);
+    }
+
+    #[test]
+    fn on_windows_a_client_under_another_is_no_app() {
+        let procs = [
+            p(1, 0, "explorer.exe"),
+            p(10, 1, "claude.exe"),
+            p(11, 10, "codex.exe"),
+            p(20, 1, "Claude.exe"),
+            p(21, 20, "claude.exe"),
+        ];
+        assert_eq!(origins(&procs), vec![(10, Origin::Terminal), (21, Origin::App), (11, Origin::Terminal)]);
+    }
+
+    #[test]
+    fn a_client_named_after_the_file_a_link_leads_to_is_told_by_its_path() {
+        assert_eq!(client_by_path("/Users/ann/.local/share/claude/versions/2.1.281"), Some("claude"));
+        assert_eq!(client_by_path("/opt/homebrew/Caskroom/codex/0.156.1/codex-aarch64-apple-darwin"), Some("codex"));
+        assert_eq!(client_by_path("/opt/homebrew/Caskroom/codex/0.156.1/codex-code-mode-host"), None);
+        assert_eq!(client_by_path("/usr/local/bin/python3"), None);
+    }
+
+    /// The system calls of each platform, on this very process: runs wherever the tests do.
+    #[test]
+    fn this_process_is_seen_as_it_is() {
+        let me = std::process::id();
+        let own = sys::processes().into_iter().find(|p| p.pid == me).expect("in the list");
+        #[cfg(unix)]
+        assert_eq!(own.parent, std::os::unix::process::parent_id());
+        let (started, cpu) = own.times.or_else(|| sys::times(me)).expect("its times");
+        let now = crate::model::now_ms();
+        assert!(started <= now + 1_000 && now - started < 3_600_000, "started within the hour: {started} vs {now}");
+        let spin = Instant::now();
+        let mut spun = 0u64;
+        while spin.elapsed().as_millis() < 300 {
+            spun = std::hint::black_box(spun.wrapping_add(1));
+        }
+        let (_, later) = sys::times(me).expect("its times again");
+        assert!(later > cpu, "CPU time grows: {cpu} then {later}");
+        assert!(sys::mine(me));
+        #[cfg(unix)]
+        assert_eq!(
+            sys::cwd(me).and_then(|dir| dir.canonicalize().ok()),
+            std::env::current_dir().ok().and_then(|dir| dir.canonicalize().ok())
+        );
     }
 
     #[test]

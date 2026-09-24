@@ -80,16 +80,24 @@ reads only the time of the last change, to tell whether someone uses a client on
 machine. Credential files are never opened.
 
 **Which agents run.** The agent also looks at the process list: which `claude`, `codex`
-and `agy` processes run, since when, in which folder (its name only; not the home or
-the temporary folder), and whether they work. A session works while it and what it
-started (tools, builds, tests) spend more of a CPU core than the client does when idle
-(6% for Claude Code, which redraws its screen even then; 3–4% for the others), and for a
-minute after, so a pause of the model is not idleness. Only this user's processes count,
-and the clients the agent starts to measure do not. Nothing else of the client is read,
-its settings are not changed, and no program is started for it. A
-look is one pass over the process list for names and parents, then the times of the
-clients' own processes: about 20 µs per process on Linux. Windows does not tell another
-process's folder.
+and `agy` processes run, since when, in which folder (its name only; not the home or a
+temporary folder), where (a terminal, an editor, or the Codex desktop app, told by the
+programs above them), and whether they work. An editor or the app runs one client per
+window for all its chats, so there a session is a window. A session works while it and
+what it started (tools, builds, tests) spend more of a CPU core than the client does
+when idle (6% for Claude Code, which redraws its screen even then; 3–4% for the others),
+and for a minute after, so a pause of the model is not idleness. Only this user's
+processes count (on Windows, those of this logon session), and the clients the agent
+starts to measure do not. Nothing else of the client is read, its settings are not
+changed, and no program is started for it. A look is one pass over the process list for
+names and parents, then the times of the clients' own processes: about 20 µs per process
+on Linux. Not seen: a client that runs as `node` (an npm install on macOS and Windows),
+and on Windows the folder, which the system does not tell of another process. macOS names
+a process after the file a link leads to, so there a client is also told by its path.
+
+**Where the client is.** On PATH, in its own installer's place, where package managers
+put programs, and, for Codex, last of all the copy the Codex desktop app or an editor
+extension carries: whoever uses only those needs no command-line client.
 
 ## Scheduling
 
