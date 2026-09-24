@@ -17,10 +17,11 @@ type Machine = {at: number; user: string; sources: Map<string, LiveSession[]>};
 export const KEEP_MS = 5 * 60_000;
 /**
  * A list counts as true until the next one, but for at most this long: an agent with
- * anything running reports at least every two minutes, so a machine quiet for longer
- * stopped working, and is not credited for its silence.
+ * anything running reports at least every two minutes (later by a look's 15 s and a
+ * measurement it waits for, up to a minute), so a machine quiet for longer stopped
+ * working, and is not credited for its silence.
  */
-export const CREDIT_MS = 150_000;
+export const CREDIT_MS = 200_000;
 /** How far back the time any agent worked on a subscription is remembered, to count overlaps once. */
 const BUSY_MEMORY_MS = 2 * 3_600_000;
 

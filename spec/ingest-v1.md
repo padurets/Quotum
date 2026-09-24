@@ -229,7 +229,7 @@ for five minutes after its last request, then forgets it.
 | Field | Meaning |
 |---|---|
 | `provider` | As in a snapshot. |
-| `account`, `accountName` | The subscription, as in a check-in, as far as the agent knows it. Without them the hub takes the subscription this machine last delivered for that provider. Either way, only a subscription the device's person holds (their devices measured it). |
+| `account`, `accountName` | The subscription, as in a check-in, as far as the agent knows it. Without them the hub takes the subscription this machine last delivered for that provider; the reference agent leaves out a session of a client that names its account while it does not know which one that is (signed in anew since it measured). Either way, only a subscription the device's person holds (their devices measured it). |
 | `origin` | Where it runs: `terminal`, `editor` (a client an editor runs, one per window) or `app` (a provider's desktop app, one client for all its chats). |
 | `project` | The name of the folder it works in (never a path), if it is a project folder. A longer name than 120 characters is cut, not refused. |
 | `startedAt` | When it started; a time ahead of the hub's is taken as now. |
@@ -243,8 +243,7 @@ stops asking it.
 A board shows a session on the card of its subscription only to the members of a board
 where the session's person shows that subscription (their personal board, or a shared
 board they are on). The hub adds up how long agents worked on each subscription, in
-five-minute cells: each list counts until the next one, for at most two and a half
-minutes.
+five-minute cells: each list counts until the next one, for at most 200 seconds.
 
 ## Connecting with a one-time code
 

@@ -177,7 +177,7 @@ in memory for five minutes (after a restart the agents send theirs again), files
 session under its subscription (the account the client is signed in to now, else the one
 the machine last delivered for that client; only one its person holds) and shows it on
 that card, to the members of a board where that person shows the subscription. Each list
-also counts until the next one, for at most two and a half minutes: how long agents
+also counts until the next one, for at most 200 seconds: how long agents
 worked on each subscription, in five-minute cells (agent time, two agents counting twice,
 and the time any of them worked, overlaps between machines counted once), kept as long
 as samples.

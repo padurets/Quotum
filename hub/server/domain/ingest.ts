@@ -72,7 +72,8 @@ function text(value: unknown, what: string, optional = false): string | null {
 function cut(value: unknown, what: string): string | null {
   if (value === undefined || value === null) return null;
   if (typeof value !== 'string' || !value.length) throw new Invalid(what);
-  return value.slice(0, LIMITS.text);
+  // By characters, as the agent cuts, not by UTF-16 units, which could split one in two.
+  return Array.from(value).slice(0, LIMITS.text).join('');
 }
 
 function time(value: unknown, what: string, optional = false): number | null {
