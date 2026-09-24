@@ -158,7 +158,7 @@ export function AgentsPanel({sources, now, arrange}: {sources: SourceState[]; no
         )}
       </div>
       {!rows.length ? (
-        <p className="panel-empty">{t(shown.length < sources.length ? 'agents.noneShown' : 'agents.none')}</p>
+        <p className="panel-empty">{t(sources.some(source => source.sessions.length && !shown.includes(source)) ? 'agents.noneShown' : 'agents.none')}</p>
       ) : (
         <div className="table-wrap">
           <table>
