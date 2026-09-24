@@ -4,8 +4,9 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
+use crate::activity::Activity;
 use crate::config::{Config, Paths, home, jitter};
-use crate::model::{Millis, Outcome, Provider, STALE_LIMIT_MS, now_ms};
+use crate::model::{Millis, Outcome, Provider, RunningSession, STALE_LIMIT_MS, now_ms};
 use crate::providers::{Adapter, Context, adapter, find_client, last_activity};
 use crate::schedule::Schedule;
 use crate::sink::Sink;
@@ -17,6 +18,28 @@ const CLIENT_TIMEOUT: Duration = Duration::from_secs(60);
 const TICK: Duration = Duration::from_secs(1);
 /// A wall clock set back by less than this is not worth correcting for.
 const CLOCK_SLACK_MS: Millis = 2_000;
+
+/// How often the agent looks at which coding agents run here, and how often it tells the
+/// hub at least while any run (the hub keeps a list for five minutes).
+const LOOK_EVERY: Duration = Duration::from_secs(15);
+const REPORT_EVERY: Duration = Duration::from_secs(120);
+
+/// Which coding agents run on this machine, told to the hub when that changes.
+struct Watch {
+    activity: Activity,
+    looked: Option<Instant>,
+    reported: Option<(Instant, Vec<RunningSession>)>,
+}
+
+impl Watch {
+    /// Whether `now` is a new list to send: the first one, a change, or one repeated in time.
+    fn worth_sending(&self, sessions: &[RunningSession]) -> bool {
+        match &self.reported {
+            None => true,
+            Some((at, before)) => before != sessions || (!sessions.is_empty() && at.elapsed() >= REPORT_EVERY),
+        }
+    }
+}
 
 /// The wall clock as last seen, with the monotonic clock at that moment.
 struct Clock {
@@ -116,10 +139,28 @@ impl Runner {
         // The account each provider last reported, and the state of its sign-in files then.
         let mut accounts: Vec<Option<(Option<String>, Option<SystemTime>)>> = vec![None; self.adapters.len()];
         let mut clock = Clock::new(now_ms());
+        let mut watch = self.config.sessions().then(|| Watch {
+            activity: Activity::new(self.home.clone()),
+            looked: None,
+            reported: None,
+        });
 
         while !stop::requested() {
             if let Some(reason) = sink.refused() {
                 return Some(reason.to_string());
+            }
+            if let Some(watch) = watch.as_mut().filter(|w| w.looked.is_none_or(|at| at.elapsed() >= LOOK_EVERY)) {
+                let first = watch.looked.is_none();
+                watch.looked = Some(Instant::now());
+                let seen = watch.activity.look();
+                // The first look cannot tell working from idle: the list goes out from the second.
+                if !first {
+                    let sessions = self.running(seen, &accounts);
+                    if watch.worth_sending(&sessions) {
+                        sink.sessions(&sessions);
+                        watch.reported = Some((Instant::now(), sessions));
+                    }
+                }
             }
             // A clock set back (by hand, or synced after a wrong start) would leave every
             // due time far ahead: move them back with it.
@@ -188,6 +229,38 @@ impl Runner {
     }
 }
 
+impl Runner {
+    /// The coding agents seen running, as the hub is told: of the providers measured here,
+    /// each with its subscription as far as it is known, the project's name only if allowed.
+    fn running(
+        &self,
+        seen: Vec<crate::activity::Session>,
+        accounts: &[Option<(Option<String>, Option<SystemTime>)>],
+    ) -> Vec<RunningSession> {
+        seen.into_iter()
+            .filter_map(|session| {
+                let index = self.adapters.iter().position(|a| a.provider() == session.provider)?;
+                let adapter = &self.adapters[index];
+                let (account, account_name) = if adapter.identifies_account() {
+                    let measured = accounts[index].as_ref().and_then(|(account, _)| account.clone());
+                    (measured.or_else(|| adapter.local_account(&self.home)), None)
+                } else {
+                    (None, self.config.account_name(session.provider).map(str::to_string))
+                };
+                Some(RunningSession {
+                    provider: session.provider,
+                    account,
+                    account_name,
+                    origin: session.origin.id(),
+                    project: session.project.filter(|_| self.config.projects()),
+                    started_at: session.started_at,
+                    working: session.working == Some(true),
+                })
+            })
+            .collect()
+    }
+}
+
 /// What happened to one scheduled slot.
 pub enum Event<'a> {
     /// Measured (or failed); the next run is due at the given time.
@@ -199,6 +272,29 @@ pub enum Event<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_list_of_running_agents_goes_out_first_on_change_and_then_in_time() {
+        let session = |working| RunningSession {
+            provider: Provider::Claude,
+            account: None,
+            account_name: None,
+            origin: "terminal",
+            project: None,
+            started_at: 0,
+            working,
+        };
+        let mut watch = Watch { activity: Activity::new(PathBuf::from("/nowhere")), looked: None, reported: None };
+        assert!(watch.worth_sending(&[]), "the first, even empty: the hub may still hold an older one");
+        watch.reported = Some((Instant::now(), vec![session(true)]));
+        assert!(!watch.worth_sending(&[session(true)]));
+        assert!(watch.worth_sending(&[session(false)]));
+        assert!(watch.worth_sending(&[]), "none runs any more");
+        watch.reported = Some((Instant::now() - REPORT_EVERY, vec![session(true)]));
+        assert!(watch.worth_sending(&[session(true)]), "in time, so the hub keeps it");
+        watch.reported = Some((Instant::now() - REPORT_EVERY, vec![]));
+        assert!(!watch.worth_sending(&[]), "an empty list said once is enough");
+    }
 
     #[test]
     fn a_clock_set_back_is_noticed_and_a_jump_forward_is_not() {

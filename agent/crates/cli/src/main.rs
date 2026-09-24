@@ -530,6 +530,12 @@ fn show_config(config: &Config, paths: &Paths) -> ExitCode {
         None => println!("hub           none: `quotum run` only logs; `quotum connect <url>` to connect"),
     }
     println!("eco mode      {}", if config.eco() { "on" } else { "off" });
+    let sessions = match (config.sessions(), config.projects()) {
+        (false, _) => "not told to the hub",
+        (true, true) => "told to the hub, with project folder names",
+        (true, false) => "told to the hub, without project folder names",
+    };
+    println!("agents here   {sessions}");
     let home = quotum_core::config::home();
     for provider in Provider::ALL {
         let client =

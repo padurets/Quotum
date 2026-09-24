@@ -133,6 +133,24 @@ impl Window {
     }
 }
 
+/// A coding agent running on this machine, as the hub is told (spec: Reporting running agents).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunningSession {
+    pub provider: Provider,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_name: Option<String>,
+    /// `terminal`, `editor` or `app`.
+    pub origin: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    #[serde(with = "ts")]
+    pub started_at: Millis,
+    pub working: bool,
+}
+
 /// A successful measurement of one provider account on one machine.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

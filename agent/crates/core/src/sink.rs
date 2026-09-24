@@ -13,7 +13,8 @@ use ureq::{Body, ResponseExt};
 
 use crate::config::Hub;
 use crate::model::{
-    Batch, ErrorKind, Failure, INGEST_VERSION, Machine, Millis, Outcome, Provider, Snapshot, now_ms, parse_time,
+    Batch, ErrorKind, Failure, INGEST_VERSION, Machine, Millis, Outcome, Provider, RunningSession, Snapshot, now_ms,
+    parse_time, ts,
 };
 
 pub trait Sink {
@@ -30,6 +31,9 @@ pub trait Sink {
     ) -> Option<Millis> {
         None
     }
+
+    /// Tells the hub which coding agents run on this machine now (all of them).
+    fn sessions(&mut self, _sessions: &[RunningSession]) {}
 
     /// Why the hub will never take anything from this device again, once it said so.
     fn refused(&self) -> Option<&str> {
@@ -167,6 +171,8 @@ pub struct HubSink {
     refused: Option<String>,
     /// The last problem reported, so a long outage is logged once.
     problem: Option<String>,
+    /// Whether the hub knows running agents (an older one does not).
+    takes_sessions: bool,
     log: Box<dyn FnMut(&str) + Send>,
 }
 
@@ -186,6 +192,7 @@ impl HubSink {
             failures: 0,
             refused: None,
             problem: None,
+            takes_sessions: true,
             log,
         }
     }
@@ -360,6 +367,29 @@ impl Sink for HubSink {
             return None;
         }
         directive["until"].as_str().and_then(parse_time)
+    }
+
+    /// Best effort: the list is sent again with the next change or within two minutes, so a
+    /// failure is not retried and does not hold back measurements. A hub that does not know
+    /// this request (older than it) is not asked again.
+    fn sessions(&mut self, sessions: &[RunningSession]) {
+        if self.refused.is_some() || self.resting() || !self.takes_sessions {
+            return;
+        }
+        let request = serde_json::json!({
+            "version": INGEST_VERSION,
+            "agent": AGENT,
+            "machine": self.machine,
+            "sentAt": ts::format(now_ms()),
+            "sessions": sessions,
+        });
+        let url = format!("{}/v1/sessions", self.base);
+        if let Ok(response) =
+            self.http.post(&url).header("Authorization", &format!("Bearer {}", self.token)).send_json(&request)
+            && response.status() == 404
+        {
+            self.takes_sessions = false;
+        }
     }
 
     fn refused(&self) -> Option<&str> {
@@ -539,6 +569,37 @@ mod tests {
         assert_eq!(destination("https://coder.example.com/api/v2/applications/auth-redirect?x=1"), "coder.example.com");
         assert_eq!(destination("//login.example.com/start"), "login.example.com");
         assert_eq!(destination("/oauth2/start?rd=%2Fv1%2Fingest"), "/oauth2/start");
+    }
+
+    #[test]
+    fn running_agents_are_told_to_the_hub_that_knows_them_and_an_older_one_is_left_alone() {
+        let session = RunningSession {
+            provider: Provider::Codex,
+            account: Some("4b7e0c1d2e3f4a5b6c7d8e9f".into()),
+            account_name: None,
+            origin: "terminal",
+            project: Some("quotum".into()),
+            started_at: 1_790_000_000_000,
+            working: true,
+        };
+        let (url, seen) = hub(|_, _| json(200, json!({"accepted": 1})));
+        let (mut current, _) = sink(&url, "sessions");
+        current.sessions(std::slice::from_ref(&session));
+        let (path, body) = seen.lock().unwrap()[0].clone();
+        assert_eq!(path, "/v1/sessions");
+        assert_eq!(
+            body["sessions"],
+            json!([{"provider": "codex", "account": "4b7e0c1d2e3f4a5b6c7d8e9f", "origin": "terminal", "project": "quotum", "startedAt": "2026-09-21T14:13:20Z", "working": true}])
+        );
+        assert_eq!(body["machine"]["id"], "0123456789abcdef");
+
+        let (url, seen) = hub(|_, _| json(404, json!({"error": "not_found"})));
+        let (mut older, log) = sink(&url, "no-sessions");
+        older.sessions(&[]);
+        older.sessions(&[]);
+        assert_eq!(seen.lock().unwrap().len(), 1, "asked once");
+        assert!(log.lock().unwrap().is_empty(), "nothing to worry about");
+        assert!(older.retry_at.is_none(), "measurements are not held back");
     }
 
     #[test]

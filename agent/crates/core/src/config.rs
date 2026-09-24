@@ -21,6 +21,10 @@ pub struct Config {
     pub interval: Option<u64>,
     /// Measure providers less often while nobody uses them (default on).
     pub eco: Option<bool>,
+    /// Tell the hub which coding agents run on this machine (default on).
+    pub sessions: Option<bool>,
+    /// With the names of their project folders (default on).
+    pub projects: Option<bool>,
     pub hub: Option<Hub>,
     pub machine: MachineSettings,
     pub providers: BTreeMap<Provider, ProviderSettings>,
@@ -124,6 +128,14 @@ impl Config {
 
     pub fn eco(&self) -> bool {
         self.eco.unwrap_or(true)
+    }
+
+    pub fn sessions(&self) -> bool {
+        self.sessions.unwrap_or(true)
+    }
+
+    pub fn projects(&self) -> bool {
+        self.projects.unwrap_or(true)
     }
 
     pub fn program(&self, provider: Provider) -> Option<&Path> {
