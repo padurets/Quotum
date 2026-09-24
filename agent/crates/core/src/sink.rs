@@ -451,6 +451,7 @@ impl Sink for HubSink {
 mod tests {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use std::{env, thread};
 
@@ -643,18 +644,37 @@ mod tests {
         );
         assert_eq!(body["machine"]["id"], "0123456789abcdef");
 
-        let (url, seen) = hub(|_, _| json(404, json!({"error": "not_found"})));
+        // A hub older than the agent: twice, then upgraded.
+        let upgraded = Arc::new(AtomicBool::new(false));
+        let now_known = upgraded.clone();
+        let (url, seen) = hub(move |_, _| {
+            if now_known.load(Ordering::SeqCst) {
+                json(200, json!({"accepted": 0}))
+            } else {
+                json(404, json!({"error": "not_found"}))
+            }
+        });
         let (mut older, log) = sink(&url, "no-sessions");
+        let hour_passes =
+            |sink: &mut HubSink| sink.sessions_unknown_until = Some(Instant::now() - Duration::from_secs(1));
         assert!(!older.sessions(&[]));
         assert!(!older.takes_sessions(), "not asked again for a while");
         assert_eq!(seen.lock().unwrap().len(), 1, "asked once");
         assert_eq!(log.lock().unwrap().len(), 1, "said once: {:?}", log.lock().unwrap());
         assert!(older.retry_at.is_none(), "measurements are not held back");
-        // An hour later it is asked again, and may have been upgraded.
-        older.sessions_unknown_until = Some(Instant::now() - Duration::from_secs(1));
+        // An hour later it is asked again: still older, it waits another hour, without saying so again.
+        hour_passes(&mut older);
         assert!(older.takes_sessions());
         assert!(!older.sessions(&[]));
+        assert_eq!(seen.lock().unwrap().len(), 2, "asked again");
+        assert!(!older.takes_sessions());
         assert_eq!(log.lock().unwrap().len(), 1, "not said again");
+        // Upgraded since: the list is taken, and the agent says so.
+        upgraded.store(true, Ordering::SeqCst);
+        hour_passes(&mut older);
+        assert!(older.sessions(&[]));
+        assert!(older.takes_sessions() && older.sessions_unknown_until.is_none());
+        assert!(log.lock().unwrap()[1].contains("takes them now"), "{:?}", log.lock().unwrap());
 
         // A 404 of something in front of the hub is only a failure: tried again in a minute.
         let (url, _) = hub(|_, _| (404, "content-type: text/plain\r\n", "404 page not found".into()));
