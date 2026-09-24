@@ -84,6 +84,9 @@ test('a malformed batch is refused whole', () => {
   assert.throws(() => parseBatch(batch([snapshot(start, 5, {provider: 'cursor'})])), /provider/);
   assert.throws(() => parseBatch(batch([snapshot(start, 5, {staleAfterMs: 0})])), /staleAfterMs/);
   assert.throws(() => parseBatch(batch([snapshot(start, 5, {resets: {available: -1}})])), /resets/);
+  // Text is 1 to 120 characters, however many UTF-16 units they take.
+  assert.equal(parseBatch(batch([snapshot(start, 5, {accountName: '🚀'.repeat(120)})])).snapshots[0].accountName, '🚀'.repeat(120));
+  assert.throws(() => parseBatch(batch([snapshot(start, 5, {accountName: '🚀'.repeat(121)})])), /accountName/);
   const parsed = parseBatch(batch([snapshot(start, 5)]));
   assert.equal(parsed.snapshots[0].windows[0].resetsAt, start + 5 * 86_400_000);
 });

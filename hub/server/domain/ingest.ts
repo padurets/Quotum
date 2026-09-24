@@ -62,9 +62,12 @@ function account(value: unknown): string | null {
 type Obj = Record<string, unknown>;
 const isObject = (value: unknown): value is Obj => !!value && typeof value === 'object' && !Array.isArray(value);
 
+/** Longer than the limit in characters, as the spec and the agent count them (a character may take two UTF-16 units). */
+const tooLong = (value: string) => value.length > LIMITS.text && (value.length > 2 * LIMITS.text || Array.from(value).length > LIMITS.text);
+
 function text(value: unknown, what: string, optional = false): string | null {
   if (optional && (value === undefined || value === null)) return null;
-  if (typeof value !== 'string' || !value.length || value.length > LIMITS.text) throw new Invalid(what);
+  if (typeof value !== 'string' || !value.length || tooLong(value)) throw new Invalid(what);
   return value;
 }
 
