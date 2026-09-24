@@ -5,7 +5,7 @@ import {sourceLabel} from '../lib/quota';
 import {planAt, started, weeklyPlanLine} from '../lib/plan';
 import {PROVIDERS} from '../lib/providers';
 import {HORIZONS, setMuted, setPrefs, usePrefs, type Horizon} from '../lib/prefs';
-import {setTimeRange, useTimeRange} from '../lib/timeRange';
+import {ofTimeRange, setTimeRange} from '../lib/timeRange';
 import {HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
 import {linesOf} from '../lib/lines';
 import {Chart, type Marker, type PlanLine} from './Chart';
@@ -67,7 +67,7 @@ export function History({
 
   const visible = useMemo(() => lines.filter(line => !prefs.muted[line.key]), [lines, prefs.muted]);
   // A time range selected on the chart is in the past: the chart shows just it, without the future.
-  const selected = useTimeRange() !== null;
+  const selected = ofTimeRange(history);
   const from = history ? Math.max(history.since, history.historyStart) : now - 86_400_000;
   const measuredTo = history?.to ?? now;
   // An announced Codex reset matters only where Codex is on the chart.

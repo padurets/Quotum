@@ -6,7 +6,7 @@ import {PLAN_TOLERANCE, planAt, type WeeklyPlan} from '../lib/plan';
 import {FORECAST, planOf, withHidden, type Arrange} from '../lib/view';
 import {linesOf, type Line} from '../lib/lines';
 import {usePrefs} from '../lib/prefs';
-import {useTimeRange} from '../lib/timeRange';
+import {ofTimeRange} from '../lib/timeRange';
 import {t, useLocale} from '../i18n';
 import {HideRow, Popover, SlidersIcon} from './Popover';
 
@@ -68,7 +68,7 @@ export function Forecast({
 }) {
   const {view} = arrange;
   const {kind} = usePrefs();
-  const selected = useTimeRange() !== null;
+  const selected = ofTimeRange(history);
   // Window names are text: they are rebuilt when the language changes.
   const locale = useLocale();
   const lines = useMemo(() => linesOf(history, overview, view, kind), [history, overview, view.windows, view.hidden, view.colors, kind, locale]);

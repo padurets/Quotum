@@ -6,8 +6,17 @@ export type TimeRange = {from: number; to: number};
 
 /** The shortest and longest periods the hub reads (config.history.minSpanMs, maxSpanMs). */
 export const MIN_TIME_RANGE = 15 * 60_000;
+/** How far the page's clock may be behind the hub's: a range ending there is not too short for it. */
+const CLOCK_SLACK = 5 * 60_000;
 const MAX_TIME_RANGE = 31 * 86_400_000;
 const DAY = 86_400_000;
+
+/**
+ * Whether history on screen is of a selected range (the hub names it `<from>-<to>`), not a
+ * fixed period: what the chart and the table show follows the data they have, so the
+ * headings of a range never stand over a period's numbers while the next answer loads.
+ */
+export const ofTimeRange = (history: {range: string} | null) => !!history && history.range.includes('-');
 
 /**
  * The selection lives in the address (`?from=…&to=…`, with the board it was selected on):
@@ -17,7 +26,7 @@ const DAY = 86_400_000;
 export function parseTimeRange(search: string, now: number): TimeRange | null {
   const params = new URLSearchParams(search);
   const [from, to] = [params.get('from'), params.get('to')].map(value => (value && /^\d{1,15}$/.test(value) ? Number(value) : NaN));
-  const end = Math.min(to, now);
+  const end = Math.min(to, now + CLOCK_SLACK);
   return end - from >= MIN_TIME_RANGE && to - from <= MAX_TIME_RANGE ? {from, to} : null;
 }
 

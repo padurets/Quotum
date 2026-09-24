@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {draggedRange, MIN_TIME_RANGE, parseTimeRange, timeRangeLabel} from '../lib/timeRange';
+import {draggedRange, MIN_TIME_RANGE, ofTimeRange, parseTimeRange, timeRangeLabel} from '../lib/timeRange';
 
 const now = 1_800_000_000_000;
 const minute = 60_000;
@@ -24,9 +24,10 @@ test('the address holds a range the hub can read, or none', () => {
   const at = (from: number, to: number) => `?board=b1&from=${from}&to=${to}`;
   assert.deepEqual(parseTimeRange(at(now - 3_600_000, now - 1_800_000), now), {from: now - 3_600_000, to: now - 1_800_000});
   assert.deepEqual(parseTimeRange(at(now - 3_600_000, now + 3_600_000), now), {from: now - 3_600_000, to: now + 3_600_000}, 'the hub ends it now');
+  assert.deepEqual(parseTimeRange(at(now - 13 * minute, now + 2 * minute), now), {from: now - 13 * minute, to: now + 2 * minute}, 'a page a little behind the hub');
   for (const search of [
     at(now + minute, now + 60 * minute),
-    at(now - 10 * minute, now + 60 * minute),
+    at(now - 8 * minute, now + 60 * minute),
     at(now - 60 * minute, now - 50 * minute),
     at(now - 40 * 86_400_000, now),
     '?from=1e12&to=2e12',
@@ -45,4 +46,10 @@ test('a range is named by its times, its days, or both', () => {
   assert.match(sameDay, /^[^–]+, [^–]+–[^–]+$/, 'one day, then two times');
   assert.equal(acrossMidnight.split(' – ').length, 2, 'a day and a time at each end');
   assert.doesNotMatch(days, /\d:\d/, 'days alone');
+});
+
+test('the history on screen tells a selected range from a fixed period', () => {
+  assert.equal(ofTimeRange({range: `${now - 3_600_000}-${now}`}), true);
+  assert.equal(ofTimeRange({range: '24h'}), false);
+  assert.equal(ofTimeRange(null), false, 'nothing yet');
 });
