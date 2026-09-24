@@ -89,8 +89,9 @@ export const config = {
     } as Record<string, {durationMs: number; cellMs: number}>,
     /**
      * A period selected on the chart gets the finest of these cells that keeps it
-     * within `maxCells`, the same density as the fixed ranges. Shorter than
-     * `minSpanMs` it would show a handful of measurements.
+     * within `maxCells` (5% over allowed), the same density as the fixed ranges, and its
+     * edges go out to whole cells. Shorter than `minSpanMs` it would show a handful of
+     * measurements.
      */
     cells: [1, 5, 15, 30, 60, 120, 360, 720].map(minutes => minutes * 60_000),
     maxCells: 360,

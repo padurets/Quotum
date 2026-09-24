@@ -205,9 +205,11 @@ them), kept for 90 days.
   for a week, 2 hours for a month) and shows the lowest value seen in each cell, so
   hovering reads every series at once and a short hiccup doesn't break a line. A time
   range dragged across the chart, from 15 minutes to a month, gets the finest cell that
-  keeps it within 360 cells (a minute for an hour, as dense as the fixed periods for
-  longer ones); where measurements come less often than cells, hovering reads the last
-  value before. Putting a month together takes a busy board a good part of a second, so
+  keeps it within about 360 cells (a minute for an hour, as dense as the fixed periods
+  for longer ones; 5% over is allowed, so a day over a month keeps the month's grid). Its
+  edges go out to whole cells, so the chart and the table may cover up to a cell beyond
+  the selection, and ranges that differ by less than a cell share one answer. Where
+  measurements come less often than cells, hovering reads the last value before. Putting a month together takes a busy board a good part of a second, so
   such an answer is reused for a quarter of its cell after the data changed, and says
   when a newer one will be ready for the page to ask again; a source joining or leaving
   the board is never served from it. The range is in the past, so the table reads it from its edges: what
