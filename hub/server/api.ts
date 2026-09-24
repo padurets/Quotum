@@ -177,6 +177,8 @@ export async function buildApp(hub: Hub) {
           /** Measured by the reader's devices: theirs to take off a shared board. */
           mine: source.holders.includes(access.user.id),
           stale: state.successAt === null || state.staleAfterMs === null || now - state.successAt > state.staleAfterMs,
+          /** The coding agents running on it right now, on any machine. */
+          sessions: hub.ingest.live.of(source.id, now),
         };
       }),
     };

@@ -76,6 +76,13 @@ export const STEPS = [
   CREATE TABLE announcements (provider TEXT NOT NULL, at INTEGER NOT NULL, url TEXT NOT NULL, text TEXT NOT NULL,
     PRIMARY KEY (provider, at)) WITHOUT ROWID;
   `,
+  // 2 — how long coding agents worked on each subscription.
+  `
+  -- In five-minute cells: agent time (two agents working for a minute count two) and the
+  -- time any of them worked. Reported by agents with the sessions they see (server/sessions.ts).
+  CREATE TABLE work (source_id TEXT NOT NULL, at INTEGER NOT NULL, agent_ms INTEGER NOT NULL, busy_ms INTEGER NOT NULL,
+    PRIMARY KEY (source_id, at)) WITHOUT ROWID;
+  `,
 ];
 
 export const SCHEMA_VERSION = STEPS.length;

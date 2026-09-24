@@ -4,6 +4,9 @@ import {providers, sourceId, type Provider, type Source} from '../domain/sources
 import {onGrid, series, type Kind, type Measurement, type Sample, type SourceState} from '../domain/quota.js';
 import {migrate} from './schema.js';
 
+/** The cells in which agents' work is kept. */
+export const WORK_CELL_MS = 5 * 60_000;
+
 export type HistorySeries = {
   sourceId: string;
   provider: Provider;
@@ -133,6 +136,12 @@ export class Store {
   }
 
   /** The source of a subscription, created the first time anyone measures it. */
+  /** The source of an account, if the hub has one. */
+  findSource(provider: Provider, account: string): string | null {
+    const row = this.db.prepare('SELECT id FROM sources WHERE provider = ? AND account = ?').get(provider, account) as {id: string} | undefined;
+    return row?.id ?? null;
+  }
+
   source(provider: Provider, account: string, now: number): string {
     const row = this.db.prepare('SELECT id FROM sources WHERE provider = ? AND account = ?').get(provider, account) as {id: string} | undefined;
     if (row) return row.id;
@@ -379,9 +388,36 @@ export class Store {
   }
 
   /** Forgets samples, events and announcements older than the retention period. */
+  /**
+   * Adds the time `agents` coding agents worked on a source from `from` to `to`, cell by
+   * cell. Agents on several machines report apart, so the time any of them worked is
+   * capped at the cell.
+   */
+  addWork(source: string, from: number, to: number, agents: number) {
+    if (agents <= 0 || to <= from) return;
+    const add = this.db.prepare(
+      'INSERT INTO work VALUES (?, ?, ?, ?) ON CONFLICT (source_id, at) DO UPDATE SET agent_ms = agent_ms + excluded.agent_ms, busy_ms = MIN(?, busy_ms + excluded.busy_ms)',
+    );
+    for (let cell = Math.floor(from / WORK_CELL_MS) * WORK_CELL_MS; cell < to; cell += WORK_CELL_MS) {
+      const ms = Math.min(to, cell + WORK_CELL_MS) - Math.max(from, cell);
+      add.run(source, cell, ms * agents, ms, WORK_CELL_MS);
+    }
+  }
+
+  /** How long agents worked on a source, cell by cell, from `from` on. */
+  work(source: string, from: number): {at: number; agentMs: number; busyMs: number}[] {
+    const rows = this.db.prepare('SELECT at, agent_ms, busy_ms FROM work WHERE source_id = ? AND at >= ? ORDER BY at').all(source, from) as {
+      at: number;
+      agent_ms: number;
+      busy_ms: number;
+    }[];
+    return rows.map(r => ({at: r.at, agentMs: r.agent_ms, busyMs: r.busy_ms}));
+  }
+
   prune(now: number) {
     const cutoff = now - config.retention.sampleDays * 86_400_000;
     this.db.prepare('DELETE FROM samples WHERE at < ?').run(cutoff);
+    this.db.prepare('DELETE FROM work WHERE at < ?').run(cutoff);
     this.db.prepare('DELETE FROM events WHERE at < ?').run(cutoff);
     this.db.prepare('DELETE FROM announcements WHERE at < ?').run(cutoff);
   }

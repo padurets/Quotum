@@ -198,6 +198,48 @@ delivering does. Errors are as for ingest (`400 invalid_request`, `401`, `403`).
 that cannot reach the hub, or gets any other answer, measures anyway: at worst two
 devices measure the same subscription for a while.
 
+## Reporting running agents
+
+An agent may also tell the hub which coding agents run on its machine right now, so a
+board can show them on the cards of the subscriptions they spend.
+
+```
+POST /v1/sessions
+Authorization: Bearer <token>
+```
+
+```json
+{
+  "version": 1,
+  "agent": "quotum/0.3.0",
+  "machine": {"id": "3f9a…", "name": "workstation", "os": "linux", "arch": "x86_64"},
+  "sentAt": "2026-09-24T10:15:00Z",
+  "sessions": [
+    {"provider": "codex", "account": "4b7e…", "origin": "terminal", "project": "quotum", "startedAt": "2026-09-24T08:02:11Z", "working": true},
+    {"provider": "claude", "account": "9c1e…", "origin": "editor", "startedAt": "2026-09-24T09:40:00Z", "working": false}
+  ]
+}
+```
+
+Each request carries every session of the machine, replacing the ones before; an empty
+list says none runs. The reference agent sends one when the list or a session's state
+changes, and at least every two minutes while any runs. The hub keeps a machine's list
+for five minutes after its last request, then forgets it.
+
+| Field | Meaning |
+|---|---|
+| `provider` | As in a snapshot. |
+| `account`, `accountName` | The subscription, as in a check-in, as far as the agent knows it. Without them the hub takes the subscription this machine last delivered for that provider. |
+| `origin` | Where it runs: `terminal`, `editor` (a client an editor runs, one per window) or `app` (a provider's desktop app, one client for all its chats). |
+| `project` | The name of the folder it works in (never a path), if it is a project folder. |
+| `startedAt` | When it started. |
+| `working` | Whether it is working now (the agent's judgement: its processes spend CPU time), or idle. |
+
+At most 200 sessions. Clocks are as in a batch. `200` with `{"accepted": n}`: sessions
+of a subscription the hub does not know are left out. Errors are as for check-ins.
+
+The hub adds up how long agents worked on each subscription, in five-minute cells.
+
 ## Connecting with a one-time code
 
 The OAuth 2.0 device authorization flow (RFC 8628) with JSON bodies:
@@ -222,4 +264,7 @@ What is sent: the pseudonym of each account, the plan name, percentages and rese
 of the windows, free resets, the client's version, the machine's random id, its name
 (the host name unless configured) and operating system, subscription names if
 configured, and for a failed measurement its kind and a short
-message of the client (at most 200 characters).
+message of the client (at most 200 characters). About running agents (unless turned
+off): which client, where it runs, since when, whether it works, and the name of its
+project folder (unless that is turned off too). Everyone on a board that shows a
+subscription sees these, as they see its limits.

@@ -220,3 +220,40 @@ export function toMeasurement(snapshot: AgentSnapshot): Measurement {
   }));
   return {observedAt: snapshot.observedAt, plan: snapshot.plan ?? '', windows, staleAfterMs: snapshot.staleAfterMs, resets: snapshot.resets};
 }
+
+/** Where an agent's session runs (spec: Reporting running agents). */
+export const ORIGINS = ['terminal', 'editor', 'app'] as const;
+export type Origin = (typeof ORIGINS)[number];
+
+export type AgentSession = {
+  provider: Provider;
+  account: string | null;
+  accountName: string | null;
+  origin: Origin;
+  project: string | null;
+  startedAt: number;
+  working: boolean;
+};
+
+/** Every coding agent running on a machine right now. */
+export type SessionReport = AgentSender & {sentAt: number; sessions: AgentSession[]};
+
+export function parseSessions(body: unknown): SessionReport {
+  const sender = parseSender(body);
+  const input = body as Obj;
+  const sessions = list(input.sessions, 'sessions', 200).map(value => {
+    if (!isObject(value)) throw new Invalid('session');
+    if (!(ORIGINS as readonly unknown[]).includes(value.origin)) throw new Invalid('origin');
+    if (typeof value.working !== 'boolean') throw new Invalid('working');
+    return {
+      provider: provider(value.provider),
+      account: account(value.account),
+      accountName: text(value.accountName, 'accountName', true),
+      origin: value.origin as Origin,
+      project: text(value.project, 'project', true),
+      startedAt: time(value.startedAt, 'startedAt')!,
+      working: value.working,
+    };
+  });
+  return {...sender, sentAt: time(input.sentAt, 'sentAt')!, sessions};
+}

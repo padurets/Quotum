@@ -413,6 +413,31 @@ test('a costly history is reused a while after new data, says when a newer one i
   }
 });
 
+test('agents report the coding agents running on their machines; the cards of their subscriptions show them', async () => {
+  const {call, person} = await hub();
+  await person('alice');
+  const token = (await call('POST', '/api/tokens', {as: 'alice', body: {}})).body.secret;
+  const headers = {authorization: `Bearer ${token}`};
+  await call('POST', '/v1/ingest', {body: batch('alices-laptop-0123456789'), headers});
+  const report = (sessions: object[]) =>
+    call('POST', '/v1/sessions', {body: {version: 1, agent: 'quotum/0.3.0', machine: machine('alices-laptop-0123456789'), sentAt: iso(Date.now()), sessions}, headers});
+  const started = iso(Date.now() - 3_600_000);
+  const codex = {provider: 'codex', account: 'a1b2c3d4e5f6a1b2c3d4e5f6', origin: 'terminal', project: 'quotum', startedAt: started, working: true};
+  const unknown = {...codex, account: 'ffffffffffffffffffffffff'};
+  const guessed = {provider: 'codex', origin: 'editor', startedAt: started, working: false};
+  const answer = await report([codex, unknown, guessed]);
+  assert.deepEqual([answer.status, answer.body], [200, {accepted: 2}], 'a subscription the hub does not know is left out');
+  const shown = async () => (await call('GET', '/api/overview', {as: 'alice'})).body.sources[0].sessions;
+  const [first, second] = await shown();
+  assert.deepEqual([first.origin, first.project, first.working, first.device.name, first.startedAt], ['terminal', 'quotum', true, 'build-01', Date.parse(started)]);
+  assert.equal(second.origin, 'editor', 'without an account: the subscription this machine delivers');
+  assert.equal((await report([])).status, 200);
+  assert.deepEqual(await shown(), [], 'an empty list: none runs');
+  const wrong = await report([{...codex, origin: 'browser'}]);
+  assert.deepEqual([wrong.status, wrong.body], [400, {error: 'invalid_request', detail: 'origin'}]);
+  assert.equal((await call('POST', '/v1/sessions', {body: {version: 1}})).status, 401);
+});
+
 test('changes from another origin, unknown hosts and other methods are refused', async () => {
   const {call, person} = await hub();
   await person('alice');

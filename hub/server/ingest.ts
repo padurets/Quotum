@@ -1,5 +1,6 @@
 import {secretKind} from './domain/auth.js';
-import {Invalid, parseBatch, parseCheckin, subscriptionKey, toMeasurement, type AgentSender} from './domain/ingest.js';
+import {Invalid, parseBatch, parseCheckin, parseSessions, subscriptionKey, toMeasurement, type AgentSender} from './domain/ingest.js';
+import {Sessions} from './sessions.js';
 import type {Duty} from './duty.js';
 import type {Provider} from './domain/sources.js';
 import type {Device, Directory, Token} from './store/directory.js';
@@ -29,11 +30,16 @@ const CLOCK_TOLERANCE_MS = 30_000;
  * by many devices, of one person or several, is one source, held by each of them.
  */
 export class Ingest {
+  /** The coding agents running on the devices right now. */
+  readonly live: Sessions;
+
   constructor(
     private readonly store: Store,
     private readonly directory: Directory,
     private readonly duty: Duty,
-  ) {}
+  ) {
+    this.live = new Sessions(store);
+  }
 
   /** The credential of an `Authorization` header; 'revoked' for a disconnected device or a revoked token. */
   authenticate(header: string | undefined): Credential | 'revoked' | null {
@@ -109,6 +115,29 @@ export class Ingest {
         return {provider: s.provider, measure: directive.measure, until: new Date(directive.until).toISOString()};
       }),
     };
+  }
+
+  /**
+   * Which coding agents run on a device now. A session is filed under the subscription
+   * it names, else under the one this device last delivered for its provider; one the
+   * hub does not know is left out.
+   */
+  sessions(credential: Credential, body: unknown, now = Date.now()): {accepted: number} {
+    const report = parseSessions(body);
+    const skew = Math.abs(now - report.sentAt) > CLOCK_TOLERANCE_MS ? now - report.sentAt : 0;
+    return this.directory.transaction(() => {
+      const device = this.device(credential, report, now);
+      const name = device.label ?? device.name;
+      const sessions = report.sessions.flatMap(({provider, account, accountName, ...session}) => {
+        const source =
+          account || accountName
+            ? this.store.findSource(provider, subscriptionKey({provider, account, accountName}, device.userId))
+            : this.store.deviceSource(device.id, provider);
+        return source ? [{...session, startedAt: session.startedAt + skew, source, device: {id: device.id, name}}] : [];
+      });
+      this.live.report(device.id, sessions, now);
+      return {accepted: sessions.length};
+    });
   }
 
   /**
