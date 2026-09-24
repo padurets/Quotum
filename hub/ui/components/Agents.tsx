@@ -73,14 +73,7 @@ export function Agents({sessions, now}: {sessions: LiveSession[]; now: number}) 
         </>
       }
     >
-      <div className="popover-title agents-title">
-        <span>{t('agents.title')}</span>
-        <span className="agents-legend">
-          <i className="agent is-working" aria-hidden="true" /> {t('agents.working')}
-          <i className="agent" aria-hidden="true" /> {t('agents.idle')}
-          <i className="agent is-quiet" aria-hidden="true" /> {t('agents.window')}
-        </span>
-      </div>
+      <div className="popover-title">{t('agents.title')}</div>
       <div className="agents-list">
         {machines.map(machine => (
           <section key={machine.id} className="agents-machine">
@@ -101,6 +94,17 @@ export function Agents({sessions, now}: {sessions: LiveSession[]; now: number}) 
             ))}
           </section>
         ))}
+      </div>
+      <div className="agents-legend" aria-hidden="true">
+        <span>
+          <i className="agent is-working" /> {t('agents.working')}
+        </span>
+        <span>
+          <i className="agent" /> {t('agents.idle')}
+        </span>
+        <span>
+          <i className="agent is-quiet" /> {t('agents.window')}
+        </span>
       </div>
     </Popover>
   );
