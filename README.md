@@ -155,7 +155,7 @@ day, not a script thrown together over a weekend. In practice that meant:
   JavaScript. There is no telemetry; the only requests the hub makes on its own are to
   the two reset trackers, every ten minutes, and `QUOTUM_RESETS=off` turns them off.
 - **Written down and tested.** The protocol between the agent and the hub is a spec
-  ([spec/ingest-v1.md](spec/ingest-v1.md)). About 120 tests cover the spending rules,
+  ([spec/ingest-v1.md](spec/ingest-v1.md)). About 180 tests cover the spending rules,
   resets, duty, scheduling, permissions, sharing, device pairing, the clients' answers and the
   translations. The TypeScript is strict and the Rust passes `clippy`.
 
@@ -317,6 +317,7 @@ Project layout:
 agent/crates/core     adapters for each client, schedule, settings, delivery to the hub
 agent/crates/cli      the `quotum` command
 npm/                  the npm packages: a launcher and a prebuilt binary per platform
+install/              the installers for `curl … | sh` and PowerShell
 deploy/               running the hub with Docker Compose behind Caddy (HTTPS)
 .github/workflows     tests on every push; everything released from a version tag
 spec/                 the protocol between the agent and the hub
@@ -336,7 +337,9 @@ hub's image.
 
 Set the new version in `agent/Cargo.toml` (`[workspace.package]`) and `hub/package.json`,
 let the lock files follow, push the commit, then tag it with the release notes as the
-tag's message:
+tag's message. A release that brings a new database layout step also adds its hash to
+`RELEASED` in `hub/server/test/schema.test.ts` in that commit: from then on the step
+never changes.
 
 ```sh
 (cd hub && npm version 0.2.0 --no-git-tag-version)   # package.json and package-lock.json

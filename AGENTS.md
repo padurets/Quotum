@@ -15,7 +15,8 @@ left, across machines. Two parts and a contract between them:
   `server/domain` (the rules), `server/store` (SQLite), `server/routes`, `ui/`.
 - `spec/ingest-v1.md` — the protocol between them.
 
-Also `npm/` (the npm packages and the build that cross-compiles the agent), `deploy/`
+Also `npm/` (the npm packages and the build that cross-compiles the agent), `install/`
+(the installers for `curl … | sh` and PowerShell), `deploy/`
 (Compose behind Caddy), `.github/workflows` (CI; releases from a version tag).
 [docs/architecture.md](docs/architecture.md) explains how it all works and why; read the
 relevant part before changing behaviour.
@@ -28,8 +29,8 @@ cd agent && cargo fmt --check && cargo clippy --all-targets --locked -- -D warni
 ```
 
 Run the checks of every part you touched; a change is done when they pass. CI also runs
-the agent on macOS and Windows: if you change process handling (`process.rs`, `stop.rs`)
-and can check only one system, say so.
+the agent on macOS and Windows: if you change process handling (`process.rs`, `stop.rs`,
+`activity.rs`) and can check only one system, say so.
 
 `npm start` in `hub/` serves the built dashboard on `127.0.0.1:8080` (a new hub prints
 the setup code of the first account to its log). `cargo run -p quotum` in `agent/`

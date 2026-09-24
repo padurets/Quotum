@@ -11,8 +11,9 @@ accounts. This document explains how the parts work and why they are built this 
 ┌───────────────────────────────┐  HTTPS         ┌──────────────────────────────┐
 │ agent (Rust)                  │  /v1/checkin   │ duty: who measures what      │
 │  claude  -p stream-json       │  /v1/ingest    │ ingest ─► rules ─► SQLite    │
-│  codex   app-server           │ ─────────────► │                   │          │
-│  agy     -p /usage            │  device or     │ dashboard (React)◄┘          │
+│  codex   app-server           │  /v1/sessions  │ running agents ──►│          │
+│  agy     -p /usage            │ ─────────────► │                   │          │
+│  process list: who runs       │  device or     │ dashboard (React)◄┘          │
 │  schedule · spool · pseudonym │  machine token └──────────────────────────────┘
 └───────────────────────────────┘
 ```
