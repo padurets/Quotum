@@ -207,7 +207,6 @@ function CardColor({source, arrange}: {source: SourceState; arrange: Arrange}) {
 function SourceSettings({source, arrange, board, onChanged}: {source: SourceState; arrange: Arrange; board: Board; onChanged: () => void}) {
   const [error, setError] = useState<unknown>(null);
   const hidden = new Set(arrange.view.windows);
-  const hiddenCount = source.windows.filter(w => hidden.has(windowKey(source.id, w.id))).length;
   const hasWeekly = source.windows.some(w => w.kind === 'weekly');
   const planned = planOf(arrange.view, source.id) !== null;
   const owner = arrange.owner;
@@ -224,7 +223,7 @@ function SourceSettings({source, arrange, board, onChanged}: {source: SourceStat
   };
 
   return (
-    <Popover label={t('source.settings', {source: sourceLabel(source)})} icon={<SlidersIcon />} badge={owner ? hiddenCount : 0}>
+    <Popover label={t('source.settings', {source: sourceLabel(source)})} icon={<SlidersIcon />}>
       {owner && (
         <>
           <div className="popover-title">{t('source.name')}</div>
