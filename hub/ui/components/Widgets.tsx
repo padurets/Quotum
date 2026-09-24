@@ -423,23 +423,24 @@ const LockIcon = ({open = false}: {open?: boolean}) => (
 /**
  * Which widgets the board shows, and whether they stay in place: locked, they have no
  * handles to move or resize them, so a pointer passing over the board catches nothing.
- * The owner brings hidden widgets back here.
+ * The owner brings hidden widgets back here, found by group: the cards, the lists of
+ * the current state, the analytics.
  */
 export function WidgetsMenu({
-  widgets,
+  groups,
   hidden,
   locked,
   onShow,
   onLock,
 }: {
-  widgets: {id: string; name: string}[];
+  groups: {title: string; widgets: {id: string; name: string}[]}[];
   hidden: string[];
   locked: boolean;
   onShow: (id: string, shown: boolean) => void;
   onLock: (locked: boolean) => void;
 }) {
   // Widgets off by default are not missing from the board: only what the owner hid is counted.
-  const count = widgets.filter(widget => hidden.includes(widget.id) && !isOffByDefault(widget.id)).length;
+  const count = groups.flatMap(group => group.widgets).filter(widget => hidden.includes(widget.id) && !isOffByDefault(widget.id)).length;
   return (
     <Popover label={t(locked ? 'widgets.titleLocked' : 'widgets.title')} icon={locked ? <LockIcon /> : <LayoutIcon />} badge={count}>
       <div className="popover-title">{t('widgets.title')}</div>
@@ -447,12 +448,19 @@ export function WidgetsMenu({
         <LockIcon open={!locked} />
         {t('widgets.lock')}
       </SwitchRow>
-      <div className="popover-sep" />
-      {widgets.map(widget => (
-        <SwitchRow key={widget.id} on={!hidden.includes(widget.id)} onChange={on => onShow(widget.id, on)}>
-          {widget.name}
-        </SwitchRow>
-      ))}
+      {groups
+        .filter(group => group.widgets.length)
+        .map(group => (
+          <div role="group" aria-label={group.title} key={group.title}>
+            <div className="popover-sep" />
+            <div className="popover-title is-group">{group.title}</div>
+            {group.widgets.map(widget => (
+              <SwitchRow key={widget.id} on={!hidden.includes(widget.id)} onChange={on => onShow(widget.id, on)}>
+                {widget.name}
+              </SwitchRow>
+            ))}
+          </div>
+        ))}
     </Popover>
   );
 }

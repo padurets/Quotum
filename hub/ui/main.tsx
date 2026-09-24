@@ -133,7 +133,11 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
         widgets={
           arrange.owner && overview && !empty ? (
             <WidgetsMenu
-              widgets={widgets}
+              groups={[
+                {title: t('widgets.groupCards'), widgets: widgets.filter(widget => widget.id !== AGENTS && cards.has(widget.id))},
+                {title: t('widgets.groupNow'), widgets: widgets.filter(widget => widget.id === AGENTS)},
+                {title: t('analytics.title'), widgets: widgets.filter(widget => panels.has(widget.id))},
+              ]}
               hidden={widgets.filter(widget => isHidden(arrange.view, widget.id)).map(widget => widget.id)}
               locked={prefs.locked}
               onShow={(id, on) => arrange.update(view => withHidden(view, id, !on))}
