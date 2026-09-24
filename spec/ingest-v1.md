@@ -229,16 +229,22 @@ for five minutes after its last request, then forgets it.
 | Field | Meaning |
 |---|---|
 | `provider` | As in a snapshot. |
-| `account`, `accountName` | The subscription, as in a check-in, as far as the agent knows it. Without them the hub takes the subscription this machine last delivered for that provider. |
+| `account`, `accountName` | The subscription, as in a check-in, as far as the agent knows it. Without them the hub takes the subscription this machine last delivered for that provider. Either way, only a subscription the device's person holds (their devices measured it). |
 | `origin` | Where it runs: `terminal`, `editor` (a client an editor runs, one per window) or `app` (a provider's desktop app, one client for all its chats). |
-| `project` | The name of the folder it works in (never a path), if it is a project folder. |
-| `startedAt` | When it started. |
+| `project` | The name of the folder it works in (never a path), if it is a project folder. A longer name than 120 characters is cut, not refused. |
+| `startedAt` | When it started; a time ahead of the hub's is taken as now. |
 | `working` | Whether it is working now (the agent's judgement: its processes spend CPU time), or idle. |
 
 At most 200 sessions. Clocks are as in a batch. `200` with `{"accepted": n}`: sessions
-of a subscription the hub does not know are left out. Errors are as for check-ins.
+of a subscription the hub does not know, or the person does not hold, are left out.
+Errors are as for check-ins; a hub without this request answers `404`, and the agent
+stops asking it.
 
-The hub adds up how long agents worked on each subscription, in five-minute cells.
+A board shows a session on the card of its subscription only to the members of a board
+where the session's person shows that subscription (their personal board, or a shared
+board they are on). The hub adds up how long agents worked on each subscription, in
+five-minute cells: each list counts until the next one, for at most two and a half
+minutes.
 
 ## Connecting with a one-time code
 
@@ -266,5 +272,5 @@ of the windows, free resets, the client's version, the machine's random id, its 
 configured, and for a failed measurement its kind and a short
 message of the client (at most 200 characters). About running agents (unless turned
 off): which client, where it runs, since when, whether it works, and the name of its
-project folder (unless that is turned off too). Everyone on a board that shows a
-subscription sees these, as they see its limits.
+project folder (unless that is turned off too). The members of a board where you show
+a subscription see these, as they see its limits.

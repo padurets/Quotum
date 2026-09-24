@@ -274,6 +274,11 @@ export class Directory {
 
   // ---------- devices ----------
 
+  /** The devices that joined with a machine token. */
+  devicesOfToken(tokenId: string): string[] {
+    return (this.db.prepare('SELECT id FROM devices WHERE token_id = ?').all(tokenId) as {id: string}[]).map(row => row.id);
+  }
+
   /** The device a device token belongs to, with whether it was disconnected. */
   deviceBySecret(secret: string): (Device & {revoked: boolean}) | null {
     const row = this.db.prepare('SELECT * FROM devices WHERE token_hash = ?').get(secretHash(secret)) as any;

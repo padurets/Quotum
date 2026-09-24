@@ -388,19 +388,24 @@ export class Store {
   }
 
   /** Forgets samples, events and announcements older than the retention period. */
-  /**
-   * Adds the time `agents` coding agents worked on a source from `from` to `to`, cell by
-   * cell. Agents on several machines report apart, so the time any of them worked is
-   * capped at the cell.
-   */
+  /** Adds the time `agents` coding agents worked on a source from `from` to `to`, cell by cell. */
   addWork(source: string, from: number, to: number, agents: number) {
-    if (agents <= 0 || to <= from) return;
+    this.addToCells(source, from, to, ms => [ms * agents, 0]);
+  }
+
+  /** Adds time when any agent worked on a source; the caller counts overlaps once (server/sessions.ts). */
+  addBusy(source: string, from: number, to: number) {
+    this.addToCells(source, from, to, ms => [0, ms]);
+  }
+
+  /** Adds to the cells from `from` to `to` what `amounts` gives for each one's share of it: [agent_ms, busy_ms]. */
+  private addToCells(source: string, from: number, to: number, amounts: (ms: number) => [number, number]) {
+    if (to <= from) return;
     const add = this.db.prepare(
-      'INSERT INTO work VALUES (?, ?, ?, ?) ON CONFLICT (source_id, at) DO UPDATE SET agent_ms = agent_ms + excluded.agent_ms, busy_ms = MIN(?, busy_ms + excluded.busy_ms)',
+      'INSERT INTO work VALUES (?, ?, ?, ?) ON CONFLICT (source_id, at) DO UPDATE SET agent_ms = agent_ms + excluded.agent_ms, busy_ms = busy_ms + excluded.busy_ms',
     );
     for (let cell = Math.floor(from / WORK_CELL_MS) * WORK_CELL_MS; cell < to; cell += WORK_CELL_MS) {
-      const ms = Math.min(to, cell + WORK_CELL_MS) - Math.max(from, cell);
-      add.run(source, cell, ms * agents, ms, WORK_CELL_MS);
+      add.run(source, cell, ...amounts(Math.min(to, cell + WORK_CELL_MS) - Math.max(from, cell)));
     }
   }
 

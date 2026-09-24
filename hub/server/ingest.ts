@@ -120,7 +120,7 @@ export class Ingest {
   /**
    * Which coding agents run on a device now. A session is filed under the subscription
    * it names, else under the one this device last delivered for its provider; one the
-   * hub does not know is left out.
+   * hub does not know, or its person does not hold, is left out.
    */
   sessions(credential: Credential, body: unknown, now = Date.now()): {accepted: number} {
     const report = parseSessions(body);
@@ -133,9 +133,11 @@ export class Ingest {
           account || accountName
             ? this.store.findSource(provider, subscriptionKey({provider, account, accountName}, device.userId))
             : this.store.deviceSource(device.id, provider);
-        return source ? [{...session, startedAt: session.startedAt + skew, source, device: {id: device.id, name}}] : [];
+        // Only a subscription the device's person holds: naming someone else's account shows nothing on it.
+        if (!source || !this.store.holds(device.userId, source)) return [];
+        return [{...session, startedAt: Math.min(now, session.startedAt + skew), source, device: {id: device.id, name}}];
       });
-      this.live.report(device.id, sessions, now);
+      this.live.report(device.id, device.userId, sessions, now);
       return {accepted: sessions.length};
     });
   }

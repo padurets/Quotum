@@ -433,6 +433,19 @@ test('agents report the coding agents running on their machines; the cards of th
   assert.equal(second.origin, 'editor', 'without an account: the subscription this machine delivers');
   assert.equal((await report([])).status, 200);
   assert.deepEqual(await shown(), [], 'an empty list: none runs');
+  const long = await report([{...codex, project: 'x'.repeat(300)}]);
+  assert.equal(long.body.accepted, 1, 'a long folder name is cut, not refused');
+  assert.equal((await shown())[0].project.length, 120);
+
+  const team = (await call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
+  await person('bob', (await call('POST', `/api/boards/${team}/invites`, {as: 'alice'})).body.url.split('/invite/')[1]);
+  const bobs = (await call('POST', '/api/tokens', {as: 'bob', body: {}})).body.secret;
+  const borrowed = await call('POST', '/v1/sessions', {
+    body: {version: 1, agent: 'quotum/0.3.0', machine: machine('bobs-laptop-0123456789'), sentAt: iso(Date.now()), sessions: [codex]},
+    headers: {authorization: `Bearer ${bobs}`},
+  });
+  assert.equal(borrowed.body.accepted, 0, "naming someone else's account shows nothing on it");
+
   const wrong = await report([{...codex, origin: 'browser'}]);
   assert.deepEqual([wrong.status, wrong.body], [400, {error: 'invalid_request', detail: 'origin'}]);
   assert.equal((await call('POST', '/v1/sessions', {body: {version: 1}})).status, 401);

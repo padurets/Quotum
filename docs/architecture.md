@@ -170,14 +170,17 @@ agent moves its own schedule back when the machine's clock is set back.
 
 **Running agents.** While the agent runs, it looks at the process list every 15 seconds
 (see [Measuring](#measuring)) and tells the hub the machine's whole list when it changes,
-and at least every two minutes while anything runs; failures are not retried, the next
-list goes out anyway. The hub keeps the latest list of each machine in memory for five
-minutes (after a restart the agents send theirs again), files each session under its
-subscription (the account the agent knows from measuring, else the one the machine last
-delivered for that client) and shows it on that card. Each list also credits the one
-before it for the time in between, at most five minutes: how long agents worked on each
-subscription, in five-minute cells (agent time, two agents counting twice, and the time
-any of them worked), kept as long as samples.
+and at least every two minutes while anything runs, with a short timeout: it never holds
+up measuring, and a list the hub did not take goes out again at the next look. Without a
+hub that takes it, the agent does not look. The hub keeps the latest list of each machine
+in memory for five minutes (after a restart the agents send theirs again), files each
+session under its subscription (the account the client is signed in to now, else the one
+the machine last delivered for that client; only one its person holds) and shows it on
+that card, to the members of a board where that person shows the subscription. Each list
+also counts until the next one, for at most two and a half minutes: how long agents
+worked on each subscription, in five-minute cells (agent time, two agents counting twice,
+and the time any of them worked, overlaps between machines counted once), kept as long
+as samples.
 
 ## Storage and the rules
 

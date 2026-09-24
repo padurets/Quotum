@@ -331,7 +331,7 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
     const user = guards.user(request, reply);
     if (!user) return reply;
     const revoked = directory.transaction(() => directory.revokeDevice(user.id, request.params.device, Date.now()) && (store.releaseRevoked(user.id), true));
-    if (revoked) hub.ingest.live.forget(request.params.device);
+    if (revoked) hub.ingest.live.forget([request.params.device]);
     return revoked ? {ok: true} : notFound(reply);
   });
 
@@ -358,6 +358,7 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
     if (!user) return reply;
     // Its machines are disconnected with it, and take along what only they measured.
     const revoked = directory.transaction(() => directory.revokeToken(user.id, request.params.token, Date.now()) && (store.releaseRevoked(user.id), true));
+    if (revoked) hub.ingest.live.forget(directory.devicesOfToken(request.params.token));
     return revoked ? {ok: true} : notFound(reply);
   });
 

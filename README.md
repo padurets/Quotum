@@ -141,8 +141,11 @@ day, not a script thrown together over a weekend. In practice that meant:
 - **Your credentials stay where they are.** Quotum never reads, stores or sends provider
   tokens or cookies. What leaves the machine: percentages and reset times, plan names,
   a one-way hash of each account id (so the hub can tell two machines share one
-  account), the machine's name and random id, and the short message of a client that
-  failed. The full list is in the [spec](spec/ingest-v1.md#privacy).
+  account), the machine's name and random id, the short message of a client that
+  failed, and which coding agents run on the machine: working or idle, since when, and
+  the name of their project folder (`sessions = false` and `projects = false` turn that
+  off). A board shows them to its members only where the person whose agents they are
+  shows that subscription. The full list is in the [spec](spec/ingest-v1.md#privacy).
 - **The numbers mean what they say.** Only a real increase inside one reset window
   counts as spending. Resets, corrections and gaps in the data never show up as
   consumption. The agent says when its next measurement is due, so a sparse series isn't

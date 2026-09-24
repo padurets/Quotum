@@ -68,6 +68,13 @@ function text(value: unknown, what: string, optional = false): string | null {
   return value;
 }
 
+/** Optional text that may run longer than the limit: cut to it, so one long value does not lose the rest of a request. */
+function cut(value: unknown, what: string): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string' || !value.length) throw new Invalid(what);
+  return value.slice(0, LIMITS.text);
+}
+
 function time(value: unknown, what: string, optional = false): number | null {
   if (optional && (value === undefined || value === null)) return null;
   const parsed = typeof value === 'string' ? Date.parse(value) : NaN;
@@ -250,7 +257,7 @@ export function parseSessions(body: unknown): SessionReport {
       account: account(value.account),
       accountName: text(value.accountName, 'accountName', true),
       origin: value.origin as Origin,
-      project: text(value.project, 'project', true),
+      project: cut(value.project, 'project'),
       startedAt: time(value.startedAt, 'startedAt')!,
       working: value.working,
     };

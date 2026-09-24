@@ -20,7 +20,8 @@ const directory = new Directory(store.db);
 
 const resets = new ResetFeed((provider, reset) => store.announce(provider, reset));
 const setup = new Setup(directory.userCount() === 0, config.auth.setupCode);
-const app = await buildApp({store, directory, resets, ingest: new Ingest(store, directory, new Duty()), pairing: new Pairing(directory), setup});
+const ingest = new Ingest(store, directory, new Duty());
+const app = await buildApp({store, directory, resets, ingest, pairing: new Pairing(directory), setup});
 await app.listen({host: config.http.host, port: config.http.port});
 console.log(JSON.stringify({event: 'start', users: directory.userCount()}));
 if (setup.pending) {
@@ -33,6 +34,7 @@ const prune = () => {
   const now = Date.now();
   store.prune(now);
   directory.prune(now);
+  ingest.live.sweep(now);
 };
 prune();
 const pruning = setInterval(prune, 3_600_000);
