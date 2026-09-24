@@ -458,6 +458,10 @@ test('changes from another origin, unknown hosts and other methods are refused',
   assert.equal((await call('POST', '/api/boards', {as: 'alice', body: {name: 'x'}, headers: {origin: 'https://evil.example'}})).status, 403);
   assert.equal((await call('POST', '/api/boards', {as: 'alice', body: {name: 'x'}, headers: {origin: 'http://localhost:9999'}})).status, 403, 'the port is part of the origin');
   assert.equal((await call('POST', '/api/boards', {as: 'alice', body: {name: 'x'}, headers: {origin: ORIGIN}})).status, 200);
+  // As many as a list may hold, every name at its longest, fit in one request.
+  const longest = {...codex, project: 'p'.repeat(120)};
+  const full = await report(Array.from({length: 200}, () => longest));
+  assert.equal(full.status, 200, JSON.stringify(full.body));
   assert.equal((await call('GET', '/api/session', {headers: {host: 'evil.example'}})).status, 403);
   assert.equal((await call('GET', '/api/session', {headers: {cookie: 'quotum_session=%E0%A4%A'}})).body.user, null, 'a malformed cookie is no session');
   assert.equal((await call('GET', '/api/history?range=1y', {as: 'alice'})).status, 400);

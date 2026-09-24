@@ -75,6 +75,8 @@ const AGENT: &str = concat!("quotum/", env!("CARGO_PKG_VERSION"));
 /// Telling the hub which agents run is quick or not done: it must not hold up measuring.
 const SESSIONS_TIMEOUT: Duration = Duration::from_secs(5);
 const SESSIONS_RETRY: Duration = Duration::from_secs(60);
+/// A hub that does not know the request yet (older than the agent) is asked again this much later: it may be upgraded.
+const SESSIONS_ASK_AGAIN: Duration = Duration::from_secs(3600);
 
 /// Why the hub did not take a request.
 enum Trouble {
@@ -182,8 +184,8 @@ pub struct HubSink {
     refused: Option<String>,
     /// The last problem reported, so a long outage is logged once.
     problem: Option<String>,
-    /// Whether the hub knows running agents (an older one does not).
-    takes_sessions: bool,
+    /// Until when the hub is taken not to know running agents (an older one), to ask it again then.
+    sessions_unknown_until: Option<Instant>,
     sessions_retry_at: Option<Instant>,
     log: Box<dyn FnMut(&str) + Send>,
 }
@@ -204,7 +206,7 @@ impl HubSink {
             failures: 0,
             refused: None,
             problem: None,
-            takes_sessions: true,
+            sessions_unknown_until: None,
             sessions_retry_at: None,
             log,
         }
@@ -383,13 +385,14 @@ impl Sink for HubSink {
     }
 
     fn takes_sessions(&self) -> bool {
-        self.takes_sessions && self.refused.is_none()
+        self.refused.is_none() && self.sessions_unknown_until.is_none_or(|at| Instant::now() >= at)
     }
 
     /// Best effort, and apart from measurements: a quick request that holds nothing back.
     /// A list the hub did not take is sent again at the next look; after a failure the hub
-    /// is left alone for a minute. A hub that does not know this request (older than it)
-    /// is not asked again.
+    /// is left alone for a minute. A hub that does not know this request (older than the
+    /// agent: its own `not_found`, not a proxy's 404) is asked again in an hour, when it
+    /// may have been upgraded.
     fn sessions(&mut self, sessions: &[RunningSession]) -> bool {
         if !self.takes_sessions() || self.sessions_retry_at.is_some_and(|at| Instant::now() < at) {
             return false;
@@ -410,17 +413,33 @@ impl Sink for HubSink {
             .build()
             .header("Authorization", &format!("Bearer {}", self.token))
             .send_json(&request);
-        match answer.map(|response| response.status().as_u16()) {
-            Ok(200..=299) => true,
-            Ok(404) => {
-                self.takes_sessions = false;
-                false
+        let (status, older) = match answer {
+            Ok(mut response) => {
+                let status = response.status().as_u16();
+                let older = status == 404
+                    && not_the_hub(&response).is_none()
+                    && response.body_mut().read_json::<Value>().is_ok_and(|body| body["error"] == "not_found");
+                (status, older)
             }
-            _ => {
-                self.sessions_retry_at = Some(Instant::now() + SESSIONS_RETRY);
-                false
+            Err(_) => (0, false),
+        };
+        if (200..300).contains(&status) {
+            if self.sessions_unknown_until.take().is_some() {
+                (self.log)("running agents: the hub takes them now");
             }
+            return true;
         }
+        if older {
+            if self.sessions_unknown_until.is_none() {
+                (self.log)(
+                    "running agents: the hub does not know them (it is older than this agent); asking again in an hour",
+                );
+            }
+            self.sessions_unknown_until = Some(Instant::now() + SESSIONS_ASK_AGAIN);
+        } else {
+            self.sessions_retry_at = Some(Instant::now() + SESSIONS_RETRY);
+        }
+        false
     }
 
     fn refused(&self) -> Option<&str> {
@@ -627,10 +646,22 @@ mod tests {
         let (url, seen) = hub(|_, _| json(404, json!({"error": "not_found"})));
         let (mut older, log) = sink(&url, "no-sessions");
         assert!(!older.sessions(&[]));
-        assert!(!older.takes_sessions());
+        assert!(!older.takes_sessions(), "not asked again for a while");
         assert_eq!(seen.lock().unwrap().len(), 1, "asked once");
-        assert!(log.lock().unwrap().is_empty(), "nothing to worry about");
+        assert_eq!(log.lock().unwrap().len(), 1, "said once: {:?}", log.lock().unwrap());
         assert!(older.retry_at.is_none(), "measurements are not held back");
+        // An hour later it is asked again, and may have been upgraded.
+        older.sessions_unknown_until = Some(Instant::now() - Duration::from_secs(1));
+        assert!(older.takes_sessions());
+        assert!(!older.sessions(&[]));
+        assert_eq!(log.lock().unwrap().len(), 1, "not said again");
+
+        // A 404 of something in front of the hub is only a failure: tried again in a minute.
+        let (url, _) = hub(|_, _| (404, "content-type: text/plain\r\n", "404 page not found".into()));
+        let (mut proxied, _) = sink(&url, "proxied-sessions");
+        assert!(!proxied.sessions(&[]));
+        assert!(proxied.takes_sessions());
+        assert!(proxied.sessions_retry_at.is_some());
     }
 
     #[test]

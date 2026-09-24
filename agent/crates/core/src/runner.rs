@@ -149,7 +149,11 @@ impl Runner {
             if let Some(reason) = sink.refused() {
                 return Some(reason.to_string());
             }
-            // Only while the list can go somewhere: no looking for a hub that does not take it.
+            // Only while the list can go somewhere: no looking for a hub that does not take it
+            // (now: an older one is asked again later, and looking starts over then).
+            if let Some(watch) = watch.as_mut().filter(|_| !sink.takes_sessions()) {
+                watch.looked = None;
+            }
             if let Some(watch) =
                 watch.as_mut().filter(|w| sink.takes_sessions() && w.looked.is_none_or(|at| at.elapsed() >= LOOK_EVERY))
             {
@@ -243,7 +247,8 @@ impl Runner {
         accounts: &[Option<(Option<String>, Option<SystemTime>)>],
         identity_paths: &[Vec<PathBuf>],
     ) -> Vec<RunningSession> {
-        seen.into_iter()
+        let sessions = seen
+            .into_iter()
             .filter_map(|session| {
                 let index = self.adapters.iter().position(|a| a.provider() == session.provider)?;
                 let adapter = &self.adapters[index];
@@ -269,8 +274,21 @@ impl Runner {
                     working: session.working == Some(true),
                 })
             })
-            .collect()
+            .collect();
+        capped(sessions)
     }
+}
+
+/// A hub takes at most this many sessions of a machine at once (spec: Reporting running agents).
+const MAX_SESSIONS: usize = 200;
+
+/// A list the hub can take: past its limit, the working sessions first, then the newest.
+fn capped(mut sessions: Vec<RunningSession>) -> Vec<RunningSession> {
+    if sessions.len() > MAX_SESSIONS {
+        sessions.sort_by_key(|s| (std::cmp::Reverse(s.working), std::cmp::Reverse(s.started_at)));
+        sessions.truncate(MAX_SESSIONS);
+    }
+    sessions
 }
 
 /// The account the client is signed in to now: the one it names on this machine, else
@@ -301,6 +319,25 @@ pub enum Event<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_list_keeps_the_working_sessions_and_then_the_newest() {
+        let session = |working, started_at| RunningSession {
+            provider: Provider::Claude,
+            account: None,
+            account_name: None,
+            origin: "terminal",
+            project: None,
+            started_at,
+            working,
+        };
+        let list: Vec<_> = (0..250).map(|i| session(i % 50 == 0, i)).collect();
+        let kept = capped(list);
+        assert_eq!(kept.len(), MAX_SESSIONS);
+        assert_eq!(kept.iter().filter(|s| s.working).count(), 5, "every working one");
+        assert_eq!(kept.last().map(|s| s.started_at), Some(52), "then the newest idle ones");
+        assert_eq!(capped(vec![session(false, 1)]).len(), 1, "a short list as it is");
+    }
 
     #[test]
     fn a_session_is_filed_under_the_account_signed_in_now() {

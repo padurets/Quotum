@@ -235,10 +235,13 @@ for five minutes after its last request, then forgets it.
 | `startedAt` | When it started; a time ahead of the hub's is taken as now. |
 | `working` | Whether it is working now (the agent's judgement: its processes spend CPU time), or idle. |
 
-At most 200 sessions. Clocks are as in a batch. `200` with `{"accepted": n}`: sessions
-of a subscription the hub does not know, or the person does not hold, are left out.
-Errors are as for check-ins; a hub without this request answers `404`, and the agent
-stops asking it.
+At most 200 sessions (the reference agent sends the working ones first, then the
+newest), in at most 128 KiB. Clocks are as in a batch. `200` with `{"accepted": n}`:
+sessions of a subscription the hub does not know, or the person does not hold, are left
+out. Errors are as for check-ins; a hub without this request answers `404` with
+`{"error": "not_found"}`, and the agent asks it again an hour later (it may have been
+upgraded). A `404` without that body comes from something in front of the hub and is
+tried again like any failure.
 
 A board shows a session on the card of its subscription only to the members of a board
 where the session's person shows that subscription (their personal board, or a shared

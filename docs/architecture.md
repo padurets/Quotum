@@ -172,7 +172,9 @@ agent moves its own schedule back when the machine's clock is set back.
 (see [Measuring](#measuring)) and tells the hub the machine's whole list when it changes,
 and at least every two minutes while anything runs, with a short timeout: it never holds
 up measuring, and a list the hub did not take goes out again at the next look. Without a
-hub that takes it, the agent does not look. The hub keeps the latest list of each machine
+hub that takes it, the agent does not look (an older hub, which does not know the
+request, is asked again every hour: it may have been upgraded). At most 200 sessions go
+out, the working ones first. The hub keeps the latest list of each machine
 in memory for five minutes (after a restart the agents send theirs again), files each
 session under its subscription (the account the client is signed in to now, else the one
 the machine last delivered for that client; only one its person holds; the agent leaves
