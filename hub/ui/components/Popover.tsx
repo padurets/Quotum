@@ -35,14 +35,22 @@ export function Popover({
   const panel = useRef<HTMLDivElement>(null);
   // Measured once it is open: a panel that would reach under the top bar opens downwards instead.
   const [down, setDown] = useState(false);
-  /** How far the panel moves sideways to stay on the screen (from a card at the edge of a narrow one). */
-  const [shift, setShift] = useState(0);
+  // The panel moves sideways to stay on the screen (from a card at the edge of a narrow
+  // one), again when the window turns or is resized; the page's width leaves out its scrollbar.
   useLayoutEffect(() => {
-    if (!open) return setShift(0);
-    const rect = panel.current?.getBoundingClientRect();
-    if (!rect) return;
-    const edge = 8;
-    setShift(rect.left < edge ? edge - rect.left : rect.right > innerWidth - edge ? innerWidth - edge - rect.right : 0);
+    const element = panel.current;
+    if (!open || !element) return;
+    const place = () => {
+      element.style.translate = '';
+      const rect = element.getBoundingClientRect();
+      const width = document.documentElement.clientWidth;
+      const edge = 8;
+      const shift = rect.left < edge ? edge - rect.left : rect.right > width - edge ? width - edge - rect.right : 0;
+      if (shift) element.style.translate = `${shift}px 0`;
+    };
+    place();
+    addEventListener('resize', place);
+    return () => removeEventListener('resize', place);
   }, [open]);
 
   useLayoutEffect(() => {
@@ -87,7 +95,7 @@ export function Popover({
         {!!badge && <i className="badge">{badge}</i>}
       </button>
       {open && (
-        <div className={`popover glass ${align === 'left' ? 'is-left' : ''} ${up && !down ? 'is-up' : ''}`} role="dialog" aria-label={label} ref={panel} style={shift ? {translate: `${shift}px 0`} : undefined}>
+        <div className={`popover glass ${align === 'left' ? 'is-left' : ''} ${up && !down ? 'is-up' : ''}`} role="dialog" aria-label={label} ref={panel}>
           {children}
         </div>
       )}

@@ -408,6 +408,7 @@ td.muted, small.muted { color: var(--text-3); }
 .tooltip-row span { color: var(--text-2); }
 /* A long name gives way; the swatch, the value and the plan beside it stay whole. */
 .tooltip-row:not(.is-marker) span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tooltip-row.is-marker span { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .tooltip-row svg, .tooltip-row strong, .tooltip-plan { flex-shrink: 0; }
 .tooltip-row.is-plan strong, .tooltip-row.is-plan span { color: var(--text-3); font-weight: 450; }
 .tooltip-sep { height: 1px; background: var(--hair); margin: 5px 0; }
