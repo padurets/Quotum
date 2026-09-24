@@ -243,8 +243,9 @@ out. Errors are as for check-ins; a hub without this request answers `404` with
 upgraded). A `404` without that body comes from something in front of the hub and is
 tried again like any failure.
 
-A board shows a session on the card of its subscription only to the members of a board
-where the session's person shows that subscription (their personal board, or a shared
+A board shows a session on the card of its subscription, with the name of its machine
+(as its person named it in the dashboard, else as the machine reports it), only to the
+members of a board where the session's person shows that subscription (their personal board, or a shared
 board they are on). The hub adds up how long agents worked on each subscription, in
 five-minute cells: each list counts until the next one, for at most 200 seconds.
 
@@ -275,4 +276,5 @@ configured, and for a failed measurement its kind and a short
 message of the client (at most 200 characters). About running agents (unless turned
 off): which client, where it runs, since when, whether it works, and the name of its
 project folder (unless that is turned off too). The members of a board where you show
-a subscription see these, as they see its limits.
+a subscription see these, as they see its limits, and with them the name of the machine
+each agent runs on.
