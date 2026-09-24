@@ -19,6 +19,10 @@ const diamond = (x: number, y: number, r = 4) => `M${x},${y - r}l${r},${r}l${-r}
 /** The spending plan of one weekly window, drawn as a faint dotted line in its colour; `lines` are the keys of the lines it plans. */
 export type PlanLine = {key: string; lines: string[]; name: string; color: string; runs: [number, number][][]};
 
+/** How wide an announcement's label is taken to be, and how near an edge a value hides under it (percent). */
+const LABEL_WIDTH = 220;
+const LABEL_BAND = 15;
+
 /** A label on the chart on a backing sized to its text, so no line under it gets in the way. */
 function MarkerLabel({x, y, end, children}: {x: number; y: number; end: boolean; children: string}) {
   const text = useRef<SVGTextElement>(null);
@@ -174,6 +178,21 @@ export function Chart({
     return ((event.clientX - rect.left) / rect.width) * width;
   };
   const timeAt = (px: number) => from + ((px - left) / (width - left - right)) * span;
+  // A label hides what runs under it: it stands at the bottom of the plot, or at the top
+  // when more of the lines run near the bottom there (a limit about to run out).
+  const labelY = (anchor: number, end: boolean) => {
+    const [a, b] = (end ? [anchor - LABEL_WIDTH, anchor] : [anchor, anchor + LABEL_WIDTH]).map(timeAt);
+    let low = 0;
+    let high = 0;
+    for (const line of lines) {
+      for (const [at, value] of line.points) {
+        if (at < a || at > b) continue;
+        if (value < LABEL_BAND) low++;
+        else if (value > 100 - LABEL_BAND) high++;
+      }
+    }
+    return low > high ? top + 18 : height - bottom - 8;
+  };
   const move = (event: PointerEvent<SVGSVGElement>) => {
     const px = toChart(event);
     const held = holding.current;
@@ -301,8 +320,9 @@ export function Chart({
             const mx = beyond ? width - right : x(marker.at);
             // Beyond the visible future: at the right edge, with the distance.
             const nearRight = beyond || mx > width - right - 150;
+            const lx = beyond ? mx : nearRight ? mx - 6 : mx + 6;
             return (
-              <MarkerLabel key={marker.key} x={beyond ? mx : nearRight ? mx - 6 : mx + 6} y={height - bottom - 8} end={nearRight}>
+              <MarkerLabel key={marker.key} x={lx} y={labelY(lx, nearRight)} end={nearRight}>
                 {beyond ? t('chart.ahead', {label: marker.label, time: duration(marker.at - now, true)}) : marker.label}
               </MarkerLabel>
             );
