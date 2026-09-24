@@ -150,6 +150,7 @@ export function History({
       if (seen.has(key)) continue;
       seen.set(key, {
         key,
+        sourceId: line.sourceId,
         name: t('chart.plan', {source: source ? sourceLabel(source) : line.provider}),
         color: line.color,
         runs: weeklyPlanLine(live.resetAt, from, to, plan),

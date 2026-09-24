@@ -17,7 +17,7 @@ const HOLD_MS = 450;
 const diamond = (x: number, y: number, r = 4) => `M${x},${y - r}l${r},${r}l${-r},${r}l${-r},${-r}z`;
 
 /** The spending plan of one weekly window, drawn as a faint dotted line in its colour. */
-export type PlanLine = {key: string; name: string; color: string; runs: [number, number][][]};
+export type PlanLine = {key: string; sourceId: string; name: string; color: string; runs: [number, number][][]};
 
 /** Value of a piecewise-linear run at time `at`, or undefined outside it. */
 function valueAt(runs: [number, number][][], at: number) {
@@ -147,6 +147,9 @@ export function Chart({
           const value = valueAt(plan.runs, Math.min(to, hover + cellMs / 2));
           return value === undefined ? [] : [{plan, value}];
         });
+  // A plan is read beside what its source has left; one with nothing read there stands on its own.
+  const planOf = (sourceId: string) => planReadout.find(row => row.plan.sourceId === sourceId);
+  const lonePlans = planReadout.filter(row => !readout.some(r => r.line.sourceId === row.plan.sourceId));
 
   const toChart = (event: PointerEvent<SVGSVGElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -309,7 +312,7 @@ export function Chart({
         )}
       </svg>
 
-      {hover !== null && !drag && readout.length + planReadout.length + markerReadout.length > 0 && (
+      {hover !== null && !drag && readout.length + lonePlans.length + markerReadout.length > 0 && (
         <div className="tooltip glass" ref={tip} style={{left: tipLeft}}>
           <div className="tooltip-time">{cellLabel(hover, cellMs)}</div>
           {[...readout]
@@ -321,6 +324,7 @@ export function Chart({
                 </svg>
                 <strong>{num(row.value)}%</strong>
                 <span>{row.line.name}</span>
+                {planOf(row.line.sourceId) && <em className="tooltip-plan">{t('chart.planValue', {value: num(planOf(row.line.sourceId)!.value)})}</em>}
               </div>
             ))}
           {markerReadout.map(marker => (
@@ -337,8 +341,8 @@ export function Chart({
               {marker.detail && <small className="tooltip-detail">{marker.detail}</small>}
             </div>
           ))}
-          {planReadout.length > 0 && <div className="tooltip-sep" />}
-          {planReadout.map(row => (
+          {lonePlans.length > 0 && <div className="tooltip-sep" />}
+          {lonePlans.map(row => (
             <div className="tooltip-row is-plan" key={row.plan.key}>
               <svg width="14" height="4" aria-hidden="true">
                 <line x1="0" x2="14" y1="2" y2="2" stroke={row.plan.color} strokeWidth="1.5" strokeDasharray="1 3" strokeLinecap="round" />

@@ -225,6 +225,7 @@ export const en = {
   'chart.label': 'Remaining limits over time, percent',
   'chart.announcedCodex': 'Codex reset announced',
   'chart.reset': 'reset · {source}',
+  'chart.planValue': 'plan {value}%',
   'chart.plan': 'plan · {source}',
   'chart.earlyReset': 'limits reset early · {source}',
   'chart.resetsGranted': {one: '{count} free reset granted · {source}', other: '{count} free resets granted · {source}'},

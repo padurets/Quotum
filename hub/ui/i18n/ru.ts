@@ -221,6 +221,7 @@ export const ru = {
   'chart.label': 'Остаток лимитов во времени, проценты',
   'chart.announcedCodex': 'объявлен сброс Codex',
   'chart.reset': 'сброс · {source}',
+  'chart.planValue': 'план {value}%',
   'chart.plan': 'план · {source}',
   'chart.earlyReset': 'досрочный сброс · {source}',
   'chart.resetsGranted': {one: 'выдан {count} бесплатный сброс · {source}', few: 'выдано {count} бесплатных сброса · {source}', many: 'выдано {count} бесплатных сбросов · {source}', other: 'выдано {count} бесплатного сброса · {source}'},
