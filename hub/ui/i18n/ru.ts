@@ -1,6 +1,6 @@
 import type {Catalog} from './index';
 
-/** Русский. «п.п.» — процентные пункты: разница между двумя процентами. */
+/** Русский. Разница двух долей лимита тоже в «%»: всё здесь — доля лимита. */
 export const ru = {
   'common.offline': 'Нет связи с хабом',
   'common.close': 'Закрыть',
@@ -128,10 +128,10 @@ export const ru = {
   'limit.resetsIn': 'сброс через {time}',
   'limit.resetPassed': 'окно сброшено, ждём замер',
   'limit.resetUnknown': 'время сброса неизвестно',
-  'limit.ahead': 'опережает план · {value} п.п.',
+  'limit.ahead': 'опережает план · {value}%',
   'limit.aheadHint': 'Расход опережает план: лимит может закончиться раньше конца плана',
   'limit.aheadHintReset': 'Расход быстрее равномерного: лимит может закончиться раньше сброса',
-  'limit.behind': 'отстаёт от плана · {value} п.п.',
+  'limit.behind': 'отстаёт от плана · {value}%',
   'limit.behindHint': 'Расход отстаёт от плана: часть лимита может остаться неиспользованной',
   'card.allHidden': 'Все лимиты скрыты',
   'agents.summary': 'Агенты: работают {working} из {count}',
@@ -211,10 +211,10 @@ export const ru = {
   'table.spentInRange': 'Потрачено',
   'table.pace': 'Темп',
   'table.paceHint': 'Средний расход за время, когда замеры шли без пропусков',
-  'table.perHour': '{value} п.п./ч',
-  'table.behindBy': 'Отстаёт от плана на {value} п.п.',
-  'table.aheadBy': 'Опережает план на {value} п.п.',
-  'table.points': '{value} п.п.',
+  'table.perHour': '{value}%/ч',
+  'table.behindBy': 'Отстаёт от плана на {value}%',
+  'table.aheadBy': 'Опережает план на {value}%',
+  'table.points': '{value}%',
   'table.unused': 'не расходовался',
   
   'forecast.title': 'Расход и прогноз',
@@ -222,7 +222,7 @@ export const ru = {
   'forecast.empty': 'За этот период нет замеров',
 
   'forecast.needData': 'Нужно хотя бы 30 минут непрерывных замеров',
-  'forecast.rate': 'Средний темп за период: {rate} п.п./ч',
+  'forecast.rate': 'Средний темп за период: {rate}%/ч',
   'forecast.usedUp': 'исчерпан до сброса',
   'forecast.runsOut': 'закончится через {time}',
   'forecast.onPaceReset': 'уложится к сбросу',

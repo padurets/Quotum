@@ -3,7 +3,8 @@ import type {Message} from './types';
 /**
  * English, the source language: every key the dashboard uses is defined here, and
  * other languages must translate all of them (the type checker and the tests say
- * which are missing). "pp" is percentage points: the difference between two percents.
+ * which are missing). A difference between two shares of a limit is in "%" too:
+ * everything here is a share of a limit.
  */
 export const en = {
   'common.offline': 'Can’t reach the hub',
@@ -132,10 +133,10 @@ export const en = {
   'limit.resetsIn': 'resets in {time}',
   'limit.resetPassed': 'window reset, waiting for a measurement',
   'limit.resetUnknown': 'reset time unknown',
-  'limit.ahead': 'ahead of plan · {value} pp',
+  'limit.ahead': 'ahead of plan · {value}%',
   'limit.aheadHint': 'Spending faster than planned: the limit may run out before the plan ends',
   'limit.aheadHintReset': 'Spending faster than an even pace: the limit may run out before it resets',
-  'limit.behind': 'behind plan · {value} pp',
+  'limit.behind': 'behind plan · {value}%',
   'limit.behindHint': 'Spending slower than planned: part of the limit may go unused',
   'card.allHidden': 'All limits are hidden',
   'agents.summary': 'Agents: {working} of {count} working',
@@ -215,10 +216,10 @@ export const en = {
   'table.spentInRange': 'Spent',
   'table.pace': 'Pace',
   'table.paceHint': 'Average spending over the time measured without gaps',
-  'table.perHour': '{value} pp/h',
-  'table.behindBy': 'Behind the plan by {value} pp',
-  'table.aheadBy': 'Ahead of the plan by {value} pp',
-  'table.points': '{value} pp',
+  'table.perHour': '{value}%/h',
+  'table.behindBy': 'Behind the plan by {value}%',
+  'table.aheadBy': 'Ahead of the plan by {value}%',
+  'table.points': '{value}%',
   'table.unused': 'not used',
   
   'forecast.title': 'Spending and forecast',
@@ -226,7 +227,7 @@ export const en = {
   'forecast.empty': 'No measurements in this period',
 
   'forecast.needData': 'Needs at least 30 minutes of continuous measurements',
-  'forecast.rate': 'Average pace over the period: {rate} pp/h',
+  'forecast.rate': 'Average pace over the period: {rate}%/h',
   'forecast.runsOut': 'runs out in {time}',
   'forecast.usedUp': 'used up until the reset',
   'forecast.onPaceReset': 'on pace for the reset',
