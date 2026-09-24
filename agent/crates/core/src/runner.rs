@@ -247,7 +247,9 @@ impl Runner {
                 let adapter = &self.adapters[index];
                 let (account, account_name) = if adapter.identifies_account() {
                     let signed_in = last_activity(&identity_paths[index]);
-                    (current_account(adapter.local_account(&self.home), &accounts[index], signed_in), None)
+                    // Not known (signed in anew since measured): left out rather than filed
+                    // under whatever the hub last saw from this machine.
+                    (Some(current_account(adapter.local_account(&self.home), &accounts[index], signed_in)?), None)
                 } else {
                     (None, self.config.account_name(session.provider).map(str::to_string))
                 };
