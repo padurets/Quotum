@@ -107,7 +107,7 @@ impl Activity {
         let listed: HashMap<u32, Option<(Millis, u64)>> = procs.iter().map(|p| (p.pid, p.times)).collect();
         let times = |pid: u32| listed.get(&pid).copied().flatten().or_else(|| sys::times(pid));
         let mut seen = HashMap::new();
-        let sessions = sessions(&procs, std::process::id())
+        let sessions = sessions(&procs, std::process::id(), &sys::exe)
             .into_iter()
             // Other people's clients on a shared machine are theirs, and on their accounts.
             .filter(|found| sys::mine(found.pid))
@@ -163,8 +163,9 @@ fn provider_of(name: &str) -> Option<Provider> {
 /// The sessions among `procs`. Not sessions: clients started by the agent itself to measure (below this
 /// process `own` or any `quotum`), and a client under another of the same kind (a
 /// launcher and the program it runs). A session under a session of another kind is its
-/// own, and its tree is not counted in the one above.
-pub fn sessions(procs: &[Proc], own: u32) -> Vec<Found> {
+/// own, and its tree is not counted in the one above. `exe` gives the path of a program,
+/// asked only of what runs a session and its name does not tell (see [`origin`]).
+pub fn sessions(procs: &[Proc], own: u32, exe: &dyn Fn(u32) -> Option<String>) -> Vec<Found> {
     let by_pid: HashMap<u32, &Proc> = procs.iter().map(|p| (p.pid, p)).collect();
     let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
     for p in procs {
@@ -185,7 +186,7 @@ pub fn sessions(procs: &[Proc], own: u32) -> Vec<Found> {
         let above: Vec<&Proc> = ancestors(p.pid).iter().filter_map(|a| by_pid.get(a).copied()).collect();
         let measuring = p.pid == own || above.iter().any(|q| q.pid == own || is_quotum(&q.name));
         let launched = above.iter().find_map(|q| provider_of(&q.name)) == Some(provider);
-        (!measuring && !launched).then(|| (provider, origin(&above)))
+        (!measuring && !launched).then(|| (provider, origin(&above, exe)))
     };
     let found: HashMap<u32, (Provider, Origin)> = procs.iter().filter_map(|p| Some((p.pid, session(p)?))).collect();
 
@@ -221,8 +222,10 @@ pub struct Found {
 }
 
 /// Where a client runs, from the programs above it: an editor, the desktop app of its
-/// provider, or else a terminal (a shell, a multiplexer, ssh).
-fn origin(above: &[&Proc]) -> Origin {
+/// provider, or else a terminal (a shell, a multiplexer, ssh). An editor's server on a
+/// remote machine (VS Code over SSH, Cursor, code-server) is a `node` found by its path.
+fn origin(above: &[&Proc], exe: &dyn Fn(u32) -> Option<String>) -> Origin {
+    const SERVERS: [&str; 4] = [".vscode-server", ".cursor-server", ".windsurf-server", "code-server"];
     const EDITORS: [&str; 6] = ["code", "code-insiders", "codium", "cursor", "windsurf", "antigravity"];
     const HELPERS: [&str; 5] =
         ["code helper", "code - insiders", "cursor helper", "windsurf helper", "antigravity helper"];
@@ -231,7 +234,8 @@ fn origin(above: &[&Proc]) -> Origin {
         .find_map(|p| {
             let bare = p.name.strip_suffix(".exe").unwrap_or(&p.name);
             let name = bare.to_ascii_lowercase();
-            if EDITORS.contains(&name.as_str()) || HELPERS.iter().any(|helper| name.starts_with(helper)) {
+            let server = || name == "node" && exe(p.pid).is_some_and(|path| SERVERS.iter().any(|s| path.contains(s)));
+            if EDITORS.contains(&name.as_str()) || HELPERS.iter().any(|helper| name.starts_with(helper)) || server() {
                 Some(Origin::Editor)
             } else if ["chatgpt", "codex", "claude"].contains(&name.as_str()) && bare != name {
                 // A capitalised name of a provider: its desktop app (a client of the same name is lower case).
@@ -313,6 +317,10 @@ mod sys {
         fs::read_link(format!("/proc/{pid}/cwd")).ok()
     }
 
+    pub fn exe(pid: u32) -> Option<String> {
+        Some(fs::read_link(format!("/proc/{pid}/exe")).ok()?.to_string_lossy().into_owned())
+    }
+
     /// Whether this user runs it.
     pub fn mine(pid: u32) -> bool {
         use std::os::unix::fs::MetadataExt;
@@ -382,8 +390,9 @@ mod sys {
                 // SAFETY: both are NUL-terminated within their arrays (zeroed first).
                 let mut name = unsafe { CStr::from_ptr(raw.as_ptr()) }.to_string_lossy().into_owned();
                 // A name the file a link led to gave (a version, a platform): the path tells the client.
-                if (name.starts_with(|c: char| c.is_ascii_digit()) || name.starts_with("codex-"))
-                    && let Some(client) = path(pid as u32).as_deref().and_then(super::client_by_path)
+                let linked = name.starts_with(|c: char| c.is_ascii_digit()) || name.starts_with("codex-");
+                if let Some(client) =
+                    linked.then(|| path(pid as u32)).flatten().as_deref().and_then(super::client_by_path)
                 {
                     name = client.to_string();
                 }
@@ -413,6 +422,10 @@ mod sys {
         // SAFETY: getuid cannot fail.
         let me = unsafe { libc::getuid() };
         info::<libc::proc_bsdinfo>(pid, libc::PROC_PIDTBSDINFO).is_some_and(|bsd| bsd.pbi_uid == me)
+    }
+
+    pub fn exe(pid: u32) -> Option<String> {
+        path(pid)
     }
 
     /// The path of its program.
@@ -512,6 +525,11 @@ mod sys {
         None
     }
 
+    /// Editors' remote servers run on Linux and macOS: not looked for here.
+    pub fn exe(_: u32) -> Option<String> {
+        None
+    }
+
     /// Whether it runs in this user's logon session (another account's process started in it,
     /// say with runas, counts too).
     pub fn mine(pid: u32) -> bool {
@@ -540,6 +558,9 @@ mod sys {
     pub fn cwd(_: u32) -> Option<PathBuf> {
         None
     }
+    pub fn exe(_: u32) -> Option<String> {
+        None
+    }
     pub fn mine(_: u32) -> bool {
         false
     }
@@ -554,11 +575,11 @@ mod tests {
     }
 
     fn found(procs: &[Proc]) -> Vec<(Provider, u32, Vec<u32>)> {
-        sessions(procs, 900).into_iter().map(|f| (f.provider, f.pid, f.tree)).collect()
+        sessions(procs, 900, &|_| None).into_iter().map(|f| (f.provider, f.pid, f.tree)).collect()
     }
 
     fn origins(procs: &[Proc]) -> Vec<(u32, Origin)> {
-        sessions(procs, 900).into_iter().map(|f| (f.pid, f.origin)).collect()
+        sessions(procs, 900, &|_| None).into_iter().map(|f| (f.pid, f.origin)).collect()
     }
 
     #[test]
@@ -628,8 +649,30 @@ mod tests {
             p(3001, 3000, "Claude"),
         ];
         assert_eq!(origins(&procs), vec![(10195, Origin::Editor), (19988, Origin::Terminal), (1098247, Origin::App)]);
-        let app = sessions(&procs, 900).into_iter().find(|f| f.pid == 1098247).unwrap();
+        let app = sessions(&procs, 900, &|_| None).into_iter().find(|f| f.pid == 1098247).unwrap();
         assert_eq!(app.tree, vec![1098247, 1114779], "the app's windows are not counted in its client");
+    }
+
+    /// Claude Code in VS Code over SSH: the editor's server is a `node` in ~/.vscode-server.
+    #[test]
+    fn a_remote_editors_server_is_an_editor() {
+        let procs = [
+            p(1, 0, "systemd"),
+            p(200, 1, "sshd"),
+            p(210, 200, "node"),
+            p(220, 210, "node"),
+            p(230, 220, "claude"),
+            p(300, 200, "bash"),
+            p(310, 300, "node"),
+            p(320, 310, "codex"),
+        ];
+        let exe = |pid: u32| match pid {
+            210 | 220 => Some("/home/ann/.vscode-server/cli/servers/Stable-abc/server/node".to_string()),
+            310 => Some("/usr/bin/node".to_string()),
+            _ => None,
+        };
+        let origins: Vec<_> = sessions(&procs, 900, &exe).into_iter().map(|f| (f.pid, f.origin)).collect();
+        assert_eq!(origins, vec![(230, Origin::Editor), (320, Origin::Terminal)], "a node of its own is not an editor");
     }
 
     #[test]
