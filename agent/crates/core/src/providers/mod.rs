@@ -35,6 +35,10 @@ pub trait Adapter: Send {
     fn program(&self) -> &'static str;
     /// The client's own install locations, besides PATH and [`usual_dirs`].
     fn install_dirs(&self, home: &Path) -> Vec<PathBuf>;
+    /// Where a copy of the client may be found when no installed one is: looked in last.
+    fn fallback_dirs(&self, _home: &Path) -> Vec<PathBuf> {
+        Vec::new()
+    }
     fn measure(&mut self, ctx: &Context) -> Outcome;
     /// Files and directories that change when someone uses the agent on this machine.
     fn activity_paths(&self, home: &Path) -> Vec<PathBuf>;
@@ -60,10 +64,15 @@ pub fn adapter(provider: Provider) -> Box<dyn Adapter> {
     }
 }
 
-/// The adapter's client: on PATH, in its own install locations, or where installers
-/// and package managers put programs.
+/// The adapter's client: on PATH, in its own install locations, where installers and
+/// package managers put programs, or else a copy another program carries.
 pub fn find_client(adapter: &dyn Adapter, home: &Path) -> Option<PathBuf> {
-    find_program(adapter.program(), &[adapter.install_dirs(home), usual_dirs(home)].concat())
+    find_program(adapter.program(), &client_dirs(adapter, home))
+}
+
+/// Where a client is looked for after PATH, in order.
+fn client_dirs(adapter: &dyn Adapter, home: &Path) -> Vec<PathBuf> {
+    [adapter.install_dirs(home), usual_dirs(home), adapter.fallback_dirs(home)].concat()
 }
 
 pub(crate) fn locate(adapter: &dyn Adapter, ctx: &Context) -> Result<PathBuf, Failure> {
@@ -146,6 +155,17 @@ pub fn last_activity(paths: &[PathBuf]) -> Option<SystemTime> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_copy_in_an_app_or_extension_comes_after_an_installed_client() {
+        let home = Path::new("/home/ann");
+        let dirs = client_dirs(adapter(Provider::Codex).as_ref(), home);
+        let position = |dir: PathBuf| dirs.iter().position(|d| *d == dir);
+        let installed = position(home.join(".npm-global/bin")).unwrap();
+        if cfg!(target_os = "linux") {
+            assert!(position(PathBuf::from("/usr/lib/chatgpt/resources")).unwrap() > installed);
+        }
+    }
 
     #[test]
     fn versions_are_found_in_client_output() {

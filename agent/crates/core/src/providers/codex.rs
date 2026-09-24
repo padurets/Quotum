@@ -27,10 +27,14 @@ impl Adapter for Codex {
         "codex"
     }
 
-    /// Its own installer's place, then the clients the Codex app and the editor extensions
-    /// carry: whoever uses only those has no command-line client to install.
     fn install_dirs(&self, home: &Path) -> Vec<PathBuf> {
-        let mut dirs = vec![home.join(".codex/bin")];
+        vec![home.join(".codex/bin")]
+    }
+
+    /// The clients the Codex app and the editor extensions carry: whoever uses only those
+    /// has no command-line client to install.
+    fn fallback_dirs(&self, home: &Path) -> Vec<PathBuf> {
+        let mut dirs = Vec::new();
         if cfg!(target_os = "linux") {
             dirs.push(PathBuf::from("/usr/lib/chatgpt/resources"));
         }
