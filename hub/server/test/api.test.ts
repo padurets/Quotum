@@ -458,8 +458,8 @@ test('agents report the coding agents running on their machines; the cards of th
 
   const wrong = await report([{...codex, origin: 'browser'}]);
   assert.deepEqual([wrong.status, wrong.body], [400, {error: 'invalid_request', detail: 'origin'}]);
-  // As many as a list may hold, every name at its longest, fit in one request.
-  const longest = {...codex, project: 'p'.repeat(120)};
+  // As many as a list may hold, every name at its longest and in the widest script, fit in one request.
+  const longest = {...guessed, provider: 'antigravity', accountName: '株'.repeat(120), project: '🚀'.repeat(120)};
   const full = await report(Array.from({length: 200}, () => longest));
   assert.equal(full.status, 200, JSON.stringify(full.body));
   assert.equal((await call('POST', '/v1/sessions', {body: {version: 1}})).status, 401);

@@ -43,8 +43,8 @@ export function agentRoutes(app: FastifyInstance, hub: Hub) {
 
   app.post('/v1/checkin', (request, reply) => asAgent(request, reply, 'invalid_request', credential => ingest.checkin(credential, request.body)));
 
-  // Up to 200 sessions with names at their longest (spec: Reporting running agents).
-  app.post('/v1/sessions', {bodyLimit: 128 * 1024}, (request, reply) =>
+  // Up to 200 sessions with names at their longest, in any script (spec: Reporting running agents).
+  app.post('/v1/sessions', {bodyLimit: 256 * 1024}, (request, reply) =>
     asAgent(request, reply, 'invalid_request', credential => ingest.sessions(credential, request.body)),
   );
 

@@ -236,7 +236,7 @@ for five minutes after its last request, then forgets it.
 | `working` | Whether it is working now (the agent's judgement: its processes spend CPU time), or idle. |
 
 At most 200 sessions (the reference agent sends the working ones first, then the
-newest), in at most 128 KiB. Clocks are as in a batch. `200` with `{"accepted": n}`:
+newest), in at most 256 KiB. Clocks are as in a batch. `200` with `{"accepted": n}`:
 sessions of a subscription the hub does not know, or the person does not hold, are left
 out. Errors are as for check-ins; a hub without this request answers `404` with
 `{"error": "not_found"}`, and the agent asks it again an hour later (it may have been
