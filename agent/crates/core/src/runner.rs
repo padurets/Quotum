@@ -216,9 +216,10 @@ impl Runner {
             }
             // Taken after the measurement, so the client's own writes do not count as use.
             seen[index] = last_activity(&activity_paths[index]).or(Some(SystemTime::UNIX_EPOCH));
-            // Also after it: a client may rewrite its sign-in files while measured (a refreshed token).
+            // As the sign-in files were before it: a sign-in during the measurement (or a token
+            // it refreshed) leaves the account unknown until the next one, never another's.
             if let Ok(snapshot) = &outcome {
-                accounts[index] = Some((snapshot.account.clone(), last_activity(&identity_paths[index])));
+                accounts[index] = Some((snapshot.account.clone(), signed_in));
             }
 
             let now = now_ms();
