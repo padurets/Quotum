@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {freshness, PULSE_FOR} from '../lib/quota';
+import {freshness, PULSE_FOR, seriesName} from '../lib/quota';
 
 test('a card’s dot is fresh for half a minute, then fades to grey over five', () => {
   assert.equal(freshness(0), 1);
@@ -18,4 +18,10 @@ test('the fade goes in half-minute steps, so the page is idle in between', () =>
   assert.ok(step(31) < step(29), 'the next one after it');
   const values = new Set(Array.from({length: 301}, (_, s) => step(s)));
   assert.ok(values.size <= 11, `at most ten steps and grey, not ${values.size}`);
+});
+
+test('a series is named by its source and the scope of its window, not its kind', () => {
+  const claude = {provider: 'claude', title: 'Claude'};
+  assert.equal(seriesName(claude, {kind: 'weekly', label: null, minutes: 10080}), 'Claude');
+  assert.equal(seriesName(claude, {kind: 'weekly', label: 'Fable', minutes: 10080}), 'Claude · Fable');
 });

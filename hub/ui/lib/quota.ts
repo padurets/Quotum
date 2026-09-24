@@ -42,9 +42,12 @@ export function titled<T extends {id: string; provider: string; owners?: string[
   });
 }
 
-/** Fully qualified series name: source, then the window. */
+/**
+ * A series' name in the analytics: the source, and the scope of the window when it has one
+ * (Fable, Gemini). Whether the windows are weekly or 5-hour is said once, above them.
+ */
 export const seriesName = (source: {provider: string; title?: string}, w: {kind: Kind; label: string | null; minutes: number | null}) =>
-  `${sourceLabel(source)} · ${w.kind === 'other' ? windowName(w) : [w.label, kindText(w.kind)].filter(Boolean).join(' · ')}`;
+  [sourceLabel(source), w.kind === 'other' ? windowName(w) : w.label].filter(Boolean).join(' · ');
 
 /** What a source's error code means, in the reader's language. */
 export function errorText(code: string) {
