@@ -19,6 +19,24 @@ const diamond = (x: number, y: number, r = 4) => `M${x},${y - r}l${r},${r}l${-r}
 /** The spending plan of one weekly window, drawn as a faint dotted line in its colour; `lines` are the keys of the lines it plans. */
 export type PlanLine = {key: string; lines: string[]; name: string; color: string; runs: [number, number][][]};
 
+/** A label on the chart on a backing sized to its text, so no line under it gets in the way. */
+function MarkerLabel({x, y, end, children}: {x: number; y: number; end: boolean; children: string}) {
+  const text = useRef<SVGTextElement>(null);
+  const [box, setBox] = useState<{x: number; width: number} | null>(null);
+  useLayoutEffect(() => {
+    const measured = text.current?.getBBox();
+    if (measured) setBox({x: measured.x, width: measured.width});
+  }, [x, y, end, children]);
+  return (
+    <g className="marker-label">
+      {box && <rect x={box.x - 6} y={y - 13} width={box.width + 12} height={19} rx={5} />}
+      <text ref={text} x={x} y={y} textAnchor={end ? 'end' : 'start'}>
+        {children}
+      </text>
+    </g>
+  );
+}
+
 /** Value of a piecewise-linear run at time `at`, or undefined outside it. */
 function valueAt(runs: [number, number][][], at: number) {
   for (const run of runs) {
@@ -253,14 +271,7 @@ export function Chart({
           />
         ))}
         {markers.map(marker => {
-          if (marker.at > to) {
-            // Beyond the visible future: an arrow at the right edge, with the distance.
-            return marker.strong ? (
-              <text key={marker.key} x={width - right} y={height - bottom - 8} textAnchor="end" className="marker-label">
-                {t('chart.ahead', {label: marker.label, time: duration(marker.at - now, true)})}
-              </text>
-            ) : null;
-          }
+          if (marker.at > to) return null;
           const mx = x(marker.at);
           if (marker.past) {
             return (
@@ -271,17 +282,10 @@ export function Chart({
               </g>
             );
           }
-          const nearRight = mx > width - right - 150;
           return (
             <g key={marker.key} className={`marker ${marker.strong ? 'is-strong' : ''}`}>
               <line x1={mx} x2={mx} y1={top} y2={height - bottom} stroke={marker.strong ? undefined : marker.color} />
-              {marker.strong ? (
-                <text x={nearRight ? mx - 6 : mx + 6} y={height - bottom - 8} textAnchor={nearRight ? 'end' : 'start'} className="marker-label">
-                  {marker.label}
-                </text>
-              ) : (
-                <circle cx={mx} cy={y(100)} r={3} fill={marker.color} />
-              )}
+              {!marker.strong && <circle cx={mx} cy={y(100)} r={3} fill={marker.color} />}
               <title>{`${marker.label} · ${cellLabel(marker.at, 0)}`}</title>
             </g>
           );
@@ -289,6 +293,20 @@ export function Chart({
         {lines.map((line, i) => (
           <path key={line.key} d={paths[i].line} className="series" stroke={line.color} strokeDasharray={line.dash || undefined} />
         ))}
+        {/* Announcements are read over the lines, each on its own backing. */}
+        {markers
+          .filter(marker => marker.strong && !marker.past)
+          .map(marker => {
+            const beyond = marker.at > to;
+            const mx = beyond ? width - right : x(marker.at);
+            // Beyond the visible future: at the right edge, with the distance.
+            const nearRight = beyond || mx > width - right - 150;
+            return (
+              <MarkerLabel key={marker.key} x={beyond ? mx : nearRight ? mx - 6 : mx + 6} y={height - bottom - 8} end={nearRight}>
+                {beyond ? t('chart.ahead', {label: marker.label, time: duration(marker.at - now, true)}) : marker.label}
+              </MarkerLabel>
+            );
+          })}
         {hover === null &&
           lines.map((line, i) =>
             paths[i].last ? (
