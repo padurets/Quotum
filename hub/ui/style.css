@@ -134,13 +134,11 @@ body.is-resizing, body.is-resizing * { cursor: ew-resize !important; user-select
   content: ''; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none;
   -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
 }
-/* A card wears its own colour: a trace of it all over, a breath more in its corner where
-   its logo is. Flat rather than lit from above, so it reads as a surface, not a button. */
+/* A breath of the card's own colour in its corner, where its logo is. */
 .card {
   background:
-    radial-gradient(420px 170px at 0 0, color-mix(in oklab, var(--card-color, transparent) 11%, transparent), transparent 75%),
-    color-mix(in oklab, var(--card-color, #16161b) 4%, #141419c2);
-  box-shadow: inset 0 1px 0 #ffffff08, 0 1px 2px #00000040, 0 18px 36px -28px #000000b3;
+    radial-gradient(360px 150px at 0 0, color-mix(in oklab, var(--card-color, transparent) 9%, transparent), transparent 75%),
+    linear-gradient(180deg, #18181eb8, #111116b8 55%);
 }
 .card { padding: 20px 22px 22px; display: flex; flex-direction: column; gap: 22px; }
 .card-head { display: flex; align-items: center; gap: 12px; }
@@ -300,12 +298,12 @@ td.muted, small.muted { color: var(--text-3); }
    machine, and a count; the panel it opens names them. No animation: a board stays open
    for hours. */
 /* The card's tray: a strip along its bottom edge, a step below the card as if pressed
-   into it, always there. What a card shows besides its limits lives in it: the agents
+   into it and tinted with the card's colour, always there. What a card shows besides its limits lives in it: the agents
    running on it, on the right. Cards in a row are as tall as the tallest, so the trays
    line up. */
 .card-foot {
   display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-height: 42px; margin: auto -22px -22px; padding: 0 10px;
-  border-radius: 0 0 15px 15px; background: color-mix(in oklab, var(--card-color, #000) 4%, #00000033);
+  border-radius: 0 0 15px 15px; background: color-mix(in oklab, var(--card-color, #000) 7%, #00000038);
   box-shadow: inset 0 1px 0 #00000059, inset 0 3px 6px -3px #00000080, 0 -1px 0 #ffffff08;
 }
 .card-foot .picker { margin-left: 0; min-width: 0; }
