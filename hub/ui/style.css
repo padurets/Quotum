@@ -200,6 +200,8 @@ body.is-resizing, body.is-resizing * { cursor: ew-resize !important; user-select
   border: 1px solid var(--glass-edge);
   box-shadow: var(--glass-shadow);
 }
+/* What scrolls inside glass keeps it: a thin light thumb, no track. */
+.glass, .glass * { scrollbar-width: thin; scrollbar-color: #ffffff26 transparent; }
 /* Over the chart's lines the text has to stay readable: a denser pane. */
 .tooltip.glass { background: linear-gradient(180deg, #ffffff0c, #ffffff02 45%), #131318d9; }
 .popover-title { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-4); padding: 4px 8px 8px; }
