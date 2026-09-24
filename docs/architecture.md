@@ -175,7 +175,9 @@ up measuring, and a list the hub did not take goes out again at the next look. W
 hub that takes it, the agent does not look. The hub keeps the latest list of each machine
 in memory for five minutes (after a restart the agents send theirs again), files each
 session under its subscription (the account the client is signed in to now, else the one
-the machine last delivered for that client; only one its person holds) and shows it on
+the machine last delivered for that client; only one its person holds; the agent leaves
+out a session of a client signed in anew since it last measured, until it knows which
+account that is) and shows it on
 that card, to the members of a board where that person shows the subscription. Each list
 also counts until the next one, for at most 200 seconds: how long agents
 worked on each subscription, in five-minute cells (agent time, two agents counting twice,

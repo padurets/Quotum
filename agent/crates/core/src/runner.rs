@@ -216,8 +216,9 @@ impl Runner {
             }
             // Taken after the measurement, so the client's own writes do not count as use.
             seen[index] = last_activity(&activity_paths[index]).or(Some(SystemTime::UNIX_EPOCH));
+            // Also after it: a client may rewrite its sign-in files while measured (a refreshed token).
             if let Ok(snapshot) = &outcome {
-                accounts[index] = Some((snapshot.account.clone(), signed_in));
+                accounts[index] = Some((snapshot.account.clone(), last_activity(&identity_paths[index])));
             }
 
             let now = now_ms();
@@ -249,7 +250,7 @@ impl Runner {
                     let signed_in = last_activity(&identity_paths[index]);
                     // Not known (signed in anew since measured): left out rather than filed
                     // under whatever the hub last saw from this machine.
-                    (Some(current_account(adapter.local_account(&self.home), &accounts[index], signed_in)?), None)
+                    (current_account(adapter.local_account(&self.home), &accounts[index], signed_in)?, None)
                 } else {
                     (None, self.config.account_name(session.provider).map(str::to_string))
                 };
@@ -272,14 +273,20 @@ impl Runner {
 }
 
 /// The account the client is signed in to now: the one it names on this machine, else
-/// the one it last reported while its sign-in files are as they were then. A sign-in
-/// since makes it unknown until measured again.
+/// the one it last reported while its sign-in files are as they were then; no account
+/// (`Some(None)`) when it named none or has not been measured yet, and the hub takes the
+/// one this machine last delivered. A sign-in since the measurement makes it unknown
+/// (`None`) until measured again.
 fn current_account(
     local: Option<String>,
     measured: &Option<(Option<String>, Option<SystemTime>)>,
     signed_in: Option<SystemTime>,
-) -> Option<String> {
-    local.or_else(|| measured.clone().filter(|(_, at)| *at == signed_in).and_then(|(account, _)| account))
+) -> Option<Option<String>> {
+    match (local, measured) {
+        (Some(local), _) => Some(Some(local)),
+        (None, None) => Some(None),
+        (None, Some((account, at))) => (*at == signed_in).then(|| account.clone()),
+    }
 }
 
 /// What happened to one scheduled slot.
@@ -299,9 +306,15 @@ mod tests {
         let then = Some(SystemTime::UNIX_EPOCH);
         let later = Some(SystemTime::UNIX_EPOCH + Duration::from_secs(60));
         let measured = Some((Some("a".to_string()), then));
-        assert_eq!(current_account(Some("b".into()), &measured, then), Some("b".into()), "what the client names now");
-        assert_eq!(current_account(None, &measured, then), Some("a".into()), "measured, and signed in since");
+        assert_eq!(
+            current_account(Some("b".into()), &measured, later),
+            Some(Some("b".into())),
+            "what the client names now"
+        );
+        assert_eq!(current_account(None, &measured, then), Some(Some("a".into())), "measured, and not signed in since");
         assert_eq!(current_account(None, &measured, later), None, "signed in again since: not known");
+        assert_eq!(current_account(None, &None, later), Some(None), "not measured yet: the hub's guess");
+        assert_eq!(current_account(None, &Some((None, then)), then), Some(None), "measured, and named no account");
     }
 
     #[test]

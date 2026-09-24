@@ -19,7 +19,8 @@ export const KEEP_MS = 5 * 60_000;
  * A list counts as true until the next one, but for at most this long: an agent with
  * anything running reports at least every two minutes (later by a look's 15 s and a
  * measurement it waits for, up to a minute), so a machine quiet for longer stopped
- * working, and is not credited for its silence.
+ * working, and is not credited for its silence. A hub slow to answer the calls around
+ * that measurement can stretch a gap past this; the few seconds over are not counted.
  */
 export const CREDIT_MS = 200_000;
 /** How far back the time any agent worked on a subscription is remembered, to count overlaps once. */
