@@ -149,15 +149,18 @@ impl Runner {
             if let Some(reason) = sink.refused() {
                 return Some(reason.to_string());
             }
-            if let Some(watch) = watch.as_mut().filter(|w| w.looked.is_none_or(|at| at.elapsed() >= LOOK_EVERY)) {
+            // Only while the list can go somewhere: no looking for a hub that does not take it.
+            if let Some(watch) =
+                watch.as_mut().filter(|w| sink.takes_sessions() && w.looked.is_none_or(|at| at.elapsed() >= LOOK_EVERY))
+            {
                 let first = watch.looked.is_none();
                 watch.looked = Some(Instant::now());
                 let seen = watch.activity.look();
                 // The first look cannot tell working from idle: the list goes out from the second.
                 if !first {
-                    let sessions = self.running(seen, &accounts);
-                    if watch.worth_sending(&sessions) {
-                        sink.sessions(&sessions);
+                    let sessions = self.running(seen, &accounts, &identity_paths);
+                    // A list the hub did not take goes out again at the next look.
+                    if watch.worth_sending(&sessions) && sink.sessions(&sessions) {
                         watch.reported = Some((Instant::now(), sessions));
                     }
                 }
@@ -236,14 +239,15 @@ impl Runner {
         &self,
         seen: Vec<crate::activity::Session>,
         accounts: &[Option<(Option<String>, Option<SystemTime>)>],
+        identity_paths: &[Vec<PathBuf>],
     ) -> Vec<RunningSession> {
         seen.into_iter()
             .filter_map(|session| {
                 let index = self.adapters.iter().position(|a| a.provider() == session.provider)?;
                 let adapter = &self.adapters[index];
                 let (account, account_name) = if adapter.identifies_account() {
-                    let measured = accounts[index].as_ref().and_then(|(account, _)| account.clone());
-                    (measured.or_else(|| adapter.local_account(&self.home)), None)
+                    let signed_in = last_activity(&identity_paths[index]);
+                    (current_account(adapter.local_account(&self.home), &accounts[index], signed_in), None)
                 } else {
                     (None, self.config.account_name(session.provider).map(str::to_string))
                 };
@@ -252,13 +256,28 @@ impl Runner {
                     account,
                     account_name,
                     origin: session.origin.id(),
-                    project: session.project.filter(|_| self.config.projects()),
+                    // As long as a hub takes it (spec: text fields); the hub would cut it too.
+                    project: session
+                        .project
+                        .filter(|_| self.config.projects())
+                        .map(|name| name.chars().take(120).collect()),
                     started_at: session.started_at,
                     working: session.working == Some(true),
                 })
             })
             .collect()
     }
+}
+
+/// The account the client is signed in to now: the one it names on this machine, else
+/// the one it last reported while its sign-in files are as they were then. A sign-in
+/// since makes it unknown until measured again.
+fn current_account(
+    local: Option<String>,
+    measured: &Option<(Option<String>, Option<SystemTime>)>,
+    signed_in: Option<SystemTime>,
+) -> Option<String> {
+    local.or_else(|| measured.clone().filter(|(_, at)| *at == signed_in).and_then(|(account, _)| account))
 }
 
 /// What happened to one scheduled slot.
@@ -272,6 +291,16 @@ pub enum Event<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_session_is_filed_under_the_account_signed_in_now() {
+        let then = Some(SystemTime::UNIX_EPOCH);
+        let later = Some(SystemTime::UNIX_EPOCH + Duration::from_secs(60));
+        let measured = Some((Some("a".to_string()), then));
+        assert_eq!(current_account(Some("b".into()), &measured, then), Some("b".into()), "what the client names now");
+        assert_eq!(current_account(None, &measured, then), Some("a".into()), "measured, and signed in since");
+        assert_eq!(current_account(None, &measured, later), None, "signed in again since: not known");
+    }
 
     #[test]
     fn a_list_of_running_agents_goes_out_first_on_change_and_then_in_time() {

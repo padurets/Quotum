@@ -32,8 +32,16 @@ pub trait Sink {
         None
     }
 
-    /// Tells the hub which coding agents run on this machine now (all of them).
-    fn sessions(&mut self, _sessions: &[RunningSession]) {}
+    /// Whether the hub is to be told which coding agents run here (there is one, it knows
+    /// that request, and it has not refused this device).
+    fn takes_sessions(&self) -> bool {
+        false
+    }
+
+    /// Tells the hub which coding agents run on this machine now (all of them); whether it took the list.
+    fn sessions(&mut self, _sessions: &[RunningSession]) -> bool {
+        false
+    }
 
     /// Why the hub will never take anything from this device again, once it said so.
     fn refused(&self) -> Option<&str> {
@@ -64,6 +72,9 @@ const ROUND_REQUESTS: usize = 64;
 const RETRY_FIRST: Duration = Duration::from_secs(60);
 const RETRY_LAST: Duration = Duration::from_secs(3600);
 const AGENT: &str = concat!("quotum/", env!("CARGO_PKG_VERSION"));
+/// Telling the hub which agents run is quick or not done: it must not hold up measuring.
+const SESSIONS_TIMEOUT: Duration = Duration::from_secs(5);
+const SESSIONS_RETRY: Duration = Duration::from_secs(60);
 
 /// Why the hub did not take a request.
 enum Trouble {
@@ -173,6 +184,7 @@ pub struct HubSink {
     problem: Option<String>,
     /// Whether the hub knows running agents (an older one does not).
     takes_sessions: bool,
+    sessions_retry_at: Option<Instant>,
     log: Box<dyn FnMut(&str) + Send>,
 }
 
@@ -193,6 +205,7 @@ impl HubSink {
             refused: None,
             problem: None,
             takes_sessions: true,
+            sessions_retry_at: None,
             log,
         }
     }
@@ -369,12 +382,17 @@ impl Sink for HubSink {
         directive["until"].as_str().and_then(parse_time)
     }
 
-    /// Best effort: the list is sent again with the next change or within two minutes, so a
-    /// failure is not retried and does not hold back measurements. A hub that does not know
-    /// this request (older than it) is not asked again.
-    fn sessions(&mut self, sessions: &[RunningSession]) {
-        if self.refused.is_some() || self.resting() || !self.takes_sessions {
-            return;
+    fn takes_sessions(&self) -> bool {
+        self.takes_sessions && self.refused.is_none()
+    }
+
+    /// Best effort, and apart from measurements: a quick request that holds nothing back.
+    /// A list the hub did not take is sent again at the next look; after a failure the hub
+    /// is left alone for a minute. A hub that does not know this request (older than it)
+    /// is not asked again.
+    fn sessions(&mut self, sessions: &[RunningSession]) -> bool {
+        if !self.takes_sessions() || self.sessions_retry_at.is_some_and(|at| Instant::now() < at) {
+            return false;
         }
         let request = serde_json::json!({
             "version": INGEST_VERSION,
@@ -384,11 +402,24 @@ impl Sink for HubSink {
             "sessions": sessions,
         });
         let url = format!("{}/v1/sessions", self.base);
-        if let Ok(response) =
-            self.http.post(&url).header("Authorization", &format!("Bearer {}", self.token)).send_json(&request)
-            && response.status() == 404
-        {
-            self.takes_sessions = false;
+        let answer = self
+            .http
+            .post(&url)
+            .config()
+            .timeout_global(Some(SESSIONS_TIMEOUT))
+            .build()
+            .header("Authorization", &format!("Bearer {}", self.token))
+            .send_json(&request);
+        match answer.map(|response| response.status().as_u16()) {
+            Ok(200..=299) => true,
+            Ok(404) => {
+                self.takes_sessions = false;
+                false
+            }
+            _ => {
+                self.sessions_retry_at = Some(Instant::now() + SESSIONS_RETRY);
+                false
+            }
         }
     }
 
@@ -584,7 +615,7 @@ mod tests {
         };
         let (url, seen) = hub(|_, _| json(200, json!({"accepted": 1})));
         let (mut current, _) = sink(&url, "sessions");
-        current.sessions(std::slice::from_ref(&session));
+        assert!(current.sessions(std::slice::from_ref(&session)), "taken");
         let (path, body) = seen.lock().unwrap()[0].clone();
         assert_eq!(path, "/v1/sessions");
         assert_eq!(
@@ -595,8 +626,8 @@ mod tests {
 
         let (url, seen) = hub(|_, _| json(404, json!({"error": "not_found"})));
         let (mut older, log) = sink(&url, "no-sessions");
-        older.sessions(&[]);
-        older.sessions(&[]);
+        assert!(!older.sessions(&[]));
+        assert!(!older.takes_sessions());
         assert_eq!(seen.lock().unwrap().len(), 1, "asked once");
         assert!(log.lock().unwrap().is_empty(), "nothing to worry about");
         assert!(older.retry_at.is_none(), "measurements are not held back");
