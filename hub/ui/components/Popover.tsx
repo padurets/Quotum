@@ -35,6 +35,16 @@ export function Popover({
   const panel = useRef<HTMLDivElement>(null);
   // Measured once it is open: a panel that would reach under the top bar opens downwards instead.
   const [down, setDown] = useState(false);
+  /** How far the panel moves sideways to stay on the screen (from a card at the edge of a narrow one). */
+  const [shift, setShift] = useState(0);
+  useLayoutEffect(() => {
+    if (!open) return setShift(0);
+    const rect = panel.current?.getBoundingClientRect();
+    if (!rect) return;
+    const edge = 8;
+    setShift(rect.left < edge ? edge - rect.left : rect.right > innerWidth - edge ? innerWidth - edge - rect.right : 0);
+  }, [open]);
+
   useLayoutEffect(() => {
     if (!open || !up) return setDown(false);
     const top = panel.current?.getBoundingClientRect().top ?? 0;
@@ -77,7 +87,7 @@ export function Popover({
         {!!badge && <i className="badge">{badge}</i>}
       </button>
       {open && (
-        <div className={`popover glass ${align === 'left' ? 'is-left' : ''} ${up && !down ? 'is-up' : ''}`} role="dialog" aria-label={label} ref={panel}>
+        <div className={`popover glass ${align === 'left' ? 'is-left' : ''} ${up && !down ? 'is-up' : ''}`} role="dialog" aria-label={label} ref={panel} style={shift ? {translate: `${shift}px 0`} : undefined}>
           {children}
         </div>
       )}

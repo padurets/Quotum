@@ -330,7 +330,7 @@ td.muted, small.muted { color: var(--text-3); }
 /* The table of every running agent: a mark as on the cards starts each row. */
 .agents-panel td .agent { margin-right: 12px; vertical-align: -1px; }
 .agents-panel td:first-child { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
-.agents-list { box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; width: 340px; max-width: 100%; max-height: min(360px, 50vh); overflow: hidden auto; padding: 0 4px 4px; }
+.agents-list { box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; width: min(340px, calc(100vw - 48px)); max-width: 100%; max-height: min(360px, 50vh); overflow: hidden auto; padding: 0 4px 4px; }
 .agents-machine h3 { display: flex; align-items: baseline; gap: 8px; margin: 0 4px 4px; font-size: 12.5px; font-weight: 560; color: var(--text); }
 .agents-machine h3 span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agents-machine h3 small { margin-left: auto; font-weight: 450; color: var(--text-3); white-space: nowrap; }
@@ -406,6 +406,9 @@ td.muted, small.muted { color: var(--text-3); }
 .tooltip-detail { flex-basis: 100%; max-width: 300px; padding-left: 23px; white-space: normal; font-size: 11px; color: var(--text-3); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .tooltip-row strong { min-width: 36px; font-weight: 500; }
 .tooltip-row span { color: var(--text-2); }
+/* A long name gives way; the swatch, the value and the plan beside it stay whole. */
+.tooltip-row:not(.is-marker) span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tooltip-row svg, .tooltip-row strong, .tooltip-plan { flex-shrink: 0; }
 .tooltip-row.is-plan strong, .tooltip-row.is-plan span { color: var(--text-3); font-weight: 450; }
 .tooltip-sep { height: 1px; background: var(--hair); margin: 5px 0; }
 /* The plan beside what is left, at the row's end. */
