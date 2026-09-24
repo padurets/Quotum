@@ -1,10 +1,10 @@
-import type {CSSProperties} from 'react';
+import type {CSSProperties, ReactNode} from 'react';
 import type {LiveSession, SourceState} from '../lib/types';
 import {duration} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
-import {AGENTS, cardId, colorOf, isHidden, withHidden, type Arrange} from '../lib/view';
-import {t} from '../i18n';
-import {HideRow, Popover, SlidersIcon} from './Popover';
+import {AGENTS, cardId, colorOf, columnShown, isHidden, withColumn, withHidden, type Arrange} from '../lib/view';
+import {t, type Key} from '../i18n';
+import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
 
 /** More sessions than this are counted in the header instead of drawn one by one. */
 const DRAWN = 10;
@@ -89,11 +89,11 @@ export function Agents({sessions, now}: {sessions: LiveSession[]; now: number}) 
               <small>{t('agents.machineSummary', {working: machine.sessions.filter(s => s.working).length, count: machine.sessions.length})}</small>
             </h3>
             {machine.sessions.map((session, i) => (
-              <div className={`agents-row ${session.working ? 'is-working' : ''}`} key={i} title={t(session.working ? 'agents.working' : 'agents.idle')}>
+              <div className={`agents-row ${session.working ? 'is-working' : ''}`} key={i} title={stateOf(session)}>
                 <Mark session={session} />
                 <span className="agents-project">
                   {session.project ?? t('agents.noProject')}
-                  <span className="sr-only">, {t(session.working ? 'agents.working' : 'agents.idle')}</span>
+                  <span className="sr-only">, {stateOf(session)}</span>
                 </span>
                 <span className="agents-origin">{t(`agents.${session.origin}`)}</span>
                 <span className="agents-age">{since(now - session.startedAt)}</span>
@@ -117,17 +117,29 @@ export function Agents({sessions, now}: {sessions: LiveSession[]; now: number}) 
   );
 }
 
+type Row = {source: SourceState; session: LiveSession};
+
+/** The table's columns after the project, each one the owner can hide to make the widget narrow. */
+const COLUMNS: {id: string; title: Key; cell: (row: Row, now: number) => ReactNode}[] = [
+  {id: 'state', title: 'agents.state', cell: ({session}) => stateOf(session)},
+  {id: 'subscription', title: 'agents.subscription', cell: ({source}) => sourceLabel(source)},
+  {id: 'machine', title: 'agents.machine', cell: ({session}) => session.device.name},
+  {id: 'origin', title: 'agents.origin', cell: ({session}) => t(`agents.${session.origin}`)},
+  {id: 'running', title: 'agents.running', cell: ({session}, now) => since(now - session.startedAt)},
+];
+
 /**
  * Every coding agent running on the board's subscriptions, as one table: a widget of the
  * current state, off until the board's owner turns it on (the cards show the same).
  */
 export function AgentsPanel({sources, now, arrange}: {sources: SourceState[]; now: number; arrange: Arrange}) {
   // Only what the board shows: a subscription whose card is hidden is left out here too.
-  const rows = sources
+  const rows: Row[] = sources
     .filter(source => !isHidden(arrange.view, cardId(source.id)))
     .flatMap(source => source.sessions.map(session => ({source, session})))
     .sort((a, b) => a.session.device.name.localeCompare(b.session.device.name) || a.session.startedAt - b.session.startedAt);
   const working = rows.filter(row => row.session.working).length;
+  const columns = COLUMNS.filter(column => columnShown(arrange.view, AGENTS, column.id));
   return (
     <section className="panel agents-panel" aria-label={t('agents.title')}>
       <div className="panel-head">
@@ -135,6 +147,13 @@ export function AgentsPanel({sources, now, arrange}: {sources: SourceState[]; no
         {rows.length > 0 && <span className="panel-note">{t('agents.machineSummary', {working, count: rows.length})}</span>}
         {arrange.owner && (
           <Popover label={t('agents.settings')} icon={<SlidersIcon />}>
+            <div className="popover-title">{t('agents.columns')}</div>
+            {COLUMNS.map(column => (
+              <SwitchRow key={column.id} on={columnShown(arrange.view, AGENTS, column.id)} onChange={on => arrange.update(view => withColumn(view, AGENTS, column.id, on))}>
+                {t(column.title)}
+              </SwitchRow>
+            ))}
+            <div className="popover-sep" />
             <HideRow onHide={() => arrange.update(view => withHidden(view, AGENTS, true))}>{t('widget.hide')}</HideRow>
           </Popover>
         )}
@@ -147,25 +166,22 @@ export function AgentsPanel({sources, now, arrange}: {sources: SourceState[]; no
             <thead>
               <tr>
                 <th>{t('agents.project')}</th>
-                <th>{t('agents.state')}</th>
-                <th>{t('agents.subscription')}</th>
-                <th>{t('agents.machine')}</th>
-                <th>{t('agents.origin')}</th>
-                <th>{t('agents.running')}</th>
+                {columns.map(column => (
+                  <th key={column.id}>{t(column.title)}</th>
+                ))}
               </tr>
             </thead>
             <tbody>
-              {rows.map(({source, session}, i) => (
-                <tr key={i} className={session.working ? 'is-working' : ''} style={{'--card-color': colorOf(arrange.view, source.id, source.provider)} as CSSProperties}>
-                  <td>
-                    <Mark session={session} />
-                    {session.project ?? t('agents.noProject')}
+              {rows.map((row, i) => (
+                <tr key={i} className={row.session.working ? 'is-working' : ''} style={{'--card-color': colorOf(arrange.view, row.source.id, row.source.provider)} as CSSProperties}>
+                  <td title={row.session.project ?? undefined}>
+                    <Mark session={row.session} />
+                    {row.session.project ?? t('agents.noProject')}
+                    {!columns.some(column => column.id === 'state') && <span className="sr-only">, {stateOf(row.session)}</span>}
                   </td>
-                  <td>{stateOf(session)}</td>
-                  <td>{sourceLabel(source)}</td>
-                  <td>{session.device.name}</td>
-                  <td>{t(`agents.${session.origin}`)}</td>
-                  <td>{since(now - session.startedAt)}</td>
+                  {columns.map(column => (
+                    <td key={column.id}>{column.cell(row, now)}</td>
+                  ))}
                 </tr>
               ))}
             </tbody>

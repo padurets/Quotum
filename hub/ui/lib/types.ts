@@ -66,6 +66,8 @@ export type View = {
   unplanned: string[];
   /** Colours given to cards, by source id, instead of the provider's. */
   colors: Record<string, string>;
+  /** Columns hidden in a widget's table, by widget id. */
+  columns: Record<string, string[]>;
 };
 
 export type Overview = {

@@ -25,14 +25,16 @@ export type View = {
   unplanned: string[];
   /** Colours given to cards, by source id, instead of the provider's. */
   colors: Record<string, string>;
+  /** Columns hidden in a widget's table, by widget id. */
+  columns: Record<string, string[]>;
 };
 
-export const EMPTY_VIEW: View = {order: [], sizes: {}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}};
+export const EMPTY_VIEW: View = {order: [], sizes: {}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}};
 
 /** The grid has twelve columns; a widget spans a third of it at least. */
 export const COLUMNS = 12;
 export const MIN_SPAN = 4;
-const LIMITS = {widgets: 200, windows: 500, id: 120, name: 60};
+const LIMITS = {widgets: 200, windows: 500, id: 120, name: 60, columns: 20};
 
 const ids = (value: unknown, max: number): string[] | null =>
   Array.isArray(value) && value.length <= max && value.every(id => typeof id === 'string' && id.length > 0 && id.length <= LIMITS.id)
@@ -52,6 +54,8 @@ function byId<T>(value: unknown, valid: (entry: unknown) => entry is T): Record<
 const isSpan = (value: unknown): value is number => Number.isInteger(value) && (value as number) >= 1 && (value as number) <= COLUMNS;
 const isName = (value: unknown): value is string => typeof value === 'string' && value.trim() === value && value.length > 0 && value.length <= LIMITS.name;
 const isColor = (value: unknown): value is string => typeof value === 'string' && /^#[0-9a-f]{6}$/.test(value);
+const isColumns = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.length <= LIMITS.columns && value.every(id => typeof id === 'string' && /^[a-z]{1,20}$/.test(id));
 
 /** A view as a page sent it, or null when anything in it is off. */
 export function parseView(body: unknown): View | null {
@@ -66,7 +70,8 @@ export function parseView(body: unknown): View | null {
   const plans = byId(input.plans, isValidPlan);
   const unplanned = ids(input.unplanned ?? [], LIMITS.widgets);
   const colors = byId(input.colors, isColor);
-  if (!order || !hidden || !shown || !windows || !sizes || !names || !plans || !unplanned || !colors) return null;
+  const columns = byId(input.columns, isColumns);
+  if (!order || !hidden || !shown || !windows || !sizes || !names || !plans || !unplanned || !colors || !columns) return null;
   const spans = Object.fromEntries(Object.entries(sizes).map(([id, span]) => [id, Math.max(MIN_SPAN, span)]));
-  return {order, sizes: spans, names, hidden, shown, windows, plans, unplanned, colors};
+  return {order, sizes: spans, names, hidden, shown, windows, plans, unplanned, colors, columns: Object.fromEntries(Object.entries(columns).map(([id, list]) => [id, [...new Set(list)]]))};
 }

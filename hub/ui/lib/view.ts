@@ -14,7 +14,7 @@ export const cardId = (sourceId: string) => `source:${sourceId}`;
 const OFF_BY_DEFAULT = [AGENTS];
 export const isOffByDefault = (id: string) => OFF_BY_DEFAULT.includes(id);
 
-const EMPTY: View = {order: [], sizes: {}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}};
+const EMPTY: View = {order: [], sizes: {}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}};
 
 /**
  * The grid has twelve columns: a card takes half of it by default, so two stand side by
@@ -71,6 +71,16 @@ export const withHidden = (view: View, id: string, hidden: boolean): View =>
   isOffByDefault(id)
     ? {...view, shown: hidden ? view.shown.filter(other => other !== id) : [...new Set([...view.shown, id])]}
     : {...view, hidden: hidden ? [...new Set([...view.hidden, id])] : view.hidden.filter(other => other !== id)};
+
+/** Whether a column of a widget's table is shown. */
+export const columnShown = (view: View, widget: string, column: string) => !(view.columns[widget] ?? []).includes(column);
+
+export const withColumn = (view: View, widget: string, column: string, shown: boolean): View => {
+  const hidden = (view.columns[widget] ?? []).filter(other => other !== column);
+  const columns = {...view.columns, [widget]: shown ? hidden : [...hidden, column]};
+  if (!columns[widget].length) delete columns[widget];
+  return {...view, columns};
+};
 
 export const withWindowHidden = (view: View, key: string, hidden: boolean): View => ({
   ...view,

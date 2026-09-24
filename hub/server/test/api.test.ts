@@ -17,7 +17,7 @@ import {Setup} from '../setup.js';
 const iso = (ms: number) => new Date(ms).toISOString();
 const ORIGIN = 'http://localhost';
 const SETUP = 'BCDF-GHJK';
-const EMPTY = {order: [], sizes: {}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}};
+const EMPTY = {order: [], sizes: {}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}};
 
 async function hub() {
   const store = new Store(path.join(mkdtempSync(path.join(tmpdir(), 'quotum-api-')), 'db.sqlite'));
@@ -226,13 +226,14 @@ test('people share their subscriptions with a shared board; its owner arranges, 
   assert.deepEqual((await call('GET', `/api/boards/${team}/shares`, {as: 'alice'})).body.shared, [{source, provider: 'codex', sharedBy: 'Bob', mine: false}]);
 
   assert.deepEqual(shared.view, EMPTY, 'nothing arranged yet');
-  const view = {...EMPTY, order: ['history', `source:${source}`], sizes: {[`source:${source}`]: 6}, names: {[source]: 'Bob’s Codex'}, hidden: ['forecast'], shown: ['agents'], windows: [`${source}/weekly`], plans: {[source]: [50, 50, 0, 0, 0, 0, 0]}, unplanned: [source], colors: {[source]: '#1fa89c'}};
+  const view = {...EMPTY, order: ['history', `source:${source}`], sizes: {[`source:${source}`]: 6}, names: {[source]: 'Bob’s Codex'}, hidden: ['forecast'], shown: ['agents'], windows: [`${source}/weekly`], plans: {[source]: [50, 50, 0, 0, 0, 0, 0]}, unplanned: [source], colors: {[source]: '#1fa89c'}, columns: {agents: ['machine', 'origin']}};
   assert.deepEqual((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: view})).body, view);
   assert.deepEqual((await call('GET', `/api/overview?board=${team}`, {as: 'bob'})).body.view, view);
   assert.equal((await call('POST', `/api/boards/${team}/view`, {as: 'bob', body: EMPTY})).status, 403, 'a member only looks');
   assert.equal((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {...view, plans: {[source]: [50, 60, 0, 0, 0, 0, 0]}}})).status, 400);
   assert.equal((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {...view, sizes: {history: 13}}})).status, 400, 'no wider than the grid');
   assert.equal((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {...view, colors: {[source]: 'red; background: url(x)'}}})).status, 400, 'a colour is a hex colour');
+  assert.equal((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {...view, columns: {agents: ['<b>']}}})).status, 400, 'a column is a short name');
   const narrow = await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {...view, sizes: {history: 3}}});
   assert.deepEqual(narrow.body.sizes, {history: 4}, 'a third of the grid at least: narrower ones, saved before, are taken as that');
   await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: view});
