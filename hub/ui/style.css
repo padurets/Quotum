@@ -134,11 +134,13 @@ body.is-resizing, body.is-resizing * { cursor: ew-resize !important; user-select
   content: ''; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none;
   -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
 }
-/* A breath of the card's own colour in its corner, where its logo is. */
+/* A card wears its own colour: a trace of it all over, a breath more in its corner where
+   its logo is. Flat rather than lit from above, so it reads as a surface, not a button. */
 .card {
   background:
-    radial-gradient(360px 150px at 0 0, color-mix(in oklab, var(--card-color, transparent) 9%, transparent), transparent 75%),
-    linear-gradient(180deg, #18181eb8, #111116b8 55%);
+    radial-gradient(420px 170px at 0 0, color-mix(in oklab, var(--card-color, transparent) 11%, transparent), transparent 75%),
+    color-mix(in oklab, var(--card-color, #16161b) 4%, #141419c2);
+  box-shadow: inset 0 1px 0 #ffffff08, 0 1px 2px #00000040, 0 18px 36px -28px #000000b3;
 }
 .card { padding: 20px 22px 22px; display: flex; flex-direction: column; gap: 22px; }
 .card-head { display: flex; align-items: center; gap: 12px; }
@@ -294,16 +296,45 @@ td.muted, small.muted { color: var(--text-3); }
 .reset-notice.is-done .reset-dot { background: var(--ok); box-shadow: 0 0 8px #75d8ad99; }
 .reset-credit { margin-left: auto; flex-shrink: 0; font-size: 11px; color: var(--text-4) !important; }
 .card-empty { color: var(--text-3); font-size: 13px; padding: 12px 0; }
-/* The agents running on a subscription: a mark each, grouped by machine. No animation:
-   a board stays open for hours. */
-.agents { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; margin-top: -6px; font-size: 12px; color: var(--text-3); }
-.agents-machine { display: inline-flex; align-items: center; gap: 4px; }
-.agents-name { margin-right: 4px; }
-.agents-count { display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
-.agents-count .agent + .agent, .agents-count .agent:not(:first-child) { margin-left: 6px; }
-.agent { display: inline-block; width: 7px; height: 12px; border-radius: 2px; box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--card-color, var(--text-3)) 75%, transparent); }
+/* The agents running on a subscription, in the card's header: a mark each, grouped by
+   machine, and a count; the panel it opens names them. No animation: a board stays open
+   for hours. */
+/* The card's tray: a strip along its bottom edge, a step below the card as if pressed
+   into it, always there. What a card shows besides its limits lives in it: the agents
+   running on it, on the right. Cards in a row are as tall as the tallest, so the trays
+   line up. */
+.card-foot {
+  display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-height: 42px; margin: auto -22px -22px; padding: 0 10px;
+  border-radius: 0 0 15px 15px; background: color-mix(in oklab, var(--card-color, #000) 4%, #00000033);
+  box-shadow: inset 0 1px 0 #00000059, inset 0 3px 6px -3px #00000080, 0 -1px 0 #ffffff08;
+}
+.card-foot .picker { margin-left: 0; min-width: 0; }
+.card-foot .popover { top: auto; bottom: calc(100% + 6px); }
+/* The name of a card is cut rather than wrapped, so the header never grows either. */
+.text-button.agents-pill { height: 26px; min-width: 58px; max-width: 100%; overflow: hidden; padding: 0 8px; gap: 7px; border-color: var(--hair); background: #ffffff05; color: var(--text-3); font-size: 12.5px; }
+.card-title h2 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.agents-pill svg { flex-shrink: 0; opacity: .8; }
+.agents-marks { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; }
+.agents-group { display: inline-flex; gap: 2px; }
+.agents-group + .agents-group { padding-left: 6px; border-left: 1px solid var(--hair-2); }
+.agents-count { font-variant-numeric: tabular-nums; }
+.agents-count b { font-weight: 560; color: var(--text); }
+.agent { flex-shrink: 0; display: inline-block; width: 5px; height: 11px; border-radius: 1.5px; box-shadow: inset 0 0 0 1.25px color-mix(in oklab, var(--card-color, var(--text-3)) 80%, var(--text-3)); }
 .agent.is-working { background: var(--card-color, var(--text-2)); box-shadow: none; }
-.agent.is-quiet { opacity: .45; }
+.agent.is-quiet { box-shadow: none; background: repeating-linear-gradient(0deg, color-mix(in oklab, var(--card-color, var(--text-3)) 70%, var(--text-3)) 0 2px, transparent 2px 4px); }
+.agents-title { display: flex; align-items: center; gap: 12px; }
+.agents-legend { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; text-transform: none; letter-spacing: 0; font-size: 11.5px; }
+.agents-legend .agent + * { margin-right: 6px; }
+.agents-legend .agent:not(:first-child) { margin-left: 6px; }
+.agents-list { display: flex; flex-direction: column; gap: 10px; width: 340px; max-width: calc(100vw - 32px); padding: 0 4px 4px; }
+.agents-machine h3 { display: flex; align-items: baseline; gap: 8px; margin: 0 4px 4px; font-size: 12.5px; font-weight: 560; color: var(--text); }
+.agents-machine h3 span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agents-machine h3 small { margin-left: auto; font-weight: 450; color: var(--text-4); white-space: nowrap; }
+.agents-row { display: grid; grid-template-columns: 5px minmax(0, 1fr) auto 52px; align-items: center; gap: 10px; padding: 5px 4px; font-size: 12.5px; color: var(--text-3); }
+.agents-row.is-working { color: var(--text); }
+.agents-project { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agents-origin { color: var(--text-4); }
+.agents-age { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text-4); }
 .card-status { margin: -8px 0 0; font-size: 12.5px; color: var(--warn); }
 .card-name input { width: 100%; }
 

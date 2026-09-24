@@ -346,10 +346,13 @@ export function SourceCard({
         {!source.windows.length && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
         {!!source.windows.length && !visible.length && <div className="card-empty">{t('card.allHidden')}</div>}
       </div>
-      <Agents sessions={source.sessions ?? []} now={now} />
       {warn && !!source.windows.length && <p className="card-status">{status}</p>}
       <ResetBanner status={resets} now={now} />
       <ResetNotice status={resets} now={now} />
+      {/* The card's tray, always there so the card never changes height: the agents running on it, on the right. */}
+      <footer className="card-foot">
+        <Agents sessions={source.sessions ?? []} now={now} />
+      </footer>
     </article>
   );
 }

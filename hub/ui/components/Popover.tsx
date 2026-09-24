@@ -10,11 +10,14 @@ export function Popover({
   open: controlled,
   onOpenChange,
   align = 'right',
+  triggerClass,
 }: {
   label: string;
   icon?: ReactNode;
   /** A text trigger instead of an icon button. */
   trigger?: ReactNode;
+  /** How a text trigger looks, when not as plain text; such a trigger is named by `label`, not by what it shows. */
+  triggerClass?: string;
   badge?: number;
   children: ReactNode;
   open?: boolean;
@@ -51,10 +54,10 @@ export function Popover({
     <div className="picker" ref={box}>
       <button
         type="button"
-        className={trigger ? 'text-button' : 'icon-button'}
+        className={trigger ? `text-button ${triggerClass ?? ''}` : 'icon-button'}
         aria-expanded={open}
         ref={button}
-        aria-label={trigger ? undefined : label}
+        aria-label={trigger && !triggerClass ? undefined : label}
         title={label}
         onClick={() => setOpen(!open)}
       >
