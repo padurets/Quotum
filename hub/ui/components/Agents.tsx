@@ -2,7 +2,7 @@ import type {CSSProperties} from 'react';
 import type {LiveSession, SourceState} from '../lib/types';
 import {duration} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
-import {AGENTS, colorOf, withHidden, type Arrange} from '../lib/view';
+import {AGENTS, cardId, colorOf, isHidden, withHidden, type Arrange} from '../lib/view';
 import {t} from '../i18n';
 import {HideRow, Popover, SlidersIcon} from './Popover';
 
@@ -122,7 +122,9 @@ export function Agents({sessions, now}: {sessions: LiveSession[]; now: number}) 
  * current state, off until the board's owner turns it on (the cards show the same).
  */
 export function AgentsPanel({sources, now, arrange}: {sources: SourceState[]; now: number; arrange: Arrange}) {
+  // Only what the board shows: a subscription whose card is hidden is left out here too.
   const rows = sources
+    .filter(source => !isHidden(arrange.view, cardId(source.id)))
     .flatMap(source => source.sessions.map(session => ({source, session})))
     .sort((a, b) => a.session.device.name.localeCompare(b.session.device.name) || a.session.startedAt - b.session.startedAt);
   const working = rows.filter(row => row.session.working).length;
