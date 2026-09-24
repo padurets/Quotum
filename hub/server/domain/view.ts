@@ -9,13 +9,15 @@ import {isValidPlan} from './plan.js';
  * measured or stored.
  */
 export type View = {
-  /** Widget ids in order: `source:<id>`, `history`, `forecast`; widgets missing here come after. */
+  /** Widget ids in order: `source:<id>`, `agents`, `history`, `forecast`; widgets missing here come after. */
   order: string[];
   /** Columns of the twelve a widget spans, where not its default. */
   sizes: Record<string, number>;
   /** Card names the board's owner gave, by source id, instead of the automatic one. */
   names: Record<string, string>;
   hidden: string[];
+  /** Widgets off until the owner turns them on (the list of running agents), turned on. */
+  shown: string[];
   /** `<source id>/<window id>` of windows hidden from cards and the chart. */
   windows: string[];
   plans: Record<string, number[]>;
@@ -25,7 +27,7 @@ export type View = {
   colors: Record<string, string>;
 };
 
-export const EMPTY_VIEW: View = {order: [], sizes: {}, names: {}, hidden: [], windows: [], plans: {}, unplanned: [], colors: {}};
+export const EMPTY_VIEW: View = {order: [], sizes: {}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}};
 
 /** The grid has twelve columns; a widget spans a third of it at least. */
 export const COLUMNS = 12;
@@ -57,13 +59,14 @@ export function parseView(body: unknown): View | null {
   const input = body as Record<string, unknown>;
   const order = ids(input.order ?? [], LIMITS.widgets);
   const hidden = ids(input.hidden ?? [], LIMITS.widgets);
+  const shown = ids(input.shown ?? [], LIMITS.widgets);
   const windows = ids(input.windows ?? [], LIMITS.windows);
   const sizes = byId(input.sizes, isSpan);
   const names = byId(input.names, isName);
   const plans = byId(input.plans, isValidPlan);
   const unplanned = ids(input.unplanned ?? [], LIMITS.widgets);
   const colors = byId(input.colors, isColor);
-  if (!order || !hidden || !windows || !sizes || !names || !plans || !unplanned || !colors) return null;
+  if (!order || !hidden || !shown || !windows || !sizes || !names || !plans || !unplanned || !colors) return null;
   const spans = Object.fromEntries(Object.entries(sizes).map(([id, span]) => [id, Math.max(MIN_SPAN, span)]));
-  return {order, sizes: spans, names, hidden, windows, plans, unplanned, colors};
+  return {order, sizes: spans, names, hidden, shown, windows, plans, unplanned, colors};
 }

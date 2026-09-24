@@ -1,7 +1,10 @@
-import type {LiveSession} from '../lib/types';
+import type {CSSProperties} from 'react';
+import type {LiveSession, SourceState} from '../lib/types';
 import {duration} from '../lib/format';
+import {sourceLabel} from '../lib/quota';
+import {AGENTS, colorOf, withHidden, type Arrange} from '../lib/view';
 import {t} from '../i18n';
-import {Popover} from './Popover';
+import {HideRow, Popover, SlidersIcon} from './Popover';
 
 /** More sessions than this are counted in the header instead of drawn one by one. */
 const DRAWN = 10;
@@ -27,6 +30,10 @@ function Mark({session}: {session: LiveSession}) {
   const quiet = !session.working && session.origin !== 'terminal';
   return <i className={`agent ${session.working ? 'is-working' : ''} ${quiet ? 'is-quiet' : ''}`} aria-hidden="true" />;
 }
+
+/** What a session is doing, as the legend names its mark. */
+const stateOf = (session: LiveSession) =>
+  t(session.working ? 'agents.working' : session.origin === 'terminal' ? 'agents.idle' : 'agents.window');
 
 /** How long a session has run, short: a fresh one is "just now". */
 const since = (ms: number) => (ms < 60_000 ? t('agents.justNow') : duration(ms, true));
@@ -107,5 +114,62 @@ export function Agents({sessions, now}: {sessions: LiveSession[]; now: number}) 
         </span>
       </div>
     </Popover>
+  );
+}
+
+/**
+ * Every coding agent running on the board's subscriptions, as one table: a widget of the
+ * current state, off until the board's owner turns it on (the cards show the same).
+ */
+export function AgentsPanel({sources, now, arrange}: {sources: SourceState[]; now: number; arrange: Arrange}) {
+  const rows = sources
+    .flatMap(source => source.sessions.map(session => ({source, session})))
+    .sort((a, b) => a.session.device.name.localeCompare(b.session.device.name) || a.session.startedAt - b.session.startedAt);
+  const working = rows.filter(row => row.session.working).length;
+  return (
+    <section className="panel agents-panel" aria-label={t('agents.title')}>
+      <div className="panel-head">
+        <h2>{t('agents.title')}</h2>
+        {rows.length > 0 && <span className="panel-note">{t('agents.machineSummary', {working, count: rows.length})}</span>}
+        {arrange.owner && (
+          <Popover label={t('agents.settings')} icon={<SlidersIcon />}>
+            <HideRow onHide={() => arrange.update(view => withHidden(view, AGENTS, true))}>{t('widget.hide')}</HideRow>
+          </Popover>
+        )}
+      </div>
+      {!rows.length ? (
+        <p className="panel-empty">{t('agents.none')}</p>
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>{t('agents.project')}</th>
+                <th>{t('agents.state')}</th>
+                <th>{t('agents.subscription')}</th>
+                <th>{t('agents.machine')}</th>
+                <th>{t('agents.origin')}</th>
+                <th>{t('agents.running')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(({source, session}, i) => (
+                <tr key={i} className={session.working ? 'is-working' : ''} style={{'--card-color': colorOf(arrange.view, source.id, source.provider)} as CSSProperties}>
+                  <td>
+                    <Mark session={session} />
+                    {session.project ?? t('agents.noProject')}
+                  </td>
+                  <td>{stateOf(session)}</td>
+                  <td>{sourceLabel(source)}</td>
+                  <td>{session.device.name}</td>
+                  <td>{t(`agents.${session.origin}`)}</td>
+                  <td>{since(now - session.startedAt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }

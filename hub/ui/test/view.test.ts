@@ -1,11 +1,11 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {arranged, colorOf, planOf, reordered, spanOf, weeklyPlanOf, withColor, withHidden, withPlan, withPlanned, withSpan, withWindowHidden} from '../lib/view';
+import {AGENTS, arranged, colorOf, isHidden, planOf, reordered, spanOf, weeklyPlanOf, withColor, withHidden, withPlan, withPlanned, withSpan, withWindowHidden} from '../lib/view';
 import {CARD_COLORS, PROVIDERS} from '../lib/providers';
 import {DEFAULT_PLAN} from '../lib/plan';
 import type {View} from '../lib/types';
 
-const EMPTY: View = {order: [], sizes: {}, names: {}, hidden: [], windows: [], plans: {}, unplanned: [], colors: {}};
+const EMPTY: View = {order: [], sizes: {}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}};
 const board = ['source:a', 'source:b', 'source:c', 'history'];
 
 test('widgets follow the board’s order; a new one comes next to its natural neighbour', () => {
@@ -22,6 +22,14 @@ test('moving the shown widgets keeps the hidden ones behind them', () => {
   const view = withHidden({...EMPTY, order: ['source:a', 'source:b', 'history']}, 'source:b', true);
   assert.deepEqual(reordered(view, ['history', 'source:a']).order, ['history', 'source:a', 'source:b']);
   assert.deepEqual(withHidden(withHidden(view, 'source:b', true), 'source:b', false).hidden, []);
+});
+
+test('the list of running agents is off until the owner turns it on', () => {
+  assert.equal(isHidden(EMPTY, AGENTS), true);
+  const on = withHidden(EMPTY, AGENTS, false);
+  assert.deepEqual([on.shown, on.hidden, isHidden(on, AGENTS)], [[AGENTS], [], false]);
+  assert.equal(isHidden(withHidden(on, AGENTS, true), AGENTS), true);
+  assert.equal(isHidden(EMPTY, 'history'), false, 'the rest are on until hidden');
 });
 
 test('hidden windows and plans belong to the view; the default plan is not stored', () => {

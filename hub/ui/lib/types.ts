@@ -56,6 +56,8 @@ export type View = {
   /** Names the board's owner gave cards, by source id. */
   names: Record<string, string>;
   hidden: string[];
+  /** Widgets off until the owner turns them on (the list of running agents), turned on. */
+  shown: string[];
   /** `windowKey`s of windows hidden from cards and the chart. */
   windows: string[];
   /** Weekly spending plans by source id; absent means the default. */

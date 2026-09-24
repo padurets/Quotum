@@ -4,12 +4,17 @@ import {DEFAULT_PLAN, isValidPlan, type WeeklyPlan} from './plan';
 import type {Overview, View} from './types';
 import {FALLBACK_COLOR, PROVIDERS} from './providers';
 
-/** Widget ids: the chart, the table of every limit, and a card per source. */
+/** Widget ids: the chart, the table of every limit, the list of running agents, and a card per source. */
 export const HISTORY = 'history';
 export const FORECAST = 'forecast';
+export const AGENTS = 'agents';
 export const cardId = (sourceId: string) => `source:${sourceId}`;
 
-const EMPTY: View = {order: [], sizes: {}, names: {}, hidden: [], windows: [], plans: {}, unplanned: [], colors: {}};
+/** Widgets a board goes without until its owner turns them on: the cards already show the agents. */
+const OFF_BY_DEFAULT = [AGENTS];
+export const isOffByDefault = (id: string) => OFF_BY_DEFAULT.includes(id);
+
+const EMPTY: View = {order: [], sizes: {}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}};
 
 /**
  * The grid has twelve columns: a card takes half of it by default, so two stand side by
@@ -60,10 +65,12 @@ export const reordered = (view: View, shown: string[]): View => ({
   order: [...shown, ...view.order.filter(id => !shown.includes(id))],
 });
 
-export const withHidden = (view: View, id: string, hidden: boolean): View => ({
-  ...view,
-  hidden: hidden ? [...new Set([...view.hidden, id])] : view.hidden.filter(other => other !== id),
-});
+export const isHidden = (view: View, id: string) => (isOffByDefault(id) ? !view.shown.includes(id) : view.hidden.includes(id));
+
+export const withHidden = (view: View, id: string, hidden: boolean): View =>
+  isOffByDefault(id)
+    ? {...view, shown: hidden ? view.shown.filter(other => other !== id) : [...new Set([...view.shown, id])]}
+    : {...view, hidden: hidden ? [...new Set([...view.hidden, id])] : view.hidden.filter(other => other !== id)};
 
 export const withWindowHidden = (view: View, key: string, hidden: boolean): View => ({
   ...view,

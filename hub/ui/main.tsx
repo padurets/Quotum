@@ -10,11 +10,12 @@ import {useResets} from './lib/resets';
 import {sourceLabel, titled} from './lib/quota';
 import {usePath} from './lib/router';
 import {boardTitle, rememberBoard, useBoard, useSession, type Board, type Session, type User} from './lib/session';
-import {arranged, cardId, FORECAST, HISTORY, reordered, spanOf, useView, withHidden, withSpan} from './lib/view';
+import {AGENTS, arranged, cardId, FORECAST, HISTORY, isHidden, reordered, spanOf, useView, withHidden, withSpan} from './lib/view';
 import {t, useLocale} from './i18n';
 import {Header} from './components/Header';
 import {SERVICE} from './components/Kit';
 import {SourceCard} from './components/SourceCard';
+import {AgentsPanel} from './components/Agents';
 import {History} from './components/History';
 import {Forecast} from './components/Forecast';
 import {AnalyticsHead} from './components/Analytics';
@@ -77,6 +78,13 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
       },
     ]),
   );
+  // The list of every running agent is about now too: it goes with the cards.
+  cards.set(AGENTS, {
+    id: AGENTS,
+    name: t('agents.title'),
+    span: spanOf(arrange.view, AGENTS),
+    content: <AgentsPanel sources={sources} now={now} arrange={arrange} />,
+  });
   const panels = new Map<string, Widget>([
     [
       HISTORY,
@@ -98,7 +106,7 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
     ],
   ]);
   const widgets = arranged(arrange.view, [...cards.keys(), ...panels.keys()]).map(id => (cards.get(id) ?? panels.get(id))!);
-  const shown = widgets.filter(widget => !arrange.view.hidden.includes(widget.id));
+  const shown = widgets.filter(widget => !isHidden(arrange.view, widget.id));
   // The cards are about now; the chart and the table below them, with their filters, are the analytics.
   // Each area is arranged on its own grid.
   const shownCards = shown.filter(widget => cards.has(widget.id));
@@ -126,7 +134,7 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
           arrange.owner && overview && !empty ? (
             <WidgetsMenu
               widgets={widgets}
-              hidden={arrange.view.hidden}
+              hidden={widgets.filter(widget => isHidden(arrange.view, widget.id)).map(widget => widget.id)}
               locked={prefs.locked}
               onShow={(id, on) => arrange.update(view => withHidden(view, id, !on))}
               onLock={locked => setPrefs({locked})}

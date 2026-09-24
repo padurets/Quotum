@@ -326,6 +326,9 @@ td.muted, small.muted { color: var(--text-3); }
 /* What the marks mean, once, under the list. */
 .agents-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 4px 0; padding: 8px 4px 2px; border-top: 1px solid var(--hair); font-size: 11.5px; color: var(--text-3); }
 .agents-legend span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+/* The table of every running agent: a mark as on the cards starts each row. */
+.agents-panel td .agent { margin-right: 12px; vertical-align: -1px; }
+.agents-panel td:first-child { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
 .agents-list { box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; width: 340px; max-width: 100%; max-height: min(360px, 50vh); overflow: hidden auto; padding: 0 4px 4px; }
 .agents-machine h3 { display: flex; align-items: baseline; gap: 8px; margin: 0 4px 4px; font-size: 12.5px; font-weight: 560; color: var(--text); }
 .agents-machine h3 span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -342,6 +345,8 @@ td.muted, small.muted { color: var(--text-3); }
 .panel { --panel-pad: 22px; padding: 20px var(--panel-pad) 22px; }
 .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .panel-head h2 { margin: 0; font-size: 15px; font-weight: 560; letter-spacing: -.01em; }
+/* A few words beside the title; the panel's settings stay at the right. */
+.panel-note { margin-right: auto; color: var(--text-3); font-size: 12.5px; }
 .controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .controls .picker { margin-left: 0; }
 .segmented { display: flex; padding: 2px; gap: 2px; border: 1px solid var(--hair); border-radius: 9px; background: #ffffff04; }

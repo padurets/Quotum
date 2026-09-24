@@ -258,8 +258,9 @@ them), kept for 90 days.
   more (its last holder left or was removed). Deleting a board deletes its sharing and
   its view, never the measurements.
 - **The view** of a board is how it is arranged: the order of its widgets (a card per
-  source, the chart and the table), their widths on a twelve-column grid, names and
-  colours given to cards, the hidden widgets, the windows hidden inside cards and the
+  source, the list of running agents, the chart and the table), their widths on a
+  twelve-column grid, names and colours given to cards, the hidden widgets (and those
+  off by default, the list of agents, turned on), the windows hidden inside cards and the
   spending plans, or that a card has none.
   It is stored once per board, like a dashboard in Grafana: the owner arranges it and
   names the cards the way the team calls them, and everyone sees the same board. Nothing
@@ -275,7 +276,8 @@ rate-limited.
 
 A single-page React app served by the hub. It reads `/api/overview` every 10 seconds
 and re-reads history only when the overview's `revision` says the board's data changed.
-A board has two areas: the cards, which are about now and show every window, and under
+A board has two areas: the cards (and the list of running agents, when turned on),
+which are about now and show every window, and under
 them the analytics, the chart and the table, which show one window type over one period
 chosen in the analytics' own head. Each area is arranged on its own grid.
 The board's view comes with the overview; the owner's changes show at once and are

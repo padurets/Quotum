@@ -1,7 +1,7 @@
 import {useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode} from 'react';
 import {t} from '../i18n';
 import {Popover, SwitchRow} from './Popover';
-import {COLUMNS, MIN_SPAN} from '../lib/view';
+import {COLUMNS, isOffByDefault, MIN_SPAN} from '../lib/view';
 
 /** A widget on the grid: `span` columns of the twelve wide; its height follows its content. */
 export type Widget = {id: string; name: string; span: number; content: ReactNode};
@@ -438,7 +438,8 @@ export function WidgetsMenu({
   onShow: (id: string, shown: boolean) => void;
   onLock: (locked: boolean) => void;
 }) {
-  const count = widgets.filter(widget => hidden.includes(widget.id)).length;
+  // Widgets off by default are not missing from the board: only what the owner hid is counted.
+  const count = widgets.filter(widget => hidden.includes(widget.id) && !isOffByDefault(widget.id)).length;
   return (
     <Popover label={t(locked ? 'widgets.titleLocked' : 'widgets.title')} icon={locked ? <LockIcon /> : <LayoutIcon />} badge={count}>
       <div className="popover-title">{t('widgets.title')}</div>
