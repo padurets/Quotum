@@ -28,8 +28,20 @@ export type SourceState = {
   owners: string[];
   /** Measured by the reader's own devices: theirs to take off a shared board. */
   mine: boolean;
+  /** The coding agents running on it right now, on any machine. */
+  sessions: LiveSession[];
   /** How the dashboard names the source (set by the client from the whole board). */
   title?: string;
+};
+
+/** A coding agent running on a machine, spending the subscription of its card. */
+export type LiveSession = {
+  device: {id: string; name: string};
+  /** A terminal; an editor or the provider's app, which run one client per window. */
+  origin: 'terminal' | 'editor' | 'app';
+  project: string | null;
+  startedAt: number;
+  working: boolean;
 };
 
 /**

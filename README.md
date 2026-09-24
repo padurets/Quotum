@@ -94,6 +94,10 @@ Codex         api                 idle     started 25m ago · editor
 - **A card per subscription**, one meter per window: green above 30%, amber at 30% and
   below, red under 10%. A tick on the meter shows where your spending plan expects you
   to be right now. The dot on the provider's logo says whether the numbers are fresh.
+- **Which agents run on it, and which of them work.** Under the limits, a mark per
+  Claude Code, Codex or Antigravity session spending the subscription, grouped by
+  machine: filled while it works, outlined while idle; its project and how long it runs
+  in the tooltip. Terminals, editors and the Codex app alike.
 - **Free resets.** When a provider grants resets of the limits (Codex does now and
   then), the card shows how many you have and until when.
 - **A weekly spending plan.** By default you spend 30 / 25 / 15 / 15 / 10 / 5% on the
@@ -251,6 +255,8 @@ Everything is optional. On Linux the file is `~/.config/quotum/config.toml`;
 ```toml
 interval = 120          # seconds between two measurements of one client, 60 to 86400
 eco = true              # measure less often while nothing changes
+sessions = true         # tell the hub which coding agents run here, working or idle
+projects = true         # with the names of their project folders
 
 [machine]
 name = "work-laptop"    # the name the machine reports (default: host name); renaming it on the hub wins

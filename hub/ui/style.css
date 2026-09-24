@@ -294,6 +294,16 @@ td.muted, small.muted { color: var(--text-3); }
 .reset-notice.is-done .reset-dot { background: var(--ok); box-shadow: 0 0 8px #75d8ad99; }
 .reset-credit { margin-left: auto; flex-shrink: 0; font-size: 11px; color: var(--text-4) !important; }
 .card-empty { color: var(--text-3); font-size: 13px; padding: 12px 0; }
+/* The agents running on a subscription: a mark each, grouped by machine. No animation:
+   a board stays open for hours. */
+.agents { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; margin-top: -6px; font-size: 12px; color: var(--text-3); }
+.agents-machine { display: inline-flex; align-items: center; gap: 4px; }
+.agents-name { margin-right: 4px; }
+.agents-count { display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
+.agents-count .agent + .agent, .agents-count .agent:not(:first-child) { margin-left: 6px; }
+.agent { display: inline-block; width: 7px; height: 12px; border-radius: 2px; box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--card-color, var(--text-3)) 75%, transparent); }
+.agent.is-working { background: var(--card-color, var(--text-2)); box-shadow: none; }
+.agent.is-quiet { opacity: .45; }
 .card-status { margin: -8px 0 0; font-size: 12.5px; color: var(--warn); }
 .card-name input { width: 100%; }
 

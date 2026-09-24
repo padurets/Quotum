@@ -4,6 +4,7 @@ import {windowKey} from '../lib/types';
 import {ago, day, duration, fullStamp, num} from '../lib/format';
 import {errorText, freshness, level, problemOf, PULSE_FOR, sourceLabel, windowName} from '../lib/quota';
 import {t} from '../i18n';
+import {Agents} from './Agents';
 import {DEFAULT_PLAN, isValidPlan, PLAN_NOTE_FROM, planAt, planTotal, type WeeklyPlan} from '../lib/plan';
 import {LOGOS} from './logos';
 import {cardId, colorOf, planOf, weeklyPlanOf, withColor, withHidden, withName, withPlan, withPlanned, withWindowHidden, type Arrange} from '../lib/view';
@@ -345,6 +346,7 @@ export function SourceCard({
         {!source.windows.length && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
         {!!source.windows.length && !visible.length && <div className="card-empty">{t('card.allHidden')}</div>}
       </div>
+      <Agents sessions={source.sessions ?? []} now={now} />
       {warn && !!source.windows.length && <p className="card-status">{status}</p>}
       <ResetBanner status={resets} now={now} />
       <ResetNotice status={resets} now={now} />
