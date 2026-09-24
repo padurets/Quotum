@@ -137,6 +137,7 @@ export const ru = {
   'agents.machineSummary': 'работают {working} из {count}',
   'agents.noProject': 'без проекта',
   'agents.justNow': 'только что',
+  'agents.window': 'открытое окно',
   'agents.working': 'работает',
   'agents.idle': 'простаивает',
   'agents.terminal': 'терминал',

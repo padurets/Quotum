@@ -1,4 +1,4 @@
-import {useEffect, useRef, useState, type ReactNode} from 'react';
+import {useEffect, useLayoutEffect, useRef, useState, type ReactNode} from 'react';
 
 /** A button with an anchored panel; closes on outside click and Escape. */
 export function Popover({
@@ -11,6 +11,7 @@ export function Popover({
   onOpenChange,
   align = 'right',
   triggerClass,
+  up = false,
 }: {
   label: string;
   icon?: ReactNode;
@@ -18,6 +19,8 @@ export function Popover({
   trigger?: ReactNode;
   /** How a text trigger looks, when not as plain text; such a trigger is named by `label`, not by what it shows. */
   triggerClass?: string;
+  /** Opens above the button (from the bottom of a card), or below it when there is no room above. */
+  up?: boolean;
   badge?: number;
   children: ReactNode;
   open?: boolean;
@@ -29,6 +32,15 @@ export function Popover({
   const setOpen = (next: boolean) => (onOpenChange ? onOpenChange(next) : setOwn(next));
   const box = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  // Measured once it is open: a panel that would reach under the top bar opens downwards instead.
+  const [down, setDown] = useState(false);
+  useLayoutEffect(() => {
+    if (!open || !up) return setDown(false);
+    const top = panel.current?.getBoundingClientRect().top ?? 0;
+    const bar = document.querySelector('.topbar')?.getBoundingClientRect().bottom ?? 0;
+    if (top < bar + 8) setDown(true);
+  }, [open, up]);
 
   useEffect(() => {
     if (!open) return;
@@ -65,7 +77,7 @@ export function Popover({
         {!!badge && <i className="badge">{badge}</i>}
       </button>
       {open && (
-        <div className={`popover glass ${align === 'left' ? 'is-left' : ''}`} role="dialog" aria-label={label}>
+        <div className={`popover glass ${align === 'left' ? 'is-left' : ''} ${up && !down ? 'is-up' : ''}`} role="dialog" aria-label={label} ref={panel}>
           {children}
         </div>
       )}

@@ -41,7 +41,7 @@ const TerminalIcon = () => (
 /**
  * The coding agents running on a subscription right now, in the card's tray; not there
  * while none runs. The marks tell at a glance how many run and work on which machine;
- * the panel it opens, upwards, names them.
+ * the panel it opens, upwards where there is room, names them.
  */
 export function Agents({sessions, now}: {sessions: LiveSession[]; now: number}) {
   if (!sessions.length) return null;
@@ -52,6 +52,7 @@ export function Agents({sessions, now}: {sessions: LiveSession[]; now: number}) 
     <Popover
       label={summary}
       triggerClass="agents-pill"
+      up
       trigger={
         <>
           <TerminalIcon />
@@ -77,6 +78,7 @@ export function Agents({sessions, now}: {sessions: LiveSession[]; now: number}) 
         <span className="agents-legend">
           <i className="agent is-working" aria-hidden="true" /> {t('agents.working')}
           <i className="agent" aria-hidden="true" /> {t('agents.idle')}
+          <i className="agent is-quiet" aria-hidden="true" /> {t('agents.window')}
         </span>
       </div>
       <div className="agents-list">
@@ -89,7 +91,10 @@ export function Agents({sessions, now}: {sessions: LiveSession[]; now: number}) 
             {machine.sessions.map((session, i) => (
               <div className={`agents-row ${session.working ? 'is-working' : ''}`} key={i} title={t(session.working ? 'agents.working' : 'agents.idle')}>
                 <Mark session={session} />
-                <span className="agents-project">{session.project ?? t('agents.noProject')}</span>
+                <span className="agents-project">
+                  {session.project ?? t('agents.noProject')}
+                  <span className="sr-only">, {t(session.working ? 'agents.working' : 'agents.idle')}</span>
+                </span>
                 <span className="agents-origin">{t(`agents.${session.origin}`)}</span>
                 <span className="agents-age">{since(now - session.startedAt)}</span>
               </div>

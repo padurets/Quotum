@@ -141,6 +141,7 @@ export const en = {
   'agents.machineSummary': '{working} of {count} working',
   'agents.noProject': 'no project',
   'agents.justNow': 'just now',
+  'agents.window': 'open window',
   'agents.working': 'working',
   'agents.idle': 'idle',
   'agents.terminal': 'terminal',
