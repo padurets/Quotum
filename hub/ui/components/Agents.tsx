@@ -134,8 +134,8 @@ const COLUMNS: {id: string; title: Key; cell: (row: Row, now: number) => ReactNo
  */
 export function AgentsPanel({sources, now, arrange}: {sources: SourceState[]; now: number; arrange: Arrange}) {
   // Only what the board shows: a subscription whose card is hidden is left out here too.
-  const rows: Row[] = sources
-    .filter(source => !isHidden(arrange.view, cardId(source.id)))
+  const shown = sources.filter(source => !isHidden(arrange.view, cardId(source.id)));
+  const rows: Row[] = shown
     .flatMap(source => source.sessions.map(session => ({source, session})))
     .sort((a, b) => a.session.device.name.localeCompare(b.session.device.name) || a.session.startedAt - b.session.startedAt);
   const working = rows.filter(row => row.session.working).length;
@@ -153,13 +153,12 @@ export function AgentsPanel({sources, now, arrange}: {sources: SourceState[]; no
                 {t(column.title)}
               </SwitchRow>
             ))}
-            <div className="popover-sep" />
             <HideRow onHide={() => arrange.update(view => withHidden(view, AGENTS, true))}>{t('widget.hide')}</HideRow>
           </Popover>
         )}
       </div>
       {!rows.length ? (
-        <p className="panel-empty">{t('agents.none')}</p>
+        <p className="panel-empty">{t(shown.length < sources.length ? 'agents.noneShown' : 'agents.none')}</p>
       ) : (
         <div className="table-wrap">
           <table>

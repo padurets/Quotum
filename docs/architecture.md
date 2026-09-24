@@ -260,8 +260,9 @@ them), kept for 90 days.
 - **The view** of a board is how it is arranged: the order of its widgets (a card per
   source, the list of running agents, the chart and the table), their widths on a
   twelve-column grid, names and colours given to cards, the hidden widgets (and those
-  off by default, the list of agents, turned on), the windows hidden inside cards and the
-  spending plans, or that a card has none.
+  off by default, the list of agents, turned on), the columns hidden in a widget's table,
+  the windows hidden inside cards and the spending plans, or that a card has none. The
+  list of agents shows only the subscriptions whose cards are shown.
   It is stored once per board, like a dashboard in Grafana: the owner arranges it and
   names the cards the way the team calls them, and everyone sees the same board. Nothing
   in the view changes what is measured or stored.

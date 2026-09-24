@@ -146,6 +146,7 @@ export const ru = {
   'agents.editor': 'редактор',
   'agents.app': 'приложение',
   'agents.none': 'Сейчас агенты не запущены',
+  'agents.noneShown': 'На показанных подписках агенты не запущены',
   'agents.settings': 'Настройки списка агентов',
   'agents.project': 'Проект',
   'agents.state': 'Состояние',

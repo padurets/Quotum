@@ -151,6 +151,7 @@ export const en = {
   'agents.editor': 'editor',
   'agents.app': 'app',
   'agents.none': 'No agents are running now',
+  'agents.noneShown': 'No agents run on the subscriptions shown',
   'agents.settings': 'Agents list settings',
   'agents.project': 'Project',
   'agents.state': 'State',
