@@ -398,7 +398,7 @@ td.muted, small.muted { color: var(--text-3); }
 .tooltip-row.is-plan strong, .tooltip-row.is-plan span { color: var(--text-3); font-weight: 450; }
 .tooltip-sep { height: 1px; background: var(--hair); margin: 5px 0; }
 /* The plan beside what is left, at the row's end. */
-.tooltip-plan { margin-left: auto; padding-left: 16px; font-style: normal; font-variant-numeric: tabular-nums; color: var(--text-4); }
+.tooltip-plan { margin-left: auto; padding-left: 16px; font-style: normal; font-variant-numeric: tabular-nums; color: var(--text-3); }
 .legend-plan { margin-left: auto; color: var(--text-3); }
 
 .table-wrap { overflow-x: auto; margin-top: 18px; }

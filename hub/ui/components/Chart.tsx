@@ -16,8 +16,8 @@ const HOLD_MS = 450;
 /** The mark of a past event: a small diamond centred at (x, y). */
 const diamond = (x: number, y: number, r = 4) => `M${x},${y - r}l${r},${r}l${-r},${r}l${-r},${-r}z`;
 
-/** The spending plan of one weekly window, drawn as a faint dotted line in its colour. */
-export type PlanLine = {key: string; sourceId: string; name: string; color: string; runs: [number, number][][]};
+/** The spending plan of one weekly window, drawn as a faint dotted line in its colour; `lines` are the keys of the lines it plans. */
+export type PlanLine = {key: string; lines: string[]; name: string; color: string; runs: [number, number][][]};
 
 /** Value of a piecewise-linear run at time `at`, or undefined outside it. */
 function valueAt(runs: [number, number][][], at: number) {
@@ -148,8 +148,8 @@ export function Chart({
           return value === undefined ? [] : [{plan, value}];
         });
   // A plan is read beside what its source has left; one with nothing read there stands on its own.
-  const planOf = (sourceId: string) => planReadout.find(row => row.plan.sourceId === sourceId);
-  const lonePlans = planReadout.filter(row => !readout.some(r => r.line.sourceId === row.plan.sourceId));
+  const planOf = (line: string) => planReadout.find(row => row.plan.lines.includes(line));
+  const lonePlans = planReadout.filter(row => !readout.some(r => row.plan.lines.includes(r.line.key)));
 
   const toChart = (event: PointerEvent<SVGSVGElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -324,7 +324,7 @@ export function Chart({
                 </svg>
                 <strong>{num(row.value)}%</strong>
                 <span>{row.line.name}</span>
-                {planOf(row.line.sourceId) && <em className="tooltip-plan">{t('chart.planValue', {value: num(planOf(row.line.sourceId)!.value)})}</em>}
+                {planOf(row.line.key) && <em className="tooltip-plan">{t('chart.planValue', {value: num(planOf(row.line.key)!.value)})}</em>}
               </div>
             ))}
           {markerReadout.map(marker => (

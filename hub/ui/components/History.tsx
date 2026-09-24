@@ -147,10 +147,14 @@ export function History({
       // Idle rolling windows (reset = now + 7 days) have not started: no plan to show.
       if (!plan || !live?.resetAt || live.minutes !== 10080 || !planAt(live, source?.successAt ?? null, now, plan)) continue;
       const key = `${line.sourceId}@${Math.round(live.resetAt / 3_600_000)}`;
-      if (seen.has(key)) continue;
+      const shared = seen.get(key);
+      if (shared) {
+        shared.lines.push(line.key);
+        continue;
+      }
       seen.set(key, {
         key,
-        sourceId: line.sourceId,
+        lines: [line.key],
         name: t('chart.plan', {source: source ? sourceLabel(source) : line.provider}),
         color: line.color,
         runs: weeklyPlanLine(live.resetAt, from, to, plan),
