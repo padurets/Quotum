@@ -5,13 +5,13 @@
   "license": "MIT",
   "description": "The Quotum hub: stores what agents measure and serves the dashboard of coding-agent subscription limits (Claude Code, Codex, Antigravity).",
   "author": "Sergey Padurets",
-  "homepage": "https://github.com/padurets/quotum",
+  "homepage": "https://github.com/padurets/Quotum",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/padurets/quotum.git",
+    "url": "git+https://github.com/padurets/Quotum.git",
     "directory": "hub"
   },
-  "bugs": "https://github.com/padurets/quotum/issues",
+  "bugs": "https://github.com/padurets/Quotum/issues",
   "type": "module",
   "engines": {
     "node": ">=24"
