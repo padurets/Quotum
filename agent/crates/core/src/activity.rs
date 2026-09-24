@@ -223,9 +223,17 @@ pub struct Found {
 
 /// Where a client runs, from the programs above it: an editor, the desktop app of its
 /// provider, or else a terminal (a shell, a multiplexer, ssh). An editor's server on a
-/// remote machine (VS Code over SSH, Cursor, code-server) is a `node` found by its path.
+/// remote machine (VS Code over SSH, Cursor, code-server) is a Node.js found by its path:
+/// named `node`, or `MainThread` on Linux since Node 24 (the name of its main thread).
 fn origin(above: &[&Proc], exe: &dyn Fn(u32) -> Option<String>) -> Origin {
-    const SERVERS: [&str; 4] = [".vscode-server", ".cursor-server", ".windsurf-server", "code-server"];
+    const SERVERS: [&str; 6] = [
+        ".vscode-server",
+        ".vscodium-server",
+        ".cursor-server",
+        ".windsurf-server",
+        ".antigravity-server",
+        "code-server",
+    ];
     const EDITORS: [&str; 6] = ["code", "code-insiders", "codium", "cursor", "windsurf", "antigravity"];
     const HELPERS: [&str; 5] =
         ["code helper", "code - insiders", "cursor helper", "windsurf helper", "antigravity helper"];
@@ -234,7 +242,10 @@ fn origin(above: &[&Proc], exe: &dyn Fn(u32) -> Option<String>) -> Origin {
         .find_map(|p| {
             let bare = p.name.strip_suffix(".exe").unwrap_or(&p.name);
             let name = bare.to_ascii_lowercase();
-            let server = || name == "node" && exe(p.pid).is_some_and(|path| SERVERS.iter().any(|s| path.contains(s)));
+            let server = || {
+                ["node", "mainthread"].contains(&name.as_str())
+                    && exe(p.pid).is_some_and(|path| SERVERS.iter().any(|s| path.contains(s)))
+            };
             if EDITORS.contains(&name.as_str()) || HELPERS.iter().any(|helper| name.starts_with(helper)) || server() {
                 Some(Origin::Editor)
             } else if ["chatgpt", "codex", "claude"].contains(&name.as_str()) && bare != name {
@@ -653,26 +664,34 @@ mod tests {
         assert_eq!(app.tree, vec![1098247, 1114779], "the app's windows are not counted in its client");
     }
 
-    /// Claude Code in VS Code over SSH: the editor's server is a `node` in ~/.vscode-server.
+    /// Claude Code in VS Code over SSH: the editor's server is a Node.js in ~/.vscode-server,
+    /// named after its main thread on Linux since Node 24.
     #[test]
     fn a_remote_editors_server_is_an_editor() {
         let procs = [
             p(1, 0, "systemd"),
             p(200, 1, "sshd"),
-            p(210, 200, "node"),
-            p(220, 210, "node"),
+            p(210, 200, "MainThread"),
+            p(220, 210, "MainThread"),
             p(230, 220, "claude"),
+            p(240, 200, "node"),
+            p(250, 240, "codex"),
             p(300, 200, "bash"),
             p(310, 300, "node"),
             p(320, 310, "codex"),
         ];
         let exe = |pid: u32| match pid {
             210 | 220 => Some("/home/ann/.vscode-server/cli/servers/Stable-abc/server/node".to_string()),
+            240 => Some("/home/ann/.cursor-server/bin/abc/node".to_string()),
             310 => Some("/usr/bin/node".to_string()),
             _ => None,
         };
         let origins: Vec<_> = sessions(&procs, 900, &exe).into_iter().map(|f| (f.pid, f.origin)).collect();
-        assert_eq!(origins, vec![(230, Origin::Editor), (320, Origin::Terminal)], "a node of its own is not an editor");
+        assert_eq!(
+            origins,
+            vec![(230, Origin::Editor), (250, Origin::Editor), (320, Origin::Terminal)],
+            "a node of its own is not an editor"
+        );
     }
 
     #[test]
