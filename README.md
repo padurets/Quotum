@@ -355,7 +355,8 @@ whose version differs from any of those four files. It checks everything again, 
 the agent for every platform, publishes the hub's image and the npm packages, and
 creates the GitHub release with the binaries. npm accepts the packages from that workflow alone,
 without a token (trusted publishing). A new npm package, for a new platform, is
-published once by hand and then trusted with `node npm/trust.mjs`.
+published once by hand and then trusted with `node npm/trust.mjs`. npm trusts the
+repository by its name: after renaming it, run that again, and it replaces the old trusts.
 
 ### Adding a language
 
