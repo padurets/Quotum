@@ -177,6 +177,20 @@ test('a new database gets the current layout; one from a newer version is refuse
   assert.throws(() => new Store(file, start), /layout/);
 });
 
+test('history starts when the database was made, or at an older sample while one is kept', () => {
+  const store = fresh();
+  assert.equal(store.historyStart, start, 'a new database');
+  const id = seen(store, 'codex', 'account-a');
+  store.record(id, measurement({observedAt: start + 60_000}));
+  assert.equal(store.historyStart, start, 'a newer sample changes nothing');
+  const older = start - 100 * 86_400_000;
+  store.record(id, measurement({observedAt: older}));
+  assert.equal(store.historyStart, older, 'measurements an agent kept for days, delivered to a new hub');
+  store.prune(start);
+  assert.equal(store.historyStart, start, 'back to the creation once that sample is gone');
+  store.close();
+});
+
 test('a database of a development version before 0.2 is refused, not misread', () => {
   const file = path.join(mkdtempSync(path.join(tmpdir(), 'quotum-')), 'db.sqlite');
   const raw = new DatabaseSync(file);
