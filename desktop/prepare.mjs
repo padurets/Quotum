@@ -4,10 +4,12 @@
  *
  *   resources/hub/              the hub of this commit as one file, with its dashboard
  *   binaries/quotum-node-<target>   Node, downloaded and checked against a pinned SHA-256
+ *   resources/licenses/         the licenses of Quotum, Node and the Rust crates the app links
  *   icons/                      the app's icons, drawn from the dashboard's favicon
  *
- * The app's build needs all three, and so do its checks: tauri-build reads them while
- * compiling. Run it before `cargo clippy`, `cargo test` and a build.
+ * The app's build needs all of them, and so do its checks: tauri-build reads them while
+ * compiling. Run it before `cargo clippy`, `cargo test` and a build; it needs cargo for
+ * the licenses.
  *
  *   node desktop/prepare.mjs                     for this machine
  *   node desktop/prepare.mjs --target <triple>   x86_64-unknown-linux-gnu or x86_64-pc-windows-msvc
@@ -22,6 +24,7 @@ import {chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, rea
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {thirdPartyLicenses} from '../npm/licenses.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const hub = path.resolve(here, '../hub');
@@ -95,9 +98,26 @@ if (!existsSync(binary) || !existsSync(license) || !existsSync(stamp) || readFil
   writeFileSync(stamp, `${node.sha256} ${sha256(binary)}`);
   rmSync(work, {recursive: true, force: true});
 }
-copyFileSync(license, path.join(resources, 'node-LICENSE'));
 
-// 3. Icons, from the favicon (square, 32×32).
+// 3. Licenses: Quotum's, Node's, and those of the Rust crates the app links on this target.
+const licenses = path.join(here, 'resources/licenses');
+rmSync(licenses, {recursive: true, force: true});
+mkdirSync(licenses, {recursive: true});
+copyFileSync(path.resolve(here, '../LICENSE'), path.join(licenses, 'LICENSE'));
+copyFileSync(license, path.join(licenses, 'node-LICENSE'));
+writeFileSync(
+  path.join(licenses, 'THIRD_PARTY_LICENSES.md'),
+  thirdPartyLicenses(here, 'quotum-desktop', [target], [
+    'The Quotum app is MIT-licensed (LICENSE next to this file). Its program includes the',
+    'Rust crates below, each under its own license, and the Rust standard library (MIT OR',
+    'Apache-2.0, https://github.com/rust-lang/rust). The app also carries Node.js',
+    '(node-LICENSE next to this file) and the Quotum hub: the packages bundled into its',
+    'server are listed with their licenses in hub/dist/app/server-licenses.md, those of',
+    'its dashboard in hub/dist/client/third-party-licenses.md.',
+  ]),
+);
+
+// 4. Icons, from the favicon (square, 32×32).
 const icons = path.join(here, 'icons');
 if (!existsSync(path.join(icons, 'icon.png'))) {
   execFileSync('npx', ['--yes', '@tauri-apps/cli@2.11.5', 'icon', path.join(hub, 'public/favicon.svg'), '-o', icons], {
