@@ -81,3 +81,7 @@ requests, but it does start the real clients.
   prefixes: `Agent: quotum start runs it in the background`. One logical change per
   commit.
 - Never commit secrets, `.env` files, hub data (`data/`, `*.sqlite`) or build output.
+- **One task is one pull request into `main`**, merged with *Rebase and merge* (see
+  *Pull requests* in CONTRIBUTING.md): never one opened only to run CI. Changes after
+  review are new commits on the branch; force-push only for a strong reason, stated in
+  the pull request.

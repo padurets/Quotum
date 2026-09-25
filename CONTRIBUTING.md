@@ -17,6 +17,18 @@ measures this machine once.
 Tests never start a real Claude Code, Codex or Antigravity client: they use recorded
 answers and stand-in programs, so they cost nothing and don't depend on your accounts.
 
+## Pull requests
+
+- **One task, one pull request.** A pull request takes one issue (or one fix) to `main`
+  and is merged once it is done. Open it as a draft while the work goes on: CI runs on
+  every push to it. Never open one only to run CI and close it after.
+- **The history stays linear.** Pull requests are merged with *Rebase and merge*: every
+  commit lands on `main` as it is, so each is one logical change with a message that
+  says what it does. What review asks for goes into new commits on the same branch.
+- **No force-push without a strong reason**, such as a rebase onto `main` to resolve a
+  conflict; when you do, say so in the pull request. `main` itself is never
+  force-pushed.
+
 ## What to keep in mind
 
 - **The dashboard speaks English and Russian.** Every new string goes into both catalogs
