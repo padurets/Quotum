@@ -121,24 +121,19 @@ test('a mark counts down in minutes within the hour, hours for two days, then da
   }
 });
 
-test('free resets tell when each of them expires, or, from an older agent, when the first does', () => {
+test('free resets tell when each of them expires, those with no time given last', () => {
   const [a, b] = [NOW + 8 * 24 * HOUR, NOW + 25 * 24 * HOUR];
   const groups = [
     {count: 1, expiresAt: a},
     {count: 2, expiresAt: b},
   ];
-  assert.deepEqual(freeResetExpiry({available: 3, expiresAt: a, expiring: groups}), {kind: 'each', groups});
+  assert.deepEqual(freeResetExpiry({available: 3, expiring: groups}), groups);
+  assert.deepEqual(freeResetExpiry({available: 5, expiring: groups}), [...groups, {count: 2, expiresAt: null}], 'those the groups leave out have no time given');
   assert.deepEqual(
-    freeResetExpiry({available: 5, expiresAt: a, expiring: groups}),
-    {kind: 'each', groups: [...groups, {count: 2, expiresAt: null}]},
-    'those the groups leave out have no time given',
-  );
-  assert.deepEqual(
-    freeResetExpiry({available: 4, expiresAt: a, expiring: [groups[0], {count: 1, expiresAt: null}]}),
-    {kind: 'each', groups: [groups[0], {count: 3, expiresAt: null}]},
+    freeResetExpiry({available: 4, expiring: [groups[0], {count: 1, expiresAt: null}]}),
+    [groups[0], {count: 3, expiresAt: null}],
     'and join those the client gave none for',
   );
-  assert.deepEqual(freeResetExpiry({available: 3, expiresAt: a}), {kind: 'first', at: a}, 'an older agent');
-  assert.deepEqual(freeResetExpiry({available: 3, expiresAt: a, expiring: []}), {kind: 'first', at: a});
-  assert.equal(freeResetExpiry({available: 2, expiresAt: null, expiring: []}), null, 'only the count');
+  assert.deepEqual(freeResetExpiry({available: 2, expiring: []}), [{count: 2, expiresAt: null}], 'only the count');
+  assert.deepEqual(freeResetExpiry({available: 2}), [{count: 2, expiresAt: null}], 'an agent older than 0.4');
 });

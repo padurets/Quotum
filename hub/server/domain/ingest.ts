@@ -126,7 +126,7 @@ function parseResets(value: unknown): FreeResets | null {
     return {count: group.count as number, expiresAt: time(group.expiresAt, 'resets expiring expiresAt', true)};
   });
   if (expiring.reduce((sum, group) => sum + group.count, 0) > available) throw new Invalid('resets expiring');
-  return {available, expiresAt: time(value.expiresAt, 'resets expiresAt', true), expiring};
+  return {available, expiring};
 }
 
 function parseSnapshot(value: unknown): AgentSnapshot {

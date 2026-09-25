@@ -114,15 +114,15 @@ test('every account of a provider is a source of its own, with a stable id', () 
 test('free resets the client reports are kept with the source until it stops reporting them', () => {
   const {store, ingest, board, token} = setup();
   const expiresAt = start + 30 * 86_400_000;
-  ingest.accept(token, batch([snapshot(start, 5, {resets: {available: 1, expiresAt: iso(expiresAt)}})]), start);
-  assert.deepEqual(only(store, board, 'codex').resets, {available: 1, expiresAt, expiring: []}, 'an older agent says only when the first expires');
+  ingest.accept(token, batch([snapshot(start, 5, {resets: {available: 1}})]), start);
+  assert.deepEqual(only(store, board, 'codex').resets, {available: 1, expiring: []}, 'a client that gives only how many');
   const later = expiresAt + 5 * 86_400_000;
   ingest.accept(
     token,
-    batch([snapshot(start + 60_000, 5, {resets: {available: 4, expiresAt: iso(expiresAt), expiring: [{count: 1, expiresAt: iso(expiresAt)}, {count: 2, expiresAt: iso(later)}, {count: 1, expiresAt: null}]}})]),
+    batch([snapshot(start + 60_000, 5, {resets: {available: 4, expiring: [{count: 1, expiresAt: iso(expiresAt)}, {count: 2, expiresAt: iso(later)}, {count: 1, expiresAt: null}]}})]),
     start + 60_000,
   );
-  assert.deepEqual(only(store, board, 'codex').resets, {available: 4, expiresAt, expiring: [{count: 1, expiresAt}, {count: 2, expiresAt: later}, {count: 1, expiresAt: null}]});
+  assert.deepEqual(only(store, board, 'codex').resets, {available: 4, expiring: [{count: 1, expiresAt}, {count: 2, expiresAt: later}, {count: 1, expiresAt: null}]});
   ingest.accept(token, batch([snapshot(start + 120_000, 5)]), start + 120_000);
   assert.equal(only(store, board, 'codex').resets, null);
 });

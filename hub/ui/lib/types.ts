@@ -15,9 +15,10 @@ export type Win = {
   minutes: number | null;
 };
 
-/** How many free resets expire when; absent from a hub or an agent older than that. */
+/** How many free resets expire when. */
 export type Expiring = {count: number; expiresAt: number | null};
-export type FreeResets = {available: number; expiresAt: number | null; expiring?: Expiring[]};
+/** `expiring` is left out by an agent older than 0.4, and those resets have no time given. */
+export type FreeResets = {available: number; expiring?: Expiring[]};
 
 export type SourceState = {
   id: string;

@@ -277,7 +277,7 @@ mod tests {
         let limits = json!({"id": 2, "result": {"rateLimits": {"primary": weekly, "planType": "pro"}, "rateLimitResetCredits": credits}});
         let s = from_responses(&init(), &limits, 1).unwrap();
         let resets = s.resets.unwrap();
-        assert_eq!((resets.available, resets.expires_at), (3, Some(1_792_000_000_000)));
+        assert_eq!(resets.available, 3);
         let groups: Vec<_> = resets.expiring.iter().map(|g| (g.count, g.expires_at)).collect();
         assert_eq!(
             groups,

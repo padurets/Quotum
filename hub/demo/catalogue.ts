@@ -491,15 +491,14 @@ const all: DemoSet = {
       ],
       resets: t =>
         t < -30 * HOUR
-          ? {available: 0, expiresAt: null}
+          ? {available: 0}
           : t < -6 * HOUR
-            ? {available: 1, expiresAt: 20 * DAY, expiring: [{count: 1, expiresAt: 20 * DAY}]}
+            ? {available: 1, expiring: [{count: 1, expiresAt: 20 * DAY}]}
             : t < -3 * HOUR
-              ? {available: 0, expiresAt: null, expiring: []}
+              ? {available: 0, expiring: []}
               : // Granted at different times, they expire at different times; one the client gives no time for.
                 {
                   available: 3,
-                  expiresAt: 8 * DAY,
                   expiring: [
                     {count: 1, expiresAt: 8 * DAY},
                     {count: 1, expiresAt: 18 * DAY},
@@ -551,8 +550,7 @@ const all: DemoSet = {
       machines: ['win-desktop'],
       history: 14 * DAY,
       windows: [fiveHours(90 * MIN, 6, agentsWork(ON_CALL_AGENTS, shifts(12))), weekly({since: -2 * DAY, use: alongPlan(-15, WEEK_PLAN_FLAT)})],
-      // From an older agent, which tells only when the first of them expires.
-      resets: () => ({available: 3, expiresAt: 25 * DAY}),
+      resets: () => ({available: 3, expiring: [{count: 3, expiresAt: 25 * DAY}]}),
       agents: ON_CALL_AGENTS,
       on: {ana: {name: 'Codex Pro for the platform team and the on-call rotation', color: '#43aca1', plan: WEEK_PLAN_FLAT, span: 4}},
       expect: [
@@ -566,7 +564,7 @@ const all: DemoSet = {
         'Teal on the card, the chart and the table',
         'Its own plan: 15% a day, 10% the last',
         'A third of the row wide, its tray full: the reset news on the left, three free resets and ten agent marks in two groups on the right, whole at a window 1260 px wide or more; narrower, the marks go all at once and the count stays',
-        'Its free resets come from an older agent, which tells only when the first expires: the panel\'s table has that time alone, marked "soonest"',
+        'Its three free resets expire together: one row in the panel\'s table',
       ],
     },
     {
@@ -715,7 +713,8 @@ const all: DemoSet = {
       eco: true,
       history: 2 * DAY,
       windows: [idle(), weekly({since: -3 * DAY, use: steady(12, 0)})],
-      resets: () => ({available: 1, expiresAt: null}),
+      // Its client gives how many, not when they expire.
+      resets: () => ({available: 1}),
       on: {ana: {name: 'CI runners (eco)'}},
       expect: [
         {title: 'CI runners (eco)'},
@@ -866,10 +865,9 @@ const showcase: DemoSet = {
       windows: [fiveHours(-3 * HOUR - 34 * MIN, 15, agentsWork(WORK_AGENTS, ALWAYS)), weekly({since: -(DAY + 3 * HOUR), use: steady(0, 31)})],
       resets: t =>
         t < -6 * HOUR
-          ? {available: 0, expiresAt: null, expiring: []}
+          ? {available: 0, expiring: []}
           : {
               available: 2,
-              expiresAt: 11 * DAY,
               expiring: [
                 {count: 1, expiresAt: 11 * DAY},
                 {count: 1, expiresAt: 18 * DAY},

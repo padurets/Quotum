@@ -134,41 +134,18 @@ const TicketIcon = () => (
 );
 
 /**
- * When free resets expire, a line each: all of them at one time is said once; how many
- * expire when, when they differ; from an older agent, when the first one does.
- */
-function expiryLines(resets: NonNullable<SourceState['resets']>): string[] {
-  const expiry = freeResetExpiry(resets);
-  if (!expiry) return [];
-  if (expiry.kind === 'first') return [t('card.freeResetsFirst', {date: stamp(expiry.at)})];
-  const [only] = expiry.groups;
-  if (expiry.groups.length === 1) return only.expiresAt !== null ? [t('card.freeResetsUntil', {date: stamp(only.expiresAt)})] : [];
-  return expiry.groups.map(group =>
-    group.expiresAt !== null ? t('card.freeResetsBy', {count: group.count, date: stamp(group.expiresAt)}) : t('card.freeResetsNoDate', {count: group.count}),
-  );
-}
-
-/**
  * Free resets of the limits the account holds, in the tray by the agents: what the card
- * has now. A ticket, so it never reads as the news of a reset for everyone.
+ * has now. A ticket, so it never reads as the news of a reset for everyone. Its panel is
+ * a table, a row per time they expire; its name says the same a line a row.
  */
 export function FreeResets({resets}: {resets: NonNullable<SourceState['resets']>}) {
   const count = t('card.freeResets', {count: resets.available});
-  const lines = expiryLines(resets);
-  const label = [count, ...lines].join('\n');
-  // The panel is always a table, a row per time: from an older agent, the soonest time
-  // alone; with no time given, one row that says so.
-  const expiry = freeResetExpiry(resets);
-  const rows: {key: string; when: string; count: string; soonest?: boolean}[] =
-    expiry?.kind === 'each'
-      ? expiry.groups.map(group => ({
-          key: String(group.expiresAt),
-          when: group.expiresAt !== null ? stamp(group.expiresAt) : t('card.freeResetsNever'),
-          count: String(group.count),
-        }))
-      : expiry?.kind === 'first'
-        ? [{key: 'first', when: stamp(expiry.at), count: t('card.freeResetsSoonest'), soonest: true}]
-        : [{key: 'never', when: t('card.freeResetsNever'), count: String(resets.available)}];
+  const groups = freeResetExpiry(resets);
+  const label = [
+    count,
+    ...groups.map(g => (g.expiresAt !== null ? t('card.freeResetsBy', {count: g.count, date: stamp(g.expiresAt)}) : t('card.freeResetsNoDate', {count: g.count}))),
+  ].join('\n');
+  const rows = groups.map(g => ({key: String(g.expiresAt), when: g.expiresAt !== null ? stamp(g.expiresAt) : t('card.freeResetsNever'), count: g.count}));
   return (
     <Popover
       label={label}
@@ -193,7 +170,7 @@ export function FreeResets({resets}: {resets: NonNullable<SourceState['resets']>
           {rows.map(row => (
             <div key={row.key}>
               <dt>{row.when}</dt>
-              <dd className={row.soonest ? 'is-soonest' : ''}>{row.count}</dd>
+              <dd>{row.count}</dd>
             </div>
           ))}
         </dl>

@@ -635,7 +635,7 @@ fn print_outcome(outcome: &Outcome, style: &Style) {
                         let verb = if free.available == 1 { "expires" } else { "expire" };
                         when(one.expires_at).map(|w| format!("{verb} {w}")).unwrap_or_default()
                     }
-                    [] => when(free.expires_at).map(|w| format!("first expires {w}")).unwrap_or_default(),
+                    [] => String::new(),
                     groups => groups
                         .iter()
                         .map(|g| format!("{} {}", g.count, when(g.expires_at).unwrap_or_else(|| "with no date".into())))

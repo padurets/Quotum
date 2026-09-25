@@ -92,7 +92,7 @@ One successful measurement of one provider account on one machine.
 | `client` | Version of the agent's client that answered. |
 | `staleAfterMs` | How long this measurement stays representative. The agent promises the next measurement of this provider before then; a later one is a gap. At most 24 h. |
 | `windows` | At least one window. |
-| `resets` | Free resets of the limits the account holds, if the client reports them: `{"available": 3, "expiresAt": "2026-10-03T09:00:00Z", "expiring": [{"count": 1, "expiresAt": "2026-10-03T09:00:00Z"}, {"count": 2}]}`. `available`: how many, at most 1000. `expiring` (optional): the available resets by when they expire, soonest first, one group per time; a group without `expiresAt` (or with `null`) expires at a time the client does not give, and comes last. Each `count` is at least 1, the counts add up to `available` at most (a client may give only how many), and there are at most 50 groups. `expiresAt`: when the first of them expires, if known, for hubs that do not read `expiring`. Only reported, never used. |
+| `resets` | Free resets of the limits the account holds, if the client reports them: `{"available": 3, "expiring": [{"count": 1, "expiresAt": "2026-10-03T09:00:00Z"}, {"count": 2}]}`. `available`: how many, at most 1000. `expiring` (optional): the available resets by when they expire, soonest first, one group per time; a group without `expiresAt` (or with `null`) expires at a time the client does not give, and comes last. Each `count` is at least 1, the counts add up to `available` at most (a client may give only how many), and there are at most 50 groups. Only reported, never used. |
 
 #### Stable account ids
 

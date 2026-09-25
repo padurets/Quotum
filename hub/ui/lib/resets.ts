@@ -59,21 +59,15 @@ export function resetLabel(status: ResetStatus | undefined, now: number): ResetL
 }
 
 /**
- * When a card's free resets expire: how many when, soonest first and those the client gives
- * no time for last (`each`), or, from an older agent that says only that, when the first
- * does (`first`); null when nothing is known.
+ * When a card's free resets expire: how many when, soonest first, and those the client
+ * gives no time for (or that no group tells of) in one group last.
  */
-export function freeResetExpiry(resets: FreeResets): {kind: 'each'; groups: Expiring[]} | {kind: 'first'; at: number} | null {
+export function freeResetExpiry(resets: FreeResets): Expiring[] {
   const groups = resets.expiring ?? [];
-  if (groups.length) {
-    const told = groups.reduce((sum, group) => sum + group.count, 0);
-    const rest = resets.available - told;
-    if (rest <= 0) return {kind: 'each', groups};
-    // The rest have no time given: with those the client already said so of, if any.
-    const last = groups[groups.length - 1];
-    return {kind: 'each', groups: last.expiresAt === null ? [...groups.slice(0, -1), {count: last.count + rest, expiresAt: null}] : [...groups, {count: rest, expiresAt: null}]};
-  }
-  return resets.expiresAt !== null ? {kind: 'first', at: resets.expiresAt} : null;
+  const rest = resets.available - groups.reduce((sum, group) => sum + group.count, 0);
+  if (rest <= 0) return groups;
+  const last = groups.at(-1);
+  return last?.expiresAt === null ? [...groups.slice(0, -1), {count: last.count + rest, expiresAt: null}] : [...groups, {count: rest, expiresAt: null}];
 }
 
 const POLL_MS = 60_000;

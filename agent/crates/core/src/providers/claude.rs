@@ -279,11 +279,7 @@ mod tests {
         });
         let s = from_responses(&init(), &usage(limits), 1).unwrap();
         let resets = s.resets.unwrap();
-        assert_eq!(
-            (resets.available, resets.expires_at),
-            (3, parse_time("2026-10-12T00:00:00Z")),
-            "paused and spent grants left out"
-        );
+        assert_eq!(resets.available, 3, "paused and spent grants left out");
         let groups: Vec<_> = resets.expiring.iter().map(|g| (g.count, g.expires_at)).collect();
         assert_eq!(groups, [(2, parse_time("2026-10-12T00:00:00Z")), (1, parse_time("2026-10-20T00:00:00Z"))]);
     }

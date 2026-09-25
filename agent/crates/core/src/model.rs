@@ -186,9 +186,6 @@ pub struct Snapshot {
 #[serde(rename_all = "camelCase")]
 pub struct Resets {
     pub available: u32,
-    /// When the first of them expires: what a hub that does not read `expiring` shows.
-    #[serde(default, skip_serializing_if = "Option::is_none", with = "ts::option")]
-    pub expires_at: Option<Millis>,
     /// The available resets by when they expire, soonest first, those the client gives no
     /// time for last. They add up to `available` at most: a client may give only the count.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -216,7 +213,7 @@ impl Resets {
             }
         }
         expiring.sort_by_key(|group| (group.expires_at.is_none(), group.expires_at));
-        Resets { available, expires_at: expiring.first().and_then(|group| group.expires_at), expiring }
+        Resets { available, expiring }
     }
 }
 
@@ -465,7 +462,7 @@ mod tests {
         assert_eq!(json["observedAt"], "2026-09-22T20:20:00.77Z");
         assert_eq!(
             json["resets"],
-            serde_json::json!({"available": 3, "expiresAt": "2026-09-22T20:20:00.77Z", "expiring": [{"count": 1, "expiresAt": "2026-09-22T20:20:00.77Z"}, {"count": 1}]})
+            serde_json::json!({"available": 3, "expiring": [{"count": 1, "expiresAt": "2026-09-22T20:20:00.77Z"}, {"count": 1}]})
         );
         assert_eq!(json["windows"][0]["usedPercent"], 8.0);
         assert_eq!(serde_json::from_value::<Snapshot>(json).unwrap(), snapshot);
