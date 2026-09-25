@@ -1,9 +1,10 @@
-import type {CSSProperties, ReactNode} from 'react';
+import {memo, type CSSProperties, type ReactNode} from 'react';
+import {useNow} from '../lib/api';
 import type {LiveSession, SourceState} from '../lib/types';
 import {duration} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
 import {AGENTS, cardId, colorOf, columnShown, isHidden, withColumn, withHidden, type Arrange} from '../lib/view';
-import {t, type Key} from '../i18n';
+import {t, useLocale, type Key} from '../i18n';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
 
 /** More sessions than this are counted in the header instead of drawn one by one. */
@@ -132,7 +133,9 @@ const COLUMNS: {id: string; title: Key; cell: (row: Row, now: number) => ReactNo
  * Every coding agent running on the board's subscriptions, as one table: a widget of the
  * current state, off until the board's owner turns it on (the cards show the same).
  */
-export function AgentsPanel({sources, now, arrange}: {sources: SourceState[]; now: number; arrange: Arrange}) {
+export const AgentsPanel = memo(function AgentsPanel({sources, arrange}: {sources: SourceState[]; arrange: Arrange}) {
+  useLocale();
+  const now = useNow();
   // Only what the board shows: a subscription whose card is hidden is left out here too.
   const shown = sources.filter(source => !isHidden(arrange.view, cardId(source.id)));
   const rows: Row[] = shown
@@ -189,4 +192,4 @@ export function AgentsPanel({sources, now, arrange}: {sources: SourceState[]; no
       )}
     </section>
   );
-}
+});

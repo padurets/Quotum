@@ -20,7 +20,8 @@
     "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.server.json && tsc -p tsconfig.app.json && vite build",
     "typecheck": "tsc -p tsconfig.test.json && tsc -p tsconfig.app.json && tsc -p tsconfig.ui-test.json",
     "test": "tsx --test server/test/*.test.ts ui/test/*.test.ts",
-    "start": "node dist/server/index.js"
+    "start": "node dist/server/index.js",
+    "bundle": "vite build --config vite.bundle.config.ts"
   },
   "dependencies": {
     "@fastify/static": "10.1.3",

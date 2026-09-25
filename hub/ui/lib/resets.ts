@@ -1,5 +1,5 @@
 import {useEffect, useState} from 'react';
-import {call} from './http';
+import {call, unlessSame} from './http';
 
 /**
  * Reset announcements as collected by the service from the community trackers
@@ -22,6 +22,9 @@ export type TrackerHealth = {name: string; url: string; ok: boolean | null; deta
 
 const POLL_MS = 60_000;
 
+/** Announcements turned off: always these, so what is given them is not rendered again. */
+const NONE = {resets: {}, past: {}, health: []};
+
 type Answer = {resets: Resets; trackers: TrackerHealth[]; past: PastResets};
 
 /** Reads `/api/resets` every minute while announcements are enabled in this browser. */
@@ -34,7 +37,7 @@ export function useResets(enabled: boolean): {resets: Resets; past: PastResets; 
     const poll = async () => {
       try {
         const answer = await call<Answer>('GET', '/api/resets', undefined, 10_000);
-        if (!done) setState(answer);
+        if (!done) setState(unlessSame(answer));
       } catch {
         /* keep the last answer */
       }
@@ -46,5 +49,5 @@ export function useResets(enabled: boolean): {resets: Resets; past: PastResets; 
       clearTimeout(timer);
     };
   }, [enabled]);
-  return enabled ? {resets: state.resets, past: state.past, health: state.trackers} : {resets: {}, past: {}, health: []};
+  return enabled ? {resets: state.resets, past: state.past, health: state.trackers} : NONE;
 }

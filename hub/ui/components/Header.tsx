@@ -1,4 +1,5 @@
 import {useState, type FormEvent, type ReactNode} from 'react';
+import {useNow} from '../lib/api';
 import {call} from '../lib/http';
 import {boardTitle, type Board, type User} from '../lib/session';
 import {Brand, ErrorLine, Field, Modal} from './Kit';
@@ -24,6 +25,13 @@ const PeopleIcon = () => (
   <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
     <circle cx="6" cy="5.5" r="2.3" />
     <path d="M1.8 13.2c.5-2.3 2.2-3.6 4.2-3.6s3.7 1.3 4.2 3.6M10.6 3.4a2.2 2.2 0 0 1 0 4.2M11.8 9.8c1.3.4 2.1 1.6 2.4 3.4" />
+  </svg>
+);
+
+const GearIcon = () => (
+  <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+    <path d="M5.65 3.93L6.63 3.51L6.74 1.52L9.26 1.52L9.37 3.51L10.35 3.93L11.21 4.56L12.98 3.67L14.24 5.85L12.58 6.94L12.70 8.00L12.58 9.06L14.24 10.15L12.98 12.33L11.21 11.44L10.35 12.07L9.37 12.49L9.26 14.48L6.74 14.48L6.63 12.49L5.65 12.07L4.79 11.44L3.02 12.33L1.76 10.15L3.42 9.06L3.30 8.00L3.42 6.94L1.76 5.85L3.02 3.67L4.79 4.56Z" strokeLinejoin="round" />
+    <circle cx="8" cy="8" r="1.9" />
   </svg>
 );
 
@@ -242,7 +250,6 @@ function BoardSwitcher({boards, board, onSelect, onChanged}: {boards: Board[]; b
  */
 export function Header({
   lastOk,
-  now,
   boards,
   board,
   onBoard,
@@ -252,9 +259,10 @@ export function Header({
   onPeople,
   user,
   onAccount,
+  local,
 }: {
-  lastOk: number;
-  now: number;
+  /** When the hub last answered: read as the clock ticks. */
+  lastOk: () => number;
   boards: Board[];
   board: Board | null;
   onBoard: (id: string) => void;
@@ -265,13 +273,17 @@ export function Header({
   onPeople: (() => void) | null;
   user: User;
   onAccount: () => void;
+  /** The desktop app's board: one board, nobody to share with, settings instead of an account. */
+  local: boolean;
 }) {
-  const offline = !!lastOk && now - lastOk > OFFLINE_AFTER;
+  const now = useNow();
+  const okAt = lastOk();
+  const offline = !!okAt && now - okAt > OFFLINE_AFTER;
   return (
     <header className="topbar">
       <div className="topbar-inner">
         <Brand href="/" />
-        <BoardSwitcher boards={boards} board={board} onSelect={onBoard} onChanged={onBoardsChanged} />
+        {!local && <BoardSwitcher boards={boards} board={board} onSelect={onBoard} onChanged={onBoardsChanged} />}
         <div className="status">
           {offline && (
             <span className="offline" role="status" title={t('common.offline')}>
@@ -288,9 +300,15 @@ export function Header({
           <button type="button" className="icon-button" aria-label={t('header.devices')} title={t('header.devices')} onClick={onDevices}>
             <DevicesIcon />
           </button>
-          <button type="button" className="avatar-button" aria-label={t('account.open')} title={`${user.name} · ${user.email}`} onClick={onAccount}>
-            <span className="avatar">{user.name.slice(0, 1).toUpperCase()}</span>
-          </button>
+          {local ? (
+            <button type="button" className="icon-button" aria-label={t('header.settings')} title={t('header.settings')} onClick={onAccount}>
+              <GearIcon />
+            </button>
+          ) : (
+            <button type="button" className="avatar-button" aria-label={t('account.open')} title={`${user.name} · ${user.email}`} onClick={onAccount}>
+              <span className="avatar">{user.name.slice(0, 1).toUpperCase()}</span>
+            </button>
+          )}
         </div>
       </div>
     </header>

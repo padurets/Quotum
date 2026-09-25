@@ -23,8 +23,8 @@
   font-size: 14px;
   line-height: 1.45;
   color: var(--text);
-  /* The page's colour lives on the root, so the light layer (body::after) can sit above it and under everything else. */
-  background: radial-gradient(900px 380px at 50% -140px, #8f82f018, transparent 70%) fixed, var(--bg);
+  /* The page's colour lives on the root, so the light layers (body::before and ::after) can sit above it and under everything else. */
+  background: var(--bg);
   font-synthesis: none;
   font-feature-settings: 'ss01', 'cv11';
   -webkit-font-smoothing: antialiased;
@@ -37,19 +37,23 @@ body {
   margin: 0;
   min-height: 100vh;
 }
-/* A sparse dot grid under the top bar, fading out towards the middle: texture for the glass to blur, never a pattern to read through. */
+/*
+ * The light at the top of the page (::before) and a sparse dot grid under the top bar,
+ * fading out towards the middle (::after): texture for the bar's glass to blur, never a
+ * pattern to read through. Both scroll with the page. Nothing on the page is fixed, and
+ * no widget blurs what is behind it: in WebKitGTK (the desktop app's window on Linux)
+ * either makes every step of a scroll paint the whole window again.
+ */
+body::before, body::after {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; pointer-events: none; z-index: -2;
+}
+body::before { height: 600px; background: radial-gradient(900px 380px at 50% -140px, #8f82f018, transparent 70%); }
 body::after {
-  /* Below the widgets' frosting (z-index -1), so they blur it. */
-  content: ''; position: fixed; inset: 0; pointer-events: none; z-index: -2;
+  height: 480px;
   background-image: radial-gradient(#ffffff26 1px, transparent 1.3px);
   background-size: 22px 22px;
   -webkit-mask-image: radial-gradient(1100px 520px at 50% -60px, #000 25%, transparent 75%);
   mask-image: radial-gradient(1100px 520px at 50% -60px, #000 25%, transparent 75%);
-}
-/* Fine film grain keeps large dark areas from looking flat. */
-body::before {
-  content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 100; opacity: .035;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
 }
 button { font: inherit; color: inherit; cursor: pointer; }
 :focus-visible { outline: 1.5px solid var(--accent); outline-offset: 2px; }
@@ -120,25 +124,21 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
 body.is-resizing, body.is-resizing * { cursor: ew-resize !important; user-select: none; }
 
 /* ---------- surfaces ---------- */
+/* Dense enough that the dot grid does not show through: widgets are not frosted (see body::after). No wide soft shadow either: it is costly to paint and all but lost on the dark page. */
 .card, .panel {
   position: relative;
-  background: linear-gradient(180deg, #18181eb8, #111116b8 55%);
+  background: linear-gradient(180deg, #18181ee0, #111116e0 55%);
   border: 1px solid var(--hair);
   border-radius: 16px;
-  box-shadow: inset 0 1px 0 #ffffff0d, 0 1px 2px #00000059, 0 24px 48px -28px #000000e6;
+  box-shadow: inset 0 1px 0 #ffffff0d, 0 1px 2px #00000059;
   transition: border-color .25s;
 }
 .card:hover, .panel:hover { border-color: #ffffff17; }
-/* Frosted through a ::before, not the widget itself, so a Popover opened from it stays glass: see .glass. */
-.card::before, .panel::before {
-  content: ''; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none;
-  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
-}
 /* A breath of the card's own colour in its corner, where its logo is. */
 .card {
   background:
     radial-gradient(360px 150px at 0 0, color-mix(in oklab, var(--card-color, transparent) 9%, transparent), transparent 75%),
-    linear-gradient(180deg, #18181eb8, #111116b8 55%);
+    linear-gradient(180deg, #18181ee0, #111116e0 55%);
 }
 .card { padding: 20px 22px 22px; display: flex; flex-direction: column; gap: 22px; }
 .card-head { display: flex; align-items: center; gap: 12px; }
@@ -517,6 +517,31 @@ code { font-family: var(--mono); font-size: .92em; color: var(--text-2); }
 .drawer-switch { margin: 0 -8px; }
 .drawer-note { margin: 6px 8px 0; font-size: 11.5px; color: var(--text-4); }
 .drawer-note a { color: var(--text-3); }
+/* ---------- the desktop app's board: its settings, the question of taking over, the agent's trouble ---------- */
+.drawer-note.is-first { margin-top: -4px; }
+.drawer-note code, .measure-status code, .takeover code, .app-banner code { font-family: var(--mono); font-size: .92em; color: var(--text-2); overflow-wrap: anywhere; }
+.drawer-note code.is-key { white-space: nowrap; }
+.drawer-actions.is-split { justify-content: space-between; }
+.drawer-actions.is-split .drawer-note { margin: 0; }
+.measure-provider { display: flex; flex-direction: column; gap: 4px; }
+.measure-head { display: flex; align-items: center; gap: 8px; margin: 0 -8px; }
+.measure-head .popover-row { flex: 1; }
+.measure-interval select { height: 28px; padding: 0 28px 0 10px; border: 1px solid var(--hair-2); border-radius: 7px; background-color: #ffffff08; color: var(--text); font: inherit; font-size: 12.5px; }
+.measure-interval select:disabled { opacity: .45; }
+.measure-status { font-size: 11.5px; color: var(--text-3); }
+.measure-account { margin-top: 6px; }
+.measure-account input { height: 32px; }
+/* The app's own words, in English: shown as they are, under a title of the page's language. */
+.app-detail { display: block; margin-top: 4px; padding: 6px 8px; border-radius: 6px; background: #ffffff08; font-family: var(--mono); font-size: 11.5px; color: var(--text-2); white-space: pre-wrap; word-break: break-word; }
+.form-error .app-detail { color: var(--text-2); }
+.takeover { display: flex; flex-direction: column; gap: 10px; }
+.takeover p { margin: 0; color: var(--text-2); font-size: 13px; }
+.takeover .button-row { margin-top: 8px; }
+.app-banner { display: flex; flex-direction: column; gap: 8px; padding: 18px 20px; border-color: #f1787055; }
+.app-banner h2 { margin: 0; font-size: 15px; font-weight: 580; color: var(--crit); }
+.app-banner p { margin: 0; color: var(--text-2); font-size: 13px; }
+.splash-text { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+
 .dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .dialog-head h2 { margin: 0; font-size: 16px; font-weight: 580; }
 .dialog-head .icon-button svg { stroke-width: 1.6; }

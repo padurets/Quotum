@@ -1,4 +1,5 @@
 import {useCallback, useEffect, useState, type FormEvent} from 'react';
+import {useNow} from '../lib/api';
 import {ago} from '../lib/format';
 import {PROVIDERS} from '../lib/providers';
 import {errorText} from '../lib/quota';
@@ -90,7 +91,9 @@ function DeviceName({device, onRenamed}: {device: Device; onRenamed: () => void}
   );
 }
 
-function Devices({now}: {now: number}) {
+/** The reader's devices; on the desktop app's board, its one machine, which cannot be disconnected (it is the app's own agent). */
+function Devices({local}: {local: boolean}) {
+  const now = useNow();
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [error, setError] = useState<unknown>(null);
   const load = useCallback(() => {
@@ -110,7 +113,7 @@ function Devices({now}: {now: number}) {
   };
 
   if (!devices) return <ErrorLine error={error} />;
-  if (!devices.length) return <p className="admin-empty">{t('devices.empty')}</p>;
+  if (!devices.length) return <p className="admin-empty">{t(local ? 'local.devicesEmpty' : 'devices.empty')}</p>;
   return (
     <div className="table-wrap">
       <ErrorLine error={error} />
@@ -130,7 +133,8 @@ function Devices({now}: {now: number}) {
                 <DeviceName device={device} onRenamed={load} />
                 <small>
                   {device.name !== device.reported && `${device.reported} · `}
-                  {device.os} · {t(device.via === 'code' ? 'devices.viaCode' : 'devices.viaToken')}
+                  {device.os}
+                  {!local && ` · ${t(device.via === 'code' ? 'devices.viaCode' : 'devices.viaToken')}`}
                 </small>
               </td>
               <td>
@@ -138,9 +142,11 @@ function Devices({now}: {now: number}) {
               </td>
               <td>{device.lastSeenAt ? ago(device.lastSeenAt, now) : '—'}</td>
               <td>
-                <button type="button" className="link-button danger" onClick={() => revoke(device)}>
-                  {t('devices.revoke')}
-                </button>
+                {!local && (
+                  <button type="button" className="link-button danger" onClick={() => revoke(device)}>
+                    {t('devices.revoke')}
+                  </button>
+                )}
               </td>
             </tr>
           ))}
@@ -150,7 +156,8 @@ function Devices({now}: {now: number}) {
   );
 }
 
-function Connect({now}: {now: number}) {
+function Connect() {
+  const now = useNow();
   const [tokens, setTokens] = useState<Token[]>([]);
   const [name, setName] = useState('');
   const [created, setCreated] = useState<{secret: string; name: string} | null>(null);
@@ -238,8 +245,30 @@ function Connect({now}: {now: number}) {
   );
 }
 
-/** The reader's own machines, wherever their data is shown, and the ways to connect more. */
-export function MachinesDialog({tab, onTab, onClose, now}: {tab: MachinesTab; onTab: (tab: MachinesTab) => void; onClose: () => void; now: number}) {
+/**
+ * The reader's own machines, wherever their data is shown, and the ways to connect more.
+ * The desktop app's board connects no other machine: only the list.
+ */
+export function MachinesDialog({
+  tab,
+  onTab,
+  onClose,
+  local,
+}: {
+  tab: MachinesTab;
+  onTab: (tab: MachinesTab) => void;
+  onClose: () => void;
+  local: boolean;
+}) {
+  if (local) {
+    return (
+      <Modal title={t('machines.title')} onClose={onClose} wide>
+        <div className="dialog-body">
+          <Devices local />
+        </div>
+      </Modal>
+    );
+  }
   return (
     <Modal title={t('machines.title')} onClose={onClose} wide>
       <Segmented
@@ -252,8 +281,8 @@ export function MachinesDialog({tab, onTab, onClose, now}: {tab: MachinesTab; on
         onChange={onTab}
       />
       <div className="dialog-body">
-        {tab === 'devices' && <Devices now={now} />}
-        {tab === 'connect' && <Connect now={now} />}
+        {tab === 'devices' && <Devices local={false} />}
+        {tab === 'connect' && <Connect />}
       </div>
     </Modal>
   );

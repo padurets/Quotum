@@ -1,0 +1,102 @@
+# The app as CI installed it, run once end to end with data of its own (see src/smoke.rs):
+#
+#   windows.ps1 normal <app.exe>   --smoke must pass, and no Node of the app is left after it
+#   windows.ps1 crash <app.exe>    --smoke=crash aborts the app; its Node must go by itself
+param([string]$Mode, [string]$App)
+$ErrorActionPreference = 'Stop'
+
+function Read-SmokeLines([string]$Path) {
+  # Descendants can retain the redirected stderr handle after the controller exits.
+  $file = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+  $reader = [IO.StreamReader]::new($file)
+  try { return $reader.ReadToEnd() -split '\r?\n' }
+  finally { $reader.Dispose() }
+}
+
+function Test-IntentionalCrash([int]$Code, [string[]]$Lines) {
+  # MSVC abort / Rust fast-fail. A loader error or the smoke watchdog is not proof
+  # that the hub was alive when its controller died.
+  return ($Code -eq 3 -or $Code -eq -1073740791) -and
+    ($Lines -ccontains 'smoke: the hub is ready') -and
+    ($Lines -ccontains 'smoke: crashing on purpose') -and
+    -not ($Lines -cmatch '^smoke: FAILED:')
+}
+
+if ($Mode -eq 'check') {
+  $reached = @('smoke: the hub is ready', 'smoke: crashing on purpose')
+  foreach ($code in @(3, -1073740791)) {
+    if (-not (Test-IntentionalCrash $code $reached)) { throw 'Deliberate abort was rejected' }
+  }
+  foreach ($case in @(
+    @{code=1; lines=@('smoke: FAILED: not done within 120 s')},
+    @{code=3; lines=@()},
+    @{code=0; lines=$reached},
+    @{code=1; lines=$reached},
+    @{code=3; lines=($reached + 'smoke: FAILED: child failed')}
+  )) {
+    if (Test-IntentionalCrash $case.code $case.lines) { throw 'An unrelated failure passed as a deliberate crash' }
+  }
+  $fixture = Join-Path ([IO.Path]::GetTempPath()) ('quotum-open-log-' + [guid]::NewGuid().ToString('N'))
+  $writer = [IO.File]::Open($fixture, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite)
+  try {
+    $bytes = [Text.Encoding]::UTF8.GetBytes(($reached -join "`r`n") + "`r`n")
+    $writer.Write($bytes, 0, $bytes.Length)
+    $writer.Flush()
+    if (-not (Test-IntentionalCrash 3 @(Read-SmokeLines $fixture))) { throw 'Could not read the still-open crash log' }
+  } finally {
+    $writer.Dispose()
+    Remove-Item -LiteralPath $fixture
+  }
+  Write-Host 'crash classification: 2 positive and 5 negative controls passed'
+  Write-Host 'crash log: concurrent writer control passed'
+  return
+}
+
+$work = Join-Path $env:RUNNER_TEMP "quotum-smoke-$Mode"
+Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force $work | Out-Null
+$env:QUOTUM_APP_DATA_DIR = "$work\app"
+$env:QUOTUM_STATE_DIR = "$work\state"
+$env:QUOTUM_CONFIG = "$work\config.toml"
+$env:QUOTUM_RESETS = 'off'
+# Only Antigravity, through a stand-in: no real client starts, no account is needed. The
+# path in single quotes: in a TOML string in double quotes a backslash escapes.
+@"
+sessions = false
+[providers.claude]
+enabled = false
+[providers.codex]
+enabled = false
+[providers.antigravity]
+path = '$PSScriptRoot\agy.cmd'
+"@ | Set-Content -Encoding utf8NoBOM $env:QUOTUM_CONFIG
+
+$dir = Split-Path -Parent $App
+function Nodes { @(Get-Process quotum-node -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$dir\*" }) }
+function Fail([string]$why) {
+  Write-Host "smoke ($Mode): $why"
+  Get-ChildItem "$work\app\logs\*.log" -ErrorAction SilentlyContinue | ForEach-Object {
+    Write-Host "--- $($_.FullName)"; Get-Content $_.FullName -Tail 40
+  }
+  exit 1
+}
+
+if ((Nodes).Count) { Fail 'a quotum-node runs before the app starts' }
+$argument = if ($Mode -eq 'crash') { '--smoke=crash' } else { '--smoke' }
+$p = Start-Process -FilePath $App -ArgumentList $argument -PassThru -RedirectStandardError "$work\stderr.txt"
+# Without the handle cached now, ExitCode may be $null later (PowerShell #5421, #20716).
+$null = $p.Handle
+if (-not $p.WaitForExit(180000)) { Stop-Process -Id $p.Id -Force; Get-Content "$work\stderr.txt"; Fail 'no end within 180 s' }
+$code = $p.ExitCode
+Get-Content "$work\stderr.txt"
+if ($null -eq $code) { Fail 'no exit code' }
+if ($Mode -eq 'crash') {
+  $lines = @(Read-SmokeLines "$work\stderr.txt")
+  if (-not (Test-IntentionalCrash $code $lines)) { Fail "the deliberate crash was not reached ($code)" }
+  for ($i = 0; $i -lt 20 -and (Nodes).Count; $i++) { Start-Sleep -Milliseconds 500 }
+  if ((Nodes).Count) { Fail 'quotum-node outlived the crashed app by 10 s' }
+} else {
+  if ($code -ne 0) { Fail "the app failed ($code)" }
+  if ((Nodes).Count) { Fail 'quotum-node outlived the app' }
+}
+Write-Host "smoke ($Mode): passed"

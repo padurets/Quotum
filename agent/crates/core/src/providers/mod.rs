@@ -16,6 +16,7 @@ pub use codex::Codex;
 
 use crate::model::{ErrorKind, Failure, Outcome, Provider};
 use crate::process::{Client, ProcError, find_program, usual_dirs};
+use crate::stop::Stop;
 
 /// Everything an adapter needs from the agent for one measurement.
 pub struct Context<'a> {
@@ -27,6 +28,8 @@ pub struct Context<'a> {
     /// A configured client path that replaces the lookup.
     pub program: Option<&'a Path>,
     pub timeout: Duration,
+    /// The stop of the run the measurement is part of.
+    pub stop: &'a Stop,
 }
 
 pub trait Adapter: Send {
@@ -124,7 +127,8 @@ impl VersionCache {
                 return Some(version.clone());
             }
         }
-        let mut client = Client::spawn(program, &["--version"], &[], ctx.work_dir, Duration::from_secs(15)).ok()?;
+        let mut client =
+            Client::spawn(program, &["--version"], &[], ctx.work_dir, Duration::from_secs(15), ctx.stop).ok()?;
         let version = version_in(&client.output().ok()?)?;
         self.value = Some((program.to_path_buf(), version.clone(), Instant::now()));
         Some(version)

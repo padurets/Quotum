@@ -28,23 +28,29 @@ impl Adapter for Codex {
     }
 
     fn install_dirs(&self, home: &Path) -> Vec<PathBuf> {
-        vec![home.join(".codex/bin")]
+        // And where the installer of the command-line client puts it on Windows.
+        let installer = dirs::data_local_dir().filter(|_| cfg!(windows));
+        let installer = installer.map(|local| local.join("Programs").join("OpenAI").join("Codex").join("bin"));
+        std::iter::once(home.join(".codex/bin")).chain(installer).collect()
     }
 
     /// The clients the Codex app and the editor extensions carry: whoever uses only those
     /// has no command-line client to install.
     fn fallback_dirs(&self, home: &Path) -> Vec<PathBuf> {
-        let mut dirs = Vec::new();
+        let mut found = Vec::new();
         if cfg!(target_os = "linux") {
-            dirs.push(PathBuf::from("/usr/lib/chatgpt/resources"));
+            found.push(PathBuf::from("/usr/lib/chatgpt/resources"));
         }
-        dirs.extend(extension_clients(home));
-        dirs
+        if cfg!(windows) {
+            found.extend(dirs::data_local_dir().map(|local| app_clients(&local)).unwrap_or_default());
+        }
+        found.extend(extension_clients(home));
+        found
     }
 
     fn measure(&mut self, ctx: &Context) -> Outcome {
         let program = locate(self, ctx)?;
-        let mut client = Client::spawn(&program, &["app-server"], &[], ctx.work_dir, ctx.timeout)
+        let mut client = Client::spawn(&program, &["app-server"], &[], ctx.work_dir, ctx.timeout, ctx.stop)
             .map_err(|e| process_failure(P, e))?;
         let send = |client: &mut Client, message: Value| client.send(&message).map_err(|e| process_failure(P, e));
         let reply =
@@ -91,6 +97,38 @@ fn extension_clients(home: &Path) -> Vec<PathBuf> {
         .iter()
         .filter_map(|dir| std::fs::read_dir(dir.join("bin")).ok())
         .flat_map(|entries| entries.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_dir()).collect::<Vec<_>>())
+        .collect()
+}
+
+/// Where the Codex app on Windows keeps the client it carries, under `%LOCALAPPDATA%`
+/// (installed from the web, or from the Store): each place, then the directories in it
+/// (`bin\\<hash>`), the newest first. Not the app's own package in WindowsApps: nobody
+/// but the app may start what is there.
+fn app_clients(local: &Path) -> Vec<PathBuf> {
+    let places = [
+        local.join("OpenAI").join("Codex").join("bin"),
+        local
+            .join("Packages")
+            .join("OpenAI.Codex_2p2nqsd0c76g0")
+            .join("LocalCache")
+            .join("Local")
+            .join("OpenAI")
+            .join("Codex")
+            .join("bin"),
+    ];
+    places
+        .into_iter()
+        .flat_map(|place| {
+            let mut inside: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(&place)
+                .into_iter()
+                .flatten()
+                .filter_map(|entry| entry.ok().map(|e| e.path()))
+                .filter(|dir| dir.is_dir())
+                .map(|dir| (dir.metadata().and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH), dir))
+                .collect();
+            inside.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
+            std::iter::once(place).chain(inside.into_iter().map(|(_, dir)| dir))
+        })
         .collect()
 }
 
@@ -199,6 +237,21 @@ mod tests {
             versions,
             ["openai.chatgpt-26.10.2-linux-x64", "openai.chatgpt-26.9.1-linux-x64", "openai.chatgpt-25.1.0-linux-x64"]
         );
+    }
+
+    #[test]
+    fn the_client_of_the_codex_app_on_windows_is_found_newest_first() {
+        let local = env::temp_dir().join(format!("quotum-codex-app-{}", std::process::id()));
+        let bin = local.join("OpenAI/Codex/bin");
+        // A directory is as new as its making.
+        for hash in ["old1", "new2"] {
+            std::fs::create_dir_all(bin.join(hash)).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let found = app_clients(&local);
+        let _ = std::fs::remove_dir_all(&local);
+        let store = local.join("Packages/OpenAI.Codex_2p2nqsd0c76g0/LocalCache/Local/OpenAI/Codex/bin");
+        assert_eq!(found, [bin.clone(), bin.join("new2"), bin.join("old1"), store]);
     }
 
     #[test]

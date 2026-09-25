@@ -64,8 +64,8 @@ impl Adapter for Claude {
     fn measure(&mut self, ctx: &Context) -> Outcome {
         let program = locate(self, ctx)?;
         let version = self.version.get(&program, ctx);
-        let mut client =
-            Client::spawn(&program, ARGS, ENV, ctx.work_dir, ctx.timeout).map_err(|e| process_failure(P, e))?;
+        let mut client = Client::spawn(&program, ARGS, ENV, ctx.work_dir, ctx.timeout, ctx.stop)
+            .map_err(|e| process_failure(P, e))?;
         let init = request(&mut client, "init", json!({"subtype": "initialize"}))?;
         let usage = request(&mut client, "usage", json!({"subtype": "get_usage", "skip_behaviors": true}))?;
         client.finish();

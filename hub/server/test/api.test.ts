@@ -29,6 +29,7 @@ async function hub() {
     ingest: new Ingest(store, directory, new Duty()),
     pairing: new Pairing(directory),
     setup: new Setup(true, SETUP),
+    local: null,
   });
   const cookies = new Map<string, string>();
   const call = async (method: 'GET' | 'POST' | 'DELETE', url: string, options: {as?: string; body?: object | string; headers?: Record<string, string>} = {}) => {

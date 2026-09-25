@@ -1,6 +1,9 @@
 //! `quotum`: the subscription limits of the coding agents on this machine.
 
+mod hold;
 mod update;
+
+use hold::Prepared;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -14,12 +17,13 @@ use std::time::Duration;
 use clap::{Parser, Subcommand};
 use quotum_core::activity::{Activity, Origin, Session};
 use quotum_core::config::{Config, Credentials, Hub, Paths, home, machine};
+use quotum_core::holder::{Running, Stopped};
 use quotum_core::model::{Batch, ErrorKind, INGEST_VERSION, Kind, Millis, Outcome, Provider, Window, now_ms};
-use quotum_core::process::{detach, kill};
+use quotum_core::process::detach;
 use quotum_core::providers::{adapter, find_client};
 use quotum_core::runner::{Event, Runner};
 use quotum_core::sink::{self, Discard, HubSink, Sink, not_the_hub};
-use quotum_core::stop;
+use quotum_core::stop::{self, How, Stop};
 
 #[derive(Parser)]
 #[command(
@@ -119,17 +123,16 @@ fn main() -> ExitCode {
             if let Some(file) = file {
                 let _ = LOG_FILE.set(file);
             }
-            let mut config = config;
-            match (hub, token) {
+            let hub = match (hub, token) {
                 (Some(url), Some(token)) => {
                     log("warning: --token shows the token to everyone on this machine who can list processes; \
                          put it in QUOTUM_HUB_TOKEN or the config file (`quotum config` shows where) instead");
-                    config.hub = Some(Hub { url, token });
+                    Some(Hub { url, token })
                 }
-                (None, None) => {}
+                (None, None) => None,
                 _ => return fail("--hub and --token go together"),
-            }
-            run(config, paths, &only)
+            };
+            run(paths, &only, hub)
         }
         Command::Start { hub, token } => start(&config, &paths, &cli.only, hub, token),
         Command::Stop => stop_running(&paths),
@@ -172,7 +175,17 @@ fn log(line: &str) {
 /// `quotum start`: `quotum run` as a process of its own, detached from this terminal, with
 /// its log in the state directory. It is started once it holds the state directory.
 fn start(config: &Config, paths: &Paths, only: &[String], hub: Option<String>, token: Option<String>) -> ExitCode {
-    if let Some(pid) = paths.running() {
+    match paths.running() {
+        Some(Running { app: true, .. }) => {
+            return fail("the Quotum app measures this machine; quit it to run the agent in the background from here");
+        }
+        Some(running) => {
+            return fail(&format!("the agent runs already{}; `quotum stop` stops it", pid_text(running.pid)));
+        }
+        None => {}
+    }
+    // Waiting for an app that just quit, it takes the machine in a moment.
+    if let Some(pid) = paths.waiting() {
         return fail(&format!("the agent runs already{}; `quotum stop` stops it", pid_text(pid)));
     }
     let target = match (&hub, &token) {
@@ -203,7 +216,9 @@ fn start(config: &Config, paths: &Paths, only: &[String], hub: Option<String>, t
         Ok(child) => child,
         Err(e) => return fail(&format!("could not start the agent: {e}")),
     };
-    // Started once it holds the state directory; stopped at once, it says why in its log.
+    // Started once it holds the state directory (or waits for the app to let it go);
+    // stopped at once, it says why in its log.
+    let mut waits = false;
     for _ in 0..50 {
         thread::sleep(Duration::from_millis(100));
         if let Ok(Some(status)) = child.try_wait() {
@@ -213,12 +228,23 @@ fn start(config: &Config, paths: &Paths, only: &[String], hub: Option<String>, t
                 tail(&log_file, 5)
             ));
         }
-        if paths.running() == Some(Some(child.id())) {
+        if paths.running().is_some_and(|r| r.pid == Some(child.id())) {
+            break;
+        }
+        if paths.waiting() == Some(Some(child.id())) {
+            waits = true;
             break;
         }
     }
     let delivering = target.map_or_else(|| "measuring without a hub".to_string(), |url| format!("delivering to {url}"));
-    println!("Quotum runs in the background (pid {}), {delivering}.", child.id());
+    if waits {
+        println!(
+            "Quotum runs in the background (pid {}): it waits until the Quotum app quits, then measures, {delivering}.",
+            child.id()
+        );
+    } else {
+        println!("Quotum runs in the background (pid {}), {delivering}.", child.id());
+    }
     println!("Log: {}", log_file.display());
     println!("`quotum stop` stops it. It does not start again by itself after a restart of the machine.");
     ExitCode::SUCCESS
@@ -239,7 +265,14 @@ fn self_update(check: bool) -> ExitCode {
         }
         Ok(update::Outcome::Updated { from, to, program }) => {
             println!("quotum updated: {from} → {to} ({}).", program.display());
-            if let Some(pid) = Paths::resolve().running() {
+            // Not the app's: it has an agent of its own.
+            let paths = Paths::resolve();
+            let cli = match paths.running() {
+                Some(Running { app: true, .. }) => None,
+                Some(running) => Some(running.pid),
+                None => paths.waiting(),
+            };
+            if let Some(pid) = cli {
                 println!(
                     "The agent running in the background{} is still {from}: restart it the way you started it \
                      (`quotum stop`, then `quotum start`).",
@@ -256,35 +289,37 @@ fn self_update(check: bool) -> ExitCode {
 }
 
 /// `quotum stop`: asks the agent on this state directory to stop, as Ctrl-C would, and
-/// ends it outright if it has not stopped after a while.
+/// ends it outright if it has not stopped after a while. The desktop app it never stops,
+/// only a `quotum run` that waits for it.
 fn stop_running(paths: &Paths) -> ExitCode {
-    let Some(pid) = paths.running() else {
-        println!("The agent is not running.");
-        return ExitCode::SUCCESS;
+    let described = |stopped: Result<Stopped, String>, what: &str| match stopped {
+        Ok(Stopped::Nothing) => None,
+        Ok(Stopped::Asked(pid)) => Some(Ok(format!("Stopped{}{what}.", pid_text(pid)))),
+        Ok(Stopped::Killed(pid)) => {
+            Some(Ok(format!("Stopped (pid {pid}){what}: it did not stop within 15 s, so it was ended outright.")))
+        }
+        Err(e) => Some(Err(e)),
     };
-    if let Err(e) = fs::write(paths.stop_file(), "") {
-        return fail(&format!("{}: {e}", paths.stop_file().display()));
-    }
-    let stopped = |seconds: u64| {
-        (0..seconds * 10).any(|_| {
-            thread::sleep(Duration::from_millis(100));
-            paths.running().is_none()
-        })
+    let outcome = match paths.running() {
+        Some(Running { app: true, .. }) => {
+            println!("The Quotum app measures this machine: quit the app to stop it.");
+            match described(paths.stop_waiting(), ", the agent that waited for the app") {
+                Some(outcome) => outcome,
+                None => return ExitCode::FAILURE,
+            }
+        }
+        Some(_) => described(paths.stop_running(How::Exit), "").unwrap_or_else(|| Ok("Stopped.".into())),
+        None => match described(paths.stop_waiting(), ", the agent that waited for the app") {
+            Some(outcome) => outcome,
+            None => Ok("The agent is not running.".into()),
+        },
     };
-    if stopped(15) {
-        println!("Stopped{}.", pid_text(pid));
-        return ExitCode::SUCCESS;
-    }
-    let Some(pid) = pid else {
-        return fail("the agent did not stop within 15 s, and it did not say which process it is");
-    };
-    kill(pid);
-    let _ = fs::remove_file(paths.stop_file());
-    if stopped(5) {
-        println!("Stopped (pid {pid}): it did not stop within 15 s, so it was ended outright.");
-        ExitCode::SUCCESS
-    } else {
-        fail(&format!("the agent (pid {pid}) does not stop"))
+    match outcome {
+        Ok(text) => {
+            println!("{text}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => fail(&e),
     }
 }
 
@@ -302,9 +337,10 @@ fn tail(file: &Path, lines: usize) -> String {
 fn status(config: Config, paths: Paths, only: &[Provider], json: bool) -> ExitCode {
     let machine = json.then(|| machine(&paths, &config));
     let connected = Credentials::load(&paths).filter(|_| config.hub.is_none());
-    let running = paths.running();
+    let (running, waiting) = (paths.running(), paths.waiting());
     let paths_log = Some(paths.log_file());
-    let mut runner = Runner::new(config, paths, only);
+    // Measured once here: nothing asks this stop.
+    let mut runner = Runner::new(config, paths, only, Stop::new());
     let style = Style::detect();
     let mut outcomes = Vec::new();
     if !json {
@@ -329,10 +365,23 @@ fn status(config: Config, paths: Paths, only: &[Provider], json: bool) -> ExitCo
     if let (false, Some(credentials)) = (json, &connected) {
         println!("\n{}", style.dim(&format!("connected {}", connected_to(credentials))));
     }
-    if let (false, Some(pid)) = (json, running) {
+    if !json {
         let log =
             paths_log.filter(|file| file.exists()).map(|file| format!(" · log {}", file.display())).unwrap_or_default();
-        println!("{}", style.dim(&format!("agent running{}{log} · `quotum stop` stops it", pid_text(pid))));
+        let line = match (running, waiting) {
+            (Some(Running { app: true, pid }), None) => format!("measured by the Quotum app{}", pid_text(pid)),
+            (Some(Running { app: true, pid }), Some(waiter)) => format!(
+                "measured by the Quotum app{} · a `quotum` agent waits for it{}{log}",
+                pid_text(pid),
+                pid_text(waiter)
+            ),
+            (Some(Running { pid, .. }), _) => format!("agent running{}{log} · `quotum stop` stops it", pid_text(pid)),
+            (None, Some(waiter)) => format!("the agent takes the machine in a moment{}{log}", pid_text(waiter)),
+            (None, None) => String::new(),
+        };
+        if !line.is_empty() {
+            println!("{}", style.dim(&line));
+        }
     }
     if let Some(machine) = machine {
         let (snapshots, failures) = outcomes.into_iter().partition::<Vec<_>, _>(|o| o.is_ok());
@@ -349,38 +398,51 @@ fn status(config: Config, paths: Paths, only: &[Provider], json: bool) -> ExitCo
     ExitCode::SUCCESS
 }
 
-fn run(config: Config, paths: Paths, only: &[Provider]) -> ExitCode {
-    // Held until the agent exits: two runs on one state directory would share its spool.
-    let _lock = match paths.lock_run() {
-        Ok(lock) => lock,
-        Err(e) => return fail(&e),
-    };
-    let mut sink: Box<dyn Sink> = match config.hub_or_connected(&paths) {
-        Some(hub) => {
-            log(&format!("delivering to {}", hub.url));
-            if insecure(&hub.url) {
-                log("warning: the hub is reached over plain http; its token travels unencrypted");
-            }
-            let machine = machine(&paths, &config);
-            Box::new(HubSink::new(&hub, machine, paths.state.join("spool.jsonl"), Box::new(log)))
-        }
-        None => {
-            log("no hub configured: measuring and logging only");
-            Box::new(Discard)
-        }
-    };
-    let stop_file = paths.stop_file();
-    let mut runner = Runner::new(config, paths, only);
-    if runner.providers().is_empty() {
-        return fail("every provider is disabled");
-    }
+/// `quotum run`: measures on the schedule and delivers, for as long as it holds the machine;
+/// it makes way for the desktop app when asked, and measures again once the app quits.
+/// The settings are read each time it takes the machine: they may have changed meanwhile.
+fn run(paths: Paths, only: &[Provider], overrides: Option<Hub>) -> ExitCode {
+    // Before anything else: a signal while it waits for the app ends the wait.
     stop::on_signals();
-    stop::on_file(stop_file);
-    // Waiting is logged once per change, not on every check-in; a failure that repeats
-    // itself is logged once too.
+    let mut prepare = |stop: &Stop| -> Result<Prepared, String> {
+        let mut config = Config::load(&paths.config)?;
+        if let Some(hub) = &overrides {
+            config.hub = Some(hub.clone());
+        }
+        let hub = config.hub_or_connected(&paths);
+        let mut sink: Box<dyn Sink + Send> = match &hub {
+            Some(hub) => {
+                log(&format!("delivering to {}", hub.url));
+                if insecure(&hub.url) {
+                    log("warning: the hub is reached over plain http; its token travels unencrypted");
+                }
+                let machine = machine(&paths, &config);
+                Box::new(HubSink::new(hub, machine, paths.state.join("spool.jsonl"), Box::new(log)))
+            }
+            None => {
+                log("no hub configured: measuring and logging only");
+                Box::new(Discard)
+            }
+        };
+        let mut runner = Runner::new(config, paths.clone(), only, stop.clone());
+        if runner.providers().is_empty() {
+            return Err("every provider is disabled".into());
+        }
+        let job = move || runner.run(sink.as_mut(), logged());
+        Ok(Prepared { job: Box::new(job), hub: hub.map(|hub| hub.url) })
+    };
+    match hold::run(&paths, &hold::Timing::REAL, &log, &mut prepare) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => fail(&e),
+    }
+}
+
+/// What the agent logs of its measurements: waiting once per change, not on every
+/// check-in, and a failure that repeats itself once.
+fn logged() -> impl FnMut(Event) {
     let mut waiting: BTreeMap<Provider, bool> = BTreeMap::new();
     let mut failing: BTreeMap<Provider, String> = BTreeMap::new();
-    let refused = runner.run(sink.as_mut(), |event| match event {
+    move |event| match event {
         Event::Measured(outcome, next) => {
             let (provider, summary, repeated) = match outcome {
                 Ok(s) => {
@@ -413,23 +475,18 @@ fn run(config: Config, paths: Paths, only: &[Provider]) -> ExitCode {
                 ));
             }
         }
-    });
-    match refused {
-        Some(reason) => fail(&format!("stopped: {reason}")),
-        None => ExitCode::SUCCESS,
     }
 }
 
 /// Plain http to anything but this machine: the bearer token can be read on the way.
 fn insecure(url: &str) -> bool {
-    let rest = url.strip_prefix("http://");
-    rest.is_some_and(|host| !["localhost", "127.0.0.1", "[::1]"].iter().any(|local| host.starts_with(local)))
+    url.starts_with("http://") && !sink::is_loopback(url)
 }
 
 /// The device-code flow: ask the hub for a code, show it, wait until a person confirms it.
 fn connect(config: &Config, paths: &Paths, url: &str) -> ExitCode {
     let url = url.trim_end_matches('/');
-    let http = sink::http();
+    let http = sink::http_to(url);
     let request =
         serde_json::json!({"machine": machine(paths, config), "agent": concat!("quotum/", env!("CARGO_PKG_VERSION"))});
     let mut response = match http.post(&format!("{url}/v1/device/code")).send_json(&request) {

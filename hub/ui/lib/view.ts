@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useRef, useState} from 'react';
+import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {call} from './http';
 import {DEFAULT_PLAN, isValidPlan, type WeeklyPlan} from './plan';
 import type {Overview, View} from './types';
@@ -186,5 +186,6 @@ export function useView(overview: Overview | null, reload: () => void): Arrange 
     return () => window.removeEventListener('pagehide', flush);
   }, []);
 
-  return {view, owner: overview?.board.role === 'owner', update};
+  const owner = overview?.board.role === 'owner';
+  return useMemo(() => ({view, owner, update}), [view, owner, update]);
 }

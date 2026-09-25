@@ -88,16 +88,38 @@ enum Trouble {
     Later(String),
 }
 
-/// An HTTP client for a hub. It follows no redirects: a hub's API does not redirect,
-/// a sign-in page in front of it does (see [`not_the_hub`]).
-pub fn http() -> ureq::Agent {
+/// An HTTP client for the hub at `url`. It follows no redirects: a hub's API does not
+/// redirect, a sign-in page in front of it does (see [`not_the_hub`]). A hub on this
+/// machine is reached directly: a proxy from the environment (ureq honours ALL_PROXY,
+/// HTTPS_PROXY and HTTP_PROXY, and its NO_PROXY knows no loopback by itself) is for others.
+pub fn http_to(url: &str) -> ureq::Agent {
+    agent(url, ureq::Proxy::try_from_env())
+}
+
+fn agent(url: &str, proxy: Option<ureq::Proxy>) -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(20)))
         .http_status_as_error(false)
         .max_redirects(0)
         .user_agent(AGENT)
+        .proxy(proxy.filter(|_| !is_loopback(url)))
         .build()
         .into()
+}
+
+/// Whether `url` leads to this machine: `localhost` (not looked up), 127.0.0.0/8, `::1`
+/// and IPv4 loopback written as IPv6. Told by the host of the URL, not by how it starts
+/// (`http://localhost.example.com` is not local).
+pub fn is_loopback(url: &str) -> bool {
+    let Ok(uri) = url.parse::<ureq::http::Uri>() else { return false };
+    let Some(host) = uri.host() else { return false };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host.eq_ignore_ascii_case("localhost")
+        || match host.parse::<std::net::IpAddr>() {
+            Ok(std::net::IpAddr::V4(ip)) => ip.is_loopback(),
+            Ok(std::net::IpAddr::V6(ip)) => ip.is_loopback() || ip.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback()),
+            Err(_) => false,
+        }
 }
 
 /// Says so when something other than the hub's API answers: a sign-in page in front of
@@ -192,6 +214,17 @@ pub struct HubSink {
 
 impl HubSink {
     pub fn new(hub: &Hub, machine: Machine, spool_file: PathBuf, log: Box<dyn FnMut(&str) + Send>) -> HubSink {
+        HubSink::with_proxy(hub, machine, spool_file, log, ureq::Proxy::try_from_env())
+    }
+
+    /// As `new`, with the proxy the environment would give (a hub on this machine goes without it).
+    fn with_proxy(
+        hub: &Hub,
+        machine: Machine,
+        spool_file: PathBuf,
+        log: Box<dyn FnMut(&str) + Send>,
+        proxy: Option<ureq::Proxy>,
+    ) -> HubSink {
         let spool = fs::read_to_string(&spool_file)
             .map(|text| text.lines().filter_map(|line| serde_json::from_str(line).ok()).collect())
             .unwrap_or_default();
@@ -199,7 +232,7 @@ impl HubSink {
             base: hub.url.trim_end_matches('/').to_string(),
             token: hub.token.clone(),
             machine,
-            http: http(),
+            http: agent(&hub.url, proxy),
             spool_file,
             spool,
             retry_at: None,
@@ -520,6 +553,46 @@ mod tests {
         let sink =
             HubSink::new(&hub, machine, spool, Box::new(move |line: &str| log.lock().unwrap().push(line.into())));
         (sink, lines)
+    }
+
+    #[test]
+    fn this_machine_is_told_by_the_host_of_the_address() {
+        for local in [
+            "http://127.0.0.1:8080",
+            "http://127.1.2.3",
+            "http://localhost:23456/",
+            "http://LOCALHOST",
+            "http://[::1]:8080",
+            "http://[::ffff:127.0.0.1]:80",
+        ] {
+            assert!(is_loopback(local), "{local}");
+        }
+        for remote in [
+            "http://localhost.example.com",
+            "https://quotum.example.com",
+            "http://10.0.0.1:8080",
+            "http://[::2]",
+            "not a url",
+            "http://",
+        ] {
+            assert!(!is_loopback(remote), "{remote}");
+        }
+    }
+
+    #[test]
+    fn a_hub_on_this_machine_is_reached_past_a_proxy_of_the_environment() {
+        let (url, seen) = hub(|_, _| json(200, json!({"accepted": 1, "duplicates": 0})));
+        let dead = ureq::Proxy::new("http://127.0.0.1:9").ok();
+        let spool = env::temp_dir().join(format!("quotum-spool-{}-proxy.jsonl", std::process::id()));
+        let _ = fs::remove_file(&spool);
+        let machine =
+            Machine { id: "0123456789abcdef".into(), name: "test".into(), os: "linux".into(), arch: "x86_64".into() };
+        let hub = Hub { url: url.clone(), token: "qt_m_test".into() };
+        let mut sink = HubSink::with_proxy(&hub, machine, spool.clone(), Box::new(|_| {}), dead.clone());
+        sink.deliver(&failed("x"));
+        assert_eq!(seen.lock().unwrap().len(), 1, "delivered straight to the hub");
+        let _ = fs::remove_file(&spool);
+        assert!(agent("https://quotum.example.com", dead).config().proxy().is_some(), "others go through the proxy");
     }
 
     fn failed(detail: &str) -> Outcome {

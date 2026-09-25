@@ -164,7 +164,8 @@ day, not a script thrown together over a weekend. In practice that meant:
 It works: I use it every day. The agent installs with one command, or runs through npm
 as `quotum`, with prebuilt binaries for Linux (x64 and arm64, any distribution), macOS
 and Windows; the hub is a Docker image (`ghcr.io/padurets/quotum-hub`, amd64 and arm64).
-Autostart and a desktop app are next ([roadmap](#roadmap)).
+A [desktop app](#desktop-app) for Windows and Linux is built and tested by CI but not
+released yet; autostart of the agent is next ([roadmap](#roadmap)).
 
 - Clients: Claude Code, Codex CLI, Antigravity CLI (`agy` 1.1.11 or newer).
 - Platforms: I run it on Linux. The macOS and Windows binaries are cross-compiled and
@@ -248,6 +249,74 @@ licences) and as a bare binary (`quotum-cli-<platform>`, what the installers and
 (`gh attestation verify <file> -R padurets/quotum`). **From source:**
 `cd agent && cargo build --release` (Rust 1.85 or newer) gives `target/release/quotum`.
 
+## Desktop app
+
+For one machine there is an app for Windows and Linux (macOS comes later): the agent of
+this machine, a hub of its own and its board in a window, with a tray icon. No account,
+no server. It has no release yet: the [Desktop workflow](.github/workflows/desktop.yml)
+builds every commit on `main` and in pull requests and keeps each installer as an
+artifact of the run (`quotum-desktop-<version>-<commit>-linux-x64.deb`, `.rpm`,
+`.AppImage`, `…-windows-x64-setup.exe` and `…-windows-x64-portable.zip`; downloading
+them takes a GitHub account). To build it yourself, see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+- **Windows 10 and 11:** run `Quotum_<version>_x64-setup.exe`. It installs for you
+  alone, into `%LOCALAPPDATA%\Quotum`, with no administrator rights, and brings WebView2
+  if Windows lacks it. The installer isn't signed yet, so SmartScreen asks first: *More
+  info → Run anyway*.
+  Or extract the portable ZIP and run `Quotum/quotum-desktop.exe` without installing.
+  Keep the whole extracted folder together. It uses the same data and settings in your
+  Windows profile as the installed app; nothing is stored beside the executable.
+  The portable version needs [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)
+  already installed (the setup.exe installs it when needed).
+- **Linux** (x64): the system package includes Chromium and works alongside the
+  system's `nodejs`. On Debian 12, Ubuntu 22.04 or newer use `sudo apt install
+  ./quotum-desktop-<…>.deb`; on Fedora use `sudo dnf install ./quotum-desktop-<…>.rpm`.
+  Elsewhere, make the AppImage executable (`chmod +x`) and run it; GTK3 and NSS must
+  be available on the system. If FUSE is unavailable,
+  add `--appimage-extract-and-run`. The AppImage needs unprivileged user namespaces for
+  Chromium's sandbox; use a native package when the system restricts them. NVIDIA
+  systems use X11/XWayland when available. If graphics fail, quit completely and try
+  `quotum-desktop --software-rendering` (or add that option to the AppImage command).
+  It affects that launch only. Closing the window frees Chromium; measuring and the
+  tray continue in the small Rust controller.
+
+When trying a new build, choose *Quit* in the old one first: closing its window keeps
+it running, and another launch opens that same process. Check the commit in settings;
+an AppImage's start-at-login entry also needs to point to the intended file.
+
+The app opens its board, and the first numbers come within a minute. The gear opens its
+settings: which providers are measured and how often, running agents, start at login,
+the version and *Quit*. These are `quotum`'s own settings ([Configuration](#agent)): the
+command and the app share them.
+
+- **Closing the window** leaves it measuring; the tray icon or starting the app again
+  opens the window. *Quit* is in the settings and in the tray's menu. GNOME shows tray
+  icons only with an extension (AppIndicator); without one, start the app again to open
+  its window.
+- **Start at login** turns on by itself the first time the app measures and starts it
+  without the window. Turn it off in the settings, and do that before uninstalling. The
+  entry names the AppImage or Windows portable EXE by its path: keep it where it is
+  (after a move, turn start at login off and on again).
+- **A newer build** installs over the old one: quit the app first. For the portable
+  version, replace the whole extracted folder; your data stays in your Windows profile.
+- **With `quotum`.** One agent measures a machine. If `quotum` already does, the app
+  asks once whether to take over. A `quotum` of this version then waits and goes on by
+  itself when the app quits, so `quotum run` as a service keeps working; an older one
+  stops (update it). A hub that `quotum` delivered to gets nothing from this machine
+  while the app runs.
+- **Its data**, the board's history and the logs, is in
+  `%LOCALAPPDATA%\com.padurets.quotum` or `~/.local/share/com.padurets.quotum`.
+- **What leaves the machine:** nothing but the reset announcements the board reads from
+  Codex Resets and Claude Resets, as every hub does (`QUOTUM_RESETS=off` in the app's
+  environment turns that off). Its hub listens on `127.0.0.1` alone, behind a key only
+  the window gets.
+- **Size:** Linux packages carry both Chromium for the window and Node.js for the hub.
+  Windows uses the system WebView2: about 26 MiB for setup.exe or 38 MiB for the ZIP.
+  In a Windows 11 VM with five subscriptions, idle working set across the app, Node
+  and WebView2 was about 342 MiB with the window open and 47 MiB after closing it;
+  CPU was 0.76% and 0.24% of one core over 30 seconds. Memory varies with history,
+  WebView2 and Windows; virtual graphics do not establish physical display performance.
+
 ## Configuration
 
 ### Agent
@@ -319,6 +388,7 @@ agent/crates/cli      the `quotum` command
 npm/                  the npm packages: a launcher and a prebuilt binary per platform
 install/              the installers for `curl … | sh` and PowerShell
 deploy/               running the hub with Docker Compose behind Caddy (HTTPS)
+desktop/              the desktop app (Rust, Electron on Linux, Tauri on Windows): the agent, its own hub and board in a window
 .github/workflows     tests on every push; everything released from a version tag
 spec/                 the protocol between the agent and the hub
 hub/server/domain     the rules: windows, spending, resets, the ingest format
@@ -329,29 +399,31 @@ hub/ui                the dashboard (React), translations in hub/ui/i18n
 ```
 
 `npm test` and `npm run typecheck` in `hub/`, `cargo test` and `cargo clippy` in
-`agent/` check everything; CI runs them on every push. `node npm/build.mjs` builds the
+`agent/` and `desktop/` check everything (the app's after `node desktop/prepare.mjs`);
+CI runs them on every push. `node npm/build.mjs` builds the
 npm packages (it needs cargo-zigbuild and zig; see the script), `docker build hub` the
 hub's image.
 
 ### Releasing
 
-Set the new version in `agent/Cargo.toml` (`[workspace.package]`) and `hub/package.json`,
-let the lock files follow, push the commit, then tag it with the release notes as the
+Set the new version in `agent/Cargo.toml` (`[workspace.package]`), `desktop/Cargo.toml`
+and `hub/package.json`, let the lock files follow, push the commit, then tag it with the release notes as the
 tag's message. A release that brings a new database layout step also adds its hash to
 `RELEASED` in `hub/server/test/schema.test.ts` in that commit: from then on the step
 never changes.
 
 ```sh
 (cd hub && npm version 0.2.0 --no-git-tag-version)   # package.json and package-lock.json
-# agent/Cargo.toml: version = "0.2.0"
+# agent/Cargo.toml and desktop/Cargo.toml: version = "0.2.0"
 (cd agent && cargo check)                            # Cargo.lock
+(cd desktop && cargo metadata --format-version 1 >/dev/null)   # its Cargo.lock, with no build
 git commit -am "Version 0.2.0" && git push origin main
 git tag -a v0.2.0 -F notes.md --cleanup=verbatim   # annotated, its message kept whole: the release notes
 git push origin v0.2.0
 ```
 
 [release.yml](.github/workflows/release.yml) refuses a tag that is not annotated or
-whose version differs from any of those four files. It checks everything again, builds
+whose version differs from any of those six files. It checks everything again, builds
 the agent for every platform, publishes the hub's image and the npm packages, and
 creates the GitHub release with the binaries. npm accepts the packages from that workflow alone,
 without a token (trusted publishing). A new npm package, for a new platform, is
@@ -370,8 +442,7 @@ language has is there.
 
 1. A team view on shared boards: people × providers at a glance.
 2. Autostart: a systemd user service, launchd, Windows.
-3. A desktop app (Tauri) with the agent and the dashboard in one window and a tray
-   icon, no server needed.
+3. Releases of the desktop app with installers, then the app on macOS.
 
 ## Credits and license
 

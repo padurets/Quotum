@@ -44,9 +44,13 @@ jobs:
           lock=$(awk '/^name = "quotum"$/ {getline; gsub(/version = |"/, ""); print}' agent/Cargo.lock)
           hub=$(node -p "require('./hub/package.json').version")
           hublock=$(node -p "require('./hub/package-lock.json').version")
-          for other in "$lock" "$hub" "$hublock"; do
+          # The desktop app is a workspace of its own, with quotum-core as a path dependency.
+          app=$(sed -n '/^\[package\]/,/^\[/s/^version = "\(.*\)"/\1/p' desktop/Cargo.toml)
+          applock=$(awk '/^name = "quotum-desktop"$/ {getline; gsub(/version = |"/, ""); print}' desktop/Cargo.lock)
+          corelock=$(awk '/^name = "quotum-core"$/ {getline; gsub(/version = |"/, ""); print}' desktop/Cargo.lock)
+          for other in "$lock" "$hub" "$hublock" "$app" "$applock" "$corelock"; do
             if [ "$other" != "$agent" ]; then
-              echo "::error::versions differ: agent/Cargo.toml $agent, agent/Cargo.lock $lock, hub/package.json $hub, hub/package-lock.json $hublock"; exit 1
+              echo "::error::versions differ: agent/Cargo.toml $agent, agent/Cargo.lock $lock, hub/package.json $hub, hub/package-lock.json $hublock, desktop/Cargo.toml $app, desktop/Cargo.lock $applock (quotum-desktop) and $corelock (quotum-core)"; exit 1
             fi
           done
           if [ "$GITHUB_REF_TYPE" = tag ]; then

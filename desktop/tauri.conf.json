@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Quotum",
+  "identifier": "com.padurets.quotum",
+  "build": {
+    "frontendDist": "static"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["deb", "appimage", "nsis"],
+    "publisher": "Sergey Padurets",
+    "homepage": "https://github.com/padurets/Quotum",
+    "copyright": "Sergey Padurets, MIT License",
+    "category": "DeveloperTool",
+    "shortDescription": "How much of your coding-agent subscriptions is left",
+    "longDescription": "Quotum measures the subscription limits of Claude Code, Codex and Antigravity on this machine through their own command-line clients and shows them on a board of its own.",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "externalBin": ["binaries/quotum-node"],
+    "resources": {
+      "resources/hub/": "hub/",
+      "resources/licenses/": "licenses/"
+    },
+    "licenseFile": "../LICENSE",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["English", "Russian"]
+      }
+    }
+  }
+}

@@ -27,19 +27,22 @@ export function agentRoutes(app: FastifyInstance, hub: Hub) {
     }
   };
 
-  app.post('/v1/device/code', (request, reply) => {
-    if (!codes.allow(request.ip)) return reply.code(429).send({error: 'too_many_attempts'});
-    const started = pairing.start(request.body);
-    if (!started) return reply.code(400).send({error: 'invalid_request'});
-    const page = `${publicOrigin(request)}/device`;
-    return {...started, verificationUri: page, verificationUriComplete: `${page}?code=${started.userCode}`};
-  });
+  // The desktop app's hub connects no other machine: its own agent has its token.
+  if (!hub.local) {
+    app.post('/v1/device/code', (request, reply) => {
+      if (!codes.allow(request.ip)) return reply.code(429).send({error: 'too_many_attempts'});
+      const started = pairing.start(request.body);
+      if (!started) return reply.code(400).send({error: 'invalid_request'});
+      const page = `${publicOrigin(request)}/device`;
+      return {...started, verificationUri: page, verificationUriComplete: `${page}?code=${started.userCode}`};
+    });
 
-  app.post<{Body: {deviceCode?: unknown}}>('/v1/device/token', (request, reply) => {
-    const result = pairing.poll(request.body?.deviceCode);
-    if (typeof result === 'string') return reply.code(400).send({error: result});
-    return {token: result.token, device: {id: result.device.id, name: result.device.label ?? result.device.name}, account: result.account};
-  });
+    app.post<{Body: {deviceCode?: unknown}}>('/v1/device/token', (request, reply) => {
+      const result = pairing.poll(request.body?.deviceCode);
+      if (typeof result === 'string') return reply.code(400).send({error: result});
+      return {token: result.token, device: {id: result.device.id, name: result.device.label ?? result.device.name}, account: result.account};
+    });
+  }
 
   app.post('/v1/checkin', (request, reply) => asAgent(request, reply, 'invalid_request', credential => ingest.checkin(credential, request.body)));
 

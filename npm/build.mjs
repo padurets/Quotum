@@ -48,7 +48,16 @@ rmSync(dist, {recursive: true, force: true});
 mkdirSync(dist, {recursive: true});
 // The same notices for every platform: the crates any of the builds links.
 const notices = path.join(dist, 'THIRD_PARTY_LICENSES.md');
-write(notices, thirdPartyLicenses(agent, PLATFORMS.map(p => p.target)));
+write(
+  notices,
+  thirdPartyLicenses(agent, 'quotum', PLATFORMS.map(p => p.target), [
+    'The Quotum agent is MIT-licensed (see LICENSE). Its binaries include the Rust crates',
+    'below, each under its own license. They also include the Rust standard library (MIT',
+    'OR Apache-2.0, https://github.com/rust-lang/rust); the Linux builds link musl libc',
+    'statically (MIT, https://musl.libc.org/COPYRIGHT) and the Windows build the MinGW-w64',
+    'runtime (https://github.com/mingw-w64/mingw-w64/blob/master/COPYING).',
+  ]),
+);
 
 for (const p of platforms) {
   console.log(`building ${p.name} (${p.target})`);

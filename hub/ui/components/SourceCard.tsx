@@ -1,9 +1,10 @@
-import {useEffect, useRef, useState, type CSSProperties} from 'react';
+import {memo, useEffect, useRef, useState, type CSSProperties} from 'react';
+import {useNow} from '../lib/api';
 import type {SourceState, Win} from '../lib/types';
 import {windowKey} from '../lib/types';
 import {ago, day, duration, fullStamp, num} from '../lib/format';
 import {errorText, freshness, level, problemOf, PULSE_FOR, sourceLabel, windowName} from '../lib/quota';
-import {t} from '../i18n';
+import {t, useLocale} from '../i18n';
 import {Agents} from './Agents';
 import {DEFAULT_PLAN, isValidPlan, PLAN_NOTE_FROM, planAt, planTotal, type WeeklyPlan} from '../lib/plan';
 import {LOGOS} from './logos';
@@ -294,21 +295,21 @@ function FreeResets({resets}: {resets: NonNullable<SourceState['resets']>}) {
   );
 }
 
-export function SourceCard({
+export const SourceCard = memo(function SourceCard({
   source,
-  now,
   resets,
   arrange,
   board,
   onChanged,
 }: {
   source: SourceState;
-  now: number;
   resets?: ResetStatus;
   arrange: Arrange;
   board: Board | null;
   onChanged: () => void;
 }) {
+  useLocale();
+  const now = useNow();
   const problem = problemOf(source);
   const hidden = new Set(arrange.view.windows);
   const visible = source.windows.filter(w => !hidden.has(windowKey(source.id, w.id)));
@@ -354,4 +355,4 @@ export function SourceCard({
       </footer>
     </article>
   );
-}
+});

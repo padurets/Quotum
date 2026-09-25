@@ -33,6 +33,33 @@ function publicUrl(value: string | undefined): string | null {
   return url.origin;
 }
 
+/** The desktop app's hub: one person who never signs in (docs/architecture.md, "Desktop app"). */
+export type LocalMode = {
+  /** Opens the board for the app's window (`/local?key=…`); new on every start. */
+  key: string;
+  /** The machine token of the app's agent; new on every start. */
+  token: string;
+};
+
+/**
+ * The local mode, from the environment the desktop app gives the hub: on when
+ * `QUOTUM_LOCAL_KEY` is set, even to nothing, so an empty key never lets anyone in. It
+ * refuses to start where the board would reach beyond this machine. Its errors name the
+ * variable but never repeat its value: a key or token would end up in the log.
+ */
+export function localMode(env: Record<string, string | undefined>): LocalMode | null {
+  const key = env.QUOTUM_LOCAL_KEY;
+  if (key === undefined) return null;
+  if (key.length < 32) throw new Error('QUOTUM_LOCAL_KEY must be at least 32 characters long');
+  const token = env.QUOTUM_LOCAL_TOKEN;
+  if (!token?.startsWith('qt_m_')) throw new Error('the local mode needs QUOTUM_LOCAL_TOKEN, a machine token (qt_m_…)');
+  if (!['127.0.0.1', '::1', 'localhost'].includes(env.QUOTUM_BIND || '127.0.0.1')) throw new Error('the local mode listens on this machine only: QUOTUM_BIND must be 127.0.0.1, ::1 or localhost');
+  if (list(env.QUOTUM_ALLOWED_HOSTS, []).includes('*')) throw new Error('the local mode answers its own host names only: QUOTUM_ALLOWED_HOSTS cannot be *');
+  if (env.QUOTUM_PUBLIC_URL) throw new Error('the local mode has no public address: unset QUOTUM_PUBLIC_URL');
+  if (env.QUOTUM_TRUST_PROXY) throw new Error('the local mode stands behind no proxy: unset QUOTUM_TRUST_PROXY');
+  return {key, token};
+}
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 /** The hub directory: two levels up from `dist/server` when built, one from `server` in source. */
 export const appRoot = path.resolve(here, path.basename(path.dirname(here)) === 'dist' ? '../..' : '..');
@@ -52,6 +79,9 @@ export const config = {
     frameAncestors: list(process.env.QUOTUM_FRAME_ANCESTORS, []),
     trustProxy: trustProxy(process.env.QUOTUM_TRUST_PROXY),
   },
+
+  /** Set by the desktop app for the hub it carries; null for a hub on a server. */
+  local: localMode(process.env),
 
   auth: {
     /** Who may sign up after the first person (who always may): `invite` (default) or `open`. */

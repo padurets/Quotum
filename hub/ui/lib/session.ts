@@ -4,7 +4,8 @@ import {call, UNAUTHORIZED} from './http';
 
 export type User = {id: string; email: string; name: string};
 export type Board = {id: string; name: string; personal: boolean; role: 'owner' | 'member'};
-export type Session = {user: User | null; boards: Board[]; signup: {first: boolean; open: boolean}};
+/** `local`: the desktop app's hub, one person who never signs in (see lib/app.ts). */
+export type Session = {user: User | null; boards: Board[]; signup: {first: boolean; open: boolean}; local: boolean};
 
 /** Personal boards have no name of their own: each reader sees theirs in their language. */
 export const boardTitle = (board: {name: string}) => board.name || t('boards.personalName');

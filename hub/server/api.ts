@@ -10,12 +10,14 @@ import {currentUser, publicOrigin} from './session.js';
 import type {Setup} from './setup.js';
 import {accountRoutes} from './routes/account.js';
 import {agentRoutes} from './routes/agents.js';
+import {localRoutes} from './local.js';
 
 const CSP =
   "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self';" +
   ` img-src 'self' data:; font-src 'self'; frame-ancestors ${["'self'", ...config.http.frameAncestors].join(' ')}`;
 
-export type Hub = {store: Store; directory: Directory; resets: ResetFeed; ingest: Ingest; pairing: Pairing; setup: Setup};
+/** `local`: the desktop app's hub, with the key its window enters with (see local.ts); null on a server. */
+export type Hub = {store: Store; directory: Directory; resets: ResetFeed; ingest: Ingest; pairing: Pairing; setup: Setup; local: {key: string} | null};
 
 /** Route helpers shared by the route modules. */
 export type Guards = {
@@ -68,6 +70,8 @@ function selected(from: string | undefined, to: string | undefined, now: number)
 /**
  * The HTTP surface. People sign in and read their boards under `/api`; agents talk to
  * `/v1` (device codes, check-ins, ingest). Everything else is the single-page client.
+ * The desktop app's hub (`local`) has one person who never signs in: the window enters
+ * at `/local`, and what is about accounts, sharing and connecting is not there.
  */
 export async function buildApp(hub: Hub) {
   const {store, directory, resets} = hub;
@@ -218,6 +222,7 @@ export async function buildApp(hub: Hub) {
 
   accountRoutes(app, hub, guards);
   agentRoutes(app, hub);
+  if (hub.local) localRoutes(app, hub, hub.local.key);
 
   await app.register(staticFiles, {root: config.clientRoot, index: 'index.html'});
   // Client-side pages (/device, /invite/…) are served by the same single-page client.

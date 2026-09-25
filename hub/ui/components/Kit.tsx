@@ -1,51 +1,101 @@
-import {useEffect, useId, useRef, useState, type InputHTMLAttributes, type ReactNode} from 'react';
+import {useLayoutEffect, useId, useRef, useState, type InputHTMLAttributes, type ReactNode} from 'react';
 import {createPortal} from 'react-dom';
 import {LOCALES, setLocale, t, useLocale, type Locale} from '../i18n';
 import {messageOf} from '../lib/http';
 
 export const SERVICE = 'Quotum';
 
+/** The dialogs open now, the last on top: only it answers Escape, and the page stays out of reach until none is left. */
+const dialogs: {panel: HTMLDivElement; overlay: HTMLElement}[] = [];
+/** How the page scrolled before the first of them opened. */
+let pageOverflow = '';
+let pageInert = false;
+let pageFocus: HTMLElement | null = null;
+
 /**
  * A dialog over the page, centred or as a panel on its side; closes on Escape and on a
- * click outside. It is placed in <body>, so a header with a backdrop filter or a moved
- * widget it was opened from cannot box it in.
+ * click outside. Without `onClose` it cannot be closed at all (a question that needs an
+ * answer). It is placed in <body>, so a header with a backdrop filter or a moved widget
+ * it was opened from cannot box it in.
  */
-export function Modal({title, onClose, children, wide, side}: {title: string; onClose: () => void; children: ReactNode; wide?: boolean; side?: boolean}) {
+export function Modal({title, onClose, children, wide, side}: {title: string; onClose?: () => void; children: ReactNode; wide?: boolean; side?: boolean}) {
   const panel = useRef<HTMLDivElement>(null);
   // The latest handler, so the effect below runs once: focus moves in when the dialog opens and back when it closes.
   const close = useRef(onClose);
   close.current = onClose;
   // Taken while rendering: a field of the dialog with autoFocus would be it by the effect.
   const [previous] = useState(() => document.activeElement as HTMLElement | null);
-  useEffect(() => {
-    const escape = (event: KeyboardEvent) => event.key === 'Escape' && close.current();
-    document.addEventListener('keydown', escape);
-    // Tab stays in the dialog: the page under it is out of reach.
-    const root = document.getElementById('root');
-    if (root) root.inert = true;
-    // Into the dialog, unless a field of it already took the focus (autoFocus).
-    if (!panel.current?.contains(document.activeElement)) panel.current?.focus();
-    // The page under the dialog stays still: only the dialog scrolls.
+  useLayoutEffect(() => {
+    const own = panel.current!;
+    const overlay = own.parentElement!;
     const page = document.documentElement;
-    const overflow = page.style.overflow;
+    const root = document.getElementById('root');
+    if (!dialogs.length) {
+      pageOverflow = page.style.overflow;
+      pageInert = root?.inert ?? false;
+      pageFocus = previous;
+    }
     page.style.overflow = 'hidden';
+    if (root) root.inert = true;
+    // Portals are siblings of #root: the lower dialogs need their own inert boundary.
+    for (const dialog of dialogs) dialog.overlay.inert = true;
+    const entry = {panel: own, overlay};
+    dialogs.push(entry);
+    const top = () => dialogs.at(-1) === entry;
+    const keydown = (event: KeyboardEvent) => {
+      if (!top()) return;
+      if (event.key === 'Escape') return close.current?.();
+      if (event.key !== 'Tab') return;
+      const fields = [...own.querySelectorAll<HTMLElement>('button, input, select, textarea, a[href], [tabindex], [contenteditable="true"]')]
+        .filter(field => field.tabIndex >= 0 && !field.matches(':disabled') && !field.closest('[inert]') && field.getClientRects().length);
+      const first = fields[0];
+      const last = fields.at(-1);
+      const focused = document.activeElement;
+      if (!first || focused === own || !own.contains(focused) || (event.shiftKey ? focused === first : focused === last)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first)?.focus();
+        if (!first) own.focus();
+      }
+    };
+    const focus = () => {
+      if (top() && !own.contains(document.activeElement)) own.focus();
+    };
+    document.addEventListener('keydown', keydown);
+    document.addEventListener('focusin', focus);
+    focus();
     return () => {
-      document.removeEventListener('keydown', escape);
-      page.style.overflow = overflow;
-      if (root) root.inert = false;
-      if (previous?.isConnected) previous.focus();
+      document.removeEventListener('keydown', keydown);
+      document.removeEventListener('focusin', focus);
+      const wasTop = top();
+      dialogs.splice(dialogs.indexOf(entry), 1);
+      overlay.inert = false;
+      const below = dialogs.at(-1);
+      if (below) {
+        below.overlay.inert = false;
+        if (wasTop) {
+          if (previous?.isConnected && below.panel.contains(previous)) previous.focus();
+          if (!below.panel.contains(document.activeElement)) below.panel.focus();
+        }
+        return;
+      }
+      page.style.overflow = pageOverflow;
+      if (root) root.inert = pageInert;
+      if (pageFocus?.isConnected) pageFocus.focus();
+      pageFocus = null;
     };
   }, []);
   return createPortal(
-    <div className={`overlay ${side ? 'is-side' : ''}`} onMouseDown={event => event.target === event.currentTarget && onClose()}>
+    <div className={`overlay ${side ? 'is-side' : ''}`} onMouseDown={event => event.target === event.currentTarget && onClose?.()}>
       <div className={`dialog glass ${wide ? 'is-wide' : ''} ${side ? 'is-side' : ''}`} role="dialog" aria-modal="true" aria-label={title} ref={panel} tabIndex={-1}>
         <div className="dialog-head">
           <h2>{title}</h2>
-          <button type="button" className="icon-button" aria-label={t('common.close')} onClick={onClose}>
-            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-              <path d="M4 4l8 8M12 4l-8 8" />
-            </svg>
-          </button>
+          {onClose && (
+            <button type="button" className="icon-button" aria-label={t('common.close')} onClick={onClose}>
+              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+                <path d="M4 4l8 8M12 4l-8 8" />
+              </svg>
+            </button>
+          )}
         </div>
         {children}
       </div>
