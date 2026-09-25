@@ -23,6 +23,10 @@ EOF
 
 fail() {
   echo "smoke ($mode): $*" >&2
+  [ ! -f "$work/output.log" ] || tail -n 40 "$work/output.log" >&2
+  if [ "${GITHUB_ACTIONS:-}" = true ]; then
+    python3 "$(dirname "$0")/diagnostic.py" "$work" "$mode: $*"
+  fi
   for log in "$work"/app/logs/*.log; do
     [ -f "$log" ] && { echo "--- $log" >&2; tail -n 40 "$log" >&2; }
   done
@@ -42,7 +46,8 @@ case $mode in
     # The sandbox must remain active. Electron reports live child failures; the
     # subreaper also checks processes that outlive the controller during teardown.
     python3 "$(dirname "$0")/monitor.py" -- \
-      timeout -k 10 180 xvfb-run -a "$@" --smoke || fail "the app failed ($?)"
+      timeout -k 10 180 xvfb-run -a "$@" --smoke > "$work/output.log" 2>&1 || fail "the app failed ($?)"
+    cat "$work/output.log"
     node_gone || fail "quotum-node outlived the app"
     ;;
   crash)
