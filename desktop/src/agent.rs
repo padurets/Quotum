@@ -108,6 +108,8 @@ pub struct Agent {
     pub last: Lasts,
     /// Numbers the saves: only the last of several quick ones restarts the agent.
     saves: u64,
+    /// A stopped worker still owns its spool until delivery has finished.
+    restart_pending: bool,
     started: bool,
 }
 
@@ -122,6 +124,7 @@ impl Agent {
             clients: BTreeMap::new(),
             last: Arc::default(),
             saves: 0,
+            restart_pending: false,
             started: false,
         }
     }
@@ -219,7 +222,7 @@ pub fn start(shell: &Arc<Shell>) {
             begin(shell);
         }
         Err(LockError::Held(running)) if !running.app => {
-            let window_open = window::is_open(shell);
+            let window_open = window::is_open_or_opening(shell);
             match on_held(shell.take_over_confirmed(), window_open) {
                 OnHeld::TakeOver => {
                     drop(_ops);
@@ -238,9 +241,11 @@ pub fn start(shell: &Arc<Shell>) {
 
 /// With the machine held: reads the settings and measures, or is idle, or says the settings are broken.
 fn begin(shell: &Arc<Shell>) {
+    let _settings = shell.settings_ops.lock().unwrap_or_else(|e| e.into_inner());
     let seen = stat(&shell.paths);
     let loaded = Config::load(&shell.paths.config);
     let mut agent = shell.agent();
+    agent.restart_pending = false;
     agent.seen = seen;
     match loaded {
         Ok(config) => {
@@ -343,23 +348,43 @@ fn record(last: &Lasts, outcome: &Outcome) {
     last.lock().unwrap_or_else(|e| e.into_inner()).insert(provider, entry);
 }
 
-/// Stops the run under way and waits up to `limit` for it (a measurement ends within a
-/// quarter of a second; a delivery may take longer, and is left to finish on its own).
-fn halt(shell: &Arc<Shell>, limit: Duration) {
-    let Some(run) = shell.agent().run.take() else { return };
-    run.stop.request(How::Exit);
+/// A delivery may outlast the wait. Keep its worker registered until it has finished:
+/// starting another would give two independent queues ownership of the same spool.
+fn finish_run(agent: &Mutex<Agent>, limit: Duration) -> bool {
+    {
+        let agent = agent.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(run) = &agent.run else { return true };
+        run.stop.request(How::Exit);
+    }
     let until = Instant::now() + limit;
-    while !run.thread.is_finished() && Instant::now() < until {
+    loop {
+        let finished = {
+            let mut agent = agent.lock().unwrap_or_else(|e| e.into_inner());
+            if agent.run.as_ref().is_none_or(|run| run.thread.is_finished()) { Some(agent.run.take()) } else { None }
+        };
+        if let Some(run) = finished {
+            if let Some(run) = run {
+                let _ = run.thread.join();
+            }
+            return true;
+        }
+        if Instant::now() >= until {
+            return false;
+        }
         thread::sleep(Duration::from_millis(50));
     }
-    if run.thread.is_finished() {
-        let _ = run.thread.join();
-    }
+}
+
+fn halt(shell: &Arc<Shell>, limit: Duration) -> bool {
+    finish_run(&shell.agent, limit)
 }
 
 /// Measures anew: the settings read again, or the hub started again.
 fn restart(shell: &Arc<Shell>) {
-    halt(shell, Duration::from_secs(5));
+    shell.agent().restart_pending = true;
+    if !halt(shell, Duration::from_secs(5)) {
+        return;
+    }
     if shell.agent().holds() && !shell.exiting() {
         begin(shell);
     }
@@ -378,8 +403,7 @@ pub fn hub_ready(shell: &Arc<Shell>) {
             && agent.run.as_ref().is_none_or(|run| run.generation != current)
     };
     if resume {
-        halt(shell, Duration::from_secs(5));
-        run(shell);
+        restart(shell);
     }
 }
 
@@ -494,6 +518,8 @@ pub fn tick(shell: &Arc<Shell>) {
             if changed {
                 shell.agent_log.line("app: config.toml changed; reading it again");
                 restart(shell);
+            } else if shell.agent().restart_pending {
+                restart(shell);
             }
         }
         _ => {}
@@ -502,14 +528,7 @@ pub fn tick(shell: &Arc<Shell>) {
 
 /// Changes the settings in config.toml; the agent measures with them in a moment.
 pub fn save_settings(shell: &Arc<Shell>, patch: &Patch) -> Result<(), String> {
-    settings::save(&shell.paths.config, patch)?;
-    let number = {
-        let mut agent = shell.agent();
-        // Its own write is no change to follow: the ticker would restart once more.
-        agent.seen = stat(&shell.paths);
-        agent.saves += 1;
-        agent.saves
-    };
+    let number = accept_settings(&shell.paths, &shell.agent, &shell.settings_ops, patch)?;
     let shell = shell.clone();
     thread::spawn(move || {
         thread::sleep(Duration::from_millis(1500));
@@ -525,6 +544,21 @@ pub fn save_settings(shell: &Arc<Shell>, patch: &Patch) -> Result<(), String> {
         }
     });
     Ok(())
+}
+
+/// File replacement and its published snapshot form one transaction, also when the
+/// native command transport runs several saves concurrently.
+fn accept_settings(paths: &Paths, state: &Mutex<Agent>, writes: &Mutex<()>, patch: &Patch) -> Result<u64, String> {
+    let _settings = writes.lock().unwrap_or_else(|e| e.into_inner());
+    settings::save(&paths.config, patch)?;
+    let config = Config::load(&paths.config)?;
+    let mut agent = state.lock().unwrap_or_else(|e| e.into_inner());
+    // Publish accepted settings now; replacing the running worker is debounced.
+    agent.config = config;
+    // Its own write is no change to follow: the ticker would restart once more.
+    agent.seen = stat(paths);
+    agent.saves += 1;
+    Ok(agent.saves)
 }
 
 /// The board's view of the agent (`app_state`).
@@ -562,6 +596,107 @@ pub fn snapshot(shell: &Arc<Shell>) -> (State, Vec<Provided>, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_slow_stopped_worker_keeps_ownership_until_it_finishes() {
+        use quotum_core::model::{ErrorKind, Failure, Machine};
+        use quotum_core::sink::Sink;
+        use std::io::{BufRead, BufReader, Read, Write};
+        use std::net::TcpListener;
+
+        let dir = std::env::temp_dir().join(format!("quotum-spool-handover-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let spool = dir.join("app-spool.jsonl");
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let hub = Hub { url: format!("http://{}", listener.local_addr().unwrap()), token: "qt_m_test".into() };
+        let identity =
+            Machine { id: "0123456789abcdef".into(), name: "test".into(), os: "linux".into(), arch: "x86_64".into() };
+        let (release, held) = std::sync::mpsc::channel();
+        let (entered, request) = std::sync::mpsc::channel();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some((name, value)) = line.split_once(':') {
+                    if name.eq_ignore_ascii_case("content-length") {
+                        length = value.trim().parse().unwrap();
+                    }
+                }
+            }
+            reader.read_exact(&mut vec![0; length]).unwrap();
+            entered.send(()).unwrap();
+            held.recv_timeout(Duration::from_secs(5)).unwrap();
+            reader
+                .get_mut()
+                .write_all(b"HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .unwrap();
+        });
+        let mut sink = HubSink::new(&hub, identity.clone(), spool.clone(), Box::new(|_| {}));
+        let mut agent = Agent::new();
+        let stop = Stop::new();
+        let observed = stop.clone();
+        agent.run = Some(Run {
+            stop,
+            thread: thread::spawn(move || {
+                sink.deliver(&Err(Failure::new(Provider::Codex, ErrorKind::Failed, "before restart")));
+                None
+            }),
+            generation: 1,
+        });
+        let agent = Mutex::new(agent);
+        request.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(!finish_run(&agent, Duration::ZERO));
+        assert!(observed.requested());
+        assert!(agent.lock().unwrap().run.is_some(), "the spool is still owned by the old worker");
+        release.send(()).unwrap();
+        assert!(finish_run(&agent, Duration::from_secs(2)));
+        assert!(agent.lock().unwrap().run.is_none());
+        server.join().unwrap();
+        // The successor opens the queue only after the old delivery persisted it.
+        let mut next = HubSink::new(&hub, identity, spool.clone(), Box::new(|_| {}));
+        next.deliver(&Err(Failure::new(Provider::Codex, ErrorKind::Failed, "after restart")));
+        let persisted = fs::read_to_string(&spool).unwrap();
+        assert!(persisted.contains("before restart") && persisted.contains("after restart"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn concurrent_patches_are_both_saved_and_published_before_restart() {
+        let dir = std::env::temp_dir().join(format!("quotum-accepted-settings-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let paths = Paths { config: dir.join("config.toml"), work: dir.join("work"), state: dir.clone() };
+        let state = Mutex::new(Agent::new());
+        let writes = Mutex::new(());
+        let first: Patch = serde_json::from_str(r#"{"sessions":false}"#).unwrap();
+        let second: Patch = serde_json::from_str(r#"{"providers":{"antigravity":{"account":"changed"}}}"#).unwrap();
+        let ready = std::sync::Barrier::new(2);
+        thread::scope(|scope| {
+            for patch in [&first, &second] {
+                let (paths, state, writes, ready) = (&paths, &state, &writes, &ready);
+                scope.spawn(move || {
+                    ready.wait();
+                    accept_settings(paths, state, writes, patch).unwrap();
+                });
+            }
+        });
+        let agent = state.lock().unwrap();
+        assert_eq!(agent.saves, 2);
+        assert!(!agent.config.sessions());
+        assert_eq!(agent.config.account_name(Provider::Antigravity), Some("changed"));
+        let saved = Config::load(&paths.config).unwrap();
+        assert!(!saved.sessions());
+        assert_eq!(saved.account_name(Provider::Antigravity), Some("changed"));
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn quotum_holding_the_machine_is_asked_about_only_in_the_window() {

@@ -10,8 +10,12 @@ pub fn is_open(shell: &Shell) -> bool {
 
 /// Shows the window: creates it if there is none, on a thread of its own.
 pub fn open(shell: &Arc<Shell>) {
+    let intent = opening(shell);
     let shell = shell.clone();
-    thread::spawn(move || open_now(&shell));
+    thread::spawn(move || {
+        let _intent = intent;
+        open_now(&shell);
+    });
 }
 
 fn open_now(shell: &Arc<Shell>) {
@@ -31,7 +35,7 @@ fn open_now(shell: &Arc<Shell>) {
     // A window just closed may still hold its label for a moment.
     for _ in 0..20 {
         let (state, generation) = shell.hub();
-        match build(shell, &state) {
+        match build(shell, &state, generation) {
             Ok(_) => {
                 drop(_creating);
                 if shell.generation() != generation {
@@ -47,11 +51,16 @@ fn open_now(shell: &Arc<Shell>) {
     }
 }
 
-fn build(shell: &Arc<Shell>, state: &HubState) -> tauri::Result<tauri::WebviewWindow> {
+fn build(shell: &Arc<Shell>, state: &HubState, generation: u64) -> tauri::Result<tauri::WebviewWindow> {
     let app = &shell.host.app;
     let navigating = shell.clone();
     let loading = shell.clone();
     let url = target(state);
+    {
+        let mut navigation = shell.host.navigation.lock().unwrap_or_else(|e| e.into_inner());
+        *navigation = Navigation::default();
+        navigation.request(generation, url.clone(), false);
+    }
     let url = if same_origin(&url, own_origin().as_str()) {
         WebviewUrl::App(url.path().trim_start_matches('/').into())
     } else {
@@ -83,6 +92,9 @@ fn build(shell: &Arc<Shell>, state: &HubState) -> tauri::Result<tauri::WebviewWi
         })
         .on_page_load(move |_, payload| {
             if payload.event() == PageLoadEvent::Finished {
+                if !belongs(payload.url(), &loading.hub().0) {
+                    navigate_current(&loading, true);
+                }
                 if let Some(smoke) = &loading.smoke {
                     smoke.page_loaded(&loading, payload.url());
                 }
@@ -143,37 +155,39 @@ fn fit_on_screen(window: &tauri::WebviewWindow) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Moves the window where it belongs in the hub's current state, if it is not there;
-/// again if the state changed meanwhile.
+/// Navigate from the requested generation, not the last document that committed.
 pub fn follow(shell: &Arc<Shell>) {
-    for _ in 0..10 {
-        let (state, generation) = shell.hub();
-        let Some(window) = shell.host.app.get_webview_window(LABEL) else { return };
-        let here = window.url().ok();
-        if !here.as_ref().is_some_and(|url| belongs(url, &state)) {
-            let _ = window.navigate(target(&state));
-        }
-        if shell.generation() == generation {
+    navigate_current(shell, false);
+}
+
+fn navigate_current(shell: &Arc<Shell>, force: bool) {
+    let queued = shell.clone();
+    // Ordering native requests on the event loop prevents a delayed worker from
+    // navigating back to a snapshot that another worker already superseded.
+    let _ = shell.host.app.run_on_main_thread(move || {
+        if queued.exiting() {
             return;
         }
-    }
+        let Some(window) = queued.host.app.get_webview_window(LABEL) else { return };
+        let (state, generation) = queued.hub();
+        let url = target(&state);
+        let changed =
+            queued.host.navigation.lock().unwrap_or_else(|e| e.into_inner()).request(generation, url.clone(), force);
+        if changed && window.navigate(url).is_err() {
+            *queued.host.navigation.lock().unwrap_or_else(|e| e.into_inner()) = Navigation::default();
+            queued.hub_log.line("app: the window could not navigate");
+        }
+    });
 }
 
 /// Leads the window to the board again, entering with the key of the hub's current start
 /// (a window that lost its session), or to the app's own page while the hub is not ready.
 pub fn reenter(shell: &Arc<Shell>) {
-    let shell = shell.clone();
-    thread::spawn(move || {
-        for _ in 0..10 {
-            let (state, generation) = shell.hub();
-            // A new window opens where it belongs by itself.
-            let Some(window) = shell.host.app.get_webview_window(LABEL) else { return open_now(&shell) };
-            let _ = window.navigate(target(&state));
-            if shell.generation() == generation {
-                return;
-            }
-        }
-    });
+    if is_open(shell) {
+        navigate_current(shell, true);
+    } else {
+        open(shell);
+    }
 }
 
 /// Takes the window off the hub's pages while the app quits.

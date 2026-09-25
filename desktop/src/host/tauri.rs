@@ -5,11 +5,17 @@ use crate::{
     shell::{self, Shell},
     smoke, tauri_ipc, tray, window,
 };
-use std::{io, path::PathBuf, sync::Arc, thread};
+use std::{
+    io,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    thread,
+};
 use tauri::{AppHandle, Manager, RunEvent};
 use tauri_plugin_autostart::ManagerExt;
 pub struct Host {
     pub app: AppHandle,
+    pub navigation: Mutex<window::Navigation>,
 }
 pub fn run(args: Args) {
     // No inherited debugging listeners in a packaged application.
@@ -64,7 +70,7 @@ pub fn run(args: Args) {
                 hub_dir,
                 smoke.map(smoke::Smoke::new),
                 lock,
-                Host { app: handle.clone() },
+                Host { app: handle.clone(), navigation: Mutex::default() },
             ));
             app.manage(shell.clone());
             app.add_capability(tauri_ipc::own_capability())?;
@@ -77,13 +83,13 @@ pub fn run(args: Args) {
                 smoke::Smoke::watch(&shell);
             }
             tray::create(&handle, &shell);
+            if !args.hidden {
+                window::open(&shell);
+            }
             let hub = shell.clone();
             thread::spawn(move || shell::run_hub(hub));
             let ticker = shell.clone();
             thread::spawn(move || shell::run_ticker(ticker));
-            if !args.hidden {
-                window::open(&shell);
-            }
             Ok(())
         })
         .build(tauri::generate_context!())

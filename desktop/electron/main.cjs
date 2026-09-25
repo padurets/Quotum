@@ -51,9 +51,11 @@ function receive(message) {
       if (!Number.isSafeInteger(message.generation) || message.generation < generation) break;
       const next = new URL(message.url);
       if (!(next.protocol === 'quotum:' && next.host === 'localhost') && !(next.protocol === 'http:' && next.hostname === '127.0.0.1' && next.port)) return finish();
+      const changed = message.generation !== generation || message.url !== target;
       generation = message.generation;
       target = message.url;
-      if (window && (message.force || !belongs(window.webContents.getURL(), target))) navigate(target);
+      // getURL() is the last committed document; an older navigation may be pending.
+      if (window && (message.force || changed)) navigate(target);
       break;
     }
     case 'focus':
@@ -187,7 +189,11 @@ Promise.all([initialized, app.whenReady()]).then(([config]) => {
   contents.setWindowOpenHandler(({url}) => { if (policy.external(url)) void shell.openExternal(url).catch(() => {}); return {action: 'deny'}; });
   contents.on('will-attach-webview', event => event.preventDefault());
   contents.on('render-process-gone', (_, details) => { if (!['clean-exit', 'killed'].includes(details.reason)) send({type: 'fault', process: 'renderer', reason: details.reason}); });
-  contents.on('did-finish-load', () => { loaded = true; if (revealed) send({type: 'loaded', url: contents.getURL()}); });
+  contents.on('did-finish-load', () => {
+    if (!quitting && !belongs(contents.getURL(), target)) { navigate(target); return; }
+    loaded = true;
+    if (revealed) send({type: 'loaded', url: contents.getURL()});
+  });
   window.on('close', () => {
     if (loaded) {
       try { fs.writeFileSync(`${config.geometry}.new`, JSON.stringify(window.getNormalBounds())); fs.renameSync(`${config.geometry}.new`, config.geometry); } catch {}

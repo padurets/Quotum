@@ -420,6 +420,10 @@ window), once: the settings turn it off. On Linux only a program that no other u
 change is started at login. When the hub ends by itself, the app starts it again, on
 the same port with new secrets, at most three times in five minutes; the window follows
 it to the new start and the agent delivers with the new token.
+Window creation counts as a foreground request while it is pending, so a fast hub
+cannot mistake it for a hidden start. Navigation follows the requested hub generation,
+including a transition whose page has not loaded yet. A stopped agent worker keeps its
+spool until delivery ends; a replacement waits for that handover.
 
 **Taking over from `quotum`.** One agent measures a machine: whoever holds `run.lock` in
 the state folder, and `run.info` next to it names its process, version and hub. When a
@@ -441,8 +445,11 @@ providers are measured and how often, a name for the Antigravity account, whethe
 running agents are shown, start at login, the version and *Quit*. They are `quotum`'s
 settings: a change is written to `config.toml` at once, keeping comments, symbolic links
 and permissions. Windows uses `ReplaceFileW` to preserve an existing file's ACL;
-new files inherit the profile folder's ACL. A change made in the file by hand is picked
-up within seconds.
+its temporary file receives the existing DACL when it is created, before any contents
+are written. Unix temporary files start private. New Windows files inherit the profile
+folder's ACL. Saves are serialized, and the board receives the accepted settings at
+once while restarting measurements is debounced. A change made in the file by hand is
+picked up within seconds.
 
 ## Roadmap
 

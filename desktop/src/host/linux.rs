@@ -149,13 +149,13 @@ fn start(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     if shell.smoke.is_some() {
         smoke::Smoke::watch(&shell);
     }
+    if !args.hidden {
+        open(&shell);
+    }
     let hub = shell.clone();
     thread::spawn(move || shell::run_hub(hub));
     let ticker = shell.clone();
     thread::spawn(move || shell::run_ticker(ticker));
-    if !args.hidden {
-        open(&shell);
-    }
     loop {
         thread::park();
     }
@@ -183,8 +183,10 @@ pub fn is_open(shell: &Shell) -> bool {
     shell.host.gui.lock().unwrap_or_else(|e| e.into_inner()).is_some()
 }
 pub fn open(shell: &Arc<Shell>) {
+    let opening = window::opening(shell);
     let shell = shell.clone();
     thread::spawn(move || {
+        let _intent = opening;
         let _opening = shell.window_lock.lock().unwrap_or_else(|e| e.into_inner());
         if shell.exiting() {
             return;

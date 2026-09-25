@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use quotum_core::config::Config;
@@ -96,21 +96,140 @@ pub fn save(path: &Path, patch: &Patch) -> Result<(), String> {
 /// Writes a new file next to `target` and puts it in its place, with the old one's
 /// permissions. A new file is private on Unix and inherits its folder's ACL on Windows.
 fn write_replacing(target: &Path, text: &str) -> io::Result<()> {
-    let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let next: PathBuf = target.with_file_name(format!(".{name}.quotum-app.new"));
-    fs::write(&next, text)?;
+    let mut next = Temporary::new(target)?;
+    let file = next.file.as_mut().expect("the temporary file is open");
+    file.write_all(text.as_bytes())?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mode = fs::metadata(target).map(|m| m.permissions().mode() & 0o7777).unwrap_or(0o600);
-        fs::set_permissions(&next, fs::Permissions::from_mode(mode))?;
+        file.set_permissions(fs::Permissions::from_mode(mode))?;
     }
-    replace(&next, target).inspect_err(|_| {
+    // Windows replacement needs the writing handle closed first.
+    next.file.take();
+    replace(&next.path, target).inspect_err(|_| {
         // ReplaceFile can fail after removing the old name. Keep the new data then.
-        if target.exists() {
-            let _ = fs::remove_file(&next);
-        }
+        next.keep = !target.exists();
     })
+}
+
+/// Its name is never reused, even after a crash; a failed write removes only its own file.
+struct Temporary {
+    path: PathBuf,
+    file: Option<fs::File>,
+    keep: bool,
+}
+
+impl Temporary {
+    fn new(target: &Path) -> io::Result<Self> {
+        let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        for _ in 0..5 {
+            let mut random = [0u8; 16];
+            getrandom::fill(&mut random).map_err(|e| io::Error::other(e.to_string()))?;
+            let path = target.with_file_name(format!(".{name}.quotum-app.{:032x}.new", u128::from_ne_bytes(random)));
+            match create_private(&path, target) {
+                Ok(file) => return Ok(Self { path, file: Some(file), keep: false }),
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        Err(io::Error::new(io::ErrorKind::AlreadyExists, "could not create a unique settings file"))
+    }
+}
+
+impl Drop for Temporary {
+    fn drop(&mut self) {
+        self.file.take();
+        if !self.keep {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn create_private(next: &Path, _: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    // The file may contain a hub token. No reader may open a broader copy before chmod.
+    fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(next)
+}
+
+#[cfg(windows)]
+fn create_private(next: &Path, target: &Path) -> io::Result<fs::File> {
+    use std::os::windows::io::FromRawHandle;
+    use windows_sys::Win32::Foundation::{GENERIC_WRITE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+    use windows_sys::Win32::Storage::FileSystem::{
+        CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+
+    let mut security = protected_dacl(target)?;
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: security.as_mut().map_or(std::ptr::null_mut(), |sd| sd.as_mut_ptr().cast()),
+        bInheritHandle: 0,
+    };
+    let next = wide(next);
+    // SAFETY: the path and aligned descriptor buffer live through CreateFileW. CREATE_NEW
+    // refuses existing files and links; the returned handle is owned by File exactly once.
+    let handle = unsafe {
+        CreateFileW(
+            next.as_ptr(),
+            GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            &attributes,
+            CREATE_NEW,
+            FILE_ATTRIBUTE_NORMAL,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        Err(io::Error::last_os_error())
+    } else {
+        // SAFETY: CreateFileW returned a valid handle, now transferred to File.
+        Ok(unsafe { fs::File::from_raw_handle(handle) })
+    }
+}
+
+/// Existing permissions apply at creation, before anyone can open the temporary file.
+/// A missing target alone allows the normal inherited ACL of a new settings file.
+#[cfg(windows)]
+fn protected_dacl(target: &Path) -> io::Result<Option<Vec<usize>>> {
+    use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
+    use windows_sys::Win32::Security::{
+        DACL_SECURITY_INFORMATION, GetFileSecurityW, SE_DACL_PROTECTED, SetSecurityDescriptorControl,
+    };
+
+    let target = wide(target);
+    let mut size = 0;
+    // SAFETY: the first call only asks for the required buffer size; the path is terminated.
+    unsafe { GetFileSecurityW(target.as_ptr(), DACL_SECURITY_INFORMATION, std::ptr::null_mut(), 0, &mut size) };
+    let error = io::Error::last_os_error();
+    if error.kind() == io::ErrorKind::NotFound {
+        return Ok(None);
+    }
+    if error.raw_os_error() != Some(ERROR_INSUFFICIENT_BUFFER as i32) {
+        return Err(error);
+    }
+    // A security descriptor requires aligned storage, even though its length is in bytes.
+    let mut descriptor = vec![0usize; (size as usize).div_ceil(std::mem::size_of::<usize>())];
+    let ptr = descriptor.as_mut_ptr().cast();
+    // SAFETY: ptr has at least size bytes of aligned storage and outlives both calls.
+    unsafe {
+        if GetFileSecurityW(target.as_ptr(), DACL_SECURITY_INFORMATION, ptr, size, &mut size) == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // Do not add broader inherited permissions from the temporary file's parent.
+        if SetSecurityDescriptorControl(ptr, SE_DACL_PROTECTED, SE_DACL_PROTECTED) == 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(Some(descriptor))
+}
+
+#[cfg(windows)]
+fn wide(path: &Path) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    path.as_os_str().encode_wide().chain(Some(0)).collect()
 }
 
 #[cfg(not(windows))]
@@ -120,16 +239,14 @@ fn replace(next: &Path, target: &Path) -> io::Result<()> {
 
 #[cfg(windows)]
 fn replace(next: &Path, target: &Path) -> io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::ReplaceFileW;
 
     if !target.try_exists()? {
         return fs::rename(next, target);
     }
-    let wide = |path: &Path| path.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<_>>();
     let (next, target) = (wide(next), wide(target));
-    // Rename replaces the file's ACL with the temporary file's inherited ACL.
-    // ReplaceFile preserves it; do not ignore an error merging those permissions.
+    // ReplaceFile preserves the original ACL, including its inheritance policy, rather
+    // than leaving the temporary file's protected ACL. Do not ignore a merge error.
     let replaced = unsafe {
         ReplaceFileW(target.as_ptr(), next.as_ptr(), std::ptr::null(), 0, std::ptr::null(), std::ptr::null())
     };
@@ -215,35 +332,136 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    #[test]
+    fn temporary_files_are_unique_and_removed_when_a_write_is_abandoned() {
+        let dir = temp("temporary");
+        let target = dir.join("config.toml");
+        fs::write(&target, "sessions = true\n").unwrap();
+        let mut first = Temporary::new(&target).unwrap();
+        let second = Temporary::new(&target).unwrap();
+        assert_ne!(first.path, second.path);
+        first.file.as_mut().unwrap().write_all(b"incomplete").unwrap();
+        let paths = [first.path.clone(), second.path.clone()];
+        drop(first);
+        drop(second);
+        assert!(paths.iter().all(|path| !path.exists()), "no abandoned temporary files");
+        assert_eq!(fs::read_to_string(&target).unwrap(), "sessions = true\n");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn an_existing_temporary_name_is_never_opened_or_truncated() {
+        let dir = temp("collision");
+        let target = dir.join("config.toml");
+        let next = dir.join("occupied.new");
+        fs::write(&target, "sessions = true\n").unwrap();
+        fs::write(&next, "another writer").unwrap();
+        assert_eq!(create_private(&next, &target).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read_to_string(&next).unwrap(), "another writer");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_temporary_file_is_private_from_creation_before_any_contents_are_written() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp("creation-mode");
+        let target = dir.join("config.toml");
+        fs::write(&target, "sessions = true\n").unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+        // Inspect the result of the create syscall itself, before write_replacing can
+        // write data or restore the target's final permissions.
+        for existing in [true, false] {
+            if !existing {
+                fs::remove_file(&target).unwrap();
+            }
+            let next = dir.join("created.new");
+            let file = create_private(&next, &target).unwrap();
+            assert_eq!(file.metadata().unwrap().len(), 0);
+            assert_eq!(file.metadata().unwrap().permissions().mode() & 0o077, 0, "private even in a public directory");
+            drop(file);
+            fs::remove_file(next).unwrap();
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_temporary_symlink_cannot_redirect_the_write() {
+        let dir = temp("temporary-symlink");
+        let target = dir.join("config.toml");
+        let victim = dir.join("other-file");
+        let next = dir.join("occupied.new");
+        fs::write(&victim, "untouched").unwrap();
+        std::os::unix::fs::symlink(&victim, &next).unwrap();
+        assert_eq!(create_private(&next, &target).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read_to_string(victim).unwrap(), "untouched");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    fn windows_acl(file: &Path, restrict: bool) -> Vec<u8> {
+        let script = if restrict {
+            "$a=New-Object Security.AccessControl.FileSecurity; $a.SetAccessRuleProtection($true,$false); $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User; $r=New-Object Security.AccessControl.FileSystemAccessRule($sid,'FullControl','Allow'); $a.AddAccessRule($r); [IO.File]::SetAccessControl($env:QUOTUM_TEST_FILE,$a); [IO.File]::GetAccessControl($env:QUOTUM_TEST_FILE).GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access)"
+        } else {
+            "[IO.File]::GetAccessControl($env:QUOTUM_TEST_FILE).GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access)"
+        };
+        let output = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &format!("$ErrorActionPreference='Stop'; {script}")])
+            .env("QUOTUM_TEST_FILE", file)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        output.stdout
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_temporary_file_has_the_protected_dacl_before_any_write() {
+        let dir = temp("creation-acl");
+        let target = dir.join("config.toml");
+        fs::write(&target, "sessions = true\n").unwrap();
+        let restricted = windows_acl(&target, true);
+        // A normal new file inherits the broader parent ACL: this is the negative control.
+        let ordinary = dir.join("inherited.txt");
+        fs::write(&ordinary, "").unwrap();
+        assert_ne!(windows_acl(&ordinary, false), restricted);
+        let next = dir.join("created.new");
+        let file = create_private(&next, &target).unwrap();
+        assert_eq!(file.metadata().unwrap().len(), 0);
+        assert_eq!(windows_acl(&next, false), restricted, "protected at creation, before write or ReplaceFileW");
+        drop(file);
+        fs::remove_file(&next).unwrap();
+        fs::remove_file(&target).unwrap();
+        let file = create_private(&next, &target).unwrap();
+        assert_eq!(windows_acl(&next, false), windows_acl(&ordinary, false), "a new config inherits normally");
+        drop(file);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     #[cfg(windows)]
     #[test]
     fn a_windows_files_explicit_acl_stays_when_settings_change() {
         let dir = temp("windows-acl");
         let file = dir.join("config.toml");
         fs::write(&file, "# keep\nsessions = true\n").unwrap();
-        let acl = |protect: bool| {
-            let script = if protect {
-                "$a=[IO.File]::GetAccessControl($env:QUOTUM_TEST_FILE); $a.SetAccessRuleProtection($true,$true); [IO.File]::SetAccessControl($env:QUOTUM_TEST_FILE,$a); [IO.File]::GetAccessControl($env:QUOTUM_TEST_FILE).GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access)"
-            } else {
-                "[IO.File]::GetAccessControl($env:QUOTUM_TEST_FILE).GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access)"
-            };
-            let output = std::process::Command::new("powershell.exe")
-                .args([
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-Command",
-                    &format!("$ErrorActionPreference='Stop'; {script}"),
-                ])
-                .env("QUOTUM_TEST_FILE", &file)
-                .output()
-                .unwrap();
-            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-            output.stdout
-        };
-        let before = acl(true);
+        let before = windows_acl(&file, true);
         save(&file, &patch(r#"{"sessions":false}"#)).unwrap();
-        assert_eq!(acl(false), before, "the protected ACL must survive replacement");
+        assert_eq!(windows_acl(&file, false), before, "the protected ACL must survive replacement");
         assert_eq!(fs::read_to_string(&file).unwrap(), "# keep\nsessions = false\n");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_files_inherited_acl_stays_when_settings_change() {
+        let dir = temp("windows-inherited-acl");
+        let file = dir.join("config.toml");
+        fs::write(&file, "sessions = true\n").unwrap();
+        let before = windows_acl(&file, false);
+        save(&file, &patch(r#"{"sessions":false}"#)).unwrap();
+        assert_eq!(windows_acl(&file, false), before, "temporary protection must not change the final ACL");
         fs::remove_dir_all(dir).unwrap();
     }
 }

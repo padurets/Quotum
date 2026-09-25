@@ -2,11 +2,80 @@
 //! starts ("Starting…") or when it is down ("Error"). Windows are created on worker threads
 //! only: on Windows, creating one from an event handler or a command deadlocks WebView2.
 
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use url::Url;
 
 use crate::hub::HubState;
+use crate::{
+    agent,
+    shell::{self, Shell},
+};
+
+/// An explicit request counts as foreground while its native window is being created.
+#[derive(Default)]
+pub struct OpenIntent(AtomicUsize);
+
+impl OpenIntent {
+    fn begin(&self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn finish(&self) -> bool {
+        self.0.fetch_sub(1, Ordering::SeqCst) == 1
+    }
+
+    fn pending(&self) -> bool {
+        self.0.load(Ordering::SeqCst) != 0
+    }
+}
+
+pub struct Opening(Arc<Shell>);
+
+pub fn opening(shell: &Arc<Shell>) -> Opening {
+    shell.window_intent.begin();
+    Opening(shell.clone())
+}
+
+impl Drop for Opening {
+    fn drop(&mut self) {
+        let shell = &self.0;
+        if shell.window_intent.finish() && !is_open_or_opening(shell) {
+            // Let a startup decision that observed this request publish Held first.
+            let _ops = shell.agent_ops.lock().unwrap_or_else(|e| e.into_inner());
+            if is_open_or_opening(shell) {
+                return;
+            }
+            let state = shell.agent.lock().unwrap_or_else(|e| e.into_inner()).state.clone();
+            // A failed foreground attempt must not leave an unseen consent question.
+            if agent::closing_quits(&state, shell.take_over_confirmed()) {
+                shell::quit(shell);
+            }
+        }
+    }
+}
+
+pub fn is_open_or_opening(shell: &Shell) -> bool {
+    shell.window_intent.pending() || is_open(shell)
+}
+
+/// The requested navigation, including one the web view has not committed yet.
+#[cfg(any(test, not(target_os = "linux")))]
+#[derive(Default)]
+pub struct Navigation(Option<(u64, Url)>);
+
+#[cfg(any(test, not(target_os = "linux")))]
+impl Navigation {
+    pub fn request(&mut self, generation: u64, url: Url, force: bool) -> bool {
+        if self.0.as_ref().is_some_and(|(old, _)| *old > generation) {
+            return false;
+        }
+        let changed = self.0.as_ref().is_none_or(|(old, target)| *old != generation || *target != url);
+        self.0 = Some((generation, url));
+        force || changed
+    }
+}
 
 #[cfg(not(target_os = "linux"))]
 pub const LABEL: &str = "main";
@@ -131,5 +200,40 @@ mod tests {
         assert!(!belongs(&own_origin().join("index.html").unwrap(), &ready(23456)));
         assert!(belongs(&own_origin().join("index.html").unwrap(), &HubState::Starting));
         assert!(!belongs(&own_origin().join("index.html").unwrap(), &HubState::Down));
+    }
+
+    #[test]
+    fn foreground_start_waits_for_its_window_and_failed_attempts_do_not_latch_intent() {
+        let intent = OpenIntent::default();
+        assert_eq!(agent::on_held(false, intent.pending()), agent::OnHeld::Quit, "hidden start");
+        intent.begin();
+        assert_eq!(agent::on_held(false, intent.pending()), agent::OnHeld::Ask, "hub wins the startup race");
+        intent.begin();
+        assert!(!intent.finish());
+        assert!(intent.pending(), "another open is still queued");
+        assert!(intent.finish());
+        assert!(!intent.pending(), "failed attempts or a completed open leave no permanent intent");
+        assert_eq!(agent::on_held(false, intent.pending()), agent::OnHeld::Quit, "closed before consent");
+        intent.begin();
+        assert!(intent.pending(), "a later open can try again");
+        assert!(intent.finish());
+    }
+
+    #[test]
+    fn navigation_follows_generations_even_before_the_previous_request_commits() {
+        let mut navigation = Navigation::default();
+        let first = target(&ready(23456));
+        assert!(navigation.request(1, first.clone(), false));
+        assert!(navigation.request(2, target(&HubState::Starting), false));
+        let mut next = ready(23456);
+        if let HubState::Ready(ready) = &mut next {
+            ready.key = "new-key".into();
+        }
+        let next = target(&next);
+        assert!(navigation.request(3, next.clone(), false), "same port, new start and entry key");
+        assert!(!navigation.request(2, target(&HubState::Starting), false), "late old state");
+        assert!(!navigation.request(3, next.clone(), false), "focus does not reload");
+        assert!(navigation.request(3, next, true), "explicit reentry does reload");
+        assert!(navigation.request(4, first, false), "generation is independent of the URL");
     }
 }

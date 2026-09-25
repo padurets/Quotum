@@ -35,6 +35,8 @@ pub struct Shell {
     pub agent: Mutex<Agent>,
     /// Puts the agent's operations one after another (see agent.rs).
     pub agent_ops: Mutex<()>,
+    /// Serializes file edits and publication of the accepted configuration.
+    pub settings_ops: Mutex<()>,
     /// Node, next to the app's executable.
     pub node: PathBuf,
     /// The hub of this commit in the app's resources.
@@ -44,6 +46,7 @@ pub struct Shell {
     state: Mutex<State>,
     /// Held by a worker thread while it creates the window, never by the main thread.
     pub window_lock: Mutex<()>,
+    pub window_intent: window::OpenIntent,
     exiting: AtomicBool,
     proc: Mutex<Option<Arc<Proc>>>,
     app_json: Mutex<AppJson>,
@@ -76,6 +79,7 @@ impl Shell {
             agent_log: Arc::new(Log::new(dirs.agent_log())),
             agent: Mutex::new(Agent::new()),
             agent_ops: Mutex::new(()),
+            settings_ops: Mutex::new(()),
             paths: Paths::resolve(),
             dirs,
             node,
@@ -84,6 +88,7 @@ impl Shell {
             host,
             state: Mutex::new(State { hub: HubState::Starting, generation: 0, capabilities: Vec::new() }),
             window_lock: Mutex::new(()),
+            window_intent: window::OpenIntent::default(),
             exiting: AtomicBool::new(false),
             proc: Mutex::new(None),
             app_json: Mutex::new(app_json),
