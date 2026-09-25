@@ -160,6 +160,32 @@ pub fn closing_quits(state: &State, confirmed: bool) -> bool {
     matches!(state, State::Held { .. }) && !confirmed
 }
 
+/// Native close events must not decide from Starting while startup is about to publish
+/// Held. Run after that operation, off the native event loop, and recheck any later open.
+pub fn window_closed(shell: &Arc<Shell>) {
+    let shell = shell.clone();
+    thread::spawn(move || {
+        if close_requires_exit(
+            &shell.agent,
+            &shell.agent_ops,
+            || window::is_open_or_opening(&shell),
+            || shell.take_over_confirmed(),
+        ) {
+            shell::quit(&shell);
+        }
+    });
+}
+
+fn close_requires_exit(
+    agent: &Mutex<Agent>,
+    operations: &Mutex<()>,
+    visible: impl FnOnce() -> bool,
+    confirmed: impl FnOnce() -> bool,
+) -> bool {
+    let _ops = operations.lock().unwrap_or_else(|e| e.into_inner());
+    !visible() && closing_quits(&agent.lock().unwrap_or_else(|e| e.into_inner()).state, confirmed())
+}
+
 /// config.toml as it is now: changed or not since it was read.
 fn stat(paths: &Paths) -> Option<(Option<SystemTime>, u64)> {
     fs::metadata(&paths.config).ok().map(|m| (m.modified().ok(), m.len()))
@@ -711,6 +737,36 @@ mod tests {
         assert!(closing_quits(&held, false));
         assert!(!closing_quits(&held, true), "held after agreeing: a failed take-over, retried in the background");
         assert!(!closing_quits(&State::Measuring, false));
+    }
+
+    #[test]
+    fn closing_during_startup_waits_for_the_takeover_decision() {
+        let agent = Arc::new(Mutex::new(Agent::new()));
+        let operations = Arc::new(Mutex::new(()));
+        let (seen, open_seen) = std::sync::mpsc::channel();
+        let (publish, held) = std::sync::mpsc::channel();
+        let (result, closed) = std::sync::mpsc::channel();
+        let (starting, serial) = (agent.clone(), operations.clone());
+        let startup = thread::spawn(move || {
+            let _ops = serial.lock().unwrap();
+            // Startup has seen a foreground window, but is still reading holder info.
+            seen.send(()).unwrap();
+            held.recv_timeout(Duration::from_secs(3)).unwrap();
+            starting.lock().unwrap().state =
+                State::Held { holder: HolderInfo { pid: Some(42), hub: None, yields: true }, error: None };
+        });
+        open_seen.recv_timeout(Duration::from_secs(3)).unwrap();
+        let (closing, serial) = (agent.clone(), operations.clone());
+        let closer = thread::spawn(move || {
+            result.send(close_requires_exit(&closing, &serial, || false, || false)).unwrap();
+        });
+        assert!(closed.recv_timeout(Duration::from_millis(50)).is_err(), "no decision from Starting");
+        publish.send(()).unwrap();
+        assert!(closed.recv_timeout(Duration::from_secs(3)).unwrap(), "the invisible question is declined");
+        startup.join().unwrap();
+        closer.join().unwrap();
+        assert!(!close_requires_exit(&agent, &operations, || true, || false), "a later open stays");
+        assert!(!close_requires_exit(&agent, &operations, || false, || true), "consent was already given");
     }
 
     #[test]

@@ -290,10 +290,7 @@ fn launch(shell: &Arc<Shell>) -> io::Result<()> {
         waiting.host.stopped.notify_all();
         drop(current);
         if !waiting.exiting() {
-            let state = waiting.agent.lock().unwrap_or_else(|e| e.into_inner()).state.clone();
-            if agent::closing_quits(&state, waiting.take_over_confirmed()) {
-                shell::quit(&waiting);
-            }
+            agent::window_closed(&waiting);
         }
     });
     Ok(())

@@ -104,10 +104,7 @@ pub fn run(args: Args) {
         RunEvent::ExitRequested { code: None, api, .. } => {
             if let Some(shell) = app.try_state::<Arc<Shell>>().filter(|shell| !shell.exiting()) {
                 api.prevent_exit();
-                let state = shell.agent.lock().unwrap_or_else(|e| e.into_inner()).state.clone();
-                if agent::closing_quits(&state, shell.take_over_confirmed()) {
-                    shell::quit(shell.inner());
-                }
+                agent::window_closed(shell.inner());
             }
         }
         // The event loop ends (also at the end of the system's session): quick, right here.

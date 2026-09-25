@@ -8,10 +8,7 @@ use std::sync::{Arc, OnceLock};
 use url::Url;
 
 use crate::hub::HubState;
-use crate::{
-    agent,
-    shell::{self, Shell},
-};
+use crate::{agent, shell::Shell};
 
 /// An explicit request counts as foreground while its native window is being created.
 #[derive(Default)]
@@ -42,16 +39,8 @@ impl Drop for Opening {
     fn drop(&mut self) {
         let shell = &self.0;
         if shell.window_intent.finish() && !is_open_or_opening(shell) {
-            // Let a startup decision that observed this request publish Held first.
-            let _ops = shell.agent_ops.lock().unwrap_or_else(|e| e.into_inner());
-            if is_open_or_opening(shell) {
-                return;
-            }
-            let state = shell.agent.lock().unwrap_or_else(|e| e.into_inner()).state.clone();
             // A failed foreground attempt must not leave an unseen consent question.
-            if agent::closing_quits(&state, shell.take_over_confirmed()) {
-                shell::quit(shell);
-            }
+            agent::window_closed(shell);
         }
     }
 }
