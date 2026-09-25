@@ -1,4 +1,5 @@
 import {
+  agentsWork,
   ALWAYS,
   DAY,
   fixed,
@@ -10,12 +11,15 @@ import {
   SECOND,
   steady,
   through,
+  noReset,
+  waveWork,
   weekly,
   type Agent,
   type Answer,
   type DemoSet,
   type Scene,
   type Wave,
+  type Work,
 } from './model.js';
 
 /**
@@ -30,8 +34,8 @@ import {
  *
  * Every entry says in `expect` what it shows, in codes the dashboard's own rules
  * (hub/ui/lib) compute from what the hub answers: `npm test` brings the set up on a hub
- * and checks each code over its span while time runs, so an entry that stops showing its
- * state fails the test. What only eyes can tell (an ellipsis, a colour, two cards in one
+ * and checks each code over its span while time runs (the showcase, at `start`), so an
+ * entry that stops showing its state fails the test. What only eyes can tell (an ellipsis, a colour, two cards in one
  * row) is `look`, checked by hand on the running board, in both languages.
  *
  * Time. Everything is in milliseconds from `start`, when the demo started, rounded down to
@@ -60,9 +64,15 @@ const WEEK_PLAN_FLAT = [15, 15, 15, 15, 15, 15, 10];
 /** Agents working 12 of every 20 minutes, staggered by `shift` minutes. */
 const shifts = (shift: number): Wave => ({period: 20 * MIN, on: 12 * MIN, phase: shift * MIN});
 
-/** A five-hour window spending `perHour` points an hour of work, back to back from `offset`. */
-const fiveHours = (offset: number, perHour: number, wave: Wave = ALWAYS, label?: string) =>
-  rolling({id: label ? `${label.split(' ')[0].toLowerCase()}:session` : 'session', label, offset, wave, use: (_elapsed, busy) => (perHour * busy) / HOUR});
+/** Work on and off, 12 of every 20 minutes, for a subscription without agents of its own. */
+const onAndOff = (shift: number): Work => waveWork(shifts(shift));
+
+/**
+ * A five-hour window spending `perHour` points an hour of full work, back to back from
+ * `offset`. Where a card has agents, its work is theirs: the window goes while they work.
+ */
+const fiveHours = (offset: number, perHour: number, work: Work = waveWork(ALWAYS), label?: string) =>
+  rolling({id: label ? `${label.split(' ')[0].toLowerCase()}:session` : 'session', label, offset, work, use: (_elapsed, busy) => (perHour * busy) / HOUR});
 
 const LONG_PROJECT =
   'platform-monorepo/services/billing-reconciliation-worker/migrations/2026-09-backfill-invoices-with-missing-tax-regions-and-currency-rounding-fixes-for-eu';
@@ -76,6 +86,11 @@ const codex = (data: object): Answer => ({json: {meta: {api_version: 'v1', gener
 const claude = (claudeEvents: object[], codexEvents: object[] = []): Answer => ({json: {providers: {claude: {events: claudeEvents}, codex: {events: codexEvents}}, meta: {}}});
 const quiet = () => claude([]);
 
+/**
+ * Most scenes say two things at once, as the trackers do: what a card shows is the most
+ * pressing of them (an announced reset, then a possible one, then one that just happened,
+ * then a change of limits).
+ */
 export const SCENES: Scene[] = [
   {
     kind: 'scene',
@@ -83,21 +98,30 @@ export const SCENES: Scene[] = [
     codex: at =>
       codex({
         scheduled_reset: {reset_type: 'regular', announced_at: at(-5 * HOUR), scheduled_for: at(26 * HOUR), text: 'Rate limits reset for all Plus and Pro plans tomorrow.'},
-        latest_reset: {announced_at: at(-9 * DAY), text: 'Limits were reset for everyone.'},
+        latest_reset: {announced_at: at(-4 * HOUR), text: 'Limits were reset for everyone.'},
       }),
-    claude: at => claude([{kind: 'reset', date: at(-3 * HOUR), scope: 'Max', note: 'Weekly limits reset for Max plans.'}, {kind: 'policy', date: at(-10 * DAY), note: 'New weekly limits.'}]),
+    claude: at => claude([{kind: 'reset', date: at(-3 * HOUR), scope: 'Max', note: 'Weekly limits reset for Max plans.'}, {kind: 'policy', date: at(-DAY), note: 'New weekly limits.'}]),
     expect: [
       {reset: 'codex', label: 'in'},
       {reset: 'claude', label: 'done', scope: 'Max'},
       {tracker: 'Codex Resets', health: 'ok'},
       {tracker: 'Claude Resets', health: 'ok'},
+      {marked: 'codex'},
+      {marked: 'claude'},
     ],
-    look: ['Codex cards: "Reset in 1d" with the date; Claude cards: "Reset happened · <time> · Max"', 'Both resets for everyone are marked on the 7-day chart'],
+    look: [
+      'Codex cards: "Reset in 1d" with the date, not the reset of four hours ago; Claude cards: "Reset happened · <time> · Max", not the change of limits of yesterday',
+      'Both resets for everyone are marked on the charts',
+    ],
   },
   {
     kind: 'scene',
     id: 'banked',
-    codex: at => codex({scheduled_reset: {reset_type: 'banked', announced_at: at(-HOUR), scheduled_for: at(20 * HOUR), text: 'Banked resets land tonight.'}}),
+    codex: at =>
+      codex({
+        scheduled_reset: {reset_type: 'banked', announced_at: at(-HOUR), scheduled_for: at(20 * HOUR), text: 'Banked resets land tonight.'},
+        active_watch: {observed_at: at(-2 * HOUR), expires_at: at(22 * HOUR), reset_chance_percent: 30, forecast_window: 'today', text: 'More resets may follow.'},
+      }),
     claude: quiet,
     expect: [
       {reset: 'codex', label: 'bankedIn'},
@@ -117,11 +141,16 @@ export const SCENES: Scene[] = [
   {
     kind: 'scene',
     id: 'awaiting',
-    codex: at => codex({scheduled_reset: {reset_type: 'regular', announced_at: at(-2 * DAY), scheduled_for: at(-3 * HOUR), text: 'Reset scheduled for this morning.'}}),
+    codex: at =>
+      codex({
+        scheduled_reset: {reset_type: 'regular', announced_at: at(-2 * DAY), scheduled_for: at(-3 * HOUR), text: 'Reset scheduled for this morning.'},
+        latest_reset: {announced_at: at(-10 * HOUR), text: 'Limits were reset for everyone.'},
+      }),
     claude: at => claude([{kind: 'reset', date: at(-2 * HOUR), scope: 'all', note: 'Limits reset for everyone.'}]),
     expect: [
       {reset: 'codex', label: 'awaiting'},
       {reset: 'claude', label: 'done', scope: ''},
+      {marked: 'codex'},
     ],
     look: ['The Claude notice names no scope: the reset was for everyone'],
   },
@@ -129,11 +158,14 @@ export const SCENES: Scene[] = [
     kind: 'scene',
     id: 'possible',
     codex: at =>
-      codex({active_watch: {observed_at: at(-2 * HOUR), expires_at: at(20 * HOUR), reset_chance_percent: 40, forecast_window: 'next 24 hours', text: 'Usage dashboards hint at another reset.'}}),
-    claude: quiet,
+      codex({
+        active_watch: {observed_at: at(-2 * HOUR), expires_at: at(20 * HOUR), reset_chance_percent: 40, forecast_window: 'next 24 hours', text: 'Usage dashboards hint at another reset.'},
+        latest_reset: {announced_at: at(-2 * HOUR), text: 'Limits were reset for some accounts.'},
+      }),
+    claude: at => claude([{kind: 'policy', date: at(-2 * DAY), note: 'New weekly limits.'}]),
     expect: [
       {reset: 'codex', label: 'possible', chance: 40},
-      {reset: 'claude', label: null},
+      {reset: 'claude', label: 'policy'},
     ],
   },
   {
@@ -151,23 +183,31 @@ export const SCENES: Scene[] = [
     kind: 'scene',
     id: 'reset',
     codex: at => codex({latest_reset: {announced_at: at(-4 * HOUR), text: 'Limits were reset for everyone.'}}),
-    claude: at => claude([{kind: 'reset', date: at(-HOUR), scope: 'Pro', note: 'Weekly limits reset for Pro plans.'}]),
+    claude: at => claude([{kind: 'reset', date: at(-HOUR), scope: 'Pro', note: 'Weekly limits reset for Pro plans.'}, {kind: 'policy', date: at(-2 * HOUR), note: 'New weekly limits.'}]),
     expect: [
       {reset: 'codex', label: 'done', scope: ''},
       {reset: 'claude', label: 'done', scope: 'Pro'},
+      {marked: 'codex'},
+      {marked: 'claude'},
     ],
   },
   {
     kind: 'scene',
     id: 'policy',
-    // Codex Resets is down: Codex falls back on the Codex part of Claude Resets.
+    // Codex Resets is down: Codex falls back on the Codex part of Claude Resets. Its resets
+    // are older than a day, so the change of limits is the news.
     codex: () => ({status: 503}),
-    claude: at => claude([{kind: 'policy', date: at(-DAY), note: 'New weekly limits.'}], [{kind: 'policy', date: at(-6 * HOUR), note: 'Five-hour windows changed.'}]),
+    claude: at =>
+      claude(
+        [{kind: 'policy', date: at(-DAY), note: 'New weekly limits.'}, {kind: 'reset', date: at(-80 * HOUR), scope: 'Max', note: 'Weekly limits reset for Max plans.'}],
+        [{kind: 'policy', date: at(-6 * HOUR), note: 'Five-hour windows changed.'}, {kind: 'reset', date: at(-80 * HOUR), note: 'Limits were reset for everyone.'}],
+      ),
     expect: [
       {reset: 'codex', label: 'policy'},
       {reset: 'claude', label: 'policy'},
       {tracker: 'Codex Resets', health: 'HTTP 503'},
       {tracker: 'Claude Resets', health: 'ok'},
+      {marked: 'codex'},
     ],
   },
   {
@@ -226,6 +266,61 @@ export const SCENES: Scene[] = [
   },
 ];
 
+// ---------- agents, and the work they do on their cards ----------
+
+const MAX_AGENTS: Agent[] = [
+  ...agents('laptop', [
+    ['terminal', 'api-gateway', -3 * HOUR, shifts(0)],
+    ['terminal', 'billing', -70 * MIN, shifts(4)],
+    ['terminal', 'infra', -2 * HOUR],
+    ['editor', 'mobile-app', -5 * HOUR],
+    ['app', null, -40 * MIN],
+    ['terminal', LONG_PROJECT, -25 * MIN, shifts(8)],
+  ]),
+  ...agents('build-01', [
+    ['terminal', 'docs-site', -4 * HOUR, shifts(2)],
+    ['terminal', 'search-indexer', -90 * MIN, shifts(10)],
+    ['terminal', 'nightly-release', -6 * HOUR],
+    ['editor', 'design-tokens-and-theme-migration-for-web', -30 * MIN],
+  ]),
+];
+
+/** Eleven, one more than a tray draws; within the first quarter of an hour one more starts and one stops. */
+const PRO_AGENTS: Agent[] = [
+  {machine: 'laptop', origin: 'terminal', project: 'checkout', since: -2 * HOUR, until: 10 * MIN, works: shifts(1)},
+  {machine: 'laptop', origin: 'terminal', project: 'hotfix-4821', since: 5 * MIN, works: ALWAYS},
+  ...agents('laptop', [
+    ['terminal', 'ledger', -3 * HOUR, shifts(5)],
+    ['terminal', 'payments-api', -50 * MIN, shifts(9)],
+    ['editor', 'admin-console', -4 * HOUR],
+    ['app', 'support-bot', -1 * HOUR],
+    ['terminal', 'notifications', -15 * MIN, {period: 4 * MIN, on: 2 * MIN, phase: 0}],
+  ]),
+  ...agents('win-desktop', [
+    ['terminal', 'desktop-client', -5 * HOUR, shifts(6)],
+    ['terminal', 'installer', -80 * MIN, shifts(11)],
+    ['editor', 'telemetry-dashboard', -2 * HOUR],
+    ['terminal', 'localization', -35 * MIN],
+    ['app', null, -10 * MIN],
+  ]),
+];
+
+/** One long job, at work all the time: the five hours run ahead of an even pace. */
+const AHEAD_AGENTS: Agent[] = agents('build-01', [['terminal', 'data-pipeline', -90 * MIN, ALWAYS]]);
+
+const IOS_AGENTS: Agent[] = agents('mac-mini', [
+  ['terminal', 'ios-app', -30 * MIN, shifts(0)],
+  ['editor', 'ios-app', -2 * HOUR],
+]);
+
+const TEAM_AGENTS: Agent[] = [
+  ...agents('laptop', [
+    ['terminal', 'shared-infra', -HOUR, shifts(3)],
+    ['terminal', 'shared-docs', -20 * MIN],
+  ]),
+  ...agents('ben-mac', [['terminal', 'shared-infra', -3 * HOUR, shifts(9)]]),
+];
+
 // ---------- the whole catalogue ----------
 
 const all: DemoSet = {
@@ -265,7 +360,13 @@ const all: DemoSet = {
       ],
       expect: [{failure: {provider: 'claude', error: 'not_installed'}}, {failure: {provider: 'antigravity', error: 'invalid_output'}}],
     },
-    {kind: 'machine', id: 'old-nuc', gone: -3 * HOUR, expect: [{via: 'token'}]},
+    {
+      kind: 'machine',
+      id: 'old-nuc',
+      gone: -3 * HOUR,
+      expect: [{via: 'token'}],
+      look: ['«Machines» shows it seen when the demo started, not three hours ago: the hub dates every contact by its own clock'],
+    },
     {kind: 'machine', id: 'ben-mac', person: 'ben', os: 'macos', failures: [{provider: 'antigravity', error: 'failed'}], expect: [{failure: {provider: 'antigravity', error: 'failed'}}]},
 
     // Cards. Their order is the board's, and the order in which they come to the hub.
@@ -277,26 +378,11 @@ const all: DemoSet = {
       machines: ['laptop', 'build-01'],
       history: 14 * DAY,
       windows: [
-        fiveHours(20 * MIN, 12, shifts(0)),
+        fiveHours(20 * MIN, 25, agentsWork(MAX_AGENTS)),
         weekly({since: -1.5 * DAY, use: through([0, 0], [0.5, 33.2], [2.5, 56.8])}),
         weekly({id: 'weekly:fable', label: 'Fable', since: -1.5 * DAY, use: through([0, 0], [0.5, 6], [1.5, 12])}),
       ],
-      agents: [
-        ...agents('laptop', [
-          ['terminal', 'api-gateway', -3 * HOUR, shifts(0)],
-          ['terminal', 'billing', -70 * MIN, shifts(4)],
-          ['terminal', 'infra', -2 * HOUR],
-          ['editor', 'mobile-app', -5 * HOUR],
-          ['app', null, -40 * MIN],
-          ['terminal', LONG_PROJECT, -25 * MIN, shifts(8)],
-        ]),
-        ...agents('build-01', [
-          ['terminal', 'docs-site', -4 * HOUR, shifts(2)],
-          ['terminal', 'search-indexer', -90 * MIN, shifts(10)],
-          ['terminal', 'nightly-release', -6 * HOUR],
-          ['editor', 'design-tokens-and-theme-migration-for-web', -30 * MIN],
-        ]),
-      ],
+      agents: MAX_AGENTS,
       on: {ana: {}, team: {hidden: true}},
       expect: [
         {title: 'Claude'},
@@ -305,7 +391,7 @@ const all: DemoSet = {
         {agents: 10, drawn: true},
         {window: 'weekly', name: 'Weekly', level: 'ok', note: null, reset: 'resetsIn', started: true},
         {window: 'weekly:fable', name: 'Fable · weekly', note: 'behind'},
-        {window: 'session', name: '5 hours'},
+        {window: 'session', name: '5 hours', note: null},
         {forecast: 'weekly', outlook: 'onPacePlan'},
         {forecast: 'weekly:fable', outlook: 'leftPlan', plan: 'behind'},
       ],
@@ -323,9 +409,10 @@ const all: DemoSet = {
       machines: ['laptop'],
       history: 14 * DAY,
       windows: [
-        fiveHours(50 * MIN, 8, ALWAYS, 'Gemini Pro'),
+        fiveHours(50 * MIN, 8, onAndOff(15), 'Gemini Pro'),
         weekly({id: 'gemini:weekly', label: 'Gemini', since: -3 * DAY, use: through([0, 0], [2, 37], [3, 49])}),
-        weekly({id: 'claude:weekly', label: 'Claude', since: -3 * DAY, use: steady(0, 8)}),
+        // A client that does not say when this one resets.
+        noReset(weekly({id: 'claude:weekly', label: 'Claude', since: -3 * DAY, use: steady(0, 8)})),
         rolling({id: 'flash:window-1440', kind: 'other', label: 'Flash', minutes: 1440, offset: -8 * HOUR, use: elapsed => (1.5 * elapsed) / HOUR}),
         fixed({id: 'credits', label: 'Credits', used: 40}),
       ],
@@ -333,11 +420,11 @@ const all: DemoSet = {
       expect: [
         {title: 'Antigravity'},
         {window: 'gemini:session', name: 'Gemini Pro · 5 hours'},
-        {window: 'claude:weekly', name: 'Claude · weekly', note: null},
+        {window: 'claude:weekly', name: 'Claude · weekly', note: null, reset: 'resetUnknown'},
         {window: 'flash:window-1440', name: 'Flash · 1d'},
         {window: 'credits', name: 'Credits', reset: 'resetUnknown'},
         {forecast: 'gemini:weekly', outlook: 'onPaceReset', plan: 'none'},
-        {forecast: 'credits', outlook: 'none', spent: 'unused'},
+        {forecast: 'claude:weekly', outlook: 'none'},
       ],
       look: ['Its plan is switched off: no pace marks on its meters', 'No reset news under it'],
     },
@@ -349,11 +436,8 @@ const all: DemoSet = {
       plan: 'Pro',
       machines: ['mac-mini'],
       history: 14 * DAY,
-      windows: [fiveHours(0, 7, ALWAYS, 'Gemini Pro'), weekly({id: 'gemini:weekly', label: 'Gemini', since: -2 * DAY, use: steady(0, 9)})],
-      agents: agents('mac-mini', [
-        ['terminal', 'ios-app', -30 * MIN, shifts(0)],
-        ['editor', 'ios-app', -2 * HOUR],
-      ]),
+      windows: [fiveHours(0, 7, agentsWork(IOS_AGENTS), 'Gemini Pro'), weekly({id: 'gemini:weekly', label: 'Gemini', since: -2 * DAY, use: steady(0, 9)})],
+      agents: IOS_AGENTS,
       on: {ana: {}},
       expect: [
         {title: 'Antigravity 2'},
@@ -363,6 +447,8 @@ const all: DemoSet = {
         {agents: 2, drawn: true, to: 6 * MIN},
         {agents: 0, drawn: true, from: 7 * MIN, to: 14 * MIN},
         {agents: 2, drawn: true, from: 15 * MIN, to: 46 * MIN},
+        {stale: true, from: 49 * MIN, to: 58 * MIN},
+        {agents: 0, drawn: true, from: 52 * MIN, to: 59 * MIN},
       ],
       look: ['Its machine sleeps from the 2nd minute to the 14th, and so every 45 minutes: the card goes stale and comes back, its agents go and come back, a gap stays on the 24-hour chart'],
     },
@@ -374,7 +460,7 @@ const all: DemoSet = {
       machines: ['laptop'],
       history: 14 * DAY,
       windows: [
-        fiveHours(40 * MIN, 10, shifts(3)),
+        fiveHours(40 * MIN, 10, agentsWork(PRO_AGENTS)),
         // A free reset used six hours ago: the week before was due in two days.
         weekly({since: -6 * HOUR, early: 2 * DAY, use: steady(0, 20), before: (elapsed, n) => (n === -1 ? steady(10, 18)(elapsed) : steady(5, 12)(elapsed))}),
       ],
@@ -386,32 +472,13 @@ const all: DemoSet = {
             : t < -3 * HOUR
               ? {available: 0, expiresAt: null}
               : {available: 2, expiresAt: 18 * DAY},
-      agents: [
-        // Within the first quarter of an hour one agent stops, another starts.
-        {machine: 'laptop', origin: 'terminal', project: 'checkout', since: -2 * HOUR, until: 10 * MIN, works: shifts(1)},
-        {machine: 'laptop', origin: 'terminal', project: 'hotfix-4821', since: 5 * MIN, works: ALWAYS},
-        ...agents('laptop', [
-          ['terminal', 'ledger', -3 * HOUR, shifts(5)],
-          ['terminal', 'payments-api', -50 * MIN, shifts(9)],
-          ['terminal', 'fraud-rules', -20 * MIN],
-          ['editor', 'admin-console', -4 * HOUR],
-          ['app', 'support-bot', -1 * HOUR],
-          ['terminal', 'notifications', -15 * MIN, {period: 4 * MIN, on: 2 * MIN, phase: 0}],
-        ]),
-        ...agents('win-desktop', [
-          ['terminal', 'desktop-client', -5 * HOUR, shifts(6)],
-          ['terminal', 'installer', -80 * MIN, shifts(11)],
-          ['editor', 'telemetry-dashboard', -2 * HOUR],
-          ['terminal', 'localization', -35 * MIN],
-          ['app', null, -10 * MIN],
-        ]),
-      ],
+      agents: PRO_AGENTS,
       on: {ana: {}, night: {hidden: true}},
       expect: [
         {title: 'Codex'},
-        {agents: 12, drawn: false, to: 5 * MIN},
-        {agents: 13, drawn: false, from: 5 * MIN + 15 * SECOND, to: 10 * MIN},
-        {agents: 12, drawn: false, from: 10 * MIN + 15 * SECOND},
+        {agents: 11, drawn: false, to: 5 * MIN},
+        {agents: 12, drawn: false, from: 5 * MIN + 15 * SECOND, to: 10 * MIN},
+        {agents: 11, drawn: false, from: 10 * MIN + 15 * SECOND},
         {event: 'early_reset'},
         {event: 'resets_granted'},
         {window: 'weekly', level: 'ok', note: null},
@@ -429,8 +496,8 @@ const all: DemoSet = {
       plan: 'Claude Pro',
       machines: ['build-01'],
       history: 2 * DAY,
-      windows: [rolling({offset: -60 * MIN, use: elapsed => (0.6 * elapsed) / MIN}), weekly({since: -2.5 * DAY, use: through([0, 0], [1.5, 62.5], [2.5, 77.5])})],
-      agents: agents('build-01', [['terminal', 'data-pipeline', -45 * MIN, shifts(7)]]),
+      windows: [fiveHours(-60 * MIN, 36, agentsWork(AHEAD_AGENTS)), weekly({since: -2.5 * DAY, use: through([0, 0], [1.5, 62.5], [2.5, 77.5])})],
+      agents: AHEAD_AGENTS,
       on: {ana: {name: 'Ahead of the plan', span: 4}},
       expect: [
         {title: 'Ahead of the plan'},
@@ -448,7 +515,7 @@ const all: DemoSet = {
       plan: 'Pro',
       machines: ['win-desktop'],
       history: 14 * DAY,
-      windows: [fiveHours(90 * MIN, 6, shifts(12)), weekly({since: -2 * DAY, use: alongPlan(-15, WEEK_PLAN_FLAT)})],
+      windows: [fiveHours(90 * MIN, 6, onAndOff(12)), weekly({since: -2 * DAY, use: alongPlan(-15, WEEK_PLAN_FLAT)})],
       on: {ana: {name: 'Codex Pro for the platform team and the on-call rotation', color: '#43aca1', plan: WEEK_PLAN_FLAT, span: 4}},
       expect: [
         {title: 'Codex Pro for the platform team and the on-call rotation'},
@@ -464,7 +531,7 @@ const all: DemoSet = {
       plan: 'Plus',
       machines: ['laptop'],
       history: 2 * DAY,
-      windows: [fiveHours(10 * MIN, 5, shifts(14)), weekly({since: -4 * DAY, use: through([0, 0], [3, 87.2], [4, 92])})],
+      windows: [fiveHours(10 * MIN, 5, onAndOff(14)), weekly({since: -4 * DAY, use: through([0, 0], [3, 87.2], [4, 92])})],
       on: {ana: {name: 'Running low', span: 4}, quiet: {}},
       expect: [
         {title: 'Running low'},
@@ -495,7 +562,7 @@ const all: DemoSet = {
       plan: 'Claude Pro',
       machines: ['build-01'],
       history: 14 * DAY,
-      windows: [fiveHours(30 * MIN, 5, shifts(5)), weekly({since: -6.2 * DAY, use: through([0, 0], [5.2, 67.6], [7, 91])})],
+      windows: [fiveHours(30 * MIN, 5, onAndOff(5)), weekly({since: -6.2 * DAY, use: through([0, 0], [5.2, 67.6], [7, 91])})],
       on: {ana: {name: 'Last day of the week'}},
       expect: [
         {title: 'Last day of the week'},
@@ -609,6 +676,7 @@ const all: DemoSet = {
         {title: 'CI runners (eco)'},
         {stale: false},
         {fresh: 'grey', from: 6 * MIN, to: 14 * MIN},
+        {forecast: 'weekly', spent: 'unused'},
       ],
       look: ['Measured every quarter of an hour: its dot fades to grey and pulses again, never a warning', 'One free reset, with no end date'],
     },
@@ -634,18 +702,15 @@ const all: DemoSet = {
       plan: 'Claude Team',
       machines: ['laptop', 'ben-mac'],
       history: 14 * DAY,
-      windows: [fiveHours(2 * HOUR, 9, shifts(6)), weekly({since: -2 * DAY, use: alongPlan(-5)})],
-      agents: [
-        ...agents('laptop', [
-          ['terminal', 'shared-infra', -HOUR, shifts(3)],
-          ['terminal', 'shared-docs', -20 * MIN],
-        ]),
-        ...agents('ben-mac', [['terminal', 'shared-infra', -3 * HOUR, shifts(9)]]),
-      ],
+      windows: [fiveHours(2 * HOUR, 9, agentsWork(TEAM_AGENTS)), weekly({since: -2 * DAY, use: alongPlan(-5)})],
+      agents: TEAM_AGENTS,
       on: {ana: {name: 'Team'}, team: {}},
       expect: [
         {title: 'Team'},
         {agents: 2, drawn: true},
+        // Five points behind the plan: marked in the table, not worth a word on the card.
+        {window: 'weekly', note: null},
+        {forecast: 'weekly', plan: 'behind'},
         {board: 'team', title: 'Claude · Ana, Ben'},
         {board: 'team', agents: 3, drawn: true},
         {board: 'ben', title: 'Claude'},
@@ -658,9 +723,10 @@ const all: DemoSet = {
       plan: 'Plus',
       machines: ['ben-mac'],
       history: 2 * DAY,
-      windows: [fiveHours(HOUR, 5), weekly({since: -4 * DAY, use: steady(0, 14)})],
+      windows: [fiveHours(HOUR, 5), weekly({since: -4 * DAY, use: alongPlan(1)})],
       on: {team: {}},
       expect: [
+        {forecast: 'weekly', plan: 'even'},
         {board: 'team', title: 'Codex · Ben'},
         {title: 'Codex'},
       ],
@@ -681,6 +747,30 @@ const all: DemoSet = {
 
 // ---------- the README images ----------
 
+const PLATFORM_AGENTS: Agent[] = [
+  ...agents('laptop', [
+    ['editor', 'mobile-app', -5 * HOUR],
+    ['terminal', 'api-gateway', -3 * HOUR, ALWAYS],
+    ['terminal', 'billing', -HOUR, ALWAYS],
+  ]),
+  ...agents('ws-2631-linux', [
+    ['terminal', 'infra', -2 * HOUR, ALWAYS],
+    ['terminal', 'docs-site', -25 * MIN],
+  ]),
+];
+const RESEARCH_AGENTS = agents('ws-2631-linux', [['terminal', 'eval-harness', -40 * MIN]]);
+const WORK_AGENTS = agents('laptop', [['terminal', 'checkout', -3 * HOUR, ALWAYS]]);
+const CI_AGENTS = agents('ws-2631-linux', [
+  ['terminal', 'ci-flaky-tests', -3 * HOUR, ALWAYS],
+  ['terminal', 'ci-release', -2 * HOUR, ALWAYS],
+  ['terminal', 'ci-lint', -2 * HOUR, ALWAYS],
+]);
+const ANNA_AGENTS = agents('ws-2631-linux', [
+  ['terminal', 'thesis', -3 * HOUR, ALWAYS],
+  ['terminal', 'notes', -HOUR],
+]);
+const PERSONAL_AGENTS = agents('laptop', [['terminal', 'dotfiles', -5 * HOUR, ALWAYS]]);
+
 const showcase: DemoSet = {
   id: 'showcase',
   about: 'a clean board for the README images',
@@ -697,21 +787,11 @@ const showcase: DemoSet = {
       machines: ['laptop'],
       history: 7 * DAY,
       windows: [
-        fiveHours(20 * MIN, 9, shifts(0)),
+        fiveHours(-3 * HOUR - 54 * MIN, 20, agentsWork(PLATFORM_AGENTS)),
         weekly({since: -(3 * DAY + 21 * HOUR), use: through([0, 0], [3, 40], [4, 44])}),
         weekly({id: 'weekly:fable', label: 'Fable', since: -(3 * DAY + 21 * HOUR), use: through([0, 0], [3, 42], [4, 45])}),
       ],
-      agents: [
-        ...agents('laptop', [
-          ['editor', 'mobile-app', -5 * HOUR],
-          ['terminal', 'api-gateway', -3 * HOUR, ALWAYS],
-          ['terminal', 'billing', -HOUR, ALWAYS],
-        ]),
-        ...agents('ws-2631-linux', [
-          ['terminal', 'infra', -2 * HOUR, ALWAYS],
-          ['terminal', 'docs-site', -25 * MIN],
-        ]),
-      ],
+      agents: PLATFORM_AGENTS,
       on: {demo: {name: 'Platform team', span: 8}},
       expect: [{title: 'Platform team'}, {agents: 5, drawn: true}, {error: null}],
     },
@@ -723,11 +803,11 @@ const showcase: DemoSet = {
       machines: ['ws-2631-linux'],
       history: 7 * DAY,
       windows: [
-        fiveHours(-3 * HOUR - 8 * MIN, 5, ALWAYS, 'Gemini Pro'),
+        fiveHours(-3 * HOUR - 8 * MIN, 5, onAndOff(7), 'Gemini Pro'),
         weekly({id: 'gemini:weekly', label: 'Gemini', since: -(3 * DAY + HOUR), use: through([0, 0], [3, 53], [4, 60])}),
         weekly({id: 'claude:weekly', label: 'Claude', since: -(3 * DAY + HOUR), use: through([0, 0], [3, 62], [4, 70])}),
       ],
-      agents: agents('ws-2631-linux', [['terminal', 'eval-harness', -40 * MIN]]),
+      agents: RESEARCH_AGENTS,
       on: {demo: {name: 'Research', span: 4, plan: 'off'}},
       expect: [{title: 'Research'}, {agents: 1, drawn: true}],
     },
@@ -738,9 +818,9 @@ const showcase: DemoSet = {
       plan: 'pro',
       machines: ['laptop'],
       history: 7 * DAY,
-      windows: [fiveHours(-3 * HOUR - 34 * MIN, 15, ALWAYS), weekly({since: -(DAY + 3 * HOUR), use: steady(0, 31)})],
+      windows: [fiveHours(-3 * HOUR - 34 * MIN, 15, agentsWork(WORK_AGENTS)), weekly({since: -(DAY + 3 * HOUR), use: steady(0, 31)})],
       resets: t => (t < -6 * HOUR ? {available: 0, expiresAt: null} : {available: 2, expiresAt: 18 * DAY}),
-      agents: agents('laptop', [['terminal', 'checkout', -HOUR, ALWAYS]]),
+      agents: WORK_AGENTS,
       on: {demo: {name: 'Work'}},
       expect: [{title: 'Work'}, {agents: 1, drawn: true}],
     },
@@ -751,12 +831,8 @@ const showcase: DemoSet = {
       plan: 'team',
       machines: ['ws-2631-linux'],
       history: 7 * DAY,
-      windows: [fiveHours(-2 * HOUR - 14 * MIN, 12, ALWAYS), weekly({since: -(5 * DAY + HOUR), use: through([0, 0], [4, 55], [5, 61])})],
-      agents: agents('ws-2631-linux', [
-        ['terminal', 'ci-flaky-tests', -2 * HOUR, ALWAYS],
-        ['terminal', 'ci-release', -HOUR, ALWAYS],
-        ['terminal', 'ci-lint', -30 * MIN, ALWAYS],
-      ]),
+      windows: [fiveHours(-2 * HOUR - 14 * MIN, 12, agentsWork(CI_AGENTS)), weekly({since: -(5 * DAY + HOUR), use: through([0, 0], [4, 55], [5, 61])})],
+      agents: CI_AGENTS,
       on: {demo: {name: 'CI runners'}},
       expect: [{title: 'CI runners'}, {agents: 3, drawn: true}],
     },
@@ -767,11 +843,8 @@ const showcase: DemoSet = {
       plan: 'Claude Pro',
       machines: ['ws-2631-linux'],
       history: 7 * DAY,
-      windows: [fiveHours(-2 * HOUR - 44 * MIN, 4, ALWAYS), weekly({since: -(2 * DAY + HOUR), use: through([0, 0], [1, 12], [2, 20])})],
-      agents: agents('ws-2631-linux', [
-        ['terminal', 'thesis', -3 * HOUR, ALWAYS],
-        ['terminal', 'notes', -HOUR],
-      ]),
+      windows: [fiveHours(-2 * HOUR - 44 * MIN, 8, agentsWork(ANNA_AGENTS)), weekly({since: -(2 * DAY + HOUR), use: through([0, 0], [1, 12], [2, 20])})],
+      agents: ANNA_AGENTS,
       on: {demo: {name: 'Anna', span: 5}},
       expect: [{title: 'Anna'}, {agents: 2, drawn: true}],
     },
@@ -782,8 +855,8 @@ const showcase: DemoSet = {
       plan: 'plus',
       machines: ['laptop'],
       history: 7 * DAY,
-      windows: [fiveHours(-4 * HOUR - 14 * MIN, 8, ALWAYS), weekly({since: -(5 * DAY + 15 * HOUR), use: through([0, 0], [4.6, 80], [5.6, 88])})],
-      agents: agents('laptop', [['terminal', 'dotfiles', -20 * MIN, ALWAYS]]),
+      windows: [fiveHours(-4 * HOUR - 14 * MIN, 8, agentsWork(PERSONAL_AGENTS)), weekly({since: -(5 * DAY + 15 * HOUR), use: through([0, 0], [4.6, 80], [5.6, 88])})],
+      agents: PERSONAL_AGENTS,
       on: {demo: {name: 'Personal', span: 7}},
       expect: [{title: 'Personal'}, {agents: 1, drawn: true}],
     },

@@ -12,15 +12,16 @@ import {ResetFeed} from '../../server/resets.js';
 import {Setup} from '../../server/setup.js';
 import {Directory} from '../../server/store/directory.js';
 import {Store} from '../../server/store/store.js';
+import type {ResetEvent, ResetProvider} from '../../server/domain/resets.js';
 import {setLocale} from '../../ui/i18n/index.js';
-import {agentRows, DRAWN} from '../../ui/lib/agents.js';
+import {agentRows, drawn} from '../../ui/lib/agents.js';
 import {forecastRow} from '../../ui/lib/forecast.js';
 import {linesOf} from '../../ui/lib/lines.js';
 import {planNote, started} from '../../ui/lib/plan.js';
-import {freshness, level, PULSE_FOR, resetLine, titled, windowName} from '../../ui/lib/quota.js';
-import {resetLabel} from '../../ui/lib/resets.js';
-import {windowKey, type History, type Overview} from '../../ui/lib/types.js';
-import {planOf} from '../../ui/lib/view.js';
+import {dotOf, level, resetLine, titled, windowName} from '../../ui/lib/quota.js';
+import {resetLabel, type Resets, type TrackerHealth} from '../../ui/lib/resets.js';
+import type {History, Overview} from '../../ui/lib/types.js';
+import {boardState, isWindowHidden, planOf} from '../../ui/lib/view.js';
 import {SCENES, SETS} from '../catalogue.js';
 import {
   awake,
@@ -34,6 +35,7 @@ import {
   SECOND,
   sessionsAt,
   snapshot,
+  staleAfter,
   type Card,
   type CardCheck,
   type DemoSet,
@@ -49,6 +51,9 @@ const SETUP = 'BCDF-GHJK';
 const TICK = 15 * SECOND;
 const setOf = (id: string) => SETS.find(set => set.id === id)!;
 
+/** What the trackers of a scene told, as `/api/resets` answers: the status per provider, their health and the resets kept. */
+type Told = {resets: Resets; trackers: TrackerHealth[]; past: Partial<Record<ResetProvider, ResetEvent[]>>};
+
 /** A hub in this process on a free port, its trackers read from the stand-in's `scene`. */
 async function hubFor(trackers: Trackers, scene: string, start: number) {
   const dir = mkdtempSync(path.join(tmpdir(), 'quotum-demo-test-'));
@@ -58,8 +63,14 @@ async function hubFor(trackers: Trackers, scene: string, start: number) {
   const resets = new ResetFeed((provider, reset) => store.announce(provider, reset), () => {}, {enabled: true, codexApi: urls.codex, claudeApi: urls.claude, timeoutMs: 300});
   const app = await buildApp({store, directory, resets, ingest: new Ingest(store, directory, new Duty()), pairing: new Pairing(directory), setup: new Setup(true, SETUP), local: null});
   await app.listen({host: '127.0.0.1', port: 0});
+  const base = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
   return {
-    base: `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`,
+    base,
+    /** One round of the hub's own trackers, as its timer runs it, and what the page reads then. */
+    async told(): Promise<Told> {
+      await resets.round();
+      return (await fetch(`${base}/api/resets`)).json() as Promise<Told>;
+    },
     async close() {
       await app.close();
       store.close();
@@ -94,7 +105,7 @@ class Reading {
   constructor(
     private readonly stand: Stand,
     readonly now: number,
-    readonly scenes: Map<string, ReturnType<ResetFeed['snapshot']>>,
+    readonly scenes: Map<string, Told>,
   ) {}
 
   private reader(board: string) {
@@ -129,6 +140,9 @@ class Reading {
   }
 }
 
+/** The table shows these kinds of windows (the analytics' choice); a line of any other is never on the board. */
+const TABLE_KINDS = ['weekly', 'session'];
+
 /**
  * What the hub shows now for a code, computed with the dashboard's own rules: a value for
  * each thing a code of that kind can claim (a string when there is nothing to look at).
@@ -137,10 +151,14 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
   const {set} = stand;
   const now = reading.now;
   if (entry.kind === 'scene') {
-    const snapshot = reading.scenes.get(entry.id)!;
-    if ('tracker' in check) return {tracker: check.tracker, health: snapshot.trackers.find(t => t.name === check.tracker)?.detail};
+    const told = reading.scenes.get(entry.id)!;
+    if ('tracker' in check) return {tracker: check.tracker, health: told.trackers.find(t => t.name === check.tracker)?.detail};
+    if ('marked' in check) {
+      const provider = check.marked as ResetProvider;
+      return {marked: told.past[provider]?.length ? provider : null};
+    }
     const {reset} = check as {reset: 'claude' | 'codex'};
-    const label = resetLabel(snapshot.resets[reset], now);
+    const label = resetLabel(told.resets[reset], now);
     return {reset, label: label?.key ?? null, chance: label?.key === 'possible' ? label.chance : undefined, scope: label?.key === 'done' ? label.scope : undefined};
   }
   if (entry.kind === 'machine') {
@@ -155,7 +173,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
     const {rows, empty} = agentRows(overview.sources, overview.view);
     const series = 'weeklySeries' in check ? linesOf(await reading.history(entry.id), overview, overview.view, 'weekly').length : 0;
     return {
-      state: overview.sources.length ? 'widgets' : 'onboarding',
+      state: boardState(overview.sources, overview.view),
       rows: empty ?? rows.length,
       // At least as many as claimed.
       weeklySeries: 'weeklySeries' in check ? Math.min(check.weeklySeries as number, series) : undefined,
@@ -167,14 +185,14 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
   const overview = await reading.overview(board);
   const source = overview.sources.find(s => s.id === stand.sources.get(entry.id));
   if (!source) return `not on the board ${board}`;
-  const age = now - (source.successAt ?? -Infinity);
+  const dot = dotOf(now - (source.successAt ?? -Infinity));
   const values: Record<string, unknown> = {
     error: source.error,
     stale: source.stale,
     title: source.title,
-    fresh: age <= PULSE_FOR ? 'pulse' : freshness(age) === 0 ? 'grey' : `fading, ${Math.round(age / 1000)} s old`,
+    fresh: dot.pulsing ? 'pulse' : dot.fresh === 0 ? 'grey' : `fading, ${dot.fresh}`,
     agents: source.sessions.length,
-    drawn: source.sessions.length <= DRAWN,
+    drawn: drawn(source.sessions),
   };
   const id = 'window' in card ? card.window : 'forecast' in card ? card.forecast : null;
   const live = id === null ? undefined : source.windows.find(w => w.id === id);
@@ -189,18 +207,19 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
       hint: note ? (note.weekly ? 'weekly' : 'reset') : undefined,
       name: windowName(live),
       reset: resetLine(live, now).key,
-      hidden: overview.view.windows.includes(windowKey(source.id, live.id)),
+      hidden: isWindowHidden(overview.view, source.id, live.id),
       started: started(live, source.successAt),
     });
   }
   if ('forecast' in card && live) {
+    if (!TABLE_KINDS.includes(live.kind)) return `window ${id} is of the kind ${live.kind}: the table shows only weekly and five-hour windows`;
     const line = linesOf(await reading.history(board), overview, overview.view, live.kind).find(l => l.sourceId === source.id && l.windowId === id);
     if (!line) return `no line of ${id} in the table`;
     const row = forecastRow(line, live, source.successAt, now, weekly);
     Object.assign(values, {
       forecast: id,
       outlook: row.outlook.key,
-      tone: row.outlook.key === 'runsOut' ? row.outlook.tone : undefined,
+      tone: row.outlook.tone,
       spent: row.spent.key,
       plan: !row.plan ? 'none' : !row.plan.notable ? 'even' : row.plan.delta >= 0 ? 'behind' : 'ahead',
     });
@@ -234,19 +253,28 @@ async function checkAll(stand: Stand, entries: Entry[], reading: Reading, t: num
   return wrong;
 }
 
-/** Runs the reset trackers of every scene once, now, as the hub does every ten minutes. */
-async function sceneRounds(feeds: Map<string, ResetFeed>) {
-  await Promise.all([...feeds.values()].map(feed => feed.round()));
-  return new Map([...feeds].map(([id, feed]) => [id, feed.snapshot()]));
-}
-
-function sceneFeeds(trackers: Trackers) {
+/**
+ * The trackers of every scene, each as a hub would poll them, keeping the resets they
+ * report. The set's own scene is what its hub reads, through `/api/resets`.
+ */
+function sceneFeeds(trackers: Trackers, except: string) {
   return new Map(
-    SCENES.map(scene => {
+    SCENES.filter(scene => scene.id !== except).map(scene => {
       const urls = trackers.urls(scene.id);
-      return [scene.id, new ResetFeed(undefined, () => {}, {enabled: true, codexApi: urls.codex, claudeApi: urls.claude, timeoutMs: 300})];
+      const past: Told['past'] = {};
+      const remember = (provider: ResetProvider, reset: ResetEvent) => {
+        const kept = (past[provider] ??= []);
+        if (!kept.some(r => r.at === reset.at)) kept.push(reset);
+      };
+      return [scene.id, {feed: new ResetFeed(remember, () => {}, {enabled: true, codexApi: urls.codex, claudeApi: urls.claude, timeoutMs: 300}), past}];
     }),
   );
+}
+
+/** One round of every scene's trackers, now, as a hub does every ten minutes. */
+async function told(feeds: ReturnType<typeof sceneFeeds>, hub: {told(): Promise<Told>}, scene: string) {
+  const [own] = await Promise.all([hub.told(), ...[...feeds.values()].map(({feed}) => feed.round())]);
+  return new Map<string, Told>([[scene, own], ...[...feeds].map(([id, {feed, past}]) => [id, {...feed.snapshot(), past}] as [string, Told])]);
 }
 
 async function bringUp(t: TestContext, set: DemoSet, start: number) {
@@ -269,51 +297,62 @@ test('the catalogue is consistent', () => {
   for (const scene of SCENES) assert.ok(scene.expect.length, `scene ${scene.id} expects something`);
 });
 
-test('the demo is the same whenever it starts: no clock, no chance in the model or the catalogue', () => {
+test('machines say how long a measurement holds as the agent does: until the next one, a fifth more and a minute', () => {
+  assert.equal(staleAfter(MIN), 132_000);
+  assert.equal(staleAfter(5 * MIN), 7 * MIN);
+  assert.equal(staleAfter(15 * MIN), 19 * MIN);
+});
+
+test('the demo is the same whenever it starts: everything is timed from the start, not by the clock or the calendar', () => {
   for (const file of ['model.ts', 'catalogue.ts', 'setup.ts']) {
     const source = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
     assert.doesNotMatch(source, /Math\.random|Date\.now|new Date\(\)/, file);
   }
-  const start = Date.parse('2026-09-21T09:17:00Z');
-  const everything = (set: DemoSet) =>
-    JSON.stringify({
-      cards: cards(set).map(card => [0, -3_600_000, 3_600_000].map(t => snapshot(card, start, t, MIN))),
-      agents: machines(set).map(machine => sessionsAt(set, machine, start, 60_000)),
+  // Times as offsets from the start: two starts a day and a bit apart must tell the same.
+  const fromStart = (start: number, value: unknown) =>
+    JSON.stringify(value, (_key, field) => (typeof field === 'string' && /^\d{4}-\d\d-\d\dT/.test(field) ? Date.parse(field) - start : field));
+  const everything = (set: DemoSet, start: number) => {
+    const at = (t: number) => new Date(start + t).toISOString();
+    return fromStart(start, {
+      cards: cards(set).map(card => [-9 * 86_400_000, -3_600_000, 0, 3_600_000, 30 * 3_600_000].map(t => snapshot(card, start, t, MIN))),
+      agents: machines(set).map(machine => [-3 * MIN, 0, 5 * MIN + 30 * SECOND, 3_600_000].map(t => sessionsAt(set, machine, start, t))),
+      scenes: SCENES.map(scene => [scene.codex(at), scene.claude(at)]),
     });
-  for (const set of SETS) assert.equal(everything(set), everything(set));
+  };
+  const start = Date.parse('2026-09-21T09:17:00Z');
+  for (const set of SETS) assert.equal(everything(set, start + 1.37 * 86_400_000), everything(set, start), set.id);
 });
 
 test('every entry of the whole catalogue shows what it claims for twelve hours', {timeout: 180_000}, async t => {
   const set = setOf('all');
   const start = Math.floor(Date.now() / MIN) * MIN;
-  const {stand, trackers} = await bringUp(t, set, start);
+  const {stand, trackers, hub} = await bringUp(t, set, start);
   const live = new Live(stand, cadence);
-  const feeds = sceneFeeds(trackers);
+  const feeds = sceneFeeds(trackers, set.scene);
   const entries = [...set.entries, ...SCENES];
   const checked = new Set<string>();
   const wrong: string[] = [];
 
-  let previous = -Infinity;
+  let previous: number | null = null;
   for (const at of points(set)) {
-    // The lists of running agents the live loop would have sent last: 15 seconds ago from
-    // a machine awake then, else the last one before it fell asleep.
-    const reports: {machine: Machine; tick: number}[] = [];
-    for (const machine of machines(set)) {
-      // Ticks up to `previous - TICK` went out at the point before.
-      for (let tick = Math.floor((at - TICK) / TICK) * TICK; tick > Math.max(previous, -TICK) - TICK; tick -= TICK) {
-        if (awake(machine, tick)) {
-          reports.push({machine, tick});
-          break;
-        }
+    // The lists of running agents the live loop sent last: every machine's, 15 seconds
+    // ago (Live leaves out those asleep); before that, the last one of a machine that fell
+    // asleep since the last point, at its last tick awake.
+    const tick = Math.floor((at - TICK) / TICK) * TICK;
+    const since = previous === null ? tick : Math.floor((previous - TICK) / TICK) * TICK;
+    for (const machine of machines(set).filter(m => !awake(m, tick))) {
+      for (let last = tick - TICK; last > since; last -= TICK) {
+        if (!awake(machine, last)) continue;
+        t.mock.timers.setTime(start + last);
+        await live.reportOne(machine, last, start + last);
+        break;
       }
     }
-    for (const {machine, tick} of reports.sort((a, b) => a.tick - b.tick)) {
-      t.mock.timers.setTime(start + tick);
-      await live.report(machine, tick, start + tick);
-    }
+    t.mock.timers.setTime(start + tick);
+    await live.report(tick, start + tick);
     t.mock.timers.setTime(start + at);
     await live.measure(at, start + at);
-    const reading = new Reading(stand, start + at, await sceneRounds(feeds));
+    const reading = new Reading(stand, start + at, await told(feeds, hub, set.scene));
     wrong.push(...(await checkAll(stand, entries, reading, at, checked)));
     previous = at;
   }
@@ -330,14 +369,13 @@ test('every entry of the whole catalogue shows what it claims for twelve hours',
 test('the showcase comes up clean', {timeout: 60_000}, async t => {
   const set = setOf('showcase');
   const start = Math.floor(Date.now() / MIN) * MIN;
-  const {stand, trackers} = await bringUp(t, set, start);
+  const {stand, hub} = await bringUp(t, set, start);
   const live = new Live(stand, cadence);
   t.mock.timers.setTime(start - TICK);
-  for (const machine of machines(set)) await live.report(machine, -TICK, start - TICK);
+  await live.report(-TICK, start - TICK);
   t.mock.timers.setTime(start);
   await live.measure(0, start);
-  const scenes = await sceneRounds(new Map([[set.scene, sceneFeeds(trackers).get(set.scene)!]]));
-  const reading = new Reading(stand, start, scenes);
+  const reading = new Reading(stand, start, new Map([[set.scene, await hub.told()]]));
   const scene = SCENES.find(s => s.id === set.scene)!;
   assert.deepEqual(await checkAll(stand, [...set.entries, scene], reading, null, new Set()), []);
 });
