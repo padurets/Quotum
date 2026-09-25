@@ -365,7 +365,7 @@ const all: DemoSet = {
       id: 'old-nuc',
       gone: -3 * HOUR,
       expect: [{via: 'token'}],
-      look: ['«Machines» shows it seen when the demo started, not three hours ago: the hub dates every contact by its own clock'],
+      look: ['«My machines» shows it seen when the demo started, not three hours ago: the hub dates every contact by its own clock'],
     },
     {kind: 'machine', id: 'ben-mac', person: 'ben', os: 'macos', failures: [{provider: 'antigravity', error: 'failed'}], expect: [{failure: {provider: 'antigravity', error: 'failed'}}]},
 

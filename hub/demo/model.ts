@@ -229,7 +229,7 @@ export type SceneCheck = Span &
     | {marked: 'claude' | 'codex'; resets: number}
   );
 
-/** A machine as the dialog «Machines» shows it. */
+/** A machine as the dialog «My machines» shows it. */
 export type MachineCheck = Span & ({os: string} | {name: string} | {via: 'code' | 'token'} | {failure: {provider: Provider; error: string}});
 
 /** What an agent reports when it cannot measure (spec: Failure). */
@@ -278,7 +278,7 @@ export type Machine = {
   byCode?: boolean;
   /** The name its person gave it on the hub. */
   renamed?: string;
-  /** Failures of clients it never measured anything with: they show only in «Machines». */
+  /** Failures of clients it never measured anything with: they show only in «My machines». */
   failures?: {provider: Provider; error: AgentError}[];
   expect: MachineCheck[];
   look?: string[];
@@ -478,7 +478,7 @@ export function problems(set: DemoSet): string[] {
   const delivering = (machine: string, provider: Provider) => cards(set).filter(c => c.provider === provider && c.machines.includes(machine));
   for (const machine of machines(set)) {
     for (const failure of machine.failures ?? []) {
-      if (delivering(machine.id, failure.provider).length) found.push(`machine ${machine.id} measures ${failure.provider}: its failure would go to a card, not only to «Machines»`);
+      if (delivering(machine.id, failure.provider).length) found.push(`machine ${machine.id} measures ${failure.provider}: its failure would go to a card, not only to «My machines»`);
     }
   }
   const sources = new Map<string, string>();
