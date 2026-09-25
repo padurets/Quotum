@@ -337,6 +337,13 @@ no name of their own, so each reader sees "My limits" in their language.
   takeover and command dispatch are shared; `desktop/src/host/` supplies each platform's
   window, tray, single-instance activation and start-at-login integration.
 
+Windows has an NSIS installer and a portable ZIP (`desktop/package-windows.mjs`) from
+the same compiled executable and prepared Node/hub resources. The ZIP keeps those
+files together and requires the system WebView2 runtime; the installer can install
+that runtime. Both variants use the same Windows profile directories, instance lock
+and start-at-login settings. Moving a portable folder requires updating its autostart
+entry by turning start at login off and on again.
+
 **Linux rendering and lifetime.** The Rust controller uses a D-Bus StatusNotifierItem
 through `ksni`; it does not link GTK or WebKit. It waits for the desktop's tray watcher
 when starting early at login and registers again when that watcher restarts. Opening the window starts an Electron

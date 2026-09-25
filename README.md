@@ -256,13 +256,18 @@ this machine, a hub of its own and its board in a window, with a tray icon. No a
 no server. It has no release yet: the [Desktop workflow](.github/workflows/desktop.yml)
 builds every commit on `main` and in pull requests and keeps each installer as an
 artifact of the run (`quotum-desktop-<version>-<commit>-linux-x64.deb`, `.rpm`,
-`.AppImage` and `…-windows-x64-setup.exe`; downloading them takes a GitHub account). To
-build it yourself, see [CONTRIBUTING.md](CONTRIBUTING.md).
+`.AppImage`, `…-windows-x64-setup.exe` and `…-windows-x64-portable.zip`; downloading
+them takes a GitHub account). To build it yourself, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 - **Windows 10 and 11:** run `Quotum_<version>_x64-setup.exe`. It installs for you
   alone, into `%LOCALAPPDATA%\Quotum`, with no administrator rights, and brings WebView2
   if Windows lacks it. The installer isn't signed yet, so SmartScreen asks first: *More
   info → Run anyway*.
+  Or extract the portable ZIP and run `Quotum/quotum-desktop.exe` without installing.
+  Keep the whole extracted folder together. It uses the same data and settings in your
+  Windows profile as the installed app; nothing is stored beside the executable.
+  The portable version needs [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)
+  already installed (the setup.exe installs it when needed).
 - **Linux** (x64): the system package includes Chromium and works alongside the
   system's `nodejs`. On Debian 12, Ubuntu 22.04 or newer use `sudo apt install
   ./quotum-desktop-<…>.deb`; on Fedora use `sudo dnf install ./quotum-desktop-<…>.rpm`.
@@ -290,9 +295,10 @@ command and the app share them.
   its window.
 - **Start at login** turns on by itself the first time the app measures and starts it
   without the window. Turn it off in the settings, and do that before uninstalling. The
-  entry names the AppImage by its path: keep it where it is (after a move, turn start
-  at login off and on again).
-- **A newer build** installs over the old one: quit the app first.
+  entry names the AppImage or Windows portable EXE by its path: keep it where it is
+  (after a move, turn start at login off and on again).
+- **A newer build** installs over the old one: quit the app first. For the portable
+  version, replace the whole extracted folder; your data stays in your Windows profile.
 - **With `quotum`.** One agent measures a machine. If `quotum` already does, the app
   asks once whether to take over. A `quotum` of this version then waits and goes on by
   itself when the app quits, so `quotum run` as a service keeps working; an older one

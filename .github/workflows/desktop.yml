@@ -93,6 +93,9 @@ jobs:
         if: runner.os == 'Windows'
         working-directory: desktop
         run: npx --yes @tauri-apps/cli@2.11.5 build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} -- --locked
+      - name: Portable ZIP (Windows)
+        if: runner.os == 'Windows'
+        run: node desktop/package-windows.mjs
 
       - name: Smoke (Linux)
         if: runner.os == 'Linux'
@@ -142,6 +145,13 @@ jobs:
           if (-not (Test-Path $app)) { throw "not installed: $app" }
           ./desktop/smoke/windows.ps1 normal $app
           ./desktop/smoke/windows.ps1 crash $app
+          # Exercise the archive after extraction, including a path with spaces.
+          $zip = Get-ChildItem "desktop/target/${{ matrix.target }}/release/bundle/portable/*.zip" | Select-Object -First 1
+          $portable = Join-Path $env:RUNNER_TEMP 'Quotum portable'
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath $portable
+          $app = Join-Path $portable 'Quotum/quotum-desktop.exe'
+          ./desktop/smoke/windows.ps1 normal $app
+          ./desktop/smoke/windows.ps1 crash $app
 
       # For the live check: `quotum` of this very commit, next to the app.
       - name: Command-line agent
@@ -162,6 +172,7 @@ jobs:
           app=out/quotum-desktop-$VERSION-$QUOTUM_COMMIT-${{ matrix.platform }}
           if [ "$RUNNER_OS" = Windows ]; then
             cp "$bundle"/nsis/*-setup.exe "$app-setup.exe"
+            cp "$bundle"/portable/*.zip "$app-portable.zip"
             cp agent/target/release/quotum.exe "out/quotum-cli-$QUOTUM_COMMIT-${{ matrix.platform }}.exe"
           else
             cp "$bundle"/deb/*.deb "$app.deb"
@@ -194,6 +205,11 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           path: out/quotum-desktop-${{ env.VERSION }}-${{ env.QUOTUM_COMMIT }}-${{ matrix.platform }}-setup.exe
+          archive: false
+      - if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          path: out/quotum-desktop-${{ env.VERSION }}-${{ env.QUOTUM_COMMIT }}-${{ matrix.platform }}-portable.zip
           archive: false
       - if: runner.os == 'Windows'
         uses: actions/upload-artifact@v7

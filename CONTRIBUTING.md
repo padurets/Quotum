@@ -22,7 +22,9 @@ checks above. Linux needs `libssl-dev` for the Rust build, `unzip` for preparati
 and Chromium's runtime libraries (`libnss3 libgtk-3-0 libgbm1 libasound2` on Debian).
 `cargo run` in `desktop/` starts a prepared debug build. `node desktop/package-linux.mjs`
 builds deb, rpm and AppImage; its packaging tools are `dpkg-deb`, `rpmbuild` and
-`mksquashfs`. On Windows, `npx @tauri-apps/cli@2.11.5 build` makes setup.exe.
+`mksquashfs`. On Windows, `npx @tauri-apps/cli@2.11.5 build --target x86_64-pc-windows-msvc`
+makes setup.exe; then `node desktop/package-windows.mjs` packages that build as a portable ZIP.
+CI runs both the installed app and the extracted ZIP, including a path with spaces.
 
 Run `node --test desktop/electron/policy.test.cjs` for the Linux bridge/navigation
 policy. CI runs the installed packages with `--smoke`: the hub starts, a stand-in client
