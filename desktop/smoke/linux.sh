@@ -29,9 +29,11 @@ fail() {
   exit 1
 }
 
-# No Node of the app (it is called quotum-node) is running.
+# No Node of the app is running. Found by its command line: Node 24 names its process
+# after its main thread (MainThread), not after the file. The brackets keep the pattern
+# from matching a shell that runs this very line.
 node_gone() {
-  ! pgrep -x quotum-node >/dev/null
+  ! pgrep -f '[q]uotum-node .*server\.mjs' >/dev/null
 }
 
 node_gone || fail "a quotum-node runs before the app starts"
