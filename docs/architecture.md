@@ -99,8 +99,12 @@ a process after the file a link leads to, so there a client is also told by its 
 **Where the client is.** On PATH, in its own installer's place, where package managers
 put programs, and, for Codex, last of all the copy the Codex desktop app or an editor
 extension carries: whoever uses only those needs no command-line client. On Windows the
-Codex app keeps its copy in `%LOCALAPPDATA%\OpenAI\Codex\bin` (the Store version under
-its package's `LocalCache`), newest first. The app execution aliases Windows puts in
+Codex app keeps its copy in `%LOCALAPPDATA%\OpenAI\Codex\bin` or its Store package's
+`LocalCache`, newest first. Antigravity's Windows installer puts its CLI in
+`%LOCALAPPDATA%\agy\bin`; finding it does not depend on the desktop's PATH.
+Claude Desktop's main executable is a GUI, not a Claude Code
+client: use a separately installed Claude Code CLI, or `path` pointing to a standalone
+CLI executable. The app execution aliases Windows puts in
 `\Microsoft\WindowsApps\` are passed over: they start the Store app, not a client that
 answers. A program started from the desktop does not see the PATH a shell sets up, so
 the desktop app finds a client only in these places; one elsewhere is given by `path` in
