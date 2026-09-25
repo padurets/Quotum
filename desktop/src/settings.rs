@@ -157,23 +157,35 @@ fn create_private(next: &Path, _: &Path) -> io::Result<fs::File> {
 fn create_private(next: &Path, target: &Path) -> io::Result<fs::File> {
     use std::os::windows::io::FromRawHandle;
     use windows_sys::Win32::Foundation::{GENERIC_WRITE, INVALID_HANDLE_VALUE};
-    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+    use windows_sys::Win32::Security::{
+        DACL_SECURITY_INFORMATION, GetSecurityDescriptorControl, PROTECTED_DACL_SECURITY_INFORMATION,
+        SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, SetFileSecurityW, SetSecurityDescriptorControl,
+        UNPROTECTED_DACL_SECURITY_INFORMATION,
+    };
     use windows_sys::Win32::Storage::FileSystem::{
         CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
     };
 
-    let mut security = protected_dacl(target)?;
+    let mut original = file_dacl(target)?;
+    let mut security = original.clone();
+    if let Some(sd) = &mut security {
+        // SAFETY: the descriptor returned by GetFileSecurityW is aligned and lives
+        // through the creation call. Protect only this copy of it.
+        if unsafe { SetSecurityDescriptorControl(sd.as_mut_ptr().cast(), SE_DACL_PROTECTED, SE_DACL_PROTECTED) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
     let attributes = SECURITY_ATTRIBUTES {
         nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
         lpSecurityDescriptor: security.as_mut().map_or(std::ptr::null_mut(), |sd| sd.as_mut_ptr().cast()),
         bInheritHandle: 0,
     };
-    let next = wide(next);
+    let name = wide(next);
     // SAFETY: the path and aligned descriptor buffer live through CreateFileW. CREATE_NEW
     // refuses existing files and links; the returned handle is owned by File exactly once.
     let handle = unsafe {
         CreateFileW(
-            next.as_ptr(),
+            name.as_ptr(),
             GENERIC_WRITE,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             &attributes,
@@ -183,21 +195,48 @@ fn create_private(next: &Path, target: &Path) -> io::Result<fs::File> {
         )
     };
     if handle == INVALID_HANDLE_VALUE {
-        Err(io::Error::last_os_error())
-    } else {
-        // SAFETY: CreateFileW returned a valid handle, now transferred to File.
-        Ok(unsafe { fs::File::from_raw_handle(handle) })
+        return Err(io::Error::last_os_error());
     }
+    // SAFETY: CreateFileW returned a valid handle, now transferred to File.
+    let file = unsafe { fs::File::from_raw_handle(handle) };
+    let normalized = (|| {
+        let Some(sd) = &mut original else { return Ok(()) };
+        let ptr = sd.as_mut_ptr().cast();
+        let (mut control, mut revision) = (0, 0);
+        // SAFETY: the original descriptor and terminated name remain valid throughout.
+        unsafe {
+            if GetSecurityDescriptorControl(ptr, &mut control, &mut revision) == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let inheritance = if control & SE_DACL_PROTECTED != 0 {
+                PROTECTED_DACL_SECURITY_INFORMATION
+            } else {
+                UNPROTECTED_DACL_SECURITY_INFORMATION
+            };
+            // Creation can turn inherited ACEs into explicit grants. Restore the exact
+            // original DACL before writing: otherwise ReplaceFile keeps duplicate grants
+            // that survive a later revocation on the parent. This low-level setter copies
+            // the descriptor without adding potentially broader current parent permissions.
+            if SetFileSecurityW(name.as_ptr(), DACL_SECURITY_INFORMATION | inheritance, ptr) == 0 {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        Ok(())
+    })();
+    if let Err(error) = normalized {
+        drop(file);
+        let _ = fs::remove_file(next);
+        return Err(error);
+    }
+    Ok(file)
 }
 
 /// Existing permissions apply at creation, before anyone can open the temporary file.
 /// A missing target alone allows the normal inherited ACL of a new settings file.
 #[cfg(windows)]
-fn protected_dacl(target: &Path) -> io::Result<Option<Vec<usize>>> {
+fn file_dacl(target: &Path) -> io::Result<Option<Vec<usize>>> {
     use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
-    use windows_sys::Win32::Security::{
-        DACL_SECURITY_INFORMATION, GetFileSecurityW, SE_DACL_PROTECTED, SetSecurityDescriptorControl,
-    };
+    use windows_sys::Win32::Security::{DACL_SECURITY_INFORMATION, GetFileSecurityW};
 
     let target = wide(target);
     let mut size = 0;
@@ -213,15 +252,9 @@ fn protected_dacl(target: &Path) -> io::Result<Option<Vec<usize>>> {
     // A security descriptor requires aligned storage, even though its length is in bytes.
     let mut descriptor = vec![0usize; (size as usize).div_ceil(std::mem::size_of::<usize>())];
     let ptr = descriptor.as_mut_ptr().cast();
-    // SAFETY: ptr has at least size bytes of aligned storage and outlives both calls.
-    unsafe {
-        if GetFileSecurityW(target.as_ptr(), DACL_SECURITY_INFORMATION, ptr, size, &mut size) == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // Do not add broader inherited permissions from the temporary file's parent.
-        if SetSecurityDescriptorControl(ptr, SE_DACL_PROTECTED, SE_DACL_PROTECTED) == 0 {
-            return Err(io::Error::last_os_error());
-        }
+    // SAFETY: ptr has at least size bytes of aligned storage and outlives the call.
+    if unsafe { GetFileSecurityW(target.as_ptr(), DACL_SECURITY_INFORMATION, ptr, size, &mut size) } == 0 {
+        return Err(io::Error::last_os_error());
     }
     Ok(Some(descriptor))
 }
@@ -401,12 +434,7 @@ mod tests {
     }
 
     #[cfg(windows)]
-    fn windows_acl(file: &Path, restrict: bool) -> Vec<u8> {
-        let script = if restrict {
-            "$a=New-Object Security.AccessControl.FileSecurity; $a.SetAccessRuleProtection($true,$false); $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User; $r=New-Object Security.AccessControl.FileSystemAccessRule($sid,'FullControl','Allow'); $a.AddAccessRule($r); [IO.File]::SetAccessControl($env:QUOTUM_TEST_FILE,$a); [IO.File]::GetAccessControl($env:QUOTUM_TEST_FILE).GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access)"
-        } else {
-            "[IO.File]::GetAccessControl($env:QUOTUM_TEST_FILE).GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access)"
-        };
+    fn windows_script(file: &Path, script: &str) -> Vec<u8> {
         let output = std::process::Command::new("powershell.exe")
             .args(["-NoProfile", "-NonInteractive", "-Command", &format!("$ErrorActionPreference='Stop'; {script}")])
             .env("QUOTUM_TEST_FILE", file)
@@ -414,6 +442,33 @@ mod tests {
             .unwrap();
         assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
         output.stdout
+    }
+
+    #[cfg(windows)]
+    fn windows_acl(file: &Path, restrict: bool) -> Vec<u8> {
+        let protect = if restrict {
+            "$a=New-Object Security.AccessControl.FileSecurity; $a.SetAccessRuleProtection($true,$false); $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User; $r=New-Object Security.AccessControl.FileSystemAccessRule($sid,'FullControl','Allow'); $a.AddAccessRule($r); [IO.File]::SetAccessControl($env:QUOTUM_TEST_FILE,$a);"
+        } else {
+            ""
+        };
+        // Compare the protection policy and every ACE, including inherited flags and
+        // duplicates. AUTO_INHERITED is bookkeeping, not a permission or inheritance rule.
+        windows_script(
+            file,
+            &format!(
+                r#"
+            {protect}
+            $a=[IO.File]::GetAccessControl($env:QUOTUM_TEST_FILE)
+            $raw=[Security.AccessControl.RawSecurityDescriptor]::new($a.GetSecurityDescriptorBinaryForm(),0)
+            $aces=@($raw.DiscretionaryAcl | ForEach-Object {{
+                $bytes=New-Object byte[] $_.BinaryLength
+                $_.GetBinaryForm($bytes,0)
+                [Convert]::ToBase64String($bytes)
+            }})
+            [ordered]@{{protected=$a.AreAccessRulesProtected; nullDacl=($null -eq $raw.DiscretionaryAcl); aces=$aces}} | ConvertTo-Json -Compress
+        "#
+            ),
+        )
     }
 
     #[cfg(windows)]
@@ -458,10 +513,44 @@ mod tests {
     fn a_windows_files_inherited_acl_stays_when_settings_change() {
         let dir = temp("windows-inherited-acl");
         let file = dir.join("config.toml");
+        windows_script(
+            &dir,
+            r#"
+            $a=[IO.Directory]::GetAccessControl($env:QUOTUM_TEST_FILE)
+            $reader=[Security.Principal.SecurityIdentifier]::new('S-1-1-0')
+            $a.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+                $reader,'ReadAndExecute','ContainerInherit,ObjectInherit','None','Allow'))
+            [IO.Directory]::SetAccessControl($env:QUOTUM_TEST_FILE,$a)
+        "#,
+        );
         fs::write(&file, "sessions = true\n").unwrap();
         let before = windows_acl(&file, false);
+        let next = dir.join("created.new");
+        let temporary = create_private(&next, &file).unwrap();
+        assert_eq!(temporary.metadata().unwrap().len(), 0);
+        assert_eq!(windows_acl(&next, false), before, "exact ACEs and inheritance before writing any bytes");
+        drop(temporary);
+        fs::remove_file(next).unwrap();
         save(&file, &patch(r#"{"sessions":false}"#)).unwrap();
         assert_eq!(windows_acl(&file, false), before, "temporary protection must not change the final ACL");
+        windows_script(
+            &dir,
+            r#"
+            $a=[IO.Directory]::GetAccessControl($env:QUOTUM_TEST_FILE)
+            $a.PurgeAccessRules([Security.Principal.SecurityIdentifier]::new('S-1-1-0'))
+            [IO.Directory]::SetAccessControl($env:QUOTUM_TEST_FILE,$a)
+        "#,
+        );
+        windows_script(
+            &file,
+            r#"
+            $a=[IO.File]::GetAccessControl($env:QUOTUM_TEST_FILE)
+            $remaining=@($a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]) |
+                Where-Object { $_.IdentityReference.Value -eq 'S-1-1-0' })
+            if($remaining.Count -ne 0) { throw 'revoked parent grant survived on the replacement' }
+        "#,
+        );
+        assert_ne!(windows_acl(&file, false), before, "the inherited reader was revoked");
         fs::remove_dir_all(dir).unwrap();
     }
 }
