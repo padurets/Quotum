@@ -69,7 +69,7 @@ const onAndOff = (shift: number): Work => waveWork(shifts(shift));
 
 /**
  * A five-hour window spending `perHour` points an hour of full work, back to back from
- * `offset`. Where a card has agents, its work is theirs: the window goes while they work.
+ * `offset`. Where a card has agents, its work is theirs once they start: the window goes while they work.
  */
 const fiveHours = (offset: number, perHour: number, work: Work = waveWork(ALWAYS), label?: string) =>
   rolling({id: label ? `${label.split(' ')[0].toLowerCase()}:session` : 'session', label, offset, work, use: (_elapsed, busy) => (perHour * busy) / HOUR});
@@ -378,7 +378,7 @@ const all: DemoSet = {
       machines: ['laptop', 'build-01'],
       history: 14 * DAY,
       windows: [
-        fiveHours(20 * MIN, 25, agentsWork(MAX_AGENTS)),
+        fiveHours(20 * MIN, 25, agentsWork(MAX_AGENTS, shifts(0))),
         weekly({since: -1.5 * DAY, use: through([0, 0], [0.5, 33.2], [2.5, 56.8])}),
         weekly({id: 'weekly:fable', label: 'Fable', since: -1.5 * DAY, use: through([0, 0], [0.5, 6], [1.5, 12])}),
       ],
@@ -436,7 +436,7 @@ const all: DemoSet = {
       plan: 'Pro',
       machines: ['mac-mini'],
       history: 14 * DAY,
-      windows: [fiveHours(0, 7, agentsWork(IOS_AGENTS), 'Gemini Pro'), weekly({id: 'gemini:weekly', label: 'Gemini', since: -2 * DAY, use: steady(0, 9)})],
+      windows: [fiveHours(0, 7, agentsWork(IOS_AGENTS, ALWAYS), 'Gemini Pro'), weekly({id: 'gemini:weekly', label: 'Gemini', since: -2 * DAY, use: steady(0, 9)})],
       agents: IOS_AGENTS,
       on: {ana: {}},
       expect: [
@@ -460,7 +460,7 @@ const all: DemoSet = {
       machines: ['laptop'],
       history: 14 * DAY,
       windows: [
-        fiveHours(40 * MIN, 10, agentsWork(PRO_AGENTS)),
+        fiveHours(40 * MIN, 10, agentsWork(PRO_AGENTS, shifts(3))),
         // A free reset used six hours ago: the week before was due in two days.
         weekly({since: -6 * HOUR, early: 2 * DAY, use: steady(0, 20), before: (elapsed, n) => (n === -1 ? steady(10, 18)(elapsed) : steady(5, 12)(elapsed))}),
       ],
@@ -496,7 +496,7 @@ const all: DemoSet = {
       plan: 'Claude Pro',
       machines: ['build-01'],
       history: 2 * DAY,
-      windows: [fiveHours(-60 * MIN, 36, agentsWork(AHEAD_AGENTS)), weekly({since: -2.5 * DAY, use: through([0, 0], [1.5, 62.5], [2.5, 77.5])})],
+      windows: [fiveHours(-60 * MIN, 36, agentsWork(AHEAD_AGENTS, shifts(9))), weekly({since: -2.5 * DAY, use: through([0, 0], [1.5, 62.5], [2.5, 77.5])})],
       agents: AHEAD_AGENTS,
       on: {ana: {name: 'Ahead of the plan', span: 4}},
       expect: [
@@ -702,7 +702,7 @@ const all: DemoSet = {
       plan: 'Claude Team',
       machines: ['laptop', 'ben-mac'],
       history: 14 * DAY,
-      windows: [fiveHours(2 * HOUR, 9, agentsWork(TEAM_AGENTS)), weekly({since: -2 * DAY, use: alongPlan(-5)})],
+      windows: [fiveHours(2 * HOUR, 9, agentsWork(TEAM_AGENTS, shifts(6))), weekly({since: -2 * DAY, use: alongPlan(-5)})],
       agents: TEAM_AGENTS,
       on: {ana: {name: 'Team'}, team: {}},
       expect: [
@@ -787,7 +787,7 @@ const showcase: DemoSet = {
       machines: ['laptop'],
       history: 7 * DAY,
       windows: [
-        fiveHours(-3 * HOUR - 54 * MIN, 20, agentsWork(PLATFORM_AGENTS)),
+        fiveHours(-3 * HOUR - 54 * MIN, 20, agentsWork(PLATFORM_AGENTS, shifts(0))),
         weekly({since: -(3 * DAY + 21 * HOUR), use: through([0, 0], [3, 40], [4, 44])}),
         weekly({id: 'weekly:fable', label: 'Fable', since: -(3 * DAY + 21 * HOUR), use: through([0, 0], [3, 42], [4, 45])}),
       ],
@@ -803,7 +803,7 @@ const showcase: DemoSet = {
       machines: ['ws-2631-linux'],
       history: 7 * DAY,
       windows: [
-        fiveHours(-3 * HOUR - 8 * MIN, 5, onAndOff(7), 'Gemini Pro'),
+        fiveHours(-3 * HOUR - 8 * MIN, 5, agentsWork(RESEARCH_AGENTS, shifts(7)), 'Gemini Pro'),
         weekly({id: 'gemini:weekly', label: 'Gemini', since: -(3 * DAY + HOUR), use: through([0, 0], [3, 53], [4, 60])}),
         weekly({id: 'claude:weekly', label: 'Claude', since: -(3 * DAY + HOUR), use: through([0, 0], [3, 62], [4, 70])}),
       ],
@@ -818,7 +818,7 @@ const showcase: DemoSet = {
       plan: 'pro',
       machines: ['laptop'],
       history: 7 * DAY,
-      windows: [fiveHours(-3 * HOUR - 34 * MIN, 15, agentsWork(WORK_AGENTS)), weekly({since: -(DAY + 3 * HOUR), use: steady(0, 31)})],
+      windows: [fiveHours(-3 * HOUR - 34 * MIN, 15, agentsWork(WORK_AGENTS, ALWAYS)), weekly({since: -(DAY + 3 * HOUR), use: steady(0, 31)})],
       resets: t => (t < -6 * HOUR ? {available: 0, expiresAt: null} : {available: 2, expiresAt: 18 * DAY}),
       agents: WORK_AGENTS,
       on: {demo: {name: 'Work'}},
@@ -831,7 +831,7 @@ const showcase: DemoSet = {
       plan: 'team',
       machines: ['ws-2631-linux'],
       history: 7 * DAY,
-      windows: [fiveHours(-2 * HOUR - 14 * MIN, 12, agentsWork(CI_AGENTS)), weekly({since: -(5 * DAY + HOUR), use: through([0, 0], [4, 55], [5, 61])})],
+      windows: [fiveHours(-2 * HOUR - 14 * MIN, 12, agentsWork(CI_AGENTS, ALWAYS)), weekly({since: -(5 * DAY + HOUR), use: through([0, 0], [4, 55], [5, 61])})],
       agents: CI_AGENTS,
       on: {demo: {name: 'CI runners'}},
       expect: [{title: 'CI runners'}, {agents: 3, drawn: true}],
@@ -843,7 +843,7 @@ const showcase: DemoSet = {
       plan: 'Claude Pro',
       machines: ['ws-2631-linux'],
       history: 7 * DAY,
-      windows: [fiveHours(-2 * HOUR - 44 * MIN, 8, agentsWork(ANNA_AGENTS)), weekly({since: -(2 * DAY + HOUR), use: through([0, 0], [1, 12], [2, 20])})],
+      windows: [fiveHours(-2 * HOUR - 44 * MIN, 8, agentsWork(ANNA_AGENTS, ALWAYS)), weekly({since: -(2 * DAY + HOUR), use: through([0, 0], [1, 12], [2, 20])})],
       agents: ANNA_AGENTS,
       on: {demo: {name: 'Anna', span: 5}},
       expect: [{title: 'Anna'}, {agents: 2, drawn: true}],
@@ -855,7 +855,7 @@ const showcase: DemoSet = {
       plan: 'plus',
       machines: ['laptop'],
       history: 7 * DAY,
-      windows: [fiveHours(-4 * HOUR - 14 * MIN, 8, agentsWork(PERSONAL_AGENTS)), weekly({since: -(5 * DAY + 15 * HOUR), use: through([0, 0], [4.6, 80], [5.6, 88])})],
+      windows: [fiveHours(-4 * HOUR - 14 * MIN, 8, agentsWork(PERSONAL_AGENTS, ALWAYS)), weekly({since: -(5 * DAY + 15 * HOUR), use: through([0, 0], [4.6, 80], [5.6, 88])})],
       agents: PERSONAL_AGENTS,
       on: {demo: {name: 'Personal', span: 7}},
       expect: [{title: 'Personal'}, {agents: 1, drawn: true}],

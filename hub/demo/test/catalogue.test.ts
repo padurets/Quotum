@@ -308,6 +308,18 @@ test('machines say how long a measurement holds as the agent does: until the nex
   assert.equal(staleAfter(15 * MIN), 19 * MIN);
 });
 
+test('a card with agents spends its five hours as its weeks go, before its agents started too', () => {
+  for (const set of SETS) {
+    for (const card of cards(set).filter(c => c.agents?.length)) {
+      const sessions = (t: number) => snapshot(card, 0, t, MIN).windows.filter(w => w.kind === 'session');
+      if (!sessions(0).length) continue;
+      const hours = Array.from({length: Math.floor(card.history / 3_600_000) - 6}, (_, i) => -card.history + i * 3_600_000);
+      const unused = hours.filter(t => sessions(t).every(w => w.usedPercent === 0)).length;
+      assert.ok(unused < hours.length / 2, `${set.id} ${card.id}: five hours unused in ${unused} of ${hours.length} hours of its history`);
+    }
+  }
+});
+
 test('the demo is the same whenever it starts: everything is timed from the start, not by the clock or the calendar', () => {
   for (const file of ['model.ts', 'catalogue.ts', 'setup.ts']) {
     const source = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
