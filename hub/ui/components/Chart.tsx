@@ -1,5 +1,5 @@
 import {useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent} from 'react';
-import {clock, duration, num, shortDay} from '../lib/format';
+import {clock, day, duration, num, shortDay, stamp} from '../lib/format';
 import {t} from '../i18n';
 import {valueIn, type Line} from '../lib/lines';
 import {draggedRange, type TimeRange} from '../lib/timeRange';
@@ -66,8 +66,7 @@ function niceTicks(from: number, to: number, count: number) {
 }
 
 function cellLabel(at: number, cellMs: number) {
-  const date = shortDay(at);
-  return cellMs ? `${date}, ${clock(at)}–${clock(at + cellMs)}` : `${date}, ${clock(at)}`;
+  return cellMs ? `${day(at)} ${clock(at)}–${clock(at + cellMs)}` : stamp(at);
 }
 
 /**

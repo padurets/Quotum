@@ -105,7 +105,7 @@ is open.
 - **Times.** A mark or a cell with little room may say how soon or how long ago
   (`countdown`, `ago` in `hub/ui/lib/format.ts`: "in 20h", "5m ago"), and then the exact
   time is in its tooltip or panel. A panel, a tooltip or a heading says when as `stamp`
-  does ("26 Sept, 14:00"): never "today" or "tomorrow", never seconds. Under a heading
+  does ("26 September 14:00"): never "today" or "tomorrow", never seconds. Under a heading
   that already gives the day, the time alone will do.
 - **No dots between parts.** A line never runs its parts together with " · ": what it
   says leads, and a detail or a time is set apart by layout (a tag beside it, a quieter

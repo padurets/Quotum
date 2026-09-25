@@ -47,9 +47,12 @@ export const clock = (time: number) => new Date(time).toLocaleTimeString(formatL
 /** "22 Sept" */
 export const shortDay = (time: number) => new Date(time).toLocaleDateString(formatLocale(), {day: 'numeric', month: 'short'});
 
+/** "26 September": the day, its month in a word. */
+export const day = (time: number) => new Date(time).toLocaleDateString(formatLocale(), {day: 'numeric', month: 'long'});
+
 /**
- * "26 Sept, 14:00": the one way a panel, a tooltip or a heading says when. A mark or a
- * cell with little room may say how soon or how long ago instead (`countdown`, `ago`).
+ * "26 September 14:00": the one way a panel, a tooltip or a heading says when, with no
+ * dots or commas between its parts. A mark or a cell with little room may say how soon
+ * or how long ago instead (`countdown`, `ago`).
  */
-export const stamp = (time: number) =>
-  new Date(time).toLocaleString(formatLocale(), {day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'});
+export const stamp = (time: number) => `${day(time)} ${clock(time)}`;
