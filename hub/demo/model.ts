@@ -225,8 +225,8 @@ export type SceneCheck = Span &
   (
     | {reset: 'claude' | 'codex'; label: ResetLabel['key'] | null; chance?: number | null; scope?: string}
     | {tracker: 'Codex Resets' | 'Claude Resets'; health: string}
-    /** The chart marks a reset for everyone of this provider (the hub keeps what the trackers reported). */
-    | {marked: 'claude' | 'codex'}
+    /** The chart marks `resets` resets of this provider (the hub keeps what the trackers reported, each once). */
+    | {marked: 'claude' | 'codex'; resets: number}
   );
 
 /** A machine as the dialog «Machines» shows it. */

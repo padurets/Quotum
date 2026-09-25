@@ -26,6 +26,7 @@ import {SCENES, SETS} from '../catalogue.js';
 import {
   awake,
   cards,
+  failuresAt,
   HOLDS,
   homeOf,
   machines,
@@ -151,8 +152,9 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
     const told = reading.scenes.get(entry.id)!;
     if ('tracker' in check) return {tracker: check.tracker, health: told.trackers.find(t => t.name === check.tracker)?.detail};
     if ('marked' in check) {
+      // Every reset the scene reports is marked once, however many rounds the hub made.
       const provider = check.marked as ResetProvider;
-      return {marked: told.past[provider]?.length ? provider : null};
+      return {marked: told.past[provider]?.length ? provider : null, resets: told.past[provider]?.length ?? 0};
     }
     const {reset} = check as {reset: 'claude' | 'codex'};
     const label = resetLabel(told.resets[reset], now);
@@ -259,27 +261,18 @@ async function checkAll(stand: Stand, entries: Entry[], reading: Reading, t: num
 }
 
 /**
- * The trackers of every scene, each as a hub would poll them, keeping the resets they
- * report. The set's own scene is what its hub reads, through `/api/resets`.
+ * A hub for every other scene, nobody on it: each keeps what its trackers report and
+ * answers `/api/resets` as the set's hub does for the set's own scene.
  */
-function sceneFeeds(trackers: Trackers, except: string) {
-  return new Map(
-    SCENES.filter(scene => scene.id !== except).map(scene => {
-      const urls = trackers.urls(scene.id);
-      const past: Told['past'] = {};
-      const remember = (provider: ResetProvider, reset: ResetEvent) => {
-        const kept = (past[provider] ??= []);
-        if (!kept.some(r => r.at === reset.at)) kept.push(reset);
-      };
-      return [scene.id, {feed: new ResetFeed(remember, () => {}, {enabled: true, codexApi: urls.codex, claudeApi: urls.claude, timeoutMs: 300}), past}];
-    }),
-  );
+async function sceneHubs(t: TestContext, trackers: Trackers, except: string, start: number) {
+  const hubs = new Map(await Promise.all(SCENES.filter(scene => scene.id !== except).map(async scene => [scene.id, await hubFor(trackers, scene.id, start)] as const)));
+  t.after(() => Promise.all([...hubs.values()].map(hub => hub.close())));
+  return hubs;
 }
 
-/** One round of every scene's trackers, now, as a hub does every ten minutes. */
-async function told(feeds: ReturnType<typeof sceneFeeds>, hub: {told(): Promise<Told>}, scene: string) {
-  const [own] = await Promise.all([hub.told(), ...[...feeds.values()].map(({feed}) => feed.round())]);
-  return new Map<string, Told>([[scene, own], ...[...feeds].map(([id, {feed, past}]) => [id, {...feed.snapshot(), past}] as [string, Told])]);
+/** One round of every scene's trackers, now, as a hub does every ten minutes, and what each hub then answers. */
+async function told(hubs: Map<string, {told(): Promise<Told>}>) {
+  return new Map(await Promise.all([...hubs].map(async ([scene, hub]) => [scene, await hub.told()] as const)));
 }
 
 async function bringUp(t: TestContext, set: DemoSet, start: number) {
@@ -321,7 +314,7 @@ test('a card with agents spends its five hours as its weeks go, before its agent
 });
 
 test('the demo is the same whenever it starts: everything is timed from the start, not by the clock or the calendar', () => {
-  for (const file of ['model.ts', 'catalogue.ts', 'setup.ts']) {
+  for (const file of ['model.ts', 'catalogue.ts', 'setup.ts', 'trackers.ts']) {
     const source = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
     assert.doesNotMatch(source, /Math\.random|Date\.now|new Date\(\)/, file);
   }
@@ -333,6 +326,7 @@ test('the demo is the same whenever it starts: everything is timed from the star
     return fromStart(start, {
       cards: cards(set).map(card => [-9 * 86_400_000, -3_600_000, 0, 3_600_000, 30 * 3_600_000].map(t => snapshot(card, start, t, MIN))),
       agents: machines(set).map(machine => [-3 * MIN, 0, 5 * MIN + 30 * SECOND, 3_600_000].map(t => sessionsAt(set, machine, start, t))),
+      failures: machines(set).map(machine => [-MIN, 0, 3_600_000].map(t => failuresAt(set, machine, start, t))),
       scenes: SCENES.map(scene => [scene.codex(at), scene.claude(at)]),
     });
   };
@@ -345,7 +339,7 @@ test('every entry of the whole catalogue shows what it claims for twelve hours',
   const start = Math.floor(Date.now() / MIN) * MIN;
   const {stand, trackers, hub} = await bringUp(t, set, start);
   const live = new Live(stand, cadence);
-  const feeds = sceneFeeds(trackers, set.scene);
+  const hubs = new Map([[set.scene, hub], ...(await sceneHubs(t, trackers, set.scene, start - MIN))]);
   const entries = [...set.entries, ...SCENES];
   const checked = new Set<string>();
   const wrong: string[] = [];
@@ -369,7 +363,7 @@ test('every entry of the whole catalogue shows what it claims for twelve hours',
     await live.report(tick, start + tick);
     t.mock.timers.setTime(start + at);
     await live.measure(at, start + at);
-    const reading = new Reading(stand, start + at, await told(feeds, hub, set.scene));
+    const reading = new Reading(stand, start + at, await told(hubs));
     wrong.push(...(await checkAll(stand, entries, reading, at, checked)));
     previous = at;
   }
