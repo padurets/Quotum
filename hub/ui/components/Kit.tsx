@@ -5,12 +5,18 @@ import {messageOf} from '../lib/http';
 
 export const SERVICE = 'Quotum';
 
+/** The dialogs open now, the last on top: only it answers Escape, and the page stays out of reach until none is left. */
+const dialogs: HTMLDivElement[] = [];
+/** How the page scrolled before the first of them opened. */
+let pageOverflow = '';
+
 /**
  * A dialog over the page, centred or as a panel on its side; closes on Escape and on a
- * click outside. It is placed in <body>, so a header with a backdrop filter or a moved
- * widget it was opened from cannot box it in.
+ * click outside. Without `onClose` it cannot be closed at all (a question that needs an
+ * answer). It is placed in <body>, so a header with a backdrop filter or a moved widget
+ * it was opened from cannot box it in.
  */
-export function Modal({title, onClose, children, wide, side}: {title: string; onClose: () => void; children: ReactNode; wide?: boolean; side?: boolean}) {
+export function Modal({title, onClose, children, wide, side}: {title: string; onClose?: () => void; children: ReactNode; wide?: boolean; side?: boolean}) {
   const panel = useRef<HTMLDivElement>(null);
   // The latest handler, so the effect below runs once: focus moves in when the dialog opens and back when it closes.
   const close = useRef(onClose);
@@ -18,34 +24,45 @@ export function Modal({title, onClose, children, wide, side}: {title: string; on
   // Taken while rendering: a field of the dialog with autoFocus would be it by the effect.
   const [previous] = useState(() => document.activeElement as HTMLElement | null);
   useEffect(() => {
-    const escape = (event: KeyboardEvent) => event.key === 'Escape' && close.current();
+    const own = panel.current!;
+    // The page under the dialogs stays still: only a dialog scrolls.
+    const page = document.documentElement;
+    if (!dialogs.length) pageOverflow = page.style.overflow;
+    page.style.overflow = 'hidden';
+    dialogs.push(own);
+    const escape = (event: KeyboardEvent) => event.key === 'Escape' && dialogs.at(-1) === own && close.current?.();
     document.addEventListener('keydown', escape);
     // Tab stays in the dialog: the page under it is out of reach.
     const root = document.getElementById('root');
     if (root) root.inert = true;
     // Into the dialog, unless a field of it already took the focus (autoFocus).
-    if (!panel.current?.contains(document.activeElement)) panel.current?.focus();
-    // The page under the dialog stays still: only the dialog scrolls.
-    const page = document.documentElement;
-    const overflow = page.style.overflow;
-    page.style.overflow = 'hidden';
+    if (!own.contains(document.activeElement)) own.focus();
     return () => {
       document.removeEventListener('keydown', escape);
-      page.style.overflow = overflow;
+      dialogs.splice(dialogs.indexOf(own), 1);
+      // Another dialog still open keeps the page out of reach and gets the focus back.
+      const below = dialogs.at(-1);
+      if (below) {
+        below.focus();
+        return;
+      }
+      page.style.overflow = pageOverflow;
       if (root) root.inert = false;
       if (previous?.isConnected) previous.focus();
     };
   }, []);
   return createPortal(
-    <div className={`overlay ${side ? 'is-side' : ''}`} onMouseDown={event => event.target === event.currentTarget && onClose()}>
+    <div className={`overlay ${side ? 'is-side' : ''}`} onMouseDown={event => event.target === event.currentTarget && onClose?.()}>
       <div className={`dialog glass ${wide ? 'is-wide' : ''} ${side ? 'is-side' : ''}`} role="dialog" aria-modal="true" aria-label={title} ref={panel} tabIndex={-1}>
         <div className="dialog-head">
           <h2>{title}</h2>
-          <button type="button" className="icon-button" aria-label={t('common.close')} onClick={onClose}>
-            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-              <path d="M4 4l8 8M12 4l-8 8" />
-            </svg>
-          </button>
+          {onClose && (
+            <button type="button" className="icon-button" aria-label={t('common.close')} onClick={onClose}>
+              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+                <path d="M4 4l8 8M12 4l-8 8" />
+              </svg>
+            </button>
+          )}
         </div>
         {children}
       </div>

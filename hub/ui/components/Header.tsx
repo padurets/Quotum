@@ -27,6 +27,13 @@ const PeopleIcon = () => (
   </svg>
 );
 
+const GearIcon = () => (
+  <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+    <path d="M5.65 3.93L6.63 3.51L6.74 1.52L9.26 1.52L9.37 3.51L10.35 3.93L11.21 4.56L12.98 3.67L14.24 5.85L12.58 6.94L12.70 8.00L12.58 9.06L14.24 10.15L12.98 12.33L11.21 11.44L10.35 12.07L9.37 12.49L9.26 14.48L6.74 14.48L6.63 12.49L5.65 12.07L4.79 11.44L3.02 12.33L1.76 10.15L3.42 9.06L3.30 8.00L3.42 6.94L1.76 5.85L3.02 3.67L4.79 4.56Z" strokeLinejoin="round" />
+    <circle cx="8" cy="8" r="1.9" />
+  </svg>
+);
+
 const PencilIcon = () => (
   <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
     <path d="M10.5 3.5l2 2M3 13l.6-2.6L11 3a1.4 1.4 0 0 1 2 2l-7.4 7.4z" />
@@ -252,6 +259,7 @@ export function Header({
   onPeople,
   user,
   onAccount,
+  local,
 }: {
   lastOk: number;
   now: number;
@@ -265,13 +273,15 @@ export function Header({
   onPeople: (() => void) | null;
   user: User;
   onAccount: () => void;
+  /** The desktop app's board: one board, nobody to share with, settings instead of an account. */
+  local: boolean;
 }) {
   const offline = !!lastOk && now - lastOk > OFFLINE_AFTER;
   return (
     <header className="topbar">
       <div className="topbar-inner">
         <Brand href="/" />
-        <BoardSwitcher boards={boards} board={board} onSelect={onBoard} onChanged={onBoardsChanged} />
+        {!local && <BoardSwitcher boards={boards} board={board} onSelect={onBoard} onChanged={onBoardsChanged} />}
         <div className="status">
           {offline && (
             <span className="offline" role="status" title={t('common.offline')}>
@@ -288,9 +298,15 @@ export function Header({
           <button type="button" className="icon-button" aria-label={t('header.devices')} title={t('header.devices')} onClick={onDevices}>
             <DevicesIcon />
           </button>
-          <button type="button" className="avatar-button" aria-label={t('account.open')} title={`${user.name} · ${user.email}`} onClick={onAccount}>
-            <span className="avatar">{user.name.slice(0, 1).toUpperCase()}</span>
-          </button>
+          {local ? (
+            <button type="button" className="icon-button" aria-label={t('header.settings')} title={t('header.settings')} onClick={onAccount}>
+              <GearIcon />
+            </button>
+          ) : (
+            <button type="button" className="avatar-button" aria-label={t('account.open')} title={`${user.name} · ${user.email}`} onClick={onAccount}>
+              <span className="avatar">{user.name.slice(0, 1).toUpperCase()}</span>
+            </button>
+          )}
         </div>
       </div>
     </header>

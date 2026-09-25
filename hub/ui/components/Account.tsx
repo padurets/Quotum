@@ -7,6 +7,8 @@ import type {User} from '../lib/session';
 import {known, rich, t} from '../i18n';
 import {ErrorLine, Field, LanguageSelect, Modal} from './Kit';
 import {SwitchRow} from './Popover';
+import {AppSection, Measuring} from './Desktop';
+import {inApp, settingsSections, type AppState} from '../lib/app';
 
 type Status = {busy?: boolean; done?: boolean; error?: unknown};
 
@@ -116,12 +118,12 @@ function trackerDetail(detail: string) {
   return known(key) ? t(key) : detail;
 }
 
-/** What this browser keeps for itself: the language and reset announcements. */
-function Browser({trackers}: {trackers: TrackerHealth[]}) {
+/** What this browser (or the app's window) keeps for itself: the language and reset announcements. */
+function Browser({trackers, title}: {trackers: TrackerHealth[]; title: string}) {
   const prefs = usePrefs();
   return (
     <section className="drawer-section">
-      <h3>{t('account.browser')}</h3>
+      <h3>{title}</h3>
       <div className="field">
         {/* The select carries its own label for screen readers. */}
         <span aria-hidden="true">{t('common.language')}</span>
@@ -169,40 +171,55 @@ const SignOutIcon = () => (
   </svg>
 );
 
-/** The person's own things, in a panel on the side: who is signed in (and signing out), profile, password, this browser's settings. */
+/**
+ * The person's own things, in a panel on the side: who is signed in (and signing out),
+ * profile, password, this browser's settings. The desktop app's board has no account:
+ * its panel is the settings of measuring and of the app, then how the board looks.
+ */
 export function AccountPanel({
   user,
   trackers,
   onChanged,
   onSignedOut,
   onClose,
+  local,
+  app,
 }: {
   user: User;
   trackers: TrackerHealth[];
   onChanged: () => Promise<void>;
   onSignedOut: () => void;
   onClose: () => void;
+  local: boolean;
+  app: {state: AppState | null; now: number; onState: (state: AppState) => void};
 }) {
   const signOut = async () => {
     await call('POST', '/api/auth/logout').catch(() => {});
     onSignedOut();
   };
+  const sections = settingsSections(local, inApp());
   return (
-    <Modal title={t('account.title')} onClose={onClose} side>
-      <div className="account-card">
-        <span className="avatar is-large">{user.name.slice(0, 1).toUpperCase()}</span>
-        <div>
-          <b>{user.name}</b>
-          <span>{user.email}</span>
-        </div>
-        <button type="button" className="sign-out" onClick={signOut}>
-          <SignOutIcon />
-          {t('account.signOut')}
-        </button>
-      </div>
-      <Profile user={user} onChanged={onChanged} />
-      <Password />
-      <Browser trackers={trackers} />
+    <Modal title={t(local ? 'settings.title' : 'account.title')} onClose={onClose} side>
+      {sections.includes('account') && (
+        <>
+          <div className="account-card">
+            <span className="avatar is-large">{user.name.slice(0, 1).toUpperCase()}</span>
+            <div>
+              <b>{user.name}</b>
+              <span>{user.email}</span>
+            </div>
+            <button type="button" className="sign-out" onClick={signOut}>
+              <SignOutIcon />
+              {t('account.signOut')}
+            </button>
+          </div>
+          <Profile user={user} onChanged={onChanged} />
+          <Password />
+        </>
+      )}
+      {sections.includes('measuring') && app.state && <Measuring state={app.state} now={app.now} onState={app.onState} />}
+      {sections.includes('app') && app.state && <AppSection state={app.state} onState={app.onState} />}
+      <Browser trackers={trackers} title={t(local ? 'settings.view' : 'account.browser')} />
     </Modal>
   );
 }

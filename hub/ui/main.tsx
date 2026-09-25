@@ -26,13 +26,34 @@ import {DevicePage} from './components/DevicePage';
 import {InvitePage} from './components/InvitePage';
 import {MachinesDialog, type MachinesTab} from './components/Machines';
 import {BoardDialog, type BoardTab} from './components/BoardDialog';
+import {AgentBanner, LocalOnboarding, OpenInApp, QuitButton, TakeOver} from './components/Desktop';
+import {inApp, useAppState} from './lib/app';
 
-function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Board[]; refresh: () => Promise<void>; onSignedOut: () => void}) {
+function Dashboard({
+  user,
+  boards,
+  local,
+  refresh,
+  onSignedOut,
+}: {
+  user: User;
+  boards: Board[];
+  /** The desktop app's hub: one person, one board, the app's own settings. */
+  local: boolean;
+  refresh: () => Promise<void>;
+  onSignedOut: () => void;
+}) {
   const now = useNow();
+  // In the app's window: its agent and settings (null in a browser).
+  const {state: appState, refresh: refreshApp, set: setAppState} = useAppState();
   const [board, selectBoard] = useBoard(boards);
   const boardId = board?.id ?? '';
   // A board deleted meanwhile, or one the reader was removed from: the list of boards is read again.
-  const {data, lastOk, reload} = useOverview(boardId, refresh);
+  const {data, lastOk, reload: reloadOverview} = useOverview(boardId, refresh);
+  const reload = useCallback(() => {
+    reloadOverview();
+    refreshApp();
+  }, [reloadOverview, refreshApp]);
   const arrange = useView(data, reload);
   const prefs = usePrefs();
   const revision = data ? data.revision : null;
@@ -146,17 +167,21 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
           ) : null
         }
         onDevices={() => setMachines('devices')}
-        onPeople={board && !board.personal ? () => setPeople('shares') : null}
+        onPeople={!local && board && !board.personal ? () => setPeople('shares') : null}
         user={user}
         onAccount={() => setAccount(true)}
+        local={local}
       />
       <main>
+        {local && <AgentBanner state={appState} />}
         {!overview ? (
           <div className="widgets" aria-hidden="true">
             {[0, 1, 2].map(i => (
               <div key={i} className="card is-loading" />
             ))}
           </div>
+        ) : empty && local ? (
+          <LocalOnboarding agent={appState?.agent} onSettings={() => setAccount(true)} />
         ) : empty && board?.personal ? (
           <section className="panel onboarding">
             <h2>{t('onboarding.title')}</h2>
@@ -201,7 +226,7 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
           </section>
         )}
       </main>
-      {machines && <MachinesDialog tab={machines} onTab={setMachines} onClose={closeMachines} now={now} />}
+      {machines && <MachinesDialog tab={machines} onTab={setMachines} onClose={closeMachines} now={now} local={local} />}
       {people && board && !board.personal && (
         <BoardDialog
           board={board}
@@ -213,7 +238,18 @@ function Dashboard({user, boards, refresh, onSignedOut}: {user: User; boards: Bo
           onChanged={reload}
         />
       )}
-      {account && <AccountPanel user={user} trackers={health} onChanged={refresh} onSignedOut={onSignedOut} onClose={() => setAccount(false)} />}
+      {account && (
+        <AccountPanel
+          user={user}
+          trackers={health}
+          onChanged={refresh}
+          onSignedOut={onSignedOut}
+          onClose={() => setAccount(false)}
+          local={local}
+          app={{state: appState, now, onState: setAppState}}
+        />
+      )}
+      {local && <TakeOver agent={appState?.agent} onState={setAppState} />}
     </>
   );
 }
@@ -224,14 +260,30 @@ function App() {
   const {session, failed, refresh, setSession} = useSession();
   const path = usePath();
 
-  if (!session) return <div className="splash">{failed ? t('app.reconnecting') : ''}</div>;
+  if (!session) {
+    return (
+      <div className="splash">
+        {failed && (
+          <div className="splash-text">
+            {t('app.reconnecting')}
+            {/* The app's window can always be quit, even with its hub gone. */}
+            {inApp() && <QuitButton />}
+          </div>
+        )}
+      </div>
+    );
+  }
   const signedIn = (next: Session) => setSession(next);
 
+  if (session.local) {
+    if (!session.user) return <OpenInApp />;
+    return <Dashboard user={session.user} boards={session.boards} local refresh={refresh} onSignedOut={() => void refresh()} />;
+  }
   if (path === '/device') return <DevicePage session={session} onSession={signedIn} />;
   const invite = path.match(/^\/invite\/([\w-]+)$/);
   if (invite) return <InvitePage secret={invite[1]} session={session} onSession={signedIn} onJoined={id => (rememberBoard(id), void refresh())} />;
   if (!session.user) return <AuthScreen session={session} onSignedIn={signedIn} />;
-  return <Dashboard user={session.user} boards={session.boards} refresh={refresh} onSignedOut={() => void refresh()} />;
+  return <Dashboard user={session.user} boards={session.boards} local={false} refresh={refresh} onSignedOut={() => void refresh()} />;
 }
 
 createRoot(document.getElementById('root')!).render(<App />);
