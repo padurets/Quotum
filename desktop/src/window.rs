@@ -133,6 +133,8 @@ fn build(shell: &Arc<Shell>, state: &HubState) -> tauri::Result<tauri::WebviewWi
     };
     let mut builder = WebviewWindowBuilder::new(app, LABEL, url)
         .title("Quotum")
+        // Match the board's --bg while WebKit has not painted a newly exposed area yet.
+        .background_color(tauri::utils::config::Color(0x0b, 0x0b, 0x0e, 255))
         .inner_size(1280.0, 800.0)
         .min_inner_size(480.0, 400.0)
         .on_navigation(move |url| {

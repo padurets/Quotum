@@ -355,6 +355,8 @@ selected transport/painting settings in `hub.log`; a live web-process failure is
 there too. No driver or desktop configuration is changed, and the page gets no new IPC
 command. Linux smoke checks trace child exit signals: a successful app process alone
 does not establish that its web processes closed without crashing.
+The native window and web view use the board's background colour, including the areas
+exposed while WebKit is painting a resized view.
 
 **The hub's local mode.** Started with `QUOTUM_LOCAL_KEY` and `QUOTUM_LOCAL_TOKEN`, a
 hub has one person and no accounts. At start it makes sure the person exists, sets the
