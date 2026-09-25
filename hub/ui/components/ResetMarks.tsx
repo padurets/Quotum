@@ -26,26 +26,30 @@ function NewsIcon({label}: {label: ResetLabel}) {
   );
 }
 
-/** What the news is and when, in full: the mark's name and the panel's first line. */
-function headline(label: ResetLabel, now: number) {
+/**
+ * What the news is, a detail that sets it apart (a chance, a scope) and when: the panel's
+ * head, a part of it each, never run together into one line.
+ */
+function headline(label: ResetLabel, now: number): {what: string; detail: string; when: string} {
   switch (label.key) {
     case 'in':
     case 'bankedIn':
-      return `${t(`reset.${label.key}`, {time: countdown(label.at - now)})} · ${stamp(label.at)}`;
+      return {what: t(`reset.${label.key}`, {time: countdown(label.at - now)}), detail: '', when: stamp(label.at)};
     case 'announced':
-      return t('reset.announced');
+      return {what: t('reset.announced'), detail: '', when: ''};
     case 'awaiting':
-      return `${t('reset.awaiting')} · ${stamp(label.at)}`;
+      return {what: t('reset.awaiting'), detail: '', when: stamp(label.at)};
     case 'possible':
-      return [t('reset.possible'), label.chance !== null ? `${label.chance}%` : '', label.at !== null ? t('reset.until', {time: stamp(label.at)}) : '']
-        .filter(Boolean)
-        .join(' · ');
+      return {what: t('reset.possible'), detail: label.chance !== null ? `${label.chance}%` : '', when: label.at !== null ? t('reset.until', {time: stamp(label.at)}) : ''};
     case 'done':
-      return [t('reset.done'), stamp(label.event.at), label.scope].filter(Boolean).join(' · ');
+      return {what: t('reset.done'), detail: label.scope, when: stamp(label.event.at)};
     case 'policy':
-      return `${t('reset.policy')} · ${stamp(label.event.at)}`;
+      return {what: t('reset.policy'), detail: '', when: stamp(label.event.at)};
   }
 }
+
+/** The same in plain text, for the mark's name and tooltip: a line each. */
+const nameOf = ({what, detail, when}: ReturnType<typeof headline>) => [detail ? `${what} (${detail})` : what, when].filter(Boolean).join('\n');
 
 /** Only numbers make it onto the mark: how soon an announced reset comes, or how likely a possible one is. */
 function markText(label: ResetLabel, now: number) {
@@ -69,12 +73,12 @@ const host = (url: string) => {
  * data it is: the trackers are credited wherever their data is shown.
  */
 export function ResetMark({label, credit, now}: {label: ResetLabel; credit: ResetStatus['credit']; now: number}) {
-  const title = headline(label, now);
+  const head = headline(label, now);
   const text = markText(label, now);
   const hint = label.tone === 'accent' ? t('reset.hintScheduled') : label.key === 'possible' ? t('reset.hintWatch') : '';
   return (
     <Popover
-      label={title}
+      label={nameOf(head)}
       triggerClass={`tray-pill reset-mark is-${label.tone}`}
       up
       align="left"
@@ -86,7 +90,13 @@ export function ResetMark({label, credit, now}: {label: ResetLabel; credit: Rese
       }
     >
       <div className="tray-panel">
-        <p className="tray-panel-lead">{title}</p>
+        <div className="tray-panel-head">
+          <p className="tray-panel-lead">
+            {head.what}
+            {head.detail && <span className="tray-panel-tag">{head.detail}</span>}
+          </p>
+          {head.when && <p className="tray-panel-when">{head.when}</p>}
+        </div>
         {hint && <p>{hint}</p>}
         {label.event.text && <p className="tray-panel-quote">{label.event.text}</p>}
         <p className="tray-panel-links">
@@ -145,7 +155,7 @@ function expiryLines(resets: NonNullable<SourceState['resets']>): string[] {
 export function FreeResets({resets}: {resets: NonNullable<SourceState['resets']>}) {
   const count = t('card.freeResets', {count: resets.available});
   const lines = expiryLines(resets);
-  const label = [count, ...lines].join(' · ');
+  const label = [count, ...lines].join('\n');
   return (
     <Popover
       label={label}
@@ -159,10 +169,14 @@ export function FreeResets({resets}: {resets: NonNullable<SourceState['resets']>
       }
     >
       <div className="tray-panel">
-        <p className="tray-panel-lead">{count}</p>
-        {lines.map(line => (
-          <p key={line}>{line}</p>
-        ))}
+        <div className="tray-panel-head">
+          <p className="tray-panel-lead">{count}</p>
+          {lines.map(line => (
+            <p key={line} className="tray-panel-when">
+              {line}
+            </p>
+          ))}
+        </div>
       </div>
     </Popover>
   );

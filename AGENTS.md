@@ -107,6 +107,10 @@ is open.
   time is in its tooltip or panel. A panel, a tooltip or a heading says when as `stamp`
   does ("26 Sept, 14:00"): never "today" or "tomorrow", never seconds. Under a heading
   that already gives the day, the time alone will do.
+- **No dots between parts.** A line never runs its parts together with " · ": what it
+  says leads, and a detail or a time is set apart by layout (a tag beside it, a quieter
+  line under it). In plain text, a tooltip or a name for screen readers, each part is a
+  line of its own.
 - Colours come from the tokens at the top of `hub/ui/style.css`, and the colours of
   series from `hub/ui/lib/providers.ts`. Status colours (ok, warn, crit) are for status
   only: how much of a limit is left, a source or device in trouble, a destructive

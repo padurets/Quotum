@@ -110,8 +110,8 @@ export const SCENES: Scene[] = [
       {marked: 'claude', resets: 1},
     ],
     look: [
-      'Codex cards: an accent mark "in 25h" on the left of the tray (the time is rounded down), not the reset of four hours ago; its panel says "Reset in 25h · tomorrow <time>", why it matters, the tracker\'s text and "Data from Codex Resets"',
-      'Claude cards: a quiet mark, an arrow round a tick, not the change of limits of yesterday; its panel says "Reset happened · <time> · Max"',
+      'Codex cards: an accent mark "in 25h" on the left of the tray (the time is rounded down), not the reset of four hours ago; its panel heads with "Reset in 25h" and the date and time under it, then why it matters, the tracker\'s text and "Data from Codex Resets"',
+      'Claude cards: a quiet mark, an arrow round a tick, not the change of limits of yesterday; its panel heads with "Reset happened", a "Max" tag beside it and the time under it',
       'Both resets for everyone are marked on the charts',
     ],
   },
@@ -139,7 +139,7 @@ export const SCENES: Scene[] = [
       {reset: 'codex', label: 'announced'},
       {reset: 'claude', label: 'policy'},
     ],
-    look: ['Codex: an accent mark with no text, "Reset announced" in its panel', 'Claude: a quiet gauge, "Limits changed · <time>"'],
+    look: ['Codex: an accent mark with no text, "Reset announced" in its panel', 'Claude: a quiet gauge, "Limits changed" with the time under it'],
   },
   {
     kind: 'scene',
@@ -155,7 +155,7 @@ export const SCENES: Scene[] = [
       {reset: 'claude', label: 'done', scope: ''},
       {marked: 'codex', resets: 1},
     ],
-    look: ['Codex: an accent mark with no text, "Reset: awaiting confirmation · <time>"', 'The Claude mark\'s panel names no scope: the reset was for everyone'],
+    look: ['Codex: an accent mark with no text, "Reset: awaiting confirmation" with the announced time under it', 'The Claude mark\'s panel names no scope: the reset was for everyone'],
   },
   {
     kind: 'scene',
@@ -170,7 +170,7 @@ export const SCENES: Scene[] = [
       {reset: 'codex', label: 'possible', chance: 40},
       {reset: 'claude', label: 'policy'},
     ],
-    look: ['Codex: a quiet dashed mark "40%"; its panel says "Possible reset · 40% · by <time>"'],
+    look: ['Codex: a quiet dashed mark "40%"; its panel heads with "Possible reset", a "40%" tag beside it and "by <time>" under it'],
   },
   {
     kind: 'scene',
@@ -566,7 +566,7 @@ const all: DemoSet = {
         'Teal on the card, the chart and the table',
         'Its own plan: 15% a day, 10% the last',
         'A third of the row wide, its tray full: the reset news on the left, three free resets and ten agent marks in two groups on the right, whole at a window 1260 px wide or more; narrower, the marks go all at once and the count stays',
-        'Its free resets come from an older agent, which tells only when the first expires: "3 free resets · the first expires <date>"',
+        'Its free resets come from an older agent, which tells only when the first expires: "3 free resets", and under it "the first expires <date>"',
       ],
     },
     {
