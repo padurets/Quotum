@@ -33,7 +33,8 @@ export function Popover({
   const box = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
-  // Measured once it is open: a panel that would reach under the top bar opens downwards instead.
+  // Measured once it is open (below): a panel opening upwards opens downwards instead when
+  // it does not fit above and there is more room below.
   const [down, setDown] = useState(false);
   // The panel moves sideways to stay on the screen (from a card at the edge of a narrow
   // one), again when the window turns or is resized; the page's width leaves out its scrollbar.
@@ -53,11 +54,37 @@ export function Popover({
     return () => removeEventListener('resize', place);
   }, [open]);
 
+  // A panel is as tall as its content and scrolls only when that is taller than the screen
+  // under the top bar: a large screen shows it whole. Upwards it goes where it fits whole.
+  const [cap, setCap] = useState<number | null>(null);
   useLayoutEffect(() => {
-    if (!open || !up) return setDown(false);
-    const top = panel.current?.getBoundingClientRect().top ?? 0;
-    const bar = document.querySelector('.topbar')?.getBoundingClientRect().bottom ?? 0;
-    if (top < bar + 8) setDown(true);
+    const element = panel.current;
+    const trigger = button.current;
+    if (!open || !element || !trigger) {
+      setDown(false);
+      return setCap(null);
+    }
+    const fit = () => {
+      element.style.maxHeight = '';
+      element.classList.remove('is-capped');
+      const natural = element.getBoundingClientRect().height;
+      const at = trigger.getBoundingClientRect();
+      const bar = document.querySelector('.topbar')?.getBoundingClientRect().bottom ?? 0;
+      const screen = innerHeight - bar - 16;
+      const height = Math.min(natural, screen);
+      const above = at.top - bar - 14;
+      const below = innerHeight - at.bottom - 14;
+      const downwards = up && height > above && below > above;
+      const capped = natural > screen ? screen : null;
+      // Set here as well as through state, so what is measured next is what shows.
+      element.style.maxHeight = capped === null ? '' : `${capped}px`;
+      element.classList.toggle('is-capped', capped !== null);
+      setDown(downwards);
+      setCap(capped);
+    };
+    fit();
+    addEventListener('resize', fit);
+    return () => removeEventListener('resize', fit);
   }, [open, up]);
 
   useEffect(() => {
@@ -103,7 +130,13 @@ export function Popover({
         {!!badge && <i className="badge">{badge}</i>}
       </button>
       {open && (
-        <div className={`popover glass ${align === 'left' ? 'is-left' : ''} ${up && !down ? 'is-up' : ''}`} role="dialog" aria-label={label} ref={panel}>
+        <div
+          className={`popover glass ${align === 'left' ? 'is-left' : ''} ${up && !down ? 'is-up' : ''} ${cap !== null ? 'is-capped' : ''}`}
+          style={cap !== null ? {maxHeight: cap} : undefined}
+          role="dialog"
+          aria-label={label}
+          ref={panel}
+        >
           {children}
         </div>
       )}

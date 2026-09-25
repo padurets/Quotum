@@ -201,6 +201,11 @@ body.is-resizing, body.is-resizing * { cursor: ew-resize !important; user-select
   border-radius: 12px;
 }
 .popover.is-up { top: auto; bottom: calc(100% + 6px); }
+/* No room for all of it (Popover measures): it scrolls, or its list does while the rest stays. */
+.popover.is-capped { overflow-y: auto; }
+.popover.is-capped:has(.agents-list) { display: flex; flex-direction: column; overflow: hidden; }
+.popover.is-capped:has(.agents-list) > * { flex-shrink: 0; }
+.popover.is-capped .agents-list { flex-shrink: 1; min-height: 0; }
 /*
  * What is behind shows through, blurred, under a faint sheen at the top edge. Popover,
  * Modal and the tooltips of our own (the chart's, a card's dot's) wear it; a new floating
@@ -358,7 +363,7 @@ td.muted, small.muted { color: var(--text-3); }
 /* The table of every running agent: a mark as on the cards starts each row. */
 .agents-panel td .agent { margin-right: 12px; vertical-align: -1px; }
 .agents-panel td:first-child { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
-.agents-list { box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; width: min(340px, calc(100vw - 48px)); max-width: 100%; max-height: min(360px, 50vh); overflow: hidden auto; padding: 0 0 4px; }
+.agents-list { box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; width: min(340px, calc(100vw - 48px)); max-width: 100%; overflow: hidden auto; padding: 0 0 4px; }
 .agents-machine h3 { display: flex; align-items: baseline; gap: 8px; margin: 0 8px 4px; font-size: 12.5px; font-weight: 560; color: var(--text); }
 .agents-machine h3 span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agents-machine h3 small { margin-left: auto; font-weight: 450; color: var(--text-3); white-space: nowrap; }
