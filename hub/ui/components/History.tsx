@@ -8,7 +8,7 @@ import {PROVIDERS} from '../lib/providers';
 import {HORIZONS, setMuted, setPrefs, usePrefs, type Horizon} from '../lib/prefs';
 import {ofTimeRange, setTimeRange} from '../lib/timeRange';
 import {HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
-import {linesOf} from '../lib/lines';
+import {chartEvents, chartFrom, chartResets, linesOf} from '../lib/lines';
 import {Chart, type Marker, type PlanLine} from './Chart';
 import type {PastResets, Resets} from '../lib/resets';
 import {t, useLocale} from '../i18n';
@@ -68,7 +68,7 @@ export const History = memo(function History({
   const visible = useMemo(() => lines.filter(line => !prefs.muted[line.key]), [lines, prefs.muted]);
   // A time range selected on the chart is in the past: the chart shows just it, without the future.
   const selected = ofTimeRange(history);
-  const from = history ? Math.max(history.since, history.historyStart) : now - 86_400_000;
+  const from = chartFrom(history, now);
   const measuredTo = history?.to ?? now;
   // An announced Codex reset matters only where Codex is on the chart.
   const announced = !selected && visible.some(line => line.provider === 'codex') ? (resets.codex?.scheduled?.scheduledFor ?? null) : null;
@@ -104,9 +104,7 @@ export const History = memo(function History({
       list.push({key, at: live.resetAt, label: t('chart.reset', {source: source ? sourceLabel(source) : line.provider}), color: line.color});
     }
     // What happened to the sources on the chart: their limits came back early, or free resets were granted.
-    for (const event of history?.events ?? []) {
-      const shown = visible.filter(line => line.sourceId === event.sourceId && (event.kind !== 'early_reset' || event.windows.includes(line.windowId)));
-      if (event.at < from || !shown.length) continue;
+    for (const {event, lines: shown} of chartEvents(history?.events ?? [], visible, from)) {
       const source = overview?.sources.find(s => s.id === event.sourceId);
       const name = source ? sourceLabel(source) : shown[0].provider;
       list.push({
@@ -118,19 +116,15 @@ export const History = memo(function History({
       });
     }
     // Resets for everyone the trackers reported, on the providers the chart shows.
-    for (const [provider, reported] of Object.entries(past)) {
-      const line = visible.find(l => l.provider === provider);
-      for (const reset of reported ?? []) {
-        if (!line || reset.at < from || reset.at > measuredTo) continue;
-        list.push({
-          key: `announced-${provider}-${reset.at}`,
-          at: reset.at,
-          label: t('chart.resetForAll', {source: PROVIDERS[provider]?.name ?? provider}),
-          detail: reset.text,
-          color: line.color,
-          past: true,
-        });
-      }
+    for (const {provider, reset, line} of chartResets(past, visible, from, measuredTo)) {
+      list.push({
+        key: `announced-${provider}-${reset.at}`,
+        at: reset.at,
+        label: t('chart.resetForAll', {source: PROVIDERS[provider]?.name ?? provider}),
+        detail: reset.text,
+        color: line.color,
+        past: true,
+      });
     }
     return list;
   }, [announced, visible, overview, history, past, from, to, measuredTo, view, locale]);

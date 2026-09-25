@@ -207,7 +207,9 @@ export const SCENES: Scene[] = [
       {reset: 'claude', label: 'policy'},
       {tracker: 'Codex Resets', health: 'HTTP 503'},
       {tracker: 'Claude Resets', health: 'ok'},
-      {marked: 'codex', resets: 1},
+      // Older than a day, the reset is off the 24-hour chart and on the week's.
+      {marked: 'codex', resets: 0},
+      {marked: 'codex', resets: 1, range: '7d'},
     ],
   },
   {

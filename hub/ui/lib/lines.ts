@@ -1,4 +1,5 @@
-import type {History, HistorySeries, Kind, Overview, View} from './types';
+import type {History, HistorySeries, Kind, Overview, SourceEvent, View} from './types';
+import type {PastResets} from './resets';
 import {windowKey} from './types';
 import {seriesName} from './quota';
 import {DASHES} from './providers';
@@ -58,4 +59,26 @@ export function valueIn(points: Line['points'], cell: number, now: number, holdM
   const next = points[found + 1];
   if (at === cell) return value;
   return next ? (next[2] === segment ? value : undefined) : cell - at <= holdMs ? value : undefined;
+}
+
+/** Where the chart begins: its period, or later where history starts. */
+export const chartFrom = (history: History | null, now: number) => (history ? Math.max(history.since, history.historyStart) : now - 86_400_000);
+
+/**
+ * What happened to sources that the chart marks: from `from` on, where it draws a line of
+ * the source (limits back early, on a window that came back); with those lines.
+ */
+export function chartEvents(events: SourceEvent[], lines: Line[], from: number) {
+  return events.flatMap(event => {
+    const on = lines.filter(line => line.sourceId === event.sourceId && (event.kind !== 'early_reset' || event.windows.includes(line.windowId)));
+    return event.at < from || !on.length ? [] : [{event, lines: on}];
+  });
+}
+
+/** The resets for everyone that the chart marks: from `from` to `to`, of a provider it draws a line of; with that line. */
+export function chartResets(past: PastResets, lines: Line[], from: number, to: number) {
+  return (Object.keys(past) as (keyof PastResets)[]).flatMap(provider => {
+    const line = lines.find(l => l.provider === provider);
+    return line ? (past[provider] ?? []).filter(reset => reset.at >= from && reset.at <= to).map(reset => ({provider, reset, line})) : [];
+  });
 }

@@ -225,8 +225,8 @@ export type SceneCheck = Span &
   (
     | {reset: 'claude' | 'codex'; label: ResetLabel['key'] | null; chance?: number | null; scope?: string}
     | {tracker: 'Codex Resets' | 'Claude Resets'; health: string}
-    /** The chart marks `resets` resets of this provider (the hub keeps what the trackers reported, each once). */
-    | {marked: 'claude' | 'codex'; resets: number}
+    /** The chart over `range` (24 hours by default) marks `resets` resets for everyone of this provider, each once. */
+    | {marked: 'claude' | 'codex'; resets: number; range?: '24h' | '7d'}
   );
 
 /** A machine as the dialog «My machines» shows it. */

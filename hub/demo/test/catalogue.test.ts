@@ -16,7 +16,7 @@ import type {ResetEvent, ResetProvider} from '../../server/domain/resets.js';
 import {setLocale} from '../../ui/i18n/index.js';
 import {agentRows, drawn} from '../../ui/lib/agents.js';
 import {forecastRow} from '../../ui/lib/forecast.js';
-import {linesOf} from '../../ui/lib/lines.js';
+import {chartEvents, chartFrom, chartResets, linesOf} from '../../ui/lib/lines.js';
 import {planNote, started} from '../../ui/lib/plan.js';
 import {dotOf, level, resetLine, titled, windowName} from '../../ui/lib/quota.js';
 import {resetLabel, type Resets, type TrackerHealth} from '../../ui/lib/resets.js';
@@ -32,6 +32,7 @@ import {
   HOUR,
   machines,
   MIN,
+  people,
   personOf,
   problems,
   SECOND,
@@ -129,12 +130,14 @@ class Reading {
     return this.overviews.get(board)!;
   }
 
-  history(board: string): Promise<History> {
-    if (!this.histories.has(board)) {
+  /** The board's history over `range`: the last 24 hours, as the chart opens, unless another is asked for. */
+  history(board: string, range = '24h'): Promise<History> {
+    const key = `${board} ${range}`;
+    if (!this.histories.has(key)) {
       const id = this.stand.boards.get(board)!;
-      this.histories.set(board, this.reader(board).get<History>(`/api/history?range=24h&board=${encodeURIComponent(id)}`));
+      this.histories.set(key, this.reader(board).get<History>(`/api/history?range=${range}&board=${encodeURIComponent(id)}`));
     }
-    return this.histories.get(board)!;
+    return this.histories.get(key)!;
   }
 
   machines(person: string) {
@@ -154,9 +157,14 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
     const told = reading.scenes.get(entry.id)!;
     if ('tracker' in check) return {tracker: check.tracker, health: told.trackers.find(t => t.name === check.tracker)?.detail};
     if ('marked' in check) {
-      // Every reset the scene reports is marked once, however many rounds the hub made.
-      const provider = check.marked as ResetProvider;
-      return {marked: told.past[provider]?.length ? provider : null, resets: told.past[provider]?.length ?? 0};
+      // On the chart of the first person's board, as it is when the demo runs with this scene:
+      // every reset the scene reports is marked once, however many rounds the hub made.
+      const {marked: provider, range} = check as {marked: ResetProvider; range?: string};
+      const board = people(set)[0].id;
+      const [overview, history] = await Promise.all([reading.overview(board), reading.history(board, range)]);
+      if (isHidden(overview.view, HISTORY)) return `the chart is hidden on the board ${board}`;
+      const marks = chartResets(told.past, linesOf(history, overview, overview.view, 'weekly'), chartFrom(history, now), history.to).filter(m => m.provider === provider);
+      return {marked: provider, resets: marks.length, range};
     }
     const {reset} = check as {reset: 'claude' | 'codex'};
     const label = resetLabel(told.resets[reset], now);
@@ -234,7 +242,11 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
     });
   }
   if ('event' in card) {
-    const events = (await reading.history(board)).events.filter(e => e.sourceId === source.id).map(e => e.kind);
+    // Marked on the chart as it opens: the weekly windows of the last 24 hours.
+    if (isHidden(overview.view, HISTORY)) return `the chart is hidden on the board ${board}`;
+    const history = await reading.history(board);
+    const marks = chartEvents(history.events, linesOf(history, overview, overview.view, 'weekly'), chartFrom(history, now));
+    const events = marks.filter(m => m.event.sourceId === source.id).map(m => m.event.kind);
     values.event = events.includes(card.event) ? card.event : events;
   }
   return values;

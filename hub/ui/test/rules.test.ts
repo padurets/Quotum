@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {agentRows, DRAWN, drawn} from '../lib/agents';
+import {chartEvents, chartResets, type Line} from '../lib/lines';
 import {outlook, planCell} from '../lib/forecast';
 import {DEFAULT_PLAN, planNote} from '../lib/plan';
 import {dotOf, PULSE_FOR, resetLine} from '../lib/quota';
@@ -84,4 +85,21 @@ test('a board without subscriptions invites to connect one; with every widget hi
   assert.deepEqual(dotOf(measured(0, {stale: true}), now), {warn: true}, 'numbers gone stale outweigh their age');
   assert.deepEqual(dotOf(measured(0, {error: 'signed_out'}), now), {warn: true});
   assert.equal(dotOf(measured(0, {error: 'waiting'}), now).warn, false, 'waiting for a first measurement is no trouble');
+});
+
+test('the chart marks what happened after it begins, on a line it draws', () => {
+  const line = (sourceId: string, windowId: string, provider: string) => ({sourceId, windowId, provider}) as Line;
+  const lines = [line('a', 'weekly', 'codex'), line('b', 'session', 'claude')];
+  const from = now - DAY;
+  const early = (sourceId: string, at: number, windows: string[]) => ({sourceId, at, kind: 'early_reset' as const, windows});
+  assert.deepEqual(chartEvents([early('a', now - HOUR, ['weekly'])], lines, from).map(m => m.lines.length), [1]);
+  assert.deepEqual(chartEvents([early('a', now - 2 * DAY, ['weekly'])], lines, from), [], 'before the chart begins');
+  assert.deepEqual(chartEvents([early('a', now - HOUR, ['session'])], lines, from), [], 'a window the chart does not draw');
+  assert.deepEqual(chartEvents([early('c', now - HOUR, ['weekly'])], lines, from), [], 'a source the chart does not draw');
+  assert.equal(chartEvents([{sourceId: 'b', at: now - HOUR, kind: 'resets_granted', count: 2}], lines, from).length, 1, 'free resets, on any line of the source');
+  const reset = (at: number) => ({url: '', text: '', at});
+  const marked = (past: Parameters<typeof chartResets>[0], drawn = lines) => chartResets(past, drawn, from, now).map(m => m.provider);
+  assert.deepEqual(marked({codex: [reset(now - HOUR)], claude: [reset(now - 2 * HOUR)]}), ['codex', 'claude']);
+  assert.deepEqual(marked({codex: [reset(now - 2 * DAY), reset(now + HOUR)]}), [], 'before the chart begins, or after it was measured');
+  assert.deepEqual(marked({claude: [reset(now - HOUR)]}, [lines[0]]), [], 'a provider the chart does not draw');
 });
