@@ -67,8 +67,10 @@ test('the trackers are read where the owner says, their own APIs by default', ()
   assert.equal(config.resets.claudeApi, 'https://claude-resets.com/api/resets');
   assert.equal(trackerUrl('QUOTUM_RESETS_CODEX_URL', undefined, 'https://codex-resets.com/api/v1/status'), 'https://codex-resets.com/api/v1/status');
   assert.equal(trackerUrl('QUOTUM_RESETS_CODEX_URL', 'http://mirror.lan:8090/codex/status?v=1', 'x'), 'http://mirror.lan:8090/codex/status?v=1');
-  assert.throws(() => trackerUrl('QUOTUM_RESETS_CODEX_URL', 'mirror.lan/codex', 'x'), /QUOTUM_RESETS_CODEX_URL/);
-  assert.throws(() => trackerUrl('QUOTUM_RESETS_CLAUDE_URL', 'ftp://mirror.lan/claude', 'x'), /QUOTUM_RESETS_CLAUDE_URL/);
+  // The value may carry a secret: no error repeats it.
+  const refused = (variable: string) => (error: Error) => error.message.includes(variable) && !error.message.includes('s3cret');
+  assert.throws(() => trackerUrl('QUOTUM_RESETS_CODEX_URL', 'mirror.lan/codex?key=s3cret', 'x'), refused('QUOTUM_RESETS_CODEX_URL'));
+  assert.throws(() => trackerUrl('QUOTUM_RESETS_CLAUDE_URL', 'ftp://mirror.lan/claude?key=s3cret', 'x'), refused('QUOTUM_RESETS_CLAUDE_URL'));
   assert.throws(
     () => trackerUrl('QUOTUM_RESETS_CLAUDE_URL', 'https://reader:s3cret@mirror.lan/claude', 'x'),
     (error: Error) => /QUOTUM_RESETS_CLAUDE_URL must not contain a user name or password/.test(error.message) && !error.message.includes('s3cret'),
