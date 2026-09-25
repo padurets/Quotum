@@ -163,6 +163,9 @@ export const en = {
   'agents.columns': 'Columns',
   'card.freeResets': {one: '{count} free reset', other: '{count} free resets'},
   'card.freeResetsUntil': 'use by {date}',
+  'card.freeResetsBy': '{count} by {date}',
+  'card.freeResetsNoDate': '{count} with no end date',
+  'card.freeResetsFirst': 'the first expires {date}',
 
   'source.settings': 'Settings · {source}',
   'source.show': 'Show limits',

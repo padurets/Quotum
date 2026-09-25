@@ -493,10 +493,19 @@ const all: DemoSet = {
         t < -30 * HOUR
           ? {available: 0, expiresAt: null}
           : t < -6 * HOUR
-            ? {available: 1, expiresAt: 20 * DAY}
+            ? {available: 1, expiresAt: 20 * DAY, expiring: [{count: 1, expiresAt: 20 * DAY}]}
             : t < -3 * HOUR
-              ? {available: 0, expiresAt: null}
-              : {available: 2, expiresAt: 18 * DAY},
+              ? {available: 0, expiresAt: null, expiring: []}
+              : // Granted at different times, they expire at different times; one the client gives no time for.
+                {
+                  available: 3,
+                  expiresAt: 8 * DAY,
+                  expiring: [
+                    {count: 1, expiresAt: 8 * DAY},
+                    {count: 1, expiresAt: 18 * DAY},
+                    {count: 1, expiresAt: null},
+                  ],
+                },
       agents: PRO_AGENTS,
       on: {ana: {}, night: {hidden: true}},
       expect: [
@@ -509,7 +518,7 @@ const all: DemoSet = {
         {window: 'weekly', level: 'ok', note: null},
       ],
       look: [
-        'Two free resets: a ticket "2" in the tray, before the agents; its panel says until when',
+        'Three free resets: a ticket "3" in the tray, before the agents; its name and panel say when each expires: one in 8 days, one in 18, one with no end date',
         'Shares a row with Antigravity 2, the same two windows: with reset news or without (Account → this browser → announcements), the two are as tall',
         'The chart marks the early reset six hours ago and the free resets granted',
         'Within 15 minutes: an agent starts (5th minute), one stops (10th), "notifications" switches working every 2 minutes',
@@ -542,6 +551,7 @@ const all: DemoSet = {
       machines: ['win-desktop'],
       history: 14 * DAY,
       windows: [fiveHours(90 * MIN, 6, agentsWork(ON_CALL_AGENTS, shifts(12))), weekly({since: -2 * DAY, use: alongPlan(-15, WEEK_PLAN_FLAT)})],
+      // From an older agent, which tells only when the first of them expires.
       resets: () => ({available: 3, expiresAt: 25 * DAY}),
       agents: ON_CALL_AGENTS,
       on: {ana: {name: 'Codex Pro for the platform team and the on-call rotation', color: '#43aca1', plan: WEEK_PLAN_FLAT, span: 4}},
@@ -556,6 +566,7 @@ const all: DemoSet = {
         'Teal on the card, the chart and the table',
         'Its own plan: 15% a day, 10% the last',
         'A third of the row wide, its tray full: the reset news on the left, three free resets and ten agent marks in two groups on the right, whole at a window 1260 px wide or more; narrower, the marks go all at once and the count stays',
+        'Its free resets come from an older agent, which tells only when the first expires: "3 free resets · the first expires <date>"',
       ],
     },
     {
@@ -853,7 +864,17 @@ const showcase: DemoSet = {
       machines: ['laptop'],
       history: 7 * DAY,
       windows: [fiveHours(-3 * HOUR - 34 * MIN, 15, agentsWork(WORK_AGENTS, ALWAYS)), weekly({since: -(DAY + 3 * HOUR), use: steady(0, 31)})],
-      resets: t => (t < -6 * HOUR ? {available: 0, expiresAt: null} : {available: 2, expiresAt: 18 * DAY}),
+      resets: t =>
+        t < -6 * HOUR
+          ? {available: 0, expiresAt: null, expiring: []}
+          : {
+              available: 2,
+              expiresAt: 11 * DAY,
+              expiring: [
+                {count: 1, expiresAt: 11 * DAY},
+                {count: 1, expiresAt: 18 * DAY},
+              ],
+            },
       agents: WORK_AGENTS,
       on: {demo: {name: 'Work'}},
       expect: [{title: 'Work'}, {agents: 1, drawn: true}],

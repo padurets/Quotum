@@ -250,7 +250,11 @@ export type Card = {
   /** Measured every quarter of an hour, as an agent does a subscription nobody uses (eco mode). */
   eco?: boolean;
   windows: WindowAt[];
-  resets?: (t: number) => {available: number; expiresAt: number | null};
+  /**
+   * Free resets at `t`: how many, when the first expires, and how many expire when (left
+   * out, as an older agent does, when not given).
+   */
+  resets?: (t: number) => {available: number; expiresAt: number | null; expiring?: {count: number; expiresAt: number | null}[]};
   /** Its machines stop delivering it then. */
   until?: number;
   /** What its first machine reports from `from` on instead. */
@@ -414,7 +418,15 @@ export function snapshot(card: Card, start: number, t: number, next: number) {
       const w = at(t);
       return {id: w.id, kind: w.kind, minutes: w.minutes, label: w.label, usedPercent: w.used, resetsAt: w.resetsAt === null ? null : iso(start, w.resetsAt)};
     }),
-    ...(resets ? {resets: {available: resets.available, expiresAt: resets.expiresAt === null ? null : iso(start, resets.expiresAt)}} : {}),
+    ...(resets
+      ? {
+          resets: {
+            available: resets.available,
+            expiresAt: resets.expiresAt === null ? null : iso(start, resets.expiresAt),
+            ...(resets.expiring ? {expiring: resets.expiring.map(g => ({count: g.count, expiresAt: g.expiresAt === null ? null : iso(start, g.expiresAt)}))} : {}),
+          },
+        }
+      : {}),
   };
 }
 

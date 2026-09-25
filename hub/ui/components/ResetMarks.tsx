@@ -1,5 +1,5 @@
-import {countdown, day, stamp} from '../lib/format';
-import type {ResetLabel, ResetStatus} from '../lib/resets';
+import {countdown, stamp} from '../lib/format';
+import {freeResetExpiry, type ResetLabel, type ResetStatus} from '../lib/resets';
 import type {SourceState} from '../lib/types';
 import {rich, t} from '../i18n';
 import {Popover} from './Popover';
@@ -124,13 +124,28 @@ const TicketIcon = () => (
 );
 
 /**
+ * When free resets expire, a line each: all of them at one time is said once; how many
+ * expire when, when they differ; from an older agent, when the first one does.
+ */
+function expiryLines(resets: NonNullable<SourceState['resets']>): string[] {
+  const expiry = freeResetExpiry(resets);
+  if (!expiry) return [];
+  if (expiry.kind === 'first') return [t('card.freeResetsFirst', {date: stamp(expiry.at)})];
+  const [only] = expiry.groups;
+  if (expiry.groups.length === 1) return only.expiresAt !== null ? [t('card.freeResetsUntil', {date: stamp(only.expiresAt)})] : [];
+  return expiry.groups.map(group =>
+    group.expiresAt !== null ? t('card.freeResetsBy', {count: group.count, date: stamp(group.expiresAt)}) : t('card.freeResetsNoDate', {count: group.count}),
+  );
+}
+
+/**
  * Free resets of the limits the account holds, in the tray by the agents: what the card
  * has now. A ticket, so it never reads as the news of a reset for everyone.
  */
 export function FreeResets({resets}: {resets: NonNullable<SourceState['resets']>}) {
-  const label = [t('card.freeResets', {count: resets.available}), resets.expiresAt ? t('card.freeResetsUntil', {date: day(resets.expiresAt)}) : '']
-    .filter(Boolean)
-    .join(' · ');
+  const count = t('card.freeResets', {count: resets.available});
+  const lines = expiryLines(resets);
+  const label = [count, ...lines].join(' · ');
   return (
     <Popover
       label={label}
@@ -144,7 +159,10 @@ export function FreeResets({resets}: {resets: NonNullable<SourceState['resets']>
       }
     >
       <div className="tray-panel">
-        <p className="tray-panel-lead">{label}</p>
+        <p className="tray-panel-lead">{count}</p>
+        {lines.map(line => (
+          <p key={line}>{line}</p>
+        ))}
       </div>
     </Popover>
   );

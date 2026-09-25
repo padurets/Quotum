@@ -158,6 +158,9 @@ export const ru = {
   'agents.columns': 'Колонки',
   'card.freeResets': {one: '{count} бесплатный сброс', few: '{count} бесплатных сброса', many: '{count} бесплатных сбросов', other: '{count} бесплатного сброса'},
   'card.freeResetsUntil': 'использовать до {date}',
+  'card.freeResetsBy': '{count} до {date}',
+  'card.freeResetsNoDate': '{count} без срока',
+  'card.freeResetsFirst': 'ближайший сгорает {date}',
 
   'source.settings': 'Настройки · {source}',
   'source.show': 'Показывать лимиты',

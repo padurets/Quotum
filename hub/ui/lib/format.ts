@@ -44,9 +44,6 @@ export function ago(time: number | null, now: number) {
 
 export const clock = (time: number) => new Date(time).toLocaleTimeString(formatLocale(), {hour: '2-digit', minute: '2-digit'});
 
-/** "22 September" */
-export const day = (time: number) => new Date(time).toLocaleDateString(formatLocale(), {day: 'numeric', month: 'long'});
-
 /** "22 Sept" */
 export const shortDay = (time: number) => new Date(time).toLocaleDateString(formatLocale(), {day: 'numeric', month: 'short'});
 

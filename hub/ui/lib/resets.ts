@@ -1,5 +1,6 @@
 import {useEffect, useState} from 'react';
 import {call, unlessSame} from './http';
+import type {Expiring, FreeResets} from './types';
 
 /**
  * Reset announcements as collected by the service from the community trackers
@@ -55,6 +56,24 @@ export function resetLabel(status: ResetStatus | undefined, now: number): ResetL
   if (latest && now - latest.at < RECENT_RESET_MS) return {...of(latest), key: 'done', tone: 'quiet', scope: latest.scope !== 'all' ? latest.scope : ''};
   if (policy && now - policy.at < RECENT_POLICY_MS) return {...of(policy), key: 'policy', tone: 'quiet'};
   return null;
+}
+
+/**
+ * When a card's free resets expire: how many when, soonest first and those the client gives
+ * no time for last (`each`), or, from an older agent that says only that, when the first
+ * does (`first`); null when nothing is known.
+ */
+export function freeResetExpiry(resets: FreeResets): {kind: 'each'; groups: Expiring[]} | {kind: 'first'; at: number} | null {
+  const groups = resets.expiring ?? [];
+  if (groups.length) {
+    const told = groups.reduce((sum, group) => sum + group.count, 0);
+    const rest = resets.available - told;
+    if (rest <= 0) return {kind: 'each', groups};
+    // The rest have no time given: with those the client already said so of, if any.
+    const last = groups[groups.length - 1];
+    return {kind: 'each', groups: last.expiresAt === null ? [...groups.slice(0, -1), {count: last.count + rest, expiresAt: null}] : [...groups, {count: rest, expiresAt: null}]};
+  }
+  return resets.expiresAt !== null ? {kind: 'first', at: resets.expiresAt} : null;
 }
 
 const POLL_MS = 60_000;
