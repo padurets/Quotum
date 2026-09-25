@@ -8,11 +8,22 @@ fix, open an issue first so we can agree on the approach before you spend time o
 ```sh
 cd hub && npm ci && npm run typecheck && npm test && npm run build
 cd agent && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+node desktop/prepare.mjs && cd desktop && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
 CI runs the same on every push, the agent on Linux, macOS and Windows. `npm start` in
 `hub/` serves the built dashboard on `127.0.0.1:8080`; `cargo run -p quotum` in `agent/`
 measures this machine once.
+
+**The desktop app** (`desktop/`) is checked after `node desktop/prepare.mjs`: it builds
+the hub into one file, fetches the Node.js the app carries (checked against a pinned
+SHA-256) and writes the icons and licenses, all of which the app's build reads. On Linux
+the app needs `libwebkit2gtk-4.1-dev libayatana-appindicator3-dev libxdo-dev libssl-dev
+librsvg2-dev` (Debian and Ubuntu names). `cargo run` in `desktop/` starts it with its hub
+and agent; `npx @tauri-apps/cli@2.11.5 build` there makes its installers (on Linux a deb
+and an AppImage, on Windows a setup.exe). CI builds it on Linux and Windows and runs
+each build with `--smoke`: the hub starts, a stand-in client is measured, the board
+shows it, the window opens twice and the app quits (`desktop/smoke/`).
 
 Tests never start a real Claude Code, Codex or Antigravity client: they use recorded
 answers and stand-in programs, so they cost nothing and don't depend on your accounts.

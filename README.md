@@ -164,7 +164,8 @@ day, not a script thrown together over a weekend. In practice that meant:
 It works: I use it every day. The agent installs with one command, or runs through npm
 as `quotum`, with prebuilt binaries for Linux (x64 and arm64, any distribution), macOS
 and Windows; the hub is a Docker image (`ghcr.io/padurets/quotum-hub`, amd64 and arm64).
-Autostart and a desktop app are next ([roadmap](#roadmap)).
+A [desktop app](#desktop-app) for Windows and Linux is built and tested by CI but not
+released yet; autostart of the agent is next ([roadmap](#roadmap)).
 
 - Clients: Claude Code, Codex CLI, Antigravity CLI (`agy` 1.1.11 or newer).
 - Platforms: I run it on Linux. The macOS and Windows binaries are cross-compiled and
@@ -248,6 +249,52 @@ licences) and as a bare binary (`quotum-cli-<platform>`, what the installers and
 (`gh attestation verify <file> -R padurets/quotum`). **From source:**
 `cd agent && cargo build --release` (Rust 1.85 or newer) gives `target/release/quotum`.
 
+## Desktop app
+
+For one machine there is an app for Windows and Linux (macOS comes later): the agent of
+this machine, a hub of its own and its board in a window, with a tray icon. No account,
+no server. It has no release yet: the [Desktop workflow](.github/workflows/desktop.yml)
+builds every commit on `main` and in pull requests and keeps the builds as the run's
+artifacts (`quotum-desktop-<version>-<commit>-<platform>`; downloading them takes a
+GitHub account). To build it yourself, see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+- **Windows 10 and 11:** run `Quotum_<version>_x64-setup.exe`. It installs for you
+  alone, into `%LOCALAPPDATA%\Quotum`, with no administrator rights, and brings WebView2
+  if Windows lacks it. The installer isn't signed yet, so SmartScreen asks first: *More
+  info → Run anyway*.
+- **Linux** (x64; Ubuntu 22.04, Debian 12 or newer): `sudo apt install
+  ./Quotum_<version>_amd64.deb`, which brings WebKitGTK and the tray's library and gets
+  along with the `nodejs` package; or the AppImage: `chmod +x` it and run it (without
+  FUSE 2, `libfuse2`, add `--appimage-extract-and-run`).
+
+The app opens its board, and the first numbers come within a minute. The gear opens its
+settings: which providers are measured and how often, running agents, start at login,
+the version and *Quit*. These are `quotum`'s own settings ([Configuration](#agent)): the
+command and the app share them.
+
+- **Closing the window** leaves it measuring; the tray icon or starting the app again
+  opens the window. *Quit* is in the settings and in the tray's menu. GNOME shows tray
+  icons only with an extension (AppIndicator); without one, start the app again to open
+  its window.
+- **Start at login** turns on by itself the first time the app measures and starts it
+  without the window. Turn it off in the settings, and do that before uninstalling. The
+  entry names the AppImage by its path: keep it where it is, at a path without spaces
+  (after a move, turn start at login off and on again).
+- **A newer build** installs over the old one: quit the app first.
+- **With `quotum`.** One agent measures a machine. If `quotum` already does, the app
+  asks once whether to take over. A `quotum` of this version then waits and goes on by
+  itself when the app quits, so `quotum run` as a service keeps working; an older one
+  stops (update it). A hub that `quotum` delivered to gets nothing from this machine
+  while the app runs.
+- **Its data**, the board's history and the logs, is in
+  `%LOCALAPPDATA%\com.padurets.quotum` or `~/.local/share/com.padurets.quotum`.
+- **What leaves the machine:** nothing but the reset announcements the board reads from
+  Codex Resets and Claude Resets, as every hub does (`QUOTUM_RESETS=off` in the app's
+  environment turns that off). Its hub listens on `127.0.0.1` alone, behind a key only
+  the window gets.
+- **Size:** the Windows installer is about 27 MB, the deb 51 MB (about 140 MB
+  installed) and the AppImage 125 MB; most of it is the Node.js its hub runs on.
+
 ## Configuration
 
 ### Agent
@@ -319,6 +366,7 @@ agent/crates/cli      the `quotum` command
 npm/                  the npm packages: a launcher and a prebuilt binary per platform
 install/              the installers for `curl … | sh` and PowerShell
 deploy/               running the hub with Docker Compose behind Caddy (HTTPS)
+desktop/              the desktop app (Tauri): the agent, its own hub and board in a window
 .github/workflows     tests on every push; everything released from a version tag
 spec/                 the protocol between the agent and the hub
 hub/server/domain     the rules: windows, spending, resets, the ingest format
@@ -329,7 +377,8 @@ hub/ui                the dashboard (React), translations in hub/ui/i18n
 ```
 
 `npm test` and `npm run typecheck` in `hub/`, `cargo test` and `cargo clippy` in
-`agent/` check everything; CI runs them on every push. `node npm/build.mjs` builds the
+`agent/` and `desktop/` check everything (the app's after `node desktop/prepare.mjs`);
+CI runs them on every push. `node npm/build.mjs` builds the
 npm packages (it needs cargo-zigbuild and zig; see the script), `docker build hub` the
 hub's image.
 
@@ -371,8 +420,7 @@ language has is there.
 
 1. A team view on shared boards: people × providers at a glance.
 2. Autostart: a systemd user service, launchd, Windows.
-3. A desktop app (Tauri) with the agent and the dashboard in one window and a tray
-   icon, no server needed.
+3. Releases of the desktop app with installers, then the app on macOS.
 
 ## Credits and license
 
