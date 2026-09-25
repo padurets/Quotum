@@ -3,12 +3,12 @@ import {useNow} from '../lib/api';
 import type {SourceState, Win} from '../lib/types';
 import {windowKey} from '../lib/types';
 import {ago, day, duration, fullStamp, num} from '../lib/format';
-import {errorText, freshness, level, problemOf, PULSE_FOR, resetLine, sourceLabel, windowName} from '../lib/quota';
+import {dotOf, errorText, level, problemOf, resetLine, sourceLabel, windowName} from '../lib/quota';
 import {t, useLocale} from '../i18n';
 import {Agents} from './Agents';
 import {DEFAULT_PLAN, isValidPlan, planAt, planNote, planTotal, type WeeklyPlan} from '../lib/plan';
 import {LOGOS} from './logos';
-import {cardId, colorOf, planOf, weeklyPlanOf, withColor, withHidden, withName, withPlan, withPlanned, withWindowHidden, type Arrange} from '../lib/view';
+import {cardId, colorOf, isWindowHidden, planOf, weeklyPlanOf, withColor, withHidden, withName, withPlan, withPlanned, withWindowHidden, type Arrange} from '../lib/view';
 import {CARD_COLORS, MIDDLE_STEP, PROVIDERS} from '../lib/providers';
 import {call} from '../lib/http';
 import type {Board} from '../lib/session';
@@ -306,11 +306,11 @@ export const SourceCard = memo(function SourceCard({
   useLocale();
   const now = useNow();
   const problem = problemOf(source);
-  const hidden = new Set(arrange.view.windows);
-  const visible = source.windows.filter(w => !hidden.has(windowKey(source.id, w.id)));
+  const visible = source.windows.filter(w => !isWindowHidden(arrange.view, source.id, w.id));
   const weekly = planOf(arrange.view, source.id);
   const warn = source.stale || !!problem;
   const age = source.successAt === null ? Infinity : now - source.successAt;
+  const dot = dotOf(age);
   // How fresh the numbers are lives in the colour of the logo's dot and in its tooltip;
   // trouble is also told under the limits, where it moves no meter out of line.
   const status = problem ?? (source.successAt ? t('source.measured', {ago: ago(source.successAt, now)}) : errorText('waiting'));
@@ -323,7 +323,7 @@ export const SourceCard = memo(function SourceCard({
           {warn ? (
             <i className="dot dot-warn" />
           ) : (
-            <i className={`dot dot-fresh ${age < PULSE_FOR ? 'is-pulsing' : ''}`} style={{'--fresh': freshness(age)} as CSSProperties} />
+            <i className={`dot dot-fresh ${dot.pulsing ? 'is-pulsing' : ''}`} style={{'--fresh': dot.fresh} as CSSProperties} />
           )}
         </span>
         <div className="card-title">

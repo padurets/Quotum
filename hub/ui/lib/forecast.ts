@@ -3,17 +3,18 @@ import type {Line} from './lines';
 import {PLAN_TOLERANCE, planAt, type WeeklyPlan} from './plan';
 
 /**
- * Where the average pace over the period leads, as the table's last column says it:
- * nothing to say (`none`), too little measured to tell (`needData`), used up, runs out
- * in `inMs`, on pace to spend it all by the deadline, or `left` points left then.
+ * Where the average pace over the period leads, as the table's last column says it, and
+ * in which tone: nothing to say (`none`), too little measured to tell (`needData`), used
+ * up, runs out in `inMs`, on pace to spend it all by the deadline, or `left` points left
+ * then.
  */
 export type Outlook =
-  | {key: 'none'}
-  | {key: 'needData'}
-  | {key: 'usedUp'}
+  | {key: 'none' | 'needData'; tone: ''}
+  | {key: 'usedUp'; tone: 'v-crit'}
   | {key: 'runsOut'; inMs: number; tone: 'v-crit' | 'v-warn'; rate: number}
-  | {key: 'onPacePlan' | 'onPaceReset'; rate: number}
-  | {key: 'leftPlan' | 'leftReset'; left: number; rate: number};
+  | {key: 'onPacePlan' | 'onPaceReset'; tone: ''; rate: number}
+  | {key: 'leftPlan'; left: number; tone: 'muted'; rate: number}
+  | {key: 'leftReset'; left: number; tone: ''; rate: number};
 
 /**
  * Where the average pace over the period leads. Weekly windows are judged against the
@@ -22,11 +23,11 @@ export type Outlook =
  */
 export function outlook(line: Pick<Line, 'consumed' | 'coveredMs'>, live: Win | undefined, measuredAt: number | null, now: number, weekly: WeeklyPlan | null): Outlook {
   const plan = live ? planAt(live, measuredAt, now, weekly) : null;
-  if (live && live.remaining <= 0) return {key: 'usedUp'};
-  if (!live?.resetAt || live.resetAt <= now) return {key: 'none'};
+  if (live && live.remaining <= 0) return {key: 'usedUp', tone: 'v-crit'};
+  if (!live?.resetAt || live.resetAt <= now) return {key: 'none', tone: ''};
 
   const hours = line.coveredMs / 3_600_000;
-  if (hours < 0.5) return {key: 'needData'};
+  if (hours < 0.5) return {key: 'needData', tone: ''};
   const rate = line.consumed / hours;
   // Past the end of its plan a week has only its reset ahead.
   const planned = plan?.weekly && !plan.done;
@@ -38,8 +39,8 @@ export function outlook(line: Pick<Line, 'consumed' | 'coveredMs'>, live: Win | 
     if (untilEmpty < untilDeadline) return {key: 'runsOut', inMs: untilEmpty, tone: untilEmpty < untilDeadline / 2 ? 'v-crit' : 'v-warn', rate};
   }
   const left = Math.max(0, live.remaining - (rate * (deadline - now)) / 3_600_000);
-  if (left < 5) return {key: planned ? 'onPacePlan' : 'onPaceReset', rate};
-  return {key: planned ? 'leftPlan' : 'leftReset', left, rate};
+  if (left < 5) return {key: planned ? 'onPacePlan' : 'onPaceReset', tone: '', rate};
+  return planned ? {key: 'leftPlan', left, tone: 'muted', rate} : {key: 'leftReset', left, tone: '', rate};
 }
 
 /** What a line spent over the period: points, nothing while measured (`unused`), or unknown. */

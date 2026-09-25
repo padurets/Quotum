@@ -11,26 +11,26 @@ import {ofTimeRange} from '../lib/timeRange';
 import {t, useLocale} from '../i18n';
 import {HideRow, Popover, SlidersIcon} from './Popover';
 
-/** The last column's text, colour and tooltip. */
-function outlookCell(ahead: Outlook): {text: string; tone: string; title: string} {
+/** The last column's text and tooltip; its colour is the outlook's tone. */
+function outlookCell(ahead: Outlook): {text: string; title: string} {
   switch (ahead.key) {
     case 'none':
-      return {text: '—', tone: '', title: ''};
+      return {text: '—', title: ''};
     case 'needData':
-      return {text: '—', tone: '', title: t('forecast.needData')};
+      return {text: '—', title: t('forecast.needData')};
     case 'usedUp':
-      return {text: t('forecast.usedUp'), tone: 'v-crit', title: ''};
+      return {text: t('forecast.usedUp'), title: ''};
   }
   const title = t('forecast.rate', {rate: ahead.rate < 0.05 ? '≈ 0' : num(ahead.rate, 1)});
   switch (ahead.key) {
     case 'runsOut':
-      return {text: t('forecast.runsOut', {time: duration(ahead.inMs, true)}), tone: ahead.tone, title};
+      return {text: t('forecast.runsOut', {time: duration(ahead.inMs, true)}), title};
     case 'onPacePlan':
     case 'onPaceReset':
-      return {text: t(`forecast.${ahead.key}`), tone: '', title};
+      return {text: t(`forecast.${ahead.key}`), title};
     case 'leftPlan':
     case 'leftReset':
-      return {text: t(`forecast.${ahead.key}`, {value: num(ahead.left)}), tone: ahead.key === 'leftPlan' ? 'muted' : '', title};
+      return {text: t(`forecast.${ahead.key}`, {value: num(ahead.left)}), title};
   }
 }
 
@@ -109,8 +109,8 @@ export const Forecast = memo(function Forecast({
                     {line.name}
                   </td>
                 );
-                const spent = <td>{spentText(spentOf(line))}</td>;
                 if (selected) {
+                  const spent = <td>{spentText(spentOf(line))}</td>;
                   const edge = (value: number | null) => (value === null ? <td>—</td> : <td className={`v-${level(value)}`}>{num(value)}%</td>);
                   return (
                     <tr key={line.key}>
@@ -127,6 +127,7 @@ export const Forecast = memo(function Forecast({
                 const measuredAt = source?.successAt ?? null;
                 const row = forecastRow(line, live, measuredAt, now, planOf(view, line.sourceId));
                 const {plan} = row;
+                const spent = <td>{spentText(row.spent)}</td>;
                 const ahead = outlookCell(row.outlook);
                 return (
                   <tr key={line.key}>
@@ -149,7 +150,7 @@ export const Forecast = memo(function Forecast({
                       )}
                     </td>
                     {spent}
-                    <td className={ahead.tone} title={ahead.title}>
+                    <td className={row.outlook.tone} title={ahead.title}>
                       {ahead.text}
                     </td>
                   </tr>

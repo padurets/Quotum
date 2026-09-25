@@ -70,6 +70,9 @@ const FADE_FOR = 5 * 60_000;
 /** The fade goes in this many steps, one every half a minute: in between, nothing on the page changes. */
 const FADE_STEPS = 10;
 
+/** The dot by a card's logo, from the age of its numbers: pulsing while they are news, then fading (`freshness`). */
+export const dotOf = (age: number) => ({pulsing: age < PULSE_FOR, fresh: freshness(age)});
+
 /**
  * How fresh a source's numbers are, from 1 (just measured) to 0 (a while ago). It only
  * says how old they are, not that anything is wrong: in eco mode a quiet subscription

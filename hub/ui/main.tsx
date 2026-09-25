@@ -10,7 +10,7 @@ import {useResets} from './lib/resets';
 import {sourceLabel, titled} from './lib/quota';
 import {usePath} from './lib/router';
 import {boardTitle, rememberBoard, useBoard, useSession, type Board, type Session, type User} from './lib/session';
-import {AGENTS, arranged, cardId, FORECAST, HISTORY, isHidden, reordered, spanOf, useView, withHidden, withSpan} from './lib/view';
+import {AGENTS, arranged, boardState, cardId, FORECAST, HISTORY, isHidden, reordered, spanOf, useView, withHidden, withSpan} from './lib/view';
 import {t, useLocale} from './i18n';
 import {Header} from './components/Header';
 import {SERVICE} from './components/Kit';
@@ -70,7 +70,8 @@ function Dashboard({
   const names = arrange.view.names;
   const overview = useMemo(() => (data ? {...data, sources: titled(data.sources, names)} : null), [data, names]);
   const sources = overview?.sources ?? [];
-  const empty = !!overview && sources.length === 0;
+  const state = overview ? boardState(sources, arrange.view) : null;
+  const empty = state === 'onboarding';
 
   useEffect(() => {
     document.title = board?.name ? `${boardTitle(board)} · ${SERVICE}` : SERVICE;
@@ -202,7 +203,7 @@ function Dashboard({
               )}
             </div>
           </section>
-        ) : shown.length ? (
+        ) : state === 'widgets' ? (
           <>
             {shownCards.length > 0 && grid(shownCards, order => arrange.update(view => reordered(view, [...order, ...ids(shownPanels)])))}
             {shownPanels.length > 0 && (
