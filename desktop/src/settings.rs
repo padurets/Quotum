@@ -223,9 +223,9 @@ mod tests {
         fs::write(&file, "# keep\nsessions = true\n").unwrap();
         let acl = |protect: bool| {
             let script = if protect {
-                "$a=Get-Acl -LiteralPath $env:QUOTUM_TEST_FILE; $a.SetAccessRuleProtection($true,$true); Set-Acl -LiteralPath $env:QUOTUM_TEST_FILE -AclObject $a; (Get-Acl -LiteralPath $env:QUOTUM_TEST_FILE).Sddl"
+                "$a=[IO.File]::GetAccessControl($env:QUOTUM_TEST_FILE); $a.SetAccessRuleProtection($true,$true); [IO.File]::SetAccessControl($env:QUOTUM_TEST_FILE,$a); [IO.File]::GetAccessControl($env:QUOTUM_TEST_FILE).GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access)"
             } else {
-                "(Get-Acl -LiteralPath $env:QUOTUM_TEST_FILE).Sddl"
+                "[IO.File]::GetAccessControl($env:QUOTUM_TEST_FILE).GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access)"
             };
             let output = std::process::Command::new("powershell.exe")
                 .args([
