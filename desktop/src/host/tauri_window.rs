@@ -2,6 +2,7 @@ use crate::{hub::HubState, shell::Shell, window::*};
 use std::{sync::Arc, thread, time::Duration};
 use tauri::webview::{NewWindowResponse, PageLoadEvent};
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_window_state::{StateFlags, WindowExt};
 /// Whether the window is open (it may be on its way out).
 pub fn is_open(shell: &Shell) -> bool {
     shell.host.app.get_webview_window(LABEL).is_some()
@@ -58,6 +59,7 @@ fn build(shell: &Arc<Shell>, state: &HubState) -> tauri::Result<tauri::WebviewWi
     };
     let mut builder = WebviewWindowBuilder::new(app, LABEL, url)
         .title("Quotum")
+        .visible(false)
         // Match the board's --bg while the web view has not painted a newly exposed area yet.
         .background_color(tauri::utils::config::Color(0x0b, 0x0b, 0x0e, 255))
         .inner_size(1280.0, 800.0)
@@ -90,7 +92,41 @@ fn build(shell: &Arc<Shell>, state: &HubState) -> tauri::Result<tauri::WebviewWi
         builder = builder.data_directory(dir.clone());
     }
     let window = builder.build()?;
+    if shell.smoke.is_none() {
+        let _ = window.restore_state(StateFlags::all() & !StateFlags::VISIBLE);
+    }
+    let _ = fit_on_screen(&window);
+    window.show()?;
     Ok(window)
+}
+
+fn fit_on_screen(window: &tauri::WebviewWindow) -> tauri::Result<()> {
+    if window.is_maximized()? || window.is_fullscreen()? {
+        return Ok(());
+    }
+    let Some(monitor) = window.current_monitor()?.or(window.primary_monitor()?) else {
+        return Ok(());
+    };
+    let area = monitor.work_area();
+    let outer = window.outer_size()?;
+    let inner = window.inner_size()?;
+    let position = window.outer_position()?;
+    let width = outer.width.min(area.size.width);
+    let height = outer.height.min(area.size.height);
+    // The work area includes neither taskbar nor docks; account for the native frame
+    // when setting the client size. All measurements here are physical pixels.
+    if width != outer.width || height != outer.height {
+        window.set_size(tauri::PhysicalSize::new(
+            width.saturating_sub(outer.width.saturating_sub(inner.width)).max(1),
+            height.saturating_sub(outer.height.saturating_sub(inner.height)).max(1),
+        ))?;
+    }
+    let x = position.x.clamp(area.position.x, area.position.x + (area.size.width - width) as i32);
+    let y = position.y.clamp(area.position.y, area.position.y + (area.size.height - height) as i32);
+    if x != position.x || y != position.y {
+        window.set_position(tauri::PhysicalPosition::new(x, y))?;
+    }
+    Ok(())
 }
 
 /// Moves the window where it belongs in the hub's current state, if it is not there;

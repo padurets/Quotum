@@ -29,7 +29,8 @@ pub fn run(args: Args) {
                     }
                 }
             }))
-            .plugin(tauri_plugin_window_state::Builder::default().build());
+            // Restore while hidden, then fit the window to the current work area.
+            .plugin(tauri_plugin_window_state::Builder::default().skip_initial_state(window::LABEL).build());
     }
     let app = builder
         // Its JavaScript API is not given to any page: the app itself turns it on and off.
