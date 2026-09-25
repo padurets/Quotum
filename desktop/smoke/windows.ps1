@@ -5,6 +5,33 @@
 param([string]$Mode, [string]$App)
 $ErrorActionPreference = 'Stop'
 
+function Test-IntentionalCrash([int]$Code, [string[]]$Lines) {
+  # MSVC abort / Rust fast-fail. A loader error or the smoke watchdog is not proof
+  # that the hub was alive when its controller died.
+  return ($Code -eq 3 -or $Code -eq -1073740791) -and
+    ($Lines -ccontains 'smoke: the hub is ready') -and
+    ($Lines -ccontains 'smoke: crashing on purpose') -and
+    -not ($Lines -cmatch '^smoke: FAILED:')
+}
+
+if ($Mode -eq 'check') {
+  $reached = @('smoke: the hub is ready', 'smoke: crashing on purpose')
+  foreach ($code in @(3, -1073740791)) {
+    if (-not (Test-IntentionalCrash $code $reached)) { throw 'Deliberate abort was rejected' }
+  }
+  foreach ($case in @(
+    @{code=1; lines=@('smoke: FAILED: not done within 120 s')},
+    @{code=3; lines=@()},
+    @{code=0; lines=$reached},
+    @{code=1; lines=$reached},
+    @{code=3; lines=($reached + 'smoke: FAILED: child failed')}
+  )) {
+    if (Test-IntentionalCrash $case.code $case.lines) { throw 'An unrelated failure passed as a deliberate crash' }
+  }
+  Write-Host 'crash classification: 2 positive and 5 negative controls passed'
+  return
+}
+
 $work = Join-Path $env:RUNNER_TEMP "quotum-smoke-$Mode"
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $work | Out-Null
@@ -44,7 +71,8 @@ $code = $p.ExitCode
 Get-Content "$work\stderr.txt"
 if ($null -eq $code) { Fail 'no exit code' }
 if ($Mode -eq 'crash') {
-  if ($code -eq 0) { Fail 'the app did not crash' }
+  $lines = [IO.File]::ReadAllLines("$work\stderr.txt")
+  if (-not (Test-IntentionalCrash $code $lines)) { Fail "the deliberate crash was not reached ($code)" }
   for ($i = 0; $i -lt 20 -and (Nodes).Count; $i++) { Start-Sleep -Milliseconds 500 }
   if ((Nodes).Count) { Fail 'quotum-node outlived the crashed app by 10 s' }
 } else {

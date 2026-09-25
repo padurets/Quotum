@@ -139,6 +139,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          ./desktop/smoke/windows.ps1 check
           $setup = Get-ChildItem "desktop/target/${{ matrix.target }}/release/bundle/nsis/*-setup.exe" | Select-Object -First 1
           Start-Process -FilePath $setup.FullName -ArgumentList '/S' -Wait
           $app = "$env:LOCALAPPDATA\Quotum\quotum-desktop.exe"
