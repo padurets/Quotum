@@ -4,7 +4,8 @@
 //! - the hub is ready and the agent delivered a measurement to it;
 //! - entering with the key gives a session whose board shows the measured subscription;
 //! - the window shows the board, and does again after it is closed and opened the way the
-//!   tray opens it (not where the runner can show no window: `QUOTUM_SMOKE_WINDOW=off`).
+//!   tray opens it, and the board asks the app for its state through the bridge (not where
+//!   the runner can show no window: `QUOTUM_SMOKE_WINDOW=off`).
 //!
 //! Then it quits, exit 0. `--smoke=crash` aborts once the hub is ready: CI then checks the
 //! hub went by itself. Anything else, or no end within two minutes, is exit 1 with the
@@ -37,6 +38,8 @@ struct Progress {
     board: bool,
     /// Times the window finished loading the board.
     loaded: u32,
+    /// The board called `app_state`: the bridge reaches the hub's page and lets it in.
+    asked: bool,
     done: bool,
 }
 
@@ -134,10 +137,19 @@ impl Smoke {
         });
     }
 
+    /// The board in the window asked the app for its state.
+    pub fn board_asked(&self, shell: &Arc<Shell>) {
+        if std::mem::replace(&mut self.progress().asked, true) {
+            return;
+        }
+        eprintln!("smoke: the board asked the app through the bridge");
+        self.pass_if_done(shell);
+    }
+
     fn pass_if_done(&self, shell: &Arc<Shell>) {
         {
             let mut progress = self.progress();
-            let window = !self.window || progress.loaded >= 2;
+            let window = !self.window || (progress.loaded >= 2 && progress.asked);
             if progress.done || !(progress.ready && progress.board && window) {
                 return;
             }

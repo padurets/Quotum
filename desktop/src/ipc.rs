@@ -79,6 +79,9 @@ fn state_of(shell: &Arc<Shell>) -> AppState {
 #[tauri::command(async)]
 pub fn app_state(webview: Webview, shell: State<'_, Arc<Shell>>) -> Result<AppState, String> {
     guard(&webview, &shell)?;
+    if let Some(smoke) = &shell.smoke {
+        smoke.board_asked(&shell);
+    }
     Ok(state_of(&shell))
 }
 
