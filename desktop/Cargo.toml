@@ -28,6 +28,10 @@ toml_edit = "0.25.15"
 [target."cfg(unix)".dependencies]
 libc = "0.2.189"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Already used by Tauri: inspect the loaded engine and its actual compositing policy.
+webkit2gtk = "2.0.2"
+
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }
 

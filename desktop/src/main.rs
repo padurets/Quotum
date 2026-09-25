@@ -8,6 +8,8 @@
 mod agent;
 mod autostart;
 mod files;
+#[cfg(target_os = "linux")]
+mod graphics;
 mod hub;
 mod ipc;
 mod settings;
@@ -33,6 +35,7 @@ use crate::shell::Shell;
 struct Args {
     /// Started at login: no window until asked for.
     hidden: bool,
+    software_rendering: bool,
     smoke: Option<smoke::Mode>,
 }
 
@@ -42,6 +45,7 @@ impl Args {
         for arg in args.into_iter().skip(1) {
             match arg.into().to_str() {
                 Some("--hidden") => parsed.hidden = true,
+                Some("--software-rendering") => parsed.software_rendering = true,
                 Some("--smoke") => parsed.smoke = Some(smoke::Mode::Normal),
                 Some("--smoke=crash") => parsed.smoke = Some(smoke::Mode::Crash),
                 _ => {}
@@ -62,8 +66,11 @@ fn without_proxy_for_loopback(current: Option<String>) -> String {
 }
 
 fn main() {
+    let args = Args::parse(std::env::args_os());
     // SAFETY: the first thing the program does, before any thread exists.
     unsafe {
+        #[cfg(target_os = "linux")]
+        graphics::configure(args.software_rendering);
         // Debugging switches of the person's would open the window to other users of the
         // machine (a DevTools port, WebKit's inspector server).
         for name in ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "WEBKIT_INSPECTOR_SERVER", "WEBKIT_INSPECTOR_HTTP_SERVER"]
@@ -74,7 +81,6 @@ fn main() {
             std::env::set_var(name, without_proxy_for_loopback(std::env::var(name).ok()));
         }
     }
-    let args = Args::parse(std::env::args_os());
     let smoke = args.smoke;
 
     let mut builder = tauri::Builder::default();
@@ -177,6 +183,7 @@ mod tests {
         assert!(split.hidden, "a path split at a space");
         assert_eq!(Args::parse(["q", "--smoke"]).smoke, Some(smoke::Mode::Normal));
         assert_eq!(Args::parse(["q", "--smoke=crash"]).smoke, Some(smoke::Mode::Crash));
+        assert!(Args::parse(["q", "--software-rendering"]).software_rendering);
     }
 
     #[test]

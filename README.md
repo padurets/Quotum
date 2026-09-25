@@ -267,10 +267,16 @@ build it yourself, see [CONTRIBUTING.md](CONTRIBUTING.md).
   library and gets along with the system's `nodejs`. On Debian 12, Ubuntu 22.04 or newer
   `sudo apt install ./quotum-desktop-<…>.deb`; on Fedora `sudo dnf install
   ./quotum-desktop-<…>.rpm`. Elsewhere the AppImage: `chmod +x` it and run it (without
-  FUSE 2, `libfuse2`, add `--appimage-extract-and-run`). It carries a WebKitGTK of its
-  own and draws through X11, and on a newer system (Fedora among them) that may mean
-  without the GPU: no blur, a slow scroll, or no start at all. Take a package where
-  there is one.
+  FUSE 2, `libfuse2`, add `--appimage-extract-and-run`). It carries its own WebKitGTK
+  and draws through X11; prefer the system package where available. For tested
+  NVIDIA/WebKit combinations the app selects a compatible renderer while keeping
+  GPU compositing and blur. If graphics still fail, quit the app completely and try
+  `quotum-desktop --software-rendering` (or add the option to the AppImage command).
+  This affects that launch only. `hub.log` records the actual graphics mode.
+
+When trying a new build, choose *Quit* in the old one first: closing its window keeps
+it running, and another launch opens that same process. Check the commit in settings;
+an AppImage's start-at-login entry also needs to point to the intended file.
 
 The app opens its board, and the first numbers come within a minute. The gear opens its
 settings: which providers are measured and how often, running agents, start at login,

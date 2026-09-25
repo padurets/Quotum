@@ -2850,6 +2850,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-window-state",
  "toml_edit 0.25.15+spec-1.1.0",
+ "webkit2gtk",
 ]
 
 [[package]]

@@ -39,7 +39,10 @@ node_gone() {
 node_gone || fail "a quotum-node runs before the app starts"
 case $mode in
   normal)
-    timeout -k 10 180 xvfb-run -a "$@" --smoke || fail "the app failed ($?)"
+    # WebKit can crash during window destruction after the app already reported success.
+    # Trace descendants' actual exit signals: the parent's zero exit code is insufficient.
+    sh "$(dirname "$0")/trace.sh" "$work/process.log" \
+      timeout -k 10 180 xvfb-run -a "$@" --smoke || fail "the app failed ($?)"
     node_gone || fail "quotum-node outlived the app"
     ;;
   crash)

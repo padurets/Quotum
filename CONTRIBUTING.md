@@ -25,6 +25,16 @@ an rpm and an AppImage, on Windows a setup.exe). CI builds it on Linux and Windo
 each build with `--smoke` (the rpm installed on Fedora): the hub starts, a stand-in client is measured, the board
 shows it, the window opens twice and the app quits (`desktop/smoke/`).
 
+Linux smoke checks also need `xvfb`, `xauth` and `strace`. Run
+`python3 desktop/smoke/test_trace.py` when changing their supervisor: a crashing WebKit
+child must fail the check even if the app exits successfully. On real Linux hardware,
+check the displayed image, scrolling and repeated window close/reopen with the actual
+package. Frame callbacks alone do not measure physical presentation; keep performance
+measurements separate from tracing, and check child crashes during teardown too.
+The intentional child-crash regression requires `QUOTUM_TEST_FAULT=1`; CI enables it.
+Leave it off on a person's desktop, whose crash handler can notify them even with core
+files disabled.
+
 Tests never start a real Claude Code, Codex or Antigravity client: they use recorded
 answers and stand-in programs, so they cost nothing and don't depend on your accounts.
 

@@ -63,7 +63,12 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev libxdo-dev libssl-dev librsvg2-dev patchelf xvfb
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev libxdo-dev libssl-dev librsvg2-dev patchelf xvfb strace
+      - name: Smoke supervisor tests
+        if: runner.os == 'Linux'
+        env:
+          QUOTUM_TEST_FAULT: '1'
+        run: python3 desktop/smoke/test_trace.py
       - name: Commit and version
         shell: bash
         run: |
@@ -98,6 +103,7 @@ jobs:
           sudo apt-get install -y nodejs
           sudo apt-get install -y "./$deb"
           sh desktop/smoke/linux.sh normal quotum-desktop
+          sh desktop/smoke/linux.sh normal quotum-desktop --software-rendering
           sh desktop/smoke/linux.sh crash quotum-desktop
       - name: Smoke (Fedora)
         if: runner.os == 'Linux'
@@ -108,7 +114,7 @@ jobs:
           rpm=$(ls desktop/target/${{ matrix.target }}/release/bundle/rpm/*.rpm)
           docker run --rm -v "$PWD:/work:ro" -w /work fedora:42 sh -c "
             set -e
-            dnf -y install nodejs xorg-x11-server-Xvfb xorg-x11-xauth procps-ng /work/$rpm > /tmp/dnf.log || { cat /tmp/dnf.log; exit 1; }
+            dnf -y install nodejs xorg-x11-server-Xvfb xorg-x11-xauth procps-ng strace /work/$rpm > /tmp/dnf.log || { cat /tmp/dnf.log; exit 1; }
             rpm -ql quotum | grep '^/usr/bin/'
             useradd -m smoke
             runuser -u smoke -- sh desktop/smoke/linux.sh normal quotum-desktop

@@ -335,6 +335,27 @@ no name of their own, so each reader sees "My limits" in their language.
 - **The window** shows that hub's board in the system's web view: WebView2 on Windows,
   WebKitGTK on Linux.
 
+**Linux rendering.** `desktop/src/graphics.rs` selects process-local defaults before
+GTK or worker threads start. For NVIDIA-only render devices using the NVIDIA driver
+(not Nouveau) and the checked WebKitGTK
+versions (2.50.4, 2.50.6 and 2.52.5), it keeps GPU compositing and blur, uses shared-memory
+frame transport and two CPU painting workers. The separate Skia GPU painting workers
+can crash inside the NVIDIA driver when a window is destroyed; disabling compositing
+would hide that fault by also removing the board's glass. The two operations are kept
+separate. For these combinations the default display is X11/XWayland when available,
+avoiding the affected GTK/NVIDIA Wayland explicit-sync path. Explicit `GDK_BACKEND`
+selection is preserved; Wayland uses the process-local explicit-sync workaround unless
+the person has already chosen its value.
+
+Other GPUs, mixed-GPU machines, unknown render devices and other WebKit versions keep
+the system defaults. Explicit WebKit renderer or painting settings suppress the entire
+automatic renderer policy. `--software-rendering` is an explicit fallback for this
+launch only. Each window logs its loaded WebKit version, actual compositing policy and
+selected transport/painting settings in `hub.log`; a live web-process failure is logged
+there too. No driver or desktop configuration is changed, and the page gets no new IPC
+command. Linux smoke checks trace child exit signals: a successful app process alone
+does not establish that its web processes closed without crashing.
+
 **The hub's local mode.** Started with `QUOTUM_LOCAL_KEY` and `QUOTUM_LOCAL_TOKEN`, a
 hub has one person and no accounts. At start it makes sure the person exists, sets the
 secret of its machine token (*Quotum app*) to the one given and deletes every session.

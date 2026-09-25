@@ -162,7 +162,10 @@ fn build(shell: &Arc<Shell>, state: &HubState) -> tauri::Result<tauri::WebviewWi
     if let Some(dir) = &shell.dirs.webview {
         builder = builder.data_directory(dir.clone());
     }
-    builder.build()
+    let window = builder.build()?;
+    #[cfg(target_os = "linux")]
+    crate::graphics::observe(&window, shell);
+    Ok(window)
 }
 
 /// Moves the window where it belongs in the hub's current state, if it is not there;
