@@ -86,6 +86,23 @@ export function planAt(w: Win, measuredAt: number | null, now: number, plan: Wee
   return {remaining: weeklyPlanRemaining(elapsed, plan), deadline, done: now >= deadline, weekly: true};
 }
 
+/** What a card says under a limit about the plan: how many points ahead of it or behind it. */
+export type PlanNote = {key: 'ahead' | 'behind'; value: number; weekly: boolean};
+
+/**
+ * The note under a limit, when the gap to the plan is worth a word: ahead of it (spent
+ * more) for any window, behind it (a reserve) only for a weekly one. A limit used up is
+ * past any plan: how far ahead of it says nothing more.
+ */
+export function planNote(w: Win, measuredAt: number | null, now: number, plan: WeeklyPlan | null = DEFAULT_PLAN): PlanNote | null {
+  const point = planAt(w, measuredAt, now, plan);
+  if (!point || point.done || w.remaining <= 0) return null;
+  const delta = w.remaining - point.remaining;
+  if (Math.round(-delta) >= PLAN_NOTE_FROM) return {key: 'ahead', value: -delta, weekly: point.weekly};
+  if (point.weekly && Math.round(delta) >= PLAN_NOTE_FROM) return {key: 'behind', value: delta, weekly: true};
+  return null;
+}
+
 /**
  * The plan as a line over [from, to] for a weekly window that resets at `resetAt`. It
  * starts with the current window: earlier weeks may have been cut short by an early

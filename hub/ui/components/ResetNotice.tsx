@@ -1,10 +1,6 @@
 import {duration, soon, stamp} from '../lib/format';
-import type {ResetStatus} from '../lib/resets';
+import {resetLabel, type ResetStatus} from '../lib/resets';
 import {t} from '../i18n';
-
-/** A reset is news on a card for a day; the chart keeps marking it. */
-const RECENT_RESET_MS = 24 * 3_600_000;
-const RECENT_POLICY_MS = 72 * 3_600_000;
 
 function Credit({status}: {status: ResetStatus}) {
   return (
@@ -20,20 +16,19 @@ function Credit({status}: {status: ResetStatus}) {
  * the card, on the card's own background.
  */
 export function ResetBanner({status, now}: {status: ResetStatus | undefined; now: number}) {
-  const event = status?.scheduled ?? status?.watch;
-  if (!status || !event) return null;
-  const scheduled = status.scheduled;
-  const at = scheduled ? scheduled.scheduledFor : status.watch!.expiresAt;
+  const label = resetLabel(status, now);
+  if (!status || label?.kind !== 'banner') return null;
+  const {event, at} = label;
   const upcoming = at !== null && at > now;
 
-  const lead = scheduled
-    ? upcoming
-      ? t(scheduled.kind === 'banked' ? 'reset.bankedIn' : 'reset.in', {time: duration(at! - now, true)})
-      : at === null
-        ? t('reset.announced')
-        : t('reset.awaiting')
-    : `${t('reset.possible')}${status.watch!.chance !== null ? ` · ${status.watch!.chance}%` : ''}`;
+  const lead =
+    label.key === 'possible'
+      ? `${t('reset.possible')}${label.chance !== null ? ` · ${label.chance}%` : ''}`
+      : label.key === 'in' || label.key === 'bankedIn'
+        ? t(`reset.${label.key}`, {time: duration(at! - now, true)})
+        : t(`reset.${label.key}`);
   const when = at !== null && upcoming ? soon(at, now) : '';
+  const scheduled = label.key !== 'possible';
   const hint = [t(scheduled ? 'reset.hintScheduled' : 'reset.hintWatch'), at !== null ? t('reset.until', {time: stamp(at)}) : '', event.text].filter(Boolean).join('. ');
 
   return (
@@ -55,24 +50,16 @@ export function ResetBanner({status, now}: {status: ResetStatus | undefined; now
 
 /** A reset that just happened, or a recent change of limits: one quiet line at the bottom. */
 export function ResetNotice({status, now}: {status: ResetStatus | undefined; now: number}) {
-  if (!status || status.scheduled || status.watch) return null;
-  const {latest, policy} = status;
-  let label: string;
-  let detail: string;
-  let event;
-  let tone: string;
-  if (latest && now - latest.at < RECENT_RESET_MS) {
-    [label, event, tone] = [t('reset.done'), latest, 'done'];
-    detail = [stamp(latest.at), latest.scope && latest.scope !== 'all' ? latest.scope : ''].filter(Boolean).join(' · ');
-  } else if (policy && now - policy.at < RECENT_POLICY_MS) {
-    [label, event, tone, detail] = [t('reset.policy'), policy, 'policy', stamp(policy.at)];
-  } else return null;
+  const label = resetLabel(status, now);
+  if (!status || label?.kind !== 'notice') return null;
+  const {event, key} = label;
+  const detail = key === 'done' ? [stamp(event.at), label.scope].filter(Boolean).join(' · ') : stamp(event.at);
 
   return (
-    <div className={`reset-notice is-${tone}`} title={event.text}>
+    <div className={`reset-notice is-${key}`} title={event.text}>
       <i className="reset-dot" />
       <a href={event.url} target="_blank" rel="noopener noreferrer">
-        {label}
+        {t(`reset.${key}`)}
         <span> · {detail}</span>
       </a>
       <Credit status={status} />

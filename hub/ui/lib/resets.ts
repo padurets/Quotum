@@ -20,6 +20,37 @@ export type Resets = Partial<Record<'claude' | 'codex', ResetStatus>>;
 export type PastResets = Partial<Record<'claude' | 'codex', ResetEvent[]>>;
 export type TrackerHealth = {name: string; url: string; ok: boolean | null; detail: string; at: number | null};
 
+/** A reset is news on a card for a day, a change of limits for three; the chart keeps marking them. */
+const RECENT_RESET_MS = 24 * 3_600_000;
+const RECENT_POLICY_MS = 72 * 3_600_000;
+
+/**
+ * What a card says about resets for everyone, the most pressing first. An announced or
+ * possible reset is a banner (`in`, `bankedIn`, `announced` without a time, `awaiting`
+ * once its time has passed, `possible` with a chance when one is given); a reset that
+ * just happened (`done`, with its scope unless it was for everyone) or a recent change of
+ * limits (`policy`) is a quiet notice.
+ */
+export type ResetLabel =
+  | {kind: 'banner'; key: 'in' | 'bankedIn' | 'announced' | 'awaiting'; event: ResetEvent; at: number | null}
+  | {kind: 'banner'; key: 'possible'; event: ResetEvent; at: number | null; chance: number | null}
+  | {kind: 'notice'; key: 'done'; event: ResetEvent; scope: string}
+  | {kind: 'notice'; key: 'policy'; event: ResetEvent};
+
+export function resetLabel(status: ResetStatus | undefined, now: number): ResetLabel | null {
+  if (!status) return null;
+  const {scheduled, watch, latest, policy} = status;
+  if (scheduled) {
+    const at = scheduled.scheduledFor;
+    const key = at === null ? 'announced' : at > now ? (scheduled.kind === 'banked' ? 'bankedIn' : 'in') : 'awaiting';
+    return {kind: 'banner', key, event: scheduled, at};
+  }
+  if (watch) return {kind: 'banner', key: 'possible', event: watch, at: watch.expiresAt, chance: watch.chance};
+  if (latest && now - latest.at < RECENT_RESET_MS) return {kind: 'notice', key: 'done', event: latest, scope: latest.scope !== 'all' ? latest.scope : ''};
+  if (policy && now - policy.at < RECENT_POLICY_MS) return {kind: 'notice', key: 'policy', event: policy};
+  return null;
+}
+
 const POLL_MS = 60_000;
 
 /** Announcements turned off: always these, so what is given them is not rendered again. */

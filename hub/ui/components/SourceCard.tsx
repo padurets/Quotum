@@ -3,10 +3,10 @@ import {useNow} from '../lib/api';
 import type {SourceState, Win} from '../lib/types';
 import {windowKey} from '../lib/types';
 import {ago, day, duration, fullStamp, num} from '../lib/format';
-import {errorText, freshness, level, problemOf, PULSE_FOR, sourceLabel, windowName} from '../lib/quota';
+import {errorText, freshness, level, problemOf, PULSE_FOR, resetLine, sourceLabel, windowName} from '../lib/quota';
 import {t, useLocale} from '../i18n';
 import {Agents} from './Agents';
-import {DEFAULT_PLAN, isValidPlan, PLAN_NOTE_FROM, planAt, planTotal, type WeeklyPlan} from '../lib/plan';
+import {DEFAULT_PLAN, isValidPlan, planAt, planNote, planTotal, type WeeklyPlan} from '../lib/plan';
 import {LOGOS} from './logos';
 import {cardId, colorOf, planOf, weeklyPlanOf, withColor, withHidden, withName, withPlan, withPlanned, withWindowHidden, type Arrange} from '../lib/view';
 import {CARD_COLORS, MIDDLE_STEP, PROVIDERS} from '../lib/providers';
@@ -33,9 +33,8 @@ function Meter({w, measuredAt, now, weekly}: {w: Win; measuredAt: number | null;
 
 function Limit({w, measuredAt, now, weekly}: {w: Win; measuredAt: number | null; now: number; weekly: WeeklyPlan | null}) {
   const state = level(w.remaining);
-  const plan = planAt(w, measuredAt, now, weekly);
-  // A limit used up is past any plan: how far ahead of it says nothing more.
-  const delta = plan && !plan.done && w.remaining > 0 ? w.remaining - plan.remaining : 0;
+  const note = planNote(w, measuredAt, now, weekly);
+  const reset = resetLine(w, now);
   return (
     <div className="limit">
       <div className="limit-top">
@@ -48,20 +47,16 @@ function Limit({w, measuredAt, now, weekly}: {w: Win; measuredAt: number | null;
       <Meter w={w} measuredAt={measuredAt} now={now} weekly={weekly} />
       <div className="limit-bottom">
         <span title={w.resetAt ? fullStamp(w.resetAt) : ''}>
-          {w.resetAt
-            ? w.resetAt > now
-              ? t('limit.resetsIn', {time: duration(w.resetAt - now)})
-              : t('limit.resetPassed')
-            : t('limit.resetUnknown')}
+          {reset.key === 'resetsIn' ? t('limit.resetsIn', {time: duration(reset.inMs)}) : t(`limit.${reset.key}`)}
         </span>
-        {Math.round(-delta) >= PLAN_NOTE_FROM && (
-          <span className="ahead" title={t(plan?.weekly ? 'limit.aheadHint' : 'limit.aheadHintReset')}>
-            {t('limit.ahead', {value: num(-delta)})}
+        {note?.key === 'ahead' && (
+          <span className="ahead" title={t(note.weekly ? 'limit.aheadHint' : 'limit.aheadHintReset')}>
+            {t('limit.ahead', {value: num(note.value)})}
           </span>
         )}
-        {plan?.weekly && Math.round(delta) >= PLAN_NOTE_FROM && (
+        {note?.key === 'behind' && (
           <span className="plan-note" title={t('limit.behindHint')}>
-            {t('limit.behind', {value: num(delta)})}
+            {t('limit.behind', {value: num(note.value)})}
           </span>
         )}
       </div>

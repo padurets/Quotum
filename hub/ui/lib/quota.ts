@@ -19,6 +19,12 @@ export function windowName(w: {kind: Kind; label: string | null; minutes: number
   return w.label ? `${w.label} · ${kindText(w.kind)}` : kindTitle(w.kind);
 }
 
+/** What a card says under a limit about its reset: in how long, that the time has passed, or that it is not known. */
+export type ResetLine = {key: 'resetsIn'; inMs: number} | {key: 'resetPassed'} | {key: 'resetUnknown'};
+
+export const resetLine = (w: {resetAt: number | null}, now: number): ResetLine =>
+  w.resetAt ? (w.resetAt > now ? {key: 'resetsIn', inMs: w.resetAt - now} : {key: 'resetPassed'}) : {key: 'resetUnknown'};
+
 export const sourceLabel = (source: {provider: string; title?: string}) =>
   source.title ?? PROVIDERS[source.provider]?.name ?? source.provider;
 
