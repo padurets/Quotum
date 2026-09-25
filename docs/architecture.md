@@ -328,10 +328,10 @@ no name of their own, so each reader sees "My limits" in their language.
   settings (`config.toml`) and state folder, so the command and the app measure alike.
 - **Its hub** is the hub of the same commit bundled into one file
   (`hub/vite.bundle.config.ts`), run by the Node.js 24 the app carries under its own
-  name, `quotum-node` (a deb puts it in `/usr/bin`, where `node` is the `nodejs`
-  package's). It listens on `127.0.0.1` only, on a port chosen once from 20000–39999
-  and remembered: the port is part of the page's origin, and with it of what the board
-  keeps in the browser's storage.
+  name, `quotum-node` (a deb or an rpm puts it in `/usr/bin`, where `node` is the
+  `nodejs` package's). It listens on `127.0.0.1` only, on a port chosen once from
+  20000–39999 and remembered: the port is part of the page's origin, and with it of what
+  the board keeps in the browser's storage.
 - **The window** shows that hub's board in the system's web view: WebView2 on Windows,
   WebKitGTK on Linux.
 

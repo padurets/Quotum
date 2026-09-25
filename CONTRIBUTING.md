@@ -20,9 +20,9 @@ the hub into one file, fetches the Node.js the app carries (checked against a pi
 SHA-256) and writes the icons and licenses, all of which the app's build reads. On Linux
 the app needs `libwebkit2gtk-4.1-dev libayatana-appindicator3-dev libxdo-dev libssl-dev
 librsvg2-dev` (Debian and Ubuntu names). `cargo run` in `desktop/` starts it with its hub
-and agent; `npx @tauri-apps/cli@2.11.5 build` there makes its installers (on Linux a deb
-and an AppImage, on Windows a setup.exe). CI builds it on Linux and Windows and runs
-each build with `--smoke`: the hub starts, a stand-in client is measured, the board
+and agent; `npx @tauri-apps/cli@2.11.5 build` there makes its installers (on Linux a deb,
+an rpm and an AppImage, on Windows a setup.exe). CI builds it on Linux and Windows and runs
+each build with `--smoke` (the rpm installed on Fedora): the hub starts, a stand-in client is measured, the board
 shows it, the window opens twice and the app quits (`desktop/smoke/`).
 
 Tests never start a real Claude Code, Codex or Antigravity client: they use recorded

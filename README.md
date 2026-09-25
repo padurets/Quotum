@@ -254,18 +254,23 @@ licences) and as a bare binary (`quotum-cli-<platform>`, what the installers and
 For one machine there is an app for Windows and Linux (macOS comes later): the agent of
 this machine, a hub of its own and its board in a window, with a tray icon. No account,
 no server. It has no release yet: the [Desktop workflow](.github/workflows/desktop.yml)
-builds every commit on `main` and in pull requests and keeps the builds as the run's
-artifacts (`quotum-desktop-<version>-<commit>-<platform>`; downloading them takes a
-GitHub account). To build it yourself, see [CONTRIBUTING.md](CONTRIBUTING.md).
+builds every commit on `main` and in pull requests and keeps each installer as an
+artifact of the run (`quotum-desktop-<version>-<commit>-linux-x64.deb`, `.rpm`,
+`.AppImage` and `…-windows-x64-setup.exe`; downloading them takes a GitHub account). To
+build it yourself, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 - **Windows 10 and 11:** run `Quotum_<version>_x64-setup.exe`. It installs for you
   alone, into `%LOCALAPPDATA%\Quotum`, with no administrator rights, and brings WebView2
   if Windows lacks it. The installer isn't signed yet, so SmartScreen asks first: *More
   info → Run anyway*.
-- **Linux** (x64; Ubuntu 22.04, Debian 12 or newer): `sudo apt install
-  ./Quotum_<version>_amd64.deb`, which brings WebKitGTK and the tray's library and gets
-  along with the `nodejs` package; or the AppImage: `chmod +x` it and run it (without
-  FUSE 2, `libfuse2`, add `--appimage-extract-and-run`).
+- **Linux** (x64): the package of your system, which brings WebKitGTK and the tray's
+  library and gets along with the system's `nodejs`. On Debian 12, Ubuntu 22.04 or newer
+  `sudo apt install ./quotum-desktop-<…>.deb`; on Fedora `sudo dnf install
+  ./quotum-desktop-<…>.rpm`. Elsewhere the AppImage: `chmod +x` it and run it (without
+  FUSE 2, `libfuse2`, add `--appimage-extract-and-run`). It carries a WebKitGTK of its
+  own and draws through X11, and on a newer system (Fedora among them) that may mean
+  without the GPU: no blur, a slow scroll, or no start at all. Take a package where
+  there is one.
 
 The app opens its board, and the first numbers come within a minute. The gear opens its
 settings: which providers are measured and how often, running agents, start at login,

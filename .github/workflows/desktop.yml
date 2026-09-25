@@ -2,8 +2,9 @@ name: Desktop
 
 # The desktop app for Linux and Windows (x64), on every push to main and every pull request:
 # put together (desktop/prepare.mjs), checked, built into its installers, and run from what
-# was built: once end to end and once crashing (desktop/smoke). The installers and the
-# command-line agent of the same commit are kept as artifacts. Releases do not use it yet.
+# was built: once end to end and once crashing (desktop/smoke). Each installer, and the
+# command-line agent of the same commit, is kept as an artifact of its own, the file as it
+# is. Releases do not use it yet.
 # Third-party actions are pinned by commit.
 on:
   push:
@@ -26,7 +27,7 @@ jobs:
         include:
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            bundles: appimage,deb
+            bundles: appimage,deb,rpm
             platform: linux-x64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
@@ -98,6 +99,21 @@ jobs:
           sudo apt-get install -y "./$deb"
           sh desktop/smoke/linux.sh normal quotum-desktop
           sh desktop/smoke/linux.sh crash quotum-desktop
+      - name: Smoke (Fedora)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          # The rpm installed on Fedora next to its nodejs package, run by a user as a person
+          # runs it: the system's WebKitGTK, not the AppImage's.
+          rpm=$(ls desktop/target/${{ matrix.target }}/release/bundle/rpm/*.rpm)
+          docker run --rm -v "$PWD:/work:ro" -w /work fedora:42 sh -c "
+            set -e
+            dnf -y install nodejs xorg-x11-server-Xvfb xorg-x11-xauth procps-ng /work/$rpm > /tmp/dnf.log || { cat /tmp/dnf.log; exit 1; }
+            rpm -ql quotum | grep '^/usr/bin/'
+            useradd -m smoke
+            runuser -u smoke -- sh desktop/smoke/linux.sh normal quotum-desktop
+            runuser -u smoke -- sh desktop/smoke/linux.sh crash quotum-desktop
+          "
       - name: Smoke (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -117,25 +133,52 @@ jobs:
           # No dependency on the Visual C++ runtime on a clean Windows.
           RUSTFLAGS: ${{ runner.os == 'Windows' && '-C target-feature=+crt-static' || '' }}
         run: cargo build --release --locked -p quotum
+      # One artifact per installer, the file itself (not zipped), named after the version and
+      # commit the app shows in its settings. A download loses the executable bit: the
+      # AppImage is made executable by hand, the Linux agent comes in a tarball.
       - name: Artifacts
         shell: bash
         run: |
-          mkdir -p out/app out/cli
+          mkdir -p out
           bundle=desktop/target/${{ matrix.target }}/release/bundle
+          app=out/quotum-desktop-$VERSION-$QUOTUM_COMMIT-${{ matrix.platform }}
           if [ "$RUNNER_OS" = Windows ]; then
-            cp "$bundle"/nsis/*-setup.exe out/app/
-            cp agent/target/release/quotum.exe out/cli/
+            cp "$bundle"/nsis/*-setup.exe "$app-setup.exe"
+            cp agent/target/release/quotum.exe "out/quotum-cli-$QUOTUM_COMMIT-${{ matrix.platform }}.exe"
           else
-            # Artifacts lose file modes; a tarball keeps the AppImage executable.
-            files=$(cd "$bundle" && ls deb/*.deb appimage/*.AppImage)
-            tar -czf "out/app/quotum-desktop-$VERSION-$QUOTUM_COMMIT-${{ matrix.platform }}.tar.gz" -C "$bundle" $files
-            tar -czf out/cli/quotum.tar.gz -C agent/target/release quotum
+            cp "$bundle"/deb/*.deb "$app.deb"
+            cp "$bundle"/rpm/*.rpm "$app.rpm"
+            cp "$bundle"/appimage/*.AppImage "$app.AppImage"
+            tar -czf "out/quotum-cli-$QUOTUM_COMMIT-${{ matrix.platform }}.tar.gz" -C agent/target/release quotum
           fi
-      - uses: actions/upload-artifact@v7
+          ls -la out
+      - if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v7
         with:
-          name: quotum-desktop-${{ env.VERSION }}-${{ env.QUOTUM_COMMIT }}-${{ matrix.platform }}
-          path: out/app
-      - uses: actions/upload-artifact@v7
+          path: out/quotum-desktop-${{ env.VERSION }}-${{ env.QUOTUM_COMMIT }}-${{ matrix.platform }}.deb
+          archive: false
+      - if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v7
         with:
-          name: quotum-cli-${{ env.QUOTUM_COMMIT }}-${{ matrix.platform }}
-          path: out/cli
+          path: out/quotum-desktop-${{ env.VERSION }}-${{ env.QUOTUM_COMMIT }}-${{ matrix.platform }}.rpm
+          archive: false
+      - if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v7
+        with:
+          path: out/quotum-desktop-${{ env.VERSION }}-${{ env.QUOTUM_COMMIT }}-${{ matrix.platform }}.AppImage
+          archive: false
+      - if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v7
+        with:
+          path: out/quotum-cli-${{ env.QUOTUM_COMMIT }}-${{ matrix.platform }}.tar.gz
+          archive: false
+      - if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          path: out/quotum-desktop-${{ env.VERSION }}-${{ env.QUOTUM_COMMIT }}-${{ matrix.platform }}-setup.exe
+          archive: false
+      - if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          path: out/quotum-cli-${{ env.QUOTUM_COMMIT }}-${{ matrix.platform }}.exe
+          archive: false
