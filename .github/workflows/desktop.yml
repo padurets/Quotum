@@ -1,0 +1,141 @@
+name: Desktop
+
+# The desktop app for Linux and Windows (x64), on every push to main and every pull request:
+# put together (desktop/prepare.mjs), checked, built into its installers, and run from what
+# was built: once end to end and once crashing (desktop/smoke). The installers and the
+# command-line agent of the same commit are kept as artifacts. Releases do not use it yet.
+# Third-party actions are pinned by commit.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  app:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: appimage,deb
+            platform: linux-x64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+            platform: windows-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      # On a pull request GITHUB_SHA is a merge commit the branch does not have: the app is
+      # built from the head of the branch and named after it (ci.yml checks the merge).
+      COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.COMMIT }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: hub/package-lock.json
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            desktop
+            agent
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: System packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev libxdo-dev libssl-dev librsvg2-dev patchelf xvfb
+      - name: Commit and version
+        shell: bash
+        run: |
+          echo "QUOTUM_COMMIT=${COMMIT::7}" >> "$GITHUB_ENV"
+          echo "VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' desktop/Cargo.toml | head -n 1)" >> "$GITHUB_ENV"
+      - run: node desktop/prepare.mjs --target ${{ matrix.target }}
+      - if: runner.os == 'Linux'
+        working-directory: desktop
+        run: cargo fmt --check
+      - working-directory: desktop
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - working-directory: desktop
+        run: cargo test --locked
+      - name: Build
+        working-directory: desktop
+        run: npx --yes @tauri-apps/cli@2.11.5 build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} -- --locked
+
+      - name: Smoke (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          bundle=desktop/target/${{ matrix.target }}/release/bundle
+          deb=$(ls "$bundle"/deb/*.deb)
+          appimage=$(ls "$bundle"/appimage/*.AppImage)
+          # The deb puts only its own names in /usr/bin: `node` is the nodejs package's.
+          binaries=$(dpkg -c "$deb" | awk '{print $6}' | grep '^\./usr/bin/.' | sort | tr '\n' ' ')
+          echo "usr/bin: $binaries"
+          [ "$binaries" = "./usr/bin/quotum-desktop ./usr/bin/quotum-node " ] || { echo "::error::unexpected files in usr/bin: $binaries"; exit 1; }
+          sh desktop/smoke/linux.sh normal "$appimage" --appimage-extract-and-run
+          sh desktop/smoke/linux.sh crash "$appimage" --appimage-extract-and-run
+          # Installed next to the nodejs package, which owns /usr/bin/node.
+          sudo apt-get install -y nodejs
+          sudo apt-get install -y "./$deb"
+          sh desktop/smoke/linux.sh normal quotum-desktop
+          sh desktop/smoke/linux.sh crash quotum-desktop
+      - name: Smoke (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem "desktop/target/${{ matrix.target }}/release/bundle/nsis/*-setup.exe" | Select-Object -First 1
+          Start-Process -FilePath $setup.FullName -ArgumentList '/S' -Wait
+          $app = "$env:LOCALAPPDATA\Quotum\quotum-desktop.exe"
+          if (-not (Test-Path $app)) { throw "not installed: $app" }
+          ./desktop/smoke/windows.ps1 normal $app
+          ./desktop/smoke/windows.ps1 crash $app
+
+      # For the live check: `quotum` of this very commit, next to the app.
+      - name: Command-line agent
+        working-directory: agent
+        shell: bash
+        env:
+          # No dependency on the Visual C++ runtime on a clean Windows.
+          RUSTFLAGS: ${{ runner.os == 'Windows' && '-C target-feature=+crt-static' || '' }}
+        run: cargo build --release --locked -p quotum
+      - name: Artifacts
+        shell: bash
+        run: |
+          mkdir -p out/app out/cli
+          bundle=desktop/target/${{ matrix.target }}/release/bundle
+          if [ "$RUNNER_OS" = Windows ]; then
+            cp "$bundle"/nsis/*-setup.exe out/app/
+            cp agent/target/release/quotum.exe out/cli/
+          else
+            # Artifacts lose file modes; a tarball keeps the AppImage executable.
+            files=$(cd "$bundle" && ls deb/*.deb appimage/*.AppImage)
+            tar -czf "out/app/quotum-desktop-$VERSION-$QUOTUM_COMMIT-${{ matrix.platform }}.tar.gz" -C "$bundle" $files
+            tar -czf out/cli/quotum.tar.gz -C agent/target/release quotum
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: quotum-desktop-${{ env.VERSION }}-${{ env.QUOTUM_COMMIT }}-${{ matrix.platform }}
+          path: out/app
+      - uses: actions/upload-artifact@v7
+        with:
+          name: quotum-cli-${{ env.QUOTUM_COMMIT }}-${{ matrix.platform }}
+          path: out/cli

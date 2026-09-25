@@ -1,0 +1,39 @@
+[package]
+name = "quotum-desktop"
+# The repository's one version (see Releasing in the README); the bundles take it from here.
+version = "0.3.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.85"
+authors = ["Sergey Padurets"]
+description = "Quotum as a desktop app: measures this machine and shows its board in a window of its own."
+homepage = "https://github.com/padurets/Quotum"
+repository = "https://github.com/padurets/Quotum"
+# Built into installers, never published on crates.io.
+publish = false
+
+[dependencies]
+quotum-core = { path = "../agent/crates/core" }
+tauri = { version = "2.11.6", features = ["tray-icon"] }
+tauri-plugin-single-instance = "2.4.5"
+tauri-plugin-autostart = "2.5.1"
+tauri-plugin-window-state = "2.4.1"
+tauri-plugin-opener = "2.5.5"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+getrandom = "0.4.3"
+sys-locale = "0.3.2"
+
+[target."cfg(unix)".dependencies]
+libc = "0.2.189"
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+# Its own: a profile of the agent's workspace does not reach this one. Unwinding, so a
+# panic of the agent's thread or of the tray is caught instead of ending the app.
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "unwind"

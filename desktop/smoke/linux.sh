@@ -1,0 +1,47 @@
+#!/bin/sh
+# The app as CI built it, run once end to end with data of its own (see src/smoke.rs):
+#
+#   linux.sh normal <command…>   --smoke must pass, and no Node of the app is left after it
+#   linux.sh crash <command…>    --smoke=crash aborts the app; its Node must go by itself
+set -eu
+
+mode=$1
+shift
+work=$(mktemp -d)
+export QUOTUM_APP_DATA_DIR="$work/app" QUOTUM_STATE_DIR="$work/state" QUOTUM_CONFIG="$work/config.toml"
+export QUOTUM_RESETS=off
+
+fail() {
+  echo "smoke ($mode): $*" >&2
+  for log in "$work"/app/logs/*.log; do
+    [ -f "$log" ] && { echo "--- $log" >&2; tail -n 40 "$log" >&2; }
+  done
+  exit 1
+}
+
+# No Node of the app (it is called quotum-node) is running.
+node_gone() {
+  ! pgrep -x quotum-node >/dev/null
+}
+
+node_gone || fail "a quotum-node runs before the app starts"
+case $mode in
+  normal)
+    timeout -k 10 180 xvfb-run -a "$@" --smoke || fail "the app failed ($?)"
+    node_gone || fail "quotum-node outlived the app"
+    ;;
+  crash)
+    status=0
+    timeout -k 10 180 xvfb-run -a "$@" --smoke=crash || status=$?
+    [ "$status" -ne 0 ] || fail "the app did not crash"
+    [ "$status" -ne 124 ] || fail "the app did not crash within 180 s"
+    for _ in $(seq 1 20); do
+      node_gone && break
+      sleep 0.5
+    done
+    node_gone || fail "quotum-node outlived the crashed app by 10 s"
+    ;;
+  *) fail "unknown mode" ;;
+esac
+echo "smoke ($mode): passed"
+rm -rf "$work"

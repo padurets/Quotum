@@ -245,7 +245,7 @@ impl Paths {
     /// guard also names the process in `run.pid`, for `quotum stop`.
     pub fn lock_run(&self) -> Result<RunLock, String> {
         let path = self.state.join("run.lock");
-        let file = lock(&path).map_err(|e| match e.kind() {
+        let file = lock_file(&path).map_err(|e| match e.kind() {
             io::ErrorKind::WouldBlock => format!(
                 "another `quotum run` uses {} already; stop it first (`quotum stop`), or give this one its own QUOTUM_STATE_DIR",
                 self.state.display()
@@ -262,7 +262,7 @@ impl Paths {
     /// The process of the `quotum run` on this state directory, if one runs: `Some(None)`
     /// when it runs but did not say which process it is.
     pub fn running(&self) -> Option<Option<u32>> {
-        match lock(&self.state.join("run.lock")) {
+        match lock_file(&self.state.join("run.lock")) {
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                 Some(fs::read_to_string(self.state.join("run.pid")).ok().and_then(|pid| pid.trim().parse().ok()))
             }
@@ -294,9 +294,10 @@ impl Drop for RunLock {
     }
 }
 
-/// `path` opened and locked exclusively, or `WouldBlock` when someone else holds it.
+/// `path` opened and locked exclusively, or `WouldBlock` when someone else holds it; the
+/// lock lasts while the file stays open and ends with the process.
 #[cfg(unix)]
-fn lock(path: &Path) -> io::Result<fs::File> {
+pub fn lock_file(path: &Path) -> io::Result<fs::File> {
     use std::os::unix::io::AsRawFd;
     let file = fs::OpenOptions::new().write(true).create(true).truncate(false).open(path)?;
     // SAFETY: flock(2) on a descriptor owned by `file`, which outlives the call.
@@ -308,7 +309,7 @@ fn lock(path: &Path) -> io::Result<fs::File> {
 
 /// Opened without sharing: every other open of the file fails while this one lasts.
 #[cfg(windows)]
-fn lock(path: &Path) -> io::Result<fs::File> {
+pub fn lock_file(path: &Path) -> io::Result<fs::File> {
     use std::os::windows::fs::OpenOptionsExt;
     const ERROR_SHARING_VIOLATION: i32 = 32;
     fs::OpenOptions::new().write(true).create(true).truncate(false).share_mode(0).open(path).map_err(|e| {
@@ -317,7 +318,7 @@ fn lock(path: &Path) -> io::Result<fs::File> {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn lock(path: &Path) -> io::Result<fs::File> {
+pub fn lock_file(path: &Path) -> io::Result<fs::File> {
     fs::OpenOptions::new().write(true).create(true).truncate(false).open(path)
 }
 
