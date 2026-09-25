@@ -135,6 +135,17 @@ export class Directory {
     this.db.prepare('DELETE FROM sessions WHERE id = ?').run(secretHash(secret));
   }
 
+  /** Every session of a person ends. */
+  deleteSessions(userId: string) {
+    this.db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
+  }
+
+  /** The one person of a hub that has only one (the desktop app's). */
+  soleUser(): User | null {
+    const rows = this.db.prepare('SELECT * FROM users LIMIT 2').all();
+    return rows.length === 1 ? user(rows[0]) : null;
+  }
+
   /** Changes a person's name, email or password; with a new password their other sessions end. */
   updateUser(id: string, change: {name?: string; email?: string; passwordHash?: string}, keepSession: string | null) {
     this.transaction(() => {
@@ -247,6 +258,14 @@ export class Directory {
     const id = newId();
     this.db.prepare('INSERT INTO tokens VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)').run(id, userId, name, secretHash(secret), hint, now);
     return {id, userId, name, hint, createdAt: now, lastUsedAt: null};
+  }
+
+  /**
+   * Gives a token a new secret in place: its machines stay connected under the same id,
+   * which revoking and creating another would not do.
+   */
+  setToken(id: string, secret: string, hint: string) {
+    this.db.prepare('UPDATE tokens SET hash = ?, hint = ? WHERE id = ?').run(secretHash(secret), hint, id);
   }
 
   tokens(userId: string): Token[] {

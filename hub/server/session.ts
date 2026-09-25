@@ -29,9 +29,10 @@ export function sessionSecret(request: FastifyRequest): string | null {
   return readCookie(request, COOKIE);
 }
 
-export function setSession(request: FastifyRequest, reply: FastifyReply, secret: string | null) {
+/** Sets the session cookie, or clears it (`null`); one that is not `persistent` ends with the browser (or window). */
+export function setSession(request: FastifyRequest, reply: FastifyReply, secret: string | null, {persistent = true} = {}) {
   const maxAge = secret ? Math.floor(config.auth.sessionTtlMs / 1000) : 0;
-  const parts = [`${COOKIE}=${secret ?? ''}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${maxAge}`];
+  const parts = [`${COOKIE}=${secret ?? ''}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', ...(persistent ? [`Max-Age=${maxAge}`] : [])];
   if (publicOrigin(request).startsWith('https:')) parts.push('Secure');
   reply.header('Set-Cookie', parts.join('; '));
 }
