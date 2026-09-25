@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {agentRows, DRAWN, drawn} from '../lib/agents';
 import {outlook} from '../lib/forecast';
-import {planNote, PLAN_NOTE_FROM} from '../lib/plan';
+import {planNote} from '../lib/plan';
 import {dotOf, PULSE_FOR, resetLine} from '../lib/quota';
 import {resetLabel, type ResetStatus} from '../lib/resets';
 import type {LiveSession, SourceState, View, Win} from '../lib/types';
@@ -35,9 +35,10 @@ test('a reset announced or possible outranks one that happened, which outranks a
 test('a note under a limit takes a gap of ten points to the plan; behind it only for a week', () => {
   const week = (remaining: number, elapsed: number): Win => ({id: 'weekly', kind: 'weekly', label: null, used: 100 - remaining, remaining, resetAt: now - elapsed + 7 * DAY, minutes: 10080});
   // A day and a half into the week the default plan leaves 57.5%.
-  assert.equal(planNote(week(57.5 + PLAN_NOTE_FROM, 1.5 * DAY), now, now)?.key, 'behind');
-  assert.equal(planNote(week(57.5 + PLAN_NOTE_FROM - 1, 1.5 * DAY), now, now), null);
-  assert.equal(planNote(week(57.5 - PLAN_NOTE_FROM, 1.5 * DAY), now, now)?.key, 'ahead');
+  assert.equal(planNote(week(67.5, 1.5 * DAY), now, now)?.key, 'behind');
+  assert.equal(planNote(week(66.5, 1.5 * DAY), now, now), null);
+  assert.equal(planNote(week(47.5, 1.5 * DAY), now, now)?.key, 'ahead');
+  assert.equal(planNote(week(48.5, 1.5 * DAY), now, now), null);
   assert.equal(planNote(week(0, 1.5 * DAY), now, now), null, 'used up is past any plan');
   const hours: Win = {id: 'session', kind: 'session', label: null, used: 10, remaining: 90, resetAt: now + 2.5 * HOUR, minutes: 300};
   assert.equal(planNote(hours, now, now), null, 'five hours behind an even pace say nothing');
