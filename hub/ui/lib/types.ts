@@ -1,6 +1,9 @@
 /** A window's length as the agent classifies it. */
 export type Kind = 'session' | 'weekly' | 'other';
 
+/** The kinds of windows the analytics show, one at a time on the chart and in the table; `other` only on cards. */
+export const ANALYTICS_KINDS: Kind[] = ['weekly', 'session'];
+
 export type Win = {
   id: string;
   kind: Kind;

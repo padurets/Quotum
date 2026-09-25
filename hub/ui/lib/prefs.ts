@@ -1,5 +1,5 @@
 import {useSyncExternalStore} from 'react';
-import type {Kind} from './types';
+import {ANALYTICS_KINDS, type Kind} from './types';
 
 /** How far the chart looks ahead: `auto` follows the period. */
 export type Horizon = 'auto' | '1d' | '3d' | '7d';
@@ -26,7 +26,6 @@ export type Prefs = {
 
 const KEY = 'quotum.prefs';
 const RANGES = ['24h', '7d', '30d'];
-const KINDS: Kind[] = ['weekly', 'session'];
 export const HORIZONS: Horizon[] = ['auto', '1d', '3d', '7d'];
 const DEFAULTS: Prefs = {muted: {}, range: '24h', kind: 'weekly', horizon: 'auto', showPlan: true, showResets: true, locked: false};
 
@@ -36,7 +35,7 @@ function read(): Prefs {
     const stored = {...DEFAULTS, ...(raw ? (JSON.parse(raw) as Partial<Prefs>) : {})};
     // Whatever the browser kept from another version must still be a valid choice.
     if (!RANGES.includes(stored.range)) stored.range = DEFAULTS.range;
-    if (!KINDS.includes(stored.kind)) stored.kind = DEFAULTS.kind;
+    if (!ANALYTICS_KINDS.includes(stored.kind)) stored.kind = DEFAULTS.kind;
     if (!HORIZONS.includes(stored.horizon)) stored.horizon = DEFAULTS.horizon;
     const {muted, range, kind, horizon, showPlan, showResets, locked} = stored;
     return {muted, range, kind, horizon, showPlan, showResets, locked: locked === true};

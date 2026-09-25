@@ -72,6 +72,10 @@ test('a board without subscriptions invites to connect one; with every widget hi
   assert.equal(boardState([{id: 'a'}], {...EMPTY, hidden: [cardId('a'), 'history', 'forecast'], shown: ['agents']}), 'widgets');
   assert.equal(isWindowHidden({...EMPTY, windows: ['a/weekly']}, 'a', 'weekly'), true);
   assert.equal(resetLine({resetAt: null}, now).key, 'resetUnknown');
-  assert.deepEqual(dotOf(PULSE_FOR - 1), {pulsing: true, fresh: 1});
-  assert.equal(dotOf(PULSE_FOR).pulsing, false);
+  const measured = (age: number, change: Partial<SourceState> = {}) => ({stale: false, error: null, successAt: now - age, ...change});
+  assert.deepEqual(dotOf(measured(PULSE_FOR - 1), now), {warn: false, pulsing: true, fresh: 1});
+  assert.deepEqual(dotOf(measured(PULSE_FOR), now), {warn: false, pulsing: false, fresh: 1});
+  assert.deepEqual(dotOf(measured(0, {stale: true}), now), {warn: true}, 'numbers gone stale outweigh their age');
+  assert.deepEqual(dotOf(measured(0, {error: 'signed_out'}), now), {warn: true});
+  assert.equal(dotOf(measured(0, {error: 'waiting'}), now).warn, false, 'waiting for a first measurement is no trouble');
 });
