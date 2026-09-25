@@ -645,7 +645,7 @@ const all: DemoSet = {
         {window: 'session', hidden: true},
         {window: 'weekly', hidden: true},
       ],
-      look: ['Says that all its limits are hidden'],
+      look: ['In the middle of the card: an eye struck through, "All limits are hidden", that measurements go on, and "Show limits", which brings them back (put them away again in its settings)'],
     },
     {
       kind: 'card',

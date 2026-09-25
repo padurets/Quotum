@@ -303,6 +303,12 @@ body.is-resizing, body.is-resizing * { cursor: ew-resize !important; user-select
 .plan-note { color: var(--text-3); }
 td.muted, small.muted { color: var(--text-3); }
 .card-empty { color: var(--text-3); font-size: 13px; padding: 12px 0; }
+/* With no limits to show, the card says why in the middle of the room they would take. */
+.limits:has(> .card-empty) { flex: 1; justify-content: center; }
+.card-empty { display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; text-wrap: balance; }
+.card-empty b { font-weight: 560; color: var(--text-2); }
+.card-empty svg { width: 20px; height: 20px; margin-bottom: 4px; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
+.text-button.card-empty-action { margin-top: 8px; border-color: var(--hair-2); }
 /* The card's tray: a strip along its bottom edge, a step below the card as if pressed
    into it and tinted with the card's colour, always there. What a card says besides its
    limits lives in it: news on the left, what it has now (free resets, the agents running

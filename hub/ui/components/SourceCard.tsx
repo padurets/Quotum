@@ -14,7 +14,7 @@ import type {Board} from '../lib/session';
 import {resetLabel, type ResetStatus} from '../lib/resets';
 import {FreeResets, ResetMark} from './ResetMarks';
 import {Tray} from './Tray';
-import {HideRow, Popover, SlidersIcon, SwitchRow, TakeOffIcon} from './Popover';
+import {EyeOffIcon, HideRow, Popover, SlidersIcon, SwitchRow, TakeOffIcon} from './Popover';
 import {ErrorLine} from './Kit';
 
 function Meter({w, measuredAt, now, weekly}: {w: Win; measuredAt: number | null; now: number; weekly: WeeklyPlan | null}) {
@@ -272,6 +272,26 @@ function SourceSettings({source, arrange, board, onChanged}: {source: SourceStat
   );
 }
 
+/**
+ * A card whose every limit its board hides: it says so where the limits would be, that
+ * the measurements go on, and lets the board's owner bring them back in one go.
+ */
+function AllHidden({source, arrange}: {source: SourceState; arrange: Arrange}) {
+  const showAll = () => arrange.update(view => source.windows.reduce((next, w) => withWindowHidden(next, windowKey(source.id, w.id), false), view));
+  return (
+    <div className="card-empty">
+      <EyeOffIcon />
+      <b>{t('card.allHidden')}</b>
+      <span>{t(arrange.owner ? 'card.allHiddenNote' : 'card.allHiddenByOwner')}</span>
+      {arrange.owner && (
+        <button type="button" className="text-button card-empty-action" onClick={showAll}>
+          {t('card.showAll')}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export const SourceCard = memo(function SourceCard({
   source,
   resets,
@@ -340,7 +360,7 @@ export const SourceCard = memo(function SourceCard({
           <Limit key={w.id} w={w} measuredAt={source.successAt} now={now} weekly={weekly} />
         ))}
         {!source.windows.length && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
-        {!!source.windows.length && !visible.length && <div className="card-empty">{t('card.allHidden')}</div>}
+        {!!source.windows.length && !visible.length && <AllHidden source={source} arrange={arrange} />}
       </div>
       <Tray
         news={news && resets && <ResetMark label={news} credit={resets.credit} now={now} />}
