@@ -6,7 +6,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {firstSignup, healthy} from './client.js';
 import {SCENES, SETS} from './catalogue.js';
-import {earliest, liveStep, machines, MIN, people, SECOND, type DemoSet} from './model.js';
+import {earliest, liveStep, MIN, people, SECOND, type DemoSet} from './model.js';
 import {emailOf, Live, PASSWORD, setUp, type Stand} from './setup.js';
 import {Trackers} from './trackers.js';
 
@@ -155,7 +155,7 @@ async function main() {
     const tick = async () => {
       const t = Date.now() - start;
       try {
-        for (const machine of machines(set)) await live.report(machine, t, Date.now());
+        await live.report(t, Date.now());
         await live.measure(t, Date.now());
       } catch (error) {
         if (!stopping) console.error(`demo: ${(error as Error).message}`);

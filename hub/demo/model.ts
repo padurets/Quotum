@@ -101,19 +101,27 @@ export const steady =
   (elapsed: number) =>
     from + (perDay * elapsed) / DAY;
 
+/** How much work was done on a subscription from `from` to `to`: in ms of time fully at work. */
+export type Work = (from: number, to: number) => number;
+
 /**
  * A rolling window of `minutes` (five hours by default) that runs back to back from
  * `offset`: it starts again as soon as the last one ends. `use` gives the share `elapsed`
- * into it, from the time spent working in it (`busy`, ms).
+ * into it, from the work done in it so far (`busy`, ms).
  */
-export function rolling(options: {id?: string; label?: string; minutes?: number; offset?: number; kind?: 'session' | 'other'; use: (elapsed: number, busy: number) => number; wave?: Wave}): WindowAt {
-  const {id = 'session', label = null, minutes = 300, offset = 0, kind = 'session', use, wave = ALWAYS} = options;
+export function rolling(options: {id?: string; label?: string; minutes?: number; offset?: number; kind?: 'session' | 'other'; use: (elapsed: number, busy: number) => number; work?: Work}): WindowAt {
+  const {id = 'session', label = null, minutes = 300, offset = 0, kind = 'session', use, work = waveWork(ALWAYS)} = options;
   const length = minutes * MIN;
   return t => {
     const begin = offset + Math.floor((t - offset) / length) * length;
-    return {id, kind, minutes, label, used: share(use(t - begin, busyIn(wave, begin, t))), resetsAt: begin + length};
+    return {id, kind, minutes, label, used: share(use(t - begin, work(begin, t))), resetsAt: begin + length};
   };
 }
+
+/** A window as its client reports it, only without a reset time: it does not know one. */
+export const noReset =
+  (window: WindowAt): WindowAt =>
+  t => ({...window(t), resetsAt: null});
 
 /** A rolling window nobody used lately: its reset is always its length from the measurement, and its start never comes. */
 export const idle =
@@ -133,6 +141,24 @@ export type Wave = {period: number; on: number; phase: number};
 export const ALWAYS: Wave = {period: HOUR, on: HOUR, phase: 0};
 
 export const isOn = (wave: Wave, t: number) => mod(t - wave.phase, wave.period) < wave.on;
+
+/** Work that follows a wave: someone working on and off, for a subscription without agents of its own. */
+export const waveWork =
+  (wave: Wave): Work =>
+  (from, to) =>
+    busyIn(wave, from, to);
+
+/**
+ * The work of a card's agents: while more of them work, its limits go faster. Averaged
+ * over them, so a window spends at most its full pace when all of them work.
+ */
+export const agentsWork =
+  (agents: Agent[]): Work =>
+  (from, to) =>
+    agents.reduce((sum, agent) => {
+      const [a, b] = [Math.max(from, agent.since), Math.min(to, agent.until ?? Infinity)];
+      return sum + (agent.works && b > a ? busyIn(agent.works, a, b) : 0);
+    }, 0) / Math.max(1, agents.length);
 
 /** How long a wave is on from `from` to `to`. */
 export function busyIn(wave: Wave, from: number, to: number): number {
@@ -182,7 +208,7 @@ export type CardCheck = Span & {board?: string} & (
 
 export type BoardCheck = Span &
   (
-    | {state: 'onboarding' | 'widgets'}
+    | {state: 'onboarding' | 'widgets' | 'allHidden'}
     /** The table of running agents: how many rows, or why it is empty. */
     | {rows: number | 'none' | 'noneShown'}
     /** Weekly series on the chart over the last 24 hours, at least. */
@@ -193,6 +219,8 @@ export type SceneCheck = Span &
   (
     | {reset: 'claude' | 'codex'; label: ResetLabel['key'] | null; chance?: number | null; scope?: string}
     | {tracker: 'Codex Resets' | 'Claude Resets'; health: string}
+    /** The chart marks a reset for everyone of this provider (the hub keeps what the trackers reported). */
+    | {marked: 'claude' | 'codex'}
   );
 
 /** A machine as the dialog «Machines» shows it. */
@@ -422,8 +450,9 @@ export const machineInfo = (machine: Machine) => ({
 
 /**
  * What a set must get right for the hub to show what it claims: unique ids, codes on every
- * entry, and agents only on machines of people who hold the card (the hub leaves out any
- * other, spec: Reporting running agents).
+ * entry, agents only on machines of people who hold the card (the hub leaves out any
+ * other, spec: Reporting running agents), failures where the hub files them, and looks
+ * the hub takes.
  */
 export function problems(set: DemoSet): string[] {
   const found: string[] = [];
@@ -432,19 +461,44 @@ export function problems(set: DemoSet): string[] {
   for (const entry of set.entries) if (!entry.expect.length) found.push(`${entry.kind} ${entry.id} expects nothing`);
   if (!people(set).length) found.push('nobody to sign in');
   const known = new Set(people(set).map(p => p.id));
+  const shared = new Set(boards(set).map(b => b.id));
   for (const machine of machines(set)) if (!known.has(personOf(set, machine))) found.push(`machine ${machine.id} is of nobody known`);
   for (const board of boards(set)) {
     // A person's id names their personal board.
     if (known.has(board.id)) found.push(`board ${board.id} is named as a person`);
     for (const person of [board.owner, ...board.members]) if (!known.has(person)) found.push(`board ${board.id} names nobody known: ${person}`);
   }
+  // A machine's failure of a client shows on the card of the source it last delivered for that client, once it is quiet.
+  const delivering = (machine: string, provider: Provider) => cards(set).filter(c => c.provider === provider && c.machines.includes(machine));
+  for (const machine of machines(set)) {
+    for (const failure of machine.failures ?? []) {
+      if (delivering(machine.id, failure.provider).length) found.push(`machine ${machine.id} measures ${failure.provider}: its failure would go to a card, not only to «Machines»`);
+    }
+  }
+  const sources = new Map<string, string>();
   for (const card of cards(set)) {
     const holders = new Set(holdersOf(set, card));
+    const shownOn = (board: string) => (known.has(board) ? holders.has(board) : !!card.on?.[board]);
+    if (card.failure) {
+      if (card.until === undefined || card.until >= card.failure.from) found.push(`card ${card.id} fails while it is still measured: the next measurement clears the failure`);
+      if (delivering(card.machines[0], card.provider).length > 1) found.push(`card ${card.id}: its first machine measures another ${card.provider} subscription, which its failure may go to`);
+    }
+    // Cards the hub files under their person's name (no pseudonym) are one source per name.
+    const key = card.account === 'pseudonym' || (card.account === undefined && card.provider !== 'antigravity') ? card.id : `${homeOf(set, card)}/${card.provider}/${typeof card.account === 'object' && card.account ? card.account.name.toLowerCase() : ''}`;
+    if (sources.has(key)) found.push(`cards ${sources.get(key)} and ${card.id} are one subscription to the hub`);
+    sources.set(key, card.id);
     for (const agent of card.agents ?? []) {
       if (!holders.has(personOf(set, machineOf(set, agent.machine)))) found.push(`card ${card.id}: an agent on ${agent.machine}, whose person does not measure it`);
     }
-    for (const board of Object.keys(card.on ?? {})) {
-      if (!known.has(board) && !boards(set).some(b => b.id === board)) found.push(`card ${card.id} is on an unknown board ${board}`);
+    for (const [board, looks] of Object.entries(card.on ?? {})) {
+      if (!known.has(board) && !shared.has(board)) found.push(`card ${card.id} is on an unknown board ${board}`);
+      else if (known.has(board) && !holders.has(board)) found.push(`card ${card.id} has looks on the board of ${board}, who does not measure it`);
+      if (looks.name !== undefined && (looks.name.trim() !== looks.name || !looks.name || looks.name.length > 60)) found.push(`card ${card.id}: a name the hub does not take`);
+      if (looks.color !== undefined && !/^#[0-9a-f]{6}$/.test(looks.color)) found.push(`card ${card.id}: a colour the hub does not take`);
+      if (looks.span !== undefined && (!Number.isInteger(looks.span) || looks.span < 4 || looks.span > 12)) found.push(`card ${card.id}: a width the hub does not take`);
+    }
+    for (const check of card.expect) {
+      if (check.board !== undefined && !shownOn(check.board)) found.push(`card ${card.id} expects something on ${check.board}, where it is not shown`);
     }
   }
   return found;

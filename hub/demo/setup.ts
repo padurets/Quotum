@@ -232,9 +232,16 @@ export class Live {
     }
   }
 
-  /** A machine tells its list of running agents as of `t`; asleep, it says nothing. */
-  async report(machine: Machine, t: number, now: number) {
+  /** Every machine tells its list of running agents as of `t`, as agents do every 15 seconds; one asleep says nothing. */
+  async report(t: number, now: number) {
+    for (const machine of machines(this.stand.set)) await this.reportOne(machine, t, now);
+  }
+
+  /** One machine tells its list as of `t`; the hub must file every agent on it. */
+  async reportOne(machine: Machine, t: number, now: number) {
     if (!awake(machine, t)) return;
-    await this.stand.agents.get(machine.id)!.sessions(sessionsAt(this.stand.set, machine, this.stand.start, t), now);
+    const sessions = sessionsAt(this.stand.set, machine, this.stand.start, t);
+    const {accepted} = await this.stand.agents.get(machine.id)!.sessions(sessions, now);
+    if (accepted !== sessions.length) throw new Error(`machine ${machine.id}: the hub filed ${accepted} of its ${sessions.length} running agents`);
   }
 }
