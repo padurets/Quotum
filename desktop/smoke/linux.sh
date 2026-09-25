@@ -52,9 +52,12 @@ case $mode in
     ;;
   crash)
     status=0
-    timeout -k 10 180 xvfb-run -a "$@" --smoke=crash || status=$?
-    [ "$status" -ne 0 ] || fail "the app did not crash"
-    [ "$status" -ne 124 ] || fail "the app did not crash within 180 s"
+    # The controller aborts deliberately. Its browser may still be flushing its
+    # profile after Node exits: reap all descendants before removing that profile.
+    python3 "$(dirname "$0")/monitor.py" -- \
+      timeout -k 10 180 xvfb-run -a "$@" --smoke=crash > "$work/output.log" 2>&1 || status=$?
+    [ "$status" -eq 134 ] || fail "expected controller SIGABRT, got exit $status"
+    cat "$work/output.log"
     for _ in $(seq 1 20); do
       node_gone && break
       sleep 0.5

@@ -23,6 +23,12 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertGreaterEqual(time.monotonic() - start, 0.2)
 
+    def test_waits_for_children_when_the_wrapper_reports_an_abort(self):
+        start = time.monotonic()
+        result = self.run_script("import subprocess,sys; subprocess.Popen([sys.executable,'-c','import time; time.sleep(0.2)']); raise SystemExit(134)")
+        self.assertEqual(result.returncode, 134, result.stderr)
+        self.assertGreaterEqual(time.monotonic() - start, 0.2)
+
     def test_leftover_process_fails_and_is_terminated(self):
         result = self.run_script("import subprocess,sys; subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)'])", grace=0.1)
         self.assertEqual(result.returncode, 1, result.stderr)
