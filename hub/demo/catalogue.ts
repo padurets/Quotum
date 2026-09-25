@@ -106,8 +106,8 @@ export const SCENES: Scene[] = [
       {reset: 'claude', label: 'done', scope: 'Max'},
       {tracker: 'Codex Resets', health: 'ok'},
       {tracker: 'Claude Resets', health: 'ok'},
-      {marked: 'codex'},
-      {marked: 'claude'},
+      {marked: 'codex', resets: 1},
+      {marked: 'claude', resets: 1},
     ],
     look: [
       'Codex cards: "Reset in 1d" with the date, not the reset of four hours ago; Claude cards: "Reset happened · <time> · Max", not the change of limits of yesterday',
@@ -150,7 +150,7 @@ export const SCENES: Scene[] = [
     expect: [
       {reset: 'codex', label: 'awaiting'},
       {reset: 'claude', label: 'done', scope: ''},
-      {marked: 'codex'},
+      {marked: 'codex', resets: 1},
     ],
     look: ['The Claude notice names no scope: the reset was for everyone'],
   },
@@ -187,8 +187,8 @@ export const SCENES: Scene[] = [
     expect: [
       {reset: 'codex', label: 'done', scope: ''},
       {reset: 'claude', label: 'done', scope: 'Pro'},
-      {marked: 'codex'},
-      {marked: 'claude'},
+      {marked: 'codex', resets: 1},
+      {marked: 'claude', resets: 1},
     ],
   },
   {
@@ -207,7 +207,7 @@ export const SCENES: Scene[] = [
       {reset: 'claude', label: 'policy'},
       {tracker: 'Codex Resets', health: 'HTTP 503'},
       {tracker: 'Claude Resets', health: 'ok'},
-      {marked: 'codex'},
+      {marked: 'codex', resets: 1},
     ],
   },
   {
