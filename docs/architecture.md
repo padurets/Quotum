@@ -347,6 +347,9 @@ files together and requires the system WebView2 runtime; the installer can insta
 that runtime. Both variants use the same Windows profile directories, instance lock
 and start-at-login settings. Moving a portable folder requires updating its autostart
 entry by turning start at login off and on again.
+Windows are created on worker threads; restoring, fitting and showing them is queued
+on the event loop after the window-state plugin's initialization. This keeps its state
+locks on the same thread as native window events.
 
 **Linux rendering and lifetime.** The Rust controller uses a D-Bus StatusNotifierItem
 through `ksni`; it does not link GTK or WebKit. It waits for the desktop's tray watcher

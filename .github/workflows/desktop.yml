@@ -145,6 +145,7 @@ jobs:
           if (-not (Test-Path $app)) { throw "not installed: $app" }
           ./desktop/smoke/windows.ps1 normal $app
           ./desktop/smoke/windows.ps1 crash $app
+          ./desktop/smoke/windows-ui.ps1 $app
           # Exercise the archive after extraction, including a path with spaces.
           $zip = Get-ChildItem "desktop/target/${{ matrix.target }}/release/bundle/portable/*.zip" | Select-Object -First 1
           $portable = Join-Path $env:RUNNER_TEMP 'Quotum portable'
@@ -152,6 +153,7 @@ jobs:
           $app = Join-Path $portable 'Quotum/quotum-desktop.exe'
           ./desktop/smoke/windows.ps1 normal $app
           ./desktop/smoke/windows.ps1 crash $app
+          ./desktop/smoke/windows-ui.ps1 $app
 
       # For the live check: `quotum` of this very commit, next to the app.
       - name: Command-line agent

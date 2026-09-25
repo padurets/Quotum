@@ -92,11 +92,25 @@ fn build(shell: &Arc<Shell>, state: &HubState) -> tauri::Result<tauri::WebviewWi
         builder = builder.data_directory(dir.clone());
     }
     let window = builder.build()?;
-    if shell.smoke.is_none() {
-        let _ = window.restore_state(StateFlags::all() & !StateFlags::VISIBLE);
-    }
-    let _ = fit_on_screen(&window);
-    window.show()?;
+    let ready = window.clone();
+    let shell = shell.clone();
+    // Tauri queues the plugin's window-ready hook on the event loop. Restoring on
+    // this worker can hold its cache while that hook waits for it, blocking both
+    // threads. Queue placement after the hook, on the same event loop.
+    window.run_on_main_thread(move || {
+        if shell.exiting() {
+            return;
+        }
+        if shell.smoke.is_none() {
+            let _ = ready.restore_state(StateFlags::all() & !StateFlags::VISIBLE);
+        }
+        if let Err(error) = fit_on_screen(&ready) {
+            shell.hub_log.line(&format!("app: the window could not be fitted to the screen: {error}"));
+        }
+        if let Err(error) = ready.show() {
+            shell.hub_log.line(&format!("app: the window could not be shown: {error}"));
+        }
+    })?;
     Ok(window)
 }
 

@@ -25,6 +25,9 @@ builds deb, rpm and AppImage; its packaging tools are `dpkg-deb`, `rpmbuild` and
 `mksquashfs`. On Windows, `npx @tauri-apps/cli@2.11.5 build --target x86_64-pc-windows-msvc`
 makes setup.exe; then `node desktop/package-windows.mjs` packages that build as a portable ZIP.
 CI runs both the installed app and the extracted ZIP, including a path with spaces.
+`desktop/smoke/windows-ui.ps1 <app.exe>` also checks ordinary startup with the real
+window-state plugin: a visible, responsive window, restored bounds inside the monitor's
+work area, and close/reopen through a second launch. It disables every provider.
 
 Run `node --test desktop/electron/policy.test.cjs` for the Linux bridge/navigation
 policy. CI runs the installed packages with `--smoke`: the hub starts, a stand-in client
