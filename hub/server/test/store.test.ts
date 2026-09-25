@@ -129,11 +129,11 @@ test('limits back before their reset time and free resets granted are events for
   const at = (minutes: number) => start + minutes * 60_000;
   const weekly = (used: number, resetAt = start + 3 * 86_400_000) => win({used, resetAt});
   const session = (used: number) => win({id: 'session', kind: 'session', minutes: 300, used, resetAt: start + 3 * 3_600_000});
-  store.record(id, measurement({observedAt: at(0), windows: [weekly(90), session(40)], resets: {available: 0, expiresAt: null}}));
-  store.record(id, measurement({observedAt: at(2), windows: [weekly(91), session(41)], resets: {available: 1, expiresAt: at(43_200)}}));
+  store.record(id, measurement({observedAt: at(0), windows: [weekly(90), session(40)], resets: {available: 0, expiresAt: null, expiring: []}}));
+  store.record(id, measurement({observedAt: at(2), windows: [weekly(91), session(41)], resets: {available: 1, expiresAt: at(43_200), expiring: []}}));
   // A free reset used: both windows back at zero days before their reset.
-  store.record(id, measurement({observedAt: at(4), windows: [weekly(0, start + 7 * 86_400_000), session(0)], resets: {available: 0, expiresAt: null}}));
-  store.record(id, measurement({observedAt: at(6), windows: [weekly(1, start + 7 * 86_400_000), session(1)], resets: {available: 0, expiresAt: null}}));
+  store.record(id, measurement({observedAt: at(4), windows: [weekly(0, start + 7 * 86_400_000), session(0)], resets: {available: 0, expiresAt: null, expiring: []}}));
+  store.record(id, measurement({observedAt: at(6), windows: [weekly(1, start + 7 * 86_400_000), session(1)], resets: {available: 0, expiresAt: null, expiring: []}}));
   const {events} = store.history(BOARD, start - 1, 60_000);
   assert.deepEqual(events, [
     {sourceId: id, at: at(2), kind: 'resets_granted', count: 1},

@@ -120,7 +120,13 @@ function parseResets(value: unknown): FreeResets | null {
   if (!isObject(value) || !Number.isInteger(value.available) || (value.available as number) < 0 || (value.available as number) > 1000) {
     throw new Invalid('resets');
   }
-  return {available: value.available as number, expiresAt: time(value.expiresAt, 'resets expiresAt', true)};
+  const available = value.available as number;
+  const expiring = list(value.expiring, 'resets expiring', 50).map(group => {
+    if (!isObject(group) || !Number.isInteger(group.count) || (group.count as number) < 1) throw new Invalid('resets expiring');
+    return {count: group.count as number, expiresAt: time(group.expiresAt, 'resets expiring expiresAt', true)};
+  });
+  if (expiring.reduce((sum, group) => sum + group.count, 0) > available) throw new Invalid('resets expiring');
+  return {available, expiresAt: time(value.expiresAt, 'resets expiresAt', true), expiring};
 }
 
 function parseSnapshot(value: unknown): AgentSnapshot {

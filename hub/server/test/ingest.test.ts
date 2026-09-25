@@ -84,6 +84,10 @@ test('a malformed batch is refused whole', () => {
   assert.throws(() => parseBatch(batch([snapshot(start, 5, {provider: 'cursor'})])), /provider/);
   assert.throws(() => parseBatch(batch([snapshot(start, 5, {staleAfterMs: 0})])), /staleAfterMs/);
   assert.throws(() => parseBatch(batch([snapshot(start, 5, {resets: {available: -1}})])), /resets/);
+  assert.throws(() => parseBatch(batch([snapshot(start, 5, {resets: {available: 1, expiring: [{count: 2}]}})])), /resets expiring/, 'more by expiry than there are');
+  assert.throws(() => parseBatch(batch([snapshot(start, 5, {resets: {available: 2, expiring: [{count: 0}]}})])), /resets expiring/);
+  assert.throws(() => parseBatch(batch([snapshot(start, 5, {resets: {available: 2, expiring: [{count: 1, expiresAt: 'soon'}]}})])), /resets expiring expiresAt/);
+  assert.throws(() => parseBatch(batch([snapshot(start, 5, {resets: {available: 1000, expiring: Array.from({length: 51}, () => ({count: 1}))}})])), /resets expiring/);
   // Text is 1 to 120 characters, however many UTF-16 units they take.
   assert.equal(parseBatch(batch([snapshot(start, 5, {accountName: '🚀'.repeat(120)})])).snapshots[0].accountName, '🚀'.repeat(120));
   assert.throws(() => parseBatch(batch([snapshot(start, 5, {accountName: '🚀'.repeat(121)})])), /accountName/);
@@ -111,8 +115,15 @@ test('free resets the client reports are kept with the source until it stops rep
   const {store, ingest, board, token} = setup();
   const expiresAt = start + 30 * 86_400_000;
   ingest.accept(token, batch([snapshot(start, 5, {resets: {available: 1, expiresAt: iso(expiresAt)}})]), start);
-  assert.deepEqual(only(store, board, 'codex').resets, {available: 1, expiresAt});
-  ingest.accept(token, batch([snapshot(start + 60_000, 5)]), start + 60_000);
+  assert.deepEqual(only(store, board, 'codex').resets, {available: 1, expiresAt, expiring: []}, 'an older agent says only when the first expires');
+  const later = expiresAt + 5 * 86_400_000;
+  ingest.accept(
+    token,
+    batch([snapshot(start + 60_000, 5, {resets: {available: 4, expiresAt: iso(expiresAt), expiring: [{count: 1, expiresAt: iso(expiresAt)}, {count: 2, expiresAt: iso(later)}, {count: 1, expiresAt: null}]}})]),
+    start + 60_000,
+  );
+  assert.deepEqual(only(store, board, 'codex').resets, {available: 4, expiresAt, expiring: [{count: 1, expiresAt}, {count: 2, expiresAt: later}, {count: 1, expiresAt: null}]});
+  ingest.accept(token, batch([snapshot(start + 120_000, 5)]), start + 120_000);
   assert.equal(only(store, board, 'codex').resets, null);
 });
 
