@@ -1,48 +1,40 @@
 import {memo, useMemo} from 'react';
 import {MINUTE, useNow} from '../lib/api';
-import type {History as HistoryData, Overview, Win} from '../lib/types';
+import type {History as HistoryData, Overview} from '../lib/types';
 import {duration, num} from '../lib/format';
 import {level} from '../lib/quota';
-import {PLAN_TOLERANCE, planAt, type WeeklyPlan} from '../lib/plan';
+import {forecastRow, spentOf, type Outlook, type Spent} from '../lib/forecast';
 import {FORECAST, planOf, withHidden, type Arrange} from '../lib/view';
-import {linesOf, type Line} from '../lib/lines';
+import {linesOf} from '../lib/lines';
 import {usePrefs} from '../lib/prefs';
 import {ofTimeRange} from '../lib/timeRange';
 import {t, useLocale} from '../i18n';
 import {HideRow, Popover, SlidersIcon} from './Popover';
 
-type Outlook = {text: string; tone: string; title: string};
-
-/**
- * Where the average pace over the period leads. Weekly windows are judged against the
- * end of their plan (everything should be spent by then); other windows, and a week past
- * the end of its plan, against their reset.
- */
-function outlook(line: Line, live: Win | undefined, measuredAt: number | null, now: number, weekly: WeeklyPlan | null): Outlook {
-  const none = {text: '—', tone: '', title: ''};
-  const plan = live ? planAt(live, measuredAt, now, weekly) : null;
-  if (live && live.remaining <= 0) return {text: t('forecast.usedUp'), tone: 'v-crit', title: ''};
-  if (!live?.resetAt || live.resetAt <= now) return none;
-
-  const hours = line.coveredMs / 3_600_000;
-  if (hours < 0.5) return {...none, title: t('forecast.needData')};
-  const rate = line.consumed / hours;
-  const title = t('forecast.rate', {rate: rate < 0.05 ? '≈ 0' : num(rate, 1)});
-  // Past the end of its plan a week has only its reset ahead.
-  const planned = plan?.weekly && !plan.done;
-  const deadline = planned ? plan.deadline : live.resetAt;
-
-  if (rate > 0.01) {
-    const untilEmpty = (live.remaining / rate) * 3_600_000;
-    const untilDeadline = deadline - now;
-    if (untilEmpty < untilDeadline) {
-      return {text: t('forecast.runsOut', {time: duration(untilEmpty, true)}), tone: untilEmpty < untilDeadline / 2 ? 'v-crit' : 'v-warn', title};
-    }
+/** The last column's text, colour and tooltip. */
+function outlookCell(ahead: Outlook): {text: string; tone: string; title: string} {
+  switch (ahead.key) {
+    case 'none':
+      return {text: '—', tone: '', title: ''};
+    case 'needData':
+      return {text: '—', tone: '', title: t('forecast.needData')};
+    case 'usedUp':
+      return {text: t('forecast.usedUp'), tone: 'v-crit', title: ''};
   }
-  const left = Math.max(0, live.remaining - (rate * (deadline - now)) / 3_600_000);
-  if (left < 5) return {text: t(planned ? 'forecast.onPacePlan' : 'forecast.onPaceReset'), tone: '', title};
-  return {text: t(planned ? 'forecast.leftPlan' : 'forecast.leftReset', {value: num(left)}), tone: planned ? 'muted' : '', title};
+  const title = t('forecast.rate', {rate: ahead.rate < 0.05 ? '≈ 0' : num(ahead.rate, 1)});
+  switch (ahead.key) {
+    case 'runsOut':
+      return {text: t('forecast.runsOut', {time: duration(ahead.inMs, true)}), tone: ahead.tone, title};
+    case 'onPacePlan':
+    case 'onPaceReset':
+      return {text: t(`forecast.${ahead.key}`), tone: '', title};
+    case 'leftPlan':
+    case 'leftReset':
+      return {text: t(`forecast.${ahead.key}`, {value: num(ahead.left)}), tone: ahead.key === 'leftPlan' ? 'muted' : '', title};
+  }
 }
+
+const spentText = (spent: Spent) => (spent.key === 'points' ? t('table.points', {value: num(spent.value, 1)}) : spent.key === 'unused' ? t('table.unused') : '—');
 
 /** How long a line must have been measured without gaps for its pace to mean something. */
 const PACE_FROM = 10 * 60_000;
@@ -117,7 +109,7 @@ export const Forecast = memo(function Forecast({
                     {line.name}
                   </td>
                 );
-                const spent = <td>{line.consumed > 0 ? t('table.points', {value: num(line.consumed, 1)}) : line.coveredMs ? t('table.unused') : '—'}</td>;
+                const spent = <td>{spentText(spentOf(line))}</td>;
                 if (selected) {
                   const edge = (value: number | null) => (value === null ? <td>—</td> : <td className={`v-${level(value)}`}>{num(value)}%</td>);
                   return (
@@ -133,24 +125,22 @@ export const Forecast = memo(function Forecast({
                 const source = overview?.sources.find(s => s.id === line.sourceId);
                 const live = source?.windows.find(w => w.id === line.windowId);
                 const measuredAt = source?.successAt ?? null;
-                const weekly = planOf(view, line.sourceId);
-                const plan = live ? planAt(live, measuredAt, now, weekly) : null;
-                const delta = plan && live && live.remaining > 0 ? live.remaining - plan.remaining : 0;
-                const notable = Math.abs(delta) >= PLAN_TOLERANCE;
-                const ahead = outlook(line, live, measuredAt, now, weekly);
+                const row = forecastRow(line, live, measuredAt, now, planOf(view, line.sourceId));
+                const {plan} = row;
+                const ahead = outlookCell(row.outlook);
                 return (
                   <tr key={line.key}>
                     {name}
                     <td className={`v-${level(line.current)}`}>{num(line.current)}%</td>
-                    <td title={plan && notable ? t(delta >= 0 ? 'table.behindBy' : 'table.aheadBy', {value: num(Math.abs(delta))}) : ''}>
+                    <td title={plan?.notable ? t(plan.delta >= 0 ? 'table.behindBy' : 'table.aheadBy', {value: num(Math.abs(plan.delta))}) : ''}>
                       {plan ? (
                         <>
                           {num(plan.remaining)}%
-                          {notable && (
-                            <small className={delta < 0 ? 'v-warn' : 'muted'}>
+                          {plan.notable && (
+                            <small className={plan.delta < 0 ? 'v-warn' : 'muted'}>
                               {' '}
-                              {delta > 0 ? '+' : '−'}
-                              {num(Math.abs(delta))}
+                              {plan.delta > 0 ? '+' : '−'}
+                              {num(Math.abs(plan.delta))}
                             </small>
                           )}
                         </>

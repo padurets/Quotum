@@ -3,12 +3,10 @@ import {useNow} from '../lib/api';
 import type {LiveSession, SourceState} from '../lib/types';
 import {duration} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
-import {AGENTS, cardId, colorOf, columnShown, isHidden, withColumn, withHidden, type Arrange} from '../lib/view';
+import {AGENTS, colorOf, columnShown, withColumn, withHidden, type Arrange} from '../lib/view';
+import {agentRows, DRAWN, type AgentRow} from '../lib/agents';
 import {t, useLocale, type Key} from '../i18n';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
-
-/** More sessions than this are counted in the header instead of drawn one by one. */
-const DRAWN = 10;
 
 type Machine = {id: string; name: string; sessions: LiveSession[]};
 
@@ -118,10 +116,8 @@ export function Agents({sessions, now}: {sessions: LiveSession[]; now: number}) 
   );
 }
 
-type Row = {source: SourceState; session: LiveSession};
-
 /** The table's columns after the project, each one the owner can hide to make the widget narrow. */
-const COLUMNS: {id: string; title: Key; cell: (row: Row, now: number) => ReactNode}[] = [
+const COLUMNS: {id: string; title: Key; cell: (row: AgentRow, now: number) => ReactNode}[] = [
   {id: 'state', title: 'agents.state', cell: ({session}) => stateOf(session)},
   {id: 'subscription', title: 'agents.subscription', cell: ({source}) => sourceLabel(source)},
   {id: 'machine', title: 'agents.machine', cell: ({session}) => session.device.name},
@@ -137,10 +133,7 @@ export const AgentsPanel = memo(function AgentsPanel({sources, arrange}: {source
   useLocale();
   const now = useNow();
   // Only what the board shows: a subscription whose card is hidden is left out here too.
-  const shown = sources.filter(source => !isHidden(arrange.view, cardId(source.id)));
-  const rows: Row[] = shown
-    .flatMap(source => source.sessions.map(session => ({source, session})))
-    .sort((a, b) => a.session.device.name.localeCompare(b.session.device.name) || a.session.startedAt - b.session.startedAt);
+  const {rows, empty} = agentRows(sources, arrange.view);
   const working = rows.filter(row => row.session.working).length;
   const columns = COLUMNS.filter(column => columnShown(arrange.view, AGENTS, column.id));
   return (
@@ -160,8 +153,8 @@ export const AgentsPanel = memo(function AgentsPanel({sources, arrange}: {source
           </Popover>
         )}
       </div>
-      {!rows.length ? (
-        <p className="panel-empty">{t(sources.some(source => source.sessions.length && !shown.includes(source)) ? 'agents.noneShown' : 'agents.none')}</p>
+      {empty ? (
+        <p className="panel-empty">{t(`agents.${empty}`)}</p>
       ) : (
         <div className="table-wrap">
           <table>
