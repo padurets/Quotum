@@ -188,6 +188,8 @@ test('history starts when the database was made, or at an older sample while one
   assert.equal(store.historyStart, older, 'measurements an agent kept for days, delivered to a new hub');
   store.prune(start);
   assert.equal(store.historyStart, start, 'back to the creation once that sample is gone');
+  store.record(id, measurement({observedAt: 0}));
+  assert.equal(store.historyStart, start, 'a sample dated before the retention period (a clock not set yet) moves nothing');
   store.close();
 });
 
