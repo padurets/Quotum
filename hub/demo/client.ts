@@ -17,15 +17,25 @@ export class Refused extends Error {
 
 type Method = 'GET' | 'POST' | 'DELETE';
 
+/**
+ * Stops every request of the demo, those under way too. Each request also closes its
+ * connection when answered: a stopping hub waits for open ones, and the demo's, kept alive
+ * for reuse, would hold it up for seconds.
+ */
+const halted = new AbortController();
+export const haltRequests = () => halted.abort();
+
 async function call<T>(base: string, method: Method, path: string, options: {body?: unknown; cookie?: string; token?: string} = {}): Promise<{body: T; cookie: string | null}> {
   const response = await fetch(base + path, {
     method,
     headers: {
+      connection: 'close',
       ...(options.body !== undefined ? {'content-type': 'application/json'} : {}),
       ...(options.cookie ? {cookie: options.cookie} : {}),
       ...(options.token ? {authorization: `Bearer ${options.token}`} : {}),
     },
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    signal: halted.signal,
   });
   const text = await response.text();
   const body = response.headers.get('content-type')?.includes('json') ? JSON.parse(text) : text;
@@ -132,7 +142,7 @@ export class Agent {
 /** Whether the hub answers its health check. */
 export async function healthy(base: string): Promise<boolean> {
   try {
-    return (await fetch(`${base}/health`)).ok;
+    return (await fetch(`${base}/health`, {headers: {connection: 'close'}, signal: halted.signal})).ok;
   } catch {
     return false;
   }

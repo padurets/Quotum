@@ -20,4 +20,5 @@ test('the demo reaches the hub where it listens and lets it answer that host', (
   const v6 = addressOf({QUOTUM_BIND: '::1'});
   assert.deepEqual([v6.base, v6.hosts], ['http://[::1]:8080', '127.0.0.1,localhost,[::1]']);
   assert.equal(addressOf({QUOTUM_BIND: '10.0.0.5'}).base, 'http://10.0.0.5:8080');
+  for (const port of ['abc', '0', '70000', '80.5']) assert.throws(() => addressOf({QUOTUM_PORT: port}), /QUOTUM_PORT must be a port number from 1 to 65535/, port);
 });

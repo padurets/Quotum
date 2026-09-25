@@ -1,10 +1,10 @@
 import {spawn, type ChildProcess} from 'node:child_process';
-import {existsSync, mkdtempSync, rmSync} from 'node:fs';
+import {existsSync, mkdtempSync, realpathSync, rmSync} from 'node:fs';
 import {createServer} from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {firstSignup, healthy} from './client.js';
+import {firstSignup, haltRequests, healthy} from './client.js';
 import {SCENES, SETS} from './catalogue.js';
 import {earliest, liveStep, MIN, people, SECOND, type DemoSet} from './model.js';
 import {emailOf, Live, PASSWORD, setUp, type Stand} from './setup.js';
@@ -27,6 +27,8 @@ const ADDRESS = ['QUOTUM_PORT', 'QUOTUM_BIND', 'QUOTUM_ALLOWED_HOSTS', 'QUOTUM_P
 /** How long the hub may take to answer after it starts, and to stop. */
 const READY_MS = 10_000;
 const STOP_MS = 5_000;
+/** How long a signal may take to reach the demo after the hub, stopped by it too, went away. */
+const SETTLE_MS = 1_000;
 /** How often machines tell their lists of running agents, as agents do. */
 const TICK = 15 * SECOND;
 
@@ -62,6 +64,7 @@ export function parseArgs(argv: string[]): {set: DemoSet; scene: string} {
  */
 export function addressOf(env: NodeJS.ProcessEnv) {
   const port = Number(env.QUOTUM_PORT || 8080);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Stop(`QUOTUM_PORT must be a port number from 1 to 65535, not "${env.QUOTUM_PORT}".`);
   const bind = env.QUOTUM_BIND || '127.0.0.1';
   const any = bind === '0.0.0.0' || bind === '::';
   const host = any ? '127.0.0.1' : bind.includes(':') ? `[${bind}]` : bind;
@@ -111,6 +114,8 @@ async function main() {
     if (stopping) return;
     stopping = true;
     clearTimeout(timer);
+    // Whatever the demo was sending (the history, a tick) goes no further.
+    haltRequests();
     if (hub && hub.exitCode === null && hub.signalCode === null) {
       const exited = new Promise(resolve => hub!.once('exit', resolve));
       hub.kill('SIGTERM');
@@ -122,8 +127,26 @@ async function main() {
     rmSync(dir, {recursive: true, force: true, maxRetries: 5});
     process.exit(code);
   };
-  process.on('SIGINT', () => void stop(0));
-  process.on('SIGTERM', () => void stop(0));
+  // A terminal closed (SIGHUP) stops it as Ctrl+C does.
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(signal, () => void stop(0));
+  /**
+   * Ctrl+C reaches the hub too, and a request can fail on its closing before the demo hears
+   * of the signal: before calling a failed request a failure, give the signal and the hub's
+   * exit a moment to arrive.
+   */
+  const settled = () =>
+    new Promise<void>(resolve => {
+      if (!hub || hub.exitCode !== null || hub.signalCode !== null) return resolve();
+      const exited = () => {
+        clearTimeout(wait);
+        resolve();
+      };
+      const wait = setTimeout(() => {
+        hub!.off('exit', exited);
+        resolve();
+      }, SETTLE_MS);
+      hub.once('exit', exited);
+    });
 
   try {
     trackers = await Trackers.start(SCENES, start);
@@ -141,9 +164,11 @@ async function main() {
     hub = spawn(process.execPath, ['dist/server/index.js'], {cwd: HUB, env, stdio: ['ignore', 'pipe', 'pipe']});
     hub.stdout!.on('data', chunk => output.add(chunk));
     hub.stderr!.on('data', chunk => output.add(chunk));
-    hub.on('exit', code => {
+    hub.on('exit', (code, signal) => {
       if (stopping) return;
-      console.error(`\nThe hub stopped by itself (exit ${code}). Its output:\n${output}`);
+      // Ctrl+C reaches the hub too, which may be done before the demo hears of it: a clean exit is a stop.
+      if (code === 0) return void stop(0);
+      console.error(`\nThe hub stopped by itself (${signal ? `killed by ${signal}` : `exit ${code}`}). Its output:\n${output}`);
       void stop(1);
     });
 
@@ -158,13 +183,15 @@ async function main() {
         await live.report(t, Date.now());
         await live.measure(t, Date.now());
       } catch (error) {
+        await settled();
         if (!stopping) console.error(`demo: ${(error as Error).message}`);
       }
       if (!stopping) timer = setTimeout(() => void tick(), TICK - ((Date.now() - start) % TICK));
     };
     await tick();
-    greet(stand, address, hub.pid!, scene, process.uptime());
+    if (!stopping) greet(stand, address, hub.pid!, scene, process.uptime());
   } catch (error) {
+    if (!(error instanceof Stop)) await settled();
     if (stopping) return;
     console.error(error instanceof Stop ? error.message : `The demo could not start: ${(error as Error).stack ?? error}`);
     await stop(1);
@@ -225,7 +252,16 @@ function greet(stand: Stand, address: ReturnType<typeof addressOf>, pid: number,
   );
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+/** Run as the command, not imported: by real paths, as a symlinked or junctioned checkout names them differently. */
+const isMain = () => {
+  try {
+    return !!process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+};
+
+if (isMain()) {
   main().catch(error => {
     console.error(error instanceof Stop ? error.message : error);
     process.exit(error instanceof Stop ? 2 : 1);
