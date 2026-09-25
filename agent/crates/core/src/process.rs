@@ -512,6 +512,7 @@ mod tests {
         pairs.iter().map(|(n, v)| (OsString::from(n), OsString::from(v))).collect()
     }
 
+    #[cfg(unix)]
     fn get<'a>(env: &'a [(OsString, OsString)], name: &str) -> Option<&'a OsStr> {
         env.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_os_str())
     }
@@ -623,7 +624,10 @@ mod tests {
         let env = client_env(Path::new("/home/ann/.local/bin/claude"), inherited, false, Path::new("/nonexistent"));
         let names: Vec<_> = env.iter().map(|(n, _)| n.to_string_lossy().into_owned()).collect();
         assert_eq!(names, ["HOME", "PATH", "XDG_DATA_DIRS", "LANG"]);
-        assert_eq!(get(&env, "PATH").unwrap(), "/home/ann/.local/bin:/usr/local/bin:/usr/bin");
+        // Then the usual directories this machine has, which differ from runner to runner.
+        let path = get(&env, "PATH").unwrap().to_string_lossy();
+        assert!(path.starts_with("/home/ann/.local/bin:/usr/local/bin:/usr/bin"), "{path}");
+        assert!(!path.contains(".mount_"), "{path}");
         assert_eq!(get(&env, "XDG_DATA_DIRS").unwrap(), "/usr/share");
 
         let plain = os(&[("HOME", "/home/ann"), ("PATH", "/bin"), ("GTK_THEME", "Adwaita:dark")]);
