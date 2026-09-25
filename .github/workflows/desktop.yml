@@ -120,7 +120,9 @@ jobs:
           # The rpm installed on Fedora next to its nodejs package, run by a user as a person
           # runs it, with the Chromium engine the package supplies.
           rpm=$(ls desktop/target/${{ matrix.target }}/release/bundle/rpm/*.rpm)
-          docker run --rm -v "$PWD:/work:ro" -w /work fedora:42 sh -c "
+          # Chromium keeps its own sandbox; nested user namespaces need to pass the
+          # outer container's syscall filter. The app still runs as the smoke user.
+          docker run --rm --security-opt seccomp=unconfined -v "$PWD:/work:ro" -w /work fedora:42 sh -c "
             set -e
             dnf -y install nodejs xorg-x11-server-Xvfb xorg-x11-xauth procps-ng strace /work/$rpm > /tmp/dnf.log || { cat /tmp/dnf.log; exit 1; }
             rpm -ql quotum | grep '^/usr/bin/'
