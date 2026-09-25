@@ -365,7 +365,7 @@ agent running in the background keeps its version until it is started again.
 | `QUOTUM_SETUP_CODE` | random, printed at start | The code the first account needs while the hub has none |
 | `QUOTUM_SIGNUP` | `invite` | `open` lets anyone sign up; otherwise only the first person and people with an invite |
 | `QUOTUM_RESETS` | on | `off` stops polling the community reset trackers |
-| `QUOTUM_RESETS_CODEX_URL`, `QUOTUM_RESETS_CLAUDE_URL` | the trackers' own APIs | Where to read Codex Resets and Claude Resets instead, such as a mirror where the tracker's bot check stops your server |
+| `QUOTUM_RESETS_CODEX_URL`, `QUOTUM_RESETS_CLAUDE_URL` | `https://codex-resets.com/api/v1/status`, `https://claude-resets.com/api/resets` | Where to read Codex Resets and Claude Resets instead, such as a mirror where the tracker's bot check stops your server: the full address of an endpoint that answers the same JSON, without a user name or password |
 | `QUOTUM_FRAME_ANCESTORS` | — | Extra origins allowed to embed the dashboard |
 
 **Opening the hub to other machines.** Put it behind HTTPS (sessions are cookies and

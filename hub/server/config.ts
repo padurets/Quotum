@@ -62,7 +62,8 @@ export function localMode(env: Record<string, string | undefined>): LocalMode | 
 
 /**
  * Where to read a reset tracker: its own API unless `variable` names another address
- * (a mirror, where the tracker's bot check stops the server). Checked at start.
+ * (a mirror, where the tracker's bot check stops the server). Checked at start; the value
+ * is not repeated in the error, as it may carry a secret.
  */
 export function trackerUrl(variable: string, value: string | undefined, fallback: string): string {
   if (!value) return fallback;
@@ -70,9 +71,11 @@ export function trackerUrl(variable: string, value: string | undefined, fallback
   try {
     url = new URL(value);
   } catch {
-    throw new Error(`${variable} must be a full address like https://mirror.example.com/api, not "${value}"`);
+    throw new Error(`${variable} must be the full address of an endpoint, like https://mirror.example.com/api/v1/status`);
   }
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error(`${variable} must start with https:// or http://, not "${value}"`);
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error(`${variable} must start with https:// or http://`);
+  // Requests cannot carry them (fetch refuses such an address): the tracker would never be read.
+  if (url.username || url.password) throw new Error(`${variable} must not contain a user name or password`);
   return url.href;
 }
 
