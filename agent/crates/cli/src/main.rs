@@ -480,14 +480,13 @@ fn logged() -> impl FnMut(Event) {
 
 /// Plain http to anything but this machine: the bearer token can be read on the way.
 fn insecure(url: &str) -> bool {
-    let rest = url.strip_prefix("http://");
-    rest.is_some_and(|host| !["localhost", "127.0.0.1", "[::1]"].iter().any(|local| host.starts_with(local)))
+    url.starts_with("http://") && !sink::is_loopback(url)
 }
 
 /// The device-code flow: ask the hub for a code, show it, wait until a person confirms it.
 fn connect(config: &Config, paths: &Paths, url: &str) -> ExitCode {
     let url = url.trim_end_matches('/');
-    let http = sink::http();
+    let http = sink::http_to(url);
     let request =
         serde_json::json!({"machine": machine(paths, config), "agent": concat!("quotum/", env!("CARGO_PKG_VERSION"))});
     let mut response = match http.post(&format!("{url}/v1/device/code")).send_json(&request) {
