@@ -512,7 +512,9 @@ impl ksni::Tray for Tray {
 fn create_tray(shell: &Arc<Shell>) {
     use ksni::blocking::TrayMethods;
     let shell = shell.clone();
-    thread::spawn(move || match (Tray { shell: shell.clone() }).spawn() {
+    // At login the controller may start before the desktop's tray watcher. Keep the
+    // service alive so ksni registers it when the watcher appears or restarts.
+    thread::spawn(move || match (Tray { shell: shell.clone() }).assume_sni_available(true).spawn() {
         Ok(handle) => {
             while !shell.exiting() {
                 thread::park();

@@ -29,7 +29,9 @@ policy. CI runs the installed packages with `--smoke`: the hub starts, a stand-i
 is measured, its board appears, the window opens twice and the app quits. Linux checks
 need `xvfb`, `xauth` and Python 3; `desktop/smoke/monitor.py` adopts surviving
 children and audits their exits, alongside Electron's live child-failure reports.
-This uses no ptrace and keeps Chromium's sandbox intact. A successful
+This uses no ptrace and keeps Chromium's sandbox intact. The installed-package checks also start the controller before a stand-in tray watcher
+(`desktop/smoke/tray.sh`, Python 3 with PyGObject) to cover early start at login.
+A successful
 controller exit alone does not prove that browser children closed successfully.
 The intentional child-crash supervisor regression requires `QUOTUM_TEST_FAULT=1`;
 CI enables it. Leave it off on a person's workstation, whose crash handler may notify

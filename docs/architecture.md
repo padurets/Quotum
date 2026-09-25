@@ -338,7 +338,8 @@ no name of their own, so each reader sees "My limits" in their language.
   window, tray, single-instance activation and start-at-login integration.
 
 **Linux rendering and lifetime.** The Rust controller uses a D-Bus StatusNotifierItem
-through `ksni`; it does not link GTK or WebKit. Opening the window starts an Electron
+through `ksni`; it does not link GTK or WebKit. It waits for the desktop's tray watcher
+when starting early at login and registers again when that watcher restarts. Opening the window starts an Electron
 process; closing it ends that process and its renderers. The Rust agent and Node hub
 continue. A socket pair inherited as fd 3 carries typed messages, not a TCP listener or
 command-line secrets. EOF tells Electron to quit if the controller dies. A second start

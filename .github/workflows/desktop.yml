@@ -63,7 +63,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libssl-dev libnss3 libgtk-3-0 libgbm1 libasound2 xvfb xauth strace unzip rpm squashfs-tools
+          sudo apt-get install -y libssl-dev libnss3 libgtk-3-0 libgbm1 libasound2 xvfb xauth strace dbus-daemon python3-gi unzip rpm squashfs-tools
       - name: Smoke supervisor tests
         if: runner.os == 'Linux'
         env:
@@ -113,6 +113,7 @@ jobs:
           sh desktop/smoke/linux.sh normal quotum-desktop
           sh desktop/smoke/linux.sh normal quotum-desktop --software-rendering
           sh desktop/smoke/linux.sh crash quotum-desktop
+          sh desktop/smoke/tray.sh /usr/bin/quotum-desktop
       - name: Smoke (Fedora)
         if: runner.os == 'Linux'
         shell: bash
@@ -124,11 +125,12 @@ jobs:
           # outer container's syscall filter. The app still runs as the smoke user.
           docker run --rm --security-opt seccomp=unconfined -v "$PWD:/work:ro" -w /work fedora:42 sh -c "
             set -e
-            dnf -y install nodejs xorg-x11-server-Xvfb xorg-x11-xauth procps-ng strace /work/$rpm > /tmp/dnf.log || { cat /tmp/dnf.log; exit 1; }
+            dnf -y install nodejs xorg-x11-server-Xvfb xorg-x11-xauth procps-ng strace dbus-daemon python3-gobject-base /work/$rpm > /tmp/dnf.log || { cat /tmp/dnf.log; exit 1; }
             rpm -ql quotum | grep '^/usr/bin/'
             useradd -m smoke
             runuser -u smoke -- sh desktop/smoke/linux.sh normal quotum-desktop
             runuser -u smoke -- sh desktop/smoke/linux.sh crash quotum-desktop
+            runuser -u smoke -- sh desktop/smoke/tray.sh /usr/bin/quotum-desktop
           "
       - name: Smoke (Windows)
         if: runner.os == 'Windows'
