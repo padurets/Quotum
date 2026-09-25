@@ -47,9 +47,11 @@ const TerminalIcon = () => (
 /**
  * The coding agents running on a subscription right now, in the card's tray; not there
  * while none runs. The marks tell at a glance how many run and work on which machine;
- * the panel it opens, upwards where there is room, names them.
+ * the panel it opens, upwards where there is room, names them. When the tray has no room
+ * for the marks (`roomy` false), they all go and the count stays; they are still laid out,
+ * unseen, so the tray can tell when they fit again.
  */
-export function Agents({sessions, now}: {sessions: LiveSession[]; now: number}) {
+export function Agents({sessions, now, roomy = true}: {sessions: LiveSession[]; now: number; roomy?: boolean}) {
   if (!sessions.length) return null;
   const machines = byMachine(sessions);
   const working = sessions.filter(s => s.working).length;
@@ -57,7 +59,7 @@ export function Agents({sessions, now}: {sessions: LiveSession[]; now: number}) 
   return (
     <Popover
       label={summary}
-      triggerClass="agents-pill"
+      triggerClass="tray-pill agents-pill"
       up
       trigger={
         <>
@@ -66,7 +68,7 @@ export function Agents({sessions, now}: {sessions: LiveSession[]; now: number}) 
             <b>{working}</b>/{sessions.length}
           </span>
           {drawn(sessions) && (
-            <span className="agents-marks">
+            <span className={`agents-marks ${roomy ? '' : 'is-out'}`}>
               {machines.map(machine => (
                 <span className="agents-group" key={machine.id}>
                   {machine.sessions.map((session, i) => (

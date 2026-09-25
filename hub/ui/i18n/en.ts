@@ -165,7 +165,6 @@ export const en = {
   'agents.columns': 'Columns',
   'card.freeResets': {one: '{count} free reset', other: '{count} free resets'},
   'card.freeResetsUntil': 'use by {date}',
-  'card.freeResetsHint': 'The provider has granted resets of the limits. Quotum only shows them; you use one in the client itself.',
 
   'source.settings': 'Settings · {source}',
   'source.show': 'Show limits',
@@ -251,6 +250,8 @@ export const en = {
   'chart.empty': 'Nothing to show: turn lines on in the legend',
 
   'reset.credit': 'Data from {name}',
+  'reset.source': 'Source: {link}',
+  'reset.mark': 'in {time}',
   'reset.in': 'Reset in {time}',
   'reset.bankedIn': 'Banked reset in {time}',
   'reset.announced': 'Reset announced',

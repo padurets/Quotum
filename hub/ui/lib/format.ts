@@ -20,6 +20,19 @@ export function duration(ms: number, short = false) {
   return short || !(hours % 24) ? t('time.days', {n: days}) : t('time.daysHours', {d: days, h: hours % 24});
 }
 
+/**
+ * How long until something, for a mark with little room: minutes within the hour, hours
+ * for two days, days after that, always rounded down and never under a minute. Two days
+ * are hours still, so a reset in 47 hours does not read as one day away.
+ */
+export function countdown(ms: number) {
+  const minutes = Math.max(1, Math.floor(ms / 60_000));
+  if (minutes < 60) return t('time.minutes', {n: minutes});
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return t('time.hours', {n: hours});
+  return t('time.days', {n: Math.floor(hours / 24)});
+}
+
 export function ago(time: number | null, now: number) {
   if (!time) return t('time.noData');
   const seconds = Math.max(0, Math.round((now - time) / 1000));

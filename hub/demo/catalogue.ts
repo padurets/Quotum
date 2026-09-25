@@ -110,7 +110,8 @@ export const SCENES: Scene[] = [
       {marked: 'claude', resets: 1},
     ],
     look: [
-      'Codex cards: "Reset in 1d" with the date, not the reset of four hours ago; Claude cards: "Reset happened · <time> · Max", not the change of limits of yesterday',
+      'Codex cards: an accent mark "in 26h" on the left of the tray, not the reset of four hours ago; its panel says "Reset in 26h · tomorrow <time>", why it matters, the tracker\'s text and "Data from Codex Resets"',
+      'Claude cards: a quiet mark, an arrow round a tick, not the change of limits of yesterday; its panel says "Reset happened · <time> · Max"',
       'Both resets for everyone are marked on the charts',
     ],
   },
@@ -127,6 +128,7 @@ export const SCENES: Scene[] = [
       {reset: 'codex', label: 'bankedIn'},
       {reset: 'claude', label: null},
     ],
+    look: ['Codex: "in 20h" on the mark, "Banked reset in 20h" in its panel; no mark on Claude cards'],
   },
   {
     kind: 'scene',
@@ -137,6 +139,7 @@ export const SCENES: Scene[] = [
       {reset: 'codex', label: 'announced'},
       {reset: 'claude', label: 'policy'},
     ],
+    look: ['Codex: an accent mark with no text, "Reset announced" in its panel', 'Claude: a quiet gauge, "Limits changed · <time>"'],
   },
   {
     kind: 'scene',
@@ -152,7 +155,7 @@ export const SCENES: Scene[] = [
       {reset: 'claude', label: 'done', scope: ''},
       {marked: 'codex', resets: 1},
     ],
-    look: ['The Claude notice names no scope: the reset was for everyone'],
+    look: ['Codex: an accent mark with no text, "Reset: awaiting confirmation · <time>"', 'The Claude mark\'s panel names no scope: the reset was for everyone'],
   },
   {
     kind: 'scene',
@@ -167,6 +170,7 @@ export const SCENES: Scene[] = [
       {reset: 'codex', label: 'possible', chance: 40},
       {reset: 'claude', label: 'policy'},
     ],
+    look: ['Codex: a quiet dashed mark "40%"; its panel says "Possible reset · 40% · by <time>"'],
   },
   {
     kind: 'scene',
@@ -177,7 +181,7 @@ export const SCENES: Scene[] = [
       {reset: 'codex', label: 'possible', chance: null},
       {reset: 'claude', label: null},
     ],
-    look: ['"Possible reset" with no chance after it, and no time'],
+    look: ['Codex: a quiet dashed mark with no text; its panel says "Possible reset" with no chance after it, and no time'],
   },
   {
     kind: 'scene',
@@ -211,6 +215,7 @@ export const SCENES: Scene[] = [
       {marked: 'codex', resets: 0},
       {marked: 'codex', resets: 1, range: '7d'},
     ],
+    look: ['The Codex mark\'s panel links its source, claude-resets.com, apart from the credit to Codex Resets'],
   },
   {
     kind: 'scene',
@@ -315,6 +320,24 @@ const IOS_AGENTS: Agent[] = agents('mac-mini', [
   ['editor', 'ios-app', -2 * HOUR],
 ]);
 
+/** A narrow card with a full tray: reset news, free resets and ten agents on two machines. */
+const ON_CALL_AGENTS: Agent[] = [
+  ...agents('win-desktop', [
+    ['terminal', 'on-call', -3 * HOUR, shifts(1)],
+    ['terminal', 'incident-4412', -40 * MIN],
+    ['terminal', 'runbooks', -2 * HOUR, shifts(7)],
+    ['editor', 'alerts', -5 * HOUR],
+    ['terminal', 'terraform', -90 * MIN, shifts(13)],
+  ]),
+  ...agents('build-01', [
+    ['terminal', 'deploys', -4 * HOUR, shifts(3)],
+    ['terminal', 'canary', -25 * MIN],
+    ['terminal', 'status-page', -70 * MIN, shifts(9)],
+    ['app', null, -2 * HOUR],
+    ['terminal', 'postmortems', -6 * HOUR, shifts(15)],
+  ]),
+];
+
 const TEAM_AGENTS: Agent[] = [
   ...agents('laptop', [
     ['terminal', 'shared-infra', -HOUR, shifts(3)],
@@ -398,7 +421,7 @@ const all: DemoSet = {
         {forecast: 'weekly:fable', outlook: 'leftPlan', plan: 'behind'},
       ],
       look: [
-        'Shares a row with the Antigravity card: the reset news under this card, none under that one',
+        'Its reset news is a mark on the left of the tray; the Antigravity card in its row has none',
         'Ten marks in the tray, in two groups (two machines); the panel names working, waiting and open-window agents',
         'The long project name ends in an ellipsis; the agent without a project says so',
       ],
@@ -428,7 +451,7 @@ const all: DemoSet = {
         {forecast: 'gemini:weekly', outlook: 'onPaceReset', plan: 'none'},
         {forecast: 'claude:weekly', outlook: 'none'},
       ],
-      look: ['Its plan is switched off: no pace marks on its meters', 'No reset news under it'],
+      look: ['Its plan is switched off: no pace marks on its meters', 'No reset news in its tray'],
     },
     {
       kind: 'card',
@@ -486,7 +509,8 @@ const all: DemoSet = {
         {window: 'weekly', level: 'ok', note: null},
       ],
       look: [
-        'Two free resets by the settings button, until a date in the tooltip',
+        'Two free resets: a ticket "2" in the tray, before the agents; its panel says until when',
+        'Shares a row with Antigravity 2, the same two windows: with reset news or without (Account → this browser → announcements), the two are as tall',
         'The chart marks the early reset six hours ago and the free resets granted',
         'Within 15 minutes: an agent starts (5th minute), one stops (10th), "notifications" switches working every 2 minutes',
       ],
@@ -517,14 +541,22 @@ const all: DemoSet = {
       plan: 'Pro',
       machines: ['win-desktop'],
       history: 14 * DAY,
-      windows: [fiveHours(90 * MIN, 6, onAndOff(12)), weekly({since: -2 * DAY, use: alongPlan(-15, WEEK_PLAN_FLAT)})],
+      windows: [fiveHours(90 * MIN, 6, agentsWork(ON_CALL_AGENTS, shifts(12))), weekly({since: -2 * DAY, use: alongPlan(-15, WEEK_PLAN_FLAT)})],
+      resets: () => ({available: 3, expiresAt: 25 * DAY}),
+      agents: ON_CALL_AGENTS,
       on: {ana: {name: 'Codex Pro for the platform team and the on-call rotation', color: '#43aca1', plan: WEEK_PLAN_FLAT, span: 4}},
       expect: [
         {title: 'Codex Pro for the platform team and the on-call rotation'},
+        {agents: 10, drawn: true},
         {window: 'weekly', level: 'ok', note: 'behind'},
         {forecast: 'weekly', outlook: 'leftPlan', plan: 'behind'},
       ],
-      look: ['Its long name ends in an ellipsis', 'Teal on the card, the chart and the table', 'Its own plan: 15% a day, 10% the last'],
+      look: [
+        'Its long name ends in an ellipsis',
+        'Teal on the card, the chart and the table',
+        'Its own plan: 15% a day, 10% the last',
+        'A third of the row wide, its tray full: the reset news on the left, three free resets and ten agent marks in two groups on the right, whole at a window 1260 px wide or more; narrower, the marks go all at once and the count stays',
+      ],
     },
     {
       kind: 'card',
@@ -680,7 +712,7 @@ const all: DemoSet = {
         {fresh: 'grey', from: 6 * MIN, to: 14 * MIN},
         {forecast: 'weekly', spent: 'unused'},
       ],
-      look: ['Measured every quarter of an hour: its dot fades to grey and pulses again, never a warning', 'One free reset, with no end date'],
+      look: ['Measured every quarter of an hour: its dot fades to grey and pulses again, never a warning', 'One free reset: a ticket "1" in the tray, and its panel gives no end date'],
     },
     {
       kind: 'card',

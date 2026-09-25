@@ -99,6 +99,9 @@ is open.
   with software rendering. What shows time reads `useNow(step)`
   (`hub/ui/lib/api.ts`) itself rather than a clock passed down from the board, and
   polled state is set through `unlessSame`, so an unchanged answer renders nothing.
+- A card tells how its measurements go in the logo's dot and its news in marks in its
+  tray, with the details in a tooltip or a panel, never in a line of its own; neither
+  changes a card's height.
 - Colours come from the tokens at the top of `hub/ui/style.css`, and the colours of
   series from `hub/ui/lib/providers.ts`. Status colours (ok, warn, crit) are for status
   only: how much of a limit is left, a source or device in trouble, a destructive

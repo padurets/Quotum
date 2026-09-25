@@ -160,7 +160,6 @@ export const ru = {
   'agents.columns': 'Колонки',
   'card.freeResets': {one: '{count} бесплатный сброс', few: '{count} бесплатных сброса', many: '{count} бесплатных сбросов', other: '{count} бесплатного сброса'},
   'card.freeResetsUntil': 'использовать до {date}',
-  'card.freeResetsHint': 'Провайдер выдал сбросы лимитов. Quotum их только показывает; использовать сброс можно в самом клиенте.',
 
   'source.settings': 'Настройки · {source}',
   'source.show': 'Показывать лимиты',
@@ -246,6 +245,8 @@ export const ru = {
   'chart.empty': 'Нечего показать: включите линии в легенде',
 
   'reset.credit': 'Данные: {name}',
+  'reset.source': 'Источник: {link}',
+  'reset.mark': 'через {time}',
   'reset.in': 'Сброс через {time}',
   'reset.bankedIn': 'Сброс из запаса через {time}',
   'reset.announced': 'Объявлен сброс',

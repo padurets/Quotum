@@ -12,6 +12,9 @@
   --ok: #75d8ad;
   --warn: #f6c56e;
   --crit: #f17870;
+  /* An announced reset: news that changes how the rest of a limit should be spent. */
+  --reset: #a29cff;
+  --reset-glow: #7b6fffaa;
   /* Glass: every surface that floats over the page (menus, dialogs, tooltips) is made of it. */
   --glass-fill: linear-gradient(180deg, #ffffff0f, #ffffff03 45%), #16161cb0;
   --glass-blur: blur(22px) saturate(170%);
@@ -281,44 +284,44 @@ body.is-resizing, body.is-resizing * { cursor: ew-resize !important; user-select
 .ahead { color: var(--warn); }
 .plan-note { color: var(--text-3); }
 td.muted, small.muted { color: var(--text-3); }
-.reset-announce { font-size: 13px; }
-.reset-icon { flex-shrink: 0; fill: none; stroke: #9b95ff; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 0 6px #7b6fffaa); }
-.reset-announce.is-watch .reset-icon { stroke: var(--text-2); filter: none; }
-.reset-main { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: none; color: var(--text-2) !important; }
-.reset-main b { font-weight: 600; color: #a29cff; text-shadow: 0 0 14px #7b6fff80; }
-.reset-announce.is-watch .reset-main b { color: var(--text); text-shadow: none; }
-.reset-main:hover b { text-decoration: underline; text-underline-offset: 2px; }
-.free-resets { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border-radius: 8px; font-size: 12.5px; font-weight: 560; font-variant-numeric: tabular-nums; color: var(--accent); background: #bbc0fe14; border: 1px solid #bbc0fe33; cursor: default; }
-.free-resets svg { fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
-.reset-notice { margin-top: auto; display: flex; align-items: center; gap: 8px; padding-top: 14px; border-top: 1px solid var(--hair); font-size: 12.5px; color: var(--text-2); }
-.reset-notice a { color: inherit; text-decoration: none; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.reset-notice a:hover { color: var(--text); }
-.reset-notice a span { color: var(--text-3); }
-.reset-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; background: var(--accent); box-shadow: 0 0 8px #bbc0fe99; }
-.reset-notice.is-policy .reset-dot { background: var(--text-3); box-shadow: none; }
-.reset-notice.is-done .reset-dot { background: var(--ok); box-shadow: 0 0 8px #75d8ad99; }
-.reset-credit { margin-left: auto; flex-shrink: 0; font-size: 11px; color: var(--text-4) !important; }
 .card-empty { color: var(--text-3); font-size: 13px; padding: 12px 0; }
-/* The agents running on a subscription, in the card's header: a mark each, grouped by
-   machine, and a count; the panel it opens names them. No animation: a board stays open
-   for hours. */
 /* The card's tray: a strip along its bottom edge, a step below the card as if pressed
-   into it and tinted with the card's colour, always there. What a card shows besides its limits lives in it: the agents
-   running on it, on the right. Cards in a row are as tall as the tallest, so the trays
-   line up. */
+   into it and tinted with the card's colour, always there. What a card says besides its
+   limits lives in it: news on the left, what it has now (free resets, the agents running
+   on it) on the right. Cards in a row are as tall as the tallest, so the trays line up. */
 .card-foot {
-  display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-height: 42px; margin: auto -22px -22px; padding: 0 10px;
+  display: flex; align-items: center; justify-content: flex-end; gap: 6px; min-height: 42px; margin: auto -22px -22px; padding: 0 8px;
   border-radius: 0 0 15px 15px; background: color-mix(in oklab, var(--card-color, #000) 7%, #00000038);
   box-shadow: inset 0 1px 0 #00000059, inset 0 3px 6px -3px #00000080, 0 -1px 0 #ffffff08;
 }
-.card-foot .picker { margin-left: 0; min-width: 0; }
-/* A reset notice sits at the card's bottom already: the tray comes right under it. */
-.reset-notice ~ .card-foot { margin-top: 0; }
-.text-button.agents-pill { height: 26px; min-width: 58px; max-width: 100%; overflow: hidden; padding: 0 8px; gap: 7px; border-color: var(--hair); background: #ffffff05; color: var(--text-3); font-size: 12.5px; }
-.agents-pill svg { flex-shrink: 0; opacity: .8; }
-.agents-marks { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; }
+/* Nothing in the tray shrinks: when there is no room the agents' marks go (Tray.tsx). */
+.card-foot .picker { margin-left: 0; flex-shrink: 0; }
+.tray-news { display: flex; gap: 6px; margin-right: auto; }
+/* Every mark in the tray: one pill of one height, on one line. */
+.text-button.tray-pill { height: 26px; padding: 0 6px; gap: 5px; border-color: var(--hair); background: #ffffff05; color: var(--text-3); font-size: 12.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tray-pill svg { flex-shrink: 0; opacity: .8; }
+.tray-pill b { font-weight: 560; color: var(--text); }
+.tray-pill .tray-icon { stroke-width: 2.2; }
+/* The glow is on the icon itself, never on the button: a filter there would spoil the glass of its panel. */
+.text-button.reset-mark.is-accent { color: var(--reset); border-color: color-mix(in oklab, var(--reset) 28%, transparent); background: color-mix(in oklab, var(--reset) 7%, transparent); font-weight: 560; }
+.text-button.reset-mark.is-accent:hover, .text-button.reset-mark.is-accent[aria-expanded=true] { border-color: color-mix(in oklab, var(--reset) 45%, transparent); background: color-mix(in oklab, var(--reset) 13%, transparent); }
+.reset-mark.is-accent svg { opacity: 1; filter: drop-shadow(0 0 5px var(--reset-glow)); }
+.reset-mark.is-accent span { text-shadow: 0 0 14px var(--reset-glow); }
+/* A panel of the tray: as wide as the agents' one, whatever the text, which may break anywhere (a long link). */
+.tray-panel { box-sizing: border-box; width: min(300px, calc(100vw - 48px)); max-width: 100%; padding: 4px 6px 2px; font-size: 12.5px; color: var(--text-2); overflow-wrap: anywhere; }
+.tray-panel p { margin: 0 0 8px; }
+.tray-panel p:last-child { margin-bottom: 0; }
+.tray-panel-lead { font-size: 13px; font-weight: 560; color: var(--text); }
+.tray-panel-quote { padding-left: 10px; border-left: 2px solid var(--hair-2); color: var(--text); }
+.tray-panel-links { display: flex; flex-direction: column; gap: 2px; padding-top: 8px; border-top: 1px solid var(--hair); font-size: 11.5px; color: var(--text-3); }
+.tray-panel-links a { color: var(--text-2); }
+.tray-panel-links a:hover { color: var(--text); }
+.text-button.agents-pill { position: relative; overflow: hidden; }
+.agents-marks { display: inline-flex; align-items: center; gap: 3px; }
+/* Out of room: laid out still, unseen, inside the pill, so the tray can tell when they fit again. */
+.agents-marks.is-out { position: absolute; right: 0; width: max-content; visibility: hidden; }
 .agents-group { display: inline-flex; gap: 2px; }
-.agents-group + .agents-group { padding-left: 6px; border-left: 1px solid var(--hair-2); }
+.agents-group + .agents-group { padding-left: 3px; border-left: 1px solid var(--hair-2); }
 .agents-count { font-variant-numeric: tabular-nums; }
 .agents-count b { font-weight: 560; color: var(--text); }
 .agent { flex-shrink: 0; display: inline-block; width: 5px; height: 11px; border-radius: 1.5px; box-shadow: inset 0 0 0 1.25px color-mix(in oklab, var(--card-color, var(--text-3)) 80%, var(--text-3)); }

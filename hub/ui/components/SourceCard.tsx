@@ -2,18 +2,18 @@ import {memo, useEffect, useRef, useState, type CSSProperties} from 'react';
 import {useNow} from '../lib/api';
 import type {SourceState, Win} from '../lib/types';
 import {windowKey} from '../lib/types';
-import {ago, day, duration, fullStamp, num} from '../lib/format';
+import {ago, duration, fullStamp, num} from '../lib/format';
 import {dotOf, errorText, level, problemOf, resetLine, sourceLabel, windowName} from '../lib/quota';
 import {t, useLocale} from '../i18n';
-import {Agents} from './Agents';
 import {DEFAULT_PLAN, isValidPlan, planAt, planNote, planTotal, type WeeklyPlan} from '../lib/plan';
 import {LOGOS} from './logos';
 import {cardId, colorOf, isWindowHidden, planOf, weeklyPlanOf, withColor, withHidden, withName, withPlan, withPlanned, withWindowHidden, type Arrange} from '../lib/view';
 import {CARD_COLORS, MIDDLE_STEP, PROVIDERS} from '../lib/providers';
 import {call} from '../lib/http';
 import type {Board} from '../lib/session';
-import type {ResetStatus} from '../lib/resets';
-import {ResetBanner, ResetNotice} from './ResetNotice';
+import {resetLabel, type ResetStatus} from '../lib/resets';
+import {FreeResets, ResetMark} from './ResetMarks';
+import {Tray} from './Tray';
 import {HideRow, Popover, SlidersIcon, SwitchRow, TakeOffIcon} from './Popover';
 import {ErrorLine} from './Kit';
 
@@ -272,24 +272,6 @@ function SourceSettings({source, arrange, board, onChanged}: {source: SourceStat
   );
 }
 
-/** Free resets of the limits the account holds: a count by the settings button, the rest in its tooltip. */
-function FreeResets({resets}: {resets: NonNullable<SourceState['resets']>}) {
-  const text = [
-    t('card.freeResets', {count: resets.available}),
-    resets.expiresAt ? t('card.freeResetsUntil', {date: day(resets.expiresAt)}) : '',
-  ]
-    .filter(Boolean)
-    .join(' · ');
-  return (
-    <span className="free-resets" title={`${text}\n${t('card.freeResetsHint')}`} aria-label={text} role="img">
-      <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">
-        <path d="M3 12a9 9 0 0 1 15.5-6.2L21 8M21 3v5h-5M21 12a9 9 0 0 1-15.5 6.2L3 16M3 21v-5h5" />
-      </svg>
-      {resets.available}
-    </span>
-  );
-}
-
 export const SourceCard = memo(function SourceCard({
   source,
   resets,
@@ -312,6 +294,7 @@ export const SourceCard = memo(function SourceCard({
   // How the measurements go lives in the logo's dot alone: its colour (how fresh, or in
   // trouble) and its tooltip; a line of its own would only repeat it and make the card taller.
   const status = problem ?? (source.successAt ? t('source.measured', {ago: ago(source.successAt, now)}) : errorText('waiting'));
+  const news = resetLabel(resets, now);
 
   return (
     <article className="card" style={{'--card-color': colorOf(arrange.view, source.id, source.provider)} as CSSProperties}>
@@ -328,7 +311,6 @@ export const SourceCard = memo(function SourceCard({
           <h2>{sourceLabel(source)}</h2>
           {source.plan && <span className="plan">{source.plan.replace(/^Claude\s+/i, '')}</span>}
         </div>
-        {!!source.resets?.available && <FreeResets resets={source.resets} />}
         {board && (arrange.owner || (!board.personal && source.mine)) && <SourceSettings source={source} arrange={arrange} board={board} onChanged={onChanged} />}
       </div>
 
@@ -339,12 +321,12 @@ export const SourceCard = memo(function SourceCard({
         {!source.windows.length && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
         {!!source.windows.length && !visible.length && <div className="card-empty">{t('card.allHidden')}</div>}
       </div>
-      <ResetBanner status={resets} now={now} />
-      <ResetNotice status={resets} now={now} />
-      {/* The card's tray, always there so the card never changes height: the agents running on it, on the right. */}
-      <footer className="card-foot">
-        <Agents sessions={source.sessions ?? []} now={now} />
-      </footer>
+      <Tray
+        news={news && resets && <ResetMark label={news} credit={resets.credit} now={now} />}
+        current={!!source.resets?.available && <FreeResets resets={source.resets} />}
+        sessions={source.sessions ?? []}
+        now={now}
+      />
     </article>
   );
 });

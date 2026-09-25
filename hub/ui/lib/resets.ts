@@ -25,29 +25,35 @@ const RECENT_RESET_MS = 24 * 3_600_000;
 const RECENT_POLICY_MS = 72 * 3_600_000;
 
 /**
- * What a card says about resets for everyone, the most pressing first. An announced or
- * possible reset is a banner (`in`, `bankedIn`, `announced` without a time, `awaiting`
- * once its time has passed, `possible` with a chance when one is given); a reset that
- * just happened (`done`, with its scope unless it was for everyone) or a recent change of
- * limits (`policy`) is a quiet notice.
+ * What a card says about resets for everyone, the most pressing first: a mark in its tray.
+ * An announced reset is in the accent colour (`in`, `bankedIn`, `announced` without a
+ * time, `awaiting` once its time has passed); a possible one (`possible`, with a chance
+ * when one is given), a reset that just happened (`done`, with its scope unless it was for
+ * everyone) and a recent change of limits (`policy`) are quiet. `link` is the tracker's
+ * own post, or null when it is the tracker's page the credit links to anyway.
  */
-export type ResetLabel =
-  | {kind: 'banner'; key: 'in' | 'bankedIn' | 'announced' | 'awaiting'; event: ResetEvent; at: number | null}
-  | {kind: 'banner'; key: 'possible'; event: ResetEvent; at: number | null; chance: number | null}
-  | {kind: 'notice'; key: 'done'; event: ResetEvent; scope: string}
-  | {kind: 'notice'; key: 'policy'; event: ResetEvent};
+export type ResetLabel = {event: ResetEvent; link: string | null} & (
+  | {key: 'in' | 'bankedIn' | 'awaiting'; tone: 'accent'; at: number}
+  | {key: 'announced'; tone: 'accent'; at: null}
+  | {key: 'possible'; tone: 'quiet'; at: number | null; chance: number | null}
+  | {key: 'done'; tone: 'quiet'; scope: string}
+  | {key: 'policy'; tone: 'quiet'}
+);
 
 export function resetLabel(status: ResetStatus | undefined, now: number): ResetLabel | null {
   if (!status) return null;
-  const {scheduled, watch, latest, policy} = status;
+  const {scheduled, latest, policy, credit} = status;
+  // A watch that has run out is no news, as the service drops it when it reads the tracker.
+  const watch = status.watch && (status.watch.expiresAt === null || status.watch.expiresAt > now) ? status.watch : null;
+  const of = (event: ResetEvent) => ({event, link: event.url !== credit.url ? event.url : null});
   if (scheduled) {
     const at = scheduled.scheduledFor;
-    const key = at === null ? 'announced' : at > now ? (scheduled.kind === 'banked' ? 'bankedIn' : 'in') : 'awaiting';
-    return {kind: 'banner', key, event: scheduled, at};
+    if (at === null) return {...of(scheduled), key: 'announced', tone: 'accent', at};
+    return {...of(scheduled), key: at > now ? (scheduled.kind === 'banked' ? 'bankedIn' : 'in') : 'awaiting', tone: 'accent', at};
   }
-  if (watch) return {kind: 'banner', key: 'possible', event: watch, at: watch.expiresAt, chance: watch.chance};
-  if (latest && now - latest.at < RECENT_RESET_MS) return {kind: 'notice', key: 'done', event: latest, scope: latest.scope !== 'all' ? latest.scope : ''};
-  if (policy && now - policy.at < RECENT_POLICY_MS) return {kind: 'notice', key: 'policy', event: policy};
+  if (watch) return {...of(watch), key: 'possible', tone: 'quiet', at: watch.expiresAt, chance: watch.chance};
+  if (latest && now - latest.at < RECENT_RESET_MS) return {...of(latest), key: 'done', tone: 'quiet', scope: latest.scope !== 'all' ? latest.scope : ''};
+  if (policy && now - policy.at < RECENT_POLICY_MS) return {...of(policy), key: 'policy', tone: 'quiet'};
   return null;
 }
 
