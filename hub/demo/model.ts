@@ -317,7 +317,7 @@ export const homeOf = (set: DemoSet, card: Card) => personOf(set, machineOf(set,
 
 /** A sleeping machine's schedule: asleep 8 hours every night before `start`; from the second minute on, 12 of every 45 minutes. */
 const NIGHT = {from: 14 * HOUR, to: 6 * HOUR};
-const SLEEP = {first: 2 * MIN, asleep: 15 * MIN, cycle: 45 * MIN};
+const SLEEP = {first: 2 * MIN, asleep: 12 * MIN, cycle: 45 * MIN};
 
 export function awake(machine: Machine, t: number): boolean {
   if (machine.gone !== undefined && t > machine.gone) return false;
