@@ -493,6 +493,14 @@ export function problems(set: DemoSet): string[] {
     const key = card.account === 'pseudonym' || (card.account === undefined && card.provider !== 'antigravity') ? card.id : `${homeOf(set, card)}/${card.provider}/${typeof card.account === 'object' && card.account ? card.account.name.toLowerCase() : ''}`;
     if (sources.has(key)) found.push(`cards ${sources.get(key)} and ${card.id} are one subscription to the hub`);
     sources.set(key, card.id);
+    if (key !== card.id) {
+      // The hub files such a subscription per person, and an agent of it under what its machine delivers for the client.
+      if (new Set(card.machines.map(m => personOf(set, machineOf(set, m)))).size > 1) found.push(`card ${card.id}: machines of different people measure it, a subscription each to the hub`);
+      for (const agent of card.agents ?? []) {
+        const there = delivering(agent.machine, card.provider);
+        if (there.length !== 1 || there[0] !== card) found.push(`card ${card.id}: an agent on ${agent.machine}, which the hub files under what that machine delivers for ${card.provider}`);
+      }
+    }
     for (const agent of card.agents ?? []) {
       if (!holders.has(personOf(set, machineOf(set, agent.machine)))) found.push(`card ${card.id}: an agent on ${agent.machine}, whose person does not measure it`);
     }
