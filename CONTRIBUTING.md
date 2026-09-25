@@ -71,8 +71,8 @@ it needs no network and no account. It prints the address and how to sign in; Ct
 stops it and leaves nothing behind. `npm run demo -- showcase` opens the clean board
 the README images come from; `--resets <scene>` picks what the reset trackers say (one
 scene a run, the list is printed). Set `QUOTUM_PORT` if 8080 is taken. After changing
-the UI, `npm run build` and reload the page; after changing the server, start the demo
-again.
+the UI, `npm run build` and reload the page; after changing the server, `npm run build`
+and start the demo again.
 
 A new state of the board gets an entry in the catalogue, with the codes it shows in
 `expect` (the file's header explains them): `npm test` then checks it holds, and it is
