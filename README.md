@@ -297,8 +297,8 @@ command and the app share them.
   Codex Resets and Claude Resets, as every hub does (`QUOTUM_RESETS=off` in the app's
   environment turns that off). Its hub listens on `127.0.0.1` alone, behind a key only
   the window gets.
-- **Size:** the Windows installer is about 27 MB, the deb 51 MB (about 140 MB
-  installed) and the AppImage 125 MB; most of it is the Node.js its hub runs on.
+- **Size:** the Windows installer is about 27 MB, the deb and the rpm 51 MB (about
+  140 MB installed) and the AppImage 125 MB; most of it is the Node.js its hub runs on.
 
 ## Configuration
 
