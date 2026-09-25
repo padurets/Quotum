@@ -1,8 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {agentRows, DRAWN, drawn} from '../lib/agents';
-import {outlook} from '../lib/forecast';
-import {planNote} from '../lib/plan';
+import {outlook, planCell} from '../lib/forecast';
+import {DEFAULT_PLAN, planNote} from '../lib/plan';
 import {dotOf, PULSE_FOR, resetLine} from '../lib/quota';
 import {resetLabel, type ResetStatus} from '../lib/resets';
 import type {LiveSession, SourceState, View, Win} from '../lib/types';
@@ -52,6 +52,12 @@ test('the table says where the pace leads, in its tone', () => {
   assert.deepEqual(outlook({consumed: 1, coveredMs: 29 * 60_000}, live, now, now, null), {key: 'needData', tone: ''});
   assert.equal(outlook({consumed: 0, coveredMs: DAY}, live, now, now, [15, 15, 15, 15, 15, 15, 10]).tone, 'muted', '~N% left when the plan ends');
   assert.equal(outlook({consumed: 0, coveredMs: DAY}, live, now, now, null).tone, '', '~N% left at the reset');
+  // The plan's column marks a gap of three points; a day and a half into the week the plan leaves 57.5%.
+  const week = (remaining: number): Win => ({...live, used: 100 - remaining, remaining, resetAt: now + 5.5 * DAY});
+  assert.equal(planCell(week(60.5), now, now, DEFAULT_PLAN)?.notable, true);
+  assert.equal(planCell(week(60.4), now, now, DEFAULT_PLAN)?.notable, false);
+  assert.equal(planCell(week(54.5), now, now, DEFAULT_PLAN)?.notable, true);
+  assert.deepEqual(planCell(week(0), now, now, DEFAULT_PLAN), {remaining: 57.5, delta: 0, notable: false}, 'used up is past any plan');
 });
 
 test('agents are drawn up to ten; the table leaves out hidden cards and says why it is empty', () => {
