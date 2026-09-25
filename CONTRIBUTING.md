@@ -83,12 +83,15 @@ on the board for the next person.
 - **One task, one pull request.** A pull request takes one issue (or one fix) to `main`
   and is merged once it is done. Open it as a draft while the work goes on: CI runs on
   every push to it. Never open one only to run CI and close it after.
-- **The history stays linear.** Pull requests are merged with *Rebase and merge*: every
-  commit lands on `main` as it is, so each is one logical change with a message that
-  says what it does. What review asks for goes into new commits on the same branch.
+- **One pull request, one commit on `main`.** Pull requests are merged with *Squash and
+  merge*: the pull request lands on `main` as one commit named by its title, so the title
+  is written as a commit message is, a short English sentence about the result. Commits
+  on the branch are for the work and the review; what review asks for goes into new
+  commits on the same branch.
+- **`main` changes only through pull requests.** Nothing is pushed to it directly, and it
+  is never force-pushed or deleted.
 - **No force-push without a strong reason**, such as a rebase onto `main` to resolve a
-  conflict; when you do, say so in the pull request. `main` itself is never
-  force-pushed.
+  conflict; when you do, say so in the pull request.
 
 ## What to keep in mind
 

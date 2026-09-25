@@ -113,7 +113,8 @@ is open.
   prefixes: `Agent: quotum start runs it in the background`. One logical change per
   commit.
 - Never commit secrets, `.env` files, hub data (`data/`, `*.sqlite`) or build output.
-- **One task is one pull request into `main`**, merged with *Rebase and merge* (see
-  *Pull requests* in CONTRIBUTING.md): never one opened only to run CI. Changes after
-  review are new commits on the branch; force-push only for a strong reason, stated in
-  the pull request.
+- **One task is one pull request into `main`**, merged with *Squash and merge* (see
+  *Pull requests* in CONTRIBUTING.md): its title becomes the one commit on `main`, so it
+  is written as a commit message is. Nothing is pushed to `main` directly, and never a
+  pull request opened only to run CI. Changes after review are new commits on the
+  branch; force-push only for a strong reason, stated in the pull request.
