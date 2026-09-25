@@ -2,21 +2,24 @@
 //! starts ("Starting…") or when it is down ("Error"). Windows are created on worker threads
 //! only: on Windows, creating one from an event handler or a command deadlocks WebView2.
 
-use std::sync::{Arc, OnceLock};
-use std::thread;
-use std::time::Duration;
+use std::sync::OnceLock;
 
-use tauri::webview::{NewWindowResponse, PageLoadEvent};
-use tauri::{Manager, Url, WebviewUrl, WebviewWindowBuilder};
+use url::Url;
 
 use crate::hub::HubState;
-use crate::shell::Shell;
 
+#[cfg(not(target_os = "linux"))]
 pub const LABEL: &str = "main";
 
 /// The origin of the app's own pages (the files in `static/`).
 pub fn own_origin() -> Url {
-    let origin = if cfg!(windows) { "http://tauri.localhost/" } else { "tauri://localhost/" };
+    let origin = if cfg!(target_os = "linux") {
+        "quotum://localhost/"
+    } else if cfg!(windows) {
+        "http://tauri.localhost/"
+    } else {
+        "tauri://localhost/"
+    };
     Url::parse(origin).expect("a valid URL")
 }
 
@@ -25,7 +28,7 @@ pub static HUB_LOG: OnceLock<String> = OnceLock::new();
 
 /// Which of the app's own pages stands for a state of the hub: `index.html` says it starts,
 /// `error.html` that it is down (and where its log is); `#quit` that the app is quitting.
-fn own_page(state: &HubState, quitting: bool) -> Url {
+pub(crate) fn own_page(state: &HubState, quitting: bool) -> Url {
     let page = match state {
         _ if quitting => "index.html#quit",
         HubState::Down => "error.html",
@@ -51,7 +54,8 @@ pub fn target(state: &HubState) -> Url {
 }
 
 /// Whether a page at `url` is where the window belongs in `state` (it need not be moved).
-fn belongs(url: &Url, state: &HubState) -> bool {
+#[cfg(any(test, not(target_os = "linux")))]
+pub(crate) fn belongs(url: &Url, state: &HubState) -> bool {
     match state {
         HubState::Ready(ready) => same_origin(url, &ready.origin()),
         other => same_origin(url, own_origin().as_str()) && url.path() == own_page(other, false).path(),
@@ -59,13 +63,14 @@ fn belongs(url: &Url, state: &HubState) -> bool {
 }
 
 /// Scheme, host and port compared: `Url::origin` is opaque, never equal, for `tauri://`.
-fn same_origin(url: &Url, origin: &str) -> bool {
+pub(crate) fn same_origin(url: &Url, origin: &str) -> bool {
     let parts = |u: &Url| (u.scheme().to_string(), u.host_str().map(str::to_string), u.port_or_known_default());
     Url::parse(origin).is_ok_and(|o| parts(&o) == parts(url))
 }
 
 /// Whether the window may go to `url`: the app's own pages always, the hub's only while
 /// it is ready, and only on its current port.
+#[cfg(any(test, not(target_os = "linux")))]
 pub fn allowed(url: &Url, state: &HubState) -> bool {
     same_origin(url, own_origin().as_str())
         || matches!(state, HubState::Ready(ready) if same_origin(url, &ready.origin()))
@@ -77,138 +82,7 @@ pub fn guard(url: &Url, state: &HubState) -> bool {
     matches!(state, HubState::Ready(ready) if same_origin(url, &ready.origin()))
 }
 
-/// Whether the window is open (it may be on its way out).
-pub fn is_open(shell: &Shell) -> bool {
-    shell.app().get_webview_window(LABEL).is_some()
-}
-
-/// Shows the window: creates it if there is none, on a thread of its own.
-pub fn open(shell: &Arc<Shell>) {
-    let shell = shell.clone();
-    thread::spawn(move || open_now(&shell));
-}
-
-fn open_now(shell: &Arc<Shell>) {
-    if shell.exiting() {
-        return;
-    }
-    let _creating = shell.window_lock.lock().unwrap_or_else(|e| e.into_inner());
-    let app = shell.app();
-    if let Some(window) = app.get_webview_window(LABEL) {
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
-        drop(_creating);
-        follow(shell);
-        return;
-    }
-    // A window just closed may still hold its label for a moment.
-    for _ in 0..20 {
-        let (state, generation) = shell.hub();
-        match build(shell, &state) {
-            Ok(_) => {
-                drop(_creating);
-                if shell.generation() != generation {
-                    follow(shell);
-                }
-                return;
-            }
-            Err(e) => {
-                shell.hub_log.line(&format!("app: the window did not open: {e}"));
-                thread::sleep(Duration::from_millis(100));
-            }
-        }
-    }
-}
-
-fn build(shell: &Arc<Shell>, state: &HubState) -> tauri::Result<tauri::WebviewWindow> {
-    let app = shell.app();
-    let navigating = shell.clone();
-    let loading = shell.clone();
-    let url = target(state);
-    let url = if same_origin(&url, own_origin().as_str()) {
-        WebviewUrl::App(url.path().trim_start_matches('/').into())
-    } else {
-        WebviewUrl::External(url)
-    };
-    let mut builder = WebviewWindowBuilder::new(app, LABEL, url)
-        .title("Quotum")
-        // Match the board's --bg while WebKit has not painted a newly exposed area yet.
-        .background_color(tauri::utils::config::Color(0x0b, 0x0b, 0x0e, 255))
-        .inner_size(1280.0, 800.0)
-        .min_inner_size(480.0, 400.0)
-        .on_navigation(move |url| {
-            let (state, _) = navigating.hub();
-            if allowed(url, &state) {
-                return true;
-            }
-            if matches!(url.scheme(), "http" | "https") {
-                let _ = tauri_plugin_opener::open_url(url.as_str(), None::<&str>);
-            }
-            false
-        })
-        .on_new_window(|url, _| {
-            // Links that open a new window go to the browser; nothing else opens.
-            if matches!(url.scheme(), "http" | "https") {
-                let _ = tauri_plugin_opener::open_url(url.as_str(), None::<&str>);
-            }
-            NewWindowResponse::Deny
-        })
-        .on_page_load(move |_, payload| {
-            if payload.event() == PageLoadEvent::Finished {
-                if let Some(smoke) = &loading.smoke {
-                    smoke.page_loaded(&loading, payload.url());
-                }
-            }
-        });
-    if let Some(dir) = &shell.dirs.webview {
-        builder = builder.data_directory(dir.clone());
-    }
-    let window = builder.build()?;
-    #[cfg(target_os = "linux")]
-    crate::graphics::observe(&window, shell);
-    Ok(window)
-}
-
-/// Moves the window where it belongs in the hub's current state, if it is not there;
-/// again if the state changed meanwhile.
-pub fn follow(shell: &Arc<Shell>) {
-    for _ in 0..10 {
-        let (state, generation) = shell.hub();
-        let Some(window) = shell.app().get_webview_window(LABEL) else { return };
-        let here = window.url().ok();
-        if !here.as_ref().is_some_and(|url| belongs(url, &state)) {
-            let _ = window.navigate(target(&state));
-        }
-        if shell.generation() == generation {
-            return;
-        }
-    }
-}
-
-/// Leads the window to the board again, entering with the key of the hub's current start
-/// (a window that lost its session), or to the app's own page while the hub is not ready.
-pub fn reenter(shell: &Arc<Shell>) {
-    let shell = shell.clone();
-    thread::spawn(move || {
-        for _ in 0..10 {
-            let (state, generation) = shell.hub();
-            // A new window opens where it belongs by itself.
-            let Some(window) = shell.app().get_webview_window(LABEL) else { return open_now(&shell) };
-            let _ = window.navigate(target(&state));
-            if shell.generation() == generation {
-                return;
-            }
-        }
-    });
-}
-
-/// Takes the window off the hub's pages while the app quits.
-pub fn leave(shell: &Arc<Shell>) {
-    if let Some(window) = shell.app().get_webview_window(LABEL) {
-        let _ = window.navigate(own_page(&HubState::Down, true));
-    }
-}
+pub use crate::host::{close, follow, is_open, leave, open, reenter};
 
 #[cfg(test)]
 mod tests {

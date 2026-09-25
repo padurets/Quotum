@@ -1,6 +1,6 @@
 //! The app's state, shared by the GUI's main thread and the worker threads (the hub, the
 //! agent, window creation, the ticker, quitting). The state mutex is only ever held to
-//! read or write fields: never across a call into Tauri that goes to the main thread
+//! read or write fields: never across a call into the native host that goes to the main thread
 //! (building, navigating or closing a window, reading a web view's URL), or the worker
 //! would wait for the main thread while the main thread waits for the mutex.
 
@@ -8,18 +8,16 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
-
-use tauri::{AppHandle, Manager};
 
 use quotum_core::config::Paths;
 
 use crate::agent::Agent;
 use crate::files::{AppJson, Dirs, Log, free_port};
 use crate::hub::{self, Event, HubState, Proc, Ready, Restarts, Secrets, Signal};
-use crate::{agent, ipc, smoke, window};
+use crate::{agent, host, smoke, window};
 
 /// How long a start of the hub may take until it says it listens.
 const START_LIMIT: Duration = Duration::from_secs(20);
@@ -42,28 +40,36 @@ pub struct Shell {
     /// The hub of this commit in the app's resources.
     pub hub_dir: PathBuf,
     pub smoke: Option<smoke::Smoke>,
-    app: OnceLock<AppHandle>,
+    pub host: host::Host,
     state: Mutex<State>,
     /// Held by a worker thread while it creates the window, never by the main thread.
     pub window_lock: Mutex<()>,
     exiting: AtomicBool,
     proc: Mutex<Option<Arc<Proc>>>,
     app_json: Mutex<AppJson>,
-    /// The lock of this copy of the app, a second line behind single-instance.
-    app_lock: Mutex<Option<File>>,
+    /// Held until the process ends, including hub and GUI teardown. A replacement must
+    /// not open the same database while this copy is still shutting down.
+    _app_lock: File,
 }
 
 pub struct State {
     pub hub: HubState,
     /// Grows with every change of the hub's state: whoever decided on a snapshot checks it
-    /// after calling into Tauri and follows the current state if it moved on.
+    /// after calling into the host and follows the current state if it moved on.
     pub generation: u64,
     /// Ports that got the `hub` capability: capabilities can be added, never removed.
     pub capabilities: Vec<u16>,
 }
 
 impl Shell {
-    pub fn new(dirs: Dirs, node: PathBuf, hub_dir: PathBuf, smoke: Option<smoke::Smoke>, app_lock: File) -> Shell {
+    pub fn new(
+        dirs: Dirs,
+        node: PathBuf,
+        hub_dir: PathBuf,
+        smoke: Option<smoke::Smoke>,
+        app_lock: File,
+        host: host::Host,
+    ) -> Shell {
         let app_json = AppJson::load(&dirs.app_json());
         Shell {
             hub_log: Arc::new(Log::new(dirs.hub_log())),
@@ -75,22 +81,14 @@ impl Shell {
             node,
             hub_dir,
             smoke,
-            app: OnceLock::new(),
+            host,
             state: Mutex::new(State { hub: HubState::Starting, generation: 0, capabilities: Vec::new() }),
             window_lock: Mutex::new(()),
             exiting: AtomicBool::new(false),
             proc: Mutex::new(None),
             app_json: Mutex::new(app_json),
-            app_lock: Mutex::new(Some(app_lock)),
+            _app_lock: app_lock,
         }
-    }
-
-    pub fn attach(&self, app: AppHandle) {
-        let _ = self.app.set(app);
-    }
-
-    pub fn app(&self) -> &AppHandle {
-        self.app.get().expect("the app handle is attached in setup")
     }
 
     pub fn state(&self) -> MutexGuard<'_, State> {
@@ -161,9 +159,7 @@ impl Shell {
             (port, generation)
         };
         if let Some(port) = port {
-            if let Err(e) = self.app().add_capability(ipc::hub_capability(port)) {
-                self.hub_log.line(&format!("app: the board on port {port} gets no commands: {e}"));
-            }
+            host::grant_port(self, port);
         }
         window::follow(self);
         if let (HubState::Ready(ready), Some(smoke)) = (&hub, &self.smoke) {
@@ -248,12 +244,21 @@ pub fn run_hub(shell: Arc<Shell>) {
     let mut port_retried = false;
     loop {
         let ending = attempt(&shell);
+        // Shutdown owns the current child. Do not steal it and wait on an open stdin.
+        if shell.exiting() {
+            return;
+        }
         // Moved off the port at once: the window must not ask a port another user may take next.
         if !shell.exiting() {
             shell.set_hub(HubState::Starting);
         }
         if let Some(proc) = shell.proc.lock().unwrap_or_else(|e| e.into_inner()).take() {
-            proc.finish(EXIT_LIMIT);
+            // Also covers shutdown racing the check above and a hub that stopped listening.
+            proc.close_stdin();
+            let clean = proc.finish(EXIT_LIMIT);
+            if shell.exiting() && shell.smoke.is_some() && !clean {
+                smoke::fail("the hub did not exit cleanly");
+            }
         }
         match next(ending, port_retried, shell.exiting(), &mut restarts, Instant::now()) {
             Next::Stop => return,
@@ -354,21 +359,18 @@ pub fn shutdown(shell: &Arc<Shell>, fast: bool, from_exit_event: bool) {
     if !fast {
         window::leave(shell);
     }
-    // 2–3. The agent stops and lets the machine go; then this copy's lock.
+    // 2–3. The agent stops and lets the machine go. The app lock stays held through teardown.
     agent::quit(shell, if fast { Duration::from_secs(1) } else { Duration::from_secs(5) });
-    shell.app_lock.lock().unwrap_or_else(|e| e.into_inner()).take();
     // 4. The hub ends by itself once its stdin closes.
     if let Some(proc) = shell.proc.lock().unwrap_or_else(|e| e.into_inner()).take() {
         proc.close_stdin();
-        proc.finish(if fast { Duration::from_secs(1) } else { Duration::from_secs(5) });
+        let clean = proc.finish(if fast { Duration::from_secs(1) } else { Duration::from_secs(5) });
+        if shell.smoke.is_some() && !clean {
+            smoke::fail("the hub did not exit cleanly");
+        }
     }
     // 5. Windows go, then the app.
-    for (_, window) in shell.app().webview_windows() {
-        let _ = window.destroy();
-    }
-    if !from_exit_event {
-        shell.app().exit(0);
-    }
+    host::exit(shell, from_exit_event);
 }
 
 /// Every five seconds while the app runs, window or not (see `agent::tick`).

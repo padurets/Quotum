@@ -4,12 +4,12 @@
 
 use std::sync::Arc;
 
-use tauri_plugin_autostart::ManagerExt;
+use crate::host;
 
 use crate::shell::Shell;
 
 pub fn is_enabled(shell: &Shell) -> bool {
-    shell.app().autolaunch().is_enabled().unwrap_or(false)
+    host::autostart_enabled(shell)
 }
 
 /// Turned on or off in the settings; from then on the app leaves it as the person set it.
@@ -17,12 +17,8 @@ pub fn set(shell: &Arc<Shell>, on: bool) -> Result<(), String> {
     if cfg!(debug_assertions) || shell.smoke.is_some() {
         return Err("a development build does not start at login".into());
     }
-    let launch = shell.app().autolaunch();
-    let done = if on {
-        safe().and_then(|_| launch.enable().map_err(|e| e.to_string()))
-    } else {
-        launch.disable().map_err(|e| e.to_string())
-    };
+    let done =
+        if on { safe().and_then(|_| host::set_autostart(shell, true)) } else { host::set_autostart(shell, false) };
     shell.mark_autostart_defaulted();
     done
 }
@@ -32,7 +28,7 @@ pub fn by_default(shell: &Arc<Shell>) {
     if cfg!(debug_assertions) || shell.smoke.is_some() || shell.autostart_defaulted() {
         return;
     }
-    match safe().and_then(|_| shell.app().autolaunch().enable().map_err(|e| e.to_string())) {
+    match safe().and_then(|_| host::set_autostart(shell, true)) {
         Ok(()) => {
             shell.mark_autostart_defaulted();
             shell.agent_log.line("app: starts at login from now on (the settings turn it off)");

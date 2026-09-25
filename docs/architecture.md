@@ -27,7 +27,7 @@ accounts. This document explains how the parts work and why they are built this 
   serves the dashboard. It never talks to providers itself.
 - **spec/** — the ingest format, the contract between the two. Anything that speaks it
   can deliver to a hub.
-- **desktop/** — the desktop app (Tauri): the agent's core, the hub and its board in one
+- **desktop/** — the desktop app (Rust with a platform host): the agent's core, the hub and its board in one
   program for one machine (see [Desktop app](#desktop-app)).
 
 ## Ways to run it
@@ -323,7 +323,7 @@ no name of their own, so each reader sees "My limits" in their language.
 └──────────────────────────────────┘           └─────────────────────────────┘
 ```
 
-- **The app** is a Tauri program (`desktop/`). It runs the machine's agent in a thread:
+- **The app** is a Rust controller (`desktop/`). It runs the machine's agent in a thread:
   `quotum-core`, the library the `quotum` command is built on, with `quotum`'s own
   settings (`config.toml`) and state folder, so the command and the app measure alike.
 - **Its hub** is the hub of the same commit bundled into one file
@@ -332,31 +332,38 @@ no name of their own, so each reader sees "My limits" in their language.
   `nodejs` package's). It listens on `127.0.0.1` only, on a port chosen once from
   20000–39999 and remembered: the port is part of the page's origin, and with it of what
   the board keeps in the browser's storage.
-- **The window** shows that hub's board in the system's web view: WebView2 on Windows,
-  WebKitGTK on Linux.
+- **The window** shows that hub's board in WebView2 through Tauri on Windows and in
+  bundled Electron/Chromium on Linux. The controller's hub supervision, settings,
+  takeover and command dispatch are shared; `desktop/src/host/` supplies each platform's
+  window, tray, single-instance activation and start-at-login integration.
 
-**Linux rendering.** `desktop/src/graphics.rs` selects process-local defaults before
-GTK or worker threads start. For NVIDIA-only render devices using the NVIDIA driver
-(not Nouveau) and the checked WebKitGTK
-versions (2.50.4, 2.50.6 and 2.52.5), it keeps GPU compositing and blur, uses shared-memory
-frame transport and two CPU painting workers. The separate Skia GPU painting workers
-can crash inside the NVIDIA driver when a window is destroyed; disabling compositing
-would hide that fault by also removing the board's glass. The two operations are kept
-separate. For these combinations the default display is X11/XWayland when available,
-avoiding the affected GTK/NVIDIA Wayland explicit-sync path. Explicit `GDK_BACKEND`
-selection is preserved; Wayland uses the process-local explicit-sync workaround unless
-the person has already chosen its value.
+**Linux rendering and lifetime.** The Rust controller uses a D-Bus StatusNotifierItem
+through `ksni`; it does not link GTK or WebKit. Opening the window starts an Electron
+process; closing it ends that process and its renderers. The Rust agent and Node hub
+continue. A socket pair inherited as fd 3 carries typed messages, not a TCP listener or
+command-line secrets. EOF tells Electron to quit if the controller dies. A second start
+sends only an Open signal through a per-user Unix socket; the receiver checks peer UID.
 
-Other GPUs, mixed-GPU machines, unknown render devices and other WebKit versions keep
-the system defaults. Explicit WebKit renderer or painting settings suppress the entire
-automatic renderer policy. `--software-rendering` is an explicit fallback for this
-launch only. Each window logs its loaded WebKit version, actual compositing policy and
-selected transport/painting settings in `hub.log`; a live web-process failure is logged
-there too. No driver or desktop configuration is changed, and the page gets no new IPC
-command. Linux smoke checks trace child exit signals: a successful app process alone
-does not establish that its web processes closed without crashing.
-The native window and web view use the board's background colour, including the areas
-exposed while WebKit is painting a resized view.
+Electron starts with renderer sandboxing, context isolation and no Node integration in
+the page. A preload exposes only the six app commands. The main process checks the
+sender is the current main frame and its origin is the current hub; Rust repeats the
+origin check before dispatch. Startup/error pages at `quotum://localhost` can only
+quit. Navigation, new windows, downloads and permission requests are restricted. No
+inherited Node/Electron debugging switches reach the window process.
+
+On NVIDIA with an available X11 display the launcher selects X11/XWayland before
+Chromium initializes Ozone. Other systems use Chromium's default display selection.
+`--software-rendering` disables hardware acceleration for that launch. No driver,
+kernel or desktop settings are changed. Both the native window and the page use the
+same background colour while newly exposed areas are painted during a resize.
+
+The engine version and archive checksum are pinned in `desktop/prepare-electron.mjs`;
+updating Chromium means rebuilding the Linux packages. `desktop/package-linux.mjs`
+packages the controller, Node, hub, GUI code and Electron's license notices into deb,
+rpm and AppImage. Native packages install Chromium's root-owned sandbox helper; the
+AppImage uses user namespaces. Neither disables Chromium's sandbox. Child failures
+are reported over the private channel, including during teardown, and the controller
+waits for GUI termination when quitting.
 
 **The hub's local mode.** Started with `QUOTUM_LOCAL_KEY` and `QUOTUM_LOCAL_TOKEN`, a
 hub has one person and no accounts. At start it makes sure the person exists, sets the
@@ -383,14 +390,15 @@ nowhere else; links open in the system's browser. The app's folder is this user'
 **Files.** The app's folder is `%LOCALAPPDATA%\com.padurets.quotum` on Windows and
 `~/.local/share/com.padurets.quotum` on Linux: the hub's database (`hub/`), `app.json`
 (the port, whether taking over was agreed to, whether start at login was set),
-`app.lock` (one app per user), the web view's data and `logs/` (`hub.log` and
-`agent.log`, each moved aside at 1 MiB). Measurements that wait for the hub go to
+`app.lock` (one app per user), the web view's data and, on Linux, `window.json` (window geometry). Linux logs are in
+`~/.cache/com.padurets.quotum/logs/` (`hub.log` and `agent.log`, each moved aside at 1 MiB).
+`QUOTUM_APP_DATA_DIR` puts logs and browser data under the chosen isolated directory. Measurements that wait for the hub go to
 `app-spool.jsonl` in `quotum`'s state folder.
 
 **Its life.** A second start of the app opens the window of the first. Closing the
 window destroys it and its web view; the app keeps measuring, and the tray icon (*Open
 Quotum*, *Quit*) or starting the app again brings the window back. *Quit*, there or in
-the settings, ends the agent and the hub. On Linux the icon is an AppIndicator, which
+the settings, ends the agent and the hub. On Linux the icon is a StatusNotifierItem, which
 GNOME shows only with an extension; without it, starting the app again opens the
 window. The first time the app measures it turns on start at login (a start without the
 window), once: the settings turn it off. On Linux only a program that no other user can
@@ -433,6 +441,6 @@ in the file by hand is picked up within seconds.
    bare binary per platform, which they fetch and check against `SHA256SUMS`; the
    latest version is read from where `releases/latest` redirects, one request with no
    API behind it.~~ Next: autostart registration.
-7. ~~The desktop app for Windows and Linux (Tauri): the agent, its own hub and board,
+7. ~~The desktop app for Windows and Linux: the agent, its own hub and board,
    tray and settings, built and tested by CI.~~ Next: its releases and installers, then
    macOS.

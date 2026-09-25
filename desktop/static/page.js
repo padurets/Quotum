@@ -29,4 +29,4 @@ const log = new URLSearchParams(location.search).get('log');
 const where = document.getElementById('log');
 if (where) where.textContent = log || 'hub.log';
 if (quitting) for (const element of document.querySelectorAll('.not-quitting')) element.hidden = true;
-document.getElementById('quit').addEventListener('click', () => window.__TAURI__?.core.invoke('quit'));
+document.getElementById('quit').addEventListener('click', () => (window.__QUOTUM__?.invoke ?? window.__TAURI__?.core.invoke)?.('quit'));

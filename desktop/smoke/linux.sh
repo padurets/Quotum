@@ -39,9 +39,9 @@ node_gone() {
 node_gone || fail "a quotum-node runs before the app starts"
 case $mode in
   normal)
-    # WebKit can crash during window destruction after the app already reported success.
-    # Trace descendants' actual exit signals: the parent's zero exit code is insufficient.
-    sh "$(dirname "$0")/trace.sh" "$work/process.log" \
+    # The sandbox must remain active. Electron reports live child failures; the
+    # subreaper also checks processes that outlive the controller during teardown.
+    python3 "$(dirname "$0")/monitor.py" -- \
       timeout -k 10 180 xvfb-run -a "$@" --smoke || fail "the app failed ($?)"
     node_gone || fail "quotum-node outlived the app"
     ;;

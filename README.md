@@ -263,16 +263,16 @@ build it yourself, see [CONTRIBUTING.md](CONTRIBUTING.md).
   alone, into `%LOCALAPPDATA%\Quotum`, with no administrator rights, and brings WebView2
   if Windows lacks it. The installer isn't signed yet, so SmartScreen asks first: *More
   info → Run anyway*.
-- **Linux** (x64): the package of your system, which brings WebKitGTK and the tray's
-  library and gets along with the system's `nodejs`. On Debian 12, Ubuntu 22.04 or newer
-  `sudo apt install ./quotum-desktop-<…>.deb`; on Fedora `sudo dnf install
-  ./quotum-desktop-<…>.rpm`. Elsewhere the AppImage: `chmod +x` it and run it (without
-  FUSE 2, `libfuse2`, add `--appimage-extract-and-run`). It carries its own WebKitGTK
-  and draws through X11; prefer the system package where available. For tested
-  NVIDIA/WebKit combinations the app selects a compatible renderer while keeping
-  GPU compositing and blur. If graphics still fail, quit the app completely and try
-  `quotum-desktop --software-rendering` (or add the option to the AppImage command).
-  This affects that launch only. `hub.log` records the actual graphics mode.
+- **Linux** (x64): the system package includes Chromium and works alongside the
+  system's `nodejs`. On Debian 12, Ubuntu 22.04 or newer use `sudo apt install
+  ./quotum-desktop-<…>.deb`; on Fedora use `sudo dnf install ./quotum-desktop-<…>.rpm`.
+  Elsewhere, make the AppImage executable (`chmod +x`) and run it. If FUSE is unavailable,
+  add `--appimage-extract-and-run`. The AppImage needs unprivileged user namespaces for
+  Chromium's sandbox; use a native package when the system restricts them. NVIDIA
+  systems use X11/XWayland when available. If graphics fail, quit completely and try
+  `quotum-desktop --software-rendering` (or add that option to the AppImage command).
+  It affects that launch only. Closing the window frees Chromium; measuring and the
+  tray continue in the small Rust controller.
 
 When trying a new build, choose *Quit* in the old one first: closing its window keeps
 it running, and another launch opens that same process. Check the commit in settings;
@@ -289,8 +289,8 @@ command and the app share them.
   its window.
 - **Start at login** turns on by itself the first time the app measures and starts it
   without the window. Turn it off in the settings, and do that before uninstalling. The
-  entry names the AppImage by its path: keep it where it is, at a path without spaces
-  (after a move, turn start at login off and on again).
+  entry names the AppImage by its path: keep it where it is (after a move, turn start
+  at login off and on again).
 - **A newer build** installs over the old one: quit the app first.
 - **With `quotum`.** One agent measures a machine. If `quotum` already does, the app
   asks once whether to take over. A `quotum` of this version then waits and goes on by
@@ -303,8 +303,8 @@ command and the app share them.
   Codex Resets and Claude Resets, as every hub does (`QUOTUM_RESETS=off` in the app's
   environment turns that off). Its hub listens on `127.0.0.1` alone, behind a key only
   the window gets.
-- **Size:** the Windows installer is about 27 MB, the deb and the rpm 51 MB (about
-  140 MB installed) and the AppImage 125 MB; most of it is the Node.js its hub runs on.
+- **Size:** Linux packages carry both Chromium for the window and Node.js for the hub.
+  The Windows app uses the system WebView2 and has a smaller installer.
 
 ## Configuration
 
@@ -377,7 +377,7 @@ agent/crates/cli      the `quotum` command
 npm/                  the npm packages: a launcher and a prebuilt binary per platform
 install/              the installers for `curl … | sh` and PowerShell
 deploy/               running the hub with Docker Compose behind Caddy (HTTPS)
-desktop/              the desktop app (Tauri): the agent, its own hub and board in a window
+desktop/              the desktop app (Rust, Electron on Linux, Tauri on Windows): the agent, its own hub and board in a window
 .github/workflows     tests on every push; everything released from a version tag
 spec/                 the protocol between the agent and the hub
 hub/server/domain     the rules: windows, spending, resets, the ingest format

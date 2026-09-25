@@ -4,7 +4,7 @@ import {unlessSame} from './http';
 
 /**
  * The desktop app, when the board is shown in its window (the hub's local mode): what it
- * says about itself and what it can be asked, through Tauri's `invoke`. In a browser there
+ * says about itself and what it can be asked, through its narrow `invoke` bridge. In a browser there
  * is no bridge, and nothing that needs one is shown. The shapes follow desktop/src/ipc.rs.
  */
 
@@ -30,7 +30,10 @@ export type AppState = {
 export type Patch = {providers?: Partial<Record<ProviderId, {enabled?: boolean; intervalS?: number; account?: string}>>; sessions?: boolean};
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
-const bridge = (): Invoke | null => (globalThis as {__TAURI__?: {core?: {invoke?: Invoke}}}).__TAURI__?.core?.invoke ?? null;
+const bridge = (): Invoke | null => {
+  const host = globalThis as {__QUOTUM__?: {invoke?: Invoke}; __TAURI__?: {core?: {invoke?: Invoke}}};
+  return host.__QUOTUM__?.invoke ?? host.__TAURI__?.core?.invoke ?? null;
+};
 
 /** Whether the board is in the app's window. */
 export const inApp = () => bridge() !== null;

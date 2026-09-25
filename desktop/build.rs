@@ -14,13 +14,16 @@ fn main() {
     println!("cargo:rustc-env=QUOTUM_COMMIT={commit}");
 
     // The app's own commands, allowed by name to the pages that may call them (see ipc.rs).
-    let manifest = tauri_build::AppManifest::new().commands(&[
-        "app_state",
-        "save_settings",
-        "take_over",
-        "set_autostart",
-        "reenter",
-        "quit",
-    ]);
-    tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest)).expect("tauri-build");
+    #[cfg(not(target_os = "linux"))]
+    {
+        let manifest = tauri_build::AppManifest::new().commands(&[
+            "app_state",
+            "save_settings",
+            "take_over",
+            "set_autostart",
+            "reenter",
+            "quit",
+        ]);
+        tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest)).expect("tauri-build");
+    }
 }

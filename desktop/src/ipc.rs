@@ -1,49 +1,26 @@
-//! What the pages may ask of the app. The board of the running hub gets the app's six
-//! commands; the app's own pages ("Starting…", "Error") only `quit`. Nothing else: no
-//! `core:default`, no plugin's API. Capabilities can be added at run time but never taken
-//! back, so a port of an earlier start of the hub keeps its capability; every command but
-//! `quit` therefore checks that it is called from the board of the current start.
-
+//! The six operations the board may request, independent of its window engine.
+use crate::{
+    agent, autostart,
+    settings::Patch,
+    shell::{self, Shell},
+    window,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::sync::Arc;
-
-use serde::Serialize;
-use tauri::ipc::CapabilityBuilder;
-use tauri::{State, Webview};
-
-use crate::settings::Patch;
-use crate::shell::{self, Shell};
-use crate::window::{self, LABEL};
-use crate::{agent, autostart};
-
-/// The app's commands, as build.rs declares them.
+use url::Url;
+#[cfg(not(target_os = "linux"))]
 pub const COMMANDS: [&str; 6] = ["app_state", "save_settings", "take_over", "set_autostart", "reenter", "quit"];
 
-fn allow(command: &str) -> String {
-    format!("allow-{}", command.replace('_', "-"))
-}
-
-/// The board served on `port`: not the app's own pages, only that origin.
-pub fn hub_capability(port: u16) -> CapabilityBuilder {
-    COMMANDS.iter().fold(
-        CapabilityBuilder::new(format!("hub-{port}"))
-            .local(false)
-            .window(LABEL)
-            .remote(format!("http://127.0.0.1:{port}/*")),
-        |capability, command| capability.permission(allow(command)),
-    )
-}
-
-/// The app's own pages: they can only quit.
-pub fn own_capability() -> CapabilityBuilder {
-    CapabilityBuilder::new("own").window(LABEL).permission(allow("quit"))
-}
-
-/// Refuses a command unless it comes from the board of the running hub.
-fn guard(webview: &Webview, shell: &Arc<Shell>) -> Result<(), String> {
-    // The URL first: reading it goes to the main thread, which must not wait on the state.
-    let url = webview.url().map_err(|e| e.to_string())?;
-    let (state, _) = shell.hub();
-    if window::guard(&url, &state) { Ok(()) } else { Err("not the board of the running hub".into()) }
+#[derive(Deserialize)]
+#[serde(tag = "command", content = "args", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Request {
+    AppState,
+    SaveSettings { patch: Patch },
+    TakeOver,
+    SetAutostart { on: bool },
+    Reenter,
+    Quit,
 }
 
 /// What the board shows of the app: its agent, the settings of measuring, start at
@@ -75,78 +52,41 @@ fn state_of(shell: &Arc<Shell>) -> AppState {
     }
 }
 
-/// Only reads: the state as the app last saw it.
-#[tauri::command(async)]
-pub fn app_state(webview: Webview, shell: State<'_, Arc<Shell>>) -> Result<AppState, String> {
-    guard(&webview, &shell)?;
-    if let Some(smoke) = &shell.smoke {
-        smoke.board_asked(&shell);
+pub fn execute(shell: &Arc<Shell>, origin: &Url, request: Request) -> Result<Value, String> {
+    let (hub, _) = shell.hub();
+    let own_quit = matches!(request, Request::Quit) && window::same_origin(origin, window::own_origin().as_str());
+    if !own_quit && !window::guard(origin, &hub) {
+        return Err("not the board of the running hub".into());
     }
-    Ok(state_of(&shell))
-}
-
-/// Changes the settings of measuring in config.toml; the agent follows in a moment.
-#[tauri::command(async)]
-pub fn save_settings(webview: Webview, shell: State<'_, Arc<Shell>>, patch: Patch) -> Result<AppState, String> {
-    guard(&webview, &shell)?;
-    agent::save_settings(&shell, &patch)?;
-    Ok(state_of(&shell))
-}
-
-/// The person agreed: the app takes the machine over from `quotum` (up to about half a minute).
-#[tauri::command(async)]
-pub fn take_over(webview: Webview, shell: State<'_, Arc<Shell>>) -> Result<AppState, String> {
-    guard(&webview, &shell)?;
-    agent::take_over(&shell)?;
-    Ok(state_of(&shell))
-}
-
-#[tauri::command(async)]
-pub fn set_autostart(webview: Webview, shell: State<'_, Arc<Shell>>, on: bool) -> Result<AppState, String> {
-    guard(&webview, &shell)?;
-    autostart::set(&shell, on)?;
-    Ok(state_of(&shell))
-}
-
-/// Opens the board again: after the window lost its session, it enters with the key of
-/// the hub's current start.
-#[tauri::command(async)]
-pub fn reenter(webview: Webview, shell: State<'_, Arc<Shell>>) -> Result<(), String> {
-    guard(&webview, &shell)?;
-    window::reenter(&shell);
-    Ok(())
-}
-
-#[tauri::command(async)]
-pub fn quit(shell: State<'_, Arc<Shell>>) -> Result<(), String> {
-    shell::quit(&shell);
-    Ok(())
+    match request {
+        Request::AppState => {
+            if let Some(smoke) = &shell.smoke {
+                smoke.board_asked(shell);
+            }
+        }
+        Request::SaveSettings { patch } => agent::save_settings(shell, &patch)?,
+        Request::TakeOver => agent::take_over(shell)?,
+        Request::SetAutostart { on } => autostart::set(shell, on)?,
+        Request::Reenter => {
+            window::reenter(shell);
+            return Ok(Value::Null);
+        }
+        Request::Quit => {
+            shell::quit(shell);
+            return Ok(Value::Null);
+        }
+    }
+    serde_json::to_value(state_of(shell)).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tauri::ipc::RuntimeCapability;
-    use tauri::utils::acl::capability::{Capability, CapabilityFile};
-
-    fn built(capability: CapabilityBuilder) -> Capability {
-        match capability.build() {
-            CapabilityFile::Capability(capability) => capability,
-            _ => panic!("one capability"),
-        }
-    }
-
     #[test]
-    fn the_board_gets_the_six_commands_and_the_apps_own_pages_only_quit() {
-        let hub = built(hub_capability(23456));
-        assert!(!hub.local, "not the app's own pages");
-        let urls = &hub.remote.as_ref().unwrap().urls;
-        assert_eq!(urls, &["http://127.0.0.1:23456/*"]);
-        assert_eq!(hub.windows, ["main"]);
-        assert_eq!(hub.permissions.len(), 6);
-        let own = built(own_capability());
-        assert!(own.local && own.remote.is_none());
-        assert_eq!(own.permissions.len(), 1);
-        assert_eq!(allow("save_settings"), "allow-save-settings");
+    fn requests_are_typed_and_unknown_commands_are_rejected() {
+        assert!(serde_json::from_str::<Request>(r#"{"command":"app_state"}"#).is_ok());
+        assert!(serde_json::from_str::<Request>(r#"{"command":"set_autostart","args":{"on":true}}"#).is_ok());
+        assert!(serde_json::from_str::<Request>(r#"{"command":"set_autostart","args":{"on":"yes"}}"#).is_err());
+        assert!(serde_json::from_str::<Request>(r#"{"command":"open_file","args":{"path":"/tmp/a"}}"#).is_err());
     }
 }

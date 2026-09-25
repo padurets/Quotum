@@ -24,6 +24,7 @@ import {chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, rea
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {prepareElectron} from './prepare-electron.mjs';
 import {thirdPartyLicenses} from '../npm/licenses.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -83,7 +84,7 @@ if (!existsSync(binary) || !existsSync(license) || !existsSync(stamp) || readFil
   const archive = path.join(work, node.archive);
   const url = `https://nodejs.org/dist/${NODE_VERSION}/${node.archive}`;
   console.log(`downloading ${url}`);
-  const response = await fetch(url);
+  const response = await fetch(url, {signal: AbortSignal.timeout(120_000)});
   if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
   writeFileSync(archive, Buffer.from(await response.arrayBuffer()));
   const actual = sha256(archive);
@@ -125,6 +126,15 @@ if (!existsSync(path.join(icons, 'icon.png'))) {
     stdio: 'inherit',
     shell: process.platform === 'win32',
   });
+}
+
+if (!windows) {
+  await prepareElectron(path.join(here, 'resources'));
+  const gui = path.join(here, 'resources/gui');
+  mkdirSync(gui, {recursive: true});
+  for (const name of ['main.cjs', 'preload.cjs', 'policy.cjs']) copyFileSync(path.join(here, 'electron', name), path.join(gui, name));
+  cpSync(path.join(here, 'static'), path.join(gui, 'static'), {recursive: true});
+  copyFileSync(path.join(icons, '128x128.png'), path.join(here, 'resources/icon.png'));
 }
 
 console.log(`prepared the desktop app for ${target}`);

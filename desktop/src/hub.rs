@@ -263,18 +263,20 @@ impl Proc {
         self.stdin.lock().unwrap_or_else(|e| e.into_inner()).take();
     }
 
-    /// Waits up to `limit` for the exit; ends it outright after that.
-    pub fn finish(&self, limit: Duration) {
+    /// Waits up to `limit` for the exit; ends it outright after that. True only for a
+    /// successful exit without forced termination.
+    pub fn finish(&self, limit: Duration) -> bool {
         let until = Instant::now() + limit;
         while Instant::now() < until {
-            if self.try_wait().is_some() {
-                return;
+            if let Some(status) = self.try_wait() {
+                return status.is_some_and(|status| status.success());
             }
             thread::sleep(Duration::from_millis(50));
         }
         let mut child = self.child.lock().unwrap_or_else(|e| e.into_inner());
         let _ = child.kill();
         let _ = child.wait();
+        false
     }
 }
 
@@ -293,6 +295,29 @@ mod tests {
 
     fn names(env: &[(OsString, OsString)]) -> Vec<String> {
         env.iter().map(|(n, _)| n.to_string_lossy().into_owned()).collect()
+    }
+
+    #[test]
+    fn closing_stdin_lets_the_hub_child_exit_without_being_killed() {
+        let root =
+            std::env::temp_dir().join(format!("quotum-hub-{}-{}", std::process::id(), crate::shell::random_u32()));
+        std::fs::create_dir_all(&root).unwrap();
+        let script = root.join("stand-in.cjs");
+        std::fs::write(&script, "process.stdin.resume(); process.stdin.on('end', () => process.exit(0));").unwrap();
+        let executable = if cfg!(windows) {
+            "quotum-node-x86_64-pc-windows-msvc.exe"
+        } else {
+            "quotum-node-x86_64-unknown-linux-gnu"
+        };
+        let node = Path::new(env!("CARGO_MANIFEST_DIR")).join("binaries").join(executable);
+        let (signals, _received) = std::sync::mpsc::channel();
+        let log = Arc::new(Log::new(root.join("hub.log")));
+        let child =
+            Proc::start(&node, &script, &root, environment(std::env::vars_os(), cfg!(windows), &[]), log, signals)
+                .unwrap();
+        child.close_stdin();
+        assert!(child.finish(Duration::from_secs(5)), "the stand-in must exit after EOF, without a kill");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use tauri::{Manager, Url};
+use url::Url;
 
 use crate::hub::{HubState, Ready};
 use crate::shell::{self, Shell};
@@ -123,9 +123,7 @@ impl Smoke {
         let shell = shell.clone();
         thread::spawn(move || match loaded {
             1 => {
-                if let Some(window) = shell.app().get_webview_window(window::LABEL) {
-                    let _ = window.destroy();
-                }
+                window::close(&shell);
                 thread::sleep(Duration::from_millis(500));
                 window::open(&shell);
             }

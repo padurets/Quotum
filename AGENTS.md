@@ -15,7 +15,7 @@ one machine:
 - `hub/` — Node 24, Fastify, the SQLite built into Node, a React dashboard:
   `server/domain` (the rules), `server/store` (SQLite), `server/routes`, `ui/`.
 - `spec/ingest-v1.md` — the protocol between them.
-- `desktop/` — the desktop app (Tauri, a Cargo workspace of its own): `quotum-core` as
+- `desktop/` — the desktop app (Rust, a Cargo workspace of its own; Electron on Linux, Tauri on Windows): `quotum-core` as
   the machine's agent, the hub bundled into one file and run in its local mode by the
   Node the app carries, and the hub's board in a window.
 
@@ -90,8 +90,8 @@ is open.
 - Widgets on the board are a `.card` (a source) or a `.panel` (the chart, the table).
 - **Keep the board cheap to render.** Nothing on the page is `position: fixed` or has a
   fixed background, and widgets have no `backdrop-filter` (floating surfaces and the
-  sticky bars may): in WebKitGTK, the desktop app's window on Linux, either makes every
-  step of a scroll paint the whole window again. What shows time reads `useNow(step)`
+  sticky bars may): whole-window repainting during scroll is expensive, especially
+  with software rendering. What shows time reads `useNow(step)`
   (`hub/ui/lib/api.ts`) itself rather than a clock passed down from the board, and
   polled state is set through `unlessSame`, so an unchanged answer renders nothing.
 - Colours come from the tokens at the top of `hub/ui/style.css`, and the colours of

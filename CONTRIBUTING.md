@@ -15,31 +15,36 @@ CI runs the same on every push, the agent on Linux, macOS and Windows. `npm star
 `hub/` serves the built dashboard on `127.0.0.1:8080`; `cargo run -p quotum` in `agent/`
 measures this machine once.
 
-**The desktop app** (`desktop/`) is checked after `node desktop/prepare.mjs`: it builds
-the hub into one file, fetches the Node.js the app carries (checked against a pinned
-SHA-256) and writes the icons and licenses, all of which the app's build reads. On Linux
-the app needs `libwebkit2gtk-4.1-dev libayatana-appindicator3-dev libxdo-dev libssl-dev
-librsvg2-dev` (Debian and Ubuntu names). `cargo run` in `desktop/` starts it with its hub
-and agent; `npx @tauri-apps/cli@2.11.5 build` there makes its installers (on Linux a deb,
-an rpm and an AppImage, on Windows a setup.exe). CI builds it on Linux and Windows and runs
-each build with `--smoke` (the rpm installed on Fedora): the hub starts, a stand-in client is measured, the board
-shows it, the window opens twice and the app quits (`desktop/smoke/`).
+**The desktop app** (`desktop/`) shares a Rust controller between Electron on Linux
+and Tauri/WebView2 on Windows. `node desktop/prepare.mjs` builds the hub, downloads
+checksum-pinned runtimes, and writes icons and license notices. Run it before the
+checks above. Linux needs `libssl-dev` for the Rust build, `unzip` for preparation,
+and Chromium's runtime libraries (`libnss3 libgtk-3-0 libgbm1 libasound2` on Debian).
+`cargo run` in `desktop/` starts a prepared debug build. `node desktop/package-linux.mjs`
+builds deb, rpm and AppImage; its packaging tools are `dpkg-deb`, `rpmbuild` and
+`mksquashfs`. On Windows, `npx @tauri-apps/cli@2.11.5 build` makes setup.exe.
 
-Linux smoke checks also need `xvfb`, `xauth` and `strace`. Run
-`python3 desktop/smoke/test_trace.py` when changing their supervisor: a crashing WebKit
-child must fail the check even if the app exits successfully. On real Linux hardware,
-check the displayed image, scrolling and repeated window close/reopen with the actual
-package. Frame callbacks alone do not measure physical presentation; keep performance
-measurements separate from tracing, and check child crashes during teardown too.
-The intentional child-crash regression requires `QUOTUM_TEST_FAULT=1`; CI enables it.
-Leave it off on a person's desktop, whose crash handler can notify them even with core
-files disabled.
+Run `node --test desktop/electron/policy.test.cjs` for the Linux bridge/navigation
+policy. CI runs the installed packages with `--smoke`: the hub starts, a stand-in client
+is measured, its board appears, the window opens twice and the app quits. Linux checks
+need `xvfb`, `xauth` and Python 3; `desktop/smoke/monitor.py` adopts surviving
+children and audits their exits, alongside Electron's live child-failure reports.
+This uses no ptrace and keeps Chromium's sandbox intact. A successful
+controller exit alone does not prove that browser children closed successfully.
+The intentional child-crash supervisor regression requires `QUOTUM_TEST_FAULT=1`;
+CI enables it. Leave it off on a person's workstation, whose crash handler may notify
+them even with core files disabled.
 
-For native Linux UI automation, a debug build can retain WebKitWebDriver's loopback
-inspector transport when `QUOTUM_NATIVE_QA=1`, `TAURI_WEBVIEW_AUTOMATION=true` and all
-three isolated paths (`QUOTUM_APP_DATA_DIR`, `QUOTUM_STATE_DIR`, `QUOTUM_CONFIG`) are
-set. Use a private session bus and synthetic data, with providers disabled or stand-ins.
-Release builds always remove inspector listeners, including with those variables set.
+For real Linux QA use isolated `QUOTUM_APP_DATA_DIR`, `QUOTUM_STATE_DIR` and
+`QUOTUM_CONFIG`, synthetic data and providers disabled or stand-ins. Check the displayed
+image, scrolling, resizing and repeated close/reopen with the actual package. Frame
+callbacks alone do not measure physical presentation. An explicitly isolated debug build
+can expose CDP with `QUOTUM_NATIVE_QA=1` and `QUOTUM_INSPECTOR_SERVER=127.0.0.1:<port>`;
+all three isolated paths must be set. Release builds ignore these switches. Use this
+for instrumentation, then check the actual release package on the physical display too. Keep performance measurements
+separate from tracing and check teardown too. Never disable the browser sandbox to
+make a test pass; an AppImage requires user namespaces, while installed native packages
+also provide Chromium's setuid helper.
 
 Tests never start a real Claude Code, Codex or Antigravity client: they use recorded
 answers and stand-in programs, so they cost nothing and don't depend on your accounts.
