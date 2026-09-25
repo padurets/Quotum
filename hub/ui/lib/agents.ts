@@ -4,6 +4,9 @@ import {cardId, isHidden} from './view';
 /** More sessions than this are counted in a card's tray instead of drawn one by one. */
 export const DRAWN = 10;
 
+/** Whether a card's tray draws a mark for each of its running agents. */
+export const drawn = (sessions: unknown[]) => sessions.length <= DRAWN;
+
 /** A running agent in the board's table, with the card whose subscription it spends. */
 export type AgentRow = {source: SourceState; session: LiveSession};
 

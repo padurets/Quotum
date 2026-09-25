@@ -4,7 +4,7 @@ import type {LiveSession, SourceState} from '../lib/types';
 import {duration} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
 import {AGENTS, colorOf, columnShown, withColumn, withHidden, type Arrange} from '../lib/view';
-import {agentRows, DRAWN, type AgentRow} from '../lib/agents';
+import {agentRows, drawn, type AgentRow} from '../lib/agents';
 import {t, useLocale, type Key} from '../i18n';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
 
@@ -65,7 +65,7 @@ export function Agents({sessions, now}: {sessions: LiveSession[]; now: number}) 
           <span className="agents-count">
             <b>{working}</b>/{sessions.length}
           </span>
-          {sessions.length <= DRAWN && (
+          {drawn(sessions) && (
             <span className="agents-marks">
               {machines.map(machine => (
                 <span className="agents-group" key={machine.id}>

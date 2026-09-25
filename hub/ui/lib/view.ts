@@ -1,7 +1,7 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {call} from './http';
 import {DEFAULT_PLAN, isValidPlan, type WeeklyPlan} from './plan';
-import type {Overview, View} from './types';
+import {windowKey, type Overview, type View} from './types';
 import {FALLBACK_COLOR, PROVIDERS} from './providers';
 
 /** Widget ids: the chart, the table of every limit, the list of running agents, and a card per source. */
@@ -81,6 +81,19 @@ export const withColumn = (view: View, widget: string, column: string, shown: bo
   if (!columns[widget].length) delete columns[widget];
   return {...view, columns};
 };
+
+/** Whether a window is hidden from its card and the chart on this board. */
+export const isWindowHidden = (view: View, sourceId: string, windowId: string) => view.windows.includes(windowKey(sourceId, windowId));
+
+/**
+ * What a board shows: a word on getting started while it has no subscription, its
+ * widgets, or a way to bring them back when every one of them is hidden.
+ */
+export function boardState(sources: {id: string}[], view: View): 'onboarding' | 'widgets' | 'allHidden' {
+  if (!sources.length) return 'onboarding';
+  const widgets = [...sources.map(source => cardId(source.id)), AGENTS, HISTORY, FORECAST];
+  return widgets.every(id => isHidden(view, id)) ? 'allHidden' : 'widgets';
+}
 
 export const withWindowHidden = (view: View, key: string, hidden: boolean): View => ({
   ...view,
