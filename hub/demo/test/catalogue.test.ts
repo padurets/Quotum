@@ -29,6 +29,7 @@ import {
   failuresAt,
   HOLDS,
   homeOf,
+  HOUR,
   machines,
   MIN,
   personOf,
@@ -37,6 +38,7 @@ import {
   sessionsAt,
   snapshot,
   staleAfter,
+  type Agent,
   type Card,
   type CardCheck,
   type DemoSet,
@@ -293,6 +295,16 @@ test('the catalogue is consistent', () => {
   assert.equal(new Set(scenes).size, scenes.length, 'scenes are named once');
   for (const set of SETS) assert.ok(scenes.includes(set.scene), `${set.id} starts with a scene that exists`);
   for (const scene of SCENES) assert.ok(scene.expect.length, `scene ${scene.id} expects something`);
+});
+
+test('the check of a set names a subscription without an account the hub would file elsewhere', () => {
+  const all = setOf('all');
+  // Ana's Antigravity without an account, on her laptop; her mac-mini delivers another one, Ben's machine none.
+  const changed = (change: Partial<Card>): DemoSet => ({...all, entries: all.entries.map(e => (e.kind === 'card' && e.id === 'antigravity' ? {...e, ...change} : e))});
+  const agent: Agent = {machine: 'mac-mini', origin: 'terminal', project: null, since: -HOUR};
+  assert.match(problems(changed({agents: [agent]})).join('\n'), /card antigravity: an agent on mac-mini, which the hub files under what that machine delivers/);
+  assert.deepEqual(problems(changed({agents: [{...agent, machine: 'laptop'}]})), []);
+  assert.match(problems(changed({machines: ['laptop', 'ben-mac']})).join('\n'), /card antigravity: machines of different people measure it/);
 });
 
 test('machines say how long a measurement holds as the agent does: until the next one, a fifth more and a minute', () => {
