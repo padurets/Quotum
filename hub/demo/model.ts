@@ -150,15 +150,21 @@ export const waveWork =
 
 /**
  * The work of a card's agents: while more of them work, its limits go faster. Averaged
- * over them, so a window spends at most its full pace when all of them work.
+ * over them, so a window spends at most its full pace when all of them work. Before the
+ * first of them started the card was worked on as `before` goes: its history is spent
+ * as its weeks are.
  */
 export const agentsWork =
-  (agents: Agent[]): Work =>
-  (from, to) =>
-    agents.reduce((sum, agent) => {
+  (agents: Agent[], before: Wave): Work =>
+  (from, to) => {
+    const first = Math.min(...agents.map(agent => agent.since));
+    const earlier = from < first ? busyIn(before, from, Math.min(to, first)) : 0;
+    const theirs = agents.reduce((sum, agent) => {
       const [a, b] = [Math.max(from, agent.since), Math.min(to, agent.until ?? Infinity)];
       return sum + (agent.works && b > a ? busyIn(agent.works, a, b) : 0);
-    }, 0) / Math.max(1, agents.length);
+    }, 0);
+    return earlier + theirs / Math.max(1, agents.length);
+  };
 
 /** How long a wave is on from `from` to `to`. */
 export function busyIn(wave: Wave, from: number, to: number): number {
