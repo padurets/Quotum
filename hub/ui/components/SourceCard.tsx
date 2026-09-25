@@ -295,16 +295,33 @@ export const SourceCard = memo(function SourceCard({
   // trouble) and its tooltip; a line of its own would only repeat it and make the card taller.
   const status = problem ?? (source.successAt ? t('source.measured', {ago: ago(source.successAt, now)}) : errorText('waiting'));
   const news = resetLabel(resets, now);
+  // A touch screen has nothing to hover: a tap on the logo shows its tooltip for a while.
+  const [tip, setTip] = useState(false);
+  useEffect(() => {
+    if (!tip) return;
+    const hide = () => setTip(false);
+    const timer = setTimeout(hide, 4000);
+    document.addEventListener('pointerdown', hide);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('pointerdown', hide);
+    };
+  }, [tip]);
 
   return (
     <article className="card" style={{'--card-color': colorOf(arrange.view, source.id, source.provider)} as CSSProperties}>
       <div className="card-head">
-        <span className={`provider-mark ${dot.warn ? 'is-warn' : ''}`} title={status} aria-label={status} role="img">
+        <span className={`provider-mark ${dot.warn ? 'is-warn' : ''}`} title={status} aria-label={status} role="img" onPointerUp={event => event.pointerType === 'touch' && setTip(true)}>
           <img className="provider-logo" src={LOGOS[source.provider]} alt="" />
           {dot.warn ? (
             <i className="dot dot-warn" />
           ) : (
             <i className={`dot dot-fresh ${dot.pulsing ? 'is-pulsing' : ''}`} style={{'--fresh': dot.fresh} as CSSProperties} />
+          )}
+          {tip && (
+            <span className="dot-tip glass" aria-hidden="true">
+              {status}
+            </span>
           )}
         </span>
         <div className="card-title">
