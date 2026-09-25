@@ -5,6 +5,14 @@
 param([string]$Mode, [string]$App)
 $ErrorActionPreference = 'Stop'
 
+function Read-SmokeLines([string]$Path) {
+  # Descendants can retain the redirected stderr handle after the controller exits.
+  $file = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+  $reader = [IO.StreamReader]::new($file)
+  try { return $reader.ReadToEnd() -split '\r?\n' }
+  finally { $reader.Dispose() }
+}
+
 function Test-IntentionalCrash([int]$Code, [string[]]$Lines) {
   # MSVC abort / Rust fast-fail. A loader error or the smoke watchdog is not proof
   # that the hub was alive when its controller died.
@@ -28,7 +36,19 @@ if ($Mode -eq 'check') {
   )) {
     if (Test-IntentionalCrash $case.code $case.lines) { throw 'An unrelated failure passed as a deliberate crash' }
   }
+  $fixture = Join-Path ([IO.Path]::GetTempPath()) ('quotum-open-log-' + [guid]::NewGuid().ToString('N'))
+  $writer = [IO.File]::Open($fixture, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite)
+  try {
+    $bytes = [Text.Encoding]::UTF8.GetBytes(($reached -join "`r`n") + "`r`n")
+    $writer.Write($bytes, 0, $bytes.Length)
+    $writer.Flush()
+    if (-not (Test-IntentionalCrash 3 @(Read-SmokeLines $fixture))) { throw 'Could not read the still-open crash log' }
+  } finally {
+    $writer.Dispose()
+    Remove-Item -LiteralPath $fixture
+  }
   Write-Host 'crash classification: 2 positive and 5 negative controls passed'
+  Write-Host 'crash log: concurrent writer control passed'
   return
 }
 
@@ -71,7 +91,7 @@ $code = $p.ExitCode
 Get-Content "$work\stderr.txt"
 if ($null -eq $code) { Fail 'no exit code' }
 if ($Mode -eq 'crash') {
-  $lines = [IO.File]::ReadAllLines("$work\stderr.txt")
+  $lines = @(Read-SmokeLines "$work\stderr.txt")
   if (-not (Test-IntentionalCrash $code $lines)) { Fail "the deliberate crash was not reached ($code)" }
   for ($i = 0; $i -lt 20 -and (Nodes).Count; $i++) { Start-Sleep -Milliseconds 500 }
   if ((Nodes).Count) { Fail 'quotum-node outlived the crashed app by 10 s' }
