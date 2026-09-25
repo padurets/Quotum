@@ -26,6 +26,7 @@ import {SCENES, SETS} from '../catalogue.js';
 import {
   awake,
   cards,
+  earliest,
   failuresAt,
   HOLDS,
   homeOf,
@@ -413,4 +414,7 @@ test('the showcase comes up clean', {timeout: 60_000}, async t => {
   const reading = new Reading(stand, start, new Map([[set.scene, await hub.told()]]));
   const scene = SCENES.find(s => s.id === set.scene)!;
   assert.deepEqual(await checkAll(stand, [...set.entries, scene], reading, null, new Set()), []);
+  const board = people(set)[0].id;
+  const first = start + earliest(set);
+  assert.deepEqual([(await reading.overview(board)).historyStart, (await reading.history(board)).historyStart], [first, first], 'history starts at the first seeded measurement');
 });
