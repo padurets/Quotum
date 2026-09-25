@@ -39,7 +39,7 @@ impl Adapter for Antigravity {
     }
 
     fn install_dirs(&self, home: &Path) -> Vec<PathBuf> {
-        let installer = dirs::data_local_dir().filter(|_| cfg!(windows)).map(|local| local.join("agy/bin"));
+        let installer = dirs::data_local_dir().filter(|_| cfg!(windows)).map(|local| local.join("agy").join("bin"));
         installer.into_iter().chain(std::iter::once(home.join(".gemini/antigravity-cli/bin"))).collect()
     }
 
