@@ -35,6 +35,12 @@ The intentional child-crash regression requires `QUOTUM_TEST_FAULT=1`; CI enable
 Leave it off on a person's desktop, whose crash handler can notify them even with core
 files disabled.
 
+For native Linux UI automation, a debug build can retain WebKitWebDriver's loopback
+inspector transport when `QUOTUM_NATIVE_QA=1`, `TAURI_WEBVIEW_AUTOMATION=true` and all
+three isolated paths (`QUOTUM_APP_DATA_DIR`, `QUOTUM_STATE_DIR`, `QUOTUM_CONFIG`) are
+set. Use a private session bus and synthetic data, with providers disabled or stand-ins.
+Release builds always remove inspector listeners, including with those variables set.
+
 Tests never start a real Claude Code, Codex or Antigravity client: they use recorded
 answers and stand-in programs, so they cost nothing and don't depend on your accounts.
 

@@ -65,8 +65,28 @@ fn without_proxy_for_loopback(current: Option<String>) -> String {
     }
 }
 
+/// WebDriver needs WebKit's inspector transport. It is available only in an explicitly
+/// isolated Linux debug run; release builds never retain a debugging listener.
+fn qa_inspector(qa: Option<&str>, automation: Option<&str>, endpoint: Option<&str>, isolated: bool) -> bool {
+    cfg!(all(debug_assertions, target_os = "linux"))
+        && qa == Some("1")
+        && automation == Some("true")
+        && isolated
+        && endpoint
+            .and_then(|value| value.parse::<std::net::SocketAddr>().ok())
+            .is_some_and(|address| address.ip().is_loopback())
+}
+
 fn main() {
     let args = Args::parse(std::env::args_os());
+    let inspection = qa_inspector(
+        std::env::var("QUOTUM_NATIVE_QA").ok().as_deref(),
+        std::env::var("TAURI_WEBVIEW_AUTOMATION").ok().as_deref(),
+        std::env::var("WEBKIT_INSPECTOR_SERVER").ok().as_deref(),
+        ["QUOTUM_APP_DATA_DIR", "QUOTUM_STATE_DIR", "QUOTUM_CONFIG"]
+            .iter()
+            .all(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty())),
+    );
     // SAFETY: the first thing the program does, before any thread exists.
     unsafe {
         #[cfg(target_os = "linux")]
@@ -75,7 +95,9 @@ fn main() {
         // machine (a DevTools port, WebKit's inspector server).
         for name in ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "WEBKIT_INSPECTOR_SERVER", "WEBKIT_INSPECTOR_HTTP_SERVER"]
         {
-            std::env::remove_var(name);
+            if name != "WEBKIT_INSPECTOR_SERVER" || !inspection {
+                std::env::remove_var(name);
+            }
         }
         for name in ["no_proxy", "NO_PROXY"] {
             std::env::set_var(name, without_proxy_for_loopback(std::env::var(name).ok()));
@@ -175,6 +197,19 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inspector_is_only_for_explicit_isolated_linux_debug_automation() {
+        assert_eq!(
+            qa_inspector(Some("1"), Some("true"), Some("127.0.0.1:12345"), true),
+            cfg!(all(debug_assertions, target_os = "linux")),
+        );
+        assert!(!qa_inspector(None, Some("true"), Some("127.0.0.1:12345"), true));
+        assert!(!qa_inspector(Some("1"), None, Some("127.0.0.1:12345"), true));
+        assert!(!qa_inspector(Some("1"), Some("true"), Some("127.0.0.1:12345"), false));
+        assert!(!qa_inspector(Some("1"), Some("true"), Some("0.0.0.0:12345"), true));
+        assert!(!qa_inspector(Some("1"), Some("true"), Some("example.com:12345"), true));
+    }
 
     #[test]
     fn arguments_are_found_wherever_they_are() {
