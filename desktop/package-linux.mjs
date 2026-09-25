@@ -59,7 +59,7 @@ const deb = path.join(bundle, 'deb');
 mkdirSync(deb, {recursive: true});
 mkdirSync(path.join(stage, 'DEBIAN'));
 writeFileSync(path.join(stage, 'DEBIAN/control'), `Package: quotum\nVersion: ${version}\nArchitecture: amd64\nMaintainer: Sergey Padurets\nSection: devel\nPriority: optional\nHomepage: https://github.com/padurets/Quotum\nDepends: libc6 (>= 2.35), libnss3, libnspr4, libatk1.0-0, libatk-bridge2.0-0, libcups2, libdrm2, libdbus-1-3, libx11-6, libxcb1, libxcomposite1, libxdamage1, libxext6, libxfixes3, libxrandr2, libgbm1, libxkbcommon0, libasound2, libgtk-3-0\nDescription: Coding-agent subscription limits on this machine\n Quotum measures through the clients and shows their limits on its board.\n`);
-run('dpkg-deb', ['--root-owner-group', '--threads-max=2', '-Zzstd', '-z6', '--build', stage, path.join(deb, `Quotum_${version}_amd64.deb`)]);
+run('dpkg-deb', ['--root-owner-group', '-Zzstd', '-z6', '--build', stage, path.join(deb, `Quotum_${version}_amd64.deb`)]);
 rmSync(path.join(stage, 'DEBIAN'), {recursive: true});
 const rpm = path.join(bundle, 'rpm');
 mkdirSync(rpm, {recursive: true});
