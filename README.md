@@ -153,7 +153,8 @@ day, not a script thrown together over a weekend. In practice that meant:
 - **Few moving parts.** The agent has nine direct dependencies. The hub is Fastify and
   the SQLite built into Node, and the UI is plain React with about 100 KB of gzipped
   JavaScript. There is no telemetry; the only requests the hub makes on its own are to
-  the two reset trackers, every ten minutes, and `QUOTUM_RESETS=off` turns them off.
+  the two reset trackers (or the mirror you name), every ten minutes, and
+  `QUOTUM_RESETS=off` turns them off.
 - **Written down and tested.** The protocol between the agent and the hub is a spec
   ([spec/ingest-v1.md](spec/ingest-v1.md)). About 180 tests cover the spending rules,
   resets, duty, scheduling, permissions, sharing, device pairing, the clients' answers and the
@@ -364,6 +365,7 @@ agent running in the background keeps its version until it is started again.
 | `QUOTUM_SETUP_CODE` | random, printed at start | The code the first account needs while the hub has none |
 | `QUOTUM_SIGNUP` | `invite` | `open` lets anyone sign up; otherwise only the first person and people with an invite |
 | `QUOTUM_RESETS` | on | `off` stops polling the community reset trackers |
+| `QUOTUM_RESETS_CODEX_URL`, `QUOTUM_RESETS_CLAUDE_URL` | the trackers' own APIs | Where to read Codex Resets and Claude Resets instead, such as a mirror where the tracker's bot check stops your server |
 | `QUOTUM_FRAME_ANCESTORS` | — | Extra origins allowed to embed the dashboard |
 
 **Opening the hub to other machines.** Put it behind HTTPS (sessions are cookies and

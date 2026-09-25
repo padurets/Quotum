@@ -1,7 +1,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {createServer} from 'node:http';
+import type {AddressInfo} from 'node:net';
 import {fromClaudeResets, fromCodexResets} from '../domain/resets.js';
-import {describeFailure} from '../resets.js';
+import {describeFailure, ResetFeed} from '../resets.js';
+import {config, trackerUrl} from '../config.js';
 
 const now = Date.parse('2026-09-22T15:00:00Z');
 const status = (data: object) => ({
@@ -57,4 +60,53 @@ test('tracker failures are described in terms the owner can act on', () => {
   assert.equal(describeFailure(new Error('challenge')), 'challenge');
   assert.equal(describeFailure(new Error('HTTP 503')), 'HTTP 503');
   assert.equal(describeFailure(new Error('invalid_reset_status')), 'format');
+});
+
+test('the trackers are read where the owner says, their own APIs by default', () => {
+  assert.equal(config.resets.codexApi, 'https://codex-resets.com/api/v1/status');
+  assert.equal(config.resets.claudeApi, 'https://claude-resets.com/api/resets');
+  assert.equal(trackerUrl('QUOTUM_RESETS_CODEX_URL', undefined, 'https://codex-resets.com/api/v1/status'), 'https://codex-resets.com/api/v1/status');
+  assert.equal(trackerUrl('QUOTUM_RESETS_CODEX_URL', 'http://mirror.lan:8090/codex/status?v=1', 'x'), 'http://mirror.lan:8090/codex/status?v=1');
+  assert.throws(() => trackerUrl('QUOTUM_RESETS_CODEX_URL', 'mirror.lan/codex', 'x'), /QUOTUM_RESETS_CODEX_URL/);
+  assert.throws(() => trackerUrl('QUOTUM_RESETS_CLAUDE_URL', 'ftp://mirror.lan/claude', 'x'), /QUOTUM_RESETS_CLAUDE_URL/);
+});
+
+test('a round reads the addresses it is given and reports how each tracker did', async () => {
+  const asked: string[] = [];
+  const server = createServer((request, response) => {
+    asked.push(request.url!);
+    if (request.url === '/codex') {
+      response.writeHead(200, {'content-type': 'application/json'});
+      response.end(JSON.stringify(status({latest_reset: {announced_at: '2026-09-22T10:00:00Z', text: 'Reset for all.', source: {url: 'https://x.com/i/status/9'}}})));
+    } else {
+      response.writeHead(503).end();
+    }
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const remembered: string[] = [];
+  const logged: object[] = [];
+  const feed = new ResetFeed((provider, reset) => remembered.push(`${provider} ${reset.at}`), event => logged.push(event), {
+    enabled: true,
+    codexApi: `${base}/codex`,
+    claudeApi: `${base}/claude`,
+    timeoutMs: 2_000,
+  });
+  await feed.round();
+  server.close();
+
+  const {resets, trackers} = feed.snapshot();
+  assert.deepEqual(asked.sort(), ['/claude', '/codex']);
+  assert.equal(resets.codex?.latest?.text, 'Reset for all.');
+  assert.equal(resets.claude, undefined);
+  assert.deepEqual(remembered, [`codex ${Date.parse('2026-09-22T10:00:00Z')}`]);
+  assert.deepEqual(
+    trackers.map(t => [t.name, t.url, t.ok, t.detail]),
+    [
+      ['Codex Resets', 'https://codex-resets.com/', true, 'ok'],
+      ['Claude Resets', 'https://claude-resets.com/', false, 'HTTP 503'],
+    ],
+    'credited as always, wherever they are read',
+  );
+  assert.deepEqual((logged[0] as {failures: object[]}).failures, [{url: `${base}/claude`, detail: 'HTTP 503'}], 'the log names the address that failed');
 });
