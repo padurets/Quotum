@@ -51,12 +51,13 @@ case $mode in
     node_gone || fail "quotum-node outlived the app"
     ;;
   crash)
-    status=0
     # The controller aborts deliberately. Its browser may still be flushing its
     # profile after Node exits: reap all descendants before removing that profile.
-    python3 "$(dirname "$0")/monitor.py" -- \
-      timeout -k 10 180 xvfb-run -a "$@" --smoke=crash > "$work/output.log" 2>&1 || status=$?
-    [ "$status" -eq 134 ] || fail "expected controller SIGABRT, got exit $status"
+    # The AppImage runtime returns 127 for the aborted child; native packages return
+    # 134. Require the app's marker too, so a loader failure cannot pass as a crash.
+    python3 "$(dirname "$0")/monitor.py" --expect-exit 127 --expect-exit 134 -- \
+      timeout -k 10 180 xvfb-run -a "$@" --smoke=crash > "$work/output.log" 2>&1 || fail "crash or child cleanup failed"
+    grep -Fx 'smoke: crashing on purpose' "$work/output.log" >/dev/null || fail "the app did not reach its deliberate crash"
     cat "$work/output.log"
     for _ in $(seq 1 20); do
       node_gone && break

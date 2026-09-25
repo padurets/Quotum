@@ -33,7 +33,7 @@ def children():
     return found
 
 
-def monitor(command, grace):
+def monitor(command, grace, expected_exits=None):
     libc = ctypes.CDLL(None, use_errno=True)
     if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER, for this process only.
         raise OSError(ctypes.get_errno(), 'cannot become a child subreaper')
@@ -53,8 +53,9 @@ def monitor(command, grace):
                 process.returncode = code
                 ended = time.monotonic()
             if os.WIFSIGNALED(status) and os.WTERMSIG(status) in FAULTS:
-                print(f'smoke: process {pid} died from {signal.Signals(os.WTERMSIG(status)).name}', file=sys.stderr)
-                failure = True
+                if pid != process.pid or expected_exits is None or 128 - code not in expected_exits:
+                    print(f'smoke: process {pid} died from {signal.Signals(os.WTERMSIG(status)).name}', file=sys.stderr)
+                    failure = True
             continue
         if ended is not None and time.monotonic() - ended > grace:
             if not timed_out:
@@ -73,15 +74,22 @@ def monitor(command, grace):
         time.sleep(0.01)
     if failure or process.returncode is None:
         return 1
-    return process.returncode if process.returncode >= 0 else 128 - process.returncode
+    code = process.returncode if process.returncode >= 0 else 128 - process.returncode
+    if expected_exits is not None:
+        if code not in expected_exits:
+            print(f'smoke: expected wrapper exit {expected_exits}, got {code}', file=sys.stderr)
+            return 1
+        return 0
+    return code
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--grace', type=float, default=10)
+    parser.add_argument('--expect-exit', type=int, action='append')
     parser.add_argument('command', nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command[:1] == ['--'] else args.command
     if not command or args.grace <= 0:
         parser.error('a command and a positive grace period are required')
-    sys.exit(monitor(command, args.grace))
+    sys.exit(monitor(command, args.grace, args.expect_exit))
