@@ -386,11 +386,13 @@ mod tests {
     #[test]
     fn the_app_is_never_stopped_nor_killed() {
         let paths = state("app");
-        let _app = paths.lock_run(Holder::App).unwrap();
+        let app = paths.lock_run(Holder::App).unwrap();
         let killed = Cell::new(None);
         let refused = paths.stop_running_with(How::Exit, &QUICK, &|pid| killed.set(Some(pid)));
         assert!(refused.unwrap_err().contains("the Quotum app"));
         assert!(!paths.stop_file().exists() && killed.get().is_none());
+        // Windows removes no directory with a file open in it.
+        drop(app);
         fs::remove_dir_all(&paths.state).unwrap();
     }
 
