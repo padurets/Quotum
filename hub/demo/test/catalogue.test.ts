@@ -1,0 +1,343 @@
+import {test, type TestContext} from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtempSync, readFileSync, rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import type {AddressInfo} from 'node:net';
+import {buildApp} from '../../server/api.js';
+import {Duty} from '../../server/duty.js';
+import {Ingest} from '../../server/ingest.js';
+import {Pairing} from '../../server/pairing.js';
+import {ResetFeed} from '../../server/resets.js';
+import {Setup} from '../../server/setup.js';
+import {Directory} from '../../server/store/directory.js';
+import {Store} from '../../server/store/store.js';
+import {setLocale} from '../../ui/i18n/index.js';
+import {agentRows, DRAWN} from '../../ui/lib/agents.js';
+import {forecastRow} from '../../ui/lib/forecast.js';
+import {linesOf} from '../../ui/lib/lines.js';
+import {planNote, started} from '../../ui/lib/plan.js';
+import {freshness, level, PULSE_FOR, resetLine, titled, windowName} from '../../ui/lib/quota.js';
+import {resetLabel} from '../../ui/lib/resets.js';
+import {windowKey, type History, type Overview} from '../../ui/lib/types.js';
+import {planOf} from '../../ui/lib/view.js';
+import {SCENES, SETS} from '../catalogue.js';
+import {
+  awake,
+  cards,
+  HOLDS,
+  homeOf,
+  machines,
+  MIN,
+  personOf,
+  problems,
+  SECOND,
+  sessionsAt,
+  snapshot,
+  type Card,
+  type CardCheck,
+  type DemoSet,
+  type Entry,
+  type Machine,
+  type Span,
+} from '../model.js';
+import {Live, setUp, type Stand} from '../setup.js';
+import {Trackers} from '../trackers.js';
+
+setLocale('en');
+const SETUP = 'BCDF-GHJK';
+const TICK = 15 * SECOND;
+const setOf = (id: string) => SETS.find(set => set.id === id)!;
+
+/** A hub in this process on a free port, its trackers read from the stand-in's `scene`. */
+async function hubFor(trackers: Trackers, scene: string, start: number) {
+  const dir = mkdtempSync(path.join(tmpdir(), 'quotum-demo-test-'));
+  const store = new Store(path.join(dir, 'db.sqlite'), start);
+  const directory = new Directory(store.db);
+  const urls = trackers.urls(scene);
+  const resets = new ResetFeed((provider, reset) => store.announce(provider, reset), () => {}, {enabled: true, codexApi: urls.codex, claudeApi: urls.claude, timeoutMs: 300});
+  const app = await buildApp({store, directory, resets, ingest: new Ingest(store, directory, new Duty()), pairing: new Pairing(directory), setup: new Setup(true, SETUP), local: null});
+  await app.listen({host: '127.0.0.1', port: 0});
+  return {
+    base: `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`,
+    async close() {
+      await app.close();
+      store.close();
+      rmSync(dir, {recursive: true, force: true});
+    },
+  };
+}
+
+/** How often the test measures: a minute at first and on the sleeping machine, then up to five (eco: its quarter of an hour). */
+const cadence = (card: Card, machine: Machine, t: number) => (card.eco ? 15 * MIN : machine.sleeps || t < 30 * MIN ? MIN : 5 * MIN);
+
+const within = (span: Span, t: number) => t >= (span.from ?? 0) && t <= (span.to ?? HOLDS);
+
+/** Where the test looks: every hour, and where every code's span begins, is halfway and ends. */
+function points(set: DemoSet): number[] {
+  const found = Array.from({length: HOLDS / 3_600_000 + 1}, (_, hour) => hour * 3_600_000);
+  for (const entry of [...set.entries, ...SCENES]) {
+    for (const check of entry.expect as Span[]) {
+      const [from, to] = [check.from ?? 0, check.to ?? HOLDS];
+      found.push(from, (from + to) / 2, to);
+    }
+  }
+  return [...new Set(found)].sort((a, b) => a - b);
+}
+
+/** What the hub shows at one moment, read once per board as the page would. */
+class Reading {
+  private readonly overviews = new Map<string, Promise<Overview>>();
+  private readonly histories = new Map<string, Promise<History>>();
+  private readonly devices = new Map<string, Promise<{reported: string; name: string; os: string; via: string; failures: {provider: string; error: string}[]}[]>>();
+
+  constructor(
+    private readonly stand: Stand,
+    readonly now: number,
+    readonly scenes: Map<string, ReturnType<ResetFeed['snapshot']>>,
+  ) {}
+
+  private reader(board: string) {
+    const entry = this.stand.set.entries.find(e => e.kind === 'board' && e.id === board);
+    return this.stand.people.get(entry?.kind === 'board' ? entry.owner : board)!;
+  }
+
+  overview(board: string): Promise<Overview> {
+    if (!this.overviews.has(board)) {
+      const id = this.stand.boards.get(board)!;
+      this.overviews.set(
+        board,
+        this.reader(board)
+          .get<Overview>(`/api/overview?board=${encodeURIComponent(id)}`)
+          .then(data => ({...data, sources: titled(data.sources, data.view.names)})),
+      );
+    }
+    return this.overviews.get(board)!;
+  }
+
+  history(board: string): Promise<History> {
+    if (!this.histories.has(board)) {
+      const id = this.stand.boards.get(board)!;
+      this.histories.set(board, this.reader(board).get<History>(`/api/history?range=24h&board=${encodeURIComponent(id)}`));
+    }
+    return this.histories.get(board)!;
+  }
+
+  machines(person: string) {
+    if (!this.devices.has(person)) this.devices.set(person, this.stand.people.get(person)!.get('/api/devices'));
+    return this.devices.get(person)!;
+  }
+}
+
+/**
+ * What the hub shows now for a code, computed with the dashboard's own rules: a value for
+ * each thing a code of that kind can claim (a string when there is nothing to look at).
+ */
+async function shown(stand: Stand, entry: Entry, check: object, reading: Reading): Promise<Record<string, unknown> | string> {
+  const {set} = stand;
+  const now = reading.now;
+  if (entry.kind === 'scene') {
+    const snapshot = reading.scenes.get(entry.id)!;
+    if ('tracker' in check) return {tracker: check.tracker, health: snapshot.trackers.find(t => t.name === check.tracker)?.detail};
+    const {reset} = check as {reset: 'claude' | 'codex'};
+    const label = resetLabel(snapshot.resets[reset], now);
+    return {reset, label: label?.key ?? null, chance: label?.key === 'possible' ? label.chance : undefined, scope: label?.key === 'done' ? label.scope : undefined};
+  }
+  if (entry.kind === 'machine') {
+    const device = (await reading.machines(personOf(set, entry))).find(d => d.reported === entry.id);
+    if (!device) return 'no such machine';
+    const failure = 'failure' in check ? (check.failure as {provider: string; error: string}) : null;
+    const failed = failure && device.failures.some(f => f.provider === failure.provider && f.error === failure.error);
+    return {os: device.os, name: device.name, via: device.via, failure: failed ? failure : device.failures};
+  }
+  if (entry.kind === 'person' || entry.kind === 'board') {
+    const overview = await reading.overview(entry.id);
+    const {rows, empty} = agentRows(overview.sources, overview.view);
+    const series = 'weeklySeries' in check ? linesOf(await reading.history(entry.id), overview, overview.view, 'weekly').length : 0;
+    return {
+      state: overview.sources.length ? 'widgets' : 'onboarding',
+      rows: empty ?? rows.length,
+      // At least as many as claimed.
+      weeklySeries: 'weeklySeries' in check ? Math.min(check.weeklySeries as number, series) : undefined,
+    };
+  }
+
+  const card = check as CardCheck;
+  const board = card.board ?? homeOf(set, entry);
+  const overview = await reading.overview(board);
+  const source = overview.sources.find(s => s.id === stand.sources.get(entry.id));
+  if (!source) return `not on the board ${board}`;
+  const age = now - (source.successAt ?? -Infinity);
+  const values: Record<string, unknown> = {
+    error: source.error,
+    stale: source.stale,
+    title: source.title,
+    fresh: age <= PULSE_FOR ? 'pulse' : freshness(age) === 0 ? 'grey' : `fading, ${Math.round(age / 1000)} s old`,
+    agents: source.sessions.length,
+    drawn: source.sessions.length <= DRAWN,
+  };
+  const id = 'window' in card ? card.window : 'forecast' in card ? card.forecast : null;
+  const live = id === null ? undefined : source.windows.find(w => w.id === id);
+  if (id !== null && !live) return `no window ${id}`;
+  const weekly = planOf(overview.view, source.id);
+  if ('window' in card && live) {
+    const note = planNote(live, source.successAt, now, weekly);
+    Object.assign(values, {
+      window: id,
+      level: level(live.remaining),
+      note: note?.key ?? null,
+      hint: note ? (note.weekly ? 'weekly' : 'reset') : undefined,
+      name: windowName(live),
+      reset: resetLine(live, now).key,
+      hidden: overview.view.windows.includes(windowKey(source.id, live.id)),
+      started: started(live, source.successAt),
+    });
+  }
+  if ('forecast' in card && live) {
+    const line = linesOf(await reading.history(board), overview, overview.view, live.kind).find(l => l.sourceId === source.id && l.windowId === id);
+    if (!line) return `no line of ${id} in the table`;
+    const row = forecastRow(line, live, source.successAt, now, weekly);
+    Object.assign(values, {
+      forecast: id,
+      outlook: row.outlook.key,
+      tone: row.outlook.key === 'runsOut' ? row.outlook.tone : undefined,
+      spent: row.spent.key,
+      plan: !row.plan ? 'none' : !row.plan.notable ? 'even' : row.plan.delta >= 0 ? 'behind' : 'ahead',
+    });
+  }
+  if ('event' in card) {
+    const events = (await reading.history(board)).events.filter(e => e.sourceId === source.id).map(e => e.kind);
+    values.event = events.includes(card.event) ? card.event : events;
+  }
+  return values;
+}
+
+const clock = (t: number) => `start + ${Math.floor(t / 3_600_000)}h ${Math.floor((t % 3_600_000) / MIN)}m ${(t % MIN) / 1000}s`;
+
+/** Checks every code of `entries` whose span holds `t` (or all of them); returns what was wrong, and marks what was checked. */
+async function checkAll(stand: Stand, entries: Entry[], reading: Reading, t: number | null, checked: Set<string>): Promise<string[]> {
+  const wrong: string[] = [];
+  for (const entry of entries) {
+    for (const [i, check] of (entry.expect as Span[]).entries()) {
+      if (t !== null && !within(check, t)) continue;
+      checked.add(`${entry.kind} ${entry.id} #${i}`);
+      const values = await shown(stand, entry, check, reading);
+      const claimed = Object.entries(check).filter(([key]) => key !== 'from' && key !== 'to' && key !== 'board');
+      const seen = typeof values === 'string' ? values : Object.fromEntries(claimed.map(([key]) => [key, values[key]]));
+      try {
+        assert.deepEqual(seen, Object.fromEntries(claimed));
+      } catch {
+        wrong.push(`${entry.kind} ${entry.id} at ${t === null ? 'start' : clock(t)}: claims ${JSON.stringify(check)}, shows ${JSON.stringify(seen)}`);
+      }
+    }
+  }
+  return wrong;
+}
+
+/** Runs the reset trackers of every scene once, now, as the hub does every ten minutes. */
+async function sceneRounds(feeds: Map<string, ResetFeed>) {
+  await Promise.all([...feeds.values()].map(feed => feed.round()));
+  return new Map([...feeds].map(([id, feed]) => [id, feed.snapshot()]));
+}
+
+function sceneFeeds(trackers: Trackers) {
+  return new Map(
+    SCENES.map(scene => {
+      const urls = trackers.urls(scene.id);
+      return [scene.id, new ResetFeed(undefined, () => {}, {enabled: true, codexApi: urls.codex, claudeApi: urls.claude, timeoutMs: 300})];
+    }),
+  );
+}
+
+async function bringUp(t: TestContext, set: DemoSet, start: number) {
+  t.mock.timers.enable({apis: ['Date'], now: start - MIN});
+  const trackers = await Trackers.start(SCENES, start);
+  const hub = await hubFor(trackers, set.scene, start - MIN);
+  t.after(async () => {
+    await hub.close();
+    await trackers.close();
+  });
+  const stand = await setUp(hub.base, set, start, SETUP, () => Date.now());
+  return {stand, trackers, hub};
+}
+
+test('the catalogue is consistent', () => {
+  for (const set of SETS) assert.deepEqual(problems(set), [], set.id);
+  const scenes = SCENES.map(s => s.id);
+  assert.equal(new Set(scenes).size, scenes.length, 'scenes are named once');
+  for (const set of SETS) assert.ok(scenes.includes(set.scene), `${set.id} starts with a scene that exists`);
+  for (const scene of SCENES) assert.ok(scene.expect.length, `scene ${scene.id} expects something`);
+});
+
+test('the demo is the same whenever it starts: no clock, no chance in the model or the catalogue', () => {
+  for (const file of ['model.ts', 'catalogue.ts', 'setup.ts']) {
+    const source = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
+    assert.doesNotMatch(source, /Math\.random|Date\.now|new Date\(\)/, file);
+  }
+  const start = Date.parse('2026-09-21T09:17:00Z');
+  const everything = (set: DemoSet) =>
+    JSON.stringify({
+      cards: cards(set).map(card => [0, -3_600_000, 3_600_000].map(t => snapshot(card, start, t, MIN))),
+      agents: machines(set).map(machine => sessionsAt(set, machine, start, 60_000)),
+    });
+  for (const set of SETS) assert.equal(everything(set), everything(set));
+});
+
+test('every entry of the whole catalogue shows what it claims for twelve hours', {timeout: 180_000}, async t => {
+  const set = setOf('all');
+  const start = Math.floor(Date.now() / MIN) * MIN;
+  const {stand, trackers} = await bringUp(t, set, start);
+  const live = new Live(stand, cadence);
+  const feeds = sceneFeeds(trackers);
+  const entries = [...set.entries, ...SCENES];
+  const checked = new Set<string>();
+  const wrong: string[] = [];
+
+  let previous = -Infinity;
+  for (const at of points(set)) {
+    // The lists of running agents the live loop would have sent last: 15 seconds ago from
+    // a machine awake then, else the last one before it fell asleep.
+    const reports: {machine: Machine; tick: number}[] = [];
+    for (const machine of machines(set)) {
+      // Ticks up to `previous - TICK` went out at the point before.
+      for (let tick = Math.floor((at - TICK) / TICK) * TICK; tick > Math.max(previous, -TICK) - TICK; tick -= TICK) {
+        if (awake(machine, tick)) {
+          reports.push({machine, tick});
+          break;
+        }
+      }
+    }
+    for (const {machine, tick} of reports.sort((a, b) => a.tick - b.tick)) {
+      t.mock.timers.setTime(start + tick);
+      await live.report(machine, tick, start + tick);
+    }
+    t.mock.timers.setTime(start + at);
+    await live.measure(at, start + at);
+    const reading = new Reading(stand, start + at, await sceneRounds(feeds));
+    wrong.push(...(await checkAll(stand, entries, reading, at, checked)));
+    previous = at;
+  }
+
+  assert.deepEqual(wrong, [], `start ${new Date(start).toISOString()}`);
+  const codes = entries.flatMap(entry => entry.expect.map((_, i) => `${entry.kind} ${entry.id} #${i}`));
+  assert.deepEqual(
+    codes.filter(code => !checked.has(code)),
+    [],
+    'every code is checked somewhere',
+  );
+});
+
+test('the showcase comes up clean', {timeout: 60_000}, async t => {
+  const set = setOf('showcase');
+  const start = Math.floor(Date.now() / MIN) * MIN;
+  const {stand, trackers} = await bringUp(t, set, start);
+  const live = new Live(stand, cadence);
+  t.mock.timers.setTime(start - TICK);
+  for (const machine of machines(set)) await live.report(machine, -TICK, start - TICK);
+  t.mock.timers.setTime(start);
+  await live.measure(0, start);
+  const scenes = await sceneRounds(new Map([[set.scene, sceneFeeds(trackers).get(set.scene)!]]));
+  const reading = new Reading(stand, start, scenes);
+  const scene = SCENES.find(s => s.id === set.scene)!;
+  assert.deepEqual(await checkAll(stand, [...set.entries, scene], reading, null, new Set()), []);
+});
