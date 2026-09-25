@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useState} from 'react';
+import {useCallback, useEffect, useRef, useState} from 'react';
 import type {Key} from '../i18n';
 import {unlessSame} from './http';
 
@@ -65,15 +65,27 @@ export const app = {
  */
 export function useAppState() {
   const [state, setState] = useState<AppState | null>(null);
+  const revision = useRef(0);
+  const set = useCallback((next: AppState) => {
+    // An older poll must not undo a command the app has already acknowledged.
+    revision.current++;
+    setState(unlessSame<AppState | null>(next));
+  }, []);
   const refresh = useCallback(() => {
-    if (inApp()) app.state().then(state => setState(unlessSame<AppState | null>(state)), () => {});
+    const reading = ++revision.current;
+    if (inApp()) app.state().then(next => {
+      if (reading === revision.current) setState(unlessSame<AppState | null>(next));
+    }, () => {});
   }, []);
   useEffect(() => {
     refresh();
     const timer = setInterval(refresh, 10_000);
-    return () => clearInterval(timer);
+    return () => {
+      revision.current++;
+      clearInterval(timer);
+    };
   }, [refresh]);
-  return {state, refresh, set: setState};
+  return {state, refresh, set};
 }
 
 /** Minutes between two measurements a provider can be set to; a value set by hand in the file shows as it is. */

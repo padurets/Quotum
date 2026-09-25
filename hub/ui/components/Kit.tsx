@@ -1,4 +1,4 @@
-import {useEffect, useId, useRef, useState, type InputHTMLAttributes, type ReactNode} from 'react';
+import {useLayoutEffect, useId, useRef, useState, type InputHTMLAttributes, type ReactNode} from 'react';
 import {createPortal} from 'react-dom';
 import {LOCALES, setLocale, t, useLocale, type Locale} from '../i18n';
 import {messageOf} from '../lib/http';
@@ -6,9 +6,11 @@ import {messageOf} from '../lib/http';
 export const SERVICE = 'Quotum';
 
 /** The dialogs open now, the last on top: only it answers Escape, and the page stays out of reach until none is left. */
-const dialogs: HTMLDivElement[] = [];
+const dialogs: {panel: HTMLDivElement; overlay: HTMLElement}[] = [];
 /** How the page scrolled before the first of them opened. */
 let pageOverflow = '';
+let pageInert = false;
+let pageFocus: HTMLElement | null = null;
 
 /**
  * A dialog over the page, centred or as a panel on its side; closes on Escape and on a
@@ -23,32 +25,63 @@ export function Modal({title, onClose, children, wide, side}: {title: string; on
   close.current = onClose;
   // Taken while rendering: a field of the dialog with autoFocus would be it by the effect.
   const [previous] = useState(() => document.activeElement as HTMLElement | null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const own = panel.current!;
-    // The page under the dialogs stays still: only a dialog scrolls.
+    const overlay = own.parentElement!;
     const page = document.documentElement;
-    if (!dialogs.length) pageOverflow = page.style.overflow;
-    page.style.overflow = 'hidden';
-    dialogs.push(own);
-    const escape = (event: KeyboardEvent) => event.key === 'Escape' && dialogs.at(-1) === own && close.current?.();
-    document.addEventListener('keydown', escape);
-    // Tab stays in the dialog: the page under it is out of reach.
     const root = document.getElementById('root');
+    if (!dialogs.length) {
+      pageOverflow = page.style.overflow;
+      pageInert = root?.inert ?? false;
+      pageFocus = previous;
+    }
+    page.style.overflow = 'hidden';
     if (root) root.inert = true;
-    // Into the dialog, unless a field of it already took the focus (autoFocus).
-    if (!own.contains(document.activeElement)) own.focus();
+    // Portals are siblings of #root: the lower dialogs need their own inert boundary.
+    for (const dialog of dialogs) dialog.overlay.inert = true;
+    const entry = {panel: own, overlay};
+    dialogs.push(entry);
+    const top = () => dialogs.at(-1) === entry;
+    const keydown = (event: KeyboardEvent) => {
+      if (!top()) return;
+      if (event.key === 'Escape') return close.current?.();
+      if (event.key !== 'Tab') return;
+      const fields = [...own.querySelectorAll<HTMLElement>('button, input, select, textarea, a[href], [tabindex], [contenteditable="true"]')]
+        .filter(field => field.tabIndex >= 0 && !field.matches(':disabled') && !field.closest('[inert]') && field.getClientRects().length);
+      const first = fields[0];
+      const last = fields.at(-1);
+      const focused = document.activeElement;
+      if (!first || focused === own || !own.contains(focused) || (event.shiftKey ? focused === first : focused === last)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first)?.focus();
+        if (!first) own.focus();
+      }
+    };
+    const focus = () => {
+      if (top() && !own.contains(document.activeElement)) own.focus();
+    };
+    document.addEventListener('keydown', keydown);
+    document.addEventListener('focusin', focus);
+    focus();
     return () => {
-      document.removeEventListener('keydown', escape);
-      dialogs.splice(dialogs.indexOf(own), 1);
-      // Another dialog still open keeps the page out of reach and gets the focus back.
+      document.removeEventListener('keydown', keydown);
+      document.removeEventListener('focusin', focus);
+      const wasTop = top();
+      dialogs.splice(dialogs.indexOf(entry), 1);
+      overlay.inert = false;
       const below = dialogs.at(-1);
       if (below) {
-        below.focus();
+        below.overlay.inert = false;
+        if (wasTop) {
+          if (previous?.isConnected && below.panel.contains(previous)) previous.focus();
+          if (!below.panel.contains(document.activeElement)) below.panel.focus();
+        }
         return;
       }
       page.style.overflow = pageOverflow;
-      if (root) root.inert = false;
-      if (previous?.isConnected) previous.focus();
+      if (root) root.inert = pageInert;
+      if (pageFocus?.isConnected) pageFocus.focus();
+      pageFocus = null;
     };
   }, []);
   return createPortal(

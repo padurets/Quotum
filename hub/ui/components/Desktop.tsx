@@ -1,4 +1,4 @@
-import {useState} from 'react';
+import {useRef, useState} from 'react';
 import {useNow} from '../lib/api';
 import {ago} from '../lib/format';
 import {PROVIDERS} from '../lib/providers';
@@ -171,18 +171,39 @@ function Status({provider, now, configPath}: {provider: ProviderSettings; now: n
 }
 
 /** Antigravity names no account: a name tells two subscriptions apart. Saved on leaving the field or Enter. */
-function AccountName({provider, onSave}: {provider: ProviderSettings; onSave: (account: string) => void}) {
-  const [name, setName] = useState(provider.account ?? '');
-  const save = () => name.trim() !== (provider.account ?? '') && onSave(name.trim());
+function AccountName({provider, onSave}: {provider: ProviderSettings; onSave: (account: string) => Promise<boolean>}) {
+  // Only typed text is a draft. An untouched field follows changes made in config.toml.
+  const [draft, setDraft] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const pending = useRef(false);
+  const name = draft ?? provider.account ?? '';
+  const save = async () => {
+    if (pending.current || draft === null) return;
+    if (draft.trim() === (provider.account ?? '')) {
+      setDraft(null);
+      return;
+    }
+    pending.current = true;
+    setBusy(true);
+    try {
+      await onSave(draft.trim());
+      // Success shows the accepted value; failure restores the authoritative one.
+      setDraft(null);
+    } finally {
+      pending.current = false;
+      setBusy(false);
+    }
+  };
   return (
     <label className="field measure-account">
       <span>{t('measure.account')}</span>
       <input
         value={name}
         maxLength={120}
-        onChange={event => setName(event.target.value)}
-        onBlur={save}
-        onKeyDown={event => event.key === 'Enter' && save()}
+        disabled={busy}
+        onChange={event => setDraft(event.target.value)}
+        onBlur={() => void save()}
+        onKeyDown={event => event.key === 'Enter' && void save()}
       />
       <small>{t('measure.accountHint')}</small>
     </label>
@@ -201,9 +222,11 @@ export function Measuring({state, onState}: {state: AppState; onState: (state: A
     setSaving(null);
     try {
       onState(await app.saveSettings(patch));
+      return true;
     } catch (error) {
       // The field shows what the app has: the value falls back by itself.
       setSaving({field, error: (error as Error).message});
+      return false;
     }
   };
   const idle = state.agent.state === 'idle';
@@ -236,7 +259,7 @@ export function Measuring({state, onState}: {state: AppState; onState: (state: A
             </div>
             <Status provider={provider} now={now} configPath={state.configPath} />
             {provider.id === 'antigravity' && provider.enabled && (
-              <AccountName provider={provider} onSave={account => void save({providers: {antigravity: {account}}}, `${provider.id}.account`)} />
+              <AccountName provider={provider} onSave={account => save({providers: {antigravity: {account}}}, `${provider.id}.account`)} />
             )}
             <SaveError saving={saving} field={provider.id} />
             <SaveError saving={saving} field={`${provider.id}.account`} />

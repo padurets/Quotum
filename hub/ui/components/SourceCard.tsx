@@ -4,7 +4,7 @@ import type {SourceState, Win} from '../lib/types';
 import {windowKey} from '../lib/types';
 import {ago, day, duration, fullStamp, num} from '../lib/format';
 import {errorText, freshness, level, problemOf, PULSE_FOR, sourceLabel, windowName} from '../lib/quota';
-import {t} from '../i18n';
+import {t, useLocale} from '../i18n';
 import {Agents} from './Agents';
 import {DEFAULT_PLAN, isValidPlan, PLAN_NOTE_FROM, planAt, planTotal, type WeeklyPlan} from '../lib/plan';
 import {LOGOS} from './logos';
@@ -308,6 +308,7 @@ export const SourceCard = memo(function SourceCard({
   board: Board | null;
   onChanged: () => void;
 }) {
+  useLocale();
   const now = useNow();
   const problem = problemOf(source);
   const hidden = new Set(arrange.view.windows);
