@@ -74,8 +74,8 @@ impl Adapter for Antigravity {
             OsStr::new("--log-file"),
             log.as_os_str(),
         ];
-        let mut client =
-            Client::spawn(&program, &args, &[], ctx.work_dir, ctx.timeout).map_err(|e| process_failure(P, e))?;
+        let mut client = Client::spawn(&program, &args, &[], ctx.work_dir, ctx.timeout, ctx.stop)
+            .map_err(|e| process_failure(P, e))?;
         let output = client.output().map_err(|e| process_failure(P, e))?;
         drop(client);
         if let Some(v) = version.as_deref().filter(|_| took_as_prompt(&output)) {
@@ -268,6 +268,7 @@ mod tests {
             state_dir: &dir,
             program: Some(program.as_path()),
             timeout: std::time::Duration::from_secs(10),
+            stop: &crate::stop::Stop::new(),
         };
         let calls = || fs::read_to_string(dir.join("calls")).unwrap_or_default().lines().collect::<Vec<_>>().join(" ");
 

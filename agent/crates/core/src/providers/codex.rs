@@ -44,7 +44,7 @@ impl Adapter for Codex {
 
     fn measure(&mut self, ctx: &Context) -> Outcome {
         let program = locate(self, ctx)?;
-        let mut client = Client::spawn(&program, &["app-server"], &[], ctx.work_dir, ctx.timeout)
+        let mut client = Client::spawn(&program, &["app-server"], &[], ctx.work_dir, ctx.timeout, ctx.stop)
             .map_err(|e| process_failure(P, e))?;
         let send = |client: &mut Client, message: Value| client.send(&message).map_err(|e| process_failure(P, e));
         let reply =

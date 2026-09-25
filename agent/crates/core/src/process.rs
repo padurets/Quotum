@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use crate::config::home;
-use crate::stop;
+use crate::stop::Stop;
 
 /// How often a wait for output looks whether the agent is stopping.
 const STOP_CHECK: Duration = Duration::from_millis(250);
@@ -25,7 +25,7 @@ const STOP_CHECK: Duration = Duration::from_millis(250);
 pub enum ProcError {
     NotFound,
     Timeout,
-    /// The agent is stopping (see `stop`).
+    /// The run is stopping (see `stop`).
     Stopped,
     /// Output ended (the process exited) before the expected message.
     Closed,
@@ -120,6 +120,8 @@ fn is_executable(path: &Path) -> bool {
 /// can respect the deadline and a stop. Dropping it kills the process tree.
 pub struct Client {
     child: Child,
+    /// The stop of the run that started it.
+    stop: Stop,
     /// Holds the client and everything it starts (Windows has no process groups).
     #[cfg(windows)]
     job: Option<job::Job>,
@@ -135,6 +137,7 @@ impl Client {
         env: &[(&str, &str)],
         cwd: &Path,
         timeout: Duration,
+        stop: &Stop,
     ) -> Result<Client, ProcError> {
         let mut command = Command::new(program);
         command
@@ -172,6 +175,7 @@ impl Client {
         });
         Ok(Client {
             child,
+            stop: stop.clone(),
             #[cfg(windows)]
             job,
             stdin,
@@ -191,7 +195,7 @@ impl Client {
     /// The next line of output, or `None` when the output has ended.
     pub fn line(&mut self) -> Result<Option<String>, ProcError> {
         loop {
-            if stop::requested() {
+            if self.stop.requested() {
                 return Err(ProcError::Stopped);
             }
             let left = self.deadline.saturating_duration_since(Instant::now());
@@ -431,9 +435,15 @@ mod tests {
     fn reads_json_lines_and_enforces_the_deadline() {
         let sh = Path::new("/bin/sh");
         let dir = env::temp_dir();
-        let mut client =
-            Client::spawn(sh, &["-c", "echo noise; echo '{\"id\":2}'; sleep 5"], &[], &dir, Duration::from_millis(500))
-                .unwrap();
+        let mut client = Client::spawn(
+            sh,
+            &["-c", "echo noise; echo '{\"id\":2}'; sleep 5"],
+            &[],
+            &dir,
+            Duration::from_millis(500),
+            &Stop::new(),
+        )
+        .unwrap();
         assert_eq!(client.wait_for(|v| v["id"] == 2).unwrap()["id"], 2);
         let started = Instant::now();
         assert!(matches!(client.line(), Err(ProcError::Timeout)));
@@ -442,12 +452,44 @@ mod tests {
     }
 
     #[test]
+    fn a_stopped_run_stops_waiting_for_its_client_and_kills_it() {
+        let stop = Stop::new();
+        let mut client = Client::spawn(
+            Path::new("/bin/sh"),
+            &["-c", "sleep 30"],
+            &[],
+            &env::temp_dir(),
+            Duration::from_secs(20),
+            &stop,
+        )
+        .unwrap();
+        let pid = client.child.id() as libc::pid_t;
+        let asked = stop.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            asked.request(crate::stop::How::Exit);
+        });
+        let started = Instant::now();
+        assert!(matches!(client.line(), Err(ProcError::Stopped)));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        drop(client);
+        // SAFETY: signal 0 only checks that the process exists.
+        assert!(unsafe { libc::kill(pid, 0) } != 0, "the client is gone");
+    }
+
+    #[test]
     fn what_a_client_leaves_running_is_killed_with_it() {
         let sh = Path::new("/bin/sh");
         let dir = env::temp_dir();
-        let mut client =
-            Client::spawn(sh, &["-c", "sleep 30 & echo \"{\\\"pid\\\": $!}\""], &[], &dir, Duration::from_secs(5))
-                .unwrap();
+        let mut client = Client::spawn(
+            sh,
+            &["-c", "sleep 30 & echo \"{\\\"pid\\\": $!}\""],
+            &[],
+            &dir,
+            Duration::from_secs(5),
+            &Stop::new(),
+        )
+        .unwrap();
         let pid = client.wait_for(|v| v["pid"].is_u64()).unwrap()["pid"].as_u64().unwrap() as libc::pid_t;
         client.finish();
         // No /proc on macOS: kill(pid, 0) fails with ESRCH once the process is gone and reaped.
@@ -475,7 +517,7 @@ mod tests {
     fn a_missing_program_is_reported_as_such() {
         let missing = Path::new("/nonexistent/quotum-test");
         assert!(matches!(
-            Client::spawn::<&str>(missing, &[], &[], &env::temp_dir(), Duration::from_secs(1)),
+            Client::spawn::<&str>(missing, &[], &[], &env::temp_dir(), Duration::from_secs(1), &Stop::new()),
             Err(ProcError::NotFound)
         ));
         assert!(find_program("quotum-surely-missing", &[]).is_none());

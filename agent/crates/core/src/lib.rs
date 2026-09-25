@@ -3,6 +3,7 @@
 
 pub mod activity;
 pub mod config;
+pub mod holder;
 pub mod model;
 pub mod process;
 pub mod providers;

@@ -67,12 +67,19 @@ impl Config {
     /// An error names where the bad value came from: the file or a variable.
     pub fn load(path: &Path) -> Result<Config, String> {
         let mut config = match fs::read_to_string(path) {
-            Ok(text) => toml::from_str::<Config>(&text).map_err(|e| format!("{}: {e}", path.display()))?,
+            Ok(text) => Config::parse(&text).map_err(|e| format!("{}: {e}", path.display()))?,
             Err(e) if e.kind() == io::ErrorKind::NotFound => Config::default(),
             Err(e) => return Err(format!("{}: {e}", path.display())),
         };
-        config.check().map_err(|e| format!("{}: {e}", path.display()))?;
         config.apply_env(|key| env::var(key).ok().filter(|v| !v.is_empty()))?;
+        Ok(config)
+    }
+
+    /// The settings a file holds, checked as the agent checks them when it reads the file,
+    /// without the environment: for whatever writes the file (the desktop app).
+    pub fn parse(text: &str) -> Result<Config, String> {
+        let config = toml::from_str::<Config>(text).map_err(|e| e.to_string())?;
+        config.check()?;
         Ok(config)
     }
 
@@ -240,57 +247,9 @@ impl Paths {
         Ok(())
     }
 
-    /// Keeps a second `quotum run` off this state directory, whose spool only one can
-    /// own. The lock lasts while the returned guard lives and ends with the process; the
-    /// guard also names the process in `run.pid`, for `quotum stop`.
-    pub fn lock_run(&self) -> Result<RunLock, String> {
-        let path = self.state.join("run.lock");
-        let file = lock_file(&path).map_err(|e| match e.kind() {
-            io::ErrorKind::WouldBlock => format!(
-                "another `quotum run` uses {} already; stop it first (`quotum stop`), or give this one its own QUOTUM_STATE_DIR",
-                self.state.display()
-            ),
-            _ => format!("{}: {e}", path.display()),
-        })?;
-        let pid = self.state.join("run.pid");
-        let _ = fs::write(&pid, std::process::id().to_string());
-        // A stop asked of an earlier run that never saw it is not meant for this one.
-        let _ = fs::remove_file(self.stop_file());
-        Ok(RunLock { _file: file, pid })
-    }
-
-    /// The process of the `quotum run` on this state directory, if one runs: `Some(None)`
-    /// when it runs but did not say which process it is.
-    pub fn running(&self) -> Option<Option<u32>> {
-        match lock_file(&self.state.join("run.lock")) {
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                Some(fs::read_to_string(self.state.join("run.pid")).ok().and_then(|pid| pid.trim().parse().ok()))
-            }
-            _ => None,
-        }
-    }
-
-    /// Asks the `quotum run` on this state directory to stop: it looks for this file.
-    pub fn stop_file(&self) -> PathBuf {
-        self.state.join("run.stop")
-    }
-
     /// Where `quotum start` has the agent write its log.
     pub fn log_file(&self) -> PathBuf {
         self.state.join("agent.log")
-    }
-}
-
-/// A `quotum run` holding its state directory; its pid file goes with it.
-#[derive(Debug)]
-pub struct RunLock {
-    _file: fs::File,
-    pid: PathBuf,
-}
-
-impl Drop for RunLock {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.pid);
     }
 }
 
@@ -428,6 +387,9 @@ mod tests {
         assert!(check(&format!("[machine]\nname = \"{}\"", "m".repeat(121))).is_err());
         assert!(check("[providers.antigravity]\naccount = \"\"").is_err());
         assert!(check("owner = \"alice\"").is_ok(), "the key of older versions is ignored, not refused");
+        assert!(Config::parse("interval = 30").unwrap_err().contains("interval"), "parse checks as load does");
+        assert!(Config::parse("[providers.cursor]").is_err());
+        assert!(!Config::parse("sessions = false").unwrap().sessions());
     }
 
     #[test]
@@ -459,21 +421,6 @@ mod tests {
         let old = r#"{"url": "https://quotum.example.com", "token": "qt_d_x", "board": "", "owner": "alice"}"#;
         let credentials: Credentials = serde_json::from_str(old).unwrap();
         assert_eq!((credentials.url.as_str(), credentials.account.as_str()), ("https://quotum.example.com", ""));
-    }
-
-    #[test]
-    fn only_one_run_holds_a_state_directory() {
-        let state = env::temp_dir().join(format!("quotum-lock-{}", std::process::id()));
-        fs::create_dir_all(&state).unwrap();
-        let paths = Paths { config: state.join("config.toml"), work: state.join("work"), state: state.clone() };
-        assert_eq!(paths.running(), None);
-        let first = paths.lock_run().unwrap();
-        assert!(paths.lock_run().unwrap_err().contains("another `quotum run`"));
-        assert_eq!(paths.running(), Some(Some(std::process::id())), "it says which process holds it");
-        drop(first);
-        let again = paths.lock_run().map(drop);
-        fs::remove_dir_all(&state).unwrap();
-        assert!(again.is_ok(), "the lock ends with the run that held it");
     }
 
     #[test]

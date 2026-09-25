@@ -10,7 +10,7 @@ use crate::model::{Millis, Outcome, Provider, RunningSession, STALE_LIMIT_MS, no
 use crate::providers::{Adapter, Context, adapter, find_client, last_activity};
 use crate::schedule::Schedule;
 use crate::sink::Sink;
-use crate::stop;
+use crate::stop::Stop;
 
 /// A single measurement may take this long before the client is killed.
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -67,18 +67,20 @@ pub struct Runner {
     paths: Paths,
     home: PathBuf,
     adapters: Vec<Box<dyn Adapter>>,
+    /// Ends this run, a measurement under way included.
+    stop: Stop,
 }
 
 impl Runner {
     /// Adapters for the enabled providers, cheapest first: Codex, Claude, Antigravity.
-    pub fn new(config: Config, paths: Paths, only: &[Provider]) -> Runner {
+    pub fn new(config: Config, paths: Paths, only: &[Provider], stop: Stop) -> Runner {
         let order = [Provider::Codex, Provider::Claude, Provider::Antigravity];
         let adapters = order
             .into_iter()
             .filter(|p| config.enabled(*p) && (only.is_empty() || only.contains(p)))
             .map(adapter)
             .collect();
-        Runner { config, paths, home: home(), adapters }
+        Runner { config, paths, home: home(), adapters, stop }
     }
 
     pub fn providers(&self) -> Vec<Provider> {
@@ -94,6 +96,7 @@ impl Runner {
             state_dir: &self.paths.state,
             program: self.config.program(provider),
             timeout: CLIENT_TIMEOUT,
+            stop: &self.stop,
         };
         let mut outcome = adapter.measure(&ctx);
         if let Ok(snapshot) = &mut outcome {
@@ -126,7 +129,7 @@ impl Runner {
         }
     }
 
-    /// Measures on the schedule until a stop is requested or the hub refuses this device
+    /// Measures on the schedule until its stop is requested or the hub refuses this device
     /// for good (then its reason is returned). Before each measurement the device checks
     /// in with the hub (when there is one): if another device measures the same
     /// subscription, this one only waits.
@@ -145,7 +148,7 @@ impl Runner {
             reported: None,
         });
 
-        while !stop::requested() {
+        while !self.stop.requested() {
             if let Some(reason) = sink.refused() {
                 return Some(reason.to_string());
             }
@@ -214,8 +217,12 @@ impl Runner {
                 }
             }
 
+            // A run asked to stop starts no client, whatever it waited for until now.
+            if self.stop.requested() {
+                break;
+            }
             let mut outcome = self.measure(index);
-            if stop::requested() {
+            if self.stop.requested() {
                 break;
             }
             // Taken after the measurement, so the client's own writes do not count as use.
@@ -417,7 +424,7 @@ mod tests {
         let config: Config = toml::from_str(&format!("[providers.antigravity]\npath = {:?}", client)).unwrap();
         let state = std::env::temp_dir().join("quotum-runner-refused");
         let paths = Paths { config: state.join("config.toml"), work: state.join("work"), state };
-        let mut runner = Runner::new(config, paths, &[Provider::Antigravity]);
+        let mut runner = Runner::new(config, paths, &[Provider::Antigravity], Stop::new());
         let mut sink = Refusing::default();
         let mut events = 0;
         assert_eq!(runner.run(&mut sink, |_| events += 1).as_deref(), Some("removed"));
@@ -451,9 +458,63 @@ mod tests {
         let config: Config = toml::from_str("[providers.antigravity]\npath = \"/nonexistent/agy\"").unwrap();
         let state = std::env::temp_dir().join("quotum-runner-missing");
         let paths = Paths { config: state.join("config.toml"), work: state.join("work"), state };
-        let mut runner = Runner::new(config, paths, &[Provider::Antigravity]);
+        let mut runner = Runner::new(config, paths, &[Provider::Antigravity], Stop::new());
         let mut sink = Counting::default();
         assert_eq!(runner.run(&mut sink, |_| {}).as_deref(), Some("done"));
         assert_eq!(sink.checkins, 0, "no duty is claimed for a client this machine lacks");
+    }
+
+    /// Takes whatever it is given, and counts what it delivers.
+    #[derive(Default)]
+    struct Taking {
+        delivered: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl Sink for Taking {
+        fn deliver(&mut self, _: &Outcome) {
+            self.delivered.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// A runner of one provider whose client is not there: it measures (and fails) at
+    /// once, without starting anything, and then waits for the next time.
+    fn missing_client(name: &str, stop: Stop) -> Runner {
+        let config: Config = toml::from_str("[providers.antigravity]\npath = \"/nonexistent/agy\"").unwrap();
+        let state = std::env::temp_dir().join(name);
+        let paths = Paths { config: state.join("config.toml"), work: state.join("work"), state };
+        Runner::new(config, paths, &[Provider::Antigravity], stop)
+    }
+
+    #[test]
+    fn a_stopped_run_ends_and_a_new_run_with_a_new_stop_measures_again() {
+        for round in 0..2 {
+            let stop = Stop::new();
+            let mut runner = missing_client("quotum-runner-stop", stop.clone());
+            let sink = Taking::default();
+            let delivered = sink.delivered.clone();
+            let (done, ended) = std::sync::mpsc::channel();
+            thread::spawn(move || {
+                let mut sink = sink;
+                let _ = done.send(runner.run(&mut sink, |_| {}));
+            });
+            let until = Instant::now() + Duration::from_secs(3);
+            while delivered.load(std::sync::atomic::Ordering::SeqCst) == 0 && Instant::now() < until {
+                thread::sleep(Duration::from_millis(20));
+            }
+            assert_eq!(delivered.load(std::sync::atomic::Ordering::SeqCst), 1, "round {round}: measured");
+            stop.request(crate::stop::How::Exit);
+            let result = ended.recv_timeout(Duration::from_secs(3));
+            assert!(matches!(result, Ok(None)), "round {round}: the run ended on its stop");
+        }
+    }
+
+    #[test]
+    fn a_run_asked_to_stop_measures_nothing_more() {
+        let stop = Stop::new();
+        stop.request(crate::stop::How::Yield);
+        let mut runner = missing_client("quotum-runner-stopped", stop);
+        let mut sink = Taking::default();
+        assert_eq!(runner.run(&mut sink, |_| {}), None);
+        assert_eq!(sink.delivered.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 }
