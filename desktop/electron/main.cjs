@@ -102,18 +102,24 @@ ipcMain.handle('quotum:invoke', (event, command, args) => {
 // Observability stays in the private transport; the page gets no extra command.
 let graphicsPending = false;
 let previousGraphics = '';
+let graphicsTimer;
+function scheduleGraphics() {
+  clearTimeout(graphicsTimer);
+  graphicsTimer = setTimeout(reportGraphics, 500);
+  graphicsTimer.unref();
+}
 async function reportGraphics() {
   if (!window || quitting || graphicsPending) return;
   graphicsPending = true;
   try {
-    const info = await app.getGPUInfo('complete');
+    const info = await app.getGPUInfo('basic');
     if (quitting || !window) return;
     const features = app.getGPUFeatureStatus();
     const message = {
       type: 'graphics', electron: process.versions.electron, chromium: process.versions.chrome,
       backend: app.commandLine.getSwitchValue('ozone-platform') || 'default',
       compositing: features.gpu_compositing || 'unknown', rasterization: features.rasterization || 'unknown',
-      renderer: String(info.auxAttributes?.glRenderer || info.auxAttributes?.glImplementationParts || 'unknown').slice(0, 256),
+      renderer: String(info.auxAttributes?.glRenderer || 'not reported').slice(0, 256),
     };
     const text = JSON.stringify(message);
     if (text !== previousGraphics) { previousGraphics = text; send(message); }
@@ -124,7 +130,7 @@ ipcMain.on('quotum:renderer-sandbox', (event, sandboxed) => {
   if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) return;
   if (sandboxed !== true) { send({type: 'fault', process: 'renderer', reason: 'sandbox disabled'}); app.exit(1); }
 });
-app.on('gpu-info-update', reportGraphics);
+app.on('gpu-info-update', scheduleGraphics);
 app.on('child-process-gone', (_, details) => {
   if (!['clean-exit', 'killed'].includes(details.reason)) send({type: 'fault', process: details.type, reason: details.reason});
 });
@@ -172,7 +178,7 @@ Promise.all([initialized, app.whenReady()]).then(([config]) => {
     if (quitting) return;
     window.show(); revealed = true;
     if (loaded) send({type: 'loaded', url: window.webContents.getURL()});
-    void reportGraphics();
+    scheduleGraphics();
   });
   const contents = window.webContents;
   contents.on('will-frame-navigate', event => {
