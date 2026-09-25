@@ -348,6 +348,8 @@ td.muted, small.muted { color: var(--text-3); }
 .tray-panel-table > .tray-panel-table-head { padding-top: 0; border-top: 0; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-4); }
 .tray-panel-table dt { color: var(--text-2); font-variant-numeric: tabular-nums; }
 .tray-panel-table dd { margin: 0; text-align: right; font-weight: 560; color: var(--text); font-variant-numeric: tabular-nums; }
+/* An older agent tells only when the soonest expires, not how many do. */
+.tray-panel-table dd.is-soonest { font-weight: 450; color: var(--text-3); }
 .tray-panel-quote { padding-left: 10px; border-left: 2px solid var(--hair-2); color: var(--text); }
 .tray-panel-links { display: flex; flex-direction: column; gap: 2px; padding-top: 8px; border-top: 1px solid var(--hair); font-size: 11.5px; color: var(--text-3); }
 .tray-panel-links a { color: var(--text-2); }

@@ -172,6 +172,7 @@ export const en = {
   'card.freeResetsExpires': 'Expires',
   'card.freeResetsCount': 'Resets',
   'card.freeResetsNever': 'no end date',
+  'card.freeResetsSoonest': 'soonest',
 
   'source.settings': 'Settings · {source}',
   'source.show': 'Show limits',

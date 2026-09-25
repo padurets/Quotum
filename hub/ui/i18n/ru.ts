@@ -167,6 +167,7 @@ export const ru = {
   'card.freeResetsExpires': 'Сгорает',
   'card.freeResetsCount': 'Сбросов',
   'card.freeResetsNever': 'без срока',
+  'card.freeResetsSoonest': 'ближайший',
 
   'source.settings': 'Настройки · {source}',
   'source.show': 'Показывать лимиты',

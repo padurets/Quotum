@@ -156,9 +156,19 @@ export function FreeResets({resets}: {resets: NonNullable<SourceState['resets']>
   const count = t('card.freeResets', {count: resets.available});
   const lines = expiryLines(resets);
   const label = [count, ...lines].join('\n');
-  // Resets that expire at different times read as a table in the panel, a row per time.
+  // The panel is always a table, a row per time: from an older agent, the soonest time
+  // alone; with no time given, one row that says so.
   const expiry = freeResetExpiry(resets);
-  const groups = expiry?.kind === 'each' && expiry.groups.length > 1 ? expiry.groups : null;
+  const rows: {key: string; when: string; count: string; soonest?: boolean}[] =
+    expiry?.kind === 'each'
+      ? expiry.groups.map(group => ({
+          key: String(group.expiresAt),
+          when: group.expiresAt !== null ? stamp(group.expiresAt) : t('card.freeResetsNever'),
+          count: String(group.count),
+        }))
+      : expiry?.kind === 'first'
+        ? [{key: 'first', when: stamp(expiry.at), count: t('card.freeResetsSoonest'), soonest: true}]
+        : [{key: 'never', when: t('card.freeResetsNever'), count: String(resets.available)}];
   return (
     <Popover
       label={label}
@@ -174,27 +184,19 @@ export function FreeResets({resets}: {resets: NonNullable<SourceState['resets']>
       <div className="tray-panel">
         <div className="tray-panel-head">
           <p className="tray-panel-lead">{count}</p>
-          {!groups &&
-            lines.map(line => (
-              <p key={line} className="tray-panel-when">
-                {line}
-              </p>
-            ))}
         </div>
-        {groups && (
-          <dl className="tray-panel-table">
-            <div className="tray-panel-table-head" aria-hidden="true">
-              <span>{t('card.freeResetsExpires')}</span>
-              <span>{t('card.freeResetsCount')}</span>
+        <dl className="tray-panel-table">
+          <div className="tray-panel-table-head" aria-hidden="true">
+            <span>{t('card.freeResetsExpires')}</span>
+            <span>{t('card.freeResetsCount')}</span>
+          </div>
+          {rows.map(row => (
+            <div key={row.key}>
+              <dt>{row.when}</dt>
+              <dd className={row.soonest ? 'is-soonest' : ''}>{row.count}</dd>
             </div>
-            {groups.map(group => (
-              <div key={group.expiresAt ?? 'never'}>
-                <dt>{group.expiresAt !== null ? stamp(group.expiresAt) : t('card.freeResetsNever')}</dt>
-                <dd>{group.count}</dd>
-              </div>
-            ))}
-          </dl>
-        )}
+          ))}
+        </dl>
       </div>
     </Popover>
   );

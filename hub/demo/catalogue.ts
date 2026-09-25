@@ -566,7 +566,7 @@ const all: DemoSet = {
         'Teal on the card, the chart and the table',
         'Its own plan: 15% a day, 10% the last',
         'A third of the row wide, its tray full: the reset news on the left, three free resets and ten agent marks in two groups on the right, whole at a window 1260 px wide or more; narrower, the marks go all at once and the count stays',
-        'Its free resets come from an older agent, which tells only when the first expires: "3 free resets", and under it "the first expires <date>"',
+        'Its free resets come from an older agent, which tells only when the first expires: the panel\'s table has that time alone, marked "soonest"',
       ],
     },
     {
