@@ -67,15 +67,25 @@ export type BoardSource = Source & {holders: string[]; sharedBy: string | null};
  */
 export class Store {
   readonly db: DatabaseSync;
-  /** Since when history is kept: the creation of this database. */
-  readonly historyStart: number;
+  /** When this database was made. */
+  private readonly created: number;
   private readonly revisions = new Map<string, number>();
   private readonly started = Date.now();
 
   constructor(file: string, now = Date.now()) {
     this.db = new DatabaseSync(file);
     migrate(this.db, now);
-    this.historyStart = Number((this.db.prepare("SELECT value FROM meta WHERE key = 'historyStart'").get() as {value: string}).value);
+    this.created = Number((this.db.prepare("SELECT value FROM meta WHERE key = 'historyStart'").get() as {value: string}).value);
+  }
+
+  /**
+   * Since when history is kept: the creation of this database, or the oldest sample it
+   * keeps when that is older (measurements an agent kept while the hub was away and
+   * delivered to a new one). The index on time finds it at once.
+   */
+  get historyStart(): number {
+    const oldest = (this.db.prepare('SELECT MIN(at) AS at FROM samples').get() as {at: number | null}).at;
+    return oldest === null ? this.created : Math.min(this.created, oldest);
   }
 
   /** Changes whenever something a board shows changes; its history is cached by it. */
