@@ -125,19 +125,12 @@ export const fixed =
   (options: {id: string; label: string; used: number}): WindowAt =>
   () => ({id: options.id, kind: 'other', minutes: null, label: options.label, used: share(options.used), resetsAt: null});
 
-/** A window reported as it was at `t`, but frozen from `at` on: what a client stuck on an old answer tells. */
-export const frozen =
-  (window: WindowAt, at: number): WindowAt =>
-  t =>
-    window(Math.min(t, at));
-
 // ---------- waves: when agents work ----------
 
 /** Work that comes and goes: on for `on` ms of every `period`, from `phase`. */
 export type Wave = {period: number; on: number; phase: number};
 
 export const ALWAYS: Wave = {period: HOUR, on: HOUR, phase: 0};
-export const NEVER: Wave = {period: HOUR, on: 0, phase: 0};
 
 export const isOn = (wave: Wave, t: number) => mod(t - wave.phase, wave.period) < wave.on;
 
@@ -324,7 +317,7 @@ export const homeOf = (set: DemoSet, card: Card) => personOf(set, machineOf(set,
 
 /** A sleeping machine's schedule: asleep 8 hours every night before `start`; from the second minute on, 12 of every 45 minutes. */
 const NIGHT = {from: 14 * HOUR, to: 6 * HOUR};
-export const SLEEP = {first: 2 * MIN, asleep: 15 * MIN, cycle: 45 * MIN};
+const SLEEP = {first: 2 * MIN, asleep: 15 * MIN, cycle: 45 * MIN};
 
 export function awake(machine: Machine, t: number): boolean {
   if (machine.gone !== undefined && t > machine.gone) return false;
