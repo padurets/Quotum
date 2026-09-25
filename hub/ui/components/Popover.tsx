@@ -1,6 +1,6 @@
-import {useEffect, useLayoutEffect, useRef, useState, type ReactNode} from 'react';
+import {useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type ReactNode} from 'react';
 
-/** A button with an anchored panel; closes on outside click and Escape. */
+/** A button with an anchored panel; closes on outside click, Escape and focus moving out. */
 export function Popover({
   label,
   icon,
@@ -80,8 +80,16 @@ export function Popover({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  // Focus moving on to something outside closes the panel as a click there would, so Tab
+  // from one mark of a tray to the next never leaves two panels open. Focus going nowhere
+  // (a click on the panel's text, the focused control gone, another window) leaves it open.
+  const leave = (event: FocusEvent<HTMLDivElement>) => {
+    const next = event.relatedTarget;
+    if (open && next instanceof Node && !box.current?.contains(next)) setOpen(false);
+  };
+
   return (
-    <div className="picker" ref={box}>
+    <div className="picker" ref={box} onBlur={leave}>
       <button
         type="button"
         className={trigger ? `text-button ${triggerClass ?? ''}` : 'icon-button'}
