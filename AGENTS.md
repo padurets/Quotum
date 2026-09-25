@@ -111,6 +111,10 @@ is open.
   says leads, and a detail or a time is set apart by layout (a tag beside it, a quieter
   line under it). In plain text, a tooltip or a name for screen readers, each part is a
   line of its own.
+- **A row lights up under the pointer, one of two ways.** In a widget's table, across
+  its whole width, as its columns run edge to edge. In a `Popover` or a `Modal`, inset
+  with rounded corners like a menu's rows (`.popover-row`), and a little brighter, to
+  show on the glass.
 - Colours come from the tokens at the top of `hub/ui/style.css`, and the colours of
   series from `hub/ui/lib/providers.ts`. Status colours (ok, warn, crit) are for status
   only: how much of a limit is left, a source or device in trouble, a destructive
