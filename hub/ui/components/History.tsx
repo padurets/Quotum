@@ -1,4 +1,5 @@
-import {useMemo} from 'react';
+import {memo, useMemo} from 'react';
+import {MINUTE, useNow} from '../lib/api';
 import type {History as HistoryData, Overview} from '../lib/types';
 import {num} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
@@ -40,13 +41,12 @@ function HistorySettings({arrange, planShown}: {arrange: Arrange; planShown: boo
 }
 
 /** The remaining share of every window of one kind over the period, with its legend. */
-export function History({
+export const History = memo(function History({
   history,
   loading,
   overview,
   resets,
   past,
-  now,
   arrange,
 }: {
   history: HistoryData | null;
@@ -55,9 +55,9 @@ export function History({
   overview: Overview | null;
   resets: Resets;
   past: PastResets;
-  now: number;
   arrange: Arrange;
 }) {
+  const now = useNow(MINUTE);
   const prefs = usePrefs();
   const {view} = arrange;
   // Series names and markers are text: they are rebuilt when the language changes.
@@ -206,4 +206,4 @@ export function History({
       {history ? <Chart lines={visible} plans={plans} markers={markers} from={from} now={measuredTo} to={to} cellMs={history.cellMs} empty={lines.length ? t('chart.empty') : null} onSelect={setTimeRange} /> : <div className="chart chart-loading">{t('history.loading')}</div>}
     </section>
   );
-}
+});

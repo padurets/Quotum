@@ -88,6 +88,12 @@ is open.
   tokens in `hub/ui/style.css`. A new floating surface uses one of them rather than
   styling its own.
 - Widgets on the board are a `.card` (a source) or a `.panel` (the chart, the table).
+- **Keep the board cheap to render.** Nothing on the page is `position: fixed` or has a
+  fixed background, and widgets have no `backdrop-filter` (floating surfaces and the
+  sticky bars may): in WebKitGTK, the desktop app's window on Linux, either makes every
+  step of a scroll paint the whole window again. What shows time reads `useNow(step)`
+  (`hub/ui/lib/api.ts`) itself rather than a clock passed down from the board, and
+  polled state is set through `unlessSame`, so an unchanged answer renders nothing.
 - Colours come from the tokens at the top of `hub/ui/style.css`, and the colours of
   series from `hub/ui/lib/providers.ts`. Status colours (ok, warn, crit) are for status
   only: how much of a limit is left, a source or device in trouble, a destructive

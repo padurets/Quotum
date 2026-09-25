@@ -1,4 +1,5 @@
-import {useMemo} from 'react';
+import {memo, useMemo} from 'react';
+import {MINUTE, useNow} from '../lib/api';
 import type {History as HistoryData, Overview, Win} from '../lib/types';
 import {duration, num} from '../lib/format';
 import {level} from '../lib/quota';
@@ -52,20 +53,19 @@ const PACE_FROM = 10 * 60_000;
  * time range selected on the chart, which is in the past, it shows that range instead:
  * what was left at its start and its end, what it spent and how fast.
  */
-export function Forecast({
+export const Forecast = memo(function Forecast({
   history,
   loading,
   overview,
-  now,
   arrange,
 }: {
   history: HistoryData | null;
   /** Another period is loading; `history` is the previous one until it comes. */
   loading: boolean;
   overview: Overview | null;
-  now: number;
   arrange: Arrange;
 }) {
+  const now = useNow(MINUTE);
   const {view} = arrange;
   const {kind} = usePrefs();
   const selected = ofTimeRange(history);
@@ -171,4 +171,4 @@ export function Forecast({
       )}
     </section>
   );
-}
+});

@@ -1,4 +1,5 @@
 import {useState} from 'react';
+import {useNow} from '../lib/api';
 import {ago} from '../lib/format';
 import {PROVIDERS} from '../lib/providers';
 import {errorText} from '../lib/quota';
@@ -193,7 +194,8 @@ function AccountName({provider, onSave}: {provider: ProviderSettings; onSave: (a
  * running agents are shown. The settings are `quotum`'s own (config.toml): the app saves
  * each change at once and measures with it in a moment.
  */
-export function Measuring({state, now, onState}: {state: AppState; now: number; onState: (state: AppState) => void}) {
+export function Measuring({state, onState}: {state: AppState; onState: (state: AppState) => void}) {
+  const now = useNow();
   const [saving, setSaving] = useState<Saving>(null);
   const save = async (patch: Patch, field: string) => {
     setSaving(null);

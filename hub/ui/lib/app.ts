@@ -1,5 +1,6 @@
 import {useCallback, useEffect, useState} from 'react';
 import type {Key} from '../i18n';
+import {unlessSame} from './http';
 
 /**
  * The desktop app, when the board is shown in its window (the hub's local mode): what it
@@ -62,7 +63,7 @@ export const app = {
 export function useAppState() {
   const [state, setState] = useState<AppState | null>(null);
   const refresh = useCallback(() => {
-    if (inApp()) app.state().then(setState, () => {});
+    if (inApp()) app.state().then(state => setState(unlessSame<AppState | null>(state)), () => {});
   }, []);
   useEffect(() => {
     refresh();

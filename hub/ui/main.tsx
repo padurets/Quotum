@@ -3,7 +3,7 @@ import {createRoot} from 'react-dom/client';
 import '@fontsource-variable/geist';
 import '@fontsource-variable/geist-mono';
 import './style.css';
-import {useHistory, useNow, useOverview} from './lib/api';
+import {useHistory, useOverview} from './lib/api';
 import {setPrefs, usePrefs} from './lib/prefs';
 import {showBoard, useTimeRange} from './lib/timeRange';
 import {useResets} from './lib/resets';
@@ -43,7 +43,6 @@ function Dashboard({
   refresh: () => Promise<void>;
   onSignedOut: () => void;
 }) {
-  const now = useNow();
   // In the app's window: its agent and settings (null in a browser).
   const {state: appState, refresh: refreshApp, set: setAppState} = useAppState();
   const [board, selectBoard] = useBoard(boards);
@@ -89,7 +88,6 @@ function Dashboard({
         content: (
           <SourceCard
             source={source}
-            now={now}
             resets={source.provider === 'claude' || source.provider === 'codex' ? resets[source.provider] : undefined}
             arrange={arrange}
             board={board}
@@ -104,7 +102,7 @@ function Dashboard({
     id: AGENTS,
     name: t('agents.title'),
     span: spanOf(arrange.view, AGENTS),
-    content: <AgentsPanel sources={sources} now={now} arrange={arrange} />,
+    content: <AgentsPanel sources={sources} arrange={arrange} />,
   });
   const panels = new Map<string, Widget>([
     [
@@ -113,7 +111,7 @@ function Dashboard({
         id: HISTORY,
         name: t('widgets.history'),
         span: spanOf(arrange.view, HISTORY),
-        content: <History history={history} loading={historyLoading} overview={overview} resets={resets} past={past} now={now} arrange={arrange} />,
+        content: <History history={history} loading={historyLoading} overview={overview} resets={resets} past={past} arrange={arrange} />,
       },
     ],
     [
@@ -122,7 +120,7 @@ function Dashboard({
         id: FORECAST,
         name: t('forecast.title'),
         span: spanOf(arrange.view, FORECAST),
-        content: <Forecast history={history} loading={historyLoading} overview={overview} now={now} arrange={arrange} />,
+        content: <Forecast history={history} loading={historyLoading} overview={overview} arrange={arrange} />,
       },
     ],
   ]);
@@ -146,7 +144,6 @@ function Dashboard({
     <>
       <Header
         lastOk={lastOk}
-        now={now}
         boards={boards}
         board={board}
         onBoard={selectBoard}
@@ -226,7 +223,7 @@ function Dashboard({
           </section>
         )}
       </main>
-      {machines && <MachinesDialog tab={machines} onTab={setMachines} onClose={closeMachines} now={now} local={local} />}
+      {machines && <MachinesDialog tab={machines} onTab={setMachines} onClose={closeMachines} local={local} />}
       {people && board && !board.personal && (
         <BoardDialog
           board={board}
@@ -246,7 +243,7 @@ function Dashboard({
           onSignedOut={onSignedOut}
           onClose={() => setAccount(false)}
           local={local}
-          app={{state: appState, now, onState: setAppState}}
+          app={{state: appState, onState: setAppState}}
         />
       )}
       {local && <TakeOver agent={appState?.agent} onState={setAppState} />}

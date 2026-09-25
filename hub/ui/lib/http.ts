@@ -17,6 +17,15 @@ export class ApiError extends Error {
  * The one way the page talks to the hub: JSON in and out, no caching, a timeout, and a
  * 401 announced to whoever keeps the session.
  */
+/**
+ * A state update that keeps the value it has when the new one is the same, for what is
+ * read again and again: React then renders nothing, and whatever was given the value
+ * can skip its render too.
+ */
+export function unlessSame<T>(next: T) {
+  return (current: T): T => (JSON.stringify(current) === JSON.stringify(next) ? current : next);
+}
+
 export async function call<T>(method: 'GET' | 'POST' | 'DELETE', url: string, body?: unknown, timeoutMs = 12_000): Promise<T> {
   const response = await fetch(url, {
     method,

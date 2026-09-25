@@ -1,4 +1,5 @@
 import {useState, type FormEvent, type ReactNode} from 'react';
+import {useNow} from '../lib/api';
 import {call} from '../lib/http';
 import {boardTitle, type Board, type User} from '../lib/session';
 import {Brand, ErrorLine, Field, Modal} from './Kit';
@@ -249,7 +250,6 @@ function BoardSwitcher({boards, board, onSelect, onChanged}: {boards: Board[]; b
  */
 export function Header({
   lastOk,
-  now,
   boards,
   board,
   onBoard,
@@ -261,8 +261,8 @@ export function Header({
   onAccount,
   local,
 }: {
-  lastOk: number;
-  now: number;
+  /** When the hub last answered: read as the clock ticks. */
+  lastOk: () => number;
   boards: Board[];
   board: Board | null;
   onBoard: (id: string) => void;
@@ -276,7 +276,9 @@ export function Header({
   /** The desktop app's board: one board, nobody to share with, settings instead of an account. */
   local: boolean;
 }) {
-  const offline = !!lastOk && now - lastOk > OFFLINE_AFTER;
+  const now = useNow();
+  const okAt = lastOk();
+  const offline = !!okAt && now - okAt > OFFLINE_AFTER;
   return (
     <header className="topbar">
       <div className="topbar-inner">

@@ -1,4 +1,5 @@
 import {useCallback, useEffect, useState, type FormEvent} from 'react';
+import {useNow} from '../lib/api';
 import {ago} from '../lib/format';
 import {PROVIDERS} from '../lib/providers';
 import {errorText} from '../lib/quota';
@@ -91,7 +92,8 @@ function DeviceName({device, onRenamed}: {device: Device; onRenamed: () => void}
 }
 
 /** The reader's devices; on the desktop app's board, its one machine, which cannot be disconnected (it is the app's own agent). */
-function Devices({now, local}: {now: number; local: boolean}) {
+function Devices({local}: {local: boolean}) {
+  const now = useNow();
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [error, setError] = useState<unknown>(null);
   const load = useCallback(() => {
@@ -154,7 +156,8 @@ function Devices({now, local}: {now: number; local: boolean}) {
   );
 }
 
-function Connect({now}: {now: number}) {
+function Connect() {
+  const now = useNow();
   const [tokens, setTokens] = useState<Token[]>([]);
   const [name, setName] = useState('');
   const [created, setCreated] = useState<{secret: string; name: string} | null>(null);
@@ -250,20 +253,18 @@ export function MachinesDialog({
   tab,
   onTab,
   onClose,
-  now,
   local,
 }: {
   tab: MachinesTab;
   onTab: (tab: MachinesTab) => void;
   onClose: () => void;
-  now: number;
   local: boolean;
 }) {
   if (local) {
     return (
       <Modal title={t('machines.title')} onClose={onClose} wide>
         <div className="dialog-body">
-          <Devices now={now} local />
+          <Devices local />
         </div>
       </Modal>
     );
@@ -280,8 +281,8 @@ export function MachinesDialog({
         onChange={onTab}
       />
       <div className="dialog-body">
-        {tab === 'devices' && <Devices now={now} local={false} />}
-        {tab === 'connect' && <Connect now={now} />}
+        {tab === 'devices' && <Devices local={false} />}
+        {tab === 'connect' && <Connect />}
       </div>
     </Modal>
   );

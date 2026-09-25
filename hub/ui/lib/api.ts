@@ -1,28 +1,64 @@
-import {useEffect, useRef, useState} from 'react';
+import {useCallback, useEffect, useRef, useState, useSyncExternalStore} from 'react';
 import type {History, Overview} from './types';
-import {ApiError, call} from './http';
+import {ApiError, call, unlessSame} from './http';
 import {dropTimeRange, timeRangeKey, type TimeRange} from './timeRange';
 
-/** A clock ticking every second, for freshness labels and countdowns. */
-export function useNow() {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, []);
-  return now;
+/**
+ * The page's clock, for what shows how long ago or how soon: nothing else changes with
+ * time alone. Every part that reads it asks for a step and moves when the step passes,
+ * all at once, on one timer per step for the whole page; the board itself reads no
+ * clock, so a tick renders only what shows time. Labels count minutes and the freshness
+ * dot changes every half a minute, so no step is finer than `TICK`.
+ */
+export const TICK = 15_000;
+export const MINUTE = 60_000;
+
+type Clock = {now: number; listeners: Set<() => void>; timer?: ReturnType<typeof setTimeout>};
+const clocks = new Map<number, Clock>();
+
+function clock(step: number): Clock {
+  let found = clocks.get(step);
+  if (!found) clocks.set(step, (found = {now: Date.now(), listeners: new Set()}));
+  return found;
+}
+
+function subscribe(step: number, listener: () => void) {
+  const c = clock(step);
+  if (!c.listeners.size) {
+    // Ticks fall on multiples of the step, so clocks of different steps agree when they meet.
+    const tick = () => {
+      c.now = Date.now();
+      c.listeners.forEach(notify => notify());
+      c.timer = setTimeout(tick, step - (Date.now() % step));
+    };
+    c.now = Date.now();
+    c.timer = setTimeout(tick, step - (c.now % step));
+  }
+  c.listeners.add(listener);
+  return () => {
+    c.listeners.delete(listener);
+    if (!c.listeners.size) clearTimeout(c.timer);
+  };
+}
+
+export function useNow(step = TICK) {
+  const listen = useCallback((listener: () => void) => subscribe(step, listener), [step]);
+  return useSyncExternalStore(listen, () => clock(step).now);
 }
 
 /**
  * The board's current state, read every 10 seconds (sooner when the tab comes back).
- * A single failed request is never shown: data stays on screen and only the age of the
- * last good answer decides whether the page looks disconnected.
+ * An answer the same as the one before changes nothing. A single failed request is never shown: data stays on screen and only the age
+ * of the last good answer decides whether the page looks disconnected. That age is read
+ * by `lastOk()` when the clock ticks, not kept in state: a good answer alone renders
+ * nothing.
  */
 export function useOverview(board: string, onGone: () => void) {
   const gone = useRef(onGone);
   gone.current = onGone;
   const [data, setData] = useState<Overview | null>(null);
-  const [lastOk, setLastOk] = useState(0);
+  const okAt = useRef(0);
+  const lastOk = useCallback(() => okAt.current, []);
   const reload = useRef(() => {});
 
   useEffect(() => {
@@ -39,8 +75,8 @@ export function useOverview(board: string, onGone: () => void) {
       try {
         const overview = await call<Overview>('GET', `/api/overview?board=${encodeURIComponent(board)}`);
         if (!done) {
-          setData(overview);
-          setLastOk(Date.now());
+          setData(unlessSame<Overview | null>(overview));
+          okAt.current = Date.now();
         }
         failures = 0;
       } catch (error) {
@@ -71,7 +107,8 @@ export function useOverview(board: string, onGone: () => void) {
     };
   }, [board]);
 
-  return {data: data?.board?.id === board ? data : null, lastOk, reload: () => reload.current()};
+  const again = useCallback(() => reload.current(), []);
+  return {data: data?.board?.id === board ? data : null, lastOk, reload: again};
 }
 
 /**

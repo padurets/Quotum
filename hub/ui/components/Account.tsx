@@ -191,7 +191,7 @@ export function AccountPanel({
   onSignedOut: () => void;
   onClose: () => void;
   local: boolean;
-  app: {state: AppState | null; now: number; onState: (state: AppState) => void};
+  app: {state: AppState | null; onState: (state: AppState) => void};
 }) {
   const signOut = async () => {
     await call('POST', '/api/auth/logout').catch(() => {});
@@ -217,7 +217,7 @@ export function AccountPanel({
           <Password />
         </>
       )}
-      {sections.includes('measuring') && app.state && <Measuring state={app.state} now={app.now} onState={app.onState} />}
+      {sections.includes('measuring') && app.state && <Measuring state={app.state} onState={app.onState} />}
       {sections.includes('app') && app.state && <AppSection state={app.state} onState={app.onState} />}
       <Browser trackers={trackers} title={t(local ? 'settings.view' : 'account.browser')} />
     </Modal>
