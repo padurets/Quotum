@@ -34,7 +34,7 @@ cpSync(path.join(here, 'static'), path.join(share, 'gui/static'), {recursive: tr
 copyFileSync(path.join(here, 'icons/128x128.png'), path.join(share, 'icon.png'));
 // Never setuid in an AppImage: it uses Chromium's user-namespace sandbox.
 chmodSync(path.join(share, 'electron/chrome-sandbox'), 0o755);
-const desktop = '[Desktop Entry]\nType=Application\nName=Quotum\nComment=How much of your coding-agent subscriptions is left\nExec=quotum-desktop\nIcon=quotum\nTerminal=false\nCategories=Development;\nStartupWMClass=Quotum\n';
+const desktop = '[Desktop Entry]\nType=Application\nName=Quotum\nComment=How much of your coding-agent subscriptions is left\nExec=quotum-desktop\nIcon=quotum\nTerminal=false\nCategories=Development;\nStartupWMClass=quotum\n';
 mkdirSync(path.join(appdir, 'usr/share/applications'), {recursive: true});
 writeFileSync(path.join(appdir, 'usr/share/applications/quotum.desktop'), desktop);
 const iconDir = path.join(appdir, 'usr/share/icons/hicolor/128x128/apps');
@@ -73,7 +73,7 @@ function rpmFiles(directory, relative = '') {
   });
 }
 const ownedFiles = rpmFiles(path.join(stage, 'usr/share/quotum'), '/usr/share/quotum').join('\n');
-writeFileSync(spec, `Name: quotum\nVersion: ${version}\nRelease: 1\nSummary: Coding-agent subscription limits on this machine\nLicense: MIT\nURL: https://github.com/padurets/Quotum\nBuildArch: x86_64\nRequires: nss, nspr, atk, at-spi2-atk, cups-libs, libdrm, dbus-libs, libX11, libxcb, libXcomposite, libXdamage, libXext, libXfixes, libXrandr, mesa-libgbm, libxkbcommon, alsa-lib, gtk3\nAutoReqProv: no\n%description\nQuotum measures through the clients and shows their limits on its board.\n%files\n%defattr(-,root,root,-)\n/usr/bin/quotum-desktop\n/usr/bin/quotum-node\n/usr/share/applications/quotum.desktop\n/usr/share/icons/hicolor/128x128/apps/quotum.png\n%dir /usr/share/quotum\n${ownedFiles}\n`);
+writeFileSync(spec, `Name: quotum\nVersion: ${version}\nRelease: 1\nSummary: Coding-agent subscription limits on this machine\nLicense: MIT\nURL: https://github.com/padurets/Quotum\nBuildArch: x86_64\nRequires: glibc >= 2.35, nss, nspr, atk, at-spi2-atk, cups-libs, libdrm, dbus-libs, libX11, libxcb, libXcomposite, libXdamage, libXext, libXfixes, libXrandr, mesa-libgbm, libxkbcommon, alsa-lib, gtk3\nAutoReqProv: no\n%description\nQuotum measures through the clients and shows their limits on its board.\n%files\n%defattr(-,root,root,-)\n/usr/bin/quotum-desktop\n/usr/bin/quotum-node\n/usr/share/applications/quotum.desktop\n/usr/share/icons/hicolor/128x128/apps/quotum.png\n%dir /usr/share/quotum\n${ownedFiles}\n`);
 const rpmDb = path.join(bundle, 'rpm-db');
 mkdirSync(rpmDb, {recursive: true});
 run('rpm', ['--dbpath', rpmDb, '--initdb']);

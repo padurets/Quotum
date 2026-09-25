@@ -266,7 +266,8 @@ build it yourself, see [CONTRIBUTING.md](CONTRIBUTING.md).
 - **Linux** (x64): the system package includes Chromium and works alongside the
   system's `nodejs`. On Debian 12, Ubuntu 22.04 or newer use `sudo apt install
   ./quotum-desktop-<…>.deb`; on Fedora use `sudo dnf install ./quotum-desktop-<…>.rpm`.
-  Elsewhere, make the AppImage executable (`chmod +x`) and run it. If FUSE is unavailable,
+  Elsewhere, make the AppImage executable (`chmod +x`) and run it; GTK3 and NSS must
+  be available on the system. If FUSE is unavailable,
   add `--appimage-extract-and-run`. The AppImage needs unprivileged user namespaces for
   Chromium's sandbox; use a native package when the system restricts them. NVIDIA
   systems use X11/XWayland when available. If graphics fail, quit completely and try

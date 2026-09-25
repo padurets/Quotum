@@ -268,7 +268,8 @@ Linux, macOS и Windows архивом (`quotum-cli-<версия>-<платфо
 - **Linux** (x64): пакет системы включает Chromium и уживается с системным `nodejs`.
   На Debian 12, Ubuntu 22.04 и новее — `sudo apt install ./quotum-desktop-<…>.deb`,
   на Fedora — `sudo dnf install ./quotum-desktop-<…>.rpm`. В остальных системах сделайте
-  AppImage исполняемым (`chmod +x`) и запустите. Если FUSE недоступен, добавьте
+  AppImage исполняемым (`chmod +x`) и запустите; в системе нужны GTK3 и NSS.
+  Если FUSE недоступен, добавьте
   `--appimage-extract-and-run`. Для песочницы Chromium в AppImage нужны непривилегированные
   пространства имён пользователей; если система их ограничивает, используйте нативный
   пакет. На NVIDIA приложение выбирает X11/XWayland, когда он доступен. При проблемах с
