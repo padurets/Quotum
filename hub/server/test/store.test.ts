@@ -169,7 +169,7 @@ test('a new database gets the current layout; one from a newer version is refuse
   const file = path.join(mkdtempSync(path.join(tmpdir(), 'quotum-')), 'db.sqlite');
   const store = new Store(file, start);
   assert.equal(Number((store.db.prepare('PRAGMA user_version').get() as any).user_version), SCHEMA_VERSION);
-  assert.equal(store.historyStart, start);
+  assert.equal(store.historyStart(start), start);
   store.close();
   const raw = new DatabaseSync(file);
   raw.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`);
@@ -179,17 +179,21 @@ test('a new database gets the current layout; one from a newer version is refuse
 
 test('history starts when the database was made, or at an older sample while one is kept', () => {
   const store = fresh();
-  assert.equal(store.historyStart, start, 'a new database');
+  const day = 86_400_000;
+  assert.equal(store.historyStart(start), start, 'a new database');
   const id = seen(store, 'codex', 'account-a');
   store.record(id, measurement({observedAt: start + 60_000}));
-  assert.equal(store.historyStart, start, 'a newer sample changes nothing');
-  const older = start - 100 * 86_400_000;
+  assert.equal(store.historyStart(start), start, 'a newer sample changes nothing');
+  store.record(id, measurement({observedAt: start - 100 * day}));
+  assert.equal(store.historyStart(start), start, 'a sample dated before the retention period moves nothing, pruned or not');
+  const older = start - 20 * day;
   store.record(id, measurement({observedAt: older}));
-  assert.equal(store.historyStart, older, 'measurements an agent kept for days, delivered to a new hub');
-  store.prune(start);
-  assert.equal(store.historyStart, start, 'back to the creation once that sample is gone');
+  assert.equal(store.historyStart(start), older, 'measurements an agent kept for days, delivered to a new hub');
+  const later = older + 91 * day;
+  store.prune(later);
+  assert.equal(store.historyStart(later), start, 'back to the creation once that sample is gone');
   store.record(id, measurement({observedAt: 0}));
-  assert.equal(store.historyStart, start, 'a sample dated before the retention period (a clock not set yet) moves nothing');
+  assert.equal(store.historyStart(later), start, 'a sample from a clock not set yet moves nothing');
   store.close();
 });
 

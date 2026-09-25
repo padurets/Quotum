@@ -85,8 +85,8 @@ export class Store {
    * dated before it (a clock not set yet) is pruned soon and moves nothing meanwhile.
    * The index on time finds it at once.
    */
-  get historyStart(): number {
-    const kept = Date.now() - config.retention.sampleDays * 86_400_000;
+  historyStart(now: number): number {
+    const kept = now - config.retention.sampleDays * 86_400_000;
     const oldest = (this.db.prepare('SELECT MIN(at) AS at FROM samples WHERE at >= ?').get(kept) as {at: number | null}).at;
     return oldest === null ? this.created : Math.min(this.created, oldest);
   }

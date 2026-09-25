@@ -173,7 +173,7 @@ export async function buildApp(hub: Hub) {
     return {
       board: access.board,
       view: directory.view(access.board.id),
-      historyStart: store.historyStart,
+      historyStart: store.historyStart(now),
       /** Changes whenever the board's data changes: the page re-reads history when it does. */
       revision: store.revision(access.board.id),
       sources: store.sources(access.board.id).map(source => {
@@ -209,7 +209,7 @@ export async function buildApp(hub: Hub) {
       const slot = `${board}:${span.since}:${span.to === now ? 'now' : span.to}`;
       const answer = reused(selectedHistory, slot, board, span.cellMs, span.to, () => store.history(board, span.since, span.cellMs, span.to));
       // Named as asked, so the page knows its answer even when the end was cut to now.
-      return {range: `${from}-${to}`, now, since: span.since, to: span.to, cellMs: span.cellMs, historyStart: store.historyStart, ...answer};
+      return {range: `${from}-${to}`, now, since: span.since, to: span.to, cellMs: span.cellMs, historyStart: store.historyStart(now), ...answer};
     }
     const range = request.query.range ?? '24h';
     const spec = Object.hasOwn(config.history.ranges, range) ? config.history.ranges[range] : null;
@@ -217,7 +217,7 @@ export async function buildApp(hub: Hub) {
 
     const board = access.board.id;
     const answer = reused(fixedHistory, `${board}:${range}`, board, spec.cellMs, now, () => store.history(board, now - spec.durationMs, spec.cellMs));
-    return {range, now, since: now - spec.durationMs, to: now, cellMs: spec.cellMs, historyStart: store.historyStart, ...answer};
+    return {range, now, since: now - spec.durationMs, to: now, cellMs: spec.cellMs, historyStart: store.historyStart(now), ...answer};
   });
 
   accountRoutes(app, hub, guards);
