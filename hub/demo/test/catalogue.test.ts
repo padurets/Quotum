@@ -318,6 +318,10 @@ test('the check of a set names a subscription without an account the hub would f
   assert.match(problems(changed({agents: [agent]})).join('\n'), /card antigravity: an agent on mac-mini, which the hub files under what that machine delivers/);
   assert.deepEqual(problems(changed({agents: [{...agent, machine: 'laptop'}]})), []);
   assert.match(problems(changed({machines: ['laptop', 'ben-mac']})).join('\n'), /card antigravity: machines of different people measure it/);
+  // The laptop delivering her Work subscription too: which of the two its agents belong to is the machine's last delivery.
+  const both: DemoSet = {...all, entries: all.entries.map(e => (e.kind === 'card' && e.id === 'antigravity-2' ? {...e, machines: [...e.machines, 'laptop']} : e))};
+  const onLaptop = {...both, entries: both.entries.map(e => (e.kind === 'card' && e.id === 'antigravity' ? {...e, agents: [{...agent, machine: 'laptop'}]} : e))};
+  assert.match(problems(onLaptop).join('\n'), /card antigravity: an agent on laptop, which the hub files under what that machine delivers/);
 });
 
 test('machines say how long a measurement holds as the agent does: until the next one, a fifth more and a minute', () => {
