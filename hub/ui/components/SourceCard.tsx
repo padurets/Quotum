@@ -309,8 +309,8 @@ export const SourceCard = memo(function SourceCard({
   const visible = source.windows.filter(w => !isWindowHidden(arrange.view, source.id, w.id));
   const weekly = planOf(arrange.view, source.id);
   const dot = dotOf(source, now);
-  // How fresh the numbers are lives in the colour of the logo's dot and in its tooltip;
-  // trouble is also told under the limits, where it moves no meter out of line.
+  // How the measurements go lives in the logo's dot alone: its colour (how fresh, or in
+  // trouble) and its tooltip; a line of its own would only repeat it and make the card taller.
   const status = problem ?? (source.successAt ? t('source.measured', {ago: ago(source.successAt, now)}) : errorText('waiting'));
 
   return (
@@ -339,7 +339,6 @@ export const SourceCard = memo(function SourceCard({
         {!source.windows.length && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
         {!!source.windows.length && !visible.length && <div className="card-empty">{t('card.allHidden')}</div>}
       </div>
-      {dot.warn && !!source.windows.length && <p className="card-status">{status}</p>}
       <ResetBanner status={resets} now={now} />
       <ResetNotice status={resets} now={now} />
       {/* The card's tray, always there so the card never changes height: the agents running on it, on the right. */}

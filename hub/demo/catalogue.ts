@@ -452,7 +452,7 @@ const all: DemoSet = {
         {stale: true, from: 49 * MIN, to: 58 * MIN},
         {agents: 0, drawn: true, from: 52 * MIN, to: 59 * MIN},
       ],
-      look: ['Its machine sleeps from the 2nd minute to the 14th, and so every 45 minutes: the card goes stale and comes back, its agents go and come back, a gap stays on the 24-hour chart'],
+      look: ['Its machine sleeps from the 2nd minute to the 14th, and so every 45 minutes: the card goes stale (its dot, no line under the limits) and comes back, its agents go and come back, a gap stays on the 24-hour chart'],
     },
     {
       kind: 'card',
@@ -616,7 +616,7 @@ const all: DemoSet = {
       windows: [fiveHours(0, 6), weekly({since: -3.5 * DAY, use: steady(5, 10)})],
       on: {ana: {name: 'Signed out'}},
       expect: [{title: 'Signed out'}, {error: 'not_logged_in'}, {stale: true}],
-      look: ['Its last values stay, under them why they are old'],
+      look: ['Its last values stay, with no line under them: its dot is in trouble, and its tooltip says why they are old'],
     },
     {
       kind: 'card',

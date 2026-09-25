@@ -339,7 +339,6 @@ td.muted, small.muted { color: var(--text-3); }
 .agents-project { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agents-origin { color: var(--text-3); }
 .agents-age { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text-3); }
-.card-status { margin: -8px 0 0; font-size: 12.5px; color: var(--warn); }
 .card-name input { width: 100%; }
 
 /* ---------- history ---------- */
