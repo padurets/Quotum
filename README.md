@@ -311,7 +311,11 @@ command and the app share them.
   environment turns that off). Its hub listens on `127.0.0.1` alone, behind a key only
   the window gets.
 - **Size:** Linux packages carry both Chromium for the window and Node.js for the hub.
-  The Windows app uses the system WebView2 and has a smaller installer.
+  Windows uses the system WebView2: about 26 MiB for setup.exe or 38 MiB for the ZIP.
+  In a Windows 11 VM with five subscriptions, idle working set across the app, Node
+  and WebView2 was about 342 MiB with the window open and 47 MiB after closing it;
+  CPU was 0.76% and 0.24% of one core over 30 seconds. Memory varies with history,
+  WebView2 and Windows; virtual graphics do not establish physical display performance.
 
 ## Configuration
 
