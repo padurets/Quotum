@@ -335,23 +335,24 @@ hub's image.
 
 ### Releasing
 
-Set the new version in `agent/Cargo.toml` (`[workspace.package]`) and `hub/package.json`,
-let the lock files follow, push the commit, then tag it with the release notes as the
+Set the new version in `agent/Cargo.toml` (`[workspace.package]`), `desktop/Cargo.toml`
+and `hub/package.json`, let the lock files follow, push the commit, then tag it with the release notes as the
 tag's message. A release that brings a new database layout step also adds its hash to
 `RELEASED` in `hub/server/test/schema.test.ts` in that commit: from then on the step
 never changes.
 
 ```sh
 (cd hub && npm version 0.2.0 --no-git-tag-version)   # package.json and package-lock.json
-# agent/Cargo.toml: version = "0.2.0"
+# agent/Cargo.toml and desktop/Cargo.toml: version = "0.2.0"
 (cd agent && cargo check)                            # Cargo.lock
+(cd desktop && cargo metadata --format-version 1 >/dev/null)   # its Cargo.lock, with no build
 git commit -am "Version 0.2.0" && git push origin main
 git tag -a v0.2.0 -F notes.md --cleanup=verbatim   # annotated, its message kept whole: the release notes
 git push origin v0.2.0
 ```
 
 [release.yml](.github/workflows/release.yml) refuses a tag that is not annotated or
-whose version differs from any of those four files. It checks everything again, builds
+whose version differs from any of those six files. It checks everything again, builds
 the agent for every platform, publishes the hub's image and the npm packages, and
 creates the GitHub release with the binaries. npm accepts the packages from that workflow alone,
 without a token (trusted publishing). A new npm package, for a new platform, is

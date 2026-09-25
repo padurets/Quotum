@@ -336,22 +336,23 @@ npm (нужны cargo-zigbuild и zig, подробности в самом ск
 
 ### Как выпустить релиз
 
-Поставьте новую версию в `agent/Cargo.toml` (`[workspace.package]`) и `hub/package.json`,
-обновите lock-файлы, запушьте коммит и повесьте на него тег с описанием релиза в
+Поставьте новую версию в `agent/Cargo.toml` (`[workspace.package]`), `desktop/Cargo.toml`
+и `hub/package.json`, обновите lock-файлы, запушьте коммит и повесьте на него тег с описанием релиза в
 сообщении. Если в релизе новый шаг схемы базы, в тот же коммит добавьте его хеш в
 `RELEASED` в `hub/server/test/schema.test.ts`: после этого шаг не меняется.
 
 ```sh
 (cd hub && npm version 0.2.0 --no-git-tag-version)   # package.json и package-lock.json
-# agent/Cargo.toml: version = "0.2.0"
+# agent/Cargo.toml и desktop/Cargo.toml: version = "0.2.0"
 (cd agent && cargo check)                            # Cargo.lock
+(cd desktop && cargo metadata --format-version 1 >/dev/null)   # его Cargo.lock, без сборки
 git commit -am "Version 0.2.0" && git push origin main
 git tag -a v0.2.0 -F notes.md --cleanup=verbatim   # аннотированный, сообщение целиком: описание релиза
 git push origin v0.2.0
 ```
 
 [release.yml](.github/workflows/release.yml) не примет тег без аннотации или с версией,
-которая расходится хоть с одним из четырёх файлов. Он ещё раз всё проверит, соберёт
+которая расходится хоть с одним из шести файлов. Он ещё раз всё проверит, соберёт
 агент под все платформы, опубликует образ хаба и пакеты npm и создаст релиз на GitHub с
 бинарями.
 npm принимает пакеты только от этого workflow и без токена (trusted publishing). Новый

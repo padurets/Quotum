@@ -52,8 +52,11 @@ requests, but it does start the real clients.
   `hub/server/store/schema.ts`; never edit a released step.
 - **Two languages everywhere.** Every UI string goes into every catalog in
   `hub/ui/i18n`; every change to `README.md` goes into `README.ru.md` too.
-- **One version.** `agent/Cargo.toml`, `agent/Cargo.lock`, `hub/package.json` and
-  `hub/package-lock.json` always carry the same version; see *Releasing* in the README.
+- **One version.** `agent/Cargo.toml`, `agent/Cargo.lock`, `desktop/Cargo.toml`,
+  `desktop/Cargo.lock`, `hub/package.json` and `hub/package-lock.json` always carry the
+  same version; see *Releasing* in the README. `desktop/Cargo.lock` also locks
+  `quotum-core`: after a change to its dependencies, `cargo metadata --format-version 1`
+  in `desktop/` updates it (no build needed), or `desktop.yml` fails on `--locked`.
 - **Releases are the maintainer's.** Never create or push a version tag, run the release
   workflow or publish packages or images unless the maintainer asked for that release.
 - **Docs describe the current system.** Update `docs/`, the READMEs and the spec with the
