@@ -381,6 +381,9 @@ Caddy. Behind a proxy of your own, tell the hub its address and trust the proxy:
   implement it.
 - [CONTRIBUTING.md](CONTRIBUTING.md): checking a change and what to keep in mind;
   [SECURITY.md](SECURITY.md): reporting a vulnerability privately.
+- `npm run demo` in `hub/` (after `npm run build`): a live board on throwaway data with
+  every state the dashboard knows, no network or account needed; Ctrl+C stops it and
+  leaves nothing behind. `npm run demo -- showcase` is the board of the images above.
 
 Project layout:
 
@@ -398,6 +401,7 @@ hub/server/store      SQLite: layout, measurements, people and devices
 hub/server/routes     HTTP routes for people and for agents
 hub/server/*.ts       ingest, duty, device pairing, sessions, the reset trackers
 hub/ui                the dashboard (React), translations in hub/ui/i18n
+hub/demo              the demo board: a catalogue of every state, kept alive
 ```
 
 `npm test` and `npm run typecheck` in `hub/`, `cargo test` and `cargo clippy` in

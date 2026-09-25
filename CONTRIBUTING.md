@@ -56,6 +56,28 @@ also provide Chromium's setuid helper.
 Tests never start a real Claude Code, Codex or Antigravity client: they use recorded
 answers and stand-in programs, so they cost nothing and don't depend on your accounts.
 
+## The demo board
+
+A change to the dashboard is looked at on the demo board, with every state it can meet:
+
+```sh
+cd hub && npm run build && npm run demo
+```
+
+It starts the built hub on throwaway data (in the system's temporary folder), fills it
+with the catalogue in `hub/demo/catalogue.ts` and keeps it alive: machines measure,
+agents start, work and stop, a machine sleeps. The reset trackers are stood in for, so
+it needs no network and no account. It prints the address and how to sign in; Ctrl+C
+stops it and leaves nothing behind. `npm run demo -- showcase` opens the clean board
+the README images come from; `--resets <scene>` picks what the reset trackers say (one
+scene a run, the list is printed). Set `QUOTUM_PORT` if 8080 is taken. After changing
+the UI, `npm run build` and reload the page; after changing the server, start the demo
+again.
+
+A new state of the board gets an entry in the catalogue, with the codes it shows in
+`expect` (the file's header explains them): `npm test` then checks it holds, and it is
+on the board for the next person.
+
 ## Pull requests
 
 - **One task, one pull request.** A pull request takes one issue (or one fix) to `main`
