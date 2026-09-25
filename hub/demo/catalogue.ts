@@ -358,13 +358,13 @@ const all: DemoSet = {
       expect: [
         {title: 'Antigravity 2'},
         {stale: false, to: 3 * MIN},
-        {stale: true, from: 4 * MIN, to: 16 * MIN},
-        {stale: false, from: 18 * MIN, to: 46 * MIN},
+        {stale: true, from: 4 * MIN, to: 13 * MIN},
+        {stale: false, from: 15 * MIN, to: 46 * MIN},
         {agents: 2, drawn: true, to: 6 * MIN},
-        {agents: 0, drawn: true, from: 7 * MIN, to: 17 * MIN},
-        {agents: 2, drawn: true, from: 18 * MIN, to: 46 * MIN},
+        {agents: 0, drawn: true, from: 7 * MIN, to: 14 * MIN},
+        {agents: 2, drawn: true, from: 15 * MIN, to: 46 * MIN},
       ],
-      look: ['Its machine sleeps from the 2nd minute to the 17th, and every 45 minutes after: the card goes stale and comes back, a gap stays on the 24-hour chart'],
+      look: ['Its machine sleeps from the 2nd minute to the 14th, and so every 45 minutes: the card goes stale and comes back, its agents go and come back, a gap stays on the 24-hour chart'],
     },
     {
       kind: 'card',
