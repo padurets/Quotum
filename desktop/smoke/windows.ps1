@@ -12,6 +12,17 @@ $env:QUOTUM_APP_DATA_DIR = "$work\app"
 $env:QUOTUM_STATE_DIR = "$work\state"
 $env:QUOTUM_CONFIG = "$work\config.toml"
 $env:QUOTUM_RESETS = 'off'
+# Only Antigravity, through a stand-in: no real client starts, no account is needed. The
+# path in single quotes: in a TOML string in double quotes a backslash escapes.
+@"
+sessions = false
+[providers.claude]
+enabled = false
+[providers.codex]
+enabled = false
+[providers.antigravity]
+path = '$PSScriptRoot\agy.cmd'
+"@ | Set-Content -Encoding utf8NoBOM $env:QUOTUM_CONFIG
 
 $dir = Split-Path -Parent $App
 function Nodes { @(Get-Process quotum-node -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$dir\*" }) }

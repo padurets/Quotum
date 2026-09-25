@@ -1,9 +1,14 @@
 //! `--smoke`: the app started as a person starts it, checked end to end and quit, for CI.
-//! It runs with its own data (`QUOTUM_APP_DATA_DIR`, the web view's profile included) and
-//! passes when the hub is ready, the window shows the board, and the window closed and
-//! opened again the way the tray opens it shows the board again; then it quits, exit 0.
-//! `--smoke=crash` aborts once the hub is ready: CI then checks the hub went by itself.
-//! Anything else, or no end within two minutes, is exit 1 with the reason on stderr.
+//! It runs with data of its own (`QUOTUM_APP_DATA_DIR`, the web view's profile included,
+//! and the agent's `QUOTUM_CONFIG` and `QUOTUM_STATE_DIR`) and passes when:
+//! - the hub is ready and the agent delivered a measurement to it;
+//! - entering with the key gives a session whose board shows the measured subscription;
+//! - the window shows the board, and does again after it is closed and opened the way the
+//!   tray opens it (not where the runner can show no window: `QUOTUM_SMOKE_WINDOW=off`).
+//!
+//! Then it quits, exit 0. `--smoke=crash` aborts once the hub is ready: CI then checks the
+//! hub went by itself. Anything else, or no end within two minutes, is exit 1 with the
+//! reason on stderr.
 
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -27,6 +32,9 @@ pub enum Mode {
 #[derive(Debug, Default)]
 struct Progress {
     ready: bool,
+    measured: bool,
+    /// The board, entered as the window enters it, shows what the agent measured.
+    board: bool,
     /// Times the window finished loading the board.
     loaded: u32,
     done: bool,
@@ -34,7 +42,6 @@ struct Progress {
 
 pub struct Smoke {
     pub mode: Mode,
-    /// Off where the runner cannot show a window (`QUOTUM_SMOKE_WINDOW=off`).
     window: bool,
     progress: Mutex<Progress>,
 }
@@ -63,16 +70,36 @@ impl Smoke {
         });
     }
 
-    pub fn hub_ready(&self, shell: &Arc<Shell>, _ready: &Ready) {
+    pub fn hub_ready(&self, _shell: &Arc<Shell>, _ready: &Ready) {
         self.progress().ready = true;
         eprintln!("smoke: the hub is ready");
         if self.mode == Mode::Crash {
             eprintln!("smoke: crashing on purpose");
             std::process::abort();
         }
-        if !self.window {
-            self.pass(shell);
+    }
+
+    /// The agent delivered a measurement: the board, entered with the key as the window
+    /// enters it, must show it.
+    pub fn measured(&self, shell: &Arc<Shell>) {
+        if std::mem::replace(&mut self.progress().measured, true) {
+            return;
         }
+        eprintln!("smoke: the agent measured and delivered");
+        let shell = shell.clone();
+        thread::spawn(move || {
+            let HubState::Ready(ready) = shell.hub().0 else { fail("the hub went away") };
+            match board_shows_a_source(&ready) {
+                Ok(()) => {
+                    eprintln!("smoke: the board shows the measured subscription");
+                    if let Some(smoke) = &shell.smoke {
+                        smoke.progress().board = true;
+                        smoke.pass_if_done(&shell);
+                    }
+                }
+                Err(e) => fail(&format!("the board: {e}")),
+            }
+        });
     }
 
     /// Called on the main thread when a page finished loading: the board of the running hub
@@ -101,16 +128,17 @@ impl Smoke {
             }
             _ => {
                 if let Some(smoke) = &shell.smoke {
-                    smoke.pass(&shell);
+                    smoke.pass_if_done(&shell);
                 }
             }
         });
     }
 
-    fn pass(&self, shell: &Arc<Shell>) {
+    fn pass_if_done(&self, shell: &Arc<Shell>) {
         {
             let mut progress = self.progress();
-            if progress.done {
+            let window = !self.window || progress.loaded >= 2;
+            if progress.done || !(progress.ready && progress.board && window) {
                 return;
             }
             progress.done = true;
@@ -118,6 +146,27 @@ impl Smoke {
         eprintln!("smoke: passed; quitting");
         shell::quit(shell);
     }
+}
+
+/// Enters as the window does (`/local?key=…`, no redirect followed) and reads the board.
+fn board_shows_a_source(ready: &Ready) -> Result<(), String> {
+    let origin = ready.origin();
+    let http = quotum_core::sink::http_to(&origin);
+    let entered = http.get(format!("{origin}/local?key={}", ready.key)).call().map_err(|e| e.to_string())?;
+    let cookie = entered
+        .headers()
+        .get("set-cookie")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(';').next())
+        .ok_or_else(|| format!("no session after entering (HTTP {})", entered.status()))?
+        .to_string();
+    let mut overview =
+        http.get(format!("{origin}/api/overview")).header("cookie", &cookie).call().map_err(|e| e.to_string())?;
+    let text = overview.body_mut().read_to_string().map_err(|e| e.to_string())?;
+    let value: serde_json::Value = serde_json::from_str(&text).map_err(|_| format!("not JSON: {text}"))?;
+    let providers: Vec<&str> =
+        value["sources"].as_array().into_iter().flatten().filter_map(|s| s["provider"].as_str()).collect();
+    if providers.is_empty() { Err(format!("no source on the board: {text}")) } else { Ok(()) }
 }
 
 pub fn fail(why: &str) -> ! {

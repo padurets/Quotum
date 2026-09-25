@@ -10,8 +10,10 @@ use serde::Serialize;
 use tauri::ipc::CapabilityBuilder;
 use tauri::{State, Webview};
 
+use crate::settings::Patch;
 use crate::shell::{self, Shell};
 use crate::window::{self, LABEL};
+use crate::{agent, autostart};
 
 /// The app's commands, as build.rs declares them.
 pub const COMMANDS: [&str; 6] = ["app_state", "save_settings", "take_over", "set_autostart", "reenter", "quit"];
@@ -44,17 +46,63 @@ fn guard(webview: &Webview, shell: &Arc<Shell>) -> Result<(), String> {
     if window::guard(&url, &state) { Ok(()) } else { Err("not the board of the running hub".into()) }
 }
 
+/// What the board shows of the app: its agent, the settings of measuring, start at
+/// login, where its files are, which build it is.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppState {
+    pub agent: agent::State,
+    pub providers: Vec<agent::Provided>,
+    pub sessions: bool,
+    pub autostart: bool,
+    pub config_path: String,
+    pub log_path: String,
     pub version: &'static str,
     pub commit: &'static str,
 }
 
+fn state_of(shell: &Arc<Shell>) -> AppState {
+    let (agent, providers, sessions) = agent::snapshot(shell);
+    AppState {
+        agent,
+        providers,
+        sessions,
+        autostart: autostart::is_enabled(shell),
+        config_path: shell.paths.config.display().to_string(),
+        log_path: shell.dirs.agent_log().display().to_string(),
+        version: env!("CARGO_PKG_VERSION"),
+        commit: env!("QUOTUM_COMMIT"),
+    }
+}
+
+/// Only reads: the state as the app last saw it.
 #[tauri::command(async)]
 pub fn app_state(webview: Webview, shell: State<'_, Arc<Shell>>) -> Result<AppState, String> {
     guard(&webview, &shell)?;
-    Ok(AppState { version: env!("CARGO_PKG_VERSION"), commit: env!("QUOTUM_COMMIT") })
+    Ok(state_of(&shell))
+}
+
+/// Changes the settings of measuring in config.toml; the agent follows in a moment.
+#[tauri::command(async)]
+pub fn save_settings(webview: Webview, shell: State<'_, Arc<Shell>>, patch: Patch) -> Result<AppState, String> {
+    guard(&webview, &shell)?;
+    agent::save_settings(&shell, &patch)?;
+    Ok(state_of(&shell))
+}
+
+/// The person agreed: the app takes the machine over from `quotum` (up to about half a minute).
+#[tauri::command(async)]
+pub fn take_over(webview: Webview, shell: State<'_, Arc<Shell>>) -> Result<AppState, String> {
+    guard(&webview, &shell)?;
+    agent::take_over(&shell)?;
+    Ok(state_of(&shell))
+}
+
+#[tauri::command(async)]
+pub fn set_autostart(webview: Webview, shell: State<'_, Arc<Shell>>, on: bool) -> Result<AppState, String> {
+    guard(&webview, &shell)?;
+    autostart::set(&shell, on)?;
+    Ok(state_of(&shell))
 }
 
 /// Opens the board again: after the window lost its session, it enters with the key of

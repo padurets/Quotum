@@ -77,6 +77,11 @@ pub fn guard(url: &Url, state: &HubState) -> bool {
     matches!(state, HubState::Ready(ready) if same_origin(url, &ready.origin()))
 }
 
+/// Whether the window is open (it may be on its way out).
+pub fn is_open(shell: &Shell) -> bool {
+    shell.app().get_webview_window(LABEL).is_some()
+}
+
 /// Shows the window: creates it if there is none, on a thread of its own.
 pub fn open(shell: &Arc<Shell>) {
     let shell = shell.clone();

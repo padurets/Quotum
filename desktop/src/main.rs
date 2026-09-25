@@ -5,9 +5,12 @@
 // No console window on Windows in a release build.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod agent;
+mod autostart;
 mod files;
 mod hub;
 mod ipc;
+mod settings;
 mod shell;
 mod smoke;
 mod tray;
@@ -88,7 +91,16 @@ fn main() {
             .plugin(tauri_plugin_window_state::Builder::default().build());
     }
     let app = builder
-        .invoke_handler(tauri::generate_handler![ipc::app_state, ipc::reenter, ipc::quit])
+        // Its JavaScript API is not given to any page: the app itself turns it on and off.
+        .plugin(tauri_plugin_autostart::Builder::new().arg("--hidden").build())
+        .invoke_handler(tauri::generate_handler![
+            ipc::app_state,
+            ipc::save_settings,
+            ipc::take_over,
+            ipc::set_autostart,
+            ipc::reenter,
+            ipc::quit
+        ])
         .setup(move |app| {
             let handle = app.handle().clone();
             let paths = app.path();
@@ -119,6 +131,8 @@ fn main() {
             tray::create(&handle, &shell);
             let hub = shell.clone();
             thread::spawn(move || shell::run_hub(hub));
+            let ticker = shell.clone();
+            thread::spawn(move || shell::run_ticker(ticker));
             if !args.hidden {
                 window::open(&shell);
             }
@@ -131,10 +145,15 @@ fn main() {
         });
 
     app.run(|app, event| match event {
-        // The last window closed: the app keeps measuring. Unless it is quitting.
+        // The last window closed: the app keeps measuring. Unless it is quitting, or the
+        // window asked whether to take over from `quotum`: closing it is the answer no.
         RunEvent::ExitRequested { code: None, api, .. } => {
-            if app.try_state::<Arc<Shell>>().is_some_and(|shell| !shell.exiting()) {
+            if let Some(shell) = app.try_state::<Arc<Shell>>().filter(|shell| !shell.exiting()) {
                 api.prevent_exit();
+                let state = shell.agent.lock().unwrap_or_else(|e| e.into_inner()).state.clone();
+                if agent::closing_quits(&state, shell.take_over_confirmed()) {
+                    shell::quit(shell.inner());
+                }
             }
         }
         // The event loop ends (also at the end of the system's session): quick, right here.

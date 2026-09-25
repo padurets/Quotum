@@ -14,9 +14,12 @@ use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Manager};
 
+use quotum_core::config::Paths;
+
+use crate::agent::Agent;
 use crate::files::{AppJson, Dirs, Log, free_port};
 use crate::hub::{self, Event, HubState, Proc, Ready, Restarts, Secrets, Signal};
-use crate::{ipc, smoke, window};
+use crate::{agent, ipc, smoke, window};
 
 /// How long a start of the hub may take until it says it listens.
 const START_LIMIT: Duration = Duration::from_secs(20);
@@ -27,7 +30,13 @@ const RESTART_PAUSE: Duration = Duration::from_secs(1);
 
 pub struct Shell {
     pub dirs: Dirs,
+    /// The agent's files, the same as `quotum`'s: config.toml, state, machine id.
+    pub paths: Paths,
     pub hub_log: Arc<Log>,
+    pub agent_log: Arc<Log>,
+    pub agent: Mutex<Agent>,
+    /// Puts the agent's operations one after another (see agent.rs).
+    pub agent_ops: Mutex<()>,
     /// Node, next to the app's executable.
     pub node: PathBuf,
     /// The hub of this commit in the app's resources.
@@ -58,6 +67,10 @@ impl Shell {
         let app_json = AppJson::load(&dirs.app_json());
         Shell {
             hub_log: Arc::new(Log::new(dirs.hub_log())),
+            agent_log: Arc::new(Log::new(dirs.agent_log())),
+            agent: Mutex::new(Agent::new()),
+            agent_ops: Mutex::new(()),
+            paths: Paths::resolve(),
             dirs,
             node,
             hub_dir,
@@ -102,22 +115,50 @@ impl Shell {
         self.app_json.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Changes the hub's state and follows it: the capability of a new port, the window.
+    /// Changes what `app.json` remembers and writes it.
+    fn remember(&self, change: impl FnOnce(&mut AppJson)) {
+        let mut json = self.app_json();
+        change(&mut json);
+        if let Err(e) = json.save(&self.dirs.app_json()) {
+            self.agent_log.line(&format!("app: {}: {e}", self.dirs.app_json().display()));
+        }
+    }
+
+    pub fn take_over_confirmed(&self) -> bool {
+        self.app_json().take_over_confirmed
+    }
+
+    pub fn confirm_take_over(&self) {
+        self.remember(|json| json.take_over_confirmed = true);
+    }
+
+    pub fn autostart_defaulted(&self) -> bool {
+        self.app_json().autostart_defaulted
+    }
+
+    pub fn mark_autostart_defaulted(&self) {
+        self.remember(|json| json.autostart_defaulted = true);
+    }
+
+    /// Changes the hub's state and follows it: the capability of a new port, the window,
+    /// the agent.
     fn set_hub(self: &Arc<Self>, hub: HubState) {
-        let port = {
+        let (port, generation) = {
             let mut state = self.state();
             if state.hub == hub {
                 return;
             }
             state.hub = hub.clone();
             state.generation += 1;
-            match &hub {
+            let generation = state.generation;
+            let port = match &hub {
                 HubState::Ready(ready) if !state.capabilities.contains(&ready.port) => {
                     state.capabilities.push(ready.port);
                     Some(ready.port)
                 }
                 _ => None,
-            }
+            };
+            (port, generation)
         };
         if let Some(port) = port {
             if let Err(e) = self.app().add_capability(ipc::hub_capability(port)) {
@@ -128,6 +169,16 @@ impl Shell {
         if let (HubState::Ready(ready), Some(smoke)) = (&hub, &self.smoke) {
             smoke.hub_ready(self, ready);
         }
+        // On a thread of their own: the agent's operations wait for runs to end.
+        let shell = self.clone();
+        thread::spawn(move || match hub {
+            HubState::Ready(_) => {
+                agent::start(&shell);
+                agent::hub_ready(&shell);
+            }
+            HubState::Starting => agent::hub_starting(&shell, generation),
+            HubState::Down => agent::hub_down(&shell),
+        });
     }
 
     /// The port remembered for the hub, or a new free one.
@@ -156,7 +207,8 @@ pub fn random_u32() -> u32 {
 }
 
 /// How one start of the hub ended.
-enum Ending {
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Ending {
     /// It stopped listening or exited by itself.
     Ended,
     /// Its port is taken (or not allowed to it).
@@ -165,15 +217,36 @@ enum Ending {
     Quit,
 }
 
+/// What comes after a start of the hub ended.
+#[derive(Debug, PartialEq)]
+pub enum Next {
+    /// At once, on a new port: once per start.
+    NewPort,
+    /// After a pause, with a new key and token.
+    Again,
+    /// For good: three restarts within five minutes.
+    Down,
+    /// The app is quitting: the hub is not started again.
+    Stop,
+}
+
+pub fn next(ending: Ending, port_retried: bool, exiting: bool, restarts: &mut Restarts, now: Instant) -> Next {
+    match ending {
+        _ if exiting => Next::Stop,
+        Ending::Quit => Next::Stop,
+        Ending::PortInUse if !port_retried => Next::NewPort,
+        _ if restarts.allow(now) => Next::Again,
+        _ => Next::Down,
+    }
+}
+
 /// Runs the hub for as long as the app runs: starts it, and after an end nobody asked
 /// for starts it again, with a new key and token, up to three times in five minutes.
+/// A new start waits until the one before exited: two would share the database.
 pub fn run_hub(shell: Arc<Shell>) {
     let mut restarts = Restarts::default();
     let mut port_retried = false;
     loop {
-        if shell.exiting() {
-            return;
-        }
         let ending = attempt(&shell);
         // Moved off the port at once: the window must not ask a port another user may take next.
         if !shell.exiting() {
@@ -182,26 +255,23 @@ pub fn run_hub(shell: Arc<Shell>) {
         if let Some(proc) = shell.proc.lock().unwrap_or_else(|e| e.into_inner()).take() {
             proc.finish(EXIT_LIMIT);
         }
-        match ending {
-            Ending::Quit => return,
-            Ending::PortInUse if !port_retried => {
+        match next(ending, port_retried, shell.exiting(), &mut restarts, Instant::now()) {
+            Next::Stop => return,
+            Next::NewPort => {
                 port_retried = true;
                 let port = shell.new_port(&mut shell.app_json());
                 shell.hub_log.line(&format!("app: the hub's port is taken; trying port {port}"));
-                continue;
             }
-            Ending::PortInUse | Ending::Ended => {}
+            Next::Again => {
+                port_retried = false;
+                thread::sleep(RESTART_PAUSE);
+            }
+            Next::Down => {
+                shell.hub_log.line("app: the hub stopped three times within five minutes; not starting it again");
+                shell.set_hub(HubState::Down);
+                return;
+            }
         }
-        if shell.exiting() {
-            return;
-        }
-        if !restarts.allow(Instant::now()) {
-            shell.hub_log.line("app: the hub stopped three times within five minutes; not starting it again");
-            shell.set_hub(HubState::Down);
-            return;
-        }
-        port_retried = false;
-        thread::sleep(RESTART_PAUSE);
     }
 }
 
@@ -284,7 +354,8 @@ pub fn shutdown(shell: &Arc<Shell>, fast: bool, from_exit_event: bool) {
     if !fast {
         window::leave(shell);
     }
-    // 2–3. The agent stops and lets the machine go (see agent.rs); then this copy's lock.
+    // 2–3. The agent stops and lets the machine go; then this copy's lock.
+    agent::quit(shell, if fast { Duration::from_secs(1) } else { Duration::from_secs(5) });
     shell.app_lock.lock().unwrap_or_else(|e| e.into_inner()).take();
     // 4. The hub ends by itself once its stdin closes.
     if let Some(proc) = shell.proc.lock().unwrap_or_else(|e| e.into_inner()).take() {
@@ -300,8 +371,33 @@ pub fn shutdown(shell: &Arc<Shell>, fast: bool, from_exit_event: bool) {
     }
 }
 
+/// Every five seconds while the app runs, window or not (see `agent::tick`).
+pub fn run_ticker(shell: Arc<Shell>) {
+    while !shell.exiting() {
+        thread::sleep(Duration::from_secs(5));
+        agent::tick(&shell);
+    }
+}
+
 /// `shutdown` on a thread of its own, for handlers that must not block.
 pub fn quit(shell: &Arc<Shell>) {
     let shell = shell.clone();
     thread::spawn(move || shutdown(&shell, false, false));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_hub_that_ends_is_started_again_three_times_then_stays_down() {
+        let (mut restarts, now) = (Restarts::default(), Instant::now());
+        assert_eq!(next(Ending::PortInUse, false, false, &mut restarts, now), Next::NewPort);
+        assert_eq!(next(Ending::PortInUse, true, false, &mut restarts, now), Next::Again, "one new port per start");
+        assert_eq!(next(Ending::Ended, false, false, &mut restarts, now), Next::Again);
+        assert_eq!(next(Ending::Ended, false, false, &mut restarts, now), Next::Again);
+        assert_eq!(next(Ending::Ended, false, false, &mut restarts, now), Next::Down);
+        assert_eq!(next(Ending::Ended, false, true, &mut Restarts::default(), now), Next::Stop, "never while quitting");
+        assert_eq!(next(Ending::Quit, false, false, &mut Restarts::default(), now), Next::Stop);
+    }
 }

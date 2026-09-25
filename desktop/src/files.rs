@@ -50,6 +50,10 @@ impl Dirs {
         self.logs.join("hub.log")
     }
 
+    pub fn agent_log(&self) -> PathBuf {
+        self.logs.join("agent.log")
+    }
+
     /// Creates the directories; on Linux only this user may enter the data directory, which
     /// holds the web view's data and the logs as well.
     pub fn ensure(&self) -> io::Result<()> {

@@ -10,6 +10,16 @@ shift
 work=$(mktemp -d)
 export QUOTUM_APP_DATA_DIR="$work/app" QUOTUM_STATE_DIR="$work/state" QUOTUM_CONFIG="$work/config.toml"
 export QUOTUM_RESETS=off
+# Only Antigravity, through a stand-in: no real client starts, no account is needed.
+cat > "$QUOTUM_CONFIG" <<EOF
+sessions = false
+[providers.claude]
+enabled = false
+[providers.codex]
+enabled = false
+[providers.antigravity]
+path = '$(cd "$(dirname "$0")" && pwd)/agy'
+EOF
 
 fail() {
   echo "smoke ($mode): $*" >&2
