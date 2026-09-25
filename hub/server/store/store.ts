@@ -79,12 +79,15 @@ export class Store {
   }
 
   /**
-   * Since when history is kept: the creation of this database, or the oldest sample it
-   * keeps when that is older (measurements an agent kept while the hub was away and
-   * delivered to a new one). The index on time finds it at once.
+   * Since when history is kept, for the whole hub: the creation of this database, or the
+   * oldest sample it keeps when that is older (measurements an agent kept while the hub
+   * was away and delivered to a new one). Only within the retention period: a sample
+   * dated before it (a clock not set yet) is pruned soon and moves nothing meanwhile.
+   * The index on time finds it at once.
    */
   get historyStart(): number {
-    const oldest = (this.db.prepare('SELECT MIN(at) AS at FROM samples').get() as {at: number | null}).at;
+    const kept = Date.now() - config.retention.sampleDays * 86_400_000;
+    const oldest = (this.db.prepare('SELECT MIN(at) AS at FROM samples WHERE at >= ?').get(kept) as {at: number | null}).at;
     return oldest === null ? this.created : Math.min(this.created, oldest);
   }
 

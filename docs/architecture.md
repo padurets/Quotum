@@ -224,9 +224,9 @@ them), kept for 90 days.
   when a newer one will be ready for the page to ask again; a source joining or leaving
   the board is never served from it. The range is in the past, so the table reads it from its edges: what
   was left at its first and last measurement, what it spent and how fast. The chart
-  begins where the history does: when the database was made, or at the oldest sample it
-  keeps when that is older (an agent's spool delivered to a new hub brings its days
-  along).
+  begins where the history does, the same for every board: when the database was made,
+  or at the oldest sample it keeps when that is older (an agent's spool delivered to a new
+  hub brings its days along); a sample dated before the retention period moves nothing.
 - **The plan** is per source and belongs to the board's view: whole percents per day of the
   weekly window (30/25/15/15/10/5/0 by default). A day at 0 has no spending planned,
   wherever it is; the plan ends with its last non-zero day. Other windows are planned
