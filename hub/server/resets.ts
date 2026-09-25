@@ -99,8 +99,9 @@ export class ResetFeed {
         ? {...tracker, ok: true, detail: 'ok', at: now}
         : {...tracker, ok: false, detail: describeFailure(result.reason), at: now};
     this.health = [report(CODEX_RESETS, codex), report(CLAUDE_RESETS, catalogue)];
-    // The address read, not the tracker's: a mirror may be the one failing.
-    const failed = (url: string, result: PromiseSettledResult<unknown>) => (result.status === 'rejected' ? [{url, detail: describeFailure(result.reason)}] : []);
+    // The address read, not the tracker's: a mirror may be the one failing. Without its query, which may hold a key.
+    const failed = (url: string, result: PromiseSettledResult<unknown>) =>
+      result.status === 'rejected' ? [{url: new URL(url).origin + new URL(url).pathname, detail: describeFailure(result.reason)}] : [];
     const failures = [...failed(codexApi, codex), ...failed(claudeApi, catalogue)];
     this.log({event: 'resets', codex: codex.status, claude: catalogue.status, ...(failures.length ? {failures} : {})});
   }

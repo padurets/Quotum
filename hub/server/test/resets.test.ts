@@ -69,6 +69,11 @@ test('the trackers are read where the owner says, their own APIs by default', ()
   assert.equal(trackerUrl('QUOTUM_RESETS_CODEX_URL', 'http://mirror.lan:8090/codex/status?v=1', 'x'), 'http://mirror.lan:8090/codex/status?v=1');
   assert.throws(() => trackerUrl('QUOTUM_RESETS_CODEX_URL', 'mirror.lan/codex', 'x'), /QUOTUM_RESETS_CODEX_URL/);
   assert.throws(() => trackerUrl('QUOTUM_RESETS_CLAUDE_URL', 'ftp://mirror.lan/claude', 'x'), /QUOTUM_RESETS_CLAUDE_URL/);
+  assert.throws(
+    () => trackerUrl('QUOTUM_RESETS_CLAUDE_URL', 'https://reader:s3cret@mirror.lan/claude', 'x'),
+    (error: Error) => /QUOTUM_RESETS_CLAUDE_URL must not contain a user name or password/.test(error.message) && !error.message.includes('s3cret'),
+    'an address with credentials would never be read, and the error does not repeat it',
+  );
 });
 
 test('a round reads the addresses it is given and reports how each tracker did', async () => {
@@ -89,14 +94,14 @@ test('a round reads the addresses it is given and reports how each tracker did',
   const feed = new ResetFeed((provider, reset) => remembered.push(`${provider} ${reset.at}`), event => logged.push(event), {
     enabled: true,
     codexApi: `${base}/codex`,
-    claudeApi: `${base}/claude`,
+    claudeApi: `${base}/claude?key=s3cret`,
     timeoutMs: 2_000,
   });
   await feed.round();
   server.close();
 
   const {resets, trackers} = feed.snapshot();
-  assert.deepEqual(asked.sort(), ['/claude', '/codex']);
+  assert.deepEqual(asked.sort(), ['/claude?key=s3cret', '/codex']);
   assert.equal(resets.codex?.latest?.text, 'Reset for all.');
   assert.equal(resets.claude, undefined);
   assert.deepEqual(remembered, [`codex ${Date.parse('2026-09-22T10:00:00Z')}`]);
@@ -108,5 +113,5 @@ test('a round reads the addresses it is given and reports how each tracker did',
     ],
     'credited as always, wherever they are read',
   );
-  assert.deepEqual((logged[0] as {failures: object[]}).failures, [{url: `${base}/claude`, detail: 'HTTP 503'}], 'the log names the address that failed');
+  assert.deepEqual((logged[0] as {failures: object[]}).failures, [{url: `${base}/claude`, detail: 'HTTP 503'}], 'the log names the address that failed, without its query');
 });

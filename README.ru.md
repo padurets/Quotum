@@ -366,7 +366,7 @@ account = "work"        # различает две подписки Antigravity
 | `QUOTUM_SETUP_CODE` | случайный, печатается при запуске | Код, который нужен первому аккаунту, пока на хабе нет ни одного |
 | `QUOTUM_SIGNUP` | `invite` | `open` — регистрироваться может кто угодно; иначе только первый человек и приглашённые |
 | `QUOTUM_RESETS` | включено | `off` — не опрашивать трекеры сбросов |
-| `QUOTUM_RESETS_CODEX_URL`, `QUOTUM_RESETS_CLAUDE_URL` | API самих трекеров | Откуда читать Codex Resets и Claude Resets вместо них, например зеркало, если проверка ботов трекера не пускает ваш сервер |
+| `QUOTUM_RESETS_CODEX_URL`, `QUOTUM_RESETS_CLAUDE_URL` | `https://codex-resets.com/api/v1/status`, `https://claude-resets.com/api/resets` | Откуда читать Codex Resets и Claude Resets вместо них, например зеркало, если проверка ботов трекера не пускает ваш сервер: полный адрес endpoint'а с тем же JSON в ответе, без имени пользователя и пароля |
 | `QUOTUM_FRAME_ANCESTORS` | — | Дополнительные origin, которым можно встраивать дашборд |
 
 **Как открыть хаб другим машинам.** Поставьте его за HTTPS (сессии — это cookies, а
