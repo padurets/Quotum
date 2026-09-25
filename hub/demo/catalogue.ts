@@ -110,7 +110,7 @@ export const SCENES: Scene[] = [
       {marked: 'claude', resets: 1},
     ],
     look: [
-      'Codex cards: an accent mark "in 26h" on the left of the tray, not the reset of four hours ago; its panel says "Reset in 26h · tomorrow <time>", why it matters, the tracker\'s text and "Data from Codex Resets"',
+      'Codex cards: an accent mark "in 25h" on the left of the tray (the time is rounded down), not the reset of four hours ago; its panel says "Reset in 25h · tomorrow <time>", why it matters, the tracker\'s text and "Data from Codex Resets"',
       'Claude cards: a quiet mark, an arrow round a tick, not the change of limits of yesterday; its panel says "Reset happened · <time> · Max"',
       'Both resets for everyone are marked on the charts',
     ],
@@ -128,7 +128,7 @@ export const SCENES: Scene[] = [
       {reset: 'codex', label: 'bankedIn'},
       {reset: 'claude', label: null},
     ],
-    look: ['Codex: "in 20h" on the mark, "Banked reset in 20h" in its panel; no mark on Claude cards'],
+    look: ['Codex: "in 19h" on the mark, "Banked reset in 19h" in its panel; no mark on Claude cards'],
   },
   {
     kind: 'scene',
