@@ -60,6 +60,22 @@ export function localMode(env: Record<string, string | undefined>): LocalMode | 
   return {key, token};
 }
 
+/**
+ * Where to read a reset tracker: its own API unless `variable` names another address
+ * (a mirror, where the tracker's bot check stops the server). Checked at start.
+ */
+export function trackerUrl(variable: string, value: string | undefined, fallback: string): string {
+  if (!value) return fallback;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${variable} must be a full address like https://mirror.example.com/api, not "${value}"`);
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error(`${variable} must start with https:// or http://, not "${value}"`);
+  return url.href;
+}
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 /** The hub directory: two levels up from `dist/server` when built, one from `server` in source. */
 export const appRoot = path.resolve(here, path.basename(path.dirname(here)) === 'dist' ? '../..' : '..');
@@ -132,12 +148,16 @@ export const config = {
     costlyMs: 50,
   },
 
-  /** Community reset trackers (see domain/resets.ts); credited wherever shown. `QUOTUM_RESETS=off` turns them off. */
+  /**
+   * Community reset trackers (see domain/resets.ts); credited wherever shown. `QUOTUM_RESETS=off`
+   * turns them off; `QUOTUM_RESETS_CODEX_URL` and `QUOTUM_RESETS_CLAUDE_URL` read them elsewhere.
+   */
   resets: {
     enabled: process.env.QUOTUM_RESETS !== 'off',
-    codexApi: 'https://codex-resets.com/api/v1/status',
-    claudeApi: 'https://claude-resets.com/api/resets',
+    codexApi: trackerUrl('QUOTUM_RESETS_CODEX_URL', process.env.QUOTUM_RESETS_CODEX_URL, 'https://codex-resets.com/api/v1/status'),
+    claudeApi: trackerUrl('QUOTUM_RESETS_CLAUDE_URL', process.env.QUOTUM_RESETS_CLAUDE_URL, 'https://claude-resets.com/api/resets'),
     intervalMs: 10 * 60_000,
+    timeoutMs: 10_000,
   },
 } as const;
 
