@@ -138,6 +138,17 @@ export const SCENES: Scene[] = [
   },
   {
     kind: 'scene',
+    id: 'possible-no-chance',
+    codex: at => codex({active_watch: {observed_at: at(-HOUR), expires_at: null, reset_chance_percent: null, forecast_window: 'this week', text: 'People report resets on some accounts.'}}),
+    claude: quiet,
+    expect: [
+      {reset: 'codex', label: 'possible', chance: null},
+      {reset: 'claude', label: null},
+    ],
+    look: ['"Possible reset" with no chance after it, and no time'],
+  },
+  {
+    kind: 'scene',
     id: 'reset',
     codex: at => codex({latest_reset: {announced_at: at(-4 * HOUR), text: 'Limits were reset for everyone.'}}),
     claude: at => claude([{kind: 'reset', date: at(-HOUR), scope: 'Pro', note: 'Weekly limits reset for Pro plans.'}]),
