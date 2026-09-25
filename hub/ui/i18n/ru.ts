@@ -153,7 +153,7 @@ export const ru = {
   'agents.state': 'Состояние',
   'agents.subscription': 'Подписка',
   'agents.machine': 'Машина',
-  'agents.origin': 'Где',
+  'agents.origin': 'Клиент',
   'agents.running': 'Запущен',
   'agents.columns': 'Колонки',
   'card.freeResets': {one: '{count} бесплатный сброс', few: '{count} бесплатных сброса', many: '{count} бесплатных сбросов', other: '{count} бесплатного сброса'},
@@ -161,6 +161,9 @@ export const ru = {
   'card.freeResetsBy': '{count} до {date}',
   'card.freeResetsNoDate': '{count} без срока',
   'card.freeResetsFirst': 'ближайший сгорает {date}',
+  'card.freeResetsExpires': 'Сгорает',
+  'card.freeResetsCount': 'Сбросов',
+  'card.freeResetsNever': 'без срока',
 
   'source.settings': 'Настройки · {source}',
   'source.show': 'Показывать лимиты',

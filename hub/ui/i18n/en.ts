@@ -158,7 +158,7 @@ export const en = {
   'agents.state': 'State',
   'agents.subscription': 'Subscription',
   'agents.machine': 'Machine',
-  'agents.origin': 'Where',
+  'agents.origin': 'Client',
   'agents.running': 'Running for',
   'agents.columns': 'Columns',
   'card.freeResets': {one: '{count} free reset', other: '{count} free resets'},
@@ -166,6 +166,9 @@ export const en = {
   'card.freeResetsBy': '{count} by {date}',
   'card.freeResetsNoDate': '{count} with no end date',
   'card.freeResetsFirst': 'the first expires {date}',
+  'card.freeResetsExpires': 'Expires',
+  'card.freeResetsCount': 'Resets',
+  'card.freeResetsNever': 'no end date',
 
   'source.settings': 'Settings · {source}',
   'source.show': 'Show limits',

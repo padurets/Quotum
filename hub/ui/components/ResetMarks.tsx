@@ -156,6 +156,9 @@ export function FreeResets({resets}: {resets: NonNullable<SourceState['resets']>
   const count = t('card.freeResets', {count: resets.available});
   const lines = expiryLines(resets);
   const label = [count, ...lines].join('\n');
+  // Resets that expire at different times read as a table in the panel, a row per time.
+  const expiry = freeResetExpiry(resets);
+  const groups = expiry?.kind === 'each' && expiry.groups.length > 1 ? expiry.groups : null;
   return (
     <Popover
       label={label}
@@ -171,12 +174,27 @@ export function FreeResets({resets}: {resets: NonNullable<SourceState['resets']>
       <div className="tray-panel">
         <div className="tray-panel-head">
           <p className="tray-panel-lead">{count}</p>
-          {lines.map(line => (
-            <p key={line} className="tray-panel-when">
-              {line}
-            </p>
-          ))}
+          {!groups &&
+            lines.map(line => (
+              <p key={line} className="tray-panel-when">
+                {line}
+              </p>
+            ))}
         </div>
+        {groups && (
+          <dl className="tray-panel-table">
+            <div className="tray-panel-table-head" aria-hidden="true">
+              <span>{t('card.freeResetsExpires')}</span>
+              <span>{t('card.freeResetsCount')}</span>
+            </div>
+            {groups.map(group => (
+              <div key={group.expiresAt ?? 'never'}>
+                <dt>{group.expiresAt !== null ? stamp(group.expiresAt) : t('card.freeResetsNever')}</dt>
+                <dd>{group.count}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
       </div>
     </Popover>
   );
