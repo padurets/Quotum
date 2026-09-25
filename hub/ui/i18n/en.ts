@@ -43,8 +43,6 @@ export const en = {
   'time.hoursAgo': '{n}h ago',
   'time.daysAgo': '{n}d ago',
   'time.noData': 'no data',
-  'time.today': 'today {time}',
-  'time.tomorrow': 'tomorrow {time}',
 
   'kind.session': '5 hours',
   'kind.weekly': 'weekly',
@@ -91,7 +89,7 @@ export const en = {
   'settings.title': 'Settings',
   'settings.view': 'Appearance',
   'settings.resets': 'Limit reset announcements',
-  'settings.checkedAt': 'Checked at {time}',
+  'settings.checkedAt': 'Checked {time}',
   'settings.resetsNote': 'Out-of-schedule resets of Claude and Codex come from {claude} and {codex}.',
   'tracker.checking': 'checking…',
   'tracker.ok': 'data received',

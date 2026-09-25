@@ -102,6 +102,11 @@ is open.
 - A card tells how its measurements go in the logo's dot and its news in marks in its
   tray, with the details in a tooltip or a panel, never in a line of its own; neither
   changes a card's height.
+- **Times.** A mark or a cell with little room may say how soon or how long ago
+  (`countdown`, `ago` in `hub/ui/lib/format.ts`: "in 20h", "5m ago"), and then the exact
+  time is in its tooltip or panel. A panel, a tooltip or a heading says when as `stamp`
+  does ("26 Sept, 14:00"): never "today" or "tomorrow", never seconds. Under a heading
+  that already gives the day, the time alone will do.
 - Colours come from the tokens at the top of `hub/ui/style.css`, and the colours of
   series from `hub/ui/lib/providers.ts`. Status colours (ok, warn, crit) are for status
   only: how much of a limit is left, a source or device in trouble, a destructive

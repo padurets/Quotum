@@ -2,7 +2,7 @@ import {memo, useEffect, useRef, useState, type CSSProperties} from 'react';
 import {useNow} from '../lib/api';
 import type {SourceState, Win} from '../lib/types';
 import {windowKey} from '../lib/types';
-import {ago, duration, fullStamp, num} from '../lib/format';
+import {ago, duration, num, stamp} from '../lib/format';
 import {dotOf, errorText, level, problemOf, resetLine, sourceLabel, windowName} from '../lib/quota';
 import {t, useLocale} from '../i18n';
 import {DEFAULT_PLAN, isValidPlan, planAt, planNote, planTotal, type WeeklyPlan} from '../lib/plan';
@@ -46,7 +46,7 @@ function Limit({w, measuredAt, now, weekly}: {w: Win; measuredAt: number | null;
       </div>
       <Meter w={w} measuredAt={measuredAt} now={now} weekly={weekly} />
       <div className="limit-bottom">
-        <span title={w.resetAt ? fullStamp(w.resetAt) : ''}>
+        <span title={w.resetAt ? stamp(w.resetAt) : ''}>
           {reset.key === 'resetsIn' ? t('limit.resetsIn', {time: duration(reset.inMs)}) : t(`limit.${reset.key}`)}
         </span>
         {note?.key === 'ahead' && (

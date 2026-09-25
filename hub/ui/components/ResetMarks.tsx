@@ -1,4 +1,4 @@
-import {countdown, day, soon, stamp} from '../lib/format';
+import {countdown, day, stamp} from '../lib/format';
 import type {ResetLabel, ResetStatus} from '../lib/resets';
 import type {SourceState} from '../lib/types';
 import {rich, t} from '../i18n';
@@ -31,7 +31,7 @@ function headline(label: ResetLabel, now: number) {
   switch (label.key) {
     case 'in':
     case 'bankedIn':
-      return `${t(`reset.${label.key}`, {time: countdown(label.at - now)})} · ${soon(label.at, now)}`;
+      return `${t(`reset.${label.key}`, {time: countdown(label.at - now)})} · ${stamp(label.at)}`;
     case 'announced':
       return t('reset.announced');
     case 'awaiting':

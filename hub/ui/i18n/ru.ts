@@ -38,8 +38,6 @@ export const ru = {
   'time.hoursAgo': '{n} ч назад',
   'time.daysAgo': '{n} д назад',
   'time.noData': 'нет данных',
-  'time.today': 'сегодня {time}',
-  'time.tomorrow': 'завтра {time}',
 
   'kind.session': '5 часов',
   'kind.weekly': 'неделя',
@@ -86,7 +84,7 @@ export const ru = {
   'settings.title': 'Настройки',
   'settings.view': 'Вид',
   'settings.resets': 'Уведомления о сбросах лимитов',
-  'settings.checkedAt': 'Проверено в {time}',
+  'settings.checkedAt': 'Проверено {time}',
   'settings.resetsNote': 'Внеплановые сбросы Claude и Codex по данным {claude} и {codex}.',
   'tracker.checking': 'проверяем…',
   'tracker.ok': 'данные получены',

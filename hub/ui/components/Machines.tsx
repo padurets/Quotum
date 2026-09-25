@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useState, type FormEvent} from 'react';
 import {useNow} from '../lib/api';
-import {ago} from '../lib/format';
+import {ago, stamp} from '../lib/format';
 import {PROVIDERS} from '../lib/providers';
 import {errorText} from '../lib/quota';
 import {call} from '../lib/http';
@@ -140,7 +140,7 @@ function Devices({local}: {local: boolean}) {
               <td>
                 <Agents device={device} />
               </td>
-              <td>{device.lastSeenAt ? ago(device.lastSeenAt, now) : '—'}</td>
+              <td title={device.lastSeenAt ? stamp(device.lastSeenAt) : undefined}>{device.lastSeenAt ? ago(device.lastSeenAt, now) : '—'}</td>
               <td>
                 {!local && (
                   <button type="button" className="link-button danger" onClick={() => revoke(device)}>
@@ -232,7 +232,7 @@ function Connect() {
                 <span>
                   <b>{tokenName(token)}</b> <span className="mono">{token.hint}</span>
                 </span>
-                <small>{token.lastUsedAt ? t('connect.used', {ago: ago(token.lastUsedAt, now)}) : t('connect.unused')}</small>
+                <small title={token.lastUsedAt ? stamp(token.lastUsedAt) : undefined}>{token.lastUsedAt ? t('connect.used', {ago: ago(token.lastUsedAt, now)}) : t('connect.unused')}</small>
                 <button type="button" className="link-button danger" onClick={() => revoke(token)}>
                   {t('connect.revoke')}
                 </button>

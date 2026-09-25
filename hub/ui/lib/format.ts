@@ -50,15 +50,9 @@ export const day = (time: number) => new Date(time).toLocaleDateString(formatLoc
 /** "22 Sept" */
 export const shortDay = (time: number) => new Date(time).toLocaleDateString(formatLocale(), {day: 'numeric', month: 'short'});
 
-/** "today 21:00", "tomorrow 10:30", otherwise "25 Sept 10:30" — for tight spaces. */
-export function soon(time: number, now: number) {
-  const dayOf = (t: number) => new Date(t).toDateString();
-  if (dayOf(time) === dayOf(now)) return t('time.today', {time: clock(time)});
-  if (dayOf(time) === dayOf(now + 86_400_000)) return t('time.tomorrow', {time: clock(time)});
-  return `${shortDay(time)} ${clock(time)}`;
-}
-
+/**
+ * "26 Sept, 14:00": the one way a panel, a tooltip or a heading says when. A mark or a
+ * cell with little room may say how soon or how long ago instead (`countdown`, `ago`).
+ */
 export const stamp = (time: number) =>
   new Date(time).toLocaleString(formatLocale(), {day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'});
-
-export const fullStamp = (time: number) => new Date(time).toLocaleString(formatLocale());
