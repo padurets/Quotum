@@ -94,7 +94,7 @@ pub fn save(path: &Path, patch: &Patch) -> Result<(), String> {
 }
 
 /// Writes a new file next to `target` and puts it in its place, with the old one's
-/// permissions (a new one is readable by this user only).
+/// permissions. A new file is private on Unix and inherits its folder's ACL on Windows.
 fn write_replacing(target: &Path, text: &str) -> io::Result<()> {
     let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let next: PathBuf = target.with_file_name(format!(".{name}.quotum-app.new"));
@@ -105,9 +105,35 @@ fn write_replacing(target: &Path, text: &str) -> io::Result<()> {
         let mode = fs::metadata(target).map(|m| m.permissions().mode() & 0o7777).unwrap_or(0o600);
         fs::set_permissions(&next, fs::Permissions::from_mode(mode))?;
     }
-    fs::rename(&next, target).inspect_err(|_| {
-        let _ = fs::remove_file(&next);
+    replace(&next, target).inspect_err(|_| {
+        // ReplaceFile can fail after removing the old name. Keep the new data then.
+        if target.exists() {
+            let _ = fs::remove_file(&next);
+        }
     })
+}
+
+#[cfg(not(windows))]
+fn replace(next: &Path, target: &Path) -> io::Result<()> {
+    fs::rename(next, target)
+}
+
+#[cfg(windows)]
+fn replace(next: &Path, target: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::ReplaceFileW;
+
+    if !target.try_exists()? {
+        return fs::rename(next, target);
+    }
+    let wide = |path: &Path| path.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<_>>();
+    let (next, target) = (wide(next), wide(target));
+    // Rename replaces the file's ACL with the temporary file's inherited ACL.
+    // ReplaceFile preserves it; do not ignore an error merging those permissions.
+    let replaced = unsafe {
+        ReplaceFileW(target.as_ptr(), next.as_ptr(), std::ptr::null(), 0, std::ptr::null(), std::ptr::null())
+    };
+    if replaced == 0 { Err(io::Error::last_os_error()) } else { Ok(()) }
 }
 
 #[cfg(test)]
@@ -186,6 +212,38 @@ mod tests {
         assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink(), "still a link");
         assert_eq!(fs::read_to_string(&real).unwrap(), "sessions = false\n");
         assert_eq!(fs::metadata(&real).unwrap().permissions().mode() & 0o777, 0o600);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_files_explicit_acl_stays_when_settings_change() {
+        let dir = temp("windows-acl");
+        let file = dir.join("config.toml");
+        fs::write(&file, "# keep\nsessions = true\n").unwrap();
+        let acl = |protect: bool| {
+            let script = if protect {
+                "$a=Get-Acl -LiteralPath $env:QUOTUM_TEST_FILE; $a.SetAccessRuleProtection($true,$true); Set-Acl -LiteralPath $env:QUOTUM_TEST_FILE -AclObject $a; (Get-Acl -LiteralPath $env:QUOTUM_TEST_FILE).Sddl"
+            } else {
+                "(Get-Acl -LiteralPath $env:QUOTUM_TEST_FILE).Sddl"
+            };
+            let output = std::process::Command::new("powershell.exe")
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    &format!("$ErrorActionPreference='Stop'; {script}"),
+                ])
+                .env("QUOTUM_TEST_FILE", &file)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            output.stdout
+        };
+        let before = acl(true);
+        save(&file, &patch(r#"{"sessions":false}"#)).unwrap();
+        assert_eq!(acl(false), before, "the protected ACL must survive replacement");
+        assert_eq!(fs::read_to_string(&file).unwrap(), "# keep\nsessions = false\n");
         fs::remove_dir_all(dir).unwrap();
     }
 }

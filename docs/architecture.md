@@ -439,8 +439,10 @@ measures, and `quotum stop` ends a waiting `quotum` but never the app.
 **Its settings** are in the board's settings panel, only in the app's window: which
 providers are measured and how often, a name for the Antigravity account, whether
 running agents are shown, start at login, the version and *Quit*. They are `quotum`'s
-settings: a change is written to `config.toml` at once (its comments kept), and one made
-in the file by hand is picked up within seconds.
+settings: a change is written to `config.toml` at once, keeping comments, symbolic links
+and permissions. Windows uses `ReplaceFileW` to preserve an existing file's ACL;
+new files inherit the profile folder's ACL. A change made in the file by hand is picked
+up within seconds.
 
 ## Roadmap
 
