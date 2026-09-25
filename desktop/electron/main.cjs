@@ -100,7 +100,6 @@ ipcMain.handle('quotum:invoke', (event, command, args) => {
   });
 });
 // Observability stays in the private transport; the page gets no extra command.
-let graphicsPending = false;
 let previousGraphics = '';
 let graphicsTimer;
 function scheduleGraphics() {
@@ -108,31 +107,28 @@ function scheduleGraphics() {
   graphicsTimer = setTimeout(reportGraphics, 500);
   graphicsTimer.unref();
 }
-async function reportGraphics() {
-  if (!window || quitting || graphicsPending) return;
-  graphicsPending = true;
-  try {
-    const info = await app.getGPUInfo('basic');
-    if (quitting || !window) return;
-    const features = app.getGPUFeatureStatus();
-    const message = {
-      type: 'graphics', electron: process.versions.electron, chromium: process.versions.chrome,
-      backend: app.commandLine.getSwitchValue('ozone-platform') || 'default',
-      compositing: features.gpu_compositing || 'unknown', rasterization: features.rasterization || 'unknown',
-      renderer: String(info.auxAttributes?.glRenderer || 'not reported').slice(0, 256),
-    };
-    const text = JSON.stringify(message);
-    if (text !== previousGraphics) { previousGraphics = text; send(message); }
-  } catch { /* GPU information can be unavailable during process teardown. */ }
-  finally { graphicsPending = false; }
+function reportGraphics() {
+  if (!window || quitting) return;
+  // Read Chromium's cached policy. Routine logging needs no device enumeration or
+  // subscription that could do work again whenever GPU information changes.
+  const features = app.getGPUFeatureStatus();
+  const message = {
+    type: 'graphics', electron: process.versions.electron, chromium: process.versions.chrome,
+    backend: app.commandLine.getSwitchValue('ozone-platform') || 'default',
+    compositing: features.gpu_compositing || 'unknown', rasterization: features.rasterization || 'unknown',
+  };
+  const text = JSON.stringify(message);
+  if (text !== previousGraphics) { previousGraphics = text; send(message); }
 }
 ipcMain.on('quotum:renderer-sandbox', (event, sandboxed) => {
   if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) return;
   if (sandboxed !== true) { send({type: 'fault', process: 'renderer', reason: 'sandbox disabled'}); app.exit(1); }
 });
-app.on('gpu-info-update', scheduleGraphics);
 app.on('child-process-gone', (_, details) => {
-  if (!['clean-exit', 'killed'].includes(details.reason)) send({type: 'fault', process: details.type, reason: details.reason});
+  if (!['clean-exit', 'killed'].includes(details.reason)) {
+    send({type: 'fault', process: details.type, reason: details.reason});
+    scheduleGraphics();
+  }
 });
 app.on('window-all-closed', finish);
 app.on('before-quit', () => { quitting = true; });

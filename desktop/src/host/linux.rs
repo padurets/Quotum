@@ -312,26 +312,10 @@ fn nvidia() -> bool {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum Message {
     Ready,
-    Request {
-        id: u64,
-        origin: String,
-        request: Value,
-    },
-    Loaded {
-        url: String,
-    },
-    Fault {
-        process: String,
-        reason: String,
-    },
-    Graphics {
-        electron: String,
-        chromium: String,
-        backend: String,
-        compositing: String,
-        rasterization: String,
-        renderer: String,
-    },
+    Request { id: u64, origin: String, request: Value },
+    Loaded { url: String },
+    Fault { process: String, reason: String },
+    Graphics { electron: String, chromium: String, backend: String, compositing: String, rasterization: String },
 }
 /// Bounded frames: neither a broken GUI nor stderr can allocate unbounded memory.
 fn read_frame(reader: &mut impl BufRead) -> io::Result<Option<String>> {
@@ -375,8 +359,8 @@ fn read_messages(shell: &Arc<Shell>, gui: &Arc<Gui>, socket: UnixStream) {
                     smoke.page_loaded(shell, &url);
                 }
             }
-            Message::Graphics { electron, chromium, backend, compositing, rasterization, renderer } => {
-                shell.hub_log.line(&format!("app: Electron {electron}, Chromium {chromium}, display {backend}, compositing {compositing}, rasterization {rasterization}, renderer {renderer}"));
+            Message::Graphics { electron, chromium, backend, compositing, rasterization } => {
+                shell.hub_log.line(&format!("app: Electron {electron}, Chromium {chromium}, display {backend}, compositing {compositing}, rasterization {rasterization}"));
             }
             Message::Fault { process, reason } => {
                 shell.hub_log.line(&format!("app: Chromium child ended unexpectedly ({process}: {reason})"));
