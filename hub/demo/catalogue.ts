@@ -439,7 +439,7 @@ const all: DemoSet = {
         {window: 'session', note: 'ahead', hint: 'reset', to: 20 * MIN},
         {forecast: 'weekly', outlook: 'runsOut', tone: 'v-crit', plan: 'ahead'},
       ],
-      look: ['A third of the row wide', 'The five hours are ahead of an even pace for the first minutes: its own tooltip'],
+      look: ['A third of the row wide, with the next two cards', 'The five hours are ahead of an even pace for the first minutes: its own tooltip'],
     },
     {
       kind: 'card',
@@ -449,7 +449,7 @@ const all: DemoSet = {
       machines: ['win-desktop'],
       history: 14 * DAY,
       windows: [fiveHours(90 * MIN, 6, shifts(12)), weekly({since: -2 * DAY, use: alongPlan(-15, WEEK_PLAN_FLAT)})],
-      on: {ana: {name: 'Codex Pro for the platform team and the on-call rotation', color: '#43aca1', plan: WEEK_PLAN_FLAT}},
+      on: {ana: {name: 'Codex Pro for the platform team and the on-call rotation', color: '#43aca1', plan: WEEK_PLAN_FLAT, span: 4}},
       expect: [
         {title: 'Codex Pro for the platform team and the on-call rotation'},
         {window: 'weekly', level: 'ok', note: 'behind'},
@@ -465,7 +465,7 @@ const all: DemoSet = {
       machines: ['laptop'],
       history: 2 * DAY,
       windows: [fiveHours(10 * MIN, 5, shifts(14)), weekly({since: -4 * DAY, use: through([0, 0], [3, 87.2], [4, 92])})],
-      on: {ana: {name: 'Running low'}, quiet: {}},
+      on: {ana: {name: 'Running low', span: 4}, quiet: {}},
       expect: [
         {title: 'Running low'},
         {agents: 0, drawn: true},
