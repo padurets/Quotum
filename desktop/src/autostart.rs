@@ -2,7 +2,6 @@
 //! person sets it. On Linux only for an app no one else can change: start at login would
 //! otherwise run whatever another user of the machine put in its place.
 
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tauri_plugin_autostart::ManagerExt;
@@ -46,7 +45,7 @@ pub fn by_default(shell: &Arc<Shell>) {
 fn safe() -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
-        let path = std::env::var_os("APPIMAGE").map(PathBuf::from).map_or_else(std::env::current_exe, Ok);
+        let path = std::env::var_os("APPIMAGE").map(std::path::PathBuf::from).map_or_else(std::env::current_exe, Ok);
         let path = path.and_then(|p| p.canonicalize()).map_err(|e| e.to_string())?;
         // SAFETY: getuid(2) has no preconditions and cannot fail.
         let me = unsafe { libc::getuid() };
@@ -70,7 +69,7 @@ fn only_mine(owner: u32, group: u32, mode: u32, me: u32, personal: Option<u32>) 
 /// The first of `path` and the directories above it that someone else could change.
 #[cfg(unix)]
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-fn changeable_by_others(path: &Path, me: u32, personal: Option<u32>) -> Result<(), PathBuf> {
+fn changeable_by_others(path: &std::path::Path, me: u32, personal: Option<u32>) -> Result<(), std::path::PathBuf> {
     use std::os::unix::fs::MetadataExt;
     for place in path.ancestors().filter(|p| !p.as_os_str().is_empty()) {
         let meta = std::fs::metadata(place).map_err(|_| place.to_path_buf())?;
