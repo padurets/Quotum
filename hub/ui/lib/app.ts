@@ -49,11 +49,21 @@ async function ask<T>(command: string, args?: Record<string, unknown>): Promise<
   }
 }
 
+/** Windows dispatches commands concurrently. Finish each mutation before invoking the
+ * next, so their accepted snapshots reach the page in the person's action order. */
+let mutations: Promise<void> = Promise.resolve();
+function change(command: string, args?: Record<string, unknown>): Promise<AppState> {
+  const accepted = mutations.then(() => ask<AppState>(command, args));
+  // A rejected command still lets the next action proceed.
+  mutations = accepted.then(() => {}, () => {});
+  return accepted;
+}
+
 export const app = {
   state: () => ask<AppState>('app_state'),
-  saveSettings: (patch: Patch) => ask<AppState>('save_settings', {patch}),
-  takeOver: () => ask<AppState>('take_over'),
-  setAutostart: (on: boolean) => ask<AppState>('set_autostart', {on}),
+  saveSettings: (patch: Patch) => change('save_settings', {patch}),
+  takeOver: () => change('take_over'),
+  setAutostart: (on: boolean) => change('set_autostart', {on}),
   /** Leads the window to the board again, with the key of the hub's current start. */
   reenter: () => ask<void>('reenter'),
   quit: () => ask<void>('quit'),

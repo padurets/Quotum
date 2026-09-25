@@ -1,6 +1,59 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {asksToTakeOver, failedTitle, intervalChoices, onboardingText, settingsSections, takeOverText, takeOverTitle, type AgentState} from '../lib/app';
+import {app, asksToTakeOver, failedTitle, intervalChoices, onboardingText, settingsSections, takeOverText, takeOverTitle, type AgentState} from '../lib/app';
+
+test('mutations invoke and acknowledge in action order across all app controls', async t => {
+  const events: string[] = [];
+  const responses = new Map<string, (value: unknown) => void>();
+  const previous = Object.getOwnPropertyDescriptor(globalThis, '__QUOTUM__');
+  Object.defineProperty(globalThis, '__QUOTUM__', {configurable: true, value: {
+    invoke(command: string) {
+      events.push(`invoke ${command}`);
+      return new Promise(resolve => responses.set(command, resolve));
+    },
+  }});
+  t.after(() => previous ? Object.defineProperty(globalThis, '__QUOTUM__', previous) : Reflect.deleteProperty(globalThis, '__QUOTUM__'));
+  const saved = app.saveSettings({sessions: true}).then(() => events.push('accepted settings'));
+  const autostart = app.setAutostart(true).then(() => events.push('accepted autostart'));
+  const takeover = app.takeOver().then(() => events.push('accepted takeover'));
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  await flush();
+  assert.deepEqual(events, ['invoke save_settings']);
+  responses.get('save_settings')!({sessions: true});
+  await saved;
+  await flush();
+  assert.deepEqual(events, ['invoke save_settings', 'accepted settings', 'invoke set_autostart']);
+  responses.get('set_autostart')!({sessions: true, autostart: true});
+  await autostart;
+  await flush();
+  assert.deepEqual(events, ['invoke save_settings', 'accepted settings', 'invoke set_autostart', 'accepted autostart', 'invoke take_over']);
+  responses.get('take_over')!({agent: {state: 'measuring'}});
+  await takeover;
+  assert.equal(events.at(-1), 'accepted takeover');
+});
+
+test('a failed mutation releases the queue while quit and reenter bypass a pending takeover', async t => {
+  const invoked: string[] = [];
+  let rejectTakeover!: (error: unknown) => void;
+  const previous = Object.getOwnPropertyDescriptor(globalThis, '__QUOTUM__');
+  Object.defineProperty(globalThis, '__QUOTUM__', {configurable: true, value: {
+    invoke(command: string) {
+      invoked.push(command);
+      return command === 'take_over' ? new Promise((_resolve, reject) => { rejectTakeover = reject; }) : Promise.resolve({sessions: true});
+    },
+  }});
+  t.after(() => previous ? Object.defineProperty(globalThis, '__QUOTUM__', previous) : Reflect.deleteProperty(globalThis, '__QUOTUM__'));
+  const rejected = assert.rejects(app.takeOver(), /synthetic takeover failure/);
+  const saved = app.saveSettings({sessions: true});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(invoked, ['take_over']);
+  await Promise.all([app.quit(), app.reenter()]);
+  assert.deepEqual(invoked, ['take_over', 'quit', 'reenter']);
+  rejectTakeover('synthetic takeover failure');
+  await rejected;
+  assert.equal((await saved).sessions, true);
+  assert.deepEqual(invoked, ['take_over', 'quit', 'reenter', 'save_settings']);
+});
 
 test('a provider is measured every 1 to 60 minutes; a value set by hand in the file is kept among them', () => {
   assert.deepEqual(intervalChoices(120), [1, 2, 5, 10, 15, 30, 60]);
