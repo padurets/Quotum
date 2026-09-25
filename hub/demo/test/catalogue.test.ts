@@ -20,8 +20,8 @@ import {linesOf} from '../../ui/lib/lines.js';
 import {planNote, started} from '../../ui/lib/plan.js';
 import {dotOf, level, resetLine, titled, windowName} from '../../ui/lib/quota.js';
 import {resetLabel, type Resets, type TrackerHealth} from '../../ui/lib/resets.js';
-import type {History, Overview} from '../../ui/lib/types.js';
-import {boardState, isWindowHidden, planOf} from '../../ui/lib/view.js';
+import {ANALYTICS_KINDS, type History, type Overview} from '../../ui/lib/types.js';
+import {AGENTS, boardState, cardId, FORECAST, HISTORY, isHidden, isWindowHidden, planOf} from '../../ui/lib/view.js';
 import {SCENES, SETS} from '../catalogue.js';
 import {
   awake,
@@ -140,9 +140,6 @@ class Reading {
   }
 }
 
-/** The table shows these kinds of windows (the analytics' choice); a line of any other is never on the board. */
-const TABLE_KINDS = ['weekly', 'session'];
-
 /**
  * What the hub shows now for a code, computed with the dashboard's own rules: a value for
  * each thing a code of that kind can claim (a string when there is nothing to look at).
@@ -170,6 +167,9 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
   }
   if (entry.kind === 'person' || entry.kind === 'board') {
     const overview = await reading.overview(entry.id);
+    // A widget hidden on the board shows none of its codes.
+    if ('rows' in check && isHidden(overview.view, AGENTS)) return `the table of running agents is hidden on the board ${entry.id}`;
+    if ('weeklySeries' in check && isHidden(overview.view, HISTORY)) return `the chart is hidden on the board ${entry.id}`;
     const {rows, empty} = agentRows(overview.sources, overview.view);
     const series = 'weeklySeries' in check ? linesOf(await reading.history(entry.id), overview, overview.view, 'weekly').length : 0;
     return {
@@ -185,12 +185,13 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
   const overview = await reading.overview(board);
   const source = overview.sources.find(s => s.id === stand.sources.get(entry.id));
   if (!source) return `not on the board ${board}`;
-  const dot = dotOf(now - (source.successAt ?? -Infinity));
+  if (isHidden(overview.view, cardId(source.id))) return `hidden on the board ${board}`;
+  const dot = dotOf(source, now);
   const values: Record<string, unknown> = {
     error: source.error,
     stale: source.stale,
     title: source.title,
-    fresh: dot.pulsing ? 'pulse' : dot.fresh === 0 ? 'grey' : `fading, ${dot.fresh}`,
+    fresh: dot.warn ? 'warn' : dot.pulsing ? 'pulse' : dot.fresh === 0 ? 'grey' : `fading, ${dot.fresh}`,
     agents: source.sessions.length,
     drawn: drawn(source.sessions),
   };
@@ -200,19 +201,23 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
   const weekly = planOf(overview.view, source.id);
   if ('window' in card && live) {
     const note = planNote(live, source.successAt, now, weekly);
+    const hidden = isWindowHidden(overview.view, source.id, live.id);
+    // A hidden window keeps its name (the card's settings list it) and draws nothing else.
+    const onCard = (value: unknown) => (hidden ? 'not drawn: the window is hidden' : value);
     Object.assign(values, {
       window: id,
-      level: level(live.remaining),
-      note: note?.key ?? null,
-      hint: note ? (note.weekly ? 'weekly' : 'reset') : undefined,
+      level: onCard(level(live.remaining)),
+      note: onCard(note?.key ?? null),
+      hint: onCard(note ? (note.weekly ? 'weekly' : 'reset') : undefined),
       name: windowName(live),
-      reset: resetLine(live, now).key,
-      hidden: isWindowHidden(overview.view, source.id, live.id),
-      started: started(live, source.successAt),
+      reset: onCard(resetLine(live, now).key),
+      hidden,
+      started: onCard(started(live, source.successAt)),
     });
   }
   if ('forecast' in card && live) {
-    if (!TABLE_KINDS.includes(live.kind)) return `window ${id} is of the kind ${live.kind}: the table shows only weekly and five-hour windows`;
+    if (isHidden(overview.view, FORECAST)) return `the table is hidden on the board ${board}`;
+    if (!ANALYTICS_KINDS.includes(live.kind)) return `window ${id} is of the kind ${live.kind}: the table shows only weekly and five-hour windows`;
     const line = linesOf(await reading.history(board), overview, overview.view, live.kind).find(l => l.sourceId === source.id && l.windowId === id);
     if (!line) return `no line of ${id} in the table`;
     const row = forecastRow(line, live, source.successAt, now, weekly);

@@ -308,9 +308,7 @@ export const SourceCard = memo(function SourceCard({
   const problem = problemOf(source);
   const visible = source.windows.filter(w => !isWindowHidden(arrange.view, source.id, w.id));
   const weekly = planOf(arrange.view, source.id);
-  const warn = source.stale || !!problem;
-  const age = source.successAt === null ? Infinity : now - source.successAt;
-  const dot = dotOf(age);
+  const dot = dotOf(source, now);
   // How fresh the numbers are lives in the colour of the logo's dot and in its tooltip;
   // trouble is also told under the limits, where it moves no meter out of line.
   const status = problem ?? (source.successAt ? t('source.measured', {ago: ago(source.successAt, now)}) : errorText('waiting'));
@@ -318,9 +316,9 @@ export const SourceCard = memo(function SourceCard({
   return (
     <article className="card" style={{'--card-color': colorOf(arrange.view, source.id, source.provider)} as CSSProperties}>
       <div className="card-head">
-        <span className={`provider-mark ${warn ? 'is-warn' : ''}`} title={status} aria-label={status} role="img">
+        <span className={`provider-mark ${dot.warn ? 'is-warn' : ''}`} title={status} aria-label={status} role="img">
           <img className="provider-logo" src={LOGOS[source.provider]} alt="" />
-          {warn ? (
+          {dot.warn ? (
             <i className="dot dot-warn" />
           ) : (
             <i className={`dot dot-fresh ${dot.pulsing ? 'is-pulsing' : ''}`} style={{'--fresh': dot.fresh} as CSSProperties} />
@@ -341,7 +339,7 @@ export const SourceCard = memo(function SourceCard({
         {!source.windows.length && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
         {!!source.windows.length && !visible.length && <div className="card-empty">{t('card.allHidden')}</div>}
       </div>
-      {warn && !!source.windows.length && <p className="card-status">{status}</p>}
+      {dot.warn && !!source.windows.length && <p className="card-status">{status}</p>}
       <ResetBanner status={resets} now={now} />
       <ResetNotice status={resets} now={now} />
       {/* The card's tray, always there so the card never changes height: the agents running on it, on the right. */}

@@ -196,7 +196,7 @@ export type CardCheck = Span & {board?: string} & (
     | {stale: boolean}
     | {title: string}
     /** The dot by the logo: pulsing (just measured) or faded to grey. */
-    | {fresh: 'pulse' | 'grey'}
+    | {fresh: 'pulse' | 'grey' | 'warn'}
     /** How many agents the tray counts, and whether it draws a mark for each. */
     | {agents: number; drawn: boolean}
     | {window: string; level?: Level; note?: 'ahead' | 'behind' | null; hint?: 'weekly' | 'reset'; name?: string; reset?: ResetLine['key']; hidden?: boolean; started?: boolean}

@@ -61,7 +61,7 @@ export function errorText(code: string) {
   return t(known(key) ? key : 'error.failed');
 }
 
-export const problemOf = (source: SourceState) => (source.error && source.error !== 'waiting' ? errorText(source.error) : null);
+export const problemOf = (source: Pick<SourceState, 'error'>) => (source.error && source.error !== 'waiting' ? errorText(source.error) : null);
 
 /** A measurement this recent is news: the card's dot pulses. */
 export const PULSE_FOR = 30_000;
@@ -70,8 +70,17 @@ const FADE_FOR = 5 * 60_000;
 /** The fade goes in this many steps, one every half a minute: in between, nothing on the page changes. */
 const FADE_STEPS = 10;
 
-/** The dot by a card's logo, from the age of its numbers: pulsing while they are news, then fading (`freshness`). */
-export const dotOf = (age: number) => ({pulsing: age < PULSE_FOR, fresh: freshness(age)});
+export type Dot = {warn: true} | {warn: false; pulsing: boolean; fresh: number};
+
+/**
+ * The dot by a card's logo: trouble (numbers gone stale, a failure) in its own colour;
+ * otherwise from the age of the numbers, pulsing while they are news, then fading (`freshness`).
+ */
+export function dotOf(source: Pick<SourceState, 'stale' | 'error' | 'successAt'>, now: number): Dot {
+  if (source.stale || problemOf(source)) return {warn: true};
+  const age = source.successAt === null ? Infinity : now - source.successAt;
+  return {warn: false, pulsing: age < PULSE_FOR, fresh: freshness(age)};
+}
 
 /**
  * How fresh a source's numbers are, from 1 (just measured) to 0 (a while ago). It only
