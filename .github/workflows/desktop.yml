@@ -88,9 +88,9 @@ jobs:
           deb=$(ls "$bundle"/deb/*.deb)
           appimage=$(ls "$bundle"/appimage/*.AppImage)
           # The deb puts only its own names in /usr/bin: `node` is the nodejs package's.
-          binaries=$(dpkg -c "$deb" | awk '{print $6}' | grep '^\./usr/bin/.' | sort | tr '\n' ' ')
+          binaries=$(dpkg -c "$deb" | awk '{print $6}' | sed 's|^\./||' | grep '^usr/bin/.' | sort | tr '\n' ' ')
           echo "usr/bin: $binaries"
-          [ "$binaries" = "./usr/bin/quotum-desktop ./usr/bin/quotum-node " ] || { echo "::error::unexpected files in usr/bin: $binaries"; exit 1; }
+          [ "$binaries" = "usr/bin/quotum-desktop usr/bin/quotum-node " ] || { echo "::error::unexpected files in usr/bin: $binaries"; exit 1; }
           sh desktop/smoke/linux.sh normal "$appimage" --appimage-extract-and-run
           sh desktop/smoke/linux.sh crash "$appimage" --appimage-extract-and-run
           # Installed next to the nodejs package, which owns /usr/bin/node.
