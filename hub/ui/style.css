@@ -177,8 +177,18 @@ body.is-resizing, body.is-resizing * { cursor: ew-resize !important; user-select
 }
 @media (prefers-reduced-motion: reduce) { .dot-fresh.is-pulsing::after { animation: none; opacity: 0; } }
 .card-title { margin-right: auto; }
-/* The dot's tooltip where nothing hovers: a tap on the logo shows it for a while (SourceCard). */
-.dot-tip { position: absolute; top: calc(100% + 8px); left: -6px; z-index: 20; width: max-content; max-width: min(260px, calc(100vw - 48px)); padding: 6px 10px; border-radius: 9px; font-size: 12.5px; line-height: 1.35; color: var(--text); pointer-events: none; }
+/*
+ * The dot's tooltip, one bubble everywhere, above the logo where the pointer covers none of
+ * it: under the pointer after a moment on a desktop,
+ * for a while after a tap on a touch screen (SourceCard).
+ */
+.dot-tip {
+  position: absolute; bottom: calc(100% + 8px); left: -6px; z-index: 20; width: max-content; max-width: min(260px, calc(100vw - 48px)); padding: 6px 10px;
+  border-radius: 9px; font-size: 12.5px; line-height: 1.35; color: var(--text); pointer-events: none;
+  opacity: 0; visibility: hidden; transition: opacity .12s, visibility .12s;
+}
+@media (hover: hover) { .provider-mark:hover .dot-tip { opacity: 1; visibility: visible; transition-delay: .3s; } }
+.provider-mark.is-tipped .dot-tip { opacity: 1; visibility: visible; }
 
 /* ---------- popovers ---------- */
 .picker { position: relative; display: flex; margin-left: 10px; }
@@ -193,7 +203,8 @@ body.is-resizing, body.is-resizing * { cursor: ew-resize !important; user-select
 .popover.is-up { top: auto; bottom: calc(100% + 6px); }
 /*
  * What is behind shows through, blurred, under a faint sheen at the top edge. Popover,
- * Modal and the chart's tooltip wear it; a new floating surface uses one of them.
+ * Modal and the tooltips of our own (the chart's, a card's dot's) wear it; a new floating
+ * surface uses one of them.
  * An element with its own backdrop-filter (or filter, opacity, mask) blurs only what is
  * inside it for the glass within: never give one to anything a Popover can open from.
  * Frost such a bar through a ::before instead, as the top bar does.
