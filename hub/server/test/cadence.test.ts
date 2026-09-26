@@ -29,6 +29,8 @@ type Holder = {
   device?: string;
   /** Whether a measurement told for at `t` is delivered; a lost one never arrives. */
   delivers?: (t: number) => boolean;
+  /** Sees every answer. */
+  told?: (answer: Answer, t: number) => void;
 };
 
 /**
@@ -36,12 +38,13 @@ type Holder = {
  * delivers 5 s later. Returns when it measured.
  */
 function run(cadence: Cadence, from: number, to: number, holder: Holder = {}): number[] {
-  const {windows = () => quiet.windows, inUse = () => false, minIntervalMs = null, device = 'laptop', delivers = () => true} = holder;
+  const {windows = () => quiet.windows, inUse = () => false, minIntervalMs = null, device = 'laptop', delivers = () => true, told} = holder;
   const measured: number[] = [];
   for (let t = from; t < to; ) {
     const signals = {windows: windows(t), inUse: inUse(t)};
     const answer = cadence.answer('acc', device, 'codex', t, minIntervalMs, signals);
     assert.ok(answer.askInMs <= 15 * S || !answer.measure, 'a holder asks at least every 15 s');
+    told?.(answer, t);
     if (answer.measure) {
       measured.push(t);
       if (delivers(t)) cadence.delivered('acc', device, reading(signals.windows), t, staleFor(answer.nextInMs!), signals.inUse, t + 5 * S);
@@ -54,9 +57,11 @@ function run(cadence: Cadence, from: number, to: number, holder: Holder = {}): n
 const gaps = (times: number[]) => times.slice(1).map((t, i) => (t - times[i]) / MIN);
 
 test('S1: an idle subscription is measured less and less often, up to every 15 minutes', () => {
-  const measured = run(new Cadence(), t0, t0 + 50 * MIN);
+  const promised: number[] = [];
+  const measured = run(new Cadence(), t0, t0 + 50 * MIN, {told: a => a.nextInMs && promised.push(a.nextInMs / MIN)});
   assert.equal(measured[0], t0, 'the first holder measures at once');
   assert.deepEqual(gaps(measured), [2, 4, 8, 15, 15]);
+  assert.deepEqual(promised, [4, 4, 8, 15, 15, 15], 'twice the interval, but never past 15 minutes');
   // 15 minutes is a cap even after a measurement that stays representative for longer.
   const cadence = new Cadence();
   run(cadence, t0, t0 + 30 * MIN);
@@ -245,6 +250,81 @@ test('S12: a device waits out its failures, the hub counts each once, and anothe
   assert.equal(spool.pausedUntil('acc', 'laptop', t0 + 10 * MIN), t0 + 12 * MIN, 'a repeat is not a second failure');
 });
 
+test('answers are whole milliseconds, whatever a measurement promised', () => {
+  const cadence = new Cadence();
+  run(cadence, t0, t0 + 30 * MIN);
+  // Measured on its own schedule, as the agent says it: 131 234 ms to its next, a fifth more and a minute.
+  const observedAt = t0 + 30 * MIN;
+  cadence.delivered('acc', 'laptop', reading(quiet.windows), observedAt, 131_234 + 26_246 + 60_000, false, observedAt + S);
+  let fractions = 0;
+  run(cadence, observedAt + 15 * S, observedAt + 10 * MIN, {
+    told: answer => {
+      for (const value of [answer.askInMs, answer.nextInMs ?? 0]) if (!Number.isInteger(value)) fractions++;
+    },
+  });
+  assert.equal(fractions, 0);
+  assert.equal(Number.isInteger(cadence.view('acc', 'laptop', observedAt + 15 * S, quiet)!.next), true);
+});
+
+test('a measurement that says it holds for less than a minute is not asked for again sooner', () => {
+  const cadence = new Cadence();
+  run(cadence, t0, t0 + 30 * MIN);
+  cadence.delivered('acc', 'laptop', reading(quiet.windows), t0 + 30 * MIN, 61_000, false, t0 + 30 * MIN);
+  assert.equal(cadence.view('acc', 'laptop', t0 + 30 * MIN + 15 * S, quiet)?.next, t0 + 31 * MIN);
+});
+
+test('work starting on a subscription with little left, quiet for hours, is measured within the minute', () => {
+  const cadence = new Cadence();
+  const low = [win(5)];
+  const last = run(cadence, t0, t0 + 4 * HOUR, {windows: () => low}).at(-1)!;
+  const busy = run(cadence, last + 15 * S, last + 10 * MIN, {windows: () => low, inUse: () => true});
+  assert.equal(busy[0], last + MIN, 'not 5 minutes after the last');
+});
+
+test('only the device told to measure answers the question', () => {
+  // Another device's measurement is no answer: the one told is asked again after 90 s.
+  const other = new Cadence();
+  assert.equal(other.answer('acc', 'laptop', 'codex', t0, null, quiet).measure, true);
+  other.delivered('acc', 'server', reading(quiet.windows), t0 + 10 * S, staleFor(4 * MIN), false, t0 + 10 * S);
+  assert.equal(other.answer('acc', 'laptop', 'codex', t0 + 90 * S, null, quiet).measure, true);
+
+  // A new holder starts its own questions: its first lost answer is asked again after 90 s too.
+  const handed = new Cadence();
+  handed.answer('acc', 'laptop', 'codex', t0, null, quiet);
+  handed.answer('acc', 'laptop', 'codex', t0 + 90 * S, null, quiet);
+  assert.equal(handed.answer('acc', 'server', 'codex', t0 + 100 * S, null, quiet).measure, true);
+  assert.equal(handed.answer('acc', 'server', 'codex', t0 + 189 * S, null, quiet).measure, false);
+  assert.equal(handed.answer('acc', 'server', 'codex', t0 + 190 * S, null, quiet).measure, true);
+
+  // Failures answer too: after three in a row, a lost answer is still asked again after 90 s.
+  const failing = new Cadence();
+  const next = (from: number) => {
+    for (let t = from, answer: Answer; t < from + HOUR; t += Math.max(S, answer.askInMs)) if ((answer = failing.answer('acc', 'laptop', 'codex', t, null, quiet)).measure) return t;
+    return null;
+  };
+  let t = t0;
+  failing.answer('acc', 'laptop', 'codex', t, null, quiet);
+  for (let i = 0; i < 3; i++) {
+    failing.failed('acc', 'laptop', 'timeout', t + 5 * S);
+    t = next(t + 15 * S)!;
+  }
+  assert.equal(next(t + 15 * S), t + 90 * S);
+});
+
+test('a device that measures at most every hour is not asked sooner, even when its answers are lost', () => {
+  const measured = run(new Cadence(), t0, t0 + 3 * HOUR, {minIntervalMs: HOUR, delivers: () => false});
+  assert.deepEqual(gaps(measured), [60, 60]);
+});
+
+test('while a measurement is under way, the board says the next one comes any moment', () => {
+  const cadence = new Cadence();
+  run(cadence, t0, t0 + 30 * MIN);
+  const due = t0 + 44 * MIN;
+  assert.equal(cadence.answer('acc', 'laptop', 'codex', due, null, quiet).measure, true);
+  assert.equal(cadence.view('acc', 'laptop', due + 30 * S, quiet)?.next, due);
+  assert.equal(cadence.view('acc', 'laptop', due + 2 * MIN, quiet)?.next, due + 90 * S, 'then, not heard from, it is asked again');
+});
+
 test('S14: a measurement taken without asking is not left to go stale', () => {
   const cadence = new Cadence();
   run(cadence, t0, t0 + 30 * MIN);
@@ -326,7 +406,7 @@ function hub() {
       },
       t,
     );
-  const working = (device: string, t: number) =>
+  const working = (device: string, t: number, busy = true) =>
     ingest.sessions(
       token,
       {
@@ -334,7 +414,7 @@ function hub() {
         agent: 'quotum/0.4.0',
         machine: machine(device),
         sentAt: iso(t),
-        sessions: [{provider: 'codex', account: ACCOUNT, origin: 'app', startedAt: iso(t - MIN), lastWorkedAt: iso(t), working: true}],
+        sessions: [{provider: 'codex', account: ACCOUNT, origin: 'app', startedAt: iso(t - MIN), lastWorkedAt: iso(t), working: busy}],
       },
       t,
     );
@@ -356,6 +436,12 @@ function hub() {
 }
 
 test('S3, S4: use on another machine or on the holder brings the pace to 2 minutes', () => {
+  // An agent open but idle on another machine is not use.
+  const idle = hub();
+  const quietly = idle.follow('laptop', t0, t0 + 30 * MIN).at(-1)!;
+  idle.working('server', t0 + 30 * MIN, false);
+  assert.deepEqual(idle.follow('laptop', t0 + 30 * MIN, t0 + 45 * MIN), [quietly + 15 * MIN]);
+
   const h = hub();
   const last = h.follow('laptop', t0, t0 + 30 * MIN).at(-1)!;
   // An agent works on the server, which does not measure: the laptop measures within 2 minutes, and again while it lasts.
@@ -400,8 +486,12 @@ test('S9: a paced holder asks often without extending its lease; a device waitin
   const failedAt = t0 + 2 * MIN;
   assert.equal(h.ask('laptop', failedAt).measure, true);
   h.deliver('laptop', failedAt, 50, 4 * MIN, 'not_logged_in');
+  // The server, not on duty and healthy, is told when the holder's lease runs out.
+  const waits = h.ask('server', t0 + 3 * MIN);
+  assert.deepEqual([waits.measure, waits.onDuty, waits.askInMs], [false, false, t0 + staleFor(4 * MIN) - (t0 + 3 * MIN)]);
   const lease = h.duty.until(ACCOUNT)!;
   const refused = h.ask('laptop', lease + S);
+  assert.equal(refused.askInMs, 10 * MIN, 'at most ten minutes, though its pause lasts longer');
   assert.deepEqual([refused.measure, refused.onDuty], [false, true], 'no one else holds it: its own pause, quietly');
   assert.equal(h.duty.holder(ACCOUNT), laptop(), 'not claimed');
   const server = h.ask('server', lease + 2 * S);

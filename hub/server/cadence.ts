@@ -28,6 +28,8 @@ const MIN_INTERVAL_MS = 60_000;
 export const MAX_GAP_MS = (24 * 3_600_000 - 60_000) / 1.2;
 /** When to tell again to measure after a `measure: true` nothing came back for: the first time, then each time after that. */
 const UNANSWERED_MS = [90_000, 2 * 60_000, 4 * 60_000, 8 * 60_000, 15 * 60_000];
+/** A measurement under way takes at most this long (the agent kills a client then): meanwhile the next one is the one being taken. */
+const MEASURING_MS = 60_000;
 
 /** Why the next measurement comes when it does, as the board says it. */
 export type Why = 'low' | 'inUse' | 'changed' | 'idle' | 'reset';
@@ -100,7 +102,8 @@ export class Cadence {
     if (pace.changed || busy) pace.busyAt = now;
     pace.signature = signature;
     // Never later than this measurement goes stale, whoever took it and however it was asked for.
-    pace.promiseAt = observedAt + Math.max(MIN_INTERVAL_MS, (staleAfterMs - 60_000) / 1.2);
+    // Whole milliseconds: the times the hub answers with are whole numbers (spec).
+    pace.promiseAt = observedAt + Math.ceil(Math.max(MIN_INTERVAL_MS, (staleAfterMs - 60_000) / 1.2));
     pace.lastAt = observedAt;
     this.answeredBy(pace, device);
     this.pauses.delete(pauseKey(key, device));
@@ -138,7 +141,7 @@ export class Cadence {
       pace.answered = false;
       pace.unanswered = 0;
       const paused = this.pausedUntil(key, device, now);
-      if (paused !== null) return {measure: false, onDuty: true, askInMs: Math.min(paused - now, ASK_EVERY_MS)};
+      if (paused !== null) return {measure: false, onDuty: true, askInMs: askIn(paused - now)};
       const {interval} = pace.lastAt === null ? {interval: BASE_INTERVAL_MS} : this.interval(pace, now, signals, floor);
       return this.ask(pace, key, device, provider, now, minIntervalMs, interval);
     }
@@ -146,7 +149,7 @@ export class Cadence {
     pace.askAt = now;
     const plan = this.plan(pace, key, device, now, signals, floor);
     if (plan.at <= now) return this.ask(pace, key, device, provider, now, minIntervalMs, plan.interval);
-    return {measure: false, onDuty: true, askInMs: Math.min(plan.at - now, ASK_EVERY_MS)};
+    return {measure: false, onDuty: true, askInMs: askIn(plan.at - now)};
   }
 
   /**
@@ -158,7 +161,9 @@ export class Cadence {
     if (!pace || holder === null || pace.askedDevice !== holder || pace.lastAt === null || pace.askAt === null) return null;
     if (now - pace.askAt > SILENT_AFTER_MS || this.pausedUntil(key, holder, now) !== null) return null;
     const plan = this.plan(pace, key, holder, now, signals, floorOf(pace.minIntervalMs));
-    return {next: plan.at, why: plan.why as Why};
+    // Told to measure and not heard from yet: the measurement is under way, the next one is that.
+    const measuring = pace.askedAt !== null && !pace.answered && now - pace.askedAt <= MEASURING_MS;
+    return {next: measuring ? pace.askedAt! : plan.at, why: plan.why as Why};
   }
 
   /** Tells a holder to measure now, promising the next measurement within twice the interval (it never slows down faster than that). */
@@ -183,7 +188,8 @@ export class Cadence {
     let at: number;
     if (pace.askedAt !== null && !pace.answered) {
       // Nothing came back for the last `measure: true`: ask again, later each time it stays unanswered.
-      at = pace.askedAt + UNANSWERED_MS[Math.min(pace.unanswered, UNANSWERED_MS.length - 1)];
+      // Never more often than the device agrees to, though.
+      at = pace.askedAt + Math.max(UNANSWERED_MS[Math.min(pace.unanswered, UNANSWERED_MS.length - 1)], floor);
     } else {
       at = (pace.lastAt ?? pace.askedAt!) + interval;
       if (pace.lastAt !== null) {
@@ -246,6 +252,9 @@ export class Cadence {
 }
 
 const pauseKey = (key: string, device: string) => `${key}\n${device}`;
+
+/** How soon to ask again: a whole number of milliseconds, never later than a regular ask. */
+const askIn = (ms: number) => Math.ceil(Math.min(ms, ASK_EVERY_MS));
 
 /** The least interval a device accepts: its own if it set one, never below a minute nor past the longest gap. */
 const floorOf = (minIntervalMs: number | null) => Math.min(Math.max(MIN_INTERVAL_MS, minIntervalMs ?? 0), MAX_GAP_MS);

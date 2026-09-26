@@ -135,7 +135,7 @@ export class Ingest {
         const leased = (this.duty.until(key) ?? 0) > now;
         if (paused !== null && !(holder === device.id && leased)) {
           // Another device measures it, or none does until this one's pause is over.
-          const askInMs = Math.min(paused - now, 10 * 60_000);
+          const askInMs = Math.ceil(Math.min(paused - now, 10 * 60_000));
           return {provider: s.provider, measure: false, onDuty: !(holder !== null && holder !== device.id && leased), askInMs, until: iso(now + askInMs)};
         }
         const directive = this.duty.claim(key, device.id, s.active, now);
