@@ -56,7 +56,7 @@ function errorCode(status: number, path: string): string {
  * headers were too large or it was not HTTP), answered in the hub's `{error}` shape
  * rather than the framework's, and its connection closed.
  */
-function clientError(error: NodeJS.ErrnoException, socket: Socket) {
+function clientError(error: NodeJS.ErrnoException, socket: Socket & {_httpMessage?: {headersSent: boolean} | null}) {
   // A connection the other side reset has nothing left to answer.
   if (error.code === 'ECONNRESET' || socket.destroyed) return;
   const [status, code] =
@@ -66,7 +66,8 @@ function clientError(error: NodeJS.ErrnoException, socket: Socket) {
         ? [431, 'headers_too_large']
         : [400, 'invalid_request'];
   const body = JSON.stringify({error: code});
-  if (socket.writable) {
+  // As Node does: an answer already on its way is cut short rather than spliced with this one.
+  if (socket.writable && !socket._httpMessage?.headersSent) {
     socket.write(
       `HTTP/1.1 ${status} ${STATUS_CODES[status]}\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`,
     );
@@ -106,7 +107,7 @@ export async function buildApp(hub: Hub) {
     bodyLimit: 16 * 1024,
     trustProxy: config.http.trustProxy,
     requestTimeout: requestTimeoutMs,
-    // Fastify sets the request's limit on a server already made, where Node ignores it while the headers' is longer.
+    // Fastify sets the request's limit on a server already made, where Node takes the longer of the two for the whole request.
     http: {headersTimeout: requestTimeoutMs, connectionsCheckingInterval: checkMs},
     clientErrorHandler: clientError,
   });

@@ -435,13 +435,13 @@ test('a request is given 30 seconds to arrive, and one that takes longer is answ
   // Node keeps the checking interval on the server, but its types do not declare it.
   const server = app.server as typeof app.server & {connectionsCheckingInterval: number};
   assert.equal(server.requestTimeout, 30_000);
-  // Node ignores the request's limit set on a made server while the headers' one is longer.
+  // Node gives the whole request the longer of the two limits.
   assert.ok(server.headersTimeout <= server.requestTimeout, `headersTimeout ${server.headersTimeout}`);
   assert.equal(server.connectionsCheckingInterval, 5_000);
 
-  const answered = (code: string) => {
+  const answered = (code: string, answering = false) => {
     let written = '';
-    const socket = Object.assign(new PassThrough(), {writable: true});
+    const socket = Object.assign(new PassThrough(), {writable: true, _httpMessage: answering ? {headersSent: true} : null});
     socket.write = (chunk: string) => ((written += chunk), true);
     // The hub closes it with the error, as Node does.
     socket.on('error', () => {});
@@ -453,10 +453,14 @@ test('a request is given 30 seconds to arrive, and one that takes longer is answ
   const [head, body] = late.written.split('\r\n\r\n');
   assert.match(head, /^HTTP\/1\.1 408 Request Timeout\r\n/);
   assert.match(head, /\r\nContent-Type: application\/json\r\n/);
+  assert.match(head, new RegExp(`\r\nContent-Length: ${body.length}\r\n`));
+  assert.match(head, /\r\nConnection: close$/);
   assert.deepEqual(JSON.parse(body), {error: 'request_timeout'});
   assert.deepEqual(JSON.parse(answered('HPE_HEADER_OVERFLOW').written.split('\r\n\r\n')[1]), {error: 'headers_too_large'});
   assert.deepEqual(JSON.parse(answered('HPE_INVALID_METHOD').written.split('\r\n\r\n')[1]), {error: 'invalid_request'});
   assert.equal(answered('ECONNRESET').written, '', 'a reset connection has no one to answer');
+  const midway = answered('HPE_INVALID_METHOD', true);
+  assert.deepEqual([midway.written, midway.destroyed], ['', true], 'an answer on its way is cut short, not spliced with another');
 });
 
 test('history reads a period selected on the chart, up to a month, on a grid fine enough for it', async () => {
