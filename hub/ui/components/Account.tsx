@@ -1,6 +1,6 @@
 import {useState, type FormEvent} from 'react';
 import {call} from '../lib/http';
-import {clock} from '../lib/format';
+import {stamp} from '../lib/format';
 import {setPrefs, usePrefs} from '../lib/prefs';
 import type {TrackerHealth} from '../lib/resets';
 import type {User} from '../lib/session';
@@ -136,7 +136,7 @@ function Browser({trackers, title}: {trackers: TrackerHealth[]; title: string}) 
         {prefs.showResets && (
           <div className="trackers">
             {trackers.map(tracker => (
-              <div key={tracker.name} className="tracker" title={tracker.at ? t('settings.checkedAt', {time: clock(tracker.at)}) : ''}>
+              <div key={tracker.name} className="tracker" title={tracker.at ? t('settings.checkedAt', {time: stamp(tracker.at)}) : ''}>
                 <i className={`dot ${tracker.ok === true ? 'dot-ok' : tracker.ok === false ? 'dot-warn' : 'dot-idle'}`} />
                 <a href={tracker.url} target="_blank" rel="noopener noreferrer">
                   {tracker.name}

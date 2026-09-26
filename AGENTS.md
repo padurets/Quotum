@@ -90,8 +90,8 @@ is open.
 - **Build from the shared pieces.** A menu, dropdown or any panel that opens from a
   button is a `Popover` (`hub/ui/components/Popover.tsx`); a dialog or side panel is a
   `Modal` (`hub/ui/components/Kit.tsx`). They are glass: the `glass` class and its
-  tokens in `hub/ui/style.css`. A new floating surface uses one of them rather than
-  styling its own.
+  tokens in `hub/ui/style.css`, as are the tooltips of our own (the chart's, a card's
+  dot's). A new floating surface uses one of them rather than styling its own.
 - Widgets on the board are a `.card` (a source) or a `.panel` (the chart, the table).
 - **Keep the board cheap to render.** Nothing on the page is `position: fixed` or has a
   fixed background, and widgets have no `backdrop-filter` (floating surfaces and the
@@ -99,6 +99,24 @@ is open.
   with software rendering. What shows time reads `useNow(step)`
   (`hub/ui/lib/api.ts`) itself rather than a clock passed down from the board, and
   polled state is set through `unlessSame`, so an unchanged answer renders nothing.
+- A card tells how its measurements go in the logo's dot and its news in marks in its
+  tray, with the details in a tooltip or a panel, never in a line of its own; neither
+  changes a card's height.
+- **Times.** Say when as `stamp` in `hub/ui/lib/format.ts` does: "26 September 14:00",
+  never "today" or "tomorrow", never seconds; under a heading that already gives the day,
+  the time alone. Where how soon or how long ago matters more, and room is short (a mark,
+  a cell, the line under a limit, a panel's heading), say that instead (`countdown`,
+  `duration`, `ago`: "in 20h", "5m ago"), with the time as `stamp` gives it beside it or
+  in its tooltip. How long something has run ("running for 31m") is not a time, nor is
+  the scale along a chart's axis ("22 Sept", "14:00").
+- **No dots between parts.** A line never runs its parts together with " · ": what it
+  says leads, and a detail or a time is set apart by layout (a tag beside it, a quieter
+  line under it). In plain text, a tooltip or a name for screen readers, each part is a
+  line of its own.
+- **A row lights up under the pointer, one of two ways.** A table's row, in a widget or
+  a dialog, across its whole width, as its columns run edge to edge. A row of a list or a
+  menu in a `Popover` or a `Modal`, inset with rounded corners (`.popover-row`), and a
+  little brighter, to show on the glass.
 - Colours come from the tokens at the top of `hub/ui/style.css`, and the colours of
   series from `hub/ui/lib/providers.ts`. Status colours (ok, warn, crit) are for status
   only: how much of a limit is left, a source or device in trouble, a destructive

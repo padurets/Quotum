@@ -180,14 +180,41 @@ pub struct Snapshot {
 }
 
 /// Free resets of the plan's limits (providers grant them now and then): how many can be
-/// used, and when the first of them expires. Reported, never used: using one takes an
-/// explicit action in the client.
+/// used, and when each of them expires. Reported, never used: using one takes an explicit
+/// action in the client.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Resets {
     pub available: u32,
+    /// The available resets by when they expire, soonest first, those the client gives no
+    /// time for last. They add up to `available` at most: a client may give only the count.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expiring: Vec<Expiring>,
+}
+
+/// Free resets that expire at one time, or at a time the client does not give.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Expiring {
+    pub count: u32,
     #[serde(default, skip_serializing_if = "Option::is_none", with = "ts::option")]
     pub expires_at: Option<Millis>,
+}
+
+impl Resets {
+    /// `available` resets, of which `groups` say how many expire when: one group per time,
+    /// soonest first and the unknown last.
+    pub fn new(available: u32, groups: impl IntoIterator<Item = (u32, Option<Millis>)>) -> Self {
+        let mut expiring: Vec<Expiring> = Vec::new();
+        for (count, expires_at) in groups.into_iter().filter(|(count, _)| *count > 0) {
+            match expiring.iter_mut().find(|group| group.expires_at == expires_at) {
+                Some(group) => group.count = group.count.saturating_add(count),
+                None => expiring.push(Expiring { count, expires_at }),
+            }
+        }
+        expiring.sort_by_key(|group| (group.expires_at.is_none(), group.expires_at));
+        Resets { available, expiring }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -246,6 +273,8 @@ pub type Outcome = Result<Snapshot, Failure>;
 pub const TEXT_LIMIT: usize = 120;
 /// At most this many windows per snapshot.
 const WINDOW_LIMIT: usize = 32;
+/// Groups of free resets by expiry a snapshot may carry (the hub's limit too).
+const EXPIRING_LIMIT: usize = 50;
 /// The longest a hub lets a measurement stay representative.
 pub const STALE_LIMIT_MS: u64 = 24 * 3_600_000;
 
@@ -275,6 +304,14 @@ impl Snapshot {
         self.windows.truncate(WINDOW_LIMIT);
         if let Some(resets) = &mut self.resets {
             resets.available = resets.available.min(1000);
+            // The groups never tell of more resets than there are, nor run long.
+            let mut left = resets.available;
+            resets.expiring.retain_mut(|group| {
+                group.count = group.count.min(left);
+                left -= group.count;
+                group.count > 0
+            });
+            resets.expiring.truncate(EXPIRING_LIMIT);
         }
     }
 }
@@ -391,7 +428,7 @@ mod tests {
                 window("weekly", Some(0), Some("")),
                 window("spark", Some(0), Some(" Spark ")),
             ],
-            resets: Some(Resets { available: 5_000, expires_at: None }),
+            resets: Some(Resets::new(5_000, (0..60).map(|i| (100, Some(i))))),
         };
         snapshot.tidy();
         assert_eq!((snapshot.account_name, snapshot.client), (None, None));
@@ -399,7 +436,31 @@ mod tests {
         assert_eq!(snapshot.stale_after_ms, 24 * 3_600_000);
         let windows: Vec<_> = snapshot.windows.iter().map(|w| (w.id.as_str(), w.minutes, w.label.as_deref())).collect();
         assert_eq!(windows, [("weekly", Some(10_080), None), ("spark", None, Some("Spark"))]);
-        assert_eq!(snapshot.resets.map(|r| r.available), Some(1000));
+        let resets = snapshot.resets.unwrap();
+        assert_eq!(resets.available, 1000);
+        assert_eq!(resets.expiring.iter().map(|g| g.count).sum::<u32>(), 1000, "no more by expiry than there are");
+        assert_eq!(resets.expiring.len(), 10);
+    }
+
+    #[test]
+    fn free_resets_keep_no_more_groups_than_a_hub_takes() {
+        let mut snapshot = Snapshot {
+            provider: Provider::Codex,
+            account: None,
+            account_name: None,
+            plan: None,
+            observed_at: 0,
+            via: "codex/app-server".into(),
+            client: None,
+            stale_after_ms: 3_600_000,
+            windows: vec![Window::new("weekly", Some(WEEK_MINUTES), None, 10.0, None)],
+            // Every one within how many there are, but a group for each.
+            resets: Some(Resets::new(60, (0..60).map(|i| (1, Some(i))))),
+        };
+        snapshot.tidy();
+        let expiring = snapshot.resets.unwrap().expiring;
+        assert_eq!(expiring.len(), 50, "the hub's limit, which the constant must not outgrow");
+        assert_eq!(expiring[0].expires_at, Some(0), "the soonest are kept");
     }
 
     #[test]
@@ -416,11 +477,14 @@ mod tests {
             client: None,
             stale_after_ms: 300_000,
             windows: vec![Window::new("weekly", Some(WEEK_MINUTES), None, 8.0, Some(ms))],
-            resets: Some(Resets { available: 1, expires_at: Some(ms) }),
+            resets: Some(Resets::new(3, [(1, Some(ms)), (1, None)])),
         };
         let json = serde_json::to_value(&snapshot).unwrap();
         assert_eq!(json["observedAt"], "2026-09-22T20:20:00.77Z");
-        assert_eq!(json["resets"], serde_json::json!({"available": 1, "expiresAt": "2026-09-22T20:20:00.77Z"}));
+        assert_eq!(
+            json["resets"],
+            serde_json::json!({"available": 3, "expiring": [{"count": 1, "expiresAt": "2026-09-22T20:20:00.77Z"}, {"count": 1}]})
+        );
         assert_eq!(json["windows"][0]["usedPercent"], 8.0);
         assert_eq!(serde_json::from_value::<Snapshot>(json).unwrap(), snapshot);
     }

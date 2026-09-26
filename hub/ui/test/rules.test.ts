@@ -30,7 +30,7 @@ test('a reset announced or possible outranks one that happened, which outranks a
   assert.equal(resetLabel(status({scheduled: {...scheduled, scheduledFor: now - 1}}), now)?.key, 'awaiting');
   assert.equal(resetLabel(status({scheduled: {...scheduled, scheduledFor: null}}), now)?.key, 'announced');
   assert.equal(resetLabel(status({scheduled: {...scheduled, kind: 'banked'}}), now)?.key, 'bankedIn');
-  assert.deepEqual(resetLabel(status({latest: {...latest, scope: 'all'}}), now), {kind: 'notice', key: 'done', event: {...latest, scope: 'all'}, scope: ''});
+  assert.deepEqual(resetLabel(status({latest: {...latest, scope: 'all'}}), now), {event: {...latest, scope: 'all'}, link: 'https://codex-resets.com/', key: 'done', tone: 'quiet', scope: ''});
 });
 
 test('a note under a limit takes a gap of ten points to the plan; behind it only for a week', () => {

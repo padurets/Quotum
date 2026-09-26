@@ -1,6 +1,5 @@
 import {useRef, useState} from 'react';
-import {useNow} from '../lib/api';
-import {ago} from '../lib/format';
+import {stamp} from '../lib/format';
 import {PROVIDERS} from '../lib/providers';
 import {errorText} from '../lib/quota';
 import {
@@ -145,13 +144,13 @@ function SaveError({saving, field}: {saving: Saving; field: string}) {
 }
 
 /** What is known of a provider's client here: where it is and how the last measurement went. */
-function Status({provider, now, configPath}: {provider: ProviderSettings; now: number; configPath: string}) {
+function Status({provider, configPath}: {provider: ProviderSettings; configPath: string}) {
   const last = provider.last;
   const result = !last
     ? t('measure.never')
     : last.ok
-      ? t('measure.measuredAgo', {ago: ago(last.at, now)})
-      : t('measure.failedAgo', {error: errorText(last.error ?? 'failed'), ago: ago(last.at, now)});
+      ? t('measure.measured', {at: stamp(last.at)})
+      : t('measure.failed', {error: errorText(last.error ?? 'failed'), at: stamp(last.at)});
   // Without a client, how its last try went says nothing more.
   if (!provider.client) {
     return (
@@ -216,7 +215,6 @@ function AccountName({provider, onSave}: {provider: ProviderSettings; onSave: (a
  * each change at once and measures with it in a moment.
  */
 export function Measuring({state, onState}: {state: AppState; onState: (state: AppState) => void}) {
-  const now = useNow();
   const [saving, setSaving] = useState<Saving>(null);
   const save = async (patch: Patch, field: string) => {
     setSaving(null);
@@ -257,7 +255,7 @@ export function Measuring({state, onState}: {state: AppState; onState: (state: A
                 </select>
               </label>
             </div>
-            <Status provider={provider} now={now} configPath={state.configPath} />
+            <Status provider={provider} configPath={state.configPath} />
             {provider.id === 'antigravity' && provider.enabled && (
               <AccountName provider={provider} onSave={account => save({providers: {antigravity: {account}}}, `${provider.id}.account`)} />
             )}
