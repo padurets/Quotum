@@ -10,6 +10,7 @@ import type {HistorySeries, SourceEvent, Store} from './store/store.js';
 import type {Board, Directory, User} from './store/directory.js';
 import {currentUser, publicOrigin} from './session.js';
 import type {Setup} from './setup.js';
+import {Projection} from './projection.js';
 import {accountRoutes} from './routes/account.js';
 import {agentRoutes} from './routes/agents.js';
 import {localRoutes} from './local.js';
@@ -107,7 +108,8 @@ function selected(from: string | undefined, to: string | undefined, now: number)
  * at `/local`, and what is about accounts, sharing and connecting is not there.
  */
 export async function buildApp(hub: Hub) {
-  const {store, directory, resets} = hub;
+  const {store, directory} = hub;
+  const projection = new Projection(hub);
   const {requestTimeoutMs, checkMs} = config.http;
   const app = Fastify({
     logger: false,
@@ -204,38 +206,19 @@ export async function buildApp(hub: Hub) {
 
   app.get('/health', () => ({status: 'ok', service: serviceName, version}));
   // With the resets the trackers reported as far back as the chart can be moved: over the history kept.
-  app.get('/api/resets', () => ({...resets.snapshot(), past: store.announcements(Date.now() - config.retention.sampleDays * 86_400_000)}));
+  app.get('/api/resets', () => projection.hubPart(Date.now()).value);
 
   app.get<{Querystring: {board?: string}}>('/api/overview', (request, reply) => {
     const access = guards.board(request, reply, request.query.board);
     if (!access) return reply;
-    const now = Date.now();
-    // Whose each source is: the people on this board whose devices measure it.
-    const members = new Map(directory.members(access.board.id).map(m => [m.id, m.name]));
+    const board = projection.snapshot(access.user.id, access.board.id, Date.now())!;
     return {
       board: access.board,
-      view: directory.view(access.board.id),
-      historyStart: store.historyStart(now),
+      view: board.view,
+      historyStart: board.historyStart,
       /** Changes whenever the board's data changes: the page re-reads history when it does. */
       revision: store.revision(access.board.id),
-      sources: store.sources(access.board.id).map(source => {
-        const state = store.state(source.id);
-        return {
-          ...state,
-          owners: source.holders.flatMap(id => members.get(id) ?? []).sort(),
-          /** Measured by the reader's devices: theirs to take off a shared board. */
-          mine: source.holders.includes(access.user.id),
-          stale: state.successAt === null || state.staleAfterMs === null || now - state.successAt > state.staleAfterMs,
-          /** The coding agents running on it right now, on the machines of those who show it on this board. */
-          sessions: hub.ingest.live.of(
-            source.id,
-            source.holders.filter(id => members.has(id)),
-            now,
-          ),
-          /** When it is measured next and why, while its holder follows the hub's pace. */
-          cadence: hub.ingest.nextMeasurement(source.id, source.account, now),
-        };
-      }),
+      sources: board.sources.map(card => ({...card, mine: board.mine.includes(card.id), sessions: board.sessions[card.id], cadence: board.cadence[card.id]})),
     };
   });
 

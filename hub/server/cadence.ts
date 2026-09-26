@@ -134,6 +134,8 @@ export class Cadence {
   /** A paced holder of subscription `key` asks whether to measure now. */
   answer(key: string, device: string, provider: string, now: number, minIntervalMs: number | null, signals: Signals): Answer {
     const pace = this.pace(key, now);
+    // In use as it asks: the pace counts its quiet from now. Only asks and measurements move it, so `view` stays a reading.
+    if (signals.inUse) pace.busyAt = now;
     const floor = floorOf(minIntervalMs);
     if (pace.askedDevice !== null && pace.askedDevice !== device) {
       // A new holder measures at once, as a device taking duty always has; the old one's questions and failures are its own.
@@ -157,13 +159,30 @@ export class Cadence {
    * while `holder`, on duty, follows the pace, asks and is not waiting out failures.
    */
   view(key: string, holder: string | null, now: number, signals: Signals): {next: number; why: Why} | null {
+    return this.viewed(key, holder, now, signals).value;
+  }
+
+  /**
+   * The first moment after `now` `view` may answer otherwise with nothing new told to the
+   * hub and the same signals (the holder falls silent, a measurement under way is over, a
+   * pause ends, a window with little left resets, the pace of a low one slows down); null
+   * when only news changes it. Never later than the change, sometimes sooner.
+   */
+  viewChangesAt(key: string, holder: string | null, now: number, signals: Signals): number | null {
+    return this.viewed(key, holder, now, signals).changesAt;
+  }
+
+  private viewed(key: string, holder: string | null, now: number, signals: Signals): {value: {next: number; why: Why} | null; changesAt: number | null} {
     const pace = this.paces.get(key);
-    if (!pace || holder === null || pace.askedDevice !== holder || pace.lastAt === null || pace.askAt === null) return null;
-    if (now - pace.askAt > SILENT_AFTER_MS || this.pausedUntil(key, holder, now) !== null) return null;
+    if (!pace || holder === null || pace.askedDevice !== holder || pace.lastAt === null || pace.askAt === null) return {value: null, changesAt: null};
+    if (now - pace.askAt > SILENT_AFTER_MS) return {value: null, changesAt: null};
+    const paused = this.pausedUntil(key, holder, now);
+    if (paused !== null) return {value: null, changesAt: paused};
     const plan = this.plan(pace, key, holder, now, signals, floorOf(pace.minIntervalMs));
     // Told to measure and not heard from yet: the measurement is under way, the next one is that.
     const measuring = pace.askedAt !== null && !pace.answered && now - pace.askedAt <= MEASURING_MS;
-    return {next: measuring ? pace.askedAt! : plan.at, why: plan.why as Why};
+    const changes = [pace.askAt + SILENT_AFTER_MS + 1, ...(measuring ? [pace.askedAt! + MEASURING_MS + 1] : []), ...intervalChanges(pace, now, signals)];
+    return {value: {next: measuring ? pace.askedAt! : plan.at, why: plan.why as Why}, changesAt: Math.min(...changes)};
   }
 
   /** Tells a holder to measure now, promising the next measurement within twice the interval (it never slows down faster than that). */
@@ -211,8 +230,7 @@ export class Cadence {
 
   /** The interval the signals call for, never below the device's own least one. */
   private interval(pace: Pace, now: number, signals: Signals, floor: number): {interval: number; why: Why} {
-    if (signals.inUse) pace.busyAt = now;
-    const low = signals.windows.some(w => w.remaining > 0 && w.remaining <= LOW_LEFT && (w.resetAt === null || w.resetAt > now));
+    const low = lowWindows(signals, now).length > 0;
     let interval: number;
     let why: Why;
     if (low) [interval, why] = [lowInterval(now - pace.busyAt), 'low'];
@@ -252,6 +270,17 @@ export class Cadence {
 }
 
 const pauseKey = (key: string, device: string) => `${key}\n${device}`;
+
+/** The windows with little left and not reset yet: while there are any, the subscription is measured more often. */
+const lowWindows = (signals: Signals, now: number) => signals.windows.filter(w => w.remaining > 0 && w.remaining <= LOW_LEFT && (w.resetAt === null || w.resetAt > now));
+
+/** When the interval the signals call for changes with time alone: a low window resets, or the quiet of a low one passes an hour or three. */
+function intervalChanges(pace: Pace, now: number, signals: Signals): number[] {
+  const low = lowWindows(signals, now);
+  if (!low.length) return [];
+  const resets = low.flatMap(w => (w.resetAt === null ? [] : [w.resetAt]));
+  return [...resets, pace.busyAt + 3_600_000, pace.busyAt + 3 * 3_600_000].filter(at => at > now);
+}
 
 /** How soon to ask again: a whole number of milliseconds, never later than a regular ask. */
 const askIn = (ms: number) => Math.ceil(Math.min(ms, ASK_EVERY_MS));

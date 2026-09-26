@@ -149,9 +149,22 @@ export class Ingest {
     };
   }
 
-  /** When a subscription is measured next and why, while its holder follows the hub's pace; null otherwise. */
-  nextMeasurement(source: string, key: string, now: number): {next: number; why: Why} | null {
-    return this.cadence.view(key, this.duty.holder(key), now, this.signals(source, key, now));
+  /**
+   * When a subscription is measured next and why, while its holder follows the hub's pace
+   * (null otherwise), and the first moment that may change with nothing new told to the
+   * hub: the pace's own (Cadence.viewChangesAt), or the subscription no longer in use.
+   */
+  nextMeasurement(source: string, key: string, now: number): {value: {next: number; why: Why} | null; changesAt: number | null} {
+    const holder = this.duty.holder(key);
+    const signals = this.signals(source, key, now);
+    const value = this.cadence.view(key, holder, now, signals);
+    const own = this.cadence.viewChangesAt(key, holder, now, signals);
+    if (value === null || !signals.inUse) return {value, changesAt: own};
+    const activeAt = this.duty.activeAt(key);
+    const ends = [own, this.live.workingChangesAt(source, now), activeAt !== null && activeAt + ACTIVE_WITHIN_MS >= now ? activeAt + ACTIVE_WITHIN_MS + 1 : null].filter(
+      (at): at is number => at !== null,
+    );
+    return {value, changesAt: ends.length ? Math.min(...ends) : null};
   }
 
   /** What the hub knows of a subscription now: its windows, and whether it is in use on any machine. */
