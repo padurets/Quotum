@@ -61,7 +61,8 @@ export const Activity = memo(function Activity({
   const groups = activity?.by[by] ?? [];
   const colors = groupColors(groups, by, arrange.view, source => overview?.sources.find(s => s.id === source)?.provider ?? '');
   const shownSources = overview?.sources.filter(source => !isHidden(arrange.view, cardId(source.id))) ?? [];
-  const since = activity?.known && activity.known.from > from ? activity.known.from : null;
+  // Known from later than the period the hub answered begins (not the page's frame, whose clock may be a minute behind).
+  const since = history && activity?.known && activity.known.from > history.since ? activity.known.from : null;
 
   const empty = !history
     ? t('history.loading')
@@ -98,7 +99,7 @@ export const Activity = memo(function Activity({
         <div className="chart chart-loading">{empty}</div>
       ) : (
         <>
-          <Stacks activity={activity!} groups={groups} colors={colors} names={groups.map(group => groupName(group, by, overview))} from={from} to={to} cellMs={cellMs} />
+          <Stacks activity={activity!} groups={groups} colors={colors} names={groups.map(group => groupName(group, by, overview))} from={from} to={to} cellMs={cellMs} unknownTo={since} />
           <div className="legend activity-legend">
             {groups.map((group, i) => (
               <span key={group.key} className="legend-item" title={t('activity.legendHint')}>
@@ -123,6 +124,7 @@ function Stacks({
   from,
   to,
   cellMs,
+  unknownTo,
 }: {
   activity: ActivityData;
   groups: ActivityGroup[];
@@ -131,6 +133,8 @@ function Stacks({
   from: number;
   to: number;
   cellMs: number;
+  /** Where what is known of the period begins, when after its start: the part before is marked. */
+  unknownTo: number | null;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const svg = useRef<SVGSVGElement>(null);
@@ -164,28 +168,38 @@ function Stacks({
   const y = (value: number) => top + (1 - value / vertical.max) * (height - top - bottom);
   const {ticks, daily} = niceTicks(from, to, narrow ? 4 : 7);
 
-  // One path a group, a rectangle a cell it has a part in, stacked in the order of the groups.
+  // One path a group, stacked in the order of the groups. Cells wide enough to read as bars
+  // stand apart; narrower ones run together into a band, so a long period is not striped,
+  // and only the band's edges part it from the groups above and below.
   const paths = useMemo(() => {
     const base = new Map<number, number>();
     const edge = (value: number) => value.toFixed(1);
-    return groups.map(group =>
-      group.cells
-        .flatMap(([cell, ms]) => {
-          if (cell + cellMs <= from || cell >= to) return [];
-          const below = base.get(cell) ?? 0;
-          base.set(cell, below + size(ms));
-          const [x0, x1] = [x(cell), x(cell + cellMs)];
-          // A hair between neighbouring cells where there is room for one.
-          const gap = x1 - x0 > 3 ? 0.5 : 0;
-          return [`M${edge(x0 + gap)},${edge(y(below))}H${edge(x1 - gap)}V${edge(y(below + size(ms)))}H${edge(x0 + gap)}Z`];
+    const apart = ((width - left - right) * cellMs) / span >= 8;
+    const gap = apart ? 0.5 : 0;
+    return groups.map(group => {
+      const runs: {x0: number; x1: number; low: number; high: number}[][] = [];
+      let previous: number | null = null;
+      for (const [cell, ms] of group.cells) {
+        if (cell + cellMs <= from || cell >= to) continue;
+        const low = base.get(cell) ?? 0;
+        const high = low + size(ms);
+        base.set(cell, high);
+        const bar = {x0: x(cell) + gap, x1: x(cell + cellMs) - gap, low, high};
+        if (!apart && previous === cell - cellMs) runs.at(-1)!.push(bar);
+        else runs.push([bar]);
+        previous = cell;
+      }
+      return runs
+        .map(run => {
+          const top = run.flatMap(bar => [`${edge(bar.x0)},${edge(y(bar.high))}`, `${edge(bar.x1)},${edge(y(bar.high))}`]);
+          const bottom = [...run].reverse().flatMap(bar => [`${edge(bar.x1)},${edge(y(bar.low))}`, `${edge(bar.x0)},${edge(y(bar.low))}`]);
+          return `M${[...top, ...bottom].join('L')}Z`;
         })
-        .join(''),
-    );
+        .join('');
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groups, from, to, cellMs, width, height, vertical.max]);
 
-  const known = activity.known;
-  const unknownTo = known && known.from > from ? Math.min(known.from, to) : null;
   const cell = hover === null ? null : activity.cells.find(([start]) => start === hover);
   const parts = hover === null ? [] : groups.flatMap((group, i) => group.cells.filter(([start]) => start === hover).map(([, ms]) => ({name: names[i], color: colors[i], ms, key: group.key})));
   const hoverX = hover === null ? 0 : x(Math.max(from, Math.min(to, hover + cellMs / 2)));
@@ -211,7 +225,7 @@ function Stacks({
           <g key={value}>
             <line x1={left} x2={width - right} y1={y(value)} y2={y(value)} className={value === 0 ? 'axis-line' : 'grid'} />
             <text x={left - 8} y={y(value) + 4} textAnchor="end" className="tick">
-              {vertical.share ? `${num(value * 100)}%` : workHours(value)}
+              {vertical.share ? `${num(value * 100)}%` : value ? workHours(value) : '0'}
             </text>
           </g>
         ))}
@@ -225,7 +239,7 @@ function Stacks({
             <rect x={x(from)} width={x(unknownTo) - x(from)} y={top} height={height - top - bottom} fill={`url(#${hatch})`} />
             {x(unknownTo) - x(from) > 170 && (
               <text x={(x(from) + x(unknownTo)) / 2} y={top + (height - top - bottom) / 2} textAnchor="middle" className="activity-unknown-label">
-                {t('activity.notKnown', {time: stamp(known!.from)})}
+                {t('activity.notKnown', {time: stamp(unknownTo)})}
               </text>
             )}
           </g>

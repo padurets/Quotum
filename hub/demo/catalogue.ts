@@ -930,7 +930,8 @@ const all: DemoSet = {
       // Its week spends six points an hour its agents work, averaged over them.
       windows: [weekly({since: -6.4 * DAY, use: (_elapsed, busy) => (6 * busy) / HOUR, work: agentsWork(WEEK_AGENTS, daily(0, 0))})],
       agents: WEEK_AGENTS,
-      on: {'with-dan': {}},
+      // Without a plan: the example is about agent work.
+      on: {dan: {plan: 'off'}, 'with-dan': {plan: 'off'}},
       expect: [{title: 'Claude'}, {work: 'weekly', range: '7d', hours: 16, perHour: 4.1, left: 10.1, during: 89, from: 0, to: 0}],
     },
 
