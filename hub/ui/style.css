@@ -658,7 +658,7 @@ tr:hover .device-name .icon-button, .device-name .icon-button:focus-visible { op
 .projects-table .device-name { max-width: min(34ch, 42vw); }
 .projects-table .device-name b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* A project many machines worked on lists them over lines, so when it last worked stays in view. */
-.projects-table td:nth-child(3) { white-space: normal; min-width: 12ch; }
+.projects-table td:nth-child(3) { white-space: normal; overflow-wrap: anywhere; min-width: 12ch; }
 /* What a project gathers wraps, each name cut to the width of the project's own. */
 .projects-table td small.project-froms { display: flex; flex-wrap: wrap; gap: 0 8px; max-width: min(34ch, 42vw); white-space: normal; }
 .project-from { display: inline-flex; align-items: center; min-width: 0; max-width: 100%; }

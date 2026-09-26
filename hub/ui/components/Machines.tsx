@@ -222,9 +222,9 @@ function Projects() {
   const [selected, setSelected] = useState<string[]>([]);
   const [merge, setMerge] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  // A rename leads to a row found by its name, new or given back: the keyboard goes there,
-  // each time anew, though the name was the same the time before.
-  const [renamed, setRenamed] = useState<{name: string; n: number} | null>(null);
+  // A rename leads to rows found by their names, new or given back: the keyboard goes to the
+  // first of them still listed, each time anew, though the names were the same the time before.
+  const [renamed, setRenamed] = useState<{names: string[]; n: number} | null>(null);
   const load = useCallback(() => {
     call<ProjectList>('GET', '/api/projects').then(answer => {
       setList(answer);
@@ -247,6 +247,7 @@ function Projects() {
 
   if (!list) return <ErrorLine error={error} />;
   if (!list.projects.length) return <p className="admin-empty">{t('projects.empty')}</p>;
+  const landing = renamed?.names.find(name => list.projects.some(group => group.name === name));
   const chosen = list.projects.filter(group => group.name !== null && selected.includes(group.name));
   const toggle = (group: ProjectGroup, on: boolean) => {
     const next = on ? [...selected, group.name!] : selected.filter(name => name !== group.name);
@@ -292,10 +293,14 @@ function Projects() {
                         name={group.name}
                         label={t('projects.nameLabel')}
                         renameLabel={t('projects.rename', {name: group.name})}
-                        focus={renamed?.name === group.name ? renamed.n : 0}
+                        focus={renamed && landing === group.name ? renamed.n : 0}
                         save={name =>
                           change('/api/projects', renaming(group, name)).then(() =>
-                            setRenamed(before => ({name: name || (group.reported.includes(group.name!) ? group.name! : group.reported[0]), n: (before?.n ?? 0) + 1})),
+                            setRenamed(before => ({
+                              // Given back, each name goes its own way: its own first, where machines reported it.
+                              names: name ? [name] : [...group.reported].sort((a, b) => Number(b === group.name) - Number(a === group.name)),
+                              n: (before?.n ?? 0) + 1,
+                            })),
                           )
                         }
                       />

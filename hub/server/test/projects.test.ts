@@ -77,7 +77,7 @@ test("a person sees and corrects the projects of their own machines, over past a
 
   const listed = await call('GET', '/api/projects', {as: 'ann'});
   assert.equal(listed.body.keptDays, 90);
-  assert.deepEqual(Object.keys(listed.body.projects[0]).sort(), ['lastAt', 'machines', 'name', 'reported'], 'how long is the boards’ to show');
+  assert.deepEqual(Object.keys(listed.body.projects[0]).sort(), ['lastAt', 'machines', 'name', 'reported'], 'how long agents worked is not listed');
   assert.deepEqual(
     listed.body.projects.map((p: any) => [p.name, p.machines.map((m: any) => m.name), p.reported]),
     [
