@@ -443,6 +443,27 @@ mod tests {
     }
 
     #[test]
+    fn free_resets_keep_no_more_groups_than_a_hub_takes() {
+        let mut snapshot = Snapshot {
+            provider: Provider::Codex,
+            account: None,
+            account_name: None,
+            plan: None,
+            observed_at: 0,
+            via: "codex/app-server".into(),
+            client: None,
+            stale_after_ms: 3_600_000,
+            windows: vec![Window::new("weekly", Some(WEEK_MINUTES), None, 10.0, None)],
+            // Every one within how many there are, but a group for each.
+            resets: Some(Resets::new(60, (0..60).map(|i| (1, Some(i))))),
+        };
+        snapshot.tidy();
+        let expiring = snapshot.resets.unwrap().expiring;
+        assert_eq!(expiring.len(), EXPIRING_LIMIT);
+        assert_eq!(expiring[0].expires_at, Some(0), "the soonest are kept");
+    }
+
+    #[test]
     fn timestamps_round_trip_as_rfc3339() {
         let ms = parse_time("2026-09-22T20:20:00.770584+00:00").unwrap();
         assert_eq!(ts::format(ms), "2026-09-22T20:20:00.77Z");
