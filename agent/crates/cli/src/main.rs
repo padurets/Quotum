@@ -684,7 +684,8 @@ fn print_sessions(sessions: &[Session], style: &Style) {
         let place = match (&session.project, &session.folder) {
             (Some(project), Some(folder)) if project != folder => format!("{project} · {folder}"),
             (None, Some(folder)) => format!("no project · {folder}"),
-            (project, _) => project.clone().unwrap_or_default(),
+            (None, None) => "no project".to_string(),
+            (Some(project), _) => project.clone(),
         };
         let origin = match session.origin {
             Origin::Terminal => String::new(),

@@ -151,26 +151,31 @@ impl Activity {
                 let next = judged(self.last.get(&key), cpu, now, working_share(provider));
                 let working = next.working;
                 seen.insert(key, next);
-                folders.push((key, if self.placing { sys::cwd(pid) } else { None }));
+                folders.push((key, pid));
                 Some(Session { provider, pid, started_at, project: None, folder: None, working, origin })
             })
             .collect();
-        for (session, Place { folder, project }) in sessions.iter_mut().zip(self.placed(folders)) {
+        for (session, Place { folder, project }) in sessions.iter_mut().zip(self.placed(folders, &sys::cwd)) {
             (session.folder, session.project) = (folder, project);
         }
         self.last = seen;
         sessions
     }
 
-    /// Where the sessions of a look are, by their folders now (none when not known) and
-    /// where the last look placed them, which is kept for the next one: a session's folder
-    /// is looked into once, and again when it changes.
-    fn placed(&mut self, folders: Vec<((u32, Millis), Option<PathBuf>)>) -> Vec<Place> {
+    /// Where the sessions of a look are, by their folders now (`cwd` tells a process's, none
+    /// when not known) and where the last look placed them, which is kept for the next one:
+    /// a session's folder is looked into once, and again when it changes. Not placing, no
+    /// folder is read at all.
+    fn placed(&mut self, sessions: Vec<((u32, Millis), u32)>, cwd: &dyn Fn(u32) -> Option<PathBuf>) -> Vec<Place> {
+        if !self.placing {
+            self.places.clear();
+            return sessions.iter().map(|_| Place::default()).collect();
+        }
         let mut kept = HashMap::new();
-        let found = folders
+        let found = sessions
             .into_iter()
-            .map(|(key, dir)| {
-                let Some(dir) = dir else { return Place::default() };
+            .map(|(key, pid)| {
+                let Some(dir) = cwd(pid) else { return Place::default() };
                 let known = self.places.get(&key);
                 let entry = match placing(&dir, known.map(|(dir, _)| dir.as_path()), &self.shielded) {
                     Placing::Kept => known.cloned(),
@@ -205,21 +210,21 @@ enum Placing {
 
 /// The same folder as before is placed as before. A folder removed under a session (a
 /// worktree removed while an agent works in it) keeps where it was; so does one the agent
-/// cannot see any more. Linux tells a removed one by ` (deleted)` after its path: never a
-/// name to send, so without an earlier place it is unknown. A folder the agent cannot see
-/// at all (a client in a container of its own) is named by itself, as it was before
-/// projects were recognised. A guarded folder is not checked for being there.
+/// cannot see any more. Linux tells a removed one by ` (deleted)` after its path, which is
+/// not there: never a name to send, so without an earlier place it is unknown. A folder the
+/// agent cannot see at all (a client in a container of its own) is named by itself, as it
+/// was before projects were recognised. A guarded folder is not checked for being there.
 fn placing(dir: &Path, known: Option<&Path>, shielded: &[PathBuf]) -> Placing {
     if known == Some(dir) {
         return Placing::Kept;
     }
-    let deleted = dir.to_string_lossy().ends_with(" (deleted)");
-    let unseen = deleted || matches!(probe(dir, shielded), Look::Missing);
-    match (unseen, known, deleted) {
-        (false, _, _) => Placing::Anew,
-        (true, Some(_), _) => Placing::Kept,
-        (true, None, true) => Placing::Unknown,
-        (true, None, false) => Placing::Named,
+    if !matches!(probe(dir, shielded), Look::Missing) {
+        return Placing::Anew;
+    }
+    match known {
+        Some(_) => Placing::Kept,
+        None if dir.to_string_lossy().ends_with(" (deleted)") => Placing::Unknown,
+        None => Placing::Named,
     }
 }
 
@@ -541,7 +546,8 @@ fn probe(path: &Path, shielded: &[PathBuf]) -> Look<(Kind, PathBuf)> {
 }
 
 /// The start of a small file (4 KiB), itself a file and not a link: a pipe would hang the
-/// agent, and a link could lead anywhere.
+/// agent, and a link could lead anywhere. What is opened is checked once open, as it may
+/// have been replaced since it was looked at (by someone else, in a folder they share).
 fn read_small(path: &Path, shielded: &[PathBuf]) -> Look<String> {
     if guarded(path, shielded) {
         return Look::Shielded;
@@ -549,11 +555,28 @@ fn read_small(path: &Path, shielded: &[PathBuf]) -> Look<String> {
     if !fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file()) {
         return Look::Missing;
     }
+    let Ok(file) = open_plain(path) else { return Look::Missing };
+    if !file.metadata().is_ok_and(|meta| meta.is_file()) {
+        return Look::Missing;
+    }
     let mut text = Vec::new();
-    match fs::File::open(path).and_then(|file| file.take(4096).read_to_end(&mut text)) {
+    match file.take(4096).read_to_end(&mut text) {
         Ok(_) => Look::Found(String::from_utf8_lossy(&text).into_owned()),
         Err(_) => Look::Missing,
     }
+}
+
+/// Opens a path for reading without following a link at its end, and without waiting: a
+/// pipe opened to read waits for a writer. Windows has no such pipes among files.
+fn open_plain(path: &Path) -> std::io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+    }
+    options.open(path)
 }
 
 #[cfg(target_os = "linux")]
@@ -1229,6 +1252,15 @@ mod tests {
             assert_eq!(read_small(&stand.at("home/dev/link"), &shielded), Look::Missing, "a link is not followed");
             stand.link("home/dev/into", "../Documents/x/.git");
             assert_eq!(probe(&stand.at("home/dev/into"), &shielded), Look::Shielded, "a link that leads inside");
+            // Put in place of a file after it was looked at: opened, a pipe does not wait for a
+            // writer, and is no file; a link is not followed.
+            let pipe = stand.at("home/dev/pipe");
+            let name = std::ffi::CString::new(pipe.to_string_lossy().as_bytes()).unwrap();
+            // SAFETY: a NUL-terminated path.
+            assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+            let opened = open_plain(&pipe).expect("opened at once");
+            assert!(!opened.metadata().unwrap().is_file());
+            assert!(open_plain(&stand.at("home/dev/link")).is_err(), "a link is not followed");
         }
     }
 
@@ -1248,35 +1280,44 @@ mod tests {
         };
         let (key, other) = ((7, 1), (8, 1));
         let worktree = both(Some("wt"), Some("quotum"));
-        let place = |p: &Place| (p.folder.clone(), p.project.clone());
+        // A look at sessions in these folders (none: not told), each its own process.
+        let look = |activity: &mut Activity, folders: Vec<((u32, Millis), Option<PathBuf>)>| {
+            let dirs: HashMap<u32, PathBuf> =
+                folders.iter().filter_map(|(key, dir)| Some((key.0, dir.clone()?))).collect();
+            let sessions = folders.iter().map(|(key, _)| (*key, key.0)).collect();
+            let placed = activity.placed(sessions, &|pid| dirs.get(&pid).cloned());
+            placed.iter().map(|p| (p.folder.clone(), p.project.clone())).collect::<Vec<_>>()
+        };
         let wt = stand.at("home/dev/wt");
-        assert_eq!(
-            activity.placed(vec![(key, Some(wt.clone()))]).iter().map(place).collect::<Vec<_>>(),
-            vec![worktree.clone()]
-        );
+        assert_eq!(look(&mut activity, vec![(key, Some(wt.clone()))]), vec![worktree.clone()]);
         // The worktree is removed under the session; Linux tells its folder so.
         fs::remove_dir_all(&wt).unwrap();
         let deleted = PathBuf::from(format!("{} (deleted)", wt.display()));
         for _ in 0..2 {
-            let placed = activity.placed(vec![(key, Some(deleted.clone())), (other, Some(deleted.clone()))]);
-            assert_eq!(placed.iter().map(place).collect::<Vec<_>>(), vec![worktree.clone(), both(None, None)]);
+            let placed = look(&mut activity, vec![(key, Some(deleted.clone())), (other, Some(deleted.clone()))]);
+            assert_eq!(placed, vec![worktree.clone(), both(None, None)]);
         }
         // Not seen in a look, a session is forgotten.
-        activity.placed(Vec::new());
+        look(&mut activity, Vec::new());
+        assert_eq!(look(&mut activity, vec![(key, Some(deleted))]), vec![both(None, None)]);
+        // A folder the agent cannot see (a client in a container of its own) is named by
+        // itself, as far as it may be: not home, nor a temporary folder.
+        let unseen = vec![
+            (other, Some(stand.at("home/box/app"))),
+            ((9, 1), Some(stand.at("tmp/box"))),
+            ((10, 1), Some(stand.at("home"))),
+        ];
         assert_eq!(
-            activity.placed(vec![(key, Some(deleted))]).iter().map(place).collect::<Vec<_>>(),
+            look(&mut activity, unseen),
+            vec![both(Some("app"), Some("app")), both(None, None), both(None, None)]
+        );
+        assert_eq!(look(&mut activity, vec![(other, None)]), vec![both(None, None)], "no folder told");
+        // With project names turned off, no folder is read.
+        activity.placing = false;
+        let placed = activity.placed(vec![(key, 7)], &|_| panic!("a folder read"));
+        assert_eq!(
+            placed.iter().map(|p| (p.folder.clone(), p.project.clone())).collect::<Vec<_>>(),
             vec![both(None, None)]
-        );
-        // A folder the agent cannot see (a client in a container of its own) is named by itself.
-        let unseen = stand.at("home/box/app");
-        assert_eq!(
-            activity.placed(vec![(other, Some(unseen))]).iter().map(place).collect::<Vec<_>>(),
-            vec![both(Some("app"), Some("app"))]
-        );
-        assert_eq!(
-            activity.placed(vec![(other, None)]).iter().map(place).collect::<Vec<_>>(),
-            vec![both(None, None)],
-            "no folder told"
         );
     }
 
@@ -1295,6 +1336,9 @@ mod tests {
         let deleted = PathBuf::from(format!("{} (deleted)", dir.display()));
         assert_eq!(placing(&deleted, Some(dir.as_path()), &shielded), Placing::Kept, "removed, as Linux tells it");
         assert_eq!(placing(&deleted, None, &shielded), Placing::Unknown);
+        let named = stand.at("home/dev/old (deleted)");
+        fs::create_dir_all(&named).unwrap();
+        assert_eq!(placing(&named, None, &shielded), Placing::Anew, "a folder that is there, whatever its name");
         // A guarded folder is not checked for being there, and is named by itself.
         let guarded = stand.at("home/Documents/gone");
         assert_eq!(placing(&guarded, None, &shielded), Placing::Anew);
