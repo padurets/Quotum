@@ -1,14 +1,16 @@
 import {useCallback, useEffect, useState, type FormEvent} from 'react';
 import {useNow} from '../lib/api';
-import {ago} from '../lib/format';
+import {ago, duration} from '../lib/format';
 import {PROVIDERS} from '../lib/providers';
+import {merging, renaming, restoring, shown, timeless, type ProjectGroup, type Projects as ProjectList} from '../lib/projects';
 import {errorText} from '../lib/quota';
 import {call} from '../lib/http';
 import {LOGOS} from './logos';
 import {CopyField, ErrorLine, Field, Modal, Segmented} from './Kit';
+import {Popover} from './Popover';
 import {t} from '../i18n';
 
-export type MachinesTab = 'devices' | 'connect';
+export type MachinesTab = 'devices' | 'projects' | 'connect';
 
 type Device = {
   id: string;
@@ -47,17 +49,33 @@ function Agents({device}: {device: Device}) {
   );
 }
 
-/** A device's name, renamed in place; an empty name gives back the one the machine reports. */
-function DeviceName({device, onRenamed}: {device: Device; onRenamed: () => void}) {
+/**
+ * A name renamed in place: the pencil opens a field, Enter saves, Escape leaves it as it
+ * was. What an empty name means is the caller's.
+ */
+function InlineName({
+  name: current,
+  label,
+  renameLabel,
+  placeholder,
+  maxLength,
+  save: store,
+}: {
+  name: string;
+  label: string;
+  renameLabel: string;
+  placeholder?: string;
+  maxLength?: number;
+  save: (name: string) => Promise<void>;
+}) {
   const [name, setName] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   const save = async (event: FormEvent) => {
     event.preventDefault();
     setError(null);
     try {
-      await call('POST', `/api/devices/${encodeURIComponent(device.id)}`, {name: name!.trim()});
+      await store(name!.trim());
       setName(null);
-      onRenamed();
     } catch (failure) {
       setError(failure);
     }
@@ -68,9 +86,9 @@ function DeviceName({device, onRenamed}: {device: Device; onRenamed: () => void}
         <input
           autoFocus
           value={name}
-          maxLength={80}
-          placeholder={device.reported}
-          aria-label={t('devices.nameLabel')}
+          maxLength={maxLength}
+          placeholder={placeholder}
+          aria-label={label}
           onChange={event => setName(event.target.value)}
           onKeyDown={event => event.key === 'Escape' && (event.stopPropagation(), setName(null))}
         />
@@ -81,13 +99,30 @@ function DeviceName({device, onRenamed}: {device: Device; onRenamed: () => void}
   }
   return (
     <span className="device-name">
-      <b>{device.name}</b>
-      <button type="button" className="icon-button" aria-label={t('devices.rename', {name: device.name})} title={t('devices.rename', {name: device.name})} onClick={() => setName(device.name)}>
+      <b>{current}</b>
+      <button type="button" className="icon-button" aria-label={renameLabel} title={renameLabel} onClick={() => setName(current)}>
         <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
           <path d="M10.5 3.5l2 2M3 13l.6-2.6L11 3a1.4 1.4 0 0 1 2 2l-7.4 7.4z" />
         </svg>
       </button>
     </span>
+  );
+}
+
+/** A device's name, renamed in place; an empty name gives back the one the machine reports. */
+function DeviceName({device, onRenamed}: {device: Device; onRenamed: () => void}) {
+  return (
+    <InlineName
+      name={device.name}
+      label={t('devices.nameLabel')}
+      renameLabel={t('devices.rename', {name: device.name})}
+      placeholder={device.reported}
+      maxLength={80}
+      save={async name => {
+        await call('POST', `/api/devices/${encodeURIComponent(device.id)}`, {name});
+        onRenamed();
+      }}
+    />
   );
 }
 
@@ -153,6 +188,131 @@ function Devices({local}: {local: boolean}) {
         </tbody>
       </table>
     </div>
+  );
+}
+
+/**
+ * The projects of the reader's machines with their agent time, which the reader renames,
+ * merges and gives back their own names; every change applies to all the time kept. The
+ * rules are in ui/lib/projects.ts.
+ */
+function Projects() {
+  const now = useNow();
+  const [list, setList] = useState<ProjectList | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [merge, setMerge] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const load = useCallback(() => {
+    call<ProjectList>('GET', '/api/projects').then(answer => {
+      setList(answer);
+      setSelected([]);
+    }, setError);
+  }, []);
+  useEffect(load, [load]);
+
+  /** A change, then the list anew: another tab may have changed it too. */
+  const change = async (url: string, body: object) => {
+    setError(null);
+    try {
+      await call('POST', url, body);
+    } finally {
+      setMerge(false);
+      load();
+    }
+  };
+  const failing = (url: string, body: object) => change(url, body).catch(setError);
+
+  if (!list) return <ErrorLine error={error} />;
+  if (!list.projects.length) return <p className="admin-empty">{t('projects.empty')}</p>;
+  const chosen = list.projects.filter(group => group.name !== null && selected.includes(group.name));
+  const toggle = (group: ProjectGroup, on: boolean) => setSelected(current => (on ? [...current, group.name!] : current.filter(name => name !== group.name)));
+  return (
+    <>
+      <div className="projects-bar">
+        <p className="dialog-text">{t('projects.caption', {days: list.keptDays})}</p>
+        {chosen.length >= 2 && (
+          <Popover label={t('projects.merge')} trigger={t('projects.merge')} triggerClass="button" open={merge} onOpenChange={setMerge}>
+            <div className="popover-title">{t('projects.mergeInto')}</div>
+            {chosen.map(target => (
+              <button key={target.name} type="button" className="popover-row" onClick={() => failing('/api/projects', merging(chosen, target))}>
+                <span>{target.name}</span>
+              </button>
+            ))}
+          </Popover>
+        )}
+      </div>
+      <ErrorLine error={error} />
+      <div className="table-wrap">
+        <table className="admin-table projects-table">
+          <thead>
+            <tr>
+              <th />
+              <th>{t('projects.project')}</th>
+              <th>{t('projects.machines')}</th>
+              <th>{t('projects.time')}</th>
+              <th>{t('projects.last')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {list.projects.map(group => {
+              const from = shown(group);
+              const unknown = timeless(group);
+              return (
+                <tr key={group.name ?? ''}>
+                  <td>
+                    {group.name !== null && (
+                      <input
+                        type="checkbox"
+                        aria-label={t('projects.select', {name: group.name})}
+                        checked={selected.includes(group.name)}
+                        onChange={event => toggle(group, event.target.checked)}
+                      />
+                    )}
+                  </td>
+                  <td>
+                    {group.name === null ? (
+                      <span className="project-none">{t('projects.none')}</span>
+                    ) : (
+                      <InlineName
+                        name={group.name}
+                        label={t('projects.nameLabel')}
+                        renameLabel={t('projects.rename', {name: group.name})}
+                        save={name => change('/api/projects', renaming(group, name))}
+                      />
+                    )}
+                    {from.length > 0 && (
+                      <small>
+                        {t('projects.from')}{' '}
+                        {from.map((name, i) => (
+                          <span key={name} className="project-from">
+                            {name}
+                            <button
+                              type="button"
+                              className="link-button"
+                              aria-label={t('projects.restore', {name})}
+                              title={t('projects.restore', {name})}
+                              onClick={() => failing('/api/projects/restore', restoring(name))}
+                            >
+                              <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">
+                                <path d="M4 4l8 8M12 4l-8 8" />
+                              </svg>
+                            </button>
+                            {i < from.length - 1 && ', '}
+                          </span>
+                        ))}
+                      </small>
+                    )}
+                  </td>
+                  <td>{group.machines.map(machine => machine.name).join(', ') || '—'}</td>
+                  <td>{unknown ? '—' : duration(group.agentMs)}</td>
+                  <td>{unknown ? '—' : ago(group.lastAt, now)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }
 
@@ -246,8 +406,9 @@ function Connect() {
 }
 
 /**
- * The reader's own machines, wherever their data is shown, and the ways to connect more.
- * The desktop app's board connects no other machine: only the list.
+ * The reader's own machines, wherever their data is shown, the projects their agents
+ * worked on, and the ways to connect more. The desktop app's board connects no other
+ * machine: only the machines and the projects.
  */
 export function MachinesDialog({
   tab,
@@ -260,29 +421,19 @@ export function MachinesDialog({
   onClose: () => void;
   local: boolean;
 }) {
-  if (local) {
-    return (
-      <Modal title={t('machines.title')} onClose={onClose} wide>
-        <div className="dialog-body">
-          <Devices local />
-        </div>
-      </Modal>
-    );
-  }
+  const tabs: [MachinesTab, string][] = [
+    ['devices', t('admin.devices')],
+    ['projects', t('admin.projects')],
+    ...(local ? [] : [['connect', t('admin.connect')] as [MachinesTab, string]]),
+  ];
+  const shownTab = local && tab === 'connect' ? 'devices' : tab;
   return (
     <Modal title={t('machines.title')} onClose={onClose} wide>
-      <Segmented
-        label={t('admin.sections')}
-        options={[
-          ['devices', t('admin.devices')],
-          ['connect', t('admin.connect')],
-        ]}
-        value={tab}
-        onChange={onTab}
-      />
+      <Segmented label={t('admin.sections')} options={tabs} value={shownTab} onChange={onTab} />
       <div className="dialog-body">
-        {tab === 'devices' && <Devices local={false} />}
-        {tab === 'connect' && <Connect />}
+        {shownTab === 'devices' && <Devices local={local} />}
+        {shownTab === 'projects' && <Projects />}
+        {shownTab === 'connect' && <Connect />}
       </div>
     </Modal>
   );

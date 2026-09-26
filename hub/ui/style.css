@@ -580,6 +580,12 @@ tr:hover .device-name .icon-button, .device-name .icon-button:focus-visible { op
 .inline-rename { display: flex; flex-wrap: wrap; gap: 6px; }
 .inline-rename input { flex: 1; min-width: 0; padding: 5px 9px; }
 .inline-rename .form-error { flex-basis: 100%; }
+.projects-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 36px; }
+.projects-table input[type=checkbox] { accent-color: var(--accent); margin: 0; }
+.projects-table th:first-child, .projects-table td:first-child { width: 1px; padding-right: 0; }
+.project-none { color: var(--text-3); }
+.project-from .link-button { margin-left: 3px; vertical-align: -1px; }
+.project-from .link-button svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
 .button-row.is-start { justify-content: flex-start; align-items: center; }
 .copy { position: relative; display: flex; align-items: center; gap: 10px; padding: 9px 10px 9px 12px; border: 1px solid var(--hair-2); border-radius: 10px; background: #07080d; }
 .copy-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
