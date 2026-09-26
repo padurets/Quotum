@@ -146,8 +146,12 @@ duplicate, so resending a batch after a lost answer is safe.
 | `401` | Unknown token | Keep the data, retry later, less and less often |
 | `403` | `device_revoked`: this device was removed, or the token it delivers with was revoked. `device_conflict`: the machine is connected with a code already, and a machine token cannot take it over | Stop: nothing will be accepted from it again |
 | `403` with another code | Something in front of the hub refused the request | Keep the data, retry later |
+| `408` | `request_timeout`: the request did not arrive in full within 30 seconds | Keep the data, retry later, as for network errors |
 | `413` | Body too large | Drop it, or split it as for `400` |
 | `5xx`, network errors | Hub unavailable | Keep the data, retry later, less and less often |
+
+The hub checks the token before it reads the body: `401` and `403 device_revoked` may come
+before the agent has sent all of it.
 
 Errors always come as `{"error": "<code>"}`, never with internal messages. The API never
 redirects and always answers with JSON: a redirect or a web page means something else

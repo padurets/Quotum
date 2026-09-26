@@ -317,7 +317,9 @@ Secrets (sessions, tokens, codes, invites) are random, prefixed by kind (`qt_s_`
 `qt_m_`, `qt_d_`, `qt_c_`, `qt_i_`) and stored only as SHA-256 hashes; passwords as
 scrypt hashes. Changes made with a session cookie are accepted only from the hub's own
 pages (Origin check, SameSite cookie). Failed sign-ins and sign-ups and code lookups are
-rate-limited.
+rate-limited. An agent's request with an unknown or revoked token is refused before its
+body is read, so whoever reaches the hub cannot make it hold bodies it would throw away,
+and a request has 30 seconds to arrive in full.
 
 ## The dashboard
 
