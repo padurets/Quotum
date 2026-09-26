@@ -142,6 +142,13 @@ export const ALWAYS: Wave = {period: HOUR, on: HOUR, phase: 0};
 
 export const isOn = (wave: Wave, t: number) => mod(t - wave.phase, wave.period) < wave.on;
 
+/** The last millisecond a wave was on, including in the cycle before the demo starts. */
+export function lastOn(wave: Wave, t: number): number | null {
+  if (wave.on <= 0) return null;
+  if (isOn(wave, t)) return t;
+  return t - mod(t - wave.phase, wave.period) + wave.on - 1;
+}
+
 /** Work that follows a wave: someone working on and off, for a subscription without agents of its own. */
 export const waveWork =
   (wave: Wave): Work =>
@@ -217,6 +224,8 @@ export type BoardCheck = Span &
     | {state: 'onboarding' | 'widgets' | 'allHidden'}
     /** The table of running agents: how many rows, or why it is empty. */
     | {rows: number | 'none' | 'noneShown'}
+    /** Machines of the first rows after activity ordering. */
+    | {firstMachines: string[]}
     /** Weekly series on the chart over the last 24 hours, at least. */
     | {weeklySeries: number}
   );
@@ -286,7 +295,7 @@ export type Machine = {
 };
 
 /** Someone on the hub; their codes are read on their personal board, where `agents` turns the table of running agents on. */
-export type Person = {kind: 'person'; id: string; name: string; agents?: boolean; expect: BoardCheck[]; look?: string[]};
+export type Person = {kind: 'person'; id: string; name: string; agents?: boolean; agentsSpan?: number; expect: BoardCheck[]; look?: string[]};
 
 export type Board = {
   kind: 'board';
@@ -296,6 +305,7 @@ export type Board = {
   members: string[];
   /** The table of running agents is turned on. */
   agents?: boolean;
+  agentsSpan?: number;
   expect: BoardCheck[];
   look?: string[];
 };
@@ -443,14 +453,19 @@ export function sessionsAt(set: DemoSet, machine: Machine, start: number, t: num
   return cards(set).flatMap(card =>
     (card.agents ?? [])
       .filter(agent => agent.machine === machine.id && agent.since <= t && (agent.until === undefined || t < agent.until))
-      .map(agent => ({
-        provider: card.provider,
-        ...accountOf(card),
-        origin: agent.origin,
-        project: agent.project,
-        startedAt: iso(start, agent.since),
-        working: !!agent.works && isOn(agent.works, t),
-      })),
+      .map(agent => {
+        const working = !!agent.works && isOn(agent.works, t);
+        const last = agent.works ? lastOn(agent.works, t) : null;
+        return {
+          provider: card.provider,
+          ...accountOf(card),
+          origin: agent.origin,
+          project: agent.project,
+          startedAt: iso(start, agent.since),
+          working,
+          ...(!working && last !== null && last >= agent.since ? {lastWorkedAt: iso(start, last)} : {}),
+        };
+      }),
   );
 }
 

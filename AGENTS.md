@@ -92,6 +92,7 @@ is open.
   `Modal` (`hub/ui/components/Kit.tsx`). They are glass: the `glass` class and its
   tokens in `hub/ui/style.css`, as are the tooltips of our own (the chart's, a card's
   dot's). A new floating surface uses one of them rather than styling its own.
+- Scrollbars have one style, set once at the top of `hub/ui/style.css`; nothing styles its own.
 - Widgets on the board are a `.card` (a source) or a `.panel` (the chart, the table).
 - **Keep the board cheap to render.** Nothing on the page is `position: fixed` or has a
   fixed background, and widgets have no `backdrop-filter` (floating surfaces and the

@@ -47,6 +47,7 @@ export type LiveSession = {
   origin: 'terminal' | 'editor' | 'app';
   project: string | null;
   startedAt: number;
+  lastWorkedAt: number | null;
   working: boolean;
 };
 
@@ -74,6 +75,8 @@ export type View = {
   colors: Record<string, string>;
   /** Columns hidden in a widget's table, by widget id. */
   columns: Record<string, string[]>;
+  /** Columns off by default that the owner turned on, by widget id. */
+  shownColumns: Record<string, string[]>;
 };
 
 export type Overview = {

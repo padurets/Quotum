@@ -8,6 +8,8 @@
   --text-2: #b2b1bf;
   --text-3: #787787;
   --text-4: #4c4b59;
+  --scrollbar: #ffffff26;
+  scrollbar-color: var(--scrollbar) transparent;
   --accent: #bbc0fe;
   --ok: #75d8ad;
   --warn: #f6c56e;
@@ -33,7 +35,7 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
-* { box-sizing: border-box; }
+* { box-sizing: border-box; scrollbar-width: thin; }
 /* The scrollbar's room is kept when a dialog stops the page from scrolling, so nothing shifts. */
 html { scrollbar-gutter: stable; }
 body {
@@ -223,7 +225,6 @@ body.is-resizing, body.is-resizing * { cursor: ew-resize !important; user-select
   box-shadow: var(--glass-shadow);
 }
 /* What scrolls inside glass keeps it: a thin light thumb, no track. */
-.glass, .glass * { scrollbar-width: thin; scrollbar-color: #ffffff26 transparent; }
 /* Over the chart's lines the text has to stay readable: a denser pane. */
 .tooltip.glass { background: linear-gradient(180deg, #ffffff0c, #ffffff02 45%), #131318d9; }
 .popover-title.is-group { padding-top: 6px; padding-bottom: 4px; }
@@ -369,7 +370,23 @@ td.muted, small.muted { color: var(--text-3); }
 .agents-legend span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 /* The table of every running agent: a mark as on the cards starts each row. */
 .agents-panel td .agent { margin-right: 12px; vertical-align: -1px; }
-.agents-panel td:first-child { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+.agents-panel table { table-layout: fixed; }
+.agents-panel td { overflow: hidden; text-overflow: ellipsis; }
+.agents-panel th button { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; padding: 0; background: none; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; text-align: left; }
+.agents-panel th button:hover, .agents-panel th[aria-sort] { color: var(--text-2); }
+.agents-sort-arrow { width: 10px; flex-shrink: 0; }
+.agents-controls { display: flex; gap: 6px; margin-left: auto; }
+.agents-panel .panel-head { gap: 8px; }
+.agents-compact { list-style: none; margin: 18px calc(-1 * var(--panel-pad)) 0; padding: 0; }
+.agents-compact > li { padding: 11px var(--panel-pad); border-bottom: 1px solid var(--hair); color: var(--text-2); }
+.agents-compact > li:last-child { border-bottom: 0; }
+.agents-compact > li:hover { background: #ffffff04; }
+.agents-compact > li.is-working { color: var(--text); }
+.agents-compact-main { display: flex; align-items: center; gap: 10px; min-width: 0; font-size: 12.5px; }
+.agents-compact-main > .agent, .agents-compact-main > .agents-origin, .agents-compact-main > .agents-age { flex-shrink: 0; }
+.agents-compact-main > .agents-project { flex: 1; }
+.agents-compact-details { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 4px 0 0 15px; color: var(--text-3); font-size: 11.5px; }
+.agents-compact-details > span { min-width: 0; overflow-wrap: anywhere; }
 .agents-list { box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; width: min(340px, calc(100vw - 48px)); max-width: 100%; overflow: hidden auto; padding: 0 0 4px; }
 .agents-machine h3 { display: flex; align-items: baseline; gap: 8px; margin: 0 8px 4px; font-size: 12.5px; font-weight: 560; color: var(--text); }
 .agents-machine h3 span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

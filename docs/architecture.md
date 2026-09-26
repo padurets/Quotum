@@ -184,8 +184,12 @@ agent moves its own schedule back when the machine's clock is set back.
 and at least every two minutes while anything runs, with a short timeout: it never holds
 up measuring, and a list the hub did not take goes out again at the next look. Without a
 hub that takes it, the agent does not look (an older hub, which does not know the
-request, is asked again every hour: it may have been upgraded). At most 200 sessions go
-out, the working ones first. The hub keeps the latest list of each machine
+request, is asked again every hour: it may have been upgraded). An idle session reports
+when it last spent CPU like a working one, if the agent saw it:
+the observation's date is remembered, never recalculated. A clock jump invalidates that
+date without changing the working judgement or its hold; after a restart or a jump it
+stays unknown until new work. Older agents may omit it. At most 200 sessions go
+out: working first, then those that worked most recently, then the newest. The hub keeps the latest list of each machine
 in memory for five minutes (after a restart the agents send theirs again), files each
 session under its subscription (the account the client is signed in to now, else the one
 the machine last delivered for that client; only one its person holds; the agent leaves
@@ -278,7 +282,7 @@ them), kept for 90 days.
 - **The view** of a board is how it is arranged: the order of its widgets (a card per
   source, the list of running agents, the chart and the table), their widths on a
   twelve-column grid, names and colours given to cards, the hidden widgets (and those
-  off by default, the list of agents, turned on), the columns hidden in a widget's table,
+  off by default, the list of agents, turned on), the columns hidden in a widget's table (and those off by default turned on),
   the windows hidden inside cards and the spending plans, or that a card has none. The
   list of agents shows only the subscriptions whose cards are shown.
   It is stored once per board, like a dashboard in Grafana: the owner arranges it and
@@ -309,9 +313,16 @@ The board's view comes with the overview; the owner's changes show at once and a
 saved about half a second later, one request per burst (a drag, typing a plan). What
 is only about how one person looks (the analytics' period and window type, the chart's
 horizon, lines switched off in the legend, reset announcements, the lock on the widgets,
-the chosen board and language) stays in their browser. A time range selected on the
+the agents table’s sort order, the chosen board and language) stays in their browser. A time range selected on the
 chart becomes the analytics' period; it lives in the page's address (`?from=&to=`),
 so a reload keeps it, Back undoes it and a link to it can be shared on the board.
+
+Both agent lists put working sessions first, then the ones that worked most recently,
+then the newest. The card's panel keeps machine groups, ordered by each one's most
+active session. The table's headers sort ascending, descending, then back to activity;
+a hidden column does not sort. When its owner's chosen columns do not fit the widget's
+own width, it becomes a compact list with a sort menu. State is off by default: the
+mark already tells it. Explicit column choices belong to the board, sorting to the viewer.
 
 Text is translated through typed catalogs in `hub/ui/i18n`: English is the source,
 every other language must translate all its keys (checked by the type checker and by
