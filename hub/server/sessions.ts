@@ -62,7 +62,8 @@ export class Sessions {
     if (before) this.credit(device, before, Math.min(now, before.at + CREDIT_MS));
     const sources = new Map<string, LiveSession[]>();
     for (const {source, ...session} of sessions) sources.set(source, [...(sources.get(source) ?? []), session]);
-    if (sources.size) this.machines.set(device, {at: now, user, sources});
+    // A clock set back does not move the list back: what is credited already is not credited again.
+    if (sources.size) this.machines.set(device, {at: Math.max(now, before?.at ?? now), user, sources});
     else this.machines.delete(device);
   }
 
@@ -91,7 +92,9 @@ export class Sessions {
       const sessions = machine.sources.get(source) ?? [];
       const names = sessions.length ? this.store.projectNames(machine.user) : new Map<string, string>();
       for (const {device, origin, project, folder, startedAt, working} of sessions) {
-        found.push({device, origin, project: project === null ? null : (names.get(project) ?? project), folder, startedAt, working});
+        const shown = project === null ? null : (names.get(project) ?? project);
+        // The agent leaves out a folder that is its project; renamed, that name tells the folder.
+        found.push({device, origin, project: shown, folder: folder ?? (shown !== project ? project : null), startedAt, working});
       }
     }
     return found.sort((a, b) => a.device.name.localeCompare(b.device.name) || a.device.id.localeCompare(b.device.id) || a.startedAt - b.startedAt);

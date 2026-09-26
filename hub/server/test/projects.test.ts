@@ -63,7 +63,7 @@ async function hub() {
     for (const s of store.agentWork(0, Number.MAX_SAFE_INTEGER).filter(s => s.user === user)) time[String(s.project)] = (time[String(s.project)] ?? 0) + s.to - s.from;
     return time;
   };
-  return {store, call, ann, bob, machines, credit, projects, name, kept, split};
+  return {store, call, ann, bob, now, machines, credit, projects, name, kept, split};
 }
 
 test("a person sees and corrects the projects of their own machines, over past and new time, and undoes it", async () => {
@@ -133,6 +133,7 @@ test("the same reported name is each person's to correct, and one's correction d
   await name('ann', ['X'], 'Quotum');
   await name('ann', ['quotum'], 'core');
   assert.deepEqual(kept(ann), [['quotum', 'core']], "Bob's correction of Quotum does not make Ann's a part of her quotum");
+  assert.deepEqual(kept(bob), [['Quotum', 'quotum']], "Ann's names given back and renamed leave Bob's as they were");
   assert.deepEqual((await projects('ann')).map((p: any) => p.name).sort(), ['Quotum', 'core'].sort());
 
   // A name only Bob's machines report is no member of Ann's group of that name.
@@ -182,6 +183,47 @@ test('corrections without time are listed and move with their group; renaming a 
   await name('ann', ['Y'], 'a');
   assert.deepEqual(kept(ann).filter(([reported]) => reported === 'a'), [], 'a name given back its own keeps nothing');
   assert.equal((await call('GET', '/api/projects')).status, 401);
+});
+
+test('a group gathers what leads to it, and the tab counts only the time kept, most recent first, time without a project last', async () => {
+  const {store, call, ann, now, machines, credit, projects, name, kept} = await hub();
+  // a → X, then b → a: the group a is b alone, and renaming it leaves a in X.
+  credit(machines.laptop, 'a', 5);
+  credit(machines.laptop, 'b', 5);
+  await name('ann', ['a'], 'X');
+  await name('ann', ['b'], 'a');
+  await name('ann', ['a'], 'c');
+  assert.deepEqual(kept(ann), [
+    ['a', 'X'],
+    ['b', 'c'],
+  ]);
+  // A name of spaces is no name: each gets its own back.
+  assert.deepEqual((await call('POST', '/api/projects', {as: 'ann', body: {groups: ['c'], name: '   '}})).body, {ok: true});
+  assert.deepEqual(kept(ann), [['a', 'X']]);
+
+  // Across the edge of the 90 days kept, and before it.
+  const day = 24 * 60;
+  credit(machines.laptop, 'edge', 20, 90 * day - 10);
+  credit(machines.laptop, 'gone', 20, 91 * day);
+  credit(machines.laptop, '', 5, 1);
+  // Machines listed by name, whatever their ids.
+  const box = (id: string, name: string) =>
+    store.db.prepare('INSERT INTO devices VALUES (?, ?, ?, ?, NULL, ?, ?, ?, NULL, NULL, ?, NULL, NULL)').run(id, ann, `m-${id}`, name, 'linux', 'x86_64', 'quotum/0.4.0', now);
+  box('0000', 'zeta-box');
+  box('zzzz', 'alpha-box');
+  credit('0000', 'multi', 5, 30);
+  credit('zzzz', 'multi', 5, 30);
+
+  const list = await projects('ann');
+  const edge = list.find((p: any) => p.name === 'edge');
+  assert.ok(edge.agentMs > 9 * minute && edge.agentMs <= 10 * minute, `only its part within: ${edge.agentMs}`);
+  assert.equal(list.find((p: any) => p.name === 'gone'), undefined, 'nothing of it within');
+  assert.deepEqual(list.find((p: any) => p.name === 'multi').machines.map((m: any) => m.name), ['alpha-box', 'zeta-box']);
+  assert.equal(list.at(-1).name, null, 'time without a project last, though the most recent');
+  assert.deepEqual(
+    list.slice(0, -1).map((p: any) => p.lastAt ?? 0),
+    list.slice(0, -1).map((p: any) => p.lastAt ?? 0).sort((a: number, b: number) => b - a),
+  );
 });
 
 test('names of projects are checked as agents send them', async () => {

@@ -100,15 +100,29 @@ test('each session keeps when it worked; agent time adds up by any group, and th
 test('lists in a row lengthen one stretch; a gap longer than a list counts starts another', () => {
   const {store, live, ann, laptop} = setup();
   const list = [session(laptop, {project: 'quotum'})];
-  for (const at of [0, 2, 4]) live.report(laptop, ann, list, start + at * minute);
+  for (const at of [0, 120, 240]) live.report(laptop, ann, list, start + at * second);
   assert.equal(count(store, 'agent_work'), 1);
-  live.report(laptop, ann, list, start + 10 * minute);
-  live.report(laptop, ann, [], start + 11 * minute);
+  // Quiet for longer than a list counts, but not long enough to be forgotten.
+  live.report(laptop, ann, list, start + 490 * second);
+  live.report(laptop, ann, [], start + 520 * second);
+  // Gone quiet, then back.
+  live.report(laptop, ann, list, start + 600 * second);
+  live.report(laptop, ann, [], start + 660 * second);
   assert.deepEqual(seconds(all(store)), [
     ['quotum', null, 0, 240 + CREDIT_MS / second],
+    ['quotum', null, 490, 520],
     ['quotum', null, 600, 660],
   ]);
   assert.equal(count(store, 'agent_sessions'), 1);
+  store.close();
+});
+
+test("a hub's clock set back credits nothing twice", () => {
+  const {store, live, ann, laptop} = setup();
+  const list = [session(laptop, {project: 'quotum'})];
+  for (const at of [0, 120, 60, 180]) live.report(laptop, ann, list, start + at * second);
+  live.report(laptop, ann, [], start + 240 * second);
+  assert.deepEqual(seconds(all(store)), [['quotum', null, 0, 240]]);
   store.close();
 });
 
@@ -196,13 +210,25 @@ test('work is read for a period, cut to it, and for the subscriptions asked', ()
 
 test('old work and the sessions left without any are forgotten; names people gave their projects stay', () => {
   const {store, live, ann, laptop} = setup();
+  const now = start + (config.retention.sampleDays + 1) * 86_400_000;
+  const cutoff = now - config.retention.sampleDays * 86_400_000;
   live.report(laptop, ann, [session(laptop, {project: 'old'})], start);
+  live.report(laptop, ann, [], start + minute);
+  // Across the edge of what is kept: kept, for its part within.
+  live.report(laptop, ann, [session(laptop, {project: 'across'})], cutoff - minute);
   live.report(laptop, ann, [session(laptop, {project: 'new'})], start + 50 * 86_400_000);
   live.report(laptop, ann, [], start + 50 * 86_400_000 + minute);
   store.db.prepare('INSERT INTO project_names VALUES (?, ?, ?)').run(ann, 'old', 'older');
-  store.prune(start + (config.retention.sampleDays + 1) * 86_400_000);
-  assert.deepEqual(all(store).map(s => s.project), ['new']);
-  assert.equal(count(store, 'agent_sessions'), 1);
+  store.prune(now);
+  assert.deepEqual(all(store).map(s => s.project), ['across', 'new']);
+  assert.deepEqual(
+    store.agentWork(cutoff, now).map(s => [s.project, s.from - cutoff]),
+    [
+      ['across', 0],
+      ['new', 49 * 86_400_000],
+    ],
+  );
+  assert.equal(count(store, 'agent_sessions'), 2);
   assert.equal(count(store, 'project_names'), 1);
   store.close();
 });
@@ -233,6 +259,15 @@ test("a board shows the sessions of those who show the subscription on it, each 
       [server, 'quotum', null],
     ].sort((a, b) => a[0]!.localeCompare(b[0]!)),
     "Ann's name for her project; Bob's as his machine reports it",
+  );
+  // In the project's own folder the agent tells no folder: renamed, the reported name shows where it works.
+  live.report(laptop, ann, [session(laptop, {project: 'quotum'}), session(laptop, {project: 'billing'})], start + 1);
+  assert.deepEqual(
+    live.of('codex:1', [ann], start + 1).map(s => [s.project, s.folder]),
+    [
+      ['core', 'quotum'],
+      ['billing', null],
+    ],
   );
   live.forget([laptop]);
   assert.deepEqual(live.of('codex:1', [ann, bob], start).map(s => s.device.id), [server]);
