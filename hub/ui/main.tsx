@@ -3,7 +3,7 @@ import {createRoot} from 'react-dom/client';
 import '@fontsource-variable/geist';
 import '@fontsource-variable/geist-mono';
 import './style.css';
-import {useHistory, useOverview} from './lib/api';
+import {historySources, useHistory, useOverview} from './lib/api';
 import {setPrefs, usePrefs} from './lib/prefs';
 import {showBoard, useTimeRange} from './lib/timeRange';
 import {useResets} from './lib/resets';
@@ -58,8 +58,8 @@ function Dashboard({
   const revision = data ? data.revision : null;
   // The chart and the table show one period: a time range selected on the chart, else the chosen one.
   const selected = useTimeRange();
-  // A range kept on the page is of the sources the board had: one added since is read again.
-  const sourceIds = useMemo(() => (data ? data.sources.map(source => source.id).sort().join(',') : ''), [data]);
+  // A range kept on the page is of the sources the board had and whose work it showed: one changed since is read again.
+  const sourceIds = useMemo(() => historySources(data), [data]);
   const {history, loading: historyLoading} = useHistory(boardId, selected ?? prefs.range, revision, sourceIds);
   const {resets, past, health} = useResets(prefs.showResets);
   const [machines, setMachines] = useState<MachinesTab | null>(null);

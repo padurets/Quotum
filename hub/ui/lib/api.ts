@@ -139,6 +139,14 @@ const KEPT_RANGES = 8;
 export const complete = (history: History, selected: TimeRange) => history.refreshInMs === null && history.to === Math.ceil(selected.to / history.cellMs) * history.cellMs;
 
 /**
+ * What history on a page is read for besides its period: the board's sources, and whose
+ * work it shows under which names (`workKey`). A range kept on the page is read again when
+ * either changes: a source added to the board, a card hidden, a project renamed.
+ */
+export const historySources = (overview: Pick<Overview, 'sources' | 'workKey'> | null) =>
+  overview ? `${overview.sources.map(source => source.id).sort().join(',')} ${overview.workKey}` : '';
+
+/**
  * History of a board over a period ending now ('24h', …) or a time range in the past,
  * read again when that changes or, for a period, when the board's data does (`revision`);
  * a range is in the past and stays as read. While another one loads, the one on screen

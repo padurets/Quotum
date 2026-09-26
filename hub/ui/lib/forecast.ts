@@ -1,5 +1,6 @@
 import type {Win} from './types';
 import type {Line} from './lines';
+import {WORK_COLUMNS} from './work';
 import {PLAN_TOLERANCE, planAt, started, weeklyPlanRemaining, type WeeklyPlan} from './plan';
 
 const HOUR = 3_600_000;
@@ -165,3 +166,38 @@ export const forecastRow = (line: Pick<Line, 'consumed' | 'coveredMs'>, live: Wi
   plan: planCell(live, measuredAt, now, weekly),
   outlook: outlook(live, measuredAt, now, weekly),
 });
+
+/**
+ * The table's columns after the window's name, which the board's owner turns on and off:
+ * over a period up to now, and over a range. What they spent, and the columns about agent
+ * work, are the same in both, so turning one off turns it off in both.
+ */
+export const LIVE_COLUMNS = ['now', 'plan', 'spent', 'forecast', ...WORK_COLUMNS] as const;
+export const RANGE_COLUMNS = ['start', 'end', 'spent', 'pace', ...WORK_COLUMNS] as const;
+export type ForecastColumn = (typeof LIVE_COLUMNS)[number] | (typeof RANGE_COLUMNS)[number];
+
+/**
+ * Room for the widest heading or value in either language, measured on the demo board,
+ * and the least room a window's name gets (`limit`), which wraps beyond it. On a widget as
+ * wide as the board every column on by default fits; with the share during work as well,
+ * it does not in Russian, which is why that column is off until the owner turns it on.
+ */
+export const FORECAST_WIDTHS: Record<ForecastColumn | 'limit', number> = {
+  limit: 180,
+  now: 72,
+  plan: 72,
+  spent: 142,
+  forecast: 216,
+  start: 82,
+  end: 74,
+  pace: 66,
+  work: 124,
+  perwork: 120,
+  workleft: 138,
+  during: 146,
+};
+
+/** A table where the chosen columns fit the widget, otherwise a list of rows. */
+export function forecastLayout(columns: readonly ForecastColumn[], width: number): 'table' | 'list' {
+  return columns.reduce((sum, column) => sum + FORECAST_WIDTHS[column], FORECAST_WIDTHS.limit) <= width ? 'table' : 'list';
+}

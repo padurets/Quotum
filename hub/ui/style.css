@@ -380,16 +380,23 @@ td.muted, small.muted { color: var(--text-3); }
 .agents-sort-arrow { width: 10px; flex-shrink: 0; }
 .agents-controls { display: flex; gap: 6px; margin-left: auto; }
 .agents-panel .panel-head { gap: 8px; }
-.agents-compact { list-style: none; margin: 18px calc(-1 * var(--panel-pad)) 0; padding: 0; }
-.agents-compact > li { padding: 11px var(--panel-pad); border-bottom: 1px solid var(--hair); color: var(--text-2); }
-.agents-compact > li:last-child { border-bottom: 0; }
-.agents-compact > li:hover { background: #ffffff04; }
+.agents-compact, .forecast-compact { list-style: none; margin: 18px calc(-1 * var(--panel-pad)) 0; padding: 0; }
+.agents-compact > li, .forecast-compact > li { padding: 11px var(--panel-pad); border-bottom: 1px solid var(--hair); color: var(--text-2); }
+.agents-compact > li:last-child, .forecast-compact > li:last-child { border-bottom: 0; }
+.agents-compact > li:hover, .forecast-compact > li:hover { background: #ffffff04; }
 .agents-compact > li.is-working { color: var(--text); }
 .agents-compact-main { display: flex; align-items: center; gap: 10px; min-width: 0; font-size: 12.5px; }
 .agents-compact-main > .agent, .agents-compact-main > .agents-origin, .agents-compact-main > .agents-age { flex-shrink: 0; }
 .agents-compact-main > .agents-project { flex: 1; }
 .agents-compact-details { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 4px 0 0 15px; color: var(--text-3); font-size: 11.5px; }
 .agents-compact-details > span { min-width: 0; overflow-wrap: anywhere; }
+/* The table of limits as a list: a window's name and what is left, then its other values, each with its heading, wrapping whole. */
+.forecast-compact-main { display: flex; align-items: baseline; gap: 10px; min-width: 0; font-size: 13px; }
+.forecast-compact-name { flex: 1; min-width: 0; color: var(--text); overflow-wrap: anywhere; }
+.forecast-compact-main > :last-child:not(.forecast-compact-name) { flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.forecast-compact-details { display: flex; flex-wrap: wrap; gap: 3px 16px; margin: 4px 0 0 13px; color: var(--text-3); font-size: 11.5px; }
+.forecast-compact-details > span { white-space: nowrap; }
+.forecast-compact-details > span > span { color: var(--text-2); font-variant-numeric: tabular-nums; }
 .agents-list { box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; width: min(340px, calc(100vw - 48px)); max-width: 100%; overflow: hidden auto; padding: 0 0 4px; }
 .agents-machine h3 { display: flex; align-items: baseline; gap: 8px; margin: 0 8px 4px; font-size: 12.5px; font-weight: 560; color: var(--text); }
 .agents-machine h3 span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -525,6 +532,8 @@ th:last-child, td:last-child { padding-right: var(--table-edge, 12px); }
 /* A table scrolls within the dialog rather than widening it past a narrow screen. */
 .dialog .table-wrap { --table-edge: 24px; margin-inline: -24px; contain: inline-size; }
 td:first-child { color: var(--text); }
+/* A window's name wraps rather than widening the table past its widget: the columns beside it keep their room. */
+.panel.forecast td:first-child { white-space: normal; overflow-wrap: anywhere; }
 /* A row's colour, marked like the card it belongs to. */
 .swatch { display: inline-block; width: 3px; height: 13px; border-radius: 2px; margin-right: 10px; vertical-align: -2px; }
 

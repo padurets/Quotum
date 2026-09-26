@@ -21,6 +21,17 @@ export function duration(ms: number, short = false) {
 }
 
 /**
+ * How long agents worked: minutes within the hour (a minute at least for any work), hours
+ * to a tenth up to ten, whole hours after that. Never days: "150h" of work is not "6d 6h".
+ */
+export function workHours(ms: number) {
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 60) return t('time.minutes', {n: ms > 0 ? Math.max(1, minutes) : 0});
+  const hours = ms / 3_600_000;
+  return t('time.hours', {n: hours < 10 ? num(hours, 1) : num(Math.round(hours))});
+}
+
+/**
  * How long until something, for a mark or a heading with little room: minutes within the
  * hour, hours for two days, days after that, always rounded down and never under a minute.
  * Two days are hours still, so a reset in 47 hours does not read as one day away.

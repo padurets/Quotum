@@ -72,8 +72,12 @@ export const withHidden = (view: View, id: string, hidden: boolean): View =>
     ? {...view, shown: hidden ? view.shown.filter(other => other !== id) : [...new Set([...view.shown, id])]}
     : {...view, hidden: hidden ? [...new Set([...view.hidden, id])] : view.hidden.filter(other => other !== id)};
 
-/** Columns whose marks already tell the state; the owner can still ask for words. */
-const OFF_BY_DEFAULT_COLUMNS: Record<string, string[]> = {[AGENTS]: ['state']};
+/**
+ * Columns off until the owner turns them on: the agents' state, which their marks already
+ * tell; the table's share of spending during work, which does not fit a widget as wide as
+ * the board beside the rest (see FORECAST_WIDTHS).
+ */
+const OFF_BY_DEFAULT_COLUMNS: Record<string, string[]> = {[AGENTS]: ['state'], [FORECAST]: ['during']};
 const columnOffByDefault = (widget: string, column: string) => OFF_BY_DEFAULT_COLUMNS[widget]?.includes(column) ?? false;
 
 /** Whether a column of a widget's table is shown. */

@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {clip, forecastLine, forecastRow, outlook, type Outlook} from '../lib/forecast';
+import {FORECAST_WIDTHS, LIVE_COLUMNS, RANGE_COLUMNS, clip, forecastLayout, forecastLine, forecastRow, outlook, type ForecastColumn, type Outlook} from '../lib/forecast';
+import {FORECAST, columnShown} from '../lib/view';
 import {DEFAULT_PLAN, type WeeklyPlan} from '../lib/plan';
 import type {Win} from '../lib/types';
 
@@ -199,4 +200,20 @@ test('no line where the table has no forecast', () => {
   assert.equal(none(week(100, {resetAt: measured + 7 * DAY - 10 * MIN})), null, 'just started');
   assert.equal(none(week(38), measured + 3 * DAY), null, 'past its zero');
   assert.equal(none(week(50, {resetAt: null})), null, 'no reset known');
+});
+
+test('the table stays a table while its chosen columns fit the widget, and becomes a list when they do not', () => {
+  for (const columns of [LIVE_COLUMNS, RANGE_COLUMNS, ['now', 'work'] as const]) {
+    const width = columns.reduce((sum, column) => sum + FORECAST_WIDTHS[column], FORECAST_WIDTHS.limit);
+    assert.equal(forecastLayout(columns, width - 1), 'list');
+    assert.equal(forecastLayout(columns, width), 'table');
+  }
+  assert.equal(forecastLayout(['now'], 360), 'table', 'fewer columns, a table on a narrower widget');
+  assert.equal(forecastLayout(LIVE_COLUMNS, 360), 'list');
+  // A widget as wide as the board: the page's content is 1184 pixels, less the panel's border.
+  const view = {order: [], sizes: {}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
+  const shown = (columns: readonly ForecastColumn[]) => columns.filter(column => columnShown(view, FORECAST, column));
+  assert.equal(forecastLayout(shown(LIVE_COLUMNS), 1182), 'table', 'every column on by default, on a widget as wide as the board');
+  assert.equal(forecastLayout(shown(RANGE_COLUMNS), 1182), 'table');
+  assert.deepEqual(LIVE_COLUMNS.filter(column => !shown(LIVE_COLUMNS).includes(column)), ['during'], 'the share during work does not fit beside them');
 });

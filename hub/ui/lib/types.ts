@@ -93,6 +93,8 @@ export type Overview = {
   historyStart: number;
   /** Changes whenever the board's data changes. */
   revision: number;
+  /** Changes whenever whose work the board shows or how it is named does: history is read again, ranges read before too. */
+  workKey: string;
   sources: SourceState[];
 };
 
@@ -113,6 +115,44 @@ export type HistorySeries = {
   staleAfterMs: number;
   /** [cell start, remaining percent, line segment] */
   points: [number, number, number][];
+  /** How agents worked on its subscription meanwhile (null for a hidden card). */
+  work: SeriesWork | null;
+};
+
+/**
+ * How agents worked on a window's subscription over a period, and what the window spent
+ * meanwhile, all from `from` on, since when that is known: `ms`, how long any of them
+ * worked (null when nothing of the period is known); `consumed`, what the window spent
+ * over the steps between measurements the hub can prove; `coveredMs`, how long agents
+ * worked during those steps; `duringWork`, what those of the steps agents worked in spent
+ * (an upper bound: a step work touches counts whole).
+ */
+export type SeriesWork = {from: number; ms: number | null; consumed: number; coveredMs: number; duringWork: number};
+
+export type ActivityDimension = 'source' | 'project' | 'device';
+
+/**
+ * A subscription, project or machine agents worked on: how long its own agents worked
+ * (`ms`, overlaps counted once) and its part of each cell's work ([cell start, ms], only
+ * cells it has a part in). `other` stands for the groups beyond the first few, `count` of
+ * them; `name` is null for a subscription (named from the board) and for no project.
+ */
+export type ActivityGroup = {key: string; name: string | null; other?: true; count?: number; ms: number; cells: [number, number][]};
+
+/**
+ * How the agents the board shows worked over the period: since when that is known on the
+ * board, the part of the period that is (null when none), how long any of them worked and
+ * all of them together, cell by cell ([cell start, work, agent time], only cells with
+ * work), and split by subscription, project and machine. Each moment is split evenly among
+ * the agents working then, so a cell's parts add up to its work.
+ */
+export type Activity = {
+  since: number;
+  known: {from: number; to: number} | null;
+  workMs: number;
+  agentMs: number;
+  cells: [number, number, number][];
+  by: Record<ActivityDimension, ActivityGroup[]>;
 };
 
 export type History = {
@@ -129,6 +169,7 @@ export type History = {
   historyStart: number;
   series: HistorySeries[];
   events: SourceEvent[];
+  activity: Activity;
   /** The board has newer data than this answer; a newer answer is ready in this long. */
   refreshInMs: number | null;
 };

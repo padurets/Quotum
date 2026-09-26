@@ -1,15 +1,16 @@
-import {memo, useMemo} from 'react';
+import {memo, useLayoutEffect, useMemo, useRef, useState, type ReactNode} from 'react';
 import {MINUTE, useNow} from '../lib/api';
-import type {History as HistoryData, Overview} from '../lib/types';
-import {countdown, num, stamp} from '../lib/format';
+import type {History as HistoryData, Overview, SeriesWork} from '../lib/types';
+import {countdown, num, stamp, workHours} from '../lib/format';
 import {level} from '../lib/quota';
-import {forecastRow, spentOf, type Outlook, type Pace, type Spent} from '../lib/forecast';
-import {FORECAST, planOf, withHidden, type Arrange} from '../lib/view';
-import {linesOf} from '../lib/lines';
+import {FORECAST_WIDTHS, LIVE_COLUMNS, RANGE_COLUMNS, forecastLayout, forecastRow, spentOf, type ForecastColumn, type Outlook, type Pace, type Spent} from '../lib/forecast';
+import {lineWork, workNotes, type WorkCell, type WorkColumn, type WorkReason} from '../lib/work';
+import {FORECAST, columnShown, planOf, withColumn, withHidden, type Arrange} from '../lib/view';
+import {linesOf, type Line} from '../lib/lines';
 import {usePrefs} from '../lib/prefs';
 import {ofTimeRange} from '../lib/timeRange';
-import {t, useLocale} from '../i18n';
-import {HideRow, Popover, SlidersIcon} from './Popover';
+import {t, useLocale, type Key} from '../i18n';
+import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
 
 /** How fast the window goes, as the tooltip of its forecast says it. */
 const paceText = (pace: Pace) =>
@@ -46,11 +47,64 @@ const spentText = (spent: Spent) => (spent.key === 'points' ? t('table.points', 
 /** How long a line must have been measured without gaps for its pace to mean something. */
 const PACE_FROM = 10 * 60_000;
 
+/** A column's heading (over a range where it differs) and what its tooltip explains. */
+const HEADINGS: Record<ForecastColumn, {title: Key; range?: Key; hint?: Key}> = {
+  now: {title: 'table.now'},
+  plan: {title: 'table.plan', hint: 'table.planHint'},
+  spent: {title: 'table.spent', range: 'table.spentInRange'},
+  forecast: {title: 'table.forecast', hint: 'table.forecastHint'},
+  start: {title: 'table.atStart'},
+  end: {title: 'table.atEnd'},
+  pace: {title: 'table.pace', hint: 'table.paceHint'},
+  work: {title: 'table.work', hint: 'table.workHint'},
+  perwork: {title: 'table.perWork', hint: 'table.perWorkHint'},
+  workleft: {title: 'table.workLeft', hint: 'table.workLeftHint'},
+  during: {title: 'table.during', hint: 'table.duringHint'},
+};
+
+const heading = (column: ForecastColumn, range: boolean) => t((range && HEADINGS[column].range) || HEADINGS[column].title);
+
+/** Why a cell about agent work is a dash: what spending nothing means depends on the column. */
+const reasonKey = (column: WorkColumn, reason: Exclude<WorkReason, 'unknown'>): Key =>
+  reason === 'nospend' ? (column === 'during' ? 'work.noSpend' : 'work.noPace') : (({none: 'work.none', short: 'work.short', noend: 'work.noEnd'}) as const)[reason];
+
+type Cell = {content: ReactNode; title?: string; className?: string};
+
+/**
+ * A cell about agent work, with a tooltip of a part a line: what the pace is taken over,
+ * that the share is an upper bound, since when work is known, or why there is no number.
+ */
+function workCell(column: WorkColumn, cell: WorkCell, work: SeriesWork, periodFrom: number, resetAt: number | null): Cell {
+  if ('none' in cell) return {content: '—', title: cell.none === 'unknown' ? t('work.unknown', {time: stamp(work.from)}) : t(reasonKey(column, cell.none))};
+  const notes = workNotes(work, periodFrom);
+  const paced = column === 'perwork' || column === 'workleft';
+  const lines = [
+    ...(paced ? [t('work.basis')] : []),
+    ...(paced && notes.basis !== null ? [t('work.basisMeasured', {time: workHours(notes.basis)})] : []),
+    ...(column === 'during' ? [t('work.upperBound')] : []),
+    ...(notes.since !== null ? [t('work.since', {time: stamp(notes.since)})] : []),
+  ];
+  if ('untilReset' in cell) return {content: t('work.untilReset'), title: [t('work.untilResetHint', {time: workHours(cell.untilReset), reset: stamp(resetAt!)}), ...lines].join('\n')};
+  const content =
+    column === 'work'
+      ? workHours(cell.value)
+      : column === 'perwork'
+        ? t('table.perHour', {value: num(cell.value, 1)})
+        : column === 'workleft'
+          ? t('work.left', {time: workHours(cell.value)})
+          : t('table.points', {value: num(cell.value)});
+  return {content, title: lines.join('\n') || undefined};
+}
+
 /**
  * The windows of one kind: what is left, what the plan expects, what the period spent,
- * and where each window's own pace leads, whatever the period. Its period and window type are the analytics', as the chart's. Over a
- * time range selected on the chart, which is in the past, it shows that range instead:
- * what was left at its start and its end, what it spent and how fast.
+ * and where each window's own pace leads, whatever the period; and how agents worked on
+ * each window's subscription meanwhile: how long, what an hour of their work spent, how
+ * long they can go on at that pace, and how much of the spending fell into their work.
+ * Its period and window type are the analytics', as the chart's. Over a time range
+ * selected on the chart, which is in the past, it shows that range instead: what was
+ * left at its start and its end, what it spent and how fast. The board's owner chooses
+ * the columns; where they do not fit the widget, each window is a row of a list.
  */
 export const Forecast = memo(function Forecast({
   history,
@@ -68,16 +122,91 @@ export const Forecast = memo(function Forecast({
   const {view} = arrange;
   const {kind} = usePrefs();
   const selected = ofTimeRange(history);
+  const range = !!selected;
   // Window names are text: they are rebuilt when the language changes.
   const locale = useLocale();
   const lines = useMemo(() => linesOf(history, overview, view, kind), [history, overview, view.windows, view.hidden, view.colors, kind, locale]);
+  const modeColumns = range ? RANGE_COLUMNS : LIVE_COLUMNS;
+  const columns = useMemo(() => modeColumns.filter(column => columnShown(view, FORECAST, column)), [modeColumns, view]);
+  const panel = useRef<HTMLElement>(null);
+  const [layout, setLayout] = useState<'table' | 'list'>('table');
+
+  // Before the first paint: the table does not flash on a narrow widget.
+  useLayoutEffect(() => {
+    const element = panel.current!;
+    const fit = () => {
+      const next = forecastLayout(columns, element.clientWidth);
+      setLayout(before => (before === next ? before : next));
+    };
+    const observer = new ResizeObserver(fit);
+    observer.observe(element);
+    fit();
+    return () => observer.disconnect();
+  }, [columns]);
+
+  /** Every cell of a line, by column. */
+  const cellsOf = (line: Line): Record<ForecastColumn, Cell> => {
+    const source = overview?.sources.find(s => s.id === line.sourceId);
+    const live = source?.windows.find(w => w.id === line.windowId);
+    const resetAt = live?.resetAt ?? null;
+    const edge = (value: number | null): Cell => (value === null ? {content: '—'} : {content: `${num(value)}%`, className: `v-${level(value)}`});
+    const work = lineWork(line, range, resetAt, now);
+    const workCells = Object.fromEntries(
+      (['work', 'perwork', 'workleft', 'during'] as const).map(column => [column, work && line.work ? workCell(column, work[column], line.work, history!.since, resetAt) : {content: '—'}]),
+    ) as Record<WorkColumn, Cell>;
+    if (range) {
+      return {
+        ...workCells,
+        start: edge(line.remainingAtStart),
+        end: edge(line.remainingAtEnd),
+        spent: {content: spentText(spentOf(line))},
+        pace: {content: line.coveredMs >= PACE_FROM ? t('table.perHour', {value: num(line.consumed / (line.coveredMs / 3_600_000), 1)}) : '—'},
+      } as Record<ForecastColumn, Cell>;
+    }
+    const row = forecastRow(line, live, source?.successAt ?? null, now, planOf(view, line.sourceId));
+    const {plan} = row;
+    const ahead = outlookCell(row.outlook);
+    return {
+      ...workCells,
+      now: {content: `${num(line.current)}%`, className: `v-${level(line.current)}`},
+      plan: {
+        title: plan?.notable ? t(plan.delta >= 0 ? 'table.behindBy' : 'table.aheadBy', {value: num(Math.abs(plan.delta))}) : undefined,
+        content: plan ? (
+          <>
+            {num(plan.remaining)}%
+            {plan.notable && (
+              <small className={plan.delta < 0 ? 'v-warn' : 'muted'}>
+                {' '}
+                {plan.delta > 0 ? '+' : '−'}
+                {num(Math.abs(plan.delta))}
+              </small>
+            )}
+          </>
+        ) : (
+          '—'
+        ),
+      },
+      spent: {content: spentText(row.spent)},
+      forecast: {content: ahead.text, title: ahead.title || undefined, className: row.outlook.tone},
+    } as Record<ForecastColumn, Cell>;
+  };
+
+  // In the list, what is left leads each row; the rest follows under the name, each value with its heading.
+  const lead: ForecastColumn = range ? 'end' : 'now';
+  const details = columns.filter(column => column !== lead);
 
   return (
-    <section className={`panel forecast ${selected ? 'is-range' : ''} ${loading ? 'is-loading' : ''}`} aria-label={t('forecast.title')} aria-busy={loading}>
+    <section ref={panel} className={`panel forecast ${range ? 'is-range' : ''} ${loading ? 'is-loading' : ''}`} aria-label={t('forecast.title')} aria-busy={loading}>
       <div className="panel-head">
         <h2>{t('forecast.title')}</h2>
         {arrange.owner && (
           <Popover label={t('forecast.settings')} icon={<SlidersIcon />}>
+            <div className="popover-title">{t('table.columns')}</div>
+            {modeColumns.map(column => (
+              <SwitchRow key={column} on={columns.includes(column)} onChange={on => arrange.update(next => withColumn(next, FORECAST, column, on))}>
+                {heading(column, range)}
+              </SwitchRow>
+            ))}
             <HideRow onHide={() => arrange.update(next => withHidden(next, FORECAST, true))}>{t('widget.hide')}</HideRow>
           </Popover>
         )}
@@ -86,80 +215,68 @@ export const Forecast = memo(function Forecast({
         <div className="panel-loading">{t('history.loading')}</div>
       ) : !lines.length ? (
         <p className="panel-empty">{t('forecast.empty')}</p>
+      ) : layout === 'list' ? (
+        <ul className="forecast-compact">
+          {lines.map(line => {
+            const cells = cellsOf(line);
+            return (
+              <li key={line.key}>
+                <div className="forecast-compact-main">
+                  <span className="swatch" style={{background: line.color}} />
+                  <span className="forecast-compact-name">{line.name}</span>
+                  {columns.includes(lead) && (
+                    <span className={cells[lead].className} title={cells[lead].title}>
+                      <span className="sr-only">{heading(lead, range)}: </span>
+                      {cells[lead].content}
+                    </span>
+                  )}
+                </div>
+                {details.length > 0 && (
+                  <div className="forecast-compact-details">
+                    {details.map(column => (
+                      <span key={column} title={cells[column].title}>
+                        {heading(column, range)} <span className={cells[column].className}>{cells[column].content}</span>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
       ) : (
         <div className="table-wrap">
           <table>
+            <colgroup>
+              <col />
+              {columns.map(column => (
+                <col key={column} style={{width: FORECAST_WIDTHS[column]}} />
+              ))}
+            </colgroup>
             <thead>
-              {selected ? (
-                <tr>
-                  <th>{t('table.limit')}</th>
-                  <th>{t('table.atStart')}</th>
-                  <th>{t('table.atEnd')}</th>
-                  <th>{t('table.spentInRange')}</th>
-                  <th title={t('table.paceHint')}>{t('table.pace')}</th>
-                </tr>
-              ) : (
-                <tr>
-                  <th>{t('table.limit')}</th>
-                  <th>{t('table.now')}</th>
-                  <th title={t('table.planHint')}>{t('table.plan')}</th>
-                  <th>{t('table.spent')}</th>
-                  <th title={t('table.forecastHint')}>{t('table.forecast')}</th>
-                </tr>
-              )}
+              <tr>
+                <th>{t('table.limit')}</th>
+                {columns.map(column => (
+                  <th key={column} title={HEADINGS[column].hint ? t(HEADINGS[column].hint!) : undefined}>
+                    {heading(column, range)}
+                  </th>
+                ))}
+              </tr>
             </thead>
             <tbody>
               {lines.map(line => {
-                const name = (
-                  <td>
-                    <span className="swatch" style={{background: line.color}} />
-                    {line.name}
-                  </td>
-                );
-                if (selected) {
-                  const spent = <td>{spentText(spentOf(line))}</td>;
-                  const edge = (value: number | null) => (value === null ? <td>—</td> : <td className={`v-${level(value)}`}>{num(value)}%</td>);
-                  return (
-                    <tr key={line.key}>
-                      {name}
-                      {edge(line.remainingAtStart)}
-                      {edge(line.remainingAtEnd)}
-                      {spent}
-                      <td>{line.coveredMs >= PACE_FROM ? t('table.perHour', {value: num(line.consumed / (line.coveredMs / 3_600_000), 1)}) : '—'}</td>
-                    </tr>
-                  );
-                }
-                const source = overview?.sources.find(s => s.id === line.sourceId);
-                const live = source?.windows.find(w => w.id === line.windowId);
-                const measuredAt = source?.successAt ?? null;
-                const row = forecastRow(line, live, measuredAt, now, planOf(view, line.sourceId));
-                const {plan} = row;
-                const spent = <td>{spentText(row.spent)}</td>;
-                const ahead = outlookCell(row.outlook);
+                const cells = cellsOf(line);
                 return (
                   <tr key={line.key}>
-                    {name}
-                    <td className={`v-${level(line.current)}`}>{num(line.current)}%</td>
-                    <td title={plan?.notable ? t(plan.delta >= 0 ? 'table.behindBy' : 'table.aheadBy', {value: num(Math.abs(plan.delta))}) : ''}>
-                      {plan ? (
-                        <>
-                          {num(plan.remaining)}%
-                          {plan.notable && (
-                            <small className={plan.delta < 0 ? 'v-warn' : 'muted'}>
-                              {' '}
-                              {plan.delta > 0 ? '+' : '−'}
-                              {num(Math.abs(plan.delta))}
-                            </small>
-                          )}
-                        </>
-                      ) : (
-                        '—'
-                      )}
+                    <td>
+                      <span className="swatch" style={{background: line.color}} />
+                      {line.name}
                     </td>
-                    {spent}
-                    <td className={row.outlook.tone} title={ahead.title}>
-                      {ahead.text}
-                    </td>
+                    {columns.map(column => (
+                      <td key={column} className={cells[column].className} title={cells[column].title}>
+                        {cells[column].content}
+                      </td>
+                    ))}
                   </tr>
                 );
               })}

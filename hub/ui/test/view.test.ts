@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {AGENTS, arranged, colorOf, columnShown, isHidden, planOf, withColumn, reordered, spanOf, weeklyPlanOf, withColor, withHidden, withPlan, withPlanned, withSpan, withWindowHidden} from '../lib/view';
+import {AGENTS, FORECAST, arranged, colorOf, columnShown, isHidden, planOf, withColumn, reordered, spanOf, weeklyPlanOf, withColor, withHidden, withPlan, withPlanned, withSpan, withWindowHidden} from '../lib/view';
 import {CARD_COLORS, PROVIDERS} from '../lib/providers';
 import {DEFAULT_PLAN} from '../lib/plan';
 import type {View} from '../lib/types';
@@ -82,6 +82,17 @@ test('a card is half the grid wide by default, a third at least and the whole gr
   assert.deepEqual(withSpan(EMPTY, 'source:new', 2).sizes, {'source:new': 4});
 });
 
+
+test("the table's columns are on until the owner turns one off, but the share during work, and off in a range and a period alike", () => {
+  assert.ok(['now', 'spent', 'work', 'perwork', 'workleft'].every(column => columnShown(EMPTY, FORECAST, column)), 'a view saved before them');
+  assert.equal(columnShown(EMPTY, FORECAST, 'during'), false);
+  const off = withColumn(EMPTY, FORECAST, 'work', false);
+  assert.deepEqual(off.columns, {forecast: ['work']});
+  assert.deepEqual([columnShown(off, FORECAST, 'work'), columnShown(off, FORECAST, 'spent')], [false, true]);
+  const during = withColumn(EMPTY, FORECAST, 'during', true);
+  assert.deepEqual(during.shownColumns, {forecast: ['during']});
+  assert.equal(columnShown(during, FORECAST, 'during'), true);
+});
 
 test('state is off by default; the owner explicitly shows it without reviving an old hidden column', () => {
   assert.equal(columnShown(EMPTY, AGENTS, 'state'), false);

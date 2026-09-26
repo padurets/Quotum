@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {frameOf, periodLabel, periodOf, PERIODS, step} from '../lib/periods';
-import {complete, heardHub, hubNow} from '../lib/api';
+import {complete, heardHub, historySources, hubNow} from '../lib/api';
 import {setLocale} from '../i18n';
 import type {History} from '../lib/types';
 
@@ -83,7 +83,7 @@ test('‹ stops where history starts, or the hub stops keeping it, and is off th
 test('only an answer that is all there is of a range is kept on the page', () => {
   const cellMs = 5 * minute;
   const range = {from: now - 2 * day - 3 * minute, to: now - day - 3 * minute};
-  const answer = {range: '', now, since: 0, to: Math.ceil(range.to / cellMs) * cellMs, cellMs, historyStart: 0, series: [], events: [], refreshInMs: null} as History;
+  const answer = {range: '', now, since: 0, to: Math.ceil(range.to / cellMs) * cellMs, cellMs, historyStart: 0, series: [], events: [], refreshInMs: null, activity: {since: 0, known: null, workMs: 0, agentMs: 0, cells: [], by: {source: [], project: [], device: []}}} as History;
   assert.equal(complete(answer, range), true);
   assert.equal(complete({...answer, to: now - day - 4 * minute}, range), false, 'cut to the hub’s now');
   assert.equal(complete({...answer, refreshInMs: 60_000}, range), false, 'a newer one is on its way');
@@ -95,4 +95,13 @@ test('the page reckons the hub’s clock from the last answer, ahead or behind i
   heardHub(now + 3 * minute, now);
   assert.equal(hubNow(now), now + 3 * minute);
   heardHub(now, now);
+});
+
+test('ranges kept on the page are read again when the sources of the board or whose work it shows change', () => {
+  const overview = {sources: [{id: 'codex:2'}, {id: 'claude:1'}], workKey: 'a'} as Parameters<typeof historySources>[0];
+  const key = historySources(overview);
+  assert.equal(key, historySources({...overview!, sources: [{id: 'claude:1'}, {id: 'codex:2'}]} as typeof overview), 'in any order');
+  assert.notEqual(historySources({...overview!, workKey: 'b'}), key, 'a card hidden, a project renamed, someone joined');
+  assert.notEqual(historySources({...overview!, sources: [{id: 'claude:1'}]} as typeof overview), key);
+  assert.equal(historySources(null), '');
 });
