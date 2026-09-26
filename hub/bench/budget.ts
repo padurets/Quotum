@@ -13,6 +13,9 @@ export const IDLE_SCRIPT_MS_PER_SECOND = 0.3;
 /** A measurement shows on its card within this, for 95 of 100. */
 export const LATENCY_P95_MS = 1000;
 
+/** How often the hub tells a stream it is there (spec/dashboard-v1.md, `hello.heartbeatMs`). */
+const HEARTBEAT_MS = 25_000;
+
 /** The chart and the table: they move on with time a cell of the history's grid at a time. */
 const ANALYTICS = new Set(['chart', 'table']);
 
@@ -30,29 +33,38 @@ export type Idle = {
   scriptMsPerSecond: number;
 };
 
+/** What shows time rendered or changed more often than the clock alone would: a label once a minute, the chart and the table once a cell. */
+function tooOften(parts: Counted[], from: number, to: number, cellMs: number, what: string): string[] {
+  const minutes = Math.ceil((to - from) / 60_000);
+  const cells = Math.floor(to / cellMs) - Math.floor(from / cellMs);
+  return parts.flatMap(part => {
+    const most = (part.kind && ANALYTICS.has(part.kind) ? cells : minutes) + 1;
+    return part.count > most ? [`${part.region} ${part.node} ${what} ${part.count} times, more than ${most}`] : [];
+  });
+}
+
 /**
  * What an idle page did that it may not: ask the hub anything, be told anything but
  * `ping`, render or change anything but what shows time, show time more often than it
  * reads otherwise (a label once a minute, the chart and the table once a cell), or spend
- * more script than its budget.
+ * more script than its budget. And whether the benchmark could tell: its own reader of the
+ * board heard the hub all along.
  */
 export function idleProblems(idle: Idle): string[] {
   const found: string[] = [];
-  const minutes = Math.ceil((idle.to - idle.from) / 60_000);
-  const cells = Math.floor(idle.to / idle.cellMs) - Math.floor(idle.from / idle.cellMs);
   if (idle.requests.count) found.push(`the page asked the hub ${idle.requests.count} times: ${JSON.stringify(idle.requests.byPath)}`);
   const told = Object.entries(idle.events).filter(([type]) => type !== 'ping');
   if (told.length) found.push(`the hub told the board ${told.map(([type, count]) => `${type} ×${count}`).join(', ')}`);
+  const pings = idle.events.ping ?? 0;
+  const least = Math.floor((idle.to - idle.from) / HEARTBEAT_MS) - 1;
+  if (pings < least) found.push(`the benchmark's own reader of the board heard ${pings} pings, fewer than ${least}: it heard nothing it could count`);
   for (const [what, parts] of [
     ['rendered', idle.renders],
     ['changed', idle.mutations],
   ] as const) {
     const outside = parts.filter(part => !part.time);
     if (outside.length) found.push(`${what} outside what shows time: ${outside.map(part => `${part.region} ${part.node} ×${part.count}`).join(', ')}`);
-    for (const part of parts.filter(part => part.time)) {
-      const most = (part.kind && ANALYTICS.has(part.kind) ? cells : minutes) + 1;
-      if (part.count > most) found.push(`${part.region} ${part.node} ${what} ${part.count} times, more than ${most}`);
-    }
+    found.push(...tooOften(parts.filter(part => part.time), idle.from, idle.to, idle.cellMs, what));
   }
   if (idle.scriptMsPerSecond > IDLE_SCRIPT_MS_PER_SECOND) found.push(`script took ${idle.scriptMsPerSecond} ms a second, more than ${IDLE_SCRIPT_MS_PER_SECOND}`);
   return found;
@@ -64,19 +76,31 @@ export function percentile(samples: number[], share: number): number {
   return sorted[Math.max(0, Math.ceil(share * sorted.length) - 1)] ?? NaN;
 }
 
+/** What the measurements of one card were: how late each showed on it (`Infinity`: never), and what the page did over all of them, from `from` to `to`. */
+export type Measured = {card: string; latencies: number[]; renders: Counted[]; mutations: Counted[]; from: number; to: number};
+
 /**
  * What measurements of one card did beyond it: rendering anything but the card, the list
- * of agents and the analytics, or changing another card or the header (what shows time
- * is the clock, not this). And how late they showed on their card.
+ * of agents and the analytics, or changing another card or the header; what shows time on
+ * another card or the header, more often than the clock alone would. How late they showed
+ * on their card, and whether each did at all. And whether the benchmark could tell: the
+ * card was seen to render for them.
  */
-export function measuredProblems(card: string, latencies: number[], renders: Counted[], mutations: Counted[]): string[] {
+export function measuredProblems({card, latencies, renders, mutations, from, to}: Measured): string[] {
   const found: string[] = [];
+  const lost = latencies.filter(latency => !Number.isFinite(latency)).length;
+  if (lost) found.push(`${lost} of ${latencies.length} measurements never showed on their card`);
   const p95 = percentile(latencies, 0.95);
   if (!(p95 <= LATENCY_P95_MS)) found.push(`a measurement showed on its card in ${Math.round(p95)} ms at the 95th percentile, more than ${LATENCY_P95_MS}`);
   const own = `card:${card}`;
+  const seen = renders.filter(part => part.region === own && !part.time).reduce((sum, part) => Math.max(sum, part.count), 0);
+  if (seen < latencies.length - lost) found.push(`the card rendered ${seen} times for ${latencies.length - lost} measurements shown: React's work is not seen`);
   const beyond = renders.filter(part => !part.time && ![own, 'agents', 'analytics'].includes(part.region));
   if (beyond.length) found.push(`measurements of ${card} rendered ${beyond.map(part => `${part.region} ${part.node} ×${part.count}`).join(', ')}`);
   const changed = mutations.filter(part => !part.time && ((part.region.startsWith('card:') && part.region !== own) || part.region === 'header'));
   if (changed.length) found.push(`measurements of ${card} changed ${changed.map(part => `${part.region} ${part.node} ×${part.count}`).join(', ')}`);
+  // What shows time elsewhere renders with the clock, as when idle, not with the measurements.
+  const elsewhere = (part: Counted) => part.time && ((part.region.startsWith('card:') && part.region !== own) || part.region === 'header');
+  found.push(...tooOften(renders.filter(elsewhere), from, to, Infinity, 'rendered'), ...tooOften(mutations.filter(elsewhere), from, to, Infinity, 'changed'));
   return found;
 }

@@ -39,6 +39,8 @@ export class Cdp {
   }
 
   send<T = unknown>(method: string, params: object = {}): Promise<T> {
+    // A browser gone meanwhile (it crashed, or was closed) answers nothing: said at once, not waited for.
+    if (this.socket.readyState !== WebSocket.OPEN) return Promise.reject(new Error(`${method}: the browser closed the connection`));
     const id = this.next++;
     return new Promise<T>((resolve, reject) => {
       this.waiting.set(id, {resolve: resolve as (value: never) => void, reject, method});

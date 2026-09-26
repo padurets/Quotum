@@ -25,7 +25,8 @@ export function stillProblems(cards: StillCard[], from: number, to: number): str
   for (const card of cards) {
     if (card.successAt === null) continue;
     if (card.staleAfterMs !== null && within(card.successAt + card.staleAfterMs)) found.push(`${card.id} goes stale`);
-    if (within(card.successAt + PULSE_FOR + FADE_FOR)) found.push(`${card.id}'s dot still fades`);
+    // The dot changes from the measurement until it has faded out: any of that within the window.
+    if (card.successAt <= to && card.successAt + PULSE_FOR + FADE_FOR >= from) found.push(`${card.id}'s dot still fades`);
     if (card.windows.some(w => w.resetAt !== null && within(w.resetAt))) found.push(`${card.id} has a limit that resets`);
   }
   return found;

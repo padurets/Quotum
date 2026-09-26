@@ -45,8 +45,8 @@ one system, say so.
 
 `npm run bench` in `hub/` (after `npm run build`) measures the board in headless Chrome
 against its budget (`hub/bench/budget.ts`): an idle board asks the hub nothing and
-renders nothing but what shows time, and a measurement shows on its card within a
-second, rendering nothing else. Run it when you change the dashboard and have Chrome
+renders nothing but what shows time, and every measurement shows on its card, 95 of
+100 within a second, rendering no other card nor the header. Run it when you change the dashboard and have Chrome
 (`QUOTUM_CHROME`, one on `PATH`, or `--cdp` to one already running); CI runs it on every
 push and fails over budget.
 

@@ -68,7 +68,7 @@ function freePort(bind: string): Promise<number> {
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, Math.max(0, ms)));
 const say = (text: string) => console.error(`bench: ${text}`);
 
-/** Counts what the page asks the hub while `counting`; the open stream of events is not a request of the idle page. */
+/** Counts what the page asks the hub while `counting`: the stream of events it opened before is not asked again, one opened meanwhile is. */
 class Requests {
   counting = false;
   count = 0;
@@ -80,7 +80,6 @@ class Requests {
     cdp.on<{requestId: string; type?: string; request: {url: string}}>('Network.requestWillBeSent', event => {
       if (!this.counting || !ASKED.has(event.type ?? '')) return;
       const url = new URL(event.request.url);
-      if (url.pathname === '/api/events' && !url.searchParams.has('mode')) return;
       this.count++;
       this.byPath[url.pathname] = (this.byPath[url.pathname] ?? 0) + 1;
       this.ids.add(event.requestId);
@@ -173,7 +172,10 @@ async function main() {
     const idle = {from, to, cellMs, requests, events, renders: reading.renders, mutations: reading.mutations, scriptMsPerSecond};
 
     const measured = await measure(stand, cdp);
-    const problems = [...idleProblems(idle), ...measuredProblems(measured.source, measured.latencies, measured.reading.renders, measured.reading.mutations)];
+    const problems = [
+      ...idleProblems(idle),
+      ...measuredProblems({card: measured.source, latencies: measured.latencies, renders: measured.reading.renders, mutations: measured.reading.mutations, from: measured.from, to: measured.to}),
+    ];
     const result = {
       set: set.id,
       idle: {
@@ -191,6 +193,7 @@ async function main() {
       measured: {
         card: MEASURED,
         count: measured.latencies.length,
+        lost: measured.latencies.filter(latency => !Number.isFinite(latency)).length,
         medianMs: Math.round(percentile(measured.latencies, 0.5)),
         p95Ms: Math.round(percentile(measured.latencies, 0.95)),
         renders: tally(measured.reading.renders).outsideBy,
@@ -220,6 +223,7 @@ async function measure(stand: Awaited<ReturnType<Demo['run']>>, cdp: Cdp) {
   const agent = stand.agents.get(card.machines[0])!;
   say(`measuring ${MEASURED} ${MEASUREMENTS} times, ${MEASURE_EVERY / 1000} s apart`);
   await cdp.evaluate('__quotumBench.reset()');
+  const from = Date.now();
   const latencies: number[] = [];
   for (let i = 0; i < MEASUREMENTS; i++) {
     await cdp.evaluate('__quotumBench.forgetCards()');
@@ -235,7 +239,7 @@ async function measure(stand: Awaited<ReturnType<Demo['run']>>, cdp: Cdp) {
     latencies.push(changed === null ? Infinity : changed - sent);
     await sleep(sent + MEASURE_EVERY - Date.now());
   }
-  return {source, latencies, reading: await cdp.evaluate<Reading>('__quotumBench.read()')};
+  return {source, latencies, reading: await cdp.evaluate<Reading>('__quotumBench.read()'), from, to: Date.now()};
 }
 
 /** Run as the command, not imported. */

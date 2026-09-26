@@ -390,7 +390,8 @@ Caddy. Behind a proxy of your own, tell the hub its address and trust the proxy:
 dashboard keeps one stream (`/api/events`) the hub pushes changes on: let the proxy
 pass it as it comes (nginx does, as the hub asks it to); where a proxy holds it back,
 the page asks with long polls instead. Over HTTP/2, as Caddy serves it, a browser keeps
-any number of boards open; over plain HTTP/1.1, about five.
+up to eight boards live at once (a tab hidden for half a minute lets its stream go);
+over plain HTTP/1.1, about five.
 
 ## More
 
