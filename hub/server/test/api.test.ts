@@ -404,7 +404,8 @@ test('an agent request without a valid token is refused before its body arrives'
 
 test('a request is given 30 seconds to arrive, and one that takes longer is answered in the spec’s terms', async () => {
   const {app} = await hub();
-  const server = app.server;
+  // Node keeps the checking interval on the server, but its types do not declare it.
+  const server = app.server as typeof app.server & {connectionsCheckingInterval: number};
   assert.equal(server.requestTimeout, 30_000);
   // Node ignores the request's limit set on a made server while the headers' one is longer.
   assert.ok(server.headersTimeout <= server.requestTimeout, `headersTimeout ${server.headersTimeout}`);
