@@ -1,5 +1,9 @@
 use crate::{hub::HubState, shell::Shell, window::*};
-use std::{sync::Arc, thread, time::Duration};
+use std::{
+    sync::Arc,
+    thread,
+    time::{Duration, Instant},
+};
 use tauri::webview::{NewWindowResponse, PageLoadEvent};
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_window_state::{StateFlags, WindowExt};
@@ -8,23 +12,34 @@ pub fn is_open(shell: &Shell) -> bool {
     shell.host.app.get_webview_window(LABEL).is_some()
 }
 
-/// Shows the window: creates it if there is none, on a thread of its own.
-pub fn open(shell: &Arc<Shell>) {
+/// Shows the window: creates it if there is none, on a thread of its own. `from` names who
+/// asked, for the log.
+pub fn open(shell: &Arc<Shell>, from: &'static str) {
     let intent = opening(shell);
     let shell = shell.clone();
     thread::spawn(move || {
         let _intent = intent;
-        open_now(&shell);
+        open_now(&shell, from);
     });
 }
 
-fn open_now(shell: &Arc<Shell>) {
+/// Milliseconds since `start`, for the log of opening the window.
+fn ms(start: Instant) -> u128 {
+    start.elapsed().as_millis()
+}
+
+fn open_now(shell: &Arc<Shell>, from: &'static str) {
+    let start = Instant::now();
     if shell.exiting() {
         return;
     }
+    shell.hub_log.line(&format!("app: {from} asks for the window"));
     let _creating = shell.window_lock.lock().unwrap_or_else(|e| e.into_inner());
+    #[cfg(windows)]
+    shell.hub_log.line(&format!("app: web view processes at {} ms: {}", ms(start), crate::webview2::describe()));
     let app = &shell.host.app;
     if let Some(window) = app.get_webview_window(LABEL) {
+        shell.hub_log.line(&format!("app: found the window {LABEL} at {} ms", ms(start)));
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
@@ -33,9 +48,10 @@ fn open_now(shell: &Arc<Shell>) {
         return;
     }
     // A window just closed may still hold its label for a moment.
-    for _ in 0..20 {
+    for attempt in 1..=20 {
+        shell.hub_log.line(&format!("app: attempt {attempt} to create the window {LABEL} at {} ms", ms(start)));
         let (state, generation) = shell.hub();
-        match build(shell, &state, generation) {
+        match build(shell, &state, generation, start) {
             Ok(_) => {
                 drop(_creating);
                 if shell.generation() != generation {
@@ -44,14 +60,15 @@ fn open_now(shell: &Arc<Shell>) {
                 return;
             }
             Err(e) => {
-                shell.hub_log.line(&format!("app: the window did not open: {e}"));
+                shell.hub_log.line(&format!("app: the window did not open at {} ms: {e}", ms(start)));
                 thread::sleep(Duration::from_millis(100));
             }
         }
     }
+    shell.hub_log.line(&format!("app: gave up on the window after {} ms", ms(start)));
 }
 
-fn build(shell: &Arc<Shell>, state: &HubState, generation: u64) -> tauri::Result<tauri::WebviewWindow> {
+fn build(shell: &Arc<Shell>, state: &HubState, generation: u64, start: Instant) -> tauri::Result<tauri::WebviewWindow> {
     let app = &shell.host.app;
     let navigating = shell.clone();
     let loading = shell.clone();
@@ -110,6 +127,15 @@ fn build(shell: &Arc<Shell>, state: &HubState, generation: u64) -> tauri::Result
     // this worker can hold its cache while that hook waits for it, blocking both
     // threads. Queue placement after the hook, on the same event loop.
     window.run_on_main_thread(move || {
+        // `build` returns before the event loop creates the window, and Tauri tells a failure
+        // only to `log`. Here, after that, a getter of a window never created fails at once.
+        match ready.is_visible() {
+            Ok(_) => shell.hub_log.line(&format!("app: the window {LABEL} is up after {} ms", ms(start))),
+            Err(e) => {
+                shell.hub_log.line(&format!("app: the window {LABEL} was not created at {} ms: {e}", ms(start)));
+                return;
+            }
+        }
         if shell.exiting() {
             return;
         }
@@ -186,7 +212,7 @@ pub fn reenter(shell: &Arc<Shell>) {
     if is_open(shell) {
         navigate_current(shell, true);
     } else {
-        open(shell);
+        open(shell, "reenter");
     }
 }
 

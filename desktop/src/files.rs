@@ -4,7 +4,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::net::{Ipv4Addr, TcpListener};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
@@ -136,6 +136,33 @@ impl Log {
     pub fn line(&self, text: &str) {
         let now = quotum_core::model::now_ms();
         self.raw(&format!("{} {text}", quotum_core::model::ts::format(now - now.rem_euclid(1000))));
+    }
+}
+
+/// Warnings and errors of Tauri, which it reports only through `log` (a window its event
+/// loop could not create among them), as lines of the hub's log.
+struct TauriLog(OnceLock<Arc<Log>>);
+
+static TAURI_LOG: TauriLog = TauriLog(OnceLock::new());
+
+impl log::Log for TauriLog {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() <= log::Level::Warn && metadata.target().starts_with("tauri")
+    }
+
+    fn log(&self, record: &log::Record) {
+        if let (true, Some(file)) = (self.enabled(record.metadata()), self.0.get()) {
+            file.line(&format!("app: tauri: {}: {}", record.target(), record.args()));
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+/// Sends Tauri's warnings and errors to `file`, from the first call on.
+pub fn keep_tauri_log(file: &Arc<Log>) {
+    if TAURI_LOG.0.set(file.clone()).is_ok() && log::set_logger(&TAURI_LOG).is_ok() {
+        log::set_max_level(log::LevelFilter::Warn);
     }
 }
 

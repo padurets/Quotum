@@ -20,12 +20,19 @@ getrandom = "0.4.3"
 sys-locale = "0.3.2"
 url = "2.5.8"
 toml_edit = "0.25.15"
+# Tauri reports a window its event loop could not create only through `log`.
+log = "0.4.34"
 
 [target."cfg(unix)".dependencies]
 libc = "0.2.189"
 
 [target."cfg(windows)".dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Security", "Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Threading",
+] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ksni = { version = "0.3.6", features = ["blocking"] }

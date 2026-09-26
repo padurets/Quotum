@@ -134,7 +134,7 @@ fn start(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             let _ = socket.set_read_timeout(Some(Duration::from_secs(1)));
             let mut byte = [0];
             if socket.read_exact(&mut byte).is_ok() && byte == *b"O" {
-                open(&accepting);
+                open(&accepting, "a second start");
             }
         }
     });
@@ -150,7 +150,7 @@ fn start(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         smoke::Smoke::watch(&shell);
     }
     if !args.hidden {
-        open(&shell);
+        open(&shell, "the app's start");
     }
     let hub = shell.clone();
     thread::spawn(move || shell::run_hub(hub));
@@ -182,7 +182,8 @@ pub fn grant_port(_: &Shell, _: u16) {}
 pub fn is_open(shell: &Shell) -> bool {
     shell.host.gui.lock().unwrap_or_else(|e| e.into_inner()).is_some()
 }
-pub fn open(shell: &Arc<Shell>) {
+/// Shows the window. Only the Tauri host logs who asked for it (`_from`).
+pub fn open(shell: &Arc<Shell>, _from: &'static str) {
     let opening = window::opening(shell);
     let shell = shell.clone();
     thread::spawn(move || {
@@ -387,7 +388,7 @@ pub fn reenter(shell: &Arc<Shell>) {
     if let Some(gui) = gui {
         send_state(shell, &gui, true);
     } else {
-        open(shell);
+        open(shell, "reenter");
     }
 }
 pub fn leave(shell: &Arc<Shell>) {
@@ -488,14 +489,14 @@ impl ksni::Tray for Tray {
         self.shell.host.resources.join("icon.png").to_string_lossy().into_owned()
     }
     fn activate(&mut self, _: i32, _: i32) {
-        open(&self.shell);
+        open(&self.shell, "the tray");
     }
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
         let ru = sys_locale::get_locale().is_some_and(|s| s.to_lowercase().starts_with("ru"));
         vec![
             ksni::menu::StandardItem {
                 label: if ru { "Открыть Quotum" } else { "Open Quotum" }.into(),
-                activate: Box::new(|this: &mut Self| open(&this.shell)),
+                activate: Box::new(|this: &mut Self| open(&this.shell, "the tray")),
                 ..Default::default()
             }
             .into(),

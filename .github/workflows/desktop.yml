@@ -138,23 +138,41 @@ jobs:
       - name: Smoke (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
+        # A hung run fails the step, and the diagnostics below are still kept.
+        timeout-minutes: 40
         run: |
+          # windows.ps1 fails with an exit code, which alone would not end the step.
+          function Smoke([string]$Mode, [string]$App) {
+            $global:LASTEXITCODE = 0
+            ./desktop/smoke/windows.ps1 $Mode $App
+            if ($LASTEXITCODE) { throw "windows.ps1 $Mode failed for $App" }
+          }
+          $diagnostics = Join-Path $env:RUNNER_TEMP 'quotum-ui-diagnostics'
           ./desktop/smoke/windows.ps1 check
           $setup = Get-ChildItem "desktop/target/${{ matrix.target }}/release/bundle/nsis/*-setup.exe" | Select-Object -First 1
           Start-Process -FilePath $setup.FullName -ArgumentList '/S' -Wait
           $app = "$env:LOCALAPPDATA\Quotum\quotum-desktop.exe"
           if (-not (Test-Path $app)) { throw "not installed: $app" }
-          ./desktop/smoke/windows.ps1 normal $app
-          ./desktop/smoke/windows.ps1 crash $app
-          ./desktop/smoke/windows-ui.ps1 $app
+          Smoke normal $app
+          Smoke crash $app
+          ./desktop/smoke/windows-ui.ps1 $app -Diagnostics "$diagnostics\installed-1"
           # Exercise the archive after extraction, including a path with spaces.
           $zip = Get-ChildItem "desktop/target/${{ matrix.target }}/release/bundle/portable/*.zip" | Select-Object -First 1
           $portable = Join-Path $env:RUNNER_TEMP 'Quotum portable'
           Expand-Archive -LiteralPath $zip.FullName -DestinationPath $portable
           $app = Join-Path $portable 'Quotum/quotum-desktop.exe'
-          ./desktop/smoke/windows.ps1 normal $app
-          ./desktop/smoke/windows.ps1 crash $app
-          ./desktop/smoke/windows-ui.ps1 $app
+          Smoke normal $app
+          Smoke crash $app
+          ./desktop/smoke/windows-ui.ps1 $app -Diagnostics "$diagnostics\portable-1"
+      # What the UI smoke saw (its report, the app's logs, its processes): when it failed,
+      # and always in a run by hand.
+      - name: UI smoke diagnostics (Windows)
+        if: (failure() || github.event_name == 'workflow_dispatch') && runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: quotum-ui-diagnostics-${{ env.QUOTUM_COMMIT }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/quotum-ui-diagnostics
+          if-no-files-found: warn
 
       # For the live check: `quotum` of this very commit, next to the app.
       - name: Command-line agent
