@@ -103,10 +103,11 @@ Codex         api                 idle     started 25m ago · editor
 - **A weekly spending plan.** By default you spend 30 / 25 / 15 / 15 / 10 / 5% on the
   six days after the reset and nothing on the seventh. Each subscription can have its
   own plan: a day at 0 is a day you don't spend, and it can be any day of the week.
-- **A chart of the weekly or the 5-hour windows** over 24 hours, 7 or 30 days. Ahead of
-  now it draws the plan and the next resets, as far as you choose; behind, it marks
-  when limits came back early and when free resets were granted. Drag across it to
-  zoom into a burst of work (on a phone, hold a finger on it first).
+- **A chart of the weekly or the 5-hour windows** over the last hour up to the last 30
+  days. Ahead of now it draws the plan and the next resets, as far as you choose;
+  behind, it marks when limits came back early and when free resets were granted. Drag
+  across it to zoom into a burst of work (on a phone, hold a finger on it first); ‹ and
+  ›, or a swipe sideways, move it back and forth through time by half its length.
 - **A table with a forecast:** what the period spent and, at that pace, whether the
   window runs out before its reset (or before your plan ends) and roughly how much
   will be left. Over a range dragged on the chart it shows what that range cost: what

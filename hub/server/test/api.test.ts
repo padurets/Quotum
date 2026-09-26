@@ -392,7 +392,7 @@ test('history reads a period selected on the chart, up to a month, on a grid fin
   const ahead = await read(`from=${now - 3_600_000}&to=${now + 86_400_000}`);
   assert.ok(ahead.body.to <= Date.now(), 'it ends now at the latest');
   const fixed = await read('range=24h');
-  assert.equal(fixed.body.to, fixed.body.now, 'a fixed range ends now');
+  assert.equal(fixed.body.to, fixed.body.now, 'a period of the list ends now');
   for (const query of [`from=${now - 600_000}&to=${now}`, `from=${now - 40 * 86_400_000}&to=${now}`, `from=${now - 100 * 86_400_000}&to=${now - 90 * 86_400_000}`, `from=${now - 3_600_000}`, 'from=abc&to=def']) {
     assert.equal((await read(query)).status, 400, query);
   }
