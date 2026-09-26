@@ -1,4 +1,4 @@
-import {useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode, type RefObject} from 'react';
+import {useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode, type RefObject} from 'react';
 import {clock, day, duration, num, shortDay, stamp} from '../lib/format';
 import {t} from '../i18n';
 import type {Line} from '../lib/lines';
@@ -70,6 +70,22 @@ export function cellLabel(at: number, cellMs: number) {
   if (!cellMs) return stamp(at);
   const end = at + cellMs;
   return sameDay(at, end - 1) ? `${day(at)} ${clock(at)}–${clock(end)}` : `${stamp(at)} – ${stamp(end)}`;
+}
+
+/** How long the chart's content takes to slide in after a step through time. */
+const SLIDE_MS = 220;
+
+/**
+ * How far the chart's content slides in after it steps through time, in pixels: from
+ * where it was drawn to where it is now, so the eye follows which way it went. None
+ * unless the period kept its length (`end` is where measurements end) and moved by a
+ * tenth of it or more: a step, not a live period's clock moving on, nor another period.
+ */
+export function slideOf(before: {from: number; end: number}, after: {from: number; end: number; to: number}, plotWidth: number) {
+  const length = after.end - after.from;
+  const moved = after.from - before.from;
+  if (length <= 0 || Math.abs(before.end - before.from - length) > length * 0.01 || Math.abs(moved) < length * 0.1 || Math.abs(moved) > length) return 0;
+  return (moved / (after.to - after.from)) * plotWidth;
 }
 
 /**
@@ -269,6 +285,27 @@ export function Chart({
   // A cell ahead of now is read at its middle; the one holding now, at now.
   const hoverX = hover === null ? 0 : hover > now ? x(Math.min(to, hover + cellMs / 2)) : bx(hover);
   // The tooltip sits right of the pointer, or left of it when it would leave the chart.
+  // A step through time slides what the chart shows in from the side it came from. The
+  // layers that move are clipped to the plot meanwhile, so nothing passes over the scale.
+  const clip = useId();
+  const shown = useRef<{from: number; end: number} | null>(null);
+  useLayoutEffect(() => {
+    const before = shown.current;
+    shown.current = {from, end: now};
+    const element = svg.current;
+    if (!before || !element || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const dx = slideOf(before, {from, end: now, to}, width - left - right);
+    if (!dx) return;
+    for (const layer of element.querySelectorAll<SVGGElement>('.slides')) {
+      const frame = layer.parentElement!;
+      layer.getAnimations().forEach(animation => animation.cancel());
+      frame.setAttribute('clip-path', `url(#${CSS.escape(clip)})`);
+      const animation = layer.animate([{transform: `translateX(${dx}px)`}, {transform: 'none'}], {duration: SLIDE_MS, easing: 'cubic-bezier(.2, .7, .3, 1)'});
+      animation.onfinish = () => frame.removeAttribute('clip-path');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [from, now]);
+
   // On a narrow chart it spans the chart's width under the plot, over what comes below, and
   // rises over the plot as far as keeps it whole in the window (a phone with many lines),
   // though never under the bars that stick at the top.
@@ -313,12 +350,21 @@ export function Chart({
         // A held finger starts a range, not the page's menu.
         onContextMenu={event => (holding.current || drag) && event.preventDefault()}
       >
-        {to > now && (
-          <g className="future">
-            <rect x={x(now)} width={x(to) - x(now)} y={top} height={height - top - bottom} className="future-zone" />
-            <line x1={x(now)} x2={x(now)} y1={top} y2={height - bottom} className="now-line" />
+        <defs>
+          <clipPath id={clip}>
+            <rect x={left} y={0} width={width - left - right} height={height} />
+          </clipPath>
+        </defs>
+        <g>
+          <g className="slides">
+            {to > now && (
+              <g className="future">
+                <rect x={x(now)} width={x(to) - x(now)} y={top} height={height - top - bottom} className="future-zone" />
+                <line x1={x(now)} x2={x(now)} y1={top} y2={height - bottom} className="now-line" />
+              </g>
+            )}
           </g>
-        )}
+        </g>
         <line x1={left} x2={width - right} y1={y(30)} y2={y(30)} className="threshold warn" />
         <line x1={left} x2={width - right} y1={y(10)} y2={y(10)} className="threshold crit" />
         {[0, 25, 50, 75, 100].map(value => (
@@ -329,73 +375,81 @@ export function Chart({
             </text>
           </g>
         ))}
-        {ticks.map(tick => (
-          <text key={tick} x={x(tick)} y={height - 8} textAnchor="middle" className="tick">
-            {daily ? shortDay(tick) : clock(tick)}
-          </text>
-        ))}
+        <g>
+          <g className="slides">
+            {ticks.map(tick => (
+              <text key={tick} x={x(tick)} y={height - 8} textAnchor="middle" className="tick">
+                {daily ? shortDay(tick) : clock(tick)}
+              </text>
+            ))}
+          </g>
+        </g>
 
-        {plans.map(plan => (
-          <path
-            key={plan.key}
-            className="plan-line"
-            stroke={plan.color}
-            d={plan.runs.map(run => run.map(([at, value], i) => `${i ? 'L' : 'M'}${x(at).toFixed(1)},${y(value).toFixed(1)}`).join('')).join('')}
-          />
-        ))}
-        {markers.map(marker => {
-          if (marker.at > to) return null;
-          const mx = x(marker.at);
-          if (marker.past) {
-            return (
-              <g key={marker.key} className="marker is-event">
-                <line x1={mx} x2={mx} y1={top} y2={height - bottom} stroke={marker.color} />
-                <path d={diamond(mx, top)} fill={marker.color} />
-                <title>{[`${marker.label} · ${cellLabel(marker.at, 0)}`, marker.detail].filter(Boolean).join('\n')}</title>
-              </g>
-            );
-          }
-          return (
-            <g key={marker.key} className={`marker ${marker.strong ? 'is-strong' : ''}`}>
-              <line x1={mx} x2={mx} y1={top} y2={height - bottom} stroke={marker.strong ? undefined : marker.color} />
-              {!marker.strong && <circle cx={mx} cy={y(100)} r={3} fill={marker.color} />}
-              <title>{`${marker.label} · ${cellLabel(marker.at, 0)}`}</title>
-            </g>
-          );
-        })}
-        {lines.map((line, i) => (
-          <path key={line.key} d={paths[i].line} className="series" stroke={line.color} strokeDasharray={line.dash || undefined} />
-        ))}
-        {/* Announcements are read over the lines, each on its own backing. */}
-        {markers
-          .filter(marker => marker.strong && !marker.past)
-          .map(marker => {
-            const beyond = marker.at > to;
-            const mx = beyond ? width - right : x(marker.at);
-            // Beyond the visible future: at the right edge, with the distance.
-            const nearRight = beyond || mx > width - right - 150;
-            const lx = beyond ? mx : nearRight ? mx - 6 : mx + 6;
-            return (
-              <MarkerLabel
-                key={marker.key}
-                x={lx}
-                y={labelY(lx, nearRight)}
-                end={nearRight}
-                onTip={beyond ? (shown, tapped) => setEdge(shown ? {key: marker.key, tapped} : null) : undefined}
-              >
-                {beyond ? t('chart.ahead', {label: marker.label, time: duration(marker.at - now, true)}) : marker.label}
-              </MarkerLabel>
-            );
-          })}
-        {hover === null &&
-          lines.map((line, i) =>
-            paths[i].last ? (
-              <g key={`${line.key}-end`}>
-                <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={7} fill={line.color} opacity={0.18} />
-                <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={3} fill={line.color} />
-              </g>
-            ) : null,
-          )}
+        <g>
+          <g className="slides">
+            {plans.map(plan => (
+              <path
+                key={plan.key}
+                className="plan-line"
+                stroke={plan.color}
+                d={plan.runs.map(run => run.map(([at, value], i) => `${i ? 'L' : 'M'}${x(at).toFixed(1)},${y(value).toFixed(1)}`).join('')).join('')}
+              />
+            ))}
+            {markers.map(marker => {
+              if (marker.at > to) return null;
+              const mx = x(marker.at);
+              if (marker.past) {
+                return (
+                  <g key={marker.key} className="marker is-event">
+                    <line x1={mx} x2={mx} y1={top} y2={height - bottom} stroke={marker.color} />
+                    <path d={diamond(mx, top)} fill={marker.color} />
+                    <title>{[`${marker.label} · ${cellLabel(marker.at, 0)}`, marker.detail].filter(Boolean).join('\n')}</title>
+                  </g>
+                );
+              }
+              return (
+                <g key={marker.key} className={`marker ${marker.strong ? 'is-strong' : ''}`}>
+                  <line x1={mx} x2={mx} y1={top} y2={height - bottom} stroke={marker.strong ? undefined : marker.color} />
+                  {!marker.strong && <circle cx={mx} cy={y(100)} r={3} fill={marker.color} />}
+                  <title>{`${marker.label} · ${cellLabel(marker.at, 0)}`}</title>
+                </g>
+              );
+            })}
+            {lines.map((line, i) => (
+              <path key={line.key} d={paths[i].line} className="series" stroke={line.color} strokeDasharray={line.dash || undefined} />
+            ))}
+            {/* Announcements are read over the lines, each on its own backing. */}
+            {markers
+              .filter(marker => marker.strong && !marker.past)
+              .map(marker => {
+                const beyond = marker.at > to;
+                const mx = beyond ? width - right : x(marker.at);
+                // Beyond the visible future: at the right edge, with the distance.
+                const nearRight = beyond || mx > width - right - 150;
+                const lx = beyond ? mx : nearRight ? mx - 6 : mx + 6;
+                return (
+                  <MarkerLabel
+                    key={marker.key}
+                    x={lx}
+                    y={labelY(lx, nearRight)}
+                    end={nearRight}
+                    onTip={beyond ? (shown, tapped) => setEdge(shown ? {key: marker.key, tapped} : null) : undefined}
+                  >
+                    {beyond ? t('chart.ahead', {label: marker.label, time: duration(marker.at - now, true)}) : marker.label}
+                  </MarkerLabel>
+                );
+              })}
+            {hover === null &&
+              lines.map((line, i) =>
+                paths[i].last ? (
+                  <g key={`${line.key}-end`}>
+                    <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={7} fill={line.color} opacity={0.18} />
+                    <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={3} fill={line.color} />
+                  </g>
+                ) : null,
+              )}
+          </g>
+        </g>
         {drag && (
           <rect x={Math.min(drag.start, drag.end)} width={Math.abs(drag.end - drag.start)} y={top} height={height - top - bottom} className="selection" />
         )}
