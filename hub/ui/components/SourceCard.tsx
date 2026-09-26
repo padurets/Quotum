@@ -2,7 +2,7 @@ import {memo, useEffect, useRef, useState, type CSSProperties} from 'react';
 import {useNow} from '../lib/api';
 import type {SourceState, Win} from '../lib/types';
 import {windowKey} from '../lib/types';
-import {ago, duration, num, stamp} from '../lib/format';
+import {duration, num, stamp} from '../lib/format';
 import {dotOf, errorText, level, problemOf, resetLine, sourceLabel, windowName} from '../lib/quota';
 import {t, useLocale} from '../i18n';
 import {DEFAULT_PLAN, isValidPlan, planAt, planNote, planTotal, type WeeklyPlan} from '../lib/plan';
@@ -313,7 +313,7 @@ export const SourceCard = memo(function SourceCard({
   const dot = dotOf(source, now);
   // How the measurements go lives in the logo's dot alone: its colour (how fresh, or in
   // trouble) and its tooltip; a line of its own would only repeat it and make the card taller.
-  const status = problem ?? (source.successAt ? t('source.measured', {ago: ago(source.successAt, now)}) : errorText('waiting'));
+  const status = problem ?? (source.successAt ? t('source.measured', {at: stamp(source.successAt)}) : errorText('waiting'));
   const news = resetLabel(resets, now);
   // The dot's tooltip is one bubble everywhere: under the pointer on a desktop (style.css),
   // and for a while after a tap on a touch screen, which has nothing to hover.
