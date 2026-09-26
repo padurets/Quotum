@@ -4,19 +4,18 @@ import {colorOf} from './view';
 
 const MINUTE = 60_000;
 
-/** The colour of the groups beyond the first few: a neutral of its own. */
+/** The colour of projects and machines beyond the first few: a neutral of its own. */
 export const OTHER_COLOR = 'var(--other)';
 
 /**
  * The colour of each group of a stack: a subscription has its card's, as on the chart;
- * projects and machines take CATEGORY_COLORS by their rank in the period, so a project
- * may change colour when the period does. The rest is neutral.
+ * projects and machines take CATEGORY_COLORS by their rank in the period (the longest
+ * first), so a project may change colour when the period does. Past as many as there are
+ * colours told apart, the rest share a neutral: each is still a group of its own, named
+ * in the tooltip and switched off and on in the legend.
  */
 export function groupColors(groups: ActivityGroup[], by: ActivityDimension, view: View, providerOf: (source: string) => string): string[] {
-  let rank = 0;
-  return groups.map(group =>
-    group.other ? OTHER_COLOR : by === 'source' ? colorOf(view, group.key, providerOf(group.key)) : CATEGORY_COLORS[rank++ % CATEGORY_COLORS.length],
-  );
+  return groups.map((group, rank) => (by === 'source' ? colorOf(view, group.key, providerOf(group.key)) : (CATEGORY_COLORS[rank] ?? OTHER_COLOR)));
 }
 
 /**

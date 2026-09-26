@@ -305,7 +305,6 @@ export const en = {
   'activity.since': 'since {time}',
   'activity.legendHint': 'Work time here: agents working at the same time count once. In the bars each moment is split among all who worked then',
   'activity.noProject': 'No project',
-  'activity.other': 'Other ({count})',
   'activity.notKnown': 'Not known before {time}',
   'activity.knownFrom': 'How agents worked is known from {time}',
   'activity.none': 'No agent worked in this period',

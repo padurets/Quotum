@@ -14,7 +14,7 @@
   --ok: #75d8ad;
   --warn: #f6c56e;
   --crit: #f17870;
-  /* What a stack of hours shows together beyond its first few projects or machines: a neutral, 3:1 on the surface. */
+  /* The colour of the projects and machines of a stack of hours past the palette's: a neutral, 3:1 on the surface. */
   --other: #6c6b7b;
   /* An announced reset: news that changes how the rest of a limit should be spent. */
   --reset: #a29cff;
@@ -443,8 +443,10 @@ td.muted, small.muted { color: var(--text-3); }
 
 /* Under its chart, as on either chart. */
 .legend { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 12px 0 0; }
-.legend-item { display: flex; align-items: center; gap: 8px; padding: 4px 0; border: 0; background: none; font-size: 12.5px; color: var(--text-2); transition: opacity .15s; }
-.legend-item b { color: var(--text); font-weight: 500; }
+.legend-item { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 0; border: 0; background: none; font-size: 12.5px; color: var(--text-2); text-align: left; transition: opacity .15s; }
+/* A long name (a project's path) breaks anywhere rather than widening the row; its value stays whole. */
+.legend-item span { min-width: 0; overflow-wrap: anywhere; }
+.legend-item b { color: var(--text); font-weight: 500; white-space: nowrap; }
 .legend-item[aria-pressed=false] { opacity: .35; }
 .legend-item:hover { opacity: 1; color: var(--text); }
 .legend-empty { font-size: 12.5px; color: var(--text-4); padding: 4px 0; }

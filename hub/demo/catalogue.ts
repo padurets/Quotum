@@ -404,6 +404,8 @@ const all: DemoSet = {
         // Agent activity counts docs-site under the name Ana gave it.
         {activityOf: 'docs', by: 'project', range: '24h', hours: 2.4, from: 0, to: 0},
         {activityOf: 'docs-site', by: 'project', range: '24h', hours: null, from: 0, to: 0},
+        // Past the palette's seven a project is grey, but a group of its own, however small.
+        {activityOf: 'notifications', by: 'project', range: '24h', hours: 0.1, from: 0, to: 0},
       ],
       look: [
         'The table of agents lists many rows, by activity',
@@ -416,6 +418,7 @@ const all: DemoSet = {
         'Escape in the merge menu closes only the menu',
         'The merge menu with many selected, at the bottom of the dialog: its glass is whole',
         'My machines → Projects shows no agent time',
+        'Agent activity by project: seven projects in colour, the rest grey, each its own row in the legend and the tooltip, switched off and on alone',
       ],
     },
     {kind: 'person', id: 'ben', name: 'Ben', agents: true, expect: [{state: 'widgets'}, {rows: 1}]},

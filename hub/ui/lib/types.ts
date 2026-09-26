@@ -133,11 +133,11 @@ export type ActivityDimension = 'source' | 'project' | 'device';
 
 /**
  * A subscription, project or machine agents worked on: how long its own agents worked
- * (`ms`, overlaps counted once) and its part of each cell's work ([cell start, ms], only
- * cells it has a part in). `other` stands for the groups beyond the first few, `count` of
- * them; `name` is null for a subscription (named from the board) and for no project.
+ * (`ms`, overlaps counted once) and its part of each bar's work ([bar start, ms], only
+ * bars it has a part in); `name` is null for a subscription (named from the board) and
+ * for no project. Every one the period has is a group of its own, the longest first.
  */
-export type ActivityGroup = {key: string; name: string | null; other?: true; count?: number; ms: number; cells: [number, number][]};
+export type ActivityGroup = {key: string; name: string | null; ms: number; cells: [number, number][]};
 
 /**
  * How the agents the board shows worked over the period: since when that is known on the

@@ -18,7 +18,6 @@ const LABELS: Record<ActivityDimension, Key> = {source: 'activity.bySource', pro
 
 /** A group as the legend and the tooltip name it. */
 function groupName(group: ActivityGroup, by: ActivityDimension, overview: Overview | null) {
-  if (group.other) return t('activity.other', {count: group.count ?? 0});
   if (by === 'source') {
     const source = overview?.sources.find(s => s.id === group.key);
     return source ? sourceLabel(source) : group.key;

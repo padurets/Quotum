@@ -97,20 +97,16 @@ export function seriesWork(samples: Sample[], worked: [number, number][], known:
   return {from: known.from, ms: overlap(worked, known.from, known.to), consumed, coveredMs, duringWork};
 }
 
-/** Projects and machines beyond this many, by how long they worked, are shown together as one. */
-export const ACTIVITY_GROUPS = 7;
-
 export type Dimension = 'source' | 'project' | 'device';
 
 /**
  * A subscription, project or machine agents worked on: how long any of its agents worked
  * (`ms`, overlaps counted once) and its part of each cell's work (only cells it has a part
- * in). `other` stands for the groups beyond the first few, `count` of them. `key` is the
- * subscription's or the machine's id, or the project's name as JSON: `null` for none,
- * which no name can be. `name` is the project's or the machine's, null for a subscription
- * (the dashboard names it) and for work outside any project.
+ * in). `key` is the subscription's or the machine's id, or the project's name as JSON:
+ * `null` for none, which no name can be. `name` is the project's or the machine's, null
+ * for a subscription (the dashboard names it) and for work outside any project.
  */
-export type ActivityGroup = {key: string; name: string | null; other?: true; count?: number; ms: number; cells: [number, number][]};
+export type ActivityGroup = {key: string; name: string | null; ms: number; cells: [number, number][]};
 
 /**
  * How agents worked over a period, bar by bar (`barMs` long): how long any of them worked
@@ -238,36 +234,25 @@ export function activity(stretches: Stretch[], known: Span, cellMs: number, devi
     // In time order, as `within` is: their unions need no sorting.
     const members = keys.map(() => [] as Stretch[]);
     within.forEach((s, i) => members[of[i]].push(s));
-    const partsOf = (indexes: number[]) => {
+    const partsOf = (g: number) => {
       const shown: [number, number][] = [];
       for (let cell = 0; cell < cellCount; cell++) {
-        const part = Math.round(indexes.reduce((sum, g) => sum + parts[g * cellCount + cell], 0));
+        const part = Math.round(parts[g * cellCount + cell]);
         if (part > 0) shown.push([cellStart(cell), part]);
       }
       return shown;
     };
-    const ranked = keys
+    // Every group keeps its own row, however small: a project worked on for minutes is
+    // named in the tooltip and switched off and on in the legend as a big one is.
+    by[dimension] = keys
       .map((key, g) => ({
         g,
         key,
         name: dimension === 'source' ? null : dimension === 'project' ? members[g][0].project : (deviceNames.get(key) ?? null),
         ms: workTime(members[g]),
       }))
-      .sort((a, b) => b.ms - a.ms || compare(a.name ?? '', b.name ?? '') || compare(a.key, b.key));
-    // Every subscription keeps its own row: its hours are the table's, and it has its card's colour.
-    const kept = dimension === 'source' ? ranked : ranked.slice(0, ACTIVITY_GROUPS);
-    const rest = ranked.slice(kept.length);
-    by[dimension] = kept.map(({g, key, name, ms}): ActivityGroup => ({key, name, ms, cells: partsOf([g])}));
-    if (rest.length) {
-      by[dimension].push({
-        key: 'other',
-        name: null,
-        other: true,
-        count: rest.length,
-        ms: workTime(rest.flatMap(r => members[r.g])),
-        cells: partsOf(rest.map(r => r.g)),
-      });
-    }
+      .sort((a, b) => b.ms - a.ms || compare(a.name ?? '', b.name ?? '') || compare(a.key, b.key))
+      .map(({g, key, name, ms}): ActivityGroup => ({key, name, ms, cells: partsOf(g)}));
   }
   return {
     barMs: cellMs,

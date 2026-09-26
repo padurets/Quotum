@@ -258,7 +258,9 @@ lasts to the reset). A widget draws hours of work in bars of an hour (the period
 where those are longer; shorter bars where a range holds fewer than twenty hours), so a
 bar's height is the time agents worked in it, stacked by subscription, project or
 machine, with the work time, how many different agents worked and their time together,
-in all and in each bar's tooltip. Each moment is split evenly among
+in all and in each bar's tooltip. Every subscription, project and machine of the period
+is a group of its own, however small; projects and machines take seven colours by their
+hours, and those past them share a neutral one. Each moment is split evenly among
 the agents working then, so a stack is as tall as the time any of them worked; a
 group's own hours are the union of its agents' time, more than its part of the stacks
 where others worked alongside, so a subscription's hours are the table's. What is known

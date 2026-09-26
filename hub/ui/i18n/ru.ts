@@ -300,7 +300,6 @@ export const ru = {
   'activity.since': 'с {time}',
   'activity.legendHint': 'Время работы здесь: одновременная работа нескольких агентов считается один раз. В столбиках каждый момент делится между всеми, кто тогда работал',
   'activity.noProject': 'Без проекта',
-  'activity.other': 'Остальные ({count})',
   'activity.notKnown': 'До {time} не известно',
   'activity.knownFrom': 'Как работали агенты, известно с {time}',
   'activity.none': 'В этот период агенты не работали',

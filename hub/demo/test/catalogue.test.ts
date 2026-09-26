@@ -225,7 +225,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
       const tenth = (ms: number) => Math.round(ms / 360_000) / 10;
       const cardOf = (source: string) => [...stand.sources].find(([, id]) => id === source)?.[0] ?? source;
       const named = (by: 'source' | 'project' | 'device') =>
-        Object.fromEntries(activity.by[by].map(g => [g.other ? 'other' : by === 'source' ? cardOf(g.key) : String(g.name), tenth(g.ms)]));
+        Object.fromEntries(activity.by[by].map(g => [by === 'source' ? cardOf(g.key) : String(g.name), tenth(g.ms)]));
       if ('activity' in check) {
         const {activity: by} = check as {activity: 'source' | 'project' | 'device'};
         return {activity: by, range, groups: named(by)};

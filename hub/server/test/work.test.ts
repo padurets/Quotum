@@ -152,23 +152,19 @@ test('cells are aligned to their length, so the first one of a period from any m
   );
 });
 
-test('projects and machines beyond seven are one group whose own hours are their union', () => {
+test('every project and machine is a group of its own, however many, the longest first', () => {
   // Nine projects, each an hour longer than the next; the last two worked at the same time.
-  const stretches = Array.from({length: 9}, (_, i) => stretch(at('00:00') + i * 10 * HOUR, at('00:00') + i * 10 * HOUR + (9 - i) * HOUR, {project: `p${i}`}));
-  stretches[8] = stretch(stretches[7].from, stretches[7].from + HOUR, {project: 'p8'});
+  const stretches = Array.from({length: 9}, (_, i) => stretch(at('00:00') + i * 10 * HOUR, at('00:00') + i * 10 * HOUR + (9 - i) * HOUR, {project: `p${i}`, device: `m${i}`}));
+  stretches[8] = stretch(stretches[7].from, stretches[7].from + HOUR, {project: 'p8', device: 'm8'});
   const result = activity(stretches, {from: at('00:00'), to: at('00:00') + 100 * HOUR}, 2 * HOUR, new Map());
   assert.deepEqual(
-    result.by.project.map(g => g.name ?? `other ${g.count}`),
-    ['p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'other 2'],
+    result.by.project.map(g => [g.name, g.ms / HOUR]),
+    [['p0', 9], ['p1', 8], ['p2', 7], ['p3', 6], ['p4', 5], ['p5', 4], ['p6', 3], ['p7', 2], ['p8', 1]],
   );
-  const other = result.by.project.at(-1)!;
-  assert.equal(other.other, true);
-  assert.equal(other.ms, 2 * HOUR, 'their union, not 2 h + 1 h');
-  // In its cell the two had half an hour together and one of them another half hour: the whole hour is theirs.
-  assert.deepEqual(
-    other.cells.map(([cell, ms]) => [(cell - at('00:00')) / HOUR, ms / MIN]),
-    [[70, 120]],
-  );
+  assert.equal(result.by.device.length, 9);
+  // In its cell the two had half an hour together: each has half of it, and one of them another half hour alone.
+  assert.deepEqual(parts(result, 'project', '"p7"'), {'22:00': 90});
+  assert.deepEqual(parts(result, 'project', '"p8"'), {'22:00': 30});
   assertStacks(result);
 });
 
@@ -176,7 +172,6 @@ test('every subscription keeps its own group, however many', () => {
   const stretches = Array.from({length: 9}, (_, i) => stretch(at('10:00'), at('10:00') + (i + 1) * MIN, {source: `claude:${i}`}));
   const result = activity(stretches, {from: at('10:00'), to: at('11:00')}, HOUR, new Map());
   assert.equal(result.by.source.length, 9);
-  assert.ok(result.by.source.every(g => !g.other));
   assert.deepEqual(
     result.by.source.map(g => g.key),
     stretches.map(s => s.source).reverse(),

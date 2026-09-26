@@ -71,11 +71,12 @@ test('projects and machines take colours no status and no provider has, told apa
   for (const [i, a] of all.entries()) for (const b of all.slice(i + 1)) assert.ok(deltaE(a, b) >= 17, `${a} from ${b}: ${deltaE(a, b).toFixed(1)}`);
 });
 
-test('a subscription has its card colour; projects and machines take theirs by rank, and the rest is neutral', () => {
-  const sources = [group('codex:1'), group('claude:1')];
-  assert.deepEqual(groupColors(sources, 'source', {...view, colors: {'claude:1': '#43aca1'}}, id => id.split(':')[0]), [PROVIDERS.codex.color, '#43aca1']);
-  const projects = [group('"a"'), group('"b"'), group('other', {other: true, count: 3})];
-  assert.deepEqual(groupColors(projects, 'project', view, () => ''), [CATEGORY_COLORS[0], CATEGORY_COLORS[1], OTHER_COLOR]);
+test('a subscription has its card colour; projects and machines take theirs by rank, and those past the palette a neutral', () => {
+  const sources = Array.from({length: 9}, (_, i) => group(`codex:${i}`));
+  assert.ok(groupColors(sources, 'source', view, () => 'codex').every(color => color === PROVIDERS.codex.color), 'every subscription its card colour, however many');
+  assert.deepEqual(groupColors(sources.slice(0, 2), 'source', {...view, colors: {'codex:1': '#43aca1'}}, () => 'codex'), [PROVIDERS.codex.color, '#43aca1']);
+  const projects = Array.from({length: CATEGORY_COLORS.length + 2}, (_, i) => group(`"p${i}"`));
+  assert.deepEqual(groupColors(projects, 'project', view, () => ''), [...CATEGORY_COLORS, OTHER_COLOR, OTHER_COLOR]);
 });
 
 test('the scale is time worked, up to the tallest stack and never more than a bar, marked at round times', () => {
