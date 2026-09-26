@@ -4,7 +4,7 @@ import type {LiveSession, SourceState} from '../lib/types';
 import {duration} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
 import {AGENTS, colorOf, columnShown, withColumn, withHidden, type Arrange} from '../lib/view';
-import {agentRows, drawn, type AgentRow} from '../lib/agents';
+import {agentRows, drawn, folderOf, type AgentRow} from '../lib/agents';
 import {t, useLocale, type Key} from '../i18n';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
 
@@ -31,9 +31,6 @@ function Mark({session}: {session: LiveSession}) {
 }
 
 /** What a session is doing, as the legend names its mark. */
-/** The folder an agent works in, where it tells apart agents of one project. */
-const folderOf = (session: LiveSession) => (session.folder !== session.project ? session.folder : null);
-
 const stateOf = (session: LiveSession) =>
   t(session.working ? 'agents.working' : session.origin === 'terminal' ? 'agents.idle' : 'agents.window');
 

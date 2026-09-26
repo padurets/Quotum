@@ -586,13 +586,19 @@ tr:hover .device-name .icon-button, .device-name .icon-button:focus-visible { op
 .inline-rename input { flex: 1; min-width: 0; padding: 5px 9px; }
 .inline-rename .form-error { flex-basis: 100%; }
 .projects-bar { display: flex; margin-top: 14px; }
+.projects-bar .picker { margin-left: 0; }
+.projects-table td:last-child { text-align: left; }
 .projects-table input[type=checkbox] { accent-color: var(--accent); margin: 0; }
 .projects-table th:first-child, .projects-table td:first-child { width: 1px; padding-right: 0; }
 .project-none { color: var(--text-3); }
 /* A project's name is as long as a folder's: cut, the whole of it in the tooltip. */
 .projects-table .device-name { max-width: min(34ch, 42vw); }
 .projects-table .device-name b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.project-from .link-button { margin-left: 3px; vertical-align: -1px; }
+/* What a project gathers wraps, each name cut to the width of the project's own. */
+.projects-table td small.project-froms { display: flex; flex-wrap: wrap; gap: 0 8px; max-width: min(34ch, 42vw); white-space: normal; }
+.project-from { display: inline-flex; align-items: center; min-width: 0; max-width: 100%; }
+.project-from > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-from .link-button { margin-left: 3px; display: inline-grid; }
 .project-from .link-button svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
 .button-row.is-start { justify-content: flex-start; align-items: center; }
 .copy { position: relative; display: flex; align-items: center; gap: 10px; padding: 9px 10px 9px 12px; border: 1px solid var(--hair-2); border-radius: 10px; background: #07080d; }

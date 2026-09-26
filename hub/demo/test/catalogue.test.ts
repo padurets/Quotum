@@ -14,7 +14,7 @@ import {Directory} from '../../server/store/directory.js';
 import {Store} from '../../server/store/store.js';
 import type {ResetEvent, ResetProvider} from '../../server/domain/resets.js';
 import {setLocale} from '../../ui/i18n/index.js';
-import {agentRows, drawn} from '../../ui/lib/agents.js';
+import {agentRows, drawn, folderOf} from '../../ui/lib/agents.js';
 import {forecastRow} from '../../ui/lib/forecast.js';
 import {chartEvents, chartFrom, chartResets, linesOf} from '../../ui/lib/lines.js';
 import {planNote, started} from '../../ui/lib/plan.js';
@@ -199,6 +199,11 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
     if ('rows' in check && isHidden(overview.view, AGENTS)) return `the table of running agents is hidden on the board ${entry.id}`;
     if ('weeklySeries' in check && isHidden(overview.view, HISTORY)) return `the chart is hidden on the board ${entry.id}`;
     const {rows, empty} = agentRows(overview.sources, overview.view);
+    if ('agentsOf' in check) {
+      const {agentsOf} = check as {agentsOf: string};
+      const folders = rows.filter(row => row.session.project === agentsOf).map(row => folderOf(row.session));
+      return {agentsOf, folders: folders.sort((a, b) => (a ?? '').localeCompare(b ?? ''))};
+    }
     const series = 'weeklySeries' in check ? linesOf(await reading.history(entry.id), overview, overview.view, 'weekly').length : 0;
     return {
       state: boardState(overview.sources, overview.view),
@@ -323,6 +328,17 @@ test('the catalogue is consistent', () => {
   assert.equal(new Set(scenes).size, scenes.length, 'scenes are named once');
   for (const set of SETS) assert.ok(scenes.includes(set.scene), `${set.id} starts with a scene that exists`);
   for (const scene of SCENES) assert.ok(scene.expect.length, `scene ${scene.id} expects something`);
+});
+
+test('the check of a set names a correction the hub keeps none of, and a project no working agent of the person has', () => {
+  const all = setOf('all');
+  const ana = (change: object): DemoSet => ({...all, entries: all.entries.map(e => (e.kind === 'person' && e.id === 'ana' ? {...e, ...change} : e))});
+  const anas = all.entries.find(e => e.kind === 'person' && e.id === 'ana') as Extract<Entry, {kind: 'person'}>;
+  assert.match(problems(ana({projects: {billing: 'billing'}})).join('\n'), /person ana: a name for billing the hub keeps no correction for/);
+  assert.match(problems(ana({projects: {billing: ' x'}})).join('\n'), /person ana: a name for billing/);
+  assert.match(problems(ana({expect: [...anas.expect, {project: 'infra'}]})).join('\n'), /person ana expects the project infra, which no working agent of theirs has/);
+  assert.deepEqual(problems(ana({expect: [...anas.expect, {project: 'infra', absent: true}]})), [], 'absent needs none');
+  assert.deepEqual(problems(ana({expect: [...anas.expect, {project: 'docs'}]})), [], 'a corrected name, by what is reported under it');
 });
 
 test('the check of a set names a subscription without an account the hub would file elsewhere', () => {

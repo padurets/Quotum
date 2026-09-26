@@ -7,6 +7,12 @@ export const DRAWN = 10;
 /** Whether a card's tray draws a mark for each of its running agents. */
 export const drawn = (sessions: unknown[]) => sessions.length <= DRAWN;
 
+/**
+ * The folder shown under an agent's project, where it tells agents of one project apart
+ * (a worktree, a folder inside the repository); none where it is the project itself.
+ */
+export const folderOf = (session: LiveSession) => (session.folder !== session.project ? session.folder : null);
+
 /** A running agent in the board's table, with the card whose subscription it spends. */
 export type AgentRow = {source: SourceState; session: LiveSession};
 

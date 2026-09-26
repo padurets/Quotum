@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {agentRows, DRAWN, drawn} from '../lib/agents';
+import {agentRows, DRAWN, drawn, folderOf} from '../lib/agents';
 import {chartEvents, chartResets, type Line} from '../lib/lines';
 import {outlook, planCell} from '../lib/forecast';
 import {DEFAULT_PLAN, planNote} from '../lib/plan';
@@ -70,6 +70,14 @@ test('agents are drawn up to ten; the table leaves out hidden cards and says why
   assert.equal(agentRows([source('a', []), source('b', [session()])], hidden).empty, 'noneShown');
   assert.equal(agentRows([source('a', []), source('b', [])], hidden).empty, 'none');
   assert.equal(agentRows([source('a', [session()]), source('b', [session()])], hidden).rows.length, 1);
+});
+
+test('an agent shows its folder under its project only where the folder tells it apart', () => {
+  const session = (project: string | null, folder: string | null) => ({project, folder}) as LiveSession;
+  assert.equal(folderOf(session('quotum', 'quotum.feat-18')), 'quotum.feat-18', 'a worktree');
+  assert.equal(folderOf(session('quotum', null)), null, 'in the project itself');
+  assert.equal(folderOf(session('core', 'core')), null, 'renamed to its folder');
+  assert.equal(folderOf(session(null, 'scratch')), 'scratch', 'no project');
 });
 
 test('a board without subscriptions invites to connect one; with every widget hidden, offers them back', () => {

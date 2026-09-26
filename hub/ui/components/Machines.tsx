@@ -225,7 +225,12 @@ function Projects() {
   if (!list) return <ErrorLine error={error} />;
   if (!list.projects.length) return <p className="admin-empty">{t('projects.empty')}</p>;
   const chosen = list.projects.filter(group => group.name !== null && selected.includes(group.name));
-  const toggle = (group: ProjectGroup, on: boolean) => setSelected(current => (on ? [...current, group.name!] : current.filter(name => name !== group.name)));
+  const toggle = (group: ProjectGroup, on: boolean) => {
+    const next = on ? [...selected, group.name!] : selected.filter(name => name !== group.name);
+    setSelected(next);
+    // The menu goes with its button; chosen again later, it waits to be opened.
+    if (next.length < 2) setMerge(false);
+  };
   return (
     <>
       <p className="dialog-text">{t('projects.caption', {days: list.keptDays})}</p>
@@ -269,11 +274,11 @@ function Projects() {
                       />
                     )}
                     {from.length > 0 && (
-                      <small>
-                        {t('projects.from')}{' '}
-                        {from.map((name, i) => (
+                      <small className="project-froms">
+                        <span>{t('projects.from')}</span>
+                        {from.map(name => (
                           <span key={name} className="project-from">
-                            {name}
+                            <span title={name}>{name}</span>
                             <button
                               type="button"
                               className="link-button"
@@ -285,7 +290,6 @@ function Projects() {
                                 <path d="M4 4l8 8M12 4l-8 8" />
                               </svg>
                             </button>
-                            {i < from.length - 1 && ', '}
                           </span>
                         ))}
                       </small>
@@ -305,7 +309,7 @@ function Projects() {
           <Popover label={t('projects.merge')} trigger={t('projects.merge')} triggerClass="button" align="left" up open={merge} onOpenChange={setMerge}>
             <div className="popover-title">{t('projects.mergeInto')}</div>
             {chosen.map(target => (
-              <button key={target.name} type="button" className="popover-row" onClick={() => failing('/api/projects', merging(chosen, target))}>
+              <button key={target.name} type="button" className="popover-row" title={target.name!} onClick={() => failing('/api/projects', merging(chosen, target))}>
                 <span>{target.name}</span>
               </button>
             ))}

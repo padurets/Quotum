@@ -227,6 +227,11 @@ export type BoardCheck = Span &
     | {rows: number | 'none' | 'noneShown'}
     /** Weekly series on the chart over the last 24 hours, at least. */
     | {weeklySeries: number}
+    /**
+     * Rows of the table of running agents under the project `agentsOf` (as the person named
+     * it): the folders shown under it, by name, none where the folder is the project.
+     */
+    | {agentsOf: string; folders: (string | null)[]}
   );
 
 export type SceneCheck = Span &

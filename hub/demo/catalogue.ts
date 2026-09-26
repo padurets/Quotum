@@ -350,6 +350,10 @@ const all: DemoSet = {
         {project: 'billing', machines: ['Build server'], from: 20 * MIN},
         {project: 'docs', machines: ['Build server'], reported: ['docs-site'], from: 20 * MIN},
         {project: null, from: 20 * MIN},
+        // The table of agents: the project, and under it the folder where that is another,
+        // the corrected name too (docs-site is where docs works).
+        {agentsOf: 'quotum', folders: [null, 'hub', 'quotum.feat-18-desktop-app']},
+        {agentsOf: 'docs', folders: ['docs-site']},
       ],
       look: [
         'The table of agents lists many rows, by machine',
