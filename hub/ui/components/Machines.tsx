@@ -222,32 +222,53 @@ function Projects() {
   const [selected, setSelected] = useState<string[]>([]);
   const [merge, setMerge] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  // A rename leads to rows found by their names, new or given back: the keyboard goes to the
-  // first of them still listed, each time anew, though the names were the same the time before.
-  const [renamed, setRenamed] = useState<{names: string[]; n: number} | null>(null);
-  const load = useCallback(() => {
-    call<ProjectList>('GET', '/api/projects').then(answer => {
-      setList(answer);
-      setSelected([]);
-    }, setError);
-  }, []);
-  useEffect(load, [load]);
+  // The row a rename led to, chosen in the list that came after it: the keyboard goes there,
+  // each time anew (a new number), though it was the same row the time before.
+  const [landing, setLanding] = useState<{name: string; n: number} | null>(null);
+  const load = useCallback(
+    () =>
+      call<ProjectList>('GET', '/api/projects').then(
+        answer => {
+          setList(answer);
+          setSelected([]);
+          return answer;
+        },
+        failure => {
+          setError(failure);
+          return null;
+        },
+      ),
+    [],
+  );
+  useEffect(() => {
+    load();
+  }, [load]);
 
-  /** A change, then the list anew: another tab may have changed it too. */
+  /** A change, then the list anew (another tab may have changed it too), which it gives back. */
   const change = async (url: string, body: object) => {
     setError(null);
+    setLanding(null);
+    let answer: ProjectList | null = null;
     try {
       await call('POST', url, body);
     } finally {
       setMerge(false);
-      load();
+      answer = await load();
     }
+    return answer;
+  };
+  /** A rename, then the keyboard on the first of `names` listed: the new name, or those given back. */
+  const rename = async (group: ProjectGroup, name: string) => {
+    const answer = await change('/api/projects', renaming(group, name));
+    // Given back, each name goes its own way: its own first, where machines reported it.
+    const names = name ? [name] : [...group.reported].sort((a, b) => Number(b === group.name) - Number(a === group.name));
+    const found = names.find(one => answer?.projects.some(listed => listed.name === one));
+    if (found) setLanding(before => ({name: found, n: (before?.n ?? 0) + 1}));
   };
   const failing = (url: string, body: object) => change(url, body).catch(setError);
 
   if (!list) return <ErrorLine error={error} />;
   if (!list.projects.length) return <p className="admin-empty">{t('projects.empty')}</p>;
-  const landing = renamed?.names.find(name => list.projects.some(group => group.name === name));
   const chosen = list.projects.filter(group => group.name !== null && selected.includes(group.name));
   const toggle = (group: ProjectGroup, on: boolean) => {
     const next = on ? [...selected, group.name!] : selected.filter(name => name !== group.name);
@@ -293,16 +314,8 @@ function Projects() {
                         name={group.name}
                         label={t('projects.nameLabel')}
                         renameLabel={t('projects.rename', {name: group.name})}
-                        focus={renamed && landing === group.name ? renamed.n : 0}
-                        save={name =>
-                          change('/api/projects', renaming(group, name)).then(() =>
-                            setRenamed(before => ({
-                              // Given back, each name goes its own way: its own first, where machines reported it.
-                              names: name ? [name] : [...group.reported].sort((a, b) => Number(b === group.name) - Number(a === group.name)),
-                              n: (before?.n ?? 0) + 1,
-                            })),
-                          )
-                        }
+                        focus={landing?.name === group.name ? landing.n : 0}
+                        save={name => rename(group, name)}
                       />
                     )}
                     {from.length > 0 && (
