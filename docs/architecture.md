@@ -81,9 +81,20 @@ reads only the time of the last change, to tell whether someone uses a client on
 machine. Credential files are never opened.
 
 **Which agents run.** The agent also looks at the process list: which `claude`, `codex`
-and `agy` processes run, since when, in which folder (its name only; not the home or a
-temporary folder), where (a terminal, an editor, or the Codex desktop app, told by the
-programs above them), and whether they work. An editor or the app runs one client per
+and `agy` processes run, since when, in which folder and project (names only; not the
+home or a temporary folder), where (a terminal, an editor, or the Codex desktop app,
+told by the programs above them), and whether they work. The project is the git
+repository the folder is in, else the folder: once per session and folder the agent
+looks for `.git` in the folder and above it, but not in the home folder or above it; in
+a worktree the `.git` file leads to the main repository's git folder through its
+`commondir`, so worktrees and folders inside a repository are one project. It reads
+only those two small files: no git is run, no settings of it are read (remotes may hold
+tokens). On macOS it touches nothing in the folders the system guards (Desktop,
+Documents, Downloads, iCloud Drive, other volumes), neither directly nor through the
+`.git` of another folder, so that the system does not ask for access: there the project
+is the folder. Paths are checked as git writes them; a chain of links made by hand may
+still lead there. Boards list agents by project, with the folder under it where that is
+another, so agents in different worktrees stay apart. An editor or the app runs one client per
 window for all its chats, so there a session is a window. A session works while it and
 what it started (tools, builds, tests) spend more of a CPU core than the client does
 when idle (6% for Claude Code, which redraws its screen even then; 3–4% for the others),
@@ -195,11 +206,18 @@ send theirs again), files each session under its subscription (the account the c
 the machine last delivered for that client; only one its person holds; the agent leaves
 out a session of a client signed in anew since it last measured, until it knows which
 account that is) and shows it on
-that card, to the members of a board where that person shows the subscription. Each list
-also counts until the next one, for at most 200 seconds: how long agents
-worked on each subscription, in five-minute cells (agent time, two agents counting twice,
-and the time any of them worked, overlaps between machines counted once), kept as long
-as samples.
+that card, by project (as that person named it) and folder, to the members of a board
+where that person shows the subscription. Each list also counts until the next one, for at most 200 seconds: the hub
+keeps when each session worked, with its machine, subscription, where it runs, since
+when and its project and folder names as reported, as long as samples. A session is
+never credited twice for the same time: after the hub's clock goes back, it is credited
+again from where its time already ends, so a clock that ran ahead costs its sessions at
+most as much time as it ran ahead, and the time counted before is never rewritten. Sums are worked
+out when read (`domain/work.ts`): agent time adds the stretches up, two agents counting
+twice; the time any of them worked is their union, overlaps counted once for whichever
+machines, people or projects are asked about. The corrections people make to project
+names apply when read, so they reach all the time kept. The database says since when
+this is kept (`agentWorkSince`): before it, how agents worked is not known.
 
 ## Storage and the rules
 
@@ -215,14 +233,15 @@ them), kept for 90 days.
   Resets, corrections by the provider and gaps (a sample arriving later than the
   previous one promised) are excluded. An idle rolling window whose reset time drifts
   forward is not a reset.
-- **The chart** puts every series on one time grid (5 minutes for a day, 30 minutes
-  for a week, 2 hours for a month) and shows the lowest value seen in each cell, so
-  hovering reads every series at once and a short hiccup doesn't break a line. A time
-  range dragged across the chart, from 15 minutes to a month, gets the finest cell that
-  keeps it within about 360 cells (a minute for an hour, as dense as the fixed periods
-  for longer ones; 5% over is allowed, so a day over a month keeps the month's grid). Its
-  edges go out to whole cells, so the chart and the table may cover up to a cell beyond
-  the selection, and ranges that differ by less than a cell share one answer. Where
+- **The chart** puts every series on one time grid and shows the lowest value seen in
+  each cell, so hovering reads every series at once and a short hiccup doesn't break a
+  line. It shows a period ending now, from an hour to 30 days (`config.history.ranges`),
+  or a time range in the past, dragged across it or stepped back to, from 15 minutes to
+  a month. Either gets the finest cell that keeps it within about 360 cells: a minute up
+  to 6 hours, 5 minutes for a day, 30 minutes for a week, 2 hours for a month (5% over is
+  allowed, so a day over a month keeps the month's grid), so a period moved back keeps
+  its grid. A range's edges go out to whole cells, so the chart and the table may cover
+  up to a cell beyond it, and ranges that differ by less than a cell share one answer. Where
   measurements come less often than cells, hovering reads the last value before. Putting a month together takes a busy board a good part of a second, so
   such an answer is reused for a quarter of its cell after the data changed, and says
   when a newer one will be ready for the page to ask again; a source joining or leaving
@@ -258,13 +277,15 @@ them), kept for 90 days.
   line in its colour and dash, from its last value to zero or its reset. With the plan
   or the forecast shown the chart keeps some future on its right; on `auto` it stretches
   to where the forecast says a window runs out, up to about 40% of its width, and a
-  window that runs out further is pointed at from the right edge.
+  window that runs out further is pointed at from the right edge. A range in the past,
+  dragged or moved to, has no forecast.
 - **Events** mark the chart behind now. An early reset is derived from the samples: a
   window's used share drops by more than 5 points before its reset time (resets of one
   source within 15 minutes are one event). Free resets granted are recorded when a
   measurement reports more of them than the one before. Resets for everyone that the
   community trackers report are kept as the hub sees them (the trackers only tell the
-  latest one), so the chart marks every one of the period.
+  latest one), and listed for as long as samples are kept, so the chart marks every
+  one of its period, however far back it is moved.
 
 ## People, boards, devices
 
@@ -274,7 +295,11 @@ them), kept for 90 days.
   link unless the hub is open (`QUOTUM_SIGNUP=open`).
 - **Devices** are running agents, and each belongs to a person. The *Machines* dialog
   shows a person's devices, what each delivers and the last failure of each client
-  there (not logged in, too old…); the person names them there. A device connects in
+  there (not logged in, too old…); the person names them there. Its *Projects* tab
+  lists the projects their agents worked on, with the machines and when they last did:
+  the person renames them and merges several into one, which applies everywhere they are
+  shown and to all the time kept (only on their own machines), and gives a reported name
+  back its own to undo it. How long agents worked is not shown there. A device connects in
   one of two ways:
   - *a one-time code* (the RFC 8628 device flow): `quotum connect <hub>` shows a code, a
     signed-in person confirms it in the browser; the device gets its own token and
@@ -338,6 +363,15 @@ horizon, lines switched off in the legend, whether it draws the plan and the for
 the agents table's sort order, the chosen board and language) stays in their browser.
 A time range selected on the chart becomes the analytics' period; it lives in the page's
 address (`?from=&to=`), so a reload keeps it, Back undoes it and a link to it can be shared on the board.
+‹ and › beside the period, a swipe sideways on a touchpad or Shift with the wheel move the
+analytics by half their length, one step a gesture: back, to a range in the past held in
+the address like a dragged one, no further than the history kept; forward, up to now,
+where the chosen period comes back. The chart moves to the new period at once, drawing
+the answer it has until the next one comes; a run of quick steps asks the hub only for
+where it stops, and the latest few ranges read whole are kept on the page for each board,
+so stepping back and forth over them asks nothing. They are kept for the board's sources
+as they were: a source added to the board has a range read again. Measurements an agent
+delivers late, into a range already kept, show after a reload.
 
 Both agent lists put working sessions first, then the ones that worked most recently,
 then the newest. The card's panel keeps machine groups, ordered by each one's most

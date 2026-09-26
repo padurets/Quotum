@@ -62,8 +62,9 @@ function account(value: unknown): string | null {
 type Obj = Record<string, unknown>;
 const isObject = (value: unknown): value is Obj => !!value && typeof value === 'object' && !Array.isArray(value);
 
-/** Longer than the limit in characters, as the spec and the agent count them (a character may take two UTF-16 units). */
-const tooLong = (value: string) => value.length > LIMITS.text && (value.length > 2 * LIMITS.text || Array.from(value).length > LIMITS.text);
+/** Longer than `chars` characters, as the spec and the agent count them (a character may take two UTF-16 units). */
+export const longerThan = (value: string, chars: number) => value.length > chars && (value.length > 2 * chars || Array.from(value).length > chars);
+const tooLong = (value: string) => longerThan(value, LIMITS.text);
 
 function text(value: unknown, what: string, optional = false): string | null {
   if (optional && (value === undefined || value === null)) return null;
@@ -253,7 +254,10 @@ export type AgentSession = {
   account: string | null;
   accountName: string | null;
   origin: Origin;
+  /** The project it works in, which its time counts under: its repository, else its folder. */
   project: string | null;
+  /** Its folder, where that is not its project; an older agent sends none. */
+  folder: string | null;
   startedAt: number;
   lastWorkedAt: number | null;
   working: boolean;
@@ -275,6 +279,7 @@ export function parseSessions(body: unknown): SessionReport {
       accountName: text(value.accountName, 'accountName', true),
       origin: value.origin as Origin,
       project: cut(value.project, 'project'),
+      folder: cut(value.folder, 'folder'),
       startedAt: time(value.startedAt, 'startedAt')!,
       lastWorkedAt: time(value.lastWorkedAt, 'lastWorkedAt', true),
       working: value.working,

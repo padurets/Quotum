@@ -1,8 +1,11 @@
-import {useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent} from 'react';
+import {useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode, type RefObject} from 'react';
 import {clock, day, duration, num, shortDay, stamp} from '../lib/format';
 import {t} from '../i18n';
-import {valueIn, type Line} from '../lib/lines';
+import type {Line} from '../lib/lines';
+import {hubNow} from '../lib/api';
+import {gapText, gapTone, readout as readCell, type ForecastLine, type PlanLine} from '../lib/readout';
 import {draggedRange, type TimeRange} from '../lib/timeRange';
+import {SWIPE, swiped} from '../lib/swipe';
 
 /**
  * A moment on the time axis: ahead, a known window reset or an announced extra one;
@@ -16,24 +19,18 @@ const HOLD_MS = 450;
 /** The mark of a past event: a small diamond centred at (x, y). */
 const diamond = (x: number, y: number, r = 4) => `M${x},${y - r}l${r},${r}l${-r},${r}l${-r},${-r}z`;
 
-/** The spending plan of one weekly window, drawn as a faint dotted line in its colour; `lines` are the keys of the lines it plans. */
-export type PlanLine = {key: string; lines: string[]; name: string; color: string; runs: [number, number][][]};
-
-/**
- * Where a window's pace leads, drawn from its last value in its line's colour and dash;
- * `key` is its line's. `beyond` says at the right edge when it runs out past it.
- */
-export type ForecastLine = {key: string; name: string; color: string; dash: string; points: [number, number][]; beyond: string | null};
-
-/** How far apart labels stacked at an edge stand. */
-const LABEL_STEP = 22;
-
 /** How wide an announcement's label is taken to be, and how near an edge a value hides under it (percent). */
 const LABEL_WIDTH = 220;
 const LABEL_BAND = 15;
+/** How far apart labels stacked at the right edge stand. */
+const LABEL_STEP = 22;
 
-/** A label on the chart on a backing sized to its text, so no line under it gets in the way. */
-function MarkerLabel({x, y, end, color, children}: {x: number; y: number; end: boolean; color?: string; children: string}) {
+/**
+ * A label on the chart on a backing sized to its text, so no line under it gets in the way.
+ * One pointing past the right edge tells its exact time under the pointer or on a tap
+ * (`onTip`).
+ */
+function MarkerLabel({x, y, end, color, children, onTip}: {x: number; y: number; end: boolean; color?: string; children: string; onTip?: (shown: boolean, tapped: boolean) => void}) {
   const text = useRef<SVGTextElement>(null);
   const [box, setBox] = useState<{x: number; width: number} | null>(null);
   useLayoutEffect(() => {
@@ -41,7 +38,13 @@ function MarkerLabel({x, y, end, color, children}: {x: number; y: number; end: b
     if (measured) setBox({x: measured.x, width: measured.width});
   }, [x, y, end, children]);
   return (
-    <g className={`marker-label ${color ? 'is-forecast' : ''}`} style={color ? ({'--label-color': color} as CSSProperties) : undefined}>
+    <g
+      className={`marker-label ${onTip ? 'is-pointed' : ''} ${color ? 'is-forecast' : ''}`}
+      style={color ? ({'--label-color': color} as CSSProperties) : undefined}
+      onPointerEnter={onTip && (event => event.pointerType !== 'touch' && onTip(true, false))}
+      onPointerLeave={onTip && (event => event.pointerType !== 'touch' && onTip(false, false))}
+      onPointerUp={onTip && (event => event.pointerType === 'touch' && onTip(true, true))}
+    >
       {box && <rect x={box.x - 6} y={y - 13} width={box.width + 12} height={19} rx={5} />}
       <text ref={text} x={x} y={y} textAnchor={end ? 'end' : 'start'}>
         {children}
@@ -49,20 +52,6 @@ function MarkerLabel({x, y, end, color, children}: {x: number; y: number; end: b
     </g>
   );
 }
-
-/** Value of a piecewise-linear run at time `at`, or undefined outside it. */
-function valueAt(runs: [number, number][][], at: number) {
-  for (const run of runs) {
-    if (at < run[0][0] || at > run.at(-1)![0]) continue;
-    for (let i = 1; i < run.length; i++) {
-      const [t0, v0] = run[i - 1];
-      const [t1, v1] = run[i];
-      if (at <= t1) return t1 === t0 ? v1 : v0 + ((v1 - v0) * (at - t0)) / (t1 - t0);
-    }
-  }
-  return undefined;
-}
-
 
 function niceTicks(from: number, to: number, count: number) {
   const span = to - from;
@@ -88,6 +77,33 @@ export function cellLabel(at: number, cellMs: number) {
 }
 
 /**
+ * How far the tooltip under a narrow chart rises over it to stay whole in the window: as
+ * far as its bottom (`top`, where it stands unraised, plus its `height`) would pass the
+ * window's, less a margin, and never above what covers the top of the page (`cover`, the
+ * bars that stick there).
+ */
+export function liftOf(top: number, height: number, windowHeight: number, cover: number) {
+  return Math.max(0, Math.min(top + height - (windowHeight - 8), top - cover - 8));
+}
+
+/** How long the chart's content takes to slide in after a step through time. */
+const SLIDE_MS = 220;
+
+/**
+ * How far the chart's content slides in after it steps through time, in pixels: from
+ * where it was drawn to where it is now, so the eye follows which way it went. None
+ * unless the period kept about its length (`end` is where measurements end, which for a
+ * period ending now may be the hub's clock rather than the page's) and moved by a tenth of
+ * it or more: a step, not a live period's clock moving on, nor another period.
+ */
+export function slideOf(before: {from: number; end: number}, after: {from: number; end: number; to: number}, plotWidth: number) {
+  const length = after.end - after.from;
+  const moved = after.from - before.from;
+  if (length <= 0 || Math.abs(before.end - before.from - length) > length * 0.1 || Math.abs(moved) < length * 0.1 || Math.abs(moved) > length) return 0;
+  return (moved / (after.to - after.from)) * plotWidth;
+}
+
+/**
  * Remaining quota over time for every selected window. All series share one time
  * grid, so hovering anywhere snaps to a cell and reads every series for it — no
  * pixel hunting. Lines break only where a whole cell is empty.
@@ -103,6 +119,7 @@ export function Chart({
   cellMs,
   empty,
   onSelect,
+  onStep,
 }: {
   lines: Line[];
   plans?: PlanLine[];
@@ -117,9 +134,13 @@ export function Chart({
   empty: string | null;
   /** A time range dragged across the chart, as in Grafana. */
   onSelect?: (range: TimeRange) => void;
+  /** A swipe sideways on a touchpad, or Shift with the wheel: back (-1) or forward (1) through time. */
+  onStep?: (direction: -1 | 1) => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(900);
+  /** CSS pixels to a unit of the chart: under 1 where the chart is narrower than it is drawn (280). */
+  const [scale, setScale] = useState(1);
   /** Start of the hovered cell. */
   const [hover, setHover] = useState<number | null>(null);
   /** Where a drag across the chart started and where it is now, in chart pixels. */
@@ -127,10 +148,38 @@ export function Chart({
   /** A finger held on the chart, before it starts a range. */
   const holding = useRef<{px: number; timer: ReturnType<typeof setTimeout>} | null>(null);
   useEffect(() => () => cancelHold(), []);
+  /** Where the pointer last was over the chart, in chart pixels: a step reads the values under it anew. */
+  const pointer = useRef<number | null>(null);
+
+  // The wheel is heard natively, so the chart can keep a swipe from scrolling the page
+  // sideways or going back in the browser. Nothing renders until the gesture steps.
+  const svg = useRef<SVGSVGElement>(null);
+  const swipe = useRef(SWIPE);
+  const stepped = useRef(onStep);
+  stepped.current = onStep;
+  const dragging = useRef(false);
+  useEffect(() => {
+    const element = svg.current;
+    if (!element) return;
+    const wheel = (event: WheelEvent) => {
+      if (!stepped.current || dragging.current) return;
+      const result = swiped(swipe.current, event);
+      swipe.current = result.state;
+      if (result.own) event.preventDefault();
+      if (result.step) stepped.current(result.step);
+    };
+    element.addEventListener('wheel', wheel, {passive: false});
+    return () => element.removeEventListener('wheel', wheel);
+  }, []);
 
   useEffect(() => {
     if (!box.current) return;
-    const observer = new ResizeObserver(entries => setWidth(Math.max(280, Math.round(entries[0].contentRect.width))));
+    const observer = new ResizeObserver(entries => {
+      const measured = entries[0].contentRect.width;
+      const drawn = Math.max(280, Math.round(measured));
+      setWidth(drawn);
+      setScale(measured ? measured / drawn : 1);
+    });
     observer.observe(box.current);
     return () => observer.disconnect();
   }, []);
@@ -155,6 +204,8 @@ export function Chart({
         let previousX = -1;
         for (const [at, remaining, group] of line.points) {
           if (at + cellMs < from) continue;
+          // The answer on screen may be of another period while the next loads: what lies past the end is not drawn.
+          if (at > now) break;
           const px = bx(at);
           const py = y(remaining);
           if (group !== segment) {
@@ -170,42 +221,49 @@ export function Chart({
           last: runs.at(-1)?.at(-1) ?? null,
         };
       }),
-    [lines, from, span, width, height, cellMs],
+    [lines, from, now, span, width, height, cellMs],
   );
 
-  const readout =
-    hover === null
-      ? []
-      : lines.flatMap(line => {
-          const value = valueIn(line.points, hover, now, Math.max(cellMs, line.staleAfterMs));
-          return value === undefined ? [] : [{line, value}];
-        });
+  const {rows, planned, foreseen} = hover === null ? {rows: [], planned: false, foreseen: false} : readCell(lines, plans, hover, cellMs, now, to, forecasts);
   const markerReadout = hover === null ? [] : markers.filter(m => m.at >= hover && m.at < hover + cellMs);
-  const planReadout =
-    hover === null
-      ? []
-      : plans.flatMap(plan => {
-          const value = valueAt(plan.runs, Math.min(to, hover + cellMs / 2));
-          return value === undefined ? [] : [{plan, value}];
-        });
-  // Ahead of now a window has no value of its own, only where its pace leads: read in a
-  // cell wholly ahead, at its middle, until the window runs out.
-  const forecastReadout =
-    hover === null || hover <= now
-      ? []
-      : forecasts.flatMap(forecast => {
-          const value = valueAt([forecast.points], Math.min(to, hover + cellMs / 2));
-          return value === undefined ? [] : [{forecast, value}];
-        });
-  // A plan is read beside what its source has left, or where it goes; one with nothing read there stands on its own.
-  const planOf = (line: string) => planReadout.find(row => row.plan.lines.includes(line));
-  const lonePlans = planReadout.filter(row => !readout.some(r => row.plan.lines.includes(r.line.key)) && !forecastReadout.some(r => row.plan.lines.includes(r.forecast.key)));
+  // Past the right edge: an announcement, then where windows run out, each said there.
+  const beyond = [
+    ...markers
+      .filter(m => m.strong && !m.past && m.at > to)
+      .map(m => ({key: m.key, label: m.label, time: stamp(m.at), text: t('chart.ahead', {label: m.label, time: duration(m.at - now, true)}), color: undefined})),
+    ...forecasts.flatMap(f => (f.beyond && f.at !== null ? [{key: `forecast-${f.key}`, label: f.name, time: t('forecast.runsOutAt', {time: stamp(f.at)}), text: f.beyond, color: f.color}] : [])),
+  ];
+  /** A label past the right edge pointed at or tapped: the tooltip tells its time instead of the cell's values. */
+  const [edge, setEdge] = useState<{key: string; tapped: boolean} | null>(null);
+  const edgeMarker = edge && beyond.find(m => m.key === edge.key);
+  // A label taken away under the pointer (a step to a range, which has no future) says nothing
+  // of it: what it told is forgotten, so the tooltip reads the cells again.
+  useEffect(() => {
+    if (edge && !edgeMarker) setEdge(null);
+  }, [edge, edgeMarker]);
+  useEffect(() => {
+    if (!edge?.tapped) return;
+    const hide = () => setEdge(null);
+    const timer = setTimeout(hide, 4000);
+    document.addEventListener('pointerdown', hide);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('pointerdown', hide);
+    };
+  }, [edge]);
 
   const toChart = (event: PointerEvent<SVGSVGElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     return ((event.clientX - rect.left) / rect.width) * width;
   };
   const timeAt = (px: number) => from + ((px - left) / (width - left - right)) * span;
+  dragging.current = drag !== null;
+  // After a step the pointer stands over another time: the tooltip reads that.
+  useEffect(() => {
+    const px = pointer.current;
+    if (px !== null && px >= left && px <= width - right) setHover(Math.floor(timeAt(px) / cellMs) * cellMs);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [from, to, cellMs]);
   // A label hides what runs under it: it stands at the bottom of the plot, or at the top
   // when more of the lines run near the bottom there (a limit about to run out).
   const labelY = (anchor: number, end: boolean) => {
@@ -221,16 +279,12 @@ export function Chart({
     }
     return low > high ? top + 18 : height - bottom - 8;
   };
-  // What lies beyond the right edge is said there: an announcement, then where windows run out.
-  const edgeLabels = [
-    ...markers.filter(m => m.strong && !m.past && m.at > to).map(m => ({key: m.key, text: t('chart.ahead', {label: m.label, time: duration(m.at - now, true)}), color: undefined})),
-    ...forecasts.flatMap(f => (f.beyond ? [{key: `forecast-${f.key}`, text: f.beyond, color: f.color}] : [])),
-  ];
-  const edgeY = edgeLabels.length ? labelY(width - right, true) : 0;
+  const edgeY = beyond.length ? labelY(width - right, true) : 0;
   // Stacked from the first one away from the edge of the plot it stands by.
   const edgeStep = edgeY < height / 2 ? LABEL_STEP : -LABEL_STEP;
-  const move =(event: PointerEvent<SVGSVGElement>) => {
+  const move = (event: PointerEvent<SVGSVGElement>) => {
     const px = toChart(event);
+    pointer.current = px;
     const held = holding.current;
     // A finger that moves before the hold is up reads values instead.
     if (held && Math.abs(px - held.px) > 8) cancelHold();
@@ -246,7 +300,8 @@ export function Chart({
   // values, as it always did; holding it still for a moment starts a range instead.
   const press = (event: PointerEvent<SVGSVGElement>) => {
     const px = toChart(event);
-    if (!onSelect || event.button !== 0 || px < left || px > width - right) return;
+    // A label telling a time is read, not dragged from.
+    if (!onSelect || event.button !== 0 || px < left || px > width - right || (event.target as Element).closest('.is-pointed')) return;
     const svg = event.currentTarget;
     const {pointerId} = event;
     const start = () => {
@@ -263,29 +318,92 @@ export function Chart({
     cancelHold();
     if (!drag || !onSelect) return;
     setDrag(null);
-    const range = Math.abs(drag.end - drag.start) >= 6 ? draggedRange(timeAt(drag.start), timeAt(drag.end), now) : null;
+    const range = Math.abs(drag.end - drag.start) >= 6 ? draggedRange(timeAt(drag.start), timeAt(drag.end), Math.min(now, hubNow())) : null;
     if (range) onSelect(range);
   };
   // A cell ahead of now is read at its middle; the one holding now, at now.
   const hoverX = hover === null ? 0 : hover > now ? x(Math.min(to, hover + cellMs / 2)) : bx(hover);
-  // The tooltip sits right of the pointer, or left of it when it would leave the chart.
+  // A step through time slides what the chart shows in from the side it came from. The
+  // layers that move are clipped to the plot meanwhile, so nothing passes over the scale.
+  const clip = useId();
+  const shown = useRef<{from: number; end: number} | null>(null);
+  useLayoutEffect(() => {
+    const before = shown.current;
+    shown.current = {from, end: now};
+    const element = svg.current;
+    if (!before || !element || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const dx = slideOf(before, {from, end: now, to}, width - left - right);
+    if (!dx) return;
+    for (const layer of element.querySelectorAll<SVGGElement>('.slides')) {
+      const frame = layer.parentElement!;
+      // A step taken while the last one still slides goes on from where that one is, not back.
+      const moving = getComputedStyle(layer).transform;
+      const start = dx + (moving === 'none' ? 0 : new DOMMatrix(moving).m41);
+      layer.getAnimations().forEach(animation => animation.cancel());
+      frame.setAttribute('clip-path', `url(#${CSS.escape(clip)})`);
+      const animation = layer.animate([{transform: `translateX(${start}px)`}, {transform: 'none'}], {duration: SLIDE_MS, easing: 'cubic-bezier(.2, .7, .3, 1)'});
+      animation.onfinish = () => frame.removeAttribute('clip-path');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [from, now]);
+
+  // On a narrow chart it spans the chart's width under the plot, over what comes below, and
+  // rises over the plot as far as keeps it whole in the window (a phone with many lines),
+  // though never under the bars that stick at the top.
+  // It is measured after every render while it shows, whatever changed it (its rows, a new
+  // answer moving the chart, the pointer), and as the page scrolls under a pointer that stays.
   const tip = useRef<HTMLDivElement>(null);
   const [tipWidth, setTipWidth] = useState(200);
-  useLayoutEffect(() => {
-    if (tip.current) setTipWidth(tip.current.offsetWidth);
-  }, [hover]);
-  const tipLeft = hoverX + 12 + tipWidth <= width ? hoverX + 12 : Math.max(0, hoverX - 12 - tipWidth);
+  const [lift, setLift] = useState(0);
+  const narrow = width < 560;
+  const measureTip = useRef(() => {});
+  measureTip.current = () => {
+    const element = tip.current;
+    if (!element) return;
+    // Its own width, not as narrowed to the side it stands on: where it goes depends on it.
+    const cap = element.style.maxWidth;
+    element.style.maxWidth = '';
+    setTipWidth(element.offsetWidth);
+    element.style.maxWidth = cap;
+    // Only the one under a narrow chart rises; a marker's time stands over its label.
+    if (!narrow || edgeMarker || !svg.current) return setLift(0);
+    // Where it stands unraised is read from the chart, never from itself, so what it finds
+    // does not depend on what it found before.
+    const top = svg.current.getBoundingClientRect().bottom + parseFloat(getComputedStyle(element).marginTop);
+    const bars = [...document.querySelectorAll<HTMLElement>('.topbar, .analytics-head')].filter(bar => getComputedStyle(bar).position === 'sticky');
+    const cover = Math.max(0, ...bars.map(bar => bar.getBoundingClientRect().bottom));
+    setLift(liftOf(top, element.getBoundingClientRect().height, innerHeight, cover));
+  };
+  // No dependencies: the same values found again change nothing, so it settles in one pass.
+  useLayoutEffect(() => measureTip.current());
+  useEffect(() => {
+    if (!narrow) return;
+    const scrolled = () => measureTip.current();
+    addEventListener('scroll', scrolled, {passive: true});
+    return () => removeEventListener('scroll', scrolled);
+  }, [narrow]);
+  // Beside the pointer: right of it, or left, or where there is more room when it fits
+  // neither side, narrowed to that room (its names wrap) rather than over the pointer.
+  const roomRight = width - hoverX - 12;
+  const roomLeft = hoverX - 12;
+  const onRight = tipWidth <= roomRight || (tipWidth > roomLeft && roomRight >= roomLeft);
+  const tipRoom = Math.min(360, Math.max(0, onRight ? roomRight : roomLeft));
+  const tipLeft = onRight ? hoverX + 12 : Math.max(0, hoverX - 12 - Math.min(tipWidth, tipRoom));
   const bandWidth = Math.max(1, x(Math.min(to, (hover ?? 0) + cellMs)) - x(hover ?? 0));
 
   return (
     <div className="chart" ref={box}>
       <svg
+        ref={svg}
         viewBox={`0 0 ${width} ${height}`}
         role="img"
         aria-label={t('chart.label')}
         className={onSelect ? 'is-selectable' : undefined}
         onPointerMove={move}
-        onPointerLeave={() => setHover(null)}
+        onPointerLeave={() => {
+          pointer.current = null;
+          setHover(null);
+        }}
         onPointerDown={press}
         onPointerUp={release}
         onPointerCancel={() => {
@@ -295,12 +413,21 @@ export function Chart({
         // A held finger starts a range, not the page's menu.
         onContextMenu={event => (holding.current || drag) && event.preventDefault()}
       >
-        {to > now && (
-          <g className="future">
-            <rect x={x(now)} width={x(to) - x(now)} y={top} height={height - top - bottom} className="future-zone" />
-            <line x1={x(now)} x2={x(now)} y1={top} y2={height - bottom} className="now-line" />
+        <defs>
+          <clipPath id={clip}>
+            <rect x={left} y={0} width={width - left - right} height={height} />
+          </clipPath>
+        </defs>
+        <g>
+          <g className="slides">
+            {to > now && (
+              <g className="future">
+                <rect x={x(now)} width={x(to) - x(now)} y={top} height={height - top - bottom} className="future-zone" />
+                <line x1={x(now)} x2={x(now)} y1={top} y2={height - bottom} className="now-line" />
+              </g>
+            )}
           </g>
-        )}
+        </g>
         <line x1={left} x2={width - right} y1={y(30)} y2={y(30)} className="threshold warn" />
         <line x1={left} x2={width - right} y1={y(10)} y2={y(10)} className="threshold crit" />
         {[0, 25, 50, 75, 100].map(value => (
@@ -311,80 +438,95 @@ export function Chart({
             </text>
           </g>
         ))}
-        {ticks.map(tick => (
-          <text key={tick} x={x(tick)} y={height - 8} textAnchor="middle" className="tick">
-            {daily ? shortDay(tick) : clock(tick)}
-          </text>
-        ))}
+        <g>
+          <g className="slides">
+            {ticks.map(tick => (
+              <text key={tick} x={x(tick)} y={height - 8} textAnchor="middle" className="tick">
+                {daily ? shortDay(tick) : clock(tick)}
+              </text>
+            ))}
+          </g>
+        </g>
 
-        {plans.map(plan => (
-          <path
-            key={plan.key}
-            className="plan-line"
-            stroke={plan.color}
-            d={plan.runs.map(run => run.map(([at, value], i) => `${i ? 'L' : 'M'}${x(at).toFixed(1)},${y(value).toFixed(1)}`).join('')).join('')}
-          />
-        ))}
-        {forecasts.map(forecast => (
-          <path
-            key={forecast.key}
-            className="forecast-line"
-            stroke={forecast.color}
-            strokeDasharray={forecast.dash || undefined}
-            d={forecast.points.map(([at, value], i) => `${i ? 'L' : 'M'}${x(at).toFixed(1)},${y(value).toFixed(1)}`).join('')}
-          />
-        ))}
-        {markers.map(marker => {
-          if (marker.at > to) return null;
-          const mx = x(marker.at);
-          if (marker.past) {
-            return (
-              <g key={marker.key} className="marker is-event">
-                <line x1={mx} x2={mx} y1={top} y2={height - bottom} stroke={marker.color} />
-                <path d={diamond(mx, top)} fill={marker.color} />
-                <title>{[`${marker.label} · ${cellLabel(marker.at, 0)}`, marker.detail].filter(Boolean).join('\n')}</title>
-              </g>
-            );
-          }
-          return (
-            <g key={marker.key} className={`marker ${marker.strong ? 'is-strong' : ''}`}>
-              <line x1={mx} x2={mx} y1={top} y2={height - bottom} stroke={marker.strong ? undefined : marker.color} />
-              {!marker.strong && <circle cx={mx} cy={y(100)} r={3} fill={marker.color} />}
-              <title>{`${marker.label} · ${cellLabel(marker.at, 0)}`}</title>
-            </g>
-          );
-        })}
-        {lines.map((line, i) => (
-          <path key={line.key} d={paths[i].line} className="series" stroke={line.color} strokeDasharray={line.dash || undefined} />
-        ))}
-        {/* Announcements are read over the lines, each on its own backing. */}
-        {markers
-          .filter(marker => marker.strong && !marker.past && marker.at <= to)
-          .map(marker => {
-            const mx = x(marker.at);
-            const nearRight = mx > width - right - 150;
-            const lx = nearRight ? mx - 6 : mx + 6;
-            return (
-              <MarkerLabel key={marker.key} x={lx} y={labelY(lx, nearRight)} end={nearRight}>
-                {marker.label}
+        <g>
+          <g className="slides">
+            {plans.map(plan => (
+              <path
+                key={plan.key}
+                className="plan-line"
+                stroke={plan.color}
+                d={plan.runs.map(run => run.map(([at, value], i) => `${i ? 'L' : 'M'}${x(at).toFixed(1)},${y(value).toFixed(1)}`).join('')).join('')}
+              />
+            ))}
+            {forecasts.map(forecast => (
+              <path
+                key={forecast.key}
+                className="forecast-line"
+                stroke={forecast.color}
+                strokeDasharray={forecast.dash || undefined}
+                d={forecast.points.map(([at, value], i) => `${i ? 'L' : 'M'}${x(at).toFixed(1)},${y(value).toFixed(1)}`).join('')}
+              />
+            ))}
+            {markers.map(marker => {
+              if (marker.at > to) return null;
+              const mx = x(marker.at);
+              if (marker.past) {
+                return (
+                  <g key={marker.key} className="marker is-event">
+                    <line x1={mx} x2={mx} y1={top} y2={height - bottom} stroke={marker.color} />
+                    <path d={diamond(mx, top)} fill={marker.color} />
+                    <title>{[`${marker.label} · ${cellLabel(marker.at, 0)}`, marker.detail].filter(Boolean).join('\n')}</title>
+                  </g>
+                );
+              }
+              return (
+                <g key={marker.key} className={`marker ${marker.strong ? 'is-strong' : ''}`}>
+                  <line x1={mx} x2={mx} y1={top} y2={height - bottom} stroke={marker.strong ? undefined : marker.color} />
+                  {!marker.strong && <circle cx={mx} cy={y(100)} r={3} fill={marker.color} />}
+                  <title>{`${marker.label} · ${cellLabel(marker.at, 0)}`}</title>
+                </g>
+              );
+            })}
+            {lines.map((line, i) => (
+              <path key={line.key} d={paths[i].line} className="series" stroke={line.color} strokeDasharray={line.dash || undefined} />
+            ))}
+            {/* Announcements are read over the lines, each on its own backing. */}
+            {markers
+              .filter(marker => marker.strong && !marker.past && marker.at <= to)
+              .map(marker => {
+                const mx = x(marker.at);
+                const nearRight = mx > width - right - 150;
+                const lx = nearRight ? mx - 6 : mx + 6;
+                return (
+                  <MarkerLabel key={marker.key} x={lx} y={labelY(lx, nearRight)} end={nearRight}>
+                    {marker.label}
+                  </MarkerLabel>
+                );
+              })}
+            {/* Beyond the visible future: at the right edge, with the distance, one under another. */}
+            {beyond.map((label, i) => (
+              <MarkerLabel
+                key={label.key}
+                x={width - right}
+                y={edgeY + i * edgeStep}
+                end
+                color={label.color}
+                onTip={(shown, tapped) => setEdge(shown ? {key: label.key, tapped} : null)}
+              >
+                {label.text}
               </MarkerLabel>
-            );
-          })}
-        {/* Beyond the visible future: at the right edge, with the distance, one under another. */}
-        {edgeLabels.map((label, i) => (
-          <MarkerLabel key={label.key} x={width - right} y={edgeY + i * edgeStep} end color={label.color}>
-            {label.text}
-          </MarkerLabel>
-        ))}
-        {hover === null &&
-          lines.map((line, i) =>
-            paths[i].last ? (
-              <g key={`${line.key}-end`}>
-                <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={7} fill={line.color} opacity={0.18} />
-                <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={3} fill={line.color} />
-              </g>
-            ) : null,
-          )}
+            ))}
+            {hover === null &&
+              lines.map((line, i) =>
+                paths[i].last ? (
+                  <g key={`${line.key}-end`} className="line-end">
+                    <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={7} fill={line.color} opacity={0.18} />
+                    <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={3} fill={line.color} />
+                  </g>
+                ) : null,
+              )}
+          </g>
+        </g>
         {drag && (
           <rect x={Math.min(drag.start, drag.end)} width={Math.abs(drag.end - drag.start)} y={top} height={height - top - bottom} className="selection" />
         )}
@@ -392,65 +534,82 @@ export function Chart({
           <g className="crosshair">
             <rect x={x(hover)} width={bandWidth} y={top} height={height - top - bottom} className="hover-band" />
             <line x1={hoverX} x2={hoverX} y1={top} y2={height - bottom} />
-            {readout.map(row => (
-              <circle key={row.line.key} cx={hoverX} cy={y(row.value)} r={4} fill={row.line.color} />
-            ))}
+            {rows.map(row => row.value !== null && <circle key={row.line.key} cx={hoverX} cy={y(row.value)} r={4} fill={row.line.color} />)}
           </g>
         )}
       </svg>
 
-      {hover !== null && !drag && readout.length + forecastReadout.length + lonePlans.length + markerReadout.length > 0 && (
-        <div className="tooltip glass" ref={tip} style={{left: tipLeft}}>
-          <div className="tooltip-time">{cellLabel(hover, cellMs)}</div>
-          {[...readout]
-            .sort((a, b) => a.value - b.value)
-            .map(row => (
-              <div className="tooltip-row" key={row.line.key}>
-                <svg width="14" height="4" aria-hidden="true">
-                  <line x1="0" x2="14" y1="2" y2="2" stroke={row.line.color} strokeWidth="2" strokeDasharray={row.line.dash || undefined} />
+      {edgeMarker ? (
+        <Tooltip tip={tip} className="is-edge" style={{right: 0, bottom: `calc(100% - ${(edgeY + beyond.indexOf(edgeMarker) * edgeStep - 18) * scale}px)`}}>
+          <div className={`tooltip-marker ${edgeMarker.color ? '' : 'is-strong'}`} style={edgeMarker.color ? {color: edgeMarker.color} : undefined}>
+            {edgeMarker.label}
+          </div>
+          <div className="tooltip-time">{edgeMarker.time}</div>
+        </Tooltip>
+      ) : (
+        hover !== null &&
+        !drag &&
+        (rows.some(row => row.left !== null || row.plan !== null || row.forecast !== null) || markerReadout.length > 0) && (
+          <Tooltip tip={tip} className={narrow ? 'is-below' : ''} style={narrow ? {top: height * scale - lift} : {left: tipLeft, maxWidth: tipRoom}}>
+            <div className="tooltip-time">{cellLabel(hover, cellMs)}</div>
+            {rows.length > 0 && (
+              <div className={`tooltip-grid ${planned ? 'is-planned' : ''} ${foreseen ? 'is-forecast' : ''}`}>
+                <span />
+                <span />
+                <span className="tooltip-head">{t('chart.left')}</span>
+                {planned && (
+                  <>
+                    <span className="tooltip-head">{t('chart.plan')}</span>
+                    <span className="tooltip-head">{t('chart.gap')}</span>
+                  </>
+                )}
+                {foreseen && <span className="tooltip-head">{t('chart.forecast')}</span>}
+                {rows.map(row => (
+                  <div className="tooltip-row" key={row.line.key}>
+                    <svg width="14" height="4" aria-hidden="true">
+                      <line x1="0" x2="14" y1="2" y2="2" stroke={row.line.color} strokeWidth="2" strokeDasharray={row.line.dash || undefined} />
+                    </svg>
+                    <span className="tooltip-name">{row.line.name}</span>
+                    <strong>{row.left !== null && `${num(row.left)}%`}</strong>
+                    {planned && (
+                      <>
+                        <span className="tooltip-plan">{row.plan !== null && `${num(row.plan)}%`}</span>
+                        <span className={`tooltip-gap ${row.gap !== null ? gapTone(row.gap) : ''}`}>{row.gap !== null && gapText(row.gap)}</span>
+                      </>
+                    )}
+                    {foreseen && <span className="tooltip-forecast">{row.forecast !== null && `${num(row.forecast)}%`}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+            {rows.length > 0 && markerReadout.length > 0 && <div className="tooltip-sep" />}
+            {markerReadout.map(marker => (
+              <div className={`tooltip-mark ${marker.strong ? 'is-strong' : ''}`} key={marker.key}>
+                <svg width="14" height="10" aria-hidden="true">
+                  {marker.past ? (
+                    <path d={diamond(7, 5)} fill={marker.color} />
+                  ) : (
+                    <line x1="7" x2="7" y1="0" y2="10" stroke={marker.strong ? 'var(--accent)' : marker.color} strokeWidth="2" />
+                  )}
                 </svg>
-                <strong>{num(row.value)}%</strong>
-                <span>{row.line.name}</span>
-                {planOf(row.line.key) && <em className="tooltip-plan">{t('chart.planValue', {value: num(planOf(row.line.key)!.value)})}</em>}
+                <strong>{clock(marker.at)}</strong>
+                <span>{marker.label}</span>
+                {marker.detail && <small className="tooltip-detail">{marker.detail}</small>}
               </div>
             ))}
-          {forecastReadout.map(row => (
-            <div className="tooltip-row is-forecast" key={row.forecast.key}>
-              <svg width="14" height="4" aria-hidden="true">
-                <line x1="0" x2="14" y1="2" y2="2" stroke={row.forecast.color} strokeWidth="1.5" strokeDasharray={row.forecast.dash || undefined} />
-              </svg>
-              <span>{row.forecast.name}</span>
-              <em className="tooltip-plan tooltip-forecast">{t('chart.forecastValue', {value: num(row.value)})}</em>
-              {planOf(row.forecast.key) && <em className="tooltip-plan">{t('chart.planValue', {value: num(planOf(row.forecast.key)!.value)})}</em>}
-            </div>
-          ))}
-          {markerReadout.map(marker => (
-            <div className={`tooltip-row is-marker ${marker.strong ? 'is-strong' : ''}`} key={marker.key}>
-              <svg width="14" height="10" aria-hidden="true">
-                {marker.past ? (
-                  <path d={diamond(7, 5)} fill={marker.color} />
-                ) : (
-                  <line x1="7" x2="7" y1="0" y2="10" stroke={marker.strong ? 'var(--accent)' : marker.color} strokeWidth="2" />
-                )}
-              </svg>
-              <strong>{clock(marker.at)}</strong>
-              <span>{marker.label}</span>
-              {marker.detail && <small className="tooltip-detail">{marker.detail}</small>}
-            </div>
-          ))}
-          {lonePlans.length > 0 && <div className="tooltip-sep" />}
-          {lonePlans.map(row => (
-            <div className="tooltip-row is-plan" key={row.plan.key}>
-              <svg width="14" height="4" aria-hidden="true">
-                <line x1="0" x2="14" y1="2" y2="2" stroke={row.plan.color} strokeWidth="1.5" strokeDasharray="1 3" strokeLinecap="round" />
-              </svg>
-              <strong>{num(row.value)}%</strong>
-              <span>{row.plan.name}</span>
-            </div>
-          ))}
-        </div>
+          </Tooltip>
+        )
       )}
       {!lines.length && empty && <div className="chart-empty">{empty}</div>}
+    </div>
+  );
+}
+
+/** The chart's own tooltip, glass as the popovers are; it lies over the widgets below, under the sticky bars. */
+function Tooltip({tip, className, style, children}: {tip: RefObject<HTMLDivElement | null>; className: string; style: CSSProperties; children: ReactNode}) {
+  return (
+    <div className={`tooltip glass ${className}`} ref={tip} style={style}>
+      {children}
     </div>
   );
 }

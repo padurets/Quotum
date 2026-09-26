@@ -4,7 +4,7 @@ import type {LiveSession, SourceState} from '../lib/types';
 import {duration} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
 import {AGENTS, colorOf, columnShown, withColumn, withHidden, type Arrange} from '../lib/view';
-import {AGENT_WIDTHS, agentRows, agentsLayout, drawn, machinesOf, nextAgentsSort, sortedRows, visibleAgentsSort, type AgentColumn, type AgentRow} from '../lib/agents';
+import {AGENT_WIDTHS, agentRows, agentsLayout, drawn, folderOf, machinesOf, nextAgentsSort, sortedRows, visibleAgentsSort, type AgentColumn, type AgentRow} from '../lib/agents';
 import {setPrefs, usePrefs} from '../lib/prefs';
 import {t, useLocale, type Key} from '../i18n';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
@@ -22,6 +22,9 @@ function Mark({session}: {session: LiveSession}) {
 /** What a session is doing, as the legend names its mark. */
 const stateOf = (session: LiveSession) =>
   t(session.working ? 'agents.working' : session.origin === 'terminal' ? 'agents.idle' : 'agents.window');
+
+/** A cut name in full on hover: the project, and the folder on a line of its own. */
+const placeOf = (session: LiveSession) => [session.project, folderOf(session)].filter(Boolean).join('\n') || undefined;
 
 /** How long a session has run, short: a fresh one is "just now". */
 const since = (ms: number) => (ms < 60_000 ? t('agents.justNow') : duration(ms, true));
@@ -111,8 +114,9 @@ export function Agents({sessions, now, roomy = true}: {sessions: LiveSession[]; 
               <div className={`agents-row ${session.working ? 'is-working' : ''}`} key={i} title={stateOf(session)}>
                 <Mark session={session} />
                 <Origin origin={session.origin} />
-                <span className="agents-project">
-                  {session.project ?? t('agents.noProject')}
+                <span className="agents-project" title={placeOf(session)}>
+                  <span>{session.project ?? t('agents.noProject')}</span>
+                  {folderOf(session) && <small>{folderOf(session)}</small>}
                   <span className="sr-only">, {stateOf(session)}</span>
                 </span>
                 <span className="agents-age">{since(now - session.startedAt)}</span>
@@ -225,8 +229,9 @@ export const AgentsPanel = memo(function AgentsPanel({sources, arrange}: {source
               <div className="agents-compact-main">
                 <Mark session={row.session} />
                 {has('origin') && <Origin origin={row.session.origin} />}
-                <span className="agents-project" title={row.session.project ?? undefined}>
-                  {row.session.project ?? t('agents.noProject')}
+                <span className="agents-project" title={placeOf(row.session)}>
+                  <span>{row.session.project ?? t('agents.noProject')}</span>
+                  {folderOf(row.session) && <small>{folderOf(row.session)}</small>}
                   {!has('state') && <span className="sr-only">, {stateOf(row.session)}</span>}
                 </span>
                 {has('running') && <span className="agents-age">{since(now - row.session.startedAt)}</span>}
@@ -259,9 +264,10 @@ export const AgentsPanel = memo(function AgentsPanel({sources, arrange}: {source
             <tbody>
               {ordered.map((row, i) => (
                 <tr key={i} className={row.session.working ? 'is-working' : ''} style={color(row)}>
-                  <td title={row.session.project ?? undefined}>
+                  <td title={placeOf(row.session)}>
                     <Mark session={row.session} />
                     {row.session.project ?? t('agents.noProject')}
+                    {folderOf(row.session) && <small className="agents-folder">{folderOf(row.session)}</small>}
                     {!has('state') && <span className="sr-only">, {stateOf(row.session)}</span>}
                   </td>
                   {columns.map(column => (

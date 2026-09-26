@@ -143,7 +143,7 @@ impl Runner {
         let mut accounts: Vec<Option<(Option<String>, Option<SystemTime>)>> = vec![None; self.adapters.len()];
         let mut clock = Clock::new(now_ms());
         let mut watch = self.config.sessions().then(|| Watch {
-            activity: Activity::new(self.home.clone()),
+            activity: Activity::new(self.home.clone(), self.config.projects()),
             looked: None,
             reported: None,
         });
@@ -267,16 +267,14 @@ impl Runner {
                 } else {
                     (None, self.config.account_name(session.provider).map(str::to_string))
                 };
+                let (project, folder) = names(session.project, session.folder, self.config.projects());
                 Some(RunningSession {
                     provider: session.provider,
                     account,
                     account_name,
                     origin: session.origin.id(),
-                    // As long as a hub takes it (spec: text fields); the hub would cut it too.
-                    project: session
-                        .project
-                        .filter(|_| self.config.projects())
-                        .map(|name| name.chars().take(120).collect()),
+                    project,
+                    folder,
                     started_at: session.started_at,
                     last_worked_at: session.last_worked,
                     working: session.working == Some(true),
@@ -285,6 +283,19 @@ impl Runner {
             .collect();
         capped(sessions)
     }
+}
+
+/// The names a session is reported with: none when project names are turned off; its
+/// folder only where it is not its project. Each as long as a hub takes it (spec: text
+/// fields); the hub would cut it too.
+fn names(project: Option<String>, folder: Option<String>, allowed: bool) -> (Option<String>, Option<String>) {
+    if !allowed {
+        return (None, None);
+    }
+    let cut = |name: String| name.chars().take(120).collect::<String>();
+    let (project, folder) = (project.map(cut), folder.map(cut));
+    let folder = folder.filter(|folder| project.as_ref() != Some(folder));
+    (project, folder)
 }
 
 /// A hub takes at most this many sessions of a machine at once (spec: Reporting running agents).
@@ -338,6 +349,7 @@ mod tests {
             account_name: None,
             origin: "terminal",
             project: None,
+            folder: None,
             started_at,
             last_worked_at: None,
             working,
@@ -355,6 +367,18 @@ mod tests {
         assert_eq!(kept[6].last_worked_at, Some(290));
         assert_eq!(kept.last().map(|s| s.started_at), Some(54), "then the newest idle ones");
         assert_eq!(capped(vec![session(false, 1)]).len(), 1, "a short list as it is");
+    }
+
+    #[test]
+    fn a_session_is_reported_with_its_folder_only_where_that_is_not_its_project() {
+        let some = |name: &str| Some(name.to_string());
+        assert_eq!(names(some("quotum"), some("hub"), false), (None, None), "turned off");
+        assert_eq!(names(some("quotum"), some("quotum"), true), (some("quotum"), None));
+        assert_eq!(names(some("quotum"), some("hub"), true), (some("quotum"), some("hub")));
+        assert_eq!(names(None, some("scratch"), true), (None, some("scratch")), "a folder of no project");
+        let long = "й".repeat(130);
+        let cut = "й".repeat(120);
+        assert_eq!(names(some(&long), some(&format!("{long}-feat")), true), (Some(cut), None), "alike once cut");
     }
 
     #[test]
@@ -381,11 +405,13 @@ mod tests {
             account_name: None,
             origin: "terminal",
             project: None,
+            folder: None,
             started_at: 0,
             last_worked_at: None,
             working,
         };
-        let mut watch = Watch { activity: Activity::new(PathBuf::from("/nowhere")), looked: None, reported: None };
+        let mut watch =
+            Watch { activity: Activity::new(PathBuf::from("/nowhere"), true), looked: None, reported: None };
         assert!(watch.worth_sending(&[]), "the first, even empty: the hub may still hold an older one");
         watch.reported = Some((Instant::now(), vec![session(true)]));
         assert!(!watch.worth_sending(&[session(true)]));

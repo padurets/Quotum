@@ -386,13 +386,13 @@ test('history reads a period selected on the chart, up to a month, on a grid fin
   const nearly = await read(`from=${now - 3_600_000 + 1}&to=${now - 1_800_000 - 1}`);
   assert.deepEqual([nearly.body.since, nearly.body.to], [hour.body.since, hour.body.to], 'less than a cell apart: one answer');
   const week = await read(`from=${now - 7 * 86_400_000}&to=${now}`);
-  assert.equal(week.body.cellMs, 30 * 60_000, 'as dense as the fixed ranges');
+  assert.equal(week.body.cellMs, 30 * 60_000, 'as dense as the ranges ending now');
   const month = await read(`from=${now - 31 * 86_400_000 + 3_600_000}&to=${now}`);
   assert.equal(month.body.cellMs, 2 * 3_600_000, 'a day over a month keeps the grid of a month');
   const ahead = await read(`from=${now - 3_600_000}&to=${now + 86_400_000}`);
   assert.ok(ahead.body.to <= Date.now(), 'it ends now at the latest');
   const fixed = await read('range=24h');
-  assert.equal(fixed.body.to, fixed.body.now, 'a fixed range ends now');
+  assert.equal(fixed.body.to, fixed.body.now, 'a period of the list ends now');
   for (const query of [`from=${now - 600_000}&to=${now}`, `from=${now - 40 * 86_400_000}&to=${now}`, `from=${now - 100 * 86_400_000}&to=${now - 90 * 86_400_000}`, `from=${now - 3_600_000}`, 'from=abc&to=def']) {
     assert.equal((await read(query)).status, 400, query);
   }
@@ -443,14 +443,31 @@ test('agents report the coding agents running on their machines; the cards of th
   assert.deepEqual([answer.status, answer.body], [200, {accepted: 2}], 'a subscription the hub does not know is left out');
   const shown = async () => (await call('GET', '/api/overview', {as: 'alice'})).body.sources[0].sessions;
   const [first, second] = await shown();
-  assert.deepEqual([first.origin, first.project, first.working, first.device.name, first.startedAt], ['terminal', 'quotum', true, 'build-01', Date.parse(started)]);
+  assert.deepEqual([first.origin, first.project, first.folder, first.working, first.device.name, first.startedAt], ['terminal', 'quotum', null, true, 'build-01', Date.parse(started)]);
   assert.equal(second.lastWorkedAt, null, 'an older agent omits the date');
   assert.equal(second.origin, 'editor', 'without an account: the subscription this machine delivers');
+  assert.deepEqual(Object.keys(first).sort(), ['device', 'folder', 'lastWorkedAt', 'origin', 'project', 'startedAt', 'working'], 'nothing of how the hub tells sessions apart');
   assert.equal((await report([])).status, 200);
   assert.deepEqual(await shown(), [], 'an empty list: none runs');
-  const long = await report([{...codex, project: 'x'.repeat(300)}]);
-  assert.equal(long.body.accepted, 1, 'a long folder name is cut, not refused');
-  assert.equal((await shown())[0].project.length, 120);
+  const long = await report([{...codex, project: 'x'.repeat(300), folder: 'y'.repeat(300)}]);
+  assert.equal(long.body.accepted, 1, 'long names are cut, not refused');
+  assert.deepEqual([(await shown())[0].project, (await shown())[0].folder], ['x'.repeat(120), 'y'.repeat(120)]);
+  // Boards show the project, and the folder where the agent tells one; an older agent tells only the project.
+  await report([
+    {...codex, folder: 'quotum.feat-18', startedAt: iso(Date.now() - 4_000_000)},
+    {...codex, startedAt: iso(Date.now() - 3_000_000)},
+    {...codex, project: undefined, folder: 'scratch', startedAt: iso(Date.now() - 2_000_000)},
+    {...codex, project: undefined, startedAt: iso(Date.now() - 1_000_000)},
+  ]);
+  assert.deepEqual(
+    (await shown()).map((s: {project: string | null; folder: string | null}) => [s.project, s.folder]),
+    [
+      ['quotum', 'quotum.feat-18'],
+      ['quotum', null],
+      [null, 'scratch'],
+      [null, null],
+    ],
+  );
 
   const team = (await call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
   await person('bob', (await call('POST', `/api/boards/${team}/invites`, {as: 'alice'})).body.url.split('/invite/')[1]);
@@ -465,11 +482,44 @@ test('agents report the coding agents running on their machines; the cards of th
   assert.deepEqual([invalidTime.status, invalidTime.body], [400, {error: 'invalid_request', detail: 'lastWorkedAt'}]);
   const wrong = await report([{...codex, origin: 'browser'}]);
   assert.deepEqual([wrong.status, wrong.body], [400, {error: 'invalid_request', detail: 'origin'}]);
-  // As many as a list may hold, every name at its longest and in the widest script, fit in one request.
-  const longest = {...guessed, provider: 'antigravity', accountName: '🚀'.repeat(120), project: '🚀'.repeat(120)};
-  const full = await report(Array.from({length: 200}, () => longest));
-  assert.equal(full.status, 200, JSON.stringify(full.body));
+  // As many as a list may hold, every name at its longest, in the widest script or escaped in JSON, fit in one request.
+  for (const char of ['🚀', '\u0001']) {
+    const name = char.repeat(120);
+    const longest = {...guessed, provider: 'antigravity', accountName: name, project: name, folder: name};
+    const full = await call('POST', '/v1/sessions', {
+      body: {version: 1, agent: 'quotum/0.3.0', machine: {...machine('alices-laptop-0123456789'), name}, sentAt: iso(Date.now()), sessions: Array.from({length: 200}, () => longest)},
+      headers,
+    });
+    assert.equal(full.status, 200, JSON.stringify(full.body));
+  }
   assert.equal((await call('POST', '/v1/sessions', {body: {version: 1}})).status, 401);
+});
+
+test('every period ending now is drawn on the finest cell that keeps it within about 360 cells, as a range as long moved back is', async () => {
+  const {call, person} = await hub();
+  await person('alice');
+  const minute = 60_000;
+  const cells: Record<string, number> = {'1h': 1, '3h': 1, '6h': 1, '12h': 5, '24h': 5, '3d': 15, '7d': 30, '14d': 60, '30d': 120};
+  assert.deepEqual(Object.keys(cells), Object.keys(config.history.ranges), 'every period the hub offers');
+  for (const [range, cell] of Object.entries(cells)) {
+    const live = await call('GET', `/api/history?range=${range}`, {as: 'alice'});
+    const durationMs = config.history.ranges[range];
+    assert.deepEqual([live.status, live.body.cellMs, live.body.to - live.body.since], [200, cell * minute, durationMs], range);
+    assert.ok(durationMs / live.body.cellMs <= 378, range);
+    const now = Date.now();
+    const moved = await call('GET', `/api/history?from=${now - durationMs * 1.5}&to=${now - durationMs / 2}`, {as: 'alice'});
+    assert.equal(moved.body.cellMs, live.body.cellMs, `${range} moved back`);
+  }
+  for (const range of ['2h', '1y', 'toString']) assert.equal((await call('GET', `/api/history?range=${range}`, {as: 'alice'})).status, 400, range);
+});
+
+test('past resets for everyone are listed over the history kept, not only the last month', async () => {
+  const {call, store} = await hub();
+  const now = Date.now();
+  const old = {at: now - 40 * 86_400_000, url: 'https://example.com/old', text: 'A reset for everyone'};
+  store.announce('codex', old);
+  store.announce('codex', {...old, at: now - 100 * 86_400_000});
+  assert.deepEqual((await call('GET', '/api/resets')).body.past, {codex: [old]});
 });
 
 test('changes from another origin, unknown hosts and other methods are refused', async () => {

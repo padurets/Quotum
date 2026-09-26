@@ -84,9 +84,10 @@ Claude max    5 hours               98%  in 4h 27m
 Antigravity   Gemini 5 hours       100%  in 4h 59m
               Gemini weekly         96%  in 1d 3h
 
-running here: 2 · 1 working
-Claude        quotum              working  started 3h 39m ago
-Codex         api                 idle     started 25m ago · editor
+running here: 3 · 2 working
+Claude        quotum               working  started 3h 39m ago
+Claude        quotum · quotum.feat-18 working  started 52m ago
+Codex         api                  idle     started 25m ago · editor
 ```
 
 ## What the dashboard shows
@@ -96,23 +97,24 @@ Codex         api                 idle     started 25m ago · editor
   to be right now. The dot on the provider's logo says whether the numbers are fresh.
 - **Which agents run on it, and which of them work.** Under the limits, a mark per
   Claude Code, Codex or Antigravity session spending the subscription, grouped by
-  machine: filled while it works, outlined while idle; its project and how long it runs
-  in the tooltip. Terminals, editors and the Codex app alike.
+  machine: filled while it works, outlined while idle; its project, its folder (a
+  worktree, a folder inside the repository) and how long it runs in the tooltip. Terminals, editors and the Codex app alike.
 - **Free resets.** When a provider grants resets of the limits (Codex does now and
   then), the card shows how many you have and until when.
 - **A weekly spending plan.** By default you spend 30 / 25 / 15 / 15 / 10 / 5% on the
   six days after the reset and nothing on the seventh. Each subscription can have its
   own plan: a day at 0 is a day you don't spend, and it can be any day of the week.
-- **A chart of the weekly or the 5-hour windows** over 24 hours, 7 or 30 days. Ahead of
-  now it draws the plan, where each window is going at its pace and the next resets, as
-  far as you choose; behind, it marks
-  when limits came back early and when free resets were granted. Drag across it to
-  zoom into a burst of work (on a phone, hold a finger on it first).
+- **A chart of the weekly or the 5-hour windows** over the last hour up to the last 30
+  days. Ahead of now it draws the plan, where each window is going at its pace and the
+  next resets, as far as you choose; behind, it marks when limits came back early and
+  when free resets were granted. Drag across it to zoom into a burst of work (on a
+  phone, hold a finger on it first); ‹ and ›, or a swipe sideways, move it back and
+  forth through time by half its length.
 - **A table with a forecast:** what the period spent and, at each window's pace since
   it started, whether it runs out before its reset (or before your plan ends, following
   the plan's shape) and when, or roughly how much will be left. The forecast is the
-  same whatever period you look at. Over a range dragged on the chart it shows what that range cost: what
-  was left at its start and end, what it spent and how fast.
+  same whatever period you look at. Over a range dragged on the chart it shows what
+  that range cost: what was left at its start and end, what it spent and how fast.
 - **Reset announcements** from the community trackers [Codex Resets](https://codex-resets.com)
   and [Claude Resets](https://claude-resets.com), with a link to the source. You
   can turn them off.
@@ -145,9 +147,13 @@ day, not a script thrown together over a weekend. In practice that meant:
   a one-way hash of each account id (so the hub can tell two machines share one
   account), the machine's name and random id, the short message of a client that
   failed, and which coding agents run on the machine: working or idle, since when, and
-  the name of their project folder (`sessions = false` and `projects = false` turn that
-  off). A board shows them, with the name of the machine they run on, to its members
-  only where the person whose agents they are shows that subscription. The full list is in the [spec](spec/ingest-v1.md#privacy).
+  the names of their project (the git repository their folder is in, else the folder)
+  and folder (`sessions = false` and `projects = false` turn that off). A board shows
+  them, with the name of the machine they run on, to its members only where the person
+  whose agents they are shows that subscription, each project under the name that person
+  gave it. The hub keeps when each agent worked,
+  with its machine, project and folder names, for 90 days, and the names you give your
+  projects until you undo them; you see and correct your projects in *My machines*. The full list is in the [spec](spec/ingest-v1.md#privacy).
 - **The numbers mean what they say.** Only a real increase inside one reset window
   counts as spending. Resets, corrections and gaps in the data never show up as
   consumption. The agent says when its next measurement is due, so a sparse series isn't
@@ -331,7 +337,7 @@ Everything is optional. On Linux the file is `~/.config/quotum/config.toml`;
 interval = 120          # seconds between two measurements of one client, 60 to 86400
 eco = true              # measure less often while nothing changes
 sessions = true         # tell the hub which coding agents run here, working or idle
-projects = true         # with the names of their project folders
+projects = true         # with the names of their projects and folders
 
 [machine]
 name = "work-laptop"    # the name the machine reports (default: host name); renaming it on the hub wins

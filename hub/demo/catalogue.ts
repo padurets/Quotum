@@ -77,8 +77,8 @@ const fiveHours = (offset: number, perHour: number, work: Work = waveWork(ALWAYS
 const LONG_PROJECT =
   'platform-monorepo/services/billing-reconciliation-worker/migrations/2026-09-backfill-invoices-with-missing-tax-regions-and-currency-rounding-fixes-for-eu';
 
-const agents = (machine: string, list: [Agent['origin'], string | null, number, Wave?][]): Agent[] =>
-  list.map(([origin, project, since, works]) => ({machine, origin, project, since, works}));
+const agents = (machine: string, list: [Agent['origin'], string | null, number, Wave?, string?][]): Agent[] =>
+  list.map(([origin, project, since, works, folder]) => ({machine, origin, project, folder, since, works}));
 
 // ---------- reset scenes ----------
 
@@ -113,6 +113,7 @@ export const SCENES: Scene[] = [
       'Codex cards: an accent mark "in 25h" on the left of the tray (the time is rounded down), not the reset of four hours ago; its panel heads with "Reset in 25h" and the date and time under it, then why it matters, the tracker\'s text and "Data from Codex Resets"',
       'Claude cards: a quiet mark, an arrow round a tick, not the change of limits of yesterday; its panel heads with "Reset happened", a "Max" tag beside it and the time under it',
       'Both resets for everyone are marked on the charts',
+      'On 24 hours with the plan shown, the Codex reset is pointed at from the right edge ("… in 1d →"): pointing at it or tapping it tells its date and time',
     ],
   },
   {
@@ -275,10 +276,12 @@ export const SCENES: Scene[] = [
 
 // ---------- agents, and the work they do on their cards ----------
 
+// Ana's quotum, as the agent tells it: on the laptop in its main folder, a worktree and a
+// folder inside it; on the build server a clone under another name.
 const MAX_AGENTS: Agent[] = [
   ...agents('laptop', [
-    ['terminal', 'api-gateway', -3 * HOUR, shifts(0)],
-    ['terminal', 'billing', -70 * MIN, shifts(4)],
+    ['terminal', 'quotum', -3 * HOUR, shifts(0)],
+    ['terminal', 'quotum', -70 * MIN, shifts(4), 'quotum.feat-18-desktop-app'],
     ['terminal', 'infra', -2 * HOUR],
     ['editor', 'mobile-app', -5 * HOUR],
     ['app', null, -40 * MIN],
@@ -286,7 +289,7 @@ const MAX_AGENTS: Agent[] = [
   ]),
   ...agents('build-01', [
     ['terminal', 'docs-site', -4 * HOUR, shifts(2)],
-    ['terminal', 'search-indexer', -90 * MIN, shifts(10)],
+    ['terminal', 'Quotum', -90 * MIN, shifts(10)],
     ['terminal', 'nightly-release', -6 * HOUR],
     ['editor', 'design-tokens-and-theme-migration-for-web', -30 * MIN],
   ]),
@@ -297,8 +300,8 @@ const PRO_AGENTS: Agent[] = [
   {machine: 'laptop', origin: 'terminal', project: 'checkout', since: -2 * HOUR, until: 10 * MIN, works: shifts(1)},
   {machine: 'laptop', origin: 'terminal', project: 'hotfix-4821', since: 5 * MIN, works: ALWAYS},
   ...agents('laptop', [
-    ['terminal', 'ledger', -3 * HOUR, shifts(5)],
-    ['terminal', 'payments-api', -50 * MIN, shifts(9)],
+    ['terminal', null, -3 * HOUR, shifts(5)],
+    ['terminal', 'quotum', -50 * MIN, shifts(9), 'hub'],
     ['editor', 'admin-console', -4 * HOUR],
     ['app', 'support-bot', -1 * HOUR],
     ['terminal', 'notifications', -15 * MIN, {period: 4 * MIN, on: 2 * MIN, phase: 0}],
@@ -313,7 +316,7 @@ const PRO_AGENTS: Agent[] = [
 ];
 
 /** One long job, at work all the time: the five hours run ahead of an even pace. */
-const AHEAD_AGENTS: Agent[] = agents('build-01', [['terminal', 'data-pipeline', -90 * MIN, ALWAYS]]);
+const AHEAD_AGENTS: Agent[] = agents('build-01', [['terminal', 'billing', -90 * MIN, ALWAYS]]);
 
 const IOS_AGENTS: Agent[] = agents('mac-mini', [
   ['terminal', 'ios-app', -30 * MIN, shifts(0)],
@@ -354,7 +357,40 @@ const all: DemoSet = {
   scene: 'announced',
   entries: [
     // People and boards. Ana is the first person: her personal board holds almost everything.
-    {kind: 'person', id: 'ana', name: 'Ana', agents: true, expect: [{state: 'widgets'}, {weeklySeries: 10}], look: ['The table of agents lists many rows, by activity']},
+    {
+      kind: 'person',
+      id: 'ana',
+      name: 'Ana',
+      agents: true,
+      projects: {'docs-site': 'docs'},
+      // Each group has a working agent that works within the first twenty minutes.
+      expect: [
+        {state: 'widgets'},
+        {weeklySeries: 10},
+        {project: 'quotum', machines: ['laptop'], reported: [], from: 20 * MIN},
+        {project: 'hub', absent: true, from: 20 * MIN},
+        {project: 'quotum.feat-18-desktop-app', absent: true, from: 20 * MIN},
+        {project: 'Quotum', machines: ['Build server'], from: 20 * MIN},
+        {project: 'billing', machines: ['Build server'], from: 20 * MIN},
+        {project: 'docs', machines: ['Build server'], reported: ['docs-site'], from: 20 * MIN},
+        {project: null, from: 20 * MIN},
+        // The table of agents: the project, and under it the folder where that is another,
+        // the corrected name too (docs-site is where docs works).
+        {agentsOf: 'quotum', folders: [null, 'hub', 'quotum.feat-18-desktop-app']},
+        {agentsOf: 'docs', folders: ['docs-site']},
+      ],
+      look: [
+        'The table of agents lists many rows, by activity',
+        'The chart\'s tooltip has a row for every line in the legend\'s order, with what is left, the plan and the gap in columns; on a phone it stays whole on the screen',
+        'My machines → Projects: quotum once, on the laptop, though three agents work in three folders (the tray and the table show quotum three times, with hub and quotum.feat-18-desktop-app under two of them)',
+        'Renamed or merged in My machines, a project is shown under its new name in the tray and the table too',
+        'Merge Quotum into quotum: one row, with both machines and "from: Quotum"; give Quotum back its name: as it was',
+        'docs gathers docs-site, and gives it back',
+        'Escape in the merge menu closes only the menu',
+        'The merge menu with many selected, at the bottom of the dialog: its glass is whole',
+        'My machines → Projects shows no agent time',
+      ],
+    },
     {kind: 'person', id: 'ben', name: 'Ben', agents: true, expect: [{state: 'widgets'}, {rows: 1}]},
     {kind: 'person', id: 'cleo', name: 'Cleo', expect: [{state: 'onboarding'}], look: ['Cleo has no machines: her board asks her to connect one']},
     {
@@ -401,7 +437,8 @@ const all: DemoSet = {
       provider: 'claude',
       plan: 'Claude Max',
       machines: ['laptop', 'build-01'],
-      history: 14 * DAY,
+      // The longest history of the demo: 30 days are full, and ‹ goes back half a month more.
+      history: 45 * DAY,
       windows: [
         fiveHours(20 * MIN, 25, agentsWork(MAX_AGENTS, shifts(0))),
         weekly({since: -1.5 * DAY, use: alongPlan(0)}),
@@ -419,9 +456,11 @@ const all: DemoSet = {
         {window: 'session', name: '5 hours', note: null},
         {forecast: 'weekly', outlook: 'onPacePlan'},
         {forecast: 'weekly:fable', outlook: 'leftPlan', plan: 'behind'},
+        {reachesBack: 45},
       ],
       look: [
         'Its reset news is a mark on the left of the tray; the Antigravity card in its row has none',
+        'On 30 days the chart is full; ‹ goes back twice, the second time to where history starts, and is off there',
         'Ten marks in the tray, in two groups (two machines); the panel names working, waiting and open-window agents',
         'The long project name ends in an ellipsis; the agent without a project says so',
       ],

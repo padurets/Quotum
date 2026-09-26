@@ -45,7 +45,10 @@ export type LiveSession = {
   device: {id: string; name: string};
   /** A terminal; an editor or the provider's app, which run one client per window. */
   origin: 'terminal' | 'editor' | 'app';
+  /** Its project, as its person named it. */
   project: string | null;
+  /** The folder it works in, where that is not its project (a worktree, a folder inside the repository). */
+  folder: string | null;
   startedAt: number;
   lastWorkedAt: number | null;
   working: boolean;
@@ -110,7 +113,7 @@ export type HistorySeries = {
 export type History = {
   /** Set by the client: which board the history was read for. */
   board?: string;
-  /** '24h', '7d', '30d', or `from-to` of a span selected on the chart. */
+  /** A period ending now ('1h' … '30d', lib/periods.ts), or `from-to` of a span selected on the chart. */
   range: string;
   now: number;
   since: number;
