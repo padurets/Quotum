@@ -180,10 +180,11 @@ body.is-resizing, body.is-resizing * { cursor: ew-resize !important; user-select
 /*
  * The dot's tooltip, one bubble everywhere, above the logo where the pointer covers none of
  * it: under the pointer after a moment on a desktop,
- * for a while after a tap on a touch screen (SourceCard).
+ * for a while after a tap on a touch screen (SourceCard). It passes under the sticky bars,
+ * like the card it belongs to, rather than over the board's navigation.
  */
 .dot-tip {
-  position: absolute; bottom: calc(100% + 8px); left: -6px; z-index: 20; width: max-content; max-width: min(260px, calc(100vw - 48px)); padding: 6px 10px;
+  position: absolute; bottom: calc(100% + 8px); left: -6px; z-index: 4; width: max-content; max-width: min(260px, calc(100vw - 48px)); padding: 6px 10px;
   border-radius: 9px; font-size: 12.5px; line-height: 1.35; color: var(--text); pointer-events: none;
   opacity: 0; visibility: hidden; transition: opacity .12s, visibility .12s;
 }
