@@ -57,7 +57,7 @@ test('a gap reads with its sign, and one ahead of the plan by 3 or more is marke
 
 test('ahead of now a line reads where its pace leads, beside its plan, until it runs out', () => {
   const lines = [line('weekly', [[now - 5 * minute, 40, 0]]), line('other', [[now - 5 * minute, 70, 0]])];
-  const forecast: ForecastLine = {key: 'weekly', name: 'Weekly', color: '', dash: '', points: [[now, 40], [now + 40 * minute, 0]], at: now + 40 * minute, beyond: null};
+  const forecast: ForecastLine = {key: 'weekly', name: 'Weekly', color: '', dash: '', points: [[now, 40], [now + 40 * minute, 0]], at: now + 40 * minute};
   const ahead = now + 10 * minute;
   const {rows, foreseen, planned} = readout(lines, [plan(['weekly'], 50)].map(p => ({...p, runs: [[[now - 60 * minute, 50], [now + 60 * minute, 50]]]})), ahead, cellMs, now, now + 60 * minute, [forecast]);
   assert.equal(foreseen, true);

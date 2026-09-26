@@ -2,7 +2,7 @@ import {useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSPr
 import {clock, countdown, day, num, shortDay, stamp} from '../lib/format';
 import {t} from '../i18n';
 import type {Line} from '../lib/lines';
-import {hubNow} from '../lib/api';
+import {hubNow, MINUTE, useNow} from '../lib/api';
 import {gapText, gapTone, readout as readCell, valueAt, type ForecastLine, type PlanLine} from '../lib/readout';
 import {draggedRange, type TimeRange} from '../lib/timeRange';
 import {SWIPE, swiped} from '../lib/swipe';
@@ -22,8 +22,17 @@ const diamond = (x: number, y: number, r = 4) => `M${x},${y - r}l${r},${r}l${-r}
 /** How wide an announcement's label is taken to be, and how near an edge a value hides under it (percent). */
 const LABEL_WIDTH = 220;
 const LABEL_BAND = 15;
-/** How far apart labels stacked at the right edge stand. */
+/** How far apart labels stacked at the right edge stand, and how wide a character of theirs is taken to be. */
 const LABEL_STEP = 22;
+const LABEL_CHAR = 6.5;
+
+/** A text cut to `chars` characters by shortening `name` in it, which it holds once. */
+export function fitName(text: (name: string) => string, name: string, chars: number) {
+  const whole = text(name);
+  if (whole.length <= chars) return whole;
+  const keep = name.length - (whole.length - chars) - 1;
+  return text(keep > 0 ? `${name.slice(0, keep).trimEnd()}…` : '…');
+}
 
 /**
  * A label on the chart on a backing sized to its text, so no line under it gets in the way.
@@ -226,12 +235,19 @@ export function Chart({
 
   const {rows, planned, foreseen} = hover === null ? {rows: [], planned: false, foreseen: false} : readCell(lines, plans, hover, cellMs, now, to, forecasts);
   const markerReadout = hover === null ? [] : markers.filter(m => m.at >= hover && m.at < hover + cellMs);
-  // Past the right edge: an announcement, then where windows run out, each said there.
+  // Past the right edge: an announcement, then where windows run out, each said there,
+  // how soon by the page's clock as the table says it, a series' name cut to the plot.
+  const pageNow = useNow(MINUTE);
+  const chars = Math.floor((width - left - right - 12) / LABEL_CHAR);
   const beyond = [
     ...markers
       .filter(m => m.strong && !m.past && m.at > to)
-      .map(m => ({key: m.key, label: m.label, time: stamp(m.at), text: t('chart.ahead', {label: m.label, time: countdown(m.at - now)}), color: undefined})),
-    ...forecasts.flatMap(f => (f.beyond && f.at !== null ? [{key: `forecast-${f.key}`, label: f.name, time: t('forecast.runsOutAt', {time: stamp(f.at)}), text: f.beyond, color: f.color}] : [])),
+      .map(m => ({key: m.key, label: m.label, time: stamp(m.at), text: t('chart.ahead', {label: m.label, time: countdown(m.at - pageNow)}), color: undefined})),
+    ...forecasts.flatMap(f =>
+      f.at !== null && f.at > to
+        ? [{key: `forecast-${f.key}`, label: f.name, time: t('forecast.runsOutAt', {time: stamp(f.at)}), text: fitName(name => t('chart.runsOut', {label: name, time: countdown(f.at! - pageNow)}), f.name, chars), color: f.color}]
+        : [],
+    ),
   ];
   /** A label past the right edge pointed at or tapped: the tooltip tells its time instead of the cell's values. */
   const [edge, setEdge] = useState<{key: string; tapped: boolean} | null>(null);
@@ -265,37 +281,46 @@ export function Chart({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [from, to, cellMs]);
   // A label hides what runs under it: it stands at the bottom of the plot, or at the top
-  // when more of the lines run near the bottom there (a limit about to run out, measured
-  // or foreseen).
+  // when more of the lines run near the bottom there (a limit about to run out).
   const labelY = (anchor: number, end: boolean) => {
     const [a, b] = (end ? [anchor - LABEL_WIDTH, anchor] : [anchor, anchor + LABEL_WIDTH]).map(timeAt);
     let low = 0;
     let high = 0;
-    const count = (value: number) => {
-      if (value < LABEL_BAND) low++;
-      else if (value > 100 - LABEL_BAND) high++;
-    };
     for (const line of lines) {
-      for (const [at, value] of line.points) if (at >= a && at <= b) count(value);
-    }
-    // A forecast has a few corners only: it is read across the label.
-    for (const forecast of forecasts) {
-      for (const at of [a, (a + b) / 2, b]) {
-        const value = valueAt([forecast.points], at);
-        if (value !== undefined) count(value);
+      for (const [at, value] of line.points) {
+        if (at < a || at > b) continue;
+        if (value < LABEL_BAND) low++;
+        else if (value > 100 - LABEL_BAND) high++;
       }
     }
     return low > high ? top + 18 : height - bottom - 8;
   };
-  // Announcements inside the chart close to its right edge take their place in the stack
-  // there, so a label past the edge never lies over them.
+  // With labels past the right edge, an announcement inside the chart takes the first
+  // place in their stack: a row of its own, so none lies over it, however wide they are.
   const announced = markers.filter(m => m.strong && !m.past && m.at <= to);
-  const byEdge = (m: Marker) => x(m.at) > width - right - LABEL_WIDTH;
-  const stack = [...announced.filter(byEdge).map(m => m.key), ...beyond.map(label => label.key)];
-  const edgeY = stack.length ? labelY(width - right, true) : 0;
+  const stack = beyond.length ? [...announced.map(m => m.key), ...beyond.map(label => label.key)] : [];
+  // The stack stands at the top or the bottom of the plot, where it hides less of what
+  // runs under it by the edge: the lines measured, planned and foreseen.
+  const stackTop = (() => {
+    if (!stack.length) return false;
+    const band = ((stack.length * LABEL_STEP + 6) / (height - top - bottom)) * 100;
+    const [a, b] = [width - right - LABEL_WIDTH, width - right].map(timeAt);
+    let low = 0;
+    let high = 0;
+    const count = (value: number | undefined) => {
+      if (value === undefined) return;
+      if (value < band) low++;
+      else if (value > 100 - band) high++;
+    };
+    for (const line of lines) for (const [at, value] of line.points) if (at >= a && at <= b) count(value);
+    const across = [0, 0.25, 0.5, 0.75, 1].map(share => a + (b - a) * share);
+    for (const forecast of forecasts) for (const at of across) count(valueAt([forecast.points], at));
+    for (const plan of plans) for (const at of across) count(valueAt(plan.runs, at));
+    return high < low;
+  })();
   // Stacked from the first one away from the edge of the plot it stands by.
-  const edgeStep = edgeY < height / 2 ? LABEL_STEP : -LABEL_STEP;
-  const stackY = (key: string) => edgeY + stack.indexOf(key) * edgeStep;
+  const edgeY = stackTop ? top + 18 : height - bottom - 8;
+  const stackY = (key: string) => edgeY + stack.indexOf(key) * (stackTop ? LABEL_STEP : -LABEL_STEP);
   const move = (event: PointerEvent<SVGSVGElement>) => {
     const px = toChart(event);
     pointer.current = px;
@@ -510,7 +535,7 @@ export function Chart({
               const nearRight = mx > width - right - 150;
               const lx = nearRight ? mx - 6 : mx + 6;
               return (
-                <MarkerLabel key={marker.key} x={lx} y={byEdge(marker) ? stackY(marker.key) : labelY(lx, nearRight)} end={nearRight}>
+                <MarkerLabel key={marker.key} x={lx} y={stack.includes(marker.key) ? stackY(marker.key) : labelY(lx, nearRight)} end={nearRight}>
                   {marker.label}
                 </MarkerLabel>
               );

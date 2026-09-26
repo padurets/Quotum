@@ -97,6 +97,8 @@ test('the forecast counts from the measurement: the moment it runs out stays, an
   // 30 hours later that is 26 hours of 54, under half.
   const half = start + 84 * HOUR;
   assert.equal(outlook(week(40), half, half, null).tone, 'v-warn');
+  // 16 hours on, 40 hours to zero of 68 to the reset: still warn, judged against the time left from now.
+  assert.equal(outlook(week(40), half, half + 16 * HOUR, null).tone, 'v-warn');
   assert.equal(outlook(week(40), half, half + 30 * HOUR, null).tone, 'v-crit');
 });
 

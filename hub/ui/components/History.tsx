@@ -1,7 +1,7 @@
 import {memo, useMemo} from 'react';
 import {MINUTE, useNow} from '../lib/api';
 import type {History as HistoryData, Overview} from '../lib/types';
-import {countdown, num} from '../lib/format';
+import {num} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
 import {planAt, started, weeklyPlanLine} from '../lib/plan';
 import {forecastLine, outlook} from '../lib/forecast';
@@ -210,11 +210,9 @@ export const History = memo(function History({
         ? []
         : ahead.flatMap(({line, live, measuredAt, weekly}) => {
             const drawn = forecastLine(live, measuredAt, now, weekly, from, to);
-            if (!drawn?.points.length) return [];
-            const beyond = drawn.at !== null && drawn.at > to ? t('chart.runsOut', {label: line.name, time: countdown(drawn.at - now)}) : null;
-            return [{key: line.key, name: line.name, color: line.color, dash: line.dash, points: drawn.points, at: drawn.at, beyond}];
+            return drawn?.points.length ? [{key: line.key, name: line.name, color: line.color, dash: line.dash, points: drawn.points, at: drawn.at}] : [];
           }),
-    [ahead, forecastShown, now, from, to, locale],
+    [ahead, forecastShown, now, from, to],
   );
 
   return (

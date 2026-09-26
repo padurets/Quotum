@@ -461,7 +461,7 @@ const all: DemoSet = {
       ],
       look: [
         'Its reset news is a mark on the left of the tray; the Antigravity card in its row has none',
-        'Its weekly forecast line bends where the plan\'s days end, beside the dotted plan',
+        'Its Fable forecast line bends where the plan\'s days end, above the dotted plan it shares with the weekly window, whose own forecast lies on the plan',
         'On 30 days the chart is full; ‹ goes back twice, the second time to where history starts, and is off there',
         'Ten marks in the tray, in two groups (two machines); the panel names working, waiting and open-window agents',
         'The long project name ends in an ellipsis; the agent without a project says so',

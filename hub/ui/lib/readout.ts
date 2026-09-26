@@ -6,10 +6,10 @@ export type PlanLine = {key: string; lines: string[]; color: string; runs: [numb
 
 /**
  * Where a window's pace leads, drawn from its last value in its line's colour and dash;
- * `key` is its line's. `at` is where it runs out when the table says it does, and
- * `beyond` says so at the right edge when that is past it.
+ * `key` and `name` are its line's. `at` is where it runs out when the table says it does:
+ * past the right edge, the chart says so there.
  */
-export type ForecastLine = {key: string; name: string; color: string; dash: string; points: [number, number][]; at: number | null; beyond: string | null};
+export type ForecastLine = {key: string; name: string; color: string; dash: string; points: [number, number][]; at: number | null};
 
 /** Value of a piecewise-linear run at time `at`, or undefined outside it. */
 export function valueAt(runs: [number, number][][], at: number) {
