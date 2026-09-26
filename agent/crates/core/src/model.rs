@@ -459,7 +459,7 @@ mod tests {
         };
         snapshot.tidy();
         let expiring = snapshot.resets.unwrap().expiring;
-        assert_eq!(expiring.len(), EXPIRING_LIMIT);
+        assert_eq!(expiring.len(), 50, "the hub's limit, which the constant must not outgrow");
         assert_eq!(expiring[0].expires_at, Some(0), "the soonest are kept");
     }
 
