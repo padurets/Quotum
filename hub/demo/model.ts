@@ -218,6 +218,8 @@ export type CardCheck = Span & {board?: string} & (
     | {forecast: string; outlook?: Outlook['key']; tone?: 'v-warn' | 'v-crit'; spent?: Spent['key']; plan?: 'ahead' | 'behind' | 'even' | 'none'}
     /** Something the chart marks on the card's source within the last 24 hours. */
     | {event: 'early_reset' | 'resets_granted'}
+    /** How many whole days back ‹ takes the chart from 30 days, step by step, on the card's board: where the history starts. */
+    | {reachesBack: number}
   );
 
 /**

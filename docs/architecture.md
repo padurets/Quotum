@@ -233,14 +233,15 @@ them), kept for 90 days.
   Resets, corrections by the provider and gaps (a sample arriving later than the
   previous one promised) are excluded. An idle rolling window whose reset time drifts
   forward is not a reset.
-- **The chart** puts every series on one time grid (5 minutes for a day, 30 minutes
-  for a week, 2 hours for a month) and shows the lowest value seen in each cell, so
-  hovering reads every series at once and a short hiccup doesn't break a line. A time
-  range dragged across the chart, from 15 minutes to a month, gets the finest cell that
-  keeps it within about 360 cells (a minute for an hour, as dense as the fixed periods
-  for longer ones; 5% over is allowed, so a day over a month keeps the month's grid). Its
-  edges go out to whole cells, so the chart and the table may cover up to a cell beyond
-  the selection, and ranges that differ by less than a cell share one answer. Where
+- **The chart** puts every series on one time grid and shows the lowest value seen in
+  each cell, so hovering reads every series at once and a short hiccup doesn't break a
+  line. It shows a period ending now, from an hour to 30 days (`config.history.ranges`),
+  or a time range in the past, dragged across it or stepped back to, from 15 minutes to
+  a month. Either gets the finest cell that keeps it within about 360 cells: a minute up
+  to 6 hours, 5 minutes for a day, 30 minutes for a week, 2 hours for a month (5% over is
+  allowed, so a day over a month keeps the month's grid), so a period moved back keeps
+  its grid. A range's edges go out to whole cells, so the chart and the table may cover
+  up to a cell beyond it, and ranges that differ by less than a cell share one answer. Where
   measurements come less often than cells, hovering reads the last value before. Putting a month together takes a busy board a good part of a second, so
   such an answer is reused for a quarter of its cell after the data changed, and says
   when a newer one will be ready for the page to ask again; a source joining or leaving
@@ -260,7 +261,8 @@ them), kept for 90 days.
   source within 15 minutes are one event). Free resets granted are recorded when a
   measurement reports more of them than the one before. Resets for everyone that the
   community trackers report are kept as the hub sees them (the trackers only tell the
-  latest one), so the chart marks every one of the period.
+  latest one), and listed for as long as samples are kept, so the chart marks every
+  one of its period, however far back it is moved.
 
 ## People, boards, devices
 
@@ -338,6 +340,15 @@ horizon, lines switched off in the legend, reset announcements, the lock on the 
 the agents table's sort order, the chosen board and language) stays in their browser.
 A time range selected on the chart becomes the analytics' period; it lives in the page's
 address (`?from=&to=`), so a reload keeps it, Back undoes it and a link to it can be shared on the board.
+‹ and › beside the period, a swipe sideways on a touchpad or Shift with the wheel move the
+analytics by half their length, one step a gesture: back, to a range in the past held in
+the address like a dragged one, no further than the history kept; forward, up to now,
+where the chosen period comes back. The chart moves to the new period at once, drawing
+the answer it has until the next one comes; a run of quick steps asks the hub only for
+where it stops, and the latest few ranges read whole are kept on the page for each board,
+so stepping back and forth over them asks nothing. They are kept for the board's sources
+as they were: a source added to the board has a range read again. Measurements an agent
+delivers late, into a range already kept, show after a reload.
 
 Both agent lists put working sessions first, then the ones that worked most recently,
 then the newest. The card's panel keeps machine groups, ordered by each one's most

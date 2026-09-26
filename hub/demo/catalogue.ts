@@ -113,6 +113,7 @@ export const SCENES: Scene[] = [
       'Codex cards: an accent mark "in 25h" on the left of the tray (the time is rounded down), not the reset of four hours ago; its panel heads with "Reset in 25h" and the date and time under it, then why it matters, the tracker\'s text and "Data from Codex Resets"',
       'Claude cards: a quiet mark, an arrow round a tick, not the change of limits of yesterday; its panel heads with "Reset happened", a "Max" tag beside it and the time under it',
       'Both resets for everyone are marked on the charts',
+      'On 24 hours with the plan shown, the Codex reset is pointed at from the right edge ("… in 1d →"): pointing at it or tapping it tells its date and time',
     ],
   },
   {
@@ -380,6 +381,7 @@ const all: DemoSet = {
       ],
       look: [
         'The table of agents lists many rows, by activity',
+        'The chart\'s tooltip has a row for every line in the legend\'s order, with what is left, the plan and the gap in columns; on a phone it stays whole on the screen',
         'My machines → Projects: quotum once, on the laptop, though three agents work in three folders (the tray and the table show quotum three times, with hub and quotum.feat-18-desktop-app under two of them)',
         'Renamed or merged in My machines, a project is shown under its new name in the tray and the table too',
         'Merge Quotum into quotum: one row, with both machines and "from: Quotum"; give Quotum back its name: as it was',
@@ -435,7 +437,8 @@ const all: DemoSet = {
       provider: 'claude',
       plan: 'Claude Max',
       machines: ['laptop', 'build-01'],
-      history: 14 * DAY,
+      // The longest history of the demo: 30 days are full, and ‹ goes back half a month more.
+      history: 45 * DAY,
       windows: [
         fiveHours(20 * MIN, 25, agentsWork(MAX_AGENTS, shifts(0))),
         weekly({since: -1.5 * DAY, use: through([0, 0], [0.5, 33.2], [2.5, 56.8])}),
@@ -453,9 +456,11 @@ const all: DemoSet = {
         {window: 'session', name: '5 hours', note: null},
         {forecast: 'weekly', outlook: 'onPacePlan'},
         {forecast: 'weekly:fable', outlook: 'leftPlan', plan: 'behind'},
+        {reachesBack: 45},
       ],
       look: [
         'Its reset news is a mark on the left of the tray; the Antigravity card in its row has none',
+        'On 30 days the chart is full; ‹ goes back twice, the second time to where history starts, and is off there',
         'Ten marks in the tray, in two groups (two machines); the panel names working, waiting and open-window agents',
         'The long project name ends in an ellipsis; the agent without a project says so',
       ],
