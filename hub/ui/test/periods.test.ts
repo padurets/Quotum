@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {frameOf, periodLabel, periodOf, PERIODS, step} from '../lib/periods';
-import {complete} from '../lib/api';
+import {complete, heardHub, hubNow} from '../lib/api';
 import {setLocale} from '../i18n';
 import type {History} from '../lib/types';
 
@@ -87,4 +87,12 @@ test('only an answer that is all there is of a range is kept on the page', () =>
   assert.equal(complete(answer, range), true);
   assert.equal(complete({...answer, to: now - day - 4 * minute}, range), false, 'cut to the hub’s now');
   assert.equal(complete({...answer, refreshInMs: 60_000}, range), false, 'a newer one is on its way');
+});
+
+test('the page reckons the hub’s clock from the last answer, ahead or behind its own', () => {
+  heardHub(now - 2 * minute, now);
+  assert.equal(hubNow(now + 10 * minute), now + 8 * minute, 'the hub two minutes behind, ten minutes later');
+  heardHub(now + 3 * minute, now);
+  assert.equal(hubNow(now), now + 3 * minute);
+  heardHub(now, now);
 });

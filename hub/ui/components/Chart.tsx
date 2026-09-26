@@ -2,6 +2,7 @@ import {useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSPr
 import {clock, day, duration, num, shortDay, stamp} from '../lib/format';
 import {t} from '../i18n';
 import type {Line} from '../lib/lines';
+import {hubNow} from '../lib/api';
 import {gapText, gapTone, readout as readCell, type PlanLine} from '../lib/readout';
 import {draggedRange, type TimeRange} from '../lib/timeRange';
 import {SWIPE, swiped} from '../lib/swipe';
@@ -115,7 +116,6 @@ export function Chart({
   empty,
   onSelect,
   onStep,
-  until,
 }: {
   lines: Line[];
   plans?: PlanLine[];
@@ -131,8 +131,6 @@ export function Chart({
   onSelect?: (range: TimeRange) => void;
   /** A swipe sideways on a touchpad, or Shift with the wheel: back (-1) or forward (1) through time. */
   onStep?: (direction: -1 | 1) => void;
-  /** How late a dragged range may end, when not `now`: the hub's clock, which the hub will not read past. */
-  until?: number;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(900);
@@ -305,7 +303,7 @@ export function Chart({
     cancelHold();
     if (!drag || !onSelect) return;
     setDrag(null);
-    const range = Math.abs(drag.end - drag.start) >= 6 ? draggedRange(timeAt(drag.start), timeAt(drag.end), until ?? now) : null;
+    const range = Math.abs(drag.end - drag.start) >= 6 ? draggedRange(timeAt(drag.start), timeAt(drag.end), Math.min(now, hubNow())) : null;
     if (range) onSelect(range);
   };
   // A cell ahead of now is read at its middle; the one holding now, at now.
@@ -492,7 +490,7 @@ export function Chart({
             {hover === null &&
               lines.map((line, i) =>
                 paths[i].last ? (
-                  <g key={`${line.key}-end`}>
+                  <g key={`${line.key}-end`} className="line-end">
                     <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={7} fill={line.color} opacity={0.18} />
                     <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={3} fill={line.color} />
                   </g>

@@ -111,6 +111,22 @@ export function useOverview(board: string, onGone: () => void) {
   return {data: data?.board?.id === board ? data : null, lastOk, reload: again};
 }
 
+/**
+ * How far the hub's clock is ahead of the page's (behind, when negative), as the last
+ * answer of history told (its `now`). A range reaches the hub no later than the hub's now,
+ * or it is cut there and may come out too short to read: a range dragged on the chart ends
+ * no later than this says the hub's clock is.
+ */
+let skew = 0;
+
+/** Notes the hub's clock (`now` of an answer) as heard at the page's `at`. */
+export function heardHub(now: number, at = Date.now()) {
+  skew = now - at;
+}
+
+/** The hub's clock as the page reckons it. */
+export const hubNow = (at = Date.now()) => at + skew;
+
 /** Changes of the period this close together are a run of steps: only the last is asked for, once they stop. */
 const SETTLE_MS = 300;
 /** How many answers of past ranges the page keeps per board, so stepping back and forth over them asks the hub nothing. */
@@ -166,6 +182,7 @@ export function useHistory(board: string, period: string | TimeRange, revision: 
       if (came) return setHistory(came);
       return call<History>('GET', `/api/history?board=${encodeURIComponent(board)}&${query}`)
         .then(answer => {
+          heardHub(answer.now);
           const data = {...answer, board};
           // One stepped past on the way is kept all the same: it may be stepped back to.
           keep(data);

@@ -44,6 +44,7 @@ test('a tooltip under a narrow chart rises as far as keeps it in the window, nev
   assert.equal(liftOf(500, 350, 800, 60), 58, 'its bottom kept 8 above the window’s');
   assert.equal(liftOf(300, 700, 800, 60), 208, 'taller: higher, still under the bars');
   assert.equal(liftOf(300, 800, 800, 60), 232, 'too tall to fit: no higher than 8 under the bars');
-  // Read from the chart, not from where it was drawn: finding it again gives the same.
-  assert.equal(liftOf(500, 350, 800, 60), liftOf(500, 350, 800, 60));
+  // Measured from where it was drawn, raised, it would find less and sink back, then rise
+  // again: that is why where it stands unraised is read from the chart.
+  assert.notEqual(liftOf(500 - 58, 350, 800, 60), 58);
 });
