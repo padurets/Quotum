@@ -674,7 +674,7 @@ fn print_sessions(sessions: &[Session], style: &Style) {
             other => format!(" · {}", other.id()),
         };
         let started = style.dim(&format!("started {} ago{origin}", until(now_ms() - session.started_at)));
-        println!("{:<14}{folder:<20}{state}  {started}", session.provider.name());
+        println!("{:<14}{folder:<20} {state}  {started}", session.provider.name());
     }
 }
 
