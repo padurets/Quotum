@@ -6,6 +6,7 @@ import path from 'node:path';
 import type {AddressInfo} from 'node:net';
 import {buildApp} from '../../server/api.js';
 import {Duty} from '../../server/duty.js';
+import {Cadence} from '../../server/cadence.js';
 import {Ingest} from '../../server/ingest.js';
 import {Pairing} from '../../server/pairing.js';
 import {ResetFeed} from '../../server/resets.js';
@@ -66,7 +67,7 @@ async function hubFor(trackers: Trackers, scene: string, start: number) {
   const directory = new Directory(store.db);
   const urls = trackers.urls(scene);
   const resets = new ResetFeed((provider, reset) => store.announce(provider, reset), () => {}, {enabled: true, codexApi: urls.codex, claudeApi: urls.claude, timeoutMs: 300});
-  const app = await buildApp({store, directory, resets, ingest: new Ingest(store, directory, new Duty()), pairing: new Pairing(directory), setup: new Setup(true, SETUP), local: null});
+  const app = await buildApp({store, directory, resets, ingest: new Ingest(store, directory, new Duty(), new Cadence()), pairing: new Pairing(directory), setup: new Setup(true, SETUP), local: null});
   await app.listen({host: '127.0.0.1', port: 0});
   const base = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
   return {

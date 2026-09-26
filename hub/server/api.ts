@@ -190,6 +190,8 @@ export async function buildApp(hub: Hub) {
             source.holders.filter(id => members.has(id)),
             now,
           ),
+          /** When it is measured next and why, while its holder follows the hub's pace. */
+          cadence: hub.ingest.nextMeasurement(source.id, source.account, now),
         };
       }),
     };

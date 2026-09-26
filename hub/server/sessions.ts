@@ -84,6 +84,14 @@ export class Sessions {
     return found.sort((a, b) => a.device.name.localeCompare(b.device.name) || a.device.id.localeCompare(b.device.id) || a.startedAt - b.startedAt);
   }
 
+  /** Whether an agent works on a subscription on any machine, by lists that still count as true. */
+  working(source: string, now: number): boolean {
+    for (const machine of this.machines.values()) {
+      if (now - machine.at <= CREDIT_MS && machine.sources.get(source)?.some(s => s.working)) return true;
+    }
+    return false;
+  }
+
   /** Credits a machine's list from its report to `until`. */
   private credit(machine: Machine, until: number) {
     const from = machine.at;
