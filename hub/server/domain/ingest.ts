@@ -93,7 +93,8 @@ function provider(value: unknown): Provider {
 }
 
 function list(value: unknown, what: string, max: number): unknown[] {
-  if (value === undefined) return [];
+  // An optional field may be left out or null (the spec); either way the list is empty.
+  if (value === undefined || value === null) return [];
   if (!Array.isArray(value) || value.length > max) throw new Invalid(what);
   return value;
 }
@@ -121,7 +122,18 @@ function parseResets(value: unknown): FreeResets | null {
   if (!isObject(value) || !Number.isInteger(value.available) || (value.available as number) < 0 || (value.available as number) > 1000) {
     throw new Invalid('resets');
   }
-  return {available: value.available as number, expiresAt: time(value.expiresAt, 'resets expiresAt', true)};
+  const available = value.available as number;
+  const expiring = list(value.expiring, 'resets expiring', 50).map(group => {
+    if (!isObject(group) || !Number.isInteger(group.count) || (group.count as number) < 1) throw new Invalid('resets expiring');
+    return {count: group.count as number, expiresAt: time(group.expiresAt, 'resets expiring expiresAt', true)};
+  });
+  if (expiring.reduce((sum, group) => sum + group.count, 0) > available) throw new Invalid('resets expiring');
+  // Soonest first, one group per time, the one without a time last: the dashboard lists them as they come.
+  expiring.forEach((group, i) => {
+    const next = expiring[i + 1];
+    if (next && (group.expiresAt === null || (next.expiresAt !== null && next.expiresAt <= group.expiresAt))) throw new Invalid('resets expiring');
+  });
+  return {available, expiring};
 }
 
 function parseSnapshot(value: unknown): AgentSnapshot {

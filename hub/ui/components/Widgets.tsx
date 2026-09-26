@@ -442,7 +442,9 @@ export function WidgetsMenu({
   // Widgets off by default are not missing from the board: only what the owner hid is counted.
   const count = groups.flatMap(group => group.widgets).filter(widget => hidden.includes(widget.id) && !isOffByDefault(widget.id)).length;
   return (
-    <Popover label={t(locked ? 'widgets.titleLocked' : 'widgets.title')} icon={locked ? <LockIcon /> : <LayoutIcon />} badge={count}>
+    // One icon whether locked or not: the button opens the same menu, and a changing icon
+    // reads as another button. Whether it is locked is in its name and in the menu.
+    <Popover label={t(locked ? 'widgets.titleLocked' : 'widgets.title')} icon={<LayoutIcon />} badge={count}>
       <div className="popover-title">{t('widgets.title')}</div>
       <SwitchRow className="is-lock" on={locked} onChange={onLock}>
         <LockIcon open={!locked} />

@@ -44,12 +44,43 @@ const TerminalIcon = () => (
   </svg>
 );
 
+/** An editor (VS Code, Cursor and the like), with the client in one of its windows. */
+const EditorIcon = () => (
+  <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+    <path d="M5.75 4.75 2.5 8l3.25 3.25M10.25 4.75 13.5 8l-3.25 3.25" />
+  </svg>
+);
+
+/** The provider's own app. */
+const AppIcon = () => (
+  <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+    <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2" />
+    <path d="M1.75 5.75h12.5" />
+  </svg>
+);
+
+const ORIGIN_ICONS = {terminal: TerminalIcon, editor: EditorIcon, app: AppIcon};
+
+/** Where a session runs: an icon, which a word on every row would only repeat; named on hover and for screen readers. */
+function Origin({origin}: {origin: LiveSession['origin']}) {
+  const Icon = ORIGIN_ICONS[origin];
+  const name = t(`agents.${origin}`);
+  return (
+    <span className="agents-origin" title={name}>
+      <Icon />
+      <span className="sr-only">{name}</span>
+    </span>
+  );
+}
+
 /**
  * The coding agents running on a subscription right now, in the card's tray; not there
  * while none runs. The marks tell at a glance how many run and work on which machine;
- * the panel it opens, upwards where there is room, names them.
+ * the panel it opens, upwards where there is room, names them. When the tray has no room
+ * for the marks (`roomy` false), they all go and the count stays; they are still laid out,
+ * unseen, so the tray can tell when they fit again.
  */
-export function Agents({sessions, now}: {sessions: LiveSession[]; now: number}) {
+export function Agents({sessions, now, roomy = true}: {sessions: LiveSession[]; now: number; roomy?: boolean}) {
   if (!sessions.length) return null;
   const machines = byMachine(sessions);
   const working = sessions.filter(s => s.working).length;
@@ -57,7 +88,7 @@ export function Agents({sessions, now}: {sessions: LiveSession[]; now: number}) 
   return (
     <Popover
       label={summary}
-      triggerClass="agents-pill"
+      triggerClass="tray-pill agents-pill"
       up
       trigger={
         <>
@@ -66,7 +97,7 @@ export function Agents({sessions, now}: {sessions: LiveSession[]; now: number}) 
             <b>{working}</b>/{sessions.length}
           </span>
           {drawn(sessions) && (
-            <span className="agents-marks">
+            <span className={`agents-marks ${roomy ? '' : 'is-out'}`}>
               {machines.map(machine => (
                 <span className="agents-group" key={machine.id}>
                   {machine.sessions.map((session, i) => (
@@ -90,12 +121,12 @@ export function Agents({sessions, now}: {sessions: LiveSession[]; now: number}) 
             {machine.sessions.map((session, i) => (
               <div className={`agents-row ${session.working ? 'is-working' : ''}`} key={i} title={stateOf(session)}>
                 <Mark session={session} />
+                <Origin origin={session.origin} />
                 <span className="agents-project">
                   <span>{session.project ?? t('agents.noProject')}</span>
                   {folderOf(session) && <small>{folderOf(session)}</small>}
                   <span className="sr-only">, {stateOf(session)}</span>
                 </span>
-                <span className="agents-origin">{t(`agents.${session.origin}`)}</span>
                 <span className="agents-age">{since(now - session.startedAt)}</span>
               </div>
             ))}
@@ -122,7 +153,7 @@ const COLUMNS: {id: string; title: Key; cell: (row: AgentRow, now: number) => Re
   {id: 'state', title: 'agents.state', cell: ({session}) => stateOf(session)},
   {id: 'subscription', title: 'agents.subscription', cell: ({source}) => sourceLabel(source)},
   {id: 'machine', title: 'agents.machine', cell: ({session}) => session.device.name},
-  {id: 'origin', title: 'agents.origin', cell: ({session}) => t(`agents.${session.origin}`)},
+  {id: 'origin', title: 'agents.origin', cell: ({session}) => <Origin origin={session.origin} />},
   {id: 'running', title: 'agents.running', cell: ({session}, now) => since(now - session.startedAt)},
 ];
 
@@ -170,7 +201,7 @@ export const AgentsPanel = memo(function AgentsPanel({sources, arrange}: {source
             <tbody>
               {rows.map((row, i) => (
                 <tr key={i} className={row.session.working ? 'is-working' : ''} style={{'--card-color': colorOf(arrange.view, row.source.id, row.source.provider)} as CSSProperties}>
-                  <td title={[row.session.project, folderOf(row.session)].filter(Boolean).join(' · ') || undefined}>
+                  <td title={[row.session.project, folderOf(row.session)].filter(Boolean).join('\n') || undefined}>
                     <Mark session={row.session} />
                     {row.session.project ?? t('agents.noProject')}
                     {folderOf(row.session) && <small className="agents-folder">{folderOf(row.session)}</small>}

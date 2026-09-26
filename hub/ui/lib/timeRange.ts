@@ -1,5 +1,5 @@
 import {useSyncExternalStore} from 'react';
-import {clock, shortDay} from './format';
+import {clock, day, stamp} from './format';
 
 /** A period selected on the chart, in milliseconds. */
 export type TimeRange = {from: number; to: number};
@@ -114,11 +114,11 @@ export function useTimeRange(): TimeRange | null {
 /** How the hub names the history of a selected time range (its `range`). */
 export const timeRangeKey = (selected: TimeRange) => `${selected.from}-${selected.to}`;
 
-/** "23 Sept, 12:40–15:10"; across days "22 Sept 22:10 – 23 Sept 01:30"; days alone from three days on. */
+/** "23 September 12:40–15:10"; across days "22 September 22:10 – 23 September 01:30"; days alone from three days on. */
 export function timeRangeLabel({from, to}: TimeRange) {
-  if (to - from >= 3 * DAY) return `${shortDay(from)} – ${shortDay(to)}`;
-  if (new Date(from).toDateString() === new Date(to).toDateString()) return `${shortDay(from)}, ${clock(from)}–${clock(to)}`;
-  return `${shortDay(from)} ${clock(from)} – ${shortDay(to)} ${clock(to)}`;
+  if (to - from >= 3 * DAY) return `${day(from)} – ${day(to)}`;
+  if (new Date(from).toDateString() === new Date(to).toDateString()) return `${day(from)} ${clock(from)}–${clock(to)}`;
+  return `${stamp(from)} – ${stamp(to)}`;
 }
 
 /**

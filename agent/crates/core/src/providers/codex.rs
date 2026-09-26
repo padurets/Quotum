@@ -197,15 +197,14 @@ pub fn from_responses(init: &Value, limits: &Value, observed_at: Millis) -> Outc
     })
 }
 
-/// Free rate-limit resets the account holds (`rateLimitResetCredits`): the available
-/// ones and the earliest of their expiry times.
+/// Free rate-limit resets the account holds (`rateLimitResetCredits`): the available ones,
+/// each with its own expiry time.
 fn reset_credits(value: &Value) -> Option<Resets> {
     let credits = value["credits"].as_array();
     let available: Vec<&Value> = credits.into_iter().flatten().filter(|c| c["status"] == "available").collect();
     let count =
         value["availableCount"].as_u64().map(|n| n as u32).or_else(|| credits.map(|_| available.len() as u32))?;
-    let expires_at = available.iter().filter_map(|c| c["expiresAt"].as_i64()).min().map(|s| s * 1000);
-    Some(Resets { available: count, expires_at })
+    Some(Resets::new(count, available.iter().map(|c| (1, c["expiresAt"].as_i64().map(|s| s * 1000)))))
 }
 
 #[cfg(test)]
@@ -271,15 +270,28 @@ mod tests {
     }
 
     #[test]
-    fn free_resets_are_counted_with_the_earliest_expiry() {
+    fn free_resets_are_counted_each_with_its_expiry() {
         let weekly = json!({"usedPercent": 96, "windowDurationMins": 10080, "resetsAt": 1790429819});
         let credit = |id: &str, status: &str, expires: i64| json!({"id": id, "resetType": "codexRateLimits", "status": status, "grantedAt": 1790110321, "expiresAt": expires, "title": "Full reset"});
-        let credits = json!({"availableCount": 2, "credits": [credit("a", "available", 1792702321), credit("b", "used", 1791000000), credit("c", "available", 1792000000)]});
+        let credits = json!({"availableCount": 3, "credits": [credit("a", "available", 1792702321), credit("b", "used", 1791000000), credit("c", "available", 1792000000), credit("d", "available", 1792702321)]});
         let limits = json!({"id": 2, "result": {"rateLimits": {"primary": weekly, "planType": "pro"}, "rateLimitResetCredits": credits}});
         let s = from_responses(&init(), &limits, 1).unwrap();
-        assert_eq!(s.resets, Some(Resets { available: 2, expires_at: Some(1_792_000_000_000) }));
+        let resets = s.resets.unwrap();
+        assert_eq!(resets.available, 3);
+        let groups: Vec<_> = resets.expiring.iter().map(|g| (g.count, g.expires_at)).collect();
+        assert_eq!(
+            groups,
+            [(1, Some(1_792_000_000_000)), (2, Some(1_792_702_321_000))],
+            "soonest first, one group per time, used ones left out"
+        );
         let none = json!({"id": 2, "result": {"rateLimits": {"primary": weekly}, "rateLimitResetCredits": {"availableCount": 0, "credits": []}}});
-        assert_eq!(from_responses(&init(), &none, 1).unwrap().resets, Some(Resets { available: 0, expires_at: None }));
+        assert_eq!(from_responses(&init(), &none, 1).unwrap().resets, Some(Resets::new(0, [])));
+        let count_only = json!({"id": 2, "result": {"rateLimits": {"primary": weekly}, "rateLimitResetCredits": {"availableCount": 2}}});
+        assert_eq!(
+            from_responses(&init(), &count_only, 1).unwrap().resets,
+            Some(Resets::new(2, [])),
+            "only a count: no expiry to tell"
+        );
     }
 
     #[test]

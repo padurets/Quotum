@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useState, type FormEvent} from 'react';
 import {useNow} from '../lib/api';
-import {ago, duration} from '../lib/format';
+import {ago, duration, stamp} from '../lib/format';
 import {PROVIDERS} from '../lib/providers';
 import {merging, renaming, restoring, shown, timeless, type ProjectGroup, type Projects as ProjectList} from '../lib/projects';
 import {errorText} from '../lib/quota';
@@ -175,7 +175,7 @@ function Devices({local}: {local: boolean}) {
               <td>
                 <Agents device={device} />
               </td>
-              <td>{device.lastSeenAt ? ago(device.lastSeenAt, now) : '—'}</td>
+              <td title={device.lastSeenAt ? stamp(device.lastSeenAt) : undefined}>{device.lastSeenAt ? ago(device.lastSeenAt, now) : '—'}</td>
               <td>
                 {!local && (
                   <button type="button" className="link-button danger" onClick={() => revoke(device)}>
@@ -297,7 +297,7 @@ function Projects() {
                   </td>
                   <td>{group.machines.map(machine => machine.name).join(', ') || '—'}</td>
                   <td>{unknown ? '—' : duration(group.agentMs)}</td>
-                  <td>{unknown ? '—' : ago(group.lastAt, now)}</td>
+                  <td title={unknown || !group.lastAt ? undefined : stamp(group.lastAt)}>{unknown ? '—' : ago(group.lastAt, now)}</td>
                 </tr>
               );
             })}
@@ -396,7 +396,7 @@ function Connect() {
                 <span>
                   <b>{tokenName(token)}</b> <span className="mono">{token.hint}</span>
                 </span>
-                <small>{token.lastUsedAt ? t('connect.used', {ago: ago(token.lastUsedAt, now)}) : t('connect.unused')}</small>
+                <small title={token.lastUsedAt ? stamp(token.lastUsedAt) : undefined}>{token.lastUsedAt ? t('connect.used', {ago: ago(token.lastUsedAt, now)}) : t('connect.unused')}</small>
                 <button type="button" className="link-button danger" onClick={() => revoke(token)}>
                   {t('connect.revoke')}
                 </button>

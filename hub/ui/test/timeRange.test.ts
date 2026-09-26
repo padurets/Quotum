@@ -1,6 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {draggedRange, MIN_TIME_RANGE, ofTimeRange, parseTimeRange, timeRangeLabel} from '../lib/timeRange';
+import {setLocale} from '../i18n';
+import {preferring} from './browser';
 
 const now = 1_800_000_000_000;
 const minute = 60_000;
@@ -39,13 +41,14 @@ test('the address holds a range the hub can read, or none', () => {
 });
 
 test('a range is named by its times, its days, or both', () => {
+  // Local times, so the clock reads the same in any time zone.
   const day = new Date(2026, 8, 23, 12, 40).getTime();
-  const sameDay = timeRangeLabel({from: day, to: day + 150 * minute});
-  const acrossMidnight = timeRangeLabel({from: day + 10 * 60 * minute, to: day + 14 * 60 * minute});
-  const days = timeRangeLabel({from: day, to: day + 4 * 86_400_000});
-  assert.match(sameDay, /^[^–]+, [^–]+–[^–]+$/, 'one day, then two times');
-  assert.equal(acrossMidnight.split(' – ').length, 2, 'a day and a time at each end');
-  assert.doesNotMatch(days, /\d:\d/, 'days alone');
+  setLocale('en');
+  preferring(['en-GB'], () => {
+    assert.equal(timeRangeLabel({from: day, to: day + 150 * minute}), '23 September 12:40–15:10', 'one day, then two times');
+    assert.equal(timeRangeLabel({from: day + 10 * 60 * minute, to: day + 14 * 60 * minute}), '23 September 22:40 – 24 September 02:40', 'a day and a time at each end');
+    assert.equal(timeRangeLabel({from: day, to: day + 4 * 86_400_000}), '23 September – 27 September', 'days alone');
+  });
 });
 
 test('the history on screen tells a selected range from a fixed period', () => {

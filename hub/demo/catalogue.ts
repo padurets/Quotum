@@ -110,7 +110,8 @@ export const SCENES: Scene[] = [
       {marked: 'claude', resets: 1},
     ],
     look: [
-      'Codex cards: "Reset in 1d" with the date, not the reset of four hours ago; Claude cards: "Reset happened · <time> · Max", not the change of limits of yesterday',
+      'Codex cards: an accent mark "in 25h" on the left of the tray (the time is rounded down), not the reset of four hours ago; its panel heads with "Reset in 25h" and the date and time under it, then why it matters, the tracker\'s text and "Data from Codex Resets"',
+      'Claude cards: a quiet mark, an arrow round a tick, not the change of limits of yesterday; its panel heads with "Reset happened", a "Max" tag beside it and the time under it',
       'Both resets for everyone are marked on the charts',
     ],
   },
@@ -127,6 +128,7 @@ export const SCENES: Scene[] = [
       {reset: 'codex', label: 'bankedIn'},
       {reset: 'claude', label: null},
     ],
+    look: ['Codex: "in 19h" on the mark, "Banked reset in 19h" in its panel; no mark on Claude cards'],
   },
   {
     kind: 'scene',
@@ -137,6 +139,7 @@ export const SCENES: Scene[] = [
       {reset: 'codex', label: 'announced'},
       {reset: 'claude', label: 'policy'},
     ],
+    look: ['Codex: an accent mark with no text, "Reset announced" in its panel', 'Claude: a quiet gauge, "Limits changed" with the time under it'],
   },
   {
     kind: 'scene',
@@ -152,7 +155,7 @@ export const SCENES: Scene[] = [
       {reset: 'claude', label: 'done', scope: ''},
       {marked: 'codex', resets: 1},
     ],
-    look: ['The Claude notice names no scope: the reset was for everyone'],
+    look: ['Codex: an accent mark with no text, "Reset: awaiting confirmation" with the announced time under it', 'The Claude mark\'s panel names no scope: the reset was for everyone'],
   },
   {
     kind: 'scene',
@@ -167,6 +170,7 @@ export const SCENES: Scene[] = [
       {reset: 'codex', label: 'possible', chance: 40},
       {reset: 'claude', label: 'policy'},
     ],
+    look: ['Codex: a quiet dashed mark "40%"; its panel heads with "Possible reset", a "40%" tag beside it and "by <time>" under it'],
   },
   {
     kind: 'scene',
@@ -177,7 +181,7 @@ export const SCENES: Scene[] = [
       {reset: 'codex', label: 'possible', chance: null},
       {reset: 'claude', label: null},
     ],
-    look: ['"Possible reset" with no chance after it, and no time'],
+    look: ['Codex: a quiet dashed mark with no text; its panel says "Possible reset" with no chance after it, and no time'],
   },
   {
     kind: 'scene',
@@ -211,6 +215,7 @@ export const SCENES: Scene[] = [
       {marked: 'codex', resets: 0},
       {marked: 'codex', resets: 1, range: '7d'},
     ],
+    look: ['The Codex mark\'s panel links its source, claude-resets.com, apart from the credit to Codex Resets'],
   },
   {
     kind: 'scene',
@@ -316,6 +321,24 @@ const IOS_AGENTS: Agent[] = agents('mac-mini', [
   ['terminal', 'ios-app', -30 * MIN, shifts(0)],
   ['editor', 'ios-app', -2 * HOUR],
 ]);
+
+/** A narrow card with a full tray: reset news, free resets and ten agents on two machines. */
+const ON_CALL_AGENTS: Agent[] = [
+  ...agents('win-desktop', [
+    ['terminal', 'on-call', -3 * HOUR, shifts(1)],
+    ['terminal', 'incident-4412', -40 * MIN],
+    ['terminal', 'runbooks', -2 * HOUR, shifts(7)],
+    ['editor', 'alerts', -5 * HOUR],
+    ['terminal', 'terraform', -90 * MIN, shifts(13)],
+  ]),
+  ...agents('build-01', [
+    ['terminal', 'deploys', -4 * HOUR, shifts(3)],
+    ['terminal', 'canary', -25 * MIN],
+    ['terminal', 'status-page', -70 * MIN, shifts(9)],
+    ['app', null, -2 * HOUR],
+    ['terminal', 'postmortems', -6 * HOUR, shifts(15)],
+  ]),
+];
 
 const TEAM_AGENTS: Agent[] = [
   ...agents('laptop', [
@@ -432,7 +455,7 @@ const all: DemoSet = {
         {forecast: 'weekly:fable', outlook: 'leftPlan', plan: 'behind'},
       ],
       look: [
-        'Shares a row with the Antigravity card: the reset news under this card, none under that one',
+        'Its reset news is a mark on the left of the tray; the Antigravity card in its row has none',
         'Ten marks in the tray, in two groups (two machines); the panel names working, waiting and open-window agents',
         'The long project name ends in an ellipsis; the agent without a project says so',
       ],
@@ -462,7 +485,7 @@ const all: DemoSet = {
         {forecast: 'gemini:weekly', outlook: 'onPaceReset', plan: 'none'},
         {forecast: 'claude:weekly', outlook: 'none'},
       ],
-      look: ['Its plan is switched off: no pace marks on its meters', 'No reset news under it'],
+      look: ['Its plan is switched off: no pace marks on its meters', 'No reset news in its tray'],
     },
     {
       kind: 'card',
@@ -486,7 +509,7 @@ const all: DemoSet = {
         {stale: true, from: 49 * MIN, to: 58 * MIN},
         {agents: 0, drawn: true, from: 52 * MIN, to: 59 * MIN},
       ],
-      look: ['Its machine sleeps from the 2nd minute to the 14th, and so every 45 minutes: the card goes stale and comes back, its agents go and come back, a gap stays on the 24-hour chart'],
+      look: ['Its machine sleeps from the 2nd minute to the 14th, and so every 45 minutes: the card goes stale (its dot, no line under the limits) and comes back, its agents go and come back, a gap stays on the 24-hour chart'],
     },
     {
       kind: 'card',
@@ -502,12 +525,20 @@ const all: DemoSet = {
       ],
       resets: t =>
         t < -30 * HOUR
-          ? {available: 0, expiresAt: null}
+          ? {available: 0}
           : t < -6 * HOUR
-            ? {available: 1, expiresAt: 20 * DAY}
+            ? {available: 1, expiring: [{count: 1, expiresAt: 20 * DAY}]}
             : t < -3 * HOUR
-              ? {available: 0, expiresAt: null}
-              : {available: 2, expiresAt: 18 * DAY},
+              ? {available: 0, expiring: []}
+              : // Granted at different times, they expire at different times; one the client gives no time for.
+                {
+                  available: 3,
+                  expiring: [
+                    {count: 1, expiresAt: 8 * DAY},
+                    {count: 1, expiresAt: 18 * DAY},
+                    {count: 1, expiresAt: null},
+                  ],
+                },
       agents: PRO_AGENTS,
       on: {ana: {}, night: {hidden: true}},
       expect: [
@@ -520,7 +551,8 @@ const all: DemoSet = {
         {window: 'weekly', level: 'ok', note: null},
       ],
       look: [
-        'Two free resets by the settings button, until a date in the tooltip',
+        'Three free resets: a ticket "3" in the tray, before the agents; its name and panel say when each expires: one in 8 days, one in 18, one with no end date',
+        'Shares a row with Antigravity 2, the same two windows: with reset news or without (Account → this browser → announcements), the two are as tall',
         'The chart marks the early reset six hours ago and the free resets granted',
         'Within 15 minutes: an agent starts (5th minute), one stops (10th), "notifications" switches working every 2 minutes',
       ],
@@ -551,14 +583,23 @@ const all: DemoSet = {
       plan: 'Pro',
       machines: ['win-desktop'],
       history: 14 * DAY,
-      windows: [fiveHours(90 * MIN, 6, onAndOff(12)), weekly({since: -2 * DAY, use: alongPlan(-15, WEEK_PLAN_FLAT)})],
+      windows: [fiveHours(90 * MIN, 6, agentsWork(ON_CALL_AGENTS, shifts(12))), weekly({since: -2 * DAY, use: alongPlan(-15, WEEK_PLAN_FLAT)})],
+      resets: () => ({available: 3, expiring: [{count: 3, expiresAt: 25 * DAY}]}),
+      agents: ON_CALL_AGENTS,
       on: {ana: {name: 'Codex Pro for the platform team and the on-call rotation', color: '#43aca1', plan: WEEK_PLAN_FLAT, span: 4}},
       expect: [
         {title: 'Codex Pro for the platform team and the on-call rotation'},
+        {agents: 10, drawn: true},
         {window: 'weekly', level: 'ok', note: 'behind'},
         {forecast: 'weekly', outlook: 'leftPlan', plan: 'behind'},
       ],
-      look: ['Its long name ends in an ellipsis', 'Teal on the card, the chart and the table', 'Its own plan: 15% a day, 10% the last'],
+      look: [
+        'Its long name ends in an ellipsis',
+        'Teal on the card, the chart and the table',
+        'Its own plan: 15% a day, 10% the last',
+        'A third of the row wide, its tray full: the reset news on the left, three free resets and ten agent marks in two groups on the right, whole at a window 1260 px wide or more; narrower, the marks go all at once and the count stays',
+        'Its three free resets expire together: one row in the panel\'s table',
+      ],
     },
     {
       kind: 'card',
@@ -636,7 +677,7 @@ const all: DemoSet = {
         {window: 'session', hidden: true},
         {window: 'weekly', hidden: true},
       ],
-      look: ['Says that all its limits are hidden'],
+      look: ['In the middle of the card: an eye struck through, "All limits are hidden", that measurements go on, and "Show limits", which brings them back (put them away again in its settings)'],
     },
     {
       kind: 'card',
@@ -650,7 +691,7 @@ const all: DemoSet = {
       windows: [fiveHours(0, 6), weekly({since: -3.5 * DAY, use: steady(5, 10)})],
       on: {ana: {name: 'Signed out'}},
       expect: [{title: 'Signed out'}, {error: 'not_logged_in'}, {stale: true}],
-      look: ['Its last values stay, under them why they are old'],
+      look: ['Its last values stay, with no line under them: its dot is in trouble, and its tooltip says why they are old'],
     },
     {
       kind: 'card',
@@ -706,7 +747,8 @@ const all: DemoSet = {
       eco: true,
       history: 2 * DAY,
       windows: [idle(), weekly({since: -3 * DAY, use: steady(12, 0)})],
-      resets: () => ({available: 1, expiresAt: null}),
+      // Its client gives how many, not when they expire.
+      resets: () => ({available: 1}),
       on: {ana: {name: 'CI runners (eco)'}},
       expect: [
         {title: 'CI runners (eco)'},
@@ -714,7 +756,7 @@ const all: DemoSet = {
         {fresh: 'grey', from: 6 * MIN, to: 14 * MIN},
         {forecast: 'weekly', spent: 'unused'},
       ],
-      look: ['Measured every quarter of an hour: its dot fades to grey and pulses again, never a warning', 'One free reset, with no end date'],
+      look: ['Measured every quarter of an hour: its dot fades to grey and pulses again, never a warning', 'One free reset: a ticket "1" in the tray, and its panel gives no end date'],
     },
     {
       kind: 'card',
@@ -855,7 +897,16 @@ const showcase: DemoSet = {
       machines: ['laptop'],
       history: 7 * DAY,
       windows: [fiveHours(-3 * HOUR - 34 * MIN, 15, agentsWork(WORK_AGENTS, ALWAYS)), weekly({since: -(DAY + 3 * HOUR), use: steady(0, 31)})],
-      resets: t => (t < -6 * HOUR ? {available: 0, expiresAt: null} : {available: 2, expiresAt: 18 * DAY}),
+      resets: t =>
+        t < -6 * HOUR
+          ? {available: 0, expiring: []}
+          : {
+              available: 2,
+              expiring: [
+                {count: 1, expiresAt: 11 * DAY},
+                {count: 1, expiresAt: 18 * DAY},
+              ],
+            },
       agents: WORK_AGENTS,
       on: {demo: {name: 'Work'}},
       expect: [{title: 'Work'}, {agents: 1, drawn: true}],

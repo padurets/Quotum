@@ -628,8 +628,20 @@ fn print_outcome(outcome: &Outcome, style: &Style) {
                 );
             }
             if let Some(free) = snapshot.resets.as_ref().filter(|r| r.available > 0) {
-                let expires =
-                    free.expires_at.map(|at| format!("expires in {}", until(at - now_ms()))).unwrap_or_default();
+                // Each group of them expires at its own time; all of them at one is said once.
+                let when = |at: Option<i64>| at.map(|at| format!("in {}", until(at - now_ms())));
+                let expires = match free.expiring.as_slice() {
+                    [one] if one.count == free.available => {
+                        let verb = if free.available == 1 { "expires" } else { "expire" };
+                        when(one.expires_at).map(|w| format!("{verb} {w}")).unwrap_or_default()
+                    }
+                    [] => String::new(),
+                    groups => groups
+                        .iter()
+                        .map(|g| format!("{} {}", g.count, when(g.expires_at).unwrap_or_else(|| "with no date".into())))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                };
                 println!("{}{:<20}{:>4}   {}", " ".repeat(14), "free resets", free.available, style.dim(&expires));
             }
         }
