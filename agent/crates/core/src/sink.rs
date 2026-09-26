@@ -704,6 +704,7 @@ mod tests {
             origin: "terminal",
             project: Some("quotum".into()),
             started_at: 1_790_000_000_000,
+            last_worked_at: None,
             working: true,
         };
         let (url, seen) = hub(|_, _| json(200, json!({"accepted": 1})));
@@ -716,6 +717,9 @@ mod tests {
             json!([{"provider": "codex", "account": "4b7e0c1d2e3f4a5b6c7d8e9f", "origin": "terminal", "project": "quotum", "startedAt": "2026-09-21T14:13:20Z", "working": true}])
         );
         assert_eq!(body["machine"]["id"], "0123456789abcdef");
+        let idle = RunningSession { working: false, last_worked_at: Some(1_790_000_015_000), ..session };
+        assert!(current.sessions(&[idle]));
+        assert_eq!(seen.lock().unwrap()[1].1["sessions"][0]["lastWorkedAt"], "2026-09-21T14:13:35Z");
 
         // A hub older than the agent: twice, then upgraded.
         let upgraded = Arc::new(AtomicBool::new(false));

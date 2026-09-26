@@ -148,6 +148,8 @@ pub struct RunningSession {
     pub project: Option<String>,
     #[serde(with = "ts")]
     pub started_at: Millis,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "ts::option")]
+    pub last_worked_at: Option<Millis>,
     pub working: bool,
 }
 

@@ -255,6 +255,7 @@ export type AgentSession = {
   origin: Origin;
   project: string | null;
   startedAt: number;
+  lastWorkedAt: number | null;
   working: boolean;
 };
 
@@ -275,6 +276,7 @@ export function parseSessions(body: unknown): SessionReport {
       origin: value.origin as Origin,
       project: cut(value.project, 'project'),
       startedAt: time(value.startedAt, 'startedAt')!,
+      lastWorkedAt: time(value.lastWorkedAt, 'lastWorkedAt', true),
       working: value.working,
     };
   });

@@ -17,7 +17,7 @@ import {Setup} from '../setup.js';
 const iso = (ms: number) => new Date(ms).toISOString();
 const ORIGIN = 'http://localhost';
 const SETUP = 'BCDF-GHJK';
-const EMPTY = {order: [], sizes: {}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}};
+const EMPTY = {order: [], sizes: {}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
 
 async function hub() {
   const store = new Store(path.join(mkdtempSync(path.join(tmpdir(), 'quotum-api-')), 'db.sqlite'));
@@ -227,7 +227,7 @@ test('people share their subscriptions with a shared board; its owner arranges, 
   assert.deepEqual((await call('GET', `/api/boards/${team}/shares`, {as: 'alice'})).body.shared, [{source, provider: 'codex', sharedBy: 'Bob', mine: false}]);
 
   assert.deepEqual(shared.view, EMPTY, 'nothing arranged yet');
-  const view = {...EMPTY, order: ['history', `source:${source}`], sizes: {[`source:${source}`]: 6}, names: {[source]: 'Bob’s Codex'}, hidden: ['forecast'], shown: ['agents'], windows: [`${source}/weekly`], plans: {[source]: [50, 50, 0, 0, 0, 0, 0]}, unplanned: [source], colors: {[source]: '#1fa89c'}, columns: {agents: ['machine', 'origin']}};
+  const view = {...EMPTY, order: ['history', `source:${source}`], sizes: {[`source:${source}`]: 6}, names: {[source]: 'Bob’s Codex'}, hidden: ['forecast'], shown: ['agents'], windows: [`${source}/weekly`], plans: {[source]: [50, 50, 0, 0, 0, 0, 0]}, unplanned: [source], colors: {[source]: '#1fa89c'}, columns: {agents: ['machine', 'origin']}, shownColumns: {agents: ['state']}};
   assert.deepEqual((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: view})).body, view);
   assert.deepEqual((await call('GET', `/api/overview?board=${team}`, {as: 'bob'})).body.view, view);
   assert.equal((await call('POST', `/api/boards/${team}/view`, {as: 'bob', body: EMPTY})).status, 403, 'a member only looks');
@@ -235,6 +235,9 @@ test('people share their subscriptions with a shared board; its owner arranges, 
   assert.equal((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {...view, sizes: {history: 13}}})).status, 400, 'no wider than the grid');
   assert.equal((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {...view, colors: {[source]: 'red; background: url(x)'}}})).status, 400, 'a colour is a hex colour');
   assert.equal((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {...view, columns: {agents: ['<b>']}}})).status, 400, 'a column is a short name');
+  assert.equal((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {...view, shownColumns: {agents: ['<b>']}}})).status, 400);
+  const {shownColumns: _, ...older} = view;
+  assert.deepEqual((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: older})).body.shownColumns, {});
   const narrow = await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {...view, sizes: {history: 3}}});
   assert.deepEqual(narrow.body.sizes, {history: 4}, 'a third of the grid at least: narrower ones, saved before, are taken as that');
   await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: view});
@@ -441,6 +444,7 @@ test('agents report the coding agents running on their machines; the cards of th
   const shown = async () => (await call('GET', '/api/overview', {as: 'alice'})).body.sources[0].sessions;
   const [first, second] = await shown();
   assert.deepEqual([first.origin, first.project, first.working, first.device.name, first.startedAt], ['terminal', 'quotum', true, 'build-01', Date.parse(started)]);
+  assert.equal(second.lastWorkedAt, null, 'an older agent omits the date');
   assert.equal(second.origin, 'editor', 'without an account: the subscription this machine delivers');
   assert.equal((await report([])).status, 200);
   assert.deepEqual(await shown(), [], 'an empty list: none runs');
@@ -457,6 +461,8 @@ test('agents report the coding agents running on their machines; the cards of th
   });
   assert.equal(borrowed.body.accepted, 0, "naming someone else's account shows nothing on it");
 
+  const invalidTime = await report([{...guessed, lastWorkedAt: 'never'}]);
+  assert.deepEqual([invalidTime.status, invalidTime.body], [400, {error: 'invalid_request', detail: 'lastWorkedAt'}]);
   const wrong = await report([{...codex, origin: 'browser'}]);
   assert.deepEqual([wrong.status, wrong.body], [400, {error: 'invalid_request', detail: 'origin'}]);
   // As many as a list may hold, every name at its longest and in the widest script, fit in one request.

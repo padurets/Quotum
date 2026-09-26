@@ -7,6 +7,7 @@ export type LiveSession = {
   origin: Origin;
   project: string | null;
   startedAt: number;
+  lastWorkedAt: number | null;
   working: boolean;
 };
 

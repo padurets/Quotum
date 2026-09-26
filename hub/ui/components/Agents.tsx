@@ -1,24 +1,13 @@
-import {memo, type CSSProperties, type ReactNode} from 'react';
+import {memo, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode} from 'react';
 import {useNow} from '../lib/api';
 import type {LiveSession, SourceState} from '../lib/types';
 import {duration} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
 import {AGENTS, colorOf, columnShown, withColumn, withHidden, type Arrange} from '../lib/view';
-import {agentRows, drawn, type AgentRow} from '../lib/agents';
+import {AGENT_WIDTHS, agentRows, agentsLayout, drawn, machinesOf, nextAgentsSort, sortedRows, visibleAgentsSort, type AgentColumn, type AgentRow} from '../lib/agents';
+import {setPrefs, usePrefs} from '../lib/prefs';
 import {t, useLocale, type Key} from '../i18n';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
-
-type Machine = {id: string; name: string; sessions: LiveSession[]};
-
-function byMachine(sessions: LiveSession[]): Machine[] {
-  const machines: Machine[] = [];
-  for (const session of sessions) {
-    const machine = machines.find(m => m.id === session.device.id);
-    if (machine) machine.sessions.push(session);
-    else machines.push({...session.device, sessions: [session]});
-  }
-  return machines;
-}
 
 /**
  * One session: filled with the card's colour while it works, outlined while idle; a
@@ -82,7 +71,7 @@ function Origin({origin}: {origin: LiveSession['origin']}) {
  */
 export function Agents({sessions, now, roomy = true}: {sessions: LiveSession[]; now: number; roomy?: boolean}) {
   if (!sessions.length) return null;
-  const machines = byMachine(sessions);
+  const machines = machinesOf(sessions);
   const working = sessions.filter(s => s.working).length;
   const summary = t('agents.summary', {count: sessions.length, working});
   return (
@@ -148,7 +137,7 @@ export function Agents({sessions, now, roomy = true}: {sessions: LiveSession[]; 
 }
 
 /** The table's columns after the project, each one the owner can hide to make the widget narrow. */
-const COLUMNS: {id: string; title: Key; cell: (row: AgentRow, now: number) => ReactNode}[] = [
+const COLUMNS: {id: AgentColumn; title: Key; cell: (row: AgentRow, now: number) => ReactNode}[] = [
   {id: 'state', title: 'agents.state', cell: ({session}) => stateOf(session)},
   {id: 'subscription', title: 'agents.subscription', cell: ({source}) => sourceLabel(source)},
   {id: 'machine', title: 'agents.machine', cell: ({session}) => session.device.name},
@@ -156,57 +145,127 @@ const COLUMNS: {id: string; title: Key; cell: (row: AgentRow, now: number) => Re
   {id: 'running', title: 'agents.running', cell: ({session}, now) => since(now - session.startedAt)},
 ];
 
-/**
- * Every coding agent running on the board's subscriptions, as one table: a widget of the
- * current state, off until the board's owner turns it on (the cards show the same).
- */
+const SortIcon = () => (
+  <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+    <path d="M4 3v10M1.5 10.5 4 13l2.5-2.5M9 4h5M9 8h3.5M9 12h2" />
+  </svg>
+);
+
+/** Running agents as a table where the chosen columns fit, otherwise a compact list. */
 export const AgentsPanel = memo(function AgentsPanel({sources, arrange}: {sources: SourceState[]; arrange: Arrange}) {
   useLocale();
   const now = useNow();
+  const {agentsSort} = usePrefs();
+  const panel = useRef<HTMLElement>(null);
+  const [layout, setLayout] = useState<'table' | 'list'>('list');
   // Only what the board shows: a subscription whose card is hidden is left out here too.
   const {rows, empty} = agentRows(sources, arrange.view);
   const working = rows.filter(row => row.session.working).length;
-  const columns = COLUMNS.filter(column => columnShown(arrange.view, AGENTS, column.id));
+  const columns = useMemo(() => COLUMNS.filter(column => columnShown(arrange.view, AGENTS, column.id)), [arrange.view]);
+  const shown = useMemo(() => ['project' as const, ...columns.map(column => column.id)], [columns]);
+  const active = visibleAgentsSort(agentsSort, shown);
+  const ordered = sortedRows(rows, active, shown);
+  const headers = [{id: 'project' as const, title: 'agents.project' as const}, ...columns];
+  const has = (id: AgentColumn) => shown.includes(id);
+  const color = (row: AgentRow) => ({'--card-color': colorOf(arrange.view, row.source.id, row.source.provider)} as CSSProperties);
+  const sortBy = (column: AgentColumn, cycle = true) => setPrefs({agentsSort: nextAgentsSort(active, column, cycle)});
+  const direction = active?.descending ? 'descending' : 'ascending';
+
+  useEffect(() => {
+    const element = panel.current!;
+    const fit = () => {
+      const next = agentsLayout(shown, element.clientWidth);
+      setLayout(before => before === next ? before : next);
+    };
+    const observer = new ResizeObserver(fit);
+    observer.observe(element);
+    fit();
+    return () => observer.disconnect();
+  }, [shown]);
+
   return (
-    <section className="panel agents-panel" aria-label={t('agents.title')}>
+    <section ref={panel} className="panel agents-panel" aria-label={t('agents.title')}>
       <div className="panel-head">
         <h2>{t('agents.title')}</h2>
         {rows.length > 0 && <span className="panel-note">{t('agents.machineSummary', {working, count: rows.length})}</span>}
-        {arrange.owner && (
-          <Popover label={t('agents.settings')} icon={<SlidersIcon />}>
-            <div className="popover-title">{t('agents.columns')}</div>
-            {COLUMNS.map(column => (
-              <SwitchRow key={column.id} on={columnShown(arrange.view, AGENTS, column.id)} onChange={on => arrange.update(view => withColumn(view, AGENTS, column.id, on))}>
-                {t(column.title)}
-              </SwitchRow>
-            ))}
-            <HideRow onHide={() => arrange.update(view => withHidden(view, AGENTS, true))}>{t('widget.hide')}</HideRow>
-          </Popover>
-        )}
+        <div className="agents-controls">
+          {layout === 'list' && (
+            <Popover label={t('agents.sort')} icon={<SortIcon />}>
+              <div className="popover-title">{t('agents.sort')}</div>
+              <button type="button" className="popover-row" aria-pressed={!active} onClick={() => setPrefs({agentsSort: null})}>
+                <span>{t('agents.activity')}</span><b aria-hidden="true">{!active ? '✓' : ''}</b>
+              </button>
+              {headers.map(column => (
+                <button type="button" className="popover-row" key={column.id} aria-pressed={active?.column === column.id} onClick={() => sortBy(column.id, false)}>
+                  <span>{t(column.title)}</span>
+                  {active?.column === column.id && <b><span aria-hidden="true">{active.descending ? '↓' : '↑'}</span><span className="sr-only">{t(`agents.${direction}`)}</span></b>}
+                </button>
+              ))}
+            </Popover>
+          )}
+          {arrange.owner && (
+            <Popover label={t('agents.settings')} icon={<SlidersIcon />}>
+              <div className="popover-title">{t('agents.columns')}</div>
+              {COLUMNS.map(column => (
+                <SwitchRow key={column.id} on={has(column.id)} onChange={on => arrange.update(view => withColumn(view, AGENTS, column.id, on))}>
+                  {t(column.title)}
+                </SwitchRow>
+              ))}
+              <HideRow onHide={() => arrange.update(view => withHidden(view, AGENTS, true))}>{t('widget.hide')}</HideRow>
+            </Popover>
+          )}
+        </div>
       </div>
       {empty ? (
         <p className="panel-empty">{t(`agents.${empty}`)}</p>
+      ) : layout === 'list' ? (
+        <ul className="agents-compact">
+          {ordered.map((row, i) => (
+            <li key={i} className={row.session.working ? 'is-working' : ''} style={color(row)}>
+              <div className="agents-compact-main">
+                <Mark session={row.session} />
+                {has('origin') && <Origin origin={row.session.origin} />}
+                <span className="agents-project" title={row.session.project ?? undefined}>
+                  {row.session.project ?? t('agents.noProject')}
+                  {!has('state') && <span className="sr-only">, {stateOf(row.session)}</span>}
+                </span>
+                {has('running') && <span className="agents-age">{since(now - row.session.startedAt)}</span>}
+              </div>
+              {columns.some(column => ['machine', 'subscription', 'state'].includes(column.id)) && (
+                <div className="agents-compact-details">
+                  {columns.filter(column => ['machine', 'subscription', 'state'].includes(column.id)).map(column => (
+                    <span key={column.id}><span className="sr-only">{t(column.title)}: </span>{column.cell(row, now)}</span>
+                  ))}
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
       ) : (
         <div className="table-wrap">
           <table>
+            <colgroup><col />{columns.map(column => <col key={column.id} style={{width: AGENT_WIDTHS[column.id]}} />)}</colgroup>
             <thead>
               <tr>
-                <th>{t('agents.project')}</th>
-                {columns.map(column => (
-                  <th key={column.id}>{t(column.title)}</th>
+                {headers.map(column => (
+                  <th scope="col" key={column.id} aria-sort={active?.column === column.id ? direction : undefined}>
+                    <button type="button" onClick={() => sortBy(column.id)}>
+                      {t(column.title)}<span className="agents-sort-arrow" aria-hidden="true">{active?.column === column.id ? active.descending ? '↓' : '↑' : ''}</span>
+                    </button>
+                  </th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {rows.map((row, i) => (
-                <tr key={i} className={row.session.working ? 'is-working' : ''} style={{'--card-color': colorOf(arrange.view, row.source.id, row.source.provider)} as CSSProperties}>
+              {ordered.map((row, i) => (
+                <tr key={i} className={row.session.working ? 'is-working' : ''} style={color(row)}>
                   <td title={row.session.project ?? undefined}>
                     <Mark session={row.session} />
                     {row.session.project ?? t('agents.noProject')}
-                    {!columns.some(column => column.id === 'state') && <span className="sr-only">, {stateOf(row.session)}</span>}
+                    {!has('state') && <span className="sr-only">, {stateOf(row.session)}</span>}
                   </td>
                   {columns.map(column => (
-                    <td key={column.id}>{column.cell(row, now)}</td>
+                    <td key={column.id} title={column.id === 'machine' ? row.session.device.name : column.id === 'subscription' ? sourceLabel(row.source) : undefined}>{column.cell(row, now)}</td>
                   ))}
                 </tr>
               ))}
