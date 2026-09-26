@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {gapText, gapTone, readout, type PlanLine} from '../lib/readout';
+import {gapText, gapTone, readout, type ForecastLine, type PlanLine} from '../lib/readout';
 import type {Line} from '../lib/lines';
 
 const minute = 60_000;
@@ -53,4 +53,21 @@ test('plan columns only where the chart draws a plan in the period', () => {
 test('a gap reads with its sign, and one ahead of the plan by 3 or more is marked as the table marks it', () => {
   assert.deepEqual([7, -8, 0].map(gapText), ['+7', '−8', '0']);
   assert.deepEqual([-3, -2, 5].map(gapTone), ['v-warn', '', '']);
+});
+
+test('ahead of now a line reads where its pace leads, beside its plan, until it runs out', () => {
+  const lines = [line('weekly', [[now - 5 * minute, 40, 0]]), line('other', [[now - 5 * minute, 70, 0]])];
+  const forecast: ForecastLine = {key: 'weekly', name: 'Weekly', color: '', dash: '', points: [[now, 40], [now + 40 * minute, 0]], at: now + 40 * minute};
+  const ahead = now + 10 * minute;
+  const {rows, foreseen, planned} = readout(lines, [plan(['weekly'], 50)].map(p => ({...p, runs: [[[now - 60 * minute, 50], [now + 60 * minute, 50]]]})), ahead, cellMs, now, now + 60 * minute, [forecast]);
+  assert.equal(foreseen, true);
+  assert.equal(planned, true);
+  // Read at the cell's middle, 12.5 minutes on: 40 less a quarter of it and a bit.
+  assert.deepEqual(rows.map(row => [row.left, row.plan, row.gap, row.forecast]), [
+    [null, 50, null, 28],
+    [null, null, null, null],
+  ]);
+  assert.equal(readout(lines, [], now + 45 * minute, cellMs, now, now + 60 * minute, [forecast]).rows[0].forecast, null, 'past where it runs out');
+  assert.equal(readout(lines, [], now - 5 * minute, cellMs, now, now + 60 * minute, [forecast]).rows[0].forecast, null, 'not in the cell holding now');
+  assert.equal(readout(lines, [], ahead, cellMs, now, now + 60 * minute).foreseen, false, 'no column without a forecast drawn');
 });

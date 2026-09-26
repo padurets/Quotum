@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {cellLabel, liftOf, slideOf} from '../components/Chart';
+import {cellLabel, fitName, liftOf, slideOf} from '../components/Chart';
 import {setLocale} from '../i18n';
 import {preferring} from './browser';
 
@@ -47,4 +47,13 @@ test('a tooltip under a narrow chart rises as far as keeps it in the window, nev
   // Measured from where it was drawn, raised, it would find less and sink back, then rise
   // again: that is why where it stands unraised is read from the chart.
   assert.notEqual(liftOf(500 - 58, 350, 800, 60), 58);
+});
+
+test('a label at the chart\'s edge shortens the name in it to fit, and keeps the rest whole', () => {
+  const text = (name: string) => `${name}: runs out in 29h →`;
+  assert.equal(fitName(text, 'Claude', 40), 'Claude: runs out in 29h →');
+  const cut = fitName(text, 'Codex Pro for the platform team and the on-call rotation', 40);
+  assert.equal(cut, 'Codex Pro for the pl…: runs out in 29h →');
+  assert.equal(cut.length, 40);
+  assert.equal(fitName(text, 'Claude', 10), '…: runs out in 29h →', 'no room for the name at all');
 });
