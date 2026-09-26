@@ -1283,8 +1283,11 @@ mod tests {
             let name = std::ffi::CString::new(pipe.to_string_lossy().as_bytes()).unwrap();
             // SAFETY: a NUL-terminated path.
             assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
-            let opened = open_plain(&pipe).expect("opened at once");
-            assert!(!opened.metadata().unwrap().is_file());
+            // Opened on a thread of its own, so a pipe that waits fails the test rather than hangs it.
+            let (sent, opened) = std::sync::mpsc::channel();
+            std::thread::spawn(move || sent.send(open_plain(&pipe).map(|file| file.metadata().unwrap().is_file())));
+            let opened = opened.recv_timeout(std::time::Duration::from_secs(5)).expect("opened at once");
+            assert!(!opened.expect("opened"), "a pipe is no file");
             assert!(open_plain(&stand.at("home/dev/link")).is_err(), "a link is not followed");
         }
     }
