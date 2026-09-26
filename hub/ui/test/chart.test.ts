@@ -1,6 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {cellLabel, edgeRows, fitting, graphemes, liftOf, shortName, slideOf} from '../components/Chart';
+import {edgeRows, fitting, graphemes, shortName, slideOf} from '../components/Chart';
+import {liftOf} from '../components/Tooltip';
+import {cellLabel} from '../lib/periods';
 import {setLocale} from '../i18n';
 import {preferring} from './browser';
 

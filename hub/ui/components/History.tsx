@@ -7,8 +7,8 @@ import {planAt, started, weeklyPlanLine} from '../lib/plan';
 import {forecastLine, outlook} from '../lib/forecast';
 import {PROVIDERS} from '../lib/providers';
 import {HORIZONS, setMuted, setPrefs, usePrefs} from '../lib/prefs';
-import {goTo, setTimeRange, timeRangeKey, useTimeRange} from '../lib/timeRange';
-import {frameOf, step} from '../lib/periods';
+import {goTo, setTimeRange, useTimeRange} from '../lib/timeRange';
+import {frameOf, measuredTo, step} from '../lib/periods';
 import {HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
 import {chartEvents, chartResets, linesOf} from '../lib/lines';
 import {Chart, type Marker} from './Chart';
@@ -93,11 +93,7 @@ export const History = memo(function History({
   const historyStart = overview?.historyStart ?? history?.historyStart ?? 0;
   const frame = frameOf(selected, prefs, now, historyStart);
   const {from, future} = frame;
-  // Measurements end at the page's clock, or at the hub's when that is ahead and the answer
-  // is of this very period: a browser a few minutes behind still draws the latest ones, up
-  // to the end of a range dragged to the edge of a period ending now.
-  const answered = history && history.range === (selected ? timeRangeKey(selected) : prefs.range) ? history : null;
-  const measuredTo = answered ? Math.max(frame.to, selected ? Math.min(answered.to, selected.to) : answered.to) : frame.to;
+  const measured = measuredTo(frame, history, selected, prefs.range);
   // An announced Codex reset matters only where Codex is on the chart.
   const announced = frame.live && visible.some(line => line.provider === 'codex') ? (resets.codex?.scheduled?.scheduledFor ?? null) : null;
   // The spending plan applies to weekly windows, when a line on the chart has a plan.
@@ -124,16 +120,16 @@ export const History = memo(function History({
   // stretched to include an announced reset when close, and to the last moment the
   // forecast says a window runs out within reach: it may take up to ~40% of the width,
   // anything further out is pointed at from the edge instead. A chosen horizon is kept as is.
-  const reach = measuredTo + (measuredTo - from) * 0.75;
+  const reach = measured + (measured - from) * 0.75;
   const lastRunOut = forecastShown ? Math.max(0, ...ahead.map(a => (a.runsOut !== null && a.runsOut <= reach ? a.runsOut : 0))) : 0;
   const to = !(planShown || forecastShown) || !frame.live
-    ? measuredTo
+    ? measured
     : prefs.horizon === 'auto'
       ? Math.max(
-          announced && announced > measuredTo && announced + future * 0.25 > measuredTo + future ? Math.min(reach, announced + future * 0.25) : measuredTo + future,
+          announced && announced > measured && announced + future * 0.25 > measured + future ? Math.min(reach, announced + future * 0.25) : measured + future,
           lastRunOut,
         )
-      : measuredTo + future;
+      : measured + future;
 
   const markers: Marker[] = useMemo(() => {
     const list: Marker[] = [];
@@ -145,7 +141,7 @@ export const History = memo(function History({
       const source = overview?.sources.find(s => s.id === line.sourceId);
       const live = source?.windows.find(w => w.id === line.windowId);
       // A reset is marked for a window that has started, whether or not the board plans it.
-      if (!live?.resetAt || live.resetAt <= measuredTo || live.resetAt > to || !started(live, source?.successAt ?? null)) continue;
+      if (!live?.resetAt || live.resetAt <= measured || live.resetAt > to || !started(live, source?.successAt ?? null)) continue;
       const key = `${line.sourceId}@${Math.round(live.resetAt / 60_000)}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -164,7 +160,7 @@ export const History = memo(function History({
       });
     }
     // Resets for everyone the trackers reported, on the providers the chart shows.
-    for (const {provider, reset, line} of chartResets(past, visible, from, measuredTo)) {
+    for (const {provider, reset, line} of chartResets(past, visible, from, measured)) {
       list.push({
         key: `announced-${provider}-${reset.at}`,
         at: reset.at,
@@ -175,7 +171,7 @@ export const History = memo(function History({
       });
     }
     return list;
-  }, [announced, visible, overview, history, past, from, to, measuredTo, view, locale]);
+  }, [announced, visible, overview, history, past, from, to, measured, view, locale]);
 
   // One plan line per distinct weekly window; windows of a source that share a reset
   // (e.g. Claude weekly and Fable) share one plan.
@@ -241,7 +237,7 @@ export const History = memo(function History({
         {!lines.length && <span className="legend-empty">{t('history.noLines')}</span>}
       </div>
 
-      {history ? <Chart lines={visible} plans={plans} forecasts={forecasts} markers={markers} from={from} now={measuredTo} to={to} cellMs={history.cellMs} empty={lines.length ? t('chart.empty') : null} onSelect={setTimeRange} onStep={direction => goTo(step(selected, prefs.range, direction, now, historyStart))} /> : <div className="chart chart-loading">{t('history.loading')}</div>}
+      {history ? <Chart lines={visible} plans={plans} forecasts={forecasts} markers={markers} from={from} now={measured} to={to} cellMs={history.cellMs} empty={lines.length ? t('chart.empty') : null} onSelect={setTimeRange} onStep={direction => goTo(step(selected, prefs.range, direction, now, historyStart))} /> : <div className="chart chart-loading">{t('history.loading')}</div>}
     </section>
   );
 });

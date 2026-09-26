@@ -1,11 +1,13 @@
-import {useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode, type RefObject} from 'react';
-import {clock, countdown, day, num, shortDay, stamp} from '../lib/format';
+import {useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent} from 'react';
+import {clock, countdown, num, shortDay, stamp} from '../lib/format';
 import {t} from '../i18n';
 import type {Line} from '../lib/lines';
 import {hubNow, MINUTE, useNow} from '../lib/api';
 import {gapText, gapTone, readout as readCell, valueAt, type ForecastLine, type PlanLine} from '../lib/readout';
 import {draggedRange, type TimeRange} from '../lib/timeRange';
 import {SWIPE, swiped} from '../lib/swipe';
+import {cellLabel, niceTicks} from '../lib/periods';
+import {Tooltip, useTip} from './Tooltip';
 
 /**
  * A moment on the time axis: ahead, a known window reset or an announced extra one;
@@ -164,39 +166,6 @@ function MarkerLabel({
       )}
     </g>
   );
-}
-
-function niceTicks(from: number, to: number, count: number) {
-  const span = to - from;
-  const steps = [5, 10, 15, 30, 60, 120, 180, 360, 720, 1440, 2880, 10080].map(minutes => minutes * 60_000);
-  const step = steps.find(candidate => span / candidate <= count) ?? steps.at(-1)!;
-  const offset = new Date().getTimezoneOffset() * 60_000;
-  const ticks: number[] = [];
-  for (let t = Math.ceil((from - offset) / step) * step + offset; t <= to; t += step) ticks.push(t);
-  return {ticks, daily: step >= 86_400_000};
-}
-
-const sameDay = (a: number, b: number) => new Date(a).toDateString() === new Date(b).toDateString();
-
-/**
- * A cell's times under its day. Cells are laid on UTC, so one may cross midnight here, and
- * then each end names its day; a time within a cell, shorter than a day, then reads as one
- * moment, save for the hour the clocks go back.
- */
-export function cellLabel(at: number, cellMs: number) {
-  if (!cellMs) return stamp(at);
-  const end = at + cellMs;
-  return sameDay(at, end - 1) ? `${day(at)} ${clock(at)}–${clock(end)}` : `${stamp(at)} – ${stamp(end)}`;
-}
-
-/**
- * How far the tooltip under a narrow chart rises over it to stay whole in the window: as
- * far as its bottom (`top`, where it stands unraised, plus its `height`) would pass the
- * window's, less a margin, and never above what covers the top of the page (`cover`, the
- * bars that stick there).
- */
-export function liftOf(top: number, height: number, windowHeight: number, cover: number) {
-  return Math.max(0, Math.min(top + height - (windowHeight - 8), top - cover - 8));
 }
 
 /** How long the chart's content takes to slide in after a step through time. */
@@ -506,48 +475,9 @@ export function Chart({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [from, now]);
 
-  // On a narrow chart it spans the chart's width under the plot, over what comes below, and
-  // rises over the plot as far as keeps it whole in the window (a phone with many lines),
-  // though never under the bars that stick at the top.
-  // It is measured after every render while it shows, whatever changed it (its rows, a new
-  // answer moving the chart, the pointer), and as the page scrolls under a pointer that stays.
-  const tip = useRef<HTMLDivElement>(null);
-  const [tipWidth, setTipWidth] = useState(200);
-  const [lift, setLift] = useState(0);
+  // On a narrow chart it spans the chart's width under the plot; a marker's time stands over its label and does not rise.
   const narrow = width < 560;
-  const measureTip = useRef(() => {});
-  measureTip.current = () => {
-    const element = tip.current;
-    if (!element) return;
-    // Its own width, not as narrowed to the side it stands on: where it goes depends on it.
-    const cap = element.style.maxWidth;
-    element.style.maxWidth = '';
-    setTipWidth(element.offsetWidth);
-    element.style.maxWidth = cap;
-    // Only the one under a narrow chart rises; a marker's time stands over its label.
-    if (!narrow || edgeMarker || !svg.current) return setLift(0);
-    // Where it stands unraised is read from the chart, never from itself, so what it finds
-    // does not depend on what it found before.
-    const top = svg.current.getBoundingClientRect().bottom + parseFloat(getComputedStyle(element).marginTop);
-    const bars = [...document.querySelectorAll<HTMLElement>('.topbar, .analytics-head')].filter(bar => getComputedStyle(bar).position === 'sticky');
-    const cover = Math.max(0, ...bars.map(bar => bar.getBoundingClientRect().bottom));
-    setLift(liftOf(top, element.getBoundingClientRect().height, innerHeight, cover));
-  };
-  // No dependencies: the same values found again change nothing, so it settles in one pass.
-  useLayoutEffect(() => measureTip.current());
-  useEffect(() => {
-    if (!narrow) return;
-    const scrolled = () => measureTip.current();
-    addEventListener('scroll', scrolled, {passive: true});
-    return () => removeEventListener('scroll', scrolled);
-  }, [narrow]);
-  // Beside the pointer: right of it, or left, or where there is more room when it fits
-  // neither side, narrowed to that room (its names wrap) rather than over the pointer.
-  const roomRight = width - hoverX - 12;
-  const roomLeft = hoverX - 12;
-  const onRight = tipWidth <= roomRight || (tipWidth > roomLeft && roomRight >= roomLeft);
-  const tipRoom = Math.min(360, Math.max(0, onRight ? roomRight : roomLeft));
-  const tipLeft = onRight ? hoverX + 12 : Math.max(0, hoverX - 12 - Math.min(tipWidth, tipRoom));
+  const {tip, style: tipStyle} = useTip(svg, {width, at: hoverX, narrow, rises: narrow && !edgeMarker, bottom: height * scale});
   const bandWidth = Math.max(1, x(Math.min(to, (hover ?? 0) + cellMs)) - x(hover ?? 0));
 
   return (
@@ -710,7 +640,7 @@ export function Chart({
         hover !== null &&
         !drag &&
         (rows.some(row => row.left !== null || row.plan !== null || row.forecast !== null) || markerReadout.length > 0) && (
-          <Tooltip tip={tip} className={narrow ? 'is-below' : ''} style={narrow ? {top: height * scale - lift} : {left: tipLeft, maxWidth: tipRoom}}>
+          <Tooltip tip={tip} className={narrow ? 'is-below' : ''} style={tipStyle}>
             <div className="tooltip-time">{cellLabel(hover, cellMs)}</div>
             {grid && (
               <div className="tooltip-grid" style={{gridTemplateColumns: `14px minmax(0, 1fr) repeat(${columnCount}, auto)`}}>
@@ -753,15 +683,6 @@ export function Chart({
         )
       )}
       {!lines.length && empty && <div className="chart-empty">{empty}</div>}
-    </div>
-  );
-}
-
-/** The chart's own tooltip, glass as the popovers are; it lies over the widgets below, under the sticky bars. */
-function Tooltip({tip, className, style, children}: {tip: RefObject<HTMLDivElement | null>; className: string; style: CSSProperties; children: ReactNode}) {
-  return (
-    <div className={`tooltip glass ${className}`} ref={tip} style={style}>
-      {children}
     </div>
   );
 }

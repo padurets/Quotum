@@ -14,6 +14,8 @@
   --ok: #75d8ad;
   --warn: #f6c56e;
   --crit: #f17870;
+  /* What a stack of hours shows together beyond its first few projects or machines: a neutral, 3:1 on the surface. */
+  --other: #6c6b7b;
   /* An announced reset: news that changes how the rest of a limit should be spent. */
   --reset: #a29cff;
   --reset-glow: #7b6fffaa;
@@ -454,6 +456,19 @@ td.muted, small.muted { color: var(--text-3); }
 .chart > svg { display: block; width: 100%; height: auto; touch-action: pan-y; overflow: visible; }
 .chart-loading, .chart-empty { min-height: 220px; display: grid; place-items: center; color: var(--text-3); font-size: 13px; }
 .chart-empty { position: absolute; inset: 0; min-height: 0; pointer-events: none; }
+/* Agent activity: its switch beside the title (under it on a narrow widget), its totals a quieter line, each a whole. */
+.activity .panel-head { gap: 10px 16px; }
+.activity-controls { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.activity-totals { display: flex; flex-wrap: wrap; gap: 2px 16px; margin-top: 6px; font-size: 12.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.activity-totals > span { white-space: nowrap; }
+.activity-since { font-size: 11px; color: var(--text-2); border: 1px solid var(--hair-2); padding: 0 6px; border-radius: 5px; }
+.activity .chart-loading { min-height: 200px; }
+/* Parts of a stack stand apart by a hair of the surface, so two of one colour do not run together. */
+.activity-stack { stroke: var(--surface); stroke-width: .75; }
+.activity-hatch { stroke: var(--hair-2); stroke-width: 1.5; }
+.activity-unknown-label { fill: var(--text-3); font-size: 11.5px; }
+.activity-swatch { display: inline-block; flex-shrink: 0; width: 10px; height: 10px; border-radius: 2px; }
+.activity-legend .legend-item { cursor: default; }
 .grid { stroke: #ffffff0a; stroke-width: 1; stroke-dasharray: 2 4; }
 .axis-line { stroke: var(--hair-2); stroke-width: 1; }
 .threshold { stroke-width: 1; stroke-dasharray: 1 3; }

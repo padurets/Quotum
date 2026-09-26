@@ -4,9 +4,10 @@ import {DEFAULT_PLAN, isValidPlan, type WeeklyPlan} from './plan';
 import {windowKey, type Overview, type View} from './types';
 import {FALLBACK_COLOR, PROVIDERS} from './providers';
 
-/** Widget ids: the chart, the table of every limit, the list of running agents, and a card per source. */
+/** Widget ids: the chart, the table of every limit, how agents worked, the list of running agents, and a card per source. */
 export const HISTORY = 'history';
 export const FORECAST = 'forecast';
+export const ACTIVITY = 'activity';
 export const AGENTS = 'agents';
 export const cardId = (sourceId: string) => `source:${sourceId}`;
 
@@ -102,7 +103,7 @@ export const isWindowHidden = (view: View, sourceId: string, windowId: string) =
  */
 export function boardState(sources: {id: string}[], view: View): 'onboarding' | 'widgets' | 'allHidden' {
   if (!sources.length) return 'onboarding';
-  const widgets = [...sources.map(source => cardId(source.id)), AGENTS, HISTORY, FORECAST];
+  const widgets = [...sources.map(source => cardId(source.id)), AGENTS, HISTORY, FORECAST, ACTIVITY];
   return widgets.every(id => isHidden(view, id)) ? 'allHidden' : 'widgets';
 }
 

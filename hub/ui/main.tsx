@@ -10,7 +10,7 @@ import {useResets} from './lib/resets';
 import {sourceLabel, titled} from './lib/quota';
 import {usePath} from './lib/router';
 import {boardTitle, rememberBoard, useBoard, useSession, type Board, type Session, type User} from './lib/session';
-import {AGENTS, arranged, boardState, cardId, FORECAST, HISTORY, isHidden, reordered, spanOf, useView, withHidden, withSpan} from './lib/view';
+import {ACTIVITY, AGENTS, arranged, boardState, cardId, FORECAST, HISTORY, isHidden, reordered, spanOf, useView, withHidden, withSpan} from './lib/view';
 import {t, useLocale} from './i18n';
 import {Header} from './components/Header';
 import {SERVICE} from './components/Kit';
@@ -18,6 +18,7 @@ import {SourceCard} from './components/SourceCard';
 import {AgentsPanel} from './components/Agents';
 import {History} from './components/History';
 import {Forecast} from './components/Forecast';
+import {Activity} from './components/Activity';
 import {AnalyticsHead} from './components/Analytics';
 import {Widgets, WidgetsMenu, type Widget} from './components/Widgets';
 import {AccountPanel} from './components/Account';
@@ -124,6 +125,15 @@ function Dashboard({
         name: t('forecast.title'),
         span: spanOf(arrange.view, FORECAST),
         content: <Forecast history={history} loading={historyLoading} overview={overview} arrange={arrange} />,
+      },
+    ],
+    [
+      ACTIVITY,
+      {
+        id: ACTIVITY,
+        name: t('activity.title'),
+        span: spanOf(arrange.view, ACTIVITY),
+        content: <Activity history={history} loading={historyLoading} overview={overview} arrange={arrange} />,
       },
     ],
   ]);
