@@ -23,6 +23,9 @@ function Mark({session}: {session: LiveSession}) {
 const stateOf = (session: LiveSession) =>
   t(session.working ? 'agents.working' : session.origin === 'terminal' ? 'agents.idle' : 'agents.window');
 
+/** A cut name in full on hover: the project, and the folder on a line of its own. */
+const placeOf = (session: LiveSession) => [session.project, folderOf(session)].filter(Boolean).join('\n') || undefined;
+
 /** How long a session has run, short: a fresh one is "just now". */
 const since = (ms: number) => (ms < 60_000 ? t('agents.justNow') : duration(ms, true));
 
@@ -111,7 +114,7 @@ export function Agents({sessions, now, roomy = true}: {sessions: LiveSession[]; 
               <div className={`agents-row ${session.working ? 'is-working' : ''}`} key={i} title={stateOf(session)}>
                 <Mark session={session} />
                 <Origin origin={session.origin} />
-                <span className="agents-project">
+                <span className="agents-project" title={placeOf(session)}>
                   <span>{session.project ?? t('agents.noProject')}</span>
                   {folderOf(session) && <small>{folderOf(session)}</small>}
                   <span className="sr-only">, {stateOf(session)}</span>
@@ -136,9 +139,6 @@ export function Agents({sessions, now, roomy = true}: {sessions: LiveSession[]; 
     </Popover>
   );
 }
-
-/** A cut name in full on hover: the project, and the folder on a line of its own. */
-const placeOf = (session: LiveSession) => [session.project, folderOf(session)].filter(Boolean).join('\n') || undefined;
 
 /** The table's columns after the project, each one the owner can hide to make the widget narrow. */
 const COLUMNS: {id: AgentColumn; title: Key; cell: (row: AgentRow, now: number) => ReactNode}[] = [

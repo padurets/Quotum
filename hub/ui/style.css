@@ -224,8 +224,11 @@ body.is-resizing, body.is-resizing * { cursor: ew-resize !important; user-select
   border: 1px solid var(--glass-edge);
   box-shadow: var(--glass-shadow);
 }
-/* Over the chart's lines the text has to stay readable: a denser pane. */
-.tooltip.glass { background: linear-gradient(180deg, #ffffff0c, #ffffff02 45%), #131318d9; }
+/*
+ * Over the chart's lines the text has to stay readable: a denser pane. So over a dialog's
+ * rows, where the glass within the dialog's own does not blur them.
+ */
+.tooltip.glass, .dialog .popover.glass { background: linear-gradient(180deg, #ffffff0c, #ffffff02 45%), #131318d9; }
 .popover-title.is-group { padding-top: 6px; padding-bottom: 4px; }
 .popover-title { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-4); padding: 4px 8px 8px; }
 .popover-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 8px; border: 0; border-radius: 8px; background: none; font-size: 13px; color: var(--text-2); text-align: left; }
@@ -392,6 +395,7 @@ td.muted, small.muted { color: var(--text-3); }
 .agents-machine h3 small { margin-left: auto; font-weight: 450; color: var(--text-3); white-space: nowrap; }
 .agents-row { display: grid; grid-template-columns: 5px 13px minmax(0, 1fr) minmax(52px, auto); align-items: center; gap: 10px; padding: 6px 8px; border-radius: 7px; font-size: 12.5px; color: var(--text-3); }
 .agents-row.is-working { color: var(--text); }
+/* A long list is followed by the eye row by row, as the table's is: as bright as a menu's rows, on the same glass. */
 .agents-row:hover { background: #ffffff08; }
 /* Positioned, so the state named for screen readers after a long project is cut with it rather than widening the page. */
 .agents-project { position: relative; min-width: 0; overflow: hidden; }
@@ -692,6 +696,7 @@ tr:hover .device-name .icon-button, .device-name .icon-button:focus-visible { op
   /* Projects keep their machines and let when they last worked go. */
   .projects-table th:nth-child(3), .projects-table td:nth-child(3) { display: table-cell; }
   .projects-table th:nth-child(5), .projects-table td:nth-child(5) { display: none; }
+  .projects-table th, .projects-table td { white-space: normal; }
   .brand span { display: none; }
   .status { gap: 10px; font-size: 12px; }
   main { padding: 16px 16px 32px; gap: 16px; }

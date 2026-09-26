@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useState, type FormEvent} from 'react';
+import {useCallback, useEffect, useRef, useState, type FormEvent} from 'react';
 import {useNow} from '../lib/api';
 import {ago, duration, stamp} from '../lib/format';
 import {PROVIDERS} from '../lib/providers';
@@ -70,9 +70,22 @@ function InlineName({
 }) {
   const [name, setName] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
+  // Closed without a change, the field gives the keyboard back to the pencil that opened it.
+  const pencil = useRef<HTMLButtonElement>(null);
+  const back = useRef(false);
+  useEffect(() => {
+    if (name === null && back.current) pencil.current?.focus();
+    back.current = false;
+  }, [name]);
+  const close = () => {
+    back.current = true;
+    setName(null);
+  };
   const save = async (event: FormEvent) => {
     event.preventDefault();
     setError(null);
+    // Saved as it was: nothing to store, so a name with spaces at its ends is not changed by trimming.
+    if (name === current) return close();
     try {
       await store(name!.trim());
       setName(null);
@@ -90,7 +103,7 @@ function InlineName({
           placeholder={placeholder}
           aria-label={label}
           onChange={event => setName(event.target.value)}
-          onKeyDown={event => event.key === 'Escape' && (event.stopPropagation(), setName(null))}
+          onKeyDown={event => event.key === 'Escape' && (event.stopPropagation(), close())}
         />
         <button className="button">{t('boards.save')}</button>
         <ErrorLine error={error} />
@@ -100,7 +113,7 @@ function InlineName({
   return (
     <span className="device-name">
       <b title={current}>{current}</b>
-      <button type="button" className="icon-button" aria-label={renameLabel} title={renameLabel} onClick={() => setName(current)}>
+      <button ref={pencil} type="button" className="icon-button" aria-label={renameLabel} title={renameLabel} onClick={() => setName(current)}>
         <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
           <path d="M10.5 3.5l2 2M3 13l.6-2.6L11 3a1.4 1.4 0 0 1 2 2l-7.4 7.4z" />
         </svg>
