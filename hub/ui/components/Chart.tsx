@@ -325,43 +325,41 @@ export function Chart({
   // On a narrow chart it spans the chart's width under the plot, over what comes below, and
   // rises over the plot as far as keeps it whole in the window (a phone with many lines),
   // though never under the bars that stick at the top.
-  // The page scrolling under a pointer that stays measures it again.
+  // It is measured after every render while it shows, whatever changed it (its rows, a new
+  // answer moving the chart, the pointer), and as the page scrolls under a pointer that stays.
   const tip = useRef<HTMLDivElement>(null);
   const [tipWidth, setTipWidth] = useState(200);
   const [lift, setLift] = useState(0);
   const lifted = useRef(0);
   const narrow = width < 560;
-  useLayoutEffect(() => {
+  const measureTip = useRef(() => {});
+  measureTip.current = () => {
     const element = tip.current;
     if (!element) return;
-    const measure = () => {
-      // Its own width, not as narrowed to the side it stands on: where it goes depends on it.
-      const cap = element.style.maxWidth;
-      element.style.maxWidth = '';
-      setTipWidth(element.offsetWidth);
-      element.style.maxWidth = cap;
-      if (!narrow) {
-        lifted.current = 0;
-        return setLift(0);
-      }
-      const rect = element.getBoundingClientRect();
-      const [top, bottom] = [rect.top + lifted.current, rect.bottom + lifted.current];
-      const bars = [...document.querySelectorAll<HTMLElement>('.topbar, .analytics-head')].filter(bar => getComputedStyle(bar).position === 'sticky');
-      const cover = Math.max(0, ...bars.map(bar => bar.getBoundingClientRect().bottom));
-      lifted.current = Math.max(0, Math.min(bottom - (innerHeight - 8), top - cover - 8));
-      setLift(lifted.current);
-    };
-    measure();
-    // Measured again as its rows change under a pointer that stays (the next answer came).
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    if (narrow) addEventListener('scroll', measure, {passive: true});
-    return () => {
-      observer.disconnect();
-      removeEventListener('scroll', measure);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hover, edge, narrow, lines.length]);
+    // Its own width, not as narrowed to the side it stands on: where it goes depends on it.
+    const cap = element.style.maxWidth;
+    element.style.maxWidth = '';
+    setTipWidth(element.offsetWidth);
+    element.style.maxWidth = cap;
+    if (!narrow) {
+      lifted.current = 0;
+      return setLift(0);
+    }
+    const rect = element.getBoundingClientRect();
+    const [top, bottom] = [rect.top + lifted.current, rect.bottom + lifted.current];
+    const bars = [...document.querySelectorAll<HTMLElement>('.topbar, .analytics-head')].filter(bar => getComputedStyle(bar).position === 'sticky');
+    const cover = Math.max(0, ...bars.map(bar => bar.getBoundingClientRect().bottom));
+    lifted.current = Math.max(0, Math.min(bottom - (innerHeight - 8), top - cover - 8));
+    setLift(lifted.current);
+  };
+  // No dependencies: the same values found again change nothing, so it settles in one pass.
+  useLayoutEffect(() => measureTip.current());
+  useEffect(() => {
+    if (!narrow) return;
+    const scrolled = () => measureTip.current();
+    addEventListener('scroll', scrolled, {passive: true});
+    return () => removeEventListener('scroll', scrolled);
+  }, [narrow]);
   // Beside the pointer: right of it, or left, or where there is more room when it fits
   // neither side, narrowed to that room (its names wrap) rather than over the pointer.
   const roomRight = width - hoverX - 12;

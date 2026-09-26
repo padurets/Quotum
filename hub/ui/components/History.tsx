@@ -6,7 +6,7 @@ import {sourceLabel} from '../lib/quota';
 import {planAt, started, weeklyPlanLine} from '../lib/plan';
 import {PROVIDERS} from '../lib/providers';
 import {HORIZONS, setMuted, setPrefs, usePrefs} from '../lib/prefs';
-import {goTo, setTimeRange, useTimeRange} from '../lib/timeRange';
+import {goTo, setTimeRange, timeRangeKey, useTimeRange} from '../lib/timeRange';
 import {frameOf, step} from '../lib/periods';
 import {HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
 import {chartEvents, chartResets, linesOf} from '../lib/lines';
@@ -69,9 +69,11 @@ export const History = memo(function History({
   const historyStart = overview?.historyStart ?? history?.historyStart ?? 0;
   const frame = frameOf(selected, prefs, now, historyStart);
   const {from, future} = frame;
-  // A period ending now ends at the page's clock, or at the hub's when that is ahead: a
-  // browser a few minutes behind still draws the latest measurements.
-  const measuredTo = frame.live && history?.range === prefs.range ? Math.max(frame.to, history.to) : frame.to;
+  // Measurements end at the page's clock, or at the hub's when that is ahead and the answer
+  // is of this very period: a browser a few minutes behind still draws the latest ones, up
+  // to the end of a range dragged to the edge of a period ending now.
+  const answered = history && history.range === (selected ? timeRangeKey(selected) : prefs.range) ? history : null;
+  const measuredTo = answered ? Math.max(frame.to, selected ? Math.min(answered.to, selected.to) : answered.to) : frame.to;
   // An announced Codex reset matters only where Codex is on the chart.
   const announced = frame.live && visible.some(line => line.provider === 'codex') ? (resets.codex?.scheduled?.scheduledFor ?? null) : null;
   // The spending plan applies to weekly windows; the days ahead are there for it, when a line on the chart has a plan.
