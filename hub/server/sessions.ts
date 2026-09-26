@@ -1,17 +1,37 @@
 import type {Origin} from './domain/ingest.js';
-import type {Store} from './store/store.js';
+import type {Store, WorkKey} from './store/store.js';
 
-/** A running coding agent as a board shows it, on the card of the subscription it spends. */
+/** A running coding agent as its machine reported it, on the subscription it spends. */
 export type LiveSession = {
   device: {id: string; name: string};
   origin: Origin;
   project: string | null;
+  folder: string | null;
+  /** On the hub's clock. */
+  startedAt: number;
+  /** As the agent sent it: the correction for its clock differs from request to request, so this tells the session. */
+  sentStartedAt: number;
+  lastWorkedAt: number | null;
+  working: boolean;
+};
+
+/**
+ * A running coding agent as a board shows it, on the card of the subscription it spends:
+ * its project as its person named it («My machines» → «Projects»), and its folder where
+ * that is another (a worktree, a folder inside the repository), so agents of one project
+ * stay apart.
+ */
+export type BoardSession = {
+  device: {id: string; name: string};
+  origin: Origin;
+  project: string | null;
+  folder: string | null;
   startedAt: number;
   lastWorkedAt: number | null;
   working: boolean;
 };
 
-/** A machine's sessions, by the subscription they spend, as its agent last reported them. */
+/** A machine's sessions, by the subscription they spend, as its agent last reported them, and when. */
 type Machine = {at: number; user: string; sources: Map<string, LiveSession[]>};
 
 /** A machine's list is kept this long after its last report (its agent reports at least every two minutes). */
@@ -24,20 +44,16 @@ export const KEEP_MS = 5 * 60_000;
  * that measurement can stretch a gap past this; the few seconds over are not counted.
  */
 export const CREDIT_MS = 200_000;
-/** How far back the time any agent worked on a subscription is remembered, to count overlaps once. */
-const BUSY_MEMORY_MS = 2 * 3_600_000;
 
 /**
  * The coding agents running on people's machines right now (spec: Reporting running
  * agents). Only the latest list of each machine is kept, in memory: after a restart the
- * agents send theirs again within minutes. What the lists said is added up as time
- * agents worked on each subscription (Store.addWork): agent time adds up across
- * machines, the time any of them worked counts overlaps once.
+ * agents send theirs again within minutes. When each session worked, as the lists said,
+ * is kept (Store.creditWork); how long agents worked is worked out from that when read
+ * (domain/work.ts).
  */
 export class Sessions {
   private readonly machines = new Map<string, Machine>();
-  /** Recently credited stretches of time any agent worked, per subscription. */
-  private readonly busy = new Map<string, [number, number][]>();
 
   constructor(private readonly store: Store) {}
 
@@ -45,7 +61,7 @@ export class Sessions {
   report(device: string, user: string, sessions: (LiveSession & {source: string})[], now: number) {
     this.sweep(now);
     const before = this.machines.get(device);
-    if (before) this.credit(before, Math.min(now, before.at + CREDIT_MS));
+    if (before) this.credit(device, before, Math.min(now, before.at + CREDIT_MS));
     const sources = new Map<string, LiveSession[]>();
     for (const {source, ...session} of sessions) sources.set(source, [...(sources.get(source) ?? []), session]);
     if (sources.size) this.machines.set(device, {at: now, user, sources});
@@ -56,13 +72,8 @@ export class Sessions {
   sweep(now: number) {
     for (const [device, machine] of this.machines) {
       if (now - machine.at <= KEEP_MS) continue;
-      this.credit(machine, machine.at + CREDIT_MS);
+      this.credit(device, machine, machine.at + CREDIT_MS);
       this.machines.delete(device);
-    }
-    for (const [source, stretches] of this.busy) {
-      const recent = stretches.filter(([, to]) => to > now - BUSY_MEMORY_MS);
-      if (recent.length) this.busy.set(source, recent);
-      else this.busy.delete(source);
     }
   }
 
@@ -75,34 +86,41 @@ export class Sessions {
    * The sessions running on a subscription on the machines of `people` (those who show
    * it on the board read), by machine name and then by age.
    */
-  of(source: string, people: string[], now: number): LiveSession[] {
-    const found: LiveSession[] = [];
+  of(source: string, people: string[], now: number): BoardSession[] {
+    const found: BoardSession[] = [];
     for (const machine of this.machines.values()) {
       if (now - machine.at > KEEP_MS || !people.includes(machine.user)) continue;
-      found.push(...(machine.sources.get(source) ?? []));
+      const sessions = machine.sources.get(source) ?? [];
+      const names = sessions.length ? this.store.projectNames(machine.user) : new Map<string, string>();
+      for (const {device, origin, project, folder, startedAt, lastWorkedAt, working} of sessions) {
+        const shown = project === null ? null : (names.get(project) ?? project);
+        // The agent leaves out a folder that is its project; renamed, that name tells the folder.
+        found.push({device, origin, project: shown, folder: folder ?? (shown !== project ? project : null), startedAt, lastWorkedAt, working});
+      }
     }
     return found.sort((a, b) => a.device.name.localeCompare(b.device.name) || a.device.id.localeCompare(b.device.id) || a.startedAt - b.startedAt);
   }
 
-  /** Credits a machine's list from its report to `until`. */
-  private credit(machine: Machine, until: number) {
+  /**
+   * Credits the working sessions of a machine's list with the time from its report to
+   * `until`; the store leaves out what a clock set back would credit twice.
+   */
+  private credit(device: string, machine: Machine, until: number) {
     const from = machine.at;
     if (until <= from) return;
+    const keys: WorkKey[] = [];
+    // Sessions alike in everything (started together by a script) are told apart by their place among them.
+    const alike = new Map<string, number>();
     for (const [source, sessions] of machine.sources) {
-      const agents = sessions.filter(s => s.working).length;
-      if (!agents) continue;
-      this.store.addWork(source, from, until, agents);
-      // Only what no other machine was credited for already.
-      const stretches = this.busy.get(source) ?? [];
-      let pieces: [number, number][] = [[from, until]];
-      for (const [start, end] of stretches) {
-        pieces = pieces.flatMap(([a, b]): [number, number][] =>
-          end <= a || start >= b ? [[a, b]] : ([[a, start], [end, b]] as [number, number][]).filter(([x, y]) => y > x),
-        );
+      for (const session of sessions) {
+        if (!session.working) continue;
+        const key = {source, origin: session.origin, startedAt: session.sentStartedAt, project: session.project ?? '', folder: session.folder ?? ''};
+        const id = JSON.stringify(key);
+        const ordinal = alike.get(id) ?? 0;
+        alike.set(id, ordinal + 1);
+        keys.push({...key, ordinal});
       }
-      for (const [a, b] of pieces) this.store.addBusy(source, a, b);
-      stretches.push([from, until]);
-      this.busy.set(source, stretches);
     }
+    this.store.creditWork(device, from, until, keys);
   }
 }

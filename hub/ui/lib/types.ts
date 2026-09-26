@@ -45,7 +45,10 @@ export type LiveSession = {
   device: {id: string; name: string};
   /** A terminal; an editor or the provider's app, which run one client per window. */
   origin: 'terminal' | 'editor' | 'app';
+  /** Its project, as its person named it. */
   project: string | null;
+  /** The folder it works in, where that is not its project (a worktree, a folder inside the repository). */
+  folder: string | null;
   startedAt: number;
   lastWorkedAt: number | null;
   working: boolean;

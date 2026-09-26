@@ -44,7 +44,8 @@ export function Modal({title, onClose, children, wide, side}: {title: string; on
     const top = () => dialogs.at(-1) === entry;
     const keydown = (event: KeyboardEvent) => {
       if (!top()) return;
-      if (event.key === 'Escape') return close.current?.();
+      // A menu open in the dialog closes first (on the same key, by itself); the dialog, on the next.
+      if (event.key === 'Escape') return own.querySelector('.popover') ? undefined : close.current?.();
       if (event.key !== 'Tab') return;
       const fields = [...own.querySelectorAll<HTMLElement>('button, input, select, textarea, a[href], [tabindex], [contenteditable="true"]')]
         .filter(field => field.tabIndex >= 0 && !field.matches(':disabled') && !field.closest('[inert]') && field.getClientRects().length);

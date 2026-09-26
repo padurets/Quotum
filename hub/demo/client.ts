@@ -104,6 +104,11 @@ export class Person {
   async renameDevice(device: string, name: string) {
     await this.post(`/api/devices/${encodeURIComponent(device)}`, {name});
   }
+
+  /** Names a project as its machines report it, whether or not any has yet. */
+  async renameProject(reported: string, name: string) {
+    await this.post('/api/projects', {groups: [reported], name});
+  }
 }
 
 export type MachineInfo = {id: string; name: string; os: string; arch: string};

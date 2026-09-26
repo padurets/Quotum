@@ -14,11 +14,12 @@ import {Directory} from '../../server/store/directory.js';
 import {Store} from '../../server/store/store.js';
 import type {ResetEvent, ResetProvider} from '../../server/domain/resets.js';
 import {setLocale} from '../../ui/i18n/index.js';
-import {agentRows, byActivity, drawn, machinesOf} from '../../ui/lib/agents.js';
+import {agentRows, byActivity, drawn, folderOf, machinesOf} from '../../ui/lib/agents.js';
 import {forecastRow} from '../../ui/lib/forecast.js';
 import {chartEvents, chartResets, linesOf} from '../../ui/lib/lines.js';
 import {frameOf, step} from '../../ui/lib/periods.js';
 import {planNote, started} from '../../ui/lib/plan.js';
+import {shown as gathered, type Projects} from '../../ui/lib/projects.js';
 import {dotOf, level, resetLine, titled, windowName} from '../../ui/lib/quota.js';
 import {resetLabel, type Resets, type TrackerHealth} from '../../ui/lib/resets.js';
 import {ANALYTICS_KINDS, type History, type Overview} from '../../ui/lib/types.js';
@@ -107,6 +108,7 @@ class Reading {
   private readonly overviews = new Map<string, Promise<Overview>>();
   private readonly histories = new Map<string, Promise<History>>();
   private readonly devices = new Map<string, Promise<{reported: string; name: string; os: string; via: string; failures: {provider: string; error: string}[]}[]>>();
+  private readonly projectLists = new Map<string, Promise<Projects>>();
 
   constructor(
     private readonly stand: Stand,
@@ -158,6 +160,11 @@ class Reading {
     if (!this.devices.has(person)) this.devices.set(person, this.stand.people.get(person)!.get('/api/devices'));
     return this.devices.get(person)!;
   }
+
+  projects(person: string) {
+    if (!this.projectLists.has(person)) this.projectLists.set(person, this.stand.people.get(person)!.get<Projects>('/api/projects'));
+    return this.projectLists.get(person)!;
+  }
 }
 
 /**
@@ -192,12 +199,25 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
     const failed = failure && device.failures.some(f => f.provider === failure.provider && f.error === failure.error);
     return {os: device.os, name: device.name, via: device.via, failure: failed ? failure : device.failures};
   }
+  if (entry.kind === 'person' && 'project' in check) {
+    // As the tab lists it: its machines in the hub's order, what it gathers as ui/lib names it.
+    const {project} = check as {project: string | null};
+    const group = (await reading.projects(entry.id)).projects.find(g => g.name === project);
+    if ('absent' in check) return {project, absent: !group};
+    if (!group) return `no project ${project}`;
+    return {project, machines: group.machines.map(m => m.name), reported: gathered(group)};
+  }
   if (entry.kind === 'person' || entry.kind === 'board') {
     const overview = await reading.overview(entry.id);
     // A widget hidden on the board shows none of its codes.
-    if ('rows' in check && isHidden(overview.view, AGENTS)) return `the table of running agents is hidden on the board ${entry.id}`;
+    if (('rows' in check || 'agentsOf' in check) && isHidden(overview.view, AGENTS)) return `the table of running agents is hidden on the board ${entry.id}`;
     if ('weeklySeries' in check && isHidden(overview.view, HISTORY)) return `the chart is hidden on the board ${entry.id}`;
     const {rows, empty} = agentRows(overview.sources, overview.view);
+    if ('agentsOf' in check) {
+      const {agentsOf} = check as {agentsOf: string};
+      const folders = rows.filter(row => row.session.project === agentsOf).map(row => folderOf(row.session));
+      return {agentsOf, folders: folders.sort((a, b) => (a ?? '').localeCompare(b ?? ''))};
+    }
     const series = 'weeklySeries' in check ? linesOf(await reading.history(entry.id), overview, overview.view, 'weekly').length : 0;
     return {
       state: boardState(overview.sources, overview.view),
@@ -329,6 +349,18 @@ test('the catalogue is consistent', () => {
   assert.equal(new Set(scenes).size, scenes.length, 'scenes are named once');
   for (const set of SETS) assert.ok(scenes.includes(set.scene), `${set.id} starts with a scene that exists`);
   for (const scene of SCENES) assert.ok(scene.expect.length, `scene ${scene.id} expects something`);
+});
+
+test('the check of a set names a correction the hub keeps none of, and a project no working agent of the person has', () => {
+  const all = setOf('all');
+  const ana = (change: object): DemoSet => ({...all, entries: all.entries.map(e => (e.kind === 'person' && e.id === 'ana' ? {...e, ...change} : e))});
+  const anas = all.entries.find(e => e.kind === 'person' && e.id === 'ana') as Extract<Entry, {kind: 'person'}>;
+  assert.match(problems(ana({projects: {billing: 'billing'}})).join('\n'), /person ana: a name for billing the hub keeps no correction for/);
+  assert.match(problems(ana({projects: {billing: ' x'}})).join('\n'), /person ana: a name for billing/);
+  assert.match(problems(ana({projects: {billing: ''}})).join('\n'), /person ana: a name for billing/, 'no name');
+  assert.match(problems(ana({expect: [...anas.expect, {project: 'infra'}]})).join('\n'), /person ana expects the project infra, which no working agent of theirs has/);
+  assert.deepEqual(problems(ana({expect: [...anas.expect, {project: 'infra', absent: true}]})), [], 'absent needs none');
+  assert.deepEqual(problems(ana({expect: [...anas.expect, {project: 'docs'}]})), [], 'a corrected name, by what is reported under it');
 });
 
 test('the check of a set names a subscription without an account the hub would file elsewhere', () => {
