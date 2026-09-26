@@ -27,6 +27,7 @@ export const en = {
   'api.invalid_code': 'The code was not found or has expired',
   'api.board_not_found': 'Board not found',
   'api.invalid_name': 'A name is 1 to 80 characters',
+  'api.invalid_project_name': 'A project name is 1 to 120 characters',
   'api.forbidden': 'Only the board’s owner can do that',
   'api.not_found': 'It is not there any more',
   'api.invalid_setup_code': 'That is not this hub’s setup code',

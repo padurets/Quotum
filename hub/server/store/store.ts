@@ -4,6 +4,7 @@ import {providers, sourceId, type Provider, type Source} from '../domain/sources
 import {onGrid, series, type Kind, type Measurement, type Sample, type SourceState} from '../domain/quota.js';
 import type {Origin} from '../domain/ingest.js';
 import type {Stretch} from '../domain/work.js';
+import {members, projectGroups, type ProjectGroup} from '../domain/projects.js';
 import {migrate} from './schema.js';
 
 /** A session credited with work (server/sessions.ts): its names as reported, '' for none. */
@@ -466,6 +467,48 @@ export class Store {
       from: r.from_at,
       to: r.to_at,
     }));
+  }
+
+  /** The projects of a person's machines, with their time since `since` and the names the person gave them. */
+  projectsOf(user: string, since: number): ProjectGroup[] {
+    const rows = this.db
+      .prepare(
+        'SELECT s.project, d.id, COALESCE(d.label, d.name) AS name, sum(w.to_at - max(w.from_at, ?)) AS ms, max(w.to_at) AS last' +
+          ' FROM devices d JOIN agent_sessions s ON s.device_id = d.id JOIN agent_work w ON w.session_id = s.id' +
+          ' WHERE d.user_id = ? AND w.to_at > ? GROUP BY s.project, d.id',
+      )
+      .all(since, user, since) as {project: string; id: string; name: string; ms: number; last: number}[];
+    const work = rows.map(r => ({reported: r.project, machine: {id: r.id, name: r.name}, agentMs: r.ms, lastAt: r.last}));
+    return projectGroups(work, this.projectNames(user));
+  }
+
+  /**
+   * Gives every reported name gathered under the person's projects `groups` the name
+   * `name`, or back its own when that is empty. Call it in a transaction: the groups are
+   * worked out from what is kept as it writes.
+   */
+  nameProjects(user: string, groups: string[], name: string) {
+    const names = this.projectNames(user);
+    const sent = new Set(
+      (this.db.prepare('SELECT DISTINCT s.project FROM devices d JOIN agent_sessions s ON s.device_id = d.id WHERE d.user_id = ?').all(user) as {project: string}[]).map(
+        r => r.project,
+      ),
+    );
+    const reported = new Set(groups.flatMap(group => members(group, names, sent)));
+    this.restoreProjects(user, [...reported].filter(r => !name || r === name));
+    const give = this.db.prepare('INSERT INTO project_names VALUES (?, ?, ?) ON CONFLICT (user_id, reported) DO UPDATE SET name = excluded.name');
+    if (name) for (const r of reported) if (r !== name) give.run(user, r, name);
+  }
+
+  /** Reported names shown under their own name again. */
+  restoreProjects(user: string, reported: string[]) {
+    const remove = this.db.prepare('DELETE FROM project_names WHERE user_id = ? AND reported = ?');
+    for (const r of reported) remove.run(user, r);
+  }
+
+  private projectNames(user: string): Map<string, string> {
+    const rows = this.db.prepare('SELECT reported, name FROM project_names WHERE user_id = ?').all(user) as {reported: string; name: string}[];
+    return new Map(rows.map(r => [r.reported, r.name]));
   }
 
   /** Since when the hub keeps how agents worked: before it, that is not known. */

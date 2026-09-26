@@ -13,6 +13,8 @@ import {
 import type {Guards, Hub} from '../api.js';
 import type {Board} from '../store/directory.js';
 import {parseView} from '../domain/view.js';
+import {longerThan} from '../domain/ingest.js';
+import {PROJECT_NAME_CHARS} from '../domain/projects.js';
 import {currentUser, Limiter, publicOrigin, sessionSecret, setSession} from '../session.js';
 
 type Body = Record<string, unknown>;
@@ -20,6 +22,15 @@ const str = (value: unknown) => (typeof value === 'string' ? value : '');
 const isOwner = (board: Board) => board.role === 'owner';
 const forbidden = (reply: FastifyReply) => reply.code(403).send({error: 'forbidden'});
 const notFound = (reply: FastifyReply) => reply.code(404).send({error: 'not_found'});
+/** Names of projects as the hub keeps them: 1 to 100 different ones, each as long as an agent sends. */
+const projectNames = (value: unknown): string[] | null =>
+  Array.isArray(value) &&
+  value.length >= 1 &&
+  value.length <= 100 &&
+  new Set(value).size === value.length &&
+  value.every(name => typeof name === 'string' && name.length > 0 && !longerThan(name, PROJECT_NAME_CHARS))
+    ? (value as string[])
+    : null;
 
 /**
  * Signing up and in; each person's machines (devices, machine tokens, approving device
@@ -333,6 +344,40 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
     const name = str(request.body?.name).trim();
     if (name && !validName(name)) return reply.code(400).send({error: 'invalid_name'});
     return directory.renameDevice(user.id, request.params.device, name) ? {ok: true} : notFound(reply);
+  });
+
+  // The projects of one's machines, and the names one gives them: see domain/projects.ts.
+  app.get('/api/projects', (request, reply) => {
+    const user = guards.user(request, reply);
+    if (!user) return reply;
+    const keptDays = config.retention.sampleDays;
+    return {keptDays, projects: store.projectsOf(user.id, Date.now() - keptDays * 86_400_000)};
+  });
+
+  // A hundred names at their longest, escaped in JSON.
+  const projectsLimit = {bodyLimit: 96 * 1024};
+
+  // Renames projects, or merges them under the name of one; an empty name gives each back its own.
+  app.post<{Body: Body}>('/api/projects', projectsLimit, (request, reply) => {
+    const user = guards.user(request, reply);
+    if (!user) return reply;
+    const groups = projectNames(request.body?.groups);
+    const given = request.body?.name;
+    if (!groups || typeof given !== 'string') return reply.code(400).send({error: 'invalid_request'});
+    const name = given.trim();
+    if (longerThan(name, PROJECT_NAME_CHARS)) return reply.code(400).send({error: 'invalid_project_name'});
+    directory.transaction(() => store.nameProjects(user.id, groups, name));
+    return {ok: true};
+  });
+
+  // Gives reported names back their own.
+  app.post<{Body: Body}>('/api/projects/restore', projectsLimit, (request, reply) => {
+    const user = guards.user(request, reply);
+    if (!user) return reply;
+    const reported = projectNames(request.body?.reported);
+    if (!reported) return reply.code(400).send({error: 'invalid_request'});
+    directory.transaction(() => store.restoreProjects(user.id, reported));
+    return {ok: true};
   });
 
   // Nor are, on it, disconnecting its one machine (the app's own agent), machine tokens and

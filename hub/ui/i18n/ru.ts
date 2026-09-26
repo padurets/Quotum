@@ -22,6 +22,7 @@ export const ru = {
   'api.invalid_code': 'Код не найден или истёк',
   'api.board_not_found': 'Доска не найдена',
   'api.invalid_name': 'Название — от 1 до 80 символов',
+  'api.invalid_project_name': 'Имя проекта — от 1 до 120 символов',
   'api.forbidden': 'Это может только владелец доски',
   'api.not_found': 'Этого уже нет',
   'api.invalid_setup_code': 'Это не код установки этого хаба',
