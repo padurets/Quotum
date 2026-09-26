@@ -250,6 +250,27 @@ machines, people or projects are asked about. The corrections people make to pro
 names apply when read, so they reach all the time kept. The database says since when
 this is kept (`agentWorkSince`): before it, how agents worked is not known.
 
+The analytics show it over their period. The table tells, for each window, how long
+agents worked on its subscription, what the window spent per hour of their work, how
+many hours of work are left at that pace (or that they last to the reset), and what
+share of its spending came while they worked. A widget draws hours of work on the
+period's grid, stacked by subscription, project or machine, with the hours of work, the
+agent time and how many worked at once on average. Each moment is split evenly among
+the agents working then, so a stack is as tall as the time any of them worked; a
+group's own hours are the union of its agents' time, more than its part of the stacks
+where others worked alongside, so a subscription's hours are the table's. What is known
+of a period begins with `agentWorkSince`, and on a shared board no earlier than the
+subscription came to it: the part before is said to be unknown, not drawn as idle. The
+pace is taken over the work within the steps between samples whose spending counts, so
+a gap counts neither, and needs half an hour of it. The share during work counts a step
+that any work touches whole, so it is an upper bound. A board shows the work of its
+members who hold each subscription it shows, but those of hidden cards: on a shared
+board from the later of their joining it and the subscription coming to it, on a
+personal board all of it. Work the board does not show (off the board, from before) is
+not in its hours while the window's spending is, and so is spending outside tracked
+agents (claude.ai, a phone, machines without Quotum, cloud tasks): the share during
+work says how far to trust the pace.
+
 ## Storage and the rules
 
 One SQLite file (WAL). A **source** is one subscription, kept once for the whole hub:
@@ -275,8 +296,15 @@ them), kept for 90 days.
   up to a cell beyond it, and ranges that differ by less than a cell share one answer. Where
   measurements come less often than cells, hovering reads the last value before. Putting a month together takes a busy board a good part of a second, so
   such an answer is reused for a quarter of its cell after the data changed, and says
-  when a newer one will be ready for the page to ask again; a source joining or leaving
-  the board is never served from it. The range is in the past, so the table reads it from its edges: what
+  when a newer one will be ready for the page to ask again. With agents' work read too,
+  most answers longer than a day are such, and measurements on the chart may lag up to a
+  quarter of a cell. An answer is reused only while the board shows the same sources and
+  the same people's work under the same names (`Store.workKey`: its sources, whose work
+  it shows from when, and the names people gave their projects and machines), so a card
+  hidden, someone joining or leaving, a project or machine renamed is never served from
+  it. Work is credited from each machine's list, but an answer is read again when the
+  board's data changes: the work shown is as fresh as the latest measurement, every two
+  minutes while agents work. The range is in the past, so the table reads it from its edges: what
   was left at its first and last measurement, what it spent and how fast. The chart
   begins where the history does, the same for every board: when the database was made,
   or at the oldest sample it keeps when that is older (an agent's spool delivered to a new
@@ -359,10 +387,10 @@ them), kept for 90 days.
   more (its last holder left or was removed). Deleting a board deletes its sharing and
   its view, never the measurements.
 - **The view** of a board is how it is arranged: the order of its widgets (a card per
-  source, the list of running agents, the chart and the table), their widths on a
+  source, the list of running agents, the chart, the table and agent activity), their widths on a
   twelve-column grid, names and colours given to cards, the hidden widgets (and those
-  off by default, the list of agents, turned on), the columns hidden in a widget's table
-  (and those off by default turned on), the windows hidden inside cards and the spending
+  off by default, the list of agents, turned on), the columns hidden in a widget's table,
+  the agents' and the limits' (and those off by default turned on), the windows hidden inside cards and the spending
   plans, or that a card has none. The list of agents shows only the subscriptions whose cards are shown.
   It is stored once per board, like a dashboard in Grafana: the owner arranges it and
   names the cards the way the team calls them, and everyone sees the same board. Nothing
@@ -379,7 +407,8 @@ and a request has 30 seconds to arrive in full.
 ## The dashboard
 
 A single-page React app served by the hub. It reads `/api/overview` every 10 seconds
-and re-reads history only when the overview's `revision` says the board's data changed;
+and re-reads history only when the overview's `revision` says the board's data changed,
+or its `workKey` that whose work the board shows or how it is named did;
 an answer the same as the one before renders nothing. What changes with time alone (how
 long ago, how soon, the freshness dot, whether the hub answers) reads a clock shared by
 the page, which ticks every 15 seconds, and every minute for the chart and the table:
@@ -391,12 +420,12 @@ when it was measured and, while the hub sets the pace, when the next measurement
 and why, each a line of its own.
 A board has two areas: the cards (and the list of running agents, when turned on),
 which are about now and show every window, and under
-them the analytics, the chart and the table, which show one window type over one period
-chosen in the analytics' own head. Each area is arranged on its own grid.
+them the analytics, the chart, the table and agent activity, which show one period
+chosen in the analytics' own head, the chart and the table one window type of it. Each area is arranged on its own grid.
 The board's view comes with the overview; the owner's changes show at once and are
 saved about half a second later, one request per burst (a drag, typing a plan). What
 is only about how one person looks (the analytics' period and window type, the chart's
-horizon, lines switched off in the legend, whether it draws the plan and the forecast, reset announcements, the lock on the widgets,
+horizon, lines switched off in the legend, whether it draws the plan and the forecast, what agent activity is stacked by, reset announcements, the lock on the widgets,
 the agents table's sort order, the chosen board and language) stays in their browser.
 A time range selected on the chart becomes the analytics' period; it lives in the page's
 address (`?from=&to=`), so a reload keeps it, Back undoes it and a link to it can be shared on the board.
@@ -407,8 +436,9 @@ where the chosen period comes back. The chart moves to the new period at once, d
 the answer it has until the next one comes; a run of quick steps asks the hub only for
 where it stops, and the latest few ranges read whole are kept on the page for each board,
 so stepping back and forth over them asks nothing. They are kept for the board's sources
-as they were: a source added to the board has a range read again. Measurements an agent
-delivers late, into a range already kept, show after a reload.
+and whose work it showed under which names, as they were: a source added to the board, a
+card hidden, someone joining or leaving, a project renamed has a range read again.
+Measurements an agent delivers late, into a range already kept, show after a reload.
 
 Both agent lists put working sessions first, then the ones that worked most recently,
 then the newest. The card's panel keeps machine groups, ordered by each one's most
@@ -416,6 +446,10 @@ active session. The table's headers sort ascending, descending, then back to act
 a hidden column does not sort. When its owner's chosen columns do not fit the widget's
 own width, it becomes a compact list with a sort menu. State is off by default: the
 mark already tells it. Explicit column choices belong to the board, sorting to the viewer.
+The table of limits does the same: its owner chooses its columns, and where they do not
+fit it lists each window with what is left, then its other values, each with its heading.
+The share of spending during work is off by default: beside the rest it does not fit a
+widget as wide as the board.
 
 Text is translated through typed catalogs in `hub/ui/i18n`: English is the source,
 every other language must translate all its keys (checked by the type checker and by

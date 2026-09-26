@@ -358,3 +358,6 @@ What the hub keeps of running agents: when each worked, with the machine, subscr
 where it ran, since when and its project and folder names, as long as samples (90 days);
 and the names a person gave or merged their projects under, until they undo it. The
 person whose machines they are sees their projects, and corrects them, in *My machines*.
+The members of a shared board see how long your agents worked on a subscription you show
+there, by project and by machine, from when you joined the board and the subscription
+came to it; you see all of it on your own board.

@@ -115,12 +115,18 @@ Codex         api                  idle     started 25m ago · editor
   the plan's shape) and when, or roughly how much will be left. The forecast is the
   same whatever period you look at. Over a range dragged on the chart it shows what
   that range cost: what was left at its start and end, what it spent and how fast.
+  Beside it, how long your agents worked on each subscription, what an hour of their
+  work costs, roughly how many hours of work are left at that pace, and how much of the
+  spending came while they worked (what went elsewhere, claude.ai or a phone, makes the
+  pace look higher).
+- **Agent activity:** hours of agent work over the same period, stacked by subscription,
+  project or machine, with the hours in all and how many agents worked at once.
 - **Reset announcements** from the community trackers [Codex Resets](https://codex-resets.com)
   and [Claude Resets](https://claude-resets.com), with a link to the source. You
   can turn them off.
-- **Boards made of widgets** (a card per subscription, the chart, the table, and a
-  list of every running agent to turn on), like a dashboard in Grafana: the cards show
-  what is left now, the chart and the table under them share one set of filters. The owner of a board drags them around, makes them wider or
+- **Boards made of widgets** (a card per subscription, the chart, the table, agent
+  activity, and a list of every running agent to turn on), like a dashboard in Grafana:
+  the cards show what is left now, the analytics under them share one set of filters. The owner of a board drags them around, makes them wider or
   narrower, names the cards, hides the ones they don't need (the data keeps coming) and
   sets the plans; everyone on the board sees it arranged the same way. Once it's set,
   a lock keeps the widgets from moving under a passing pointer.

@@ -58,7 +58,10 @@ import {
  * measured at the hub's pace (`paced`) say what their dot tells of the next measurement
  * for minutes from `start`, one resetting ten minutes in: a test of their own asks every
  * 15 seconds as their machine does, while the long one measures them on its rhythm and
- * leaves those codes out.
+ * leaves those codes out. How agents worked before `start` is written into the hub (as it
+ * would have credited it, from ten days back: the part before is unknown) and read at
+ * `start` alone: the codes of the activity widget and of the table's work are at that
+ * fixed point, over a range ending there.
  *
  * A new state gets an entry here with at least one code; the test picks it up.
  */

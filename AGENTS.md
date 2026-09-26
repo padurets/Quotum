@@ -90,10 +90,11 @@ is open.
 - **Build from the shared pieces.** A menu, dropdown or any panel that opens from a
   button is a `Popover` (`hub/ui/components/Popover.tsx`); a dialog or side panel is a
   `Modal` (`hub/ui/components/Kit.tsx`). They are glass: the `glass` class and its
-  tokens in `hub/ui/style.css`, as are the tooltips of our own (the chart's, a card's
-  dot's). A new floating surface uses one of them rather than styling its own.
+  tokens in `hub/ui/style.css`, as are the tooltips of our own (the charts', from
+  `hub/ui/components/Tooltip.tsx`, a card's dot's). A new floating surface uses one of
+  them rather than styling its own.
 - Scrollbars have one style, set once at the top of `hub/ui/style.css`; nothing styles its own.
-- Widgets on the board are a `.card` (a source) or a `.panel` (the chart, the table).
+- Widgets on the board are a `.card` (a source) or a `.panel` (the chart, the table, agent activity).
 - **Keep the board cheap to render.** Nothing on the page is `position: fixed` or has a
   fixed background, and widgets have no `backdrop-filter` (floating surfaces and the
   sticky bars may): whole-window repainting during scroll is expensive, especially

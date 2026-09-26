@@ -2,14 +2,14 @@ import {isValidPlan} from './plan.js';
 
 /**
  * How a board is arranged: the order of its widgets (a card per source, the history
- * chart and the table), how wide each is, the names given to cards, the hidden widgets,
+ * chart, the table and agent activity), how wide each is, the names given to cards, the hidden widgets,
  * the windows hidden inside cards, the weekly spending plan per source (or none) and the
  * colours given to cards. The owner
  * arranges it and everyone on the board sees it this way. Nothing here changes what is
  * measured or stored.
  */
 export type View = {
-  /** Widget ids in order: `source:<id>`, `agents`, `history`, `forecast`; widgets missing here come after. */
+  /** Widget ids in order: `source:<id>`, `agents`, `history`, `forecast`, `activity`; widgets missing here come after. */
   order: string[];
   /** Columns of the twelve a widget spans, where not its default. */
   sizes: Record<string, number>;
