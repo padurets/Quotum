@@ -6,7 +6,7 @@ import {config, serviceName, version} from './config.js';
 import type {Ingest} from './ingest.js';
 import type {Pairing} from './pairing.js';
 import type {ResetFeed} from './resets.js';
-import type {HistorySeries, SourceEvent, Store} from './store/store.js';
+import type {HistoryActivity, HistorySeries, Shown, SourceEvent, Store} from './store/store.js';
 import type {Board, Directory, User} from './store/directory.js';
 import {currentUser, publicOrigin} from './session.js';
 import type {Setup} from './setup.js';
@@ -120,36 +120,37 @@ export async function buildApp(hub: Hub) {
   });
   const hosts = new Set<string>(config.http.hosts);
   const anyHost = hosts.has('*');
-  type Answer = {series: HistorySeries[]; events: SourceEvent[]};
-  type Kept = {cell: number; revision: number; sources: string; at: number; costly: boolean; value: Answer};
+  type Answer = {series: HistorySeries[]; events: SourceEvent[]; activity: HistoryActivity};
+  type Kept = {cell: number; revision: number; work: string; at: number; costly: boolean; value: Answer};
   /**
-   * An answer is reused while the grid stays on the same cell, the board has the same
-   * sources and their data has not changed. A costly one (a month of a busy board takes a
-   * good part of a second) is also reused for a quarter of a cell after new data came: a
-   * month is drawn in 2-hour cells, where half an hour of news does not show. Such an
-   * answer says when a newer one will be ready (`refreshInMs`), so the page asks again
-   * then. The ranges ending now are kept per board; of the periods selected on charts, the
-   * latest few.
+   * An answer is reused while the grid stays on the same cell, the board shows the same
+   * sources and agents under the same names (`Store.workKey`) and their data has not
+   * changed. A costly one (a month of a busy board takes a good part of a second) is also
+   * reused for a quarter of a cell after new data came: a month is drawn in 2-hour cells,
+   * where half an hour of news does not show. Such an answer says when a newer one will be
+   * ready (`refreshInMs`), so the page asks again then. The ranges ending now are kept per
+   * board; of the periods selected on charts, the latest few.
    */
   const fixedHistory = new Map<string, Kept>();
   const selectedHistory = new Map<string, Kept>();
   const SELECTED_KEPT = 32;
-  const reused = (cache: Map<string, Kept>, slot: string, board: string, cellMs: number, end: number, read: () => Answer) => {
+  const reused = (cache: Map<string, Kept>, slot: string, board: string, cellMs: number, end: number, read: (shown: Shown) => Answer) => {
     const now = Date.now();
     const cell = Math.floor(end / cellMs);
     const revision = store.revision(board);
-    const sources = store.sources(board).map(s => s.id).join(' ');
+    const shown = store.shown(board, directory.view(board).hidden);
+    const work = store.workKey(board, shown);
     const hit = cache.get(slot);
-    if (hit && hit.cell === cell && hit.sources === sources) {
+    if (hit && hit.cell === cell && hit.work === work) {
       if (hit.revision === revision) return {...hit.value, refreshInMs: null};
       const left = hit.at + cellMs / 4 - now;
       if (hit.costly && left > 0) return {...hit.value, refreshInMs: Math.ceil(left)};
     }
-    const value = read();
+    const value = read(shown);
     const costly = Date.now() - now >= config.history.costlyMs;
     // Map order is insertion order: the entry read last goes to the end, the oldest is dropped.
     cache.delete(slot);
-    cache.set(slot, {cell, revision, sources, at: now, costly, value});
+    cache.set(slot, {cell, revision, work, at: now, costly, value});
     if (cache === selectedHistory && cache.size > SELECTED_KEPT) cache.delete(cache.keys().next().value!);
     return {...value, refreshInMs: null};
   };
@@ -212,12 +213,15 @@ export async function buildApp(hub: Hub) {
     const now = Date.now();
     // Whose each source is: the people on this board whose devices measure it.
     const members = new Map(directory.members(access.board.id).map(m => [m.id, m.name]));
+    const view = directory.view(access.board.id);
     return {
       board: access.board,
-      view: directory.view(access.board.id),
+      view,
       historyStart: store.historyStart(now),
       /** Changes whenever the board's data changes: the page re-reads history when it does. */
       revision: store.revision(access.board.id),
+      /** Changes whenever whose work the board shows or how it is named does: the page re-reads history, ranges read before too. */
+      workKey: store.workKey(access.board.id, store.shown(access.board.id, view.hidden)),
       sources: store.sources(access.board.id).map(source => {
         const state = store.state(source.id);
         return {
@@ -251,7 +255,7 @@ export async function buildApp(hub: Hub) {
       const board = access.board.id;
       // A period up to now keeps its entry as now moves on; `reused` tells when it is stale.
       const slot = `${board}:${span.since}:${span.to === now ? 'now' : span.to}`;
-      const answer = reused(selectedHistory, slot, board, span.cellMs, span.to, () => store.history(board, span.since, span.cellMs, span.to));
+      const answer = reused(selectedHistory, slot, board, span.cellMs, span.to, shown => store.history(board, span.since, span.cellMs, {to: span.to, now, shown}));
       // Named as asked, so the page knows its answer even when the end was cut to now.
       return {range: `${from}-${to}`, now, since: span.since, to: span.to, cellMs: span.cellMs, historyStart: store.historyStart(now), ...answer};
     }
@@ -261,7 +265,7 @@ export async function buildApp(hub: Hub) {
 
     const board = access.board.id;
     const cellMs = cellOf(durationMs);
-    const answer = reused(fixedHistory, `${board}:${range}`, board, cellMs, now, () => store.history(board, now - durationMs, cellMs));
+    const answer = reused(fixedHistory, `${board}:${range}`, board, cellMs, now, shown => store.history(board, now - durationMs, cellMs, {now, shown}));
     return {range, now, since: now - durationMs, to: now, cellMs, historyStart: store.historyStart(now), ...answer};
   });
 
