@@ -696,7 +696,9 @@ tr:hover .device-name .icon-button, .device-name .icon-button:focus-visible { op
   /* Projects keep their machines and let when they last worked go. */
   .projects-table th:nth-child(3), .projects-table td:nth-child(3) { display: table-cell; }
   .projects-table th:nth-child(5), .projects-table td:nth-child(5) { display: none; }
-  .projects-table th, .projects-table td { white-space: normal; }
+  .projects-table th, .projects-table td { white-space: normal; overflow-wrap: anywhere; }
+  .projects-table th { overflow-wrap: normal; }
+  .projects-table .device-name, .projects-table td small.project-froms, .projects-table .inline-rename { max-width: 30vw; }
   .brand span { display: none; }
   .status { gap: 10px; font-size: 12px; }
   main { padding: 16px 16px 32px; gap: 16px; }

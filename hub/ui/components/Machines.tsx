@@ -59,6 +59,7 @@ function InlineName({
   renameLabel,
   placeholder,
   maxLength,
+  focused = false,
   save: store,
 }: {
   name: string;
@@ -66,29 +67,35 @@ function InlineName({
   renameLabel: string;
   placeholder?: string;
   maxLength?: number;
+  /** Takes the keyboard when it comes: the row a rename made anew. */
+  focused?: boolean;
   save: (name: string) => Promise<void>;
 }) {
   const [name, setName] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
-  // Closed without a change, the field gives the keyboard back to the pencil that opened it.
+  // Closed, the field gives the keyboard back to the pencil that opened it.
   const pencil = useRef<HTMLButtonElement>(null);
   const back = useRef(false);
   useEffect(() => {
     if (name === null && back.current) pencil.current?.focus();
     back.current = false;
   }, [name]);
+  useEffect(() => {
+    if (focused) pencil.current?.focus();
+  }, [focused]);
   const close = () => {
     back.current = true;
+    setError(null);
     setName(null);
   };
   const save = async (event: FormEvent) => {
     event.preventDefault();
     setError(null);
     // Saved as it was: nothing to store, so a name with spaces at its ends is not changed by trimming.
-    if (name === current) return close();
+    if (name === current || name!.trim() === current) return close();
     try {
       await store(name!.trim());
-      setName(null);
+      close();
     } catch (failure) {
       setError(failure);
     }
@@ -215,6 +222,8 @@ function Projects() {
   const [selected, setSelected] = useState<string[]>([]);
   const [merge, setMerge] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  // A renamed project is a row of its own, found by its new name: the keyboard goes there.
+  const [renamed, setRenamed] = useState<string | null>(null);
   const load = useCallback(() => {
     call<ProjectList>('GET', '/api/projects').then(answer => {
       setList(answer);
@@ -283,7 +292,8 @@ function Projects() {
                         name={group.name}
                         label={t('projects.nameLabel')}
                         renameLabel={t('projects.rename', {name: group.name})}
-                        save={name => change('/api/projects', renaming(group, name))}
+                        focused={group.name === renamed}
+                        save={name => change('/api/projects', renaming(group, name)).then(() => setRenamed(name))}
                       />
                     )}
                     {from.length > 0 && (
