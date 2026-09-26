@@ -107,7 +107,8 @@ is open.
   the time alone. Where how soon or how long ago matters more, and room is short (a mark,
   a cell, the line under a limit, a panel's heading), say that instead (`countdown`,
   `duration`, `ago`: "in 20h", "5m ago"), with the time as `stamp` gives it beside it or
-  in its tooltip. How long something has run ("running for 31m") is not a time.
+  in its tooltip. How long something has run ("running for 31m") is not a time, nor is
+  the scale along a chart's axis ("22 Sept", "14:00").
 - **No dots between parts.** A line never runs its parts together with " · ": what it
   says leads, and a detail or a time is set apart by layout (a tag beside it, a quieter
   line under it). In plain text, a tooltip or a name for screen readers, each part is a
