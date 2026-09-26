@@ -2,10 +2,12 @@ import {DatabaseSync} from 'node:sqlite';
 import {config} from '../config.js';
 import {providers, sourceId, type Provider, type Source} from '../domain/sources.js';
 import {onGrid, series, type Kind, type Measurement, type Sample, type SourceState} from '../domain/quota.js';
+import type {Origin} from '../domain/ingest.js';
+import type {Stretch} from '../domain/work.js';
 import {migrate} from './schema.js';
 
-/** The cells in which agents' work is kept. */
-export const WORK_CELL_MS = 5 * 60_000;
+/** A session credited with work (server/sessions.ts): its names as reported, '' for none. */
+export type WorkKey = {source: string; origin: Origin; startedAt: number; project: string; folder: string; ordinal: number};
 
 export type HistorySeries = {
   sourceId: string;
@@ -400,42 +402,84 @@ export class Store {
     return byProvider;
   }
 
-  /** Forgets samples, events and announcements older than the retention period. */
-  /** Adds the time `agents` coding agents worked on a source from `from` to `to`, cell by cell. */
-  addWork(source: string, from: number, to: number, agents: number) {
-    this.addToCells(source, from, to, ms => [ms * agents, 0]);
-  }
-
-  /** Adds time when any agent worked on a source; the caller counts overlaps once (server/sessions.ts). */
-  addBusy(source: string, from: number, to: number) {
-    this.addToCells(source, from, to, ms => [0, ms]);
-  }
-
-  /** Adds to the cells from `from` to `to` what `amounts` gives for each one's share of it: [agent_ms, busy_ms]. */
-  private addToCells(source: string, from: number, to: number, amounts: (ms: number) => [number, number]) {
-    if (to <= from) return;
+  /**
+   * Credits the sessions `keys` of a device with work from `from` to `until`: a stretch
+   * that ends where this one starts grows, else a new one begins. A savepoint keeps it
+   * whole on its own (a sweep) and inside a request's transaction alike.
+   */
+  creditWork(device: string, from: number, until: number, keys: WorkKey[]) {
+    if (until <= from || !keys.length) return;
     const add = this.db.prepare(
-      'INSERT INTO work VALUES (?, ?, ?, ?) ON CONFLICT (source_id, at) DO UPDATE SET agent_ms = agent_ms + excluded.agent_ms, busy_ms = busy_ms + excluded.busy_ms',
+      'INSERT INTO agent_sessions (device_id, source_id, origin, started_at, project, folder, ordinal) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING',
     );
-    for (let cell = Math.floor(from / WORK_CELL_MS) * WORK_CELL_MS; cell < to; cell += WORK_CELL_MS) {
-      add.run(source, cell, ...amounts(Math.min(to, cell + WORK_CELL_MS) - Math.max(from, cell)));
+    const find = this.db.prepare(
+      'SELECT id FROM agent_sessions WHERE device_id = ? AND source_id = ? AND started_at = ? AND origin = ? AND project = ? AND folder = ? AND ordinal = ?',
+    );
+    const extend = this.db.prepare('UPDATE agent_work SET to_at = ? WHERE session_id = ? AND to_at = ?');
+    const begin = this.db.prepare('INSERT INTO agent_work VALUES (?, ?, ?) ON CONFLICT (session_id, from_at) DO UPDATE SET to_at = max(to_at, excluded.to_at)');
+    this.db.exec('SAVEPOINT credit');
+    try {
+      for (const {source, origin, startedAt, project, folder, ordinal} of keys) {
+        add.run(device, source, origin, startedAt, project, folder, ordinal);
+        const {id} = find.get(device, source, startedAt, origin, project, folder, ordinal) as {id: number};
+        if (!extend.run(until, id, from).changes) begin.run(id, from, until);
+      }
+      this.db.exec('RELEASE credit');
+    } catch (error) {
+      this.db.exec('ROLLBACK TO credit');
+      this.db.exec('RELEASE credit');
+      throw error;
     }
   }
 
-  /** How long agents worked on a source, cell by cell, from `from` on. */
-  work(source: string, from: number): {at: number; agentMs: number; busyMs: number}[] {
-    const rows = this.db.prepare('SELECT at, agent_ms, busy_ms FROM work WHERE source_id = ? AND at >= ? ORDER BY at').all(source, from) as {
-      at: number;
-      agent_ms: number;
-      busy_ms: number;
+  /** Every stretch agents worked within [from, to), of the given subscriptions or all, projects named as their people corrected them. */
+  agentWork(from: number, to: number, sources?: string[]): Stretch[] {
+    const rows = this.db
+      .prepare(
+"SELECT s.source_id, s.device_id, d.user_id, s.origin, s.started_at, COALESCE(n.name, NULLIF(s.project, '')) AS project," +
+          " NULLIF(s.folder, '') AS folder, max(w.from_at, ?) AS from_at, min(w.to_at, ?) AS to_at" +
+          ' FROM agent_work w JOIN agent_sessions s ON s.id = w.session_id JOIN devices d ON d.id = s.device_id' +
+          ' LEFT JOIN project_names n ON n.user_id = d.user_id AND n.reported = s.project' +
+          ' WHERE w.to_at > ? AND w.from_at < ?' +
+          (sources ? ' AND s.source_id IN (SELECT value FROM json_each(?))' : '') +
+          ' ORDER BY s.id, w.from_at',
+      )
+      .all(from, to, from, to, ...(sources ? [JSON.stringify(sources)] : [])) as {
+      source_id: string;
+      device_id: string;
+      user_id: string;
+      origin: Origin;
+      started_at: number;
+      project: string | null;
+      folder: string | null;
+      from_at: number;
+      to_at: number;
     }[];
-    return rows.map(r => ({at: r.at, agentMs: r.agent_ms, busyMs: r.busy_ms}));
+    return rows.map(r => ({
+      source: r.source_id,
+      device: r.device_id,
+      user: r.user_id,
+      origin: r.origin,
+      project: r.project,
+      folder: r.folder,
+      startedAt: r.started_at,
+      from: r.from_at,
+      to: r.to_at,
+    }));
   }
 
+  /** Since when the hub keeps how agents worked: before it, that is not known. */
+  agentWorkSince(): number {
+    return Number((this.db.prepare("SELECT value FROM meta WHERE key = 'agentWorkSince'").get() as {value: string}).value);
+  }
+
+  /** Forgets samples, events, announcements and agents' work older than the retention period; corrected project names stay until undone. */
   prune(now: number) {
     const cutoff = now - config.retention.sampleDays * 86_400_000;
     this.db.prepare('DELETE FROM samples WHERE at < ?').run(cutoff);
-    this.db.prepare('DELETE FROM work WHERE at < ?').run(cutoff);
+    this.db.prepare('DELETE FROM agent_work WHERE to_at < ?').run(cutoff);
+    // A session without work is not needed; one still running is made again when credited.
+    this.db.prepare('DELETE FROM agent_sessions WHERE NOT EXISTS (SELECT 1 FROM agent_work WHERE session_id = agent_sessions.id)').run();
     this.db.prepare('DELETE FROM events WHERE at < ?').run(cutoff);
     this.db.prepare('DELETE FROM announcements WHERE at < ?').run(cutoff);
   }

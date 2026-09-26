@@ -62,7 +62,7 @@ test('the table says where the pace leads, in its tone', () => {
 });
 
 test('agents are drawn up to ten; the table leaves out hidden cards and says why it is empty', () => {
-  const session = (): LiveSession => ({device: {id: 'd', name: 'laptop'}, origin: 'terminal', project: null, startedAt: now, working: true});
+  const session = (): LiveSession => ({device: {id: 'd', name: 'laptop'}, origin: 'terminal', folder: null, startedAt: now, working: true});
   assert.equal(drawn(Array.from({length: DRAWN}, session)), true);
   assert.equal(drawn(Array.from({length: DRAWN + 1}, session)), false);
   const source = (id: string, sessions: LiveSession[]) => ({id, sessions}) as unknown as SourceState;

@@ -7,7 +7,7 @@ import {Store} from '../store/store.js';
 import {Directory} from '../store/directory.js';
 import {Duty} from '../duty.js';
 import {Ingest, IngestError, type Credential} from '../ingest.js';
-import {Invalid, parseBatch} from '../domain/ingest.js';
+import {Invalid, parseBatch, parseSessions} from '../domain/ingest.js';
 import {edge, onGrid, series, type Sample} from '../domain/quota.js';
 import {newSecret} from '../domain/auth.js';
 
@@ -181,6 +181,42 @@ test('an agent whose clock is off has its times moved by the difference', () => 
   assert.equal(only(store, board, 'codex').successAt, start);
   const late = ingest.accept(token, {...batch([snapshot(start + 20_000, 6)]), sentAt: iso(start + 20_000)}, start + 30_000);
   assert.equal(late.accepted, 1, 'within the tolerance nothing is moved');
+});
+
+/** A report of running agents from the machine of `batch`, sent at `sentAt` by its clock. */
+const running = (sessions: object[], sentAt = start) => ({
+  version: 1,
+  agent: 'quotum/0.4.0',
+  machine: {id: 'machine-one-0123456789', name: 'host-one', os: 'linux', arch: 'x86_64'},
+  sentAt: iso(sentAt),
+  sessions: sessions.map(session => ({provider: 'codex', origin: 'terminal', startedAt: iso(start - 3_600_000), working: true, ...session})),
+});
+
+test('a session names its project and, where that differs, its folder; long names are cut, not refused', () => {
+  const parsed = (session: object) => parseSessions(running([session])).sessions[0];
+  assert.deepEqual([parsed({project: 'quotum', folder: 'hub'}).project, parsed({project: 'quotum', folder: 'hub'}).folder], ['quotum', 'hub']);
+  assert.equal(parsed({project: 'quotum'}).folder, null, 'an older agent sends no folder');
+  assert.deepEqual([parsed({folder: 'scratch'}).project, parsed({folder: 'scratch'}).folder], [null, 'scratch']);
+  assert.equal(parsed({folder: '🚀'.repeat(130)}).folder, '🚀'.repeat(120), 'by characters');
+  assert.throws(() => parsed({folder: ''}), (error: Invalid) => error.what === 'folder');
+  assert.throws(() => parsed({folder: 7}), (error: Invalid) => error.what === 'folder');
+});
+
+test("a session is told by the start its agent sends, however far off and unsteady the agent's clock is", () => {
+  const {store, ingest, token} = setup();
+  ingest.accept(token, batch([snapshot(start, 10)]), start);
+  const session = {account: 'a1b2c3d4e5f6a1b2c3d4e5f6', project: 'quotum'};
+  // A minute behind, give or take the delay of each request.
+  for (const [i, behind] of [61_000, 64_000, 58_000].entries()) {
+    const now = start + i * 120_000;
+    assert.equal(ingest.sessions(token, running([session], now - behind), now).accepted, 1);
+  }
+  ingest.sessions(token, running([], start + 300_000), start + 300_000);
+  assert.equal((store.db.prepare('SELECT count(*) AS n FROM agent_sessions').get() as {n: number}).n, 1);
+  assert.deepEqual(
+    store.agentWork(0, Number.MAX_SAFE_INTEGER).map(s => [s.project, s.from - start, s.to - start]),
+    [['quotum', 0, 300_000]],
+  );
 });
 
 test('resent and older measurements are duplicates, not errors', () => {

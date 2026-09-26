@@ -241,7 +241,10 @@ export type AgentSession = {
   account: string | null;
   accountName: string | null;
   origin: Origin;
+  /** The project it works in, which its time counts under: its repository, else its folder. */
   project: string | null;
+  /** Its folder, where that is not its project; an older agent sends none. */
+  folder: string | null;
   startedAt: number;
   working: boolean;
 };
@@ -262,6 +265,7 @@ export function parseSessions(body: unknown): SessionReport {
       accountName: text(value.accountName, 'accountName', true),
       origin: value.origin as Origin,
       project: cut(value.project, 'project'),
+      folder: cut(value.folder, 'folder'),
       startedAt: time(value.startedAt, 'startedAt')!,
       working: value.working,
     };

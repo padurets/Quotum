@@ -23,7 +23,7 @@ pub struct Config {
     pub eco: Option<bool>,
     /// Tell the hub which coding agents run on this machine (default on).
     pub sessions: Option<bool>,
-    /// With the names of their project folders (default on).
+    /// With the names of their projects and folders (default on).
     pub projects: Option<bool>,
     pub hub: Option<Hub>,
     pub machine: MachineSettings,

@@ -146,6 +146,9 @@ pub struct RunningSession {
     pub origin: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+    /// Its folder's name, only where that is not its project.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
     #[serde(with = "ts")]
     pub started_at: Millis,
     pub working: bool,

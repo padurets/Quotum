@@ -336,7 +336,7 @@ td.muted, small.muted { color: var(--text-3); }
 .agents-machine h3 small { margin-left: auto; font-weight: 450; color: var(--text-3); white-space: nowrap; }
 .agents-row { display: grid; grid-template-columns: 5px minmax(0, 1fr) auto minmax(52px, auto); align-items: center; gap: 10px; padding: 5px 4px; font-size: 12.5px; color: var(--text-3); }
 .agents-row.is-working { color: var(--text); }
-.agents-project { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agents-folder { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agents-origin { color: var(--text-3); }
 .agents-age { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text-3); }
 .card-status { margin: -8px 0 0; font-size: 12.5px; color: var(--warn); }

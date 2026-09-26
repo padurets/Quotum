@@ -215,7 +215,7 @@ Authorization: Bearer <token>
   "machine": {"id": "3f9a…", "name": "workstation", "os": "linux", "arch": "x86_64"},
   "sentAt": "2026-09-24T10:15:00Z",
   "sessions": [
-    {"provider": "codex", "account": "4b7e…", "origin": "terminal", "project": "quotum", "startedAt": "2026-09-24T08:02:11Z", "working": true},
+    {"provider": "codex", "account": "4b7e…", "origin": "terminal", "project": "quotum", "folder": "quotum.feat-18-desktop-app", "startedAt": "2026-09-24T08:02:11Z", "working": true},
     {"provider": "claude", "account": "9c1e…", "origin": "editor", "startedAt": "2026-09-24T09:40:00Z", "working": false}
   ]
 }
@@ -224,19 +224,25 @@ Authorization: Bearer <token>
 Each request carries every session of the machine, replacing the ones before; an empty
 list says none runs. The reference agent sends one when the list or a session's state
 changes, and at least every two minutes while any runs. The hub keeps a machine's list
-for five minutes after its last request, then forgets it.
+of running agents for five minutes after its last request, then forgets it.
 
 | Field | Meaning |
 |---|---|
 | `provider` | As in a snapshot. |
 | `account`, `accountName` | The subscription, as in a check-in, as far as the agent knows it. Without them the hub takes the subscription this machine last delivered for that provider; the reference agent leaves out a session of a client that names its account while it does not know which one that is (signed in anew since it measured). Either way, only a subscription the device's person holds (their devices measured it). |
 | `origin` | Where it runs: `terminal`, `editor` (a client an editor runs, one per window) or `app` (a provider's desktop app, one client for all its chats). |
-| `project` | The name of the folder it works in (never a path), if it is a project folder. A longer name than 120 characters is cut, not refused. |
+| `project` | The project it works in, never a path: the name of the git repository its folder is in (for a worktree, of the repository it belongs to), else the name of the folder. Absent when the folder that names it (the repository's main folder, else the folder itself) is the home folder, above it or temporary. A repository is looked for in the folder and the folders above it, stopping before the home folder (neither it nor anything above it is looked at), and on macOS not in or through the folders the system guards (Desktop, Documents, Downloads, iCloud Drive, other volumes): there the project is the folder. Paths are checked as git writes them; a chain of links made by hand may still lead there. The hub counts time under this name. A longer name than 120 characters is cut, not refused. |
+| `folder` | The name of the folder it works in, when that is not `project` (a subfolder or a worktree), and the folder is not the home folder, above it or temporary. Boards show it in the lists of running agents, else `project`. Cut like `project`. |
 | `startedAt` | When it started; a time ahead of the hub's is taken as now. |
 | `working` | Whether it is working now (the agent's judgement: its processes spend CPU time), or idle. |
 
+The reference agent finds a repository by the `.git` in the folder and the folders above
+it, stopping before the home folder (a folder outside it is looked at up to the root);
+in a worktree, the `.git` file leads to the main repository's git folder through its
+`commondir`. It runs no git and reads none of its settings.
+
 At most 200 sessions (the reference agent sends the working ones first, then the
-newest), in at most 256 KiB. Clocks are as in a batch. `200` with `{"accepted": n}`:
+newest), in at most 512 KiB. Clocks are as in a batch. `200` with `{"accepted": n}`:
 sessions of a subscription the hub does not know, or the person does not hold, are left
 out. Errors are as for check-ins; a hub without this request answers `404` with
 `{"error": "not_found"}`, and the agent asks it again an hour later (it may have been
@@ -246,8 +252,13 @@ tried again like any failure.
 A board shows a session on the card of its subscription, with the name of its machine
 (as its person named it in the dashboard, else as the machine reports it), only to the
 members of a board where the session's person shows that subscription (their personal board, or a shared
-board they are on). The hub adds up how long agents worked on each subscription, in
-five-minute cells: each list counts until the next one, for at most 200 seconds.
+board they are on).
+
+The hub keeps when each session worked, with its machine, subscription, where it runs,
+since when and its project and folder names: each list counts until the next one, for at
+most 200 seconds. How long agents worked, and how long any of them did, are worked out
+from that. The person whose machines they are can rename projects and merge them, which
+applies to all time kept.
 
 ## Connecting with a one-time code
 
@@ -275,6 +286,13 @@ of the windows, free resets, the client's version, the machine's random id, its 
 configured, and for a failed measurement its kind and a short
 message of the client (at most 200 characters). About running agents (unless turned
 off): which client, where it runs, since when, whether it works, and the name of its
-project folder (unless that is turned off too). The members of a board where you show
-a subscription see these, as they see its limits, and with them the name of the machine
-each agent runs on.
+project (the repository its folder is in, else the folder) and of its folder when that
+differs (unless that is turned off too). The members of a board where you show a
+subscription see which client, where it runs, since when, whether it works and the name
+of its folder, else of its project, as they see its limits, and with them the name of
+the machine each agent runs on.
+
+What the hub keeps of running agents: when each worked, with the machine, subscription,
+where it ran, since when and its project and folder names, as long as samples (90 days);
+and the names a person gave or merged their projects under, until they undo it. The
+person whose machines they are sees their agents' time by project in *My machines*.

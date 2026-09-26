@@ -90,8 +90,8 @@ export function Agents({sessions, now}: {sessions: LiveSession[]; now: number}) 
             {machine.sessions.map((session, i) => (
               <div className={`agents-row ${session.working ? 'is-working' : ''}`} key={i} title={stateOf(session)}>
                 <Mark session={session} />
-                <span className="agents-project">
-                  {session.project ?? t('agents.noProject')}
+                <span className="agents-folder">
+                  {session.folder ?? t('agents.noFolder')}
                   <span className="sr-only">, {stateOf(session)}</span>
                 </span>
                 <span className="agents-origin">{t(`agents.${session.origin}`)}</span>
@@ -116,7 +116,7 @@ export function Agents({sessions, now}: {sessions: LiveSession[]; now: number}) 
   );
 }
 
-/** The table's columns after the project, each one the owner can hide to make the widget narrow. */
+/** The table's columns after the folder, each one the owner can hide to make the widget narrow. */
 const COLUMNS: {id: string; title: Key; cell: (row: AgentRow, now: number) => ReactNode}[] = [
   {id: 'state', title: 'agents.state', cell: ({session}) => stateOf(session)},
   {id: 'subscription', title: 'agents.subscription', cell: ({source}) => sourceLabel(source)},
@@ -160,7 +160,7 @@ export const AgentsPanel = memo(function AgentsPanel({sources, arrange}: {source
           <table>
             <thead>
               <tr>
-                <th>{t('agents.project')}</th>
+                <th>{t('agents.folder')}</th>
                 {columns.map(column => (
                   <th key={column.id}>{t(column.title)}</th>
                 ))}
@@ -169,9 +169,9 @@ export const AgentsPanel = memo(function AgentsPanel({sources, arrange}: {source
             <tbody>
               {rows.map((row, i) => (
                 <tr key={i} className={row.session.working ? 'is-working' : ''} style={{'--card-color': colorOf(arrange.view, row.source.id, row.source.provider)} as CSSProperties}>
-                  <td title={row.session.project ?? undefined}>
+                  <td title={row.session.folder ?? undefined}>
                     <Mark session={row.session} />
-                    {row.session.project ?? t('agents.noProject')}
+                    {row.session.folder ?? t('agents.noFolder')}
                     {!columns.some(column => column.id === 'state') && <span className="sr-only">, {stateOf(row.session)}</span>}
                   </td>
                   {columns.map(column => (

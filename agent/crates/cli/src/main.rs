@@ -589,8 +589,8 @@ fn show_config(config: &Config, paths: &Paths) -> ExitCode {
     println!("eco mode      {}", if config.eco() { "on" } else { "off" });
     let sessions = match (config.sessions(), config.projects()) {
         (false, _) => "not told to the hub",
-        (true, true) => "told to the hub, with project folder names",
-        (true, false) => "told to the hub, without project folder names",
+        (true, true) => "told to the hub, with project and folder names",
+        (true, false) => "told to the hub, without project and folder names",
     };
     println!("agents here   {sessions}");
     let home = quotum_core::config::home();
@@ -667,13 +667,14 @@ fn print_sessions(sessions: &[Session], style: &Style) {
             Some(false) => style.dim("idle   "),
             None => " ".repeat(7),
         };
-        let project = session.project.as_deref().unwrap_or("");
+        // Its folder, as boards show it: agents in worktrees of one project stay apart.
+        let folder = session.folder.as_deref().or(session.project.as_deref()).unwrap_or("");
         let origin = match session.origin {
             Origin::Terminal => String::new(),
             other => format!(" · {}", other.id()),
         };
         let started = style.dim(&format!("started {} ago{origin}", until(now_ms() - session.started_at)));
-        println!("{:<14}{project:<20}{state}  {started}", session.provider.name());
+        println!("{:<14}{folder:<20}{state}  {started}", session.provider.name());
     }
 }
 
