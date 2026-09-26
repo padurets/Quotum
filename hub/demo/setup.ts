@@ -155,18 +155,21 @@ export function viewOf(stand: Stand, key: string) {
   const {set} = stand;
   const personal = stand.people.has(key);
   const shown = cards(set).filter(card => (personal ? holdersOf(set, card).includes(key) : !!card.on?.[key]));
+  const board = boards(set).find(b => b.id === key) ?? people(set).find(p => p.id === key);
   const view = {
     order: [...shown.map(card => `source:${stand.sources.get(card.id)}`), 'agents', 'history', 'forecast'],
     sizes: {} as Record<string, number>,
     names: {} as Record<string, string>,
     hidden: [] as string[],
-    shown: (boards(set).find(b => b.id === key) ?? people(set).find(p => p.id === key))?.agents ? ['agents'] : [],
+    shown: board?.agents ? ['agents'] : [],
     windows: [] as string[],
     plans: {} as Record<string, number[]>,
     unplanned: [] as string[],
     colors: {} as Record<string, string>,
     columns: {},
+    shownColumns: {},
   };
+  if (board?.agentsSpan) view.sizes.agents = board.agentsSpan;
   for (const card of shown) {
     const source = stand.sources.get(card.id)!;
     const looks = card.on?.[key] ?? {};

@@ -259,6 +259,7 @@ export type AgentSession = {
   /** Its folder, where that is not its project; an older agent sends none. */
   folder: string | null;
   startedAt: number;
+  lastWorkedAt: number | null;
   working: boolean;
 };
 
@@ -280,6 +281,7 @@ export function parseSessions(body: unknown): SessionReport {
       project: cut(value.project, 'project'),
       folder: cut(value.folder, 'folder'),
       startedAt: time(value.startedAt, 'startedAt')!,
+      lastWorkedAt: time(value.lastWorkedAt, 'lastWorkedAt', true),
       working: value.working,
     };
   });

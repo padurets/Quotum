@@ -216,7 +216,7 @@ Authorization: Bearer <token>
   "sentAt": "2026-09-24T10:15:00Z",
   "sessions": [
     {"provider": "codex", "account": "4b7e…", "origin": "terminal", "project": "quotum", "folder": "quotum.feat-18-desktop-app", "startedAt": "2026-09-24T08:02:11Z", "working": true},
-    {"provider": "claude", "account": "9c1e…", "origin": "editor", "startedAt": "2026-09-24T09:40:00Z", "working": false}
+    {"provider": "claude", "account": "9c1e…", "origin": "editor", "startedAt": "2026-09-24T09:40:00Z", "working": false, "lastWorkedAt": "2026-09-24T10:12:00Z"}
   ]
 }
 ```
@@ -235,14 +235,16 @@ of running agents for five minutes after its last request, then forgets it.
 | `folder` | The name of the folder it works in, when that is not `project` (a subfolder or a worktree), and the folder is not the home folder, above it or temporary. Boards show it under the project in the lists of running agents, so agents of one project stay apart; where the agent tells none and its person renamed the project, the name reported for the project is shown there instead. Cut like `project`. |
 | `startedAt` | When it started; a time ahead of the hub's is taken as now. |
 | `working` | Whether it is working now (the agent's judgement: its processes spend CPU time), or idle. |
+| `lastWorkedAt` | Optional: when an idle session was last seen spending CPU like a working one. Absent while working or when unknown, including after the agent restarts or the clocks jump. The reference agent remembers the observation's wall time without recalculating it, and sends it only between `startedAt` and now. The hub corrects it for clock skew as it does `startedAt`, limits it to now and brings a time before `startedAt` up to `startedAt`; an invalid time is refused. |
 
 The reference agent finds a repository by the `.git` in the folder and the folders above
 it, stopping before the home folder and the folders above it, which are not looked at;
 in a worktree, the `.git` file leads to the main repository's git folder through its
 `commondir`. It runs no git and reads none of its settings.
 
-At most 200 sessions (the reference agent sends the working ones first, then the
-newest), in at most 512 KiB. Clocks are as in a batch. `200` with `{"accepted": n}`:
+At most 200 sessions (the reference agent keeps the working ones first, then those that
+worked most recently, then the newest), in at most 512 KiB. Without `lastWorkedAt`,
+working ones come first, then the newest. Clocks are as in a batch. `200` with `{"accepted": n}`:
 sessions of a subscription the hub does not know, or the person does not hold, are left
 out. Errors are as for check-ins; a hub without this request answers `404` with
 `{"error": "not_found"}`, and the agent asks it again an hour later (it may have been
@@ -286,11 +288,11 @@ of the windows, free resets and when each expires, the client's version, the mac
 (the host name unless configured) and operating system, subscription names if
 configured, and for a failed measurement its kind and a short
 message of the client (at most 200 characters). About running agents (unless turned
-off): which client, where it runs, since when, whether it works, and the name of its
-project (the repository its folder is in, else the folder) and of its folder when that
-differs (unless that is turned off too). The members of a board where you show a
-subscription see these, as they see its limits, with each project under the name its
-person gave it, and with them the name of the machine each agent runs on.
+off): which client, where it runs, since when, whether it works and when it last did,
+and the name of its project (the repository its folder is in, else the folder) and of
+its folder when that differs (unless that is turned off too). The members of a board
+where you show a subscription see these, as they see its limits, with each project under
+the name its person gave it, and with them the name of the machine each agent runs on.
 
 What the hub keeps of running agents: when each worked, with the machine, subscription,
 where it ran, since when and its project and folder names, as long as samples (90 days);

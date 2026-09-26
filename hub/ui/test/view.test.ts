@@ -5,7 +5,7 @@ import {CARD_COLORS, PROVIDERS} from '../lib/providers';
 import {DEFAULT_PLAN} from '../lib/plan';
 import type {View} from '../lib/types';
 
-const EMPTY: View = {order: [], sizes: {}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}};
+const EMPTY: View = {order: [], sizes: {}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
 const board = ['source:a', 'source:b', 'source:c', 'history'];
 
 test('widgets follow the board’s order; a new one comes next to its natural neighbour', () => {
@@ -35,7 +35,7 @@ test('the list of running agents is off until the owner turns it on', () => {
 test('a table column hidden is kept per widget; showing every column again stores nothing', () => {
   const view = withColumn(withColumn(EMPTY, AGENTS, 'machine', false), AGENTS, 'origin', false);
   assert.deepEqual(view.columns, {agents: ['machine', 'origin']});
-  assert.deepEqual([columnShown(view, AGENTS, 'machine'), columnShown(view, AGENTS, 'state')], [false, true]);
+  assert.deepEqual([columnShown(view, AGENTS, 'machine'), columnShown(view, AGENTS, 'state')], [false, false]);
   assert.deepEqual(withColumn(withColumn(view, AGENTS, 'machine', true), AGENTS, 'origin', true).columns, {});
 });
 
@@ -80,4 +80,16 @@ test('a card is half the grid wide by default, a third at least and the whole gr
   assert.deepEqual([spanOf(view, 'source:new'), spanOf(view, 'history'), spanOf(view, 'source:old'), spanOf(view, 'source:wide')], [6, 12, 4, 12]);
   assert.deepEqual(withSpan(view, 'source:wide', 6).sizes, {'source:old': 3}, 'the default is not stored');
   assert.deepEqual(withSpan(EMPTY, 'source:new', 2).sizes, {'source:new': 4});
+});
+
+
+test('state is off by default; the owner explicitly shows it without reviving an old hidden column', () => {
+  assert.equal(columnShown(EMPTY, AGENTS, 'state'), false);
+  const old = {...EMPTY, columns: {agents: ['state']}};
+  assert.equal(columnShown(old, AGENTS, 'state'), false);
+  const shown = withColumn(old, AGENTS, 'state', true);
+  assert.equal(columnShown(shown, AGENTS, 'state'), true);
+  assert.deepEqual(shown.shownColumns, {agents: ['state']});
+  assert.deepEqual(withColumn(shown, AGENTS, 'state', false), old);
+  assert.deepEqual(withColumn(withColumn(EMPTY, AGENTS, 'state', true), AGENTS, 'state', true).shownColumns, {agents: ['state']});
 });

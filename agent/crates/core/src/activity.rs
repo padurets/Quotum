@@ -48,6 +48,8 @@ pub struct Session {
     pub folder: Option<String>,
     /// Whether it is working, idle, or not yet known (seen once so far).
     pub working: Option<bool>,
+    /// When an idle session last spent CPU like a working one, if seen on reliable clocks.
+    pub last_worked: Option<Millis>,
     pub origin: Origin,
 }
 
@@ -85,9 +87,17 @@ struct Seen {
     /// CPU time of its tree, and when that was read.
     cpu: u64,
     at: Instant,
+    wall: Millis,
     /// When it last spent like a working session.
     busy_at: Option<Instant>,
+    busy_wall: Option<Millis>,
     working: Option<bool>,
+}
+
+impl Seen {
+    fn last_worked(&self, started_at: Millis, now: Millis) -> Option<Millis> {
+        self.busy_wall.filter(|&at| self.working == Some(false) && started_at <= at && at <= now)
+    }
 }
 
 /// Looks at the running clients again and again; working or idle is told by the CPU time
@@ -130,6 +140,7 @@ impl Activity {
 
     pub fn look(&mut self) -> Vec<Session> {
         let now = Instant::now();
+        let wall = crate::model::now_ms();
         let procs = sys::processes();
         let listed: HashMap<u32, Option<(Millis, u64)>> = procs.iter().map(|p| (p.pid, p.times)).collect();
         let times = |pid: u32| listed.get(&pid).copied().flatten().or_else(|| sys::times(pid));
@@ -148,11 +159,12 @@ impl Activity {
                 let (started_at, _) = (*measured.first()?)?;
                 let cpu: u64 = measured.iter().flatten().map(|&(_, cpu)| cpu).sum();
                 let key = (pid, started_at);
-                let next = judged(self.last.get(&key), cpu, now, working_share(provider));
+                let next = judged(self.last.get(&key), cpu, now, wall, working_share(provider));
                 let working = next.working;
+                let last_worked = next.last_worked(started_at, wall);
                 seen.insert(key, next);
                 folders.push((key, pid));
-                Some(Session { provider, pid, started_at, project: None, folder: None, working, origin })
+                Some(Session { provider, pid, started_at, project: None, folder: None, working, last_worked, origin })
             })
             .collect();
         for (session, Place { folder, project }) in sessions.iter_mut().zip(self.placed(folders, &sys::cwd)) {
@@ -230,17 +242,30 @@ fn placing(dir: &Path, known: Option<&Path>, shielded: &[PathBuf]) -> Placing {
 
 /// A session seen again with its tree at `cpu` ms: working when it spent at least `share`
 /// of a core since the look before, and for `HOLD_MS` after.
-fn judged(before: Option<&Seen>, cpu: u64, now: Instant, share: f64) -> Seen {
-    let Some(before) = before else { return Seen { cpu, at: now, busy_at: None, working: None } };
-    let wall = now.duration_since(before.at).as_millis();
-    if wall < MIN_LOOK_MS {
+fn judged(before: Option<&Seen>, cpu: u64, now: Instant, wall: Millis, share: f64) -> Seen {
+    let Some(before) = before else {
+        return Seen { cpu, at: now, wall, busy_at: None, busy_wall: None, working: None };
+    };
+    let elapsed = now.duration_since(before.at).as_millis();
+    // A clock correction invalidates the remembered date, but never working or its hold.
+    let continuous = ((wall as i128 - before.wall as i128) - elapsed as i128).abs() <= 2_000;
+    let busy_wall = before.busy_wall.filter(|_| continuous);
+    if elapsed < MIN_LOOK_MS {
         // Looked again too soon: it stays as it was, measured from the earlier look.
-        return Seen { cpu: before.cpu, at: before.at, busy_at: before.busy_at, working: before.working };
+        return Seen {
+            cpu: before.cpu,
+            at: before.at,
+            wall: before.wall,
+            busy_at: before.busy_at,
+            busy_wall,
+            working: before.working,
+        };
     }
-    let busy = cpu.saturating_sub(before.cpu) as f64 / wall as f64 >= share;
+    let busy = cpu.saturating_sub(before.cpu) as f64 / elapsed as f64 >= share;
     let busy_at = if busy { Some(now) } else { before.busy_at };
+    let busy_wall = if busy { Some(wall) } else { busy_wall };
     let working = busy_at.is_some_and(|at| now.duration_since(at).as_millis() < HOLD_MS);
-    Seen { cpu, at: now, busy_at, working: Some(working) }
+    Seen { cpu, at: now, wall, busy_at, busy_wall, working: Some(working) }
 }
 
 /// The client a program name belongs to: `claude`, `codex` and `agy` as they are named,
@@ -1404,21 +1429,75 @@ mod tests {
         use std::time::Duration;
         let start = Instant::now();
         let at = |s: u64| start + Duration::from_secs(s);
-        let first = judged(None, 1_000, at(0), 0.05);
+        let first = judged(None, 1_000, at(0), 0, 0.05);
         assert_eq!(first.working, None, "one look cannot tell");
         // 15 s at 10% of a core: working.
-        let busy = judged(Some(&first), 2_500, at(15), 0.05);
+        let busy = judged(Some(&first), 2_500, at(15), 15_000, 0.05);
         assert_eq!(busy.working, Some(true));
         assert_eq!(
-            judged(Some(&busy), 2_600, at(15) + Duration::from_millis(300), 0.05).working,
+            judged(Some(&busy), 2_600, at(15) + Duration::from_millis(300), 15_300, 0.05).working,
             Some(true),
             "too soon to tell anew"
         );
         // Then quiet: still working for a minute, idle after.
-        let pause = judged(Some(&busy), 2_510, at(45), 0.05);
+        let pause = judged(Some(&busy), 2_510, at(45), 45_000, 0.05);
         assert_eq!(pause.working, Some(true));
-        let quiet = judged(Some(&pause), 2_520, at(80), 0.05);
+        let quiet = judged(Some(&pause), 2_520, at(80), 80_000, 0.05);
         assert_eq!(quiet.working, Some(false));
+    }
+
+    #[test]
+    fn last_work_is_a_fixed_date_only_for_an_idle_session() {
+        use std::time::Duration;
+        let start = Instant::now();
+        let look =
+            |before: Option<&Seen>, cpu, ms| judged(before, cpu, start + Duration::from_millis(ms), ms as Millis, 0.05);
+        let first = look(None, 0, 0);
+        assert_eq!(first.last_worked(0, 0), None);
+        let busy = look(Some(&first), 1_500, 15_000);
+        assert_eq!(busy.last_worked(0, 15_000), None);
+        let hold = look(Some(&busy), 1_500, 45_000);
+        assert_eq!(hold.last_worked(0, 45_000), None);
+        let idle = look(Some(&hold), 1_500, 75_000);
+        assert_eq!(idle.last_worked(0, 75_000), Some(15_000));
+        let early = look(Some(&idle), 1_500, 75_300);
+        assert_eq!(early.last_worked(0, 75_300), Some(15_000));
+        assert_eq!((early.cpu, early.at, early.wall), (idle.cpu, idle.at, idle.wall));
+        let later = look(Some(&early), 1_500, 90_000);
+        assert_eq!(later.last_worked(0, 90_000), idle.last_worked(0, 75_000));
+        assert_eq!(later.last_worked(16_000, 90_000), None, "a process start on a different clock scale");
+        assert_eq!(later.last_worked(0, 14_000), None, "never a future date");
+    }
+
+    #[test]
+    fn clock_corrections_forget_dates_but_keep_working_and_its_hold() {
+        use std::time::Duration;
+        let start = Instant::now();
+        for jump in [-3_600_000, 3_600_000] {
+            let wall = 10 * 3_600_000;
+            let look = |before: Option<&Seen>, cpu, ms, shift| {
+                judged(before, cpu, start + Duration::from_millis(ms), wall + ms as Millis + shift, 0.05)
+            };
+            let first = look(None, 0, 0, 0);
+            let busy = look(Some(&first), 1_500, 15_000, 0);
+            let early = look(Some(&busy), 1_500, 15_300, jump);
+            assert_eq!(early.busy_wall, None, "even a look too early invalidates a date");
+            assert_eq!(early.working, Some(true));
+            assert_eq!((early.cpu, early.at, early.wall), (busy.cpu, busy.at, busy.wall));
+            let hold = look(Some(&busy), 1_500, 45_000, jump);
+            assert_eq!(hold.busy_wall, None);
+            assert_eq!(hold.working, Some(true), "the hold uses monotonic time");
+            let idle = look(Some(&hold), 1_500, 75_000, jump);
+            let later = look(Some(&idle), 1_500, 90_000, jump);
+            assert_eq!(idle.working, Some(false));
+            assert_eq!(idle.last_worked(0, wall + 75_000 + jump), None);
+            assert_eq!(later.last_worked(0, wall + 90_000 + jump), None, "a bad date never becomes recent work");
+            let again = look(Some(&later), 3_000, 105_000, jump);
+            let quiet = look(Some(&again), 3_000, 165_000, jump);
+            assert_eq!(quiet.last_worked(0, wall + 165_000 + jump), Some(wall + 105_000 + jump));
+            let busy_at_jump = look(Some(&busy), 3_000, 30_000, jump);
+            assert_eq!(busy_at_jump.busy_wall, Some(wall + 30_000 + jump), "new work already uses the corrected clock");
+        }
     }
 
     #[test]

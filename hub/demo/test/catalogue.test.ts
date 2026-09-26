@@ -14,7 +14,7 @@ import {Directory} from '../../server/store/directory.js';
 import {Store} from '../../server/store/store.js';
 import type {ResetEvent, ResetProvider} from '../../server/domain/resets.js';
 import {setLocale} from '../../ui/i18n/index.js';
-import {agentRows, drawn, folderOf} from '../../ui/lib/agents.js';
+import {agentRows, byActivity, drawn, folderOf, machinesOf} from '../../ui/lib/agents.js';
 import {forecastRow} from '../../ui/lib/forecast.js';
 import {chartEvents, chartFrom, chartResets, linesOf} from '../../ui/lib/lines.js';
 import {planNote, started} from '../../ui/lib/plan.js';
@@ -127,7 +127,19 @@ class Reading {
         board,
         this.reader(board)
           .get<Overview>(`/api/overview?board=${encodeURIComponent(id)}`)
-          .then(data => ({...data, sources: titled(data.sources, data.view.names)})),
+          .then(data => {
+            const overview = {...data, sources: titled(data.sources, data.view.names)};
+            const ordered = (sessions: Overview['sources'][number]['sessions']) => {
+              for (let i = 1; i < sessions.length; i++) assert.ok(byActivity(sessions[i - 1], sessions[i]) <= 0, `${board}: activity order`);
+            };
+            ordered(agentRows(overview.sources, overview.view).rows.map(r => r.session));
+            for (const source of overview.sources) {
+              const groups = machinesOf(source.sessions);
+              ordered(groups.map(m => m.sessions[0]));
+              for (const group of groups) ordered(group.sessions);
+            }
+            return overview;
+          }),
       );
     }
     return this.overviews.get(board)!;
@@ -208,6 +220,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
     return {
       state: boardState(overview.sources, overview.view),
       rows: empty ?? rows.length,
+      firstMachines: 'firstMachines' in check ? rows.slice(0, (check.firstMachines as string[]).length).map(r => r.session.device.name) : undefined,
       // At least as many as claimed.
       weeklySeries: 'weeklySeries' in check ? Math.min(check.weeklySeries as number, series) : undefined,
     };
@@ -453,4 +466,26 @@ test('the showcase comes up clean', {timeout: 60_000}, async t => {
   const board = people(set)[0].id;
   const first = start + earliest(set);
   assert.deepEqual([(await reading.overview(board)).historyStart, (await reading.history(board)).historyStart], [first, first], 'history starts at the first seeded measurement');
+});
+
+
+test('the activity example puts two working agents above recent and morning work, with a narrow board too', async t => {
+  const set = setOf('activity');
+  const start = Math.floor(Date.now() / MIN) * MIN;
+  const {stand, hub} = await bringUp(t, set, start);
+  const live = new Live(stand, cadence);
+  const checked = new Set<string>();
+  for (const at of [0, 2 * MIN, 6 * MIN, 10 * MIN]) {
+    t.mock.timers.setTime(start + at);
+    await live.report(at, start + at);
+    await live.measure(at, start + at);
+    const reading = new Reading(stand, start + at, new Map([[set.scene, await hub.told()]]));
+    assert.deepEqual(await checkAll(stand, set.entries, reading, at, checked), []);
+    assert.equal((await reading.overview('compact')).view.sizes.agents, 4);
+    if (at >= 2 * MIN) {
+      const overview = await reading.overview('ana');
+      assert.deepEqual(agentRows(overview.sources, overview.view).rows.map(r => r.session.project),
+        ['web', 'api', 'recent-1', 'recent-2', 'recent-3', 'recent-4', 'morning-1', 'morning-2', 'morning-3', 'morning-4', 'new-session', null]);
+    }
+  }
 });

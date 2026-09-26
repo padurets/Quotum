@@ -11,6 +11,7 @@ export type LiveSession = {
   startedAt: number;
   /** As the agent sent it: the correction for its clock differs from request to request, so this tells the session. */
   sentStartedAt: number;
+  lastWorkedAt: number | null;
   working: boolean;
 };
 
@@ -26,6 +27,7 @@ export type BoardSession = {
   project: string | null;
   folder: string | null;
   startedAt: number;
+  lastWorkedAt: number | null;
   working: boolean;
 };
 
@@ -93,10 +95,10 @@ export class Sessions {
       if (now - machine.at > KEEP_MS || !people.includes(machine.user)) continue;
       const sessions = machine.sources.get(source) ?? [];
       const names = sessions.length ? this.store.projectNames(machine.user) : new Map<string, string>();
-      for (const {device, origin, project, folder, startedAt, working} of sessions) {
+      for (const {device, origin, project, folder, startedAt, lastWorkedAt, working} of sessions) {
         const shown = project === null ? null : (names.get(project) ?? project);
         // The agent leaves out a folder that is its project; renamed, that name tells the folder.
-        found.push({device, origin, project: shown, folder: folder ?? (shown !== project ? project : null), startedAt, working});
+        found.push({device, origin, project: shown, folder: folder ?? (shown !== project ? project : null), startedAt, lastWorkedAt, working});
       }
     }
     return found.sort((a, b) => a.device.name.localeCompare(b.device.name) || a.device.id.localeCompare(b.device.id) || a.startedAt - b.startedAt);

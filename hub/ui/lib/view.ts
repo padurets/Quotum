@@ -14,7 +14,7 @@ export const cardId = (sourceId: string) => `source:${sourceId}`;
 const OFF_BY_DEFAULT = [AGENTS];
 export const isOffByDefault = (id: string) => OFF_BY_DEFAULT.includes(id);
 
-const EMPTY: View = {order: [], sizes: {}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}};
+const EMPTY: View = {order: [], sizes: {}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
 
 /**
  * The grid has twelve columns: a card takes half of it by default, so two stand side by
@@ -72,14 +72,21 @@ export const withHidden = (view: View, id: string, hidden: boolean): View =>
     ? {...view, shown: hidden ? view.shown.filter(other => other !== id) : [...new Set([...view.shown, id])]}
     : {...view, hidden: hidden ? [...new Set([...view.hidden, id])] : view.hidden.filter(other => other !== id)};
 
+/** Columns whose marks already tell the state; the owner can still ask for words. */
+const OFF_BY_DEFAULT_COLUMNS: Record<string, string[]> = {[AGENTS]: ['state']};
+const columnOffByDefault = (widget: string, column: string) => OFF_BY_DEFAULT_COLUMNS[widget]?.includes(column) ?? false;
+
 /** Whether a column of a widget's table is shown. */
-export const columnShown = (view: View, widget: string, column: string) => !(view.columns[widget] ?? []).includes(column);
+export const columnShown = (view: View, widget: string, column: string) =>
+  columnOffByDefault(widget, column) ? (view.shownColumns[widget] ?? []).includes(column) : !(view.columns[widget] ?? []).includes(column);
 
 export const withColumn = (view: View, widget: string, column: string, shown: boolean): View => {
-  const hidden = (view.columns[widget] ?? []).filter(other => other !== column);
-  const columns = {...view.columns, [widget]: shown ? hidden : [...hidden, column]};
+  const off = columnOffByDefault(widget, column);
+  const key = off ? 'shownColumns' : 'columns';
+  const others = (view[key][widget] ?? []).filter(other => other !== column);
+  const columns = {...view[key], [widget]: shown === off ? [...others, column] : others};
   if (!columns[widget].length) delete columns[widget];
-  return {...view, columns};
+  return {...view, [key]: columns};
 };
 
 /** Whether a window is hidden from its card and the chart on this board. */

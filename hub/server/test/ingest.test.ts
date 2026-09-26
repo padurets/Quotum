@@ -293,3 +293,27 @@ test('stored agent samples carry their staleness into history', () => {
   assert.equal(history.consumed, 2);
   assert.deepEqual(history.points.map(p => p[2]), [0, 0]);
 });
+
+
+test('an idle session may tell when it last worked, on the same corrected clock as its start', () => {
+  const {store, ingest, token, alice, board} = setup();
+  ingest.accept(token, batch([snapshot(start, 30)]), start);
+  const source = only(store, board, 'codex').id;
+  const session = {provider: 'codex', origin: 'terminal', startedAt: iso(start - 3_600_000), working: false};
+  const report = (change: object = {}, sentAt = start) => ({...batch([]), sentAt: iso(sentAt), sessions: [{...session, ...change}]});
+  const shown = (change: object = {}, sentAt = start) => {
+    assert.equal(ingest.sessions(token, report(change, sentAt), start).accepted, 1);
+    return ingest.live.of(source, [alice.id], start)[0];
+  };
+  assert.equal(shown().lastWorkedAt, null, 'an older agent');
+  assert.equal(shown({lastWorkedAt: null}).lastWorkedAt, null);
+  assert.equal(shown({lastWorkedAt: iso(start - 60_000)}).lastWorkedAt, start - 60_000);
+  assert.equal(shown({lastWorkedAt: iso(start + 60_000)}).lastWorkedAt, start, 'never in the future');
+  assert.equal(shown({lastWorkedAt: iso(start - 7_200_000)}).lastWorkedAt, start - 3_600_000, 'never before its start');
+  for (const shift of [-3_600_000, 3_600_000]) {
+    const found = shown({startedAt: iso(start - 3_600_000 + shift), lastWorkedAt: iso(start - 60_000 + shift)}, start + shift);
+    assert.deepEqual([found.startedAt, found.lastWorkedAt], [start - 3_600_000, start - 60_000]);
+  }
+  for (const lastWorkedAt of ['never', 42, {}, false]) assert.throws(() => parseSessions(report({lastWorkedAt})), /lastWorkedAt/);
+  store.close();
+});

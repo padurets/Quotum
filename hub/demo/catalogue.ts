@@ -379,7 +379,7 @@ const all: DemoSet = {
         {agentsOf: 'docs', folders: ['docs-site']},
       ],
       look: [
-        'The table of agents lists many rows, by machine',
+        'The table of agents lists many rows, by activity',
         'My machines → Projects: quotum once, on the laptop, though three agents work in three folders (the tray and the table show quotum three times, with hub and quotum.feat-18-desktop-app under two of them)',
         'Renamed or merged in My machines, a project is shown under its new name in the tray and the table too',
         'Merge Quotum into quotum: the time adds up, all of it; give Quotum back its name: as it was',
@@ -950,4 +950,30 @@ const showcase: DemoSet = {
   ],
 };
 
-export const SETS: DemoSet[] = [all, showcase];
+/** The issue's example: recent work rises above a newer idle session, across three machines. */
+const SORT_AGENTS: Agent[] = [
+  ...agents('workstation', [
+    ['terminal', 'api', -3 * HOUR, {period: DAY, on: HOUR, phase: MIN}],
+    ['editor', 'web', -2 * HOUR, {period: DAY, on: HOUR, phase: MIN}],
+    ['app', null, -10 * MIN],
+    ['terminal', 'new-session', -MIN],
+  ]),
+  ...agents('laptop', Array.from({length: 4}, (_, i) => ['terminal', `recent-${i + 1}`, -HOUR - i * MIN, {period: DAY, on: MIN, phase: -(i + 2) * MIN}] as const)),
+  ...agents('server', Array.from({length: 4}, (_, i) => ['terminal', `morning-${i + 1}`, -8 * HOUR - i * MIN, {period: DAY, on: MIN, phase: -(i + 4) * HOUR}] as const)),
+];
+const activity: DemoSet = {
+  id: 'activity',
+  about: 'twelve agents ordered by activity, as a table and a narrow list',
+  scene: 'quiet',
+  entries: [
+    {kind: 'person', id: 'ana', name: 'Ana', agents: true, expect: [{rows: 12}, {firstMachines: ['workstation', 'workstation', 'laptop', 'laptop'], from: 2 * MIN, to: 10 * MIN}], look: ['At full width, sortable headers; two agents on workstation rise to the top after a minute']},
+    {kind: 'board', id: 'compact', name: 'Compact agents', owner: 'ana', members: [], agents: true, agentsSpan: 4, expect: [{rows: 12}], look: ['At 4 of 12 columns the widget is a compact list, with a sort menu']},
+    {
+      kind: 'card', id: 'activity', provider: 'codex', plan: 'pro', machines: ['workstation', 'laptop', 'server'], history: DAY,
+      windows: [weekly({since: -2 * DAY, use: steady(0, 10)})], agents: SORT_AGENTS,
+      on: {ana: {name: 'Agent activity'}, compact: {name: 'Agent activity'}}, expect: [{title: 'Agent activity'}, {agents: 12, drawn: false}],
+    },
+  ],
+};
+
+export const SETS: DemoSet[] = [all, showcase, activity];

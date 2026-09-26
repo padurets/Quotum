@@ -33,6 +33,7 @@ const session = (device: string, {source = 'codex:1', working = true, project = 
   folder,
   startedAt: startedAt + 7_000,
   sentStartedAt: startedAt,
+  lastWorkedAt: null,
   working,
 }) satisfies LiveSession & {source: string};
 

@@ -12,7 +12,7 @@ import {boardState, cardId, isWindowHidden} from '../lib/view';
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const now = Date.parse('2026-09-24T12:00:00Z');
-const EMPTY: View = {order: [], sizes: {}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}};
+const EMPTY: View = {order: [], sizes: {}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
 
 test('a reset announced or possible outranks one that happened, which outranks a change of limits', () => {
   const event = (at: number) => ({url: 'https://codex-resets.com/', text: '', at});
@@ -62,7 +62,7 @@ test('the table says where the pace leads, in its tone', () => {
 });
 
 test('agents are drawn up to ten; the table leaves out hidden cards and says why it is empty', () => {
-  const session = (): LiveSession => ({device: {id: 'd', name: 'laptop'}, origin: 'terminal', project: null, folder: null, startedAt: now, working: true});
+  const session = (): LiveSession => ({device: {id: 'd', name: 'laptop'}, origin: 'terminal', project: null, folder: null, startedAt: now, lastWorkedAt: null, working: true});
   assert.equal(drawn(Array.from({length: DRAWN}, session)), true);
   assert.equal(drawn(Array.from({length: DRAWN + 1}, session)), false);
   const source = (id: string, sessions: LiveSession[]) => ({id, sessions}) as unknown as SourceState;
