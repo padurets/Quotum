@@ -72,6 +72,10 @@ export async function setUp(base: string, set: DemoSet, start: number, setupCode
     const devices = await person.get<{id: string; reported: string}[]>('/api/devices');
     await person.renameDevice(devices.find(d => d.reported === machine.id)!.id, machine.renamed!);
   }
+  // Before any agent reports: a name nothing has reported yet is corrected all the same.
+  for (const person of people(set)) {
+    for (const [reported, name] of Object.entries(person.projects ?? {})) await stand.people.get(person.id)!.renameProject(reported, name);
+  }
 
   for (const card of cards(set)) {
     stand.sources.set(card.id, sourceOf(card, stand.people.get(homeOf(set, card))!.id));

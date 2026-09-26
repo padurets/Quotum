@@ -183,7 +183,7 @@ export class Ingest {
         if (!source || !this.store.holds(device.userId, source)) return [];
         const startedAt = Math.min(now, session.startedAt + skew);
         const lastWorkedAt = session.lastWorkedAt === null ? null : Math.max(startedAt, Math.min(now, session.lastWorkedAt + skew));
-        return [{...session, startedAt, lastWorkedAt, source, device: {id: device.id, name}}];
+        return [{...session, startedAt, sentStartedAt: session.startedAt, lastWorkedAt, source, device: {id: device.id, name}}];
       });
       this.live.report(device.id, device.userId, sessions, now);
       return {accepted: sessions.length};

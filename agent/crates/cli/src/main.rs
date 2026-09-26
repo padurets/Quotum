@@ -348,7 +348,7 @@ fn status(config: Config, paths: Paths, only: &[Provider], json: bool) -> ExitCo
     }
     // The agents running here are looked at before and after measuring: the CPU time they
     // spent meanwhile tells which of them work, with no wait of its own.
-    let mut activity = (!json).then(|| Activity::new(home()));
+    let mut activity = (!json).then(|| Activity::new(home(), true));
     if let Some(activity) = activity.as_mut() {
         activity.look();
     }
@@ -596,8 +596,8 @@ fn show_config(config: &Config, paths: &Paths) -> ExitCode {
     println!("eco mode      {eco}");
     let sessions = match (config.sessions(), config.projects()) {
         (false, _) => "not told to the hub",
-        (true, true) => "told to the hub, with project folder names",
-        (true, false) => "told to the hub, without project folder names",
+        (true, true) => "told to the hub, with project and folder names",
+        (true, false) => "told to the hub, without project and folder names",
     };
     println!("agents here   {sessions}");
     let home = quotum_core::config::home();
@@ -690,13 +690,20 @@ fn print_sessions(sessions: &[Session], style: &Style) {
             Some(false) => style.dim("idle   "),
             None => " ".repeat(7),
         };
-        let project = session.project.as_deref().unwrap_or("");
+        // Its project, and its folder where that is another, as boards show them: agents in
+        // worktrees of one project stay apart.
+        let place = match (&session.project, &session.folder) {
+            (Some(project), Some(folder)) if project != folder => format!("{project} · {folder}"),
+            (None, Some(folder)) => format!("no project · {folder}"),
+            (None, None) => "no project".to_string(),
+            (Some(project), _) => project.clone(),
+        };
         let origin = match session.origin {
             Origin::Terminal => String::new(),
             other => format!(" · {}", other.id()),
         };
         let started = style.dim(&format!("started {} ago{origin}", until(now_ms() - session.started_at)));
-        println!("{:<14}{project:<20}{state}  {started}", session.provider.name());
+        println!("{:<14}{place:<20} {state}  {started}", session.provider.name());
     }
 }
 

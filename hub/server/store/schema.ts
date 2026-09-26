@@ -83,6 +83,26 @@ export const STEPS = [
   CREATE TABLE work (source_id TEXT NOT NULL, at INTEGER NOT NULL, agent_ms INTEGER NOT NULL, busy_ms INTEGER NOT NULL,
     PRIMARY KEY (source_id, at)) WITHOUT ROWID;
   `,
+  // 3 — what agents did, rather than sums of it: each session and when it worked, and the
+  // names people give their projects. Sums are worked out when read (domain/work.ts).
+  `
+  DROP TABLE work;
+  -- A coding agent as its machine reported it: on which subscription, where it runs, since when
+  -- (the agent's clock), in which project and folder ('' for none), names as reported. A change of
+  -- any of these is a session of its own. Agents alike in all of it (started together by a script:
+  -- Linux tells start times in hundredths of a second) are told apart by their place among them.
+  CREATE TABLE agent_sessions (
+    id INTEGER PRIMARY KEY, device_id TEXT NOT NULL, source_id TEXT NOT NULL, origin TEXT NOT NULL,
+    started_at INTEGER NOT NULL, project TEXT NOT NULL, folder TEXT NOT NULL, ordinal INTEGER NOT NULL,
+    UNIQUE (device_id, source_id, started_at, origin, project, folder, ordinal));
+  -- When it worked, on the hub's clock: each list counts until the next one, for at most 200 seconds.
+  CREATE TABLE agent_work (session_id INTEGER NOT NULL, from_at INTEGER NOT NULL, to_at INTEGER NOT NULL,
+    PRIMARY KEY (session_id, from_at)) WITHOUT ROWID;
+  CREATE INDEX agent_work_by_end ON agent_work (to_at);
+  -- What a person's machines report as a project, and the name it is shown and counted under.
+  CREATE TABLE project_names (user_id TEXT NOT NULL, reported TEXT NOT NULL, name TEXT NOT NULL,
+    PRIMARY KEY (user_id, reported)) WITHOUT ROWID;
+  `,
 ];
 
 export const SCHEMA_VERSION = STEPS.length;
@@ -102,6 +122,8 @@ export function migrate(db: DatabaseSync, now: number) {
     for (const step of STEPS.slice(current)) db.exec(step);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.prepare('INSERT OR IGNORE INTO meta VALUES (?, ?)').run('historyStart', String(now));
+    // Before this, how agents worked is not known (the sums of layout 2 are gone), rather than none worked.
+    if (current < 3) db.prepare('INSERT OR IGNORE INTO meta VALUES (?, ?)').run('agentWorkSince', String(now));
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');

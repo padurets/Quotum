@@ -81,9 +81,20 @@ reads only the time of the last change, to tell whether someone uses a client on
 machine. Credential files are never opened.
 
 **Which agents run.** The agent also looks at the process list: which `claude`, `codex`
-and `agy` processes run, since when, in which folder (its name only; not the home or a
-temporary folder), where (a terminal, an editor, or the Codex desktop app, told by the
-programs above them), and whether they work. An editor or the app runs one client per
+and `agy` processes run, since when, in which folder and project (names only; not the
+home or a temporary folder), where (a terminal, an editor, or the Codex desktop app,
+told by the programs above them), and whether they work. The project is the git
+repository the folder is in, else the folder: once per session and folder the agent
+looks for `.git` in the folder and above it, but not in the home folder or above it; in
+a worktree the `.git` file leads to the main repository's git folder through its
+`commondir`, so worktrees and folders inside a repository are one project. It reads
+only those two small files: no git is run, no settings of it are read (remotes may hold
+tokens). On macOS it touches nothing in the folders the system guards (Desktop,
+Documents, Downloads, iCloud Drive, other volumes), neither directly nor through the
+`.git` of another folder, so that the system does not ask for access: there the project
+is the folder. Paths are checked as git writes them; a chain of links made by hand may
+still lead there. Boards list agents by project, with the folder under it where that is
+another, so agents in different worktrees stay apart. An editor or the app runs one client per
 window for all its chats, so there a session is a window. A session works while it and
 what it started (tools, builds, tests) spend more of a CPU core than the client does
 when idle (6% for Claude Code, which redraws its screen even then; 3–4% for the others),
@@ -226,11 +237,18 @@ send theirs again), files each session under its subscription (the account the c
 the machine last delivered for that client; only one its person holds; the agent leaves
 out a session of a client signed in anew since it last measured, until it knows which
 account that is) and shows it on
-that card, to the members of a board where that person shows the subscription. Each list
-also counts until the next one, for at most 200 seconds: how long agents
-worked on each subscription, in five-minute cells (agent time, two agents counting twice,
-and the time any of them worked, overlaps between machines counted once), kept as long
-as samples.
+that card, by project (as that person named it) and folder, to the members of a board
+where that person shows the subscription. Each list also counts until the next one, for at most 200 seconds: the hub
+keeps when each session worked, with its machine, subscription, where it runs, since
+when and its project and folder names as reported, as long as samples. A session is
+never credited twice for the same time: after the hub's clock goes back, it is credited
+again from where its time already ends, so a clock that ran ahead costs its sessions at
+most as much time as it ran ahead, and the time counted before is never rewritten. Sums are worked
+out when read (`domain/work.ts`): agent time adds the stretches up, two agents counting
+twice; the time any of them worked is their union, overlaps counted once for whichever
+machines, people or projects are asked about. The corrections people make to project
+names apply when read, so they reach all the time kept. The database says since when
+this is kept (`agentWorkSince`): before it, how agents worked is not known.
 
 ## Storage and the rules
 
@@ -283,7 +301,11 @@ them), kept for 90 days.
   link unless the hub is open (`QUOTUM_SIGNUP=open`).
 - **Devices** are running agents, and each belongs to a person. The *Machines* dialog
   shows a person's devices, what each delivers and the last failure of each client
-  there (not logged in, too old…); the person names them there. A device connects in
+  there (not logged in, too old…); the person names them there. Its *Projects* tab
+  lists the projects their agents worked on, with the machines and when they last did:
+  the person renames them and merges several into one, which applies everywhere they are
+  shown and to all the time kept (only on their own machines), and gives a reported name
+  back its own to undo it. How long agents worked is not shown there. A device connects in
   one of two ways:
   - *a one-time code* (the RFC 8628 device flow): `quotum connect <hub>` shows a code, a
     signed-in person confirms it in the browser; the device gets its own token and
