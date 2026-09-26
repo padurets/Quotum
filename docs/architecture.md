@@ -456,7 +456,11 @@ and start-at-login settings. Moving a portable folder requires updating its auto
 entry by turning start at login off and on again.
 Windows are created on worker threads; restoring, fitting and showing them is queued
 on the event loop after the window-state plugin's initialization. This keeps its state
-locks on the same thread as native window events.
+locks on the same thread as native window events. Closing the window destroys it with its
+web view. A request to open it asks the event loop whether the window it finds is still
+there: a second start can arrive while a closed window still holds its label, and that
+one does not count as open. The new window is created once it has gone, and the app's
+log tells each request, attempt and outcome.
 
 **Linux rendering and lifetime.** The Rust controller uses a D-Bus StatusNotifierItem
 through `ksni`; it does not link GTK or WebKit. It waits for the desktop's tray watcher

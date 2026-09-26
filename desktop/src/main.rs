@@ -22,9 +22,6 @@ mod tauri_ipc;
 mod tauri_window;
 #[cfg(not(target_os = "linux"))]
 mod tray;
-#[cfg(windows)]
-#[path = "host/webview2.rs"]
-mod webview2;
 mod window;
 use std::ffi::OsString;
 

@@ -1,6 +1,6 @@
 use crate::{hub::HubState, shell::Shell, window::*};
 use std::{
-    sync::Arc,
+    sync::{Arc, mpsc},
     thread,
     time::{Duration, Instant},
 };
@@ -23,6 +23,12 @@ pub fn open(shell: &Arc<Shell>, from: &'static str) {
     });
 }
 
+/// How long the main thread may take to tell whether the window it has is still there.
+const ANSWER_LIMIT: Duration = Duration::from_secs(1);
+/// How long a request waits for a closing window to go; the UI smoke waits 20 s for the
+/// window after a second start.
+const CLOSING_LIMIT: Duration = Duration::from_secs(15);
+
 /// Milliseconds since `start`, for the log of opening the window.
 fn ms(start: Instant) -> u128 {
     start.elapsed().as_millis()
@@ -35,19 +41,46 @@ fn open_now(shell: &Arc<Shell>, from: &'static str) {
     }
     shell.hub_log.line(&format!("app: {from} asks for the window"));
     let _creating = shell.window_lock.lock().unwrap_or_else(|e| e.into_inner());
-    #[cfg(windows)]
-    shell.hub_log.line(&format!("app: web view processes at {} ms: {}", ms(start), crate::webview2::describe()));
     let app = &shell.host.app;
     if let Some(window) = app.get_webview_window(LABEL) {
-        shell.hub_log.line(&format!("app: found the window {LABEL} at {} ms", ms(start)));
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
-        drop(_creating);
-        follow(shell);
-        return;
+        // A second start can hand over while Tauri still holds a closed window under its
+        // label: off the screen and without its web view, but not destroyed yet. Showing it
+        // shows nothing, and the request would be spent: a new window comes once it has gone.
+        match alive(shell, window.clone()) {
+            Some(true) => {
+                shell.hub_log.line(&format!("app: found the window {LABEL} at {} ms", ms(start)));
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+                drop(_creating);
+                follow(shell);
+                return;
+            }
+            Some(false) => {
+                shell.hub_log.line(&format!("app: the window {LABEL} is closing at {} ms", ms(start)));
+                while app.get_webview_window(LABEL).is_some() {
+                    if shell.exiting() {
+                        return;
+                    }
+                    if start.elapsed() >= CLOSING_LIMIT {
+                        shell.hub_log.line(&format!("app: the window {LABEL} did not go within {} ms", ms(start)));
+                        return;
+                    }
+                    thread::sleep(Duration::from_millis(50));
+                }
+                shell.hub_log.line(&format!("app: the window {LABEL} went at {} ms", ms(start)));
+            }
+            None => {
+                // It may be one still being created: that one shows when it is.
+                shell.hub_log.line(&format!(
+                    "app: the main thread did not tell within {} ms whether the window {LABEL} is there",
+                    ANSWER_LIMIT.as_millis()
+                ));
+                return;
+            }
+        }
     }
-    // A window just closed may still hold its label for a moment.
+    // A window that went may still hold its label for a moment.
     for attempt in 1..=20 {
         shell.hub_log.line(&format!("app: attempt {attempt} to create the window {LABEL} at {} ms", ms(start)));
         let (state, generation) = shell.hub();
@@ -66,6 +99,21 @@ fn open_now(shell: &Arc<Shell>, from: &'static str) {
         }
     }
     shell.hub_log.line(&format!("app: gave up on the window after {} ms", ms(start)));
+}
+
+/// Whether `window` is still there, as the main thread tells: there a getter of a closing
+/// window fails at once. `None` without an answer in time. Not asked on a worker: a getter
+/// there waits for the main thread, for ever if it is stuck.
+fn alive(shell: &Shell, window: tauri::WebviewWindow) -> Option<bool> {
+    let (answer, answered) = mpsc::channel();
+    shell
+        .host
+        .app
+        .run_on_main_thread(move || {
+            let _ = answer.send(window.is_visible().is_ok());
+        })
+        .ok()?;
+    answered.recv_timeout(ANSWER_LIMIT).ok()
 }
 
 fn build(shell: &Arc<Shell>, state: &HubState, generation: u64, start: Instant) -> tauri::Result<tauri::WebviewWindow> {

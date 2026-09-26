@@ -281,12 +281,6 @@ fn provider_of(name: &str) -> Option<Provider> {
     }
 }
 
-/// All processes of the machine, as one pass over the list gives them. The desktop app looks
-/// for its own children in it.
-pub fn processes() -> Vec<Proc> {
-    sys::processes()
-}
-
 /// The sessions among `procs`. Not sessions: clients started by the agent itself to measure (below this
 /// process `own` or any `quotum`), and a client under another of the same kind (a
 /// launcher and the program it runs). A session under a session of another kind is its
