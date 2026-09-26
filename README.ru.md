@@ -84,9 +84,10 @@ Claude max    5 hours               98%  in 4h 27m
 Antigravity   Gemini 5 hours       100%  in 4h 59m
               Gemini weekly         96%  in 1d 3h
 
-running here: 2 · 1 working
-Claude        quotum              working  started 3h 39m ago
-Codex         api                 idle     started 25m ago · editor
+running here: 3 · 2 working
+Claude        quotum               working  started 3h 39m ago
+Claude        quotum · quotum.feat-18 working  started 52m ago
+Codex         api                  idle     started 25m ago · editor
 ```
 
 ## Что показывает дашборд
@@ -147,7 +148,8 @@ Codex         api                 idle     started 25m ago · editor
   времени, как называются их проект (git-репозиторий, в котором лежит их папка, иначе
   сама папка) и папка (`sessions = false` и `projects = false` это отключают).
   Участникам доски их видно вместе с именем машины, только если человек, чьи это агенты,
-  показывает эту подписку на доске. Хаб хранит, когда работал каждый агент, с именами
+  показывает эту подписку на доске, и каждый проект — под тем именем, что дал ему этот
+  человек. Хаб хранит, когда работал каждый агент, с именами
   его машины, проекта и папки, 90 дней, а имена, которые вы дали проектам, — пока вы их
   не вернёте; по проектам это видно в «Моих машинах». Полный список — в [спецификации](spec/ingest-v1.md#privacy).
 - **Цифрам можно верить.** Расходом считается только реальный рост внутри одного окна

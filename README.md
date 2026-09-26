@@ -84,9 +84,10 @@ Claude max    5 hours               98%  in 4h 27m
 Antigravity   Gemini 5 hours       100%  in 4h 59m
               Gemini weekly         96%  in 1d 3h
 
-running here: 2 · 1 working
-Claude        quotum              working  started 3h 39m ago
-Codex         api                 idle     started 25m ago · editor
+running here: 3 · 2 working
+Claude        quotum               working  started 3h 39m ago
+Claude        quotum · quotum.feat-18 working  started 52m ago
+Codex         api                  idle     started 25m ago · editor
 ```
 
 ## What the dashboard shows
@@ -146,7 +147,8 @@ day, not a script thrown together over a weekend. In practice that meant:
   the names of their project (the git repository their folder is in, else the folder)
   and folder (`sessions = false` and `projects = false` turn that off). A board shows
   them, with the name of the machine they run on, to its members only where the person
-  whose agents they are shows that subscription. The hub keeps when each agent worked,
+  whose agents they are shows that subscription, each project under the name that person
+  gave it. The hub keeps when each agent worked,
   with its machine, project and folder names, for 90 days, and the names you give your
   projects until you undo them; you see it by project in *My machines*. The full list is in the [spec](spec/ingest-v1.md#privacy).
 - **The numbers mean what they say.** Only a real increase inside one reset window
