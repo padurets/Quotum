@@ -1,4 +1,4 @@
-import {useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent} from 'react';
+import {useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent} from 'react';
 import {clock, day, duration, num, shortDay, stamp} from '../lib/format';
 import {t} from '../i18n';
 import {valueIn, type Line} from '../lib/lines';
@@ -19,12 +19,21 @@ const diamond = (x: number, y: number, r = 4) => `M${x},${y - r}l${r},${r}l${-r}
 /** The spending plan of one weekly window, drawn as a faint dotted line in its colour; `lines` are the keys of the lines it plans. */
 export type PlanLine = {key: string; lines: string[]; name: string; color: string; runs: [number, number][][]};
 
+/**
+ * Where a window's pace leads, drawn from its last value in its line's colour and dash;
+ * `key` is its line's. `beyond` says at the right edge when it runs out past it.
+ */
+export type ForecastLine = {key: string; name: string; color: string; dash: string; points: [number, number][]; beyond: string | null};
+
+/** How far apart labels stacked at an edge stand. */
+const LABEL_STEP = 22;
+
 /** How wide an announcement's label is taken to be, and how near an edge a value hides under it (percent). */
 const LABEL_WIDTH = 220;
 const LABEL_BAND = 15;
 
 /** A label on the chart on a backing sized to its text, so no line under it gets in the way. */
-function MarkerLabel({x, y, end, children}: {x: number; y: number; end: boolean; children: string}) {
+function MarkerLabel({x, y, end, color, children}: {x: number; y: number; end: boolean; color?: string; children: string}) {
   const text = useRef<SVGTextElement>(null);
   const [box, setBox] = useState<{x: number; width: number} | null>(null);
   useLayoutEffect(() => {
@@ -32,7 +41,7 @@ function MarkerLabel({x, y, end, children}: {x: number; y: number; end: boolean;
     if (measured) setBox({x: measured.x, width: measured.width});
   }, [x, y, end, children]);
   return (
-    <g className="marker-label">
+    <g className={`marker-label ${color ? 'is-forecast' : ''}`} style={color ? ({'--label-color': color} as CSSProperties) : undefined}>
       {box && <rect x={box.x - 6} y={y - 13} width={box.width + 12} height={19} rx={5} />}
       <text ref={text} x={x} y={y} textAnchor={end ? 'end' : 'start'}>
         {children}
@@ -86,6 +95,7 @@ export function cellLabel(at: number, cellMs: number) {
 export function Chart({
   lines,
   plans = [],
+  forecasts = [],
   markers = [],
   from,
   now,
@@ -96,6 +106,7 @@ export function Chart({
 }: {
   lines: Line[];
   plans?: PlanLine[];
+  forecasts?: ForecastLine[];
   markers?: Marker[];
   from: number;
   /** Where measurements end; everything right of it is the future. */
@@ -177,9 +188,18 @@ export function Chart({
           const value = valueAt(plan.runs, Math.min(to, hover + cellMs / 2));
           return value === undefined ? [] : [{plan, value}];
         });
-  // A plan is read beside what its source has left; one with nothing read there stands on its own.
+  // Ahead of now a window has no value of its own, only where its pace leads: read in a
+  // cell wholly ahead, at its middle, until the window runs out.
+  const forecastReadout =
+    hover === null || hover <= now
+      ? []
+      : forecasts.flatMap(forecast => {
+          const value = valueAt([forecast.points], Math.min(to, hover + cellMs / 2));
+          return value === undefined ? [] : [{forecast, value}];
+        });
+  // A plan is read beside what its source has left, or where it goes; one with nothing read there stands on its own.
   const planOf = (line: string) => planReadout.find(row => row.plan.lines.includes(line));
-  const lonePlans = planReadout.filter(row => !readout.some(r => row.plan.lines.includes(r.line.key)));
+  const lonePlans = planReadout.filter(row => !readout.some(r => row.plan.lines.includes(r.line.key)) && !forecastReadout.some(r => row.plan.lines.includes(r.forecast.key)));
 
   const toChart = (event: PointerEvent<SVGSVGElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -201,7 +221,15 @@ export function Chart({
     }
     return low > high ? top + 18 : height - bottom - 8;
   };
-  const move = (event: PointerEvent<SVGSVGElement>) => {
+  // What lies beyond the right edge is said there: an announcement, then where windows run out.
+  const edgeLabels = [
+    ...markers.filter(m => m.strong && !m.past && m.at > to).map(m => ({key: m.key, text: t('chart.ahead', {label: m.label, time: duration(m.at - now, true)}), color: undefined})),
+    ...forecasts.flatMap(f => (f.beyond ? [{key: `forecast-${f.key}`, text: f.beyond, color: f.color}] : [])),
+  ];
+  const edgeY = edgeLabels.length ? labelY(width - right, true) : 0;
+  // Stacked from the first one away from the edge of the plot it stands by.
+  const edgeStep = edgeY < height / 2 ? LABEL_STEP : -LABEL_STEP;
+  const move =(event: PointerEvent<SVGSVGElement>) => {
     const px = toChart(event);
     const held = holding.current;
     // A finger that moves before the hold is up reads values instead.
@@ -297,6 +325,15 @@ export function Chart({
             d={plan.runs.map(run => run.map(([at, value], i) => `${i ? 'L' : 'M'}${x(at).toFixed(1)},${y(value).toFixed(1)}`).join('')).join('')}
           />
         ))}
+        {forecasts.map(forecast => (
+          <path
+            key={forecast.key}
+            className="forecast-line"
+            stroke={forecast.color}
+            strokeDasharray={forecast.dash || undefined}
+            d={forecast.points.map(([at, value], i) => `${i ? 'L' : 'M'}${x(at).toFixed(1)},${y(value).toFixed(1)}`).join('')}
+          />
+        ))}
         {markers.map(marker => {
           if (marker.at > to) return null;
           const mx = x(marker.at);
@@ -322,19 +359,23 @@ export function Chart({
         ))}
         {/* Announcements are read over the lines, each on its own backing. */}
         {markers
-          .filter(marker => marker.strong && !marker.past)
+          .filter(marker => marker.strong && !marker.past && marker.at <= to)
           .map(marker => {
-            const beyond = marker.at > to;
-            const mx = beyond ? width - right : x(marker.at);
-            // Beyond the visible future: at the right edge, with the distance.
-            const nearRight = beyond || mx > width - right - 150;
-            const lx = beyond ? mx : nearRight ? mx - 6 : mx + 6;
+            const mx = x(marker.at);
+            const nearRight = mx > width - right - 150;
+            const lx = nearRight ? mx - 6 : mx + 6;
             return (
               <MarkerLabel key={marker.key} x={lx} y={labelY(lx, nearRight)} end={nearRight}>
-                {beyond ? t('chart.ahead', {label: marker.label, time: duration(marker.at - now, true)}) : marker.label}
+                {marker.label}
               </MarkerLabel>
             );
           })}
+        {/* Beyond the visible future: at the right edge, with the distance, one under another. */}
+        {edgeLabels.map((label, i) => (
+          <MarkerLabel key={label.key} x={width - right} y={edgeY + i * edgeStep} end color={label.color}>
+            {label.text}
+          </MarkerLabel>
+        ))}
         {hover === null &&
           lines.map((line, i) =>
             paths[i].last ? (
@@ -358,7 +399,7 @@ export function Chart({
         )}
       </svg>
 
-      {hover !== null && !drag && readout.length + lonePlans.length + markerReadout.length > 0 && (
+      {hover !== null && !drag && readout.length + forecastReadout.length + lonePlans.length + markerReadout.length > 0 && (
         <div className="tooltip glass" ref={tip} style={{left: tipLeft}}>
           <div className="tooltip-time">{cellLabel(hover, cellMs)}</div>
           {[...readout]
@@ -373,6 +414,16 @@ export function Chart({
                 {planOf(row.line.key) && <em className="tooltip-plan">{t('chart.planValue', {value: num(planOf(row.line.key)!.value)})}</em>}
               </div>
             ))}
+          {forecastReadout.map(row => (
+            <div className="tooltip-row is-forecast" key={row.forecast.key}>
+              <svg width="14" height="4" aria-hidden="true">
+                <line x1="0" x2="14" y1="2" y2="2" stroke={row.forecast.color} strokeWidth="1.5" strokeDasharray={row.forecast.dash || undefined} />
+              </svg>
+              <span>{row.forecast.name}</span>
+              <em className="tooltip-plan tooltip-forecast">{t('chart.forecastValue', {value: num(row.value)})}</em>
+              {planOf(row.forecast.key) && <em className="tooltip-plan">{t('chart.planValue', {value: num(planOf(row.forecast.key)!.value)})}</em>}
+            </div>
+          ))}
           {markerReadout.map(marker => (
             <div className={`tooltip-row is-marker ${marker.strong ? 'is-strong' : ''}`} key={marker.key}>
               <svg width="14" height="10" aria-hidden="true">

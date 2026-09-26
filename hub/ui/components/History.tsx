@@ -1,15 +1,16 @@
 import {memo, useMemo} from 'react';
 import {MINUTE, useNow} from '../lib/api';
 import type {History as HistoryData, Overview} from '../lib/types';
-import {num} from '../lib/format';
+import {countdown, num} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
 import {planAt, started, weeklyPlanLine} from '../lib/plan';
+import {forecastLine, outlook} from '../lib/forecast';
 import {PROVIDERS} from '../lib/providers';
 import {HORIZONS, setMuted, setPrefs, usePrefs, type Horizon} from '../lib/prefs';
 import {ofTimeRange, setTimeRange} from '../lib/timeRange';
 import {HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
 import {chartEvents, chartFrom, chartResets, linesOf} from '../lib/lines';
-import {Chart, type Marker, type PlanLine} from './Chart';
+import {Chart, type ForecastLine, type Marker, type PlanLine} from './Chart';
 import type {PastResets, Resets} from '../lib/resets';
 import {t, useLocale} from '../i18n';
 import {Segmented} from './Kit';
@@ -21,7 +22,7 @@ const FUTURE: Record<string, number> = {'24h': 4 * 3_600_000, '7d': DAY, '30d': 
 const HORIZON: Record<Exclude<Horizon, 'auto'>, number> = {'1d': DAY, '3d': 3 * DAY, '7d': 7 * DAY};
 
 /** The chart's own settings: how far it looks ahead, and (for the board's owner) hiding it. */
-function HistorySettings({arrange, planShown}: {arrange: Arrange; planShown: boolean}) {
+function HistorySettings({arrange, ahead}: {arrange: Arrange; ahead: boolean}) {
   const {horizon} = usePrefs();
   return (
     <Popover label={t('history.settings')} icon={<SlidersIcon />}>
@@ -34,7 +35,7 @@ function HistorySettings({arrange, planShown}: {arrange: Arrange; planShown: boo
           label={t('history.horizon')}
         />
       </div>
-      {!planShown && <div className="popover-note">{t('history.horizonNote')}</div>}
+      {!ahead && <div className="popover-note">{t('history.horizonNote')}</div>}
       {arrange.owner && <HideRow onHide={() => arrange.update(view => withHidden(view, HISTORY, true))}>{t('widget.hide')}</HideRow>}
     </Popover>
   );
@@ -75,16 +76,36 @@ export const History = memo(function History({
   // The spending plan applies to weekly windows; the days ahead are there for it, when a line on the chart has a plan.
   const planAvailable = prefs.kind === 'weekly' && visible.some(line => planOf(view, line.sourceId) !== null);
   const planShown = planAvailable && prefs.showPlan;
-  // Without the plan the chart ends now (an announced reset is pointed at from the right
-  // edge). With it, on `auto` some future stays on the right, stretched to include an
-  // announced reset when close: it may take up to ~40% of the width, a reset further
-  // out is pointed at from the edge instead. A chosen horizon is kept as is.
+  // Where each window's pace leads, for the lines that have a forecast to draw.
+  const ahead = useMemo(
+    () =>
+      visible.flatMap(line => {
+        const source = overview?.sources.find(s => s.id === line.sourceId);
+        const live = source?.windows.find(w => w.id === line.windowId);
+        const measuredAt = source?.successAt ?? null;
+        const weekly = planOf(view, line.sourceId);
+        const said = outlook(live, measuredAt, now, weekly);
+        return 'pace' in said ? [{line, live, measuredAt, weekly, runsOut: said.key === 'runsOut' ? said.at : null}] : [];
+      }),
+    [visible, overview, now, view],
+  );
+  const forecastAvailable = ahead.length > 0;
+  const forecastShown = forecastAvailable && prefs.showForecast && !selected;
+  // Without the plan or the forecast the chart ends now (an announced reset is pointed at
+  // from the right edge). With either, on `auto` some future stays on the right,
+  // stretched to include an announced reset when close, and to where the forecast says a
+  // window runs out: it may take up to ~40% of the width, anything further out is pointed
+  // at from the edge instead. A chosen horizon is kept as is.
   const future = prefs.horizon === 'auto' ? (FUTURE[prefs.range] ?? FUTURE['24h']) : HORIZON[prefs.horizon];
   const reach = measuredTo + (measuredTo - from) * 0.75;
-  const to = !planShown || selected
+  const lastRunOut = forecastShown ? Math.max(0, ...ahead.map(a => a.runsOut ?? 0)) : 0;
+  const to = !(planShown || forecastShown) || selected
     ? measuredTo
-    : prefs.horizon === 'auto' && announced && announced > measuredTo && announced + future * 0.25 > measuredTo + future
-      ? Math.min(reach, announced + future * 0.25)
+    : prefs.horizon === 'auto'
+      ? Math.max(
+          announced && announced > measuredTo && announced + future * 0.25 > measuredTo + future ? Math.min(reach, announced + future * 0.25) : measuredTo + future,
+          Math.min(reach, lastRunOut),
+        )
       : measuredTo + future;
 
   const markers: Marker[] = useMemo(() => {
@@ -157,11 +178,24 @@ export const History = memo(function History({
     return [...seen.values()];
   }, [visible, overview, from, to, now, planShown, view, locale]);
 
+  const forecasts: ForecastLine[] = useMemo(
+    () =>
+      !forecastShown
+        ? []
+        : ahead.flatMap(({line, live, measuredAt, weekly}) => {
+            const drawn = forecastLine(live, measuredAt, now, weekly, from, to);
+            if (!drawn?.points.length) return [];
+            const beyond = drawn.at !== null && drawn.at > to ? t('chart.runsOut', {label: line.name, time: countdown(drawn.at - now)}) : null;
+            return [{key: line.key, name: line.name, color: line.color, dash: line.dash, points: drawn.points, beyond}];
+          }),
+    [ahead, forecastShown, now, from, to, locale],
+  );
+
   return (
     <section className={`panel history ${loading ? 'is-loading' : ''}`} aria-label={t('history.label')} aria-busy={loading}>
       <div className="panel-head">
         <h2>{t('history.title')}</h2>
-        <HistorySettings arrange={arrange} planShown={planShown} />
+        <HistorySettings arrange={arrange} ahead={planShown || forecastShown} />
       </div>
 
       <div className="legend">
@@ -195,9 +229,23 @@ export const History = memo(function History({
             <span>{t('history.planLegend')}</span>
           </button>
         )}
+        {forecastAvailable && (
+          <button
+            type="button"
+            className="legend-item legend-plan"
+            aria-pressed={prefs.showForecast}
+            title={t('history.forecastLegendHint')}
+            onClick={() => setPrefs({showForecast: !prefs.showForecast})}
+          >
+            <svg width="18" height="6" aria-hidden="true">
+              <line x1="1" x2="17" y1="3" y2="3" stroke="currentColor" strokeWidth="1.5" strokeDasharray="4 3" />
+            </svg>
+            <span>{t('history.forecastLegend')}</span>
+          </button>
+        )}
       </div>
 
-      {history ? <Chart lines={visible} plans={plans} markers={markers} from={from} now={measuredTo} to={to} cellMs={history.cellMs} empty={lines.length ? t('chart.empty') : null} onSelect={setTimeRange} /> : <div className="chart chart-loading">{t('history.loading')}</div>}
+      {history ? <Chart lines={visible} plans={plans} forecasts={forecasts} markers={markers} from={from} now={measuredTo} to={to} cellMs={history.cellMs} empty={lines.length ? t('chart.empty') : null} onSelect={setTimeRange} /> : <div className="chart chart-loading">{t('history.loading')}</div>}
     </section>
   );
 });

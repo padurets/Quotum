@@ -404,7 +404,7 @@ const all: DemoSet = {
       history: 14 * DAY,
       windows: [
         fiveHours(20 * MIN, 25, agentsWork(MAX_AGENTS, shifts(0))),
-        weekly({since: -1.5 * DAY, use: through([0, 0], [0.5, 33.2], [2.5, 56.8])}),
+        weekly({since: -1.5 * DAY, use: alongPlan(0)}),
         weekly({id: 'weekly:fable', label: 'Fable', since: -1.5 * DAY, use: through([0, 0], [0.5, 6], [1.5, 12])}),
       ],
       agents: MAX_AGENTS,
@@ -435,7 +435,8 @@ const all: DemoSet = {
       history: 14 * DAY,
       windows: [
         fiveHours(50 * MIN, 8, onAndOff(15), 'Gemini Pro'),
-        weekly({id: 'gemini:weekly', label: 'Gemini', since: -3 * DAY, use: through([0, 0], [2, 37], [3, 49])}),
+        // A seventh of the week a day: on pace to spend it all by the reset.
+        weekly({id: 'gemini:weekly', label: 'Gemini', since: -3 * DAY, use: steady(0, 100 / 7)}),
         // A client that does not say when this one resets.
         noReset(weekly({id: 'claude:weekly', label: 'Claude', since: -3 * DAY, use: steady(0, 8)})),
         rolling({id: 'flash:window-1440', kind: 'other', label: 'Flash', minutes: 1440, offset: -8 * HOUR, use: elapsed => (1.5 * elapsed) / HOUR}),
@@ -461,7 +462,11 @@ const all: DemoSet = {
       plan: 'Pro',
       machines: ['mac-mini'],
       history: 14 * DAY,
-      windows: [fiveHours(0, 7, agentsWork(IOS_AGENTS, ALWAYS), 'Gemini Pro'), weekly({id: 'gemini:weekly', label: 'Gemini', since: -2 * DAY, use: steady(0, 9)})],
+      windows: [
+        fiveHours(0, 7, agentsWork(IOS_AGENTS, ALWAYS), 'Gemini Pro'),
+        // A tenth faster than the default plan every day: it runs out on the fifth day, past half of the time left to the plan's end.
+        weekly({id: 'gemini:weekly', label: 'Gemini', since: -2 * DAY, use: through([0, 0], [1, 33], [2, 60.5], [3, 77])}),
+      ],
       agents: IOS_AGENTS,
       on: {ana: {}},
       expect: [
@@ -539,6 +544,7 @@ const all: DemoSet = {
         {window: 'weekly', level: 'warn', note: 'ahead', hint: 'weekly'},
         {window: 'session', note: 'ahead', hint: 'reset', to: 20 * MIN},
         {forecast: 'weekly', outlook: 'runsOut', tone: 'v-crit', plan: 'ahead'},
+        {forecast: 'session', outlook: 'runsOut', tone: 'v-crit', to: 90 * MIN},
       ],
       look: ['A third of the row wide, with the next two cards', 'The five hours are ahead of an even pace for the first minutes: its own tooltip'],
     },
@@ -574,14 +580,17 @@ const all: DemoSet = {
       plan: 'Plus',
       machines: ['laptop'],
       history: 2 * DAY,
-      windows: [fiveHours(10 * MIN, 5, onAndOff(14)), weekly({since: -4 * DAY, use: through([0, 0], [3, 87.2], [4, 92])})],
+      windows: [fiveHours(10 * MIN, 5, onAndOff(14)), weekly({since: -4 * DAY, use: through([0, 0], [3, 87.2], [4, 93])})],
       on: {ana: {name: 'Running low', span: 4}, quiet: {}},
       expect: [
         {title: 'Running low'},
         {agents: 0, drawn: true},
         {window: 'weekly', level: 'crit', note: null},
-        {forecast: 'weekly', outlook: 'runsOut', tone: 'v-warn'},
+        {forecast: 'weekly', outlook: 'runsOut', tone: 'v-crit'},
+        // Its five hours reset ten minutes in: a forecast from 40 minutes on.
+        {forecast: 'session', outlook: 'leftReset', from: 45 * MIN, to: 5 * HOUR},
       ],
+      look: ['The weekly forecast line reaches zero within the hours ahead, where the table says it runs out'],
     },
     {
       kind: 'card',
@@ -626,8 +635,9 @@ const all: DemoSet = {
       expect: [
         {title: 'Idle five hours'},
         {window: 'session', started: false, note: null, reset: 'resetsIn'},
+        {forecast: 'session', outlook: 'idle'},
       ],
-      look: ['The five hours have not started: no pace mark, and it always resets in 5h'],
+      look: ['The five hours have not started: no pace mark, and it always resets in 5h', 'On the five-hour chart and table: no forecast for them, the tooltip says they start when first used'],
     },
     {
       kind: 'card',
@@ -668,9 +678,11 @@ const all: DemoSet = {
       history: 2 * DAY,
       until: -6 * HOUR,
       failure: {error: 'timeout', from: -6 * HOUR + 5 * MIN},
-      windows: [fiveHours(0, 5), weekly({since: -3 * DAY, use: steady(10, 9)})],
+      // Almost used up when it was last measured, and going fast.
+      windows: [fiveHours(0, 5), weekly({since: -3 * DAY, use: through([0, 0], [2.75, 97])})],
       on: {ana: {name: 'Too slow to answer'}},
-      expect: [{title: 'Too slow to answer'}, {error: 'timeout'}, {stale: true}],
+      expect: [{title: 'Too slow to answer'}, {error: 'timeout'}, {stale: true}, {forecast: 'weekly', outlook: 'pastZero'}],
+      look: ['No forecast for its week: the tooltip says it should have run out hours ago, and waits for a new measurement'],
     },
     {
       kind: 'card',
@@ -701,6 +713,7 @@ const all: DemoSet = {
         {error: null},
         {window: 'session', reset: 'resetPassed'},
         {window: 'weekly', reset: 'resetsIn'},
+        {forecast: 'weekly', outlook: 'leftPlan'},
       ],
       look: ['Not heard from for three hours: its five hours have reset since, waiting for a measurement'],
     },
@@ -731,13 +744,14 @@ const all: DemoSet = {
       plan: 'Plus',
       machines: ['laptop'],
       history: 10 * MIN,
-      windows: [fiveHours(0, 6), weekly({since: -2 * DAY, use: steady(0, 10)})],
+      // Its week began an hour before the demo.
+      windows: [fiveHours(0, 6), weekly({since: -HOUR, use: steady(0, 10)})],
       on: {ana: {name: 'New subscription'}},
       expect: [
         {title: 'New subscription'},
-        {forecast: 'weekly', outlook: 'needData', to: 19 * MIN},
+        {forecast: 'weekly', outlook: 'needData', to: 7 * HOUR},
       ],
-      look: ['For its first 20 minutes the table has no forecast for it, with a tooltip why'],
+      look: ['Until its week has run 8.4 hours the table has no forecast for it, with a tooltip why, and the chart no forecast line'],
     },
     {
       kind: 'card',
