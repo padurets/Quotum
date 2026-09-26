@@ -102,19 +102,18 @@ is open.
 - A card tells how its measurements go in the logo's dot and its news in marks in its
   tray, with the details in a tooltip or a panel, never in a line of its own; neither
   changes a card's height.
-- **Times.** A mark or a cell with little room may say how soon or how long ago
-  (`countdown`, `ago` in `hub/ui/lib/format.ts`: "in 20h", "5m ago"), and then the exact
-  time is in its tooltip or panel. A panel, a tooltip or a heading says when as `stamp`
-  does ("26 September 14:00"): never "today" or "tomorrow", never seconds. Under a heading
-  that already gives the day, the time alone will do.
+- **Times.** Say when as `stamp` in `hub/ui/lib/format.ts` does: "26 September 14:00",
+  never "today" or "tomorrow", never seconds; under a heading that already gives the day,
+  the time alone. Only a mark or a cell with little room says how soon or how long ago
+  (`countdown`, `ago`: "20h", "5m ago"), and its tooltip or panel then gives the time.
 - **No dots between parts.** A line never runs its parts together with " · ": what it
   says leads, and a detail or a time is set apart by layout (a tag beside it, a quieter
   line under it). In plain text, a tooltip or a name for screen readers, each part is a
   line of its own.
-- **A row lights up under the pointer, one of two ways.** In a widget's table, across
-  its whole width, as its columns run edge to edge. In a `Popover` or a `Modal`, inset
-  with rounded corners like a menu's rows (`.popover-row`), and a little brighter, to
-  show on the glass.
+- **A row lights up under the pointer, one of two ways.** A table's row, in a widget or
+  a dialog, across its whole width, as its columns run edge to edge. A row of a list or a
+  menu in a `Popover` or a `Modal`, inset with rounded corners (`.popover-row`), and a
+  little brighter, to show on the glass.
 - Colours come from the tokens at the top of `hub/ui/style.css`, and the colours of
   series from `hub/ui/lib/providers.ts`. Status colours (ok, warn, crit) are for status
   only: how much of a limit is left, a source or device in trouble, a destructive
