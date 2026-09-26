@@ -11,6 +11,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      ui-runs:
+        description: How many times the Windows UI smoke runs, on the installed app and on the portable one each
+        type: number
+        default: 1
 
 permissions:
   contents: read
@@ -140,6 +145,8 @@ jobs:
         shell: pwsh
         # A hung run fails the step, and the diagnostics below are still kept.
         timeout-minutes: 40
+        env:
+          UI_RUNS: ${{ inputs.ui-runs || 1 }}
         run: |
           # windows.ps1 fails with an exit code, which alone would not end the step.
           function Smoke([string]$Mode, [string]$App) {
@@ -147,15 +154,39 @@ jobs:
             ./desktop/smoke/windows.ps1 $Mode $App
             if ($LASTEXITCODE) { throw "windows.ps1 $Mode failed for $App" }
           }
+          $runs = [int]$env:UI_RUNS
+          if ($runs -lt 1) { throw "ui-runs must be at least 1, not $env:UI_RUNS" }
           $diagnostics = Join-Path $env:RUNNER_TEMP 'quotum-ui-diagnostics'
+          $profiles = Join-Path $env:LOCALAPPDATA 'com.padurets.quotum'
+          $failed = @()
+          $summary = @()
+          $stop = $null
+          # Every run goes on after a failed one. A run that leaves its profile set aside, or
+          # the app running, would fail all the next ones on their start: that stops them.
+          function Ui([string]$Kind, [string]$App) {
+            $passed = 0
+            for ($run = 1; $run -le $runs -and -not $script:stop; $run++) {
+              try { ./desktop/smoke/windows-ui.ps1 $App -Diagnostics "$diagnostics\$Kind-$run"; $passed++ }
+              catch { $script:failed += "$Kind-$run"; Write-Host "::error::UI smoke $Kind-$run failed: $($_.Exception.Message)" }
+              if (Get-ChildItem -LiteralPath $profiles -Filter 'EBWebView.quotum-ui-*' -Directory -ErrorAction SilentlyContinue) {
+                $script:stop = "$Kind-$run left the profile of WebView2 set aside"
+              } elseif (Get-Process quotum-desktop -ErrorAction SilentlyContinue) {
+                $script:stop = "$Kind-$run left the app running"
+              }
+            }
+            $script:summary += "${Kind}: $passed/$runs"
+          }
           ./desktop/smoke/windows.ps1 check
+          # A profile of WebView2 there before the UI smoke, which must set it aside and put it back.
+          New-Item -ItemType Directory -Force "$profiles\EBWebView" | Out-Null
+          Set-Content -LiteralPath "$profiles\EBWebView\quotum-ci-sentinel" -Value 'ci'
           $setup = Get-ChildItem "desktop/target/${{ matrix.target }}/release/bundle/nsis/*-setup.exe" | Select-Object -First 1
           Start-Process -FilePath $setup.FullName -ArgumentList '/S' -Wait
           $app = "$env:LOCALAPPDATA\Quotum\quotum-desktop.exe"
           if (-not (Test-Path $app)) { throw "not installed: $app" }
           Smoke normal $app
           Smoke crash $app
-          ./desktop/smoke/windows-ui.ps1 $app -Diagnostics "$diagnostics\installed-1"
+          Ui installed $app
           # Exercise the archive after extraction, including a path with spaces.
           $zip = Get-ChildItem "desktop/target/${{ matrix.target }}/release/bundle/portable/*.zip" | Select-Object -First 1
           $portable = Join-Path $env:RUNNER_TEMP 'Quotum portable'
@@ -163,7 +194,11 @@ jobs:
           $app = Join-Path $portable 'Quotum/quotum-desktop.exe'
           Smoke normal $app
           Smoke crash $app
-          ./desktop/smoke/windows-ui.ps1 $app -Diagnostics "$diagnostics\portable-1"
+          Ui portable $app
+          $summary | ForEach-Object { Write-Host $_ }
+          if ($stop) { throw "UI smoke stopped: $stop" }
+          if ($failed.Count) { throw "UI smoke failed in $($failed.Count) runs: $($failed -join ', ')" }
+          if (-not (Test-Path -LiteralPath "$profiles\EBWebView\quotum-ci-sentinel")) { throw 'The UI smoke did not put the profile of WebView2 back' }
       # What the UI smoke saw (its report, the app's logs, its processes): when it failed,
       # and always in a run by hand.
       - name: UI smoke diagnostics (Windows)

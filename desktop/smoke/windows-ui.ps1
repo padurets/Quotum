@@ -1,4 +1,6 @@
 # Ordinary startup, including the window-state and single-instance plugins that --smoke skips.
+# Every run starts from a fresh profile of WebView2, as the first start on a machine does:
+# the one there is set aside and put back at the end.
 # -Diagnostics <dir> keeps there, passed or not, the report, the app's logs and its processes.
 param([Parameter(Mandatory=$true)][string]$App, [string]$Report, [string]$Diagnostics)
 $ErrorActionPreference = 'Stop'
@@ -9,6 +11,11 @@ $savedState = if (Test-Path -LiteralPath $stateFile) { [IO.File]::ReadAllBytes($
 $environment = @{}
 $names = @('QUOTUM_APP_DATA_DIR', 'QUOTUM_STATE_DIR', 'QUOTUM_CONFIG', 'QUOTUM_RESETS')
 foreach ($name in $names) { $environment[$name] = [Environment]::GetEnvironmentVariable($name) }
+$webviewRoot = Join-Path $env:LOCALAPPDATA 'com.padurets.quotum'
+$webview = Join-Path $webviewRoot 'EBWebView'
+$aside = Join-Path $webviewRoot ('EBWebView.quotum-ui-' + [guid]::NewGuid().ToString('N'))
+# unknown: not touched; absent: there was none; moved: set aside to $aside.
+$profileState = 'unknown'
 $process = $null
 $second = $null
 $failed = $false
@@ -110,6 +117,8 @@ function Stop-Owned($Owned, [string]$Description) {
 
 try {
   if (Get-Process quotum-desktop -ErrorAction SilentlyContinue) { throw 'Another Quotum instance is already running' }
+  $left = @(Get-ChildItem -LiteralPath $webviewRoot -Filter 'EBWebView.quotum-ui-*' -Directory -ErrorAction SilentlyContinue)
+  if ($left.Count) { throw "A profile of WebView2 set aside by an interrupted run is left: $($left.FullName -join ', '). Put it back as $webview by hand." }
   New-Item -ItemType Directory -Force "$work/app", "$work/state", (Split-Path $stateFile) | Out-Null
   $env:QUOTUM_APP_DATA_DIR = "$work/app"
   $env:QUOTUM_STATE_DIR = "$work/state"
@@ -125,6 +134,13 @@ try {
   $me = Get-Process -Id $PID
   $null = Select-Browser @(Get-Process msedgewebview2 -ErrorAction SilentlyContinue) 0 ([datetime]::MinValue) @()
   $null = Select-Browser @($me) $me.Parent.Id ([datetime]::MinValue) @()
+  if (Test-Path -LiteralPath $webview) {
+    try { [IO.Directory]::Move($webview, $aside) }
+    catch { throw "Could not set the profile of WebView2 aside, a process of WebView2 may hold it: $webview ($($_.Exception.Message))" }
+    $profileState = 'moved'
+  } else {
+    $profileState = 'absent'
+  }
   $clock = [Diagnostics.Stopwatch]::StartNew()
   $process = Start-Process -FilePath $appPath -PassThru
   $null = $process.Handle
@@ -231,6 +247,22 @@ try {
   }
   $result.leftovers = $leftovers
   if ($leftovers.Count) { $result.errors += "Children survived the controller: $(($leftovers | ForEach-Object { $_.pid }) -join ', ')" }
+  # The fresh profile goes and the one set aside comes back. If the fresh one cannot go, the
+  # one set aside stays where it is: both are named.
+  if ($profileState -ne 'unknown') {
+    Invoke-Step 'putting the profile of WebView2 back' {
+      $deadline = (Get-Date).AddSeconds(10)
+      while (Test-Path -LiteralPath $webview) {
+        try { Remove-Item -LiteralPath $webview -Recurse -Force }
+        catch {
+          if ((Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500; continue }
+          $kept = if ($profileState -eq 'moved') { "; the previous one stays at $aside" } else { '' }
+          throw "the fresh profile $webview could not be removed ($($_.Exception.Message))$kept"
+        }
+      }
+      if ($profileState -eq 'moved') { [IO.Directory]::Move($aside, $webview) }
+    }
+  }
   Invoke-Step 'restoring the window state' {
     if ($null -ne $savedState) { [IO.File]::WriteAllBytes($stateFile, $savedState) }
     else { Remove-Item -LiteralPath $stateFile -ErrorAction SilentlyContinue }
