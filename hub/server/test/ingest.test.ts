@@ -87,7 +87,18 @@ test('a malformed batch is refused whole', () => {
   assert.throws(() => parseBatch(batch([snapshot(start, 5, {resets: {available: 1, expiring: [{count: 2}]}})])), /resets expiring/, 'more by expiry than there are');
   assert.throws(() => parseBatch(batch([snapshot(start, 5, {resets: {available: 2, expiring: [{count: 0}]}})])), /resets expiring/);
   assert.throws(() => parseBatch(batch([snapshot(start, 5, {resets: {available: 2, expiring: [{count: 1, expiresAt: 'soon'}]}})])), /resets expiring expiresAt/);
-  assert.throws(() => parseBatch(batch([snapshot(start, 5, {resets: {available: 1000, expiring: Array.from({length: 51}, () => ({count: 1}))}})])), /resets expiring/);
+  assert.throws(() => parseBatch(batch([snapshot(start, 5, {resets: {available: 2, expiring: [{count: 1.5}]}})])), /resets expiring/, 'a count is whole');
+  // Soonest first, one group per time, the one without a time last.
+  const day = (n: number) => iso(start + n * 86_400_000);
+  const resets = (expiring: unknown) => parseBatch(batch([snapshot(start, 5, {resets: {available: 1000, expiring}})])).snapshots[0].resets;
+  assert.throws(() => resets([{count: 1, expiresAt: day(2)}, {count: 1, expiresAt: day(1)}]), /resets expiring/, 'out of order');
+  assert.throws(() => resets([{count: 1, expiresAt: day(1)}, {count: 1, expiresAt: day(1)}]), /resets expiring/, 'one time twice');
+  assert.throws(() => resets([{count: 1}, {count: 1, expiresAt: day(1)}]), /resets expiring/, 'no time before a time');
+  assert.throws(() => resets([{count: 1}, {count: 1, expiresAt: null}]), /resets expiring/, 'no time twice');
+  const groups = (n: number) => Array.from({length: n}, (_, i) => ({count: 1, expiresAt: day(i + 1)}));
+  assert.equal(resets(groups(50))?.expiring.length, 50, 'fifty groups, as many as an agent sends');
+  assert.throws(() => resets(groups(51)), /resets expiring/);
+  assert.deepEqual(resets(null), {available: 1000, expiring: []}, 'an optional list may be null');
   // Text is 1 to 120 characters, however many UTF-16 units they take.
   assert.equal(parseBatch(batch([snapshot(start, 5, {accountName: '🚀'.repeat(120)})])).snapshots[0].accountName, '🚀'.repeat(120));
   assert.throws(() => parseBatch(batch([snapshot(start, 5, {accountName: '🚀'.repeat(121)})])), /accountName/);

@@ -92,7 +92,8 @@ function provider(value: unknown): Provider {
 }
 
 function list(value: unknown, what: string, max: number): unknown[] {
-  if (value === undefined) return [];
+  // An optional field may be left out or null (the spec); either way the list is empty.
+  if (value === undefined || value === null) return [];
   if (!Array.isArray(value) || value.length > max) throw new Invalid(what);
   return value;
 }
@@ -126,6 +127,11 @@ function parseResets(value: unknown): FreeResets | null {
     return {count: group.count as number, expiresAt: time(group.expiresAt, 'resets expiring expiresAt', true)};
   });
   if (expiring.reduce((sum, group) => sum + group.count, 0) > available) throw new Invalid('resets expiring');
+  // Soonest first, one group per time, the one without a time last: the dashboard lists them as they come.
+  expiring.forEach((group, i) => {
+    const next = expiring[i + 1];
+    if (next && (group.expiresAt === null || (next.expiresAt !== null && next.expiresAt <= group.expiresAt))) throw new Invalid('resets expiring');
+  });
   return {available, expiring};
 }
 
