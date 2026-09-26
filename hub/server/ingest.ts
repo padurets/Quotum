@@ -150,13 +150,9 @@ export class Ingest {
    * come back with the token it had, but a new token (after rotating a leaked one)
    * takes it back.
    */
-  /**
-   * The device a request comes from. The credential was checked before the body arrived,
-   * which may take a while: one revoked since then is refused here, before anything is kept.
-   */
   private device(credential: Credential, sender: AgentSender, now: number): Device {
     if (credential.kind === 'device') {
-      if (!this.directory.touchDevice(credential.device.id, sender.machine, sender.agent, now)) throw new IngestError('device_revoked');
+      this.directory.touchDevice(credential.device.id, sender.machine, sender.agent, now);
       return credential.device;
     }
     const {token} = credential;
@@ -164,7 +160,7 @@ export class Ingest {
     // A machine connected with a code keeps its own token; a machine token cannot take it over.
     if (existing?.byCode && !existing.revoked) throw new IngestError('device_conflict');
     if (existing?.revoked && existing.tokenId === token.id) throw new IngestError('device_revoked');
-    if (!this.directory.touchToken(token.id, now)) throw new IngestError('device_revoked');
+    this.directory.touchToken(token.id, now);
     return this.directory.saveDevice({userId: token.userId, machine: sender.machine, agent: sender.agent, tokenId: token.id}, now);
   }
 }

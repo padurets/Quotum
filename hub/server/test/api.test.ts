@@ -402,31 +402,51 @@ test('an agent request without a valid token is refused before its body arrives'
   assert.deepEqual(await hanging('/v1/ingest', {host: 'evil.example'}), [403, 'forbidden_host'], 'the host is checked first');
 });
 
-test('a device removed or a token revoked while its body arrives delivers nothing', async t => {
+test('a device removed or a token revoked while its body arrives delivers nothing, nor does its old secret once it is connected anew', async t => {
   const {app, call, person} = await hub();
   await person('alice');
-  const started = (await call('POST', '/v1/device/code', {body: {machine: machine('laptop-0123456789ab'), agent: 'quotum/0.2.0'}})).body;
-  await call('POST', '/api/device/approve', {as: 'alice', body: {code: started.userCode}});
-  const device = (await call('POST', '/v1/device/token', {body: {deviceCode: started.deviceCode}})).body.token;
-  const token = (await call('POST', '/api/tokens', {as: 'alice', body: {}})).body;
-
-  /** Sends the headers and half of a batch, revokes, then sends the rest. */
-  const revokedMidway = async (secret: string, id: string, revoke: () => Promise<unknown>) => {
+  /** Connects a machine with a one-time code; returns its secret. */
+  const pair = async (id: string) => {
+    const started = (await call('POST', '/v1/device/code', {body: {machine: machine(id), agent: 'quotum/0.2.0'}})).body;
+    await call('POST', '/api/device/approve', {as: 'alice', body: {code: started.userCode}});
+    return (await call('POST', '/v1/device/token', {body: {deviceCode: started.deviceCode}})).body.token as string;
+  };
+  const removeDevice = async () => {
+    const [device] = (await call('GET', '/api/devices', {as: 'alice'})).body;
+    await call('DELETE', `/api/devices/${device.id}`, {as: 'alice'});
+  };
+  /** Sends the headers and half of a batch, lets `meanwhile` happen, then sends the rest. */
+  const midway = async (secret: string, id: string, meanwhile: () => Promise<unknown>) => {
     const body = new PassThrough();
     t.after(() => body.destroy());
     const text = JSON.stringify(batch(id));
     body.write(text.slice(0, text.length / 2));
     const answer = app.inject({method: 'POST', url: '/v1/ingest', payload: body, headers: {'content-type': 'application/json', authorization: `Bearer ${secret}`}});
     await new Promise(resolve => setTimeout(resolve, 50));
-    await revoke();
+    await meanwhile();
     body.end(text.slice(text.length / 2));
     const response = await answer;
     return [response.statusCode, JSON.parse(response.body).error];
   };
-  const [listed] = (await call('GET', '/api/devices', {as: 'alice'})).body;
-  assert.deepEqual(await revokedMidway(device, 'laptop-0123456789ab', () => call('DELETE', `/api/devices/${listed.id}`, {as: 'alice'})), [403, 'device_revoked']);
-  assert.deepEqual(await revokedMidway(token.secret, 'build-0123456789ab', () => call('DELETE', `/api/tokens/${token.id}`, {as: 'alice'})), [403, 'device_revoked']);
+
+  const device = await pair('laptop-0123456789ab');
+  assert.deepEqual(await midway(device, 'laptop-0123456789ab', removeDevice), [403, 'device_revoked']);
+  const token = (await call('POST', '/api/tokens', {as: 'alice', body: {}})).body;
+  assert.deepEqual(await midway(token.secret, 'build-0123456789ab', () => call('DELETE', `/api/tokens/${token.id}`, {as: 'alice'})), [403, 'device_revoked']);
   assert.deepEqual((await call('GET', '/api/devices', {as: 'alice'})).body, [], 'no device comes back or joins');
+  assert.deepEqual((await call('GET', '/api/overview', {as: 'alice'})).body.sources, [], 'nothing was kept');
+
+  // A secret a device was disconnected for never works again, even when it comes back meanwhile.
+  const old = await pair('desk-0123456789abcd');
+  assert.deepEqual(await midway(old, 'desk-0123456789abcd', () => removeDevice().then(() => pair('desk-0123456789abcd'))), [401, 'unauthorized'], 'connected with a new code');
+  const again = await pair('desk-0123456789abcd');
+  const joining = (await call('POST', '/api/tokens', {as: 'alice', body: {}})).body.secret;
+  const join = async () => {
+    await removeDevice();
+    const joined = await call('POST', '/v1/checkin', {body: {version: 1, agent: 'quotum/0.2.0', machine: machine('desk-0123456789abcd')}, headers: {authorization: `Bearer ${joining}`}});
+    assert.equal(joined.status, 200);
+  };
+  assert.deepEqual(await midway(again, 'desk-0123456789abcd', join), [401, 'unauthorized'], 'joined with a machine token');
   assert.deepEqual((await call('GET', '/api/overview', {as: 'alice'})).body.sources, [], 'nothing was kept');
 });
 
