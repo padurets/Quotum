@@ -110,15 +110,15 @@ Codex         api                  idle     started 25m ago · editor
   when free resets were granted. Drag across it to zoom into a burst of work (on a
   phone, hold a finger on it first); ‹ and ›, or a swipe sideways, move it back and
   forth through time by half its length.
-- **A table with a forecast:** what the period spent and, at each window's pace since
-  it started, whether it runs out before its reset (or before your plan ends, following
-  the plan's shape) and when, or roughly how much will be left. The forecast is the
-  same whatever period you look at. Over a range dragged on the chart it shows what
-  that range cost: what was left at its start and end, what it spent and how fast.
-  Beside it, how long your agents worked on each subscription, what an hour of their
-  work costs, roughly how many hours of work are left at that pace, and how much of the
-  spending came while they worked (what went elsewhere, claude.ai or a phone, makes the
-  pace look higher).
+- **A table with two forecasts:** what the period spent, how long your agents worked on
+  each subscription, what an hour of their work costs and how much of the spending came
+  while they worked (what went elsewhere, claude.ai or a phone, makes an hour of work
+  look dearer). Then where it leads. By time: at each window's pace since it started,
+  whether it runs out before its reset (or before your plan ends, following the plan's
+  shape) and when, or roughly how much will be left, the same whatever period you look
+  at. By work: roughly how many hours of agent work are left. Over a range dragged on
+  the chart it shows what that range cost: what was left at its start and end, what it
+  spent in all and per hour, and what the agents worked.
 - **Agent activity:** hours of agent work over the same period, stacked by subscription,
   project or machine, with the hours in all and how many agents worked at once.
 - **Reset announcements** from the community trackers [Codex Resets](https://codex-resets.com)

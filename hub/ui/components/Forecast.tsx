@@ -51,15 +51,15 @@ const PACE_FROM = 10 * 60_000;
 const HEADINGS: Record<ForecastColumn, {title: Key; range?: Key; hint?: Key}> = {
   now: {title: 'table.now'},
   plan: {title: 'table.plan', hint: 'table.planHint'},
-  spent: {title: 'table.spent', range: 'table.spentInRange'},
-  forecast: {title: 'table.forecast', hint: 'table.forecastHint'},
   start: {title: 'table.atStart'},
   end: {title: 'table.atEnd'},
+  spent: {title: 'table.spent', range: 'table.spentInRange'},
   pace: {title: 'table.pace', hint: 'table.paceHint'},
   work: {title: 'table.work', hint: 'table.workHint'},
   perwork: {title: 'table.perWork', hint: 'table.perWorkHint'},
-  workleft: {title: 'table.workLeft', hint: 'table.workLeftHint'},
   during: {title: 'table.during', hint: 'table.duringHint'},
+  forecast: {title: 'table.forecast', hint: 'table.forecastHint'},
+  workleft: {title: 'table.workLeft', hint: 'table.workLeftHint'},
 };
 
 const heading = (column: ForecastColumn, range: boolean) => t((range && HEADINGS[column].range) || HEADINGS[column].title);
@@ -71,15 +71,16 @@ const reasonKey = (column: WorkColumn, reason: Exclude<WorkReason, 'unknown'>): 
 type Cell = {content: ReactNode; title?: string; className?: string};
 
 /**
- * A cell about agent work, with a tooltip of a part a line: what the pace is taken over,
- * that the share is an upper bound, since when work is known, or why there is no number.
+ * A cell about agent work, with a tooltip of a part a line: what an hour of work spent
+ * for the forecast (`perWork`), how much work that is taken over, that the share is an
+ * upper bound, since when work is known, or why there is no number.
  */
-function workCell(column: WorkColumn, cell: WorkCell, work: SeriesWork, periodFrom: number, resetAt: number | null): Cell {
+function workCell(column: WorkColumn, cell: WorkCell, work: SeriesWork, periodFrom: number, resetAt: number | null, perWork: number | null): Cell {
   if ('none' in cell) return {content: '—', title: cell.none === 'unknown' ? t('work.unknown', {time: stamp(work.from)}) : t(reasonKey(column, cell.none))};
   const notes = workNotes(work, periodFrom);
   const paced = column === 'perwork' || column === 'workleft';
   const lines = [
-    ...(paced ? [t('work.basis')] : []),
+    ...(column === 'workleft' && perWork !== null ? [t('work.basis', {value: num(perWork, 1)})] : []),
     ...(paced && notes.basis !== null ? [t('work.basisMeasured', {time: workHours(notes.basis)})] : []),
     ...(column === 'during' ? [t('work.upperBound')] : []),
     ...(notes.since !== null ? [t('work.since', {time: stamp(notes.since)})] : []),
@@ -92,19 +93,21 @@ function workCell(column: WorkColumn, cell: WorkCell, work: SeriesWork, periodFr
         ? t('table.perHour', {value: num(cell.value, 1)})
         : column === 'workleft'
           ? t('work.left', {time: workHours(cell.value)})
-          : t('table.points', {value: num(cell.value)});
+          : t('work.during', {value: num(cell.value)});
   return {content, title: lines.join('\n') || undefined};
 }
 
 /**
- * The windows of one kind: what is left, what the plan expects, what the period spent,
- * and where each window's own pace leads, whatever the period; and how agents worked on
- * each window's subscription meanwhile: how long, what an hour of their work spent, how
- * long they can go on at that pace, and how much of the spending fell into their work.
- * Its period and window type are the analytics', as the chart's. Over a time range
- * selected on the chart, which is in the past, it shows that range instead: what was
- * left at its start and its end, what it spent and how fast. The board's owner chooses
- * the columns; where they do not fit the widget, each window is a row of a list.
+ * The windows of one kind, from what is left to where it leads: what is left and what the
+ * plan expects; what the period spent, how long agents worked on each window's
+ * subscription meanwhile, what an hour of their work spent and how much of the spending
+ * fell into their work; then two forecasts, by the time on the clock (where each window's
+ * own pace since it started leads, whatever the period) and by work (how many hours agents
+ * can go on at what an hour of their work spent). Its period and window type are the
+ * analytics', as the chart's. Over a time range selected on the chart, which is in the
+ * past, it shows that range instead: what was left at its start and its end, what it spent
+ * in all and per hour, and its agents' work. The board's owner chooses the columns; where
+ * they do not fit the widget, each window is a row of a list.
  */
 export const Forecast = memo(function Forecast({
   history,
@@ -151,8 +154,9 @@ export const Forecast = memo(function Forecast({
     const resetAt = live?.resetAt ?? null;
     const edge = (value: number | null): Cell => (value === null ? {content: '—'} : {content: `${num(value)}%`, className: `v-${level(value)}`});
     const work = lineWork(line, range, resetAt, now);
+    const perWork = work && 'value' in work.perwork ? work.perwork.value : null;
     const workCells = Object.fromEntries(
-      (['work', 'perwork', 'workleft', 'during'] as const).map(column => [column, work && line.work ? workCell(column, work[column], line.work, history!.since, resetAt) : {content: '—'}]),
+      (['work', 'perwork', 'workleft', 'during'] as const).map(column => [column, work && line.work ? workCell(column, work[column], line.work, history!.since, resetAt, perWork) : {content: '—'}]),
     ) as Record<WorkColumn, Cell>;
     if (range) {
       return {
