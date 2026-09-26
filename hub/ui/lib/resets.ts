@@ -58,6 +58,15 @@ export function resetLabel(status: ResetStatus | undefined, now: number): ResetL
   return null;
 }
 
+/** When `resetLabel` reads otherwise: an announced reset's time comes, a possible one runs out, news gets old. */
+export function resetLabelChangesAt(status: ResetStatus | undefined, now: number): number | null {
+  if (!status) return null;
+  const {scheduled, watch, latest, policy} = status;
+  const moments = [scheduled?.scheduledFor ?? null, watch?.expiresAt ?? null, latest ? latest.at + RECENT_RESET_MS : null, policy ? policy.at + RECENT_POLICY_MS : null];
+  const later = moments.filter((at): at is number => at !== null && at > now);
+  return later.length ? Math.min(...later) : null;
+}
+
 /**
  * When a card's free resets expire: how many when, soonest first, and those the client
  * gives no time for (or that no group tells of) in one group last.

@@ -1,0 +1,182 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {INITIAL, reduce, titlesOf, type HubEvent, type PageEvent, type PageState, type Snapshot} from '../lib/board';
+import {createStore, selector, shallowEqual} from '../lib/store';
+import type {Card} from '../lib/types';
+
+const card = (id: string, used = 50, extra: Partial<Card> = {}): Card => ({
+  id,
+  provider: 'codex',
+  plan: 'pro',
+  successAt: 1000,
+  error: null,
+  stale: false,
+  windows: [{id: '5h', kind: 'session', label: null, used, remaining: 100 - used, resetAt: null, minutes: 300}],
+  resets: null,
+  owners: ['Ana'],
+  staleAfterMs: 420_000,
+  ...extra,
+});
+
+const VIEW = {order: [], sizes: {}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
+const session = {device: {id: 'd', name: 'laptop'}, origin: 'terminal' as const, project: 'quotum', folder: null, startedAt: 1, lastWorkedAt: null, working: true};
+
+function snapshot(change: Partial<Snapshot> = {}): Snapshot {
+  return {
+    board: {id: 'b1', name: '', personal: true},
+    view: VIEW,
+    historyStart: 0,
+    sources: [card('s1'), card('s2')],
+    sessions: {s1: [session], s2: []},
+    cadence: {s1: {next: 5000, why: 'idle'}, s2: null},
+    mine: ['s1', 's2'],
+    boards: [{id: 'b1', name: '', personal: true, role: 'owner'}],
+    resets: {
+      resets: {codex: {scheduled: null, watch: null, latest: null, policy: null, credit: {name: 'Codex Resets', url: 'https://x'}}},
+      trackers: [{name: 'Codex Resets', url: 'https://x', ok: true, detail: 'ok', at: 1}],
+      past: {},
+    },
+    ...change,
+  };
+}
+
+const hub = (event: HubEvent): PageEvent => ({type: 'hub', event});
+const run = (...events: PageEvent[]) => events.reduce(reduce, INITIAL);
+/** Every slice of the state, to compare what stayed the same object. */
+const slices = (s: PageState) => ({
+  meta: s.board!.meta,
+  view: s.board!.view,
+  lineup: s.board!.lineup,
+  s1: s.board!.cards.s1,
+  s2: s.board!.cards.s2,
+  sessions1: s.board!.sessions.s1,
+  sessions2: s.board!.sessions.s2,
+  cadence1: s.board!.cadence.s1,
+  mine: s.board!.mine,
+  boards: s.boards,
+  resets: s.resets!.resets,
+  past: s.resets!.past,
+});
+
+function same(before: PageState, after: PageState, but: string[] = []) {
+  const [a, b] = [slices(before), slices(after)];
+  for (const key of Object.keys(a) as (keyof typeof a)[]) {
+    if (but.includes(key)) assert.notEqual(b[key], a[key], `${key} changed`);
+    else assert.equal(b[key], a[key], `${key} is the same object`);
+  }
+}
+
+test('a snapshot is the board; the same snapshot again keeps every slice as it was, when the trackers were asked too', () => {
+  const first = run(hub({type: 'snapshot', data: snapshot()}));
+  assert.deepEqual(first.board!.lineup, ['s1', 's2']);
+  assert.equal(first.board!.cards.s2.id, 's2');
+  const again = reduce(
+    first,
+    hub({type: 'snapshot', data: JSON.parse(JSON.stringify({...snapshot(), resets: {...snapshot().resets, trackers: [{...snapshot().resets.trackers[0], at: 2}]}}))}),
+  );
+  same(first, again);
+  assert.equal(again.board, first.board);
+  assert.equal(again.resets!.trackers[0].at, 2, 'when they were asked is taken');
+  const changed = reduce(first, hub({type: 'snapshot', data: snapshot({sources: [card('s1'), card('s2', 60)]})}));
+  same(first, changed, ['s2']);
+});
+
+test('each event changes its own slice and leaves the others as they were', () => {
+  const s = run(hub({type: 'snapshot', data: snapshot()}));
+  same(s, reduce(s, hub({type: 'card', data: card('s1', 70)})), ['s1']);
+  assert.equal(reduce(s, hub({type: 'card', data: card('s1')})), s, 'a card the same as before changes nothing');
+  same(s, reduce(s, hub({type: 'sessions', data: {id: 's2', sessions: [session]}})), ['sessions2']);
+  same(s, reduce(s, hub({type: 'cadence', data: {id: 's1', cadence: null}})), ['cadence1']);
+  same(s, reduce(s, hub({type: 'view', data: {view: {...VIEW, order: ['history']}}})), ['view']);
+  same(s, reduce(s, hub({type: 'board', data: {board: {id: 'b1', name: 'Mine', personal: true}}})), ['meta']);
+  same(s, reduce(s, hub({type: 'mine', data: {sources: ['s1']}})), ['mine']);
+  same(s, reduce(s, hub({type: 'boards', data: {boards: [...snapshot().boards, {id: 'b2', name: 'Team', personal: false, role: 'member'}]}})), ['boards']);
+  const resets = reduce(s, hub({type: 'resets', data: {...snapshot().resets, trackers: []}}));
+  same(s, resets);
+  assert.deepEqual(resets.resets!.trackers, []);
+  assert.equal(reduce(s, hub({type: 'history', data: {sources: ['s1'], since: 0}})), s);
+});
+
+test('a lineup without a source drops what was kept of it; one new to the board comes with its card first', () => {
+  const s = run(hub({type: 'snapshot', data: snapshot()}));
+  const without = reduce(s, hub({type: 'lineup', data: {sources: ['s1']}}));
+  assert.deepEqual([Object.keys(without.board!.cards), Object.keys(without.board!.sessions), Object.keys(without.board!.cadence)], [['s1'], ['s1'], ['s1']]);
+  assert.equal(without.board!.cards.s1, s.board!.cards.s1);
+  const back = [
+    hub({type: 'card', data: card('s3')}),
+    hub({type: 'sessions', data: {id: 's3', sessions: []}}),
+    hub({type: 'cadence', data: {id: 's3', cadence: null}}),
+    hub({type: 'lineup', data: {sources: ['s1', 's3']}}),
+  ].reduce(reduce, without);
+  assert.deepEqual(back.board!.lineup, ['s1', 's3']);
+  assert.equal(back.board!.cards.s3.id, 's3');
+});
+
+test('the list of boards: every session replaces it, a board made is added, one gone is taken out, the open one with it', () => {
+  const b = (id: string, personal = false) => ({id, name: id, personal, role: 'owner' as const});
+  let s = run({type: 'board-created', board: b('t')});
+  assert.deepEqual(s.boards, [b('t')], 'made before any session: the list is that one');
+  s = reduce(s, {type: 'session-boards', boards: [b('p', true), b('t')]});
+  assert.deepEqual(
+    s.boards?.map(x => x.id),
+    ['p', 't'],
+  );
+  const same = reduce(s, {type: 'session-boards', boards: [b('p', true), b('t')]});
+  assert.equal(same, s, 'the same list changes nothing');
+  s = reduce(s, {type: 'board-created', board: b('u')});
+  assert.equal(reduce(s, {type: 'board-created', board: b('u')}), s, 'made twice is there once');
+  s = reduce(s, hub({type: 'snapshot', data: snapshot({board: {id: 't', name: 't', personal: false}, boards: s.boards!})}));
+  s = reduce(s, {type: 'board-gone', id: 't'});
+  assert.deepEqual([s.boards?.map(x => x.id), s.board], [['p', 'u'], null]);
+  s = reduce(s, {type: 'board-open', id: 'p'});
+  assert.equal(s.board, null);
+});
+
+test("the app's state is taken only when newer than the one there", () => {
+  const app = (seq: number) => ({
+    agent: {state: 'idle' as const},
+    providers: [],
+    sessions: true,
+    autostart: false,
+    configPath: '',
+    logPath: '',
+    version: '',
+    commit: '',
+    seq,
+  });
+  const s = run({type: 'app', state: app(5)}, {type: 'app', state: app(3)}, {type: 'app', state: app(5)});
+  assert.equal(s.app?.seq, 5);
+  assert.equal(reduce(s, {type: 'app', state: app(6)}).app?.seq, 6);
+});
+
+test('a reader of one slice reads the same object when another slice changes; a list of several stays while each does', () => {
+  const store = createStore(reduce, INITIAL);
+  store.dispatch(hub({type: 'snapshot', data: snapshot()}));
+  let notified = 0;
+  store.subscribe(() => notified++);
+  const ofS1 = selector(store, () => ({select: (s: PageState) => s.board?.cards.s1, equal: Object.is}));
+  const sessionsOf = selector(store, () => ({select: (s: PageState) => ['s1', 's2'].map(id => s.board?.sessions[id]), equal: shallowEqual}));
+  const [s1, lists] = [ofS1(), sessionsOf()];
+  store.dispatch(hub({type: 'card', data: card('s2', 90)}));
+  assert.equal(notified, 1);
+  assert.equal(ofS1(), s1);
+  assert.equal(sessionsOf(), lists, 'agents did not change');
+  store.dispatch(hub({type: 'sessions', data: {id: 's2', sessions: [session]}}));
+  assert.notEqual(sessionsOf(), lists);
+  store.dispatch(hub({type: 'card', data: card('s2', 90)}));
+  assert.equal(notified, 2, 'a card the same as before changes nothing, and notifies nobody');
+  const heard: string[] = [];
+  store.listen(event => heard.push(event.type === 'hub' ? event.event.type : event.type));
+  store.dispatch(hub({type: 'history', data: {sources: ['s1'], since: 0}}));
+  assert.deepEqual(heard, ['history'], 'services hear events that change no state');
+});
+
+test('the names of the cards stay the same object while no name changes', () => {
+  const s = run(hub({type: 'snapshot', data: snapshot()}));
+  const titles = titlesOf(s.board);
+  assert.deepEqual(titles.s1, {title: 'Codex', provider: 'codex'});
+  assert.equal(titles.s2.title, 'Codex 2');
+  assert.equal(titlesOf(reduce(s, hub({type: 'card', data: card('s1', 10)})).board), titles, 'numbers changed, not names');
+  const named = reduce(s, hub({type: 'view', data: {view: {...VIEW, names: {s2: 'Work'}}}}));
+  assert.equal(titlesOf(named.board).s2.title, 'Work');
+});

@@ -20,6 +20,56 @@ export function duration(ms: number, short = false) {
   return short || !(hours % 24) ? t('time.days', {n: days}) : t('time.daysHours', {d: days, h: hours % 24});
 }
 
+/*
+ * Each of these says, for what a label shows at `now`, the first moment after it that the
+ * label reads otherwise (lib/clock.ts wakes the label then); null when it never does.
+ * They follow the functions above: whole units, rounded as they round them.
+ */
+
+/** The first count of minutes `duration` reads otherwise after `minutes`, counting up. */
+function durationUp(minutes: number, short: boolean) {
+  if (minutes < 60) return minutes + 1;
+  if (minutes < 1440) return short ? 60 * (Math.floor(minutes / 60) + 1) : minutes + 1;
+  return short ? 1440 * (Math.floor(minutes / 1440) + 1) : 60 * (Math.floor(minutes / 60) + 1);
+}
+
+/** The largest count of minutes below `minutes` that `duration` reads otherwise, counting down; null below a minute. */
+function durationDown(minutes: number, short: boolean) {
+  if (minutes < 1) return null;
+  if (minutes < 60) return minutes - 1;
+  if (minutes < 1440) return short ? 60 * Math.floor(minutes / 60) - 1 : minutes - 1;
+  return short ? 1440 * Math.floor(minutes / 1440) - 1 : 60 * Math.floor(minutes / 60) - 1;
+}
+
+/** `duration(now - from)`: how long something has run. */
+export function durationChangesAt(from: number, now: number, short = false): number {
+  const minutes = Math.max(0, Math.round((now - from) / 60_000));
+  return from + (durationUp(minutes, short) - 0.5) * 60_000;
+}
+
+/** `duration(to - now)`: how long until something. */
+export function durationUntilChangesAt(to: number, now: number, short = false): number | null {
+  const next = durationDown(Math.max(0, Math.round((to - now) / 60_000)), short);
+  return next === null ? null : to - (next + 0.5) * 60_000 + 1;
+}
+
+/** `countdown(target - now)`. One minute, and past it, reads so to the end. */
+export function countdownChangesAt(target: number, now: number): number | null {
+  const minutes = Math.floor((target - now) / 60_000);
+  if (minutes <= 1) return null;
+  const unit = minutes < 60 ? 60_000 : minutes < 48 * 60 ? 3_600_000 : 86_400_000;
+  return target - Math.floor((target - now) / unit) * unit + 1;
+}
+
+/** `ago(time, now)`. */
+export function agoChangesAt(time: number | null, now: number): number | null {
+  if (!time) return null;
+  const seconds = Math.max(0, Math.round((now - time) / 1000));
+  const next =
+    seconds < 45 ? 45 : seconds < 3600 ? Math.min(3600, 60 * Math.round(seconds / 60) + 30) : seconds < 86_400 ? 3600 * (Math.floor(seconds / 3600) + 1) : 86_400 * (Math.floor(seconds / 86_400) + 1);
+  return time + (next - 0.5) * 1000;
+}
+
 /**
  * How long until something, for a mark or a heading with little room: minutes within the
  * hour, hours for two days, days after that, always rounded down and never under a minute.

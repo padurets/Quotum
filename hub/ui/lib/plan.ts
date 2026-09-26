@@ -104,6 +104,37 @@ export function planNote(w: Win, measuredAt: number | null, now: number, plan: W
 }
 
 /**
+ * What of a limit's plan shows anywhere at `now`: the plan's remaining in whole percent
+ * (the mark on the card and its hint), the gap to it in whole points either way, whether
+ * the gap is wide enough for the table to mark, whether the plan is over.
+ */
+function planReading(w: Win, measuredAt: number | null, now: number, plan: WeeklyPlan | null): string {
+  const point = planAt(w, measuredAt, now, plan);
+  if (!point) return '';
+  const gap = w.remaining - point.remaining;
+  return `${Math.round(point.remaining)} ${Math.round(gap)} ${Math.round(-gap)} ${Math.abs(gap) >= PLAN_TOLERANCE} ${point.done}`;
+}
+
+/**
+ * When what a limit shows of its plan changes (`planReading`): the plan moves on
+ * continuously, and is shown in whole percent, so it changes when one of those numbers
+ * does, or at the end of the plan or of the window. Everything in it only ever moves one
+ * way while the window lasts, so the first moment it differs is found by halving.
+ */
+export function planChangesAt(w: Win, measuredAt: number | null, now: number, plan: WeeklyPlan | null = DEFAULT_PLAN): number | null {
+  if (!w.resetAt || !planAt(w, measuredAt, now, plan)) return null;
+  const seen = planReading(w, measuredAt, now, plan);
+  // At the reset the window's plan is over: it reads otherwise there for sure.
+  let [same, other] = [now, w.resetAt];
+  while (other - same > 1) {
+    const middle = Math.floor((same + other) / 2);
+    if (planReading(w, measuredAt, middle, plan) === seen) same = middle;
+    else other = middle;
+  }
+  return other;
+}
+
+/**
  * The plan as a line over [from, to] for a weekly window that resets at `resetAt`. It
  * starts with the current window: earlier weeks may have been cut short by an early
  * reset or started late after idle time, so a plan drawn for them would be made up.

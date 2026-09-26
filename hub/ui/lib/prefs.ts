@@ -61,15 +61,18 @@ export function setPrefs(update: Partial<Prefs> | ((prefs: Prefs) => Partial<Pre
   for (const listener of listeners) listener();
 }
 
+const subscribe = (listener: () => void) => {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+};
+
 export function usePrefs(): Prefs {
-  return useSyncExternalStore(
-    listener => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    () => current,
-    () => current,
-  );
+  return useSyncExternalStore(subscribe, () => current, () => current);
+}
+
+/** One preference: whoever reads it renders when it changes, not when another one does. */
+export function usePref<K extends keyof Prefs>(key: K): Prefs[K] {
+  return useSyncExternalStore(subscribe, () => current[key], () => current[key]);
 }
 
 export const setMuted = (key: string, muted: boolean) =>

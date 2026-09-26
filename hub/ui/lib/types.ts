@@ -42,6 +42,26 @@ export type SourceState = {
   title?: string;
 };
 
+/**
+ * A source as its card shows it (spec/dashboard-v1.md: `card`): its state, the people on
+ * the board whose devices measure it, and whether its numbers are too old, as the hub says.
+ */
+export type Card = {
+  id: string;
+  provider: string;
+  plan: string;
+  successAt: number | null;
+  error: string | null;
+  stale: boolean;
+  windows: Win[];
+  resets: FreeResets | null;
+  owners: string[];
+  staleAfterMs: number | null;
+};
+
+/** When a source is measured next and why, while the hub sets the pace of the device measuring it; `next` may have passed. */
+export type Pace = {next: number; why: CadenceWhy} | null;
+
 /** Why the next measurement comes when it does: little left, in use, numbers that just changed or stay the same, a reset. */
 export type CadenceWhy = 'low' | 'inUse' | 'changed' | 'idle' | 'reset';
 
