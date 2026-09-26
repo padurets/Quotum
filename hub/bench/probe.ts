@@ -69,8 +69,11 @@ export function nodeOf(fiber: Fiber, selector: string): Place | null {
   return host ? host.closest(selector) : null;
 }
 
-/** One part of the page and how many times it rendered or changed. */
-export type Counted = {node: string; time: boolean; region: string; count: number};
+/**
+ * One part of the page and how many times it rendered or changed. `time`: it shows time,
+ * and `kind` is what (its `data-time`: a label, the chart, the table).
+ */
+export type Counted = {node: string; time: boolean; kind: string | null; region: string; count: number};
 
 /** What the probe counted since its last `reset`. */
 export type Reading = {
@@ -86,8 +89,9 @@ export type Reading = {
 };
 
 /**
- * Installs the probe as `window.__quotumBench` (`reset()`, `read()`). Runs in the page,
- * before React loads, with `rendered` and `nodeOf` passed in.
+ * Installs the probe as `window.__quotumBench`: `reset()`, `read()`, and for one card at a
+ * time `forgetCards()` and `cardChanged(id)`. Runs in the page, before React loads, with
+ * `rendered` and `nodeOf` passed in.
  */
 export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf}, selector: string) {
   type Element = {
@@ -99,7 +103,7 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
   };
   const page = globalThis as unknown as {
     __REACT_DEVTOOLS_GLOBAL_HOOK__: object;
-    __quotumBench: {reset(): void; read(): Reading};
+    __quotumBench: {reset(): void; read(): Reading; forgetCards(): void; cardChanged(id: string): number | null};
     MutationObserver: new (callback: (records: {target: {nodeType: number; parentElement: Element | null}}[]) => void) => {
       observe(target: unknown, options: object): void;
     };
@@ -135,7 +139,13 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
     return `${node.tagName.toLowerCase()}${classes}${time ? `[data-time=${time}]` : ''}#${names.get(node)}`;
   };
   const listed = (counts: Map<Element | null, number>): Counted[] =>
-    [...counts].map(([node, count]) => ({node: describe(node), time: !!node?.hasAttribute('data-time'), region: regionOf(node), count}));
+    [...counts].map(([node, count]) => ({
+      node: describe(node),
+      time: !!node?.hasAttribute('data-time'),
+      kind: node?.getAttribute('data-time') ?? null,
+      region: regionOf(node),
+      count,
+    }));
 
   page.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
     supportsFiber: true,
@@ -185,6 +195,10 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
       cardChanged = {};
     },
     read: () => ({instrumentMs, commits, renders: listed(renders), mutations: listed(mutations), cardChanged}),
+    forgetCards() {
+      cardChanged = {};
+    },
+    cardChanged: id => cardChanged[id] ?? null,
   };
 }
 

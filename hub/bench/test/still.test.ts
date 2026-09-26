@@ -31,11 +31,11 @@ test('a stand that would change by itself during the window is told, card by car
 
 test('the report adds up work outside what shows time by region, and the busiest label', () => {
   const counted = [
-    {node: 'a', time: false, region: 'card:s1', count: 2},
-    {node: 'b', time: false, region: 'card:s1', count: 1},
-    {node: 'c', time: false, region: 'header', count: 4},
-    {node: 'd', time: true, region: 'card:s1', count: 3},
-    {node: 'e', time: true, region: 'agents', count: 5},
+    {node: 'a', time: false, kind: null, region: 'card:s1', count: 2},
+    {node: 'b', time: false, kind: null, region: 'card:s1', count: 1},
+    {node: 'c', time: false, kind: null, region: 'header', count: 4},
+    {node: 'd', time: true, kind: 'mark', region: 'card:s1', count: 3},
+    {node: 'e', time: true, kind: 'since', region: 'agents', count: 5},
   ];
   assert.deepEqual(tally(counted), {outside: 7, outsideBy: {'card:s1': 3, header: 4}, timeNodes: 2, timeMax: 5});
   assert.equal(scriptPerSecond({ScriptDuration: 1}, {ScriptDuration: 1.5}, 100, 10), 40, 'milliseconds a second, less the probe');
