@@ -7,4 +7,10 @@ contextBridge.exposeInMainWorld('__QUOTUM__', Object.freeze({
     if (!commands.has(command)) return Promise.reject(new Error('unknown app command'));
     return ipcRenderer.invoke('quotum:invoke', command, args);
   },
+  /** The app's state whenever it changes; what it returns stops that. */
+  watch(callback) {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on('quotum:state', listener);
+    return () => { ipcRenderer.removeListener('quotum:state', listener); };
+  },
 }));

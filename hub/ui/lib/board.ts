@@ -49,9 +49,6 @@ export type HubEvent =
 
 export type ConnectionStatus = 'connecting' | 'live' | 'polling' | 'retrying' | 'paused';
 
-/** The desktop app's state, with its order: a later state has a larger `seq`. */
-export type AppSnapshot = AppState & {seq: number};
-
 export type BoardState = {
   id: string;
   meta: BoardMeta;
@@ -70,7 +67,8 @@ export type PageState = {
   boards: Board[] | null;
   board: BoardState | null;
   resets: HubResets | null;
-  app: AppSnapshot | null;
+  /** The desktop app's state, in its order: a later one has a larger `seq`. */
+  app: AppState | null;
 };
 
 export type PageEvent =
@@ -83,7 +81,7 @@ export type PageEvent =
   /** A board is gone, or the reader is off it. */
   | {type: 'board-gone'; id: string}
   | {type: 'board-created'; board: Board}
-  | {type: 'app'; state: AppSnapshot};
+  | {type: 'app'; state: AppState};
 
 export const INITIAL: PageState = {connection: {status: 'connecting', lostAt: null}, boards: null, board: null, resets: null, app: null};
 

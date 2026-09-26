@@ -65,6 +65,10 @@ function receive(message) {
       target = 'quotum://localhost/index.html#quit';
       if (window) navigate(target);
       break;
+    case 'app_state':
+      // The app's state, to the board of the hub's current start only, in the window's main frame.
+      if (window && message.generation === generation && policy.mayInvoke(window.webContents.mainFrame.url, target, 'app_state')) window.webContents.send('quotum:state', message.state);
+      break;
     case 'close': finish(); break;
     case 'response': {
       const waiter = pending.get(message.id);

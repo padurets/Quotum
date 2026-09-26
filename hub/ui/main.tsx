@@ -8,7 +8,7 @@ import {showBoard} from './lib/timeRange';
 import {usePath} from './lib/router';
 import {boardTitle, rememberBoard, rereadSession, useBoard, useSession, type Board, type Session, type User} from './lib/session';
 import {AGENTS, arranged, boardState, cardId, FORECAST, HISTORY, isHidden, reordered, spanOf, useView, withHidden, withSpan} from './lib/view';
-import {page, useBoardId, useBoardMeta, useBoards, useLineup, useRole, useServerView, useTitles} from './lib/board';
+import {page, useApp, useBoardId, useBoardMeta, useBoards, useLineup, useRole, useServerView, useTitles} from './lib/board';
 import {heardHub, hubNow, wakeDue} from './lib/clock';
 import {startLive} from './lib/live';
 import {UNAUTHORIZED} from './lib/http';
@@ -28,7 +28,7 @@ import {InvitePage} from './components/InvitePage';
 import {MachinesDialog, type MachinesTab} from './components/Machines';
 import {BoardDialog, type BoardTab} from './components/BoardDialog';
 import {AgentBanner, LocalOnboarding, OpenInApp, QuitButton, TakeOver} from './components/Desktop';
-import {inApp, useAppState} from './lib/app';
+import {followApp, inApp, type AppState} from './lib/app';
 
 /** The page's own entry script, as the hub's `index.html` names it: a page of another build is loaded anew. */
 function entryScript() {
@@ -50,6 +50,10 @@ const live = startLive({
   },
 });
 
+/** The desktop app's state, as it sends it and as its commands answer: into the page's state, the newest kept. */
+const setAppState = (state: AppState) => page.dispatch({type: 'app', state});
+if (inApp()) followApp(setAppState);
+
 const NO_BOARDS: Board[] = [];
 
 function Dashboard({
@@ -65,7 +69,7 @@ function Dashboard({
   onSignedOut: () => void;
 }) {
   // In the app's window: its agent and settings (null in a browser).
-  const {state: appState, set: setAppState} = useAppState();
+  const appState = useApp();
   const boards = useBoards() ?? NO_BOARDS;
   const [board, selectBoard] = useBoard();
   const boardId = board?.id ?? '';

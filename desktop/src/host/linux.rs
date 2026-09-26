@@ -377,6 +377,17 @@ fn send_state(shell: &Arc<Shell>, gui: &Gui, force: bool) {
     let _ = gui
         .send(&json!({"type":"state", "generation":generation, "url":window::target(&state).as_str(), "force":force}));
 }
+/// The app's state, to the board in the window while the hub is ready; the GUI hands it
+/// only to the board of this start of the hub (`main.cjs`).
+pub fn push_state(shell: &Shell, state: &Value) {
+    let (hub, generation) = shell.hub();
+    if !matches!(hub, crate::hub::HubState::Ready(_)) {
+        return;
+    }
+    if let Some(gui) = shell.host.gui.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        let _ = gui.send(&json!({"type":"app_state", "generation":generation, "state":state}));
+    }
+}
 pub fn follow(shell: &Arc<Shell>) {
     if let Some(gui) = shell.host.gui.lock().unwrap_or_else(|e| e.into_inner()).clone() {
         send_state(shell, &gui, false);

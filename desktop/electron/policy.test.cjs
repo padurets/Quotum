@@ -12,6 +12,7 @@ async function mainProcess() {
   let channel;
   let window;
   const navigations = [];
+  const sent = [];
   const app = Object.assign(new EventEmitter(), {
     setName() {}, setDesktopName() {}, enableSandbox() {}, setPath() {},
     whenReady: () => Promise.resolve(), quit() {},
@@ -21,8 +22,12 @@ async function mainProcess() {
       super();
       window = this;
       this.url = '';
+      const frame = this;
       this.webContents = Object.assign(new EventEmitter(), {
         getURL: () => this.url, setWindowOpenHandler() {},
+        mainFrame: {get url() { return frame.url; }},
+        // Messages are made inside the script's own context: compared as JSON.
+        send: (name, ...args) => sent.push(JSON.stringify([name, ...args])),
       });
     }
     setMenu() {}
@@ -51,7 +56,7 @@ async function mainProcess() {
   deliver({type: 'init', profile: '/isolated/profile', geometry: '/isolated/window.json'});
   await new Promise(setImmediate);
   return {
-    navigations, deliver,
+    navigations, deliver, sent,
     commit(url) { window.url = url; window.webContents.emit('did-finish-load'); },
   };
 }
@@ -76,6 +81,24 @@ test('batched restart states replace an uncommitted navigation on the same port'
   assert.deepEqual(main.navigations, [], 'old states and unchanged state cannot reload the board');
   main.deliver({type: 'state', generation: 3, url: next, force: true});
   assert.deepEqual(main.navigations, [next], 'explicit reentry still enters with the current key');
+});
+
+test("the app's state goes only to the board of the hub's current start", async () => {
+  const main = await mainProcess();
+  main.deliver({type: 'state', generation: 1, url: hub});
+  main.commit('http://127.0.0.1:23456/');
+  main.deliver({type: 'app_state', generation: 1, state: {seq: 1}});
+  assert.deepEqual(main.sent, [JSON.stringify(['quotum:state', {seq: 1}])]);
+  main.sent.length = 0;
+  main.deliver({type: 'app_state', generation: 0, state: {seq: 2}});
+  assert.deepEqual(main.sent, [], 'of an earlier start');
+  main.commit('https://example.org/');
+  main.deliver({type: 'app_state', generation: 1, state: {seq: 3}});
+  assert.deepEqual(main.sent, [], 'a page of another origin in the window');
+  main.deliver({type: 'state', generation: 2, url: 'quotum://localhost/index.html'});
+  main.commit('quotum://localhost/index.html');
+  main.deliver({type: 'app_state', generation: 2, state: {seq: 4}});
+  assert.deepEqual(main.sent, [], "the app's own page");
 });
 
 test('only the current hub origin has the six app commands', () => {

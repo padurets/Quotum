@@ -16,6 +16,8 @@ use tauri_plugin_autostart::ManagerExt;
 pub struct Host {
     pub app: AppHandle,
     pub navigation: Mutex<window::Navigation>,
+    /// Where the board in the window hears the app's state (`watch_state`).
+    pub watching: Mutex<Option<tauri::ipc::Channel<serde_json::Value>>>,
 }
 pub fn run(args: Args) {
     // No inherited debugging listeners in a packaged application.
@@ -47,7 +49,8 @@ pub fn run(args: Args) {
             tauri_ipc::take_over,
             tauri_ipc::set_autostart,
             tauri_ipc::reenter,
-            tauri_ipc::quit
+            tauri_ipc::quit,
+            tauri_ipc::watch_state
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -70,7 +73,7 @@ pub fn run(args: Args) {
                 hub_dir,
                 smoke.map(smoke::Smoke::new),
                 lock,
-                Host { app: handle.clone(), navigation: Mutex::default() },
+                Host { app: handle.clone(), navigation: Mutex::default(), watching: Mutex::default() },
             ));
             app.manage(shell.clone());
             app.add_capability(tauri_ipc::own_capability())?;
@@ -137,4 +140,5 @@ pub fn set_autostart(shell: &Shell, on: bool) -> Result<(), String> {
     let launch = shell.host.app.autolaunch();
     (if on { launch.enable() } else { launch.disable() }).map_err(|e| e.to_string())
 }
+pub use crate::tauri_ipc::push_state;
 pub use crate::tauri_window::{close, follow, is_open, leave, open, reenter};

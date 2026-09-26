@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {app, asksToTakeOver, failedTitle, intervalChoices, intervalMenu, onboardingText, settingsSections, takeOverText, takeOverTitle, type AgentState} from '../lib/app';
+import {app, asksToTakeOver, failedTitle, followApp, intervalChoices, intervalMenu, onboardingText, settingsSections, takeOverText, takeOverTitle, type AgentState, type AppState} from '../lib/app';
 
 test('mutations invoke and acknowledge in action order across all app controls', async t => {
   const events: string[] = [];
@@ -53,6 +53,94 @@ test('a failed mutation releases the queue while quit and reenter bypass a pendi
   await rejected;
   assert.equal((await saved).sessions, true);
   assert.deepEqual(invoked, ['take_over', 'quit', 'reenter', 'save_settings']);
+});
+
+/** Puts a stand-in for the app's window on the page for one test. */
+function inWindow(t: {after: (run: () => void) => void}, name: '__QUOTUM__' | '__TAURI__', value: unknown) {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, name);
+  Object.defineProperty(globalThis, name, {configurable: true, value});
+  t.after(() => (previous ? Object.defineProperty(globalThis, name, previous) : Reflect.deleteProperty(globalThis, name)));
+}
+
+const flush = () => new Promise(resolve => setImmediate(resolve));
+const state = (seq: number) => ({seq}) as AppState;
+
+/** Tauri's API as the page sees it: `invoke` and `Channel`, noting in which order they are used. */
+function tauri(order: string[], watching: (channel: {onmessage: (state: AppState) => void}) => Promise<unknown>) {
+  class Channel {
+    onmessage: (state: AppState) => void = () => {};
+  }
+  return {
+    core: {
+      Channel,
+      invoke(command: string, args?: {channel?: Channel}) {
+        order.push(command);
+        return command === 'watch_state' ? watching(args!.channel!) : Promise.resolve(state(1));
+      },
+    },
+  };
+}
+
+test("on Windows the board asks for the app's state only after the app's first message reached it", async t => {
+  const order: string[] = [];
+  let channel!: {onmessage: (state: AppState) => void};
+  inWindow(t, '__TAURI__', tauri(order, watched => ((channel = watched), Promise.resolve())));
+  const got: number[] = [];
+  followApp(next => got.push(next.seq));
+  await flush();
+  assert.deepEqual(order, ['watch_state'], 'watching first, and nothing asked before a message');
+  channel.onmessage(state(3));
+  await flush();
+  assert.deepEqual(order, ['watch_state', 'app_state']);
+  channel.onmessage(state(4));
+  await flush();
+  assert.deepEqual(order, ['watch_state', 'app_state'], 'asked once');
+  assert.deepEqual(got, [3, 1, 4], 'everything goes to the page; which is newest, `seq` tells');
+});
+
+test('an app that cannot send its state says so and is asked for it at once', async t => {
+  const order: string[] = [];
+  inWindow(t, '__TAURI__', tauri(order, () => Promise.reject(new Error('not allowed'))));
+  const errors: unknown[] = [];
+  const error = console.error;
+  console.error = (...args: unknown[]) => void errors.push(args);
+  t.after(() => (console.error = error));
+  const got: number[] = [];
+  followApp(next => got.push(next.seq));
+  await flush();
+  await flush();
+  assert.deepEqual(order, ['watch_state', 'app_state']);
+  assert.equal(errors.length, 1);
+  assert.deepEqual(got, [1]);
+});
+
+test("on Linux the board watches, then asks at once: the app sends only what changes", async t => {
+  const order: string[] = [];
+  let send!: (state: AppState) => void;
+  inWindow(t, '__QUOTUM__', {
+    watch(onState: (state: AppState) => void) {
+      order.push('watch');
+      send = onState;
+      return () => order.push('stop');
+    },
+    invoke(command: string) {
+      order.push(command);
+      return Promise.resolve(state(1));
+    },
+  });
+  const got: number[] = [];
+  const stop = followApp(next => got.push(next.seq));
+  assert.deepEqual(order, ['watch', 'app_state']);
+  await flush();
+  send(state(2));
+  stop();
+  assert.deepEqual(got, [1, 2]);
+  assert.equal(order.at(-1), 'stop');
+});
+
+test('in a browser there is no app to follow', () => {
+  const stop = followApp(() => assert.fail('no state'));
+  stop();
 });
 
 test('a provider is measured every 1 to 60 minutes; a value set by hand in the file is kept among them', () => {

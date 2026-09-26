@@ -5,7 +5,9 @@
 //! - entering with the key gives a session whose board shows the measured subscription;
 //! - the window shows the board, and does again after it is closed and opened the way the
 //!   tray opens it, and the board asks the app for its state through the bridge (not where
-//!   the runner can show no window: `QUOTUM_SMOKE_WINDOW=off`).
+//!   the runner can show no window: `QUOTUM_SMOKE_WINDOW=off`); on Windows the board
+//!   watches the app's state first and asks only once the app's first message reached it
+//!   (hub/ui/lib/app.ts), so the ask proves the message was delivered.
 //!
 //! Then it quits, exit 0. `--smoke=crash` aborts once the hub is ready: CI then checks the
 //! hub went by itself. Anything else, or no end within two minutes, is exit 1 with the
@@ -40,6 +42,8 @@ struct Progress {
     loaded: u32,
     /// The board called `app_state`: the bridge reaches the hub's page and lets it in.
     asked: bool,
+    /// The board watches the app's state (`watch_state`), and its first message was sent.
+    watched: bool,
     done: bool,
 }
 
@@ -144,10 +148,22 @@ impl Smoke {
         self.pass_if_done(shell);
     }
 
+    /// The board in the window watches the app's state, and the first message went to it.
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
+    pub fn watched(&self, shell: &Arc<Shell>) {
+        if std::mem::replace(&mut self.progress().watched, true) {
+            return;
+        }
+        eprintln!("smoke: the board watches the app's state");
+        self.pass_if_done(shell);
+    }
+
     fn pass_if_done(&self, shell: &Arc<Shell>) {
         {
             let mut progress = self.progress();
-            let window = !self.window || (progress.loaded >= 2 && progress.asked);
+            // Linux's window has nothing to call to watch: the app sends, its preload listens.
+            let watched = cfg!(target_os = "linux") || progress.watched;
+            let window = !self.window || (progress.loaded >= 2 && progress.asked && watched);
             if progress.done || !(progress.ready && progress.board && window) {
                 return;
             }
