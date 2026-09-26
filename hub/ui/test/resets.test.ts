@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {freeResetExpiry, resetLabel, type ResetStatus} from '../lib/resets';
-import {countdown} from '../lib/format';
+import {countdown, stamp} from '../lib/format';
 import {setLocale} from '../i18n';
 
 const NOW = Date.UTC(2026, 8, 25, 12);
@@ -121,6 +121,20 @@ test('a mark counts down in minutes within the hour, hours for two days, then da
   }
 });
 
+test('an exact time names its month in a word, with no dots, commas or seconds', () => {
+  // Local time, so the clock reads the same in any time zone.
+  const at = new Date(2026, 8, 26, 21, 24, 37).getTime();
+  try {
+    setLocale('ru');
+    assert.equal(stamp(at), '26 сентября 21:24');
+    // English follows the browser's region for the order of day and month and the clock.
+    setLocale('en');
+    assert.match(stamp(at), /^(26 September|September 26) (21:24|09:24 PM)$/);
+  } finally {
+    setLocale('en');
+  }
+});
+
 test('free resets tell when each of them expires, those with no time given last', () => {
   const [a, b] = [NOW + 8 * 24 * HOUR, NOW + 25 * 24 * HOUR];
   const groups = [
@@ -135,5 +149,5 @@ test('free resets tell when each of them expires, those with no time given last'
     'and join those the client gave none for',
   );
   assert.deepEqual(freeResetExpiry({available: 2, expiring: []}), [{count: 2, expiresAt: null}], 'only the count');
-  assert.deepEqual(freeResetExpiry({available: 2}), [{count: 2, expiresAt: null}], 'an agent older than 0.4');
+  assert.deepEqual(freeResetExpiry({available: 2}), [{count: 2, expiresAt: null}], 'as a hub older than 0.4 stored them');
 });
