@@ -82,8 +82,12 @@ export function Popover({
       element.classList.toggle('is-capped', capped !== null);
       element.classList.toggle('is-up', upwards);
       if (opening && !upwards) {
+        // The button stays below the bars that stick over it: the analytics' head, above a
+        // button of its section, sticks under the top bar as the page scrolls.
+        const heads = [...document.querySelectorAll<HTMLElement>('.analytics-head')].filter(head => getComputedStyle(head).position === 'sticky');
+        const cover = Math.max(bar, ...heads.map(head => head.getBoundingClientRect()).filter(head => head.top < at.top).map(head => bar + head.height));
         const hidden = element.getBoundingClientRect().bottom + 8 - innerHeight;
-        if (hidden > 0) scrollBy(0, Math.min(hidden, Math.max(0, at.top - bar - 8)));
+        if (hidden > 0) scrollBy(0, Math.min(hidden, Math.max(0, at.top - cover - 8)));
       }
       opening = false;
       setDown(up && !upwards);
