@@ -41,8 +41,8 @@ test('a step through time slides the chart in from the side it came from; the cl
   assert.equal(slideOf(live, {from: now - 7 * 24 * hour, end: now, to: now}, 1000), 0, 'another period');
 });
 
-test('a tooltip under a narrow chart rises as far as keeps it in the window, never under the bars, and the same once found again', () => {
-  // Under the plot at 400, 350 tall, in a window 800 tall under bars ending at 60.
+test('a chart\'s tooltip rises as far as keeps it in the window, never under the bars, and the same once found again', () => {
+  // Unraised at 400, 350 tall, in a window 800 tall under bars ending at 60.
   assert.equal(liftOf(400, 350, 800, 60), 0, 'it fits');
   assert.equal(liftOf(500, 350, 800, 60), 58, 'its bottom kept 8 above the window’s');
   assert.equal(liftOf(300, 700, 800, 60), 208, 'taller: higher, still under the bars');

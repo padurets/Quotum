@@ -221,7 +221,7 @@ function Stacks({
   const bar = hover === null ? null : activity.cells.find(([start]) => start === hover);
   const parts = hover === null ? [] : groups.flatMap(({group, color, name}) => group.cells.filter(([start]) => start === hover).map(([, ms]) => ({key: group.key, color, name, ms})));
   const hoverX = hover === null ? 0 : x(Math.max(from, Math.min(to, hover + barMs / 2)));
-  const {tip, style: tipStyle} = useTip(svg, {width, at: hoverX, narrow, rises: narrow, bottom: height * scale});
+  const {tip, style: tipStyle} = useTip(svg, {width, at: hoverX, narrow, rises: true, bottom: height * scale});
 
   return (
     <div className="chart activity-chart" ref={box}>

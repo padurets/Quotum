@@ -335,7 +335,7 @@ export function Chart({
   const hoverX = hover === null ? 0 : hover > now ? x(Math.min(to, hover + cellMs / 2)) : bx(hover);
   // On a narrow chart it spans the chart's width under the plot; a marker's time stands over its label and does not rise.
   const narrow = width < 560;
-  const {tip, style: tipStyle} = useTip(svg, {width, at: hoverX, narrow, rises: narrow && !edgeMarker, bottom: height * scale});
+  const {tip, style: tipStyle} = useTip(svg, {width, at: hoverX, narrow, rises: !edgeMarker, bottom: height * scale});
   const bandWidth = Math.max(1, x(Math.min(to, (hover ?? 0) + cellMs)) - x(hover ?? 0));
 
   return (
