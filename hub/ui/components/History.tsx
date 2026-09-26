@@ -14,28 +14,49 @@ import {Chart, type ForecastLine, type Marker, type PlanLine} from './Chart';
 import type {PastResets, Resets} from '../lib/resets';
 import {t, useLocale} from '../i18n';
 import {Segmented} from './Kit';
-import {HideRow, Popover, SlidersIcon} from './Popover';
+import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
 
 const DAY = 86_400_000;
 /** How much future the chart keeps on its right when its horizon is `auto`, per range. */
 const FUTURE: Record<string, number> = {'24h': 4 * 3_600_000, '7d': DAY, '30d': 3 * DAY};
 const HORIZON: Record<Exclude<Horizon, 'auto'>, number> = {'1d': DAY, '3d': 3 * DAY, '7d': 7 * DAY};
 
-/** The chart's own settings: how far it looks ahead, and (for the board's owner) hiding it. */
-function HistorySettings({arrange, ahead}: {arrange: Arrange; ahead: boolean}) {
-  const {horizon} = usePrefs();
+/**
+ * The chart's own settings: whether it draws the plan and the forecast (where either has
+ * something to draw), how far it looks ahead, and (for the board's owner) hiding it.
+ */
+function HistorySettings({arrange, planAvailable, forecastAvailable, ahead}: {arrange: Arrange; planAvailable: boolean; forecastAvailable: boolean; ahead: boolean}) {
+  const {horizon, showPlan, showForecast} = usePrefs();
   return (
     <Popover label={t('history.settings')} icon={<SlidersIcon />}>
-      <div className="popover-title">{t('history.horizon')}</div>
-      <div className="popover-pad">
-        <Segmented
-          value={horizon}
-          onChange={value => setPrefs({horizon: value})}
-          options={HORIZONS.map(h => [h, h === 'auto' ? t('history.horizonAuto') : t('history.daysShort', {count: parseInt(h)})])}
-          label={t('history.horizon')}
-        />
+      {(planAvailable || forecastAvailable) && (
+        <div className="popover-section">
+          <div className="popover-title">{t('history.show')}</div>
+          {planAvailable && (
+            <SwitchRow on={showPlan} onChange={on => setPrefs({showPlan: on})}>
+              {t('history.plan')}
+            </SwitchRow>
+          )}
+          {forecastAvailable && (
+            <SwitchRow on={showForecast} onChange={on => setPrefs({showForecast: on})}>
+              {t('history.forecast')}
+            </SwitchRow>
+          )}
+          {planAvailable && <div className="popover-note">{t('history.planHint')}</div>}
+        </div>
+      )}
+      <div className="popover-section">
+        <div className="popover-title">{t('history.horizon')}</div>
+        <div className="popover-pad">
+          <Segmented
+            value={horizon}
+            onChange={value => setPrefs({horizon: value})}
+            options={HORIZONS.map(h => [h, h === 'auto' ? t('history.horizonAuto') : t('history.daysShort', {count: parseInt(h)})])}
+            label={t('history.horizon')}
+          />
+        </div>
+        {!ahead && <div className="popover-note">{t('history.horizonNote')}</div>}
       </div>
-      {!ahead && <div className="popover-note">{t('history.horizonNote')}</div>}
       {arrange.owner && <HideRow onHide={() => arrange.update(view => withHidden(view, HISTORY, true))}>{t('widget.hide')}</HideRow>}
     </Popover>
   );
@@ -195,7 +216,7 @@ export const History = memo(function History({
     <section className={`panel history ${loading ? 'is-loading' : ''}`} aria-label={t('history.label')} aria-busy={loading}>
       <div className="panel-head">
         <h2>{t('history.title')}</h2>
-        <HistorySettings arrange={arrange} ahead={planShown || forecastShown} />
+        <HistorySettings arrange={arrange} planAvailable={planAvailable} forecastAvailable={forecastAvailable} ahead={planShown || forecastShown} />
       </div>
 
       <div className="legend">
@@ -215,38 +236,6 @@ export const History = memo(function History({
           </button>
         ))}
         {!lines.length && <span className="legend-empty">{t('history.noLines')}</span>}
-        {(planAvailable || forecastAvailable) && (
-          <span className="legend-switches">
-            {planAvailable && (
-              <button
-                type="button"
-                className="legend-item legend-plan"
-                aria-pressed={prefs.showPlan}
-                title={t('history.planLegendHint')}
-                onClick={() => setPrefs({showPlan: !prefs.showPlan})}
-              >
-                <svg width="18" height="6" aria-hidden="true">
-                  <line x1="1" x2="17" y1="3" y2="3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeDasharray="1 4" />
-                </svg>
-                <span>{t('history.planLegend')}</span>
-              </button>
-            )}
-            {forecastAvailable && (
-              <button
-                type="button"
-                className="legend-item legend-plan"
-                aria-pressed={prefs.showForecast}
-                title={t('history.forecastLegendHint')}
-                onClick={() => setPrefs({showForecast: !prefs.showForecast})}
-              >
-                <svg width="18" height="6" aria-hidden="true">
-                  <line x1="1" x2="17" y1="3" y2="3" stroke="currentColor" strokeWidth="1.5" strokeDasharray="4 3" />
-                </svg>
-                <span>{t('history.forecastLegend')}</span>
-              </button>
-            )}
-          </span>
-        )}
       </div>
 
       {history ? <Chart lines={visible} plans={plans} forecasts={forecasts} markers={markers} from={from} now={measuredTo} to={to} cellMs={history.cellMs} empty={lines.length ? t('chart.empty') : null} onSelect={setTimeRange} /> : <div className="chart chart-loading">{t('history.loading')}</div>}
