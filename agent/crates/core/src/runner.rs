@@ -143,7 +143,7 @@ impl Runner {
         let mut accounts: Vec<Option<(Option<String>, Option<SystemTime>)>> = vec![None; self.adapters.len()];
         let mut clock = Clock::new(now_ms());
         let mut watch = self.config.sessions().then(|| Watch {
-            activity: Activity::new(self.home.clone()),
+            activity: Activity::new(self.home.clone(), self.config.projects()),
             looked: None,
             reported: None,
         });
@@ -398,7 +398,8 @@ mod tests {
             started_at: 0,
             working,
         };
-        let mut watch = Watch { activity: Activity::new(PathBuf::from("/nowhere")), looked: None, reported: None };
+        let mut watch =
+            Watch { activity: Activity::new(PathBuf::from("/nowhere"), true), looked: None, reported: None };
         assert!(watch.worth_sending(&[]), "the first, even empty: the hub may still hold an older one");
         watch.reported = Some((Instant::now(), vec![session(true)]));
         assert!(!watch.worth_sending(&[session(true)]));

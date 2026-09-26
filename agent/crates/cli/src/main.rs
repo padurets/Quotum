@@ -348,7 +348,7 @@ fn status(config: Config, paths: Paths, only: &[Provider], json: bool) -> ExitCo
     }
     // The agents running here are looked at before and after measuring: the CPU time they
     // spent meanwhile tells which of them work, with no wait of its own.
-    let mut activity = (!json).then(|| Activity::new(home()));
+    let mut activity = (!json).then(|| Activity::new(home(), true));
     if let Some(activity) = activity.as_mut() {
         activity.look();
     }
@@ -671,7 +671,8 @@ fn print_sessions(sessions: &[Session], style: &Style) {
         // worktrees of one project stay apart.
         let place = match (&session.project, &session.folder) {
             (Some(project), Some(folder)) if project != folder => format!("{project} · {folder}"),
-            (project, folder) => project.as_ref().or(folder.as_ref()).cloned().unwrap_or_default(),
+            (None, Some(folder)) => format!("no project · {folder}"),
+            (project, _) => project.clone().unwrap_or_default(),
         };
         let origin = match session.origin {
             Origin::Terminal => String::new(),
