@@ -448,10 +448,10 @@ time as the hub's messages tell it. The chart and the table move on a cell of th
 history's grid at a time. History is read again when the hub tells of measurements the
 chart has not shown, at most every ten seconds for a period ending now. Nothing that
 shows data or time keeps a timer of its own (a tooltip or a gesture may wait a moment;
-`hub/ui/test/timers.test.ts` lists where), and `npm run bench` checks that an idle board asks the hub
-nothing and renders nothing but what shows time. Nothing on the page is fixed and the
-widgets are not frosted, so a scroll paints only what comes into view, even in a
-WebKitGTK window that draws without the GPU.
+`hub/ui/test/timers.test.ts` lists where), and `npm run bench` checks that an idle
+board asks the hub nothing and renders nothing but what shows time. Nothing on the
+page is fixed and the widgets are not frosted, so a scroll paints only what comes into
+view, even in a WebKitGTK window that draws without the GPU.
 A card's dot by the logo tells how its measurements go: its colour, and in its tooltip
 when it was measured and, while the hub sets the pace, when the next measurement comes
 and why, each a line of its own.
