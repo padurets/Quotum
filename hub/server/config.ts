@@ -136,25 +136,32 @@ export const config = {
 
   history: {
     /**
-     * Each range is drawn on one shared time grid: every series gets a value for the
-     * same cells, so a hover always reads all of them at once. Totals still use every
-     * raw sample.
+     * The periods the chart offers, each ending now. Every period, one of these or a time
+     * range selected on the chart, is drawn on one shared time grid: every series gets a
+     * value for the same cells, so a hover always reads all of them at once. Totals still
+     * use every raw sample.
      */
     ranges: {
-      '24h': {durationMs: 86_400_000, cellMs: 5 * 60_000},
-      '7d': {durationMs: 7 * 86_400_000, cellMs: 30 * 60_000},
-      '30d': {durationMs: 30 * 86_400_000, cellMs: 2 * 3_600_000},
-    } as Record<string, {durationMs: number; cellMs: number}>,
+      '1h': 3_600_000,
+      '3h': 3 * 3_600_000,
+      '6h': 6 * 3_600_000,
+      '12h': 12 * 3_600_000,
+      '24h': 86_400_000,
+      '3d': 3 * 86_400_000,
+      '7d': 7 * 86_400_000,
+      '14d': 14 * 86_400_000,
+      '30d': 30 * 86_400_000,
+    } as Record<string, number>,
     /**
-     * A period selected on the chart gets the finest of these cells that keeps it
-     * within `maxCells` (5% over allowed), the same density as the fixed ranges, and its
-     * edges go out to whole cells. Shorter than `minSpanMs` it would show a handful of
-     * measurements.
+     * A period gets the finest of these cells that keeps it within `maxCells` (5% over
+     * allowed), whether it is one of the ranges or selected on the chart: a period moved
+     * back in time keeps its grid. A selected period's edges go out to whole cells. Shorter
+     * than `minSpanMs` it would show a handful of measurements.
      */
     cells: [1, 5, 15, 30, 60, 120, 360, 720].map(minutes => minutes * 60_000),
     maxCells: 360,
     minSpanMs: 15 * 60_000,
-    /** As long as the longest fixed range (dragged on it, a little longer). */
+    /** As long as the longest range (dragged on it, a little longer). */
     maxSpanMs: 31 * 86_400_000,
     /** A history that takes this long to put together is reused a while after new data (see api.ts). */
     costlyMs: 50,
