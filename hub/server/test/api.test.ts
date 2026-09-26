@@ -386,7 +386,7 @@ test('history reads a period selected on the chart, up to a month, on a grid fin
   const nearly = await read(`from=${now - 3_600_000 + 1}&to=${now - 1_800_000 - 1}`);
   assert.deepEqual([nearly.body.since, nearly.body.to], [hour.body.since, hour.body.to], 'less than a cell apart: one answer');
   const week = await read(`from=${now - 7 * 86_400_000}&to=${now}`);
-  assert.equal(week.body.cellMs, 30 * 60_000, 'as dense as the fixed ranges');
+  assert.equal(week.body.cellMs, 30 * 60_000, 'as dense as the ranges ending now');
   const month = await read(`from=${now - 31 * 86_400_000 + 3_600_000}&to=${now}`);
   assert.equal(month.body.cellMs, 2 * 3_600_000, 'a day over a month keeps the grid of a month');
   const ahead = await read(`from=${now - 3_600_000}&to=${now + 86_400_000}`);
@@ -470,6 +470,33 @@ test('agents report the coding agents running on their machines; the cards of th
   const full = await report(Array.from({length: 200}, () => longest));
   assert.equal(full.status, 200, JSON.stringify(full.body));
   assert.equal((await call('POST', '/v1/sessions', {body: {version: 1}})).status, 401);
+});
+
+test('every period ending now is drawn on the finest cell that keeps it within about 360 cells, as a range as long moved back is', async () => {
+  const {call, person} = await hub();
+  await person('alice');
+  const minute = 60_000;
+  const cells: Record<string, number> = {'1h': 1, '3h': 1, '6h': 1, '12h': 5, '24h': 5, '3d': 15, '7d': 30, '14d': 60, '30d': 120};
+  assert.deepEqual(Object.keys(cells), Object.keys(config.history.ranges), 'every period the hub offers');
+  for (const [range, cell] of Object.entries(cells)) {
+    const live = await call('GET', `/api/history?range=${range}`, {as: 'alice'});
+    const durationMs = config.history.ranges[range];
+    assert.deepEqual([live.status, live.body.cellMs, live.body.to - live.body.since], [200, cell * minute, durationMs], range);
+    assert.ok(durationMs / live.body.cellMs <= 378, range);
+    const now = Date.now();
+    const moved = await call('GET', `/api/history?from=${now - durationMs * 1.5}&to=${now - durationMs / 2}`, {as: 'alice'});
+    assert.equal(moved.body.cellMs, live.body.cellMs, `${range} moved back`);
+  }
+  for (const range of ['2h', '1y', 'toString']) assert.equal((await call('GET', `/api/history?range=${range}`, {as: 'alice'})).status, 400, range);
+});
+
+test('past resets for everyone are listed over the history kept, not only the last month', async () => {
+  const {call, store} = await hub();
+  const now = Date.now();
+  const old = {at: now - 40 * 86_400_000, url: 'https://example.com/old', text: 'A reset for everyone'};
+  store.announce('codex', old);
+  store.announce('codex', {...old, at: now - 100 * 86_400_000});
+  assert.deepEqual((await call('GET', '/api/resets')).body.past, {codex: [old]});
 });
 
 test('changes from another origin, unknown hosts and other methods are refused', async () => {
