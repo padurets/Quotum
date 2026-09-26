@@ -278,8 +278,9 @@ export class Directory {
     return r ? {...token(r), revoked: r.revoked_at !== null} : null;
   }
 
-  touchToken(id: string, now: number) {
-    this.db.prepare('UPDATE tokens SET last_used_at = ? WHERE id = ?').run(now, id);
+  /** False when the token was revoked meanwhile. */
+  touchToken(id: string, now: number): boolean {
+    return this.db.prepare('UPDATE tokens SET last_used_at = ? WHERE id = ? AND revoked_at IS NULL').run(now, id).changes > 0;
   }
 
   /** Revoking a machine token also disconnects every device that joined with it. */
@@ -340,8 +341,13 @@ export class Directory {
     return row ? device(row) : null;
   }
 
-  touchDevice(id: string, machine: Machine, agent: string, now: number) {
-    this.db.prepare('UPDATE devices SET name = ?, os = ?, arch = ?, agent = ?, last_seen_at = ? WHERE id = ?').run(machine.name, machine.os, machine.arch, agent, now, id);
+  /** False when the device was removed meanwhile. */
+  touchDevice(id: string, machine: Machine, agent: string, now: number): boolean {
+    return (
+      this.db
+        .prepare('UPDATE devices SET name = ?, os = ?, arch = ?, agent = ?, last_seen_at = ? WHERE id = ? AND revoked_at IS NULL')
+        .run(machine.name, machine.os, machine.arch, agent, now, id).changes > 0
+    );
   }
 
   devices(userId: string): Device[] {

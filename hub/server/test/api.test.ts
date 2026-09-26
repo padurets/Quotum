@@ -402,6 +402,34 @@ test('an agent request without a valid token is refused before its body arrives'
   assert.deepEqual(await hanging('/v1/ingest', {host: 'evil.example'}), [403, 'forbidden_host'], 'the host is checked first');
 });
 
+test('a device removed or a token revoked while its body arrives delivers nothing', async t => {
+  const {app, call, person} = await hub();
+  await person('alice');
+  const started = (await call('POST', '/v1/device/code', {body: {machine: machine('laptop-0123456789ab'), agent: 'quotum/0.2.0'}})).body;
+  await call('POST', '/api/device/approve', {as: 'alice', body: {code: started.userCode}});
+  const device = (await call('POST', '/v1/device/token', {body: {deviceCode: started.deviceCode}})).body.token;
+  const token = (await call('POST', '/api/tokens', {as: 'alice', body: {}})).body;
+
+  /** Sends the headers and half of a batch, revokes, then sends the rest. */
+  const revokedMidway = async (secret: string, id: string, revoke: () => Promise<unknown>) => {
+    const body = new PassThrough();
+    t.after(() => body.destroy());
+    const text = JSON.stringify(batch(id));
+    body.write(text.slice(0, text.length / 2));
+    const answer = app.inject({method: 'POST', url: '/v1/ingest', payload: body, headers: {'content-type': 'application/json', authorization: `Bearer ${secret}`}});
+    await new Promise(resolve => setTimeout(resolve, 50));
+    await revoke();
+    body.end(text.slice(text.length / 2));
+    const response = await answer;
+    return [response.statusCode, JSON.parse(response.body).error];
+  };
+  const [listed] = (await call('GET', '/api/devices', {as: 'alice'})).body;
+  assert.deepEqual(await revokedMidway(device, 'laptop-0123456789ab', () => call('DELETE', `/api/devices/${listed.id}`, {as: 'alice'})), [403, 'device_revoked']);
+  assert.deepEqual(await revokedMidway(token.secret, 'build-0123456789ab', () => call('DELETE', `/api/tokens/${token.id}`, {as: 'alice'})), [403, 'device_revoked']);
+  assert.deepEqual((await call('GET', '/api/devices', {as: 'alice'})).body, [], 'no device comes back or joins');
+  assert.deepEqual((await call('GET', '/api/overview', {as: 'alice'})).body.sources, [], 'nothing was kept');
+});
+
 test('a request is given 30 seconds to arrive, and one that takes longer is answered in the spec’s terms', async () => {
   const {app} = await hub();
   // Node keeps the checking interval on the server, but its types do not declare it.
