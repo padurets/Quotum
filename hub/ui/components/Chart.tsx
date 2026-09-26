@@ -78,13 +78,14 @@ const SLIDE_MS = 220;
 /**
  * How far the chart's content slides in after it steps through time, in pixels: from
  * where it was drawn to where it is now, so the eye follows which way it went. None
- * unless the period kept its length (`end` is where measurements end) and moved by a
- * tenth of it or more: a step, not a live period's clock moving on, nor another period.
+ * unless the period kept about its length (`end` is where measurements end, which for a
+ * period ending now may be the hub's clock rather than the page's) and moved by a tenth of
+ * it or more: a step, not a live period's clock moving on, nor another period.
  */
 export function slideOf(before: {from: number; end: number}, after: {from: number; end: number; to: number}, plotWidth: number) {
   const length = after.end - after.from;
   const moved = after.from - before.from;
-  if (length <= 0 || Math.abs(before.end - before.from - length) > length * 0.01 || Math.abs(moved) < length * 0.1 || Math.abs(moved) > length) return 0;
+  if (length <= 0 || Math.abs(before.end - before.from - length) > length * 0.1 || Math.abs(moved) < length * 0.1 || Math.abs(moved) > length) return 0;
   return (moved / (after.to - after.from)) * plotWidth;
 }
 
@@ -333,12 +334,16 @@ export function Chart({
   useLayoutEffect(() => {
     const element = tip.current;
     if (!element) return;
-    setTipWidth(element.offsetWidth);
-    if (!narrow) {
-      lifted.current = 0;
-      return setLift(0);
-    }
-    const fit = () => {
+    const measure = () => {
+      // Its own width, not as narrowed to the side it stands on: where it goes depends on it.
+      const cap = element.style.maxWidth;
+      element.style.maxWidth = '';
+      setTipWidth(element.offsetWidth);
+      element.style.maxWidth = cap;
+      if (!narrow) {
+        lifted.current = 0;
+        return setLift(0);
+      }
       const rect = element.getBoundingClientRect();
       const [top, bottom] = [rect.top + lifted.current, rect.bottom + lifted.current];
       const bars = [...document.querySelectorAll<HTMLElement>('.topbar, .analytics-head')].filter(bar => getComputedStyle(bar).position === 'sticky');
@@ -346,9 +351,15 @@ export function Chart({
       lifted.current = Math.max(0, Math.min(bottom - (innerHeight - 8), top - cover - 8));
       setLift(lifted.current);
     };
-    fit();
-    addEventListener('scroll', fit, {passive: true});
-    return () => removeEventListener('scroll', fit);
+    measure();
+    // Measured again as its rows change under a pointer that stays (the next answer came).
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    if (narrow) addEventListener('scroll', measure, {passive: true});
+    return () => {
+      observer.disconnect();
+      removeEventListener('scroll', measure);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hover, edge, narrow, lines.length]);
   // Beside the pointer: right of it, or left, or where there is more room when it fits

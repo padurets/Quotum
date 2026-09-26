@@ -409,6 +409,8 @@ td.muted, small.muted { color: var(--text-3); }
 .panel-note { margin-right: auto; color: var(--text-3); font-size: 12.5px; }
 .controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .controls .picker { margin-left: 0; }
+/* At the right even when it takes a row of its own: the arrows at its end stay where they were. */
+.analytics-head .controls { margin-left: auto; justify-content: flex-end; }
 .segmented { display: flex; padding: 2px; gap: 2px; border: 1px solid var(--hair); border-radius: 9px; background: #ffffff04; }
 .segmented button { white-space: nowrap; border: 0; background: none; color: var(--text-3); padding: 5px 12px; border-radius: 7px; font-size: 12.5px; transition: color .15s, background .15s; }
 .segmented button:hover { color: var(--text-2); }
@@ -700,7 +702,7 @@ tr:hover .device-name .icon-button, .device-name .icon-button:focus-visible { op
   .controls { width: 100%; flex-direction: column; align-items: stretch; }
   .controls .segmented { flex: 1; }
   .controls .segmented button { flex: 1; padding: 6px; }
-  /* The list takes what room is left between the arrows; a long time range wraps in it. */
+  /* The list takes what room the arrows leave; a long time range wraps in it. */
   .period .picker { flex: 1; min-width: 0; }
   .period .text-button { flex: 1; justify-content: center; height: auto; min-height: 28px; padding: 4px 10px; white-space: normal; text-align: center; }
   .forecast th:nth-child(4), .forecast td:nth-child(4) { display: none; }

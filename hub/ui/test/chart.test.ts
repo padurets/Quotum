@@ -33,5 +33,7 @@ test('a step through time slides the chart in from the side it came from; the cl
   assert.equal(slideOf(live, back, 1000), -500, 'back: half the width, the earlier half coming in from the left');
   assert.equal(slideOf({from: back.from, end: back.end}, {...live, to: now + 4 * hour}, 1000), (12 / 28) * 1000, 'forward to a period with its future');
   assert.equal(slideOf(live, {from: now - 24 * hour + 60_000, end: now + 60_000, to: now + 60_000}, 1000), 0, 'a live period a minute on');
+  const hourLive = {from: now - hour, end: now + 5 * 60_000};
+  assert.equal(slideOf(hourLive, {from: now - 1.5 * hour, end: now - 0.5 * hour, to: now - 0.5 * hour}, 1000), -500, 'an hour whose end was the hub’s clock, minutes ahead of the page');
   assert.equal(slideOf(live, {from: now - 7 * 24 * hour, end: now, to: now}, 1000), 0, 'another period');
 });

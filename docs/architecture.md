@@ -323,8 +323,10 @@ analytics by half their length, one step a gesture: back, to a range in the past
 the address like a dragged one, no further than the history kept; forward, up to now,
 where the chosen period comes back. The chart moves to the new period at once, drawing
 the answer it has until the next one comes; a run of quick steps asks the hub only for
-where it stops, and the latest few ranges read whole are kept on the page, so stepping
-back and forth over them asks nothing.
+where it stops, and the latest few ranges read whole are kept on the page for each board,
+so stepping back and forth over them asks nothing. They are kept for the board's sources
+as they were: a source added to the board has a range read again. Measurements an agent
+delivers late, into a range already kept, show after a reload.
 
 Both agent lists put working sessions first, then the ones that worked most recently,
 then the newest. The card's panel keeps machine groups, ordered by each one's most
