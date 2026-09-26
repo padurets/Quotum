@@ -69,7 +69,8 @@ const sameDay = (a: number, b: number) => new Date(a).toDateString() === new Dat
 
 /**
  * A cell's times under its day. Cells are laid on UTC, so one may cross midnight here, and
- * then each end names its day; a time within a cell, shorter than a day, is then still one.
+ * then each end names its day; a time within a cell, shorter than a day, then reads as one
+ * moment, save for the hour the clocks go back.
  */
 export function cellLabel(at: number, cellMs: number) {
   if (!cellMs) return stamp(at);
