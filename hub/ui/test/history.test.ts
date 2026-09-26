@@ -182,3 +182,74 @@ test('a range the hub refuses brings the chosen period back; another failure is 
   await h.advance(15 * S);
   assert.equal(h.reads.length, reads + 1);
 });
+
+const HOUR = 3_600_000;
+
+test('news or a snapshot while a range is read: its answer may miss what came, so it is shown, not kept, and read again', async () => {
+  const range = {from: NOW - 3 * HOUR, to: NOW - 2 * HOUR};
+  const answer = {range: `${range.from}-${range.to}`, to: range.to};
+  for (const told of ['news', 'snapshot'] as const) {
+    const h = harness();
+    h.loader.choose('24h', null);
+    h.loader.open('b1');
+    h.loader.snapshot(['s1']);
+    await h.reads[0].answer();
+    await h.advance(LIVE_MIN_MS);
+    h.loader.choose('24h', range);
+    await h.advance(S);
+    assert.equal(h.reads.length, 2, 'the range is being read');
+    // The event comes before the (large) answer, which the hub put together before the measurement.
+    if (told === 'news') h.loader.news(range.from + 10 * MIN);
+    else h.loader.snapshot(['s1']);
+    await h.reads[1].answer(answer);
+    await h.advance(LIVE_MIN_MS + S);
+    assert.equal(h.reads.length, 3, `${told}: the range on screen is read again`);
+    await h.reads[2].answer(answer);
+
+    // Stepped away and back: the answer read again was kept, the old one never was.
+    h.loader.choose('24h', null);
+    await h.advance(S);
+    await h.reads.at(-1)!.answer();
+    const reads = h.reads.length;
+    h.loader.choose('24h', range);
+    await h.advance(S);
+    assert.equal(h.reads.length, reads, `${told}: kept as read again`);
+  }
+});
+
+test('a range stepped past while it is read, and touched by news meanwhile, is read again when stepped back to', async () => {
+  const h = harness();
+  h.loader.choose('24h', null);
+  h.loader.open('b1');
+  h.loader.snapshot(['s1']);
+  await h.reads[0].answer();
+  const a = {from: NOW - 3 * HOUR, to: NOW - 2 * HOUR};
+  const b = {from: NOW - 5 * HOUR, to: NOW - 4 * HOUR};
+  h.loader.choose('24h', a);
+  await h.advance(S);
+  h.loader.choose('24h', b);
+  await h.advance(S);
+  h.loader.news(a.from + MIN);
+  await h.reads.find(r => r.query.includes(`from=${a.from}`))!.answer({range: `${a.from}-${a.to}`, to: a.to});
+  for (const r of h.reads.filter(r => r.query.includes(`from=${b.from}`))) await r.answer({range: `${b.from}-${b.to}`, to: b.to});
+  const reads = h.reads.length;
+  h.loader.choose('24h', a);
+  await h.advance(S);
+  assert.equal(h.reads.length, reads + 1);
+});
+
+test('a refusal of a range the page has stepped away from does not drop the one selected now', async () => {
+  const h = harness();
+  h.loader.choose('24h', null);
+  h.loader.open('b1');
+  h.loader.snapshot(['s1']);
+  await h.reads[0].answer();
+  await h.advance(10 * S);
+  h.loader.choose('24h', {from: NOW - 3 * HOUR, to: NOW - 2 * HOUR});
+  await h.advance(100);
+  h.loader.choose('24h', {from: NOW - 4 * HOUR, to: NOW - 3 * HOUR});
+  await h.reads[1].fail(new ApiError(400, 'invalid_request'));
+  assert.equal(h.dropped(), 0);
+  await h.advance(S);
+  assert.match(h.reads.at(-1)!.query, new RegExp(`from=${NOW - 4 * HOUR}`), 'the one selected is read');
+});

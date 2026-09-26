@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {clip, forecastLine, forecastRow, outlook, type Outlook} from '../lib/forecast';
+import {clip, forecastLine, outlook, spentOf, type Outlook} from '../lib/forecast';
 import {DEFAULT_PLAN, type WeeklyPlan} from '../lib/plan';
 import type {Win} from '../lib/types';
 
@@ -102,12 +102,10 @@ test('the forecast counts from the measurement: the moment it runs out stays, an
   assert.equal(outlook(week(40), half, half + 30 * HOUR, null).tone, 'v-crit');
 });
 
-test('the period on screen does not change the forecast', () => {
-  const live = week(38);
-  const day = forecastRow({consumed: 40, coveredMs: 20 * HOUR}, live, start + 72 * HOUR, start + 72 * HOUR, DEFAULT_PLAN);
-  const month = forecastRow({consumed: 150, coveredMs: 20 * DAY}, live, start + 72 * HOUR, start + 72 * HOUR, DEFAULT_PLAN);
-  assert.deepEqual(day.outlook, month.outlook);
-  assert.notDeepEqual(day.spent, month.spent);
+test('what the table says a period spent: points, nothing spent while measured, or unknown', () => {
+  assert.deepEqual(spentOf({consumed: 40, coveredMs: 20 * HOUR}), {key: 'points', value: 40});
+  assert.deepEqual(spentOf({consumed: 0, coveredMs: 20 * DAY}), {key: 'unused'});
+  assert.deepEqual(spentOf({consumed: 0, coveredMs: 0}), {key: 'unknown'});
 });
 
 test('a window started too recently waits: half an hour, or a twentieth of the window', () => {

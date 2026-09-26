@@ -7,7 +7,7 @@ import {resetLabel, resetLabelChangesAt, type ResetStatus} from '../lib/resets';
 import {DEFAULT_PLAN, planAt, planChangesAt, planNote} from '../lib/plan';
 import {since, sinceChangesAt} from '../lib/agents';
 import {frameChangesAt, step, stepChangesAt} from '../lib/periods';
-import {outlook, outlookChangesAt} from '../lib/forecast';
+import {outlook, outlookChangesAt, planCell} from '../lib/forecast';
 import type {Win} from '../lib/types';
 
 const S = 1000;
@@ -153,6 +153,12 @@ const around = (from: number) => [
   ...[0, 1, 29_999, 30_000, 44_499, 44_500, 59_999, 60_000, 3_599_499, 86_399_499, 2 * DAY + 5].map(d => from + d),
 ];
 
+/** Moments before `to`, what counts down to it: its last two hours a minute at a time, and either side of each unit. */
+const before = (to: number) => [
+  ...Array.from({length: 125}, (_, i) => to - 2 * HOUR + i * 60_013),
+  ...[2 * DAY + 1, 2 * DAY, DAY + 1, DAY, HOUR + 1, HOUR, HOUR - 1, MIN + 1, MIN, MIN - 1, 30_001, 30_000, 1].map(d => to - d),
+];
+
 test('ago, countdown and duration say when they read otherwise, to the millisecond', () => {
   const time = T0 - 3 * S;
   changesAtItsMoment(
@@ -165,7 +171,7 @@ test('ago, countdown and duration say when they read otherwise, to the milliseco
     'countdown',
     now => countdown(time + 3 * DAY - now),
     now => countdownChangesAt(time + 3 * DAY, now),
-    around(time),
+    [...around(time), ...before(time + 3 * DAY)],
   );
   changesAtItsMoment(
     'duration since',
@@ -184,13 +190,13 @@ test('ago, countdown and duration say when they read otherwise, to the milliseco
     'duration until',
     now => duration(to - now),
     now => durationUntilChangesAt(to, now),
-    around(T0),
+    [...around(T0), ...before(to)],
   );
   changesAtItsMoment(
     'duration until, short',
     now => duration(to - now, true),
     now => durationUntilChangesAt(to, now, true),
-    around(T0),
+    [...around(T0), ...before(to)],
   );
   assert.equal(agoChangesAt(null, T0), null);
   changesAtItsMoment(
@@ -213,7 +219,7 @@ test("a card's dot and its pace say when they look otherwise", () => {
     'cadence',
     now => cadenceOf(source, now)?.when,
     now => cadenceChangesAt(source, now),
-    around(T0),
+    [...around(T0), ...before(source.cadence.next)],
   );
   assert.equal(dotChangesAt({...source, stale: true}, T0), null, 'trouble passes when the hub says');
   const w = {resetAt: T0 + 2 * DAY + 13 * S};
@@ -224,7 +230,7 @@ test("a card's dot and its pace say when they look otherwise", () => {
       return line.key === 'resetsIn' ? duration(line.inMs) : line.key;
     },
     now => resetLineChangesAt(w, now),
-    around(T0),
+    [...around(T0), ...before(w.resetAt)],
   );
 });
 
@@ -247,7 +253,7 @@ test('what a card says of resets for everyone says when it changes', () => {
       'reset label',
       now => resetLabel(status, now),
       now => resetLabelChangesAt(status, now),
-      around(T0),
+      [...around(T0), ...before(T0 + 5 * HOUR), ...before(T0 + 2 * HOUR)],
       false,
     );
 });
@@ -259,10 +265,14 @@ test("a limit's plan says when its mark, its gap or its end show otherwise", () 
   const shown = (w: Win, now: number) => {
     const point = planAt(w, measuredAt, now, DEFAULT_PLAN);
     const note = planNote(w, measuredAt, now, DEFAULT_PLAN);
-    return [point && Math.round(point.remaining), point?.done, note && [note.key, Math.round(note.value)]];
+    // The table's cell too: its number, the gap and whether the gap is worth marking.
+    const cell = planCell(w, measuredAt, now, DEFAULT_PLAN);
+    return [point && Math.round(point.remaining), point?.done, note && [note.key, Math.round(note.value)], cell && [Math.round(cell.remaining), Math.round(cell.delta), cell.notable]];
   };
-  for (const w of [weekly, session]) {
-    const moments = Array.from({length: 150}, (_, i) => T0 + i * 1_234_567).filter(t => t < w.resetAt!);
+  // Close to its plan: the gap grows past the mark the table draws from.
+  const close: Win = {...weekly, id: 'c', used: 64.5, remaining: 35.5};
+  for (const w of [weekly, session, close]) {
+    const moments = [...Array.from({length: 150}, (_, i) => T0 + i * 1_234_567), ...before(w.resetAt!)].filter(t => t < w.resetAt!);
     changesAtItsMoment(
       `plan ${w.kind}`,
       now => shown(w, now),

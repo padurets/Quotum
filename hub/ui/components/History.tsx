@@ -1,5 +1,5 @@
 import {memo, useMemo} from 'react';
-import {num} from '../lib/format';
+import {earliest, num} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
 import {planAt, started, weeklyPlanLine} from '../lib/plan';
 import {forecastLine, outlook} from '../lib/forecast';
@@ -77,7 +77,8 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
   // The chart moves to the period asked for at once, drawing the answer it has until the
   // next one comes. A time range is in the past: the chart shows just it, without the future.
   const selected = useTimeRange();
-  const now = useClock(now => frameChangesAt(selected, history?.cellMs ?? 60_000, now));
+  // On with the next cell, or when what the chart points at past its right edge comes due: drawn within it then.
+  const now = useClock(now => earliest(frameChangesAt(selected, history?.cellMs ?? 60_000, now), ...pointed.filter(at => at > now)));
   const codex = useResetsFor('codex');
   const past = usePastResets();
 
@@ -208,6 +209,8 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
           }),
     [ahead, forecastShown, now, from, to],
   );
+  // What the chart points at past its right edge (Chart.tsx): an announced reset, where a window runs out.
+  const pointed = [...markers.filter(m => m.strong && !m.past && m.at > to).map(m => m.at), ...forecasts.flatMap(f => (f.at !== null && f.at > to ? [f.at] : []))];
 
   return (
     <section className={`panel history ${loading ? 'is-loading' : ''}`} data-time="chart" aria-label={t('history.label')} aria-busy={loading}>

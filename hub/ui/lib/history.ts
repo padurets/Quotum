@@ -52,8 +52,10 @@ export class HistoryLoader {
   private selected: TimeRange | null = null;
   private shown: History | null = null;
   private readonly kept = new Map<string, History>();
-  /** The read under way, and whether news came meanwhile (for the period ending now). */
+  /** The read whose answer goes on screen, and whether news came meanwhile. */
   private reading: {slot: string; again: boolean} | null = null;
+  /** Every read under way, each marked once news or a snapshot may have made its answer old before it comes. */
+  private readonly underway = new Set<{old: boolean}>();
   private lastRead: {slot: string; at: number} | null = null;
   private changedAt = 0;
   private readonly timers = new Map<'settle' | 'later' | 'retry', unknown>();
@@ -144,6 +146,8 @@ export class HistoryLoader {
       return this.publish();
     }
     if (why === 'change') {
+      // Whatever is read of the range left is no longer the one on screen.
+      this.reading = null;
       this.clear('later');
       const now = this.env.now();
       const quick = now - this.changedAt < SETTLE_MS;
@@ -168,13 +172,17 @@ export class HistoryLoader {
     if (!target) return;
     const slot = this.slotOf(target);
     const reading = {slot, again: false};
+    const flight = {old: false};
     this.reading = reading;
+    this.underway.add(flight);
     this.lastRead = {slot, at: this.env.now()};
     this.env.read(target.board, target.query).then(
       answer => {
+        this.underway.delete(flight);
         const data = {...answer, board: target.board};
-        // One stepped past on the way is kept all the same: it may be stepped back to.
-        if (target.selected && complete(data, target.selected)) this.keep(slot, target.board, data);
+        // One stepped past on the way is kept all the same: it may be stepped back to. Not
+        // one that news may have made old on its way: it is read again when wanted.
+        if (target.selected && !flight.old && complete(data, target.selected)) this.keep(slot, target.board, data);
         if (this.reading !== reading) return;
         this.reading = null;
         this.shown = data;
@@ -184,6 +192,7 @@ export class HistoryLoader {
         else if (reading.again) this.want('news');
       },
       error => {
+        this.underway.delete(flight);
         if (this.reading !== reading) return;
         this.reading = null;
         // A selected range the hub will not read (say, a link older than the history it keeps)
@@ -202,9 +211,13 @@ export class HistoryLoader {
     if (ofBoard.length > KEPT_RANGES) this.kept.delete(ofBoard[0]);
   }
 
-  /** Drops the ranges kept of the open board that `hit` says may have changed. */
+  /**
+   * Drops the ranges kept of the open board that `hit` says may have changed; an answer
+   * still on its way may have missed it too, whatever its range.
+   */
   private forget(hit: (answer: History) => boolean) {
     for (const [slot, answer] of this.kept) if (answer.board === this.board && hit(answer)) this.kept.delete(slot);
+    for (const flight of this.underway) flight.old = true;
   }
 
   private cancel() {

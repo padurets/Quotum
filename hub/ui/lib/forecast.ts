@@ -176,11 +176,3 @@ export function planCell(live: Win | undefined, measuredAt: number | null, now: 
   return {remaining: plan.remaining, delta, notable: Math.abs(delta) >= PLAN_TOLERANCE};
 }
 
-/** A line of the table over a period up to now: what the period spent, the plan, and where the window's pace leads. */
-export type ForecastRow = {spent: Spent; plan: PlanCell | null; outlook: Outlook};
-
-export const forecastRow = (line: Pick<Line, 'consumed' | 'coveredMs'>, live: Win | undefined, measuredAt: number | null, now: number, weekly: WeeklyPlan | null): ForecastRow => ({
-  spent: spentOf(line),
-  plan: planCell(live, measuredAt, now, weekly),
-  outlook: outlook(live, measuredAt, now, weekly),
-});

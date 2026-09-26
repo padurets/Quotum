@@ -16,7 +16,7 @@ import {Store} from '../../server/store/store.js';
 import type {ResetEvent, ResetProvider} from '../../server/domain/resets.js';
 import {setLocale} from '../../ui/i18n/index.js';
 import {agentRows, byActivity, drawn, folderOf, machinesOf} from '../../ui/lib/agents.js';
-import {forecastRow} from '../../ui/lib/forecast.js';
+import {outlook, planCell, spentOf} from '../../ui/lib/forecast.js';
 import {chartEvents, chartResets, linesOf} from '../../ui/lib/lines.js';
 import {frameOf, step} from '../../ui/lib/periods.js';
 import {planNote, started} from '../../ui/lib/plan.js';
@@ -276,13 +276,15 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
     if (!ANALYTICS_KINDS.includes(live.kind)) return `window ${id} is of the kind ${live.kind}: the table shows only weekly and five-hour windows`;
     const line = linesOf(await reading.history(board), overview.sources, overview.view, live.kind).find(l => l.sourceId === source.id && l.windowId === id);
     if (!line) return `no line of ${id} in the table`;
-    const row = forecastRow(line, live, source.successAt, now, weekly);
+    // As the table's cells put it (components/Forecast.tsx).
+    const ahead = outlook(live, source.successAt, now, weekly);
+    const plan = planCell(live, source.successAt, now, weekly);
     Object.assign(values, {
       forecast: id,
-      outlook: row.outlook.key,
-      tone: row.outlook.tone,
-      spent: row.spent.key,
-      plan: !row.plan ? 'none' : !row.plan.notable ? 'even' : row.plan.delta >= 0 ? 'behind' : 'ahead',
+      outlook: ahead.key,
+      tone: ahead.tone,
+      spent: spentOf(line).key,
+      plan: !plan ? 'none' : !plan.notable ? 'even' : plan.delta >= 0 ? 'behind' : 'ahead',
     });
   }
   if ('reachesBack' in card) {
