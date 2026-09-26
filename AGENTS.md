@@ -14,7 +14,8 @@ one machine:
   settings, delivery), `crates/cli` (the `quotum` command).
 - `hub/` — Node 24, Fastify, the SQLite built into Node, a React dashboard:
   `server/domain` (the rules), `server/store` (SQLite), `server/routes`, `ui/`.
-- `spec/ingest-v1.md` — the protocol between them.
+- `spec/ingest-v1.md` — the protocol between them; `spec/dashboard-v1.md` — the events
+  the hub pushes to its dashboard.
 - `desktop/` — the desktop app (Rust, a Cargo workspace of its own; Electron on Linux, Tauri on Windows): `quotum-core` as
   the machine's agent, the hub bundled into one file and run in its local mode by the
   Node the app carries, and the hub's board in a window.
@@ -42,6 +43,13 @@ macOS and Windows, and builds the app on Windows and Linux and runs each build
 `holder.rs`, `activity.rs`, `desktop/src/hub.rs`) or start at login and can check only
 one system, say so.
 
+`npm run bench` in `hub/` (after `npm run build`) measures the board in headless Chrome
+against its budget (`hub/bench/budget.ts`): an idle board asks the hub nothing and
+renders nothing but what shows time, and a measurement shows on its card within a
+second, rendering nothing else. Run it when you change the dashboard and have Chrome
+(`QUOTUM_CHROME`, one on `PATH`, or `--cdp` to one already running); CI runs it on every
+push and fails over budget.
+
 `npm start` in `hub/` serves the built dashboard on `127.0.0.1:8080` (a new hub prints
 the setup code of the first account to its log). `npm run demo` in `hub/` serves it on
 throwaway data with every state the board knows, needing no network or account; see
@@ -64,7 +72,8 @@ is open.
   provider is an adapter in `agent/crates/core/src/providers/` that asks the provider's
   own command-line client.
 - **The protocol is a spec.** A change to what the agent sends or the hub answers goes
-  into `spec/ingest-v1.md` in the same commit, including its Privacy section.
+  into `spec/ingest-v1.md` in the same commit, including its Privacy section; a change to
+  the events the hub tells its dashboard, into `spec/dashboard-v1.md`.
 - **Released database layouts are frozen.** A new layout is a new step at the end of
   `hub/server/store/schema.ts`; never edit a released step.
 - **Two languages everywhere.** Every UI string goes into every catalog in
@@ -97,9 +106,13 @@ is open.
 - **Keep the board cheap to render.** Nothing on the page is `position: fixed` or has a
   fixed background, and widgets have no `backdrop-filter` (floating surfaces and the
   sticky bars may): whole-window repainting during scroll is expensive, especially
-  with software rendering. What shows time reads `useNow(step)`
-  (`hub/ui/lib/api.ts`) itself rather than a clock passed down from the board, and
-  polled state is set through `unlessSame`, so an unchanged answer renders nothing.
+  with software rendering. Nothing polls: data comes as the hub's events into the page's
+  store, and a widget reads its own part of it with a hook of `hub/ui/lib/board.ts`,
+  never the board passed down, so it renders only when that part changes. What shows
+  time is a small part of its own that reads `useClock(changesAt)` (`hub/ui/lib/clock.ts`)
+  with a `…ChangesAt` of its own beside the function that words it, tested to read the
+  same until then; nothing keeps a timer of its own (`hub/ui/test/timers.test.ts`), and
+  what shows time is marked `data-time`, as `npm run bench` counts it.
 - A card tells how its measurements go in the logo's dot and its news in marks in its
   tray, with the details in a tooltip or a panel, never in a line of its own; neither
   changes a card's height.

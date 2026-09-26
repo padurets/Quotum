@@ -25,8 +25,9 @@ accounts. This document explains how the parts work and why they are built this 
   React UI. It decides which device measures which subscription, stores measurements,
   applies the rules (what counts as spending, what is a reset, what is a gap) and
   serves the dashboard. It never talks to providers itself.
-- **spec/** — the ingest format, the contract between the two. Anything that speaks it
-  can deliver to a hub.
+- **spec/** — the contracts: the [ingest format](../spec/ingest-v1.md) between the two
+  (anything that speaks it can deliver to a hub), and the
+  [dashboard's events](../spec/dashboard-v1.md) between the hub and its page.
 - **desktop/** — the desktop app (Rust with a platform host): the agent's core, the hub and its board in one
   program for one machine (see [Desktop app](#desktop-app)).
 
@@ -378,14 +379,39 @@ and a request has 30 seconds to arrive in full.
 
 ## The dashboard
 
-A single-page React app served by the hub. It reads `/api/overview` every 10 seconds
-and re-reads history only when the overview's `revision` says the board's data changed;
-an answer the same as the one before renders nothing. What changes with time alone (how
-long ago, how soon, the freshness dot, whether the hub answers) reads a clock shared by
-the page, which ticks every 15 seconds, and every minute for the chart and the table:
-only that is rendered again, the board itself reads no clock. Nothing on the page is
-fixed and the widgets are not frosted, so a scroll paints only what comes into view,
-even in a WebKitGTK window that draws without the GPU.
+A single-page React app served by the hub. It asks nothing again and again: it opens one
+connection to its board's [events](../spec/dashboard-v1.md) (`GET /api/events`), and the
+hub tells it the board as it is, then each part of it that changes, within a tenth of a
+second. On the hub, whatever changes data says what it touched (a source, a board, a
+person); a moment later the hub puts the touched parts of every board being read
+together again (`hub/server/projection.ts`) and sends each reader only what differs from
+what it last got (`hub/server/events.ts`). What changes with time alone (a card going
+stale, a machine's agents no longer shown, a holder falling silent, a past reset leaving
+the history) it tells when that comes: it keeps the moment each board being read next
+changes by itself. A board nobody reads costs nothing. Every connection starts with the
+board as it is, so a dropped connection, a sleep, a restart of the hub or a tab hidden
+for half a minute (the page lets its connection go then) lose nothing; where a proxy
+holds a stream back, the page reads the same events with long polls for ten minutes. A
+session keeps at most 8 readers, a person 16 and the hub 2000; a new one takes the place
+of the oldest in its limit, so tabs a sleeping laptop left behind never keep a new one
+out. Over plain HTTP/1.1 a browser opens at most six connections to one host and every
+open board keeps one: behind a proxy that speaks HTTP/2 (Caddy in `deploy/`) that is no
+limit, without one more than about five tabs of a hub in one browser wait for each other.
+
+In the page, the events go through one reducer into a store (`hub/ui/lib/board.ts`); each
+widget reads its own part of it and renders only when that part changes (a card, its
+agents, its pace, the list of agents, the chart), and a part the same as before stays
+the same object. What shows time (how long ago, how soon, the freshness dot, the plan's
+mark, that the hub cannot be reached) is a small part of its own that tells the page's
+one clock (`hub/ui/lib/clock.ts`) when it reads otherwise, and renders only then: the
+clock keeps one timer for the whole page, none on a hidden tab, and counts in the hub's
+time as the hub's messages tell it. The chart and the table move on a cell of the
+history's grid at a time. History is read again when the hub tells of measurements the
+chart has not shown, at most every ten seconds for a period ending now. No component
+keeps a timer of its own, and `npm run bench` checks that an idle board asks the hub
+nothing and renders nothing but what shows time. Nothing on the page is fixed and the
+widgets are not frosted, so a scroll paints only what comes into view, even in a
+WebKitGTK window that draws without the GPU.
 A card's dot by the logo tells how its measurements go: its colour, and in its tooltip
 when it was measured and, while the hub sets the pace, when the next measurement comes
 and why, each a line of its own.
@@ -393,8 +419,9 @@ A board has two areas: the cards (and the list of running agents, when turned on
 which are about now and show every window, and under
 them the analytics, the chart and the table, which show one window type over one period
 chosen in the analytics' own head. Each area is arranged on its own grid.
-The board's view comes with the overview; the owner's changes show at once and are
-saved about half a second later, one request per burst (a drag, typing a plan). What
+The board's view comes with its events; the owner's changes show at once and are saved
+about half a second later, one request per burst (a drag, typing a plan), and stay on
+screen until the hub tells the view it saved. What
 is only about how one person looks (the analytics' period and window type, the chart's
 horizon, lines switched off in the legend, whether it draws the plan and the forecast, reset announcements, the lock on the widgets,
 the agents table's sort order, the chosen board and language) stays in their browser.
@@ -408,7 +435,7 @@ the answer it has until the next one comes; a run of quick steps asks the hub on
 where it stops, and the latest few ranges read whole are kept on the page for each board,
 so stepping back and forth over them asks nothing. They are kept for the board's sources
 as they were: a source added to the board has a range read again. Measurements an agent
-delivers late, into a range already kept, show after a reload.
+delivers late, into a range already kept, have it read again when the hub tells of them.
 
 Both agent lists put working sessions first, then the ones that worked most recently,
 then the newest. The card's panel keeps machine groups, ordered by each one's most
@@ -467,9 +494,10 @@ command-line secrets. EOF tells Electron to quit if the controller dies. A secon
 sends only an Open signal through a per-user Unix socket; the receiver checks peer UID.
 
 Electron starts with renderer sandboxing, context isolation and no Node integration in
-the page. A preload exposes only the six app commands. The main process checks the
-sender is the current main frame and its origin is the current hub; Rust repeats the
-origin check before dispatch. Startup/error pages at `quotum://localhost` can only
+the page. A preload exposes only the six app commands and a way to hear the app's state.
+The main process checks the sender is the current main frame and its origin is the
+current hub; Rust repeats the origin check before dispatch. The app's state goes to the
+window over the same channel and on only to the main frame of the current hub. Startup/error pages at `quotum://localhost` can only
 quit. Navigation, new windows, downloads and permission requests are restricted. No
 inherited Node/Electron debugging switches reach the window process.
 
@@ -506,7 +534,8 @@ the app's environment (`PATH`, the home and temporary folders, the language, and
 `QUOTUM_RESETS`), nothing `NODE_*`. The hub still checks Host and Origin as on a server,
 and the agent reaches it with no proxy in between. The window's bridge to the app is
 open only to pages of the hub's current origin and to six commands: its state, saving
-settings, taking over, start at login, entering again and quitting. The window goes
+settings, taking over, start at login, entering again and quitting; on Windows a seventh,
+`watch_state`, gives the board a channel to hear the app's state on. The window goes
 nowhere else; links open in the system's browser. The app's folder is this user's only.
 
 **Files.** The app's folder is `%LOCALAPPDATA%\com.padurets.quotum` on Windows and
@@ -556,8 +585,12 @@ settings: a change is written to `config.toml` at once, keeping comments, symbol
 and permissions. Windows uses `ReplaceFileW` to preserve an existing file's ACL;
 its temporary file receives the existing DACL when it is created, and its inherited ACEs
 are restored before any contents are written. Unix temporary files start private. New Windows files inherit the profile
-folder's ACL. Saves are serialized, and the board receives the accepted settings at
-once while restarting measurements is debounced. The board waits for each state-changing
+folder's ACL. The app sends its state to the board whenever it changes (the agent's
+state, a measurement, the settings, start at login), numbered, so the board keeps the
+newest; the answer of each command carries the same number. Whatever changes it only
+wakes the app's ticker, which puts the state together and sends it, one at a time, off
+the window's own thread. Saves are serialized, and the board receives the accepted
+settings at once while restarting measurements is debounced. The board waits for each state-changing
 command's response before issuing the next; quitting and reentry do not wait in that queue.
 A change made in the file by hand is
 picked up within seconds.

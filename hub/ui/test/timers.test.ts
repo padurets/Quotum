@@ -7,7 +7,7 @@ import {fileURLToPath} from 'node:url';
 const UI = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 /**
- * Where the page may keep a timer (docs/architecture.md, "Dashboard"): the connection to
+ * Where the page may keep a timer (docs/architecture.md, "The dashboard"): the connection to
  * the hub, the one clock, the history loader, retries of the first session, saving the
  * view and short-lived gestures and tooltips. Anything that shows time asks the clock
  * (lib/clock.ts), anything that shows data waits for the hub's events: a timer of its own

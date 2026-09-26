@@ -76,7 +76,19 @@ and start the demo again.
 
 A new state of the board gets an entry in the catalogue, with the codes it shows in
 `expect` (the file's header explains them): `npm test` then checks it holds, and it is
-on the board for the next person.
+on the board for the next person. `npm run demo -- --still` keeps the board still:
+nothing is measured after the start, and no card goes stale for three hours.
+
+`npm run bench` (after `npm run build`) runs such a still demo, opens Ana's board in
+headless Chrome and holds it to the budget in `hub/bench/budget.ts`: for two minutes
+(five without `--ci`) the idle page asks the hub nothing, is told nothing but `ping`,
+renders and changes nothing but what shows time (and that no more than it reads
+otherwise), and spends a fifth of the script it did before it was driven by events;
+then twenty measurements of one card each show on it within a second, rendering no
+other card. It prints what it measured as JSON and exits 1 over budget. It needs Chrome:
+`QUOTUM_CHROME`, `google-chrome` or `chromium` on `PATH`, or `--cdp http://host:port` to
+one already running. CI runs it on every push; run it yourself when you change the
+dashboard and have Chrome.
 
 ## Pull requests
 
@@ -99,7 +111,8 @@ on the board for the next person.
   in `hub/ui/i18n`; the type checker and the tests will tell you if one is missing.
 - **Both READMEs say the same thing.** A change to `README.md` goes into `README.ru.md` too.
 - **The protocol is a spec.** Anything that changes what the agent sends or what the hub
-  answers goes into [spec/ingest-v1.md](spec/ingest-v1.md) in the same change.
+  answers goes into [spec/ingest-v1.md](spec/ingest-v1.md) in the same change; what the
+  hub tells its dashboard, into [spec/dashboard-v1.md](spec/dashboard-v1.md).
 - **A released database layout never changes.** A new layout is a new step at the end of
   `hub/server/store/schema.ts`; `hub/server/test/schema.test.ts` guards the released ones.
 - **The agent stays out of the way and out of your secrets.** It never reads provider
