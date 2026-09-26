@@ -11,11 +11,11 @@ import {
   onboardingText,
   takeOverText,
   takeOverTitle,
-  type AgentState,
   type AppState,
   type Patch,
   type ProviderSettings,
 } from '../lib/app';
+import {useApp} from '../lib/board';
 import {rich, t} from '../i18n';
 import {Brand, Modal} from './Kit';
 import {SwitchRow} from './Popover';
@@ -65,7 +65,8 @@ export function OpenInApp() {
  * over. The question cannot be closed: the answers are to take over or to quit (closing
  * the window quits too). After a failed attempt it says why and offers another.
  */
-export function TakeOver({agent, onState}: {agent: AgentState | undefined; onState: (state: AppState) => void}) {
+export function TakeOver({onState}: {onState: (state: AppState) => void}) {
+  const agent = useApp()?.agent;
   const [busy, setBusy] = useState(false);
   if (!asksToTakeOver(agent)) return null;
   const text = takeOverText(agent.holder);
@@ -100,7 +101,8 @@ export function TakeOver({agent, onState}: {agent: AgentState | undefined; onSta
 }
 
 /** The agent cannot measure: why, in the page's words, and what to do. */
-export function AgentBanner({state}: {state: AppState | null}) {
+export function AgentBanner() {
+  const state = useApp();
   if (state?.agent.state !== 'failed') return null;
   const {cause, error} = state.agent;
   return (
@@ -118,7 +120,8 @@ export function AgentBanner({state}: {state: AppState | null}) {
 }
 
 /** An empty board in the app: whether numbers come soon, and where the settings are. */
-export function LocalOnboarding({agent, onSettings}: {agent: AgentState | undefined; onSettings: () => void}) {
+export function LocalOnboarding({onSettings}: {onSettings: () => void}) {
+  const agent = useApp()?.agent;
   return (
     <section className="panel onboarding">
       <h2>{t('local.onboardingTitle')}</h2>

@@ -3,8 +3,8 @@ import type {Kind} from '../lib/types';
 import {setPrefs, usePrefs} from '../lib/prefs';
 import {PERIODS, periodLabel, periodOf, step, stepChangesAt} from '../lib/periods';
 import {goTo, setTimeRange, timeRangeLabel, useTimeRange} from '../lib/timeRange';
-import {useHistoryStart} from '../lib/board';
 import {hubNow, useClock} from '../lib/clock';
+import {useHistoryBegins} from '../lib/history';
 import {t} from '../i18n';
 import {Segmented} from './Kit';
 import {Popover} from './Popover';
@@ -136,7 +136,7 @@ function PeriodSwitch({historyStart}: {historyStart: number}) {
  */
 export function AnalyticsHead() {
   const {kind} = usePrefs();
-  const historyStart = useHistoryStart() ?? 0;
+  const historyStart = useHistoryBegins();
   return (
     <div className="analytics-head">
       <h2>{t('analytics.title')}</h2>

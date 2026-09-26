@@ -7,9 +7,10 @@ import type {ConnectionStatus, HubEvent, PageEvent} from './board';
  * connection starts with the board as it is, so a dropped one, a sleep, a restart of the
  * hub or a hidden tab shown again lose nothing.
  *
- * What it does in each state is the table "Connection" of the task's design; the rows
- * are named in the code. Times of its own timers are the page's (`Date.now()`); when the
- * connection was lost is the hub's (`hubNow`), as the header counts it.
+ * What it does in each state is the table in docs/architecture.md, "The page's
+ * connection"; the code names its rows. Times of its own timers are the page's
+ * (`Date.now()`); when the connection was lost is the hub's (`hubNow`), as the header
+ * counts it.
  */
 
 /** Where a stream that does not work goes: long polls, for this long, then a stream again. */
@@ -109,6 +110,8 @@ export class Live {
   private pollUntil = 0;
   private lostAt: number | null = null;
   private lastByteAt = 0;
+  /** When the tab was hidden, by the page's clock; null while it shows. */
+  private hiddenAt: number | null = null;
   /** Streams in a row that ended before their first ping, not by the page nor with `bye`. */
   private short = 0;
   private backoff = 0;
@@ -126,28 +129,30 @@ export class Live {
 
   constructor(private readonly env: LiveEnv) {}
 
-  /** Row 1: another board (or the first). */
+  /** Row 1: another board (or the first). A tab hidden meanwhile keeps counting (row 18). */
   open(board: string) {
     this.drop();
-    this.clear('hide');
     this.board = board;
     this.env.dispatch({type: 'board-open', id: board});
     this.connect();
     if (!this.env.visible()) this.hidden();
   }
 
-  /** The page leaves the board: nothing more is asked or heard. */
+  /** The page leaves the board: nothing more is asked or heard, and nothing of it is kept. */
   close() {
     this.drop();
     this.clear('hide');
     this.board = null;
     this.status = 'stopped';
+    this.lostAt = null;
+    this.env.dispatch({type: 'board-close'});
   }
 
   /** The tab was shown or hidden. */
   visibility() {
     if (this.status === 'stopped') return;
     if (!this.env.visible()) return this.hidden();
+    this.hiddenAt = null;
     this.clear('hide');
     // Row 2.
     if (this.status === 'paused') return this.connect();
@@ -247,10 +252,12 @@ export class Live {
     this.short = 0;
   }
 
-  /** Row 18: hidden for 30 s, the connection goes; the tab shown again connects anew. */
+  /** Row 18: hidden for 30 s since it was hidden, the connection goes; the tab shown again connects anew. */
   private hidden() {
+    const now = this.env.now();
+    this.hiddenAt ??= now;
     if (this.status === 'paused' || this.timers.has('hide')) return;
-    this.after('hide', HIDDEN_MS, () => {
+    this.after('hide', Math.max(0, this.hiddenAt + HIDDEN_MS - now), () => {
       if (this.env.visible() || this.status === 'stopped') return;
       this.drop();
       this.enter('paused');
@@ -337,7 +344,8 @@ export class Live {
     }
     if (!current()) return void response.body?.cancel().catch(() => {});
     if (response.status === 401) return this.unauthorized();
-    if (response.status === 404) return this.gone();
+    if (response.status === 404 && (await boardNotFound(response))) return current() ? this.gone() : undefined;
+    if (!current()) return;
     if (response.status !== 200 || !response.headers.get('content-type')?.startsWith('text/event-stream') || !response.body) {
       void response.body?.cancel().catch(() => {});
       return this.retry();
@@ -462,7 +470,7 @@ export class Live {
       });
       if (!current()) return;
       if (response.status === 401) return this.unauthorized();
-      if (response.status === 404) return this.gone();
+      if (response.status === 404 && (await boardNotFound(response))) return current() ? this.gone() : undefined;
       if (response.status !== 200) throw new Error(String(response.status));
       answer = await response.json();
       if (!current()) return;
@@ -497,6 +505,12 @@ export class Live {
     this.attempt++;
     void this.poll(this.attempt);
   }
+}
+
+/** Row 8: a `404` is the hub's word that the board is gone only when it says so; a proxy's, or a hub's that knows no events, is not. */
+async function boardNotFound(response: Response): Promise<boolean> {
+  const body = await response.json().catch(() => null);
+  return (body as {error?: unknown} | null)?.error === 'board_not_found';
 }
 
 const inBrowser = typeof window !== 'undefined';

@@ -11,9 +11,9 @@ import {HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
 import {chartEvents, chartResets, linesOf} from '../lib/lines';
 import {Chart, type Marker} from './Chart';
 import type {ForecastLine, PlanLine} from '../lib/readout';
-import {useHistoryStart, useNamed, usePastResets, useResetsFor} from '../lib/board';
+import {useNamed, usePastResets, useResetsFor} from '../lib/board';
 import {hubNow, useClock} from '../lib/clock';
-import {useHistory} from '../lib/history';
+import {useHistory, useHistoryBegins} from '../lib/history';
 import {t, useLocale} from '../i18n';
 import {Segmented} from './Kit';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
@@ -69,7 +69,7 @@ function HistorySettings({arrange, planAvailable, forecastAvailable, horizonNote
  */
 export const History = memo(function History({arrange}: {arrange: Arrange}) {
   const {history, loading} = useHistory();
-  const sources = useNamed();
+  const sources = useNamed(arrange.view.names);
   const prefs = usePrefs();
   const {view} = arrange;
   // Series names and markers are text: they are rebuilt when the language changes.
@@ -84,9 +84,7 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
   const lines = useMemo(() => linesOf(history, sources, view, prefs.kind), [history, sources, prefs.kind, view.windows, view.hidden, view.colors, locale]);
 
   const visible = useMemo(() => lines.filter(line => !prefs.muted[line.key]), [lines, prefs.muted]);
-  // Where the history starts as the answer on screen says, else as the board's snapshot does.
-  const snapshotStart = useHistoryStart();
-  const historyStart = history?.historyStart ?? snapshotStart ?? 0;
+  const historyStart = useHistoryBegins();
   const frame = frameOf(selected, prefs, now, historyStart);
   const {from, future} = frame;
   // Measurements end at the page's clock, or at the hub's when that is ahead and the answer

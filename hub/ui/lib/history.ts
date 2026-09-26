@@ -1,5 +1,5 @@
 import {useSyncExternalStore} from 'react';
-import {page} from './board';
+import {page, useHistoryStart} from './board';
 import {ApiError, call} from './http';
 import {onPrefs, prefs} from './prefs';
 import {dropTimeRange, onTimeRange, timeRange, timeRangeKey, type TimeRange} from './timeRange';
@@ -246,4 +246,13 @@ if (typeof window !== 'undefined') {
 /** The history on screen, and whether another is loading in its place. */
 export function useHistory(): Shown {
   return useSyncExternalStore(loader.subscribe, loader.get, loader.get);
+}
+
+const answeredStart = () => loader.get().history?.historyStart ?? null;
+
+/** Where the board's history begins: as the answer on screen says, else as the board's snapshot did (spec: `historyStart`). */
+export function useHistoryBegins(): number {
+  const answered = useSyncExternalStore(loader.subscribe, answeredStart, answeredStart);
+  const snapshot = useHistoryStart();
+  return answered ?? snapshot ?? 0;
 }

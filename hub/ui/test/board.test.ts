@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {INITIAL, reduce, titlesOf, type HubEvent, type PageEvent, type PageState, type Snapshot} from '../lib/board';
+import {INITIAL, metaOf, reduce, titlesOf, type HubEvent, type PageEvent, type PageState, type Snapshot} from '../lib/board';
 import {createStore, selector, shallowEqual} from '../lib/store';
 import type {Card} from '../lib/types';
 
@@ -179,4 +179,24 @@ test('the names of the cards stay the same object while no name changes', () => 
   assert.equal(titlesOf(reduce(s, hub({type: 'card', data: card('s1', 10)})).board), titles, 'numbers changed, not names');
   const named = reduce(s, hub({type: 'view', data: {view: {...VIEW, names: {s2: 'Work'}}}}));
   assert.equal(titlesOf(named.board).s2.title, 'Work');
+  assert.equal(titlesOf(s.board, {s1: 'Home'}).s1.title, 'Home', 'as the owner names it on screen, before the hub saved it');
+});
+
+test('a board is shown only as the one opened: another still in the store is nothing, and closing keeps nothing of it', () => {
+  const s = run(hub({type: 'snapshot', data: snapshot()}), {type: 'connection', status: 'retrying', lostAt: 5});
+  assert.equal(metaOf(s, 'b1')?.id, 'b1');
+  assert.equal(metaOf(s, 'b2'), null, 'the next board opens: the last one is not drawn under its name');
+  const closed = reduce(s, {type: 'board-close'});
+  assert.deepEqual([closed.board, closed.connection], [null, INITIAL.connection]);
+  assert.equal(closed.boards, s.boards, 'the list of boards is the session’s');
+});
+
+test("the trackers' news keeps each provider's the same object while it says the same", () => {
+  const claude = {scheduled: null, watch: null, latest: null, policy: null, credit: {name: 'Claude Resets', url: 'https://y'}};
+  const both = {...snapshot().resets, resets: {...snapshot().resets.resets, claude}};
+  const s = run(hub({type: 'snapshot', data: snapshot({resets: both})}));
+  const news = {...both, resets: {...both.resets, codex: {...both.resets.codex!, latest: {at: 5, url: 'https://x/1', text: 'reset'}}}};
+  const next = reduce(s, hub({type: 'resets', data: JSON.parse(JSON.stringify(news))}));
+  assert.notEqual(next.resets!.resets.codex, s.resets!.resets.codex);
+  assert.equal(next.resets!.resets.claude, s.resets!.resets.claude, 'the cards of the other provider read the same');
 });

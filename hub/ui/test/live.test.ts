@@ -64,7 +64,7 @@ const SNAPSHOT = {
   resets: {resets: {}, trackers: [], past: {}},
 };
 
-function harness(options: {visible?: boolean; skew?: number; script?: string | null; storage?: 'none' | Map<string, string>} = {}) {
+function harness(options: {visible?: boolean; skew?: number; script?: string | null; storage?: 'none' | Map<string, string>; random?: number} = {}) {
   const timers = new Timers(Date.parse('2026-09-26T12:00:00Z'));
   const asked: Asked[] = [];
   const events: PageEvent[] = [];
@@ -120,7 +120,7 @@ function harness(options: {visible?: boolean; skew?: number; script?: string | n
     now: () => timers.t,
     setTimeout: timers.set,
     clearTimeout: timers.clear,
-    random: () => 0.5,
+    random: () => options.random ?? 0.5,
     visible: () => visible,
     hubNow: (at = timers.t) => at + (options.skew ?? 0),
     heard: now => void heard.push(now),
@@ -137,6 +137,20 @@ function harness(options: {visible?: boolean; skew?: number; script?: string | n
   const live = new Live(env);
   const last = () => asked.at(-1)!;
   const connection = () => events.filter(e => e.type === 'connection').at(-1) as Extract<PageEvent, {type: 'connection'}> | undefined;
+  /** Opens the board and brings long polls live: ten seconds without an answer, then a lease with hello and snapshot. */
+  const gopoll = async () => {
+    live.open('b1');
+    await timers.advance(10 * S);
+    await last().json(200, {
+      lease: 'L',
+      now: timers.t,
+      events: [
+        {type: 'hello', data: {epoch: 'e1', now: timers.t, client: null, heartbeatMs: HEARTBEAT}},
+        {type: 'snapshot', data: SNAPSHOT},
+      ],
+    });
+    assert.equal(connection()?.status, 'polling');
+  };
   /** Opens the board and brings a stream live: hello and snapshot. */
   const golive = async () => {
     live.open('b1');
@@ -157,6 +171,7 @@ function harness(options: {visible?: boolean; skew?: number; script?: string | n
     last,
     connection,
     golive,
+    gopoll,
     hide: () => {
       visible = false;
       live.visibility();
@@ -239,6 +254,7 @@ test('row 4a: hello and snapshot, and then silence until the first ping is due: 
   const stream = await g.golive();
   await g.timers.advance(HEARTBEAT);
   await stream.write(frame('ping', {now: 1}));
+  assert.equal(g.heard.at(-1), 1, 'the hub’s clock as the ping tells it');
   await g.timers.advance(20 * S);
   assert.equal(g.asked.length, 1);
   assert.equal(g.connection()?.status, 'live');
@@ -286,6 +302,8 @@ test('row 6, 17: a long poll brings the board, then asks again at once, applying
   }
   assert.equal(h.last().url, '/api/events?board=b1', 'a stream again');
   assert.equal(h.connection()?.status, 'connecting');
+  for (const request of h.asked) assert.equal(request.headers['Quotum-Stream'], '1', 'in every request, polls too: the hub refuses one without');
+  assert.deepEqual(h.heard.slice(0, 3), [5, 5, 6], 'the hub’s clock as each answer tells it');
 });
 
 test('rows 7, 8, 11: 401 or bye unauthorized ends it for sign-in; 404 or bye gone drops the board and reads the session', async () => {
@@ -333,6 +351,61 @@ test('rows 7, 8, 11: 401 or bye unauthorized ends it for sign-in; 404 or bye gon
     ],
   });
   assert.deepEqual([p.said, p.hubEvents()], [['gone'], ['snapshot']]);
+
+  // While polling: 401 and 404 of the hub, and bye unauthorized, as in a stream.
+  for (const [status, error, said] of [
+    [401, 'unauthorized', 'unauthorized'],
+    [404, 'board_not_found', 'gone'],
+  ] as const) {
+    const q = harness();
+    await q.gopoll();
+    const asked = q.asked.length;
+    await q.last().json(status, {error});
+    assert.deepEqual(q.said, [said]);
+    await q.timers.advance(MIN);
+    assert.equal(q.asked.length, asked, 'nothing more');
+  }
+  const u = harness();
+  await u.gopoll();
+  const asked = u.asked.length;
+  await u.last().json(200, {lease: 'L', now: 1, events: [{type: 'bye', data: {reason: 'unauthorized'}}]});
+  assert.deepEqual(u.said, ['unauthorized']);
+  await u.timers.advance(MIN);
+  assert.equal(u.asked.length, asked);
+});
+
+test('row 8: a 404 that is not the hub’s word on the board (a proxy’s, a hub without events) is any other answer, tried again later', async () => {
+  const h = harness();
+  h.live.open('b1');
+  await flush();
+  await h.last().json(404, {error: 'not_found'});
+  assert.deepEqual([h.said, h.connection()?.status], [[], 'retrying']);
+  await h.timers.advance(S);
+  await h.last().json(404, {});
+  await h.timers.advance(S);
+  assert.equal(h.asked.length, 2, 'backing off: two seconds the second time');
+  await h.timers.advance(S);
+  assert.equal(h.asked.length, 3);
+
+  const g = harness();
+  await g.gopoll();
+  await g.last().json(404, 'Not Found');
+  assert.deepEqual([g.said, g.connection()?.status], [[], 'retrying']);
+  assert.ok(!g.events.some(e => e.type === 'board-gone'));
+});
+
+test('closing lets the board and its connection go: signed in again later, nothing old shows', async () => {
+  const h = harness();
+  h.live.open('b1');
+  await flush();
+  await h.last().json(503, {});
+  assert.notEqual(h.connection()?.lostAt, null);
+  h.live.close();
+  assert.deepEqual(h.events.at(-1), {type: 'board-close'});
+  await h.timers.advance(10 * MIN);
+  h.live.open('b1');
+  await flush();
+  assert.deepEqual(h.connection(), {type: 'connection', status: 'connecting', lostAt: h.timers.t}, 'lost since now, not ten minutes ago');
 });
 
 test('row 9: any other answer, a proxy’s page, the network: tried again later, longer each time, 429 included', async () => {
@@ -362,7 +435,7 @@ test('row 9a, 14: three streams in a row that end before their first ping: long 
   const h = harness();
   h.live.open('b1');
   await flush();
-  // Backoffs of 1, 2 and 5 s, and each retry answered before its 10 s run out.
+  // Backoffs of 1, 1 and 2 s (the second came live, which starts them over), each retry answered before its 10 s run out.
   for (let i = 0; i < 3; i++) {
     assert.equal(h.last().url, '/api/events?board=b1');
     const stream = h.last().stream();
@@ -392,10 +465,11 @@ test('row 9a, 14: three streams in a row that end before their first ping: long 
 });
 
 test('rows 12, 13: bye restart comes back in seconds, bye limit not before 30 s, also when the page wakes', async () => {
-  const h = harness();
+  const h = harness({skew: MIN});
   let stream = await h.golive();
-  await stream.write(frame('bye', {reason: 'restart'}));
-  assert.equal(h.connection()?.status, 'retrying');
+  await h.timers.advance(5 * S);
+  await stream.write(frame('ping', {now: 1}) + frame('bye', {reason: 'restart'}));
+  assert.deepEqual(h.connection(), {type: 'connection', status: 'retrying', lostAt: h.timers.t + MIN}, 'lost now, by the hub');
   await h.timers.advance(3 * S);
   assert.equal(h.asked.length, 2, 'within 1–5 s');
 
@@ -407,6 +481,97 @@ test('rows 12, 13: bye restart comes back in seconds, bye limit not before 30 s,
   assert.equal(h.asked.length, 2, 'focus two seconds on changes nothing');
   await h.timers.advance(15 * S);
   assert.equal(h.asked.length, 3);
+
+  // A second at the least, however the dice fall.
+  const g = harness({random: 0});
+  const next = await g.golive();
+  await next.write(frame('bye', {reason: 'restart'}));
+  await g.timers.advance(999);
+  assert.equal(g.asked.length, 1);
+  await g.timers.advance(1);
+  assert.equal(g.asked.length, 2);
+});
+
+test('events that come after bye in the same chunk are not heard', async () => {
+  const h = harness();
+  const stream = await h.golive();
+  await stream.write(frame('bye', {reason: 'restart'}) + frame('card', {id: 'late'}));
+  assert.deepEqual(h.hubEvents(), ['snapshot']);
+});
+
+test('row 3: the answer came, and its hello and snapshot have ten seconds from then', async () => {
+  const h = harness();
+  h.live.open('b1');
+  await h.timers.advance(9 * S);
+  h.last().stream();
+  await flush();
+  await h.timers.advance(9 * S);
+  assert.equal(h.asked.length, 1, 'nine seconds after the answer: still waiting');
+  await h.timers.advance(S);
+  assert.match(h.last().url, /mode=poll$/);
+});
+
+test('row 9: a first poll answer without the board is not the hub’s: tried again later', async () => {
+  const h = harness();
+  h.live.open('b1');
+  await h.timers.advance(10 * S);
+  await h.last().json(200, {lease: 'L', now: 1, events: []});
+  assert.equal(h.connection()?.status, 'retrying');
+  await h.timers.advance(S);
+  assert.match(h.last().url, /mode=poll$/, 'polls still, a new lease');
+});
+
+test('row 16: once the time for polls is over, a retry opens a stream', async () => {
+  const h = harness();
+  h.live.open('b1');
+  await h.timers.advance(10 * S);
+  const began = h.timers.t;
+  let back: number | null = null;
+  while (h.timers.t - began < 12 * MIN) {
+    if (!h.last().url.includes('mode=poll')) {
+      back = h.timers.t;
+      break;
+    }
+    await h.last().json(503, {});
+    await h.timers.advance(30 * S);
+  }
+  assert.ok(back !== null && back - began >= 10 * MIN, `a stream again ${back === null ? 'never' : `after ${(back - began) / S} s`}`);
+});
+
+test('backoff starts over once live or polling', async () => {
+  const h = harness();
+  h.live.open('b1');
+  await flush();
+  await h.last().json(503, {});
+  await h.timers.advance(S);
+  await h.last().json(503, {});
+  await h.timers.advance(2 * S);
+  const stream = h.last().stream();
+  await stream.write(frame('hello', {epoch: 'e', now: 1, client: null, heartbeatMs: HEARTBEAT}) + frame('snapshot', SNAPSHOT) + frame('ping', {now: 1}));
+  await stream.end();
+  const asked = h.asked.length;
+  await h.timers.advance(S);
+  assert.equal(h.asked.length, asked + 1, 'one second again, not five');
+
+  const g = harness();
+  g.live.open('b1');
+  await g.timers.advance(10 * S);
+  await g.last().json(503, {});
+  await g.timers.advance(S);
+  await g.last().json(503, {});
+  await g.timers.advance(2 * S);
+  await g.last().json(200, {
+    lease: 'L',
+    now: 1,
+    events: [
+      {type: 'hello', data: {epoch: 'e', now: 1, client: null, heartbeatMs: HEARTBEAT}},
+      {type: 'snapshot', data: SNAPSHOT},
+    ],
+  });
+  await g.last().json(503, {});
+  const polled = g.asked.length;
+  await g.timers.advance(S);
+  assert.equal(g.asked.length, polled + 1, 'one second again after polling');
 });
 
 test('a lease let go for a newer reader: its tombstone in a poll answer keeps the page away 30 s, a focus too', async () => {
@@ -488,6 +653,39 @@ test('row 15a: waking while connecting or polling reconnects only when the attem
   assert.equal(g.asked.length, polls + 1);
   assert.match(g.last().url, /mode=poll$/, 'still polls, a new lease');
   assert.deepEqual(g.connection(), {type: 'connection', status: 'connecting', lostAt: since});
+});
+
+test('row 15a: the attempt’s own timer held up by a sleep is a wake: opened again in the same mode, not long polls', async () => {
+  const h = harness();
+  h.live.open('b1');
+  await flush();
+  await h.timers.advance(20 * S, true);
+  assert.equal(h.asked.length, 2);
+  assert.equal(h.last().url, '/api/events?board=b1');
+});
+
+test('shown again is a wake: a stream found silent too long meanwhile is opened again', async () => {
+  const h = harness();
+  const stream = await h.golive();
+  await stream.write(frame('ping', {now: 1}));
+  h.hide();
+  h.timers.t += 2 * MIN;
+  h.show();
+  await flush();
+  assert.equal(h.asked.length, 2);
+});
+
+test('row 18: a tab hidden keeps counting from when it was hidden, when it is given another board meanwhile', async () => {
+  const h = harness();
+  await h.golive();
+  h.hide();
+  await h.timers.advance(25 * S);
+  h.live.open('b2');
+  await h.timers.advance(5 * S);
+  assert.equal(h.connection()?.status, 'paused');
+  h.show();
+  await flush();
+  assert.equal(h.last().url, '/api/events?board=b2');
 });
 
 test('row 16, 18, 2: a tab hidden for 30 s lets go; shown again, it connects anew; one opened hidden counts from opening', async () => {

@@ -161,7 +161,7 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
   useLocale();
   const lineup = useLineup();
   const sessions = useSessionsOf(lineup);
-  const titles = useTitles();
+  const titles = useTitles(arrange.view.names);
   const sources = useMemo(
     () => lineup.flatMap((id, i): AgentSource[] => (titles[id] ? [{id, provider: titles[id].provider, title: titles[id].title, sessions: sessions[i]}] : [])),
     [lineup, sessions, titles],

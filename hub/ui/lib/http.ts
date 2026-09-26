@@ -14,8 +14,8 @@ export class ApiError extends Error {
 }
 
 /**
- * The one way the page talks to the hub: JSON in and out, no caching, a timeout, and a
- * 401 announced to whoever keeps the session.
+ * How the page asks the hub: JSON in and out, no caching, a timeout, and a 401 announced
+ * to whoever keeps the session. The hub's events come their own way (lib/live.ts).
  */
 export async function call<T>(method: 'GET' | 'POST' | 'DELETE', url: string, body?: unknown, timeoutMs = 12_000): Promise<T> {
   const response = await fetch(url, {

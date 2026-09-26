@@ -78,6 +78,8 @@ export type PageEvent =
   | {type: 'session-boards'; boards: Board[]}
   /** Another board is opened: what the page had of the last one goes. */
   | {type: 'board-open'; id: string}
+  /** The page leaves the board (signed out, its board gone): nothing of it, nor of its connection, is kept. */
+  | {type: 'board-close'}
   /** A board is gone, or the reader is off it. */
   | {type: 'board-gone'; id: string}
   | {type: 'board-created'; board: Board}
@@ -106,7 +108,8 @@ function only<T>(record: Record<string, T>, ids: string[]): Record<string, T> {
 
 function withResets(old: HubResets | null, next: HubResets): HubResets {
   // When the trackers were asked changes every round: it is taken, and nothing else is new because of it.
-  return {resets: keep(old?.resets, next.resets), trackers: next.trackers, past: keep(old?.past, next.past)};
+  // Each provider's news stays the same object while it says the same: a card reads only its own.
+  return {resets: keepEach(old?.resets, next.resets), trackers: next.trackers, past: keep(old?.past, next.past)};
 }
 
 function snapshot(state: PageState, data: Snapshot): PageState {
@@ -194,6 +197,8 @@ export function reduce(state: PageState, event: PageEvent): PageState {
     }
     case 'board-open':
       return state.board === null ? state : {...state, board: null};
+    case 'board-close':
+      return state.board === null && state.connection === INITIAL.connection ? state : {...state, board: null, connection: INITIAL.connection};
     case 'board-gone':
       return {...state, boards: state.boards?.filter(b => b.id !== event.id) ?? null, board: state.board?.id === event.id ? null : state.board};
     case 'board-created':
@@ -213,7 +218,9 @@ const NO_PAST: PastResets = {};
 const usePage = <T>(select: (state: PageState) => T, equal?: (a: T, b: T) => boolean) => useSelect(page, select, equal);
 
 export const useBoardId = () => usePage(s => s.board?.id ?? null);
-export const useBoardMeta = () => usePage(s => s.board?.meta ?? null);
+/** The open board's name and kind, once the hub told it: nothing of another board still in the store before this one opens. */
+export const metaOf = (state: PageState, board: string) => (state.board?.id === board ? state.board.meta : null);
+export const useBoardMeta = (board: string) => usePage(s => metaOf(s, board));
 /** The reader's role on the open board: their own, from their list of boards. */
 export const useRole = () => usePage(s => s.boards?.find(b => b.id === s.board?.id)?.role ?? null);
 export const useServerView = () => usePage(s => s.board?.view ?? null);
@@ -239,28 +246,31 @@ let titles: {key: string; value: Record<string, Title>} = {key: '', value: {}};
 
 /**
  * Every source of the open board named (`titled`): by the owners when that tells them
- * apart, or as the board's owner named it. The same object while no name changes.
+ * apart, or as the board's owner named it, by the view on screen (`names`: the owner's
+ * changes before they are saved) or else the one the hub told. The same object while no
+ * name changes.
  */
-export function titlesOf(board: BoardState | null): Record<string, Title> {
+export function titlesOf(board: BoardState | null, names: Record<string, string> = board?.view.names ?? {}): Record<string, Title> {
   const named = (board?.lineup ?? []).flatMap(id => {
     const card = board!.cards[id];
     return card ? [{id, provider: card.provider, owners: card.owners}] : [];
   });
-  const key = JSON.stringify([named, board?.view.names ?? {}]);
-  if (key !== titles.key) titles = {key, value: Object.fromEntries(titled(named, board?.view.names).map(s => [s.id, {title: s.title, provider: s.provider}]))};
+  const key = JSON.stringify([named, names]);
+  if (key !== titles.key) titles = {key, value: Object.fromEntries(titled(named, names).map(s => [s.id, {title: s.title, provider: s.provider}]))};
   return titles.value;
 }
 
-export const useTitles = () => usePage(s => titlesOf(s.board));
+/** The names of the board's cards (`titlesOf`), by the view on screen when given. */
+export const useTitles = (names?: Record<string, string>) => usePage(s => titlesOf(s.board, names), sameJson);
 /** One card's name on the board (`titlesOf`). */
-export const useTitle = (id: string) => usePage(s => titlesOf(s.board)[id]?.title ?? '');
+export const useTitle = (id: string, names?: Record<string, string>) => usePage(s => titlesOf(s.board, names)[id]?.title ?? '');
 
 export type Named = Card & {title?: string};
 
 /** The board's cards in its order, each with its name: what the chart and the table draw. Not their agents or pace. */
-export function useNamed(): Named[] {
+export function useNamed(names?: Record<string, string>): Named[] {
   const cards = useCards(useLineup());
-  const titles = useTitles();
+  const titles = useTitles(names);
   return useMemo(() => cards.map(card => ({...card, title: titles[card.id]?.title})), [cards, titles]);
 }
 

@@ -9,6 +9,7 @@ import {ErrorLine, Field, LanguageSelect, Modal} from './Kit';
 import {SwitchRow} from './Popover';
 import {AppSection, Measuring} from './Desktop';
 import {inApp, settingsSections, type AppState} from '../lib/app';
+import {useApp} from '../lib/board';
 
 type Status = {busy?: boolean; done?: boolean; error?: unknown};
 
@@ -196,15 +197,17 @@ export function AccountPanel({
   onSignedOut,
   onClose,
   local,
-  app,
+  onAppState,
 }: {
   user: User;
   onChanged: () => Promise<void>;
   onSignedOut: () => void;
   onClose: () => void;
   local: boolean;
-  app: {state: AppState | null; onState: (state: AppState) => void};
+  /** The app's state as its commands answer it (lib/app.ts). */
+  onAppState: (state: AppState) => void;
 }) {
+  const appState = useApp();
   const signOut = async () => {
     await call('POST', '/api/auth/logout').catch(() => {});
     onSignedOut();
@@ -229,8 +232,8 @@ export function AccountPanel({
           <Password />
         </>
       )}
-      {sections.includes('measuring') && app.state && <Measuring state={app.state} onState={app.onState} />}
-      {sections.includes('app') && app.state && <AppSection state={app.state} onState={app.onState} />}
+      {sections.includes('measuring') && appState && <Measuring state={appState} onState={onAppState} />}
+      {sections.includes('app') && appState && <AppSection state={appState} onState={onAppState} />}
       <Browser title={t(local ? 'settings.view' : 'account.browser')} />
     </Modal>
   );

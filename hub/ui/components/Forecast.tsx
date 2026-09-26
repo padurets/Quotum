@@ -100,7 +100,7 @@ const PACE_FROM = 10 * 60_000;
  */
 export const Forecast = memo(function Forecast({arrange}: {arrange: Arrange}) {
   const {history, loading} = useHistory();
-  const sources = useNamed();
+  const sources = useNamed(arrange.view.names);
   const {view} = arrange;
   const {kind} = usePrefs();
   const selected = ofTimeRange(history);

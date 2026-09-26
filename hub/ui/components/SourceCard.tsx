@@ -385,7 +385,7 @@ function CardTray({source}: {source: Card}) {
 export const SourceCard = memo(function SourceCard({id, arrange, boardId, personal}: {id: string; arrange: Arrange; boardId: string; personal: boolean}) {
   useLocale();
   const source = useCard(id);
-  const title = useTitle(id);
+  const title = useTitle(id, arrange.view.names);
   const mine = useMine(id);
   if (!source) return null;
   const visible = source.windows.filter(w => !isWindowHidden(arrange.view, source.id, w.id));

@@ -400,6 +400,43 @@ out. Over plain HTTP/1.1 a browser opens at most six connections to one host and
 open board keeps one: behind a proxy that speaks HTTP/2 (Caddy in `deploy/`) that is no
 limit, without one more than about five tabs of a hub in one browser wait for each other.
 
+### The page's connection
+
+`hub/ui/lib/live.ts` does what this table says and nothing else; its code and tests name
+the rows. `mode` is a stream or long polls (for ten minutes once chosen); `short` counts
+streams in a row that ended before their first `ping`, closed neither by the page nor
+with `bye`; retries back off 1, 2, 5, 10 and 30 s, ±20%, and start over once `live` or
+`polling`. Its timers count in the page's clock; `lostAt`, when the connection was lost,
+in the hub's: entering `connecting` or `retrying` without one sets it to now unless a row
+says otherwise, `live` and `polling` clear it, `paused` keeps it, and the page leaving
+the board (signed out, the board gone) clears it with the board. Waking is `online`, the
+tab shown, `pageshow`, `focus`, or a timer of its own more than 5 s late (a sleep). The
+header says the hub cannot be reached once `lostAt` is 45 s old, unless `paused`.
+
+| # | From | When | Does | To | `lostAt` |
+|---|---|---|---|---|---|
+| 1 | any | another board opened | ends the connection; the page forgets the last board | `connecting` | as above |
+| 2 | `paused` | the tab shown | | `connecting` | as above |
+| 3 | `connecting` | `200` | waits 10 s more for `hello` and `snapshot` | `connecting` | |
+| 4 | `connecting` | `hello` and `snapshot` on a stream | watches for 2.5 heartbeats without a byte; waits a heartbeat and 10 s for the first `ping` | `live` | cleared |
+| 4a | `live` | no first `ping` in time, its timer on time (a proxy holds small frames back; a timer late is waking) | ends it; long polls | `connecting` | the last byte |
+| 5 | `connecting` (stream) | no answer in 10 s, or no `hello` and `snapshot` 10 s after it | ends it; long polls | `connecting` | as above |
+| 6 | `connecting` (polls) | an answer with `hello` and `snapshot` | asks again at once | `polling` | cleared |
+| 7 | `connecting`, `polling` | `401` | stops; the page asks who is signed in | | cleared |
+| 8 | `connecting`, `polling` | `404` with `board_not_found` | stops; the board leaves the list, the session is read again | | cleared |
+| 9 | `connecting`, `polling` | any other answer (`429`, `403`, `5xx`, a proxy's `404` or sign-in page), a first poll answer without the board, no network, a poll unanswered for 35 s | backs off (`429` never means long polls) | `retrying` | as above |
+| 9a | `connecting` (stream) | the stream ends after `200`, before `hello` and `snapshot` | as row 14 | `retrying` | as above |
+| 10 | `live` | `ping` or an event | the first `ping` clears `short` | `live` | |
+| 11 | `live`, `polling` | `bye unauthorized` or `bye gone` | as rows 7, 8 | | cleared |
+| 12 | `live`, `polling` | `bye restart` | tries again in 1 to 5 s | `retrying` | now |
+| 13 | `live`, `polling` | `bye limit` | tries again, not sooner than in 30 s | `retrying` | now |
+| 14 | `live` | the stream ends, neither by the page nor with `bye` | before its first `ping` it counts in `short`, and the third in a row means long polls; backs off | `retrying` | the last byte |
+| 15 | `live` | 2.5 heartbeats without a byte, found by its watch or on waking | opens again at once | `connecting` | the last byte |
+| 15a | `connecting`, `polling` | waking after the attempt's time (10 s, or 35 s for a poll) is up; waking before does nothing | opens again at once, the same way | `connecting` | as above; the last byte from `polling` |
+| 16 | `retrying` | its time came, or waking (not sooner than rows 12 and 13 allow) | a stream again once the time for polls is up; opens | `connecting` | as above |
+| 17 | `polling` | a poll answered | applies its events in order, none after `bye`; asks again at once, or opens a stream once the time for polls is up | `polling`, `connecting` | cleared |
+| 18 | any but `paused` | the tab hidden for 30 s, counted from when it was hidden, whatever board it was given meanwhile | ends the connection and its timers | `paused` | kept |
+
 In the page, the events go through one reducer into a store (`hub/ui/lib/board.ts`); each
 widget reads its own part of it and renders only when that part changes (a card, its
 agents, its pace, the list of agents, the chart), and a part the same as before stays
@@ -409,8 +446,9 @@ one clock (`hub/ui/lib/clock.ts`) when it reads otherwise, and renders only then
 clock keeps one timer for the whole page, none on a hidden tab, and counts in the hub's
 time as the hub's messages tell it. The chart and the table move on a cell of the
 history's grid at a time. History is read again when the hub tells of measurements the
-chart has not shown, at most every ten seconds for a period ending now. No component
-keeps a timer of its own, and `npm run bench` checks that an idle board asks the hub
+chart has not shown, at most every ten seconds for a period ending now. Nothing that
+shows data or time keeps a timer of its own (a tooltip or a gesture may wait a moment;
+`hub/ui/test/timers.test.ts` lists where), and `npm run bench` checks that an idle board asks the hub
 nothing and renders nothing but what shows time. Nothing on the page is fixed and the
 widgets are not frosted, so a scroll paints only what comes into view, even in a
 WebKitGTK window that draws without the GPU.

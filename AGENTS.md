@@ -111,7 +111,8 @@ is open.
   never the board passed down, so it renders only when that part changes. What shows
   time is a small part of its own that reads `useClock(changesAt)` (`hub/ui/lib/clock.ts`)
   with a `…ChangesAt` of its own beside the function that words it, tested to read the
-  same until then; nothing keeps a timer of its own (`hub/ui/test/timers.test.ts`), and
+  same until then; nothing that shows data or time keeps a timer of its own, only a
+  tooltip or a gesture may wait a moment (`hub/ui/test/timers.test.ts` lists where), and
   what shows time is marked `data-time`, as `npm run bench` counts it.
 - A card tells how its measurements go in the logo's dot and its news in marks in its
   tray, with the details in a tooltip or a panel, never in a line of its own; neither

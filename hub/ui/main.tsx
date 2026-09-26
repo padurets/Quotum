@@ -8,7 +8,7 @@ import {showBoard} from './lib/timeRange';
 import {usePath} from './lib/router';
 import {boardTitle, rememberBoard, rereadSession, useBoard, useSession, type Board, type Session, type User} from './lib/session';
 import {AGENTS, arranged, boardState, cardId, FORECAST, HISTORY, isHidden, reordered, spanOf, useView, withHidden, withSpan} from './lib/view';
-import {page, useApp, useBoardId, useBoardMeta, useBoards, useLineup, useRole, useServerView, useTitles} from './lib/board';
+import {page, useBoardId, useBoardMeta, useBoards, useLineup, useRole, useServerView, useTitles} from './lib/board';
 import {heardHub, hubNow, wakeDue} from './lib/clock';
 import {startLive} from './lib/live';
 import {UNAUTHORIZED} from './lib/http';
@@ -68,8 +68,6 @@ function Dashboard({
   refresh: () => Promise<void>;
   onSignedOut: () => void;
 }) {
-  // In the app's window: its agent and settings (null in a browser).
-  const appState = useApp();
   const boards = useBoards() ?? NO_BOARDS;
   const [board, selectBoard] = useBoard();
   const boardId = board?.id ?? '';
@@ -80,11 +78,11 @@ function Dashboard({
 
   // The board as the hub told it: nothing of it until its snapshot came. Each widget reads
   // its own part; the board itself renders only when its sources, view or names change.
-  const meta = useBoardMeta();
+  const meta = useBoardMeta(boardId);
   const role = useRole();
   const arrange = useView(useBoardId() ?? '', useServerView(), role === 'owner');
   const lineup = useLineup();
-  const titles = useTitles();
+  const titles = useTitles(arrange.view.names);
   const prefs = usePrefs();
   const [machines, setMachines] = useState<MachinesTab | null>(null);
   const [people, setPeople] = useState<BoardTab | null>(null);
@@ -183,7 +181,7 @@ function Dashboard({
         local={local}
       />
       <main>
-        {local && <AgentBanner state={appState} />}
+        {local && <AgentBanner />}
         {!meta ? (
           <div className="widgets" aria-hidden="true">
             {[0, 1, 2].map(i => (
@@ -191,7 +189,7 @@ function Dashboard({
             ))}
           </div>
         ) : empty && local ? (
-          <LocalOnboarding agent={appState?.agent} onSettings={() => setAccount(true)} />
+          <LocalOnboarding onSettings={() => setAccount(true)} />
         ) : empty && board?.personal ? (
           <section className="panel onboarding">
             <h2>{t('onboarding.title')}</h2>
@@ -247,10 +245,10 @@ function Dashboard({
           onSignedOut={onSignedOut}
           onClose={() => setAccount(false)}
           local={local}
-          app={{state: appState, onState: setAppState}}
+          onAppState={setAppState}
         />
       )}
-      {local && <TakeOver agent={appState?.agent} onState={setAppState} />}
+      {local && <TakeOver onState={setAppState} />}
     </>
   );
 }
