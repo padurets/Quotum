@@ -268,8 +268,9 @@ them), kept for 90 days.
   it has run half an hour or a twentieth of its length (8.4 hours of a week), nor an
   idle rolling window; one due to have run out already says when and waits for a new
   measurement. Numbers gone stale keep their forecast: the moment it runs out is a
-  moment, as true for an old measurement until it comes. After an early reset a
-  provider reports a new reset time, so the window starts over. A plan with days at 0
+  moment, as true for an old measurement until it comes. The forecast assumes that after
+  an early reset a provider reports a new reset time, so the window starts over; one
+  that kept the old reset time would read as spending slower until then. A plan with days at 0
   first counts spending on those days against its later shape, and so jumps at 10
   points without any new spending; before 10 points, a week goes straight on past the
   end of its own plan, and one spending just as a plan heavy on its first day does may

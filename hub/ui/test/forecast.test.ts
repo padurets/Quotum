@@ -62,6 +62,9 @@ test('on pace is five points either way of spending it all by the deadline', () 
 
 test('a plan that has planned under ten points leaves the week to its calendar pace', () => {
   const late = [0, 0, 20, 20, 20, 20, 20];
+  // Ten points exactly, at hour 60, is along the plan.
+  const edge = at(week(97), 60 * HOUR, late);
+  assert.ok('pace' in edge && edge.pace.by === 'plan');
   // 3 points over the weekend: at hour 59 the plan has planned 9.2, at hour 61 10.8.
   const before = at(week(97), 59 * HOUR, late);
   const after = at(week(97), 61 * HOUR, late);
@@ -125,6 +128,8 @@ test('a window without a forecast says why', () => {
   assert.equal(outlook(week(50, {resetAt: null}), measured, measured, null).key, 'none');
   assert.equal(outlook(week(50), measured, start + 7 * DAY, null).key, 'none', 'the reset has come');
   assert.equal(outlook(undefined, measured, measured, null).key, 'none');
+  // Measured by a clock ahead of the page's, after the reset the page has not reached yet.
+  assert.equal(outlook(week(50), start + 7 * DAY + MIN, start + 7 * DAY - MIN, null).key, 'none');
 });
 
 test('the deadline is the end of the plan while it runs, else the reset', () => {
@@ -132,6 +137,17 @@ test('the deadline is the end of the plan while it runs, else the reset', () => 
   assert.equal(at(week(80), 48 * HOUR).key, 'leftReset');
   assert.equal(at(week(20), 150 * HOUR, DEFAULT_PLAN).key, 'leftReset');
   assert.equal(at(hours(80), 2 * HOUR, DEFAULT_PLAN).key, 'leftReset', 'five hours are judged against their reset');
+  // The plan's end, not the reset, sets the tone: 38 hours to zero of 72 to the plan's end
+  // is warn, where 96 to the reset would have made it crit.
+  assert.deepEqual(pick(at(week(23), 72 * HOUR, DEFAULT_PLAN)), {key: 'runsOut', tone: 'v-warn'});
+  // The plan is judged when the window was measured: before its end, even if now is past it.
+  assert.equal(outlook(week(3), start + 140 * HOUR, start + 146 * HOUR, DEFAULT_PLAN).key, 'onPacePlan');
+  // A plan that has planned under ten points still sets the deadline: 10 left when it ends.
+  assert.deepEqual(pick(at(week(87.5), 20 * HOUR, [5, 20, 20, 20, 20, 15, 0])), {key: 'leftPlan', tone: 'muted', left: 10});
+  // Five hours never follow a week's plan, however much it front-loads.
+  const front = at(hours(20), 4 * HOUR, [100, 0, 0, 0, 0, 0, 0]);
+  assert.equal(front.key, 'onPaceReset');
+  assert.ok('pace' in front && front.pace.by === 'hour' && front.pace.rate === 20);
   // Spending next to nothing leads to what is left.
   assert.deepEqual(pick(at(week(99.5), 100 * HOUR)), {key: 'leftReset', tone: '', left: 99.5});
   assert.equal(at(week(99.5), 100 * HOUR, DEFAULT_PLAN).key, 'leftPlan');

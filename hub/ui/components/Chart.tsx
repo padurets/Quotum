@@ -1,9 +1,9 @@
 import {useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode, type RefObject} from 'react';
-import {clock, day, duration, num, shortDay, stamp} from '../lib/format';
+import {clock, countdown, day, num, shortDay, stamp} from '../lib/format';
 import {t} from '../i18n';
 import type {Line} from '../lib/lines';
 import {hubNow} from '../lib/api';
-import {gapText, gapTone, readout as readCell, type ForecastLine, type PlanLine} from '../lib/readout';
+import {gapText, gapTone, readout as readCell, valueAt, type ForecastLine, type PlanLine} from '../lib/readout';
 import {draggedRange, type TimeRange} from '../lib/timeRange';
 import {SWIPE, swiped} from '../lib/swipe';
 
@@ -230,7 +230,7 @@ export function Chart({
   const beyond = [
     ...markers
       .filter(m => m.strong && !m.past && m.at > to)
-      .map(m => ({key: m.key, label: m.label, time: stamp(m.at), text: t('chart.ahead', {label: m.label, time: duration(m.at - now, true)}), color: undefined})),
+      .map(m => ({key: m.key, label: m.label, time: stamp(m.at), text: t('chart.ahead', {label: m.label, time: countdown(m.at - now)}), color: undefined})),
     ...forecasts.flatMap(f => (f.beyond && f.at !== null ? [{key: `forecast-${f.key}`, label: f.name, time: t('forecast.runsOutAt', {time: stamp(f.at)}), text: f.beyond, color: f.color}] : [])),
   ];
   /** A label past the right edge pointed at or tapped: the tooltip tells its time instead of the cell's values. */
@@ -265,23 +265,37 @@ export function Chart({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [from, to, cellMs]);
   // A label hides what runs under it: it stands at the bottom of the plot, or at the top
-  // when more of the lines run near the bottom there (a limit about to run out).
+  // when more of the lines run near the bottom there (a limit about to run out, measured
+  // or foreseen).
   const labelY = (anchor: number, end: boolean) => {
     const [a, b] = (end ? [anchor - LABEL_WIDTH, anchor] : [anchor, anchor + LABEL_WIDTH]).map(timeAt);
     let low = 0;
     let high = 0;
+    const count = (value: number) => {
+      if (value < LABEL_BAND) low++;
+      else if (value > 100 - LABEL_BAND) high++;
+    };
     for (const line of lines) {
-      for (const [at, value] of line.points) {
-        if (at < a || at > b) continue;
-        if (value < LABEL_BAND) low++;
-        else if (value > 100 - LABEL_BAND) high++;
+      for (const [at, value] of line.points) if (at >= a && at <= b) count(value);
+    }
+    // A forecast has a few corners only: it is read across the label.
+    for (const forecast of forecasts) {
+      for (const at of [a, (a + b) / 2, b]) {
+        const value = valueAt([forecast.points], at);
+        if (value !== undefined) count(value);
       }
     }
     return low > high ? top + 18 : height - bottom - 8;
   };
-  const edgeY = beyond.length ? labelY(width - right, true) : 0;
+  // Announcements inside the chart close to its right edge take their place in the stack
+  // there, so a label past the edge never lies over them.
+  const announced = markers.filter(m => m.strong && !m.past && m.at <= to);
+  const byEdge = (m: Marker) => x(m.at) > width - right - LABEL_WIDTH;
+  const stack = [...announced.filter(byEdge).map(m => m.key), ...beyond.map(label => label.key)];
+  const edgeY = stack.length ? labelY(width - right, true) : 0;
   // Stacked from the first one away from the edge of the plot it stands by.
   const edgeStep = edgeY < height / 2 ? LABEL_STEP : -LABEL_STEP;
+  const stackY = (key: string) => edgeY + stack.indexOf(key) * edgeStep;
   const move = (event: PointerEvent<SVGSVGElement>) => {
     const px = toChart(event);
     pointer.current = px;
@@ -491,24 +505,22 @@ export function Chart({
               <path key={line.key} d={paths[i].line} className="series" stroke={line.color} strokeDasharray={line.dash || undefined} />
             ))}
             {/* Announcements are read over the lines, each on its own backing. */}
-            {markers
-              .filter(marker => marker.strong && !marker.past && marker.at <= to)
-              .map(marker => {
-                const mx = x(marker.at);
-                const nearRight = mx > width - right - 150;
-                const lx = nearRight ? mx - 6 : mx + 6;
-                return (
-                  <MarkerLabel key={marker.key} x={lx} y={labelY(lx, nearRight)} end={nearRight}>
-                    {marker.label}
-                  </MarkerLabel>
-                );
-              })}
+            {announced.map(marker => {
+              const mx = x(marker.at);
+              const nearRight = mx > width - right - 150;
+              const lx = nearRight ? mx - 6 : mx + 6;
+              return (
+                <MarkerLabel key={marker.key} x={lx} y={byEdge(marker) ? stackY(marker.key) : labelY(lx, nearRight)} end={nearRight}>
+                  {marker.label}
+                </MarkerLabel>
+              );
+            })}
             {/* Beyond the visible future: at the right edge, with the distance, one under another. */}
-            {beyond.map((label, i) => (
+            {beyond.map(label => (
               <MarkerLabel
                 key={label.key}
                 x={width - right}
-                y={edgeY + i * edgeStep}
+                y={stackY(label.key)}
                 end
                 color={label.color}
                 onTip={(shown, tapped) => setEdge(shown ? {key: label.key, tapped} : null)}
@@ -540,7 +552,7 @@ export function Chart({
       </svg>
 
       {edgeMarker ? (
-        <Tooltip tip={tip} className="is-edge" style={{right: 0, bottom: `calc(100% - ${(edgeY + beyond.indexOf(edgeMarker) * edgeStep - 18) * scale}px)`}}>
+        <Tooltip tip={tip} className="is-edge" style={{right: 0, bottom: `calc(100% - ${(stackY(edgeMarker.key) - 18) * scale}px)`}}>
           <div className={`tooltip-marker ${edgeMarker.color ? '' : 'is-strong'}`} style={edgeMarker.color ? {color: edgeMarker.color} : undefined}>
             {edgeMarker.label}
           </div>

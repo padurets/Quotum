@@ -52,9 +52,9 @@ import {
  * and the stale card (on a machine that never comes back, its five hours already over).
  * What lives by design holds only a short span from `start` and is checked in the first
  * minutes of a run, or by starting it again: the sleeping machine, agents that come and
- * go, a five-hour window ahead of its pace, a new subscription that needs 30 minutes of
- * measurements. A code about a change of agents begins 15 seconds after it at the
- * earliest, when a list that shows it has gone out.
+ * go, a five-hour window ahead of its pace or foreseen between two of its resets, a week
+ * begun too recently to be foreseen (8.4 hours). A code about a change of agents begins
+ * 15 seconds after it at the earliest, when a list that shows it has gone out.
  *
  * A new state gets an entry here with at least one code; the test picks it up.
  */
@@ -113,7 +113,7 @@ export const SCENES: Scene[] = [
       'Codex cards: an accent mark "in 25h" on the left of the tray (the time is rounded down), not the reset of four hours ago; its panel heads with "Reset in 25h" and the date and time under it, then why it matters, the tracker\'s text and "Data from Codex Resets"',
       'Claude cards: a quiet mark, an arrow round a tick, not the change of limits of yesterday; its panel heads with "Reset happened", a "Max" tag beside it and the time under it',
       'Both resets for everyone are marked on the charts',
-      'On 24 hours with the plan shown, the Codex reset is pointed at from the right edge ("… in 1d →"): pointing at it or tapping it tells its date and time',
+      'On 24 hours with the plan or the forecast shown, the Codex reset is pointed at from the right edge ("… in 25h →"): pointing at it or tapping it tells its date and time',
     ],
   },
   {
@@ -381,7 +381,8 @@ const all: DemoSet = {
       ],
       look: [
         'The table of agents lists many rows, by activity',
-        'The chart\'s tooltip has a row for every line in the legend\'s order, with what is left, the plan and the gap in columns; on a phone it stays whole on the screen',
+        'The chart\'s tooltip has a row for every line in the legend\'s order, with what is left, the plan and the gap in columns, and ahead of now where each forecast leads in a column of its own; on a phone it stays whole on the screen',
+        'The chart\'s settings switch the plan and the forecast on and off, under "On the chart"',
         'My machines → Projects: quotum once, on the laptop, though three agents work in three folders (the tray and the table show quotum three times, with hub and quotum.feat-18-desktop-app under two of them)',
         'Renamed or merged in My machines, a project is shown under its new name in the tray and the table too',
         'Merge Quotum into quotum: one row, with both machines and "from: Quotum"; give Quotum back its name: as it was',
@@ -460,6 +461,7 @@ const all: DemoSet = {
       ],
       look: [
         'Its reset news is a mark on the left of the tray; the Antigravity card in its row has none',
+        'Its weekly forecast line bends where the plan\'s days end, beside the dotted plan',
         'On 30 days the chart is full; ‹ goes back twice, the second time to where history starts, and is off there',
         'Ten marks in the tray, in two groups (two machines); the panel names working, waiting and open-window agents',
         'The long project name ends in an ellipsis; the agent without a project says so',
@@ -518,8 +520,13 @@ const all: DemoSet = {
         {agents: 2, drawn: true, from: 15 * MIN, to: 46 * MIN},
         {stale: true, from: 49 * MIN, to: 58 * MIN},
         {agents: 0, drawn: true, from: 52 * MIN, to: 59 * MIN},
+        // Asleep or not, the forecast stays.
+        {forecast: 'gemini:weekly', outlook: 'runsOut', tone: 'v-warn'},
       ],
-      look: ['Its machine sleeps from the 2nd minute to the 14th, and so every 45 minutes: the card goes stale (its dot, no line under the limits) and comes back, its agents go and come back, a gap stays on the 24-hour chart'],
+      look: [
+        'Its machine sleeps from the 2nd minute to the 14th, and so every 45 minutes: the card goes stale (its dot, no line under the limits) and comes back, its agents go and come back, a gap stays on the 24-hour chart',
+        'Its Gemini week runs out past the chart\'s right edge: "Antigravity 2 · Gemini: runs out in 2d →" stands there, in its colour, stacked with the other labels and never over the Codex reset\'s; pointing at it tells the date and time',
+      ],
     },
     {
       kind: 'card',
@@ -585,7 +592,11 @@ const all: DemoSet = {
         {forecast: 'weekly', outlook: 'runsOut', tone: 'v-crit', plan: 'ahead'},
         {forecast: 'session', outlook: 'runsOut', tone: 'v-crit', to: 90 * MIN},
       ],
-      look: ['A third of the row wide, with the next two cards', 'The five hours are ahead of an even pace for the first minutes: its own tooltip'],
+      look: [
+        'A third of the row wide, with the next two cards',
+        'The five hours are ahead of an even pace for the first minutes: its own tooltip',
+        'Its week runs out past the right edge of the 24-hour chart: a label there says in how many hours',
+      ],
     },
     {
       kind: 'card',

@@ -21,8 +21,10 @@ import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
 /**
  * The chart's own settings: whether it draws the plan and the forecast (where either has
  * something to draw), how far it looks ahead, and (for the board's owner) hiding it.
+ * Its note says the look ahead needs the plan or the forecast, where a period ending now
+ * has neither; a range in the past has no future at all.
  */
-function HistorySettings({arrange, planAvailable, forecastAvailable, ahead}: {arrange: Arrange; planAvailable: boolean; forecastAvailable: boolean; ahead: boolean}) {
+function HistorySettings({arrange, planAvailable, forecastAvailable, horizonNote}: {arrange: Arrange; planAvailable: boolean; forecastAvailable: boolean; horizonNote: boolean}) {
   const {horizon, showPlan, showForecast} = usePrefs();
   return (
     <Popover label={t('history.settings')} icon={<SlidersIcon />}>
@@ -52,7 +54,7 @@ function HistorySettings({arrange, planAvailable, forecastAvailable, ahead}: {ar
             label={t('history.horizon')}
           />
         </div>
-        {!ahead && <div className="popover-note">{t('history.horizonNote')}</div>}
+        {horizonNote && <div className="popover-note">{t('history.horizonNote')}</div>}
       </div>
       {arrange.owner && <HideRow onHide={() => arrange.update(view => withHidden(view, HISTORY, true))}>{t('widget.hide')}</HideRow>}
     </Popover>
@@ -114,21 +116,22 @@ export const History = memo(function History({
       }),
     [visible, overview, now, view],
   );
-  const forecastAvailable = ahead.length > 0;
-  const forecastShown = forecastAvailable && prefs.showForecast && frame.live;
+  // A range in the past has no forecast, so nothing to switch.
+  const forecastAvailable = frame.live && ahead.length > 0;
+  const forecastShown = forecastAvailable && prefs.showForecast;
   // Without the plan or the forecast the chart ends now (an announced reset is pointed at
   // from the right edge). With either, on `auto` some future stays on the right,
-  // stretched to include an announced reset when close, and to where the forecast says a
-  // window runs out: it may take up to ~40% of the width, anything further out is pointed
-  // at from the edge instead. A chosen horizon is kept as is.
+  // stretched to include an announced reset when close, and to the last moment the
+  // forecast says a window runs out within reach: it may take up to ~40% of the width,
+  // anything further out is pointed at from the edge instead. A chosen horizon is kept as is.
   const reach = measuredTo + (measuredTo - from) * 0.75;
-  const lastRunOut = forecastShown ? Math.max(0, ...ahead.map(a => a.runsOut ?? 0)) : 0;
+  const lastRunOut = forecastShown ? Math.max(0, ...ahead.map(a => (a.runsOut !== null && a.runsOut <= reach ? a.runsOut : 0))) : 0;
   const to = !(planShown || forecastShown) || !frame.live
     ? measuredTo
     : prefs.horizon === 'auto'
       ? Math.max(
           announced && announced > measuredTo && announced + future * 0.25 > measuredTo + future ? Math.min(reach, announced + future * 0.25) : measuredTo + future,
-          Math.min(reach, lastRunOut),
+          lastRunOut,
         )
       : measuredTo + future;
 
@@ -218,7 +221,7 @@ export const History = memo(function History({
     <section className={`panel history ${loading ? 'is-loading' : ''}`} aria-label={t('history.label')} aria-busy={loading}>
       <div className="panel-head">
         <h2>{t('history.title')}</h2>
-        <HistorySettings arrange={arrange} planAvailable={planAvailable} forecastAvailable={forecastAvailable} ahead={planShown || forecastShown} />
+        <HistorySettings arrange={arrange} planAvailable={planAvailable} forecastAvailable={forecastAvailable} horizonNote={frame.live && !planShown && !forecastShown} />
       </div>
 
       <div className="legend">

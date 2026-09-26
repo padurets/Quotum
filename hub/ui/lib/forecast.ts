@@ -31,7 +31,7 @@ export type Outlook =
   | {key: 'leftReset'; left: number; tone: ''; pace: Pace};
 
 /** How long a window must have run before its pace means something: half an hour, or a twentieth of the window. */
-export const forecastFrom = (minutes: number) => Math.max(30 * 60_000, (minutes * 60_000) / 20);
+const forecastFrom = (minutes: number) => Math.max(30 * 60_000, (minutes * 60_000) / 20);
 
 /**
  * Where a window goes from the moment it was measured until its reset: [time, remaining]

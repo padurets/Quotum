@@ -228,7 +228,7 @@ export const en = {
   'table.planHint': 'How much should be left now by the spending plan',
   'table.spent': 'Spent in period',
   'table.forecast': 'Forecast',
-  'table.forecastHint': 'Where the pace since the window started leads, the same over any period. A week with a spending plan goes the way its plan does',
+  'table.forecastHint': 'Where the pace since the window started leads, the same over any period. A week with a spending plan is foreseen along the shape of its plan, at your pace',
   'table.atStart': 'At start',
   'table.atEnd': 'At end',
   'table.spentInRange': 'Spent',
