@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {freeResetExpiry, resetLabel, type ResetStatus} from '../lib/resets';
 import {countdown, stamp} from '../lib/format';
 import {setLocale} from '../i18n';
+import {preferring} from './browser';
 
 const NOW = Date.UTC(2026, 8, 25, 12);
 const MIN = 60_000;
@@ -125,11 +126,12 @@ test('an exact time names its month in a word, with no dots, commas or seconds',
   // Local time, so the clock reads the same in any time zone.
   const at = new Date(2026, 8, 26, 21, 24, 37).getTime();
   try {
-    setLocale('ru');
-    assert.equal(stamp(at), '26 сентября 21:24');
-    // English follows the browser's region for the order of day and month and the clock.
-    setLocale('en');
-    assert.match(stamp(at), /^(26 September|September 26) (21:24|09:24 PM)$/);
+    preferring(['en-GB'], () => {
+      setLocale('ru');
+      assert.equal(stamp(at), '26 сентября 21:24');
+      setLocale('en');
+      assert.equal(stamp(at), '26 September 21:24');
+    });
   } finally {
     setLocale('en');
   }
