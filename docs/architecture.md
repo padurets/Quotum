@@ -388,7 +388,9 @@ together again (`hub/server/projection.ts`) and sends each reader only what diff
 what it last got (`hub/server/events.ts`). What changes with time alone (a card going
 stale, a machine's agents no longer shown, a holder falling silent, a past reset leaving
 the history) it tells when that comes: it keeps the moment each board being read next
-changes by itself. A board nobody reads costs nothing. Every connection starts with the
+changes by itself. A board nobody reads costs nothing, and one the hub cannot work out
+(its data spoilt) fails alone: its readers start over, and a new one is answered an
+error. Every connection starts with the
 board as it is, so a dropped connection, a sleep, a restart of the hub or a tab hidden
 for half a minute (the page lets its connection go then) lose nothing; where a proxy
 holds a stream back, the page reads the same events with long polls for ten minutes. A

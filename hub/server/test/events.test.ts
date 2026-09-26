@@ -423,6 +423,68 @@ test('every watched board is worked out in full now and then: a change no touch 
   assert.deepEqual([event.type, event.data.board.name], ['board', 'Secret']);
 });
 
+test('a deadline months off waits for its day: while a reset for everyone stays in the list, an open board costs nothing', async t => {
+  const h = await hub();
+  t.after(() => h.app.close());
+  await h.person('alice');
+  h.store.announce('codex', {at: Date.now() - 86_400_000, url: 'https://example.com', text: 'reset'});
+  let asked = 0;
+  const announcements = h.store.announcements.bind(h.store);
+  h.store.announcements = (since: number) => (asked++, announcements(since));
+  const warnings: string[] = [];
+  const warned = (warning: Error) => warnings.push(warning.name);
+  process.on('warning', warned);
+  t.after(() => process.off('warning', warned));
+  const s = await reading(h, 'alice');
+  t.after(s.close);
+  assert.equal(s.snapshot.resets.past.codex.length, 1);
+  asked = 0;
+  await new Promise(resolve => setTimeout(resolve, 600));
+  assert.deepEqual({asked, warnings}, {asked: 0, warnings: []});
+});
+
+test('a board the hub cannot work out fails alone: its readers start over, a new one is refused with an error and leaves nothing behind, and the hub goes on', async t => {
+  const h = await hub();
+  t.after(() => h.app.close());
+  const personal = await h.person('alice');
+  const team = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
+  await h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {order: ['history']}});
+  const own = await reading(h, 'alice', personal);
+  const broken = await reading(h, 'alice', team);
+  t.after(() => [own, broken].forEach(s => s.close()));
+
+  // Its view spoilt behind the hub's back, then the board touched: the timer's work fails on it.
+  h.store.db.prepare('UPDATE views SET payload = ? WHERE board_id = ?').run('{not json', team);
+  await h.call('POST', `/api/boards/${team}`, {as: 'alice', body: {name: 'Crew'}});
+  assert.deepEqual((await broken.next()).data, {reason: 'restart'});
+  assert.deepEqual(await own.types(), ['boards'], 'the other board goes on');
+
+  const refused = await h.stream('alice', team);
+  assert.equal(refused.status, 500);
+  const polled = await h.call('GET', `/api/events?mode=poll&board=${team}`, {as: 'alice', headers: STREAM});
+  assert.equal(polled.status, 500);
+  assert.equal(h.events.readers, 1, 'nothing is left of the readers refused');
+  await h.call('POST', `/api/boards/${personal}`, {as: 'alice', body: {name: 'Mine'}});
+  assert.deepEqual(await own.types(), ['board', 'boards']);
+});
+
+test('a ping finds out what nobody told: a session gone or a place on the board lost behind the hub’s back', async t => {
+  const h = await timed();
+  t.after(() => h.app.close());
+  const s = await reading(h, 'alice');
+  t.after(s.close);
+  h.store.db.prepare('DELETE FROM sessions').run();
+  h.clock.advance(25_000 + 100);
+  assert.deepEqual((await s.next()).data, {reason: 'unauthorized'});
+
+  await h.call('POST', '/api/auth/login', {as: 'alice', body: {email: 'alice@example.com', password: 'correct horse'}});
+  const again = await reading(h, 'alice');
+  t.after(again.close);
+  h.store.db.prepare('DELETE FROM members').run();
+  h.clock.advance(25_000 + 100);
+  assert.deepEqual((await again.next()).data, {reason: 'gone'});
+});
+
 test('signing out, a new password, being removed and a board deleted end the streams they concern with bye, and nothing else', async t => {
   const h = await hub();
   t.after(() => h.app.close());
@@ -486,7 +548,9 @@ test('only the hub’s own page opens events: without its header, from another o
   }
   assert.equal(h.events.readers, 0, 'no lease, nobody let go');
   assert.equal((await open(h.base, undefined)).status, 401);
+  assert.equal((await open(h.base, undefined, 'nope', {})).status, 401, 'no session is told so first');
   assert.deepEqual((await open(h.base, cookie, 'nope')).body, {error: 'board_not_found'});
+  assert.deepEqual((await open(h.base, cookie, 'nope', {})).body, {error: 'forbidden_origin'}, 'another page learns nothing of which boards there are');
   assert.equal(
     (await fetch(`${h.base}/api/events`, {method: 'HEAD', headers: {cookie: cookie!, ...STREAM}})).headers.get('content-type')?.includes('event-stream') ?? false,
     false,
@@ -515,7 +579,10 @@ test('too many streams: a new one takes the place of the oldest of its session, 
   b1.close();
   await new Promise(resolve => setTimeout(resolve, 100));
   const bob = await reading(h, 'bob');
-  for (const s of [a1, a2, a3, b2, bob]) s.close();
+  await h.call('POST', '/api/auth/login', {as: 'alice3', body: {email: 'alice@example.com', password: 'correct horse'}});
+  const c1 = await reading(h, 'alice3');
+  assert.deepEqual((await a3.next()).data, {reason: 'limit'}, 'past the hub’s limit, someone with streams gives up their oldest');
+  for (const s of [a1, a2, a3, b2, bob, c1]) s.close();
 });
 
 test('a reader too far behind is let go', () => {
@@ -585,6 +652,30 @@ test('long polls carry the same events: a lease starts with hello and snapshot, 
   );
   await h.call('POST', '/api/auth/login', {as: 'alice2', body: {email: 'alice@example.com', password: 'correct horse'}});
   assert.notEqual((await poll(expired.lease, 'alice2')).lease, expired.lease, "another session's lease is not this one's");
+});
+
+test('a lease is of its board, and holds no more than a reader may fall behind: past that it starts over', async t => {
+  const h = await hub({pollMs: 300, bufferBytes: 64});
+  t.after(() => h.app.close());
+  const personal = await h.person('alice');
+  const team = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
+  const poll = async (board: string, lease?: string) =>
+    (await h.call('GET', `/api/events?mode=poll&board=${board}${lease ? `&lease=${lease}` : ''}`, {as: 'alice', headers: STREAM})).body;
+  const first = await poll(personal);
+  const other = await poll(team, first.lease);
+  assert.notEqual(other.lease, first.lease, 'asked for another board, it is another lease');
+  assert.equal(other.events[1].data.board.id, team);
+
+  // Renamed until what waits for the lease is more than it may hold.
+  for (const name of ['Crew', 'Band', 'Gang']) await h.call('POST', `/api/boards/${team}`, {as: 'alice', body: {name}});
+  await new Promise(resolve => setTimeout(resolve, 200));
+  const behind = await poll(team, other.lease);
+  assert.notEqual(behind.lease, other.lease);
+  assert.deepEqual(
+    behind.events.map((e: Event) => e.type),
+    ['hello', 'snapshot'],
+  );
+  assert.equal(behind.events[1].data.board.name, 'Gang');
 });
 
 test('a lease let go for a newer reader says so once, then is forgotten', async t => {
@@ -701,5 +792,70 @@ test('every change a reader sees is told: what each request touches reaches the 
     assert.ok((done as {status: number}).status < 300, `${what}: ${JSON.stringify(done)}`);
     const [a, b, c] = await Promise.all([own.types(), shared.types(), bobs.types()]);
     assert.deepEqual({own: a, shared: b, bobs: c}, {own: onOwn, shared: onShared, bobs: onBobs}, what);
+  }
+});
+
+test('what each change of data touches reaches the boards it shows on: people joining and leaving, subscriptions held and let go, agents gone with their machine, the trackers', async t => {
+  const h = await hub();
+  t.after(() => h.app.close());
+  const personal = await h.person('alice');
+  const team = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
+  const bobs = await h.person('bob', await h.invite('alice', team));
+  const other = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Other'}})).body.id;
+  await h.person('carol', await h.invite('alice', other));
+  const id = (who: string) => h.directory.credentials(`${who}@example.com`)!.user.id;
+  const secret = await h.token('alice');
+  const desk = await h.token('alice');
+  const bobsSecret = await h.token('bob');
+  await h.measure(secret, Date.now() - 20 * MIN);
+  // The same subscription from a second machine: the first can go and the subscription stays.
+  await h.measure(desk, Date.now() - 19 * MIN, {device: 'desk'});
+  await h.measure(bobsSecret, Date.now() - 20 * MIN, {account: 'b0b0b0b0b0b0b0b0b0b0b0b0', device: 'bobs'});
+  await h.call('POST', `/api/boards/${team}/shares`, {as: 'bob', body: {source: h.store.sources(bobs)[0].id}});
+  const agent = (device: string) => ({version: 1, agent: 'quotum/0.4.0', machine: h.machine(device)});
+  const session = {
+    provider: 'codex',
+    account: ACCOUNT,
+    origin: 'app',
+    project: 'quotum',
+    folder: null,
+    startedAt: iso(Date.now() - MIN),
+    lastWorkedAt: null,
+    working: false,
+  };
+  const agents = (device: string, sessions: object[]) =>
+    h.call('POST', '/v1/sessions', {token: device === 'desk' ? desk : secret, body: {...agent(device), sentAt: iso(Date.now()), sessions}});
+  await agents('laptop', [session]);
+  const laptop = (await h.call('GET', '/api/devices', {as: 'alice'})).body.find((d: {name: string}) => d.name === 'laptop').id;
+
+  const own = await reading(h, 'alice', personal);
+  const shared = await reading(h, 'alice', team);
+  const carols = await reading(h, 'carol');
+  t.after(() => [own, shared, carols].forEach(s => s.close()));
+
+  // Each change made alone, as the store and the directory make it, so no other touch hides a missing one.
+  type Row = [string, () => unknown, string[], string[], string[]];
+  const rows: Row[] = [
+    ['someone joins a board', () => h.directory.addMember(team, id('carol'), Date.now()), [], [], ['boards']],
+    ['someone leaves it, what they shared left behind for now: they no longer own it there', () => h.directory.removeMember(team, id('bob')), [], ['card'], []],
+    ['what nobody on the board holds leaves it', () => h.store.unshareOrphans(team), [], ['lineup'], []],
+    [
+      'a subscription measured for the first time',
+      () => h.measure(desk, Date.now() - MIN, {account: 'c0c0c0c0c0c0c0c0c0c0c0c0', device: 'box'}),
+      // Sent whole as it comes; the page reads its history for the new lineup.
+      ['card', 'sessions', 'cadence', 'lineup', 'mine'],
+      [],
+      [],
+    ],
+    ['the machine that told of agents is disconnected', () => h.call('DELETE', `/api/devices/${laptop}`, {as: 'alice'}), ['sessions'], [], []],
+    ['a machine tells of its agents', () => agents('desk', [session]), ['sessions'], [], []],
+    ['and then of none', () => agents('desk', []), ['sessions'], [], []],
+    ['the trackers asked', () => h.resets.round(), ['resets'], ['resets'], ['resets']],
+  ];
+  for (const [what, act, onOwn, onShared, onCarols] of rows) {
+    const done = await act();
+    if (done && typeof done === 'object' && 'status' in done) assert.ok((done as {status: number}).status < 300, `${what}: ${JSON.stringify(done)}`);
+    const [a, b, c] = await Promise.all([own.types(), shared.types(), carols.types()]);
+    assert.deepEqual({own: a, shared: b, carols: c}, {own: onOwn, shared: onShared, carols: onCarols}, what);
   }
 });

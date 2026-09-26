@@ -84,9 +84,14 @@ export class Projection {
     };
   }
 
-  /** What is the reader's own: which sources of the board their devices measure, and their boards with their role on each. */
-  readerPart(user: string, lineup: BoardSource[]): ReaderPart {
-    return {mine: lineup.filter(s => s.holders.includes(user)).map(s => s.id), boards: this.hub.directory.boards(user)};
+  /** What is the reader's own on a board: which of its sources their devices measure. */
+  mine(user: string, lineup: BoardSource[]): string[] {
+    return lineup.filter(s => s.holders.includes(user)).map(s => s.id);
+  }
+
+  /** What is the reader's own on every board: their boards with their role on each. */
+  boards(user: string): Board[] {
+    return this.hub.directory.boards(user);
   }
 
   /** The same for everyone: the reset trackers' news, how they are doing, and the resets they reported as far back as history goes. */
@@ -112,7 +117,8 @@ export class Projection {
       sources: sources.map(s => s.card),
       sessions: Object.fromEntries(lineup.map((s, i) => [s.id, sources[i].sessions])),
       cadence: Object.fromEntries(lineup.map((s, i) => [s.id, sources[i].cadence])),
-      ...this.readerPart(user, lineup),
+      mine: this.mine(user, lineup),
+      boards: this.boards(user),
       resets: this.hubPart(now).value,
     };
   }

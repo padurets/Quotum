@@ -28,6 +28,11 @@ export function tell(observer: Touches | null, touch: (observer: Touches) => voi
   try {
     touch(observer);
   } catch (error) {
-    console.error(JSON.stringify({event: 'error', url: 'events', message: String((error as Error)?.message ?? error)}));
+    trouble(error);
   }
+}
+
+/** Logs trouble with the events of open dashboards, which never takes the hub down. */
+export function trouble(error: unknown) {
+  console.error(JSON.stringify({event: 'error', url: 'events', message: String((error as Error)?.message ?? error)}));
 }

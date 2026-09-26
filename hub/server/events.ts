@@ -7,7 +7,7 @@ import type {ResetFeed} from './resets.js';
 import {earliest, Projection, type HubPart} from './projection.js';
 import type {Directory} from './store/directory.js';
 import type {BoardSource, Store} from './store/store.js';
-import type {Touches} from './touches.js';
+import {trouble, type Touches} from './touches.js';
 
 /**
  * What open dashboards hear (spec/dashboard-v1.md): every reader of a board gets its
@@ -42,10 +42,13 @@ const bye = (reason: ByeReason) => frame('bye', {reason});
 /** The hub's clock and timers: tests move them by hand. */
 export type Clock = {now(): number; after(ms: number, run: () => void): () => void};
 
+/** The longest a timer of Node waits: a longer one runs at once. A deadline further off is armed again when it runs. */
+const LONGEST_MS = 2 ** 31 - 1;
+
 export const realClock: Clock = {
   now: () => Date.now(),
   after(ms, run) {
-    const timer = setTimeout(run, ms);
+    const timer = setTimeout(run, Math.min(ms, LONGEST_MS));
     timer.unref();
     return () => clearTimeout(timer);
   },
@@ -220,7 +223,7 @@ export class Events implements Touches {
   private schedule() {
     if (this.stopFlush || this.closed) return;
     if (!this.dirtyBoards.size && !this.dirtySources.size && !this.dirtyUsers.size && !this.dirtyHub && !this.histories.size) return;
-    this.stopFlush = this.clock.after(this.options.smoothMs, () => {
+    this.stopFlush = this.later(this.options.smoothMs, () => {
       this.stopFlush = null;
       this.flush();
     });
@@ -228,8 +231,12 @@ export class Events implements Touches {
 
   // ---------- working out what changed ----------
 
-  /** Works out every touched part of the watched boards and sends what differs from what their readers got. */
-  flush() {
+  /**
+   * Works out every touched part of the watched boards and sends what differs from what
+   * their readers got. A board that cannot be worked out lets its readers go to start over,
+   * and fails no other; the boards it failed are returned.
+   */
+  flush(): Set<string> {
     this.stopFlush?.();
     this.stopFlush = null;
     const now = this.clock.now();
@@ -247,19 +254,36 @@ export class Events implements Touches {
     const heads = new Map<string, Frame[]>();
     const tails = new Map<string, Frame[]>();
     const lineups = new Map<string, BoardSource[]>();
+    const failed = new Set<string>();
     for (const id of new Set([...whole, ...sources.keys(), ...histories.keys()])) {
       const watched = this.watched.get(id);
       if (!watched) continue;
-      if (whole.has(id) || sources.has(id)) {
-        const head = this.refresh(watched, whole.has(id), sources.get(id) ?? new Set(), now, lineups);
-        if (!head) continue;
-        heads.set(id, head);
+      try {
+        if (whole.has(id) || sources.has(id)) {
+          const head = this.refresh(watched, whole.has(id), sources.get(id) ?? new Set(), now, lineups);
+          if (!head) continue;
+          heads.set(id, head);
+        }
+      } catch (error) {
+        trouble(error);
+        failed.add(id);
+        // What its readers got may be half told: they start over with a snapshot. One still opening is refused instead.
+        for (const sub of [...watched.subscribers]) if (!sub.fresh) this.end(sub, 'restart');
+        continue;
       }
       if (whole.has(id)) for (const sub of watched.subscribers) users.add(sub.user);
       const pending = histories.get(id);
       if (pending?.size) tails.set(id, [frame('history', {sources: [...pending.keys()], since: Math.min(...pending.values())})]);
     }
-    const news = hubTouched ? this.refreshHub(now) : [];
+    let news: Frame[] = [];
+    if (hubTouched) {
+      try {
+        news = this.refreshHub(now);
+      } catch (error) {
+        // Told again by the next touch or recheck.
+        trouble(error);
+      }
+    }
 
     const mines = new Map<string, Frame[]>();
     const lists = new Map<string, Frame[]>();
@@ -268,9 +292,14 @@ export class Events implements Touches {
         let own: Frame[] = [];
         if (users.has(sub.user)) {
           const key = `${sub.user}\n${watched.id}`;
-          if (!mines.has(key)) mines.set(key, this.refreshMine(sub.user, watched.id, lineups));
-          if (!lists.has(sub.user)) lists.set(sub.user, this.refreshBoards(sub.user));
-          own = [...mines.get(key)!, ...lists.get(sub.user)!];
+          try {
+            if (!mines.has(key)) mines.set(key, this.refreshMine(sub.user, watched.id, lineups));
+            if (!lists.has(sub.user)) lists.set(sub.user, this.refreshBoards(sub.user));
+            own = [...mines.get(key)!, ...lists.get(sub.user)!];
+          } catch (error) {
+            trouble(error);
+            users.delete(sub.user);
+          }
         }
         const frames = [...(heads.get(watched.id) ?? []), ...own, ...(tails.get(watched.id) ?? []), ...news];
         if (!frames.length || sub.fresh) continue;
@@ -278,9 +307,10 @@ export class Events implements Touches {
         if ((sub.backlog?.() ?? 0) > this.options.bufferBytes) this.end(sub, 'limit');
       }
     }
+    return failed;
   }
 
-  /** Compares a part with what was sent, keeping it when it differs; true then. */
+  /** Compares a part with what was sent, keeping it when it differs: its JSON then, else null. */
   private changed(base: Watched['base'], key: string, value: unknown): string | null {
     const json = JSON.stringify(value);
     if (base.get(key)?.json === json) return null;
@@ -350,7 +380,7 @@ export class Events implements Touches {
   private refreshMine(user: string, board: string, lineups: Map<string, BoardSource[]>): Frame[] {
     let lineup = lineups.get(board);
     if (!lineup) lineups.set(board, (lineup = this.projection.lineup(board)));
-    const json = JSON.stringify(lineup.filter(s => s.holders.includes(user)).map(s => s.id));
+    const json = JSON.stringify(this.projection.mine(user, lineup));
     const key = `${user}\n${board}`;
     if (this.mines.get(key) === json) return [];
     this.mines.set(key, json);
@@ -359,7 +389,7 @@ export class Events implements Touches {
 
   /** The reader's boards with their role on each, when they changed. */
   private refreshBoards(user: string): Frame[] {
-    const value = this.parts.directory.boards(user);
+    const value = this.projection.boards(user);
     const json = JSON.stringify(value);
     if (this.boardLists.get(user)?.json === json) return [];
     this.boardLists.set(user, {json, value});
@@ -391,7 +421,7 @@ export class Events implements Touches {
     if (at === null) return;
     watched.deadline = {
       at,
-      cancel: this.clock.after(Math.max(1000, at - now), () => {
+      cancel: this.later(Math.max(1000, at - now), () => {
         watched.deadline = null;
         const due = [...watched.changes].filter(([, when]) => when <= this.clock.now()).map(([id]) => id);
         if (!due.length) return this.arm(watched, this.clock.now());
@@ -410,11 +440,22 @@ export class Events implements Touches {
     if (at === null) return;
     this.hubDeadline = {
       at,
-      cancel: this.clock.after(Math.max(1000, at - now), () => {
+      cancel: this.later(Math.max(1000, at - now), () => {
         this.hubDeadline = null;
         this.touchHub();
       }),
     };
+  }
+
+  /** Runs `run` in `ms`: trouble in it is logged, and never takes the hub down. */
+  private later(ms: number, run: () => void): () => void {
+    return this.clock.after(ms, () => {
+      try {
+        run();
+      } catch (error) {
+        trouble(error);
+      }
+    });
   }
 
   /** Repeats `run` every `ms` until stopped; never when `ms` is 0. */
@@ -422,7 +463,7 @@ export class Events implements Touches {
     if (!ms) return () => {};
     let stop = () => {};
     const again = () => {
-      stop = this.clock.after(ms, () => {
+      stop = this.later(ms, () => {
         again();
         run();
       });
@@ -473,27 +514,33 @@ export class Events implements Touches {
     this.dirtyBoards.add(watched.id);
     this.dirtyUsers.add(reader.user);
     this.dirtyHub = true;
-    this.flush();
-    if (!this.watched.get(reader.board)?.subscribers.has(sub)) {
+    const now = this.clock.now();
+    let snapshot;
+    try {
+      if (this.flush().has(reader.board)) throw new Error('the board could not be worked out');
+      if (!this.watched.get(reader.board)?.subscribers.has(sub)) {
+        this.unsubscribe(sub);
+        return null;
+      }
+      const value = (key: string) => watched.base.get(key)?.value;
+      snapshot = {
+        board: value('board'),
+        view: value('view'),
+        historyStart: this.parts.store.historyStart(now),
+        sources: watched.lineup.map(id => value(`card:${id}`)),
+        sessions: Object.fromEntries(watched.lineup.map(id => [id, value(`sessions:${id}`)])),
+        cadence: Object.fromEntries(watched.lineup.map(id => [id, value(`cadence:${id}`)])),
+        mine: JSON.parse(this.mines.get(`${reader.user}\n${reader.board}`) ?? '[]'),
+        boards: this.boardLists.get(reader.user)?.value ?? [],
+        resets: this.hub?.value,
+      };
+    } catch (error) {
+      // Refused with an error, and nothing of it is left behind.
       this.unsubscribe(sub);
-      return null;
+      throw error;
     }
     sub.fresh = false;
     if (sub.kind === 'stream') sub.stopPing = this.every(this.options.heartbeatMs, () => this.ping(sub));
-
-    const now = this.clock.now();
-    const value = (key: string) => watched.base.get(key)?.value;
-    const snapshot = {
-      board: value('board'),
-      view: value('view'),
-      historyStart: this.parts.store.historyStart(now),
-      sources: watched.lineup.map(id => value(`card:${id}`)),
-      sessions: Object.fromEntries(watched.lineup.map(id => [id, value(`sessions:${id}`)])),
-      cadence: Object.fromEntries(watched.lineup.map(id => [id, value(`cadence:${id}`)])),
-      mine: JSON.parse(this.mines.get(`${reader.user}\n${reader.board}`) ?? '[]'),
-      boards: this.boardLists.get(reader.user)?.value ?? [],
-      resets: this.hub?.value,
-    };
     const hello = {epoch: this.epoch, now, client: this.client, heartbeatMs: this.options.heartbeatMs};
     return {sub, frames: [frame('hello', hello), frame('snapshot', snapshot)]};
   }
@@ -583,7 +630,7 @@ export class Events implements Touches {
       const frames = known.queue.length
         ? this.take(known)
         : await new Promise<Frame[]>(resolve => {
-            const stop = this.clock.after(this.options.pollMs, () => answer(this.take(known)));
+            const stop = this.later(this.options.pollMs, () => answer(this.take(known)));
             const answer = (frames: Frame[]) => {
               stop();
               if (known.waiting === answer) known.waiting = null;
@@ -594,7 +641,7 @@ export class Events implements Touches {
       // Forgotten `leaseMs` after its last answer; a newer request waiting keeps it.
       if (this.leases.get(known.id) === known && !known.waiting) {
         known.stopExpiry();
-        known.stopExpiry = this.clock.after(this.options.leaseMs, () => this.expire(known));
+        known.stopExpiry = this.later(this.options.leaseMs, () => this.expire(known));
       }
       return {lease: known.id, now: this.clock.now(), frames};
     }
@@ -627,7 +674,7 @@ export class Events implements Touches {
     if (opened === null || opened === 'limit') return opened;
     lease.subscriber = opened.sub;
     this.leases.set(lease.id, lease);
-    lease.stopExpiry = this.clock.after(this.options.leaseMs, () => this.expire(lease));
+    lease.stopExpiry = this.later(this.options.leaseMs, () => this.expire(lease));
     return {lease: lease.id, now: this.clock.now(), frames: opened.frames};
   }
 

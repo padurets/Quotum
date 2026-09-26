@@ -34,6 +34,9 @@ order for both:
 | 404 | `board_not_found` | No such board, or the reader is not on it. |
 | 429 | `too_many_streams` | No room for another reader (see [Limits](#limits)). |
 
+Any other answer (a `500` when the hub cannot work out the board, a proxy's error) is
+tried again later.
+
 No link, frame or cross-site request can set `Quotum-Stream`, while the page's own
 `fetch` does without a preflight: so only the hub's page takes a reader's place, also on
 plain http, where browsers send no `Sec-Fetch-Site`. `HEAD` opens nothing.
@@ -99,7 +102,7 @@ falling silent, a past reset leaving the history) goes out when it does.
 |---|---|---|
 | `unauthorized` | The session ended: signed out, a new password, expired. | Signs in again. |
 | `gone` | The board was deleted, or the reader is no longer on it. | Opens another board. |
-| `restart` | The hub stops. | Connects again in a few seconds. |
+| `restart` | The hub stops, or could not work out the board. | Connects again in a few seconds. |
 | `limit` | A newer reader took its place, or it fell 256 KiB behind. | Connects again, not sooner than in 30 seconds. |
 
 ## The board at once
