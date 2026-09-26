@@ -11,6 +11,13 @@ export const ACTIVITY = 'activity';
 export const AGENTS = 'agents';
 export const cardId = (sourceId: string) => `source:${sourceId}`;
 
+/**
+ * The analytics' widgets in the order a board has them until its owner moves them: how
+ * agents worked first, over what is left and the table. A board arranged before one of
+ * them existed gets it by its neighbour here (`arranged`).
+ */
+export const ANALYTICS = [ACTIVITY, HISTORY, FORECAST];
+
 /** Widgets a board goes without until its owner turns them on: the cards already show the agents. */
 const OFF_BY_DEFAULT = [AGENTS];
 export const isOffByDefault = (id: string) => OFF_BY_DEFAULT.includes(id);
@@ -103,7 +110,7 @@ export const isWindowHidden = (view: View, sourceId: string, windowId: string) =
  */
 export function boardState(sources: {id: string}[], view: View): 'onboarding' | 'widgets' | 'allHidden' {
   if (!sources.length) return 'onboarding';
-  const widgets = [...sources.map(source => cardId(source.id)), AGENTS, HISTORY, FORECAST, ACTIVITY];
+  const widgets = [...sources.map(source => cardId(source.id)), AGENTS, ...ANALYTICS];
   return widgets.every(id => isHidden(view, id)) ? 'allHidden' : 'widgets';
 }
 

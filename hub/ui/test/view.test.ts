@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {AGENTS, FORECAST, arranged, colorOf, columnShown, isHidden, planOf, withColumn, reordered, spanOf, weeklyPlanOf, withColor, withHidden, withPlan, withPlanned, withSpan, withWindowHidden} from '../lib/view';
+import {ACTIVITY, AGENTS, ANALYTICS, FORECAST, HISTORY, arranged, colorOf, columnShown, isHidden, planOf, withColumn, reordered, spanOf, weeklyPlanOf, withColor, withHidden, withPlan, withPlanned, withSpan, withWindowHidden} from '../lib/view';
 import {CARD_COLORS, PROVIDERS} from '../lib/providers';
 import {DEFAULT_PLAN} from '../lib/plan';
 import type {View} from '../lib/types';
@@ -16,6 +16,13 @@ test('widgets follow the board’s order; a new one comes next to its natural ne
   const card = ['source:a', 'source:b', 'source:c', 'source:d', 'history'];
   assert.deepEqual(arranged(view, card), ['history', 'source:c', 'source:d', 'source:a', 'source:b'], 'a new card after the one before it');
   assert.deepEqual(arranged({...EMPTY, order: ['source:gone', 'source:b']}, board), ['source:a', 'source:b', 'source:c', 'history']);
+});
+
+test('agent activity stands over what is left, on a new board and on one arranged before it', () => {
+  const ids = ['source:a', AGENTS, ...ANALYTICS];
+  assert.deepEqual(arranged(EMPTY, ids), ['source:a', AGENTS, ACTIVITY, HISTORY, FORECAST]);
+  const before = {...EMPTY, order: ['source:a', AGENTS, FORECAST, HISTORY]};
+  assert.deepEqual(arranged(before, ids), ['source:a', AGENTS, ACTIVITY, FORECAST, HISTORY], 'first of the analytics, whatever order they were given');
 });
 
 test('moving the shown widgets keeps the hidden ones behind them', () => {

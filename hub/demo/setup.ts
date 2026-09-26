@@ -161,7 +161,7 @@ export function viewOf(stand: Stand, key: string) {
   const shown = cards(set).filter(card => (personal ? holdersOf(set, card).includes(key) : !!card.on?.[key]));
   const board = boards(set).find(b => b.id === key) ?? people(set).find(p => p.id === key);
   const view = {
-    order: [...shown.map(card => `source:${stand.sources.get(card.id)}`), 'agents', 'history', 'forecast', 'activity'],
+    order: [...shown.map(card => `source:${stand.sources.get(card.id)}`), 'agents', 'activity', 'history', 'forecast'],
     sizes: {} as Record<string, number>,
     names: {} as Record<string, string>,
     hidden: [] as string[],

@@ -10,7 +10,7 @@ import {useResets} from './lib/resets';
 import {sourceLabel, titled} from './lib/quota';
 import {usePath} from './lib/router';
 import {boardTitle, rememberBoard, useBoard, useSession, type Board, type Session, type User} from './lib/session';
-import {ACTIVITY, AGENTS, arranged, boardState, cardId, FORECAST, HISTORY, isHidden, reordered, spanOf, useView, withHidden, withSpan} from './lib/view';
+import {ACTIVITY, AGENTS, ANALYTICS, arranged, boardState, cardId, FORECAST, HISTORY, isHidden, reordered, spanOf, useView, withHidden, withSpan} from './lib/view';
 import {t, useLocale} from './i18n';
 import {Header} from './components/Header';
 import {SERVICE} from './components/Kit';
@@ -137,7 +137,7 @@ function Dashboard({
       },
     ],
   ]);
-  const widgets = arranged(arrange.view, [...cards.keys(), ...panels.keys()]).map(id => (cards.get(id) ?? panels.get(id))!);
+  const widgets = arranged(arrange.view, [...cards.keys(), ...ANALYTICS]).map(id => (cards.get(id) ?? panels.get(id))!);
   const shown = widgets.filter(widget => !isHidden(arrange.view, widget.id));
   // The cards are about now; the chart and the table below them, with their filters, are the analytics.
   // Each area is arranged on its own grid.

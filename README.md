@@ -125,8 +125,8 @@ Codex         api                  idle     started 25m ago · editor
 - **Reset announcements** from the community trackers [Codex Resets](https://codex-resets.com)
   and [Claude Resets](https://claude-resets.com), with a link to the source. You
   can turn them off.
-- **Boards made of widgets** (a card per subscription, the chart, the table, agent
-  activity, and a list of every running agent to turn on), like a dashboard in Grafana:
+- **Boards made of widgets** (a card per subscription, agent activity, the chart, the
+  table, and a list of every running agent to turn on), like a dashboard in Grafana:
   the cards show what is left now, the analytics under them share one set of filters. The owner of a board drags them around, makes them wider or
   narrower, names the cards, hides the ones they don't need (the data keeps coming) and
   sets the plans; everyone on the board sees it arranged the same way. Once it's set,

@@ -96,7 +96,7 @@ is open.
   through `useTimeAxis` (`hub/ui/components/timeAxis.ts`), keeps its own options in its
   settings, and has its legend under it, each entry switched off and on by a click.
 - Scrollbars have one style, set once at the top of `hub/ui/style.css`; nothing styles its own.
-- Widgets on the board are a `.card` (a source) or a `.panel` (the chart, the table, agent activity).
+- Widgets on the board are a `.card` (a source) or a `.panel` (agent activity, the chart, the table).
 - **Keep the board cheap to render.** Nothing on the page is `position: fixed` or has a
   fixed background, and widgets have no `backdrop-filter` (floating surfaces and the
   sticky bars may): whole-window repainting during scroll is expensive, especially
