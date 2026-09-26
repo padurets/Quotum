@@ -7,6 +7,7 @@ import {PassThrough} from 'node:stream';
 import {buildApp} from '../api.js';
 import {config} from '../config.js';
 import {Duty} from '../duty.js';
+import {Cadence} from '../cadence.js';
 import {Ingest} from '../ingest.js';
 import {Pairing} from '../pairing.js';
 import {ResetFeed} from '../resets.js';
@@ -27,7 +28,7 @@ async function hub() {
     store,
     directory,
     resets: new ResetFeed(undefined, () => {}),
-    ingest: new Ingest(store, directory, new Duty()),
+    ingest: new Ingest(store, directory, new Duty(), new Cadence()),
     pairing: new Pairing(directory),
     setup: new Setup(true, SETUP),
     local: null,
@@ -370,6 +371,33 @@ test('agents get errors in the spec’s terms', async () => {
   assert.deepEqual([broken.status, broken.body], [400, {error: 'invalid_batch'}]);
   const wrong = await call('POST', '/v1/ingest', {body: {...batch('m-0123456789ab'), version: 2}, headers: auth});
   assert.deepEqual([wrong.status, wrong.body], [400, {error: 'invalid_batch', detail: 'version'}]);
+});
+
+test('a device following the hub’s pace is told when to ask again, and the card says when it measures next', async () => {
+  const {call, person} = await hub();
+  await person('alice');
+  const headers = {authorization: `Bearer ${(await call('POST', '/api/tokens', {as: 'alice', body: {}})).body.secret}`};
+  const checkin = (paced: unknown, change: object = {}) =>
+    call('POST', '/v1/checkin', {
+      body: {version: 1, agent: 'quotum/0.4.0', paced, machine: machine('m-0123456789ab'), subscriptions: [{provider: 'codex', account: 'a1b2c3d4e5f6a1b2c3d4e5f6', active: false, ...change}]},
+      headers,
+    });
+  const cadence = async () => (await call('GET', '/api/overview', {as: 'alice'})).body.sources[0]?.cadence;
+
+  const first = (await checkin(true)).body.subscriptions[0];
+  assert.deepEqual([first.measure, first.onDuty, first.askInMs, first.nextInMs], [true, true, 15_000, 240_000]);
+  const measured = Date.now() - 1000;
+  await call('POST', '/v1/ingest', {body: {...batch('m-0123456789ab'), snapshots: [{...snapshot(measured), staleAfterMs: 240_000 * 1.2 + 60_000}]}, headers});
+  const waiting = (await checkin(true)).body.subscriptions[0];
+  assert.deepEqual([waiting.measure, waiting.onDuty, waiting.nextInMs], [false, true, undefined]);
+  assert.ok(waiting.askInMs > 0 && waiting.askInMs <= 15_000);
+  assert.deepEqual(await cadence(), {next: measured + 120_000, why: 'idle'});
+
+  const plain = (await checkin(false)).body.subscriptions[0];
+  assert.deepEqual(Object.keys(plain), ['provider', 'measure', 'until'], 'without the pace, the answer is as before');
+  const bad = await checkin(true, {minIntervalMs: 30_000});
+  assert.deepEqual([bad.status, bad.body], [400, {error: 'invalid_request', detail: 'minIntervalMs'}]);
+  assert.deepEqual((await checkin('yes')).body, {error: 'invalid_request', detail: 'paced'});
 });
 
 test('an agent request without a valid token is refused before its body arrives', async t => {
