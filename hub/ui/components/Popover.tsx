@@ -54,8 +54,11 @@ export function Popover({
     return () => removeEventListener('resize', place);
   }, [open]);
 
-  // A panel is as tall as its content and scrolls only when that is taller than the screen
-  // under the top bar: a large screen shows it whole. Upwards it goes where it fits whole.
+  // A panel is as tall as its content and scrolls only when it has no room for it: a large
+  // screen shows it whole. Upwards it goes where it fits whole, or where there is more room.
+  // Opening down, the page scrolls to the rest of it, so only a panel taller than the screen
+  // under the top bar scrolls; opening up, nothing shows it past the top bar, so it scrolls
+  // when taller than the room above its button. It is measured again as its content changes.
   const [cap, setCap] = useState<number | null>(null);
   useLayoutEffect(() => {
     const element = panel.current;
@@ -71,20 +74,26 @@ export function Popover({
       const at = trigger.getBoundingClientRect();
       const bar = document.querySelector('.topbar')?.getBoundingClientRect().bottom ?? 0;
       const screen = innerHeight - bar - 16;
-      const height = Math.min(natural, screen);
       const above = at.top - bar - 14;
       const below = innerHeight - at.bottom - 14;
-      const downwards = up && height > above && below > above;
-      const capped = natural > screen ? screen : null;
+      const upwards = up && !(Math.min(natural, screen) > above && below > above);
+      const room = upwards ? above : screen;
+      const capped = natural > room ? room : null;
       // Set here as well as through state, so what is measured next is what shows.
       element.style.maxHeight = capped === null ? '' : `${capped}px`;
       element.classList.toggle('is-capped', capped !== null);
-      setDown(downwards);
+      setDown(up && !upwards);
       setCap(capped);
     };
     fit();
+    // Refitting leaves the panel as tall as it was, so it does not wake the observer again.
+    const observer = new ResizeObserver(fit);
+    observer.observe(element);
     addEventListener('resize', fit);
-    return () => removeEventListener('resize', fit);
+    return () => {
+      observer.disconnect();
+      removeEventListener('resize', fit);
+    };
   }, [open, up]);
 
   useEffect(() => {
