@@ -1,6 +1,7 @@
 import {useSyncExternalStore} from 'react';
 import {readAgentsSort, type AgentsSort} from './agents';
 import {ANALYTICS_KINDS, type Kind} from './types';
+import {DEFAULT_PERIOD, periodOf} from './periods';
 
 /** How far the chart looks ahead: `auto` follows the period. */
 export type Horizon = 'auto' | '1d' | '3d' | '7d';
@@ -28,16 +29,15 @@ export type Prefs = {
 };
 
 const KEY = 'quotum.prefs';
-const RANGES = ['24h', '7d', '30d'];
 export const HORIZONS: Horizon[] = ['auto', '1d', '3d', '7d'];
-const DEFAULTS: Prefs = {muted: {}, range: '24h', kind: 'weekly', horizon: 'auto', showPlan: true, showResets: true, locked: false, agentsSort: null};
+const DEFAULTS: Prefs = {muted: {}, range: DEFAULT_PERIOD, kind: 'weekly', horizon: 'auto', showPlan: true, showResets: true, locked: false, agentsSort: null};
 
 function read(): Prefs {
   try {
     const raw = localStorage.getItem(KEY);
     const stored = {...DEFAULTS, ...(raw ? (JSON.parse(raw) as Partial<Prefs>) : {})};
     // Whatever the browser kept from another version must still be a valid choice.
-    if (!RANGES.includes(stored.range)) stored.range = DEFAULTS.range;
+    stored.range = periodOf(String(stored.range)).id;
     if (!ANALYTICS_KINDS.includes(stored.kind)) stored.kind = DEFAULTS.kind;
     if (!HORIZONS.includes(stored.horizon)) stored.horizon = DEFAULTS.horizon;
     const {muted, range, kind, horizon, showPlan, showResets, locked} = stored;

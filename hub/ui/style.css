@@ -413,9 +413,14 @@ td.muted, small.muted { color: var(--text-3); }
 .segmented button { white-space: nowrap; border: 0; background: none; color: var(--text-3); padding: 5px 12px; border-radius: 7px; font-size: 12.5px; transition: color .15s, background .15s; }
 .segmented button:hover { color: var(--text-2); }
 .segmented button[aria-pressed=true], .segmented .is-on { background: #ffffff12; color: var(--text); box-shadow: inset 0 1px 0 #ffffff0d; }
-.segmented .segmented-range { display: inline-flex; align-items: center; gap: 7px; font-variant-numeric: tabular-nums; }
-.segmented-range svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; opacity: .55; }
-.segmented-range:hover svg { opacity: 1; }
+/* The period: ‹ [the list] ›, and a time range's × beside the list. */
+.period { display: flex; align-items: center; gap: 2px; }
+.period .icon-button { width: 28px; height: 28px; }
+.period .icon-button svg { stroke-width: 1.6; stroke-linejoin: round; }
+.period .icon-button:disabled { opacity: .35; pointer-events: none; }
+.period .text-button { border-color: var(--hair); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.period-name { display: flex; align-items: center; gap: 6px; }
+.period-name svg { flex-shrink: 0; }
 
 .legend { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 18px 0 4px; }
 .legend-item { display: flex; align-items: center; gap: 8px; padding: 4px 0; border: 0; background: none; font-size: 12.5px; color: var(--text-2); transition: opacity .15s; }
@@ -679,9 +684,9 @@ tr:hover .device-name .icon-button, .device-name .icon-button:focus-visible { op
   .controls { width: 100%; flex-direction: column; align-items: stretch; }
   .controls .segmented { flex: 1; }
   .controls .segmented button { flex: 1; padding: 6px; }
-  /* A selected time range takes a row of its own under the fixed periods. */
-  .controls .segmented { flex-wrap: wrap; }
-  .controls .segmented .segmented-range { flex-basis: 100%; justify-content: center; }
+  /* The list takes what room is left between the arrows; a long time range wraps in it. */
+  .period .picker { flex: 1; min-width: 0; }
+  .period .text-button { flex: 1; justify-content: center; height: auto; min-height: 28px; padding: 4px 10px; white-space: normal; text-align: center; }
   .forecast th:nth-child(4), .forecast td:nth-child(4) { display: none; }
   /* Over a selected time range what it spent matters most; its pace goes instead. */
   .forecast.is-range th:nth-child(4), .forecast.is-range td:nth-child(4) { display: table-cell; }

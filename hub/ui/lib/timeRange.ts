@@ -65,6 +65,11 @@ export function setTimeRange(selected: TimeRange | null) {
   go(params, true);
 }
 
+/** Goes where a step through time takes the analytics (periods.ts): a range, or the chosen period again. */
+export function goTo(next: TimeRange | 'live' | null) {
+  if (next) setTimeRange(next === 'live' ? null : next);
+}
+
 /** Forgets a selection the hub will not read (older than it keeps history), without a step back to it. */
 export function dropTimeRange() {
   const params = new URLSearchParams(location.search);

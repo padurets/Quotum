@@ -144,6 +144,8 @@ export function Chart({
         let previousX = -1;
         for (const [at, remaining, group] of line.points) {
           if (at + cellMs < from) continue;
+          // The answer on screen may be of another period while the next loads: what lies past the end is not drawn.
+          if (at > now) break;
           const px = bx(at);
           const py = y(remaining);
           if (group !== segment) {
@@ -159,7 +161,7 @@ export function Chart({
           last: runs.at(-1)?.at(-1) ?? null,
         };
       }),
-    [lines, from, span, width, height, cellMs],
+    [lines, from, now, span, width, height, cellMs],
   );
 
   const readout =

@@ -205,6 +205,8 @@ export const en = {
   'analytics.title': 'Analytics',
   'history.range': 'Period',
   'history.rangeClear': 'Clear the selection and go back to the period',
+  'history.back': 'Half the period back',
+  'history.forward': 'Half the period forward',
   'history.hours': '{count}h',
   'history.days': {one: '{count} day', other: '{count} days'},
   'history.noLines': 'No limits of this type selected',

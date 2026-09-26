@@ -111,44 +111,78 @@ export function useOverview(board: string, onGone: () => void) {
   return {data: data?.board?.id === board ? data : null, lastOk, reload: again};
 }
 
+/** Changes of the period this close together are a run of steps: only the last is asked for, once they stop. */
+const SETTLE_MS = 300;
+/** How many answers of past ranges the page keeps, so stepping back and forth over them asks the hub nothing. */
+const KEPT_RANGES = 8;
+
 /**
- * History of a board over a fixed range ('24h', …) or a time range selected on the chart,
- * read again when that changes or, for a range, when the board's data does
- * (`revision`); a selected one is in the past and stays as read. While another one loads, the
- * one on screen stays (`loading`), so the page keeps its height and does not jump.
+ * Whether an answer is all there is of a range: nothing newer is on its way
+ * (`refreshInMs`), and its end was not cut to the hub's now, so later data cannot change it.
+ */
+export const complete = (history: History, selected: TimeRange) => history.refreshInMs === null && history.to === Math.ceil(selected.to / history.cellMs) * history.cellMs;
+
+/**
+ * History of a board over a period ending now ('24h', …) or a time range in the past,
+ * read again when that changes or, for a period, when the board's data does (`revision`);
+ * a range is in the past and stays as read. While another one loads, the one on screen
+ * stays (`loading`), so the page keeps its height and does not jump. A run of quick
+ * changes (steps back through time) asks only for where it stops, and the latest few
+ * ranges read whole are kept on the page.
  */
 export function useHistory(board: string, period: string | TimeRange, revision: number | null): {history: History | null; loading: boolean} {
   const [history, setHistory] = useState<History | null>(null);
   const [retry, setRetry] = useState(0);
+  const kept = useRef(new Map<string, History>());
+  const changed = useRef({key: '', at: 0});
   const selected = typeof period === 'string' ? null : period;
   const key = selected ? timeRangeKey(selected) : (period as string);
   const query = selected ? `from=${selected.from}&to=${selected.to}` : `range=${key}`;
   const version = selected && revision !== null ? 0 : revision;
+  const cached = selected ? kept.current.get(`${board} ${key}`) : undefined;
 
   useEffect(() => {
     if (version === null) return;
+    const slot = `${board} ${key}`;
+    const now = Date.now();
+    const quick = changed.current.key !== slot && now - changed.current.at < SETTLE_MS;
+    if (changed.current.key !== slot) changed.current = {key: slot, at: now};
+    if (cached) return setHistory(cached);
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
-    call<History>('GET', `/api/history?board=${encodeURIComponent(board)}&${query}`)
-      .then(data => {
-        if (cancelled) return;
-        setHistory({...data, board});
-        // A costly history is put together again a while after new data came: asked for then.
-        if (data.refreshInMs !== null) timer = setTimeout(() => setRetry(n => n + 1), data.refreshInMs + 1_000);
-      })
-      .catch(error => {
-        if (cancelled) return;
-        // A selected range the hub will not read (say, a link older than the history it keeps)
-        // cannot succeed later: the chosen period comes back instead.
-        if (selected && error instanceof ApiError && error.status === 400) return dropTimeRange();
-        timer = setTimeout(() => setRetry(n => n + 1), 15000);
-      });
+    const keep = (data: History) => {
+      if (!selected || !complete(data, selected)) return;
+      // Map order is insertion order: the one read last goes to the end, the oldest is dropped.
+      kept.current.delete(slot);
+      kept.current.set(slot, data);
+      if (kept.current.size > KEPT_RANGES) kept.current.delete(kept.current.keys().next().value!);
+    };
+    const read = () =>
+      call<History>('GET', `/api/history?board=${encodeURIComponent(board)}&${query}`)
+        .then(answer => {
+          const data = {...answer, board};
+          // One stepped past on the way is kept all the same: it may be stepped back to.
+          keep(data);
+          if (cancelled) return;
+          setHistory(data);
+          // A costly history is put together again a while after new data came: asked for then.
+          if (data.refreshInMs !== null) timer = setTimeout(() => setRetry(n => n + 1), data.refreshInMs + 1_000);
+        })
+        .catch(error => {
+          if (cancelled) return;
+          // A selected range the hub will not read (say, a link older than the history it keeps)
+          // cannot succeed later: the chosen period comes back instead.
+          if (selected && error instanceof ApiError && error.status === 400) return dropTimeRange();
+          timer = setTimeout(() => setRetry(n => n + 1), 15000);
+        });
+    if (quick) timer = setTimeout(read, SETTLE_MS);
+    else void read();
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [board, query, version, retry]);
+  }, [board, query, version, retry, cached]);
 
-  const shown = history?.board === board ? history : null;
+  const shown = cached ?? (history?.board === board ? history : null);
   return {history: shown, loading: !!shown && shown.range !== key};
 }

@@ -5,20 +5,16 @@ import {num} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
 import {planAt, started, weeklyPlanLine} from '../lib/plan';
 import {PROVIDERS} from '../lib/providers';
-import {HORIZONS, setMuted, setPrefs, usePrefs, type Horizon} from '../lib/prefs';
-import {ofTimeRange, setTimeRange} from '../lib/timeRange';
+import {HORIZONS, setMuted, setPrefs, usePrefs} from '../lib/prefs';
+import {setTimeRange, useTimeRange} from '../lib/timeRange';
+import {frameOf} from '../lib/periods';
 import {HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
-import {chartEvents, chartFrom, chartResets, linesOf} from '../lib/lines';
+import {chartEvents, chartResets, linesOf} from '../lib/lines';
 import {Chart, type Marker, type PlanLine} from './Chart';
 import type {PastResets, Resets} from '../lib/resets';
 import {t, useLocale} from '../i18n';
 import {Segmented} from './Kit';
 import {HideRow, Popover, SlidersIcon} from './Popover';
-
-const DAY = 86_400_000;
-/** How much future the chart keeps on its right when its horizon is `auto`, per range. */
-const FUTURE: Record<string, number> = {'24h': 4 * 3_600_000, '7d': DAY, '30d': 3 * DAY};
-const HORIZON: Record<Exclude<Horizon, 'auto'>, number> = {'1d': DAY, '3d': 3 * DAY, '7d': 7 * DAY};
 
 /** The chart's own settings: how far it looks ahead, and (for the board's owner) hiding it. */
 function HistorySettings({arrange, planShown}: {arrange: Arrange; planShown: boolean}) {
@@ -66,12 +62,13 @@ export const History = memo(function History({
   const lines = useMemo(() => linesOf(history, overview, view, prefs.kind), [history, overview, prefs.kind, view.windows, view.hidden, view.colors, locale]);
 
   const visible = useMemo(() => lines.filter(line => !prefs.muted[line.key]), [lines, prefs.muted]);
-  // A time range selected on the chart is in the past: the chart shows just it, without the future.
-  const selected = ofTimeRange(history);
-  const from = chartFrom(history, now);
-  const measuredTo = history?.to ?? now;
+  // The chart moves to the period asked for at once, drawing the answer it has until the
+  // next one comes. A time range is in the past: the chart shows just it, without the future.
+  const frame = frameOf(useTimeRange(), prefs, now, overview?.historyStart ?? history?.historyStart ?? 0);
+  const {from, future} = frame;
+  const measuredTo = frame.to;
   // An announced Codex reset matters only where Codex is on the chart.
-  const announced = !selected && visible.some(line => line.provider === 'codex') ? (resets.codex?.scheduled?.scheduledFor ?? null) : null;
+  const announced = frame.live && visible.some(line => line.provider === 'codex') ? (resets.codex?.scheduled?.scheduledFor ?? null) : null;
   // The spending plan applies to weekly windows; the days ahead are there for it, when a line on the chart has a plan.
   const planAvailable = prefs.kind === 'weekly' && visible.some(line => planOf(view, line.sourceId) !== null);
   const planShown = planAvailable && prefs.showPlan;
@@ -79,9 +76,8 @@ export const History = memo(function History({
   // edge). With it, on `auto` some future stays on the right, stretched to include an
   // announced reset when close: it may take up to ~40% of the width, a reset further
   // out is pointed at from the edge instead. A chosen horizon is kept as is.
-  const future = prefs.horizon === 'auto' ? (FUTURE[prefs.range] ?? FUTURE['24h']) : HORIZON[prefs.horizon];
   const reach = measuredTo + (measuredTo - from) * 0.75;
-  const to = !planShown || selected
+  const to = !planShown || !frame.live
     ? measuredTo
     : prefs.horizon === 'auto' && announced && announced > measuredTo && announced + future * 0.25 > measuredTo + future
       ? Math.min(reach, announced + future * 0.25)

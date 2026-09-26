@@ -200,6 +200,8 @@ export const ru = {
   'analytics.title': 'Аналитика',
   'history.range': 'Период',
   'history.rangeClear': 'Снять выделение и вернуться к периоду',
+  'history.back': 'На полпериода назад',
+  'history.forward': 'На полпериода вперёд',
   'history.hours': '{count} ч',
   'history.days': {one: '{count} день', few: '{count} дня', many: '{count} дней', other: '{count} дня'},
   'history.noLines': 'Нет выбранных лимитов этого типа',

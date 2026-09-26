@@ -16,7 +16,8 @@ import type {ResetEvent, ResetProvider} from '../../server/domain/resets.js';
 import {setLocale} from '../../ui/i18n/index.js';
 import {agentRows, byActivity, drawn, machinesOf} from '../../ui/lib/agents.js';
 import {forecastRow} from '../../ui/lib/forecast.js';
-import {chartEvents, chartFrom, chartResets, linesOf} from '../../ui/lib/lines.js';
+import {chartEvents, chartResets, linesOf} from '../../ui/lib/lines.js';
+import {frameOf} from '../../ui/lib/periods.js';
 import {planNote, started} from '../../ui/lib/plan.js';
 import {dotOf, level, resetLine, titled, windowName} from '../../ui/lib/quota.js';
 import {resetLabel, type Resets, type TrackerHealth} from '../../ui/lib/resets.js';
@@ -176,7 +177,8 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
       const board = people(set)[0].id;
       const [overview, history] = await Promise.all([reading.overview(board), reading.history(board, range)]);
       if (isHidden(overview.view, HISTORY)) return `the chart is hidden on the board ${board}`;
-      const marks = chartResets(told.past, linesOf(history, overview, overview.view, 'weekly'), chartFrom(history, now), history.to).filter(m => m.provider === provider);
+      const frame = frameOf(null, {range: range ?? '24h', horizon: 'auto'}, now, overview.historyStart);
+      const marks = chartResets(told.past, linesOf(history, overview, overview.view, 'weekly'), frame.from, frame.to).filter(m => m.provider === provider);
       return {marked: provider, resets: marks.length, range};
     }
     const {reset} = check as {reset: 'claude' | 'codex'};
@@ -259,7 +261,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
     // Marked on the chart as it opens: the weekly windows of the last 24 hours.
     if (isHidden(overview.view, HISTORY)) return `the chart is hidden on the board ${board}`;
     const history = await reading.history(board);
-    const marks = chartEvents(history.events, linesOf(history, overview, overview.view, 'weekly'), chartFrom(history, now));
+    const marks = chartEvents(history.events, linesOf(history, overview, overview.view, 'weekly'), frameOf(null, {range: '24h', horizon: 'auto'}, now, overview.historyStart).from);
     const events = marks.filter(m => m.event.sourceId === source.id).map(m => m.event.kind);
     values.event = events.includes(card.event) ? card.event : events;
   }

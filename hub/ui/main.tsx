@@ -208,7 +208,7 @@ function Dashboard({
             {shownCards.length > 0 && grid(shownCards, order => arrange.update(view => reordered(view, [...order, ...ids(shownPanels)])))}
             {shownPanels.length > 0 && (
               <section className="analytics" aria-label={t('analytics.title')}>
-                <AnalyticsHead />
+                <AnalyticsHead historyStart={overview?.historyStart ?? 0} />
                 {grid(shownPanels, order => arrange.update(view => reordered(view, [...ids(shownCards), ...order])))}
               </section>
             )}
