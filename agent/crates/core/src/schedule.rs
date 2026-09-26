@@ -194,7 +194,8 @@ impl Schedule {
                 Directive::Wait { on_duty: true, .. } => {
                     slot.paced = true;
                     slot.due = shared.unwrap_or(now + ASK_AGAIN_MS);
-                    slot.fallback_at = Some(slot.fallback_at.unwrap_or(now).max(now + SILENCE_MS));
+                    // Silence counts from when the hub said to ask again, however long that is.
+                    slot.fallback_at = Some(slot.fallback_at.unwrap_or(now).max(slot.due + SILENCE_MS));
                 }
                 Directive::Measure { paced: Some(p) } => {
                     slot.paced = true;
@@ -466,11 +467,11 @@ mod tests {
         // It answers on a question again: the slot goes on at its pace.
         let mut s = Schedule::new(&[120_000], 0, true);
         s.answer(&[(0, wait(15 * S))], 0);
-        assert_eq!(s.slots[0].fallback_at, Some(4 * MIN));
+        assert_eq!(s.slots[0].fallback_at, Some(15 * S + 4 * MIN), "from when it is to ask again");
         s.answer(&[(0, Directive::Unanswered)], 15 * S);
         s.answer(&[(0, wait(15 * S))], 30 * S);
         assert!(s.paced(0));
-        assert_eq!(s.slots[0].fallback_at, Some(30 * S + 4 * MIN), "borne anew from the answer");
+        assert_eq!(s.slots[0].fallback_at, Some(40 * S + 4 * MIN), "borne anew from the answer's time to ask");
         // A slot not yet measured in this run bears 4 minutes of silence too.
         let mut s = Schedule::new(&[120_000], 0, true);
         s.answer(&[(0, wait(15 * S))], 0);
@@ -513,6 +514,18 @@ mod tests {
         assert_eq!(s.due(1), MIN + 10 * S);
         s.answer(&[(1, other(5 * 3_600_000))], MIN);
         assert_eq!(s.due(1), MIN + 15 * MIN);
+    }
+
+    #[test]
+    fn a_hub_silent_right_after_a_long_wait_it_asked_for_is_borne_as_any_silence() {
+        // On duty, told to ask again in ten minutes (a pause after failures): one lost
+        // answer then is asked again, not taken for four minutes of silence.
+        let mut s = Schedule::new(&[120_000], 0, true);
+        s.answer(&[(0, wait(10 * MIN))], 0);
+        s.answer(&[(0, Directive::Unanswered)], 10 * MIN);
+        assert!(s.paced(0));
+        assert_eq!(s.due(0), 10 * MIN + 15 * S);
+        assert_eq!(cleared(&mut s), []);
     }
 
     #[test]

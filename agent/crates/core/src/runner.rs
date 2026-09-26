@@ -803,6 +803,17 @@ mod tests {
     }
 
     #[test]
+    fn another_device_on_duty_is_said_once_with_when_to_ask_again() {
+        let started = now_ms();
+        let other = |now| Directive::Wait { ask_at: now + 10 * 60_000, on_duty: false };
+        let (_, runs, events) = paced_run(other, snapshot, 3_000);
+        assert_eq!(runs, 0);
+        assert_eq!(events.len(), 1, "{events:?}");
+        let (measured, next) = events[0];
+        assert!(!measured && next >= started + 10 * 60_000 && next <= now_ms() + 10 * 60_000);
+    }
+
+    #[test]
     fn an_unanswered_check_in_is_not_followed_by_sending_the_spool() {
         let (sink, runs, _) = paced_run(|_| Directive::Unanswered, snapshot, 5_000);
         assert_eq!((sink.flushed, runs), (0, 1), "measured as without a hub, nothing flushed");
