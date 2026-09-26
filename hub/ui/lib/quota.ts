@@ -99,7 +99,7 @@ export function cadenceOf(source: Pick<SourceState, 'stale' | 'error' | 'success
 
 /**
  * How fresh a source's numbers are, from 1 (just measured) to 0 (a while ago). It only
- * says how old they are, not that anything is wrong: in eco mode a quiet subscription
+ * says how old they are, not that anything is wrong: a quiet subscription
  * is measured every quarter of an hour, and that is fine. Trouble has its own colour.
  */
 export function freshness(age: number): number {

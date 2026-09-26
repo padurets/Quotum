@@ -135,9 +135,11 @@ day, not a script thrown together over a weekend. In practice that meant:
 - **It stays out of the way.** The agent idles at about 5 MB of memory. The expensive
   part is starting an agent's client (around a second of CPU and 100–230 MB of memory
   for that second), so Quotum starts as few of them as it can. They run one at a time,
-  every two minutes by default. When nothing changes and nobody uses a client, that
-  client is measured less often, down to once every 15 minutes. And only one machine
-  measures each subscription.
+  and only one machine measures each subscription, as often as the hub says, since it
+  sees the subscription on every machine: every two minutes while it is in use anywhere
+  or its numbers change, every minute when little is left, and less often while nothing
+  happens, down to once every 15 minutes. The machine asks the hub every 15 seconds,
+  which starts nothing.
 - **Your credentials stay where they are.** Quotum never reads, stores or sends provider
   tokens or cookies. What leaves the machine: percentages and reset times, plan names,
   a one-way hash of each account id (so the hub can tell two machines share one
@@ -326,8 +328,9 @@ Everything is optional. On Linux the file is `~/.config/quotum/config.toml`;
 `quotum config` shows where it is on your system and what is in effect.
 
 ```toml
-interval = 120          # seconds between two measurements of one client, 60 to 86400
-eco = true              # measure less often while nothing changes
+# interval = 120        # seconds, 60 to 86400: with a hub, the most often a client is measured
+                        # (left out, the hub measures as often as needed); without one, how often
+eco = true              # without a hub (or while it does not answer): measure less often while nothing changes
 sessions = true         # tell the hub which coding agents run here, working or idle
 projects = true         # with the names of their project folders
 
