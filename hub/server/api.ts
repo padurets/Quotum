@@ -107,7 +107,7 @@ export async function buildApp(hub: Hub) {
     bodyLimit: 16 * 1024,
     trustProxy: config.http.trustProxy,
     requestTimeout: requestTimeoutMs,
-    // Fastify sets the request's limit on a server already made, where Node takes the longer of the two for the whole request.
+    // Once the headers are in, Node holds a request to the longer of its two limits (the headers' is 60 seconds by default).
     http: {headersTimeout: requestTimeoutMs, connectionsCheckingInterval: checkMs},
     clientErrorHandler: clientError,
   });

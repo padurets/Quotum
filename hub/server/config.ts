@@ -100,8 +100,9 @@ export const config = {
     /**
      * How long a request may take to arrive, headers and body, so one that trickles in
      * does not hold a connection for ever. Above the 20 seconds after which the agent
-     * gives up itself. Node checks it every `checkMs`; the headers get the same limit, as
-     * Node gives the whole request the longer of the two (the headers' is 60 seconds by default).
+     * gives up itself. Node checks it every `checkMs`. The headers get the same limit:
+     * once they are in, Node holds a request to the longer of the two (the headers' is 60
+     * seconds by default).
      */
     requestTimeoutMs: 30_000,
     checkMs: 5_000,

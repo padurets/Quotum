@@ -455,7 +455,7 @@ test('a request is given 30 seconds to arrive, and one that takes longer is answ
   // Node keeps the checking interval on the server, but its types do not declare it.
   const server = app.server as typeof app.server & {connectionsCheckingInterval: number};
   assert.equal(server.requestTimeout, 30_000);
-  // Node gives the whole request the longer of the two limits.
+  // Once the headers are in, Node holds a request to the longer of the two limits.
   assert.ok(server.headersTimeout <= server.requestTimeout, `headersTimeout ${server.headersTimeout}`);
   assert.equal(server.connectionsCheckingInterval, 5_000);
 
