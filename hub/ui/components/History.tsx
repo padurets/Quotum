@@ -215,33 +215,37 @@ export const History = memo(function History({
           </button>
         ))}
         {!lines.length && <span className="legend-empty">{t('history.noLines')}</span>}
-        {planAvailable && (
-          <button
-            type="button"
-            className="legend-item legend-plan"
-            aria-pressed={prefs.showPlan}
-            title={t('history.planLegendHint')}
-            onClick={() => setPrefs({showPlan: !prefs.showPlan})}
-          >
-            <svg width="18" height="6" aria-hidden="true">
-              <line x1="1" x2="17" y1="3" y2="3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeDasharray="1 4" />
-            </svg>
-            <span>{t('history.planLegend')}</span>
-          </button>
-        )}
-        {forecastAvailable && (
-          <button
-            type="button"
-            className="legend-item legend-plan"
-            aria-pressed={prefs.showForecast}
-            title={t('history.forecastLegendHint')}
-            onClick={() => setPrefs({showForecast: !prefs.showForecast})}
-          >
-            <svg width="18" height="6" aria-hidden="true">
-              <line x1="1" x2="17" y1="3" y2="3" stroke="currentColor" strokeWidth="1.5" strokeDasharray="4 3" />
-            </svg>
-            <span>{t('history.forecastLegend')}</span>
-          </button>
+        {(planAvailable || forecastAvailable) && (
+          <span className="legend-switches">
+            {planAvailable && (
+              <button
+                type="button"
+                className="legend-item legend-plan"
+                aria-pressed={prefs.showPlan}
+                title={t('history.planLegendHint')}
+                onClick={() => setPrefs({showPlan: !prefs.showPlan})}
+              >
+                <svg width="18" height="6" aria-hidden="true">
+                  <line x1="1" x2="17" y1="3" y2="3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeDasharray="1 4" />
+                </svg>
+                <span>{t('history.planLegend')}</span>
+              </button>
+            )}
+            {forecastAvailable && (
+              <button
+                type="button"
+                className="legend-item legend-plan"
+                aria-pressed={prefs.showForecast}
+                title={t('history.forecastLegendHint')}
+                onClick={() => setPrefs({showForecast: !prefs.showForecast})}
+              >
+                <svg width="18" height="6" aria-hidden="true">
+                  <line x1="1" x2="17" y1="3" y2="3" stroke="currentColor" strokeWidth="1.5" strokeDasharray="4 3" />
+                </svg>
+                <span>{t('history.forecastLegend')}</span>
+              </button>
+            )}
+          </span>
         )}
       </div>
 

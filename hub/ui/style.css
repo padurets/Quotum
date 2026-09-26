@@ -477,8 +477,9 @@ td.muted, small.muted { color: var(--text-3); }
 .tooltip-sep { height: 1px; background: var(--hair); margin: 5px 0; }
 /* The plan beside what is left, at the row's end. */
 .tooltip-plan { margin-left: auto; padding-left: 16px; font-style: normal; font-variant-numeric: tabular-nums; color: var(--text-3); }
-.legend-plan { margin-left: auto; color: var(--text-3); }
-.legend-plan + .legend-plan { margin-left: 0; }
+/* The plan's and the forecast's switches stay together at the end of the legend. */
+.legend-switches { display: flex; gap: 4px 18px; margin-left: auto; }
+.legend-plan { color: var(--text-3); }
 .tooltip-forecast { color: var(--text-2); }
 
 /* Positioned, so what is hidden for screen readers in a cell scrolls with the table rather than widening the page. */
