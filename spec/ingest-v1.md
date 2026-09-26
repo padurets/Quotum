@@ -232,11 +232,12 @@ also has:
 
 Times in these fields are durations, not moments, so a device whose clock is off still
 waits as long as it is told. The hub measures a subscription with any window at 10% or
-less every minute while it was active within the last hour (its numbers changed or it was
+less, above 0, every minute while it was active within the last hour (its numbers changed or it was
 in use), every 2 minutes after an hour of quiet and every 5 minutes after three; one in
 use, or whose numbers just changed, every 2 minutes; otherwise less and less often, up
 to every 15 minutes, and 30 seconds after a known reset. Never more often than a
-device's `minIntervalMs`.
+device's `minIntervalMs`, taken as at most 71 950 000 so that a measurement never goes
+stale before the next.
 
 A device whose measurements of a subscription fail delivers the failures as usual and
 keeps asking: the hub waits them out, longer each time in a row (15 minutes for
@@ -339,9 +340,10 @@ of the windows, free resets and when each expires, the client's version, the mac
 configured, and for a failed measurement its kind and a short
 message of the client (at most 200 characters). With each check-in: whether the client is
 in use on the machine (on duty, as often as every 15 seconds), and how often at most the
-machine measures the subscription, if configured. The members of a board where you show
-a subscription see whether it is in use right now (from that, and from the working agents
-of any machine), whatever the settings about running agents say. About running agents (unless turned
+machine measures the subscription, if configured. Wherever the subscription is shown, by
+anyone who holds its account, the members of the board see whether it is in use right now
+(from that, and from the working agents of any machine), whatever the settings about
+running agents say. About running agents (unless turned
 off): which client, where it runs, since when, whether it works and when it last did,
 and the name of its project (the repository its folder is in, else the folder) and of
 its folder when that differs (unless that is turned off too). The members of a board
