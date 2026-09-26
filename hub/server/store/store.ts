@@ -405,8 +405,10 @@ export class Store {
 
   /**
    * Credits the sessions `keys` of a device with work from `from` to `until`: a stretch
-   * that ends where this one starts grows, else a new one begins. A savepoint keeps it
-   * whole on its own (a sweep) and inside a request's transaction alike.
+   * that ends where this one starts grows, else a new one begins. A session is never
+   * credited again for time before the end of its latest stretch, which a clock set back
+   * would bring, even after the hub restarted or the machine went quiet in between. A
+   * savepoint keeps it whole on its own (a sweep) and inside a request's transaction alike.
    */
   creditWork(device: string, from: number, until: number, keys: WorkKey[]) {
     if (until <= from || !keys.length) return;
@@ -416,6 +418,7 @@ export class Store {
     const find = this.db.prepare(
       'SELECT id FROM agent_sessions WHERE device_id = ? AND source_id = ? AND started_at = ? AND origin = ? AND project = ? AND folder = ? AND ordinal = ?',
     );
+    const latest = this.db.prepare('SELECT max(to_at) AS at FROM agent_work WHERE session_id = ?');
     const extend = this.db.prepare('UPDATE agent_work SET to_at = ? WHERE session_id = ? AND to_at = ?');
     const begin = this.db.prepare('INSERT INTO agent_work VALUES (?, ?, ?) ON CONFLICT (session_id, from_at) DO UPDATE SET to_at = max(to_at, excluded.to_at)');
     this.db.exec('SAVEPOINT credit');
@@ -423,7 +426,9 @@ export class Store {
       for (const {source, origin, startedAt, project, folder, ordinal} of keys) {
         add.run(device, source, origin, startedAt, project, folder, ordinal);
         const {id} = find.get(device, source, startedAt, origin, project, folder, ordinal) as {id: number};
-        if (!extend.run(until, id, from).changes) begin.run(id, from, until);
+        const start = Math.max(from, (latest.get(id) as {at: number | null}).at ?? from);
+        if (until <= start) continue;
+        if (!extend.run(until, id, start).changes) begin.run(id, start, until);
       }
       this.db.exec('RELEASE credit');
     } catch (error) {

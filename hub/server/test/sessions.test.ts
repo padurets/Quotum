@@ -135,6 +135,30 @@ test("a hub's clock set back credits nothing twice", () => {
   store.close();
 });
 
+test('a clock set back after the hub forgot a machine credits nothing twice either', () => {
+  const {store, live, ann, laptop} = setup();
+  const list = [session(laptop, {project: 'quotum'})];
+  live.report(laptop, ann, list, start);
+  live.report(laptop, ann, list, start + 120 * second);
+  // Quiet long enough to be forgotten, as after a restart of the hub; then the clock goes back.
+  live.sweep(start + 20 * minute);
+  for (const at of [60, 180, 300, 420]) live.report(laptop, ann, list, start + at * second);
+  live.report(laptop, ann, [], start + 540 * second);
+  assert.deepEqual(seconds(all(store)), [['quotum', null, 0, 540]], 'the time before 320 s once, then on');
+  store.close();
+});
+
+test('a clock set back before anything was credited loses only the list it came back to', () => {
+  const {store, live, ann, laptop} = setup();
+  const list = [session(laptop, {project: 'quotum'})];
+  // The hub's first list three hours ahead, then its clock is put right.
+  live.report(laptop, ann, list, start + 3 * 3_600_000);
+  for (let at = 0; at <= 10; at += 2) live.report(laptop, ann, list, start + at * minute);
+  live.report(laptop, ann, [], start + 11 * minute);
+  assert.deepEqual(seconds(all(store)), [['quotum', null, 0, 660]]);
+  store.close();
+});
+
 test('idle agents are not credited', () => {
   const {store, live, ann, laptop} = setup();
   live.report(laptop, ann, [session(laptop, {project: 'quotum', working: false})], start);

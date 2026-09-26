@@ -31,11 +31,8 @@ export type BoardSession = {
   working: boolean;
 };
 
-/**
- * A machine's sessions, by the subscription they spend, as its agent last reported them:
- * when, and up to when its work is credited already, which a clock set back stays behind.
- */
-type Machine = {at: number; credited: number; user: string; sources: Map<string, LiveSession[]>};
+/** A machine's sessions, by the subscription they spend, as its agent last reported them, and when. */
+type Machine = {at: number; user: string; sources: Map<string, LiveSession[]>};
 
 /** A machine's list is kept this long after its last report (its agent reports at least every two minutes). */
 export const KEEP_MS = 5 * 60_000;
@@ -64,10 +61,10 @@ export class Sessions {
   report(device: string, user: string, sessions: (LiveSession & {source: string})[], now: number) {
     this.sweep(now);
     const before = this.machines.get(device);
-    const credited = before ? this.credit(device, before, Math.min(now, before.at + CREDIT_MS)) : 0;
+    if (before) this.credit(device, before, Math.min(now, before.at + CREDIT_MS));
     const sources = new Map<string, LiveSession[]>();
     for (const {source, ...session} of sessions) sources.set(source, [...(sources.get(source) ?? []), session]);
-    if (sources.size) this.machines.set(device, {at: now, credited, user, sources});
+    if (sources.size) this.machines.set(device, {at: now, user, sources});
     else this.machines.delete(device);
   }
 
@@ -106,11 +103,11 @@ export class Sessions {
 
   /**
    * Credits the working sessions of a machine's list with the time from its report to
-   * `until`, but none it was credited for already (a clock set back); up to when it is now.
+   * `until`; the store leaves out what a clock set back would credit twice.
    */
-  private credit(device: string, machine: Machine, until: number): number {
-    const from = Math.max(machine.at, machine.credited);
-    if (until <= from) return from;
+  private credit(device: string, machine: Machine, until: number) {
+    const from = machine.at;
+    if (until <= from) return;
     const keys: WorkKey[] = [];
     // Sessions alike in everything (started together by a script) are told apart by their place among them.
     const alike = new Map<string, number>();
@@ -125,6 +122,5 @@ export class Sessions {
       }
     }
     this.store.creditWork(device, from, until, keys);
-    return until;
   }
 }
