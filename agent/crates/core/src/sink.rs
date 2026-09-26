@@ -703,18 +703,23 @@ mod tests {
             account_name: None,
             origin: "terminal",
             project: Some("quotum".into()),
+            folder: Some("quotum.feat-18-desktop-app".into()),
             started_at: 1_790_000_000_000,
             last_worked_at: None,
             working: true,
         };
         let (url, seen) = hub(|_, _| json(200, json!({"accepted": 1})));
         let (mut current, _) = sink(&url, "sessions");
-        assert!(current.sessions(std::slice::from_ref(&session)), "taken");
+        let nameless = RunningSession { project: None, folder: None, working: false, ..session.clone() };
+        assert!(current.sessions(&[session.clone(), nameless]), "taken");
         let (path, body) = seen.lock().unwrap()[0].clone();
         assert_eq!(path, "/v1/sessions");
         assert_eq!(
             body["sessions"],
-            json!([{"provider": "codex", "account": "4b7e0c1d2e3f4a5b6c7d8e9f", "origin": "terminal", "project": "quotum", "startedAt": "2026-09-21T14:13:20Z", "working": true}])
+            json!([
+                {"provider": "codex", "account": "4b7e0c1d2e3f4a5b6c7d8e9f", "origin": "terminal", "project": "quotum", "folder": "quotum.feat-18-desktop-app", "startedAt": "2026-09-21T14:13:20Z", "working": true},
+                {"provider": "codex", "account": "4b7e0c1d2e3f4a5b6c7d8e9f", "origin": "terminal", "startedAt": "2026-09-21T14:13:20Z", "working": false}
+            ])
         );
         assert_eq!(body["machine"]["id"], "0123456789abcdef");
         let idle = RunningSession { working: false, last_worked_at: Some(1_790_000_015_000), ..session };

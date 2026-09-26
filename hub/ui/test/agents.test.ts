@@ -5,7 +5,7 @@ import type {LiveSession, SourceState, View} from '../lib/types';
 import {setLocale} from '../i18n';
 
 const session = (project: string | null, change: Partial<LiveSession> = {}): LiveSession => ({
-  project, device: {id: 'laptop', name: 'laptop'}, startedAt: 100, lastWorkedAt: null, working: false, origin: 'terminal', ...change,
+  project, folder: null, device: {id: 'laptop', name: 'laptop'}, startedAt: 100, lastWorkedAt: null, working: false, origin: 'terminal', ...change,
 });
 const row = (project: string | null, change: Partial<LiveSession> = {}, title = 'Codex'): AgentRow => ({
   session: session(project, change), source: {id: title, provider: 'codex', title} as SourceState,
