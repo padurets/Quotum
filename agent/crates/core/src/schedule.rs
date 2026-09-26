@@ -139,15 +139,6 @@ impl Schedule {
         slot.due
     }
 
-    /// Another device measures this provider's subscription: ask again at `until`
-    /// (kept between 10 s and the eco cap from now), without measuring.
-    pub fn postpone(&mut self, index: usize, now: Millis, until: Millis) -> Millis {
-        let slot = &mut self.slots[index];
-        slot.phased = true;
-        slot.due = until.clamp(now + ASK_FLOOR_MS, now + ECO_CAP_MS as i64);
-        slot.due
-    }
-
     /// Which slots to ask the hub about now, if it is time to ask: every paced slot once
     /// any of them is due (they share one timer), and the others due within a few
     /// seconds. None while slots cleared by the last answer wait to be measured.
@@ -361,14 +352,6 @@ mod tests {
     }
 
     #[test]
-    fn waiting_for_another_device_is_bounded() {
-        let mut s = Schedule::new(&all(), 0, true);
-        assert_eq!(s.postpone(0, 0, 5 * MIN), 5 * MIN);
-        assert_eq!(s.postpone(0, 0, 1_000), 10_000, "never a busy loop");
-        assert_eq!(s.postpone(0, 0, 60 * MIN), 15 * MIN, "never longer than the eco cap");
-    }
-
-    #[test]
     fn after_a_long_sleep_providers_spread_out_again() {
         let mut s = Schedule::new(&all(), 0, false);
         for _ in 0..3 {
@@ -524,6 +507,24 @@ mod tests {
         assert!(s.paced(0) && !s.paced(1));
         assert_eq!(s.due(1), 10 * MIN);
         assert_eq!(s.asks(30 * S), [0], "asked about on its own");
+        // Waiting for another device is bounded: never a busy loop, never longer than the eco cap.
+        let other = |ask_at| Directive::Wait { ask_at, on_duty: false };
+        s.answer(&[(1, other(0))], MIN);
+        assert_eq!(s.due(1), MIN + 10 * S);
+        s.answer(&[(1, other(5 * 3_600_000))], MIN);
+        assert_eq!(s.due(1), MIN + 15 * MIN);
+    }
+
+    #[test]
+    fn paced_slots_asked_about_apart_are_asked_about_together_from_then_on() {
+        // One became paced at one answer, the other at another: their times to ask differ.
+        let mut s = Schedule::new(&[120_000, 120_000], 0, true);
+        s.answer(&[(0, wait(25 * S))], 0);
+        s.answer(&[(1, wait(40 * S))], 0);
+        assert_eq!((s.due(0), s.due(1)), (25 * S, 40 * S));
+        assert_eq!(s.asks(25 * S), [0, 1], "one check-in for both");
+        s.answer(&[(0, wait(40 * S)), (1, wait(40 * S))], 25 * S);
+        assert_eq!(s.due(0), s.due(1));
     }
 
     #[test]

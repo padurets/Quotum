@@ -542,6 +542,10 @@ impl Sink for HubSink {
     }
 }
 
+/// A promise of the next measurement the agent can keep (spec: `nextInMs`): its
+/// `staleAfterMs` stays within what a hub takes.
+const NEXT_IN_MS: std::ops::RangeInclusive<u64> = 60_000..=71_950_000;
+
 /// One subscription of a check-in's answer. An element with `askInMs` follows the hub's
 /// pace; any other is read as a hub without it answers: measure, or wait until `until`.
 fn read_directive(directive: &Value, now: Millis) -> Directive {
@@ -551,8 +555,10 @@ fn read_directive(directive: &Value, now: Millis) -> Directive {
         if !measure {
             return Directive::Wait { ask_at, on_duty: directive["onDuty"] == true };
         }
-        let paced =
-            directive["nextInMs"].as_u64().filter(|&ms| ms >= 60_000).map(|next_in_ms| Paced { ask_at, next_in_ms });
+        let paced = directive["nextInMs"]
+            .as_u64()
+            .filter(|ms| NEXT_IN_MS.contains(ms))
+            .map(|next_in_ms| Paced { ask_at, next_in_ms });
         return Directive::Measure { paced };
     }
     match directive["until"].as_str().and_then(parse_time) {
@@ -718,6 +724,14 @@ mod tests {
         let Directive::Wait { ask_at, on_duty: true } = directives[1] else { panic!("{directives:?}") };
         assert!((before + 12_000..=after + 12_000).contains(&ask_at));
         assert!(matches!(directives[2], Directive::Wait { on_duty: false, .. }));
+    }
+
+    #[test]
+    fn a_promise_past_what_a_hub_takes_is_no_pace() {
+        let read = |next_in: u64| read_directive(&json!({"measure": true, "askInMs": 15000, "nextInMs": next_in}), 0);
+        assert!(matches!(read(71_950_000), Directive::Measure { paced: Some(_) }));
+        assert_eq!(read(71_950_001), Directive::Measure { paced: None }, "measured on its own rhythm");
+        assert_eq!(read(u64::MAX), Directive::Measure { paced: None });
     }
 
     #[test]

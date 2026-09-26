@@ -264,7 +264,7 @@ impl Runner {
                     Some(None)
                 } else {
                     let signed_in = last_activity(&identity_paths[index]);
-                    ask_account(schedule.paced(index), adapter.local_account(&self.home), &accounts[index], signed_in)
+                    ask_account(&schedule, index, adapter.local_account(&self.home), &accounts[index], signed_in)
                 };
                 match account {
                     Some(account) => asked.push((index, account)),
@@ -394,7 +394,8 @@ fn current_account(
 /// they were then. While the hub sets the pace, the last one reported stands even after a
 /// sign-in: the measurement the hub asks for shows which account it is now.
 fn ask_account(
-    paced: bool,
+    schedule: &Schedule,
+    index: usize,
     local: Option<String>,
     measured: &Option<(Option<String>, Option<SystemTime>)>,
     signed_in: Option<SystemTime>,
@@ -403,7 +404,7 @@ fn ask_account(
         return Some(local);
     }
     let (account, at) = measured.as_ref()?;
-    (paced || *at == signed_in).then(|| account.clone())
+    (schedule.paced(index) || *at == signed_in).then(|| account.clone())
 }
 
 /// What happened to one scheduled slot.
@@ -635,6 +636,8 @@ mod tests {
     struct Scripted {
         outcome: fn() -> Outcome,
         runs: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        /// What changes when someone uses it.
+        activity: Vec<PathBuf>,
     }
 
     impl Adapter for Scripted {
@@ -652,7 +655,7 @@ mod tests {
             (self.outcome)()
         }
         fn activity_paths(&self, _: &std::path::Path) -> Vec<PathBuf> {
-            Vec::new()
+            self.activity.clone()
         }
         fn identifies_account(&self) -> bool {
             false
@@ -680,6 +683,8 @@ mod tests {
         checkins: usize,
         flushed: usize,
         delivered: Vec<Outcome>,
+        /// What each check-in said of the first subscription: whether in use, the least interval, its name.
+        asked: Vec<(bool, Option<u64>, Option<String>)>,
     }
 
     impl Sink for Pacing {
@@ -688,6 +693,7 @@ mod tests {
         }
         fn checkin(&mut self, asks: &[Ask]) -> Vec<Directive> {
             self.checkins += 1;
+            self.asked.push((asks[0].active, asks[0].min_interval_ms, asks[0].account_name.map(str::to_string)));
             asks.iter().map(|_| (self.directive)(now_ms())).collect()
         }
         fn flush(&mut self) {
@@ -707,7 +713,7 @@ mod tests {
         let state = std::env::temp_dir().join("quotum-runner-paced");
         let paths = Paths { config: state.join("config.toml"), work: state.join("work"), state };
         let runs = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let adapter: Box<dyn Adapter> = Box::new(Scripted { outcome, runs: runs.clone() });
+        let adapter: Box<dyn Adapter> = Box::new(Scripted { outcome, runs: runs.clone(), activity: Vec::new() });
         let stop = Stop::new();
         let mut runner = Runner::with_adapters(config, paths, vec![adapter], std::env::temp_dir(), stop.clone());
         let timer = stop.clone();
@@ -715,7 +721,7 @@ mod tests {
             thread::sleep(Duration::from_millis(for_ms));
             timer.request(crate::stop::How::Exit);
         });
-        let mut sink = Pacing { directive, checkins: 0, flushed: 0, delivered: Vec::new() };
+        let mut sink = Pacing { directive, checkins: 0, flushed: 0, delivered: Vec::new(), asked: Vec::new() };
         let mut events = Vec::new();
         runner.run(&mut sink, |event| {
             match event {
@@ -757,12 +763,43 @@ mod tests {
         let timeout = || Err(crate::model::Failure::new(Provider::Antigravity, ErrorKind::Timeout, ""));
         let (sink, _, events) = paced_run(paced, timeout, 5_000);
         assert!(matches!(&sink.delivered[0], Err(f) if f.error == ErrorKind::Timeout));
-        assert!(events[0].1 < started + 5 * 60_000, "the hub's promise, not a local back-off");
+        let promise = started + 240_000;
+        assert!(events[0].1 >= promise && events[0].1 < promise + 5_000, "the hub's promise, not a local back-off");
 
         // A client gone since it was asked for is not the hub's business: its own rhythm, half an hour.
         let gone = || Err(crate::model::Failure::new(Provider::Antigravity, ErrorKind::NotInstalled, ""));
         let (_, _, events) = paced_run(paced, gone, 5_000);
         assert!(events[0].1 >= started + 30 * 60_000);
+    }
+
+    #[test]
+    fn a_check_in_says_whether_the_client_was_used_since_the_last_one_and_how_often_at_most_to_measure() {
+        let dir = std::env::temp_dir().join(format!("quotum-runner-asks-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let history = dir.join("history");
+        std::fs::write(&history, "").unwrap();
+        let client = std::env::current_exe().unwrap();
+        let settings = format!("[providers.antigravity]\npath = {client:?}\ninterval = 300\naccount = \"live\"");
+        let config: Config = toml::from_str(&settings).unwrap();
+        let paths = Paths { config: dir.join("config.toml"), work: dir.join("work"), state: dir.clone() };
+        let runs = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let adapter: Box<dyn Adapter> = Box::new(Scripted { outcome: snapshot, runs, activity: vec![history.clone()] });
+        let stop = Stop::new();
+        let mut runner = Runner::with_adapters(config, paths, vec![adapter], dir.clone(), stop.clone());
+        let timer = stop.clone();
+        thread::spawn(move || {
+            // Used between the first question and the next, which comes 10 s later.
+            thread::sleep(Duration::from_secs(3));
+            std::fs::write(&history, "used").unwrap();
+            thread::sleep(Duration::from_secs(9));
+            timer.request(crate::stop::How::Exit);
+        });
+        let wait = |now| Directive::Wait { ask_at: now, on_duty: true };
+        let mut sink = Pacing { directive: wait, checkins: 0, flushed: 0, delivered: Vec::new(), asked: Vec::new() };
+        runner.run(&mut sink, |_| {});
+        let _ = std::fs::remove_dir_all(&dir);
+        let live = Some("live".to_string());
+        assert_eq!(sink.asked, [(false, Some(300_000), live.clone()), (true, Some(300_000), live)]);
     }
 
     #[test]
@@ -776,15 +813,18 @@ mod tests {
         let then = Some(SystemTime::UNIX_EPOCH);
         let later = Some(SystemTime::UNIX_EPOCH + Duration::from_secs(60));
         let measured = Some((Some("a".to_string()), then));
-        assert_eq!(ask_account(true, None, &measured, later), Some(Some("a".into())), "the measurement will tell");
-        assert_eq!(ask_account(false, None, &measured, later), None, "not known: measured without asking");
-        assert_eq!(ask_account(false, None, &measured, then), Some(Some("a".into())));
-        assert_eq!(
-            ask_account(true, Some("b".into()), &measured, later),
-            Some(Some("b".into())),
-            "what the client names"
-        );
-        assert_eq!(ask_account(true, None, &None, later), None, "never measured");
+        // Slot 0 follows the hub's pace, slot 1 does not.
+        let mut schedule = Schedule::new(&[120_000, 120_000], 0, true);
+        schedule.answer(&[(0, Directive::Wait { ask_at: 15_000, on_duty: true })], 0);
+        let (paced, own) = (0, 1);
+        let ask = |index, local: Option<&str>, measured, signed_in| {
+            ask_account(&schedule, index, local.map(str::to_string), measured, signed_in)
+        };
+        assert_eq!(ask(paced, None, &measured, later), Some(Some("a".into())), "the measurement will tell");
+        assert_eq!(ask(own, None, &measured, later), None, "not known: measured without asking");
+        assert_eq!(ask(own, None, &measured, then), Some(Some("a".into())));
+        assert_eq!(ask(paced, Some("b"), &measured, later), Some(Some("b".into())), "what the client names");
+        assert_eq!(ask(paced, None, &None, later), None, "never measured");
     }
 
     #[test]
