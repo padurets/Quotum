@@ -224,7 +224,6 @@ body.is-resizing, body.is-resizing * { cursor: ew-resize !important; user-select
   border: 1px solid var(--glass-edge);
   box-shadow: var(--glass-shadow);
 }
-/* What scrolls inside glass keeps it: a thin light thumb, no track. */
 /* Over the chart's lines the text has to stay readable: a denser pane. */
 .tooltip.glass { background: linear-gradient(180deg, #ffffff0c, #ffffff02 45%), #131318d9; }
 .popover-title.is-group { padding-top: 6px; padding-bottom: 4px; }
@@ -395,7 +394,8 @@ td.muted, small.muted { color: var(--text-3); }
 .agents-row.is-working { color: var(--text); }
 /* A long list is followed by the eye row by row, as the table's is: as bright as a menu's rows, on the same glass. */
 .agents-row:hover { background: #ffffff08; }
-.agents-project { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Keep the hidden state beside a long project inside the same clipped box. */
+.agents-project { position: relative; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agents-origin { display: inline-grid; place-items: center; color: var(--text-3); }
 .agents-origin svg { display: block; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
 .agents-age { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text-3); }
