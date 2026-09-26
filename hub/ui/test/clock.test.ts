@@ -7,6 +7,7 @@ import {resetLabel, resetLabelChangesAt, type ResetStatus} from '../lib/resets';
 import {DEFAULT_PLAN, planAt, planChangesAt, planNote} from '../lib/plan';
 import {since, sinceChangesAt} from '../lib/agents';
 import {frameChangesAt, step, stepChangesAt} from '../lib/periods';
+import {outlook, outlookChangesAt} from '../lib/forecast';
 import type {Win} from '../lib/types';
 
 const S = 1000;
@@ -285,4 +286,25 @@ test('the arrows of the analytics say when they turn on or off; the frame moves 
   assert.equal(frameChangesAt(null, 5 * MIN, T0 + 7 * S), T0 + 5 * MIN);
   assert.equal(frameChangesAt({from: T0 - DAY, to: T0 - HOUR}, 5 * MIN, T0), null, 'a range in the past stands still');
   assert.equal(frameChangesAt({from: T0 - DAY, to: T0 + HOUR}, 5 * MIN, T0), T0 + 5 * MIN, 'one reaching past now does not');
+});
+
+test('where the pace leads says when it reads otherwise: its countdown, its tone, its zero, the reset', () => {
+  const start = T0 - 72 * HOUR;
+  const week = (remaining: number, change: Partial<Win> = {}): Win => ({id: 'w', kind: 'weekly', label: null, used: 100 - remaining, remaining, resetAt: start + 7 * DAY, minutes: 10080, ...change});
+  const shown = (live: Win, measuredAt: number, plan: typeof DEFAULT_PLAN | null) => (now: number) => {
+    const ahead = outlook(live, measuredAt, now, plan);
+    return [ahead.key, ahead.tone, ahead.key === 'runsOut' ? countdown(ahead.inMs) : null];
+  };
+  const cases: [string, Win, typeof DEFAULT_PLAN | null][] = [
+    ['runs out, no plan', week(38), null],
+    // Runs out in 59 hours of the 96 left: said louder once under half of what is left.
+    ['runs out later, no plan', week(45), null],
+    ['runs out along the plan', week(20), DEFAULT_PLAN],
+    ['left at the end of the plan', week(38), DEFAULT_PLAN],
+    ['a five-hour window', {id: 's', kind: 'session', label: null, used: 70, remaining: 30, resetAt: T0 + 2 * HOUR, minutes: 300}, null],
+  ];
+  for (const [what, live, plan] of cases) {
+    const moments = [...Array.from({length: 300}, (_, i) => T0 + i * 1_987_654), ...Array.from({length: 300}, (_, i) => T0 + i * 13_331)];
+    changesAtItsMoment(what, shown(live, T0, plan), now => outlookChangesAt(live, T0, now, plan), moments, false);
+  }
 });
