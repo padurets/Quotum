@@ -66,7 +66,7 @@ export const problemOf = (source: Pick<SourceState, 'error'>) => (source.error &
 /** A measurement this recent is news: the card's dot pulses. */
 export const PULSE_FOR = 30_000;
 /** How long the dot takes to fade from fresh to grey after that. */
-const FADE_FOR = 5 * 60_000;
+export const FADE_FOR = 5 * 60_000;
 /** The fade goes in this many steps, one every half a minute: in between, nothing on the page changes. */
 const FADE_STEPS = 10;
 

@@ -1,0 +1,143 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import vm from 'node:vm';
+import {NODES, nodeOf, probeScript, rendered, type Fiber, type Reading} from '../probe.js';
+
+/** A stand-in element: its tag, classes and attributes, and `closest` for the simple selectors the probe uses. */
+class Element {
+  readonly nodeType = 1;
+  constructor(
+    readonly tagName: string,
+    readonly className: string,
+    private readonly attributes: Record<string, string>,
+    readonly parentElement: Element | null,
+  ) {}
+  hasAttribute(name: string) {
+    return Object.hasOwn(this.attributes, name);
+  }
+  getAttribute(name: string) {
+    return this.attributes[name] ?? null;
+  }
+  private matches(selector: string) {
+    const attribute = selector.match(/^\[([\w-]+)\]$/);
+    if (attribute) return this.hasAttribute(attribute[1]);
+    const [tag, klass] = selector.split('.');
+    return this.tagName.toLowerCase() === tag && this.className.split(' ').includes(klass);
+  }
+  closest(selector: string): Element | null {
+    const any = selector.split(',').map(s => s.trim());
+    for (let e: Element | null = this; e; e = e.parentElement) if (any.some(s => e!.matches(s))) return e;
+    return null;
+  }
+}
+
+const el = (tag: string, parent: Element | null, attributes: Record<string, string> = {}, className = '') => new Element(tag.toUpperCase(), className, attributes, parent);
+
+/** A fiber of the new tree; `was` is its version in the old one (null: mounted in this commit). */
+function fiber(tag: number, options: {flags?: number; was?: Fiber | null; stateNode?: unknown; children?: Fiber[]} = {}): Fiber {
+  const f: Fiber = {tag, flags: options.flags ?? 0, child: null, sibling: null, return: null, alternate: options.was ?? null, stateNode: options.stateNode ?? null};
+  const children = options.children ?? [];
+  children.forEach((c, i) => {
+    c.return = f;
+    c.sibling = children[i + 1] ?? null;
+  });
+  f.child = children[0] ?? null;
+  return f;
+}
+
+const FUNCTION = 0;
+const ROOT = 3;
+const HOST = 5;
+const MEMO = 15;
+const PERFORMED = 1;
+
+test('a component counts as rendered when it did work or was mounted; a subtree React did not go into does not count, whatever flags it kept', () => {
+  const oldChild = fiber(FUNCTION, {flags: PERFORMED});
+  const untouched = fiber(ROOT, {was: fiber(ROOT, {children: [oldChild]})});
+  untouched.child = oldChild;
+  assert.deepEqual(rendered(untouched), [], 'the same child as before: nothing below rendered');
+
+  const worked = fiber(FUNCTION, {flags: PERFORMED, was: fiber(FUNCTION)});
+  const bailed = fiber(MEMO, {flags: 0, was: fiber(MEMO)});
+  const mountedLeaf = fiber(MEMO);
+  const mounted = fiber(FUNCTION, {children: [mountedLeaf]});
+  const parent = fiber(FUNCTION, {flags: PERFORMED, was: fiber(FUNCTION, {children: [fiber(FUNCTION)]}), children: [worked, bailed, mounted]});
+  const root = fiber(ROOT, {was: fiber(ROOT, {children: [fiber(FUNCTION)]}), children: [parent]});
+  assert.deepEqual(new Set(rendered(root)), new Set([parent, worked, mounted, mountedLeaf]));
+});
+
+test("a component's work is counted in the part of the page its first element is in: a label that shows time, not the card around it", () => {
+  const card = el('article', null, {'data-card': 's1'}, 'card');
+  const label = el('span', card, {'data-time': ''});
+  const labelLeaf = fiber(FUNCTION, {children: [fiber(HOST, {stateNode: label})]});
+  const cardComponent = fiber(FUNCTION, {children: [fiber(HOST, {stateNode: card, children: [labelLeaf]})]});
+  assert.equal(nodeOf(labelLeaf, NODES), label);
+  assert.equal(nodeOf(cardComponent, NODES), card);
+  // One that renders nothing of its own counts where it sits.
+  const empty = fiber(FUNCTION);
+  const host = fiber(HOST, {stateNode: el('div', card), children: [empty]});
+  assert.equal(host.child, empty);
+  assert.equal(nodeOf(empty, NODES), card);
+  assert.equal(nodeOf(fiber(FUNCTION, {children: [fiber(HOST, {stateNode: el('main', null)})]}), NODES), null, 'outside every part: the page');
+});
+
+/** Runs the probe as the browser gets it, in a context of its own with a stand-in DOM. */
+function page() {
+  let observer: ((records: {target: unknown}[]) => void) | undefined;
+  const context: Record<string, unknown> = {
+    performance,
+    document: {body: {}, readyState: 'complete', addEventListener() {}},
+    MutationObserver: class {
+      constructor(callback: (records: {target: unknown}[]) => void) {
+        observer = callback;
+      }
+      observe() {}
+    },
+  };
+  vm.runInNewContext(probeScript(), context);
+  const hook = context.__REACT_DEVTOOLS_GLOBAL_HOOK__ as {supportsFiber: boolean; onCommitFiberRoot(id: number, root: {current: Fiber}): void};
+  const probed = context.__quotumBench as {reset(): void; read(): Reading};
+  // What the page answers comes over as JSON, as Runtime.evaluate returns it.
+  const bench = {reset: () => probed.reset(), read: (): Reading => JSON.parse(JSON.stringify(probed.read()))};
+  return {hook, bench, mutate: (...targets: unknown[]) => observer!(targets.map(target => ({target})))};
+}
+
+test('the probe, sent as text, counts a part of the page once per commit however many components rendered in it', () => {
+  const {hook, bench} = page();
+  assert.equal(hook.supportsFiber, true, 'React injects into it');
+  const card = el('article', null, {'data-card': 's1'}, 'card');
+  const header = el('header', null, {}, 'topbar');
+  const inCard = () => fiber(FUNCTION, {flags: PERFORMED, was: fiber(FUNCTION), children: [fiber(HOST, {stateNode: el('div', card)})]});
+  const root = fiber(ROOT, {was: fiber(ROOT), children: [inCard(), inCard(), inCard(), fiber(FUNCTION, {children: [fiber(HOST, {stateNode: header})]})]});
+  hook.onCommitFiberRoot(1, {current: root});
+  hook.onCommitFiberRoot(1, {current: root});
+  const reading = bench.read();
+  assert.equal(reading.commits, 2);
+  assert.deepEqual(reading.renders.map(r => [r.region, r.time, r.count]).sort(), [
+    ['card:s1', false, 2],
+    ['header', false, 2],
+  ]);
+  assert.ok(reading.instrumentMs >= 0);
+  bench.reset();
+  assert.deepEqual(bench.read().renders, []);
+});
+
+test('the probe counts DOM changes by part once per callback, and notes when a card first changed outside what shows time', () => {
+  const {bench, mutate} = page();
+  const card = el('article', null, {'data-card': 's1'}, 'card');
+  const label = el('span', card, {'data-time': 'ago'});
+  const text = {nodeType: 3, parentElement: label};
+  mutate(text, label);
+  assert.deepEqual(bench.read().cardChanged, {}, 'a label that shows time is the clock, not news');
+  mutate(el('b', card), el('i', card));
+  const reading = bench.read();
+  assert.deepEqual(
+    reading.mutations.map(m => [m.region, m.time, m.count]),
+    [
+      ['card:s1', true, 1],
+      ['card:s1', false, 1],
+    ],
+  );
+  assert.deepEqual(Object.keys(reading.cardChanged), ['s1']);
+  assert.match(reading.mutations[0].node, /^span\[data-time=ago\]#\d+$/);
+});
