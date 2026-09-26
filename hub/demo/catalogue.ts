@@ -353,6 +353,22 @@ const TEAM_AGENTS: Agent[] = [
   ...agents('ben-mac', [['terminal', 'shared-infra', -3 * HOUR, shifts(9)]]),
 ];
 
+/**
+ * The example of the analytics' agent work: Dan's week on Claude Max, his agents on two
+ * projects on two machines, most of it on days −5 and −4 (by `start`, never the calendar),
+ * several at once for hours, spending the week while they worked.
+ */
+const daily = (from: number, hours: number): Wave => ({period: DAY, on: hours * HOUR, phase: from});
+const WEEK_AGENTS: Agent[] = [
+  {machine: 'dan-laptop', origin: 'terminal', project: 'atlas', since: -5 * DAY, until: -3.5 * DAY, works: daily(-5 * DAY, 8)},
+  {machine: 'dan-laptop', origin: 'terminal', project: 'atlas', folder: 'atlas.feat-invoices', since: -5 * DAY + HOUR, until: -3.5 * DAY, works: daily(-5 * DAY + HOUR, 6)},
+  {machine: 'dan-desk', origin: 'terminal', project: 'harbor', since: -5 * DAY + 2 * HOUR, until: -3.5 * DAY, works: daily(-5 * DAY + 2 * HOUR, 4)},
+  {machine: 'dan-desk', origin: 'editor', project: 'harbor', since: -4 * DAY, until: -3.5 * DAY, works: daily(-4 * DAY + 3 * HOUR, 3)},
+];
+
+/** Dan measures Ben's Codex too, and worked on it: never on Team, where Dan is not. */
+const DAN_ON_BEN: Agent[] = [{machine: 'dan-desk', origin: 'terminal', project: 'harbor', since: -3 * DAY, until: -2.5 * DAY, works: daily(-3 * DAY, 5)}];
+
 // ---------- the whole catalogue ----------
 
 const all: DemoSet = {
@@ -382,6 +398,9 @@ const all: DemoSet = {
         // the corrected name too (docs-site is where docs works).
         {agentsOf: 'quotum', folders: [null, 'hub', 'quotum.feat-18-desktop-app']},
         {agentsOf: 'docs', folders: ['docs-site']},
+        // Agent activity counts docs-site under the name Ana gave it.
+        {activityOf: 'docs', by: 'project', range: '24h', hours: 2.4, from: 0, to: 0},
+        {activityOf: 'docs-site', by: 'project', range: '24h', hours: null, from: 0, to: 0},
       ],
       look: [
         'The table of agents lists many rows, by activity',
@@ -399,14 +418,57 @@ const all: DemoSet = {
     {kind: 'person', id: 'ben', name: 'Ben', agents: true, expect: [{state: 'widgets'}, {rows: 1}]},
     {kind: 'person', id: 'cleo', name: 'Cleo', expect: [{state: 'onboarding'}], look: ['Cleo has no machines: her board asks her to connect one']},
     {
+      kind: 'person',
+      id: 'dan',
+      name: 'Dan',
+      // The week before `start`, at a fixed point: the agents of the example are gone by then.
+      expect: [
+        {state: 'widgets'},
+        {activity: 'project', range: '7d', groups: {atlas: 16, harbor: 13}, from: 0, to: 0},
+        {activity: 'device', range: '7d', groups: {'dan-laptop': 16, Desk: 13}, from: 0, to: 0},
+        {activity: 'source', range: '7d', groups: {'claude-week': 16, 'ben-codex': 5}, from: 0, to: 0},
+        {activityTotals: {work: 21, agents: 44, atOnce: 2.1}, range: '7d', from: 0, to: 0},
+        {activityKnownFrom: -10 * DAY, range: '30d', from: 0, to: 0},
+      ],
+      look: [
+        'Agent activity over 7 days by project: atlas and harbor on days −5 and −4, harbor again on day −3',
+        'The legend\'s hours add up to more than the hours of work: agents worked at once',
+        'Over 30 days the first twenty are hatched: not known before',
+        'The table: hours of work, the pace per hour of it, hours of work left and, turned on, the share during work, for the weekly window',
+      ],
+    },
+    {
       kind: 'board',
       id: 'team',
       name: 'Team',
       owner: 'ana',
       members: ['ben'],
+      // Ben joined an hour before `start`, when his agent had worked on Team's Claude for two hours.
+      joined: {ben: -HOUR},
       agents: true,
-      expect: [{state: 'widgets'}, {rows: 3}],
-      look: ['Cards are named with their owners', 'Ben sees Team as a member: no arranging, no invites'],
+      expect: [
+        {state: 'widgets'},
+        {rows: 3},
+        // The work of its members on what it shows, Ben's only since he joined; none of the hidden
+        // Claude Max, and none of Dan's on Ben's Codex, Dan not being on Team.
+        {activity: 'device', range: '24h', groups: {laptop: 0.6, 'ben-mac': 0.6}, from: 0, to: 0},
+        {activity: 'source', range: '7d', groups: {'team-claude': 0.9}, from: 0, to: 0},
+      ],
+      look: [
+        'Cards are named with their owners',
+        'Ben sees Team as a member: no arranging, no invites',
+        'Agent activity by machine: the laptop and ben-mac, nothing of Dan; Ben\'s from an hour before the start',
+      ],
+    },
+    {
+      kind: 'board',
+      id: 'with-dan',
+      name: 'With Dan',
+      owner: 'ana',
+      members: ['dan'],
+      forecastSpan: 4,
+      expect: [{state: 'widgets'}, {tableLayout: 'list'}],
+      look: ['The table, a third of the board wide, is a list: each window its name and what is left, then the rest with their headings; nothing scrolls sideways'],
     },
     {kind: 'board', id: 'quiet', name: 'Quiet corner', owner: 'ana', members: [], agents: true, expect: [{rows: 'none'}]},
     {kind: 'board', id: 'night', name: 'Night shift', owner: 'ana', members: [], agents: true, expect: [{rows: 'noneShown'}]},
@@ -434,6 +496,8 @@ const all: DemoSet = {
       look: ['«My machines» shows it seen when the demo started, not three hours ago: the hub dates every contact by its own clock'],
     },
     {kind: 'machine', id: 'ben-mac', person: 'ben', os: 'macos', failures: [{provider: 'antigravity', error: 'failed'}], expect: [{failure: {provider: 'antigravity', error: 'failed'}}]},
+    {kind: 'machine', id: 'dan-laptop', person: 'dan', expect: [{via: 'token'}]},
+    {kind: 'machine', id: 'dan-desk', person: 'dan', renamed: 'Desk', expect: [{name: 'Desk'}]},
 
     // Cards. Their order is the board's, and the order in which they come to the hub.
     {
@@ -834,9 +898,10 @@ const all: DemoSet = {
       id: 'ben-codex',
       provider: 'codex',
       plan: 'Plus',
-      machines: ['ben-mac'],
+      machines: ['ben-mac', 'dan-desk'],
       history: 2 * DAY,
       windows: [fiveHours(HOUR, 5), weekly({since: -4 * DAY, use: alongPlan(1)})],
+      agents: DAN_ON_BEN,
       on: {team: {}},
       expect: [
         {forecast: 'weekly', plan: 'even'},
@@ -854,6 +919,19 @@ const all: DemoSet = {
       windows: [fiveHours(3 * HOUR, 5), weekly({since: -DAY, use: steady(0, 15)})],
       expect: [{title: 'Claude 2'}],
       look: ['Ben keeps this one off Team'],
+    },
+    {
+      kind: 'card',
+      id: 'claude-week',
+      provider: 'claude',
+      plan: 'Claude Max',
+      machines: ['dan-laptop'],
+      history: 8 * DAY,
+      // Its week spends six points an hour its agents work, averaged over them.
+      windows: [weekly({since: -6.4 * DAY, use: (_elapsed, busy) => (6 * busy) / HOUR, work: agentsWork(WEEK_AGENTS, daily(0, 0))})],
+      agents: WEEK_AGENTS,
+      on: {'with-dan': {}},
+      expect: [{title: 'Claude'}, {work: 'weekly', range: '7d', hours: 16, perHour: 4.1, left: 10.1, during: 89, from: 0, to: 0}],
     },
 
     // Measured at the hub's pace, one reason each, all by one machine asking every 15 seconds.
@@ -1080,7 +1158,7 @@ const activity: DemoSet = {
     {
       kind: 'card', id: 'activity', provider: 'codex', plan: 'pro', machines: ['workstation', 'laptop', 'server'], history: DAY,
       windows: [weekly({since: -2 * DAY, use: steady(0, 10)})], agents: SORT_AGENTS,
-      on: {ana: {name: 'Agent activity'}, compact: {name: 'Agent activity'}}, expect: [{title: 'Agent activity'}, {agents: 12, drawn: false}],
+      on: {ana: {name: 'Sorted agents'}, compact: {name: 'Sorted agents'}}, expect: [{title: 'Sorted agents'}, {agents: 12, drawn: false}],
     },
   ],
 };

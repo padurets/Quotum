@@ -16,7 +16,9 @@ import {Store} from '../../server/store/store.js';
 import type {ResetEvent, ResetProvider} from '../../server/domain/resets.js';
 import {setLocale} from '../../ui/i18n/index.js';
 import {agentRows, byActivity, drawn, folderOf, machinesOf} from '../../ui/lib/agents.js';
-import {forecastRow} from '../../ui/lib/forecast.js';
+import {LIVE_COLUMNS, forecastLayout, forecastRow} from '../../ui/lib/forecast.js';
+import {atOnce} from '../../ui/lib/activity.js';
+import {lineWork} from '../../ui/lib/work.js';
 import {chartEvents, chartResets, linesOf} from '../../ui/lib/lines.js';
 import {frameOf, step} from '../../ui/lib/periods.js';
 import {planNote, started} from '../../ui/lib/plan.js';
@@ -24,7 +26,7 @@ import {shown as gathered, type Projects} from '../../ui/lib/projects.js';
 import {cadenceOf, dotOf, level, resetLine, titled, windowName} from '../../ui/lib/quota.js';
 import {resetLabel, type Resets, type TrackerHealth} from '../../ui/lib/resets.js';
 import {ANALYTICS_KINDS, type History, type Overview} from '../../ui/lib/types.js';
-import {AGENTS, boardState, cardId, FORECAST, HISTORY, isHidden, isWindowHidden, planOf} from '../../ui/lib/view.js';
+import {ACTIVITY, AGENTS, boardState, cardId, columnShown, FORECAST, HISTORY, isHidden, isWindowHidden, planOf, spanOf} from '../../ui/lib/view.js';
 import {SCENES, SETS} from '../catalogue.js';
 import {
   awake,
@@ -51,7 +53,7 @@ import {
   type Machine,
   type Span,
 } from '../model.js';
-import {Live, setUp, type Stand} from '../setup.js';
+import {Live, seedWork, setUp, type Stand} from '../setup.js';
 import {Trackers} from '../trackers.js';
 
 setLocale('en');
@@ -74,6 +76,7 @@ async function hubFor(trackers: Trackers, scene: string, start: number) {
   const base = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
   return {
     base,
+    store,
     /** One round of the hub's own trackers, as its timer runs it, and what the page reads then. */
     async told(): Promise<Told> {
       await resets.round();
@@ -210,6 +213,33 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
   }
   if (entry.kind === 'person' || entry.kind === 'board') {
     const overview = await reading.overview(entry.id);
+    if ('tableLayout' in check) {
+      // On a screen wide enough for the whole board: twelve columns of 84 pixels and gaps of 16, less the panel's border.
+      const span = spanOf(overview.view, FORECAST);
+      const columns = LIVE_COLUMNS.filter(column => columnShown(overview.view, FORECAST, column));
+      return {tableLayout: forecastLayout(columns, span * 84 + (span - 1) * 16 - 2)};
+    }
+    if ('activity' in check || 'activityOf' in check || 'activityTotals' in check || 'activityKnownFrom' in check) {
+      if (isHidden(overview.view, ACTIVITY)) return `the activity widget is hidden on the board ${entry.id}`;
+      const {range} = check as unknown as {range: string};
+      const {activity} = await reading.history(entry.id, range);
+      const tenth = (ms: number) => Math.round(ms / 360_000) / 10;
+      const cardOf = (source: string) => [...stand.sources].find(([, id]) => id === source)?.[0] ?? source;
+      const named = (by: 'source' | 'project' | 'device') =>
+        Object.fromEntries(activity.by[by].map(g => [g.other ? 'other' : by === 'source' ? cardOf(g.key) : String(g.name), tenth(g.ms)]));
+      if ('activity' in check) {
+        const {activity: by} = check as {activity: 'source' | 'project' | 'device'};
+        return {activity: by, range, groups: named(by)};
+      }
+      if ('activityOf' in check) {
+        const {activityOf: name, by} = check as {activityOf: string; by: 'project' | 'device'};
+        return {activityOf: name, by, range, hours: named(by)[name] ?? null};
+      }
+      if ('activityTotals' in check) {
+        return {activityTotals: {work: tenth(activity.workMs), agents: tenth(activity.agentMs), atOnce: Math.round(atOnce(activity.agentMs, activity.workMs) * 10) / 10}, range};
+      }
+      return {activityKnownFrom: activity.known ? activity.known.from - stand.start : null, range};
+    }
     // A widget hidden on the board shows none of its codes.
     if (('rows' in check || 'agentsOf' in check) && isHidden(overview.view, AGENTS)) return `the table of running agents is hidden on the board ${entry.id}`;
     if ('weeklySeries' in check && isHidden(overview.view, HISTORY)) return `the chart is hidden on the board ${entry.id}`;
@@ -246,7 +276,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
     cadence: cadenceOf(source, now)?.when ?? null,
     why: cadenceOf(source, now)?.why,
   };
-  const id = 'window' in card ? card.window : 'forecast' in card ? card.forecast : null;
+  const id = 'window' in card ? card.window : 'forecast' in card ? card.forecast : 'work' in card ? card.work : null;
   const live = id === null ? undefined : source.windows.find(w => w.id === id);
   if (id !== null && !live) return `no window ${id}`;
   const weekly = planOf(overview.view, source.id);
@@ -278,6 +308,24 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
       tone: row.outlook.tone,
       spent: row.spent.key,
       plan: !row.plan ? 'none' : !row.plan.notable ? 'even' : row.plan.delta >= 0 ? 'behind' : 'ahead',
+    });
+  }
+  if ('work' in card && live) {
+    if (isHidden(overview.view, FORECAST)) return `the table is hidden on the board ${board}`;
+    const line = linesOf(await reading.history(board, card.range), overview, overview.view, live.kind).find(l => l.sourceId === source.id && l.windowId === id);
+    if (!line) return `no line of ${id} in the table`;
+    const cells = lineWork(line, false, live.resetAt, now);
+    if (!cells) return `no work of ${id}`;
+    const tenth = (value: number) => Math.round(value * 10) / 10;
+    const hours = (cell: (typeof cells)['work']) => ('value' in cell ? tenth(cell.value / 3_600_000) : 'untilReset' in cell ? 'untilReset' : undefined);
+    Object.assign(values, {
+      work: id,
+      range: card.range,
+      hours: hours(cells.work),
+      perHour: 'value' in cells.perwork ? tenth(cells.perwork.value) : undefined,
+      left: hours(cells.workleft),
+      during: 'value' in cells.during ? Math.round(cells.during.value) : undefined,
+      none: 'none' in cells.work ? cells.work.none : undefined,
     });
   }
   if ('reachesBack' in card) {
@@ -351,6 +399,7 @@ async function bringUp(t: TestContext, set: DemoSet, start: number) {
     await trackers.close();
   });
   const stand = await setUp(hub.base, set, start, SETUP, () => Date.now());
+  seedWork(hub.store, stand);
   return {stand, trackers, hub};
 }
 

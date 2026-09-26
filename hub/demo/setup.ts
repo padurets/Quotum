@@ -1,3 +1,5 @@
+import type {Store, WorkKey} from '../server/store/store.js';
+import {parseSessions} from '../server/domain/ingest.js';
 import {Agent, Person} from './client.js';
 import {
   awake,
@@ -8,6 +10,7 @@ import {
   historyTimes,
   holdersOf,
   homeOf,
+  isOn,
   machineInfo,
   machines,
   MIN,
@@ -17,6 +20,7 @@ import {
   sessionsAt,
   snapshot,
   sourceOf,
+  workSince,
   type Card,
   type DemoSet,
   type Machine,
@@ -157,7 +161,7 @@ export function viewOf(stand: Stand, key: string) {
   const shown = cards(set).filter(card => (personal ? holdersOf(set, card).includes(key) : !!card.on?.[key]));
   const board = boards(set).find(b => b.id === key) ?? people(set).find(p => p.id === key);
   const view = {
-    order: [...shown.map(card => `source:${stand.sources.get(card.id)}`), 'agents', 'history', 'forecast'],
+    order: [...shown.map(card => `source:${stand.sources.get(card.id)}`), 'agents', 'history', 'forecast', 'activity'],
     sizes: {} as Record<string, number>,
     names: {} as Record<string, string>,
     hidden: [] as string[],
@@ -170,6 +174,7 @@ export function viewOf(stand: Stand, key: string) {
     shownColumns: {},
   };
   if (board?.agentsSpan) view.sizes.agents = board.agentsSpan;
+  if (board?.forecastSpan) view.sizes.forecast = board.forecastSpan;
   for (const card of shown) {
     const source = stand.sources.get(card.id)!;
     const looks = card.on?.[key] ?? {};
@@ -182,6 +187,80 @@ export function viewOf(stand: Stand, key: string) {
     else if (looks.plan) view.plans[source] = looks.plan;
   }
   return view;
+}
+
+/**
+ * Writes how the agents of a stand worked before `start` straight into its hub's database
+ * (`store`), as the hub credits the lists machines send (server/sessions.ts): each working
+ * agent of an awake machine, a minute at a time, from when the hub is taken to have kept
+ * work (`workSince`) on. Public requests cannot tell the past: the hub credits work by its
+ * own clock, from the list it has now. The lists `Live` sends go on with the same sessions.
+ * People joined boards and shared cards at `start`, in `setUp`: all of it moves back to
+ * when the hub began keeping work, in the same order, and a member a board says `joined`
+ * later joins then. In one transaction, with the hub running: nothing else writes then.
+ */
+export function seedWork(store: Store, stand: Stand) {
+  const {set, start} = stand;
+  const since = workSince(set);
+  const {db} = store;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare("UPDATE meta SET value = ? WHERE key = 'agentWorkSince'").run(String(start + since));
+    const earliest = (db.prepare('SELECT min(at) AS at FROM (SELECT joined_at AS at FROM members UNION ALL SELECT shared_at FROM shares)').get() as {at: number}).at;
+    db.prepare('UPDATE members SET joined_at = joined_at - ?').run(earliest - (start + since));
+    db.prepare('UPDATE shares SET shared_at = shared_at - ?').run(earliest - (start + since));
+    for (const board of boards(set)) {
+      for (const [person, at] of Object.entries(board.joined ?? {})) {
+        db.prepare('UPDATE members SET joined_at = ? WHERE board_id = ? AND user_id = ?').run(start + at, stand.boards.get(board.id)!, stand.people.get(person)!.id);
+      }
+    }
+    for (const machine of machines(set)) {
+      const device = (db.prepare('SELECT id FROM devices WHERE user_id = ? AND machine_id = ?').get(stand.people.get(personOf(set, machine))!.id, machineInfo(machine).id) as {id: string}).id;
+      // Its agents that ever work, each with the names the hub files it under, read as the hub reads a list.
+      const agents = cards(set).flatMap(card =>
+        (card.agents ?? [])
+          .filter(agent => agent.machine === machine.id && agent.works)
+          .map(agent => {
+            const [told] = parseSessions({
+              version: 1,
+              agent: Agent.VERSION,
+              machine: machineInfo(machine),
+              sentAt: new Date(start).toISOString(),
+              sessions: [{provider: card.provider, origin: agent.origin, project: agent.project, folder: agent.folder, startedAt: new Date(start + agent.since).toISOString(), working: true}],
+            }).sessions;
+            return {agent, key: {source: stand.sources.get(card.id)!, origin: told.origin, startedAt: told.startedAt, project: told.project ?? '', folder: told.folder ?? ''}};
+          }),
+      );
+      const open = new Map<string, {key: WorkKey; from: number; to: number}>();
+      const credit = (stretch: {key: WorkKey; from: number; to: number}) => store.creditWork(device, start + stretch.from, start + stretch.to, [stretch.key]);
+      for (let t = since; t < 0; t += MIN) {
+        // Agents alike in all of it are told apart by their place among those working, as the hub tells them.
+        const alike = new Map<string, number>();
+        const working = new Set<string>();
+        for (const {agent, key} of awake(machine, t) ? agents : []) {
+          if (agent.since > t || (agent.until !== undefined && t >= agent.until) || !isOn(agent.works!, t)) continue;
+          const plain = JSON.stringify(key);
+          const ordinal = alike.get(plain) ?? 0;
+          alike.set(plain, ordinal + 1);
+          const id = `${plain} ${ordinal}`;
+          working.add(id);
+          const stretch = open.get(id);
+          if (stretch) stretch.to = t + MIN;
+          else open.set(id, {key: {...key, ordinal}, from: t, to: t + MIN});
+        }
+        for (const [id, stretch] of open) {
+          if (working.has(id)) continue;
+          credit(stretch);
+          open.delete(id);
+        }
+      }
+      for (const stretch of open.values()) credit(stretch);
+    }
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
 }
 
 /** How often each card is measured at `t` by a machine: the demo measures on the agent's schedule, the test faster or slower. */

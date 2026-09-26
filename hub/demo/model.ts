@@ -56,7 +56,8 @@ const anotherWeek = (elapsed: number, n: number) => ((60 + 8 * mod(n, 4)) * elap
  * A weekly window whose current cycle began at `since` (before `start`), so it resets a
  * week after. With `early`, the cycle before was due to reset then but came back at
  * `since`: an early reset (a free one used, or one for everyone). `use` gives the used
- * share `elapsed` into the current cycle, `before` into cycle `n` of the others (-1 the
+ * share `elapsed` into the current cycle, and, with `work`, the work done in it so far
+ * (`busy`, ms), as a rolling window's does; `before` into cycle `n` of the others (-1 the
  * one before…).
  */
 export function weekly(options: {
@@ -64,14 +65,16 @@ export function weekly(options: {
   label?: string;
   since: number;
   early?: number;
-  use: (elapsed: number) => number;
+  use: (elapsed: number, busy: number) => number;
+  work?: Work;
   before?: (elapsed: number, n: number) => number;
 }): WindowAt {
-  const {id = 'weekly', label = null, since, early, use, before = anotherWeek} = options;
+  const {id = 'weekly', label = null, since, early, use, work, before = anotherWeek} = options;
   return t => {
     const cycle = cycleOf(t, since, early);
     const elapsed = t - cycle.begin;
-    return {id, kind: 'weekly', minutes: 7 * 24 * 60, label, used: share(cycle.n === 0 ? use(elapsed) : before(elapsed, cycle.n)), resetsAt: cycle.reset};
+    const used = cycle.n === 0 ? use(elapsed, work ? work(cycle.begin, t) : 0) : before(elapsed, cycle.n);
+    return {id, kind: 'weekly', minutes: 7 * 24 * 60, label, used: share(used), resetsAt: cycle.reset};
   };
 }
 
@@ -223,6 +226,12 @@ export type CardCheck = Span & {board?: string} & (
     | {cadence: Cadence['when'] | null; why?: CadenceWhy}
     /** How many whole days back ‹ takes the chart from 30 days, step by step, on the card's board: where the history starts. */
     | {reachesBack: number}
+    /**
+     * A window's cells about agent work in the table over `range`: hours of work, the pace
+     * per hour of it, hours of work left (to a tenth), the share of spending during work
+     * (whole percent), or why there are none.
+     */
+    | {work: string; range: string; hours?: number; perHour?: number; left?: number; during?: number; none?: string}
   );
 
 /**
@@ -246,6 +255,19 @@ export type BoardCheck = Span &
      * it): the folders shown under it, by name, none where the folder is the project.
      */
     | {agentsOf: string; folders: (string | null)[]}
+    /**
+     * The activity widget over `range`, split by subscription (named by card id), project or
+     * machine (by its name shown): every group and its own hours, to a tenth.
+     */
+    | {activity: 'source' | 'project' | 'device'; range: string; groups: Record<string, number>}
+    /** One group of the activity widget and its own hours, whatever the others (null: not among the groups). */
+    | {activityOf: string; by: 'project' | 'device'; range: string; hours: number | null}
+    /** The activity widget's totals over `range`: hours of work, agent time, and how many at once. */
+    | {activityTotals: {work: number; agents: number; atOnce: number}; range: string}
+    /** Since when, from `start`, the activity widget knows how agents worked over `range`. */
+    | {activityKnownFrom: number; range: string}
+    /** The table of limits as a table or a list of rows, on a board as wide as a wide screen. */
+    | {tableLayout: 'table' | 'list'}
   );
 
 export type SceneCheck = Span &
@@ -322,7 +344,17 @@ export type Machine = {
  * table of running agents on, and in «My machines». `projects` are the names they give the
  * projects their machines report, before any agent reports one (reported → shown).
  */
-export type Person = {kind: 'person'; id: string; name: string; agents?: boolean; agentsSpan?: number; projects?: Record<string, string>; expect: (BoardCheck | ProjectCheck)[]; look?: string[]};
+export type Person = {
+  kind: 'person';
+  id: string;
+  name: string;
+  agents?: boolean;
+  agentsSpan?: number;
+  forecastSpan?: number;
+  projects?: Record<string, string>;
+  expect: (BoardCheck | ProjectCheck)[];
+  look?: string[];
+};
 
 export type Board = {
   kind: 'board';
@@ -333,6 +365,9 @@ export type Board = {
   /** The table of running agents is turned on. */
   agents?: boolean;
   agentsSpan?: number;
+  forecastSpan?: number;
+  /** When members joined it, from `start`, where later than it was made: work before is not the board's. */
+  joined?: Record<string, number>;
   expect: BoardCheck[];
   look?: string[];
 };
@@ -421,6 +456,12 @@ export function historyTimes(set: DemoSet, card: Card): {t: number; step: number
 
 /** The earliest measurement a set seeds: where the chart's history begins. */
 export const earliest = (set: DemoSet) => Math.min(...cards(set).flatMap(card => historyTimes(set, card).slice(0, 1).map(s => s.t)));
+
+/** How far back the demo's hub has kept how agents worked: before it, that is not known. */
+export const WORK_SINCE = -10 * DAY;
+
+/** Since when a set's hub knows how agents worked: ten days back, or where its history begins when that is later. */
+export const workSince = (set: DemoSet) => Math.max(WORK_SINCE, earliest(set));
 
 const iso = (start: number, t: number) => new Date(start + t).toISOString();
 
@@ -524,6 +565,10 @@ export function problems(set: DemoSet): string[] {
     // A person's id names their personal board.
     if (known.has(board.id)) found.push(`board ${board.id} is named as a person`);
     for (const person of [board.owner, ...board.members]) if (!known.has(person)) found.push(`board ${board.id} names nobody known: ${person}`);
+    for (const [person, at] of Object.entries(board.joined ?? {})) {
+      if (!board.members.includes(person)) found.push(`board ${board.id}: ${person} joins it without being a member`);
+      if (at < workSince(set) || at > 0) found.push(`board ${board.id}: ${person} joins it before the board was made or after the start`);
+    }
   }
   for (const person of people(set)) {
     for (const [reported, name] of Object.entries(person.projects ?? {})) {
