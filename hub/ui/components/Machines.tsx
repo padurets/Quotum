@@ -99,7 +99,7 @@ function InlineName({
   }
   return (
     <span className="device-name">
-      <b>{current}</b>
+      <b title={current}>{current}</b>
       <button type="button" className="icon-button" aria-label={renameLabel} title={renameLabel} onClick={() => setName(current)}>
         <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
           <path d="M10.5 3.5l2 2M3 13l.6-2.6L11 3a1.4 1.4 0 0 1 2 2l-7.4 7.4z" />

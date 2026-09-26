@@ -427,7 +427,8 @@ tbody tr:hover td { background: #ffffff04; }
 th:first-child, td:first-child { padding-left: var(--table-edge, 12px); }
 th:last-child, td:last-child { padding-right: var(--table-edge, 12px); }
 .panel .table-wrap { --table-edge: var(--panel-pad); margin-inline: calc(-1 * var(--panel-pad)); }
-.dialog .table-wrap { --table-edge: 24px; margin-inline: -24px; }
+/* A table scrolls within the dialog rather than widening it past a narrow screen. */
+.dialog .table-wrap { --table-edge: 24px; margin-inline: -24px; contain: inline-size; }
 td:first-child { color: var(--text); }
 /* A row's colour, marked like the card it belongs to. */
 .swatch { display: inline-block; width: 3px; height: 13px; border-radius: 2px; margin-right: 10px; vertical-align: -2px; }
@@ -584,6 +585,9 @@ tr:hover .device-name .icon-button, .device-name .icon-button:focus-visible { op
 .projects-table input[type=checkbox] { accent-color: var(--accent); margin: 0; }
 .projects-table th:first-child, .projects-table td:first-child { width: 1px; padding-right: 0; }
 .project-none { color: var(--text-3); }
+/* A project's name is as long as a folder's: cut, the whole of it in the tooltip. */
+.projects-table .device-name { max-width: min(34ch, 42vw); }
+.projects-table .device-name b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-from .link-button { margin-left: 3px; vertical-align: -1px; }
 .project-from .link-button svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
 .button-row.is-start { justify-content: flex-start; align-items: center; }
@@ -616,6 +620,9 @@ tr:hover .device-name .icon-button, .device-name .icon-button:focus-visible { op
   .inline-form { flex-direction: column; align-items: stretch; }
   .token-list li { grid-template-columns: 1fr auto; }
   .admin-table th:nth-child(3), .admin-table td:nth-child(3) { display: none; }
+  /* Projects keep their machines and let when they last worked go. */
+  .projects-table th:nth-child(3), .projects-table td:nth-child(3) { display: table-cell; }
+  .projects-table th:nth-child(5), .projects-table td:nth-child(5) { display: none; }
   .brand span { display: none; }
   .status { gap: 10px; font-size: 12px; }
   main { padding: 16px 16px 32px; gap: 16px; }
