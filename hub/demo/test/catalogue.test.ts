@@ -17,7 +17,8 @@ import type {ResetEvent, ResetProvider} from '../../server/domain/resets.js';
 import {setLocale} from '../../ui/i18n/index.js';
 import {agentRows, byActivity, drawn, folderOf, machinesOf} from '../../ui/lib/agents.js';
 import {forecastRow} from '../../ui/lib/forecast.js';
-import {chartEvents, chartFrom, chartResets, linesOf} from '../../ui/lib/lines.js';
+import {chartEvents, chartResets, linesOf} from '../../ui/lib/lines.js';
+import {frameOf, step} from '../../ui/lib/periods.js';
 import {planNote, started} from '../../ui/lib/plan.js';
 import {shown as gathered, type Projects} from '../../ui/lib/projects.js';
 import {cadenceOf, dotOf, level, resetLine, titled, windowName} from '../../ui/lib/quota.js';
@@ -184,7 +185,8 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
       const board = people(set)[0].id;
       const [overview, history] = await Promise.all([reading.overview(board), reading.history(board, range)]);
       if (isHidden(overview.view, HISTORY)) return `the chart is hidden on the board ${board}`;
-      const marks = chartResets(told.past, linesOf(history, overview, overview.view, 'weekly'), chartFrom(history, now), history.to).filter(m => m.provider === provider);
+      const frame = frameOf(null, {range: range ?? '24h', horizon: 'auto'}, now, overview.historyStart);
+      const marks = chartResets(told.past, linesOf(history, overview, overview.view, 'weekly'), frame.from, frame.to).filter(m => m.provider === provider);
       return {marked: provider, resets: marks.length, range};
     }
     const {reset} = check as {reset: 'claude' | 'codex'};
@@ -278,11 +280,17 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
       plan: !row.plan ? 'none' : !row.plan.notable ? 'even' : row.plan.delta >= 0 ? 'behind' : 'ahead',
     });
   }
+  if ('reachesBack' in card) {
+    // As ‹ does from the chart's longest period, until it is off.
+    let range: {from: number; to: number} | null = null;
+    for (let next = step(null, '30d', -1, now, overview.historyStart); next && next !== 'live'; next = step(range, '30d', -1, now, overview.historyStart)) range = next;
+    values.reachesBack = range ? Math.floor((now - range.from) / 86_400_000) : 0;
+  }
   if ('event' in card) {
     // Marked on the chart as it opens: the weekly windows of the last 24 hours.
     if (isHidden(overview.view, HISTORY)) return `the chart is hidden on the board ${board}`;
     const history = await reading.history(board);
-    const marks = chartEvents(history.events, linesOf(history, overview, overview.view, 'weekly'), chartFrom(history, now));
+    const marks = chartEvents(history.events, linesOf(history, overview, overview.view, 'weekly'), frameOf(null, {range: '24h', horizon: 'auto'}, now, overview.historyStart).from);
     const events = marks.filter(m => m.event.sourceId === source.id).map(m => m.event.kind);
     values.event = events.includes(card.event) ? card.event : events;
   }

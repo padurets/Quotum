@@ -61,9 +61,6 @@ export function valueIn(points: Line['points'], cell: number, now: number, holdM
   return next ? (next[2] === segment ? value : undefined) : cell - at <= holdMs ? value : undefined;
 }
 
-/** Where the chart begins: its period, or later where history starts. */
-export const chartFrom = (history: History | null, now: number) => (history ? Math.max(history.since, history.historyStart) : now - 86_400_000);
-
 /**
  * What happened to sources that the chart marks: from `from` on, where it draws a line of
  * the source (limits back early, on a window that came back); with those lines.

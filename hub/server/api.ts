@@ -50,6 +50,15 @@ function errorCode(status: number, path: string): string {
 }
 
 /**
+ * The cell a period of `span` is drawn on: the finest that keeps it within `maxCells`, a
+ * little over the count rather than a three times coarser grid for a day over a month.
+ */
+function cellOf(span: number) {
+  const {cells, maxCells} = config.history;
+  return cells.find(cell => span / cell <= maxCells * 1.05) ?? cells.at(-1)!;
+}
+
+/**
  * A period from `from` to `to` (milliseconds) within the kept history, from 15 minutes to
  * a month long, with the cell it is drawn on; null when it is not one. Its end is at most
  * now; its edges go out to whole cells, so periods that differ by less than a cell are
@@ -61,9 +70,7 @@ function selected(from: string | undefined, to: string | undefined, now: number)
   const end = Math.min(Number(to), now);
   const span = end - start;
   if (span < config.history.minSpanMs || span > config.history.maxSpanMs || start < now - config.retention.sampleDays * 86_400_000) return null;
-  const {cells, maxCells} = config.history;
-  // A little over the count, rather than a three times coarser grid for a day over a month.
-  const cellMs = cells.find(cell => span / cell <= maxCells * 1.05) ?? cells.at(-1)!;
+  const cellMs = cellOf(span);
   return {since: Math.floor(start / cellMs) * cellMs, to: Math.min(Math.ceil(end / cellMs) * cellMs, now), cellMs};
 }
 
@@ -86,7 +93,7 @@ export async function buildApp(hub: Hub) {
    * good part of a second) is also reused for a quarter of a cell after new data came: a
    * month is drawn in 2-hour cells, where half an hour of news does not show. Such an
    * answer says when a newer one will be ready (`refreshInMs`), so the page asks again
-   * then. The fixed ranges are kept per board; of the periods selected on charts, the
+   * then. The ranges ending now are kept per board; of the periods selected on charts, the
    * latest few.
    */
   const fixedHistory = new Map<string, Kept>();
@@ -161,8 +168,8 @@ export async function buildApp(hub: Hub) {
   };
 
   app.get('/health', () => ({status: 'ok', service: serviceName, version}));
-  // With the resets the trackers reported over the longest period the chart shows.
-  app.get('/api/resets', () => ({...resets.snapshot(), past: store.announcements(Date.now() - 31 * 86_400_000)}));
+  // With the resets the trackers reported as far back as the chart can be moved: over the history kept.
+  app.get('/api/resets', () => ({...resets.snapshot(), past: store.announcements(Date.now() - config.retention.sampleDays * 86_400_000)}));
 
   app.get<{Querystring: {board?: string}}>('/api/overview', (request, reply) => {
     const access = guards.board(request, reply, request.query.board);
@@ -214,12 +221,13 @@ export async function buildApp(hub: Hub) {
       return {range: `${from}-${to}`, now, since: span.since, to: span.to, cellMs: span.cellMs, historyStart: store.historyStart(now), ...answer};
     }
     const range = request.query.range ?? '24h';
-    const spec = Object.hasOwn(config.history.ranges, range) ? config.history.ranges[range] : null;
-    if (!spec) return reply.code(400).send({error: 'invalid_request'});
+    const durationMs = Object.hasOwn(config.history.ranges, range) ? config.history.ranges[range] : null;
+    if (!durationMs) return reply.code(400).send({error: 'invalid_request'});
 
     const board = access.board.id;
-    const answer = reused(fixedHistory, `${board}:${range}`, board, spec.cellMs, now, () => store.history(board, now - spec.durationMs, spec.cellMs));
-    return {range, now, since: now - spec.durationMs, to: now, cellMs: spec.cellMs, historyStart: store.historyStart(now), ...answer};
+    const cellMs = cellOf(durationMs);
+    const answer = reused(fixedHistory, `${board}:${range}`, board, cellMs, now, () => store.history(board, now - durationMs, cellMs));
+    return {range, now, since: now - durationMs, to: now, cellMs, historyStart: store.historyStart(now), ...answer};
   });
 
   accountRoutes(app, hub, guards);

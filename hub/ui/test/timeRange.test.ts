@@ -51,7 +51,7 @@ test('a range is named by its times, its days, or both', () => {
   });
 });
 
-test('the history on screen tells a selected range from a fixed period', () => {
+test('the history on screen tells a selected range from a period ending now', () => {
   assert.equal(ofTimeRange({range: `${now - 3_600_000}-${now}`}), true);
   assert.equal(ofTimeRange({range: '24h'}), false);
   assert.equal(ofTimeRange(null), false, 'nothing yet');

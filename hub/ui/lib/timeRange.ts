@@ -13,7 +13,7 @@ const DAY = 86_400_000;
 
 /**
  * Whether history on screen is of a selected range (the hub names it `<from>-<to>`), not a
- * fixed period: what the chart and the table show follows the data they have, so the
+ * period ending now: what the chart and the table show follows the data they have, so the
  * headings of a range never stand over a period's numbers while the next answer loads.
  */
 export const ofTimeRange = (history: {range: string} | null) => !!history && history.range.includes('-');
@@ -63,6 +63,11 @@ export function setTimeRange(selected: TimeRange | null) {
     params.delete('to');
   }
   go(params, true);
+}
+
+/** Goes where a step through time takes the analytics (periods.ts): a range, or the chosen period again. */
+export function goTo(next: TimeRange | 'live' | null) {
+  if (next) setTimeRange(next === 'live' ? null : next);
 }
 
 /** Forgets a selection the hub will not read (older than it keeps history), without a step back to it. */

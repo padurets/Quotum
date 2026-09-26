@@ -118,7 +118,7 @@ export type HistorySeries = {
 export type History = {
   /** Set by the client: which board the history was read for. */
   board?: string;
-  /** '24h', '7d', '30d', or `from-to` of a span selected on the chart. */
+  /** A period ending now ('1h' … '30d', lib/periods.ts), or `from-to` of a span selected on the chart. */
   range: string;
   now: number;
   since: number;

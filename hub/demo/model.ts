@@ -221,6 +221,8 @@ export type CardCheck = Span & {board?: string} & (
     | {event: 'early_reset' | 'resets_granted'}
     /** What the dot's tooltip says of the next measurement, while the card is measured at the hub's pace, and why. */
     | {cadence: Cadence['when'] | null; why?: CadenceWhy}
+    /** How many whole days back ‹ takes the chart from 30 days, step by step, on the card's board: where the history starts. */
+    | {reachesBack: number}
   );
 
 /**
