@@ -667,14 +667,18 @@ fn print_sessions(sessions: &[Session], style: &Style) {
             Some(false) => style.dim("idle   "),
             None => " ".repeat(7),
         };
-        // Its folder, as boards show it: agents in worktrees of one project stay apart.
-        let folder = session.folder.as_deref().or(session.project.as_deref()).unwrap_or("");
+        // Its project, and its folder where that is another, as boards show them: agents in
+        // worktrees of one project stay apart.
+        let place = match (&session.project, &session.folder) {
+            (Some(project), Some(folder)) if project != folder => format!("{project} · {folder}"),
+            (project, folder) => project.as_ref().or(folder.as_ref()).cloned().unwrap_or_default(),
+        };
         let origin = match session.origin {
             Origin::Terminal => String::new(),
             other => format!(" · {}", other.id()),
         };
         let started = style.dim(&format!("started {} ago{origin}", until(now_ms() - session.started_at)));
-        println!("{:<14}{folder:<20} {state}  {started}", session.provider.name());
+        println!("{:<14}{place:<20} {state}  {started}", session.provider.name());
     }
 }
 

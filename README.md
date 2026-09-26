@@ -96,8 +96,8 @@ Codex         api                 idle     started 25m ago · editor
   to be right now. The dot on the provider's logo says whether the numbers are fresh.
 - **Which agents run on it, and which of them work.** Under the limits, a mark per
   Claude Code, Codex or Antigravity session spending the subscription, grouped by
-  machine: filled while it works, outlined while idle; its folder and how long it runs
-  in the tooltip. Terminals, editors and the Codex app alike.
+  machine: filled while it works, outlined while idle; its project, its folder (a
+  worktree, a folder inside the repository) and how long it runs in the tooltip. Terminals, editors and the Codex app alike.
 - **Free resets.** When a provider grants resets of the limits (Codex does now and
   then), the card shows how many you have and until when.
 - **A weekly spending plan.** By default you spend 30 / 25 / 15 / 15 / 10 / 5% on the

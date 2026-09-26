@@ -220,17 +220,19 @@ test('a machine gone quiet is credited for a short while, whether or not it is s
   }
 });
 
-test('a board shows the sessions of those who show the subscription on it, by folder; a device taken off, none', () => {
+test("a board shows the sessions of those who show the subscription on it, each project as its person named it; a device taken off, none", () => {
   const {store, live, ann, bob, laptop, server} = setup();
   live.report(laptop, ann, [session(laptop, {project: 'quotum', folder: 'quotum.feat'})], start);
   live.report(server, bob, [session(server, {project: 'quotum', working: false})], start);
+  store.db.prepare('INSERT INTO project_names VALUES (?, ?, ?)').run(ann, 'quotum', 'core');
   assert.deepEqual(live.of('codex:1', [ann], start).map(s => s.device.id), [laptop]);
   assert.deepEqual(
-    live.of('codex:1', [ann, bob], start).map(s => [s.device.id, s.folder]),
+    live.of('codex:1', [ann, bob], start).map(s => [s.device.id, s.project, s.folder]),
     [
-      [laptop, 'quotum.feat'],
-      [server, 'quotum'],
+      [laptop, 'core', 'quotum.feat'],
+      [server, 'quotum', null],
     ].sort((a, b) => a[0]!.localeCompare(b[0]!)),
+    "Ann's name for her project; Bob's as his machine reports it",
   );
   live.forget([laptop]);
   assert.deepEqual(live.of('codex:1', [ann, bob], start).map(s => s.device.id), [server]);

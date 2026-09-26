@@ -14,11 +14,16 @@ export type LiveSession = {
   working: boolean;
 };
 
-/** A running coding agent as a board shows it, on the card of the subscription it spends: by its folder. */
+/**
+ * A running coding agent as a board shows it, on the card of the subscription it spends:
+ * its project as its person named it («My machines» → «Projects»), and its folder where
+ * that is another (a worktree, a folder inside the repository), so agents of one project
+ * stay apart.
+ */
 export type BoardSession = {
   device: {id: string; name: string};
   origin: Origin;
-  /** Its folder, else its project (an older agent tells only that). */
+  project: string | null;
   folder: string | null;
   startedAt: number;
   working: boolean;
@@ -83,8 +88,10 @@ export class Sessions {
     const found: BoardSession[] = [];
     for (const machine of this.machines.values()) {
       if (now - machine.at > KEEP_MS || !people.includes(machine.user)) continue;
-      for (const {device, origin, project, folder, startedAt, working} of machine.sources.get(source) ?? []) {
-        found.push({device, origin, folder: folder ?? project, startedAt, working});
+      const sessions = machine.sources.get(source) ?? [];
+      const names = sessions.length ? this.store.projectNames(machine.user) : new Map<string, string>();
+      for (const {device, origin, project, folder, startedAt, working} of sessions) {
+        found.push({device, origin, project: project === null ? null : (names.get(project) ?? project), folder, startedAt, working});
       }
     }
     return found.sort((a, b) => a.device.name.localeCompare(b.device.name) || a.device.id.localeCompare(b.device.id) || a.startedAt - b.startedAt);

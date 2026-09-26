@@ -506,7 +506,8 @@ export class Store {
     for (const r of reported) remove.run(user, r);
   }
 
-  private projectNames(user: string): Map<string, string> {
+  /** The names a person gave the projects their machines report: reported → shown. */
+  projectNames(user: string): Map<string, string> {
     const rows = this.db.prepare('SELECT reported, name FROM project_names WHERE user_id = ?').all(user) as {reported: string; name: string}[];
     return new Map(rows.map(r => [r.reported, r.name]));
   }

@@ -231,8 +231,8 @@ of running agents for five minutes after its last request, then forgets it.
 | `provider` | As in a snapshot. |
 | `account`, `accountName` | The subscription, as in a check-in, as far as the agent knows it. Without them the hub takes the subscription this machine last delivered for that provider; the reference agent leaves out a session of a client that names its account while it does not know which one that is (signed in anew since it measured). Either way, only a subscription the device's person holds (their devices measured it). |
 | `origin` | Where it runs: `terminal`, `editor` (a client an editor runs, one per window) or `app` (a provider's desktop app, one client for all its chats). |
-| `project` | The project it works in, never a path: the name of the git repository its folder is in (for a worktree, of the repository it belongs to), else the name of the folder. Absent when the folder that names it (the repository's main folder, else the folder itself) is the home folder, above it or temporary. A repository is looked for in the folder and the folders above it, stopping before the home folder (neither it nor anything above it is looked at), and on macOS not in or through the folders the system guards (Desktop, Documents, Downloads, iCloud Drive, other volumes): there the project is the folder. Paths are checked as git writes them; a chain of links made by hand may still lead there. The hub counts time under this name. A longer name than 120 characters is cut, not refused. |
-| `folder` | The name of the folder it works in, when that is not `project` (a subfolder or a worktree), and the folder is not the home folder, above it or temporary. Boards show it in the lists of running agents, else `project`. Cut like `project`. |
+| `project` | The project it works in, never a path: the name of the git repository its folder is in (for a worktree, of the repository it belongs to), else the name of the folder. Absent when the folder that names it (the repository's main folder, else the folder itself) is the home folder, above it or temporary. A repository is looked for in the folder and the folders above it, stopping before the home folder (neither it nor anything above it is looked at), and on macOS not in or through the folders the system guards (Desktop, Documents, Downloads, iCloud Drive, other volumes): there the project is the folder. Paths are checked as git writes them; a chain of links made by hand may still lead there. The hub counts time under this name, and boards show it. A longer name than 120 characters is cut, not refused. |
+| `folder` | The name of the folder it works in, when that is not `project` (a subfolder or a worktree), and the folder is not the home folder, above it or temporary. Boards show it under the project in the lists of running agents, so agents of one project stay apart. Cut like `project`. |
 | `startedAt` | When it started; a time ahead of the hub's is taken as now. |
 | `working` | Whether it is working now (the agent's judgement: its processes spend CPU time), or idle. |
 
@@ -249,7 +249,8 @@ out. Errors are as for check-ins; a hub without this request answers `404` with
 upgraded). A `404` without that body comes from something in front of the hub and is
 tried again like any failure.
 
-A board shows a session on the card of its subscription, with the name of its machine
+A board shows a session on the card of its subscription, with its project (as its person
+named it in the dashboard, else as reported) and folder, and the name of its machine
 (as its person named it in the dashboard, else as the machine reports it), only to the
 members of a board where the session's person shows that subscription (their personal board, or a shared
 board they are on).
@@ -288,9 +289,8 @@ message of the client (at most 200 characters). About running agents (unless tur
 off): which client, where it runs, since when, whether it works, and the name of its
 project (the repository its folder is in, else the folder) and of its folder when that
 differs (unless that is turned off too). The members of a board where you show a
-subscription see which client, where it runs, since when, whether it works and the name
-of its folder, else of its project, as they see its limits, and with them the name of
-the machine each agent runs on.
+subscription see these, as they see its limits, with each project under the name its
+person gave it, and with them the name of the machine each agent runs on.
 
 What the hub keeps of running agents: when each worked, with the machine, subscription,
 where it ran, since when and its project and folder names, as long as samples (90 days);

@@ -93,8 +93,8 @@ tokens). On macOS it touches nothing in the folders the system guards (Desktop,
 Documents, Downloads, iCloud Drive, other volumes), neither directly nor through the
 `.git` of another folder, so that the system does not ask for access: there the project
 is the folder. Paths are checked as git writes them; a chain of links made by hand may
-still lead there. Boards list agents by folder, so those in different worktrees stay
-apart. An editor or the app runs one client per
+still lead there. Boards list agents by project, with the folder under it where that is
+another, so agents in different worktrees stay apart. An editor or the app runs one client per
 window for all its chats, so there a session is a window. A session works while it and
 what it started (tools, builds, tests) spend more of a CPU core than the client does
 when idle (6% for Claude Code, which redraws its screen even then; 3–4% for the others),
@@ -202,8 +202,8 @@ session under its subscription (the account the client is signed in to now, else
 the machine last delivered for that client; only one its person holds; the agent leaves
 out a session of a client signed in anew since it last measured, until it knows which
 account that is) and shows it on
-that card, by folder, to the members of a board where that person shows the
-subscription. Each list also counts until the next one, for at most 200 seconds: the hub
+that card, by project (as that person named it) and folder, to the members of a board
+where that person shows the subscription. Each list also counts until the next one, for at most 200 seconds: the hub
 keeps when each session worked, with its machine, subscription, where it runs, since
 when and its project and folder names as reported, as long as samples. Sums are worked
 out when read (`domain/work.ts`): agent time adds the stretches up, two agents counting

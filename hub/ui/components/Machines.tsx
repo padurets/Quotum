@@ -228,19 +228,7 @@ function Projects() {
   const toggle = (group: ProjectGroup, on: boolean) => setSelected(current => (on ? [...current, group.name!] : current.filter(name => name !== group.name)));
   return (
     <>
-      <div className="projects-bar">
-        <p className="dialog-text">{t('projects.caption', {days: list.keptDays})}</p>
-        {chosen.length >= 2 && (
-          <Popover label={t('projects.merge')} trigger={t('projects.merge')} triggerClass="button" open={merge} onOpenChange={setMerge}>
-            <div className="popover-title">{t('projects.mergeInto')}</div>
-            {chosen.map(target => (
-              <button key={target.name} type="button" className="popover-row" onClick={() => failing('/api/projects', merging(chosen, target))}>
-                <span>{target.name}</span>
-              </button>
-            ))}
-          </Popover>
-        )}
-      </div>
+      <p className="dialog-text">{t('projects.caption', {days: list.keptDays})}</p>
       <ErrorLine error={error} />
       <div className="table-wrap">
         <table className="admin-table projects-table">
@@ -312,6 +300,18 @@ function Projects() {
           </tbody>
         </table>
       </div>
+      {chosen.length >= 2 && (
+        <div className="projects-bar">
+          <Popover label={t('projects.merge')} trigger={t('projects.merge')} triggerClass="button" align="left" up open={merge} onOpenChange={setMerge}>
+            <div className="popover-title">{t('projects.mergeInto')}</div>
+            {chosen.map(target => (
+              <button key={target.name} type="button" className="popover-row" onClick={() => failing('/api/projects', merging(chosen, target))}>
+                <span>{target.name}</span>
+              </button>
+            ))}
+          </Popover>
+        </div>
+      )}
     </>
   );
 }

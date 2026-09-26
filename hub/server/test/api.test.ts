@@ -440,22 +440,30 @@ test('agents report the coding agents running on their machines; the cards of th
   assert.deepEqual([answer.status, answer.body], [200, {accepted: 2}], 'a subscription the hub does not know is left out');
   const shown = async () => (await call('GET', '/api/overview', {as: 'alice'})).body.sources[0].sessions;
   const [first, second] = await shown();
-  assert.deepEqual([first.origin, first.folder, first.working, first.device.name, first.startedAt], ['terminal', 'quotum', true, 'build-01', Date.parse(started)]);
+  assert.deepEqual([first.origin, first.project, first.folder, first.working, first.device.name, first.startedAt], ['terminal', 'quotum', null, true, 'build-01', Date.parse(started)]);
   assert.equal(second.origin, 'editor', 'without an account: the subscription this machine delivers');
-  assert.deepEqual(Object.keys(first).sort(), ['device', 'folder', 'origin', 'startedAt', 'working'], 'a board sees the folder, not the project');
+  assert.deepEqual(Object.keys(first).sort(), ['device', 'folder', 'origin', 'project', 'startedAt', 'working'], 'nothing of how the hub tells sessions apart');
   assert.equal((await report([])).status, 200);
   assert.deepEqual(await shown(), [], 'an empty list: none runs');
   const long = await report([{...codex, project: 'x'.repeat(300), folder: 'y'.repeat(300)}]);
   assert.equal(long.body.accepted, 1, 'long names are cut, not refused');
-  assert.equal((await shown())[0].folder, 'y'.repeat(120));
-  // Boards show the folder where there is one, else the project an older agent tells.
+  assert.deepEqual([(await shown())[0].project, (await shown())[0].folder], ['x'.repeat(120), 'y'.repeat(120)]);
+  // Boards show the project, and the folder where the agent tells one; an older agent tells only the project.
   await report([
     {...codex, folder: 'quotum.feat-18', startedAt: iso(Date.now() - 4_000_000)},
     {...codex, startedAt: iso(Date.now() - 3_000_000)},
     {...codex, project: undefined, folder: 'scratch', startedAt: iso(Date.now() - 2_000_000)},
     {...codex, project: undefined, startedAt: iso(Date.now() - 1_000_000)},
   ]);
-  assert.deepEqual((await shown()).map((s: {folder: string | null}) => s.folder), ['quotum.feat-18', 'quotum', 'scratch', null]);
+  assert.deepEqual(
+    (await shown()).map((s: {project: string | null; folder: string | null}) => [s.project, s.folder]),
+    [
+      ['quotum', 'quotum.feat-18'],
+      ['quotum', null],
+      [null, 'scratch'],
+      [null, null],
+    ],
+  );
 
   const team = (await call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
   await person('bob', (await call('POST', `/api/boards/${team}/invites`, {as: 'alice'})).body.url.split('/invite/')[1]);

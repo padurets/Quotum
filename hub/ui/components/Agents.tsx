@@ -31,6 +31,9 @@ function Mark({session}: {session: LiveSession}) {
 }
 
 /** What a session is doing, as the legend names its mark. */
+/** The folder an agent works in, where it tells apart agents of one project. */
+const folderOf = (session: LiveSession) => (session.folder !== session.project ? session.folder : null);
+
 const stateOf = (session: LiveSession) =>
   t(session.working ? 'agents.working' : session.origin === 'terminal' ? 'agents.idle' : 'agents.window');
 
@@ -90,8 +93,9 @@ export function Agents({sessions, now}: {sessions: LiveSession[]; now: number}) 
             {machine.sessions.map((session, i) => (
               <div className={`agents-row ${session.working ? 'is-working' : ''}`} key={i} title={stateOf(session)}>
                 <Mark session={session} />
-                <span className="agents-folder">
-                  {session.folder ?? t('agents.noFolder')}
+                <span className="agents-project">
+                  <span>{session.project ?? t('agents.noProject')}</span>
+                  {folderOf(session) && <small>{folderOf(session)}</small>}
                   <span className="sr-only">, {stateOf(session)}</span>
                 </span>
                 <span className="agents-origin">{t(`agents.${session.origin}`)}</span>
@@ -116,7 +120,7 @@ export function Agents({sessions, now}: {sessions: LiveSession[]; now: number}) 
   );
 }
 
-/** The table's columns after the folder, each one the owner can hide to make the widget narrow. */
+/** The table's columns after the project, each one the owner can hide to make the widget narrow. */
 const COLUMNS: {id: string; title: Key; cell: (row: AgentRow, now: number) => ReactNode}[] = [
   {id: 'state', title: 'agents.state', cell: ({session}) => stateOf(session)},
   {id: 'subscription', title: 'agents.subscription', cell: ({source}) => sourceLabel(source)},
@@ -160,7 +164,7 @@ export const AgentsPanel = memo(function AgentsPanel({sources, arrange}: {source
           <table>
             <thead>
               <tr>
-                <th>{t('agents.folder')}</th>
+                <th>{t('agents.project')}</th>
                 {columns.map(column => (
                   <th key={column.id}>{t(column.title)}</th>
                 ))}
@@ -169,9 +173,10 @@ export const AgentsPanel = memo(function AgentsPanel({sources, arrange}: {source
             <tbody>
               {rows.map((row, i) => (
                 <tr key={i} className={row.session.working ? 'is-working' : ''} style={{'--card-color': colorOf(arrange.view, row.source.id, row.source.provider)} as CSSProperties}>
-                  <td title={row.session.folder ?? undefined}>
+                  <td title={[row.session.project, folderOf(row.session)].filter(Boolean).join(' · ') || undefined}>
                     <Mark session={row.session} />
-                    {row.session.folder ?? t('agents.noFolder')}
+                    {row.session.project ?? t('agents.noProject')}
+                    {folderOf(row.session) && <small className="agents-folder">{folderOf(row.session)}</small>}
                     {!columns.some(column => column.id === 'state') && <span className="sr-only">, {stateOf(row.session)}</span>}
                   </td>
                   {columns.map(column => (

@@ -353,7 +353,8 @@ const all: DemoSet = {
       ],
       look: [
         'The table of agents lists many rows, by machine',
-        'My machines → Projects: quotum once, on the laptop, though three agents work in three folders (the tray and the table show the folders: quotum, hub, quotum.feat-18-desktop-app)',
+        'My machines → Projects: quotum once, on the laptop, though three agents work in three folders (the tray and the table show quotum three times, with hub and quotum.feat-18-desktop-app under two of them)',
+        'Renamed or merged in My machines, a project is shown under its new name in the tray and the table too',
         'Merge Quotum into quotum: the time adds up, all of it; give Quotum back its name: as it was',
         'docs gathers docs-site, and gives it back',
         'Escape in the merge menu closes only the menu',
@@ -429,7 +430,7 @@ const all: DemoSet = {
       look: [
         'Shares a row with the Antigravity card: the reset news under this card, none under that one',
         'Ten marks in the tray, in two groups (two machines); the panel names working, waiting and open-window agents',
-        'The long folder name ends in an ellipsis; the agent without a folder says so',
+        'The long project name ends in an ellipsis; the agent without a project says so',
       ],
     },
     {
