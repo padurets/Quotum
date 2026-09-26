@@ -1,9 +1,8 @@
-import type {Activity, ActivityDimension, ActivityGroup, View} from './types';
+import type {ActivityDimension, ActivityGroup, View} from './types';
 import {CATEGORY_COLORS} from './providers';
 import {colorOf} from './view';
 
 const MINUTE = 60_000;
-const HOUR = 60 * MINUTE;
 
 /** The colour of the groups beyond the first few: a neutral of its own. */
 export const OTHER_COLOR = 'var(--other)';
@@ -20,26 +19,25 @@ export function groupColors(groups: ActivityGroup[], by: ActivityDimension, view
   );
 }
 
-/** How many agents worked at the same time on average while any did. */
-export const atOnce = (agentMs: number, workMs: number) => (workMs > 0 ? agentMs / workMs : 0);
-
 /**
- * The widget's vertical scale. Cells shorter than an hour (periods up to a week) are read
- * as the share of the cell agents worked (`share`, 0 to 1, marked 0, 50 and 100%): minutes
- * of work in a minute-long cell say little. Longer cells are read in hours of work, up to
- * the busiest cell of the period (never more than a cell), marked at round times.
+ * The widget's vertical scale, in time worked: up to the tallest stack drawn (`busiest`,
+ * never more than a bar `barMs` long), with three marks or fewer above zero at round times.
  */
-export type ActivityScale = {share: true; max: 1; ticks: number[]} | {share: false; max: number; ticks: number[]};
+export type ActivityScale = {max: number; ticks: number[]};
 
-const STEPS = [5, 10, 15, 30, 60, 120, 180, 360].map(minutes => minutes * MINUTE);
+const STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 180, 360].map(minutes => minutes * MINUTE);
 
-export function activityScale(activity: Pick<Activity, 'cells'>, cellMs: number): ActivityScale {
-  if (cellMs < HOUR) return {share: true, max: 1, ticks: [0, 0.5, 1]};
-  const busiest = Math.max(0, ...activity.cells.map(([, work]) => work));
-  // Three marks or fewer above zero, on a round step; the top one at or above the busiest cell.
+export function activityScale(busiest: number, barMs: number): ActivityScale {
   const step = STEPS.find(candidate => busiest / candidate <= 3) ?? STEPS.at(-1)!;
-  const max = Math.min(cellMs, Math.max(step, Math.ceil(busiest / step) * step));
+  const max = Math.min(barMs, Math.max(step, Math.ceil(busiest / step) * step));
   const ticks: number[] = [];
   for (let at = 0; at <= max; at += step) ticks.push(at);
-  return {share: false, max, ticks};
+  return {max, ticks};
 }
+
+/**
+ * Under which key a group switched off in the widget's legend is kept among the lines
+ * switched off in the chart's (`Prefs.muted`): its own for each way of splitting, so
+ * switching off a project leaves the machines as they are.
+ */
+export const mutedKey = (by: ActivityDimension, key: string) => `activity:${by}:${key}`;

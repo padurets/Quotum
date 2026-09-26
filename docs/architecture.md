@@ -251,11 +251,14 @@ names apply when read, so they reach all the time kept. The database says since 
 this is kept (`agentWorkSince`): before it, how agents worked is not known.
 
 The analytics show it over their period. The table tells, for each window, how long
-agents worked on its subscription, what the window spent per hour of their work, how
-many hours of work are left at that pace (or that they last to the reset), and what
-share of its spending came while they worked. A widget draws hours of work on the
-period's grid, stacked by subscription, project or machine, with the hours of work, the
-agent time and how many worked at once on average. Each moment is split evenly among
+agents worked on its subscription, what the window spent per hour of their work, what
+share of its spending came while they worked, and, beside the forecast by time, a
+forecast by work: how many hours of work what is left lasts at that spending (or that it
+lasts to the reset). A widget draws hours of work in bars of an hour (the period's cells
+where those are longer; shorter bars where a range holds fewer than twenty hours), so a
+bar's height is the time agents worked in it, stacked by subscription, project or
+machine, with the work time, how many different agents worked and their time together,
+in all and in each bar's tooltip. Each moment is split evenly among
 the agents working then, so a stack is as tall as the time any of them worked; a
 group's own hours are the union of its agents' time, more than its part of the stacks
 where others worked alongside, so a subscription's hours are the table's. What is known
@@ -315,7 +318,8 @@ them), kept for 90 days.
   linearly to their reset. The board's owner can switch a source's plan off: then none
   of its windows is planned on that board. The chart draws the plan of the current week
   only.
-- **The forecast** says where a window's own pace leads, the same over any period. It
+- **The forecast by time** says where a window's own pace leads, the same over any period
+  (the forecast by work is told with agents' work, under *Delivery*). It
   counts from the window's last measurement: what was spent since the window started
   (its reset less its length) over the calendar time since then, idle hours too. A
   weekly window whose plan has planned 10 points by then goes the way the plan does,
@@ -425,11 +429,13 @@ chosen in the analytics' own head, the chart and the table one window type of it
 The board's view comes with the overview; the owner's changes show at once and are
 saved about half a second later, one request per burst (a drag, typing a plan). What
 is only about how one person looks (the analytics' period and window type, the chart's
-horizon, lines switched off in the legend, whether it draws the plan and the forecast, what agent activity is stacked by, reset announcements, the lock on the widgets,
+horizon, lines and groups switched off in either chart's legend, whether it draws the plan and the forecast, what agent activity is stacked by, reset announcements, the lock on the widgets,
 the agents table's sort order, the chosen board and language) stays in their browser.
-A time range selected on the chart becomes the analytics' period; it lives in the page's
+Both charts, the remaining shares and agent activity, read and move along time alike
+(`ui/components/timeAxis.ts`), each with its legend under it. A time range selected on
+either becomes the analytics' period; it lives in the page's
 address (`?from=&to=`), so a reload keeps it, Back undoes it and a link to it can be shared on the board.
-‹ and › beside the period, a swipe sideways on a touchpad or Shift with the wheel move the
+‹ and › beside the period, a swipe sideways on a touchpad or Shift with the wheel over a chart move the
 analytics by half their length, one step a gesture: back, to a range in the past held in
 the address like a dragged one, no further than the history kept; forward, up to now,
 where the chosen period comes back. The chart moves to the new period at once, drawing

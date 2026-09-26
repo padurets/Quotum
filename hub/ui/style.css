@@ -441,14 +441,15 @@ td.muted, small.muted { color: var(--text-3); }
 .period-name { display: flex; align-items: center; gap: 6px; }
 .period-name svg { flex-shrink: 0; }
 
-.legend { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 18px 0 4px; }
+/* Under its chart, as on either chart. */
+.legend { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 12px 0 0; }
 .legend-item { display: flex; align-items: center; gap: 8px; padding: 4px 0; border: 0; background: none; font-size: 12.5px; color: var(--text-2); transition: opacity .15s; }
 .legend-item b { color: var(--text); font-weight: 500; }
 .legend-item[aria-pressed=false] { opacity: .35; }
 .legend-item:hover { opacity: 1; color: var(--text); }
 .legend-empty { font-size: 12.5px; color: var(--text-4); padding: 4px 0; }
 
-.chart { position: relative; margin-top: 10px; }
+.chart { position: relative; margin-top: 18px; }
 /* Dimmed while the next period loads. Not the chart itself: that would lay its tooltip under the next widget. */
 .panel .chart > svg, .panel .table-wrap { transition: opacity .2s; }
 .panel.is-loading .chart > svg, .panel.is-loading .table-wrap { opacity: .5; }
@@ -456,11 +457,11 @@ td.muted, small.muted { color: var(--text-3); }
 .chart > svg { display: block; width: 100%; height: auto; touch-action: pan-y; overflow: visible; }
 .chart-loading, .chart-empty { min-height: 220px; display: grid; place-items: center; color: var(--text-3); font-size: 13px; }
 .chart-empty { position: absolute; inset: 0; min-height: 0; pointer-events: none; }
-/* Agent activity: its switch beside the title (under it on a narrow widget), its totals a quieter line, each a whole. */
-.activity .panel-head { gap: 10px 16px; }
-.activity-controls { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+/* Agent activity: its totals a quieter line under the title, each a whole, its value as the legend's. */
 .activity-totals { display: flex; flex-wrap: wrap; gap: 2px 16px; margin-top: 6px; font-size: 12.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .activity-totals > span { white-space: nowrap; }
+.activity-totals b { color: var(--text); font-weight: 500; }
+.activity-totals + .chart { margin-top: 12px; }
 .activity-since { font-size: 11px; color: var(--text-2); border: 1px solid var(--hair-2); padding: 0 6px; border-radius: 5px; }
 .activity .chart-loading { min-height: 200px; }
 /* Parts of a stack stand apart by a hair of the surface, so two of one colour do not run together. */
@@ -468,7 +469,6 @@ td.muted, small.muted { color: var(--text-3); }
 .activity-hatch { stroke: var(--hair-2); stroke-width: 1.5; }
 .activity-unknown-label { fill: var(--text-3); font-size: 11.5px; }
 .activity-swatch { display: inline-block; flex-shrink: 0; width: 10px; height: 10px; border-radius: 2px; }
-.activity-legend .legend-item { cursor: default; }
 .grid { stroke: #ffffff0a; stroke-width: 1; stroke-dasharray: 2 4; }
 .axis-line { stroke: var(--hair-2); stroke-width: 1; }
 .threshold { stroke-width: 1; stroke-dasharray: 1 3; }

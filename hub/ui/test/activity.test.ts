@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {activityScale, atOnce, groupColors, OTHER_COLOR} from '../lib/activity';
+import {activityScale, groupColors, mutedKey, OTHER_COLOR} from '../lib/activity';
 import {CATEGORY_COLORS, PROVIDERS} from '../lib/providers';
 import type {ActivityGroup, View} from '../lib/types';
 
@@ -78,15 +78,16 @@ test('a subscription has its card colour; projects and machines take theirs by r
   assert.deepEqual(groupColors(projects, 'project', view, () => ''), [CATEGORY_COLORS[0], CATEGORY_COLORS[1], OTHER_COLOR]);
 });
 
-test('short cells are read as the share of the cell agents worked, longer ones in hours up to the busiest', () => {
-  const cells = (...work: number[]) => ({cells: work.map((ms, i): [number, number, number] => [i * 2 * HOUR, ms, ms])});
-  assert.deepEqual(activityScale(cells(60_000), 30 * 60_000), {share: true, max: 1, ticks: [0, 0.5, 1]}, 'a week is drawn in half-hour cells');
-  assert.deepEqual(activityScale(cells(1.7 * HOUR, HOUR), 2 * HOUR), {share: false, max: 2 * HOUR, ticks: [0, HOUR, 2 * HOUR]});
-  assert.deepEqual(activityScale(cells(20 * 60_000), 2 * HOUR), {share: false, max: 20 * 60_000, ticks: [0, 10 * 60_000, 20 * 60_000]});
-  assert.equal(activityScale(cells(11 * HOUR), 12 * HOUR).max, 12 * HOUR, 'never more than a cell');
+test('the scale is time worked, up to the tallest stack and never more than a bar, marked at round times', () => {
+  const MINUTE = 60_000;
+  assert.deepEqual(activityScale(50 * MINUTE, HOUR), {max: HOUR, ticks: [0, 30 * MINUTE, HOUR]});
+  assert.deepEqual(activityScale(20 * MINUTE, HOUR), {max: 20 * MINUTE, ticks: [0, 10 * MINUTE, 20 * MINUTE]});
+  assert.deepEqual(activityScale(1.7 * HOUR, 2 * HOUR), {max: 2 * HOUR, ticks: [0, HOUR, 2 * HOUR]});
+  assert.equal(activityScale(11 * HOUR, 12 * HOUR).max, 12 * HOUR, 'never more than a bar');
+  assert.equal(activityScale(4.5 * MINUTE, 5 * MINUTE).max, 5 * MINUTE);
 });
 
-test('how many agents at once is agent time over work', () => {
-  assert.equal(atOnce(2 * HOUR, 1.5 * HOUR).toFixed(2), '1.33');
-  assert.equal(atOnce(0, 0), 0);
+test('a group switched off is kept apart for each way of splitting', () => {
+  assert.notEqual(mutedKey('project', '"atlas"'), mutedKey('device', '"atlas"'));
+  assert.equal(mutedKey('source', 'claude:1'), 'activity:source:claude:1');
 });

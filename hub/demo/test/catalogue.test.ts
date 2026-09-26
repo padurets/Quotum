@@ -17,7 +17,6 @@ import type {ResetEvent, ResetProvider} from '../../server/domain/resets.js';
 import {setLocale} from '../../ui/i18n/index.js';
 import {agentRows, byActivity, drawn, folderOf, machinesOf} from '../../ui/lib/agents.js';
 import {LIVE_COLUMNS, forecastLayout, forecastRow} from '../../ui/lib/forecast.js';
-import {atOnce} from '../../ui/lib/activity.js';
 import {lineWork} from '../../ui/lib/work.js';
 import {chartEvents, chartResets, linesOf} from '../../ui/lib/lines.js';
 import {frameOf, step} from '../../ui/lib/periods.js';
@@ -236,7 +235,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
         return {activityOf: name, by, range, hours: named(by)[name] ?? null};
       }
       if ('activityTotals' in check) {
-        return {activityTotals: {work: tenth(activity.workMs), agents: tenth(activity.agentMs), atOnce: Math.round(atOnce(activity.agentMs, activity.workMs) * 10) / 10}, range};
+        return {activityTotals: {work: tenth(activity.workMs), agents: activity.agents, agentTime: tenth(activity.agentMs)}, range};
       }
       return {activityKnownFrom: activity.known ? activity.known.from - stand.start : null, range};
     }

@@ -4,7 +4,7 @@ import {config} from '../config.js';
 import {providers, sourceId, type Provider, type Source} from '../domain/sources.js';
 import {onGrid, series, type Kind, type Measurement, type Sample, type SourceState} from '../domain/quota.js';
 import type {Origin} from '../domain/ingest.js';
-import {activity, seriesWork, union, type Activity, type SeriesWork, type Stretch} from '../domain/work.js';
+import {activity, barOf, seriesWork, union, type Activity, type SeriesWork, type Stretch} from '../domain/work.js';
 import {members, projectGroups, type ProjectGroup} from '../domain/projects.js';
 import {migrate} from './schema.js';
 
@@ -464,8 +464,9 @@ export class Store {
   }
 
   /**
-   * How the agents a board shows worked from `from` to `to`: the activity, and when each
-   * subscription had any of them working. What is known begins with the hub keeping it
+   * How the agents a board shows worked from `from` to `to`: the activity, in bars of up
+   * to an hour gathered from the chart's cells `cellMs` long, and when each subscription
+   * had any of them working. What is known begins with the hub keeping it
    * (`agentWorkSince`) and, on a shared board, the first subscription coming to it.
    */
   private work(from: number, to: number, cellMs: number, shown: Shown) {
@@ -493,11 +494,12 @@ export class Store {
         }[]
       ).map(d => [d.id, d.name]),
     );
-    const none = {workMs: 0, agentMs: 0, cells: [], by: {source: [], project: [], device: []}};
+    const barMs = barOf(cellMs, to - from);
+    const none = {barMs, workMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}};
     return {
       ...known,
       worked: new Map([...bySource].map(([id, list]) => [id, union(list)])),
-      activity: known.to > known.from ? {since, known, ...activity(stretches, known, cellMs, names)} : {since, known: null, ...none},
+      activity: known.to > known.from ? {since, known, ...activity(stretches, known, barMs, names)} : {since, known: null, ...none},
     };
   }
 
@@ -578,12 +580,12 @@ export class Store {
               " NULLIF(s.folder, '') AS folder, s.started_at AS startedAt FROM agent_sessions s JOIN devices d ON d.id = s.device_id" +
               ' LEFT JOIN project_names n ON n.user_id = d.user_id AND n.reported = s.project WHERE s.id IN (SELECT value FROM json_each(?))',
           )
-          .all(JSON.stringify([...new Set(rows.map(([id]) => id))])) as ({id: number} & Omit<Stretch, 'from' | 'to'>)[]
+          .all(JSON.stringify([...new Set(rows.map(([id]) => id))])) as ({id: number} & Omit<Stretch, 'session' | 'from' | 'to'>)[]
       ).map(({id, ...session}) => [id, session]),
     );
     return rows.map(([id, start, end]) => {
       const s = sessions.get(id)!;
-      return {source: s.source, device: s.device, user: s.user, origin: s.origin, project: s.project, folder: s.folder, startedAt: s.startedAt, from: start, to: end};
+      return {session: id, source: s.source, device: s.device, user: s.user, origin: s.origin, project: s.project, folder: s.folder, startedAt: s.startedAt, from: start, to: end};
     });
   }
 

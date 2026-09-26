@@ -430,14 +430,15 @@ const all: DemoSet = {
         {activity: 'project', range: '7d', groups: {atlas: 16, harbor: 13}, from: 0, to: 0},
         {activity: 'device', range: '7d', groups: {'dan-laptop': 16, Desk: 13}, from: 0, to: 0},
         {activity: 'source', range: '7d', groups: {'claude-week': 16, 'ben-codex': 5}, from: 0, to: 0},
-        {activityTotals: {work: 21, agents: 44, atOnce: 2.1}, range: '7d', from: 0, to: 0},
+        {activityTotals: {work: 21, agents: 5, agentTime: 44}, range: '7d', from: 0, to: 0},
         {activityKnownFrom: -10 * DAY, range: '30d', from: 0, to: 0},
       ],
       look: [
         'Agent activity over 7 days by project: atlas and harbor on days −5 and −4, harbor again on day −3',
+        'Its bars are hours and its scale is time worked, up to an hour; over 30 days the bars are two hours',
         'The legend\'s hours add up to more than the hours of work: agents worked at once',
         'Over 30 days the first twenty are hatched: not known before',
-        'The table: hours of work, the pace per hour of it, hours of work left and, turned on, the share during work, for the weekly window',
+        'The table, for the weekly window: work time, spent per work hour, the forecast by work and, turned on, the share of spending during work',
       ],
     },
     {

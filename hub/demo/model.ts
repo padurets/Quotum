@@ -227,8 +227,8 @@ export type CardCheck = Span & {board?: string} & (
     /** How many whole days back ‹ takes the chart from 30 days, step by step, on the card's board: where the history starts. */
     | {reachesBack: number}
     /**
-     * A window's cells about agent work in the table over `range`: hours of work, the pace
-     * per hour of it, hours of work left (to a tenth), the share of spending during work
+     * A window's cells about agent work in the table over `range`: work time, spent per
+     * hour of it, hours of work left (to a tenth), the share of spending during work
      * (whole percent), or why there are none.
      */
     | {work: string; range: string; hours?: number; perHour?: number; left?: number; during?: number; none?: string}
@@ -262,8 +262,8 @@ export type BoardCheck = Span &
     | {activity: 'source' | 'project' | 'device'; range: string; groups: Record<string, number>}
     /** One group of the activity widget and its own hours, whatever the others (null: not among the groups). */
     | {activityOf: string; by: 'project' | 'device'; range: string; hours: number | null}
-    /** The activity widget's totals over `range`: hours of work, agent time, and how many at once. */
-    | {activityTotals: {work: number; agents: number; atOnce: number}; range: string}
+    /** The activity widget's totals over `range`: hours of work, how many different agents worked, and their hours together. */
+    | {activityTotals: {work: number; agents: number; agentTime: number}; range: string}
     /** Since when, from `start`, the activity widget knows how agents worked over `range`. */
     | {activityKnownFrom: number; range: string}
     /** The table of limits as a table or a list of rows, on a board as wide as a wide screen. */

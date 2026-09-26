@@ -1,22 +1,19 @@
-import {useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent} from 'react';
+import {useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties} from 'react';
 import {clock, countdown, num, shortDay, stamp} from '../lib/format';
 import {t} from '../i18n';
 import type {Line} from '../lib/lines';
-import {hubNow, MINUTE, useNow} from '../lib/api';
+import {MINUTE, useNow} from '../lib/api';
 import {gapText, gapTone, readout as readCell, valueAt, type ForecastLine, type PlanLine} from '../lib/readout';
-import {draggedRange, type TimeRange} from '../lib/timeRange';
-import {SWIPE, swiped} from '../lib/swipe';
+import type {TimeRange} from '../lib/timeRange';
 import {cellLabel, niceTicks} from '../lib/periods';
 import {Tooltip, useTip} from './Tooltip';
+import {useTimeAxis} from './timeAxis';
 
 /**
  * A moment on the time axis: ahead, a known window reset or an announced extra one;
  * behind (`past`), something that happened to a source, such as an early reset.
  */
 export type Marker = {key: string; at: number; label: string; color: string; strong?: boolean; past?: boolean; detail?: string};
-
-/** How long a finger rests on the chart before it starts a range. */
-const HOLD_MS = 450;
 
 /** The mark of a past event: a small diamond centred at (x, y). */
 const diamond = (x: number, y: number, r = 4) => `M${x},${y - r}l${r},${r}l${-r},${r}l${-r},${-r}z`;
@@ -168,23 +165,6 @@ function MarkerLabel({
   );
 }
 
-/** How long the chart's content takes to slide in after a step through time. */
-const SLIDE_MS = 220;
-
-/**
- * How far the chart's content slides in after it steps through time, in pixels: from
- * where it was drawn to where it is now, so the eye follows which way it went. None
- * unless the period kept about its length (`end` is where measurements end, which for a
- * period ending now may be the hub's clock rather than the page's) and moved by a tenth of
- * it or more: a step, not a live period's clock moving on, nor another period.
- */
-export function slideOf(before: {from: number; end: number}, after: {from: number; end: number; to: number}, plotWidth: number) {
-  const length = after.end - after.from;
-  const moved = after.from - before.from;
-  if (length <= 0 || Math.abs(before.end - before.from - length) > length * 0.1 || Math.abs(moved) < length * 0.1 || Math.abs(moved) > length) return 0;
-  return (moved / (after.to - after.from)) * plotWidth;
-}
-
 /**
  * Remaining quota over time for every selected window. All series share one time
  * grid, so hovering anywhere snaps to a cell and reads every series for it — no
@@ -219,60 +199,13 @@ export function Chart({
   /** A swipe sideways on a touchpad, or Shift with the wheel: back (-1) or forward (1) through time. */
   onStep?: (direction: -1 | 1) => void;
 }) {
-  const box = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(900);
-  /** CSS pixels to a unit of the chart: under 1 where the chart is narrower than it is drawn (280). */
-  const [scale, setScale] = useState(1);
-  /** Start of the hovered cell. */
-  const [hover, setHover] = useState<number | null>(null);
-  /** Where a drag across the chart started and where it is now, in chart pixels. */
-  const [drag, setDrag] = useState<{start: number; end: number} | null>(null);
-  /** A finger held on the chart, before it starts a range. */
-  const holding = useRef<{px: number; timer: ReturnType<typeof setTimeout>} | null>(null);
-  useEffect(() => () => cancelHold(), []);
-  /** Where the pointer last was over the chart, in chart pixels: a step reads the values under it anew. */
-  const pointer = useRef<number | null>(null);
-
-  // The wheel is heard natively, so the chart can keep a swipe from scrolling the page
-  // sideways or going back in the browser. Nothing renders until the gesture steps.
-  const svg = useRef<SVGSVGElement>(null);
-  const swipe = useRef(SWIPE);
-  const stepped = useRef(onStep);
-  stepped.current = onStep;
-  const dragging = useRef(false);
-  useEffect(() => {
-    const element = svg.current;
-    if (!element) return;
-    const wheel = (event: WheelEvent) => {
-      if (!stepped.current || dragging.current) return;
-      const result = swiped(swipe.current, event);
-      swipe.current = result.state;
-      if (result.own) event.preventDefault();
-      if (result.step) stepped.current(result.step);
-    };
-    element.addEventListener('wheel', wheel, {passive: false});
-    return () => element.removeEventListener('wheel', wheel);
-  }, []);
-
-  useEffect(() => {
-    if (!box.current) return;
-    const observer = new ResizeObserver(entries => {
-      const measured = entries[0].contentRect.width;
-      const drawn = Math.max(280, Math.round(measured));
-      setWidth(drawn);
-      setScale(measured ? measured / drawn : 1);
-    });
-    observer.observe(box.current);
-    return () => observer.disconnect();
-  }, []);
-
-  const height = width < 560 ? 220 : 300;
   const left = 40;
   const right = 12;
+  const {box, svg, width, scale, hover, drag, x, timeAt, clip, handlers} = useTimeAxis({from, to, end: now, cellMs, left, right, onSelect, onStep});
+
+  const height = width < 560 ? 220 : 300;
   const top = 12;
   const bottom = 28;
-  const span = Math.max(60_000, to - from);
-  const x = (at: number) => left + ((Math.min(to, Math.max(from, at)) - from) / span) * (width - left - right);
   /** A cell is drawn at its middle (the last, partial one at "now"). */
   const bx = (cell: number) => x(Math.min(now, cell + cellMs / 2));
   const y = (value: number) => top + (1 - value / 100) * (height - top - bottom);
@@ -303,7 +236,7 @@ export function Chart({
           last: runs.at(-1)?.at(-1) ?? null,
         };
       }),
-    [lines, from, now, span, width, height, cellMs],
+    [lines, from, to, now, width, height, cellMs],
   );
 
   const none = {left: false, plan: false, gap: false, forecast: false};
@@ -353,18 +286,6 @@ export function Chart({
     };
   }, [edge]);
 
-  const toChart = (event: PointerEvent<SVGSVGElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    return ((event.clientX - rect.left) / rect.width) * width;
-  };
-  const timeAt = (px: number) => from + ((px - left) / (width - left - right)) * span;
-  dragging.current = drag !== null;
-  // After a step the pointer stands over another time: the tooltip reads that.
-  useEffect(() => {
-    const px = pointer.current;
-    if (px !== null && px >= left && px <= width - right) setHover(Math.floor(timeAt(px) / cellMs) * cellMs);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [from, to, cellMs]);
   // A label hides what runs under it: it stands at the bottom of the plot, or at the top
   // when more of the lines run near the bottom there (a limit about to run out).
   const labelY = (anchor: number, end: boolean) => {
@@ -410,71 +331,8 @@ export function Chart({
     stackTop ? top + 18 : height - bottom - 8,
     stackTop,
   );
-  const move = (event: PointerEvent<SVGSVGElement>) => {
-    const px = toChart(event);
-    pointer.current = px;
-    const held = holding.current;
-    // A finger that moves before the hold is up reads values instead.
-    if (held && Math.abs(px - held.px) > 8) cancelHold();
-    if (drag) setDrag({...drag, end: Math.min(width - right, Math.max(left, px))});
-    if (px < left || px > width - right) return setHover(null);
-    setHover(Math.floor(timeAt(px) / cellMs) * cellMs);
-  };
-  const cancelHold = () => {
-    if (holding.current) clearTimeout(holding.current.timer);
-    holding.current = null;
-  };
-  // A mouse or a pen drags a range at once. A finger sliding along the chart reads its
-  // values, as it always did; holding it still for a moment starts a range instead.
-  const press = (event: PointerEvent<SVGSVGElement>) => {
-    const px = toChart(event);
-    // A label telling a time is read, not dragged from.
-    if (!onSelect || event.button !== 0 || px < left || px > width - right || (event.target as Element).closest('.is-pointed')) return;
-    const svg = event.currentTarget;
-    const {pointerId} = event;
-    const start = () => {
-      holding.current = null;
-      svg.setPointerCapture(pointerId);
-      setDrag({start: px, end: px});
-    };
-    if (event.pointerType !== 'touch') return start();
-    cancelHold();
-    holding.current = {px, timer: setTimeout(start, HOLD_MS)};
-  };
-  // A drag of a few pixels is a click.
-  const release = () => {
-    cancelHold();
-    if (!drag || !onSelect) return;
-    setDrag(null);
-    const range = Math.abs(drag.end - drag.start) >= 6 ? draggedRange(timeAt(drag.start), timeAt(drag.end), Math.min(now, hubNow())) : null;
-    if (range) onSelect(range);
-  };
   // A cell ahead of now is read at its middle; the one holding now, at now.
   const hoverX = hover === null ? 0 : hover > now ? x(Math.min(to, hover + cellMs / 2)) : bx(hover);
-  // A step through time slides what the chart shows in from the side it came from. The
-  // layers that move are clipped to the plot meanwhile, so nothing passes over the scale.
-  const clip = useId();
-  const shown = useRef<{from: number; end: number} | null>(null);
-  useLayoutEffect(() => {
-    const before = shown.current;
-    shown.current = {from, end: now};
-    const element = svg.current;
-    if (!before || !element || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    const dx = slideOf(before, {from, end: now, to}, width - left - right);
-    if (!dx) return;
-    for (const layer of element.querySelectorAll<SVGGElement>('.slides')) {
-      const frame = layer.parentElement!;
-      // A step taken while the last one still slides goes on from where that one is, not back.
-      const moving = getComputedStyle(layer).transform;
-      const start = dx + (moving === 'none' ? 0 : new DOMMatrix(moving).m41);
-      layer.getAnimations().forEach(animation => animation.cancel());
-      frame.setAttribute('clip-path', `url(#${CSS.escape(clip)})`);
-      const animation = layer.animate([{transform: `translateX(${start}px)`}, {transform: 'none'}], {duration: SLIDE_MS, easing: 'cubic-bezier(.2, .7, .3, 1)'});
-      animation.onfinish = () => frame.removeAttribute('clip-path');
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [from, now]);
-
   // On a narrow chart it spans the chart's width under the plot; a marker's time stands over its label and does not rise.
   const narrow = width < 560;
   const {tip, style: tipStyle} = useTip(svg, {width, at: hoverX, narrow, rises: narrow && !edgeMarker, bottom: height * scale});
@@ -488,19 +346,7 @@ export function Chart({
         role="img"
         aria-label={t('chart.label')}
         className={onSelect ? 'is-selectable' : undefined}
-        onPointerMove={move}
-        onPointerLeave={() => {
-          pointer.current = null;
-          setHover(null);
-        }}
-        onPointerDown={press}
-        onPointerUp={release}
-        onPointerCancel={() => {
-          cancelHold();
-          setDrag(null);
-        }}
-        // A held finger starts a range, not the page's menu.
-        onContextMenu={event => (holding.current || drag) && event.preventDefault()}
+        {...handlers}
       >
         <defs>
           <clipPath id={clip}>

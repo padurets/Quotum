@@ -1,13 +1,16 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import type {Sample} from '../domain/quota.js';
-import {activity, overlap, seriesWork, union, workTime, type Activity, type Stretch} from '../domain/work.js';
+import {activity, barOf, overlap, seriesWork, union, workTime, type Activity, type Stretch} from '../domain/work.js';
 
 const at = (time: string) => Date.parse(`2026-09-22T${time}:00Z`);
 const MIN = 60_000;
 const HOUR = 60 * MIN;
 
+/** A stretch of an agent of its own, unless `change` names one. */
+let agent = 0;
 const stretch = (from: number, to: number, change: Partial<Stretch> = {}): Stretch => ({
+  session: ++agent,
   source: 'codex:1',
   device: 'laptop',
   user: 'ann',
@@ -77,11 +80,12 @@ test('two agents half an hour together: work once, agent time twice, and the mom
   assert.equal(result.workMs, 1.5 * HOUR);
   assert.equal(result.agentMs, 2 * HOUR);
   assert.equal(Math.round((result.agentMs / result.workMs) * 100) / 100, 1.33, 'at once, on average');
+  assert.equal(result.agents, 2);
   assert.deepEqual(
-    result.cells.map(([cell, work, agents]) => [new Date(cell).toISOString().slice(11, 16), work / MIN, agents / MIN]),
+    result.cells.map(([cell, work, agentTime, agents]) => [new Date(cell).toISOString().slice(11, 16), work / MIN, agentTime / MIN, agents]),
     [
-      ['10:00', 60, 90],
-      ['11:00', 30, 30],
+      ['10:00', 60, 90, 2],
+      ['11:00', 30, 30, 1],
     ],
   );
   // In the hour they overlap, each has half of the half hour they worked together.
@@ -97,6 +101,29 @@ test('two agents half an hour together: work once, agent time twice, and the mom
     ],
   );
   assertStacks(result);
+});
+
+test('an agent counts once in a bar and in the period, however many stretches it worked', () => {
+  const stretches = [stretch(at('10:00'), at('10:10'), {session: 7}), stretch(at('10:40'), at('11:20'), {session: 7}), stretch(at('10:20'), at('10:30'))];
+  const result = activity(stretches, {from: at('10:00'), to: at('12:00')}, HOUR, new Map());
+  assert.equal(result.agents, 2);
+  assert.deepEqual(
+    result.cells.map(([cell, , , agents]) => [new Date(cell).toISOString().slice(11, 16), agents]),
+    [
+      ['10:00', 2],
+      ['11:00', 1],
+    ],
+  );
+});
+
+test('a period is drawn in bars of up to an hour, as long as there are enough of them, or in its cells when they are longer', () => {
+  assert.equal(barOf(5 * MIN, 24 * HOUR), HOUR, 'a day in hours');
+  assert.equal(barOf(5 * MIN, 24 * HOUR - 3 * MIN), HOUR, 'a few minutes short of the day');
+  assert.equal(barOf(30 * MIN, 7 * 24 * HOUR), HOUR, 'a week in hours');
+  assert.equal(barOf(2 * HOUR, 30 * 24 * HOUR), 2 * HOUR, 'a month in its cells');
+  assert.equal(barOf(5 * MIN, 12 * HOUR), 30 * MIN, 'too few hours in half a day');
+  assert.equal(barOf(MIN, 2 * HOUR), 5 * MIN);
+  assert.equal(barOf(MIN, 15 * MIN), MIN, 'never shorter than a cell');
 });
 
 test('stretches are cut at the edges of cells and of the known part of the period', () => {
@@ -194,7 +221,7 @@ test('work outside any project is a group of its own, and one project name of tw
 
 test('no work: empty cells and groups', () => {
   const result = activity([], {from: at('10:00'), to: at('11:00')}, MIN, new Map());
-  assert.deepEqual(result, {workMs: 0, agentMs: 0, cells: [], by: {source: [], project: [], device: []}});
+  assert.deepEqual(result, {barMs: MIN, workMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}});
 });
 
 test("a window's pace basis: only steps edge proves, from the known part on, and the work within them", () => {

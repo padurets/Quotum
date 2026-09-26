@@ -634,6 +634,7 @@ test('a shared board shows the work of its members on its subscriptions, from th
   const history = (await call('GET', `/api/history?board=${team}&range=24h`, {as: 'bob'})).body;
   assert.deepEqual(hoursBy(history, 'project'), {quotum: 2, billing: 1}, "neither Alice's work before the sharing nor Bob's before he joined");
   assert.deepEqual([history.activity.workMs / hour, history.activity.agentMs / hour], [2.5, 3], "Bob's and Carol's half hour together counts once in the work");
+  assert.deepEqual([history.activity.agents, history.activity.barMs], [3, hour], 'three agents, drawn in hours over a day');
   assert.deepEqual(history.activity.known, {from: ago(5), to: history.now}, 'known from the sharing on, up to now');
   assert.equal(history.activity.since, ago(5));
   const line = (id: string) => history.series.find((l: any) => l.sourceId === id).work;

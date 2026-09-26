@@ -3,11 +3,12 @@ import {edge, type Sample} from './quota.js';
 
 /**
  * A stretch of time a coding agent worked, as the hub keeps it (server/sessions.ts), cut
- * to the period asked for: its subscription, machine and person, where it runs, since when
- * (on its agent's clock), and its project and folder, the project named as its person
- * corrected it.
+ * to the period asked for: its agent (`session`), subscription, machine and person, where
+ * it runs, since when (on its agent's clock), and its project and folder, the project
+ * named as its person corrected it.
  */
 export type Stretch = {
+  session: number;
   source: string;
   device: string;
   user: string;
@@ -112,18 +113,35 @@ export type Dimension = 'source' | 'project' | 'device';
 export type ActivityGroup = {key: string; name: string | null; other?: true; count?: number; ms: number; cells: [number, number][]};
 
 /**
- * How agents worked over a period, cell by cell on its grid: how long any of them worked
- * (`workMs`) and how long all of them together did (`agentMs`, two at once counting twice),
- * in all and in each cell with work (`cells`: its start, work, agent time), and split by
- * subscription, project and machine.
+ * How agents worked over a period, bar by bar (`barMs` long): how long any of them worked
+ * (`workMs`), how long all of them together did (`agentMs`, two at once counting twice)
+ * and how many different agents worked (`agents`), in all and in each bar with work
+ * (`cells`: its start, work, agent time, agents), and split by subscription, project and
+ * machine.
  */
-export type Activity = {workMs: number; agentMs: number; cells: [number, number, number][]; by: Record<Dimension, ActivityGroup[]>};
+export type Activity = {barMs: number; workMs: number; agentMs: number; agents: number; cells: [number, number, number, number][]; by: Record<Dimension, ActivityGroup[]>};
+
+/**
+ * How long each bar of a period `spanMs` long drawn on cells `cellMs` long is: the
+ * period's cells gathered into bars of up to an hour, the longest that keep at least
+ * `MIN_BARS` of them, so a bar's height reads as the time worked in a stretch worth
+ * telling (an hour of a day) rather than minutes of a five-minute cell. Cells of an hour
+ * or longer are bars as they are. Every bar length here is a whole number of any shorter
+ * cell (config `history.cells`), and both start at whole multiples of their length.
+ */
+const BAR_STEPS = [60, 30, 15, 5, 1].map(minutes => minutes * 60_000);
+const MIN_BARS = 20;
+
+export function barOf(cellMs: number, spanMs: number): number {
+  if (cellMs >= BAR_STEPS[0]) return cellMs;
+  return BAR_STEPS.find(bar => bar >= cellMs && bar % cellMs === 0 && spanMs / bar >= MIN_BARS) ?? cellMs;
+}
 
 const DIMENSIONS: Dimension[] = ['source', 'project', 'device'];
 
 /**
- * Agents' work over the known part of a period on a grid of `cellMs` (cells aligned as
- * the chart's are, `onGrid`). Each moment is split evenly among the agents working then,
+ * Agents' work over the known part of a period in bars `cellMs` long (`barOf`), each
+ * starting at a whole multiple of its length as the chart's cells do. Each moment is split evenly among the agents working then,
  * so the parts of a cell add up to its work, whichever way it is split; each group also
  * keeps how long its own agents worked, which is more than its parts when other agents
  * worked alongside. Machines are named by `deviceNames`.
@@ -189,14 +207,18 @@ export function activity(stretches: Stretch[], known: Span, cellMs: number, devi
     return shares[low] + (counts[low] ? (time - times[low]) / counts[low] : 0);
   };
 
-  // A stretch's part of a cell is what one agent has of the time it worked there.
-  const agents = new Float64Array(cellCount);
+  // A stretch's part of a cell is what one agent has of the time it worked there. An agent
+  // counts once in a cell however many of its stretches lie there.
+  const agentTime = new Float64Array(cellCount);
+  const agents = new Uint32Array(cellCount);
+  const counted = new Set<string>();
   within.forEach((s, i) => {
     for (let cell = cellOf(s.from); cell <= cellOf(s.to - 1); cell++) {
       const from = Math.max(s.from, cellStart(cell));
       const to = Math.min(s.to, cellStart(cell + 1));
       const part = shareAt(to) - shareAt(from);
-      agents[cell] += to - from;
+      agentTime[cell] += to - from;
+      if (!counted.has(`${s.session}@${cell}`)) (counted.add(`${s.session}@${cell}`), agents[cell]++);
       for (const dimension of DIMENSIONS) groups[dimension].parts[groups[dimension].of[i] * cellCount + cell] += part;
     }
   });
@@ -205,8 +227,8 @@ export function activity(stretches: Stretch[], known: Span, cellMs: number, devi
   for (const [from, to] of worked) {
     for (let cell = cellOf(from); cell <= cellOf(to - 1); cell++) work[cell] += Math.min(to, cellStart(cell + 1)) - Math.max(from, cellStart(cell));
   }
-  const cells: [number, number, number][] = [];
-  for (let cell = 0; cell < cellCount; cell++) if (work[cell] > 0) cells.push([cellStart(cell), work[cell], agents[cell]]);
+  const cells: [number, number, number, number][] = [];
+  for (let cell = 0; cell < cellCount; cell++) if (work[cell] > 0) cells.push([cellStart(cell), work[cell], agentTime[cell], agents[cell]]);
 
   const by = {} as Record<Dimension, ActivityGroup[]>;
   for (const dimension of DIMENSIONS) {
@@ -245,7 +267,14 @@ export function activity(stretches: Stretch[], known: Span, cellMs: number, devi
       });
     }
   }
-  return {workMs: worked.reduce((sum, [from, to]) => sum + to - from, 0), agentMs: within.reduce((sum, s) => sum + s.to - s.from, 0), cells, by};
+  return {
+    barMs: cellMs,
+    workMs: worked.reduce((sum, [from, to]) => sum + to - from, 0),
+    agentMs: within.reduce((sum, s) => sum + s.to - s.from, 0),
+    agents: new Set(within.map(s => s.session)).size,
+    cells,
+    by,
+  };
 }
 
 /** The same order in any locale. */

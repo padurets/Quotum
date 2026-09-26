@@ -141,17 +141,20 @@ export type ActivityGroup = {key: string; name: string | null; other?: true; cou
 
 /**
  * How the agents the board shows worked over the period: since when that is known on the
- * board, the part of the period that is (null when none), how long any of them worked and
- * all of them together, cell by cell ([cell start, work, agent time], only cells with
- * work), and split by subscription, project and machine. Each moment is split evenly among
- * the agents working then, so a cell's parts add up to its work.
+ * board, the part of the period that is (null when none), how long any of them worked, all
+ * of them together, and how many different agents did, in all and bar by bar (`barMs`
+ * long: [bar start, work, agent time, agents], only bars with work), and split by
+ * subscription, project and machine. Each moment is split evenly among the agents working
+ * then, so a bar's parts add up to its work.
  */
 export type Activity = {
   since: number;
   known: {from: number; to: number} | null;
+  barMs: number;
   workMs: number;
   agentMs: number;
-  cells: [number, number, number][];
+  agents: number;
+  cells: [number, number, number, number][];
   by: Record<ActivityDimension, ActivityGroup[]>;
 };
 

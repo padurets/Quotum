@@ -61,7 +61,7 @@ function HistorySettings({arrange, planAvailable, forecastAvailable, horizonNote
   );
 }
 
-/** The remaining share of every window of one kind over the period, with its legend. */
+/** The remaining share of every window of one kind over the period, with its legend under it. */
 export const History = memo(function History({
   history,
   loading,
@@ -218,6 +218,8 @@ export const History = memo(function History({
         <HistorySettings arrange={arrange} planAvailable={planAvailable} forecastAvailable={forecastAvailable} horizonNote={frame.live && !planShown && !forecastShown} />
       </div>
 
+      {history ? <Chart lines={visible} plans={plans} forecasts={forecasts} markers={markers} from={from} now={measured} to={to} cellMs={history.cellMs} empty={lines.length ? t('chart.empty') : null} onSelect={setTimeRange} onStep={direction => goTo(step(selected, prefs.range, direction, now, historyStart))} /> : <div className="chart chart-loading">{t('history.loading')}</div>}
+
       <div className="legend">
         {lines.map(line => (
           <button
@@ -236,8 +238,6 @@ export const History = memo(function History({
         ))}
         {!lines.length && <span className="legend-empty">{t('history.noLines')}</span>}
       </div>
-
-      {history ? <Chart lines={visible} plans={plans} forecasts={forecasts} markers={markers} from={from} now={measured} to={to} cellMs={history.cellMs} empty={lines.length ? t('chart.empty') : null} onSelect={setTimeRange} onStep={direction => goTo(step(selected, prefs.range, direction, now, historyStart))} /> : <div className="chart chart-loading">{t('history.loading')}</div>}
     </section>
   );
 });

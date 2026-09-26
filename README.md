@@ -119,8 +119,9 @@ Codex         api                  idle     started 25m ago · editor
   at. By work: roughly how many hours of agent work are left. Over a range dragged on
   the chart it shows what that range cost: what was left at its start and end, what it
   spent in all and per hour, and what the agents worked.
-- **Agent activity:** hours of agent work over the same period, stacked by subscription,
-  project or machine, with the hours in all and how many agents worked at once.
+- **Agent activity:** hours of agent work over the same period, hour by hour, stacked by
+  subscription, project or machine, with the work time, how many agents worked and their
+  time together. It zooms and moves through time as the chart does.
 - **Reset announcements** from the community trackers [Codex Resets](https://codex-resets.com)
   and [Claude Resets](https://claude-resets.com), with a link to the source. You
   can turn them off.
