@@ -514,7 +514,9 @@ nowhere else; links open in the system's browser. The app's folder is this user'
 (the port, whether taking over was agreed to, whether start at login was set),
 `app.lock` (one app per user), the web view's data and, on Linux, `window.json` (window geometry). Linux logs are in
 `~/.cache/com.padurets.quotum/logs/` (`hub.log` and `agent.log`, each moved aside at 1 MiB).
-`QUOTUM_APP_DATA_DIR` puts logs and browser data under the chosen isolated directory. Measurements that wait for the hub go to
+`QUOTUM_APP_DATA_DIR` puts the app's data and logs under the chosen isolated directory, and the web view's
+data too on Linux and in the smoke run (`--smoke`); elsewhere on Windows WebView2 keeps its profile in
+`%LOCALAPPDATA%\com.padurets.quotum\EBWebView`. Measurements that wait for the hub go to
 `app-spool.jsonl` in `quotum`'s state folder.
 
 **Its life.** A second start of the app opens the window of the first. Closing the
