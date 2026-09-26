@@ -208,17 +208,19 @@ export function activity(stretches: Stretch[], known: Span, cellMs: number, devi
   };
 
   // A stretch's part of a cell is what one agent has of the time it worked there. An agent
-  // counts once in a cell however many of its stretches lie there.
+  // counts once in a cell however many of its stretches lie there: its stretches never
+  // overlap, so in time order they reach its cells in order, and the last one it counted
+  // is enough to tell.
   const agentTime = new Float64Array(cellCount);
   const agents = new Uint32Array(cellCount);
-  const counted = new Set<string>();
+  const counted = new Map<number, number>();
   within.forEach((s, i) => {
     for (let cell = cellOf(s.from); cell <= cellOf(s.to - 1); cell++) {
       const from = Math.max(s.from, cellStart(cell));
       const to = Math.min(s.to, cellStart(cell + 1));
       const part = shareAt(to) - shareAt(from);
       agentTime[cell] += to - from;
-      if (!counted.has(`${s.session}@${cell}`)) (counted.add(`${s.session}@${cell}`), agents[cell]++);
+      if ((counted.get(s.session) ?? -1) < cell) (counted.set(s.session, cell), agents[cell]++);
       for (const dimension of DIMENSIONS) groups[dimension].parts[groups[dimension].of[i] * cellCount + cell] += part;
     }
   });
@@ -271,7 +273,7 @@ export function activity(stretches: Stretch[], known: Span, cellMs: number, devi
     barMs: cellMs,
     workMs: worked.reduce((sum, [from, to]) => sum + to - from, 0),
     agentMs: within.reduce((sum, s) => sum + s.to - s.from, 0),
-    agents: new Set(within.map(s => s.session)).size,
+    agents: counted.size,
     cells,
     by,
   };
