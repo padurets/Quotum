@@ -43,7 +43,7 @@ test('a range is named by its times, its days, or both', () => {
   const sameDay = timeRangeLabel({from: day, to: day + 150 * minute});
   const acrossMidnight = timeRangeLabel({from: day + 10 * 60 * minute, to: day + 14 * 60 * minute});
   const days = timeRangeLabel({from: day, to: day + 4 * 86_400_000});
-  assert.match(sameDay, /^[^–]+, [^–]+–[^–]+$/, 'one day, then two times');
+  assert.match(sameDay, /^[^–,]+–[^–,]+$/, 'one day, then two times, with no comma');
   assert.equal(acrossMidnight.split(' – ').length, 2, 'a day and a time at each end');
   assert.doesNotMatch(days, /\d:\d/, 'days alone');
 });

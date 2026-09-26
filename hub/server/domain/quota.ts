@@ -15,8 +15,11 @@ export type Win = {
   minutes: number | null;
 };
 
-/** Free resets of the limits an account holds: how many, and when the first expires. */
-export type FreeResets = {available: number; expiresAt: number | null};
+/**
+ * Free resets of the limits an account holds: how many, and how many expire when (soonest
+ * first, an unknown time last; empty from a client that gives only the count).
+ */
+export type FreeResets = {available: number; expiring: {count: number; expiresAt: number | null}[]};
 
 /** One measurement of a source: every window the client reported at one moment. */
 export type Measurement = {

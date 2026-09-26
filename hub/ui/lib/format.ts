@@ -20,6 +20,19 @@ export function duration(ms: number, short = false) {
   return short || !(hours % 24) ? t('time.days', {n: days}) : t('time.daysHours', {d: days, h: hours % 24});
 }
 
+/**
+ * How long until something, for a mark with little room: minutes within the hour, hours
+ * for two days, days after that, always rounded down and never under a minute. Two days
+ * are hours still, so a reset in 47 hours does not read as one day away.
+ */
+export function countdown(ms: number) {
+  const minutes = Math.max(1, Math.floor(ms / 60_000));
+  if (minutes < 60) return t('time.minutes', {n: minutes});
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return t('time.hours', {n: hours});
+  return t('time.days', {n: Math.floor(hours / 24)});
+}
+
 export function ago(time: number | null, now: number) {
   if (!time) return t('time.noData');
   const seconds = Math.max(0, Math.round((now - time) / 1000));
@@ -31,21 +44,15 @@ export function ago(time: number | null, now: number) {
 
 export const clock = (time: number) => new Date(time).toLocaleTimeString(formatLocale(), {hour: '2-digit', minute: '2-digit'});
 
-/** "22 September" */
-export const day = (time: number) => new Date(time).toLocaleDateString(formatLocale(), {day: 'numeric', month: 'long'});
-
 /** "22 Sept" */
 export const shortDay = (time: number) => new Date(time).toLocaleDateString(formatLocale(), {day: 'numeric', month: 'short'});
 
-/** "today 21:00", "tomorrow 10:30", otherwise "25 Sept 10:30" — for tight spaces. */
-export function soon(time: number, now: number) {
-  const dayOf = (t: number) => new Date(t).toDateString();
-  if (dayOf(time) === dayOf(now)) return t('time.today', {time: clock(time)});
-  if (dayOf(time) === dayOf(now + 86_400_000)) return t('time.tomorrow', {time: clock(time)});
-  return `${shortDay(time)} ${clock(time)}`;
-}
+/** "26 September": the day, its month in a word. */
+export const day = (time: number) => new Date(time).toLocaleDateString(formatLocale(), {day: 'numeric', month: 'long'});
 
-export const stamp = (time: number) =>
-  new Date(time).toLocaleString(formatLocale(), {day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'});
-
-export const fullStamp = (time: number) => new Date(time).toLocaleString(formatLocale());
+/**
+ * "26 September 14:00": the one way a panel, a tooltip or a heading says when, with no
+ * dots or commas between its parts. A mark or a cell with little room may say how soon
+ * or how long ago instead (`countdown`, `ago`).
+ */
+export const stamp = (time: number) => `${day(time)} ${clock(time)}`;

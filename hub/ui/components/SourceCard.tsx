@@ -2,19 +2,19 @@ import {memo, useEffect, useRef, useState, type CSSProperties} from 'react';
 import {useNow} from '../lib/api';
 import type {SourceState, Win} from '../lib/types';
 import {windowKey} from '../lib/types';
-import {ago, day, duration, fullStamp, num} from '../lib/format';
+import {duration, num, stamp} from '../lib/format';
 import {dotOf, errorText, level, problemOf, resetLine, sourceLabel, windowName} from '../lib/quota';
 import {t, useLocale} from '../i18n';
-import {Agents} from './Agents';
 import {DEFAULT_PLAN, isValidPlan, planAt, planNote, planTotal, type WeeklyPlan} from '../lib/plan';
 import {LOGOS} from './logos';
 import {cardId, colorOf, isWindowHidden, planOf, weeklyPlanOf, withColor, withHidden, withName, withPlan, withPlanned, withWindowHidden, type Arrange} from '../lib/view';
 import {CARD_COLORS, MIDDLE_STEP, PROVIDERS} from '../lib/providers';
 import {call} from '../lib/http';
 import type {Board} from '../lib/session';
-import type {ResetStatus} from '../lib/resets';
-import {ResetBanner, ResetNotice} from './ResetNotice';
-import {HideRow, Popover, SlidersIcon, SwitchRow, TakeOffIcon} from './Popover';
+import {resetLabel, type ResetStatus} from '../lib/resets';
+import {FreeResets, ResetMark} from './ResetMarks';
+import {Tray} from './Tray';
+import {EyeOffIcon, HideRow, Popover, SlidersIcon, SwitchRow, TakeOffIcon} from './Popover';
 import {ErrorLine} from './Kit';
 
 function Meter({w, measuredAt, now, weekly}: {w: Win; measuredAt: number | null; now: number; weekly: WeeklyPlan | null}) {
@@ -46,7 +46,7 @@ function Limit({w, measuredAt, now, weekly}: {w: Win; measuredAt: number | null;
       </div>
       <Meter w={w} measuredAt={measuredAt} now={now} weekly={weekly} />
       <div className="limit-bottom">
-        <span title={w.resetAt ? fullStamp(w.resetAt) : ''}>
+        <span title={w.resetAt ? stamp(w.resetAt) : ''}>
           {reset.key === 'resetsIn' ? t('limit.resetsIn', {time: duration(reset.inMs)}) : t(`limit.${reset.key}`)}
         </span>
         {note?.key === 'ahead' && (
@@ -272,21 +272,23 @@ function SourceSettings({source, arrange, board, onChanged}: {source: SourceStat
   );
 }
 
-/** Free resets of the limits the account holds: a count by the settings button, the rest in its tooltip. */
-function FreeResets({resets}: {resets: NonNullable<SourceState['resets']>}) {
-  const text = [
-    t('card.freeResets', {count: resets.available}),
-    resets.expiresAt ? t('card.freeResetsUntil', {date: day(resets.expiresAt)}) : '',
-  ]
-    .filter(Boolean)
-    .join(' · ');
+/**
+ * A card whose every limit its board hides: it says so where the limits would be, that
+ * the measurements go on, and lets the board's owner bring them back in one go.
+ */
+function AllHidden({source, arrange}: {source: SourceState; arrange: Arrange}) {
+  const showAll = () => arrange.update(view => source.windows.reduce((next, w) => withWindowHidden(next, windowKey(source.id, w.id), false), view));
   return (
-    <span className="free-resets" title={`${text}\n${t('card.freeResetsHint')}`} aria-label={text} role="img">
-      <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">
-        <path d="M3 12a9 9 0 0 1 15.5-6.2L21 8M21 3v5h-5M21 12a9 9 0 0 1-15.5 6.2L3 16M3 21v-5h5" />
-      </svg>
-      {resets.available}
-    </span>
+    <div className="card-empty">
+      <EyeOffIcon />
+      <b>{t('card.allHidden')}</b>
+      <span>{t(arrange.owner ? 'card.allHiddenNote' : 'card.allHiddenByOwner')}</span>
+      {arrange.owner && (
+        <button type="button" className="text-button card-empty-action" onClick={showAll}>
+          {t('card.showAll')}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -309,26 +311,47 @@ export const SourceCard = memo(function SourceCard({
   const visible = source.windows.filter(w => !isWindowHidden(arrange.view, source.id, w.id));
   const weekly = planOf(arrange.view, source.id);
   const dot = dotOf(source, now);
-  // How fresh the numbers are lives in the colour of the logo's dot and in its tooltip;
-  // trouble is also told under the limits, where it moves no meter out of line.
-  const status = problem ?? (source.successAt ? t('source.measured', {ago: ago(source.successAt, now)}) : errorText('waiting'));
+  // How the measurements go lives in the logo's dot alone: its colour (how fresh, or in
+  // trouble) and its tooltip; a line of its own would only repeat it and make the card taller.
+  const status = problem ?? (source.successAt ? t('source.measured', {at: stamp(source.successAt)}) : errorText('waiting'));
+  const news = resetLabel(resets, now);
+  // The dot's tooltip is one bubble everywhere: under the pointer on a desktop (style.css),
+  // and for a while after a tap on a touch screen, which has nothing to hover.
+  const [tip, setTip] = useState(false);
+  useEffect(() => {
+    if (!tip) return;
+    const hide = () => setTip(false);
+    const timer = setTimeout(hide, 4000);
+    document.addEventListener('pointerdown', hide);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('pointerdown', hide);
+    };
+  }, [tip]);
 
   return (
     <article className="card" style={{'--card-color': colorOf(arrange.view, source.id, source.provider)} as CSSProperties}>
       <div className="card-head">
-        <span className={`provider-mark ${dot.warn ? 'is-warn' : ''}`} title={status} aria-label={status} role="img">
+        <span
+          className={`provider-mark ${dot.warn ? 'is-warn' : ''} ${tip ? 'is-tipped' : ''}`}
+          aria-label={status}
+          role="img"
+          onPointerUp={event => event.pointerType === 'touch' && setTip(true)}
+        >
           <img className="provider-logo" src={LOGOS[source.provider]} alt="" />
           {dot.warn ? (
             <i className="dot dot-warn" />
           ) : (
             <i className={`dot dot-fresh ${dot.pulsing ? 'is-pulsing' : ''}`} style={{'--fresh': dot.fresh} as CSSProperties} />
           )}
+          <span className="dot-tip glass" aria-hidden="true">
+            {status}
+          </span>
         </span>
         <div className="card-title">
           <h2>{sourceLabel(source)}</h2>
           {source.plan && <span className="plan">{source.plan.replace(/^Claude\s+/i, '')}</span>}
         </div>
-        {!!source.resets?.available && <FreeResets resets={source.resets} />}
         {board && (arrange.owner || (!board.personal && source.mine)) && <SourceSettings source={source} arrange={arrange} board={board} onChanged={onChanged} />}
       </div>
 
@@ -337,15 +360,14 @@ export const SourceCard = memo(function SourceCard({
           <Limit key={w.id} w={w} measuredAt={source.successAt} now={now} weekly={weekly} />
         ))}
         {!source.windows.length && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
-        {!!source.windows.length && !visible.length && <div className="card-empty">{t('card.allHidden')}</div>}
+        {!!source.windows.length && !visible.length && <AllHidden source={source} arrange={arrange} />}
       </div>
-      {dot.warn && !!source.windows.length && <p className="card-status">{status}</p>}
-      <ResetBanner status={resets} now={now} />
-      <ResetNotice status={resets} now={now} />
-      {/* The card's tray, always there so the card never changes height: the agents running on it, on the right. */}
-      <footer className="card-foot">
-        <Agents sessions={source.sessions ?? []} now={now} />
-      </footer>
+      <Tray
+        news={news && resets && <ResetMark label={news} credit={resets.credit} now={now} />}
+        current={!!source.resets?.available && <FreeResets resets={source.resets} />}
+        sessions={source.sessions ?? []}
+        now={now}
+      />
     </article>
   );
 });

@@ -215,10 +215,19 @@ pub fn from_responses(init: &Value, usage: &Value, observed_at: Millis) -> Outco
 /// do yet; until then it is null and nothing is reported.
 fn free_resets(value: &Value) -> Option<Resets> {
     let grants = value["grants"].as_array()?;
-    let usable: Vec<&Value> = grants.iter().filter(|g| g["paused"] != true).collect();
-    let available = usable.iter().filter_map(|g| g["resets_left"].as_u64()).sum::<u64>() as u32;
-    let expires_at = usable.iter().filter_map(|g| g["ends_at"].as_str().and_then(parse_time)).min();
-    Some(Resets { available, expires_at })
+    // Each grant holds its own resets, which expire when it ends.
+    let usable: Vec<(u32, Option<Millis>)> = grants
+        .iter()
+        .filter(|g| g["paused"] != true)
+        .map(|g| {
+            (
+                g["resets_left"].as_u64().unwrap_or(0).min(u32::MAX.into()) as u32,
+                g["ends_at"].as_str().and_then(parse_time),
+            )
+        })
+        .collect();
+    let available = usable.iter().fold(0u32, |sum, (left, _)| sum.saturating_add(*left));
+    Some(Resets::new(available, usable))
 }
 
 fn slug(name: &str) -> String {
@@ -261,10 +270,18 @@ mod tests {
         let grant = |left: u64, ends: &str, paused: bool| json!({"id": "g", "label": "Reset", "resets_total": 1, "resets_left": left, "ends_at": ends, "paused": paused, "usable_now": true});
         let limits = json!({
             "five_hour": {"utilization": 100, "resets_at": null},
-            "cedar_ember": {"eligible": true, "grants": [grant(1, "2026-10-20T00:00:00Z", false), grant(2, "2026-10-10T00:00:00Z", true)]}
+            "cedar_ember": {"eligible": true, "grants": [
+                grant(1, "2026-10-20T00:00:00Z", false),
+                grant(2, "2026-10-10T00:00:00Z", true),
+                grant(2, "2026-10-12T00:00:00Z", false),
+                grant(0, "2026-10-01T00:00:00Z", false)
+            ]}
         });
         let s = from_responses(&init(), &usage(limits), 1).unwrap();
-        assert_eq!(s.resets, Some(Resets { available: 1, expires_at: parse_time("2026-10-20T00:00:00Z") }));
+        let resets = s.resets.unwrap();
+        assert_eq!(resets.available, 3, "paused and spent grants left out");
+        let groups: Vec<_> = resets.expiring.iter().map(|g| (g.count, g.expires_at)).collect();
+        assert_eq!(groups, [(2, parse_time("2026-10-12T00:00:00Z")), (1, parse_time("2026-10-20T00:00:00Z"))]);
     }
 
     #[test]

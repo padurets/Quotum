@@ -1,6 +1,6 @@
-import {useEffect, useLayoutEffect, useRef, useState, type ReactNode} from 'react';
+import {useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type ReactNode} from 'react';
 
-/** A button with an anchored panel; closes on outside click and Escape. */
+/** A button with an anchored panel; closes on outside click, Escape and focus moving out. */
 export function Popover({
   label,
   icon,
@@ -33,7 +33,8 @@ export function Popover({
   const box = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
-  // Measured once it is open: a panel that would reach under the top bar opens downwards instead.
+  // Measured once it is open (below): a panel opening upwards opens downwards instead when
+  // it does not fit above and there is more room below.
   const [down, setDown] = useState(false);
   // The panel moves sideways to stay on the screen (from a card at the edge of a narrow
   // one), again when the window turns or is resized; the page's width leaves out its scrollbar.
@@ -53,11 +54,46 @@ export function Popover({
     return () => removeEventListener('resize', place);
   }, [open]);
 
+  // A panel is as tall as its content and scrolls only when it has no room for it: a large
+  // screen shows it whole. Upwards it goes where it fits whole, or where there is more room.
+  // Opening down, the page scrolls to the rest of it, so only a panel taller than the screen
+  // under the top bar scrolls; opening up, nothing shows it past the top bar, so it scrolls
+  // when taller than the room above its button. It is measured again as its content changes.
+  const [cap, setCap] = useState<number | null>(null);
   useLayoutEffect(() => {
-    if (!open || !up) return setDown(false);
-    const top = panel.current?.getBoundingClientRect().top ?? 0;
-    const bar = document.querySelector('.topbar')?.getBoundingClientRect().bottom ?? 0;
-    if (top < bar + 8) setDown(true);
+    const element = panel.current;
+    const trigger = button.current;
+    if (!open || !element || !trigger) {
+      setDown(false);
+      return setCap(null);
+    }
+    const fit = () => {
+      element.style.maxHeight = '';
+      element.classList.remove('is-capped');
+      const natural = element.getBoundingClientRect().height;
+      const at = trigger.getBoundingClientRect();
+      const bar = document.querySelector('.topbar')?.getBoundingClientRect().bottom ?? 0;
+      const screen = innerHeight - bar - 16;
+      const above = at.top - bar - 14;
+      const below = innerHeight - at.bottom - 14;
+      const upwards = up && !(Math.min(natural, screen) > above && below > above);
+      const room = upwards ? above : screen;
+      const capped = natural > room ? room : null;
+      // Set here as well as through state, so what is measured next is what shows.
+      element.style.maxHeight = capped === null ? '' : `${capped}px`;
+      element.classList.toggle('is-capped', capped !== null);
+      setDown(up && !upwards);
+      setCap(capped);
+    };
+    fit();
+    // Refitting leaves the panel as tall as it was, so it does not wake the observer again.
+    const observer = new ResizeObserver(fit);
+    observer.observe(element);
+    addEventListener('resize', fit);
+    return () => {
+      observer.disconnect();
+      removeEventListener('resize', fit);
+    };
   }, [open, up]);
 
   useEffect(() => {
@@ -80,8 +116,16 @@ export function Popover({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  // Focus moving on to something outside closes the panel as a click there would, so Tab
+  // from one mark of a tray to the next never leaves two panels open. Focus going nowhere
+  // (a click on the panel's text, the focused control gone, another window) leaves it open.
+  const leave = (event: FocusEvent<HTMLDivElement>) => {
+    const next = event.relatedTarget;
+    if (open && next instanceof Node && !box.current?.contains(next)) setOpen(false);
+  };
+
   return (
-    <div className="picker" ref={box}>
+    <div className="picker" ref={box} onBlur={leave}>
       <button
         type="button"
         className={trigger ? `text-button ${triggerClass ?? ''}` : 'icon-button'}
@@ -95,7 +139,13 @@ export function Popover({
         {!!badge && <i className="badge">{badge}</i>}
       </button>
       {open && (
-        <div className={`popover glass ${align === 'left' ? 'is-left' : ''} ${up && !down ? 'is-up' : ''}`} role="dialog" aria-label={label} ref={panel}>
+        <div
+          className={`popover glass ${align === 'left' ? 'is-left' : ''} ${up && !down ? 'is-up' : ''} ${cap !== null ? 'is-capped' : ''}`}
+          style={cap !== null ? {maxHeight: cap} : undefined}
+          role="dialog"
+          aria-label={label}
+          ref={panel}
+        >
           {children}
         </div>
       )}
