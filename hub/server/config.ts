@@ -97,6 +97,14 @@ export const config = {
     /** Origins allowed to embed the dashboard in a frame, besides itself. */
     frameAncestors: list(process.env.QUOTUM_FRAME_ANCESTORS, []),
     trustProxy: trustProxy(process.env.QUOTUM_TRUST_PROXY),
+    /**
+     * How long a request may take to arrive, headers and body, so one that trickles in
+     * does not hold a connection for ever. Above the 20 seconds after which the agent
+     * gives up itself. Node checks it every `checkMs`, and only while the headers' limit
+     * is no longer than the request's.
+     */
+    requestTimeoutMs: 30_000,
+    checkMs: 5_000,
   },
 
   /** Set by the desktop app for the hub it carries; null for a hub on a server. */

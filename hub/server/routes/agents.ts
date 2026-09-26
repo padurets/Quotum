@@ -13,13 +13,24 @@ export function agentRoutes(app: FastifyInstance, hub: Hub) {
   const {ingest, pairing} = hub;
   const codes = new Limiter(30, 60 * 60_000);
 
-  /** Runs an agent request with its credential, answering refusals in the spec's terms. */
-  const asAgent = <T>(request: FastifyRequest, reply: FastifyReply, invalid: string, work: (credential: Credential) => T) => {
+  /**
+   * Checks the token before the body is read (a route's own hooks run after the hub's
+   * Host and method checks): a request without a valid one is refused at once, so whoever
+   * reaches the hub cannot make it hold bodies it would throw away. What it finds is
+   * kept for the handler, which asks nothing more of the database.
+   */
+  const credentials = new WeakMap<FastifyRequest, Credential>();
+  const authenticate = async (request: FastifyRequest, reply: FastifyReply) => {
     const credential = ingest.authenticate(request.headers.authorization);
     if (credential === 'revoked') return reply.code(403).send({error: 'device_revoked'});
     if (!credential) return reply.code(401).send({error: 'unauthorized'});
+    credentials.set(request, credential);
+  };
+
+  /** Runs an agent request with its credential, answering refusals in the spec's terms. */
+  const asAgent = <T>(request: FastifyRequest, reply: FastifyReply, invalid: string, work: (credential: Credential) => T) => {
     try {
-      return work(credential);
+      return work(credentials.get(request)!);
     } catch (error) {
       if (error instanceof IngestError) return reply.code(403).send({error: error.code});
       if (error instanceof Invalid) return reply.code(400).send({error: invalid, detail: error.what});
@@ -44,14 +55,14 @@ export function agentRoutes(app: FastifyInstance, hub: Hub) {
     });
   }
 
-  app.post('/v1/checkin', (request, reply) => asAgent(request, reply, 'invalid_request', credential => ingest.checkin(credential, request.body)));
+  app.post('/v1/checkin', {onRequest: authenticate}, (request, reply) => asAgent(request, reply, 'invalid_request', credential => ingest.checkin(credential, request.body)));
 
   // Up to 200 sessions with names at their longest, in any script (spec: Reporting running agents).
-  app.post('/v1/sessions', {bodyLimit: 256 * 1024}, (request, reply) =>
+  app.post('/v1/sessions', {bodyLimit: 256 * 1024, onRequest: authenticate}, (request, reply) =>
     asAgent(request, reply, 'invalid_request', credential => ingest.sessions(credential, request.body)),
   );
 
-  app.post('/v1/ingest', {bodyLimit: config.ingest.bodyLimit}, (request, reply) =>
+  app.post('/v1/ingest', {bodyLimit: config.ingest.bodyLimit, onRequest: authenticate}, (request, reply) =>
     asAgent(request, reply, 'invalid_batch', credential => ingest.accept(credential, request.body)),
   );
 }

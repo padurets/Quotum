@@ -1,3 +1,5 @@
+import {STATUS_CODES} from 'node:http';
+import type {Socket} from 'node:net';
 import Fastify, {type FastifyReply, type FastifyRequest} from 'fastify';
 import staticFiles from '@fastify/static';
 import {config, serviceName, version} from './config.js';
@@ -50,6 +52,29 @@ function errorCode(status: number, path: string): string {
 }
 
 /**
+ * A request that never got as far as the hub's handlers (it took too long to arrive, its
+ * headers were too large or it was not HTTP), answered in the hub's `{error}` shape
+ * rather than the framework's, and its connection closed.
+ */
+function clientError(error: NodeJS.ErrnoException, socket: Socket) {
+  // A connection the other side reset has nothing left to answer.
+  if (error.code === 'ECONNRESET' || socket.destroyed) return;
+  const [status, code] =
+    error.code === 'ERR_HTTP_REQUEST_TIMEOUT'
+      ? [408, 'request_timeout']
+      : error.code === 'HPE_HEADER_OVERFLOW'
+        ? [431, 'headers_too_large']
+        : [400, 'invalid_request'];
+  const body = JSON.stringify({error: code});
+  if (socket.writable) {
+    socket.write(
+      `HTTP/1.1 ${status} ${STATUS_CODES[status]}\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`,
+    );
+  }
+  socket.destroy(error);
+}
+
+/**
  * A period from `from` to `to` (milliseconds) within the kept history, from 15 minutes to
  * a month long, with the cell it is drawn on; null when it is not one. Its end is at most
  * now; its edges go out to whole cells, so periods that differ by less than a cell are
@@ -75,7 +100,16 @@ function selected(from: string | undefined, to: string | undefined, now: number)
  */
 export async function buildApp(hub: Hub) {
   const {store, directory, resets} = hub;
-  const app = Fastify({logger: false, bodyLimit: 16 * 1024, trustProxy: config.http.trustProxy});
+  const {requestTimeoutMs, checkMs} = config.http;
+  const app = Fastify({
+    logger: false,
+    bodyLimit: 16 * 1024,
+    trustProxy: config.http.trustProxy,
+    requestTimeout: requestTimeoutMs,
+    // Fastify sets the request's limit on a server already made, where Node ignores it while the headers' is longer.
+    http: {headersTimeout: requestTimeoutMs, connectionsCheckingInterval: checkMs},
+    clientErrorHandler: clientError,
+  });
   const hosts = new Set<string>(config.http.hosts);
   const anyHost = hosts.has('*');
   type Answer = {series: HistorySeries[]; events: SourceEvent[]};

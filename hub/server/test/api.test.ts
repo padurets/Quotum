@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {existsSync, mkdtempSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
+import {PassThrough} from 'node:stream';
 import {buildApp} from '../api.js';
 import {config} from '../config.js';
 import {Duty} from '../duty.js';
@@ -369,6 +370,64 @@ test('agents get errors in the spec’s terms', async () => {
   assert.deepEqual([broken.status, broken.body], [400, {error: 'invalid_batch'}]);
   const wrong = await call('POST', '/v1/ingest', {body: {...batch('m-0123456789ab'), version: 2}, headers: auth});
   assert.deepEqual([wrong.status, wrong.body], [400, {error: 'invalid_batch', detail: 'version'}]);
+});
+
+test('an agent request without a valid token is refused before its body arrives', async t => {
+  const {app, call, person} = await hub();
+  await person('alice');
+  const revokedToken = (await call('POST', '/api/tokens', {as: 'alice', body: {}})).body;
+  await call('DELETE', `/api/tokens/${revokedToken.id}`, {as: 'alice'});
+  const started = (await call('POST', '/v1/device/code', {body: {machine: machine('laptop-0123456789ab'), agent: 'quotum/0.2.0'}})).body;
+  await call('POST', '/api/device/approve', {as: 'alice', body: {code: started.userCode}});
+  const revokedDevice = (await call('POST', '/v1/device/token', {body: {deviceCode: started.deviceCode}})).body.token;
+  const [device] = (await call('GET', '/api/devices', {as: 'alice'})).body;
+  await call('DELETE', `/api/devices/${device.id}`, {as: 'alice'});
+
+  /** Sends the start of a body that never ends; before the fix such a request waited for the rest for ever. */
+  const hanging = async (url: string, headers: Record<string, string>) => {
+    const body = new PassThrough();
+    t.after(() => body.destroy());
+    body.write('{"version": 1,');
+    const answer = app.inject({method: 'POST', url, payload: body, headers: {'content-type': 'application/json', ...headers}});
+    const late = new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`${url} waited for the body`)), 1000).unref());
+    const response = await Promise.race([answer, late]);
+    return [response.statusCode, JSON.parse(response.body).error];
+  };
+  for (const url of ['/v1/checkin', '/v1/sessions', '/v1/ingest']) {
+    assert.deepEqual(await hanging(url, {}), [401, 'unauthorized'], `${url} without a token`);
+    assert.deepEqual(await hanging(url, {authorization: 'Bearer qt_m_someone-elses-token-0123456789'}), [401, 'unauthorized'], `${url} with an unknown token`);
+    assert.deepEqual(await hanging(url, {authorization: `Bearer ${revokedToken.secret}`}), [403, 'device_revoked'], `${url} with a revoked token`);
+    assert.deepEqual(await hanging(url, {authorization: `Bearer ${revokedDevice}`}), [403, 'device_revoked'], `${url} from a removed device`);
+  }
+  assert.deepEqual(await hanging('/v1/ingest', {host: 'evil.example'}), [403, 'forbidden_host'], 'the host is checked first');
+});
+
+test('a request is given 30 seconds to arrive, and one that takes longer is answered in the spec’s terms', async () => {
+  const {app} = await hub();
+  const server = app.server;
+  assert.equal(server.requestTimeout, 30_000);
+  // Node ignores the request's limit set on a made server while the headers' one is longer.
+  assert.ok(server.headersTimeout <= server.requestTimeout, `headersTimeout ${server.headersTimeout}`);
+  assert.equal(server.connectionsCheckingInterval, 5_000);
+
+  const answered = (code: string) => {
+    let written = '';
+    const socket = Object.assign(new PassThrough(), {writable: true});
+    socket.write = (chunk: string) => ((written += chunk), true);
+    // The hub closes it with the error, as Node does.
+    socket.on('error', () => {});
+    server.emit('clientError', Object.assign(new Error(code), {code}), socket);
+    return {written, destroyed: socket.destroyed};
+  };
+  const late = answered('ERR_HTTP_REQUEST_TIMEOUT');
+  assert.ok(late.destroyed, 'the connection is closed');
+  const [head, body] = late.written.split('\r\n\r\n');
+  assert.match(head, /^HTTP\/1\.1 408 Request Timeout\r\n/);
+  assert.match(head, /\r\nContent-Type: application\/json\r\n/);
+  assert.deepEqual(JSON.parse(body), {error: 'request_timeout'});
+  assert.deepEqual(JSON.parse(answered('HPE_HEADER_OVERFLOW').written.split('\r\n\r\n')[1]), {error: 'headers_too_large'});
+  assert.deepEqual(JSON.parse(answered('HPE_INVALID_METHOD').written.split('\r\n\r\n')[1]), {error: 'invalid_request'});
+  assert.equal(answered('ECONNRESET').written, '', 'a reset connection has no one to answer');
 });
 
 test('history reads a period selected on the chart, up to a month, on a grid fine enough for it', async () => {
