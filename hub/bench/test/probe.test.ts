@@ -31,7 +31,8 @@ class Element {
   }
 }
 
-const el = (tag: string, parent: Element | null, attributes: Record<string, string> = {}, className = '') => new Element(tag.toUpperCase(), className, attributes, parent);
+const el = (tag: string, parent: Element | null, attributes: Record<string, string> = {}, className = '') =>
+  new Element(tag.toUpperCase(), className, attributes, parent);
 
 /** A fiber of the new tree; `was` is its version in the old one (null: mounted in this commit). */
 function fiber(tag: number, options: {flags?: number; was?: Fiber | null; stateNode?: unknown; children?: Fiber[]} = {}): Fiber {

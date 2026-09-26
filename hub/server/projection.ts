@@ -53,11 +53,16 @@ const DAY = 86_400_000;
 export class Projection {
   constructor(private readonly hub: {store: Store; directory: Directory; ingest: Ingest; resets: ResetFeed}) {}
 
+  /** The sources a board shows, in order, with whose they are. */
+  lineup(board: string): BoardSource[] {
+    return this.hub.store.sources(board);
+  }
+
   /** The board: its name, how it is arranged, which sources it shows in which order; null once it is gone. */
-  boardPart(board: string): BoardPart | null {
+  boardPart(board: string, lineup = this.lineup(board)): BoardPart | null {
     const found = this.hub.directory.board(board);
     if (!found) return null;
-    return {board: found, view: this.hub.directory.view(board), lineup: this.hub.store.sources(board).map(s => s.id)};
+    return {board: found, view: this.hub.directory.view(board), lineup: lineup.map(s => s.id)};
   }
 
   /** The people on a board, by id, with their names: whose each source is, and whose agents it shows. */
@@ -95,9 +100,9 @@ export class Projection {
 
   /** The board as the reader sees it now; null once it is gone. */
   snapshot(user: string, board: string, now: number): Snapshot | null {
-    const part = this.boardPart(board);
+    const lineup = this.lineup(board);
+    const part = this.boardPart(board, lineup);
     if (!part) return null;
-    const lineup = this.hub.store.sources(board);
     const members = this.members(board);
     const sources = lineup.map(source => this.sourcePart(source, members, now).value);
     return {

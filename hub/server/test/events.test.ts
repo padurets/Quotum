@@ -1,0 +1,704 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtempSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import {buildApp} from '../api.js';
+import {Cadence} from '../cadence.js';
+import {config} from '../config.js';
+import {Duty} from '../duty.js';
+import {Events, type Clock, type EventsOptions, type Frame, type Reader} from '../events.js';
+import {Ingest, type Credential} from '../ingest.js';
+import {Pairing} from '../pairing.js';
+import {Projection} from '../projection.js';
+import {ResetFeed} from '../resets.js';
+import {Setup} from '../setup.js';
+import {Directory} from '../store/directory.js';
+import {Store} from '../store/store.js';
+
+const S = 1000;
+const MIN = 60_000;
+const SETUP = 'BCDF-GHJK';
+const iso = (ms: number) => new Date(ms).toISOString();
+const ACCOUNT = 'a1b2c3d4e5f6a1b2c3d4e5f6';
+/** The page asks for events with this header (spec: `GET /api/events`). */
+const STREAM = {'quotum-stream': '1'};
+
+/** A clock tests move by hand: timers run, in order, as it passes them. */
+class ManualClock implements Clock {
+  private timers: {at: number; run: () => void}[] = [];
+  constructor(public t: number) {}
+  now() {
+    return this.t;
+  }
+  after(ms: number, run: () => void) {
+    const timer = {at: this.t + ms, run};
+    this.timers.push(timer);
+    return () => void (this.timers = this.timers.filter(t => t !== timer));
+  }
+  /** Moves the clock on, running every timer due on the way. */
+  advance(ms: number) {
+    const end = this.t + ms;
+    for (;;) {
+      const next = this.timers.filter(t => t.at <= end).sort((a, b) => a.at - b.at)[0];
+      if (!next) break;
+      this.timers = this.timers.filter(t => t !== next);
+      this.t = Math.max(this.t, next.at);
+      next.run();
+    }
+    this.t = end;
+  }
+}
+
+type Event = {type: string; data: any};
+
+/** A stream of events read as the page reads it: what came, in order, and what comes next. */
+async function open(base: string, cookie: string | undefined, board?: string, headers: Record<string, string> = STREAM) {
+  const controller = new AbortController();
+  const response = await fetch(`${base}/api/events${board ? `?board=${board}` : ''}`, {headers: {...(cookie ? {cookie} : {}), ...headers}, signal: controller.signal});
+  if (response.headers.get('content-type') !== 'text/event-stream; charset=utf-8')
+    return {status: response.status, body: await response.json(), headers: response.headers};
+  const events: Event[] = [];
+  const waiting = new Set<() => void>();
+  let ended = false;
+  const decoder = new TextDecoder();
+  const reader = response.body!.getReader();
+  void (async () => {
+    let text = '';
+    try {
+      for (;;) {
+        const {value, done} = await reader.read();
+        if (done) break;
+        text += decoder.decode(value, {stream: true});
+        let at: number;
+        while ((at = text.indexOf('\n\n')) >= 0) {
+          const block = text.slice(0, at);
+          text = text.slice(at + 2);
+          const type = block.match(/^event: (.*)$/m)?.[1] ?? 'message';
+          const data = block.match(/^data: (.*)$/m)?.[1] ?? '';
+          events.push({type, data: JSON.parse(data)});
+        }
+        for (const wake of waiting) wake();
+      }
+    } catch {
+      /* aborted */
+    }
+    ended = true;
+    for (const wake of waiting) wake();
+  })();
+  let read = 0;
+  /** The next event but pings, within `ms`. */
+  const next = async (ms = 2000): Promise<Event> => {
+    const until = Date.now() + ms;
+    for (;;) {
+      while (read < events.length) {
+        const event = events[read++];
+        if (event.type !== 'ping') return event;
+      }
+      if (ended) throw new Error('the stream ended');
+      const left = until - Date.now();
+      if (left <= 0) throw new Error(`no event in ${ms} ms`);
+      await new Promise<void>(resolve => {
+        const wake = () => {
+          waiting.delete(wake);
+          clearTimeout(timer);
+          resolve();
+        };
+        const timer = setTimeout(wake, left);
+        waiting.add(wake);
+      });
+    }
+  };
+  /** Every event but pings that comes within `ms`. */
+  const within = async (ms = 400): Promise<Event[]> => {
+    const found: Event[] = [];
+    const until = Date.now() + ms;
+    for (;;) {
+      try {
+        found.push(await next(Math.max(1, until - Date.now())));
+      } catch {
+        return found;
+      }
+    }
+  };
+  return {
+    status: response.status,
+    headers: response.headers,
+    body: null as any,
+    events,
+    next,
+    within,
+    types: async (ms?: number) => (await within(ms)).map(e => e.type),
+    get ended() {
+      return ended;
+    },
+    close: () => void reader.cancel().catch(() => undefined),
+  };
+}
+
+type Stream = Awaited<ReturnType<typeof open>> & {next: (ms?: number) => Promise<Event>};
+
+async function hub(options: Partial<EventsOptions> = {}, clock?: Clock) {
+  const store = new Store(path.join(mkdtempSync(path.join(tmpdir(), 'quotum-events-')), 'db.sqlite'));
+  const directory = new Directory(store.db);
+  const ingest = new Ingest(store, directory, new Duty(), new Cadence());
+  const resets = new ResetFeed(undefined, () => {}, {...config.resets, enabled: false});
+  const events = new Events({store, directory, ingest, resets}, {...config.events, recheckMs: 0, ...options}, clock, '/assets/index-test.js');
+  const app = await buildApp({store, directory, resets, ingest, pairing: new Pairing(directory), setup: new Setup(true, SETUP), local: null, events});
+  await app.listen({host: '127.0.0.1', port: 0});
+  const base = `http://127.0.0.1:${(app.server.address() as {port: number}).port}`;
+  const cookies = new Map<string, string>();
+  const call = async (method: 'GET' | 'POST' | 'DELETE', url: string, options: {as?: string; body?: object; token?: string; headers?: Record<string, string>} = {}) => {
+    const response = await app.inject({
+      method,
+      url,
+      payload: options.body,
+      headers: {
+        ...(options.as && cookies.get(options.as) ? {cookie: cookies.get(options.as)!} : {}),
+        ...(options.token ? {authorization: `Bearer ${options.token}`} : {}),
+        ...options.headers,
+      },
+    });
+    const set = response.headers['set-cookie'];
+    if (options.as && typeof set === 'string') cookies.set(options.as, set.split(';')[0]);
+    return {status: response.statusCode, body: String(response.headers['content-type'] ?? '').includes('json') ? JSON.parse(response.body) : response.body};
+  };
+  /** Signs someone up (the first with the setup code, others with an invite); their personal board. */
+  const person = async (as: string, invite?: string) => {
+    const signup = await call('POST', '/api/auth/signup', {
+      as,
+      body: {email: `${as}@example.com`, name: as[0].toUpperCase() + as.slice(1), password: 'correct horse', invite, setupCode: SETUP},
+    });
+    assert.equal(signup.status, 200, JSON.stringify(signup.body));
+    return signup.body.boards.find((b: any) => b.personal).id as string;
+  };
+  const token = async (as: string) => (await call('POST', '/api/tokens', {as, body: {name: 'machines'}})).body.secret as string;
+  const machine = (id: string) => ({id: `${id}-0123456789`, name: id, os: 'linux', arch: 'x86_64'});
+  const measure = (secret: string, at: number, options: {used?: number; staleAfterMs?: number; account?: string; device?: string} = {}) =>
+    call('POST', '/v1/ingest', {
+      token: secret,
+      body: {
+        version: 1,
+        agent: 'quotum/0.4.0',
+        machine: machine(options.device ?? 'laptop'),
+        sentAt: iso(Date.now()),
+        snapshots: [
+          {
+            provider: 'codex',
+            account: options.account ?? ACCOUNT,
+            plan: 'pro',
+            observedAt: iso(at),
+            via: 'codex/app-server',
+            staleAfterMs: options.staleAfterMs ?? 30 * MIN,
+            windows: [{id: '5h', kind: 'session', minutes: 300, usedPercent: options.used ?? 50, resetsAt: null}],
+          },
+        ],
+        failures: [],
+      },
+    });
+  const stream = (as: string, board?: string, headers?: Record<string, string>) => open(base, cookies.get(as), board, headers) as Promise<Stream>;
+  const invite = async (as: string, board: string) => (await call('POST', `/api/boards/${board}/invites`, {as})).body.url.split('/invite/')[1] as string;
+  return {app, base, store, directory, ingest, resets, events, call, person, token, machine, measure, stream, invite, cookies};
+}
+
+/** Opens a stream and reads its `hello` and `snapshot`. */
+async function reading(h: Awaited<ReturnType<typeof hub>>, as: string, board?: string) {
+  const s = await h.stream(as, board);
+  assert.equal(s.status, 200, JSON.stringify(s.body));
+  const hello = await s.next();
+  const snapshot = await s.next();
+  assert.deepEqual([hello.type, snapshot.type], ['hello', 'snapshot']);
+  return Object.assign(s, {hello: hello.data, snapshot: snapshot.data});
+}
+
+test('a stream starts with hello and the board as the reader sees it, the same as the projection puts it together', async t => {
+  const h = await hub();
+  t.after(() => h.app.close());
+  const board = await h.person('alice');
+  const secret = await h.token('alice');
+  await h.measure(secret, Date.now() - MIN);
+  const s = await reading(h, 'alice');
+  t.after(s.close);
+  assert.deepEqual(Object.keys(s.hello), ['epoch', 'now', 'client', 'heartbeatMs']);
+  assert.equal(s.hello.client, '/assets/index-test.js');
+  assert.equal(s.hello.heartbeatMs, 25_000);
+  assert.ok(Math.abs(s.hello.now - Date.now()) < 5 * S);
+  const alice = h.directory.credentials('alice@example.com')!.user.id;
+  assert.deepEqual(s.snapshot, JSON.parse(JSON.stringify(new Projection(h).snapshot(alice, board, Date.now()))));
+  assert.equal(s.snapshot.sources.length, 1);
+  for (const header of ['cache-control', 'x-accel-buffering', 'content-security-policy', 'referrer-policy', 'x-content-type-options'])
+    assert.ok(s.headers.get(header), header);
+  assert.equal(s.headers.get('cache-control'), 'no-store');
+  assert.deepEqual(await s.types(300), [], 'nothing changed: nothing more');
+});
+
+test('a change goes out once, only as the part it changed, in one event however many touches it took', async t => {
+  const h = await hub();
+  t.after(() => h.app.close());
+  await h.person('alice');
+  const secret = await h.token('alice');
+  await h.measure(secret, Date.now() - 3 * MIN);
+  const s = await reading(h, 'alice');
+  t.after(s.close);
+  const sessions = s.snapshot.sessions;
+
+  // Three measurements in a row: one card, one history.
+  await h.measure(secret, Date.now() - 2 * MIN, {used: 51});
+  await h.measure(secret, Date.now() - MIN, {used: 52});
+  await h.measure(secret, Date.now() - 1000, {used: 53});
+  const changed = await s.within();
+  assert.deepEqual(
+    changed.map(e => e.type),
+    ['card', 'history'],
+  );
+  assert.equal(changed[0].data.windows[0].used, 53);
+  assert.equal(changed[1].data.sources.length, 1);
+  assert.ok(changed[1].data.since <= Date.now() - 2 * MIN);
+
+  // The same numbers again change nothing a reader sees.
+  await h.measure(secret, Date.now() - 500, {used: 53});
+  assert.deepEqual(await s.types(), ['card', 'history'], 'a newer measurement: when it was taken changed');
+  assert.deepEqual(sessions, s.snapshot.sessions);
+});
+
+test("the board's own events and each reader's own go apart: its owner and a member hear different boards and sources of their own", async t => {
+  const h = await hub();
+  t.after(() => h.app.close());
+  await h.person('alice');
+  const team = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
+  await h.person('bob', await h.invite('alice', team));
+  const secret = await h.token('alice');
+  await h.measure(secret, Date.now() - MIN);
+  const source = h.store.sources((await h.call('GET', '/api/session', {as: 'alice'})).body.boards[0].id)[0].id;
+  const alice = await reading(h, 'alice', team);
+  const bob = await reading(h, 'bob', team);
+  t.after(() => (alice.close(), bob.close()));
+  assert.deepEqual([alice.snapshot.boards.find((b: any) => b.id === team).role, bob.snapshot.boards.find((b: any) => b.id === team).role], ['owner', 'member']);
+
+  await h.call('POST', `/api/boards/${team}/shares`, {as: 'alice', body: {source}});
+  const [ofAlice, ofBob] = await Promise.all([alice.within(), bob.within()]);
+  assert.deepEqual(
+    ofAlice.map(e => e.type),
+    ['card', 'sessions', 'cadence', 'lineup', 'mine'],
+  );
+  assert.deepEqual(ofAlice.at(-1)!.data, {sources: [source]});
+  assert.deepEqual(
+    ofBob.map(e => e.type),
+    ['card', 'sessions', 'cadence', 'lineup'],
+    "not Bob's: no mine for him",
+  );
+  for (const event of ofBob) assert.ok(!JSON.stringify(event.data).includes('"role"'), 'no role in what the board tells everyone');
+});
+
+test('a source taken off and back comes back whole, before the lineup; a reader who comes meanwhile never sees it', async t => {
+  const h = await hub();
+  t.after(() => h.app.close());
+  const personal = await h.person('alice');
+  const team = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
+  await h.measure(await h.token('alice'), Date.now() - MIN);
+  const source = h.store.sources(personal)[0].id;
+  await h.call('POST', `/api/boards/${team}/shares`, {as: 'alice', body: {source}});
+  const s = await reading(h, 'alice', team);
+  t.after(s.close);
+
+  await h.call('DELETE', `/api/boards/${team}/shares/${source}`, {as: 'alice'});
+  assert.deepEqual(await s.types(), ['lineup', 'mine']);
+  const later = await reading(h, 'alice', team);
+  later.close();
+  assert.deepEqual([later.snapshot.sources, later.snapshot.sessions, later.snapshot.cadence], [[], {}, {}]);
+
+  await h.call('POST', `/api/boards/${team}/shares`, {as: 'alice', body: {source}});
+  assert.deepEqual(await s.types(), ['card', 'sessions', 'cadence', 'lineup', 'mine'], 'with no measurement in between');
+});
+
+test('a reader coming while changes wait to go out has them in the snapshot and hears of them no more', async t => {
+  const h = await hub({smoothMs: 300});
+  t.after(() => h.app.close());
+  await h.person('alice');
+  const secret = await h.token('alice');
+  await h.measure(secret, Date.now() - 2 * MIN);
+  const first = await reading(h, 'alice');
+  t.after(first.close);
+  await h.measure(secret, Date.now() - MIN, {used: 70});
+  const s = await reading(h, 'alice');
+  t.after(s.close);
+  assert.equal(s.snapshot.sources[0].windows[0].used, 70);
+  assert.deepEqual(await s.types(600), [], 'in the snapshot, and the page reads its history after a snapshot anyway');
+  assert.deepEqual(await first.types(100), ['card', 'history'], 'sent to the one reading already, when the new one came');
+});
+
+/** A hub on a clock tests move, with Alice, her token and a stream of her personal board. */
+async function timed(options: Partial<EventsOptions> = {}) {
+  const clock = new ManualClock(Date.now());
+  const h = await hub(options, clock);
+  const board = await h.person('alice');
+  const secret = await h.token('alice');
+  const credential = h.ingest.authenticate(`Bearer ${secret}`) as Credential;
+  const agent = {version: 1, agent: 'quotum/0.4.0', machine: h.machine('laptop')};
+  const deliver = (at: number, staleAfterMs: number) =>
+    h.ingest.accept(
+      credential,
+      {
+        ...agent,
+        sentAt: iso(clock.now()),
+        snapshots: [
+          {
+            provider: 'codex',
+            account: ACCOUNT,
+            plan: 'pro',
+            observedAt: iso(at),
+            via: 'codex/app-server',
+            staleAfterMs,
+            windows: [{id: '5h', kind: 'session', minutes: 300, usedPercent: 50, resetsAt: null}],
+          },
+        ],
+        failures: [],
+      },
+      clock.now(),
+    );
+  return {...h, clock, board, credential, agent, deliver};
+}
+
+test('what changes with time alone goes out when it does, with nothing told to the hub', async t => {
+  const h = await timed();
+  t.after(() => h.app.close());
+  h.deliver(h.clock.now() - MIN, 3 * MIN);
+  const s = await reading(h, 'alice');
+  t.after(s.close);
+  assert.equal(s.snapshot.sources[0].stale, false);
+
+  // The card goes stale two minutes on.
+  h.clock.advance(2 * MIN + S);
+  const stale = await s.next();
+  assert.deepEqual([stale.type, stale.data.stale], ['card', true]);
+
+  // A machine's list of agents stops showing five minutes after it was told.
+  h.ingest.sessions(
+    h.credential,
+    {
+      ...h.agent,
+      sentAt: iso(h.clock.now()),
+      sessions: [{provider: 'codex', account: ACCOUNT, origin: 'app', startedAt: iso(h.clock.now() - MIN), lastWorkedAt: null, working: false}],
+    },
+    h.clock.now(),
+  );
+  h.clock.advance(200);
+  assert.equal((await s.next()).data.sessions.length, 1);
+  h.clock.advance(5 * MIN + S);
+  assert.deepEqual((await s.next()).data.sessions, []);
+
+  // A holder following the pace: its plan shows while it asks, and goes when it falls silent.
+  h.ingest.checkin(h.credential, {...h.agent, paced: true, subscriptions: [{provider: 'codex', account: ACCOUNT, active: false}]}, h.clock.now());
+  h.clock.advance(200);
+  h.deliver(h.clock.now() - 100, 3 * MIN);
+  h.clock.advance(200);
+  const told = await s.within(300);
+  assert.ok(
+    told.some(e => e.type === 'cadence' && e.data.cadence !== null),
+    JSON.stringify(told),
+  );
+  h.clock.advance(2 * MIN + S);
+  const silent = (await s.within(300)).find(e => e.type === 'cadence');
+  assert.equal(silent?.data.cadence, null, 'a holder quiet for over two minutes');
+
+  // A reset for everyone falls out of the list as it falls out of the history.
+  const kept = config.retention.sampleDays * 86_400_000;
+  h.store.announce('codex', {at: h.clock.now() - kept + 10 * S, url: 'https://example.com', text: 'reset'});
+  h.clock.advance(200);
+  assert.equal((await s.next()).data.past.codex.length, 1);
+  h.clock.advance(11 * S);
+  assert.deepEqual((await s.next()).data.past, {});
+});
+
+test('every watched board is worked out in full now and then: a change no touch told of arrives all the same', async t => {
+  const h = await timed({recheckMs: 25_000});
+  t.after(() => h.app.close());
+  const s = await reading(h, 'alice');
+  t.after(s.close);
+  // Behind the hub's back: no touch.
+  h.store.db.prepare('UPDATE boards SET name = ? WHERE id = ?').run('Secret', h.board);
+  h.clock.advance(25_000 + 200);
+  const event = await s.next();
+  assert.deepEqual([event.type, event.data.board.name], ['board', 'Secret']);
+});
+
+test('signing out, a new password, being removed and a board deleted end the streams they concern with bye, and nothing else', async t => {
+  const h = await hub();
+  t.after(() => h.app.close());
+  await h.person('alice');
+  const team = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
+  await h.person('bob', await h.invite('alice', team));
+  await h.call('POST', '/api/auth/login', {as: 'alice2', body: {email: 'alice@example.com', password: 'correct horse'}});
+
+  const bobs = await reading(h, 'bob', team);
+  const bobsOwn = await reading(h, 'bob');
+  const other = await reading(h, 'alice2');
+  const own = await reading(h, 'alice');
+  t.after(() => [bobs, bobsOwn, other, own].forEach(s => s.close()));
+
+  // A rolled-back removal lets nobody go.
+  assert.throws(() =>
+    h.directory.transaction(() => {
+      h.directory.removeMember(team, h.directory.credentials('bob@example.com')!.user.id);
+      throw new Error('rolled back');
+    }),
+  );
+  assert.deepEqual(await bobs.types(300), [], 'still on the board');
+
+  await h.call('POST', `/api/boards/${team}/leave`, {as: 'bob'});
+  assert.deepEqual((await bobs.next()).data, {reason: 'gone'});
+  assert.deepEqual(await bobsOwn.types(), ['boards'], 'his other stream hears his boards changed');
+
+  // A new password ends the other sessions, not this one.
+  await h.call('POST', '/api/account', {as: 'alice', body: {currentPassword: 'correct horse', password: 'better horse staple'}});
+  assert.deepEqual((await other.next()).data, {reason: 'unauthorized'});
+  assert.deepEqual(await own.types(300), [], 'the session that changed it goes on');
+
+  const deleted = await reading(h, 'alice', team);
+  await h.call('DELETE', `/api/boards/${team}`, {as: 'alice'});
+  assert.deepEqual((await deleted.next()).data, {reason: 'gone'});
+  assert.deepEqual(await own.types(), ['boards']);
+
+  await h.call('POST', '/api/auth/logout', {as: 'alice'});
+  assert.deepEqual((await own.next()).data, {reason: 'unauthorized'});
+  await new Promise(resolve => setTimeout(resolve, 100));
+  for (const s of [bobs, other, own, deleted]) assert.equal(s.ended, true, 'and the stream ends');
+  assert.equal(h.events.readers, 1, "only Bob's own board is read still");
+});
+
+test('only the hub’s own page opens events: without its header, from another origin or site, or with HEAD, nothing starts', async t => {
+  const h = await hub();
+  t.after(() => h.app.close());
+  await h.person('alice');
+  const cookie = h.cookies.get('alice');
+  const refused = [
+    await open(h.base, cookie, undefined, {}),
+    await open(h.base, cookie, undefined, {...STREAM, origin: 'https://evil.example.com'}),
+    await open(h.base, cookie, undefined, {...STREAM, 'sec-fetch-site': 'same-site'}),
+  ];
+  assert.deepEqual(
+    refused.map(r => [r.status, r.body]),
+    Array(3).fill([403, {error: 'forbidden_origin'}]),
+  );
+  for (const url of ['/api/events?mode=poll', '/api/events?mode=poll&lease=x']) {
+    assert.deepEqual(await h.call('GET', url, {as: 'alice'}), {status: 403, body: {error: 'forbidden_origin'}});
+  }
+  assert.equal(h.events.readers, 0, 'no lease, nobody let go');
+  assert.equal((await open(h.base, undefined)).status, 401);
+  assert.deepEqual((await open(h.base, cookie, 'nope')).body, {error: 'board_not_found'});
+  assert.equal(
+    (await fetch(`${h.base}/api/events`, {method: 'HEAD', headers: {cookie: cookie!, ...STREAM}})).headers.get('content-type')?.includes('event-stream') ?? false,
+    false,
+  );
+  const same = await open(h.base, cookie, undefined, {...STREAM, 'sec-fetch-site': 'same-origin', origin: h.base});
+  assert.equal(same.status, 200);
+  (same as Stream).close();
+});
+
+test('too many streams: a new one takes the place of the oldest of its session, then of its person; past the hub’s limit, another person is refused', async t => {
+  const h = await hub({perSession: 2, perUser: 3, maxStreams: 3});
+  t.after(() => h.app.close());
+  await h.person('alice');
+  const team = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
+  await h.person('bob', await h.invite('alice', team));
+  const a1 = await reading(h, 'alice');
+  const a2 = await reading(h, 'alice');
+  const a3 = await reading(h, 'alice');
+  assert.deepEqual((await a1.next()).data, {reason: 'limit'}, 'the oldest of the session');
+  await h.call('POST', '/api/auth/login', {as: 'alice2', body: {email: 'alice@example.com', password: 'correct horse'}});
+  const b1 = await reading(h, 'alice2');
+  const b2 = await reading(h, 'alice2');
+  assert.deepEqual((await a2.next()).data, {reason: 'limit'}, 'the oldest of the person, from another session');
+  const refused = await h.stream('bob');
+  assert.deepEqual([refused.status, refused.body], [429, {error: 'too_many_streams'}], 'Bob has no stream to give up');
+  b1.close();
+  await new Promise(resolve => setTimeout(resolve, 100));
+  const bob = await reading(h, 'bob');
+  for (const s of [a1, a2, a3, b2, bob]) s.close();
+});
+
+test('a reader too far behind is let go', () => {
+  const store = new Store(path.join(mkdtempSync(path.join(tmpdir(), 'quotum-events-')), 'db.sqlite'));
+  const directory = new Directory(store.db);
+  const ingest = new Ingest(store, directory, new Duty(), new Cadence());
+  const clock = new ManualClock(Date.now());
+  const events = new Events(
+    {store, directory, ingest, resets: new ResetFeed(undefined, () => {}, {...config.resets, enabled: false})},
+    {...config.events, recheckMs: 0},
+    clock,
+    null,
+  );
+  events.attach();
+  const user = directory.createUser('alice@example.com', 'Alice', 'x', clock.now());
+  directory.createSession('qt_s_secret', user.id, clock.now(), MIN);
+  const board = directory.boards(user.id)[0].id;
+  const got: string[] = [];
+  const reader: Reader = {
+    user: user.id,
+    secret: 'qt_s_secret',
+    board,
+    kind: 'stream',
+    send: frames => got.push(...frames.map((f: Frame) => f.type)),
+    backlog: () => 300 * 1024,
+    end: reason => got.push(`bye ${reason}`),
+  };
+  assert.notEqual(events.open(reader), 'limit');
+  directory.renameBoard(board, 'Mine');
+  clock.advance(200);
+  assert.deepEqual(got, ['board', 'boards', 'bye limit']);
+  assert.equal(events.readers, 0);
+});
+
+test('long polls carry the same events: a lease starts with hello and snapshot, waits for news, and one unknown starts over', async t => {
+  const h = await hub({pollMs: 400, leaseMs: 1000});
+  t.after(() => h.app.close());
+  await h.person('alice');
+  const secret = await h.token('alice');
+  await h.measure(secret, Date.now() - 2 * MIN);
+  const poll = async (lease?: string, as = 'alice') => (await h.call('GET', `/api/events?mode=poll${lease ? `&lease=${lease}` : ''}`, {as, headers: STREAM})).body;
+  const first = await poll();
+  assert.deepEqual(
+    first.events.map((e: Event) => e.type),
+    ['hello', 'snapshot'],
+  );
+  const started = Date.now();
+  const empty = await poll(first.lease);
+  assert.deepEqual(empty.events, []);
+  assert.ok(Date.now() - started >= 350, 'held while nothing happened');
+
+  const waiting = poll(first.lease);
+  await h.measure(secret, Date.now() - MIN, {used: 60});
+  const news = await waiting;
+  assert.deepEqual(
+    news.events.map((e: Event) => e.type),
+    ['card', 'history'],
+  );
+  assert.equal(news.lease, first.lease);
+
+  await new Promise(resolve => setTimeout(resolve, 1200));
+  const expired = await poll(first.lease);
+  assert.notEqual(expired.lease, first.lease, 'forgotten a while after its last answer');
+  assert.deepEqual(
+    expired.events.map((e: Event) => e.type),
+    ['hello', 'snapshot'],
+  );
+  await h.call('POST', '/api/auth/login', {as: 'alice2', body: {email: 'alice@example.com', password: 'correct horse'}});
+  assert.notEqual((await poll(expired.lease, 'alice2')).lease, expired.lease, "another session's lease is not this one's");
+});
+
+test('a lease let go for a newer reader says so once, then is forgotten', async t => {
+  const h = await hub({perSession: 1, pollMs: 300});
+  t.after(() => h.app.close());
+  await h.person('alice');
+  const poll = async (lease?: string) => (await h.call('GET', `/api/events?mode=poll${lease ? `&lease=${lease}` : ''}`, {as: 'alice', headers: STREAM})).body;
+  const held = await poll();
+  const waiting = poll(held.lease);
+  const s = await reading(h, 'alice');
+  t.after(s.close);
+  assert.deepEqual((await waiting).events, [{type: 'bye', data: {reason: 'limit'}}], 'a request waiting hears it at once');
+
+  const idle = await poll();
+  assert.deepEqual((await s.next()).data, {reason: 'limit'});
+  const again = await reading(h, 'alice');
+  t.after(again.close);
+  assert.deepEqual((await poll(idle.lease)).events, [{type: 'bye', data: {reason: 'limit'}}], 'a lease asked on later hears it once');
+  assert.deepEqual(
+    (await poll(idle.lease)).events.map((e: Event) => e.type),
+    ['hello', 'snapshot'],
+  );
+});
+
+test('a hub with open streams and a held poll stops at once, telling them it restarts', async () => {
+  const h = await hub({pollMs: 10_000});
+  await h.person('alice');
+  const s = await reading(h, 'alice');
+  const lease = (await h.call('GET', '/api/events?mode=poll', {as: 'alice', headers: STREAM})).body.lease;
+  const held = fetch(`${h.base}/api/events?mode=poll&lease=${lease}`, {headers: {cookie: h.cookies.get('alice')!, ...STREAM}});
+  await new Promise(resolve => setTimeout(resolve, 100));
+  const started = Date.now();
+  await h.app.close();
+  assert.ok(Date.now() - started < 1000, `closed in ${Date.now() - started} ms`);
+  assert.deepEqual((await s.next()).data, {reason: 'restart'});
+  const answer = await held;
+  assert.deepEqual((await answer.json()).events, [{type: 'bye', data: {reason: 'restart'}}]);
+});
+
+test('a stream outlives the time a request is given to arrive', async t => {
+  const http = config.http as {requestTimeoutMs: number; checkMs: number};
+  const saved = {...http};
+  Object.assign(http, {requestTimeoutMs: 300, checkMs: 100});
+  t.after(() => Object.assign(http, saved));
+  const h = await hub({heartbeatMs: 200});
+  t.after(() => h.app.close());
+  await h.person('alice');
+  const s = await reading(h, 'alice');
+  t.after(s.close);
+  await new Promise(resolve => setTimeout(resolve, 1200));
+  assert.equal(s.ended, false);
+  assert.ok(s.events.filter(e => e.type === 'ping').length >= 3, 'pinged all along');
+});
+
+test('every change a reader sees is told: what each request touches reaches the streams of the boards it is on, and no other', async t => {
+  const h = await hub();
+  t.after(() => h.app.close());
+  const personal = await h.person('alice');
+  const team = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
+  await h.person('bob', await h.invite('alice', team));
+  const secret = await h.token('alice');
+  await h.measure(secret, Date.now() - 20 * MIN);
+  const source = h.store.sources(personal)[0].id;
+  await h.call('POST', `/api/boards/${team}/shares`, {as: 'alice', body: {source}});
+  const devices = (await h.call('GET', '/api/devices', {as: 'alice'})).body;
+
+  const own = await reading(h, 'alice', personal);
+  const shared = await reading(h, 'alice', team);
+  const bobs = await reading(h, 'bob');
+  t.after(() => [own, shared, bobs].forEach(s => s.close()));
+  const agent = {version: 1, agent: 'quotum/0.4.0', machine: h.machine('laptop')};
+  const session = {
+    provider: 'codex',
+    account: ACCOUNT,
+    origin: 'app',
+    project: 'quotum',
+    folder: null,
+    startedAt: iso(Date.now() - MIN),
+    lastWorkedAt: null,
+    working: false,
+  };
+
+  type Row = [string, () => Promise<unknown>, string[], string[], string[]];
+  const rows: Row[] = [
+    ['a measurement', () => h.measure(secret, Date.now() - 10 * MIN, {used: 60}), ['card', 'history'], ['card', 'history'], []],
+    // Measured long enough ago: told to measure now, the card says a measurement is under way.
+
+    [
+      'a check-in at the pace',
+      () => h.call('POST', '/v1/checkin', {token: secret, body: {...agent, paced: true, subscriptions: [{provider: 'codex', account: ACCOUNT, active: false}]}}),
+      ['cadence'],
+      ['cadence'],
+      [],
+    ],
+    [
+      'a list of agents',
+      () => h.call('POST', '/v1/sessions', {token: secret, body: {...agent, sentAt: iso(Date.now()), sessions: [session]}}),
+      ['sessions'],
+      ['sessions'],
+      [],
+    ],
+    ['a project renamed', () => h.call('POST', '/api/projects', {as: 'alice', body: {groups: ['quotum'], name: 'Quotum'}}), ['sessions'], ['sessions'], []],
+    ['a project given its name back', () => h.call('POST', '/api/projects/restore', {as: 'alice', body: {reported: ['quotum']}}), ['sessions'], ['sessions'], []],
+    ['a view saved', () => h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {order: ['history']}}), [], ['view'], []],
+    ['a board renamed', () => h.call('POST', `/api/boards/${team}`, {as: 'alice', body: {name: 'Crew'}}), ['boards'], ['board', 'boards'], ['boards']],
+    ['a board made', () => h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Solo'}}), ['boards'], ['boards'], []],
+    ['a name changed', () => h.call('POST', '/api/account', {as: 'alice', body: {name: 'Alicia'}}), ['card'], ['card'], []],
+    ['a source taken off', () => h.call('DELETE', `/api/boards/${team}/shares/${source}`, {as: 'alice'}), [], ['lineup', 'mine'], []],
+    ['a device renamed', () => h.call('POST', `/api/devices/${devices[0].id}`, {as: 'alice', body: {name: 'Book'}}), [], [], []],
+    ['a device disconnected', () => h.call('DELETE', `/api/devices/${devices[0].id}`, {as: 'alice'}), ['lineup', 'mine'], [], []],
+  ];
+  for (const [what, act, onOwn, onShared, onBobs] of rows) {
+    const done = await act();
+    assert.ok((done as {status: number}).status < 300, `${what}: ${JSON.stringify(done)}`);
+    const [a, b, c] = await Promise.all([own.types(), shared.types(), bobs.types()]);
+    assert.deepEqual({own: a, shared: b, bobs: c}, {own: onOwn, shared: onShared, bobs: onBobs}, what);
+  }
+});

@@ -4,6 +4,11 @@ import type {Directory, User} from './store/directory.js';
 
 const COOKIE = 'quotum_session';
 
+/** What a page of the hub may load and who may frame it: every answer carries it. */
+export const CSP =
+  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self';" +
+  ` img-src 'self' data:; font-src 'self'; frame-ancestors ${["'self'", ...config.http.frameAncestors].join(' ')}`;
+
 function readCookie(request: FastifyRequest, name: string): string | null {
   for (const part of (request.headers.cookie ?? '').split(';')) {
     const [key, ...value] = part.trim().split('=');
@@ -23,6 +28,23 @@ function readCookie(request: FastifyRequest, name: string): string | null {
  */
 export function publicOrigin(request: FastifyRequest): string {
   return new URL(config.auth.publicUrl ?? `${request.protocol}://${request.host}`).origin;
+}
+
+/**
+ * Whether a page at `origin` belongs to this hub: the public address when one is set,
+ * else the same host name and port as the request (default ports aside). The scheme is
+ * not compared: behind a TLS-terminating proxy the hub itself sees plain http.
+ */
+export function sameSite(origin: string, request: FastifyRequest): boolean {
+  let page: URL;
+  try {
+    page = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (config.auth.publicUrl) return page.origin === publicOrigin(request);
+  const own = new URL(`${request.protocol}://${request.host}`);
+  return page.hostname === own.hostname && page.port === own.port;
 }
 
 export function sessionSecret(request: FastifyRequest): string | null {

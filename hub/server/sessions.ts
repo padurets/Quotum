@@ -82,6 +82,11 @@ export class Sessions {
     for (const device of devices) this.machines.delete(device);
   }
 
+  /** The subscriptions a machine's list shows agents on. */
+  sourcesOf(device: string): string[] {
+    return [...(this.machines.get(device)?.sources.keys() ?? [])];
+  }
+
   /**
    * The sessions running on a subscription on the machines of `people` (those who show
    * it on the board read), by machine name and then by age.

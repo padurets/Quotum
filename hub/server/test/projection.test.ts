@@ -40,13 +40,27 @@ function hub() {
       {
         ...agent,
         sentAt: iso(t),
-        snapshots: [{provider: 'codex', account: ACCOUNT, plan: 'pro', observedAt: iso(t), via: 'codex/app-server', staleAfterMs, windows: [{id: '5h', kind: 'session', minutes: 300, usedPercent: used, resetsAt: resetsAt === null ? null : iso(resetsAt)}]}],
+        snapshots: [
+          {
+            provider: 'codex',
+            account: ACCOUNT,
+            plan: 'pro',
+            observedAt: iso(t),
+            via: 'codex/app-server',
+            staleAfterMs,
+            windows: [{id: '5h', kind: 'session', minutes: 300, usedPercent: used, resetsAt: resetsAt === null ? null : iso(resetsAt)}],
+          },
+        ],
         failures: [],
       },
       t,
     );
   const running = (t: number, working: boolean) =>
-    ingest.sessions(token, {...agent, sentAt: iso(t), sessions: [{provider: 'codex', account: ACCOUNT, origin: 'app', startedAt: iso(t - MIN), lastWorkedAt: iso(t), working}]}, t);
+    ingest.sessions(
+      token,
+      {...agent, sentAt: iso(t), sessions: [{provider: 'codex', account: ACCOUNT, origin: 'app', startedAt: iso(t - MIN), lastWorkedAt: iso(t), working}]},
+      t,
+    );
   const part = (now: number) => {
     const source = store.sources(board)[0];
     return projection.sourcePart(source, projection.members(board), now);
@@ -60,7 +74,7 @@ function hub() {
  */
 function walk<T>(read: (now: number) => Timed<T>, from: number, until: number): number[] {
   const moments: number[] = [];
-  for (let now = from; now < until; ) {
+  for (let now = from; now < until;) {
     const {value, changesAt} = read(now);
     if (changesAt !== null) assert.ok(changesAt > now, `a change after ${now - from} ms, not at ${changesAt - from}`);
     const end = Math.min(changesAt ?? until, until);
@@ -125,9 +139,6 @@ test("a snapshot is the board as its reader sees it: every source's parts, and w
   assert.deepEqual([ofAlice.sources.map(s => s.id), ofAlice.sources[0].owners, ofAlice.sources[0].stale], [[source], ['Alice'], false]);
   assert.deepEqual([Object.keys(ofAlice.sessions), Object.keys(ofAlice.cadence)], [[source], [source]]);
   assert.deepEqual([ofAlice.mine, ofBob.mine], [[source], []], 'measured by her devices, not his');
-  assert.deepEqual(
-    [ofAlice.boards.find(b => b.id === shared.id)?.role, ofBob.boards.find(b => b.id === shared.id)?.role],
-    ['owner', 'member'],
-  );
+  assert.deepEqual([ofAlice.boards.find(b => b.id === shared.id)?.role, ofBob.boards.find(b => b.id === shared.id)?.role], ['owner', 'member']);
   assert.equal(h.projection.snapshot(h.alice.id, 'gone', t0), null);
 });

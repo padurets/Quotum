@@ -55,7 +55,8 @@ export function rendered(current: Fiber): Fiber[] {
  * included; null when none does.
  */
 export function nodeOf(fiber: Fiber, selector: string): Place | null {
-  const element = (f: Fiber) => ((f.tag === 5 || f.tag === 26 || f.tag === 27) && f.stateNode && typeof (f.stateNode as Place).closest === 'function' ? (f.stateNode as Place) : null);
+  const element = (f: Fiber) =>
+    (f.tag === 5 || f.tag === 26 || f.tag === 27) && f.stateNode && typeof (f.stateNode as Place).closest === 'function' ? (f.stateNode as Place) : null;
   const first = (from: Fiber | null): Place | null => {
     for (let f = from; f; f = f.sibling) {
       const found = element(f) ?? first(f.child);
@@ -99,7 +100,9 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
   const page = globalThis as unknown as {
     __REACT_DEVTOOLS_GLOBAL_HOOK__: object;
     __quotumBench: {reset(): void; read(): Reading};
-    MutationObserver: new (callback: (records: {target: {nodeType: number; parentElement: Element | null}}[]) => void) => {observe(target: unknown, options: object): void};
+    MutationObserver: new (callback: (records: {target: {nodeType: number; parentElement: Element | null}}[]) => void) => {
+      observe(target: unknown, options: object): void;
+    };
     document: {body: unknown; readyState: string; addEventListener(type: string, listener: () => void): void};
     performance: {now(): number; timeOrigin: number};
   };

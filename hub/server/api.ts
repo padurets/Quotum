@@ -8,42 +8,26 @@ import type {Pairing} from './pairing.js';
 import type {ResetFeed} from './resets.js';
 import type {HistorySeries, SourceEvent, Store} from './store/store.js';
 import type {Board, Directory, User} from './store/directory.js';
-import {currentUser, publicOrigin} from './session.js';
+import {CSP, currentUser, sameSite} from './session.js';
 import type {Setup} from './setup.js';
+import {Events} from './events.js';
 import {Projection} from './projection.js';
 import {accountRoutes} from './routes/account.js';
+import {eventRoutes} from './routes/events.js';
 import {agentRoutes} from './routes/agents.js';
 import {localRoutes} from './local.js';
 
-const CSP =
-  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self';" +
-  ` img-src 'self' data:; font-src 'self'; frame-ancestors ${["'self'", ...config.http.frameAncestors].join(' ')}`;
-
-/** `local`: the desktop app's hub, with the key its window enters with (see local.ts); null on a server. */
-export type Hub = {store: Store; directory: Directory; resets: ResetFeed; ingest: Ingest; pairing: Pairing; setup: Setup; local: {key: string} | null};
+/**
+ * `local`: the desktop app's hub, with the key its window enters with (see local.ts); null
+ * on a server. `events`: what open dashboards hear, made here when not given.
+ */
+export type Hub = {store: Store; directory: Directory; resets: ResetFeed; ingest: Ingest; pairing: Pairing; setup: Setup; local: {key: string} | null; events?: Events};
 
 /** Route helpers shared by the route modules. */
 export type Guards = {
   user(request: FastifyRequest, reply: FastifyReply): User | null;
   board(request: FastifyRequest, reply: FastifyReply, boardId: string | undefined): {user: User; board: Board} | null;
 };
-
-/**
- * Whether a page at `origin` belongs to this hub: the public address when one is set,
- * else the same host name and port as the request (default ports aside). The scheme is
- * not compared: behind a TLS-terminating proxy the hub itself sees plain http.
- */
-function sameSite(origin: string, request: FastifyRequest): boolean {
-  let page: URL;
-  try {
-    page = new URL(origin);
-  } catch {
-    return false;
-  }
-  if (config.auth.publicUrl) return page.origin === publicOrigin(request);
-  const own = new URL(`${request.protocol}://${request.host}`);
-  return page.hostname === own.hostname && page.port === own.port;
-}
 
 /** Errors of the framework itself (malformed JSON, a body too large…) in the hub's `{error}` shape. */
 function errorCode(status: number, path: string): string {
@@ -248,6 +232,11 @@ export async function buildApp(hub: Hub) {
     return {range, now, since: now - durationMs, to: now, cellMs, historyStart: store.historyStart(now), ...answer};
   });
 
+  const events = hub.events ?? new Events(hub);
+  events.attach();
+  // Open streams and held polls would keep the server from closing: they end first.
+  app.addHook('preClose', async () => events.close());
+  eventRoutes(app, directory, events, guards);
   accountRoutes(app, hub, guards);
   agentRoutes(app, hub);
   if (hub.local) localRoutes(app, hub, hub.local.key);
