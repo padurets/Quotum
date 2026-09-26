@@ -1,40 +1,71 @@
 import {memo, useEffect, useRef, useState, type CSSProperties} from 'react';
-import {useNow} from '../lib/api';
-import type {SourceState, Win} from '../lib/types';
+import type {Card, Win} from '../lib/types';
 import {windowKey} from '../lib/types';
-import {countdown, duration, num, stamp} from '../lib/format';
-import {cadenceOf, dotOf, errorText, level, problemOf, resetLine, sourceLabel, windowName} from '../lib/quota';
+import {countdown, countdownChangesAt, duration, earliest, num, stamp} from '../lib/format';
+import {cadenceChangesAt, cadenceOf, dotChangesAt, dotOf, errorText, level, problemOf, resetLine, resetLineChangesAt, windowName} from '../lib/quota';
 import {t, useLocale} from '../i18n';
-import {DEFAULT_PLAN, isValidPlan, planAt, planNote, planTotal, type WeeklyPlan} from '../lib/plan';
+import {DEFAULT_PLAN, isValidPlan, planAt, planChangesAt, planNote, planTotal, type WeeklyPlan} from '../lib/plan';
 import {LOGOS} from './logos';
 import {cardId, colorOf, isWindowHidden, planOf, weeklyPlanOf, withColor, withHidden, withName, withPlan, withPlanned, withWindowHidden, type Arrange} from '../lib/view';
 import {CARD_COLORS, MIDDLE_STEP, PROVIDERS} from '../lib/providers';
 import {call} from '../lib/http';
-import type {Board} from '../lib/session';
-import {resetLabel, type ResetStatus} from '../lib/resets';
-import {FreeResets, ResetMark} from './ResetMarks';
+import {useCadence, useCard, useMine, useResetsFor, useSessions, useTitle} from '../lib/board';
+import {useClock} from '../lib/clock';
+import {FreeResets} from './ResetMarks';
 import {Tray} from './Tray';
 import {EyeOffIcon, HideRow, Popover, SlidersIcon, SwitchRow, TakeOffIcon} from './Popover';
 import {ErrorLine} from './Kit';
 
-function Meter({w, measuredAt, now, weekly}: {w: Win; measuredAt: number | null; now: number; weekly: WeeklyPlan | null}) {
-  const state = level(w.remaining);
+/** Where the plan expects the limit to be now: a mark on its meter, in whole percent, moved when that changes. */
+function PlanMark({w, measuredAt, weekly}: {w: Win; measuredAt: number | null; weekly: WeeklyPlan | null}) {
+  const now = useClock(now => planChangesAt(w, measuredAt, now, weekly));
   const plan = planAt(w, measuredAt, now, weekly);
-  const pace = plan && !plan.done ? plan.remaining : null;
+  const pace = plan && !plan.done ? Math.round(plan.remaining) : null;
   return (
-    <div className="meter" role="progressbar" aria-label={windowName(w)} aria-valuenow={Math.round(w.remaining)} aria-valuemin={0} aria-valuemax={100}>
-      <span className="meter-track">
-        <i className={`fill fill-${state}`} style={{width: `${Math.max(w.remaining, 1)}%`}} />
-      </span>
-      {pace !== null && <b className="pace" style={{left: `${pace}%`}} title={t('limit.paceHint', {value: num(pace)})} />}
-    </div>
+    <b
+      className="pace"
+      data-time="plan"
+      hidden={pace === null}
+      style={pace === null ? undefined : {left: `${pace}%`}}
+      title={pace === null ? undefined : t('limit.paceHint', {value: num(pace)})}
+    />
   );
 }
 
-function Limit({w, measuredAt, now, weekly}: {w: Win; measuredAt: number | null; now: number; weekly: WeeklyPlan | null}) {
-  const state = level(w.remaining);
+/** How far ahead of the plan or behind it the limit is, when that is worth a word. */
+function PlanNote({w, measuredAt, weekly}: {w: Win; measuredAt: number | null; weekly: WeeklyPlan | null}) {
+  const now = useClock(now => planChangesAt(w, measuredAt, now, weekly));
   const note = planNote(w, measuredAt, now, weekly);
+  if (note?.key === 'ahead') {
+    return (
+      <span className="ahead" data-time="plan" title={t(note.weekly ? 'limit.aheadHint' : 'limit.aheadHintReset')}>
+        {t('limit.ahead', {value: num(note.value)})}
+      </span>
+    );
+  }
+  if (note?.key === 'behind') {
+    return (
+      <span className="plan-note" data-time="plan" title={t('limit.behindHint')}>
+        {t('limit.behind', {value: num(note.value)})}
+      </span>
+    );
+  }
+  return <span data-time="plan" />;
+}
+
+/** When the limit resets: in how long, that the time has passed, or that it is not known. */
+function ResetLine({w}: {w: Win}) {
+  const now = useClock(now => resetLineChangesAt(w, now));
   const reset = resetLine(w, now);
+  return (
+    <span data-time="reset" title={w.resetAt ? stamp(w.resetAt) : ''}>
+      {reset.key === 'resetsIn' ? t('limit.resetsIn', {time: duration(reset.inMs)}) : t(`limit.${reset.key}`)}
+    </span>
+  );
+}
+
+function Limit({w, measuredAt, weekly}: {w: Win; measuredAt: number | null; weekly: WeeklyPlan | null}) {
+  const state = level(w.remaining);
   return (
     <div className="limit">
       <div className="limit-top">
@@ -44,21 +75,15 @@ function Limit({w, measuredAt, now, weekly}: {w: Win; measuredAt: number | null;
           <small>%</small>
         </span>
       </div>
-      <Meter w={w} measuredAt={measuredAt} now={now} weekly={weekly} />
-      <div className="limit-bottom">
-        <span title={w.resetAt ? stamp(w.resetAt) : ''}>
-          {reset.key === 'resetsIn' ? t('limit.resetsIn', {time: duration(reset.inMs)}) : t(`limit.${reset.key}`)}
+      <div className="meter" role="progressbar" aria-label={windowName(w)} aria-valuenow={Math.round(w.remaining)} aria-valuemin={0} aria-valuemax={100}>
+        <span className="meter-track">
+          <i className={`fill fill-${state}`} style={{width: `${Math.max(w.remaining, 1)}%`}} />
         </span>
-        {note?.key === 'ahead' && (
-          <span className="ahead" title={t(note.weekly ? 'limit.aheadHint' : 'limit.aheadHintReset')}>
-            {t('limit.ahead', {value: num(note.value)})}
-          </span>
-        )}
-        {note?.key === 'behind' && (
-          <span className="plan-note" title={t('limit.behindHint')}>
-            {t('limit.behind', {value: num(note.value)})}
-          </span>
-        )}
+        <PlanMark w={w} measuredAt={measuredAt} weekly={weekly} />
+      </div>
+      <div className="limit-bottom">
+        <ResetLine w={w} />
+        <PlanNote w={w} measuredAt={measuredAt} weekly={weekly} />
       </div>
     </div>
   );
@@ -68,7 +93,7 @@ function Limit({w, measuredAt, now, weekly}: {w: Win; measuredAt: number | null;
  * The weekly spending plan of one source, one whole percent per day. It is saved only
  * when it adds up to exactly 100%; a day at 0 has no spending planned.
  */
-function PlanEditor({source, arrange}: {source: SourceState; arrange: Arrange}) {
+function PlanEditor({source, arrange}: {source: Card; arrange: Arrange}) {
   const saved = weeklyPlanOf(arrange.view, source.id);
   const [draft, setDraft] = useState<WeeklyPlan>(saved);
   useEffect(() => setDraft(saved), [saved.join(',')]);
@@ -112,7 +137,7 @@ function PlanEditor({source, arrange}: {source: SourceState; arrange: Arrange}) 
 }
 
 /** A card's name as the board's owner sets it; empty gives back the automatic one. */
-function CardName({source, arrange}: {source: SourceState; arrange: Arrange}) {
+function CardName({source, arrange}: {source: Card; arrange: Arrange}) {
   const saved = arrange.view.names[source.id] ?? '';
   const [name, setName] = useState(saved);
   useEffect(() => setName(saved), [saved]);
@@ -148,7 +173,7 @@ const HUE_NAMES = ['source.hue.blue', 'source.hue.teal', 'source.hue.purple', 's
  * of lightness of the chosen one. The provider's colour is where the card starts; picking
  * it again, or resetting, gives the card back the provider's.
  */
-function CardColor({source, arrange}: {source: SourceState; arrange: Arrange}) {
+function CardColor({source, arrange}: {source: Card; arrange: Arrange}) {
   const own = PROVIDERS[source.provider]?.color;
   const chosen = arrange.view.colors[source.id];
   const current = chosen ?? own;
@@ -198,28 +223,26 @@ function CardColor({source, arrange}: {source: SourceState; arrange: Arrange}) {
 /**
  * A card's menu. The board's owner names the card, gives it a colour, picks its limits,
  * sets the weekly plan or switches it off, hides it; on a shared board the owner, or whoever's devices measure it, also
- * takes it off the board.
+ * takes it off the board: it goes when the board tells so.
  */
-function SourceSettings({source, arrange, board, onChanged}: {source: SourceState; arrange: Arrange; board: Board; onChanged: () => void}) {
+function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Card; title: string; arrange: Arrange; boardId: string; takeOff: boolean}) {
   const [error, setError] = useState<unknown>(null);
   const hidden = new Set(arrange.view.windows);
   const hasWeekly = source.windows.some(w => w.kind === 'weekly');
   const planned = planOf(arrange.view, source.id) !== null;
   const owner = arrange.owner;
-  const takeOff = !board.personal && (owner || source.mine);
 
   const unshare = async () => {
     setError(null);
     try {
-      await call('DELETE', `/api/boards/${encodeURIComponent(board.id)}/shares/${encodeURIComponent(source.id)}`);
-      onChanged();
+      await call('DELETE', `/api/boards/${encodeURIComponent(boardId)}/shares/${encodeURIComponent(source.id)}`);
     } catch (failure) {
       setError(failure);
     }
   };
 
   return (
-    <Popover label={t('source.settings', {source: sourceLabel(source)})} icon={<SlidersIcon />}>
+    <Popover label={t('source.settings', {source: title})} icon={<SlidersIcon />}>
       {owner && (
         <>
           <div className="popover-title">{t('source.name')}</div>
@@ -276,7 +299,7 @@ function SourceSettings({source, arrange, board, onChanged}: {source: SourceStat
  * A card whose every limit its board hides: it says so where the limits would be, that
  * the measurements go on, and lets the board's owner bring them back in one go.
  */
-function AllHidden({source, arrange}: {source: SourceState; arrange: Arrange}) {
+function AllHidden({source, arrange}: {source: Card; arrange: Arrange}) {
   const showAll = () => arrange.update(view => source.windows.reduce((next, w) => withWindowHidden(next, windowKey(source.id, w.id), false), view));
   return (
     <div className="card-empty">
@@ -292,40 +315,30 @@ function AllHidden({source, arrange}: {source: SourceState; arrange: Arrange}) {
   );
 }
 
-export const SourceCard = memo(function SourceCard({
-  source,
-  resets,
-  arrange,
-  board,
-  onChanged,
-}: {
-  source: SourceState;
-  resets?: ResetStatus;
-  arrange: Arrange;
-  board: Board | null;
-  onChanged: () => void;
-}) {
-  useLocale();
-  const now = useNow();
+/**
+ * The logo and the dot by it: how fresh the numbers are, or trouble, and in its tooltip
+ * when they were measured and when the next measurement comes and why. It is what of a
+ * card changes with time: it renders at those moments, the card does not.
+ */
+function CardMark({source}: {source: Card}) {
+  const pace = useCadence(source.id);
+  const paced = {...source, cadence: pace};
+  const now = useClock(now => {
+    const cadence = cadenceOf(paced, now);
+    return earliest(dotChangesAt(source, now), cadenceChangesAt(paced, now), cadence?.when === 'nextIn' ? countdownChangesAt(cadence.next, now) : null);
+  });
   const problem = problemOf(source);
-  const visible = source.windows.filter(w => !isWindowHidden(arrange.view, source.id, w.id));
-  const weekly = planOf(arrange.view, source.id);
   const dot = dotOf(source, now);
   // How the measurements go lives in the logo's dot alone: its colour (how fresh, or in
   // trouble) and its tooltip; a line of its own would only repeat it and make the card taller.
   const status = problem ?? (source.successAt ? t('source.measured', {at: stamp(source.successAt)}) : errorText('waiting'));
   // Then when the next measurement comes (how soon, and the time) and why, each a line of its own.
-  const cadence = cadenceOf(source, now);
+  const cadence = cadenceOf(paced, now);
   const lines = [
     status,
-    ...(cadence
-      ? cadence.when === 'nextSoon'
-        ? [t('source.nextSoon')]
-        : [t('source.nextIn', {time: countdown(cadence.next - now)}), stamp(cadence.next)]
-      : []),
+    ...(cadence ? (cadence.when === 'nextSoon' ? [t('source.nextSoon')] : [t('source.nextIn', {time: countdown(cadence.next - now)}), stamp(cadence.next)]) : []),
     ...(cadence ? [t(`source.why.${cadence.why}`)] : []),
   ];
-  const news = resetLabel(resets, now);
   // The dot's tooltip is one bubble everywhere: under the pointer on a desktop (style.css),
   // and for a while after a tap on a touch screen, which has nothing to hover.
   const [tip, setTip] = useState(false);
@@ -339,48 +352,65 @@ export const SourceCard = memo(function SourceCard({
       document.removeEventListener('pointerdown', hide);
     };
   }, [tip]);
+  return (
+    <span
+      className={`provider-mark ${dot.warn ? 'is-warn' : ''} ${tip ? 'is-tipped' : ''}`}
+      data-time="mark"
+      aria-label={lines.join('\n')}
+      role="img"
+      onPointerUp={event => event.pointerType === 'touch' && setTip(true)}
+    >
+      <img className="provider-logo" src={LOGOS[source.provider]} alt="" />
+      {dot.warn ? <i className="dot dot-warn" /> : <i className={`dot dot-fresh ${dot.pulsing ? 'is-pulsing' : ''}`} style={{'--fresh': dot.fresh} as CSSProperties} />}
+      <span className="dot-tip glass" aria-hidden="true">
+        {lines.map(line => (
+          <span key={line}>{line}</span>
+        ))}
+      </span>
+    </span>
+  );
+}
+
+/** The card's tray: news of resets for everyone, free resets, the agents running on it. */
+function CardTray({source}: {source: Card}) {
+  const sessions = useSessions(source.id);
+  const resets = useResetsFor(source.provider);
+  return <Tray resets={resets} current={!!source.resets?.available && <FreeResets resets={source.resets} />} sessions={sessions} />;
+}
+
+/**
+ * A source of the board. It reads its own card, pace, agents and news from the page's
+ * state, by `id`: what changes of another source does not render it.
+ */
+export const SourceCard = memo(function SourceCard({id, arrange, boardId, personal}: {id: string; arrange: Arrange; boardId: string; personal: boolean}) {
+  useLocale();
+  const source = useCard(id);
+  const title = useTitle(id);
+  const mine = useMine(id);
+  if (!source) return null;
+  const visible = source.windows.filter(w => !isWindowHidden(arrange.view, source.id, w.id));
+  const weekly = planOf(arrange.view, source.id);
+  const takeOff = !personal && (arrange.owner || mine);
 
   return (
-    <article className="card" style={{'--card-color': colorOf(arrange.view, source.id, source.provider)} as CSSProperties}>
+    <article className="card" data-card={id} style={{'--card-color': colorOf(arrange.view, source.id, source.provider)} as CSSProperties}>
       <div className="card-head">
-        <span
-          className={`provider-mark ${dot.warn ? 'is-warn' : ''} ${tip ? 'is-tipped' : ''}`}
-          aria-label={lines.join('\n')}
-          role="img"
-          onPointerUp={event => event.pointerType === 'touch' && setTip(true)}
-        >
-          <img className="provider-logo" src={LOGOS[source.provider]} alt="" />
-          {dot.warn ? (
-            <i className="dot dot-warn" />
-          ) : (
-            <i className={`dot dot-fresh ${dot.pulsing ? 'is-pulsing' : ''}`} style={{'--fresh': dot.fresh} as CSSProperties} />
-          )}
-          <span className="dot-tip glass" aria-hidden="true">
-            {lines.map(line => (
-              <span key={line}>{line}</span>
-            ))}
-          </span>
-        </span>
+        <CardMark source={source} />
         <div className="card-title">
-          <h2>{sourceLabel(source)}</h2>
+          <h2>{title}</h2>
           {source.plan && <span className="plan">{source.plan.replace(/^Claude\s+/i, '')}</span>}
         </div>
-        {board && (arrange.owner || (!board.personal && source.mine)) && <SourceSettings source={source} arrange={arrange} board={board} onChanged={onChanged} />}
+        {(arrange.owner || takeOff) && <SourceSettings source={source} title={title} arrange={arrange} boardId={boardId} takeOff={takeOff} />}
       </div>
 
       <div className="limits">
         {visible.map(w => (
-          <Limit key={w.id} w={w} measuredAt={source.successAt} now={now} weekly={weekly} />
+          <Limit key={w.id} w={w} measuredAt={source.successAt} weekly={weekly} />
         ))}
         {!source.windows.length && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
         {!!source.windows.length && !visible.length && <AllHidden source={source} arrange={arrange} />}
       </div>
-      <Tray
-        news={news && resets && <ResetMark label={news} credit={resets.credit} now={now} />}
-        current={!!source.resets?.available && <FreeResets resets={source.resets} />}
-        sessions={source.sessions ?? []}
-        now={now}
-      />
+      <CardTray source={source} />
     </article>
   );
 });

@@ -192,18 +192,12 @@ export async function buildApp(hub: Hub) {
   // With the resets the trackers reported as far back as the chart can be moved: over the history kept.
   app.get('/api/resets', () => projection.hubPart(Date.now()).value);
 
+  // The board as a stream's `snapshot` gives it (spec/dashboard-v1.md), once: for whatever
+  // reads a board at a moment rather than following it.
   app.get<{Querystring: {board?: string}}>('/api/overview', (request, reply) => {
     const access = guards.board(request, reply, request.query.board);
     if (!access) return reply;
-    const board = projection.snapshot(access.user.id, access.board.id, Date.now())!;
-    return {
-      board: access.board,
-      view: board.view,
-      historyStart: board.historyStart,
-      /** Changes whenever the board's data changes: the page re-reads history when it does. */
-      revision: store.revision(access.board.id),
-      sources: board.sources.map(card => ({...card, mine: board.mine.includes(card.id), sessions: board.sessions[card.id], cadence: board.cadence[card.id]})),
-    };
+    return projection.snapshot(access.user.id, access.board.id, Date.now());
   });
 
   app.get<{Querystring: {range?: string; from?: string; to?: string; board?: string}}>('/api/history', (request, reply) => {

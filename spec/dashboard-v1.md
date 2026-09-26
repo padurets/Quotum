@@ -80,8 +80,10 @@ theirs alone. `resets` is what `GET /api/resets` answers. `historyStart` is when
 board's history begins as of the snapshot; `GET /api/history` tells it later.
 
 A card is `{id, provider, plan, successAt, error, stale, windows, resets, owners,
-staleAfterMs}`: as the overview's sources, without `sessions`, `cadence` and `mine`.
-`stale` is the hub's to say, and it says so: a card sent when its numbers get too old.
+staleAfterMs}`: the source's last measurement (`successAt`, its `windows` and free
+`resets`), the last error, the people on the board whose devices measure it, and how long
+its numbers hold. `stale` is the hub's to say, and it says so: a card sent when its
+numbers get too old.
 
 Each event carries its part whole; the page puts it in place of what it had. What changes
 at the same moment goes out together, in this order: `board`, `view`, the sources'
@@ -99,6 +101,15 @@ falling silent, a past reset leaving the history) goes out when it does.
 | `gone` | The board was deleted, or the reader is no longer on it. | Opens another board. |
 | `restart` | The hub stops. | Connects again in a few seconds. |
 | `limit` | A newer reader took its place, or it fell 256 KiB behind. | Connects again, not sooner than in 30 seconds. |
+
+## The board at once
+
+```
+GET /api/overview?board=<id>
+```
+
+The board as a `snapshot` gives it, as JSON, for whatever reads a board once rather than
+following it. `board` may be left out, as above; `401` and `404` are as above.
 
 ## Long polls
 

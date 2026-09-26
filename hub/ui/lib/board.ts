@@ -1,3 +1,4 @@
+import {useMemo} from 'react';
 import type {AppState} from './app';
 import {usePref} from './prefs';
 import {titled} from './quota';
@@ -253,6 +254,17 @@ export function titlesOf(board: BoardState | null): Record<string, Title> {
 }
 
 export const useTitles = () => usePage(s => titlesOf(s.board));
+/** One card's name on the board (`titlesOf`). */
+export const useTitle = (id: string) => usePage(s => titlesOf(s.board)[id]?.title ?? '');
+
+export type Named = Card & {title?: string};
+
+/** The board's cards in its order, each with its name: what the chart and the table draw. Not their agents or pace. */
+export function useNamed(): Named[] {
+  const cards = useCards(useLineup());
+  const titles = useTitles();
+  return useMemo(() => cards.map(card => ({...card, title: titles[card.id]?.title})), [cards, titles]);
+}
 
 /** The trackers' news about a provider, while this browser shows it. */
 export function useResetsFor(provider: string) {

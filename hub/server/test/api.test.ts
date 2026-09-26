@@ -382,7 +382,10 @@ test('a device following the hub’s pace is told when to ask again, and the car
       body: {version: 1, agent: 'quotum/0.4.0', paced, machine: machine('m-0123456789ab'), subscriptions: [{provider: 'codex', account: 'a1b2c3d4e5f6a1b2c3d4e5f6', active: false, ...change}]},
       headers,
     });
-  const cadence = async () => (await call('GET', '/api/overview', {as: 'alice'})).body.sources[0]?.cadence;
+  const cadence = async () => {
+    const board = (await call('GET', '/api/overview', {as: 'alice'})).body;
+    return board.cadence[board.sources[0]?.id];
+  };
 
   const first = (await checkin(true)).body.subscriptions[0];
   assert.deepEqual([first.measure, first.onDuty, first.askInMs, first.nextInMs], [true, true, 15_000, 240_000]);
@@ -581,7 +584,10 @@ test('agents report the coding agents running on their machines; the cards of th
   const guessed = {provider: 'codex', origin: 'editor', startedAt: started, working: false};
   const answer = await report([codex, unknown, guessed]);
   assert.deepEqual([answer.status, answer.body], [200, {accepted: 2}], 'a subscription the hub does not know is left out');
-  const shown = async () => (await call('GET', '/api/overview', {as: 'alice'})).body.sources[0].sessions;
+  const shown = async () => {
+    const board = (await call('GET', '/api/overview', {as: 'alice'})).body;
+    return board.sessions[board.sources[0].id];
+  };
   const [first, second] = await shown();
   assert.deepEqual([first.origin, first.project, first.folder, first.working, first.device.name, first.startedAt], ['terminal', 'quotum', null, true, 'build-01', Date.parse(started)]);
   assert.equal(second.lastWorkedAt, null, 'an older agent omits the date');

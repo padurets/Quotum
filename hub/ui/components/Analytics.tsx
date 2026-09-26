@@ -1,9 +1,10 @@
 import {useRef, useState} from 'react';
 import type {Kind} from '../lib/types';
-import {MINUTE, useNow} from '../lib/api';
 import {setPrefs, usePrefs} from '../lib/prefs';
-import {PERIODS, periodLabel, periodOf, step} from '../lib/periods';
-import {goTo, setTimeRange, timeRangeLabel, useTimeRange, type TimeRange} from '../lib/timeRange';
+import {PERIODS, periodLabel, periodOf, step, stepChangesAt} from '../lib/periods';
+import {goTo, setTimeRange, timeRangeLabel, useTimeRange} from '../lib/timeRange';
+import {useHistoryStart} from '../lib/board';
+import {hubNow, useClock} from '../lib/clock';
 import {t} from '../i18n';
 import {Segmented} from './Kit';
 import {Popover} from './Popover';
@@ -40,12 +41,13 @@ const ChevronIcon = () => (
  * in the past, dragged across the chart or stepped back to with ‹. ‹ and › move either by
  * half its length; › up to now brings the chosen period back, as clearing a range does.
  * The button of the list is named by what it shows. The arrows stand together at the end,
- * where a label of any length leaves them in place for the next click.
+ * where a label of any length leaves them in place for the next click. Where they go is
+ * reckoned at the click; the clock renders them only when ‹ turns on or off.
  */
 function PeriodSwitch({historyStart}: {historyStart: number}) {
   const {range} = usePrefs();
   const selected = useTimeRange();
-  const now = useNow(MINUTE);
+  const now = useClock(now => stepChangesAt(selected, range, now, historyStart));
   const [open, setOpen] = useState(false);
   const group = useRef<HTMLDivElement>(null);
   // A choice closes the list, or takes away the range's own button: focus goes to the list's button.
@@ -60,12 +62,14 @@ function PeriodSwitch({historyStart}: {historyStart: number}) {
   const forward = step(selected, range, 1, now, historyStart);
   // An arrow that has taken the chart as far as it goes turns off, and focus would fall to
   // the page: it goes to the list's button instead.
-  const go = (next: TimeRange | 'live' | null, direction: -1 | 1) => {
+  const go = (direction: -1 | 1) => {
+    const at = hubNow();
+    const next = step(selected, range, direction, at, historyStart);
     goTo(next);
-    if (next && !step(next === 'live' ? null : next, range, direction, now, historyStart)) refocus();
+    if (next && !step(next === 'live' ? null : next, range, direction, at, historyStart)) refocus();
   };
   return (
-    <div className="period" role="group" aria-label={t('history.range')} ref={group}>
+    <div className="period" role="group" aria-label={t('history.range')} ref={group} data-time="period">
       <Popover
         label={t('history.range')}
         open={open}
@@ -116,10 +120,10 @@ function PeriodSwitch({historyStart}: {historyStart: number}) {
           </svg>
         </button>
       )}
-      <button type="button" className="icon-button" aria-label={t('history.back')} title={t('history.back')} disabled={!back} onClick={() => go(back, -1)}>
+      <button type="button" className="icon-button" aria-label={t('history.back')} title={t('history.back')} disabled={!back} onClick={() => go(-1)}>
         <Arrow back />
       </button>
-      <button type="button" className="icon-button" aria-label={t('history.forward')} title={t('history.forward')} disabled={!forward} onClick={() => go(forward, 1)}>
+      <button type="button" className="icon-button" aria-label={t('history.forward')} title={t('history.forward')} disabled={!forward} onClick={() => go(1)}>
         <Arrow back={false} />
       </button>
     </div>
@@ -130,8 +134,9 @@ function PeriodSwitch({historyStart}: {historyStart: number}) {
  * The head of the board's analytics: the window type and the period that the chart and
  * the table both show. The cards above it are about now and show every window.
  */
-export function AnalyticsHead({historyStart}: {historyStart: number}) {
+export function AnalyticsHead() {
   const {kind} = usePrefs();
+  const historyStart = useHistoryStart() ?? 0;
   return (
     <div className="analytics-head">
       <h2>{t('analytics.title')}</h2>

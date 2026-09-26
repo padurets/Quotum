@@ -61,10 +61,15 @@ export function setPrefs(update: Partial<Prefs> | ((prefs: Prefs) => Partial<Pre
   for (const listener of listeners) listener();
 }
 
-const subscribe = (listener: () => void) => {
+/** Hears of every change of preferences; components read them with `usePrefs` or `usePref`. */
+export const onPrefs = (listener: () => void) => {
   listeners.add(listener);
-  return () => listeners.delete(listener);
+  return () => void listeners.delete(listener);
 };
+const subscribe = onPrefs;
+
+/** The preferences now. */
+export const prefs = () => current;
 
 export function usePrefs(): Prefs {
   return useSyncExternalStore(subscribe, () => current, () => current);

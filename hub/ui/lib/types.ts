@@ -20,28 +20,6 @@ export type Expiring = {count: number; expiresAt: number | null};
 /** `expiring` is left out of what a hub older than 0.4 stored, and those resets have no time given. */
 export type FreeResets = {available: number; expiring?: Expiring[]};
 
-export type SourceState = {
-  id: string;
-  provider: string;
-  plan: string;
-  successAt: number | null;
-  error: string | null;
-  stale: boolean;
-  windows: Win[];
-  /** Free resets of the limits the account holds, when its client reports them. */
-  resets: FreeResets | null;
-  /** The people on the board whose devices measure this source. */
-  owners: string[];
-  /** Measured by the reader's own devices: theirs to take off a shared board. */
-  mine: boolean;
-  /** The coding agents running on it right now, on any machine. */
-  sessions: LiveSession[];
-  /** When it is measured next and why, while the hub sets the pace of the device measuring it; `next` may have passed. */
-  cadence: {next: number; why: CadenceWhy} | null;
-  /** How the dashboard names the source (set by the client from the whole board). */
-  title?: string;
-};
-
 /**
  * A source as its card shows it (spec/dashboard-v1.md: `card`): its state, the people on
  * the board whose devices measure it, and whether its numbers are too old, as the hub says.
@@ -105,15 +83,6 @@ export type View = {
   columns: Record<string, string[]>;
   /** Columns off by default that the owner turned on, by widget id. */
   shownColumns: Record<string, string[]>;
-};
-
-export type Overview = {
-  board: {id: string; name: string; personal: boolean; role: 'owner' | 'member'};
-  view: View;
-  historyStart: number;
-  /** Changes whenever the board's data changes. */
-  revision: number;
-  sources: SourceState[];
 };
 
 export type HistorySeries = {

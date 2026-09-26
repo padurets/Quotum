@@ -1,4 +1,4 @@
-import {useState, type FormEvent} from 'react';
+import {useEffect, useState, type FormEvent} from 'react';
 import {call} from '../lib/http';
 import {stamp} from '../lib/format';
 import {setPrefs, usePrefs} from '../lib/prefs';
@@ -118,8 +118,34 @@ function trackerDetail(detail: string) {
   return known(key) ? t(key) : detail;
 }
 
+/** How each tracker answered when last asked, read when shown: when it was checked changes every round, and nothing else here needs it. */
+function Trackers() {
+  const [trackers, setTrackers] = useState<TrackerHealth[]>([]);
+  useEffect(() => {
+    let shown = true;
+    call<{trackers: TrackerHealth[]}>('GET', '/api/resets', undefined, 10_000).then(
+      answer => shown && setTrackers(answer.trackers),
+      () => {},
+    );
+    return () => void (shown = false);
+  }, []);
+  return (
+    <div className="trackers">
+      {trackers.map(tracker => (
+        <div key={tracker.name} className="tracker" title={tracker.at ? t('settings.checkedAt', {time: stamp(tracker.at)}) : ''}>
+          <i className={`dot ${tracker.ok === true ? 'dot-ok' : tracker.ok === false ? 'dot-warn' : 'dot-idle'}`} />
+          <a href={tracker.url} target="_blank" rel="noopener noreferrer">
+            {tracker.name}
+          </a>
+          <span>{trackerDetail(tracker.detail)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** What this browser (or the app's window) keeps for itself: the language and reset announcements. */
-function Browser({trackers, title}: {trackers: TrackerHealth[]; title: string}) {
+function Browser({title}: {title: string}) {
   const prefs = usePrefs();
   return (
     <section className="drawer-section">
@@ -133,19 +159,7 @@ function Browser({trackers, title}: {trackers: TrackerHealth[]; title: string}) 
         <SwitchRow on={prefs.showResets} onChange={on => setPrefs({showResets: on})}>
           {t('settings.resets')}
         </SwitchRow>
-        {prefs.showResets && (
-          <div className="trackers">
-            {trackers.map(tracker => (
-              <div key={tracker.name} className="tracker" title={tracker.at ? t('settings.checkedAt', {time: stamp(tracker.at)}) : ''}>
-                <i className={`dot ${tracker.ok === true ? 'dot-ok' : tracker.ok === false ? 'dot-warn' : 'dot-idle'}`} />
-                <a href={tracker.url} target="_blank" rel="noopener noreferrer">
-                  {tracker.name}
-                </a>
-                <span>{trackerDetail(tracker.detail)}</span>
-              </div>
-            ))}
-          </div>
-        )}
+        {prefs.showResets && <Trackers />}
         <p className="drawer-note">
           {rich('settings.resetsNote', {
             claude: (
@@ -178,7 +192,6 @@ const SignOutIcon = () => (
  */
 export function AccountPanel({
   user,
-  trackers,
   onChanged,
   onSignedOut,
   onClose,
@@ -186,7 +199,6 @@ export function AccountPanel({
   app,
 }: {
   user: User;
-  trackers: TrackerHealth[];
   onChanged: () => Promise<void>;
   onSignedOut: () => void;
   onClose: () => void;
@@ -219,7 +231,7 @@ export function AccountPanel({
       )}
       {sections.includes('measuring') && app.state && <Measuring state={app.state} onState={app.onState} />}
       {sections.includes('app') && app.state && <AppSection state={app.state} onState={app.onState} />}
-      <Browser trackers={trackers} title={t(local ? 'settings.view' : 'account.browser')} />
+      <Browser title={t(local ? 'settings.view' : 'account.browser')} />
     </Modal>
   );
 }

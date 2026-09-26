@@ -1,7 +1,8 @@
-import type {LiveSession, SourceState, View} from './types';
+import type {LiveSession, View} from './types';
 import {cardId, isHidden} from './view';
 import {sourceLabel} from './quota';
-import {formatLocale} from '../i18n';
+import {duration, durationChangesAt} from './format';
+import {formatLocale, t} from '../i18n';
 
 /** More sessions than this are counted in a card's tray instead of drawn one by one. */
 export const DRAWN = 10;
@@ -15,8 +16,16 @@ export const drawn = (sessions: unknown[]) => sessions.length <= DRAWN;
  */
 export const folderOf = (session: LiveSession) => (session.folder !== session.project ? session.folder : null);
 
+/** How long an agent has run, short: a fresh one is "just now". */
+export const since = (ms: number) => (ms < 60_000 ? t('agents.justNow') : duration(ms, true));
+
+/** When `since` reads otherwise: at a minute it stops being fresh, then as `duration` rounds. */
+export const sinceChangesAt = (from: number, now: number) => (now - from < 60_000 ? from + 60_000 : durationChangesAt(from, now, true));
+
+/** A source of the board as the list of agents names it, with its agents. */
+export type AgentSource = {id: string; provider: string; title?: string; sessions: LiveSession[]};
 /** A running agent in the board's table, with the card whose subscription it spends. */
-export type AgentRow = {source: SourceState; session: LiveSession};
+export type AgentRow = {source: AgentSource; session: LiveSession};
 export const AGENT_COLUMNS = ['project', 'state', 'subscription', 'machine', 'origin', 'running'] as const;
 export type AgentColumn = (typeof AGENT_COLUMNS)[number];
 export type AgentsSort = {column: AgentColumn; descending: boolean} | null;
@@ -44,7 +53,7 @@ export function machinesOf(sessions: LiveSession[]): {id: string; name: string; 
 const rowActivity = (a: AgentRow, b: AgentRow) => byActivity(a.session, b.session) || a.source.id.localeCompare(b.source.id);
 
 /** Every agent on the cards shown, by activity; when empty, whether hiding cards caused it. */
-export function agentRows(sources: SourceState[], view: View): {rows: AgentRow[]; empty: 'none' | 'noneShown' | null} {
+export function agentRows(sources: AgentSource[], view: View): {rows: AgentRow[]; empty: 'none' | 'noneShown' | null} {
   const shown = sources.filter(source => !isHidden(view, cardId(source.id)));
   const rows = shown.flatMap(source => source.sessions.map(session => ({source, session}))).sort(rowActivity);
   if (rows.length) return {rows, empty: null};

@@ -41,6 +41,10 @@ function durationDown(minutes: number, short: boolean) {
   return short ? 1440 * Math.floor(minutes / 1440) - 1 : 60 * Math.floor(minutes / 60) - 1;
 }
 
+/** The nearest of the moments something reads otherwise; null when none comes. */
+export const earliest = (...moments: (number | null)[]) =>
+  moments.reduce<number | null>((first, at) => (at !== null && (first === null || at < first) ? at : first), null);
+
 /** `duration(now - from)`: how long something has run. */
 export function durationChangesAt(from: number, now: number, short = false): number {
   const minutes = Math.max(0, Math.round((now - from) / 60_000));

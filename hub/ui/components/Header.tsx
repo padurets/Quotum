@@ -1,11 +1,13 @@
 import {useState, type FormEvent, type ReactNode} from 'react';
-import {useNow} from '../lib/api';
 import {call} from '../lib/http';
 import {boardTitle, type Board, type User} from '../lib/session';
+import {page, useConnection} from '../lib/board';
+import {useClock} from '../lib/clock';
 import {Brand, ErrorLine, Field, Modal} from './Kit';
 import {Popover} from './Popover';
 import {t} from '../i18n';
 
+/** The connection lost this long (by the hub's clock) is said in the header. */
 const OFFLINE_AFTER = 45_000;
 
 const ChevronIcon = () => (
@@ -56,13 +58,11 @@ function BoardItem({
   board,
   current,
   onSelect,
-  onChanged,
   onDelete,
 }: {
   board: Board;
   current: boolean;
   onSelect: () => void;
-  onChanged: () => Promise<void>;
   onDelete: () => void;
 }) {
   const [name, setName] = useState<string | null>(null);
@@ -74,8 +74,8 @@ function BoardItem({
     setError(null);
     const typed = name!.trim();
     try {
+      // The list of boards changes when the hub tells so.
       await call('POST', `/api/boards/${encodeURIComponent(board.id)}`, {name: board.personal && typed === t('boards.personalName') ? '' : typed});
-      await onChanged();
       setName(null);
     } catch (failure) {
       setError(failure);
@@ -87,7 +87,6 @@ function BoardItem({
     setError(null);
     try {
       await call('POST', `/api/boards/${encodeURIComponent(board.id)}/leave`);
-      await onChanged();
     } catch (failure) {
       setError(failure);
     }
@@ -145,7 +144,7 @@ function BoardItem({
 }
 
 /** Deleting a shared board: its name typed out, since nothing of it can come back. */
-function DeleteBoard({board, onClose, onDeleted}: {board: Board; onClose: () => void; onDeleted: () => Promise<void>}) {
+function DeleteBoard({board, onClose}: {board: Board; onClose: () => void}) {
   const [typed, setTyped] = useState('');
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
@@ -155,7 +154,6 @@ function DeleteBoard({board, onClose, onDeleted}: {board: Board; onClose: () => 
     setError(null);
     try {
       await call('DELETE', `/api/boards/${encodeURIComponent(board.id)}`);
-      await onDeleted();
       onClose();
     } catch (failure) {
       setError(failure);
@@ -181,8 +179,11 @@ function DeleteBoard({board, onClose, onDeleted}: {board: Board; onClose: () => 
   );
 }
 
-/** Which board is on screen; boards are created and renamed right here. */
-function BoardSwitcher({boards, board, onSelect, onChanged}: {boards: Board[]; board: Board | null; onSelect: (id: string) => void; onChanged: () => Promise<void>}) {
+/**
+ * Which board is on screen; boards are created and renamed right here. What changes the
+ * list comes as the hub's news of it, but for a board just created: it is opened at once.
+ */
+function BoardSwitcher({boards, board, onSelect}: {boards: Board[]; board: Board | null; onSelect: (id: string) => void}) {
   const [open, setOpen] = useState(false);
   const [deleting, setDeleting] = useState<Board | null>(null);
   const [name, setName] = useState('');
@@ -197,7 +198,7 @@ function BoardSwitcher({boards, board, onSelect, onChanged}: {boards: Board[]; b
       const created = await call<Board>('POST', '/api/boards', {name: name.trim()});
       setName('');
       setOpen(false);
-      await onChanged();
+      page.dispatch({type: 'board-created', board: created});
       onSelect(created.id);
     } catch (failure) {
       setError(failure);
@@ -226,7 +227,6 @@ function BoardSwitcher({boards, board, onSelect, onChanged}: {boards: Board[]; b
           board={b}
           current={b.id === board?.id}
           onSelect={() => (onSelect(b.id), setOpen(false))}
-          onChanged={onChanged}
           onDelete={() => (setOpen(false), setDeleting(b))}
         />
       ))}
@@ -238,8 +238,28 @@ function BoardSwitcher({boards, board, onSelect, onChanged}: {boards: Board[]; b
       </form>
       <ErrorLine error={error} />
     </Popover>
-    {deleting && <DeleteBoard board={deleting} onClose={() => setDeleting(null)} onDeleted={onChanged} />}
+    {deleting && <DeleteBoard board={deleting} onClose={() => setDeleting(null)} />}
     </>
+  );
+}
+
+/**
+ * A word when the hub cannot be reached: the connection lost a while ago (lib/live.ts), not
+ * a tab put to sleep. It renders when that comes or goes; its slot is there all the time.
+ */
+function Offline() {
+  const {status, lostAt} = useConnection();
+  const since = status === 'paused' ? null : lostAt;
+  const now = useClock(now => (since !== null && now < since + OFFLINE_AFTER ? since + OFFLINE_AFTER : null));
+  return (
+    <span className="time-slot" data-time="offline">
+      {since !== null && now >= since + OFFLINE_AFTER && (
+        <span className="offline" role="status" title={t('common.offline')}>
+          <i className="dot dot-warn" />
+          <span>{t('common.offline')}</span>
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -249,11 +269,9 @@ function BoardSwitcher({boards, board, onSelect, onChanged}: {boards: Board[]; b
  * own panel behind the avatar.
  */
 export function Header({
-  lastOk,
   boards,
   board,
   onBoard,
-  onBoardsChanged,
   widgets,
   onDevices,
   onPeople,
@@ -261,12 +279,9 @@ export function Header({
   onAccount,
   local,
 }: {
-  /** When the hub last answered: read as the clock ticks. */
-  lastOk: () => number;
   boards: Board[];
   board: Board | null;
   onBoard: (id: string) => void;
-  onBoardsChanged: () => Promise<void>;
   widgets: ReactNode;
   onDevices: () => void;
   /** A shared board's people and what they share; null on a personal board. */
@@ -276,21 +291,13 @@ export function Header({
   /** The desktop app's board: one board, nobody to share with, settings instead of an account. */
   local: boolean;
 }) {
-  const now = useNow();
-  const okAt = lastOk();
-  const offline = !!okAt && now - okAt > OFFLINE_AFTER;
   return (
     <header className="topbar">
       <div className="topbar-inner">
         <Brand href="/" />
-        {!local && <BoardSwitcher boards={boards} board={board} onSelect={onBoard} onChanged={onBoardsChanged} />}
+        {!local && <BoardSwitcher boards={boards} board={board} onSelect={onBoard} />}
         <div className="status">
-          {offline && (
-            <span className="offline" role="status" title={t('common.offline')}>
-              <i className="dot dot-warn" />
-              <span>{t('common.offline')}</span>
-            </span>
-          )}
+          <Offline />
           {widgets}
           {onPeople && (
             <button type="button" className="icon-button" aria-label={t('header.people')} title={t('header.people')} onClick={onPeople}>

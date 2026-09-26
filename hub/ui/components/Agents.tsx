@@ -1,13 +1,13 @@
 import {memo, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode} from 'react';
-import {useNow} from '../lib/api';
-import type {LiveSession, SourceState} from '../lib/types';
-import {duration} from '../lib/format';
+import type {LiveSession} from '../lib/types';
 import {sourceLabel} from '../lib/quota';
 import {AGENTS, colorOf, columnShown, withColumn, withHidden, type Arrange} from '../lib/view';
-import {AGENT_WIDTHS, agentRows, agentsLayout, drawn, folderOf, machinesOf, nextAgentsSort, sortedRows, visibleAgentsSort, type AgentColumn, type AgentRow} from '../lib/agents';
+import {AGENT_WIDTHS, agentRows, agentsLayout, drawn, folderOf, machinesOf, nextAgentsSort, sortedRows, visibleAgentsSort, type AgentColumn, type AgentRow, type AgentSource} from '../lib/agents';
+import {useLineup, useSessionsOf, useTitles} from '../lib/board';
 import {setPrefs, usePrefs} from '../lib/prefs';
 import {t, useLocale, type Key} from '../i18n';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
+import {Since} from './Time';
 
 /**
  * One session: filled with the card's colour while it works, outlined while idle; a
@@ -25,9 +25,6 @@ const stateOf = (session: LiveSession) =>
 
 /** A cut name in full on hover: the project, and the folder on a line of its own. */
 const placeOf = (session: LiveSession) => [session.project, folderOf(session)].filter(Boolean).join('\n') || undefined;
-
-/** How long a session has run, short: a fresh one is "just now". */
-const since = (ms: number) => (ms < 60_000 ? t('agents.justNow') : duration(ms, true));
 
 const TerminalIcon = () => (
   <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
@@ -72,7 +69,7 @@ function Origin({origin}: {origin: LiveSession['origin']}) {
  * for the marks (`roomy` false), they all go and the count stays; they are still laid out,
  * unseen, so the tray can tell when they fit again.
  */
-export function Agents({sessions, now, roomy = true}: {sessions: LiveSession[]; now: number; roomy?: boolean}) {
+export function Agents({sessions, roomy = true}: {sessions: LiveSession[]; roomy?: boolean}) {
   if (!sessions.length) return null;
   const machines = machinesOf(sessions);
   const working = sessions.filter(s => s.working).length;
@@ -119,7 +116,7 @@ export function Agents({sessions, now, roomy = true}: {sessions: LiveSession[]; 
                   {folderOf(session) && <small>{folderOf(session)}</small>}
                   <span className="sr-only">, {stateOf(session)}</span>
                 </span>
-                <span className="agents-age">{since(now - session.startedAt)}</span>
+                <Since className="agents-age" from={session.startedAt} />
               </div>
             ))}
           </section>
@@ -141,12 +138,12 @@ export function Agents({sessions, now, roomy = true}: {sessions: LiveSession[]; 
 }
 
 /** The table's columns after the project, each one the owner can hide to make the widget narrow. */
-const COLUMNS: {id: AgentColumn; title: Key; cell: (row: AgentRow, now: number) => ReactNode}[] = [
+const COLUMNS: {id: AgentColumn; title: Key; cell: (row: AgentRow) => ReactNode}[] = [
   {id: 'state', title: 'agents.state', cell: ({session}) => stateOf(session)},
   {id: 'subscription', title: 'agents.subscription', cell: ({source}) => sourceLabel(source)},
   {id: 'machine', title: 'agents.machine', cell: ({session}) => session.device.name},
   {id: 'origin', title: 'agents.origin', cell: ({session}) => <Origin origin={session.origin} />},
-  {id: 'running', title: 'agents.running', cell: ({session}, now) => since(now - session.startedAt)},
+  {id: 'running', title: 'agents.running', cell: ({session}) => <Since from={session.startedAt} />},
 ];
 
 const SortIcon = () => (
@@ -155,10 +152,20 @@ const SortIcon = () => (
   </svg>
 );
 
-/** Running agents as a table where the chosen columns fit, otherwise a compact list. */
-export const AgentsPanel = memo(function AgentsPanel({sources, arrange}: {sources: SourceState[]; arrange: Arrange}) {
+/**
+ * Running agents as a table where the chosen columns fit, otherwise a compact list. It
+ * reads the agents of every source of the board and their names, not their cards: a new
+ * measurement does not render it. How long each has run is a part of its own.
+ */
+export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrange}) {
   useLocale();
-  const now = useNow();
+  const lineup = useLineup();
+  const sessions = useSessionsOf(lineup);
+  const titles = useTitles();
+  const sources = useMemo(
+    () => lineup.flatMap((id, i): AgentSource[] => (titles[id] ? [{id, provider: titles[id].provider, title: titles[id].title, sessions: sessions[i]}] : [])),
+    [lineup, sessions, titles],
+  );
   const {agentsSort} = usePrefs();
   const panel = useRef<HTMLElement>(null);
   const [layout, setLayout] = useState<'table' | 'list'>('list');
@@ -234,12 +241,12 @@ export const AgentsPanel = memo(function AgentsPanel({sources, arrange}: {source
                   {folderOf(row.session) && <small>{folderOf(row.session)}</small>}
                   {!has('state') && <span className="sr-only">, {stateOf(row.session)}</span>}
                 </span>
-                {has('running') && <span className="agents-age">{since(now - row.session.startedAt)}</span>}
+                {has('running') && <Since className="agents-age" from={row.session.startedAt} />}
               </div>
               {columns.some(column => ['machine', 'subscription', 'state'].includes(column.id)) && (
                 <div className="agents-compact-details">
                   {columns.filter(column => ['machine', 'subscription', 'state'].includes(column.id)).map(column => (
-                    <span key={column.id}><span className="sr-only">{t(column.title)}: </span>{column.cell(row, now)}</span>
+                    <span key={column.id}><span className="sr-only">{t(column.title)}: </span>{column.cell(row)}</span>
                   ))}
                 </div>
               )}
@@ -271,7 +278,7 @@ export const AgentsPanel = memo(function AgentsPanel({sources, arrange}: {source
                     {!has('state') && <span className="sr-only">, {stateOf(row.session)}</span>}
                   </td>
                   {columns.map(column => (
-                    <td key={column.id} title={column.id === 'machine' ? row.session.device.name : column.id === 'subscription' ? sourceLabel(row.source) : undefined}>{column.cell(row, now)}</td>
+                    <td key={column.id} title={column.id === 'machine' ? row.session.device.name : column.id === 'subscription' ? sourceLabel(row.source) : undefined}>{column.cell(row)}</td>
                   ))}
                 </tr>
               ))}

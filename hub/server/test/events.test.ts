@@ -211,7 +211,7 @@ async function reading(h: Awaited<ReturnType<typeof hub>>, as: string, board?: s
   return Object.assign(s, {hello: hello.data, snapshot: snapshot.data});
 }
 
-test('a stream starts with hello and the board as the reader sees it, the same as the projection puts it together', async t => {
+test('a stream starts with hello and the board as the reader sees it, the same as the projection puts it together and /api/overview answers', async t => {
   const h = await hub();
   t.after(() => h.app.close());
   const board = await h.person('alice');
@@ -225,6 +225,7 @@ test('a stream starts with hello and the board as the reader sees it, the same a
   assert.ok(Math.abs(s.hello.now - Date.now()) < 5 * S);
   const alice = h.directory.credentials('alice@example.com')!.user.id;
   assert.deepEqual(s.snapshot, JSON.parse(JSON.stringify(new Projection(h).snapshot(alice, board, Date.now()))));
+  assert.deepEqual(s.snapshot, (await h.call('GET', `/api/overview?board=${board}`, {as: 'alice'})).body);
   assert.equal(s.snapshot.sources.length, 1);
   for (const header of ['cache-control', 'x-accel-buffering', 'content-security-policy', 'referrer-policy', 'x-content-type-options'])
     assert.ok(s.headers.get(header), header);

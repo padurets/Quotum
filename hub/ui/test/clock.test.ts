@@ -5,6 +5,8 @@ import {ago, agoChangesAt, countdown, countdownChangesAt, duration, durationChan
 import {cadenceChangesAt, cadenceOf, dotChangesAt, dotOf, resetLine, resetLineChangesAt} from '../lib/quota';
 import {resetLabel, resetLabelChangesAt, type ResetStatus} from '../lib/resets';
 import {DEFAULT_PLAN, planAt, planChangesAt, planNote} from '../lib/plan';
+import {since, sinceChangesAt} from '../lib/agents';
+import {frameChangesAt, step, stepChangesAt} from '../lib/periods';
 import type {Win} from '../lib/types';
 
 const S = 1000;
@@ -190,6 +192,12 @@ test('ago, countdown and duration say when they read otherwise, to the milliseco
     around(T0),
   );
   assert.equal(agoChangesAt(null, T0), null);
+  changesAtItsMoment(
+    'running for',
+    now => since(now - time),
+    now => sinceChangesAt(time, now),
+    around(time),
+  );
 });
 
 test("a card's dot and its pace say when they look otherwise", () => {
@@ -263,4 +271,18 @@ test("a limit's plan says when its mark, its gap or its end show otherwise", () 
     );
   }
   assert.equal(planChangesAt(weekly, measuredAt, T0, null), null, 'no plan: nothing to change');
+});
+
+test('the arrows of the analytics say when they turn on or off; the frame moves on a cell at a time', () => {
+  const arrows = (selected: {from: number; to: number} | null, range: string, historyStart: number) => (now: number) =>
+    [step(selected, range, -1, now, historyStart) !== null, step(selected, range, 1, now, historyStart) !== null];
+  // A history begun a while ago: the period ending now reaches back to it after a while.
+  for (const [range, start] of [['24h', T0 - 3 * HOUR], ['7d', T0 - 2 * DAY], ['30d', T0 - 100 * DAY]] as const)
+    changesAtItsMoment(`‹ › of ${range}`, arrows(null, range, start), now => stepChangesAt(null, range, now, start), around(T0));
+  // A range stepped back to: it falls out of what the hub keeps at last.
+  const range = {from: T0 - 80 * DAY, to: T0 - 79 * DAY};
+  changesAtItsMoment('‹ › of a range', arrows(range, '24h', 0), now => stepChangesAt(range, '24h', now, 0), [T0, T0 + 5 * DAY, T0 + 9 * DAY, T0 + 9 * DAY + 22 * HOUR]);
+  assert.equal(frameChangesAt(null, 5 * MIN, T0 + 7 * S), T0 + 5 * MIN);
+  assert.equal(frameChangesAt({from: T0 - DAY, to: T0 - HOUR}, 5 * MIN, T0), null, 'a range in the past stands still');
+  assert.equal(frameChangesAt({from: T0 - DAY, to: T0 + HOUR}, 5 * MIN, T0), T0 + 5 * MIN, 'one reaching past now does not');
 });

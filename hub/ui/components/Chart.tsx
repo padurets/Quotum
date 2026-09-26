@@ -2,7 +2,7 @@ import {useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSPr
 import {clock, day, duration, num, shortDay, stamp} from '../lib/format';
 import {t} from '../i18n';
 import type {Line} from '../lib/lines';
-import {hubNow} from '../lib/api';
+import {hubNow} from '../lib/clock';
 import {gapText, gapTone, readout as readCell, type PlanLine} from '../lib/readout';
 import {draggedRange, type TimeRange} from '../lib/timeRange';
 import {SWIPE, swiped} from '../lib/swipe';

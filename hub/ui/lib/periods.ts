@@ -56,6 +56,14 @@ export function frameOf(selected: TimeRange | null, prefs: {range: string; horiz
   return {from: Math.max(now - period.ms, historyStart), to: now, length: period.ms, future, live: true};
 }
 
+/**
+ * When the frame moves on (`frameOf`): at the next cell of the history's grid while it
+ * ends now, or reaches past now. A minute more of a day is less than a pixel of the chart;
+ * a range wholly in the past never moves.
+ */
+export const frameChangesAt = (selected: TimeRange | null, cellMs: number, now: number) =>
+  selected && selected.to <= now ? null : Math.floor(now / cellMs) * cellMs + cellMs;
+
 /** How long the hub keeps samples (config.retention.sampleDays; a test keeps them the same); a range starts an hour inside it, so it is still read a while later. */
 export const KEPT_MS = 90 * DAY;
 
@@ -81,4 +89,22 @@ export function step(selected: TimeRange | null, range: string, direction: -1 | 
   if (from <= limit) return null;
   const start = Math.max(floorMinute(from - by), limit);
   return {from: start, to: start + length};
+}
+
+/**
+ * When ‹ turns on or off by itself (`step` back): a period ending now once the history is
+ * longer than it, a range once it falls out of what the hub keeps. Either happens once, so
+ * the first moment it does is found by halving.
+ */
+export function stepChangesAt(selected: TimeRange | null, range: string, now: number, historyStart: number): number | null {
+  const can = (at: number) => step(selected, range, -1, at, historyStart) !== null;
+  const seen = can(now);
+  let [same, other] = [now, now + KEPT_MS];
+  if (can(other) === seen) return null;
+  while (other - same > 1) {
+    const middle = Math.floor((same + other) / 2);
+    if (can(middle) === seen) same = middle;
+    else other = middle;
+  }
+  return other;
 }
