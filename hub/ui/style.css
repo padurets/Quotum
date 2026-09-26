@@ -430,8 +430,9 @@ td.muted, small.muted { color: var(--text-3); }
 .legend-empty { font-size: 12.5px; color: var(--text-4); padding: 4px 0; }
 
 .chart { position: relative; margin-top: 10px; }
-.panel .chart, .panel .table-wrap { transition: opacity .2s; }
-.panel.is-loading .chart, .panel.is-loading .table-wrap { opacity: .5; }
+/* Dimmed while the next period loads. Not the chart itself: that would lay its tooltip under the next widget. */
+.panel .chart > svg, .panel .table-wrap { transition: opacity .2s; }
+.panel.is-loading .chart > svg, .panel.is-loading .table-wrap { opacity: .5; }
 .panel-loading, .panel-empty { margin: 18px 0 0; min-height: 96px; display: grid; place-items: center; color: var(--text-3); font-size: 13px; }
 .chart > svg { display: block; width: 100%; height: auto; touch-action: pan-y; overflow: visible; }
 .chart-loading, .chart-empty { min-height: 220px; display: grid; place-items: center; color: var(--text-3); font-size: 13px; }
@@ -448,12 +449,14 @@ td.muted, small.muted { color: var(--text-3); }
 .marker.is-strong line { stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: none; opacity: 1; }
 /* An announcement stands out on the chart: dark text on a light accent backing. */
 .marker-label { pointer-events: none; }
+.marker-label.is-pointed { pointer-events: auto; cursor: default; }
 .marker-label text { fill: var(--bg); font-size: 11px; font-weight: 600; }
 .marker-label rect { fill: var(--accent); }
 .marker.is-event line { stroke-dasharray: none; opacity: .4; }
-.tooltip-row.is-marker.is-strong span { color: var(--accent); }
 .plan-line { fill: none; stroke-width: 1.5; stroke-dasharray: 1 4; stroke-linecap: round; opacity: .55; }
 .series { fill: none; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+/* Drawn over the lines, it never takes the pointer from what is under it (a label telling a time). */
+.crosshair, .selection { pointer-events: none; }
 .hover-band { fill: #ffffff06; }
 .crosshair line { stroke: var(--text-3); stroke-width: 1; stroke-dasharray: 2 3; }
 .crosshair circle { stroke: var(--bg); stroke-width: 2; }
@@ -461,23 +464,36 @@ td.muted, small.muted { color: var(--text-3); }
 .chart svg.is-selectable { cursor: crosshair; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
 .selection { fill: color-mix(in oklab, var(--accent) 14%, transparent); stroke: color-mix(in oklab, var(--accent) 50%, transparent); stroke-width: 1; }
 .tooltip {
-  position: absolute; top: 8px; pointer-events: none; min-width: 190px; max-width: min(320px, 100%);
+  position: absolute; top: 8px; z-index: 4; pointer-events: none; width: max-content; min-width: 190px; max-width: min(360px, 100%);
   border-radius: 10px; padding: 9px 11px; font-size: 12px;
 }
+/* Over the widgets below (their handles are 2), under the sticky bars (5) and the popovers. */
+.tooltip.is-below { top: 0; left: 0; right: 0; width: auto; max-width: none; margin-top: 4px; padding: 7px 9px; font-size: 11.5px; }
+/* Narrow and possibly long: denser, so a dozen lines fit a phone's screen. */
+.tooltip.is-below .tooltip-grid { column-gap: 6px; row-gap: 1px; }
+.tooltip.is-below .tooltip-head { font-size: 9.5px; }
+.tooltip.is-below .tooltip-name { line-height: 1.2; }
+.tooltip.is-edge { top: auto; min-width: 0; }
 .tooltip-time { color: var(--text-3); margin-bottom: 5px; font-family: var(--mono); font-size: 11px; }
-.tooltip-row { display: flex; align-items: center; gap: 9px; padding: 2px 0; white-space: nowrap; }
-.tooltip-row.is-marker { flex-wrap: wrap; }
-.tooltip-detail { flex-basis: 100%; max-width: 300px; padding-left: 23px; white-space: normal; font-size: 11px; color: var(--text-3); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.tooltip-row strong { min-width: 36px; font-weight: 500; }
-.tooltip-row span { color: var(--text-2); }
-/* A long name gives way; the swatch, the value and the plan beside it stay whole. */
-.tooltip-row:not(.is-marker) span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.tooltip-row.is-marker span { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.tooltip-row svg, .tooltip-row strong, .tooltip-plan { flex-shrink: 0; }
-.tooltip-row.is-plan strong, .tooltip-row.is-plan span { color: var(--text-3); font-weight: 450; }
-.tooltip-sep { height: 1px; background: var(--hair); margin: 5px 0; }
-/* The plan beside what is left, at the row's end. */
-.tooltip-plan { margin-left: auto; padding-left: 16px; font-style: normal; font-variant-numeric: tabular-nums; color: var(--text-3); }
+.tooltip.is-edge .tooltip-time { margin: 2px 0 0; }
+/* One row a line: its swatch, its name, then what is left, the plan and the gap, each a column across all rows. */
+.tooltip-grid { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; align-items: center; column-gap: 9px; row-gap: 3px; }
+.tooltip-grid.is-planned { grid-template-columns: 14px minmax(0, 1fr) auto auto auto; }
+.tooltip-row { display: contents; }
+.tooltip-head { font-size: 10.5px; color: var(--text-4); text-align: right; }
+.tooltip-name { color: var(--text-2); overflow-wrap: anywhere; line-height: 1.3; }
+.tooltip-grid strong, .tooltip-plan, .tooltip-gap { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tooltip-grid strong { font-weight: 500; color: var(--text); }
+.tooltip-plan, .tooltip-gap { color: var(--text-3); }
+.tooltip-sep { height: 1px; background: var(--hair); margin: 6px 0 5px; }
+/* A moment in the cell: its time, what it was and, for a reset for everyone, what was said. */
+.tooltip-mark { display: flex; flex-wrap: wrap; align-items: center; gap: 0 9px; padding: 2px 0; }
+.tooltip-mark svg, .tooltip-mark strong { flex-shrink: 0; }
+.tooltip-mark strong { min-width: 36px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.tooltip-mark span { flex: 1 1 0; min-width: 0; color: var(--text-2); overflow-wrap: anywhere; }
+.tooltip-mark.is-strong span, .tooltip-marker.is-strong { color: var(--accent); }
+.tooltip-marker { font-weight: 500; }
+.tooltip-detail { flex-basis: 100%; padding-left: 23px; font-size: 11px; color: var(--text-3); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .legend-plan { margin-left: auto; color: var(--text-3); }
 
 /* Positioned, so what is hidden for screen readers in a cell scrolls with the table rather than widening the page. */

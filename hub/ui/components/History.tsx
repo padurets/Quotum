@@ -10,7 +10,8 @@ import {goTo, setTimeRange, useTimeRange} from '../lib/timeRange';
 import {frameOf, step} from '../lib/periods';
 import {HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
 import {chartEvents, chartResets, linesOf} from '../lib/lines';
-import {Chart, type Marker, type PlanLine} from './Chart';
+import {Chart, type Marker} from './Chart';
+import type {PlanLine} from '../lib/readout';
 import type {PastResets, Resets} from '../lib/resets';
 import {t, useLocale} from '../i18n';
 import {Segmented} from './Kit';
@@ -147,7 +148,6 @@ export const History = memo(function History({
       seen.set(key, {
         key,
         lines: [line.key],
-        name: t('chart.plan', {source: source ? sourceLabel(source) : line.provider}),
         color: line.color,
         runs: weeklyPlanLine(live.resetAt, from, to, plan),
       });

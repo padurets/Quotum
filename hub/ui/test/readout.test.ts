@@ -1,0 +1,54 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {gapText, gapTone, readout, type PlanLine} from '../lib/readout';
+import type {Line} from '../lib/lines';
+
+const minute = 60_000;
+const cellMs = 5 * minute;
+const now = 1_800_000_000_000;
+const cell = now - 60 * minute;
+
+const line = (key: string, points: [number, number, number][]) => ({key, points, staleAfterMs: 10 * minute}) as Line;
+const plan = (lines: string[], value: number): PlanLine => ({key: lines[0], lines, color: '', runs: [[[now - 120 * minute, value], [now, value]]]});
+
+test('a row for every line, in the legend’s order, empty where a line has nothing in the cell', () => {
+  const lines = [line('b', [[cell, 80, 0]]), line('a', [[cell - 60 * minute, 20, 0]]), line('c', [[cell, 10.4, 0]])];
+  const {rows, planned} = readout(lines, [], cell, cellMs, now, now);
+  assert.deepEqual(
+    rows.map(row => [row.line.key, row.left, row.plan, row.gap]),
+    [
+      ['b', 80, null, null],
+      ['a', null, null, null],
+      ['c', 10, null, null],
+    ],
+  );
+  assert.equal(planned, false, 'no plan columns without a plan on the chart');
+});
+
+test('the plan is read beside the lines it plans, and the gap is of the numbers shown', () => {
+  const lines = [line('weekly', [[cell, 42.4, 0]]), line('fable', [[cell, 49.6, 0]]), line('other', [[cell, 30, 0]])];
+  const {rows, planned} = readout(lines, [plan(['weekly', 'fable'], 50.4)], cell, cellMs, now, now);
+  assert.equal(planned, true);
+  assert.deepEqual(
+    rows.map(row => [row.left, row.plan, row.gap]),
+    [
+      [42, 50, -8],
+      [50, 50, 0],
+      [30, null, null],
+    ],
+  );
+  assert.ok(!Object.is(rows[1].gap, -0), 'never a negative zero');
+  assert.equal(rows[0].value, 42.4, 'the point is drawn where the value is');
+});
+
+test('plan columns only where the chart draws a plan in the period', () => {
+  const lines = [line('weekly', [[cell, 42, 0]])];
+  assert.equal(readout(lines, [{...plan(['weekly'], 50), runs: []}], cell, cellMs, now, now).planned, false, 'a range older than the week');
+  const later = readout(lines, [{...plan(['weekly'], 50), runs: [[[now - 10 * minute, 60], [now, 60]]]}], cell, cellMs, now, now);
+  assert.deepEqual([later.planned, later.rows[0].plan, later.rows[0].gap], [true, null, null], 'a plan elsewhere in the period: the cell is empty');
+});
+
+test('a gap reads with its sign, and one ahead of the plan by 3 or more is marked as the table marks it', () => {
+  assert.deepEqual([7, -8, 0].map(gapText), ['+7', '−8', '0']);
+  assert.deepEqual([-3, -2, 5].map(gapTone), ['v-warn', '', '']);
+});

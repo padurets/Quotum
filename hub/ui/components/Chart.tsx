@@ -1,7 +1,8 @@
-import {useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent} from 'react';
+import {useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode, type RefObject} from 'react';
 import {clock, day, duration, num, shortDay, stamp} from '../lib/format';
 import {t} from '../i18n';
-import {valueIn, type Line} from '../lib/lines';
+import type {Line} from '../lib/lines';
+import {gapText, gapTone, readout as readCell, type PlanLine} from '../lib/readout';
 import {draggedRange, type TimeRange} from '../lib/timeRange';
 import {SWIPE, swiped} from '../lib/swipe';
 
@@ -17,15 +18,16 @@ const HOLD_MS = 450;
 /** The mark of a past event: a small diamond centred at (x, y). */
 const diamond = (x: number, y: number, r = 4) => `M${x},${y - r}l${r},${r}l${-r},${r}l${-r},${-r}z`;
 
-/** The spending plan of one weekly window, drawn as a faint dotted line in its colour; `lines` are the keys of the lines it plans. */
-export type PlanLine = {key: string; lines: string[]; name: string; color: string; runs: [number, number][][]};
-
 /** How wide an announcement's label is taken to be, and how near an edge a value hides under it (percent). */
 const LABEL_WIDTH = 220;
 const LABEL_BAND = 15;
 
-/** A label on the chart on a backing sized to its text, so no line under it gets in the way. */
-function MarkerLabel({x, y, end, children}: {x: number; y: number; end: boolean; children: string}) {
+/**
+ * A label on the chart on a backing sized to its text, so no line under it gets in the way.
+ * One pointing past the right edge tells its exact time under the pointer or on a tap
+ * (`onTip`).
+ */
+function MarkerLabel({x, y, end, children, onTip}: {x: number; y: number; end: boolean; children: string; onTip?: (shown: boolean, tapped: boolean) => void}) {
   const text = useRef<SVGTextElement>(null);
   const [box, setBox] = useState<{x: number; width: number} | null>(null);
   useLayoutEffect(() => {
@@ -33,7 +35,12 @@ function MarkerLabel({x, y, end, children}: {x: number; y: number; end: boolean;
     if (measured) setBox({x: measured.x, width: measured.width});
   }, [x, y, end, children]);
   return (
-    <g className="marker-label">
+    <g
+      className={`marker-label ${onTip ? 'is-pointed' : ''}`}
+      onPointerEnter={onTip && (event => event.pointerType !== 'touch' && onTip(true, false))}
+      onPointerLeave={onTip && (event => event.pointerType !== 'touch' && onTip(false, false))}
+      onPointerUp={onTip && (event => event.pointerType === 'touch' && onTip(true, true))}
+    >
       {box && <rect x={box.x - 6} y={y - 13} width={box.width + 12} height={19} rx={5} />}
       <text ref={text} x={x} y={y} textAnchor={end ? 'end' : 'start'}>
         {children}
@@ -41,20 +48,6 @@ function MarkerLabel({x, y, end, children}: {x: number; y: number; end: boolean;
     </g>
   );
 }
-
-/** Value of a piecewise-linear run at time `at`, or undefined outside it. */
-function valueAt(runs: [number, number][][], at: number) {
-  for (const run of runs) {
-    if (at < run[0][0] || at > run.at(-1)![0]) continue;
-    for (let i = 1; i < run.length; i++) {
-      const [t0, v0] = run[i - 1];
-      const [t1, v1] = run[i];
-      if (at <= t1) return t1 === t0 ? v1 : v0 + ((v1 - v0) * (at - t0)) / (t1 - t0);
-    }
-  }
-  return undefined;
-}
-
 
 function niceTicks(from: number, to: number, count: number) {
   const span = to - from;
@@ -191,24 +184,21 @@ export function Chart({
     [lines, from, now, span, width, height, cellMs],
   );
 
-  const readout =
-    hover === null
-      ? []
-      : lines.flatMap(line => {
-          const value = valueIn(line.points, hover, now, Math.max(cellMs, line.staleAfterMs));
-          return value === undefined ? [] : [{line, value}];
-        });
+  const {rows, planned} = hover === null ? {rows: [], planned: false} : readCell(lines, plans, hover, cellMs, now, to);
   const markerReadout = hover === null ? [] : markers.filter(m => m.at >= hover && m.at < hover + cellMs);
-  const planReadout =
-    hover === null
-      ? []
-      : plans.flatMap(plan => {
-          const value = valueAt(plan.runs, Math.min(to, hover + cellMs / 2));
-          return value === undefined ? [] : [{plan, value}];
-        });
-  // A plan is read beside what its source has left; one with nothing read there stands on its own.
-  const planOf = (line: string) => planReadout.find(row => row.plan.lines.includes(line));
-  const lonePlans = planReadout.filter(row => !readout.some(r => row.plan.lines.includes(r.line.key)));
+  /** A marker past the right edge, its label pointed at or tapped: the tooltip tells its time instead of the cell's values. */
+  const [edge, setEdge] = useState<{key: string; tapped: boolean} | null>(null);
+  const edgeMarker = edge && markers.find(m => m.key === edge.key && m.at > to);
+  useEffect(() => {
+    if (!edge?.tapped) return;
+    const hide = () => setEdge(null);
+    const timer = setTimeout(hide, 4000);
+    document.addEventListener('pointerdown', hide);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('pointerdown', hide);
+    };
+  }, [edge]);
 
   const toChart = (event: PointerEvent<SVGSVGElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -255,7 +245,8 @@ export function Chart({
   // values, as it always did; holding it still for a moment starts a range instead.
   const press = (event: PointerEvent<SVGSVGElement>) => {
     const px = toChart(event);
-    if (!onSelect || event.button !== 0 || px < left || px > width - right) return;
+    // A label telling a time is read, not dragged from.
+    if (!onSelect || event.button !== 0 || px < left || px > width - right || (event.target as Element).closest('.is-pointed')) return;
     const svg = event.currentTarget;
     const {pointerId} = event;
     const start = () => {
@@ -278,11 +269,25 @@ export function Chart({
   // A cell ahead of now is read at its middle; the one holding now, at now.
   const hoverX = hover === null ? 0 : hover > now ? x(Math.min(to, hover + cellMs / 2)) : bx(hover);
   // The tooltip sits right of the pointer, or left of it when it would leave the chart.
+  // On a narrow chart it spans the chart's width under the plot, over what comes below, and
+  // rises over the plot as far as keeps it whole in the window (a phone with many lines),
+  // though never under the bars that stick at the top.
   const tip = useRef<HTMLDivElement>(null);
   const [tipWidth, setTipWidth] = useState(200);
+  const [lift, setLift] = useState(0);
+  const narrow = width < 560;
   useLayoutEffect(() => {
-    if (tip.current) setTipWidth(tip.current.offsetWidth);
-  }, [hover]);
+    const element = tip.current;
+    if (!element) return;
+    setTipWidth(element.offsetWidth);
+    if (!narrow) return setLift(0);
+    const rect = element.getBoundingClientRect();
+    const [top, bottom] = [rect.top + lift, rect.bottom + lift];
+    const bars = [...document.querySelectorAll<HTMLElement>('.topbar, .analytics-head')].filter(bar => getComputedStyle(bar).position === 'sticky');
+    const cover = Math.max(0, ...bars.map(bar => bar.getBoundingClientRect().bottom));
+    setLift(Math.max(0, Math.min(bottom - (innerHeight - 8), top - cover - 8)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hover, edge, narrow, lines.length]);
   const tipLeft = hoverX + 12 + tipWidth <= width ? hoverX + 12 : Math.max(0, hoverX - 12 - tipWidth);
   const bandWidth = Math.max(1, x(Math.min(to, (hover ?? 0) + cellMs)) - x(hover ?? 0));
 
@@ -371,7 +376,13 @@ export function Chart({
             const nearRight = beyond || mx > width - right - 150;
             const lx = beyond ? mx : nearRight ? mx - 6 : mx + 6;
             return (
-              <MarkerLabel key={marker.key} x={lx} y={labelY(lx, nearRight)} end={nearRight}>
+              <MarkerLabel
+                key={marker.key}
+                x={lx}
+                y={labelY(lx, nearRight)}
+                end={nearRight}
+                onTip={beyond ? (shown, tapped) => setEdge(shown ? {key: marker.key, tapped} : null) : undefined}
+              >
                 {beyond ? t('chart.ahead', {label: marker.label, time: duration(marker.at - now, true)}) : marker.label}
               </MarkerLabel>
             );
@@ -392,55 +403,78 @@ export function Chart({
           <g className="crosshair">
             <rect x={x(hover)} width={bandWidth} y={top} height={height - top - bottom} className="hover-band" />
             <line x1={hoverX} x2={hoverX} y1={top} y2={height - bottom} />
-            {readout.map(row => (
-              <circle key={row.line.key} cx={hoverX} cy={y(row.value)} r={4} fill={row.line.color} />
-            ))}
+            {rows.map(row => row.value !== null && <circle key={row.line.key} cx={hoverX} cy={y(row.value)} r={4} fill={row.line.color} />)}
           </g>
         )}
       </svg>
 
-      {hover !== null && !drag && readout.length + lonePlans.length + markerReadout.length > 0 && (
-        <div className="tooltip glass" ref={tip} style={{left: tipLeft}}>
-          <div className="tooltip-time">{cellLabel(hover, cellMs)}</div>
-          {[...readout]
-            .sort((a, b) => a.value - b.value)
-            .map(row => (
-              <div className="tooltip-row" key={row.line.key}>
-                <svg width="14" height="4" aria-hidden="true">
-                  <line x1="0" x2="14" y1="2" y2="2" stroke={row.line.color} strokeWidth="2" strokeDasharray={row.line.dash || undefined} />
+      {edgeMarker ? (
+        <Tooltip tip={tip} className="is-edge" style={{right: 0, bottom: `calc(100% - ${labelY(width - right, true) - 18}px)`}}>
+          <div className="tooltip-marker is-strong">{edgeMarker.label}</div>
+          <div className="tooltip-time">{stamp(edgeMarker.at)}</div>
+        </Tooltip>
+      ) : (
+        hover !== null &&
+        !drag &&
+        (rows.some(row => row.left !== null || row.plan !== null) || markerReadout.length > 0) && (
+          <Tooltip tip={tip} className={narrow ? 'is-below' : ''} style={narrow ? {top: height - lift} : {left: tipLeft}}>
+            <div className="tooltip-time">{cellLabel(hover, cellMs)}</div>
+            {rows.length > 0 && (
+              <div className={`tooltip-grid ${planned ? 'is-planned' : ''}`}>
+                <span />
+                <span />
+                <span className="tooltip-head">{t('chart.left')}</span>
+                {planned && (
+                  <>
+                    <span className="tooltip-head">{t('chart.plan')}</span>
+                    <span className="tooltip-head">{t('chart.gap')}</span>
+                  </>
+                )}
+                {rows.map(row => (
+                  <div className="tooltip-row" key={row.line.key}>
+                    <svg width="14" height="4" aria-hidden="true">
+                      <line x1="0" x2="14" y1="2" y2="2" stroke={row.line.color} strokeWidth="2" strokeDasharray={row.line.dash || undefined} />
+                    </svg>
+                    <span className="tooltip-name">{row.line.name}</span>
+                    <strong>{row.left !== null && `${num(row.left)}%`}</strong>
+                    {planned && (
+                      <>
+                        <span className="tooltip-plan">{row.plan !== null && `${num(row.plan)}%`}</span>
+                        <span className={`tooltip-gap ${row.gap !== null ? gapTone(row.gap) : ''}`}>{row.gap !== null && gapText(row.gap)}</span>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+            {rows.length > 0 && markerReadout.length > 0 && <div className="tooltip-sep" />}
+            {markerReadout.map(marker => (
+              <div className={`tooltip-mark ${marker.strong ? 'is-strong' : ''}`} key={marker.key}>
+                <svg width="14" height="10" aria-hidden="true">
+                  {marker.past ? (
+                    <path d={diamond(7, 5)} fill={marker.color} />
+                  ) : (
+                    <line x1="7" x2="7" y1="0" y2="10" stroke={marker.strong ? 'var(--accent)' : marker.color} strokeWidth="2" />
+                  )}
                 </svg>
-                <strong>{num(row.value)}%</strong>
-                <span>{row.line.name}</span>
-                {planOf(row.line.key) && <em className="tooltip-plan">{t('chart.planValue', {value: num(planOf(row.line.key)!.value)})}</em>}
+                <strong>{clock(marker.at)}</strong>
+                <span>{marker.label}</span>
+                {marker.detail && <small className="tooltip-detail">{marker.detail}</small>}
               </div>
             ))}
-          {markerReadout.map(marker => (
-            <div className={`tooltip-row is-marker ${marker.strong ? 'is-strong' : ''}`} key={marker.key}>
-              <svg width="14" height="10" aria-hidden="true">
-                {marker.past ? (
-                  <path d={diamond(7, 5)} fill={marker.color} />
-                ) : (
-                  <line x1="7" x2="7" y1="0" y2="10" stroke={marker.strong ? 'var(--accent)' : marker.color} strokeWidth="2" />
-                )}
-              </svg>
-              <strong>{clock(marker.at)}</strong>
-              <span>{marker.label}</span>
-              {marker.detail && <small className="tooltip-detail">{marker.detail}</small>}
-            </div>
-          ))}
-          {lonePlans.length > 0 && <div className="tooltip-sep" />}
-          {lonePlans.map(row => (
-            <div className="tooltip-row is-plan" key={row.plan.key}>
-              <svg width="14" height="4" aria-hidden="true">
-                <line x1="0" x2="14" y1="2" y2="2" stroke={row.plan.color} strokeWidth="1.5" strokeDasharray="1 3" strokeLinecap="round" />
-              </svg>
-              <strong>{num(row.value)}%</strong>
-              <span>{row.plan.name}</span>
-            </div>
-          ))}
-        </div>
+          </Tooltip>
+        )
       )}
       {!lines.length && empty && <div className="chart-empty">{empty}</div>}
+    </div>
+  );
+}
+
+/** The chart's own tooltip, glass as the popovers are; it lies over the widgets below, under the sticky bars. */
+function Tooltip({tip, className, style, children}: {tip: RefObject<HTMLDivElement | null>; className: string; style: CSSProperties; children: ReactNode}) {
+  return (
+    <div className={`tooltip glass ${className}`} ref={tip} style={style}>
+      {children}
     </div>
   );
 }
