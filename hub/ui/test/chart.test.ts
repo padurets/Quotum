@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {cellLabel, slideOf} from '../components/Chart';
+import {cellLabel, liftOf, slideOf} from '../components/Chart';
 import {setLocale} from '../i18n';
 import {preferring} from './browser';
 
@@ -36,4 +36,14 @@ test('a step through time slides the chart in from the side it came from; the cl
   const hourLive = {from: now - hour, end: now + 5 * 60_000};
   assert.equal(slideOf(hourLive, {from: now - 1.5 * hour, end: now - 0.5 * hour, to: now - 0.5 * hour}, 1000), -500, 'an hour whose end was the hub’s clock, minutes ahead of the page');
   assert.equal(slideOf(live, {from: now - 7 * 24 * hour, end: now, to: now}, 1000), 0, 'another period');
+});
+
+test('a tooltip under a narrow chart rises as far as keeps it in the window, never under the bars, and the same once found again', () => {
+  // Under the plot at 400, 350 tall, in a window 800 tall under bars ending at 60.
+  assert.equal(liftOf(400, 350, 800, 60), 0, 'it fits');
+  assert.equal(liftOf(500, 350, 800, 60), 58, 'its bottom kept 8 above the window’s');
+  assert.equal(liftOf(300, 700, 800, 60), 208, 'taller: higher, still under the bars');
+  assert.equal(liftOf(300, 800, 800, 60), 232, 'too tall to fit: no higher than 8 under the bars');
+  // Read from the chart, not from where it was drawn: finding it again gives the same.
+  assert.equal(liftOf(500, 350, 800, 60), liftOf(500, 350, 800, 60));
 });

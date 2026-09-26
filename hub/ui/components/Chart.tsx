@@ -72,6 +72,16 @@ export function cellLabel(at: number, cellMs: number) {
   return sameDay(at, end - 1) ? `${day(at)} ${clock(at)}–${clock(end)}` : `${stamp(at)} – ${stamp(end)}`;
 }
 
+/**
+ * How far the tooltip under a narrow chart rises over it to stay whole in the window: as
+ * far as its bottom (`top`, where it stands unraised, plus its `height`) would pass the
+ * window's, less a margin, and never above what covers the top of the page (`cover`, the
+ * bars that stick there).
+ */
+export function liftOf(top: number, height: number, windowHeight: number, cover: number) {
+  return Math.max(0, Math.min(top + height - (windowHeight - 8), top - cover - 8));
+}
+
 /** How long the chart's content takes to slide in after a step through time. */
 const SLIDE_MS = 220;
 
@@ -105,6 +115,7 @@ export function Chart({
   empty,
   onSelect,
   onStep,
+  until,
 }: {
   lines: Line[];
   plans?: PlanLine[];
@@ -120,6 +131,8 @@ export function Chart({
   onSelect?: (range: TimeRange) => void;
   /** A swipe sideways on a touchpad, or Shift with the wheel: back (-1) or forward (1) through time. */
   onStep?: (direction: -1 | 1) => void;
+  /** How late a dragged range may end, when not `now`: the hub's clock, which the hub will not read past. */
+  until?: number;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(900);
@@ -292,12 +305,11 @@ export function Chart({
     cancelHold();
     if (!drag || !onSelect) return;
     setDrag(null);
-    const range = Math.abs(drag.end - drag.start) >= 6 ? draggedRange(timeAt(drag.start), timeAt(drag.end), now) : null;
+    const range = Math.abs(drag.end - drag.start) >= 6 ? draggedRange(timeAt(drag.start), timeAt(drag.end), until ?? now) : null;
     if (range) onSelect(range);
   };
   // A cell ahead of now is read at its middle; the one holding now, at now.
   const hoverX = hover === null ? 0 : hover > now ? x(Math.min(to, hover + cellMs / 2)) : bx(hover);
-  // The tooltip sits right of the pointer, or left of it when it would leave the chart.
   // A step through time slides what the chart shows in from the side it came from. The
   // layers that move are clipped to the plot meanwhile, so nothing passes over the scale.
   const clip = useId();
@@ -330,7 +342,6 @@ export function Chart({
   const tip = useRef<HTMLDivElement>(null);
   const [tipWidth, setTipWidth] = useState(200);
   const [lift, setLift] = useState(0);
-  const lifted = useRef(0);
   const narrow = width < 560;
   const measureTip = useRef(() => {});
   measureTip.current = () => {
@@ -341,16 +352,14 @@ export function Chart({
     element.style.maxWidth = '';
     setTipWidth(element.offsetWidth);
     element.style.maxWidth = cap;
-    if (!narrow) {
-      lifted.current = 0;
-      return setLift(0);
-    }
-    const rect = element.getBoundingClientRect();
-    const [top, bottom] = [rect.top + lifted.current, rect.bottom + lifted.current];
+    // Only the one under a narrow chart rises; a marker's time stands over its label.
+    if (!narrow || edgeMarker || !svg.current) return setLift(0);
+    // Where it stands unraised is read from the chart, never from itself, so what it finds
+    // does not depend on what it found before.
+    const top = svg.current.getBoundingClientRect().bottom + parseFloat(getComputedStyle(element).marginTop);
     const bars = [...document.querySelectorAll<HTMLElement>('.topbar, .analytics-head')].filter(bar => getComputedStyle(bar).position === 'sticky');
     const cover = Math.max(0, ...bars.map(bar => bar.getBoundingClientRect().bottom));
-    lifted.current = Math.max(0, Math.min(bottom - (innerHeight - 8), top - cover - 8));
-    setLift(lifted.current);
+    setLift(liftOf(top, element.getBoundingClientRect().height, innerHeight, cover));
   };
   // No dependencies: the same values found again change nothing, so it settles in one pass.
   useLayoutEffect(() => measureTip.current());
