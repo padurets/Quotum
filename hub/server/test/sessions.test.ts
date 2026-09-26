@@ -12,6 +12,7 @@ const session = (source: string, working: boolean, device = 'laptop'): LiveSessi
   origin: 'terminal',
   project: null,
   startedAt: start,
+  lastWorkedAt: null,
   working,
 });
 

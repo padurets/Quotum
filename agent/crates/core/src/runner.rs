@@ -278,6 +278,7 @@ impl Runner {
                         .filter(|_| self.config.projects())
                         .map(|name| name.chars().take(120).collect()),
                     started_at: session.started_at,
+                    last_worked_at: session.last_worked,
                     working: session.working == Some(true),
                 })
             })
@@ -289,10 +290,12 @@ impl Runner {
 /// A hub takes at most this many sessions of a machine at once (spec: Reporting running agents).
 const MAX_SESSIONS: usize = 200;
 
-/// A list the hub can take: past its limit, the working sessions first, then the newest.
+/// A list the hub can take: working first, then those that worked most recently, then the newest.
 fn capped(mut sessions: Vec<RunningSession>) -> Vec<RunningSession> {
     if sessions.len() > MAX_SESSIONS {
-        sessions.sort_by_key(|s| (std::cmp::Reverse(s.working), std::cmp::Reverse(s.started_at)));
+        sessions.sort_by_key(|s| {
+            std::cmp::Reverse((s.working, if s.working { None } else { s.last_worked_at }, s.started_at))
+        });
         sessions.truncate(MAX_SESSIONS);
     }
     sessions
@@ -336,13 +339,21 @@ mod tests {
             origin: "terminal",
             project: None,
             started_at,
+            last_worked_at: None,
             working,
         };
         let list: Vec<_> = (0..250).map(|i| session(i % 50 == 0, i)).collect();
-        let kept = capped(list);
+        let mut recent = session(false, 1);
+        recent.last_worked_at = Some(300);
+        let mut older = session(false, 2);
+        older.last_worked_at = Some(290);
+        let kept = capped([list, vec![older, recent]].concat());
         assert_eq!(kept.len(), MAX_SESSIONS);
         assert_eq!(kept.iter().filter(|s| s.working).count(), 5, "every working one");
-        assert_eq!(kept.last().map(|s| s.started_at), Some(52), "then the newest idle ones");
+        assert_eq!(kept[0].started_at, 200, "newest working first");
+        assert_eq!(kept[5].last_worked_at, Some(300), "recent work precedes newer sessions never seen working");
+        assert_eq!(kept[6].last_worked_at, Some(290));
+        assert_eq!(kept.last().map(|s| s.started_at), Some(54), "then the newest idle ones");
         assert_eq!(capped(vec![session(false, 1)]).len(), 1, "a short list as it is");
     }
 
@@ -371,6 +382,7 @@ mod tests {
             origin: "terminal",
             project: None,
             started_at: 0,
+            last_worked_at: None,
             working,
         };
         let mut watch = Watch { activity: Activity::new(PathBuf::from("/nowhere")), looked: None, reported: None };
@@ -379,6 +391,14 @@ mod tests {
         assert!(!watch.worth_sending(&[session(true)]));
         assert!(watch.worth_sending(&[session(false)]));
         assert!(watch.worth_sending(&[]), "none runs any more");
+        let mut idle = session(false);
+        idle.last_worked_at = Some(15_000);
+        watch.reported = Some((Instant::now(), vec![idle.clone()]));
+        assert!(!watch.worth_sending(&[idle.clone()]), "a remembered date stays equal on later idle looks");
+        idle.last_worked_at = None;
+        assert!(watch.worth_sending(&[idle.clone()]), "a clock correction can send one changed list");
+        watch.reported = Some((Instant::now(), vec![idle.clone()]));
+        assert!(!watch.worth_sending(&[idle]), "then idle dates stay unknown until new work");
         watch.reported = Some((Instant::now() - REPORT_EVERY, vec![session(true)]));
         assert!(watch.worth_sending(&[session(true)]), "in time, so the hub keeps it");
         watch.reported = Some((Instant::now() - REPORT_EVERY, vec![]));

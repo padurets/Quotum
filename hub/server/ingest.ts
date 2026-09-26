@@ -135,7 +135,9 @@ export class Ingest {
             : this.store.deviceSource(device.id, provider);
         // Only a subscription the device's person holds: naming someone else's account shows nothing on it.
         if (!source || !this.store.holds(device.userId, source)) return [];
-        return [{...session, startedAt: Math.min(now, session.startedAt + skew), source, device: {id: device.id, name}}];
+        const startedAt = Math.min(now, session.startedAt + skew);
+        const lastWorkedAt = session.lastWorkedAt === null ? null : Math.max(startedAt, Math.min(now, session.lastWorkedAt + skew));
+        return [{...session, startedAt, lastWorkedAt, source, device: {id: device.id, name}}];
       });
       this.live.report(device.id, device.userId, sessions, now);
       return {accepted: sessions.length};
