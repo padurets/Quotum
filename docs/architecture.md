@@ -209,7 +209,10 @@ account that is) and shows it on
 that card, by project (as that person named it) and folder, to the members of a board
 where that person shows the subscription. Each list also counts until the next one, for at most 200 seconds: the hub
 keeps when each session worked, with its machine, subscription, where it runs, since
-when and its project and folder names as reported, as long as samples. Sums are worked
+when and its project and folder names as reported, as long as samples. A session is
+never credited twice for the same time: after the hub's clock goes back, it is credited
+again from where its time already ends, so a clock that ran ahead costs its sessions at
+most as much time as it ran ahead, and the time shown before is never rewritten. Sums are worked
 out when read (`domain/work.ts`): agent time adds the stretches up, two agents counting
 twice; the time any of them worked is their union, overlaps counted once for whichever
 machines, people or projects are asked about. The corrections people make to project

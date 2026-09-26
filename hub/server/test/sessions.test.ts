@@ -159,6 +159,19 @@ test('a clock set back before anything was credited loses only the list it came 
   store.close();
 });
 
+test('a clock that ran ahead for a while costs its sessions at most as much as it ran ahead', () => {
+  const {store, live, ann, laptop} = setup();
+  const list = [session(laptop, {project: 'quotum'})];
+  const ahead = 30 * minute;
+  live.report(laptop, ann, list, start + ahead);
+  live.report(laptop, ann, list, start + ahead + 2 * minute);
+  // Put right: the session goes on from where its time ends, the time shown before as it was.
+  for (let at = 0; at <= 60; at += 2) live.report(laptop, ann, list, start + at * minute);
+  live.report(laptop, ann, [], start + 61 * minute);
+  assert.deepEqual(seconds(all(store)), [['quotum', null, 30 * 60, 61 * 60]]);
+  store.close();
+});
+
 test('idle agents are not credited', () => {
   const {store, live, ann, laptop} = setup();
   live.report(laptop, ann, [session(laptop, {project: 'quotum', working: false})], start);

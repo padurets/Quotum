@@ -418,7 +418,8 @@ export class Store {
     const find = this.db.prepare(
       'SELECT id FROM agent_sessions WHERE device_id = ? AND source_id = ? AND started_at = ? AND origin = ? AND project = ? AND folder = ? AND ordinal = ?',
     );
-    const latest = this.db.prepare('SELECT max(to_at) AS at FROM agent_work WHERE session_id = ?');
+    // Stretches of a session never overlap, so its last one by start ends latest.
+    const latest = this.db.prepare('SELECT to_at AS at FROM agent_work WHERE session_id = ? ORDER BY from_at DESC LIMIT 1');
     const extend = this.db.prepare('UPDATE agent_work SET to_at = ? WHERE session_id = ? AND to_at = ?');
     const begin = this.db.prepare('INSERT INTO agent_work VALUES (?, ?, ?) ON CONFLICT (session_id, from_at) DO UPDATE SET to_at = max(to_at, excluded.to_at)');
     this.db.exec('SAVEPOINT credit');
@@ -426,7 +427,7 @@ export class Store {
       for (const {source, origin, startedAt, project, folder, ordinal} of keys) {
         add.run(device, source, origin, startedAt, project, folder, ordinal);
         const {id} = find.get(device, source, startedAt, origin, project, folder, ordinal) as {id: number};
-        const start = Math.max(from, (latest.get(id) as {at: number | null}).at ?? from);
+        const start = Math.max(from, (latest.get(id) as {at: number} | undefined)?.at ?? from);
         if (until <= start) continue;
         if (!extend.run(until, id, start).changes) begin.run(id, start, until);
       }
