@@ -271,9 +271,11 @@ them), kept for 90 days.
 - **Devices** are running agents, and each belongs to a person. The *Machines* dialog
   shows a person's devices, what each delivers and the last failure of each client
   there (not logged in, too old…); the person names them there. Its *Projects* tab
-  lists the projects their agents worked on, with their time: the person renames them
-  and merges several into one, which applies to all the time kept (only on their own
-  machines), and gives a reported name back its own to undo it. A device connects in
+  lists the projects their agents worked on, with the machines and when they last did:
+  the person renames them and merges several into one, which applies everywhere they are
+  shown and to all the time kept (only on their own machines), and gives a reported name
+  back its own to undo it. How long agents worked is not shown there: that is for the
+  boards. A device connects in
   one of two ways:
   - *a one-time code* (the RFC 8628 device flow): `quotum connect <hub>` shows a code, a
     signed-in person confirms it in the browser; the device gets its own token and

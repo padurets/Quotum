@@ -297,4 +297,4 @@ the name its person gave it, and with them the name of the machine each agent ru
 What the hub keeps of running agents: when each worked, with the machine, subscription,
 where it ran, since when and its project and folder names, as long as samples (90 days);
 and the names a person gave or merged their projects under, until they undo it. The
-person whose machines they are sees their agents' time by project in *My machines*.
+person whose machines they are sees their projects, and corrects them, in *My machines*.

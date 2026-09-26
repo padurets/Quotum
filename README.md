@@ -150,7 +150,7 @@ day, not a script thrown together over a weekend. In practice that meant:
   whose agents they are shows that subscription, each project under the name that person
   gave it. The hub keeps when each agent worked,
   with its machine, project and folder names, for 90 days, and the names you give your
-  projects until you undo them; you see it by project in *My machines*. The full list is in the [spec](spec/ingest-v1.md#privacy).
+  projects until you undo them; you see and correct your projects in *My machines*. The full list is in the [spec](spec/ingest-v1.md#privacy).
 - **The numbers mean what they say.** Only a real increase inside one reset window
   counts as spending. Resets, corrections and gaps in the data never show up as
   consumption. The agent says when its next measurement is due, so a sparse series isn't

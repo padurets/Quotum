@@ -475,16 +475,16 @@ export class Store {
     }));
   }
 
-  /** The projects of a person's machines, with their time since `since` and the names the person gave them. */
+  /** The projects a person's machines worked on since `since`, under the names the person gave them. */
   projectsOf(user: string, since: number): ProjectGroup[] {
     const rows = this.db
       .prepare(
-        'SELECT s.project, d.id, COALESCE(d.label, d.name) AS name, sum(w.to_at - max(w.from_at, ?)) AS ms, max(w.to_at) AS last' +
+        'SELECT s.project, d.id, COALESCE(d.label, d.name) AS name, max(w.to_at) AS last' +
           ' FROM devices d JOIN agent_sessions s ON s.device_id = d.id JOIN agent_work w ON w.session_id = s.id' +
           ' WHERE d.user_id = ? AND w.to_at > ? GROUP BY s.project, d.id',
       )
-      .all(since, user, since) as {project: string; id: string; name: string; ms: number; last: number}[];
-    const work = rows.map(r => ({reported: r.project, machine: {id: r.id, name: r.name}, agentMs: r.ms, lastAt: r.last}));
+      .all(user, since) as {project: string; id: string; name: string; last: number}[];
+    const work = rows.map(r => ({reported: r.project, machine: {id: r.id, name: r.name}, lastAt: r.last}));
     return projectGroups(work, this.projectNames(user));
   }
 

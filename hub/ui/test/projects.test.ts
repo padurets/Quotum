@@ -2,12 +2,11 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {merging, renaming, restoring, shown, timeless, type ProjectGroup} from '../lib/projects';
 
-const group = (name: string | null, reported: string[], agentMs = 60_000, lastAt: number | null = 1): ProjectGroup => ({
+const group = (name: string | null, reported: string[], lastAt: number | null = 1): ProjectGroup => ({
   name,
-  agentMs,
   lastAt,
   machines: [{id: 'd', name: 'laptop'}],
-  reported: reported.map(name => ({name, agentMs: 0})),
+  reported,
 });
 
 test('a project is renamed alone, merged with all selected under the one chosen, and a reported name given back alone', () => {
@@ -27,7 +26,7 @@ test('a project shows what it gathers besides its own name, by name', () => {
   assert.deepEqual(shown(group(null, [])), []);
 });
 
-test('a correction with no time kept has none to show, which is not no time at all', () => {
-  assert.equal(timeless(group('docs', ['docs-site'], 0, null)), true);
-  assert.equal(timeless(group('quotum', ['quotum'], 0, 5)), false);
+test('a correction with no work kept does not tell when it worked', () => {
+  assert.equal(timeless(group('docs', ['docs-site'], null)), true);
+  assert.equal(timeless(group('quotum', ['quotum'], 5)), false);
 });

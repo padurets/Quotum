@@ -77,11 +77,12 @@ test("a person sees and corrects the projects of their own machines, over past a
 
   const listed = await call('GET', '/api/projects', {as: 'ann'});
   assert.equal(listed.body.keptDays, 90);
+  assert.deepEqual(Object.keys(listed.body.projects[0]).sort(), ['lastAt', 'machines', 'name', 'reported'], 'how long is the boards’ to show');
   assert.deepEqual(
-    listed.body.projects.map((p: any) => [p.name, p.agentMs, p.machines.map((m: any) => m.name), p.reported]),
+    listed.body.projects.map((p: any) => [p.name, p.machines.map((m: any) => m.name), p.reported]),
     [
-      ['quotum', 30 * minute, ['laptop'], [{name: 'quotum', agentMs: 30 * minute}]],
-      ['Quotum', 20 * minute, ['build-server'], [{name: 'Quotum', agentMs: 20 * minute}]],
+      ['quotum', ['laptop'], ['quotum']],
+      ['Quotum', ['build-server'], ['Quotum']],
     ],
     'the most recent first',
   );
@@ -100,7 +101,7 @@ test("a person sees and corrects the projects of their own machines, over past a
   };
   assert.deepEqual((await name('ann', ['Quotum', 'quotum'], 'quotum')).body, {ok: true});
   const [merged] = await projects('ann');
-  assert.deepEqual([merged.name, merged.agentMs, merged.machines.map((m: any) => m.name)], ['quotum', 50 * minute, ['build-server', 'laptop']]);
+  assert.deepEqual([merged.name, merged.machines.map((m: any) => m.name), merged.reported], ['quotum', ['build-server', 'laptop'], ['quotum', 'Quotum']]);
   assert.deepEqual(split(ann), {quotum: 50 * minute}, 'past time counts under the new name');
   credit(machines.server, 'Quotum', 3, 0);
   assert.deepEqual(split(ann), {quotum: 53 * minute}, 'and new time too');
@@ -147,7 +148,7 @@ test("the same reported name is each person's to correct, and one's correction d
   ]);
 });
 
-test('corrections without time are listed and move with their group; renaming a name nothing reported corrects no phantom', async () => {
+test('corrections with no work kept are listed and move with their group; renaming a name nothing reported corrects no phantom', async () => {
   const {call, ann, machines, credit, projects, name, kept} = await hub();
   credit(machines.laptop, 'quotum', 30);
   credit(machines.laptop, 'a', 10, 100);
@@ -160,13 +161,10 @@ test('corrections without time are listed and move with their group; renaming a 
   ]);
   const list = await projects('ann');
   const quotum = list.find((p: any) => p.name === 'quotum');
-  assert.deepEqual(quotum.reported, [
-    {name: 'old', agentMs: 0},
-    {name: 'quotum', agentMs: 30 * minute},
-  ]);
+  assert.deepEqual(quotum.reported, ['old', 'quotum']);
   const docs = list.find((p: any) => p.name === 'docs');
-  assert.deepEqual([docs.agentMs, docs.lastAt, docs.machines, docs.reported], [0, null, [], [{name: 'docs-site', agentMs: 0}]]);
-  assert.equal(list.at(-1).name, 'docs', 'without time, after those with');
+  assert.deepEqual([docs.lastAt, docs.machines, docs.reported], [null, [], ['docs-site']]);
+  assert.equal(list.at(-1).name, 'docs', 'with no work, after those with');
 
   await name('ann', ['quotum'], 'core');
   assert.deepEqual(kept(ann), [
@@ -178,14 +176,14 @@ test('corrections without time are listed and move with their group; renaming a 
   await name('ann', ['a'], 'X');
   await name('ann', ['X'], 'Y');
   assert.deepEqual(kept(ann).filter(([reported]) => reported === 'a' || reported === 'X'), [['a', 'Y']], 'only what was reported');
-  assert.deepEqual((await projects('ann')).find((p: any) => p.name === 'Y').reported, [{name: 'a', agentMs: 10 * minute}]);
+  assert.deepEqual((await projects('ann')).find((p: any) => p.name === 'Y').reported, ['a']);
 
   await name('ann', ['Y'], 'a');
   assert.deepEqual(kept(ann).filter(([reported]) => reported === 'a'), [], 'a name given back its own keeps nothing');
   assert.equal((await call('GET', '/api/projects')).status, 401);
 });
 
-test('a group gathers what leads to it, and the tab counts only the time kept, most recent first, time without a project last', async () => {
+test('a group gathers what leads to it, and the tab lists what worked within the time kept, most recent first, work without a project last', async () => {
   const {store, call, ann, now, machines, credit, projects, name, kept} = await hub();
   // a → X, then b → a: the group a is b alone, and renaming it leaves a in X.
   credit(machines.laptop, 'a', 5);
@@ -221,10 +219,10 @@ test('a group gathers what leads to it, and the tab counts only the time kept, m
 
   const list = await projects('ann');
   const edge = list.find((p: any) => p.name === 'edge');
-  assert.ok(edge.agentMs > 9 * minute && edge.agentMs <= 10 * minute, `only its part within: ${edge.agentMs}`);
+  assert.ok(edge, 'worked partly within');
   assert.equal(list.find((p: any) => p.name === 'gone'), undefined, 'nothing of it within');
   assert.deepEqual(list.find((p: any) => p.name === 'multi').machines.map((m: any) => m.name), ['alpha-box', 'zeta-box']);
-  assert.equal(list.at(-1).name, null, 'time without a project last, though the most recent');
+  assert.equal(list.at(-1).name, null, 'work without a project last, though the most recent');
   assert.deepEqual(
     list.slice(0, -1).map((p: any) => p.lastAt ?? 0),
     list.slice(0, -1).map((p: any) => p.lastAt ?? 0).sort((a: number, b: number) => b - a),

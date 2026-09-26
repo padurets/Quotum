@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useRef, useState, type FormEvent} from 'react';
 import {useNow} from '../lib/api';
-import {ago, duration, stamp} from '../lib/format';
+import {ago, stamp} from '../lib/format';
 import {PROVIDERS} from '../lib/providers';
 import {merging, renaming, restoring, shown, timeless, type ProjectGroup, type Projects as ProjectList} from '../lib/projects';
 import {errorText} from '../lib/quota';
@@ -264,7 +264,6 @@ function Projects() {
               <th />
               <th>{t('projects.project')}</th>
               <th>{t('projects.machines')}</th>
-              <th>{t('projects.time')}</th>
               <th>{t('projects.last')}</th>
             </tr>
           </thead>
@@ -319,7 +318,6 @@ function Projects() {
                     )}
                   </td>
                   <td>{group.machines.map(machine => machine.name).join(', ') || '—'}</td>
-                  <td>{unknown ? '—' : duration(group.agentMs)}</td>
                   <td title={unknown || !group.lastAt ? undefined : stamp(group.lastAt)}>{unknown ? '—' : ago(group.lastAt, now)}</td>
                 </tr>
               );

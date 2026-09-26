@@ -1,18 +1,17 @@
 /**
  * The projects of the reader's machines, and the corrections they make (server/domain/projects.ts).
  * Requests name the groups as the tab shows them; the hub works out which reported names
- * they gather, so a correction without time and a name reported meanwhile go along.
+ * they gather, so a correction with no work kept and a name reported meanwhile go along.
  */
 
-/** A project as the hub lists it: the name shown, and the reported names it gathers. */
+/** A project as the hub lists it: the name shown, the reported names it gathers, and its machines. */
 export type ProjectGroup = {
-  /** Null for time without a project. */
+  /** Null for work without a project. */
   name: string | null;
-  agentMs: number;
-  /** When its agents last worked; null for a correction with no time kept. */
+  /** When its agents last worked; null for a correction with no work kept. */
   lastAt: number | null;
   machines: {id: string; name: string}[];
-  reported: {name: string; agentMs: number}[];
+  reported: string[];
 };
 
 export type Projects = {keptDays: number; projects: ProjectGroup[]};
@@ -31,10 +30,7 @@ export const restoring = (reported: string): {reported: string[]} => ({reported:
 
 /** The reported names a project gathers besides its own name, by name: what it was renamed or merged from. */
 export const shown = (group: ProjectGroup): string[] =>
-  group.reported
-    .map(r => r.name)
-    .filter(name => name !== group.name)
-    .sort((a, b) => a.localeCompare(b));
+  group.reported.filter(name => name !== group.name).sort((a, b) => a.localeCompare(b));
 
-/** A correction with nothing kept of its time: its time and when it worked are not zero but unknown. */
-export const timeless = (group: ProjectGroup) => group.agentMs === 0 && group.lastAt === null;
+/** A correction with no work kept: when it worked is not known. */
+export const timeless = (group: ProjectGroup) => group.lastAt === null;
