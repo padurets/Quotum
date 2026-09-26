@@ -21,9 +21,9 @@ export function duration(ms: number, short = false) {
 }
 
 /**
- * How long until something, for a mark with little room: minutes within the hour, hours
- * for two days, days after that, always rounded down and never under a minute. Two days
- * are hours still, so a reset in 47 hours does not read as one day away.
+ * How long until something, for a mark or a heading with little room: minutes within the
+ * hour, hours for two days, days after that, always rounded down and never under a minute.
+ * Two days are hours still, so a reset in 47 hours does not read as one day away.
  */
 export function countdown(ms: number) {
   const minutes = Math.max(1, Math.floor(ms / 60_000));
@@ -44,15 +44,15 @@ export function ago(time: number | null, now: number) {
 
 export const clock = (time: number) => new Date(time).toLocaleTimeString(formatLocale(), {hour: '2-digit', minute: '2-digit'});
 
-/** "22 Sept" */
+/** "22 Sept": the scale along a chart's axis, which has little room; saying when is `stamp`. */
 export const shortDay = (time: number) => new Date(time).toLocaleDateString(formatLocale(), {day: 'numeric', month: 'short'});
 
 /** "26 September": the day, its month in a word. */
 export const day = (time: number) => new Date(time).toLocaleDateString(formatLocale(), {day: 'numeric', month: 'long'});
 
 /**
- * "26 September 14:00": the one way a panel, a tooltip or a heading says when, with no
- * dots or commas between its parts. A mark or a cell with little room may say how soon
- * or how long ago instead (`countdown`, `ago`).
+ * "26 September 14:00": the one way the board says when, with no dots or commas between
+ * its parts. Where how soon or how long ago matters more and room is short, that is said
+ * instead (`countdown`, `duration`, `ago`), with this beside it or in its tooltip.
  */
 export const stamp = (time: number) => `${day(time)} ${clock(time)}`;

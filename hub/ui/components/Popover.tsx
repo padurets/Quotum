@@ -34,7 +34,7 @@ export function Popover({
   const button = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   // Measured once it is open (below): a panel opening upwards opens downwards instead when
-  // it does not fit above and there is more room below.
+  // it does not fit above whole.
   const [down, setDown] = useState(false);
   // The panel moves sideways to stay on the screen (from a card at the edge of a narrow
   // one), again when the window turns or is resized; the page's width leaves out its scrollbar.
@@ -57,7 +57,8 @@ export function Popover({
   // A panel is as tall as its content and scrolls only when that is taller than the screen
   // under the top bar: a large screen shows it whole. One opening upwards does so only where
   // it fits whole, as nothing shows it past the top bar; otherwise it opens downwards, where
-  // the page scrolls to the rest of it. It is measured again as its content changes.
+  // the page scrolls to the rest of it, and on opening scrolls as far as shows it or as keeps
+  // its button in sight. It is measured again as its content changes.
   const [cap, setCap] = useState<number | null>(null);
   useLayoutEffect(() => {
     const element = panel.current;
@@ -66,6 +67,7 @@ export function Popover({
       setDown(false);
       return setCap(null);
     }
+    let opening = true;
     const fit = () => {
       element.style.maxHeight = '';
       element.classList.remove('is-capped');
@@ -78,6 +80,16 @@ export function Popover({
       // Set here as well as through state, so what is measured next is what shows.
       element.style.maxHeight = capped === null ? '' : `${capped}px`;
       element.classList.toggle('is-capped', capped !== null);
+      element.classList.toggle('is-up', upwards);
+      if (opening && !upwards) {
+        // The button stays below the bars that stick over it: the analytics' head, above a
+        // button of its section, sticks under the top bar as the page scrolls.
+        const heads = [...document.querySelectorAll<HTMLElement>('.analytics-head')].filter(head => getComputedStyle(head).position === 'sticky');
+        const cover = Math.max(bar, ...heads.map(head => head.getBoundingClientRect()).filter(head => head.top < at.top).map(head => bar + head.height));
+        const hidden = element.getBoundingClientRect().bottom + 8 - innerHeight;
+        if (hidden > 0) scrollBy(0, Math.min(hidden, Math.max(0, at.top - cover - 8)));
+      }
+      opening = false;
       setDown(up && !upwards);
       setCap(capped);
     };

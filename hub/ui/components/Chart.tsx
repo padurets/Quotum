@@ -65,8 +65,17 @@ function niceTicks(from: number, to: number, count: number) {
   return {ticks, daily: step >= 86_400_000};
 }
 
-function cellLabel(at: number, cellMs: number) {
-  return cellMs ? `${day(at)} ${clock(at)}–${clock(at + cellMs)}` : stamp(at);
+const sameDay = (a: number, b: number) => new Date(a).toDateString() === new Date(b).toDateString();
+
+/**
+ * A cell's times under its day. Cells are laid on UTC, so one may cross midnight here, and
+ * then each end names its day; a time within a cell, shorter than a day, then reads as one
+ * moment, save for the hour the clocks go back.
+ */
+export function cellLabel(at: number, cellMs: number) {
+  if (!cellMs) return stamp(at);
+  const end = at + cellMs;
+  return sameDay(at, end - 1) ? `${day(at)} ${clock(at)}–${clock(end)}` : `${stamp(at)} – ${stamp(end)}`;
 }
 
 /**
