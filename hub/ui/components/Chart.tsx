@@ -67,8 +67,11 @@ function niceTicks(from: number, to: number, count: number) {
 
 const sameDay = (a: number, b: number) => new Date(a).toDateString() === new Date(b).toDateString();
 
-/** A cell's times under its day; cells are laid on UTC, so one may cross midnight here, and then each end names its day. */
-function cellLabel(at: number, cellMs: number) {
+/**
+ * A cell's times under its day. Cells are laid on UTC, so one may cross midnight here, and
+ * then each end names its day; a time within a cell, shorter than a day, is then still one.
+ */
+export function cellLabel(at: number, cellMs: number) {
   if (!cellMs) return stamp(at);
   const end = at + cellMs;
   return sameDay(at, end - 1) ? `${day(at)} ${clock(at)}–${clock(end)}` : `${stamp(at)} – ${stamp(end)}`;
@@ -378,7 +381,7 @@ export function Chart({
                   <line x1="7" x2="7" y1="0" y2="10" stroke={marker.strong ? 'var(--accent)' : marker.color} strokeWidth="2" />
                 )}
               </svg>
-              <strong>{sameDay(marker.at, hover) ? clock(marker.at) : stamp(marker.at)}</strong>
+              <strong>{clock(marker.at)}</strong>
               <span>{marker.label}</span>
               {marker.detail && <small className="tooltip-detail">{marker.detail}</small>}
             </div>
