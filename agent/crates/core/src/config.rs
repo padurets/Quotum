@@ -150,6 +150,12 @@ impl Config {
         self.interval_source(provider).map(|_| self.interval_ms(provider))
     }
 
+    /// The interval set for all providers, if any, in ms, and where it is set.
+    pub fn global_interval(&self) -> Option<(u64, IntervalSource)> {
+        let source = if self.interval_from_env { IntervalSource::Env } else { IntervalSource::File };
+        self.interval.map(|s| (s.saturating_mul(1000).max(MIN_INTERVAL_MS), source))
+    }
+
     pub fn interval_source(&self, provider: Provider) -> Option<IntervalSource> {
         if self.providers.get(&provider).and_then(|p| p.interval).is_some() {
             Some(IntervalSource::Provider)
@@ -444,9 +450,11 @@ mod tests {
         assert_eq!(config.min_interval_ms(Provider::Codex), Some(90_000));
         assert_eq!(config.interval_source(Provider::Codex), Some(IntervalSource::File));
         assert_eq!(config.interval_source(Provider::Claude), Some(IntervalSource::Provider), "its own wins");
+        assert_eq!(config.global_interval(), Some((90_000, IntervalSource::File)));
         config.apply_env(|key| (key == "QUOTUM_INTERVAL").then(|| "120".to_string())).unwrap();
         assert_eq!(config.interval_source(Provider::Codex), Some(IntervalSource::Env));
         assert_eq!(config.min_interval_ms(Provider::Codex), Some(120_000));
+        assert_eq!(config.global_interval(), Some((120_000, IntervalSource::Env)));
     }
 
     #[test]
