@@ -196,7 +196,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
   if (entry.kind === 'person' || entry.kind === 'board') {
     const overview = await reading.overview(entry.id);
     // A widget hidden on the board shows none of its codes.
-    if ('rows' in check && isHidden(overview.view, AGENTS)) return `the table of running agents is hidden on the board ${entry.id}`;
+    if (('rows' in check || 'agentsOf' in check) && isHidden(overview.view, AGENTS)) return `the table of running agents is hidden on the board ${entry.id}`;
     if ('weeklySeries' in check && isHidden(overview.view, HISTORY)) return `the chart is hidden on the board ${entry.id}`;
     const {rows, empty} = agentRows(overview.sources, overview.view);
     if ('agentsOf' in check) {
@@ -336,6 +336,7 @@ test('the check of a set names a correction the hub keeps none of, and a project
   const anas = all.entries.find(e => e.kind === 'person' && e.id === 'ana') as Extract<Entry, {kind: 'person'}>;
   assert.match(problems(ana({projects: {billing: 'billing'}})).join('\n'), /person ana: a name for billing the hub keeps no correction for/);
   assert.match(problems(ana({projects: {billing: ' x'}})).join('\n'), /person ana: a name for billing/);
+  assert.match(problems(ana({projects: {billing: ''}})).join('\n'), /person ana: a name for billing/, 'no name');
   assert.match(problems(ana({expect: [...anas.expect, {project: 'infra'}]})).join('\n'), /person ana expects the project infra, which no working agent of theirs has/);
   assert.deepEqual(problems(ana({expect: [...anas.expect, {project: 'infra', absent: true}]})), [], 'absent needs none');
   assert.deepEqual(problems(ana({expect: [...anas.expect, {project: 'docs'}]})), [], 'a corrected name, by what is reported under it');

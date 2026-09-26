@@ -364,7 +364,8 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
     const groups = projectNames(request.body?.groups);
     const given = request.body?.name;
     if (!groups || typeof given !== 'string') return reply.code(400).send({error: 'invalid_request'});
-    const name = given.trim();
+    // Trimmed, unless it is the name of a group asked for, as a folder's name may end in a space.
+    const name = groups.includes(given) ? given : given.trim();
     if (longerThan(name, PROJECT_NAME_CHARS)) return reply.code(400).send({error: 'invalid_project_name'});
     directory.transaction(() => store.nameProjects(user.id, groups, name));
     return {ok: true};

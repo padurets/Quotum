@@ -123,6 +123,14 @@ test("a hub's clock set back credits nothing twice", () => {
   for (const at of [0, 120, 60, 180]) live.report(laptop, ann, list, start + at * second);
   live.report(laptop, ann, [], start + 240 * second);
   assert.deepEqual(seconds(all(store)), [['quotum', null, 0, 240]]);
+  // Set back by an hour, then quiet: the list goes as any does, however far back the clock went.
+  live.report(laptop, ann, list, start + 300 * second);
+  const back = start + 300 * second - 3_600_000;
+  live.report(laptop, ann, list, back);
+  assert.equal(live.of('codex:1', [ann], back + KEEP_MS - second).length, 1);
+  live.sweep(back + KEEP_MS + second);
+  assert.deepEqual(live.of('codex:1', [ann], back + KEEP_MS + second), [], 'gone from the board');
+  assert.deepEqual(seconds(all(store)), [['quotum', null, 0, 240]], 'nothing credited twice');
   store.close();
 });
 

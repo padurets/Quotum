@@ -29,8 +29,11 @@ export type BoardSession = {
   working: boolean;
 };
 
-/** A machine's sessions, by the subscription they spend, as its agent last reported them. */
-type Machine = {at: number; user: string; sources: Map<string, LiveSession[]>};
+/**
+ * A machine's sessions, by the subscription they spend, as its agent last reported them:
+ * when, and up to when its work is credited already, which a clock set back stays behind.
+ */
+type Machine = {at: number; credited: number; user: string; sources: Map<string, LiveSession[]>};
 
 /** A machine's list is kept this long after its last report (its agent reports at least every two minutes). */
 export const KEEP_MS = 5 * 60_000;
@@ -59,11 +62,10 @@ export class Sessions {
   report(device: string, user: string, sessions: (LiveSession & {source: string})[], now: number) {
     this.sweep(now);
     const before = this.machines.get(device);
-    if (before) this.credit(device, before, Math.min(now, before.at + CREDIT_MS));
+    const credited = before ? this.credit(device, before, Math.min(now, before.at + CREDIT_MS)) : 0;
     const sources = new Map<string, LiveSession[]>();
     for (const {source, ...session} of sessions) sources.set(source, [...(sources.get(source) ?? []), session]);
-    // A clock set back does not move the list back: what is credited already is not credited again.
-    if (sources.size) this.machines.set(device, {at: Math.max(now, before?.at ?? now), user, sources});
+    if (sources.size) this.machines.set(device, {at: now, credited, user, sources});
     else this.machines.delete(device);
   }
 
@@ -100,10 +102,13 @@ export class Sessions {
     return found.sort((a, b) => a.device.name.localeCompare(b.device.name) || a.device.id.localeCompare(b.device.id) || a.startedAt - b.startedAt);
   }
 
-  /** Credits the working sessions of a machine's list with the time from its report to `until`. */
-  private credit(device: string, machine: Machine, until: number) {
-    const from = machine.at;
-    if (until <= from) return;
+  /**
+   * Credits the working sessions of a machine's list with the time from its report to
+   * `until`, but none it was credited for already (a clock set back); up to when it is now.
+   */
+  private credit(device: string, machine: Machine, until: number): number {
+    const from = Math.max(machine.at, machine.credited);
+    if (until <= from) return from;
     const keys: WorkKey[] = [];
     // Sessions alike in everything (started together by a script) are told apart by their place among them.
     const alike = new Map<string, number>();
@@ -118,5 +123,6 @@ export class Sessions {
       }
     }
     this.store.creditWork(device, from, until, keys);
+    return until;
   }
 }

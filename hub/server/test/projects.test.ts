@@ -197,9 +197,14 @@ test('a group gathers what leads to it, and the tab counts only the time kept, m
     ['a', 'X'],
     ['b', 'c'],
   ]);
+  // Merged into a name that ends in a space, as a folder's may: the name as it is.
+  credit(machines.laptop, 'My Project ', 5);
+  credit(machines.laptop, 'mine', 5);
+  await name('ann', ['My Project ', 'mine'], 'My Project ');
+  assert.deepEqual(kept(ann).filter(([reported]) => reported.startsWith('m') || reported.startsWith('M')), [['mine', 'My Project ']]);
   // A name of spaces is no name: each gets its own back.
   assert.deepEqual((await call('POST', '/api/projects', {as: 'ann', body: {groups: ['c'], name: '   '}})).body, {ok: true});
-  assert.deepEqual(kept(ann), [['a', 'X']]);
+  assert.deepEqual(kept(ann).filter(([reported]) => reported === 'a' || reported === 'b'), [['a', 'X']]);
 
   // Across the edge of the 90 days kept, and before it.
   const day = 24 * 60;
