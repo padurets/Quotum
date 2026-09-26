@@ -378,7 +378,8 @@ td.muted, small.muted { color: var(--text-3); }
 .agents-row.is-working { color: var(--text); }
 /* A long list is followed by the eye row by row, as the table's is: as bright as a menu's rows, on the same glass. */
 .agents-row:hover { background: #ffffff08; }
-.agents-project { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Positioned, so the state named for screen readers after a long project is cut with it rather than widening the page. */
+.agents-project { position: relative; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agents-origin { display: inline-grid; place-items: center; color: var(--text-3); }
 .agents-origin svg { display: block; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
 .agents-age { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text-3); }
