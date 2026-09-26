@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {cellLabel, fitName, liftOf, slideOf} from '../components/Chart';
+import {cellLabel, edgeRows, fitting, liftOf, shortName, slideOf} from '../components/Chart';
 import {setLocale} from '../i18n';
 import {preferring} from './browser';
 
@@ -49,11 +49,23 @@ test('a tooltip under a narrow chart rises as far as keeps it in the window, nev
   assert.notEqual(liftOf(500 - 58, 350, 800, 60), 58);
 });
 
-test('a label at the chart\'s edge shortens the name in it to fit, and keeps the rest whole', () => {
-  const text = (name: string) => `${name}: runs out in 29h →`;
-  assert.equal(fitName(text, 'Claude', 40), 'Claude: runs out in 29h →');
-  const cut = fitName(text, 'Codex Pro for the platform team and the on-call rotation', 40);
-  assert.equal(cut, 'Codex Pro for the pl…: runs out in 29h →');
-  assert.equal(cut.length, 40);
-  assert.equal(fitName(text, 'Claude', 10), '…: runs out in 29h →', 'no room for the name at all');
+test('a label at the chart\'s edge keeps as much of a name as fits, an emoji whole', () => {
+  // A name of five characters 6 wide, beside 100 of the rest, with an ellipsis of 6.
+  const widths = [6, 6, 6, 6, 6];
+  assert.equal(fitting(widths, 100, 6, 130), 5, 'fits whole');
+  assert.equal(fitting(widths, 100, 6, 129), 3, 'three and an ellipsis');
+  assert.equal(fitting([20, 20, 20], 100, 6, 150), 2, 'wide characters, as many as fit');
+  assert.equal(fitting(widths, 100, 6, 105), 0, 'no room for any of it');
+  assert.equal(shortName('Claude', 6), 'Claude');
+  assert.equal(shortName('Ahead of the plan', 6), 'Ahead…', 'no space before the ellipsis');
+  assert.equal(shortName('Team 🚀🚀🚀🚀', 6), 'Team 🚀…', 'an emoji is one character, never cut in half');
+  assert.equal(shortName('Claude', 0), '…');
+});
+
+test('with labels past the right edge, an announcement inside the chart takes a row of the stack first', () => {
+  const up = edgeRows(['announced'], ['forecast-a', 'forecast-b'], 264, false);
+  assert.deepEqual([...up], [['announced', 264], ['forecast-a', 242], ['forecast-b', 220]]);
+  assert.equal(new Set(up.values()).size, up.size, 'no two labels share a row');
+  assert.deepEqual([...edgeRows([], ['announced'], 30, true)], [['announced', 30]], 'an announcement past the edge, down from the top');
+  assert.equal(edgeRows(['announced'], [], 264, false).size, 0, 'no stack without labels past the edge: the announcement stands where it would alone');
 });

@@ -22,16 +22,38 @@ const diamond = (x: number, y: number, r = 4) => `M${x},${y - r}l${r},${r}l${-r}
 /** How wide an announcement's label is taken to be, and how near an edge a value hides under it (percent). */
 const LABEL_WIDTH = 220;
 const LABEL_BAND = 15;
-/** How far apart labels stacked at the right edge stand, and how wide a character of theirs is taken to be. */
+/** How far apart labels stacked at the right edge stand. */
 const LABEL_STEP = 22;
-const LABEL_CHAR = 6.5;
 
-/** A text cut to `chars` characters by shortening `name` in it, which it holds once. */
-export function fitName(text: (name: string) => string, name: string, chars: number) {
-  const whole = text(name);
-  if (whole.length <= chars) return whole;
-  const keep = name.length - (whole.length - chars) - 1;
-  return text(keep > 0 ? `${name.slice(0, keep).trimEnd()}…` : '…');
+/** A name shortened to its first `keep` characters, counted as a reader does (an emoji is one), and an ellipsis. */
+export function shortName(name: string, keep: number) {
+  const letters = Array.from(name);
+  return keep >= letters.length ? name : `${letters.slice(0, Math.max(0, keep)).join('').trimEnd()}…`;
+}
+
+/**
+ * How many characters of `name` fit when the text around it takes `rest` and an ellipsis
+ * `ellipsis`: the most whose widths (`widths`, one a character) leave the whole within
+ * `room`. All of them when the name fits whole.
+ */
+export function fitting(widths: number[], rest: number, ellipsis: number, room: number) {
+  const whole = widths.reduce((sum, width) => sum + width, 0);
+  if (rest + whole <= room) return widths.length;
+  let used = rest + ellipsis;
+  let keep = 0;
+  while (keep < widths.length && used + widths[keep] <= room) used += widths[keep++];
+  return keep;
+}
+
+/**
+ * The rows of the labels at the chart's right edge: those past it (`past`), and with them
+ * every announcement inside the chart (`inside`), first, so each has a row of its own
+ * however wide they are. They go from `from` down the plot, or up it. Without labels past
+ * the edge there is no stack, and an announcement stands where it would alone.
+ */
+export function edgeRows(inside: string[], past: string[], from: number, down: boolean): Map<string, number> {
+  const keys = past.length ? [...inside, ...past] : [];
+  return new Map(keys.map((key, row) => [key, from + row * (down ? LABEL_STEP : -LABEL_STEP)]));
 }
 
 /**
@@ -39,13 +61,53 @@ export function fitName(text: (name: string) => string, name: string, chars: num
  * One pointing past the right edge tells its exact time under the pointer or on a tap
  * (`onTip`).
  */
-function MarkerLabel({x, y, end, color, children, onTip}: {x: number; y: number; end: boolean; color?: string; children: string; onTip?: (shown: boolean, tapped: boolean) => void}) {
+function MarkerLabel({
+  x,
+  y,
+  end,
+  color,
+  children,
+  shorten,
+  onTip,
+}: {
+  x: number;
+  y: number;
+  end: boolean;
+  color?: string;
+  children: string;
+  /** Wider than `room`, the text is said again with `name` in it shortened to what fits. */
+  shorten?: {name: string; say: (name: string) => string; room: number};
+  onTip?: (shown: boolean, tapped: boolean) => void;
+}) {
   const text = useRef<SVGTextElement>(null);
   const [box, setBox] = useState<{x: number; width: number} | null>(null);
+  // How many characters of the name it keeps; all until the whole text is measured too wide.
+  const [keep, setKeep] = useState<number | null>(null);
+  const shown = shorten && keep !== null ? shorten.say(shortName(shorten.name, keep)) : children;
+  useLayoutEffect(() => setKeep(null), [children, shorten?.room]);
+  useLayoutEffect(() => {
+    const element = text.current;
+    if (!element || !shorten) return;
+    const length = element.getComputedTextLength();
+    if (length <= shorten.room) return;
+    // Cut once more if the ellipsis took more room than it was given.
+    if (keep !== null) return setKeep(Math.max(0, keep - 1));
+    // Each character of the name as drawn in the whole text, the rest of it, and an
+    // ellipsis about as wide as its average character.
+    const start = shown.indexOf(shorten.name);
+    let at = start;
+    const widths = Array.from(shorten.name, letter => {
+      const width = element.getSubStringLength(at, letter.length);
+      at += letter.length;
+      return width;
+    });
+    const name = widths.reduce((sum, width) => sum + width, 0);
+    setKeep(fitting(widths, length - name, length / shown.length, shorten.room));
+  }, [shown, shorten?.room]);
   useLayoutEffect(() => {
     const measured = text.current?.getBBox();
     if (measured) setBox({x: measured.x, width: measured.width});
-  }, [x, y, end, children]);
+  }, [x, y, end, shown]);
   return (
     <g
       className={`marker-label ${onTip ? 'is-pointed' : ''} ${color ? 'is-forecast' : ''}`}
@@ -56,7 +118,7 @@ function MarkerLabel({x, y, end, color, children, onTip}: {x: number; y: number;
     >
       {box && <rect x={box.x - 6} y={y - 13} width={box.width + 12} height={19} rx={5} />}
       <text ref={text} x={x} y={y} textAnchor={end ? 'end' : 'start'}>
-        {children}
+        {shown}
       </text>
     </g>
   );
@@ -236,18 +298,17 @@ export function Chart({
   const {rows, planned, foreseen} = hover === null ? {rows: [], planned: false, foreseen: false} : readCell(lines, plans, hover, cellMs, now, to, forecasts);
   const markerReadout = hover === null ? [] : markers.filter(m => m.at >= hover && m.at < hover + cellMs);
   // Past the right edge: an announcement, then where windows run out, each said there,
-  // how soon by the page's clock as the table says it, a series' name cut to the plot.
+  // how soon by the page's clock as the table says it, a series' name shortened to the plot.
   const pageNow = useNow(MINUTE);
-  const chars = Math.floor((width - left - right - 12) / LABEL_CHAR);
   const beyond = [
     ...markers
       .filter(m => m.strong && !m.past && m.at > to)
-      .map(m => ({key: m.key, label: m.label, time: stamp(m.at), text: t('chart.ahead', {label: m.label, time: countdown(m.at - pageNow)}), color: undefined})),
-    ...forecasts.flatMap(f =>
-      f.at !== null && f.at > to
-        ? [{key: `forecast-${f.key}`, label: f.name, time: t('forecast.runsOutAt', {time: stamp(f.at)}), text: fitName(name => t('chart.runsOut', {label: name, time: countdown(f.at! - pageNow)}), f.name, chars), color: f.color}]
-        : [],
-    ),
+      .map(m => ({key: m.key, label: m.label, time: stamp(m.at), text: t('chart.ahead', {label: m.label, time: countdown(m.at - pageNow)}), color: undefined, say: undefined})),
+    ...forecasts.flatMap(f => {
+      if (f.at === null || f.at <= to) return [];
+      const say = (name: string) => t('chart.runsOut', {label: name, time: countdown(f.at! - pageNow)});
+      return [{key: `forecast-${f.key}`, label: f.name, time: t('forecast.runsOutAt', {time: stamp(f.at)}), text: say(f.name), color: f.color, say}];
+    }),
   ];
   /** A label past the right edge pointed at or tapped: the tooltip tells its time instead of the cell's values. */
   const [edge, setEdge] = useState<{key: string; tapped: boolean} | null>(null);
@@ -298,12 +359,12 @@ export function Chart({
   // With labels past the right edge, an announcement inside the chart takes the first
   // place in their stack: a row of its own, so none lies over it, however wide they are.
   const announced = markers.filter(m => m.strong && !m.past && m.at <= to);
-  const stack = beyond.length ? [...announced.map(m => m.key), ...beyond.map(label => label.key)] : [];
+  const stacked = beyond.length ? announced.length + beyond.length : 0;
   // The stack stands at the top or the bottom of the plot, where it hides less of what
   // runs under it by the edge: the lines measured, planned and foreseen.
   const stackTop = (() => {
-    if (!stack.length) return false;
-    const band = ((stack.length * LABEL_STEP + 6) / (height - top - bottom)) * 100;
+    if (!stacked) return false;
+    const band = ((stacked * LABEL_STEP + 6) / (height - top - bottom)) * 100;
     const [a, b] = [width - right - LABEL_WIDTH, width - right].map(timeAt);
     let low = 0;
     let high = 0;
@@ -319,8 +380,12 @@ export function Chart({
     return high < low;
   })();
   // Stacked from the first one away from the edge of the plot it stands by.
-  const edgeY = stackTop ? top + 18 : height - bottom - 8;
-  const stackY = (key: string) => edgeY + stack.indexOf(key) * (stackTop ? LABEL_STEP : -LABEL_STEP);
+  const stackRows = edgeRows(
+    announced.map(m => m.key),
+    beyond.map(label => label.key),
+    stackTop ? top + 18 : height - bottom - 8,
+    stackTop,
+  );
   const move = (event: PointerEvent<SVGSVGElement>) => {
     const px = toChart(event);
     pointer.current = px;
@@ -535,7 +600,7 @@ export function Chart({
               const nearRight = mx > width - right - 150;
               const lx = nearRight ? mx - 6 : mx + 6;
               return (
-                <MarkerLabel key={marker.key} x={lx} y={stack.includes(marker.key) ? stackY(marker.key) : labelY(lx, nearRight)} end={nearRight}>
+                <MarkerLabel key={marker.key} x={lx} y={stackRows.get(marker.key) ?? labelY(lx, nearRight)} end={nearRight}>
                   {marker.label}
                 </MarkerLabel>
               );
@@ -545,9 +610,11 @@ export function Chart({
               <MarkerLabel
                 key={label.key}
                 x={width - right}
-                y={stackY(label.key)}
+                y={stackRows.get(label.key)!}
                 end
                 color={label.color}
+                // Its backing stays within the plot, 6 past the text on either side.
+                shorten={label.say && {name: label.label, say: label.say, room: width - left - right - 12}}
                 onTip={(shown, tapped) => setEdge(shown ? {key: label.key, tapped} : null)}
               >
                 {label.text}
@@ -577,7 +644,7 @@ export function Chart({
       </svg>
 
       {edgeMarker ? (
-        <Tooltip tip={tip} className="is-edge" style={{right: 0, bottom: `calc(100% - ${(stackY(edgeMarker.key) - 18) * scale}px)`}}>
+        <Tooltip tip={tip} className="is-edge" style={{right: 0, bottom: `calc(100% - ${(stackRows.get(edgeMarker.key)! - 18) * scale}px)`}}>
           <div className={`tooltip-marker ${edgeMarker.color ? '' : 'is-strong'}`} style={edgeMarker.color ? {color: edgeMarker.color} : undefined}>
             {edgeMarker.label}
           </div>
