@@ -17,7 +17,7 @@ export type ResetStatus = {
 };
 
 export type Resets = Partial<Record<'claude' | 'codex', ResetStatus>>;
-/** Resets for everyone the trackers reported over the last month, by provider, oldest first. */
+/** Resets for everyone the trackers reported over the history the hub keeps, by provider, oldest first. */
 export type PastResets = Partial<Record<'claude' | 'codex', ResetEvent[]>>;
 export type TrackerHealth = {name: string; url: string; ok: boolean | null; detail: string; at: number | null};
 

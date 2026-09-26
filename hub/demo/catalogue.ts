@@ -113,6 +113,7 @@ export const SCENES: Scene[] = [
       'Codex cards: an accent mark "in 25h" on the left of the tray (the time is rounded down), not the reset of four hours ago; its panel heads with "Reset in 25h" and the date and time under it, then why it matters, the tracker\'s text and "Data from Codex Resets"',
       'Claude cards: a quiet mark, an arrow round a tick, not the change of limits of yesterday; its panel heads with "Reset happened", a "Max" tag beside it and the time under it',
       'Both resets for everyone are marked on the charts',
+      'On 24 hours with the plan shown, the Codex reset is pointed at from the right edge ("… in 1d →"): pointing at it or tapping it tells its date and time',
     ],
   },
   {
@@ -354,7 +355,7 @@ const all: DemoSet = {
   scene: 'announced',
   entries: [
     // People and boards. Ana is the first person: her personal board holds almost everything.
-    {kind: 'person', id: 'ana', name: 'Ana', agents: true, expect: [{state: 'widgets'}, {weeklySeries: 10}], look: ['The table of agents lists many rows, by activity']},
+    {kind: 'person', id: 'ana', name: 'Ana', agents: true, expect: [{state: 'widgets'}, {weeklySeries: 10}], look: ['The table of agents lists many rows, by activity', 'The chart\'s tooltip has a row for every line in the legend\'s order, with what is left, the plan and the gap in columns; on a phone it stays whole on the screen']},
     {kind: 'person', id: 'ben', name: 'Ben', agents: true, expect: [{state: 'widgets'}, {rows: 1}]},
     {kind: 'person', id: 'cleo', name: 'Cleo', expect: [{state: 'onboarding'}], look: ['Cleo has no machines: her board asks her to connect one']},
     {

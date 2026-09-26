@@ -113,7 +113,7 @@ export function useOverview(board: string, onGone: () => void) {
 
 /** Changes of the period this close together are a run of steps: only the last is asked for, once they stop. */
 const SETTLE_MS = 300;
-/** How many answers of past ranges the page keeps, so stepping back and forth over them asks the hub nothing. */
+/** How many answers of past ranges the page keeps per board, so stepping back and forth over them asks the hub nothing. */
 const KEPT_RANGES = 8;
 
 /**
@@ -128,9 +128,10 @@ export const complete = (history: History, selected: TimeRange) => history.refre
  * a range is in the past and stays as read. While another one loads, the one on screen
  * stays (`loading`), so the page keeps its height and does not jump. A run of quick
  * changes (steps back through time) asks only for where it stops, and the latest few
- * ranges read whole are kept on the page.
+ * ranges read whole are kept on the page, for the board's sources as they are
+ * (`sources`): one added to the board has its lines in the range read again.
  */
-export function useHistory(board: string, period: string | TimeRange, revision: number | null): {history: History | null; loading: boolean} {
+export function useHistory(board: string, period: string | TimeRange, revision: number | null, sources: string): {history: History | null; loading: boolean} {
   const [history, setHistory] = useState<History | null>(null);
   const [retry, setRetry] = useState(0);
   const kept = useRef(new Map<string, History>());
@@ -139,7 +140,8 @@ export function useHistory(board: string, period: string | TimeRange, revision: 
   const key = selected ? timeRangeKey(selected) : (period as string);
   const query = selected ? `from=${selected.from}&to=${selected.to}` : `range=${key}`;
   const version = selected && revision !== null ? 0 : revision;
-  const cached = selected ? kept.current.get(`${board} ${key}`) : undefined;
+  const store = `${board} ${sources} ${key}`;
+  const cached = selected ? kept.current.get(store) : undefined;
 
   useEffect(() => {
     if (version === null) return;
@@ -152,13 +154,17 @@ export function useHistory(board: string, period: string | TimeRange, revision: 
     let timer: ReturnType<typeof setTimeout>;
     const keep = (data: History) => {
       if (!selected || !complete(data, selected)) return;
-      // Map order is insertion order: the one read last goes to the end, the oldest is dropped.
-      kept.current.delete(slot);
-      kept.current.set(slot, data);
-      if (kept.current.size > KEPT_RANGES) kept.current.delete(kept.current.keys().next().value!);
+      // Map order is insertion order: the one read last goes to the end, the board's oldest is dropped.
+      kept.current.delete(store);
+      kept.current.set(store, data);
+      const ofBoard = [...kept.current.keys()].filter(stored => stored.startsWith(`${board} `));
+      if (ofBoard.length > KEPT_RANGES) kept.current.delete(ofBoard[0]);
     };
-    const read = () =>
-      call<History>('GET', `/api/history?board=${encodeURIComponent(board)}&${query}`)
+    const read = () => {
+      // An answer stepped past on the way may have come meanwhile: it is not asked for again.
+      const came = kept.current.get(store);
+      if (came) return setHistory(came);
+      return call<History>('GET', `/api/history?board=${encodeURIComponent(board)}&${query}`)
         .then(answer => {
           const data = {...answer, board};
           // One stepped past on the way is kept all the same: it may be stepped back to.
@@ -175,13 +181,14 @@ export function useHistory(board: string, period: string | TimeRange, revision: 
           if (selected && error instanceof ApiError && error.status === 400) return dropTimeRange();
           timer = setTimeout(() => setRetry(n => n + 1), 15000);
         });
+    };
     if (quick) timer = setTimeout(read, SETTLE_MS);
     else void read();
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [board, query, version, retry, cached]);
+  }, [board, query, version, retry, cached, store]);
 
   const shown = cached ?? (history?.board === board ? history : null);
   return {history: shown, loading: !!shown && shown.range !== key};

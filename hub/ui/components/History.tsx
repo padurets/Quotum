@@ -69,7 +69,9 @@ export const History = memo(function History({
   const historyStart = overview?.historyStart ?? history?.historyStart ?? 0;
   const frame = frameOf(selected, prefs, now, historyStart);
   const {from, future} = frame;
-  const measuredTo = frame.to;
+  // A period ending now ends at the page's clock, or at the hub's when that is ahead: a
+  // browser a few minutes behind still draws the latest measurements.
+  const measuredTo = frame.live && history?.range === prefs.range ? Math.max(frame.to, history.to) : frame.to;
   // An announced Codex reset matters only where Codex is on the chart.
   const announced = frame.live && visible.some(line => line.provider === 'codex') ? (resets.codex?.scheduled?.scheduledFor ?? null) : null;
   // The spending plan applies to weekly windows; the days ahead are there for it, when a line on the chart has a plan.

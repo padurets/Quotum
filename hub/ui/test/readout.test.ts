@@ -38,6 +38,8 @@ test('the plan is read beside the lines it plans, and the gap is of the numbers 
     ],
   );
   assert.ok(!Object.is(rows[1].gap, -0), 'never a negative zero');
+  const nothing = readout([line('empty', [[cell, -0.3, 0]])], [plan(['empty'], 0)], cell, cellMs, now, now).rows[0];
+  assert.ok(!Object.is(nothing.gap, -0), 'not even from a value that rounds to −0');
   assert.equal(rows[0].value, 42.4, 'the point is drawn where the value is');
 });
 

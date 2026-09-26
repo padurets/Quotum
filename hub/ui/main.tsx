@@ -58,7 +58,9 @@ function Dashboard({
   const revision = data ? data.revision : null;
   // The chart and the table show one period: a time range selected on the chart, else the chosen one.
   const selected = useTimeRange();
-  const {history, loading: historyLoading} = useHistory(boardId, selected ?? prefs.range, revision);
+  // A range kept on the page is of the sources the board had: one added since is read again.
+  const sourceIds = useMemo(() => (data ? data.sources.map(source => source.id).sort().join(',') : ''), [data]);
+  const {history, loading: historyLoading} = useHistory(boardId, selected ?? prefs.range, revision, sourceIds);
   const {resets, past, health} = useResets(prefs.showResets);
   const [machines, setMachines] = useState<MachinesTab | null>(null);
   const [people, setPeople] = useState<BoardTab | null>(null);

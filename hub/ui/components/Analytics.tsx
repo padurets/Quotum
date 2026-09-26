@@ -3,7 +3,7 @@ import type {Kind} from '../lib/types';
 import {MINUTE, useNow} from '../lib/api';
 import {setPrefs, usePrefs} from '../lib/prefs';
 import {PERIODS, periodLabel, periodOf, step} from '../lib/periods';
-import {goTo, setTimeRange, timeRangeLabel, useTimeRange} from '../lib/timeRange';
+import {goTo, setTimeRange, timeRangeLabel, useTimeRange, type TimeRange} from '../lib/timeRange';
 import {t} from '../i18n';
 import {Segmented} from './Kit';
 import {Popover} from './Popover';
@@ -39,7 +39,8 @@ const ChevronIcon = () => (
  * The period of both the chart and the table: one of a list, ending now, or a time range
  * in the past, dragged across the chart or stepped back to with ‹. ‹ and › move either by
  * half its length; › up to now brings the chosen period back, as clearing a range does.
- * The button of the list is named by what it shows.
+ * The button of the list is named by what it shows. The arrows stand together at the end,
+ * where a label of any length leaves them in place for the next click.
  */
 function PeriodSwitch({historyStart}: {historyStart: number}) {
   const {range} = usePrefs();
@@ -57,11 +58,14 @@ function PeriodSwitch({historyStart}: {historyStart: number}) {
   };
   const back = step(selected, range, -1, now, historyStart);
   const forward = step(selected, range, 1, now, historyStart);
+  // An arrow that has taken the chart as far as it goes turns off, and focus would fall to
+  // the page: it goes to the list's button instead.
+  const go = (next: TimeRange | 'live' | null, direction: -1 | 1) => {
+    goTo(next);
+    if (next && !step(next === 'live' ? null : next, range, direction, now, historyStart)) refocus();
+  };
   return (
     <div className="period" role="group" aria-label={t('history.range')} ref={group}>
-      <button type="button" className="icon-button" aria-label={t('history.back')} title={t('history.back')} disabled={!back} onClick={() => goTo(back)}>
-        <Arrow back />
-      </button>
       <Popover
         label={t('history.range')}
         open={open}
@@ -112,7 +116,10 @@ function PeriodSwitch({historyStart}: {historyStart: number}) {
           </svg>
         </button>
       )}
-      <button type="button" className="icon-button" aria-label={t('history.forward')} title={t('history.forward')} disabled={!forward} onClick={() => goTo(forward)}>
+      <button type="button" className="icon-button" aria-label={t('history.back')} title={t('history.back')} disabled={!back} onClick={() => go(back, -1)}>
+        <Arrow back />
+      </button>
+      <button type="button" className="icon-button" aria-label={t('history.forward')} title={t('history.forward')} disabled={!forward} onClick={() => go(forward, 1)}>
         <Arrow back={false} />
       </button>
     </div>

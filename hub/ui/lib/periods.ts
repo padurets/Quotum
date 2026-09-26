@@ -56,8 +56,8 @@ export function frameOf(selected: TimeRange | null, prefs: {range: string; horiz
   return {from: Math.max(now - period.ms, historyStart), to: now, length: period.ms, future, live: true};
 }
 
-/** How long the hub keeps samples (config.retention.sampleDays); a range starts an hour inside it, so it is still read a while later. */
-const KEPT = 90 * DAY;
+/** How long the hub keeps samples (config.retention.sampleDays; a test keeps them the same); a range starts an hour inside it, so it is still read a while later. */
+export const KEPT_MS = 90 * DAY;
 
 const floorMinute = (at: number) => Math.floor(at / MINUTE) * MINUTE;
 const ceilMinute = (at: number) => Math.ceil(at / MINUTE) * MINUTE;
@@ -77,7 +77,7 @@ export function step(selected: TimeRange | null, range: string, direction: -1 | 
     if (!selected) return null;
     return from + length + by >= now - by / 2 ? 'live' : {from: from + by, to: from + by + length};
   }
-  const limit = ceilMinute(Math.max(historyStart, now - KEPT + HOUR));
+  const limit = ceilMinute(Math.max(historyStart, now - KEPT_MS + HOUR));
   if (from <= limit) return null;
   const start = Math.max(floorMinute(from - by), limit);
   return {from: start, to: start + length};

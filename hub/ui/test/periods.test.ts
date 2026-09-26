@@ -20,6 +20,14 @@ test('a period this page does not know is the default one; one it knows stays', 
   assert.deepEqual(PERIODS.map(periodLabel), ['1h', '3h', '6h', '12h', '24h', '3 days', '7 days', '14 days', '30 days']);
 });
 
+test('each period keeps its own future on the right', () => {
+  const minutes = (id: string) => periodOf(id).future / minute;
+  assert.deepEqual(
+    PERIODS.map(period => [period.id, minutes(period.id)]),
+    [['1h', 10], ['3h', 30], ['6h', 60], ['12h', 120], ['24h', 240], ['3d', 720], ['7d', 1440], ['14d', 2880], ['30d', 4320]],
+  );
+});
+
 test('a period ends now with its future on the right; a chosen horizon is no longer than the period', () => {
   assert.deepEqual(frameOf(null, {range: '6h', horizon: 'auto'}, now, long), {from: now - 6 * hour, to: now, length: 6 * hour, future: hour, live: true});
   assert.equal(frameOf(null, {range: '6h', horizon: '3d'}, now, long).future, 6 * hour);
@@ -35,6 +43,7 @@ test('‹ on a period ending now goes half of it back, on whole minutes, and one
   assert.equal(step(null, '24h', 1, now, long), null, 'nothing later than now');
   assert.equal(step(back as {from: number; to: number}, '24h', 1, now, long), 'live');
   assert.equal(step(back as {from: number; to: number}, '24h', 1, now + 5 * hour, long), 'live', 'even a while later, within half a step');
+  assert.notEqual(step(back as {from: number; to: number}, '24h', 1, now + 7 * hour, long), 'live', 'more than half a step later, a range still');
   const twice = step(back as {from: number; to: number}, '24h', -1, now, long)!;
   assert.deepEqual(step(twice as {from: number; to: number}, '24h', 1, now, long), back, 'two back and one forward is one back');
 });

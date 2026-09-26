@@ -122,6 +122,8 @@ export function Chart({
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(900);
+  /** CSS pixels to a unit of the chart: under 1 where the chart is narrower than it is drawn (280). */
+  const [scale, setScale] = useState(1);
   /** Start of the hovered cell. */
   const [hover, setHover] = useState<number | null>(null);
   /** Where a drag across the chart started and where it is now, in chart pixels. */
@@ -155,7 +157,12 @@ export function Chart({
 
   useEffect(() => {
     if (!box.current) return;
-    const observer = new ResizeObserver(entries => setWidth(Math.max(280, Math.round(entries[0].contentRect.width))));
+    const observer = new ResizeObserver(entries => {
+      const measured = entries[0].contentRect.width;
+      const drawn = Math.max(280, Math.round(measured));
+      setWidth(drawn);
+      setScale(measured ? measured / drawn : 1);
+    });
     observer.observe(box.current);
     return () => observer.disconnect();
   }, []);
@@ -205,6 +212,11 @@ export function Chart({
   /** A marker past the right edge, its label pointed at or tapped: the tooltip tells its time instead of the cell's values. */
   const [edge, setEdge] = useState<{key: string; tapped: boolean} | null>(null);
   const edgeMarker = edge && markers.find(m => m.key === edge.key && m.at > to);
+  // A label taken away under the pointer (a step to a range, which has no future) says nothing
+  // of it: what it told is forgotten, so the tooltip reads the cells again.
+  useEffect(() => {
+    if (edge && !edgeMarker) setEdge(null);
+  }, [edge, edgeMarker]);
   useEffect(() => {
     if (!edge?.tapped) return;
     const hide = () => setEdge(null);
@@ -298,9 +310,12 @@ export function Chart({
     if (!dx) return;
     for (const layer of element.querySelectorAll<SVGGElement>('.slides')) {
       const frame = layer.parentElement!;
+      // A step taken while the last one still slides goes on from where that one is, not back.
+      const moving = getComputedStyle(layer).transform;
+      const start = dx + (moving === 'none' ? 0 : new DOMMatrix(moving).m41);
       layer.getAnimations().forEach(animation => animation.cancel());
       frame.setAttribute('clip-path', `url(#${CSS.escape(clip)})`);
-      const animation = layer.animate([{transform: `translateX(${dx}px)`}, {transform: 'none'}], {duration: SLIDE_MS, easing: 'cubic-bezier(.2, .7, .3, 1)'});
+      const animation = layer.animate([{transform: `translateX(${start}px)`}, {transform: 'none'}], {duration: SLIDE_MS, easing: 'cubic-bezier(.2, .7, .3, 1)'});
       animation.onfinish = () => frame.removeAttribute('clip-path');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -309,23 +324,40 @@ export function Chart({
   // On a narrow chart it spans the chart's width under the plot, over what comes below, and
   // rises over the plot as far as keeps it whole in the window (a phone with many lines),
   // though never under the bars that stick at the top.
+  // The page scrolling under a pointer that stays measures it again.
   const tip = useRef<HTMLDivElement>(null);
   const [tipWidth, setTipWidth] = useState(200);
   const [lift, setLift] = useState(0);
+  const lifted = useRef(0);
   const narrow = width < 560;
   useLayoutEffect(() => {
     const element = tip.current;
     if (!element) return;
     setTipWidth(element.offsetWidth);
-    if (!narrow) return setLift(0);
-    const rect = element.getBoundingClientRect();
-    const [top, bottom] = [rect.top + lift, rect.bottom + lift];
-    const bars = [...document.querySelectorAll<HTMLElement>('.topbar, .analytics-head')].filter(bar => getComputedStyle(bar).position === 'sticky');
-    const cover = Math.max(0, ...bars.map(bar => bar.getBoundingClientRect().bottom));
-    setLift(Math.max(0, Math.min(bottom - (innerHeight - 8), top - cover - 8)));
+    if (!narrow) {
+      lifted.current = 0;
+      return setLift(0);
+    }
+    const fit = () => {
+      const rect = element.getBoundingClientRect();
+      const [top, bottom] = [rect.top + lifted.current, rect.bottom + lifted.current];
+      const bars = [...document.querySelectorAll<HTMLElement>('.topbar, .analytics-head')].filter(bar => getComputedStyle(bar).position === 'sticky');
+      const cover = Math.max(0, ...bars.map(bar => bar.getBoundingClientRect().bottom));
+      lifted.current = Math.max(0, Math.min(bottom - (innerHeight - 8), top - cover - 8));
+      setLift(lifted.current);
+    };
+    fit();
+    addEventListener('scroll', fit, {passive: true});
+    return () => removeEventListener('scroll', fit);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hover, edge, narrow, lines.length]);
-  const tipLeft = hoverX + 12 + tipWidth <= width ? hoverX + 12 : Math.max(0, hoverX - 12 - tipWidth);
+  // Beside the pointer: right of it, or left, or where there is more room when it fits
+  // neither side, narrowed to that room (its names wrap) rather than over the pointer.
+  const roomRight = width - hoverX - 12;
+  const roomLeft = hoverX - 12;
+  const onRight = tipWidth <= roomRight || (tipWidth > roomLeft && roomRight >= roomLeft);
+  const tipRoom = Math.min(360, Math.max(0, onRight ? roomRight : roomLeft));
+  const tipLeft = onRight ? hoverX + 12 : Math.max(0, hoverX - 12 - Math.min(tipWidth, tipRoom));
   const bandWidth = Math.max(1, x(Math.min(to, (hover ?? 0) + cellMs)) - x(hover ?? 0));
 
   return (
@@ -463,7 +495,7 @@ export function Chart({
       </svg>
 
       {edgeMarker ? (
-        <Tooltip tip={tip} className="is-edge" style={{right: 0, bottom: `calc(100% - ${labelY(width - right, true) - 18}px)`}}>
+        <Tooltip tip={tip} className="is-edge" style={{right: 0, bottom: `calc(100% - ${(labelY(width - right, true) - 18) * scale}px)`}}>
           <div className="tooltip-marker is-strong">{edgeMarker.label}</div>
           <div className="tooltip-time">{stamp(edgeMarker.at)}</div>
         </Tooltip>
@@ -471,7 +503,7 @@ export function Chart({
         hover !== null &&
         !drag &&
         (rows.some(row => row.left !== null || row.plan !== null) || markerReadout.length > 0) && (
-          <Tooltip tip={tip} className={narrow ? 'is-below' : ''} style={narrow ? {top: height - lift} : {left: tipLeft}}>
+          <Tooltip tip={tip} className={narrow ? 'is-below' : ''} style={narrow ? {top: height * scale - lift} : {left: tipLeft, maxWidth: tipRoom}}>
             <div className="tooltip-time">{cellLabel(hover, cellMs)}</div>
             {rows.length > 0 && (
               <div className={`tooltip-grid ${planned ? 'is-planned' : ''}`}>
