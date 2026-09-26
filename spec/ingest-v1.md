@@ -339,7 +339,9 @@ of the windows, free resets and when each expires, the client's version, the mac
 configured, and for a failed measurement its kind and a short
 message of the client (at most 200 characters). With each check-in: whether the client is
 in use on the machine (on duty, as often as every 15 seconds), and how often at most the
-machine measures the subscription, if configured. About running agents (unless turned
+machine measures the subscription, if configured. The members of a board where you show
+a subscription see whether it is in use right now (from that, and from the working agents
+of any machine), whatever the settings about running agents say. About running agents (unless turned
 off): which client, where it runs, since when, whether it works and when it last did,
 and the name of its project (the repository its folder is in, else the folder) and of
 its folder when that differs (unless that is turned off too). The members of a board

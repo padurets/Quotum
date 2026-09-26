@@ -138,16 +138,20 @@ day, not a script thrown together over a weekend. In practice that meant:
   for that second), so Quotum starts as few of them as it can. They run one at a time,
   and only one machine measures each subscription, as often as the hub says, since it
   sees the subscription on every machine: every two minutes while it is in use anywhere
-  or its numbers change, every minute when little is left, and less often while nothing
-  happens, down to once every 15 minutes. The machine asks the hub every 15 seconds,
-  which starts nothing.
+  or its numbers change; when little is left, every minute while it is active, every two
+  and then every five as it stays quiet for hours; and less often while nothing happens,
+  down to once every 15 minutes. The machine on duty asks the hub every 15 seconds, which
+  starts nothing.
 - **Your credentials stay where they are.** Quotum never reads, stores or sends provider
   tokens or cookies. What leaves the machine: percentages and reset times, plan names,
   a one-way hash of each account id (so the hub can tell two machines share one
   account), the machine's name and random id, the short message of a client that
   failed, and which coding agents run on the machine: working or idle, since when, and
   the names of their project (the git repository their folder is in, else the folder)
-  and folder (`sessions = false` and `projects = false` turn that off). A board shows
+  and folder (`sessions = false` and `projects = false` turn that off). With each
+  question to the hub, whether its client is in use on the machine: a card tells the
+  members of its boards that the subscription is in use right now, whatever those
+  settings say. A board shows
   them, with the name of the machine they run on, to its members only where the person
   whose agents they are shows that subscription, each project under the name that person
   gave it. The hub keeps when each agent worked,
