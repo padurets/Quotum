@@ -216,6 +216,12 @@ test('a group gathers what leads to it, and the tab lists what worked within the
   box('zzzz', 'alpha-box');
   credit('0000', 'multi', 5, 30);
   credit('zzzz', 'multi', 5, 30);
+  // When a project last worked is its latest stretch, of any session and any name it gathers.
+  credit(machines.laptop, 'twice', 5, 50);
+  credit(machines.laptop, 'twice', 5, 20);
+  credit(machines.laptop, 'Late', 5, 15);
+  credit(machines.laptop, 'early', 5, 55);
+  await name('ann', ['Late', 'early'], 'Late');
 
   const list = await projects('ann');
   const edge = list.find((p: any) => p.name === 'edge');
@@ -223,6 +229,9 @@ test('a group gathers what leads to it, and the tab lists what worked within the
   assert.equal(list.find((p: any) => p.name === 'gone'), undefined, 'nothing of it within');
   assert.deepEqual(list.find((p: any) => p.name === 'multi').machines.map((m: any) => m.name), ['alpha-box', 'zeta-box']);
   assert.equal(list.at(-1).name, null, 'work without a project last, though the most recent');
+  assert.deepEqual(list.at(-1).reported, [], 'work without a project gathers no names to give back');
+  const last = (project: string) => (now - list.find((p: any) => p.name === project).lastAt) / minute;
+  assert.deepEqual([last('twice'), last('Late')], [20, 15]);
   assert.deepEqual(
     list.slice(0, -1).map((p: any) => p.lastAt ?? 0),
     list.slice(0, -1).map((p: any) => p.lastAt ?? 0).sort((a: number, b: number) => b - a),

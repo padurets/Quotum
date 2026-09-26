@@ -59,7 +59,7 @@ function InlineName({
   renameLabel,
   placeholder,
   maxLength,
-  focused = false,
+  focus = 0,
   save: store,
 }: {
   name: string;
@@ -67,8 +67,8 @@ function InlineName({
   renameLabel: string;
   placeholder?: string;
   maxLength?: number;
-  /** Takes the keyboard when it comes: the row a rename made anew. */
-  focused?: boolean;
+  /** Takes the keyboard each time this changes to another number: the row a rename led to. */
+  focus?: number;
   save: (name: string) => Promise<void>;
 }) {
   const [name, setName] = useState<string | null>(null);
@@ -81,8 +81,8 @@ function InlineName({
     back.current = false;
   }, [name]);
   useEffect(() => {
-    if (focused) pencil.current?.focus();
-  }, [focused]);
+    if (focus) pencil.current?.focus();
+  }, [focus]);
   const close = () => {
     back.current = true;
     setError(null);
@@ -212,9 +212,9 @@ function Devices({local}: {local: boolean}) {
 }
 
 /**
- * The projects of the reader's machines with their agent time, which the reader renames,
- * merges and gives back their own names; every change applies to all the time kept. The
- * rules are in ui/lib/projects.ts.
+ * The projects of the reader's machines, with the machines and when they last worked, which
+ * the reader renames, merges and gives back their own names; every change applies to all
+ * the time kept. The rules are in ui/lib/projects.ts.
  */
 function Projects() {
   const now = useNow();
@@ -222,8 +222,9 @@ function Projects() {
   const [selected, setSelected] = useState<string[]>([]);
   const [merge, setMerge] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  // A renamed project is a row of its own, found by its new name: the keyboard goes there.
-  const [renamed, setRenamed] = useState<string | null>(null);
+  // A rename leads to a row found by its name, new or given back: the keyboard goes there,
+  // each time anew, though the name was the same the time before.
+  const [renamed, setRenamed] = useState<{name: string; n: number} | null>(null);
   const load = useCallback(() => {
     call<ProjectList>('GET', '/api/projects').then(answer => {
       setList(answer);
@@ -291,8 +292,12 @@ function Projects() {
                         name={group.name}
                         label={t('projects.nameLabel')}
                         renameLabel={t('projects.rename', {name: group.name})}
-                        focused={group.name === renamed}
-                        save={name => change('/api/projects', renaming(group, name)).then(() => setRenamed(name))}
+                        focus={renamed?.name === group.name ? renamed.n : 0}
+                        save={name =>
+                          change('/api/projects', renaming(group, name)).then(() =>
+                            setRenamed(before => ({name: name || (group.reported.includes(group.name!) ? group.name! : group.reported[0]), n: (before?.n ?? 0) + 1})),
+                          )
+                        }
                       />
                     )}
                     {from.length > 0 && (

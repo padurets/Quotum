@@ -212,7 +212,7 @@ keeps when each session worked, with its machine, subscription, where it runs, s
 when and its project and folder names as reported, as long as samples. A session is
 never credited twice for the same time: after the hub's clock goes back, it is credited
 again from where its time already ends, so a clock that ran ahead costs its sessions at
-most as much time as it ran ahead, and the time shown before is never rewritten. Sums are worked
+most as much time as it ran ahead, and the time counted before is never rewritten. Sums are worked
 out when read (`domain/work.ts`): agent time adds the stretches up, two agents counting
 twice; the time any of them worked is their union, overlaps counted once for whichever
 machines, people or projects are asked about. The corrections people make to project
@@ -274,8 +274,7 @@ them), kept for 90 days.
   lists the projects their agents worked on, with the machines and when they last did:
   the person renames them and merges several into one, which applies everywhere they are
   shown and to all the time kept (only on their own machines), and gives a reported name
-  back its own to undo it. How long agents worked is not shown there: that is for the
-  boards. A device connects in
+  back its own to undo it. How long agents worked is not shown there. A device connects in
   one of two ways:
   - *a one-time code* (the RFC 8628 device flow): `quotum connect <hub>` shows a code, a
     signed-in person confirms it in the browser; the device gets its own token and

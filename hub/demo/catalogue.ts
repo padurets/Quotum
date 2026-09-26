@@ -386,7 +386,7 @@ const all: DemoSet = {
         'docs gathers docs-site, and gives it back',
         'Escape in the merge menu closes only the menu',
         'The merge menu with many selected, at the bottom of the dialog: its glass is whole',
-        'My machines → Projects shows no agent time: that is the boards’ to show',
+        'My machines → Projects shows no agent time',
       ],
     },
     {kind: 'person', id: 'ben', name: 'Ben', agents: true, expect: [{state: 'widgets'}, {rows: 1}]},

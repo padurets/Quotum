@@ -8,10 +8,7 @@
 /** Names of projects are as long as agents send them, in characters. */
 export const PROJECT_NAME_CHARS = 120;
 
-/**
- * A project as a person's tab lists it: every name that is shown under it, and the machines
- * that worked on it. How long they worked is the boards' to show, not the tab's.
- */
+/** A project as a person's tab lists it: every name that is shown under it, and the machines that worked on it. */
 export type ProjectGroup = {
   /** The name shown; null for work without a project. */
   name: string | null;
