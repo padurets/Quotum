@@ -6,9 +6,15 @@
 //! The agent may check this often, so a check is one pass over the process list for
 //! names and parents; start times, CPU times and folders are read only for the clients'
 //! own process trees. No program is started for it.
+//!
+//! A session's project is the git repository its folder is in, found once per session and
+//! folder by the `.git` above it (see [`place`]); git is not run and none of its settings
+//! is read.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::fs;
+use std::io::Read;
+use std::path::{Component, Path, PathBuf};
 use std::time::Instant;
 
 use crate::model::{Millis, Provider};
@@ -36,8 +42,10 @@ pub struct Session {
     pub provider: Provider,
     pub pid: u32,
     pub started_at: Millis,
-    /// The name of the folder it works in, when that is a project (not the home folder).
+    /// The project it works in: the repository its folder belongs to, else the folder itself.
     pub project: Option<String>,
+    /// The name of the folder it works in, when that is not a home or temporary folder.
+    pub folder: Option<String>,
     /// Whether it is working, idle, or not yet known (seen once so far).
     pub working: Option<bool>,
     pub origin: Origin,
@@ -88,8 +96,12 @@ pub struct Activity {
     /// Folders that are not projects, as given and as the system resolves them.
     homes: Vec<PathBuf>,
     temps: Vec<PathBuf>,
+    /// Folders not to be looked into for a repository (macOS guards them).
+    shielded: Vec<PathBuf>,
     /// Each session at the last look, by pid and start (pids are reused).
     last: HashMap<(u32, Millis), Seen>,
+    /// Each session's folder at the last look, and where that placed it.
+    places: HashMap<(u32, Millis), (PathBuf, Place)>,
 }
 
 impl Activity {
@@ -98,7 +110,19 @@ impl Activity {
         let both = |dir: PathBuf| [dir.canonicalize().ok(), Some(dir)].into_iter().flatten().collect::<Vec<_>>();
         let mut temps = both(std::env::temp_dir());
         temps.extend(["/tmp", "/private/tmp", "/var/tmp"].map(PathBuf::from));
-        Activity { homes: both(home), temps, last: HashMap::new() }
+        // Merely looking inside these may make macOS ask the person to allow it, on behalf of
+        // a tool that promises to read nothing of theirs.
+        let shielded = if cfg!(target_os = "macos") {
+            ["Desktop", "Documents", "Downloads", "Library/Mobile Documents"]
+                .iter()
+                .map(|dir| home.join(dir))
+                .chain([PathBuf::from("/Volumes")])
+                .flat_map(both)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Activity { homes: both(home), temps, shielded, last: HashMap::new(), places: HashMap::new() }
     }
 
     pub fn look(&mut self) -> Vec<Session> {
@@ -107,6 +131,7 @@ impl Activity {
         let listed: HashMap<u32, Option<(Millis, u64)>> = procs.iter().map(|p| (p.pid, p.times)).collect();
         let times = |pid: u32| listed.get(&pid).copied().flatten().or_else(|| sys::times(pid));
         let mut seen = HashMap::new();
+        let mut places = HashMap::new();
         let sessions = sessions(&procs, std::process::id(), &sys::exe)
             .into_iter()
             // Other people's clients on a shared machine are theirs, and on their accounts.
@@ -123,12 +148,51 @@ impl Activity {
                 let next = judged(self.last.get(&key), cpu, now, working_share(provider));
                 let working = next.working;
                 seen.insert(key, next);
-                let project = sys::cwd(pid).and_then(|dir| project(&dir, &self.homes, &self.temps));
-                Some(Session { provider, pid, started_at, project, working, origin })
+                let placed = sys::cwd(pid).and_then(|dir| {
+                    let known = self.places.get(&key);
+                    let entry = match placing(&dir, known.map(|(dir, _)| dir.as_path()), &self.shielded) {
+                        Placing::Kept => known.cloned(),
+                        Placing::Anew => {
+                            let place = place(&dir, &self.homes, &self.temps, &self.shielded);
+                            Some((dir, place))
+                        }
+                        Placing::Unknown => None,
+                    };
+                    places.extend(entry.clone().map(|entry| (key, entry)));
+                    entry.map(|(_, place)| place)
+                });
+                let Place { folder, project } = placed.unwrap_or_default();
+                Some(Session { provider, pid, started_at, project, folder, working, origin })
             })
             .collect();
         self.last = seen;
+        self.places = places;
         sessions
+    }
+}
+
+/// What a look does about a session's folder: keep what it placed the session in last
+/// time, place it anew, or leave it without folder and project.
+#[derive(Debug, PartialEq)]
+enum Placing {
+    Kept,
+    Anew,
+    Unknown,
+}
+
+/// The same folder as before is placed as before. A folder removed under a session (a
+/// worktree removed while an agent works in it; Linux then adds ` (deleted)` to its path,
+/// which is not there either) keeps where it was, or is unknown. A guarded folder is not
+/// checked for being there.
+fn placing(dir: &Path, known: Option<&Path>, shielded: &[PathBuf]) -> Placing {
+    if known == Some(dir) {
+        return Placing::Kept;
+    }
+    let gone = matches!(probe(dir, shielded), Look::Missing);
+    match (gone, known) {
+        (false, _) => Placing::Anew,
+        (true, Some(_)) => Placing::Kept,
+        (true, None) => Placing::Unknown,
     }
 }
 
@@ -276,13 +340,193 @@ fn is_quotum(name: &str) -> bool {
     name.strip_suffix(".exe").unwrap_or(name).eq_ignore_ascii_case("quotum")
 }
 
-/// The folder's name, when it is a project: not a home folder, anything above it or a
-/// temporary folder.
-fn project(dir: &Path, homes: &[PathBuf], temps: &[PathBuf]) -> Option<String> {
+/// The folder's name, when it may name anything: not a home folder, anything above it or
+/// a temporary folder.
+fn named(dir: &Path, homes: &[PathBuf], temps: &[PathBuf]) -> Option<String> {
     if homes.iter().any(|home| home.starts_with(dir)) || temps.iter().any(|temp| dir.starts_with(temp)) {
         return None;
     }
     dir.file_name().map(|name| name.to_string_lossy().into_owned())
+}
+
+/// The names a session's folder gives it.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Place {
+    folder: Option<String>,
+    project: Option<String>,
+}
+
+/// Where a session working in `dir` is: its folder, and its project, the git repository the
+/// folder is in (for a worktree, the repository it belongs to), else the folder. A
+/// repository whose main folder is a home or temporary folder names no project.
+///
+/// The repository is found by the `.git` in the folder or above it, not in the home folder
+/// or above (a home kept in git is not one project). A `.git` folder makes its folder the
+/// main one. A `.git` file (`gitdir: <path>`) is a worktree when that git folder has a
+/// `commondir`, which leads to the main repository's git folder; else (a submodule, a
+/// separate git folder, an unreadable file) its folder is the main one. Only these two
+/// small files are read, and nothing in the `shielded` folders, through a path or a link
+/// that leads there (see [`probe`]).
+///
+/// Known to go wrong (a person merges or renames such projects on the hub):
+/// - with `--separate-git-dir` and worktrees, the main checkout is named after its folder
+///   and its worktrees after the git folder (only `core.worktree` in its config tells);
+/// - a submodule added with a `--name` other than its path: it is named after its folder,
+///   its worktrees after its name;
+/// - a main checkout whose `.git` is a link (`quotum/.git → store/q-git`) is named after
+///   its folder, its worktrees after the git folder (`q-git`);
+/// - a folder the system guards on macOS is a project of its own, not its repository's;
+/// - the check for guarded folders reads paths as written: a hand-made chain of links, or
+///   a link inside a path, may still lead there, and macOS may ask for access.
+fn place(dir: &Path, homes: &[PathBuf], temps: &[PathBuf], shielded: &[PathBuf]) -> Place {
+    let folder = named(dir, homes, temps);
+    let project = match repository(dir, homes, shielded) {
+        Some((main, bare)) => named(&main, homes, temps)
+            .map(|name| if bare { name.strip_suffix(".git").map(str::to_string).unwrap_or(name) } else { name }),
+        None => folder.clone(),
+    };
+    Place { folder, project }
+}
+
+/// The main folder of the repository `dir` is in, and whether that is a bare repository
+/// named `<name>.git`; none found, or not to be looked for.
+fn repository(dir: &Path, homes: &[PathBuf], shielded: &[PathBuf]) -> Option<(PathBuf, bool)> {
+    for folder in dir.ancestors() {
+        if homes.iter().any(|home| home.starts_with(folder)) {
+            return None;
+        }
+        match probe(&folder.join(".git"), shielded) {
+            // In a guarded folder, or a link that leads into one: not looked at further.
+            Look::Shielded => return None,
+            Look::Missing => continue,
+            Look::Found((Kind::Folder, _)) => return Some((folder.to_path_buf(), false)),
+            Look::Found((Kind::File, file)) => return worktree(folder, &file, shielded),
+        }
+    }
+    None
+}
+
+/// The main folder of the repository whose `.git` in `folder` is the file `file`.
+fn worktree(folder: &Path, file: &Path, shielded: &[PathBuf]) -> Option<(PathBuf, bool)> {
+    let own = Some((folder.to_path_buf(), false));
+    let text = match read_small(file, shielded) {
+        Look::Found(text) => text,
+        Look::Missing => return own,
+        Look::Shielded => return None,
+    };
+    let Some(gitdir) = text.lines().next().and_then(|line| line.strip_prefix("gitdir:")).map(str::trim) else {
+        return own;
+    };
+    if gitdir.is_empty() {
+        return own;
+    }
+    let gitdir = normal(&folder.join(gitdir));
+    match read_small(&gitdir.join("commondir"), shielded) {
+        Look::Found(common) => Some(repo_folder(&normal(&gitdir.join(common.trim())))),
+        Look::Missing => own,
+        // Its git folder is guarded: not looked into, and so not known.
+        Look::Shielded => None,
+    }
+}
+
+/// The main folder of the repository whose git folder is `common`, and whether that is a
+/// bare repository named `<name>.git`.
+fn repo_folder(common: &Path) -> (PathBuf, bool) {
+    let name = common.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+    let parent = || common.parent().unwrap_or(common).to_path_buf();
+    if name == ".git" {
+        (parent(), false)
+    } else if name.len() > 4 && name.ends_with(".git") {
+        (common.to_path_buf(), true)
+    } else if name.starts_with('.') {
+        // `.bare` beside the worktrees.
+        (parent(), false)
+    } else {
+        // A bare repository by another name, or a submodule's git folder (`.git/modules/<name>`).
+        (common.to_path_buf(), false)
+    }
+}
+
+/// The path with `.` and `..` worked out as written, without asking the file system.
+fn normal(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir => match out.components().next_back() {
+                Some(Component::Normal(_)) => {
+                    out.pop();
+                }
+                Some(Component::RootDir | Component::Prefix(_)) => {}
+                _ => out.push(".."),
+            },
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+// Recognising a project touches the file system only through the functions below, and
+// each first checks the path it is given: nothing inside a guarded folder is touched.
+
+/// What a look at a path found.
+#[derive(Debug, PartialEq)]
+enum Look<T> {
+    /// The path is in a guarded folder, or a link leads there: nothing was touched.
+    Shielded,
+    /// Nothing there, or not readable.
+    Missing,
+    Found(T),
+}
+
+#[derive(Debug, PartialEq)]
+enum Kind {
+    Folder,
+    File,
+}
+
+fn guarded(path: &Path, shielded: &[PathBuf]) -> bool {
+    let path = normal(path);
+    shielded.iter().any(|dir| path.starts_with(dir))
+}
+
+/// A folder or a file at `path`, following a link as git does, and where it is: the link's
+/// target, which is checked before the link is followed.
+fn probe(path: &Path, shielded: &[PathBuf]) -> Look<(Kind, PathBuf)> {
+    if guarded(path, shielded) {
+        return Look::Shielded;
+    }
+    let Ok(own) = fs::symlink_metadata(path) else { return Look::Missing };
+    let mut at = path.to_path_buf();
+    if own.file_type().is_symlink() {
+        let Ok(target) = fs::read_link(path) else { return Look::Missing };
+        at = normal(&path.parent().unwrap_or(path).join(target));
+        if guarded(&at, shielded) {
+            return Look::Shielded;
+        }
+    }
+    match fs::metadata(path) {
+        Ok(meta) if meta.is_dir() => Look::Found((Kind::Folder, at)),
+        Ok(meta) if meta.is_file() => Look::Found((Kind::File, at)),
+        // Missing, a broken link or a loop, a pipe or a socket.
+        _ => Look::Missing,
+    }
+}
+
+/// The start of a small file (4 KiB), itself a file and not a link: a pipe would hang the
+/// agent, and a link could lead anywhere.
+fn read_small(path: &Path, shielded: &[PathBuf]) -> Look<String> {
+    if guarded(path, shielded) {
+        return Look::Shielded;
+    }
+    if !fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file()) {
+        return Look::Missing;
+    }
+    let mut text = Vec::new();
+    match fs::File::open(path).and_then(|file| file.take(4096).read_to_end(&mut text)) {
+        Ok(_) => Look::Found(String::from_utf8_lossy(&text).into_owned()),
+        Err(_) => Look::Missing,
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -697,12 +941,263 @@ mod tests {
     #[test]
     fn only_project_folders_are_named() {
         let activity = Activity::new(PathBuf::from("/home/ann"));
-        let named = |dir: &str| project(Path::new(dir), &activity.homes, &activity.temps);
-        assert_eq!(named("/home/ann/dev/quotum"), Some("quotum".into()));
-        assert_eq!(named("/home/ann"), None);
-        assert_eq!(named("/"), None);
-        assert_eq!(named("/private/tmp/scratch"), None, "a temporary folder, resolved");
-        assert_eq!(project(&std::env::temp_dir().join("scratch"), &activity.homes, &activity.temps), None);
+        let name = |dir: &str| named(Path::new(dir), &activity.homes, &activity.temps);
+        assert_eq!(name("/home/ann/dev/quotum"), Some("quotum".into()));
+        assert_eq!(name("/home/ann"), None);
+        assert_eq!(name("/"), None);
+        assert_eq!(name("/private/tmp/scratch"), None, "a temporary folder, resolved");
+        assert_eq!(named(&std::env::temp_dir().join("scratch"), &activity.homes, &activity.temps), None);
+    }
+
+    /// Folders laid out for a test in a temporary folder of its own, with a home and a
+    /// temporary folder inside it; removed after.
+    struct Stand(PathBuf);
+
+    impl Stand {
+        fn new(name: &str) -> Stand {
+            let root = std::env::temp_dir().join(format!("quotum-place-{name}-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&root);
+            fs::create_dir_all(&root).unwrap();
+            Stand(root)
+        }
+
+        fn at(&self, path: &str) -> PathBuf {
+            self.0.join(path)
+        }
+
+        /// The path as git writes it into a `.git` file: absolute, with `/` between folders.
+        fn abs(&self, path: &str) -> String {
+            self.at(path).to_string_lossy().replace('\\', "/")
+        }
+
+        fn dir(&self, path: &str) -> &Stand {
+            fs::create_dir_all(self.at(path)).unwrap();
+            self
+        }
+
+        fn file(&self, path: &str, text: &str) -> &Stand {
+            let at = self.at(path);
+            fs::create_dir_all(at.parent().unwrap()).unwrap();
+            fs::write(at, text).unwrap();
+            self
+        }
+
+        #[cfg(unix)]
+        fn link(&self, path: &str, target: &str) -> &Stand {
+            let at = self.at(path);
+            fs::create_dir_all(at.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(target, at).unwrap();
+            self
+        }
+
+        /// A worktree `path` of the git folder `common`, its own git folder at `gitdir`,
+        /// as `git worktree add` makes one.
+        fn worktree(&self, path: &str, gitdir: &str, written: &str) -> &Stand {
+            self.dir(path).file(&format!("{path}/.git"), &format!("gitdir: {written}\n"));
+            self.file(&format!("{gitdir}/commondir"), "../..\n")
+        }
+
+        fn shielded(&self, shielded: &[&str]) -> Vec<PathBuf> {
+            shielded.iter().map(|dir| self.at(dir)).collect()
+        }
+
+        /// The folder and project of a session in `dir`.
+        fn place(&self, dir: &str, shielded: &[&str]) -> (Option<String>, Option<String>) {
+            let Place { folder, project } =
+                place(&self.at(dir), &[self.at("home")], &[self.at("tmp")], &self.shielded(shielded));
+            (folder, project)
+        }
+    }
+
+    impl Drop for Stand {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn both(folder: Option<&str>, project: Option<&str>) -> (Option<String>, Option<String>) {
+        (folder.map(str::to_string), project.map(str::to_string))
+    }
+
+    #[test]
+    fn a_folder_in_a_repository_is_its_project() {
+        let stand = Stand::new("repo");
+        stand.dir("home/dev/quotum/.git").dir("home/dev/quotum/hub");
+        assert_eq!(stand.place("home/dev/quotum", &[]), both(Some("quotum"), Some("quotum")), "its root");
+        assert_eq!(stand.place("home/dev/quotum/hub", &[]), both(Some("hub"), Some("quotum")), "a folder in it");
+        stand.dir("home/notes");
+        assert_eq!(stand.place("home/notes", &[]), both(Some("notes"), Some("notes")), "no repository");
+        assert_eq!(stand.place("home", &[]), both(None, None), "the home folder");
+        stand.file("home/dev/odd/.git", "not a link to a git folder\n").dir("home/dev/odd/src");
+        assert_eq!(stand.place("home/dev/odd/src", &[]), both(Some("src"), Some("odd")), "a .git file of another kind");
+    }
+
+    #[test]
+    fn a_home_kept_in_git_is_not_one_project() {
+        let stand = Stand::new("home");
+        stand.dir("home/.git").dir("home/notes");
+        assert_eq!(stand.place("home/notes", &[]), both(Some("notes"), Some("notes")));
+    }
+
+    #[test]
+    fn a_worktree_belongs_to_its_repository() {
+        let stand = Stand::new("worktree");
+        stand.dir("home/dev/quotum/.git");
+        let gitdir = "home/dev/quotum/.git/worktrees/feat-18";
+        stand.worktree("home/dev/quotum.feat-18", gitdir, &stand.abs(gitdir)).dir("home/dev/quotum.feat-18/hub");
+        let feat = both(Some("quotum.feat-18"), Some("quotum"));
+        assert_eq!(stand.place("home/dev/quotum.feat-18", &[]), feat, "gitdir written in full");
+        assert_eq!(
+            stand.place("home/dev/quotum.feat-18/hub", &[]),
+            both(Some("hub"), Some("quotum")),
+            "a folder in it"
+        );
+        stand.worktree(
+            "home/dev/quotum.feat-19",
+            "home/dev/quotum/.git/worktrees/feat-19",
+            "../quotum/.git/worktrees/feat-19",
+        );
+        assert_eq!(
+            stand.place("home/dev/quotum.feat-19", &[]),
+            both(Some("quotum.feat-19"), Some("quotum")),
+            "relative"
+        );
+    }
+
+    #[test]
+    fn a_bare_repository_names_the_project_of_its_worktrees() {
+        let stand = Stand::new("bare");
+        stand.dir("home/src/quotum.git/worktrees/main");
+        stand.worktree(
+            "home/src/main",
+            "home/src/quotum.git/worktrees/main",
+            &stand.abs("home/src/quotum.git/worktrees/main"),
+        );
+        assert_eq!(stand.place("home/src/main", &[]), both(Some("main"), Some("quotum")), "quotum.git, without .git");
+        stand.dir("home/dev/quotum/.bare/worktrees/main");
+        stand.worktree("home/dev/quotum/main", "home/dev/quotum/.bare/worktrees/main", "../.bare/worktrees/main");
+        assert_eq!(stand.place("home/dev/quotum/main", &[]), both(Some("main"), Some("quotum")), "a .bare beside it");
+    }
+
+    #[test]
+    fn a_submodule_is_a_project_of_its_own() {
+        let stand = Stand::new("submodule");
+        stand
+            .dir("home/dev/app/.git/modules/lib")
+            .file("home/dev/app/vendor/lib/.git", "gitdir: ../../.git/modules/lib\n")
+            .dir("home/dev/app/vendor/lib/src");
+        assert_eq!(stand.place("home/dev/app/vendor/lib/src", &[]), both(Some("src"), Some("lib")), "no commondir");
+        let gitdir = "home/dev/app/.git/modules/lib/worktrees/libwt";
+        stand.worktree("home/dev/libwt", gitdir, &stand.abs(gitdir));
+        assert_eq!(stand.place("home/dev/libwt", &[]), both(Some("libwt"), Some("lib")), "its worktree");
+    }
+
+    #[test]
+    fn a_commondir_that_is_no_file_is_no_worktree() {
+        let stand = Stand::new("commondir");
+        let gitdir = "home/dev/quotum/.git/worktrees/feat-18";
+        stand.dir(&format!("{gitdir}/commondir")).dir("home/dev/quotum.feat-18");
+        stand.file("home/dev/quotum.feat-18/.git", &format!("gitdir: {}\r\n", stand.abs(gitdir)));
+        assert_eq!(stand.place("home/dev/quotum.feat-18", &[]), both(Some("quotum.feat-18"), Some("quotum.feat-18")));
+    }
+
+    #[test]
+    fn temporary_folders_name_nothing_but_their_repository_may() {
+        let stand = Stand::new("temp");
+        stand.dir("home/dev/quotum/.git");
+        let gitdir = "home/dev/quotum/.git/worktrees/wt-1";
+        stand.worktree("tmp/wt-1", gitdir, &stand.abs(gitdir));
+        assert_eq!(stand.place("tmp/wt-1", &[]), both(None, Some("quotum")), "a worktree in a temporary folder");
+        stand.dir("tmp/scratch/.git");
+        assert_eq!(stand.place("tmp/scratch", &[]), both(None, None), "a clone in one");
+        stand.dir("tmp/q/.git");
+        stand.worktree("home/dev/q.wt", "tmp/q/.git/worktrees/q.wt", &stand.abs("tmp/q/.git/worktrees/q.wt"));
+        assert_eq!(stand.place("home/dev/q.wt", &[]), both(Some("q.wt"), None), "a worktree of a repository in one");
+    }
+
+    #[test]
+    fn guarded_folders_are_not_looked_into() {
+        let stand = Stand::new("guarded");
+        stand.dir("home/Documents/quotum/.git").dir("home/Documents/quotum/hub");
+        let documents = ["home/Documents"];
+        assert_eq!(stand.place("home/Documents/quotum/hub", &documents), both(Some("hub"), Some("hub")), "in one");
+        assert_eq!(stand.place("home/Documents/quotum/hub", &[]), both(Some("hub"), Some("quotum")), "unguarded");
+        // A worktree outside, of a repository inside: its git folder is not read.
+        let gitdir = "home/Documents/quotum/.git/worktrees/feat";
+        stand.worktree("home/wt/feat", gitdir, &stand.abs(gitdir)).dir("home/wt/feat/hub");
+        assert_eq!(stand.place("home/wt/feat/hub", &documents), both(Some("hub"), Some("hub")), "through gitdir");
+        assert_eq!(stand.place("home/wt/feat/hub", &[]), both(Some("hub"), Some("quotum")), "unguarded");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_git_link_is_followed_unless_it_leads_into_a_guarded_folder() {
+        let stand = Stand::new("link");
+        stand
+            .dir("home/dev/outer/.git")
+            .dir("store/inner-git")
+            .link("home/dev/outer/inner/.git", "../../../../store/inner-git");
+        assert_eq!(stand.place("home/dev/outer/inner", &[]), both(Some("inner"), Some("inner")), "to a git folder");
+
+        stand.dir("home/src/quotum/.git").dir("home/dev/.git");
+        let gitdir = "home/src/quotum/.git/worktrees/x";
+        stand.file(&format!("{gitdir}/commondir"), "../..\n");
+        stand.file("home/Documents/x-git", &format!("gitdir: {}\n", stand.abs(gitdir)));
+        stand.dir("home/dev/x").link("home/dev/x/.git", "../../Documents/x-git");
+        assert_eq!(stand.place("home/dev/x", &["home/Documents"]), both(Some("x"), Some("x")), "into a guarded one");
+        assert_eq!(stand.place("home/dev/x", &[]), both(Some("x"), Some("quotum")), "unguarded");
+
+        // A link to a git folder inside one: not followed, so not even looked at.
+        stand.dir("home/Documents/y-git").dir("home/dev/y/src").link("home/dev/y/.git", "../../Documents/y-git");
+        assert_eq!(stand.place("home/dev/y/src", &["home/Documents"]), both(Some("src"), Some("src")));
+        assert_eq!(stand.place("home/dev/y/src", &[]), both(Some("src"), Some("y")), "unguarded");
+    }
+
+    #[test]
+    fn the_guard_touches_nothing_inside_and_tells_it_from_nothing() {
+        let stand = Stand::new("guard");
+        stand.file("home/Documents/x/.git", "gitdir: y\n").file("home/dev/.git", "gitdir: y\n");
+        let shielded = stand.shielded(&["home/Documents"]);
+        let inside = stand.at("home/Documents/x/.git");
+        assert_eq!(probe(&inside, &shielded), Look::Shielded, "there, and not looked at");
+        assert_eq!(read_small(&inside, &shielded), Look::Shielded);
+        assert_eq!(probe(&stand.at("home/dev/../Documents/x/.git"), &shielded), Look::Shielded, "through ..");
+        assert_eq!(probe(&stand.at("home/dev/none"), &shielded), Look::Missing);
+        assert_eq!(read_small(&stand.at("home/dev/none"), &shielded), Look::Missing);
+        let outside = stand.at("home/dev/.git");
+        assert_eq!(probe(&outside, &shielded), Look::Found((Kind::File, outside.clone())));
+        assert_eq!(read_small(&outside, &shielded), Look::Found("gitdir: y\n".into()));
+        assert_eq!(read_small(&stand.at("home/dev"), &shielded), Look::Missing, "a folder is no file");
+        #[cfg(unix)]
+        {
+            stand.link("home/dev/link", ".git");
+            assert_eq!(read_small(&stand.at("home/dev/link"), &shielded), Look::Missing, "a link is not followed");
+            stand.link("home/dev/into", "../Documents/x/.git");
+            assert_eq!(probe(&stand.at("home/dev/into"), &shielded), Look::Shielded, "a link that leads inside");
+        }
+    }
+
+    #[test]
+    fn a_session_is_placed_again_only_when_its_folder_changes() {
+        let stand = Stand::new("placing");
+        stand.dir("home/dev/quotum").dir("home/Documents/notes");
+        let dir = stand.at("home/dev/quotum");
+        let shielded = stand.shielded(&["home/Documents"]);
+        assert_eq!(placing(&dir, None, &shielded), Placing::Anew, "a new session");
+        assert_eq!(placing(&dir, Some(dir.as_path()), &shielded), Placing::Kept, "the same folder");
+        assert_eq!(placing(&dir, Some(stand.at("home/dev").as_path()), &shielded), Placing::Anew, "another folder");
+        let gone = stand.at("home/dev/quotum.feat-18");
+        assert_eq!(placing(&gone, Some(dir.as_path()), &shielded), Placing::Kept, "removed: as it was");
+        assert_eq!(placing(&gone, None, &shielded), Placing::Unknown, "removed, and not seen before");
+        let deleted = PathBuf::from(format!("{} (deleted)", dir.display()));
+        assert_eq!(placing(&deleted, Some(dir.as_path()), &shielded), Placing::Kept, "removed, as Linux tells it");
+        assert_eq!(placing(&deleted, None, &shielded), Placing::Unknown);
+        // A guarded folder is not checked for being there, and is named by itself.
+        let guarded = stand.at("home/Documents/gone");
+        assert_eq!(placing(&guarded, None, &shielded), Placing::Anew);
+        let homes = [stand.at("home")];
+        let Place { folder, project } = place(&guarded, &homes, &[], &shielded);
+        assert_eq!((folder, project), both(Some("gone"), Some("gone")));
     }
 
     #[test]
