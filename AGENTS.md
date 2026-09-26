@@ -104,8 +104,10 @@ is open.
   changes a card's height.
 - **Times.** Say when as `stamp` in `hub/ui/lib/format.ts` does: "26 September 14:00",
   never "today" or "tomorrow", never seconds; under a heading that already gives the day,
-  the time alone. Only a mark or a cell with little room says how soon or how long ago
-  (`countdown`, `ago`: "20h", "5m ago"), and its tooltip or panel then gives the time.
+  the time alone. Where how soon or how long ago matters more, and room is short (a mark,
+  a cell, the line under a limit, a panel's heading), say that instead (`countdown`,
+  `duration`, `ago`: "in 20h", "5m ago"), with the time as `stamp` gives it beside it or
+  in its tooltip. How long something has run ("running for 31m") is not a time.
 - **No dots between parts.** A line never runs its parts together with " · ": what it
   says leads, and a detail or a time is set apart by layout (a tag beside it, a quieter
   line under it). In plain text, a tooltip or a name for screen readers, each part is a
