@@ -172,6 +172,23 @@ test('a clock that ran ahead for a while costs its sessions at most as much as i
   store.close();
 });
 
+test('a clock set back into the latest of several stretches goes on from its end', () => {
+  const {store, live, ann, laptop} = setup();
+  const list = [session(laptop, {project: 'quotum'})];
+  live.report(laptop, ann, list, start);
+  live.report(laptop, ann, [], start + 60 * second);
+  live.report(laptop, ann, list, start + 600 * second);
+  live.report(laptop, ann, list, start + 720 * second);
+  // Five minutes back, inside the second stretch of the same session.
+  for (const at of [420, 540, 660, 780, 900]) live.report(laptop, ann, list, start + at * second);
+  live.report(laptop, ann, [], start + 960 * second);
+  assert.deepEqual(seconds(all(store)), [
+    ['quotum', null, 0, 60],
+    ['quotum', null, 600, 960],
+  ]);
+  store.close();
+});
+
 test('idle agents are not credited', () => {
   const {store, live, ann, laptop} = setup();
   live.report(laptop, ann, [session(laptop, {project: 'quotum', working: false})], start);
