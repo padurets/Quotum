@@ -60,8 +60,9 @@ fn state_value(shell: &Arc<Shell>) -> Value {
     serde_json::to_value(state_of(shell)).unwrap_or_default()
 }
 
-/// Whether the page at `origin` is the board of the running hub: the one check before
-/// every command and every state sent.
+/// Whether the page at `origin` is the board of the running hub: the check before every
+/// command but the own page's quit, and before every state sent on Windows (on Linux the
+/// window's process checks the page a state goes to, electron/main.cjs).
 pub fn is_board(shell: &Shell, origin: &Url) -> bool {
     window::guard(origin, &shell.hub().0)
 }

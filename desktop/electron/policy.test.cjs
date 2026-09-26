@@ -13,9 +13,11 @@ async function mainProcess() {
   let window;
   const navigations = [];
   const sent = [];
+  const quits = [];
+  let gone = false;
   const app = Object.assign(new EventEmitter(), {
     setName() {}, setDesktopName() {}, enableSandbox() {}, setPath() {},
-    whenReady: () => Promise.resolve(), quit() {},
+    whenReady: () => Promise.resolve(), quit() { quits.push('quit'); },
   });
   class BrowserWindow extends EventEmitter {
     constructor() {
@@ -25,7 +27,8 @@ async function mainProcess() {
       const frame = this;
       this.webContents = Object.assign(new EventEmitter(), {
         getURL: () => this.url, setWindowOpenHandler() {},
-        mainFrame: {get url() { return frame.url; }},
+        // As Electron's does once the page's renderer is gone: its frame cannot be read.
+        mainFrame: {get url() { if (gone) throw new Error('Render frame was disposed'); return frame.url; }},
         // Messages are made inside the script's own context: compared as JSON.
         send: (name, ...args) => sent.push(JSON.stringify([name, ...args])),
       });
@@ -56,8 +59,9 @@ async function mainProcess() {
   deliver({type: 'init', profile: '/isolated/profile', geometry: '/isolated/window.json'});
   await new Promise(setImmediate);
   return {
-    navigations, deliver, sent,
+    navigations, deliver, sent, quits,
     commit(url) { window.url = url; window.webContents.emit('did-finish-load'); },
+    crash() { gone = true; },
   };
 }
 
@@ -99,6 +103,16 @@ test("the app's state goes only to the board of the hub's current start", async 
   main.commit('quotum://localhost/index.html');
   main.deliver({type: 'app_state', generation: 2, state: {seq: 4}});
   assert.deepEqual(main.sent, [], "the app's own page");
+});
+
+test("the app's state for a page whose renderer is gone is dropped, and the window stays", async () => {
+  const main = await mainProcess();
+  main.deliver({type: 'state', generation: 1, url: hub});
+  main.commit('http://127.0.0.1:23456/');
+  main.crash();
+  main.deliver({type: 'app_state', generation: 1, state: {seq: 1}}, {type: 'state', generation: 2, url: 'quotum://localhost/index.html'});
+  assert.deepEqual([main.sent, main.quits], [[], []]);
+  assert.equal(main.navigations.at(-1), 'quotum://localhost/index.html', 'what came after it is heard');
 });
 
 test('only the current hub origin has the six app commands', () => {
