@@ -380,6 +380,13 @@ test('the check of a set names a subscription without an account the hub would f
   assert.match(problems(onLaptop).join('\n'), /card antigravity: an agent on laptop, which the hub files under what that machine delivers/);
 });
 
+test('the check of a set names a card measured at the hub’s pace by more than one machine', () => {
+  const all = setOf('all');
+  const paced = (machines: string[]): DemoSet => ({...all, entries: all.entries.map(e => (e.kind === 'card' && e.id === 'paced-idle' ? {...e, machines} : e))});
+  assert.match(problems(paced(['pacer', 'laptop'])).join('\n'), /card paced-idle is measured at the hub's pace by one machine only/);
+  assert.deepEqual(problems(paced(['pacer'])), []);
+});
+
 test('machines say how long a measurement holds as the agent does: until the next one, a fifth more and a minute', () => {
   assert.equal(staleAfter(MIN), 132_000);
   assert.equal(staleAfter(5 * MIN), 7 * MIN);
