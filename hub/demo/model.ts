@@ -180,10 +180,11 @@ export function busyIn(wave: Wave, from: number, to: number): number {
 export type Origin = 'terminal' | 'editor' | 'app';
 
 /**
- * A coding agent on a card: where it runs, in which project, from `since` (before `start`
+ * A coding agent on a card: where it runs, in which project and, where that is not the
+ * project (a worktree, a folder inside it), in which folder, from `since` (before `start`
  * when it already ran then) until `until`, and when it works. Without a wave it waits.
  */
-export type Agent = {machine: string; origin: Origin; project: string | null; since: number; until?: number; works?: Wave};
+export type Agent = {machine: string; origin: Origin; project: string | null; folder?: string; since: number; until?: number; works?: Wave};
 
 /** How a card looks on one board: its name, colour, width, whether it or some of its windows are hidden, its plan. */
 export type CardView = {name?: string; color?: string; span?: number; hidden?: boolean; windows?: string[]; plan?: WeeklyPlan | 'off'};
@@ -211,6 +212,13 @@ export type CardCheck = Span & {board?: string} & (
     /** Something the chart marks on the card's source within the last 24 hours. */
     | {event: 'early_reset' | 'resets_granted'}
   );
+
+/**
+ * A group in «My machines» → «Projects»: its name (null: no project), its machines by the name
+ * shown, in the order the hub lists them, and the reported names it gathers besides its own, as
+ * the tab lists them (ui/lib shown()); or that there is no such group.
+ */
+export type ProjectCheck = Span & ({project: string | null; machines?: string[]; reported?: string[]} | {project: string; absent: true});
 
 export type BoardCheck = Span &
   (
@@ -284,8 +292,12 @@ export type Machine = {
   look?: string[];
 };
 
-/** Someone on the hub; their codes are read on their personal board, where `agents` turns the table of running agents on. */
-export type Person = {kind: 'person'; id: string; name: string; agents?: boolean; expect: BoardCheck[]; look?: string[]};
+/**
+ * Someone on the hub; their codes are read on their personal board, where `agents` turns the
+ * table of running agents on, and in «My machines». `projects` are the names they give the
+ * projects their machines report, before any agent reports one (reported → shown).
+ */
+export type Person = {kind: 'person'; id: string; name: string; agents?: boolean; projects?: Record<string, string>; expect: (BoardCheck | ProjectCheck)[]; look?: string[]};
 
 export type Board = {
   kind: 'board';
@@ -440,6 +452,7 @@ export function sessionsAt(set: DemoSet, machine: Machine, start: number, t: num
         ...accountOf(card),
         origin: agent.origin,
         project: agent.project,
+        folder: agent.folder,
         startedAt: iso(start, agent.since),
         working: !!agent.works && isOn(agent.works, t),
       })),
@@ -473,6 +486,18 @@ export function problems(set: DemoSet): string[] {
     // A person's id names their personal board.
     if (known.has(board.id)) found.push(`board ${board.id} is named as a person`);
     for (const person of [board.owner, ...board.members]) if (!known.has(person)) found.push(`board ${board.id} names nobody known: ${person}`);
+  }
+  for (const person of people(set)) {
+    for (const [reported, name] of Object.entries(person.projects ?? {})) {
+      if (!name.trim() || name.trim() !== name || name === reported) found.push(`person ${person.id}: a name for ${reported} the hub keeps no correction for`);
+    }
+    // Only working agents are credited: a project of theirs none of whose agents works never shows.
+    const working = cards(set).flatMap(card => (card.agents ?? []).filter(agent => agent.works && personOf(set, machineOf(set, agent.machine)) === person.id));
+    const shownAs = (project: string | null) => (project === null ? null : (person.projects?.[project] ?? project));
+    for (const check of person.expect) {
+      if (!('project' in check) || 'absent' in check) continue;
+      if (!working.some(agent => shownAs(agent.project) === check.project)) found.push(`person ${person.id} expects the project ${check.project}, which no working agent of theirs has`);
+    }
   }
   // A machine's failure of a client shows on the card of the source it last delivered for that client, once it is quiet.
   const delivering = (machine: string, provider: Provider) => cards(set).filter(c => c.provider === provider && c.machines.includes(machine));
