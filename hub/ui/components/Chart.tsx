@@ -3,6 +3,7 @@ import {clock, day, duration, num, shortDay, stamp} from '../lib/format';
 import {t} from '../i18n';
 import {valueIn, type Line} from '../lib/lines';
 import {draggedRange, type TimeRange} from '../lib/timeRange';
+import {SWIPE, swiped} from '../lib/swipe';
 
 /**
  * A moment on the time axis: ahead, a known window reset or an announced extra one;
@@ -93,6 +94,7 @@ export function Chart({
   cellMs,
   empty,
   onSelect,
+  onStep,
 }: {
   lines: Line[];
   plans?: PlanLine[];
@@ -106,6 +108,8 @@ export function Chart({
   empty: string | null;
   /** A time range dragged across the chart, as in Grafana. */
   onSelect?: (range: TimeRange) => void;
+  /** A swipe sideways on a touchpad, or Shift with the wheel: back (-1) or forward (1) through time. */
+  onStep?: (direction: -1 | 1) => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(900);
@@ -116,6 +120,29 @@ export function Chart({
   /** A finger held on the chart, before it starts a range. */
   const holding = useRef<{px: number; timer: ReturnType<typeof setTimeout>} | null>(null);
   useEffect(() => () => cancelHold(), []);
+  /** Where the pointer last was over the chart, in chart pixels: a step reads the values under it anew. */
+  const pointer = useRef<number | null>(null);
+
+  // The wheel is heard natively, so the chart can keep a swipe from scrolling the page
+  // sideways or going back in the browser. Nothing renders until the gesture steps.
+  const svg = useRef<SVGSVGElement>(null);
+  const swipe = useRef(SWIPE);
+  const stepped = useRef(onStep);
+  stepped.current = onStep;
+  const dragging = useRef(false);
+  useEffect(() => {
+    const element = svg.current;
+    if (!element) return;
+    const wheel = (event: WheelEvent) => {
+      if (!stepped.current || dragging.current) return;
+      const result = swiped(swipe.current, event);
+      swipe.current = result.state;
+      if (result.own) event.preventDefault();
+      if (result.step) stepped.current(result.step);
+    };
+    element.addEventListener('wheel', wheel, {passive: false});
+    return () => element.removeEventListener('wheel', wheel);
+  }, []);
 
   useEffect(() => {
     if (!box.current) return;
@@ -188,6 +215,13 @@ export function Chart({
     return ((event.clientX - rect.left) / rect.width) * width;
   };
   const timeAt = (px: number) => from + ((px - left) / (width - left - right)) * span;
+  dragging.current = drag !== null;
+  // After a step the pointer stands over another time: the tooltip reads that.
+  useEffect(() => {
+    const px = pointer.current;
+    if (px !== null && px >= left && px <= width - right) setHover(Math.floor(timeAt(px) / cellMs) * cellMs);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [from, to, cellMs]);
   // A label hides what runs under it: it stands at the bottom of the plot, or at the top
   // when more of the lines run near the bottom there (a limit about to run out).
   const labelY = (anchor: number, end: boolean) => {
@@ -205,6 +239,7 @@ export function Chart({
   };
   const move = (event: PointerEvent<SVGSVGElement>) => {
     const px = toChart(event);
+    pointer.current = px;
     const held = holding.current;
     // A finger that moves before the hold is up reads values instead.
     if (held && Math.abs(px - held.px) > 8) cancelHold();
@@ -254,12 +289,16 @@ export function Chart({
   return (
     <div className="chart" ref={box}>
       <svg
+        ref={svg}
         viewBox={`0 0 ${width} ${height}`}
         role="img"
         aria-label={t('chart.label')}
         className={onSelect ? 'is-selectable' : undefined}
         onPointerMove={move}
-        onPointerLeave={() => setHover(null)}
+        onPointerLeave={() => {
+          pointer.current = null;
+          setHover(null);
+        }}
         onPointerDown={press}
         onPointerUp={release}
         onPointerCancel={() => {

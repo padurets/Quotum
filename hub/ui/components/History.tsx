@@ -6,8 +6,8 @@ import {sourceLabel} from '../lib/quota';
 import {planAt, started, weeklyPlanLine} from '../lib/plan';
 import {PROVIDERS} from '../lib/providers';
 import {HORIZONS, setMuted, setPrefs, usePrefs} from '../lib/prefs';
-import {setTimeRange, useTimeRange} from '../lib/timeRange';
-import {frameOf} from '../lib/periods';
+import {goTo, setTimeRange, useTimeRange} from '../lib/timeRange';
+import {frameOf, step} from '../lib/periods';
 import {HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
 import {chartEvents, chartResets, linesOf} from '../lib/lines';
 import {Chart, type Marker, type PlanLine} from './Chart';
@@ -64,7 +64,9 @@ export const History = memo(function History({
   const visible = useMemo(() => lines.filter(line => !prefs.muted[line.key]), [lines, prefs.muted]);
   // The chart moves to the period asked for at once, drawing the answer it has until the
   // next one comes. A time range is in the past: the chart shows just it, without the future.
-  const frame = frameOf(useTimeRange(), prefs, now, overview?.historyStart ?? history?.historyStart ?? 0);
+  const selected = useTimeRange();
+  const historyStart = overview?.historyStart ?? history?.historyStart ?? 0;
+  const frame = frameOf(selected, prefs, now, historyStart);
   const {from, future} = frame;
   const measuredTo = frame.to;
   // An announced Codex reset matters only where Codex is on the chart.
@@ -193,7 +195,7 @@ export const History = memo(function History({
         )}
       </div>
 
-      {history ? <Chart lines={visible} plans={plans} markers={markers} from={from} now={measuredTo} to={to} cellMs={history.cellMs} empty={lines.length ? t('chart.empty') : null} onSelect={setTimeRange} /> : <div className="chart chart-loading">{t('history.loading')}</div>}
+      {history ? <Chart lines={visible} plans={plans} markers={markers} from={from} now={measuredTo} to={to} cellMs={history.cellMs} empty={lines.length ? t('chart.empty') : null} onSelect={setTimeRange} onStep={direction => goTo(step(selected, prefs.range, direction, now, historyStart))} /> : <div className="chart chart-loading">{t('history.loading')}</div>}
     </section>
   );
 });

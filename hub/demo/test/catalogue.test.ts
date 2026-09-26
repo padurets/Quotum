@@ -17,7 +17,7 @@ import {setLocale} from '../../ui/i18n/index.js';
 import {agentRows, byActivity, drawn, machinesOf} from '../../ui/lib/agents.js';
 import {forecastRow} from '../../ui/lib/forecast.js';
 import {chartEvents, chartResets, linesOf} from '../../ui/lib/lines.js';
-import {frameOf} from '../../ui/lib/periods.js';
+import {frameOf, step} from '../../ui/lib/periods.js';
 import {planNote, started} from '../../ui/lib/plan.js';
 import {dotOf, level, resetLine, titled, windowName} from '../../ui/lib/quota.js';
 import {resetLabel, type Resets, type TrackerHealth} from '../../ui/lib/resets.js';
@@ -256,6 +256,12 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
       spent: row.spent.key,
       plan: !row.plan ? 'none' : !row.plan.notable ? 'even' : row.plan.delta >= 0 ? 'behind' : 'ahead',
     });
+  }
+  if ('reachesBack' in card) {
+    // As ‹ does from the chart's longest period, until it is off.
+    let range: {from: number; to: number} | null = null;
+    for (let next = step(null, '30d', -1, now, overview.historyStart); next && next !== 'live'; next = step(range, '30d', -1, now, overview.historyStart)) range = next;
+    values.reachesBack = range ? Math.floor((now - range.from) / 86_400_000) : 0;
   }
   if ('event' in card) {
     // Marked on the chart as it opens: the weekly windows of the last 24 hours.
