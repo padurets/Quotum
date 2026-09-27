@@ -345,7 +345,8 @@ them), kept for 90 days.
   pace, 5 or more over it runs out, otherwise some is left. A window says nothing until
   it has run half an hour or a twentieth of its length, whichever is longer (8.4 hours
   of a week), nor an idle rolling window; one due to have run out already says when and
-  waits for a new measurement. Numbers gone stale keep their forecast: the moment it runs out is a
+  waits for a new measurement, as does one whose reset went by unmeasured, used up or
+  not. Numbers gone stale keep their forecast: the moment it runs out is a
   moment, as true for an old measurement until it comes. The forecast assumes that after
   an early reset a provider reports a new reset time, so the window starts over; one
   that kept the old reset time would read as spending slower until then. A plan with days at 0

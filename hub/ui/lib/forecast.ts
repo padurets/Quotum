@@ -17,7 +17,8 @@ export type Pace = {by: 'hour'; rate: number} | {by: 'plan'; k: number};
 /**
  * Where a window's own pace leads, as the table's last column says it, and in which tone:
  * nothing to say (`none`), a rolling window not started yet (`idle`), started too
- * recently to tell (`needData`), used up, due to have run out already at `at`
+ * recently to tell (`needData`), its reset gone by unmeasured (`awaiting`, used up or
+ * not), used up, due to have run out already at `at`
  * (`pastZero`), runs out at `at`, on pace to spend it all by the deadline, or `left`
  * points left then.
  */
