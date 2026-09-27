@@ -56,8 +56,11 @@ fn open_now(shell: &Arc<Shell>, from: &'static str) {
                 follow(shell);
                 return;
             }
+            // A window whose creation failed answers the same, and never goes.
             Some(false) => {
-                shell.hub_log.line(&format!("app: the window {LABEL} is closing at {} ms", ms(start)));
+                shell
+                    .hub_log
+                    .line(&format!("app: the window {LABEL} is closing, or was never created, at {} ms", ms(start)));
                 while app.get_webview_window(LABEL).is_some() {
                     if shell.exiting() {
                         return;
@@ -70,6 +73,8 @@ fn open_now(shell: &Arc<Shell>, from: &'static str) {
                 }
                 shell.hub_log.line(&format!("app: the window {LABEL} went at {} ms", ms(start)));
             }
+            // No answer for as long as a closing window may take to go: the main thread is
+            // stuck, and neither showing a window nor creating one would get through it.
             None => {
                 shell.hub_log.line(&format!(
                     "app: the main thread did not tell within {} ms whether the window {LABEL} is there",
