@@ -1,6 +1,7 @@
 import {
   agentsWork,
   ALWAYS,
+  busyIn,
   DAY,
   fixed,
   HOUR,
@@ -74,6 +75,10 @@ const shifts = (shift: number): Wave => ({period: 20 * MIN, on: 12 * MIN, phase:
 
 /** Work on and off, 12 of every 20 minutes, for a subscription without agents of its own. */
 const onAndOff = (shift: number): Work => waveWork(shifts(shift));
+
+/** Two hours a day, twelve hours apart: some agent work, and spending away from it. */
+const MORNINGS: Wave = {period: DAY, on: 2 * HOUR, phase: 6 * HOUR};
+const EVENINGS: Wave = {period: DAY, on: 2 * HOUR, phase: 18 * HOUR};
 
 /**
  * A five-hour window spending `perHour` points an hour of full work, back to back from
@@ -1016,6 +1021,19 @@ const all: DemoSet = {
         'Over a range of the day before the last hour: the forecast by work "lasts to the reset", its tooltip that it lasts longer than the window, naming no hours',
         'Over it, its Pool window, of no known length: the forecast by work a dash, too little spent per hour of work to foresee',
       ],
+    },
+    {
+      kind: 'card',
+      id: 'spent-elsewhere',
+      provider: 'codex',
+      plan: 'pro',
+      machines: ['laptop'],
+      history: DAY,
+      // Its week spends in the evening, outside its agent (a browser, a phone); the agent works in the morning and spends none of it.
+      windows: [weekly({since: -2 * DAY, use: elapsed => 10 + (3 * busyIn(EVENINGS, -2 * DAY, -2 * DAY + elapsed)) / HOUR})],
+      agents: [{machine: 'laptop', origin: 'terminal', project: 'ledger', since: -DAY, works: MORNINGS}],
+      expect: [{work: 'weekly', range: '24h', lowShare: 0, from: 0, to: 0}],
+      look: ['In the table, the tooltips of spent per work hour and the forecast by work say nothing was spent while agents worked'],
     },
 
     // Measured at the hub's pace, one reason each, all by one machine asking every 15 seconds.
