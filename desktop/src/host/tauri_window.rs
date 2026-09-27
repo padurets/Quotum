@@ -23,11 +23,11 @@ pub fn open(shell: &Arc<Shell>, from: &'static str) {
     });
 }
 
-/// How long the main thread may take to tell whether the window it has is still there.
-const ANSWER_LIMIT: Duration = Duration::from_secs(1);
-/// How long a request waits for a closing window to go; the UI smoke waits 20 s for the
-/// window after a second start.
-const CLOSING_LIMIT: Duration = Duration::from_secs(15);
+/// How long a request waits, from its start, for the main thread to tell whether the window
+/// it found is still there, and for a closing one to go. The main thread may be busy for a
+/// while with the window that is closing, or with one being created. The UI smoke waits
+/// 20 s for the window after a second start.
+const WAIT_LIMIT: Duration = Duration::from_secs(15);
 
 /// Milliseconds since `start`, for the log of opening the window.
 fn ms(start: Instant) -> u128 {
@@ -46,7 +46,7 @@ fn open_now(shell: &Arc<Shell>, from: &'static str) {
         // A second start can hand over while Tauri still holds a closed window under its
         // label: off the screen and without its web view, but not destroyed yet. Showing it
         // shows nothing, and the request would be spent: a new window comes once it has gone.
-        match alive(shell, window.clone()) {
+        match alive(shell, window.clone(), start + WAIT_LIMIT) {
             Some(true) => {
                 shell.hub_log.line(&format!("app: found the window {LABEL} at {} ms", ms(start)));
                 let _ = window.unminimize();
@@ -62,7 +62,7 @@ fn open_now(shell: &Arc<Shell>, from: &'static str) {
                     if shell.exiting() {
                         return;
                     }
-                    if start.elapsed() >= CLOSING_LIMIT {
+                    if start.elapsed() >= WAIT_LIMIT {
                         shell.hub_log.line(&format!("app: the window {LABEL} did not go within {} ms", ms(start)));
                         return;
                     }
@@ -71,10 +71,9 @@ fn open_now(shell: &Arc<Shell>, from: &'static str) {
                 shell.hub_log.line(&format!("app: the window {LABEL} went at {} ms", ms(start)));
             }
             None => {
-                // It may be one still being created: that one shows when it is.
                 shell.hub_log.line(&format!(
                     "app: the main thread did not tell within {} ms whether the window {LABEL} is there",
-                    ANSWER_LIMIT.as_millis()
+                    ms(start)
                 ));
                 return;
             }
@@ -102,9 +101,9 @@ fn open_now(shell: &Arc<Shell>, from: &'static str) {
 }
 
 /// Whether `window` is still there, as the main thread tells: there a getter of a closing
-/// window fails at once. `None` without an answer in time. Not asked on a worker: a getter
-/// there waits for the main thread, for ever if it is stuck.
-fn alive(shell: &Shell, window: tauri::WebviewWindow) -> Option<bool> {
+/// window fails at once. `None` without an answer by `deadline`. Not asked on a worker: a
+/// getter there waits for the main thread, for ever if it is stuck.
+fn alive(shell: &Shell, window: tauri::WebviewWindow, deadline: Instant) -> Option<bool> {
     let (answer, answered) = mpsc::channel();
     shell
         .host
@@ -113,7 +112,7 @@ fn alive(shell: &Shell, window: tauri::WebviewWindow) -> Option<bool> {
             let _ = answer.send(window.is_visible().is_ok());
         })
         .ok()?;
-    answered.recv_timeout(ANSWER_LIMIT).ok()
+    answered.recv_timeout(deadline.saturating_duration_since(Instant::now())).ok()
 }
 
 fn build(shell: &Arc<Shell>, state: &HubState, generation: u64, start: Instant) -> tauri::Result<tauri::WebviewWindow> {
