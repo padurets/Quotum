@@ -1,6 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {HistoryLoader, LIVE_MIN_MS} from '../lib/history';
+import {INITIAL, reduce, type Snapshot} from '../lib/board';
+import {follow, HistoryLoader, LIVE_MIN_MS} from '../lib/history';
+import {createStore} from '../lib/store';
 import type {History} from '../lib/types';
 import {ApiError} from '../lib/http';
 
@@ -188,7 +190,7 @@ const HOUR = 3_600_000;
 test('news or a snapshot while a range is read: its answer may miss what came, so it is shown, not kept, and read again', async () => {
   const range = {from: NOW - 3 * HOUR, to: NOW - 2 * HOUR};
   const answer = {range: `${range.from}-${range.to}`, to: range.to};
-  for (const told of ['news', 'snapshot'] as const) {
+  for (const told of ['news', 'news, then of a later time', 'snapshot'] as const) {
     const h = harness();
     h.loader.choose('24h', null);
     h.loader.open('b1');
@@ -199,8 +201,10 @@ test('news or a snapshot while a range is read: its answer may miss what came, s
     await h.advance(S);
     assert.equal(h.reads.length, 2, 'the range is being read');
     // The event comes before the (large) answer, which the hub put together before the measurement.
-    if (told === 'news') h.loader.news(range.from + 10 * MIN);
-    else h.loader.snapshot(['s1']);
+    if (told === 'snapshot') h.loader.snapshot(['s1']);
+    else h.loader.news(range.from + 10 * MIN);
+    // A measurement taken now: the earlier news still decides.
+    if (told === 'news, then of a later time') h.loader.news(NOW);
     await h.reads[1].answer(answer);
     await h.advance(LIVE_MIN_MS + S);
     assert.equal(h.reads.length, 3, `${told}: the range on screen is read again`);
@@ -301,22 +305,83 @@ test('the period ending now: news while it is read, and more of it, give one rea
   assert.equal(h.reads.length, 2, 'and no more');
 });
 
-test('a board left (signed out, gone) is read no more, whatever comes due or is chosen', async () => {
+test('the period ending now: a measurement taken just after the hub put its answer together, told before the answer came, reads it again', async () => {
+  const h = harness();
+  h.loader.choose('24h', null);
+  h.loader.open('b1');
+  h.loader.snapshot(['s1']);
+  await h.advance(S);
+  h.loader.news(NOW + S + 20);
+  await h.reads[0].answer({to: NOW + S});
+  await h.advance(LIVE_MIN_MS);
+  assert.equal(h.reads.length, 2);
+});
+
+test('a range reaching past now, its end cut to now: news of a time after that, while it is read, reads it again, then no more', async () => {
   const h = harness();
   h.loader.choose('24h', null);
   h.loader.open('b1');
   h.loader.snapshot(['s1']);
   await h.reads[0].answer();
+  await h.advance(LIVE_MIN_MS);
+  const range = {from: NOW - 2 * HOUR, to: NOW + HOUR};
+  const answer = (to: number) => ({range: `${range.from}-${range.to}`, to});
+  h.loader.choose('24h', range);
+  await h.advance(100);
+  h.loader.news(NOW + LIVE_MIN_MS + S);
+  await h.reads[1].answer(answer(NOW + LIVE_MIN_MS + 100));
+  await h.advance(LIVE_MIN_MS + S);
+  assert.equal(h.reads.length, 3);
+  await h.reads[2].answer(answer(NOW + 2 * LIVE_MIN_MS + S));
+  await h.advance(10 * MIN);
+  assert.equal(h.reads.length, 3);
+});
+
+test('a board left (signed out, gone), as the page tells it, is read no more, whatever comes due, is chosen or answers', async () => {
+  const h = harness();
+  const store = createStore(reduce, INITIAL);
+  follow(h.loader, store);
+  const snapshot: Snapshot = {
+    board: {id: 'b1', name: 'Home', personal: true},
+    view: {order: [], sizes: {}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}},
+    historyStart: 0,
+    sources: [],
+    sessions: {},
+    cadence: {},
+    mine: [],
+    boards: [],
+    resets: {resets: {}, trackers: [], past: {}},
+  };
+  const opened = () => {
+    store.dispatch({type: 'board-open', id: 'b1'});
+    store.dispatch({type: 'hub', event: {type: 'snapshot', data: snapshot}});
+  };
+  const news = () => store.dispatch({type: 'hub', event: {type: 'history', data: {sources: ['s1'], since: NOW}}});
+  h.loader.choose('24h', null);
+  opened();
+  await h.reads[0].answer();
+  await h.advance(LIVE_MIN_MS);
+  news();
+  store.dispatch({type: 'hub', event: {type: 'lineup', data: {sources: ['s1']}}});
+  assert.equal(h.reads.length, 3, 'news of measurements, then a source on the board: read again');
+  await h.reads[2].answer();
   await h.advance(S);
-  h.loader.news(NOW);
-  h.loader.close();
+  news();
+  store.dispatch({type: 'board-close'});
   await h.advance(MIN);
   h.loader.choose('7d', null);
   h.loader.news(NOW);
   await h.advance(MIN);
-  assert.equal(h.reads.length, 1);
+  assert.equal(h.reads.length, 3);
   assert.equal(h.loader.get().history, null, 'nothing of it is shown');
-  h.loader.open('b1');
-  h.loader.snapshot(['s1']);
-  assert.equal(h.reads.length, 2, 'opened again, read again');
+  opened();
+  assert.equal(h.reads.length, 4, 'opened again, read again');
+
+  // A range the hub refuses after the page left: the time range stays, and nothing is tried again.
+  h.loader.choose('7d', {from: NOW - 3 * HOUR, to: NOW - 2 * HOUR});
+  await h.advance(S);
+  store.dispatch({type: 'board-close'});
+  await h.reads[4].fail(new ApiError(400, 'invalid_request'));
+  await h.advance(MIN);
+  assert.deepEqual([h.dropped(), h.reads.length], [0, 5]);
 });

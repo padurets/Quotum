@@ -1,7 +1,8 @@
 import {useSyncExternalStore} from 'react';
-import {page, useHistoryStart} from './board';
+import {page, useHistoryStart, type PageEvent, type PageState} from './board';
 import {ApiError, call} from './http';
 import {onPrefs, prefs} from './prefs';
+import type {Store} from './store';
 import {dropTimeRange, onTimeRange, timeRange, timeRangeKey, type TimeRange} from './timeRange';
 import type {History} from './types';
 
@@ -249,14 +250,19 @@ export const loader = new HistoryLoader({
   dropTimeRange,
 });
 
+/** What the loader hears of the page's events: its board opened or left, the board's snapshot, lineup and news of measurements. */
+export function follow(loader: HistoryLoader, store: Store<PageState, PageEvent>) {
+  return store.listen((event, state) => {
+    if (event.type === 'board-open') loader.open(event.id);
+    else if (event.type === 'board-close') loader.close();
+    else if (event.type === 'hub' && event.event.type === 'snapshot') loader.snapshot(state.board?.lineup ?? []);
+    else if (event.type === 'hub' && event.event.type === 'lineup') loader.lineup(state.board?.lineup ?? []);
+    else if (event.type === 'hub' && event.event.type === 'history') loader.news(event.event.data.since);
+  });
+}
+
 // The page's events, its period and its selection drive the loader; nothing on screen does.
-page.listen((event, state) => {
-  if (event.type === 'board-open') loader.open(event.id);
-  else if (event.type === 'board-close') loader.close();
-  else if (event.type === 'hub' && event.event.type === 'snapshot') loader.snapshot(state.board?.lineup ?? []);
-  else if (event.type === 'hub' && event.event.type === 'lineup') loader.lineup(state.board?.lineup ?? []);
-  else if (event.type === 'hub' && event.event.type === 'history') loader.news(event.event.data.since);
-});
+follow(loader, page);
 if (typeof window !== 'undefined') {
   const chosen = () => loader.choose(prefs().range, timeRange());
   onPrefs(chosen);
