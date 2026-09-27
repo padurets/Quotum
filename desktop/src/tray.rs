@@ -43,13 +43,13 @@ fn build(app: &AppHandle, shell: &Arc<Shell>) -> tauri::Result<()> {
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(move |_, event| match event.id().as_ref() {
-            "open" => window::open(&on_menu),
+            "open" => window::open(&on_menu, "the tray"),
             "quit" => shell::quit(&on_menu),
             _ => {}
         })
         .on_tray_icon_event(move |_, event| {
             if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
-                window::open(&on_click);
+                window::open(&on_click, "the tray");
             }
         });
     if let Some(icon) = app.default_window_icon() {

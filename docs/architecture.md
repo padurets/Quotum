@@ -508,7 +508,11 @@ and start-at-login settings. Moving a portable folder requires updating its auto
 entry by turning start at login off and on again.
 Windows are created on worker threads; restoring, fitting and showing them is queued
 on the event loop after the window-state plugin's initialization. This keeps its state
-locks on the same thread as native window events.
+locks on the same thread as native window events. Closing the window destroys it with its
+web view. A request to open it asks the event loop whether the window it finds is still
+there: a second start can arrive while a closed window still holds its label, and that
+one does not count as open. The new window is created once it has gone, and the app's
+`hub.log` tells each request, attempt and outcome.
 
 **Linux rendering and lifetime.** The Rust controller uses a D-Bus StatusNotifierItem
 through `ksni`; it does not link GTK or WebKit. It waits for the desktop's tray watcher
@@ -564,9 +568,12 @@ nowhere else; links open in the system's browser. The app's folder is this user'
 **Files.** The app's folder is `%LOCALAPPDATA%\com.padurets.quotum` on Windows and
 `~/.local/share/com.padurets.quotum` on Linux: the hub's database (`hub/`), `app.json`
 (the port, whether taking over was agreed to, whether start at login was set),
-`app.lock` (one app per user), the web view's data and, on Linux, `window.json` (window geometry). Linux logs are in
-`~/.cache/com.padurets.quotum/logs/` (`hub.log` and `agent.log`, each moved aside at 1 MiB).
-`QUOTUM_APP_DATA_DIR` puts logs and browser data under the chosen isolated directory. Measurements that wait for the hub go to
+`app.lock` (one app per user), the web view's data and, on Linux, `window.json` (window geometry). The logs are in
+`%LOCALAPPDATA%\com.padurets.quotum\logs\` on Windows and `~/.cache/com.padurets.quotum/logs/` on Linux (`hub.log`
+and `agent.log`, each moved aside at 1 MiB).
+`QUOTUM_APP_DATA_DIR` puts the app's data and logs under the chosen isolated directory, and the web view's
+data too on Linux and in the smoke run (`--smoke`); elsewhere on Windows WebView2 keeps its profile in
+`%LOCALAPPDATA%\com.padurets.quotum\EBWebView`. Measurements that wait for the hub go to
 `app-spool.jsonl` in `quotum`'s state folder.
 
 **Its life.** A second start of the app opens the window of the first. Closing the

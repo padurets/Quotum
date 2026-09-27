@@ -2859,6 +2859,7 @@ dependencies = [
  "getrandom 0.4.3",
  "ksni",
  "libc",
+ "log",
  "quotum-core",
  "serde",
  "serde_json",

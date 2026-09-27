@@ -1,5 +1,9 @@
 use crate::{hub::HubState, shell::Shell, window::*};
-use std::{sync::Arc, thread, time::Duration};
+use std::{
+    sync::{Arc, mpsc},
+    thread,
+    time::{Duration, Instant},
+};
 use tauri::webview::{NewWindowResponse, PageLoadEvent};
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_window_state::{StateFlags, WindowExt};
@@ -8,34 +12,85 @@ pub fn is_open(shell: &Shell) -> bool {
     shell.host.app.get_webview_window(LABEL).is_some()
 }
 
-/// Shows the window: creates it if there is none, on a thread of its own.
-pub fn open(shell: &Arc<Shell>) {
+/// Shows the window: creates it if there is none, on a thread of its own. `from` names who
+/// asked, for the log.
+pub fn open(shell: &Arc<Shell>, from: &'static str) {
     let intent = opening(shell);
     let shell = shell.clone();
     thread::spawn(move || {
         let _intent = intent;
-        open_now(&shell);
+        open_now(&shell, from);
     });
 }
 
-fn open_now(shell: &Arc<Shell>) {
+/// How long a request waits, from its start, for the main thread to tell whether the window
+/// it found is still there, and for a closing one to go. The main thread may be busy for a
+/// while with the window that is closing, or with one being created. The UI smoke waits
+/// 20 s for the window after a second start.
+const WAIT_LIMIT: Duration = Duration::from_secs(15);
+
+/// Milliseconds since `start`, for the log of opening the window.
+fn ms(start: Instant) -> u128 {
+    start.elapsed().as_millis()
+}
+
+fn open_now(shell: &Arc<Shell>, from: &'static str) {
+    let start = Instant::now();
     if shell.exiting() {
         return;
     }
+    shell.hub_log.line(&format!("app: {from} asks for the window"));
     let _creating = shell.window_lock.lock().unwrap_or_else(|e| e.into_inner());
     let app = &shell.host.app;
     if let Some(window) = app.get_webview_window(LABEL) {
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
-        drop(_creating);
-        follow(shell);
-        return;
+        // A second start can hand over while Tauri still holds a closed window under its
+        // label: off the screen and without its web view, but not destroyed yet. Showing it
+        // shows nothing, and the request would be spent: a new window comes once it has gone.
+        match alive(shell, window.clone(), start + WAIT_LIMIT) {
+            Some(true) => {
+                // The UI smoke (desktop/smoke/windows-ui.ps1) reads this line.
+                shell.hub_log.line(&format!("app: found the window {LABEL} at {} ms", ms(start)));
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+                drop(_creating);
+                follow(shell);
+                return;
+            }
+            // A window whose creation failed answers the same, and never goes.
+            Some(false) => {
+                shell
+                    .hub_log
+                    .line(&format!("app: the window {LABEL} is closing, or was never created, at {} ms", ms(start)));
+                while app.get_webview_window(LABEL).is_some() {
+                    if shell.exiting() {
+                        return;
+                    }
+                    if start.elapsed() >= WAIT_LIMIT {
+                        shell.hub_log.line(&format!("app: the window {LABEL} did not go within {} ms", ms(start)));
+                        return;
+                    }
+                    thread::sleep(Duration::from_millis(50));
+                }
+                shell.hub_log.line(&format!("app: the window {LABEL} went at {} ms", ms(start)));
+            }
+            // No answer by the deadline, which counts from the request and so includes its wait
+            // for the lock: the main thread is stuck or far behind. A new window cannot be made
+            // while the label is taken, and a show queued now could come long after it was asked
+            // for: the request ends here, in the log.
+            None => {
+                shell
+                    .hub_log
+                    .line(&format!("app: no answer within {} ms whether the window {LABEL} is still there", ms(start)));
+                return;
+            }
+        }
     }
-    // A window just closed may still hold its label for a moment.
-    for _ in 0..20 {
+    // A window that went may still hold its label for a moment.
+    for attempt in 1..=20 {
+        shell.hub_log.line(&format!("app: attempt {attempt} to create the window {LABEL} at {} ms", ms(start)));
         let (state, generation) = shell.hub();
-        match build(shell, &state, generation) {
+        match build(shell, &state, generation, start) {
             Ok(_) => {
                 drop(_creating);
                 if shell.generation() != generation {
@@ -44,14 +99,30 @@ fn open_now(shell: &Arc<Shell>) {
                 return;
             }
             Err(e) => {
-                shell.hub_log.line(&format!("app: the window did not open: {e}"));
+                shell.hub_log.line(&format!("app: the window did not open at {} ms: {e}", ms(start)));
                 thread::sleep(Duration::from_millis(100));
             }
         }
     }
+    shell.hub_log.line(&format!("app: gave up on the window after {} ms", ms(start)));
 }
 
-fn build(shell: &Arc<Shell>, state: &HubState, generation: u64) -> tauri::Result<tauri::WebviewWindow> {
+/// Whether `window` is still there, as the main thread tells: there a getter of a closing
+/// window fails at once. `None` without an answer by `deadline`. Not asked on a worker: a
+/// getter there waits for the main thread, for ever if it is stuck.
+fn alive(shell: &Shell, window: tauri::WebviewWindow, deadline: Instant) -> Option<bool> {
+    let (answer, answered) = mpsc::channel();
+    shell
+        .host
+        .app
+        .run_on_main_thread(move || {
+            let _ = answer.send(window.is_visible().is_ok());
+        })
+        .ok()?;
+    answered.recv_timeout(deadline.saturating_duration_since(Instant::now())).ok()
+}
+
+fn build(shell: &Arc<Shell>, state: &HubState, generation: u64, start: Instant) -> tauri::Result<tauri::WebviewWindow> {
     let app = &shell.host.app;
     let navigating = shell.clone();
     let loading = shell.clone();
@@ -110,6 +181,15 @@ fn build(shell: &Arc<Shell>, state: &HubState, generation: u64) -> tauri::Result
     // this worker can hold its cache while that hook waits for it, blocking both
     // threads. Queue placement after the hook, on the same event loop.
     window.run_on_main_thread(move || {
+        // `build` returns before the event loop creates the window, and Tauri tells a failure
+        // only to `log`. Here, after that, a getter of a window never created fails at once.
+        match ready.is_visible() {
+            Ok(_) => shell.hub_log.line(&format!("app: the window {LABEL} is up after {} ms", ms(start))),
+            Err(e) => {
+                shell.hub_log.line(&format!("app: the window {LABEL} was not created at {} ms: {e}", ms(start)));
+                return;
+            }
+        }
         if shell.exiting() {
             return;
         }
@@ -186,7 +266,7 @@ pub fn reenter(shell: &Arc<Shell>) {
     if is_open(shell) {
         navigate_current(shell, true);
     } else {
-        open(shell);
+        open(shell, "reenter");
     }
 }
 

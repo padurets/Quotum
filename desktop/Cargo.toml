@@ -20,6 +20,8 @@ getrandom = "0.4.3"
 sys-locale = "0.3.2"
 url = "2.5.8"
 toml_edit = "0.25.15"
+# Tauri reports a window its event loop could not create only through `log`.
+log = "0.4.34"
 
 [target."cfg(unix)".dependencies]
 libc = "0.2.189"
