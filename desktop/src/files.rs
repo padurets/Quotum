@@ -18,12 +18,14 @@ pub struct Dirs {
     /// `app.json`, `app.lock`, the hub's database (`hub/`), and on Linux the web view's data.
     pub data: PathBuf,
     pub logs: PathBuf,
-    /// The web view's profile, in the smoke run only (elsewhere it is the system's choice).
+    /// The web view's profile, set in the smoke run only. Otherwise Electron keeps it in
+    /// `data/chromium`, and WebView2 in `EBWebView` of the system's folder for the app
+    /// (`%LOCALAPPDATA%\com.padurets.quotum`), even with `QUOTUM_APP_DATA_DIR`.
     pub webview: Option<PathBuf>,
 }
 
 impl Dirs {
-    /// `QUOTUM_APP_DATA_DIR` moves everything, for the smoke run and for tests.
+    /// `QUOTUM_APP_DATA_DIR` moves the data and the logs, for the smoke run and for tests.
     pub fn new(data: PathBuf, logs: PathBuf, smoke: bool) -> Dirs {
         match std::env::var_os("QUOTUM_APP_DATA_DIR").filter(|d| !d.is_empty()) {
             Some(dir) => {
@@ -152,11 +154,29 @@ impl log::Log for TauriLog {
 
     fn log(&self, record: &log::Record) {
         if let (true, Some(file)) = (self.enabled(record.metadata()), self.0.get()) {
-            file.line(&format!("app: tauri: {}: {}", record.target(), record.args()));
+            file.line(&tauri_line(record.target(), &record.args().to_string()));
         }
     }
 
     fn flush(&self) {}
+}
+
+/// A line of the hub's log for a record of Tauri's, with the value of every `key=` cut out:
+/// Tauri names a URL it could not navigate to, and the window's address carries the key of
+/// the hub's current start, which stays in no log.
+fn tauri_line(target: &str, message: &str) -> String {
+    let mut line = format!("app: tauri: {target}: ");
+    let mut rest = message;
+    while let Some(at) = rest.find("key=") {
+        let value = at + "key=".len();
+        line.push_str(&rest[..value]);
+        line.push('…');
+        // The key is base64url.
+        let length = rest[value..].find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        rest = &rest[value + length.unwrap_or(rest.len() - value)..];
+    }
+    line.push_str(rest);
+    line
 }
 
 /// Sends Tauri's warnings and errors to `file`, from the first call on.
@@ -207,6 +227,38 @@ mod tests {
         })
         .unwrap();
         assert!(PORTS.contains(&port) && port != busy, "{port}");
+    }
+
+    #[test]
+    fn tauris_warnings_and_errors_reach_the_hubs_log_without_the_key() {
+        let dir = temp("tauri-log");
+        let forward = TauriLog(OnceLock::new());
+        let _ = forward.0.set(Arc::new(Log::new(dir.join("hub.log"))));
+        let record = |level, target, text: &str| {
+            log::Log::log(
+                &forward,
+                &log::Record::builder().level(level).target(target).args(format_args!("{text}")).build(),
+            );
+        };
+        let key = "Ab-_9".repeat(8);
+        record(
+            log::Level::Error,
+            "tauri_runtime_wry",
+            &format!("failed to navigate to url http://127.0.0.1:23456/local?key={key}: gone"),
+        );
+        record(log::Level::Warn, "tauri::manager", "key=");
+        record(log::Level::Info, "tauri_runtime_wry", "not a warning");
+        record(log::Level::Error, "tao::platform_impl", "not Tauri's");
+        let text = fs::read_to_string(dir.join("hub.log")).unwrap();
+        let lines: Vec<&str> = text.lines().map(|l| l.split_once(' ').unwrap().1).collect();
+        assert_eq!(
+            lines,
+            [
+                "app: tauri: tauri_runtime_wry: failed to navigate to url http://127.0.0.1:23456/local?key=…: gone",
+                "app: tauri: tauri::manager: key=…",
+            ]
+        );
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
