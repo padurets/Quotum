@@ -1,4 +1,3 @@
-import {num} from './format';
 import type {Line} from './lines';
 import type {SeriesWork} from './types';
 
@@ -10,11 +9,11 @@ const HOUR = 3_600_000;
 export const WORK_PACE_FROM = 30 * 60_000;
 /**
  * A pace slower than this (percent per hour of work) spends nothing worth foreseeing: the
- * hundreds of hours it would last say nothing, and the pace itself reads "≈ 0".
+ * hundreds of hours it would last say nothing, and the pace itself reads "≈ 0" (`rateText`).
  */
 export const MIN_RATE = 0.05;
-/** What an hour of work spends, in percent, the same in its cell and in the forecast's tooltip: one too small to foresee from reads "≈ 0". */
-export const perWorkText = (value: number) => (value > 0 && value < MIN_RATE ? '≈ 0' : num(value, 1));
+/** Under this share of the spending during work, most of it went elsewhere and an hour of work looks dearer than it is. */
+const LOW_SHARE = 50;
 /** The pace is taken over less work than the hours shown when it had less than this share of them: a few minutes at the edges of the measurements do not count. */
 const BASIS_SHARE = 0.9;
 
@@ -33,9 +32,23 @@ export type WorkReason = 'unknown' | 'none' | 'short' | 'nospend' | 'slow';
 /**
  * A cell about agent work: a number (milliseconds of work, percent per hour of work, or
  * percent of the spending), work enough to last beyond the window's reset (`untilReset`,
- * milliseconds of work left), or why there is none.
+ * milliseconds of work left), nothing left to work on (`usedUp`), or why there is none.
  */
-export type WorkCell = {value: number} | {untilReset: number} | {none: WorkReason};
+export type WorkCell = {value: number} | {untilReset: number} | {usedUp: true} | {none: WorkReason};
+
+/** What a dash's tooltip says why: a reason, or one about the whole period told since when work is known. */
+export type DashText = Exclude<WorkReason, 'unknown'> | 'noneSince' | 'nospendSince';
+
+/**
+ * What the tooltip of a dash says (`text`), and since when work is known as a line of its
+ * own (`knownFrom`). Where work is known from later than the period begins (`since`), a
+ * reason about the whole period (none worked, nothing spent) is told since then instead: the
+ * spending before is in the period's, and the work before is not known.
+ */
+export function dashOf(reason: Exclude<WorkReason, 'unknown'>, since: number | null): {text: DashText; knownFrom: number | null} {
+  if (since !== null && (reason === 'none' || reason === 'nospend')) return {text: `${reason}Since`, knownFrom: null};
+  return {text: reason, knownFrom: since};
+}
 
 /**
  * A window's cells about agent work over the period: how long agents worked on its
@@ -53,15 +66,18 @@ export function workCells(work: SeriesWork, remaining: number, resetInMs: number
     return {work: unknown, perwork: unknown, workleft: unknown, during: unknown};
   }
   const during: WorkCell = work.consumed > 0 ? {value: (work.duringWork / work.consumed) * 100} : {none: 'nospend'};
+  // Nothing left is what the forecast says, however the work went.
+  const usedUp = remaining <= 0 ? ({usedUp: true} as const) : null;
   // With no work at all, all of the spending went elsewhere; with work mostly in gaps between
   // measurements, whose spending is not known, the share would say 0 of work that was there.
-  if (!work.ms) return {work: {none: 'none'}, perwork: {none: 'none'}, workleft: {none: 'none'}, during};
+  if (!work.ms) return {work: {none: 'none'}, perwork: {none: 'none'}, workleft: usedUp ?? {none: 'none'}, during};
   const short = {none: 'short'} as const;
-  if (work.coveredMs < WORK_PACE_FROM) return {work: {value: work.ms}, perwork: short, workleft: short, during: short};
+  if (work.coveredMs < WORK_PACE_FROM) return {work: {value: work.ms}, perwork: short, workleft: usedUp ?? short, during: short};
   const pace = work.consumed / (work.coveredMs / HOUR);
   const leftMs = (remaining / pace) * HOUR;
   const workleft: WorkCell =
-    work.consumed <= 0 ? {none: 'nospend'} : pace < MIN_RATE ? {none: 'slow'} : resetInMs !== null && leftMs >= resetInMs ? {untilReset: leftMs} : {value: leftMs};
+    usedUp ??
+    (work.consumed <= 0 ? {none: 'nospend'} : pace < MIN_RATE ? {none: 'slow'} : resetInMs !== null && leftMs >= resetInMs ? {untilReset: leftMs} : {value: leftMs});
   return {work: {value: work.ms}, perwork: {value: pace}, workleft, during};
 }
 
@@ -79,12 +95,17 @@ export function lineWork(line: Pick<Line, 'work' | 'current' | 'remainingAtEnd'>
 
 /**
  * What the tooltips of a window's work cells add: since when its work is known, when that
- * is after the period begins (`since`); how much work the pace is taken over, when that is
- * notably less than the hours shown (`basis`).
+ * is after the period begins (`since`); how much work the pace and the share are taken over,
+ * when that is notably less than the hours shown (`basis`); and the share of the spending
+ * during work, when under half of it (`share`, percent), whether its column shows or not:
+ * the pace and what it foresees count the rest against the work.
  */
-export function workNotes(work: SeriesWork, periodFrom: number): {since: number | null; basis: number | null} {
+export function workNotes(work: SeriesWork, periodFrom: number): {since: number | null; basis: number | null; share: number | null} {
+  const measured = !!work.ms && work.coveredMs >= WORK_PACE_FROM;
+  const share = measured && work.consumed > 0 ? (work.duringWork / work.consumed) * 100 : null;
   return {
     since: work.ms !== null && work.from > periodFrom ? work.from : null,
-    basis: work.ms && work.coveredMs >= WORK_PACE_FROM && work.coveredMs < BASIS_SHARE * work.ms ? work.coveredMs : null,
+    basis: measured && work.coveredMs < BASIS_SHARE * work.ms! ? work.coveredMs : null,
+    share: share !== null && share < LOW_SHARE ? share : null,
   };
 }

@@ -10,6 +10,9 @@ export function num(value: number, digits: 0 | 1 | 2 = 0) {
   return formatter.format(value);
 }
 
+/** A rate, percent an hour, to a tenth, the same wherever it is told: one above 0 too small to read so reads "≈ 0". */
+export const rateText = (value: number) => (value > 0 && value < 0.05 ? '≈ 0' : num(value, 1));
+
 export function duration(ms: number, short = false) {
   const minutes = Math.max(0, Math.round(ms / 60000));
   if (minutes < 1) return t('time.underMinute');

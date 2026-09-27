@@ -1,10 +1,10 @@
 import {memo, useLayoutEffect, useMemo, useRef, useState, type ReactNode} from 'react';
 import {MINUTE, useNow} from '../lib/api';
 import type {History as HistoryData, Overview, SeriesWork} from '../lib/types';
-import {countdown, num, stamp, workHours} from '../lib/format';
+import {countdown, num, rateText, stamp, workHours} from '../lib/format';
 import {level} from '../lib/quota';
 import {FORECAST_WIDTHS, LIVE_COLUMNS, RANGE_COLUMNS, forecastLayout, forecastRow, spentOf, type ForecastColumn, type Outlook, type Pace, type Spent} from '../lib/forecast';
-import {lineWork, perWorkText, workNotes, type WorkCell, type WorkColumn, type WorkReason} from '../lib/work';
+import {dashOf, lineWork, workNotes, type DashText, type WorkCell, type WorkColumn} from '../lib/work';
 import {FORECAST, columnShown, planOf, withColumn, withHidden, type Arrange} from '../lib/view';
 import {linesOf, type Line} from '../lib/lines';
 import {usePrefs} from '../lib/prefs';
@@ -14,7 +14,7 @@ import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
 
 /** How fast the window goes, as the tooltip of its forecast says it. */
 const paceText = (pace: Pace) =>
-  pace.by === 'plan' ? t('forecast.planPace', {k: num(pace.k, 2)}) : t('forecast.rate', {rate: pace.rate < 0.05 ? '≈ 0' : num(pace.rate, 1)});
+  pace.by === 'plan' ? t('forecast.planPace', {k: num(pace.k, 2)}) : t('forecast.rate', {rate: rateText(pace.rate)});
 
 /** The last column's text and tooltip, a part a line; its colour is the outlook's tone. */
 function outlookCell(ahead: Outlook): {text: string; title: string} {
@@ -65,39 +65,46 @@ const HEADINGS: Record<ForecastColumn, {title: Key; range?: Key; hint?: Key}> = 
 const heading = (column: ForecastColumn, range: boolean) => t((range && HEADINGS[column].range) || HEADINGS[column].title);
 
 /** Why a cell about agent work is a dash. */
-const REASONS: Record<Exclude<WorkReason, 'unknown'>, Key> = {none: 'work.none', short: 'work.short', nospend: 'work.noSpend', slow: 'work.slow'};
-/** Where work is known from later than the period begins, a reason about the whole period says since when instead. */
-const REASONS_SINCE: Partial<Record<WorkReason, Key>> = {none: 'work.noneSince', nospend: 'work.noSpendSince'};
+const REASONS: Record<DashText, Key> = {
+  none: 'work.none',
+  noneSince: 'work.noneSince',
+  short: 'work.short',
+  nospend: 'work.noSpend',
+  nospendSince: 'work.noSpendSince',
+  slow: 'work.slow',
+};
 
 type Cell = {content: ReactNode; title?: string; className?: string};
 
 /**
  * A cell about agent work, with a tooltip of a part a line: what an hour of work spent
- * for the forecast (`perWork`), how much work that is taken over, that the share is an
- * upper bound, since when work is known, or why there is no number (and since when that
- * holds, where work is known from later than the period begins).
+ * for the forecast (`perWork`), how much work that and the share are taken over, that the
+ * share is an upper bound, that little of the spending came during work, since when work is
+ * known, or why there is no number.
  */
 function workCell(column: WorkColumn, cell: WorkCell, work: SeriesWork, periodFrom: number, resetAt: number | null, perWork: number | null): Cell {
   const notes = workNotes(work, periodFrom);
-  const since = notes.since !== null ? [t('work.since', {time: stamp(notes.since)})] : [];
+  const known = (at: number | null) => (at !== null ? [t('work.since', {time: stamp(at)})] : []);
   if ('none' in cell) {
     if (cell.none === 'unknown') return {content: '—', title: t('work.unknown', {time: stamp(work.from)})};
-    const sinceKey = REASONS_SINCE[cell.none];
-    return {content: '—', title: notes.since !== null && sinceKey ? t(sinceKey, {time: stamp(notes.since)}) : [t(REASONS[cell.none]), ...since].join('\n')};
+    const dash = dashOf(cell.none, notes.since);
+    return {content: '—', title: [t(REASONS[dash.text], {time: notes.since === null ? '' : stamp(notes.since)}), ...known(dash.knownFrom)].join('\n')};
   }
   const paced = column === 'perwork' || column === 'workleft';
   const lines = [
-    ...(column === 'workleft' && perWork !== null ? [t('work.basis', {value: perWorkText(perWork)})] : []),
-    ...(paced && notes.basis !== null ? [t('work.basisMeasured', {time: workHours(notes.basis)})] : []),
+    ...(column === 'workleft' && perWork !== null ? [t('work.basis', {value: rateText(perWork)})] : []),
+    ...(column !== 'work' && notes.basis !== null ? [t('work.basisMeasured', {time: workHours(notes.basis)})] : []),
+    ...(paced && notes.share !== null ? [t('work.lowShare', {value: num(notes.share)})] : []),
     ...(column === 'during' ? [t('work.upperBound')] : []),
-    ...since,
+    ...known(notes.since),
   ];
+  if ('usedUp' in cell) return {content: t('work.usedUp'), title: known(notes.since).join('\n') || undefined};
   if ('untilReset' in cell) return {content: t('work.untilReset'), title: [t('work.untilResetHint', {time: workHours(cell.untilReset), reset: stamp(resetAt!)}), ...lines].join('\n')};
   const content =
     column === 'work'
       ? workHours(cell.value)
       : column === 'perwork'
-        ? t('table.perHour', {value: perWorkText(cell.value)})
+        ? t('table.perHour', {value: rateText(cell.value)})
         : column === 'workleft'
           ? t('work.left', {time: workHours(cell.value)})
           : t('work.during', {value: num(cell.value)});
@@ -171,7 +178,7 @@ export const Forecast = memo(function Forecast({
         start: edge(line.remainingAtStart),
         end: edge(line.remainingAtEnd),
         spent: {content: spentText(spentOf(line))},
-        pace: {content: line.coveredMs >= PACE_FROM ? t('table.perHour', {value: num(line.consumed / (line.coveredMs / 3_600_000), 1)}) : '—'},
+        pace: {content: line.coveredMs >= PACE_FROM ? t('table.perHour', {value: rateText(line.consumed / (line.coveredMs / 3_600_000))}) : '—'},
       } as Record<ForecastColumn, Cell>;
     }
     const row = forecastRow(line, live, source?.successAt ?? null, now, planOf(view, line.sourceId));

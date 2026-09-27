@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {lineWork, MIN_RATE, perWorkText, workCells, workNotes, WORK_PACE_FROM, type WorkCell} from '../lib/work';
-import {workHours} from '../lib/format';
+import {dashOf, lineWork, MIN_RATE, workCells, workNotes, WORK_PACE_FROM, type WorkCell} from '../lib/work';
+import {rateText, workHours} from '../lib/format';
 import {setLocale} from '../i18n';
 import type {SeriesWork} from '../lib/types';
 
@@ -42,7 +42,9 @@ test('each dash says why', () => {
   assert.equal(none(workCells(work({consumed: 0.1}), 38, null).workleft), 'slow', 'spent, but too little an hour of work to foresee');
   assert.equal(none(workCells(work({consumed: 0.63}), 38, null).workleft), 'slow', '0.03% an hour would last over a thousand hours');
   assert.equal(none(workCells(work({consumed: 21 * MIN_RATE}), 38, null).workleft), null);
-  assert.equal(value(workCells(work(), 0, null).workleft), 0, 'nothing left, nothing to work on');
+  assert.deepEqual(workCells(work(), 0, null).workleft, {usedUp: true}, 'nothing left, nothing to work on');
+  assert.deepEqual(workCells(work({coveredMs: 29 * MIN}), 0, null).workleft, {usedUp: true}, 'however the work went');
+  assert.deepEqual(workCells(work({ms: 0, coveredMs: 0}), 0, null).workleft, {usedUp: true});
 });
 
 test('work enough to last beyond the reset says so, in a period up to now', () => {
@@ -64,12 +66,25 @@ test('over a range what is left is what was left at its end, and the reset is on
   assert.equal(lineWork({...line, remainingAtEnd: null}, true, null, now), null, 'a range with no measurement has no end to foresee from');
 });
 
-test('a tooltip says since when work is known, and over how much work the pace is, only when that matters', () => {
-  assert.deepEqual(workNotes(work(), from), {since: null, basis: null});
-  assert.deepEqual(workNotes(work(), from - DAY), {since: from, basis: null}, 'known from later than the period begins');
-  assert.deepEqual(workNotes(work({ms: null}), from - DAY), {since: null, basis: null}, 'not known at all is its own dash');
-  assert.deepEqual(workNotes(work({coveredMs: 12 * HOUR}), from), {since: null, basis: 12 * HOUR});
-  assert.deepEqual(workNotes(work({coveredMs: 21 * HOUR - 2 * MIN}), from), {since: null, basis: null}, 'a couple of minutes at the edges of the measurements');
+test('a tooltip says since when work is known, over how much work the pace is, and that little came during work, only when that matters', () => {
+  const none = {since: null, basis: null, share: null};
+  assert.deepEqual(workNotes(work(), from), none);
+  assert.deepEqual(workNotes(work(), from - DAY), {...none, since: from}, 'known from later than the period begins');
+  assert.deepEqual(workNotes(work({ms: null}), from - DAY), none, 'not known at all is its own dash');
+  assert.deepEqual(workNotes(work({coveredMs: 12 * HOUR}), from), {...none, basis: 12 * HOUR});
+  assert.deepEqual(workNotes(work({coveredMs: 21 * HOUR - 2 * MIN}), from), none, 'a couple of minutes at the edges of the measurements');
+  assert.deepEqual(workNotes(work({duringWork: 6.2}), from), {...none, share: 10}, 'a tenth of the spending during work');
+  assert.deepEqual(workNotes(work({duringWork: 31}), from), none, 'half of it');
+  assert.deepEqual(workNotes(work({duringWork: 0, coveredMs: 29 * MIN}), from), none, 'too little work measured to tell a share');
+});
+
+test('a dash about the whole period says since when, where work is known from later', () => {
+  const since = from + DAY;
+  assert.deepEqual(dashOf('none', null), {text: 'none', knownFrom: null});
+  assert.deepEqual(dashOf('none', since), {text: 'noneSince', knownFrom: null}, 'none worked since then; before is not known');
+  assert.deepEqual(dashOf('nospend', since), {text: 'nospendSince', knownFrom: null}, 'the spending before is in the period’s');
+  assert.deepEqual(dashOf('short', since), {text: 'short', knownFrom: since}, 'a reason of its own, with since when as a line');
+  assert.deepEqual(dashOf('slow', null), {text: 'slow', knownFrom: null});
 });
 
 test('hours of work are minutes within the hour, tenths up to ten, whole hours after, and never days', () => {
@@ -85,10 +100,10 @@ test('hours of work are minutes within the hour, tenths up to ten, whole hours a
 
 test('a pace too small to foresee from reads "≈ 0" wherever it is told, and one that foresees never reads 0', () => {
   setLocale('en');
-  assert.deepEqual([0, 0.001, 0.03, MIN_RATE, 2.95].map(perWorkText), ['0', '≈ 0', '≈ 0', '0.1', '3']);
+  assert.deepEqual([0, 0.001, 0.03, MIN_RATE, 2.95].map(rateText), ['0', '≈ 0', '≈ 0', '0.1', '3']);
   for (const consumed of [0.21, 0.63, 1, 5]) {
     const cells = workCells(work({consumed}), 38, null);
     const pace = 'value' in cells.perwork ? cells.perwork.value : 0;
-    assert.equal(perWorkText(pace) === '≈ 0', 'none' in cells.workleft && cells.workleft.none === 'slow', `${consumed}% over 21 hours`);
+    assert.equal(rateText(pace) === '≈ 0', 'none' in cells.workleft && cells.workleft.none === 'slow', `${consumed}% over 21 hours`);
   }
 });
