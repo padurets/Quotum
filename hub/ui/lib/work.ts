@@ -119,14 +119,16 @@ export function lineWork(line: Pick<Line, 'work' | 'current' | 'remainingAtEnd' 
 
 /**
  * When a line's forecast by work over a period up to now reads otherwise as time passes:
- * hours of work short of the reset come to last to it once the reset is nearer than they
- * are, and the reset going by unmeasured leaves any of it waiting for a measurement.
+ * hours of work short of the reset, named or past a whole window, come to last to it once
+ * the reset is nearer than they are, and the reset going by unmeasured leaves any of it
+ * waiting for a measurement.
  * Nothing else about work moves with time; null where the reset is not ahead.
  */
 export function workLeftChangesAt(line: Pick<Line, 'work' | 'current' | 'remainingAtEnd' | 'minutes'>, resetAt: number | null, now: number): number | null {
   if (resetAt === null || resetAt <= now) return null;
   const left = lineWork(line, false, resetAt, now)?.workleft;
-  return left && 'value' in left ? Math.min(resetAt, Math.max(now + 1, Math.ceil(resetAt - left.value))) : resetAt;
+  const hours = !left ? null : 'value' in left ? left.value : 'outlasts' in left ? left.outlasts : null;
+  return hours === null ? resetAt : Math.min(resetAt, Math.max(now + 1, Math.ceil(resetAt - hours)));
 }
 
 /**

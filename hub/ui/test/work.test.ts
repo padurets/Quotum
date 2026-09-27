@@ -97,6 +97,11 @@ test('the hours of work left read otherwise when the reset comes nearer than the
   const turns = workLeftChangesAt(line, now + 2 * DAY, now)!;
   assert.equal(turns, Math.ceil(now + 2 * DAY - left.value), 'when the reset is as near as the hours');
   assert.ok('value' in lineWork(line, false, now + 2 * DAY, turns - 1)!.workleft && 'untilReset' in lineWork(line, false, now + 2 * DAY, turns)!.workleft, 'named until then, lasting to the reset from then');
+  // A window of a day, its reset (by a clock ahead) two days on: the 27 hours outlast the window until the reset is as near.
+  const day = {...line, minutes: 24 * 60};
+  const outlasts = workLeftChangesAt(day, now + 2 * DAY, now)!;
+  assert.equal(outlasts, Math.ceil(now + 2 * DAY - left.value));
+  assert.ok('outlasts' in lineWork(day, false, now + 2 * DAY, outlasts - 1)!.workleft && 'untilReset' in lineWork(day, false, now + 2 * DAY, outlasts)!.workleft, 'past the window until then, lasting to the reset from then');
   assert.equal(workLeftChangesAt(line, now + HOUR, now), now + HOUR, 'lasting to the reset already: it waits for a measurement once the reset goes by');
   assert.equal(workLeftChangesAt(line, now - MIN, now), null, 'waiting: only a measurement changes it');
   assert.equal(workLeftChangesAt(line, null, now), null, 'no reset told');
