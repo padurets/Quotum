@@ -550,8 +550,11 @@ th:last-child, td:last-child { padding-right: var(--table-edge, 12px); }
 /* A table scrolls within the dialog rather than widening it past a narrow screen. */
 .dialog .table-wrap { --table-edge: 24px; margin-inline: -24px; contain: inline-size; }
 td:first-child { color: var(--text); }
-/* A window's name wraps rather than widening the table past its widget: the columns beside it keep their room. */
+/* A window's name wraps rather than widening the table past its widget: the columns beside it keep their room. Its lines start after its colour, as in the list. */
 .panel.forecast td:first-child { white-space: normal; overflow-wrap: anywhere; }
+.forecast-name { display: flex; align-items: baseline; }
+.forecast-name > .swatch { flex-shrink: 0; }
+.forecast-name > :last-child { min-width: 0; }
 /* A row's colour, marked like the card it belongs to. */
 .swatch { display: inline-block; width: 3px; height: 13px; border-radius: 2px; margin-right: 10px; vertical-align: -2px; }
 

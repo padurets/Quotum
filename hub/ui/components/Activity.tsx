@@ -166,7 +166,8 @@ function Stacks({
   onStep: (direction: -1 | 1) => void;
 }) {
   const barMs = activity.barMs;
-  const left = 44;
+  // Room for the scale's longest label ("30 мин") within the widget.
+  const left = 48;
   const right = 12;
   const {box, svg, width, scale, hover, drag, x, clip, handlers} = useTimeAxis({from, to, end: to, cellMs: barMs, left, right, onSelect, onStep});
   const narrow = width < 560;
