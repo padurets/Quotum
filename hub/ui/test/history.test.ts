@@ -190,7 +190,7 @@ const HOUR = 3_600_000;
 test('news or a snapshot while a range is read: its answer may miss what came, so it is shown, not kept, and read again', async () => {
   const range = {from: NOW - 3 * HOUR, to: NOW - 2 * HOUR};
   const answer = {range: `${range.from}-${range.to}`, to: range.to};
-  for (const told of ['news', 'news, then of a later time', 'snapshot'] as const) {
+  for (const told of ['news', 'news, then of a later time', 'news of a later time, then this', 'snapshot'] as const) {
     const h = harness();
     h.loader.choose('24h', null);
     h.loader.open('b1');
@@ -201,9 +201,10 @@ test('news or a snapshot while a range is read: its answer may miss what came, s
     await h.advance(S);
     assert.equal(h.reads.length, 2, 'the range is being read');
     // The event comes before the (large) answer, which the hub put together before the measurement.
+    // A measurement taken now, told before or after: the earliest news decides.
+    if (told === 'news of a later time, then this') h.loader.news(NOW);
     if (told === 'snapshot') h.loader.snapshot(['s1']);
     else h.loader.news(range.from + 10 * MIN);
-    // A measurement taken now: the earlier news still decides.
     if (told === 'news, then of a later time') h.loader.news(NOW);
     await h.reads[1].answer(answer);
     await h.advance(LIVE_MIN_MS + S);
@@ -337,24 +338,26 @@ test('a range reaching past now, its end cut to now: news of a time after that, 
   assert.equal(h.reads.length, 3);
 });
 
+/** A board as its snapshot tells it, for the page's events that drive the loader (`follow`). */
+const SNAPSHOT: Snapshot = {
+  board: {id: 'b1', name: 'Home', personal: true},
+  view: {order: [], sizes: {}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}},
+  historyStart: 0,
+  sources: [],
+  sessions: {},
+  cadence: {},
+  mine: [],
+  boards: [],
+  resets: {resets: {}, trackers: [], past: {}},
+};
+
 test('a board left (signed out, gone), as the page tells it, is read no more, whatever comes due, is chosen or answers', async () => {
   const h = harness();
   const store = createStore(reduce, INITIAL);
   follow(h.loader, store);
-  const snapshot: Snapshot = {
-    board: {id: 'b1', name: 'Home', personal: true},
-    view: {order: [], sizes: {}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}},
-    historyStart: 0,
-    sources: [],
-    sessions: {},
-    cadence: {},
-    mine: [],
-    boards: [],
-    resets: {resets: {}, trackers: [], past: {}},
-  };
   const opened = () => {
     store.dispatch({type: 'board-open', id: 'b1'});
-    store.dispatch({type: 'hub', event: {type: 'snapshot', data: snapshot}});
+    store.dispatch({type: 'hub', event: {type: 'snapshot', data: SNAPSHOT}});
   };
   const news = () => store.dispatch({type: 'hub', event: {type: 'history', data: {sources: ['s1'], since: NOW}}});
   h.loader.choose('24h', null);
@@ -384,4 +387,27 @@ test('a board left (signed out, gone), as the page tells it, is read no more, wh
   await h.reads[4].fail(new ApiError(400, 'invalid_request'));
   await h.advance(MIN);
   assert.deepEqual([h.dropped(), h.reads.length], [0, 5]);
+});
+
+test('news the page hears tells the loader its time: a kept past range it falls in is read again when stepped back to', async () => {
+  const h = harness();
+  const store = createStore(reduce, INITIAL);
+  follow(h.loader, store);
+  h.loader.choose('24h', null);
+  store.dispatch({type: 'board-open', id: 'b1'});
+  store.dispatch({type: 'hub', event: {type: 'snapshot', data: SNAPSHOT}});
+  await h.reads[0].answer();
+  const range = {from: NOW - 3 * HOUR, to: NOW - 2 * HOUR};
+  h.loader.choose('24h', range);
+  await h.advance(S);
+  await h.reads[1].answer({range: `${range.from}-${range.to}`, to: range.to});
+  h.loader.choose('24h', null);
+  await h.advance(S);
+  // A machine that was offline delivers measurements of a time inside the range.
+  store.dispatch({type: 'hub', event: {type: 'history', data: {sources: ['s1'], since: range.from + 10 * MIN}}});
+  await h.advance(MIN);
+  const reads = h.reads.length;
+  h.loader.choose('24h', range);
+  await h.advance(S);
+  assert.equal(h.reads.length, reads + 1, 'read again, not taken from what was kept');
 });
