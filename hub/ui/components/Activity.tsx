@@ -64,7 +64,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const sources = useNamed(arrange.view.names);
   const prefs = usePrefs();
   const by = prefs.activityBy;
-  useLocale();
+  const locale = useLocale();
   const selected = useTimeRange();
   const now = useClock(now => frameChangesAt(selected, history?.cellMs ?? 60_000, now));
   const historyStart = useHistoryBegins();
@@ -72,10 +72,16 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const from = frame.from;
   const to = measuredTo(frame, history, selected, prefs.range);
   const activity = history?.activity ?? null;
-  const groups = activity?.by[by] ?? [];
-  const colors = groupColors(groups, by, arrange.view, source => sources.find(s => s.id === source)?.provider ?? '');
-  const names = groups.map(group => groupName(group, by, sources));
-  const muted = groups.map(group => !!prefs.muted[mutedKey(by, group.key)]);
+  // What the groups look like changes with the answer, the board and the legend, not with time: the same objects as the clock moves the frame.
+  const {groups, colors, names, muted, shown} = useMemo(() => {
+    const groups = activity?.by[by] ?? [];
+    const colors = groupColors(groups, by, arrange.view, source => sources.find(s => s.id === source)?.provider ?? '');
+    const names = groups.map(group => groupName(group, by, sources));
+    const muted = groups.map(group => !!prefs.muted[mutedKey(by, group.key)]);
+    const shown = groups.flatMap((group, i) => (muted[i] ? [] : [{group, color: colors[i], name: names[i]}]));
+    return {groups, colors, names, muted, shown};
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activity, by, arrange.view, sources, prefs.muted, locale]);
   const shownSources = sources.filter(source => !isHidden(arrange.view, cardId(source.id)));
   // Known from later than the period the hub answered begins (not the page's frame, whose clock may be a minute behind).
   const since = history && activity?.known && activity.known.from > history.since ? activity.known.from : null;
@@ -115,7 +121,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
         <>
           <Stacks
             activity={activity!}
-            groups={groups.flatMap((group, i) => (muted[i] ? [] : [{group, color: colors[i], name: names[i]}]))}
+            groups={shown}
             from={from}
             to={to}
             unknownTo={since}
@@ -184,21 +190,25 @@ function Stacks({
 
   // One path a group, stacked in the order of the groups. Bars wide enough to read as such
   // stand apart; narrower ones run together into a band, so a long period is not striped,
-  // and only the band's edges part it from the groups above and below.
+  // and only the band's edges part it from the groups above and below. They are drawn from
+  // the start of the answer (`origin`) and moved into place whole, clipped to the plot: as
+  // the clock moves the frame on by a cell, only where they stand changes.
+  const perMs = (width - left - right) / span;
+  const origin = activity.since;
   const paths = useMemo(() => {
     const base = new Map<number, number>();
     const edge = (value: number) => value.toFixed(1);
-    const apart = ((width - left - right) * barMs) / span >= 8;
+    const at = (time: number) => (time - origin) * perMs;
+    const apart = perMs * barMs >= 8;
     const gap = apart ? 0.5 : 0;
     return groups.map(({group}) => {
       const runs: {x0: number; x1: number; low: number; high: number}[][] = [];
       let previous: number | null = null;
       for (const [start, ms] of group.cells) {
-        if (start + barMs <= from || start >= to) continue;
         const low = base.get(start) ?? 0;
         const high = low + ms;
         base.set(start, high);
-        const bar = {x0: x(start) + gap, x1: x(start + barMs) - gap, low, high};
+        const bar = {x0: at(start) + gap, x1: at(start + barMs) - gap, low, high};
         if (!apart && previous === start - barMs) runs.at(-1)!.push(bar);
         else runs.push([bar]);
         previous = start;
@@ -212,7 +222,7 @@ function Stacks({
         .join('');
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groups, from, to, barMs, width, height, vertical.max]);
+  }, [groups, origin, perMs, barMs, height, vertical.max]);
 
   const bar = hover === null ? null : activity.cells.find(([start]) => start === hover);
   // What the hovered bar draws: over one whose groups are all switched off, nothing tells of it, as over an empty one.
@@ -277,9 +287,13 @@ function Stacks({
                 </text>
               </g>
             )}
-            {groups.map(({group, color}, i) => (
-              <path key={group.key} d={paths[i]} fill={color} className="activity-stack" />
-            ))}
+            <g clipPath={`url(#${CSS.escape(clip)})`}>
+              <g transform={`translate(${(left + (origin - from) * perMs).toFixed(1)} 0)`}>
+                {groups.map(({group, color}, i) => (
+                  <path key={group.key} d={paths[i]} fill={color} className="activity-stack" />
+                ))}
+              </g>
+            </g>
           </g>
         </g>
         {drag && <rect x={Math.min(drag.start, drag.end)} width={Math.abs(drag.end - drag.start)} y={top} height={height - top - bottom} className="selection" />}
