@@ -477,7 +477,16 @@ const all: DemoSet = {
       expect: [{state: 'widgets'}, {tableLayout: 'list'}],
       look: ['The table, a third of the board wide, is a list: each window its name and what is left, then the rest with their headings; nothing scrolls sideways'],
     },
-    {kind: 'board', id: 'quiet', name: 'Quiet corner', owner: 'ana', members: [], agents: true, expect: [{rows: 'none'}]},
+    {
+      kind: 'board',
+      id: 'quiet',
+      name: 'Quiet corner',
+      owner: 'ana',
+      members: [],
+      agents: true,
+      // No agent on it: over a month, only from when work was known.
+      expect: [{rows: 'none'}, {activityEmpty: 'none', range: '24h', from: 0, to: 0}, {activityEmpty: 'noneSince', range: '30d', from: 0, to: 0}],
+    },
     {kind: 'board', id: 'night', name: 'Night shift', owner: 'ana', members: [], agents: true, expect: [{rows: 'noneShown'}]},
     {kind: 'board', id: 'empty', name: 'Empty board', owner: 'ana', members: ['cleo'], expect: [{state: 'onboarding'}]},
 
@@ -586,6 +595,7 @@ const all: DemoSet = {
       agents: IOS_AGENTS,
       on: {ana: {}},
       expect: [
+        {work: 'gemini:weekly', range: '24h', paceWhy: 'short', leftWhy: 'short', from: 0, to: 0},
         {title: 'Antigravity 2'},
         {stale: false, to: 3 * MIN},
         {stale: true, from: 4 * MIN, to: 13 * MIN},
@@ -635,6 +645,7 @@ const all: DemoSet = {
       agents: PRO_AGENTS,
       on: {ana: {}, night: {hidden: true}},
       expect: [
+        {work: 'session', range: '24h', left: 'untilReset', from: 0, to: 0},
         {title: 'Codex'},
         {agents: 11, drawn: false, to: 5 * MIN},
         {agents: 12, drawn: false, from: 5 * MIN + 15 * SECOND, to: 10 * MIN},
@@ -913,6 +924,10 @@ const all: DemoSet = {
       expect: [
         {forecast: 'weekly', plan: 'even'},
         {board: 'team', title: 'Codex · Ben'},
+        // Dan's hours on it show on his board, where its measurements while he worked were too few for a pace;
+        // Team does not show him, and says so of the agents it shows.
+        {work: 'weekly', board: 'dan', range: '7d', hours: 5, paceWhy: 'short', leftWhy: 'short', from: 0, to: 0},
+        {work: 'weekly', board: 'team', range: '7d', none: 'none', from: 0, to: 0},
         {title: 'Codex'},
       ],
     },
@@ -939,7 +954,12 @@ const all: DemoSet = {
       agents: WEEK_AGENTS,
       // Without a plan: the example is about agent work.
       on: {dan: {plan: 'off'}, 'with-dan': {plan: 'off'}},
-      expect: [{title: 'Claude'}, {work: 'weekly', range: '7d', hours: 16, perHour: 4.1, left: 10.1, during: 89, from: 0, to: 0}],
+      // The share during work is off on the board: turned on, it tells 89%.
+      expect: [
+        {title: 'Claude'},
+        {work: 'weekly', range: '7d', hours: 16, perHour: 4.1, left: 10.1, during: 'hidden', from: 0, to: 0},
+        {work: 'weekly', range: '30d', since: -10 * DAY, from: 0, to: 0},
+      ],
     },
 
     // Measured at the hub's pace, one reason each, all by one machine asking every 15 seconds.
@@ -972,7 +992,7 @@ const all: DemoSet = {
       paced: true,
       windows: [weekly({since: -3 * DAY, use: () => 60})],
       agents: [{machine: 'pacer', origin: 'terminal', project: 'paced', since: -HOUR, works: ALWAYS}],
-      expect: [{error: null}, {from: 15 * SECOND, to: 75 * SECOND, cadence: 'nextIn', why: 'inUse'}],
+      expect: [{error: null}, {from: 15 * SECOND, to: 75 * SECOND, cadence: 'nextIn', why: 'inUse'}, {work: 'weekly', range: '24h', perHour: 0, leftWhy: 'nospend', from: 0, to: 0}],
     },
     {
       kind: 'card',

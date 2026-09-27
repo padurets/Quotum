@@ -17,7 +17,8 @@ import type {ResetEvent, ResetProvider} from '../../server/domain/resets.js';
 import {setLocale} from '../../ui/i18n/index.js';
 import {agentRows, byActivity, drawn, folderOf, machinesOf} from '../../ui/lib/agents.js';
 import {LIVE_COLUMNS, forecastLayout, forecastRow} from '../../ui/lib/forecast.js';
-import {lineWork} from '../../ui/lib/work.js';
+import {lineWork, workNotes} from '../../ui/lib/work.js';
+import {activityEmpty} from '../../ui/lib/activity.js';
 import {chartEvents, chartResets, linesOf} from '../../ui/lib/lines.js';
 import {frameOf, step} from '../../ui/lib/periods.js';
 import {planNote, started} from '../../ui/lib/plan.js';
@@ -218,10 +219,15 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
       const columns = LIVE_COLUMNS.filter(column => columnShown(overview.view, FORECAST, column));
       return {tableLayout: forecastLayout(columns, span * 84 + (span - 1) * 16 - 2)};
     }
-    if ('activity' in check || 'activityOf' in check || 'activityTotals' in check || 'activityKnownFrom' in check) {
+    if ('activity' in check || 'activityOf' in check || 'activityTotals' in check || 'activityKnownFrom' in check || 'activityEmpty' in check) {
       if (isHidden(overview.view, ACTIVITY)) return `the activity widget is hidden on the board ${entry.id}`;
       const {range} = check as unknown as {range: string};
-      const {activity} = await reading.history(entry.id, range);
+      const history = await reading.history(entry.id, range);
+      const {activity} = history;
+      if ('activityEmpty' in check) {
+        const shown = overview.sources.filter(source => !isHidden(overview.view, cardId(source.id))).length;
+        return {activityEmpty: activityEmpty(history, shown)?.key ?? null, range};
+      }
       const tenth = (ms: number) => Math.round(ms / 360_000) / 10;
       const cardOf = (source: string) => [...stand.sources].find(([, id]) => id === source)?.[0] ?? source;
       const named = (by: 'source' | 'project' | 'device') =>
@@ -311,20 +317,28 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
   }
   if ('work' in card && live) {
     if (isHidden(overview.view, FORECAST)) return `the table is hidden on the board ${board}`;
-    const line = linesOf(await reading.history(board, card.range), overview, overview.view, live.kind).find(l => l.sourceId === source.id && l.windowId === id);
+    const history = await reading.history(board, card.range);
+    const line = linesOf(history, overview, overview.view, live.kind).find(l => l.sourceId === source.id && l.windowId === id);
     if (!line) return `no line of ${id} in the table`;
     const cells = lineWork(line, false, live.resetAt, now);
-    if (!cells) return `no work of ${id}`;
+    if (!cells || !line.work) return `no work of ${id}`;
     const tenth = (value: number) => Math.round(value * 10) / 10;
     const hours = (cell: (typeof cells)['work']) => ('value' in cell ? tenth(cell.value / 3_600_000) : 'untilReset' in cell ? 'untilReset' : undefined);
+    const why = (cell: (typeof cells)['work']) => ('none' in cell ? cell.none : undefined);
+    // A column off on the board shows nothing to check.
+    const on = <T,>(column: 'work' | 'perwork' | 'workleft' | 'during', value: T) => (columnShown(overview.view, FORECAST, column) ? value : 'hidden');
+    const since = workNotes(line.work, history.since).since;
     Object.assign(values, {
       work: id,
       range: card.range,
-      hours: hours(cells.work),
-      perHour: 'value' in cells.perwork ? tenth(cells.perwork.value) : undefined,
-      left: hours(cells.workleft),
-      during: 'value' in cells.during ? Math.round(cells.during.value) : undefined,
-      none: 'none' in cells.work ? cells.work.none : undefined,
+      hours: on('work', hours(cells.work)),
+      perHour: on('perwork', 'value' in cells.perwork ? tenth(cells.perwork.value) : undefined),
+      left: on('workleft', hours(cells.workleft)),
+      during: on('during', 'value' in cells.during ? Math.round(cells.during.value) : undefined),
+      none: on('work', why(cells.work)),
+      paceWhy: on('perwork', why(cells.perwork)),
+      leftWhy: on('workleft', why(cells.workleft)),
+      since: since === null ? null : since - stand.start,
     });
   }
   if ('reachesBack' in card) {

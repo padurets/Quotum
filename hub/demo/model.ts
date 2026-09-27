@@ -227,11 +227,24 @@ export type CardCheck = Span & {board?: string} & (
     /** How many whole days back ‹ takes the chart from 30 days, step by step, on the card's board: where the history starts. */
     | {reachesBack: number}
     /**
-     * A window's cells about agent work in the table over `range`: work time, spent per
-     * hour of it, hours of work left (to a tenth), the share of spending during work
-     * (whole percent), or why there are none.
+     * A window's cells about agent work in the table over `range`, as its board shows them
+     * ('hidden' for a column off there): work time, spent per hour of it, hours of work
+     * left (to a tenth) or 'untilReset', the share of spending during work (whole percent),
+     * why a cell is a dash (`none` for the work time, `paceWhy`, `leftWhy`), and since when
+     * work is known where that is after the period begins (`since`, from `start`).
      */
-    | {work: string; range: string; hours?: number; perHour?: number; left?: number; during?: number; none?: string}
+    | {
+        work: string;
+        range: string;
+        hours?: number;
+        perHour?: number;
+        left?: number | 'untilReset';
+        during?: number | 'hidden';
+        none?: string;
+        paceWhy?: string;
+        leftWhy?: string;
+        since?: number | null;
+      }
   );
 
 /**
@@ -266,6 +279,8 @@ export type BoardCheck = Span &
     | {activityTotals: {work: number; agents: number; agentTime: number}; range: string}
     /** Since when, from `start`, the activity widget knows how agents worked over `range`. */
     | {activityKnownFrom: number; range: string}
+    /** What the activity widget says instead of its stacks over `range` (`ui/lib/activity.ts` `activityEmpty`), or null for stacks. */
+    | {activityEmpty: 'noSources' | 'knownFrom' | 'none' | 'noneSince' | null; range: string}
     /** The table of limits as a table or a list of rows, on a board as wide as a wide screen. */
     | {tableLayout: 'table' | 'list'}
   );

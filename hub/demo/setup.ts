@@ -154,7 +154,7 @@ async function seed(stand: Stand, card: Card, now: () => number) {
 
 const ownerOf = (stand: Stand, key: string) => stand.people.get(boards(stand.set).find(b => b.id === key)?.owner ?? key)!;
 
-/** A board's view: its cards in the catalogue's order with their looks there, then the agents, the chart and the table. */
+/** A board's view: its cards in the catalogue's order with their looks there, then the agents, agent activity, the chart and the table. */
 export function viewOf(stand: Stand, key: string) {
   const {set} = stand;
   const personal = stand.people.has(key);
