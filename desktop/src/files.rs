@@ -240,7 +240,8 @@ mod tests {
                 &log::Record::builder().level(level).target(target).args(format_args!("{text}")).build(),
             );
         };
-        let key = "Ab-_9".repeat(8);
+        // Every character a key can have.
+        let key = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
         record(
             log::Level::Error,
             "tauri_runtime_wry",
