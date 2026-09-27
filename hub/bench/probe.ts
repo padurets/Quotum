@@ -71,7 +71,7 @@ export function nodeOf(fiber: Fiber, selector: string): Place | null {
 
 /**
  * One part of the page and how many times it rendered or changed. `time`: it shows time,
- * and `kind` is what (its `data-time`: a label, the chart, the table).
+ * and `kind` is what (its `data-time`: a label, a cell of the table, the chart).
  */
 export type Counted = {node: string; time: boolean; kind: string | null; region: string; count: number};
 

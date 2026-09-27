@@ -32,14 +32,16 @@ export type Idle = {
 
 /**
  * What shows time rendered or changed more often than the clock alone would: a label once a
- * minute, and the chart, whose labels past its right edge count down as a label does, once a
- * cell of the history's grid more.
+ * minute, the chart once a cell of the history's grid. The chart's labels past its right edge
+ * count down too, each change drawn and then measured; on the bench's board they are hours
+ * away, and none changes within the minutes counted. A board where one counts minutes there
+ * would need more.
  */
 function tooOften(parts: Counted[], from: number, to: number, cellMs: number, what: string): string[] {
   const minutes = Math.ceil((to - from) / 60_000);
   const cells = Math.floor(to / cellMs) - Math.floor(from / cellMs);
   return parts.flatMap(part => {
-    const most = minutes + (part.kind === 'chart' ? cells : 0) + 1;
+    const most = (part.kind === 'chart' ? cells : minutes) + 1;
     return part.count > most ? [`${part.region} ${part.node} ${what} ${part.count} times, more than ${most}`] : [];
   });
 }
@@ -47,7 +49,7 @@ function tooOften(parts: Counted[], from: number, to: number, cellMs: number, wh
 /**
  * What an idle page did that it may not: ask the hub anything, be told anything but
  * `ping`, render or change anything but what shows time, show time more often than it
- * reads otherwise (a label once a minute, the chart once a cell too), or spend
+ * reads otherwise (a label once a minute, the chart once a cell), or spend
  * more script than its budget. And whether the benchmark could tell: its own reader of the
  * board heard the hub all along.
  */
