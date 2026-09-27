@@ -1001,13 +1001,15 @@ const all: DemoSet = {
         weekly({since: -2 * DAY, use: steady(20, 0.9)}),
         // As slow, but nearly used up: what is left lasts some sixty hours, short of the reset, and that is worth its number.
         weekly({id: 'weekly:ledger', label: 'Ledger', since: -2 * DAY, use: steady(96, 0.9)}),
-        // As slow, from a client that does not tell its length: over a range, with no reset ahead, nothing bounds the hours, and none are foreseen.
+        // As slow, from a client that does not tell its length: over a range, with no reset ahead, only a week bounds the hours, and what is left lasts over it.
         noLength(weekly({id: 'weekly:pool', label: 'Pool', since: -2 * DAY, use: steady(50, 0.9)})),
       ],
       agents: [{machine: 'laptop', origin: 'terminal', project: 'ledger', since: -DAY, works: ALWAYS}],
       expect: [
         {work: 'weekly', range: '24h', perHour: 0, left: 'untilReset', from: 0, to: 0},
         {work: 'weekly:ledger', range: '24h', perHour: 0, left: 58.7, from: 0, to: 0},
+        // By time, the week's pace since it began, which spent 96 points at once: it runs out within hours.
+        {forecast: 'weekly:ledger', outlook: 'runsOut', tone: 'v-crit', from: 0, to: 0},
         {work: 'weekly:pool', range: '24h', perHour: 0, left: 'untilReset', from: 0, to: 0},
         // Over the last hour but one, a tenth of a point: what is left would outlast the week, so it lasts to the reset.
         {work: 'weekly', range: {from: -2 * HOUR, to: -HOUR}, perHour: 0.1, left: 'outlasts', from: 0, to: 0},
@@ -1018,9 +1020,9 @@ const all: DemoSet = {
       look: [
         'In the table, spent per work hour is "≈ 0%/h" and the forecast by work "lasts to the reset", its tooltip naming no hours',
         'Its Ledger window, nearly used up at the same pace: the forecast by work some sixty hours of work, its tooltip telling the pace as under 0.05% an hour',
-        'Beside them, its forecast by time runs out within the hour, in red: it takes the pace since the window started, which spent 96 points at once, where the forecast by work takes the period’s',
+        'Beside them, its forecast by time runs out in an hour or two ("in 1h" rounded down), in red, at about 1.8× its plan: it takes the week’s pace since it began, which spent 96 points at once, where the forecast by work takes the period’s',
         'Over a range of the day before the last hour: the forecast by work "lasts to the reset", its tooltip that it lasts longer than the window, naming no hours',
-        'Over it, its Pool window, of no known length: the forecast by work a dash, too little spent per hour of work to foresee',
+        'Over it, its Pool window, of no known length: the forecast by work a dash, its tooltip that what is left lasts over a week of work, at under 0.05% an hour',
       ],
     },
     {
