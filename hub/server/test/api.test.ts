@@ -745,6 +745,25 @@ test('the work a board shows follows its cards, members and names at once, a cos
   }
 });
 
+test('project names containing separators cannot alias other names in the history cache', async () => {
+  const {call, store, team, device, workKey: key} = await worked();
+  const {user_id: user} = store.db.prepare('SELECT user_id FROM devices WHERE id = ?').get(device) as {user_id: string};
+  const rename = async (group: string, name: string) => {
+    const response = await call('POST', '/api/projects', {as: 'alice', body: {groups: [group], name}});
+    assert.equal(response.status, 200);
+  };
+  const read = async () => (await call('GET', `/api/history?board=${team}&range=24h`, {as: 'alice'})).body;
+  // One name must not encode a second project's entry in the key.
+  const joined = `A\u001f${user}\u001esecret\u001eB`;
+  await rename('quotum', joined);
+  const before = key();
+  assert.deepEqual(hoursBy(await read(), 'project'), {[joined]: 1, quotum: 1, billing: 1});
+  await rename(joined, 'A');
+  await rename('secret', 'B');
+  assert.notEqual(key(), before, 'different names have different keys');
+  assert.deepEqual(hoursBy(await read(), 'project'), {A: 1, quotum: 1, billing: 1}, 'the cached answer is not reused after renaming');
+});
+
 test('a board’s history is read under a key of what the board shows, which names off the board leave as it is', async () => {
   const {call, team, later, workKey: key} = await worked();
   // Alice's second subscription leaves the board: the project she worked on only there is off it.
