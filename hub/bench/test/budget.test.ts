@@ -60,13 +60,23 @@ test('measurements of a card show on it in time and render nothing of another ca
   const quick = Array.from({length: 20}, (_, i) => 100 + i * 10);
   const renders = [part('card:s1', null, 20), part('agents', null, 1), part('analytics', null, 3), part('card:s2', 'mark', 2)];
   /** Twenty measurements three seconds apart: a minute. */
-  const measured = (change: Partial<Measured> = {}): Measured => ({card: 's1', latencies: quick, renders, mutations: [part('card:s1', null, 20)], from: 0, to: MIN, ...change});
+  const measured = (change: Partial<Measured> = {}): Measured => ({
+    card: 's1',
+    latencies: quick,
+    renders,
+    mutations: [part('card:s1', null, 20)],
+    from: 0,
+    to: MIN,
+    ...change,
+  });
   assert.deepEqual(measuredProblems(measured()), []);
   assert.equal(percentile(quick, 0.95), 280);
   assert.equal(percentile(quick, 0.5), 190);
   const late = [...quick.slice(0, 18), LATENCY_P95_MS + 1, Infinity];
   assert.match(measuredProblems(measured({latencies: late}))[1], /95th percentile/);
-  const busy = measuredProblems(measured({renders: [...renders, part('card:s2', null, 1), part('page', null, 1)], mutations: [part('header', null, 1), part('analytics', null, 4)]}));
+  const busy = measuredProblems(
+    measured({renders: [...renders, part('card:s2', null, 1), part('page', null, 1)], mutations: [part('header', null, 1), part('analytics', null, 4)]}),
+  );
   assert.equal(busy.length, 2, busy.join('\n'));
   assert.match(busy[0], /rendered card:s2 .* page /);
   assert.match(busy[1], /changed header/);
@@ -87,8 +97,18 @@ test('what shows time on another card renders with the clock, not with each meas
   assert.match(measuredProblems({...once, renders: [own, part('card:s2', 'tray', 20)]})[0], /card:s2 .* rendered 20 times, more than 2/);
 });
 
+test('what shows time in the header, and what changes of another card, answer to the clock too', () => {
+  const quick = Array.from({length: 20}, () => 100);
+  const once = {card: 's1', latencies: quick, from: 0, to: MIN};
+  const own = part('card:s1', null, 20);
+  assert.match(measuredProblems({...once, renders: [own, part('header', 'offline', 20)], mutations: []})[0], /header .* rendered 20 times/);
+  assert.match(measuredProblems({...once, renders: [own], mutations: [part('card:s2', 'mark', 20)]})[0], /card:s2 .* changed 20 times/);
+});
+
 test('numbers the benchmark could not see fail: no work of React on the card, no ping heard', () => {
   const quick = Array.from({length: 20}, () => 100);
   assert.match(measuredProblems({card: 's1', latencies: quick, renders: [], mutations: [part('card:s1', null, 20)], from: 0, to: MIN})[0], /React's work is not seen/);
+  const elsewhere = measuredProblems({card: 's1', latencies: quick, renders: [part('agents', null, 20)], mutations: [], from: 0, to: MIN});
+  assert.match(elsewhere[0], /React's work is not seen/, "the list of agents rendering is not the card's");
   assert.match(idleProblems(idle({events: {}})).join('\n'), /heard 0 pings, fewer than 3/);
 });

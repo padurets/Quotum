@@ -69,7 +69,7 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, Math.ma
 const say = (text: string) => console.error(`bench: ${text}`);
 
 /** Counts what the page asks the hub while `counting`: the stream of events it opened before is not asked again, one opened meanwhile is. */
-class Requests {
+export class Requests {
   counting = false;
   count = 0;
   bytes = 0;
@@ -174,7 +174,14 @@ async function main() {
     const measured = await measure(stand, cdp);
     const problems = [
       ...idleProblems(idle),
-      ...measuredProblems({card: measured.source, latencies: measured.latencies, renders: measured.reading.renders, mutations: measured.reading.mutations, from: measured.from, to: measured.to}),
+      ...measuredProblems({
+        card: measured.source,
+        latencies: measured.latencies,
+        renders: measured.reading.renders,
+        mutations: measured.reading.mutations,
+        from: measured.from,
+        to: measured.to,
+      }),
     ];
     const result = {
       set: set.id,
