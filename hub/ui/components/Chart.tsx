@@ -1,6 +1,6 @@
 import {memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode, type RefObject} from 'react';
 import {clock, countdown, countdownChangesAt, day, num, shortDay, stamp} from '../lib/format';
-import {t} from '../i18n';
+import {t, useLocale} from '../i18n';
 import type {Line} from '../lib/lines';
 import {hubNow, useClock} from '../lib/clock';
 import {gapText, gapTone, readout as readCell, valueAt, type ForecastLine, type PlanLine} from '../lib/readout';
@@ -195,6 +195,8 @@ const EdgeLabel = memo(function EdgeLabel({
   onEdge: (edge: {key: string; tapped: boolean} | null) => void;
 }) {
   const now = useClock(now => countdownChangesAt(at, now));
+  // Its words are rebuilt when the language changes.
+  useLocale();
   const say = (label: string) => t(runsOut ? 'chart.runsOut' : 'chart.ahead', {label, time: countdown(at - now)});
   return (
     <g data-time="countdown">
