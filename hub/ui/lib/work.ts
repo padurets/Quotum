@@ -105,8 +105,9 @@ export function lineWork(line: Pick<Line, 'work' | 'current' | 'remainingAtEnd' 
   // A line on the table has measurements, so it has an end; one without is not foreseen.
   if (!line.work || remaining === null) return null;
   const cells = workCells(line.work, remaining, range ? null : resetAt !== null && resetAt > now ? resetAt - now : null, line.minutes ? line.minutes * 60_000 : null);
+  // Where agents worked: with none of them, there is no forecast by work either way.
   const reset = !range && resetAt !== null && resetAt <= now;
-  return reset && line.work.ms !== null ? {...cells, workleft: {none: 'awaiting'}} : cells;
+  return reset && line.work.ms ? {...cells, workleft: {none: 'awaiting'}} : cells;
 }
 
 /**

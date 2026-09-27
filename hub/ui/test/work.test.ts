@@ -73,6 +73,7 @@ test('over a range what is left is what was left at its end, and the reset is on
   assert.ok(lineWork(line, false, now + HOUR, now)?.workleft && 'untilReset' in lineWork(line, false, now + HOUR, now)!.workleft);
   assert.deepEqual(lineWork(line, false, now - MIN, now)?.workleft, {none: 'awaiting'}, 'a reset already past, not measured after: what is left is not known');
   assert.equal(value(lineWork(line, false, now - MIN, now)!.perwork), 2.95, 'the pace over the period is');
+  assert.deepEqual(lineWork({...line, work: work({ms: 0, coveredMs: 0})}, false, now - MIN, now)?.workleft, {none: 'none'}, 'with none of them working, none worked');
   assert.equal(lineWork({...line, work: null}, false, null, now), null, 'a hidden card');
   assert.equal(lineWork({...line, remainingAtEnd: null}, true, null, now), null, 'a range with no measurement has no end to foresee from');
 });
