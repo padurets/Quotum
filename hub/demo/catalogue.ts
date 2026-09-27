@@ -850,6 +850,8 @@ const all: DemoSet = {
       machines: ['old-nuc'],
       history: 2 * DAY,
       windows: [fiveHours(-6 * HOUR, 8), weekly({since: -2 * DAY, use: steady(0, 11)})],
+      // An agent worked on it until the machine went quiet.
+      agents: [{machine: 'old-nuc', origin: 'terminal', project: 'nightly', since: -6 * HOUR, until: -3 * HOUR, works: ALWAYS}],
       on: {ana: {name: 'Quiet machine'}},
       expect: [
         {title: 'Quiet machine'},
@@ -858,8 +860,14 @@ const all: DemoSet = {
         {window: 'session', reset: 'resetPassed'},
         {window: 'weekly', reset: 'resetsIn'},
         {forecast: 'weekly', outlook: 'leftPlan'},
+        // Its five hours reset unmeasured: neither forecast knows what is left until the next measurement.
+        {forecast: 'session', outlook: 'awaiting'},
+        {work: 'session', range: '24h', leftWhy: 'awaiting', from: 0, to: 0},
       ],
-      look: ['Not heard from for three hours: its five hours have reset since, waiting for a measurement'],
+      look: [
+        'Not heard from for three hours: its five hours have reset since, waiting for a measurement',
+        'On the five-hour table: both forecasts a dash, "Waiting for a new measurement"',
+      ],
     },
     {
       kind: 'card',
@@ -983,14 +991,22 @@ const all: DemoSet = {
       machines: ['laptop'],
       history: DAY,
       // Under a point over a day of work: too little an hour of it to tell, yet what is left lasts to the reset.
-      windows: [weekly({since: -2 * DAY, use: steady(20, 0.9)})],
+      windows: [
+        weekly({since: -2 * DAY, use: steady(20, 0.9)}),
+        // As slow, but nearly used up: what is left lasts some sixty hours, short of the reset, and too slow a pace tells no number.
+        weekly({id: 'weekly:ledger', label: 'Ledger', since: -2 * DAY, use: steady(96, 0.9)}),
+      ],
       agents: [{machine: 'laptop', origin: 'terminal', project: 'ledger', since: -DAY, works: ALWAYS}],
       expect: [
         {work: 'weekly', range: '24h', perHour: 0, left: 'untilReset', from: 0, to: 0},
+        {work: 'weekly:ledger', range: '24h', perHour: 0, leftWhy: 'slow', from: 0, to: 0},
         // Over the last hour but one, a tenth of a point: what is left would outlast the week, so it lasts to the reset.
         {work: 'weekly', range: {from: -2 * HOUR, to: -HOUR}, perHour: 0.1, left: 'outlasts', from: 0, to: 0},
       ],
-      look: ['In the table, spent per work hour is "≈ 0%/h" and the forecast by work "lasts to the reset": too little spent to tell a number, enough to last'],
+      look: [
+        'In the table, spent per work hour is "≈ 0%/h" and the forecast by work "lasts to the reset", its tooltip naming no hours',
+        'Its Ledger window, nearly used up at the same pace: the forecast by work a dash, too little spent per hour of work to foresee',
+      ],
     },
 
     // Measured at the hub's pace, one reason each, all by one machine asking every 15 seconds.
