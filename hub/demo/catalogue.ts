@@ -1018,6 +1018,7 @@ const all: DemoSet = {
       look: [
         'In the table, spent per work hour is "≈ 0%/h" and the forecast by work "lasts to the reset", its tooltip naming no hours',
         'Its Ledger window, nearly used up at the same pace: the forecast by work some sixty hours of work, its tooltip telling the pace as under 0.05% an hour',
+        'Beside them, its forecast by time runs out within the hour, in red: it takes the pace since the window started, which spent 96 points at once, where the forecast by work takes the period’s',
         'Over a range of the day before the last hour: the forecast by work "lasts to the reset", its tooltip that it lasts longer than the window, naming no hours',
         'Over it, its Pool window, of no known length: the forecast by work a dash, too little spent per hour of work to foresee',
       ],
