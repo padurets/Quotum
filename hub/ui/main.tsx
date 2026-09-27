@@ -10,7 +10,7 @@ import {useResets} from './lib/resets';
 import {sourceLabel, titled} from './lib/quota';
 import {usePath} from './lib/router';
 import {boardTitle, rememberBoard, useBoard, useSession, type Board, type Session, type User} from './lib/session';
-import {ACTIVITY, AGENTS, ANALYTICS, arranged, boardState, cardId, FORECAST, HISTORY, isHidden, reordered, spanOf, useView, withHidden, withSpan} from './lib/view';
+import {ACTIVITY, AGENTS, areas, boardState, cardId, FORECAST, HISTORY, isHidden, reordered, spanOf, useView, withHidden, withSpan} from './lib/view';
 import {t, useLocale} from './i18n';
 import {Header} from './components/Header';
 import {SERVICE} from './components/Kit';
@@ -138,10 +138,10 @@ function Dashboard({
     ],
   ]);
   // The cards are about now; agent activity, the chart and the table below them, with their
-  // filters, are the analytics. Each area is arranged on its own grid, and on its own: a
-  // widget new to the board takes its place among its own area's.
-  const cardWidgets = arranged(arrange.view, [...cards.keys()]).map(id => cards.get(id)!);
-  const panelWidgets = arranged(arrange.view, ANALYTICS).map(id => panels.get(id)!);
+  // filters, are the analytics. Each area is arranged on its own grid, and on its own.
+  const area = areas(arrange.view, [...cards.keys()]);
+  const cardWidgets = area.cards.map(id => cards.get(id)!);
+  const panelWidgets = area.analytics.map(id => panels.get(id)!);
   const widgets = [...cardWidgets, ...panelWidgets];
   const shownOf = (list: Widget[]) => list.filter(widget => !isHidden(arrange.view, widget.id));
   const shownCards = shownOf(cardWidgets);

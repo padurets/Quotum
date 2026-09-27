@@ -214,6 +214,9 @@ test('the table stays a table while its chosen columns fit the widget, and becom
   const view = {order: [], sizes: {}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
   const shown = (columns: readonly ForecastColumn[]) => columns.filter(column => columnShown(view, FORECAST, column));
   assert.equal(forecastLayout(shown(LIVE_COLUMNS), 1182), 'table', 'every column on by default, on a widget as wide as the board');
+  // As measured on the board, with the padding of the cells at the table's edges.
+  assert.equal(forecastLayout(shown(LIVE_COLUMNS), 1138), 'table');
+  assert.equal(forecastLayout(shown(LIVE_COLUMNS), 1137), 'list');
   assert.equal(forecastLayout(shown(RANGE_COLUMNS), 1182), 'table');
   assert.deepEqual(LIVE_COLUMNS.filter(column => !shown(LIVE_COLUMNS).includes(column)), ['during'], 'the share during work does not fit beside them');
 });

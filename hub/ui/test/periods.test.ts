@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {frameOf, periodLabel, periodOf, PERIODS, step} from '../lib/periods';
-import {complete, heardHub, historySources, hubNow, readFor} from '../lib/api';
+import {complete, heardHub, historySources, hubNow, keptFor, readFor} from '../lib/api';
 import {setLocale} from '../i18n';
 import type {History} from '../lib/types';
 
@@ -87,6 +87,11 @@ test('only an answer that is all there is of a range is kept on the page', () =>
   assert.equal(complete(answer, range), true);
   assert.equal(complete({...answer, to: now - day - 4 * minute}, range), false, 'cut to the hub’s now');
   assert.equal(complete({...answer, refreshInMs: 60_000}, range), false, 'a newer one is on its way');
+  const sources = historySources({sources: [{id: 'claude:1'}], workKey: 'a'} as Parameters<typeof historySources>[0]);
+  assert.equal(keptFor({...answer, workKey: 'a'}, range, sources), true);
+  assert.equal(keptFor({...answer, workKey: 'b'}, range, sources), false, 'read under another state of the board than the page knows');
+  assert.equal(keptFor({...answer, workKey: 'a', refreshInMs: 60_000}, range, sources), false);
+  assert.equal(keptFor({...answer, workKey: 'a'}, null, sources), false, 'a period up to now is read again as it moves on');
 });
 
 test('the page reckons the hub’s clock from the last answer, ahead or behind its own', () => {

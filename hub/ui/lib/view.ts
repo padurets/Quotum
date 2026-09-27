@@ -67,6 +67,13 @@ export function arranged(view: View, ids: string[]): string[] {
   return order;
 }
 
+/**
+ * The board's widgets by area, each arranged on its own (`arranged`): the cards and the
+ * list of agents, which are about now, and the analytics under them. A widget new to the
+ * board takes its place among its own area's, never after a card the order put last.
+ */
+export const areas = (view: View, cards: string[]) => ({cards: arranged(view, cards), analytics: arranged(view, ANALYTICS)});
+
 /** A new order of the shown widgets; hidden ones keep theirs after them. */
 export const reordered = (view: View, shown: string[]): View => ({
   ...view,
