@@ -389,7 +389,7 @@ const all: DemoSet = {
       // Each group has a working agent that works within the first twenty minutes.
       expect: [
         {state: 'widgets'},
-        {weeklySeries: 10},
+        {weeklySeries: 11},
         {project: 'quotum', machines: ['laptop'], reported: [], from: 20 * MIN},
         {project: 'hub', absent: true, from: 20 * MIN},
         {project: 'quotum.feat-18-desktop-app', absent: true, from: 20 * MIN},
@@ -406,6 +406,8 @@ const all: DemoSet = {
         {activityOf: 'docs-site', by: 'project', range: '24h', hours: null, from: 0, to: 0},
         // Past the palette's seven a project is grey, but a group of its own, however small.
         {activityOf: 'notifications', by: 'project', range: '24h', hours: 0.1, from: 0, to: 0},
+        // A range dragged on the chart before the hub knew how agents worked.
+        {activityEmpty: 'knownFrom', range: {from: -13 * DAY, to: -11 * DAY}, from: 0, to: 0},
       ],
       look: [
         'The table of agents lists many rows, by activity',
@@ -474,6 +476,7 @@ const all: DemoSet = {
       owner: 'ana',
       members: ['dan'],
       forecastSpan: 4,
+      tableColumns: ['during'],
       expect: [{state: 'widgets'}, {tableLayout: 'list'}],
       look: ['The table, a third of the board wide, is a list: each window its name and what is left, then the rest with their headings; nothing scrolls sideways'],
     },
@@ -487,7 +490,7 @@ const all: DemoSet = {
       // No agent on it: over a month, only from when work was known.
       expect: [{rows: 'none'}, {activityEmpty: 'none', range: '24h', from: 0, to: 0}, {activityEmpty: 'noneSince', range: '30d', from: 0, to: 0}],
     },
-    {kind: 'board', id: 'night', name: 'Night shift', owner: 'ana', members: [], agents: true, expect: [{rows: 'noneShown'}]},
+    {kind: 'board', id: 'night', name: 'Night shift', owner: 'ana', members: [], agents: true, expect: [{rows: 'noneShown'}, {activityEmpty: 'noSources', range: '24h', from: 0, to: 0}]},
     {kind: 'board', id: 'empty', name: 'Empty board', owner: 'ana', members: ['cleo'], expect: [{state: 'onboarding'}]},
 
     // Machines with something of their own; the rest are Ana's, on Linux, with her machine token.
@@ -573,6 +576,7 @@ const all: DemoSet = {
         {window: 'gemini:session', name: 'Gemini Pro · 5 hours'},
         {window: 'claude:weekly', name: 'Claude · weekly', note: null, reset: 'resetUnknown'},
         {window: 'flash:window-1440', name: 'Flash · 1d'},
+        {work: 'gemini:weekly', range: {from: -13 * DAY, to: -11 * DAY}, none: 'unknown', from: 0, to: 0},
         {window: 'credits', name: 'Credits', reset: 'resetUnknown'},
         {forecast: 'gemini:weekly', outlook: 'onPaceReset', plan: 'none'},
         {forecast: 'claude:weekly', outlook: 'none'},
@@ -954,12 +958,26 @@ const all: DemoSet = {
       agents: WEEK_AGENTS,
       // Without a plan: the example is about agent work.
       on: {dan: {plan: 'off'}, 'with-dan': {plan: 'off'}},
-      // The share during work is off on the board: turned on, it tells 89%.
+      // The share during work is off on Dan's board, on With Dan.
       expect: [
         {title: 'Claude'},
         {work: 'weekly', range: '7d', hours: 16, perHour: 4.1, left: 10.1, during: 'hidden', from: 0, to: 0},
+        {board: 'with-dan', work: 'weekly', range: '7d', during: 89, from: 0, to: 0},
         {work: 'weekly', range: '30d', since: -10 * DAY, from: 0, to: 0},
       ],
+    },
+    {
+      kind: 'card',
+      id: 'slow-spender',
+      provider: 'codex',
+      plan: 'pro',
+      machines: ['laptop'],
+      history: DAY,
+      // Under a point over a day of work: too little an hour of it to foresee by.
+      windows: [weekly({since: -2 * DAY, use: steady(20, 0.9)})],
+      agents: [{machine: 'laptop', origin: 'terminal', project: 'ledger', since: -DAY, works: ALWAYS}],
+      expect: [{work: 'weekly', range: '24h', perHour: 0, leftWhy: 'slow', from: 0, to: 0}],
+      look: ['In the table, spent per work hour is "≈ 0%/h" and the forecast by work a dash: too little spent per hour of work to foresee'],
     },
 
     // Measured at the hub's pace, one reason each, all by one machine asking every 15 seconds.

@@ -203,6 +203,9 @@ export type CardView = {name?: string; color?: string; span?: number; hidden?: b
 /** A time within which an expectation holds, from `start`: [from, to], by default the first twelve hours. */
 export type Span = {from?: number; to?: number};
 
+/** A period of the analytics: one up to now ('24h', …), or a time range selected on the chart, from `start`. */
+export type Period = string | {from: number; to: number};
+
 /**
  * What an entry shows, as codes the rules of the dashboard (hub/ui/lib) compute from what
  * the hub answers; the catalogue test checks each over its span. A card's codes are read
@@ -235,7 +238,7 @@ export type CardCheck = Span & {board?: string} & (
      */
     | {
         work: string;
-        range: string;
+        range: Period;
         hours?: number;
         perHour?: number;
         left?: number | 'untilReset';
@@ -272,15 +275,15 @@ export type BoardCheck = Span &
      * The activity widget over `range`, split by subscription (named by card id), project or
      * machine (by its name shown): every group and its own hours, to a tenth.
      */
-    | {activity: 'source' | 'project' | 'device'; range: string; groups: Record<string, number>}
+    | {activity: 'source' | 'project' | 'device'; range: Period; groups: Record<string, number>}
     /** One group of the activity widget and its own hours, whatever the others (null: not among the groups). */
-    | {activityOf: string; by: 'project' | 'device'; range: string; hours: number | null}
+    | {activityOf: string; by: 'project' | 'device'; range: Period; hours: number | null}
     /** The activity widget's totals over `range`: hours of work, how many different agents worked, and their hours together. */
-    | {activityTotals: {work: number; agents: number; agentTime: number}; range: string}
+    | {activityTotals: {work: number; agents: number; agentTime: number}; range: Period}
     /** Since when, from `start`, the activity widget knows how agents worked over `range`. */
-    | {activityKnownFrom: number; range: string}
+    | {activityKnownFrom: number; range: Period}
     /** What the activity widget says instead of its stacks over `range` (`ui/lib/activity.ts` `activityEmpty`), or null for stacks. */
-    | {activityEmpty: 'noSources' | 'knownFrom' | 'none' | 'noneSince' | null; range: string}
+    | {activityEmpty: 'noSources' | 'knownFrom' | 'none' | 'noneSince' | null; range: Period}
     /** The table of limits as a table or a list of rows, on a board as wide as a wide screen. */
     | {tableLayout: 'table' | 'list'}
   );
@@ -383,6 +386,8 @@ export type Board = {
   forecastSpan?: number;
   /** When members joined it, from `start`, where later than it was made: work before is not the board's. */
   joined?: Record<string, number>;
+  /** Columns of the table, off by default, that the board turns on. */
+  tableColumns?: string[];
   expect: BoardCheck[];
   look?: string[];
 };

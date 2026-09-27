@@ -51,6 +51,7 @@ import {
   type DemoSet,
   type Entry,
   type Machine,
+  type Period,
   type Span,
 } from '../model.js';
 import {Live, seedWork, setUp, type Stand} from '../setup.js';
@@ -151,11 +152,12 @@ class Reading {
   }
 
   /** The board's history over `range`: the last 24 hours, as the chart opens, unless another is asked for. */
-  history(board: string, range = '24h'): Promise<History> {
-    const key = `${board} ${range}`;
+  history(board: string, range: Period = '24h'): Promise<History> {
+    const key = `${board} ${JSON.stringify(range)}`;
     if (!this.histories.has(key)) {
       const id = this.stand.boards.get(board)!;
-      this.histories.set(key, this.reader(board).get<History>(`/api/history?range=${range}&board=${encodeURIComponent(id)}`));
+      const period = typeof range === 'string' ? `range=${range}` : `from=${this.stand.start + range.from}&to=${this.stand.start + range.to}`;
+      this.histories.set(key, this.reader(board).get<History>(`/api/history?${period}&board=${encodeURIComponent(id)}`));
     }
     return this.histories.get(key)!;
   }
@@ -221,7 +223,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
     }
     if ('activity' in check || 'activityOf' in check || 'activityTotals' in check || 'activityKnownFrom' in check || 'activityEmpty' in check) {
       if (isHidden(overview.view, ACTIVITY)) return `the activity widget is hidden on the board ${entry.id}`;
-      const {range} = check as unknown as {range: string};
+      const {range} = check as unknown as {range: Period};
       const history = await reading.history(entry.id, range);
       const {activity} = history;
       if ('activityEmpty' in check) {
@@ -320,7 +322,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
     const history = await reading.history(board, card.range);
     const line = linesOf(history, overview, overview.view, live.kind).find(l => l.sourceId === source.id && l.windowId === id);
     if (!line) return `no line of ${id} in the table`;
-    const cells = lineWork(line, false, live.resetAt, now);
+    const cells = lineWork(line, typeof card.range !== 'string', live.resetAt, now);
     if (!cells || !line.work) return `no work of ${id}`;
     const tenth = (value: number) => Math.round(value * 10) / 10;
     const hours = (cell: (typeof cells)['work']) => ('value' in cell ? tenth(cell.value / 3_600_000) : 'untilReset' in cell ? 'untilReset' : undefined);

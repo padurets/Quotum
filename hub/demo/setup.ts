@@ -171,7 +171,7 @@ export function viewOf(stand: Stand, key: string) {
     unplanned: [] as string[],
     colors: {} as Record<string, string>,
     columns: {},
-    shownColumns: {},
+    shownColumns: board?.kind === 'board' && board.tableColumns ? {forecast: board.tableColumns} : {},
   };
   if (board?.agentsSpan) view.sizes.agents = board.agentsSpan;
   if (board?.forecastSpan) view.sizes.forecast = board.forecastSpan;
