@@ -32,10 +32,8 @@ export type Idle = {
 
 /**
  * What shows time rendered or changed more often than the clock alone would: a label once a
- * minute, the chart once a cell of the history's grid. The chart's labels past its right edge
- * count down too, each change drawn and then measured; on the bench's board they are hours
- * away, and none changes within the minutes counted. A board where one counts minutes there
- * would need more.
+ * minute, the chart once a cell of the history's grid (a label past its right edge counts
+ * down as a label of its own).
  */
 function tooOften(parts: Counted[], from: number, to: number, cellMs: number, what: string): string[] {
   const minutes = Math.ceil((to - from) / 60_000);

@@ -65,7 +65,7 @@ function HistorySettings({arrange, planAvailable, forecastAvailable, horizonNote
  * The remaining share of every window of one kind over the period, with its legend. It
  * reads the history on screen (`useHistory`, which another answer replaces while loading)
  * and the board's cards, not their agents or pace; with time it moves on a cell of the
- * history's grid at a time, and as a label past its right edge counts down.
+ * history's grid at a time, and a label past its right edge counts down on its own.
  */
 export const History = memo(function History({arrange}: {arrange: Arrange}) {
   const {history, loading} = useHistory();
