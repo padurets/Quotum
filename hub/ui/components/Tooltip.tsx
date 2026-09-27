@@ -18,15 +18,16 @@ export function liftOf(top: number, height: number, windowHeight: number, cover:
  * names wrap) rather than over the pointer. On a `narrow` chart it spans the chart's width
  * under the plot (`bottom`, in CSS pixels), over what comes below. While it `rises`, it
  * rises as far as keeps it whole in the window (a long list, a phone), though never under
- * the bars that stick at the top. It is measured after every render while it shows,
+ * the bars that stick at the top; one taller than the room between them and the window's
+ * bottom is cut to it, so it never lengthens the page. It is measured after every render while it shows,
  * whatever changed it (its rows, a new answer moving the chart, the pointer), and as the
  * page scrolls under a pointer that stays.
  */
 export function useTip(svg: RefObject<SVGSVGElement | null>, {width, at, narrow, rises, bottom}: {width: number; at: number; narrow: boolean; rises: boolean; bottom: number}) {
   const tip = useRef<HTMLDivElement>(null);
   const [tipWidth, setTipWidth] = useState(200);
-  /** How far it rises, and from where it stands unraised within the chart (CSS pixels). */
-  const [lift, setLift] = useState({by: 0, from: 0});
+  /** How far it rises, from where it stands unraised within the chart, and how tall it may be (CSS pixels; 0 for any). */
+  const [lift, setLift] = useState({by: 0, from: 0, room: 0});
   const measure = useRef(() => {});
   measure.current = () => {
     const element = tip.current;
@@ -36,7 +37,7 @@ export function useTip(svg: RefObject<SVGSVGElement | null>, {width, at, narrow,
     element.style.maxWidth = '';
     setTipWidth(element.offsetWidth);
     element.style.maxWidth = cap;
-    if (!rises || !svg.current) return setLift(same => (same.by ? {by: 0, from: 0} : same));
+    if (!rises || !svg.current) return setLift(same => (same.by || same.room ? {by: 0, from: 0, room: 0} : same));
     // Where it stands unraised is read with nothing of its own rise, never from where it
     // is drawn, so what it finds does not depend on what it found before: under the plot
     // on a narrow chart, else where the stylesheet puts it.
@@ -51,9 +52,10 @@ export function useTip(svg: RefObject<SVGSVGElement | null>, {width, at, narrow,
     }
     const bars = [...document.querySelectorAll<HTMLElement>('.topbar, .analytics-head')].filter(bar => getComputedStyle(bar).position === 'sticky');
     const cover = Math.max(0, ...bars.map(bar => bar.getBoundingClientRect().bottom));
+    const room = Math.max(0, innerHeight - cover - 16);
     const by = liftOf(top, element.getBoundingClientRect().height, innerHeight, cover);
     const from = narrow ? bottom : top - chart.top;
-    setLift(same => (same.by === by && same.from === from ? same : {by, from}));
+    setLift(same => (same.by === by && same.from === from && same.room === room ? same : {by, from, room}));
   };
   // No dependencies: the same values found again change nothing, so it settles in one pass.
   useLayoutEffect(() => measure.current());
@@ -68,7 +70,8 @@ export function useTip(svg: RefObject<SVGSVGElement | null>, {width, at, narrow,
   const onRight = tipWidth <= roomRight || (tipWidth > roomLeft && roomRight >= roomLeft);
   const room = Math.min(360, Math.max(0, onRight ? roomRight : roomLeft));
   const left = onRight ? at + 12 : Math.max(0, at - 12 - Math.min(tipWidth, room));
-  const style: CSSProperties = narrow ? {top: bottom - lift.by} : {left, maxWidth: room, ...(lift.by ? {top: lift.from - lift.by} : {})};
+  const cut = lift.room ? {maxHeight: lift.room} : {};
+  const style: CSSProperties = narrow ? {top: bottom - lift.by, ...cut} : {left, maxWidth: room, ...cut, ...(lift.by ? {top: lift.from - lift.by} : {})};
   return {tip, style};
 }
 

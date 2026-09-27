@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {FORECAST_WIDTHS, LIVE_COLUMNS, RANGE_COLUMNS, clip, forecastLayout, forecastLine, forecastRow, outlook, type ForecastColumn, type Outlook} from '../lib/forecast';
+import {FORECAST_EDGES, FORECAST_WIDTHS, LIVE_COLUMNS, RANGE_COLUMNS, clip, forecastLayout, forecastLine, forecastRow, outlook, type ForecastColumn, type Outlook} from '../lib/forecast';
 import {FORECAST, columnShown} from '../lib/view';
 import {DEFAULT_PLAN, type WeeklyPlan} from '../lib/plan';
 import type {Win} from '../lib/types';
@@ -204,7 +204,7 @@ test('no line where the table has no forecast', () => {
 
 test('the table stays a table while its chosen columns fit the widget, and becomes a list when they do not', () => {
   for (const columns of [LIVE_COLUMNS, RANGE_COLUMNS, ['now', 'work'] as const]) {
-    const width = columns.reduce((sum, column) => sum + FORECAST_WIDTHS[column], FORECAST_WIDTHS.limit);
+    const width = columns.reduce((sum, column) => sum + FORECAST_WIDTHS[column], FORECAST_WIDTHS.limit + FORECAST_EDGES);
     assert.equal(forecastLayout(columns, width - 1), 'list');
     assert.equal(forecastLayout(columns, width), 'table');
   }

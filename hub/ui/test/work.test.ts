@@ -37,7 +37,7 @@ test('each dash says why', () => {
   assert.equal(none(workCells(work({coveredMs: WORK_PACE_FROM}), 38, null).perwork), null, 'half an hour is enough');
   const idle = workCells(work({consumed: 0, duringWork: 0}), 38, null);
   assert.deepEqual([value(idle.perwork), none(idle.workleft), none(idle.during)], [0, 'nospend', 'nospend']);
-  assert.equal(none(workCells(work(), null, null).workleft), 'noend', 'no measurement at the end of a range');
+  assert.equal(none(workCells(work({consumed: 0.1}), 38, null).workleft), 'slow', 'spent, but too little an hour of work to foresee');
   assert.equal(value(workCells(work(), 0, null).workleft), 0, 'nothing left, nothing to work on');
 });
 
@@ -57,6 +57,7 @@ test('over a range what is left is what was left at its end, and the reset is on
   assert.ok(lineWork(line, false, now + HOUR, now)?.workleft && 'untilReset' in lineWork(line, false, now + HOUR, now)!.workleft);
   assert.equal(hoursLeft(lineWork(line, false, now - MIN, now)), 27.1, 'a reset already past, not measured after');
   assert.equal(lineWork({...line, work: null}, false, null, now), null, 'a hidden card');
+  assert.equal(lineWork({...line, remainingAtEnd: null}, true, null, now), null, 'a range with no measurement has no end to foresee from');
 });
 
 test('a tooltip says since when work is known, and over how much work the pace is, only when that matters', () => {

@@ -8,9 +8,10 @@ export type Horizon = 'auto' | '1d' | '3d' | '7d';
 
 /**
  * How this reader looks at the dashboard, whatever the board: the period and window type
- * of its analytics (the chart and the table), the chart's horizon, lines switched off in
- * its legend and whether it draws the plan and the forecast, what the activity widget
- * stacks by, reset announcements, and whether the widgets are locked in place. How a
+ * of its analytics (agent activity, the chart and the table), the chart's horizon, lines
+ * and groups switched off in either chart's legend, whether it draws the plan and the
+ * forecast, what the activity widget stacks by, reset announcements, and whether the
+ * widgets are locked in place. How a
  * board is arranged is the board's own (lib/view.ts).
  */
 export type Prefs = {

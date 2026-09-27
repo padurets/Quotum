@@ -91,8 +91,8 @@ main { max-width: 1240px; margin: 0 auto; padding: 28px 28px 56px; display: flex
 /* ---------- widgets ---------- */
 .widgets { position: relative; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 16px; }
 
-/* The analytics under the cards: one head with the filters of the chart and the table,
-   which stays under the top bar while they scroll by. */
+/* The analytics under the cards: one head with the filters of agent activity, the chart
+   and the table, which stays under the top bar while they scroll by. */
 .analytics { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
 .analytics-head { position: sticky; top: 60px; z-index: 5; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 10px 0; }
 .analytics-head::before { content: ''; position: absolute; inset: 0 -28px; z-index: -1; background: #0b0b0ecc; -webkit-backdrop-filter: blur(16px) saturate(140%); backdrop-filter: blur(16px) saturate(140%); }
@@ -397,8 +397,9 @@ td.muted, small.muted { color: var(--text-3); }
 .forecast-compact-name { flex: 1; min-width: 0; color: var(--text); overflow-wrap: anywhere; }
 .forecast-compact-main > :last-child:not(.forecast-compact-name) { flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .forecast-compact-details { display: flex; flex-wrap: wrap; gap: 3px 16px; margin: 4px 0 0 13px; color: var(--text-3); font-size: 11.5px; }
-.forecast-compact-details > span { white-space: nowrap; }
-.forecast-compact-details > span > span { color: var(--text-2); font-variant-numeric: tabular-nums; }
+/* A heading wraps where the row is narrow (a phone); its value stays whole. */
+.forecast-compact-details > span { min-width: 0; overflow-wrap: anywhere; }
+.forecast-compact-details > span > span { color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .agents-list { box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; width: min(340px, calc(100vw - 48px)); max-width: 100%; overflow: hidden auto; padding: 0 0 4px; }
 .agents-machine h3 { display: flex; align-items: baseline; gap: 8px; margin: 0 8px 4px; font-size: 12.5px; font-weight: 560; color: var(--text); }
 .agents-machine h3 span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -502,7 +503,7 @@ td.muted, small.muted { color: var(--text-3); }
 .chart svg.is-selectable { cursor: crosshair; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
 .selection { fill: color-mix(in oklab, var(--accent) 14%, transparent); stroke: color-mix(in oklab, var(--accent) 50%, transparent); stroke-width: 1; }
 .tooltip {
-  position: absolute; top: 8px; z-index: 4; pointer-events: none; width: max-content; min-width: 190px; max-width: min(360px, 100%);
+  position: absolute; top: 8px; z-index: 4; pointer-events: none; width: max-content; min-width: 190px; max-width: min(360px, 100%); overflow: hidden;
   border-radius: 10px; padding: 9px 11px; font-size: 12px;
 }
 /* Over the widgets below (their handles are 2), under the sticky bars (5) and the popovers. */
@@ -766,10 +767,6 @@ tr:hover .device-name .icon-button, .device-name .icon-button:focus-visible { op
   /* The list takes what room the arrows leave; a long time range wraps in it. */
   .period .picker { flex: 1; min-width: 0; }
   .period .text-button { flex: 1; justify-content: center; height: auto; min-height: 28px; padding: 4px 10px; white-space: normal; text-align: center; }
-  .forecast th:nth-child(4), .forecast td:nth-child(4) { display: none; }
-  /* Over a selected time range what it spent matters most; its pace goes instead. */
-  .forecast.is-range th:nth-child(4), .forecast.is-range td:nth-child(4) { display: table-cell; }
-  .forecast.is-range th:nth-child(5), .forecast.is-range td:nth-child(5) { display: none; }
   td:first-child { white-space: normal; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }

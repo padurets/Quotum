@@ -35,8 +35,8 @@ export const periodOf = (id: string): Period => PERIODS.find(period => period.id
 export const periodLabel = ({ms}: Period) => (ms < 2 * DAY ? t('history.hours', {count: ms / HOUR}) : t('history.days', {count: ms / DAY}));
 
 /**
- * What the chart and the table look at: the chosen period, ending now (`live`), or a time
- * range in the past, dragged across the chart or moved to. `from` starts no earlier than
+ * What the analytics look at: the chosen period, ending now (`live`), or a time range in
+ * the past, dragged across a chart or moved to. `from` starts no earlier than
  * the history does; `length` is the period's own, as asked for. `future` is how much of it
  * the chart may keep on its right: none for a range.
  */

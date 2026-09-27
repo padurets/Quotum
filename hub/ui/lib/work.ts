@@ -17,11 +17,12 @@ export const WORK_COLUMNS = ['work', 'perwork', 'workleft', 'during'] as const;
 export type WorkColumn = (typeof WORK_COLUMNS)[number];
 
 /**
- * Why a cell has no number: how agents worked is not known in the period (`unknown`),
- * none worked (`none`), too little of their work was measured to tell a pace (`short`),
- * nothing was spent (`nospend`), no measurement at the end of the range (`noend`).
+ * Why a cell has no number: how agents worked is not known in the period (`unknown`), none
+ * of the agents the board shows worked (`none`), too little of their work was measured to
+ * tell a pace (`short`), nothing was spent (`nospend`), or too little per hour of work to
+ * foresee anything (`slow`).
  */
-export type WorkReason = 'unknown' | 'none' | 'short' | 'nospend' | 'noend';
+export type WorkReason = 'unknown' | 'none' | 'short' | 'nospend' | 'slow';
 
 /**
  * A cell about agent work: a number (milliseconds of work, percent per hour of work, or
@@ -39,7 +40,7 @@ export type WorkCell = {value: number} | {untilReset: number} | {none: WorkReaso
  * `resetInMs`, how long until the window's reset, only in a period up to now: work that
  * lasts beyond it lasts to the reset.
  */
-export function workCells(work: SeriesWork, remaining: number | null, resetInMs: number | null): Record<WorkColumn, WorkCell> {
+export function workCells(work: SeriesWork, remaining: number, resetInMs: number | null): Record<WorkColumn, WorkCell> {
   if (work.ms === null) {
     const unknown = {none: 'unknown'} as const;
     return {work: unknown, perwork: unknown, workleft: unknown, during: unknown};
@@ -48,21 +49,22 @@ export function workCells(work: SeriesWork, remaining: number | null, resetInMs:
   if (!work.ms) return {work: {none: 'none'}, perwork: {none: 'none'}, workleft: {none: 'none'}, during};
   if (work.coveredMs < WORK_PACE_FROM) return {work: {value: work.ms}, perwork: {none: 'short'}, workleft: {none: 'short'}, during};
   const pace = work.consumed / (work.coveredMs / HOUR);
-  const leftMs = remaining === null ? null : (remaining / pace) * HOUR;
+  const leftMs = (remaining / pace) * HOUR;
   const workleft: WorkCell =
-    pace < MIN_RATE ? {none: 'nospend'} : leftMs === null ? {none: 'noend'} : resetInMs !== null && leftMs >= resetInMs ? {untilReset: leftMs} : {value: leftMs};
+    work.consumed <= 0 ? {none: 'nospend'} : pace < MIN_RATE ? {none: 'slow'} : resetInMs !== null && leftMs >= resetInMs ? {untilReset: leftMs} : {value: leftMs};
   return {work: {value: work.ms}, perwork: {value: pace}, workleft, during};
 }
 
 /**
  * A line's cells about agent work (`workCells`), null for none. Over a range, which is in
- * the past, what is left is what was left at its end; over a period up to now, what is
- * left now, and the window's reset (`resetAt`) is ahead while it is after `now`.
+ * the past, what is left is what was left at its last measurement; over a period up to
+ * now, what is left now, and the window's reset (`resetAt`) is ahead while it is after `now`.
  */
 export function lineWork(line: Pick<Line, 'work' | 'current' | 'remainingAtEnd'>, range: boolean, resetAt: number | null, now: number): Record<WorkColumn, WorkCell> | null {
-  if (!line.work) return null;
-  if (range) return workCells(line.work, line.remainingAtEnd, null);
-  return workCells(line.work, line.current, resetAt !== null && resetAt > now ? resetAt - now : null);
+  const remaining = range ? line.remainingAtEnd : line.current;
+  // A line on the table has measurements, so it has an end; one without is not foreseen.
+  if (!line.work || remaining === null) return null;
+  return workCells(line.work, remaining, range ? null : resetAt !== null && resetAt > now ? resetAt - now : null);
 }
 
 /**

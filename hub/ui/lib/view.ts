@@ -26,7 +26,7 @@ const EMPTY: View = {order: [], sizes: {}, names: {}, hidden: [], shown: [], win
 
 /**
  * The grid has twelve columns: a card takes half of it by default, so two stand side by
- * side, and a third at least, so three at most; the chart and the table take all of it.
+ * side, and a third at least, so three at most; the widgets of the analytics take all of it.
  */
 export const COLUMNS = 12;
 export const MIN_SPAN = 4;

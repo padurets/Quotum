@@ -198,7 +198,13 @@ export const FORECAST_WIDTHS: Record<ForecastColumn | 'limit', number> = {
   pace: 122,
 };
 
+/**
+ * What the outer columns take beyond their budgets: they keep the panel's padding at the
+ * widget's edges (22) rather than a cell's (10), on either side.
+ */
+export const FORECAST_EDGES = 2 * (22 - 10);
+
 /** A table where the chosen columns fit the widget, otherwise a list of rows. */
 export function forecastLayout(columns: readonly ForecastColumn[], width: number): 'table' | 'list' {
-  return columns.reduce((sum, column) => sum + FORECAST_WIDTHS[column], FORECAST_WIDTHS.limit) <= width ? 'table' : 'list';
+  return columns.reduce((sum, column) => sum + FORECAST_WIDTHS[column], FORECAST_WIDTHS.limit + FORECAST_EDGES) <= width ? 'table' : 'list';
 }

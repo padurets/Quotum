@@ -1,4 +1,4 @@
-import type {ActivityDimension, ActivityGroup, View} from './types';
+import type {ActivityDimension, ActivityGroup, History, View} from './types';
 import {CATEGORY_COLORS} from './providers';
 import {colorOf} from './view';
 
@@ -19,19 +19,42 @@ export function groupColors(groups: ActivityGroup[], by: ActivityDimension, view
 }
 
 /**
- * The widget's vertical scale, in time worked: up to the tallest stack drawn (`busiest`,
- * never more than a bar `barMs` long), with three marks or fewer above zero at round times.
+ * The widget's vertical scale, in time worked: up to the tallest stack drawn (`busiest`),
+ * with three marks or fewer above zero at round times, its top one of them. It never goes
+ * past a whole bar (`barMs`): where it would, it ends there, marked at a step the bar divides into.
  */
 export type ActivityScale = {max: number; ticks: number[]};
 
 const STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 180, 360].map(minutes => minutes * MINUTE);
 
 export function activityScale(busiest: number, barMs: number): ActivityScale {
-  const step = STEPS.find(candidate => busiest / candidate <= 3) ?? STEPS.at(-1)!;
-  const max = Math.min(barMs, Math.max(step, Math.ceil(busiest / step) * step));
+  let step = STEPS.find(candidate => busiest / candidate <= 3) ?? STEPS.at(-1)!;
+  let max = Math.max(step, Math.ceil(busiest / step) * step);
+  if (max > barMs) {
+    max = barMs;
+    step = STEPS.find(candidate => barMs % candidate === 0 && barMs / candidate <= 3) ?? barMs;
+  }
   const ticks: number[] = [];
   for (let at = 0; at <= max; at += step) ticks.push(at);
   return {max, ticks};
+}
+
+/**
+ * What the widget says instead of its stacks, if anything: no answer yet (`loading`), no
+ * subscription shown on the board (`noSources`), how agents worked is not known in the
+ * period, only from `at` (`knownFrom`), none of the agents the board shows worked in it
+ * (`none`), or none since `at`, where what is known begins after the period does
+ * (`noneSince`): the part before is not said to be idle.
+ */
+export type ActivityEmpty = {key: 'loading' | 'noSources' | 'none'} | {key: 'knownFrom' | 'noneSince'; at: number} | null;
+
+export function activityEmpty(history: Pick<History, 'since' | 'activity'> | null, shownSources: number): ActivityEmpty {
+  if (!history) return {key: 'loading'};
+  if (!shownSources) return {key: 'noSources'};
+  const {activity} = history;
+  if (!activity.known) return {key: 'knownFrom', at: activity.since};
+  if (activity.workMs) return null;
+  return activity.known.from > history.since ? {key: 'noneSince', at: activity.known.from} : {key: 'none'};
 }
 
 /**

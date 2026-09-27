@@ -19,10 +19,11 @@ test('widgets follow the board’s order; a new one comes next to its natural ne
 });
 
 test('agent activity stands over what is left, on a new board and on one arranged before it', () => {
-  const ids = ['source:a', AGENTS, ...ANALYTICS];
-  assert.deepEqual(arranged(EMPTY, ids), ['source:a', AGENTS, ACTIVITY, HISTORY, FORECAST]);
-  const before = {...EMPTY, order: ['source:a', AGENTS, FORECAST, HISTORY]};
-  assert.deepEqual(arranged(before, ids), ['source:a', AGENTS, ACTIVITY, FORECAST, HISTORY], 'first of the analytics, whatever order they were given');
+  assert.deepEqual(arranged(EMPTY, ANALYTICS), [ACTIVITY, HISTORY, FORECAST]);
+  assert.deepEqual(arranged({...EMPTY, order: ['source:a', AGENTS, FORECAST, HISTORY]}, ANALYTICS), [ACTIVITY, FORECAST, HISTORY], 'first of the analytics, whatever order they were given');
+  // Moving widgets puts the hidden ones after the shown: a card or the list of agents may stand after the analytics.
+  assert.deepEqual(arranged({...EMPTY, order: ['source:a', FORECAST, HISTORY, 'source:b']}, ANALYTICS), [ACTIVITY, FORECAST, HISTORY], 'a hidden card after them');
+  assert.deepEqual(arranged({...EMPTY, order: ['source:a', HISTORY, FORECAST, AGENTS]}, ANALYTICS), [ACTIVITY, HISTORY, FORECAST], 'the list of agents after them');
 });
 
 test('moving the shown widgets keeps the hidden ones behind them', () => {

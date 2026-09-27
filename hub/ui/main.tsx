@@ -57,7 +57,7 @@ function Dashboard({
   const arrange = useView(data, reload);
   const prefs = usePrefs();
   const revision = data ? data.revision : null;
-  // The chart and the table show one period: a time range selected on the chart, else the chosen one.
+  // The analytics show one period: a time range selected on a chart, else the chosen one.
   const selected = useTimeRange();
   // A range kept on the page is of the sources the board had and whose work it showed: one changed since is read again.
   const sourceIds = useMemo(() => historySources(data), [data]);
@@ -81,7 +81,7 @@ function Dashboard({
   }, [board]);
   useEffect(() => showBoard(boardId), [boardId]);
 
-  // Every widget of the board in its order: a card per source, the chart and the table.
+  // Every widget of the board: a card per source, the list of agents, and the analytics (agent activity, the chart and the table).
   const cards = new Map<string, Widget>(
     sources.map(source => [
       cardId(source.id),
@@ -137,12 +137,15 @@ function Dashboard({
       },
     ],
   ]);
-  const widgets = arranged(arrange.view, [...cards.keys(), ...ANALYTICS]).map(id => (cards.get(id) ?? panels.get(id))!);
-  const shown = widgets.filter(widget => !isHidden(arrange.view, widget.id));
-  // The cards are about now; the chart and the table below them, with their filters, are the analytics.
-  // Each area is arranged on its own grid.
-  const shownCards = shown.filter(widget => cards.has(widget.id));
-  const shownPanels = shown.filter(widget => panels.has(widget.id));
+  // The cards are about now; agent activity, the chart and the table below them, with their
+  // filters, are the analytics. Each area is arranged on its own grid, and on its own: a
+  // widget new to the board takes its place among its own area's.
+  const cardWidgets = arranged(arrange.view, [...cards.keys()]).map(id => cards.get(id)!);
+  const panelWidgets = arranged(arrange.view, ANALYTICS).map(id => panels.get(id)!);
+  const widgets = [...cardWidgets, ...panelWidgets];
+  const shownOf = (list: Widget[]) => list.filter(widget => !isHidden(arrange.view, widget.id));
+  const shownCards = shownOf(cardWidgets);
+  const shownPanels = shownOf(panelWidgets);
   const ids = (list: Widget[]) => list.map(widget => widget.id);
   const grid = (list: Widget[], onMove: (order: string[]) => void) => (
     <Widgets

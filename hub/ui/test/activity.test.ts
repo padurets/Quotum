@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {activityScale, groupColors, mutedKey, OTHER_COLOR} from '../lib/activity';
+import {activityEmpty, activityScale, groupColors, mutedKey, OTHER_COLOR} from '../lib/activity';
 import {CATEGORY_COLORS, PROVIDERS} from '../lib/providers';
 import type {ActivityGroup, View} from '../lib/types';
 
@@ -85,7 +85,19 @@ test('the scale is time worked, up to the tallest stack and never more than a ba
   assert.deepEqual(activityScale(20 * MINUTE, HOUR), {max: 20 * MINUTE, ticks: [0, 10 * MINUTE, 20 * MINUTE]});
   assert.deepEqual(activityScale(1.7 * HOUR, 2 * HOUR), {max: 2 * HOUR, ticks: [0, HOUR, 2 * HOUR]});
   assert.equal(activityScale(11 * HOUR, 12 * HOUR).max, 12 * HOUR, 'never more than a bar');
-  assert.equal(activityScale(4.5 * MINUTE, 5 * MINUTE).max, 5 * MINUTE);
+  assert.deepEqual(activityScale(4.5 * MINUTE, 5 * MINUTE), {max: 5 * MINUTE, ticks: [0, 5 * MINUTE]}, 'a five-minute bar marked at its top');
+  assert.deepEqual(activityScale(1.9 * HOUR, 2 * HOUR), {max: 2 * HOUR, ticks: [0, HOUR, 2 * HOUR]});
+});
+
+test('the widget says why it has no stacks, and never calls a period idle before work was known', () => {
+  const since = Date.parse('2026-09-01T00:00:00Z');
+  const activity = (change: object) => ({since, known: {from: since, to: since + 30 * 24 * HOUR}, barMs: HOUR, workMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}, ...change});
+  assert.deepEqual(activityEmpty(null, 1), {key: 'loading'});
+  assert.deepEqual(activityEmpty({since, activity: activity({})}, 0), {key: 'noSources'});
+  assert.deepEqual(activityEmpty({since, activity: activity({known: null, since: since + HOUR})}, 1), {key: 'knownFrom', at: since + HOUR});
+  assert.deepEqual(activityEmpty({since, activity: activity({})}, 1), {key: 'none'});
+  assert.deepEqual(activityEmpty({since, activity: activity({known: {from: since + 20 * 24 * HOUR, to: since + 30 * 24 * HOUR}})}, 1), {key: 'noneSince', at: since + 20 * 24 * HOUR});
+  assert.equal(activityEmpty({since, activity: activity({workMs: HOUR})}, 1), null);
 });
 
 test('a group switched off is kept apart for each way of splitting', () => {

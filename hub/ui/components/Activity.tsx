@@ -1,9 +1,9 @@
-import {memo, useMemo} from 'react';
+import {memo, useLayoutEffect, useMemo, useRef, useState} from 'react';
 import {MINUTE, useNow} from '../lib/api';
 import type {Activity as ActivityData, ActivityDimension, ActivityGroup, History as HistoryData, Overview} from '../lib/types';
 import {clock, num, shortDay, stamp, workHours} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
-import {activityScale, groupColors, mutedKey} from '../lib/activity';
+import {activityEmpty, activityScale, groupColors, mutedKey} from '../lib/activity';
 import {ACTIVITY_BY, setMuted, setPrefs, usePrefs} from '../lib/prefs';
 import {goTo, setTimeRange, useTimeRange, type TimeRange} from '../lib/timeRange';
 import {cellLabel, frameOf, measuredTo, niceTicks, step} from '../lib/periods';
@@ -84,15 +84,14 @@ export const Activity = memo(function Activity({
   // Known from later than the period the hub answered begins (not the page's frame, whose clock may be a minute behind).
   const since = history && activity?.known && activity.known.from > history.since ? activity.known.from : null;
 
-  const empty = !history
-    ? t('history.loading')
-    : !shownSources.length
-      ? t('activity.noSources')
-      : !activity?.known
-        ? t('activity.knownFrom', {time: stamp(activity?.since ?? now)})
-        : !activity.workMs
-          ? t('activity.none')
-          : null;
+  const said = activityEmpty(history, shownSources.length);
+  const empty = !said
+    ? null
+    : said.key === 'loading'
+      ? t('history.loading')
+      : said.key === 'knownFrom' || said.key === 'noneSince'
+        ? t(`activity.${said.key}`, {time: stamp(said.at)})
+        : t(`activity.${said.key}`);
 
   return (
     <section className={`panel activity ${loading ? 'is-loading' : ''}`} aria-label={t('activity.title')} aria-busy={loading}>
@@ -222,6 +221,15 @@ function Stacks({
   const parts = hover === null ? [] : groups.flatMap(({group, color, name}) => group.cells.filter(([start]) => start === hover).map(([, ms]) => ({key: group.key, color, name, ms})));
   const hoverX = hover === null ? 0 : x(Math.max(from, Math.min(to, hover + barMs / 2)));
   const {tip, style: tipStyle} = useTip(svg, {width, at: hoverX, narrow, rises: true, bottom: height * scale});
+  // The label of the part not known shows only where it fits within its hatching, measured
+  // as drawn (its length depends on the language and the font), never over the scale.
+  const unknownLabel = useRef<SVGTextElement>(null);
+  const [labelFits, setLabelFits] = useState(false);
+  const hatched = unknownTo === null ? 0 : x(unknownTo) - x(from);
+  useLayoutEffect(() => {
+    const label = unknownLabel.current;
+    setLabelFits(!!label && label.getComputedTextLength() + 24 <= hatched);
+  });
 
   return (
     <div className="chart activity-chart" ref={box}>
@@ -256,11 +264,16 @@ function Stacks({
             {unknownTo !== null && (
               <g className="activity-unknown">
                 <rect x={x(from)} width={x(unknownTo) - x(from)} y={top} height={height - top - bottom} fill={`url(#${CSS.escape(clip)}-hatch)`} />
-                {x(unknownTo) - x(from) > 170 && (
-                  <text x={(x(from) + x(unknownTo)) / 2} y={top + (height - top - bottom) / 2} textAnchor="middle" className="activity-unknown-label">
-                    {t('activity.notKnown', {time: stamp(unknownTo)})}
-                  </text>
-                )}
+                <text
+                  ref={unknownLabel}
+                  x={(x(from) + x(unknownTo)) / 2}
+                  y={top + (height - top - bottom) / 2}
+                  textAnchor="middle"
+                  className="activity-unknown-label"
+                  visibility={labelFits ? undefined : 'hidden'}
+                >
+                  {t('activity.notKnown', {time: stamp(unknownTo)})}
+                </text>
               </g>
             )}
             {groups.map(({group, color}, i) => (
@@ -269,9 +282,10 @@ function Stacks({
           </g>
         </g>
         {drag && <rect x={Math.min(drag.start, drag.end)} width={Math.abs(drag.end - drag.start)} y={top} height={height - top - bottom} className="selection" />}
-        {hover !== null && bar && <rect x={x(hover)} width={Math.max(1, x(hover + barMs) - x(hover))} y={top} height={height - top - bottom} className="hover-band" />}
+        {hover !== null && bar && groups.length > 0 && <rect x={x(hover)} width={Math.max(1, x(hover + barMs) - x(hover))} y={top} height={height - top - bottom} className="hover-band" />}
       </svg>
-      {hover !== null && bar && !drag && (
+      {!groups.length && <div className="chart-empty">{t('activity.allOff')}</div>}
+      {hover !== null && bar && groups.length > 0 && !drag && (
         <Tooltip tip={tip} className={narrow ? 'is-below' : ''} style={tipStyle}>
           <div className="tooltip-time">{cellLabel(hover, barMs)}</div>
           {parts.length > 0 && (

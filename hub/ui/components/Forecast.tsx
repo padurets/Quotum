@@ -64,33 +64,34 @@ const HEADINGS: Record<ForecastColumn, {title: Key; range?: Key; hint?: Key}> = 
 
 const heading = (column: ForecastColumn, range: boolean) => t((range && HEADINGS[column].range) || HEADINGS[column].title);
 
-/** Why a cell about agent work is a dash: what spending nothing means depends on the column. */
-const reasonKey = (column: WorkColumn, reason: Exclude<WorkReason, 'unknown'>): Key =>
-  reason === 'nospend' ? (column === 'during' ? 'work.noSpend' : 'work.noPace') : (({none: 'work.none', short: 'work.short', noend: 'work.noEnd'}) as const)[reason];
+/** Why a cell about agent work is a dash. */
+const REASONS: Record<Exclude<WorkReason, 'unknown'>, Key> = {none: 'work.none', short: 'work.short', nospend: 'work.noSpend', slow: 'work.slow'};
 
 type Cell = {content: ReactNode; title?: string; className?: string};
 
 /**
  * A cell about agent work, with a tooltip of a part a line: what an hour of work spent
  * for the forecast (`perWork`), how much work that is taken over, that the share is an
- * upper bound, since when work is known, or why there is no number.
+ * upper bound, since when work is known, or why there is no number (and since when that
+ * holds, where work is known from later than the period begins).
  */
 function workCell(column: WorkColumn, cell: WorkCell, work: SeriesWork, periodFrom: number, resetAt: number | null, perWork: number | null): Cell {
-  if ('none' in cell) return {content: '—', title: cell.none === 'unknown' ? t('work.unknown', {time: stamp(work.from)}) : t(reasonKey(column, cell.none))};
   const notes = workNotes(work, periodFrom);
+  const since = notes.since !== null ? [t('work.since', {time: stamp(notes.since)})] : [];
+  if ('none' in cell) return {content: '—', title: cell.none === 'unknown' ? t('work.unknown', {time: stamp(work.from)}) : [t(REASONS[cell.none]), ...since].join('\n')};
   const paced = column === 'perwork' || column === 'workleft';
   const lines = [
     ...(column === 'workleft' && perWork !== null ? [t('work.basis', {value: num(perWork, 1)})] : []),
     ...(paced && notes.basis !== null ? [t('work.basisMeasured', {time: workHours(notes.basis)})] : []),
     ...(column === 'during' ? [t('work.upperBound')] : []),
-    ...(notes.since !== null ? [t('work.since', {time: stamp(notes.since)})] : []),
+    ...since,
   ];
   if ('untilReset' in cell) return {content: t('work.untilReset'), title: [t('work.untilResetHint', {time: workHours(cell.untilReset), reset: stamp(resetAt!)}), ...lines].join('\n')};
   const content =
     column === 'work'
       ? workHours(cell.value)
       : column === 'perwork'
-        ? t('table.perHour', {value: num(cell.value, 1)})
+        ? t('table.perHour', {value: cell.value > 0 && cell.value < 0.05 ? '≈ 0' : num(cell.value, 1)})
         : column === 'workleft'
           ? t('work.left', {time: workHours(cell.value)})
           : t('work.during', {value: num(cell.value)});
