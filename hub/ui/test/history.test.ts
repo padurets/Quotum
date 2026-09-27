@@ -95,6 +95,33 @@ test("the period ending now is read on the board's first snapshot, not before; n
   assert.equal(h.reads.length, 4);
 });
 
+test('all of the history as news (whose work the board shows changed) is read at once, as a new lineup is, and no range of it is kept', async () => {
+  const h = harness();
+  h.loader.choose('24h', null);
+  h.loader.open('b1');
+  h.loader.snapshot(['s1']);
+  await h.reads[0].answer();
+  const range = {from: NOW - 3 * 3_600_000, to: NOW - 2 * 3_600_000};
+  h.loader.choose('24h', range);
+  await h.advance(S);
+  await h.reads[1].answer({range: `${range.from}-${range.to}`, to: range.to});
+  h.loader.choose('24h', null);
+  await h.advance(S);
+  await h.reads[2].answer();
+  await h.advance(2 * S);
+  h.loader.news(0);
+  assert.equal(h.reads.length, 4, 'two seconds after the last read: at once');
+  h.loader.news(0);
+  await h.advance(S);
+  assert.equal(h.reads.length, 5, 'and again while it is read, once a run of them stops, its answer no longer the one shown');
+  await h.reads[3].answer({cellMs: MIN});
+  assert.notEqual(h.loader.get().history?.cellMs, MIN, 'the answer read before the second is not shown');
+  await h.reads[4].answer();
+  h.loader.choose('24h', range);
+  await h.advance(S);
+  assert.equal(h.reads.length, 6, 'the range kept is read again');
+});
+
 test('every snapshot (a connection again) reads the period again, within the same limit, and drops the ranges kept', async () => {
   const h = harness();
   h.loader.choose('24h', null);

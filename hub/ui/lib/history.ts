@@ -100,10 +100,14 @@ export class HistoryLoader {
     this.want('change');
   }
 
-  /** Measurements at `since` or later reached the hub: what was read of that time is read again. */
+  /**
+   * Measurements at `since` or later reached the hub: what was read of that time is read
+   * again. All of it (`since` 0) is whose work the board shows, or under which names,
+   * changing: like a new lineup, that is read at once.
+   */
   news(since: number) {
     this.forget(since);
-    this.want('news');
+    this.want(since === 0 ? 'change' : 'news');
   }
 
   /** The chosen period or the selected range changed. */
