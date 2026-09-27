@@ -941,8 +941,9 @@ test('row 18 × each row: the pause keeps lostAt once the connection was lost (r
         const opened = h.timers.t;
         await flush();
         h.hide();
+        await h.timers.advance(2 * S);
         await h.last().json(503, {});
-        await h.timers.advance(31 * S);
+        await h.timers.advance(29 * S);
         return opened;
       },
     ],
@@ -1022,6 +1023,7 @@ test('row 18 × each row: the pause keeps lostAt once the connection was lost (r
         await flush();
         h.hide();
         await h.last().json(503, {});
+        await h.timers.advance(S / 2);
         h.live.open('b2');
         await flush();
         await h.timers.advance(31 * S);
