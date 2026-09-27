@@ -67,7 +67,8 @@ const RESET_DROP = 5;
 /**
  * The names a board's history is keyed by (`Store.workKey`), for its people (a JSON list,
  * given twice) and its subscriptions (likewise): each project a person named that worked
- * on one of them, and each machine that did. It is read with every overview, so a
+ * on one of them, and each machine that did. It is read with every answer of history and
+ * whenever the hub works out a watched board whole (at least every `recheckMs`), so a
  * machine's sessions are found by project (schema step 4) rather than read through.
  */
 export const WORK_NAMES =

@@ -206,7 +206,7 @@ test('a database of a development version before 0.2 is refused, not misread', (
 });
 
 test('the names a board’s history is keyed by are found by project, not by reading every session of a machine', () => {
-  // Read with every overview: without the index a person with many sessions stalls the hub for each.
+  // Read with every answer of history and every look at a watched board: without the index a person with many sessions stalls the hub for each.
   const store = fresh();
   const plan = (store.db.prepare(`EXPLAIN QUERY PLAN ${WORK_NAMES}`).all('[]', '[]', '[]', '[]') as {detail: string}[]).map(row => row.detail);
   assert.ok(
