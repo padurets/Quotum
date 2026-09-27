@@ -61,7 +61,7 @@ import {
  * leaves those codes out. How agents worked before `start` is written into the hub (as it
  * would have credited it, from ten days back: the part before is unknown) and read at
  * `start` alone: the codes of the activity widget and of the table's work are at that
- * fixed point, over a range ending there.
+ * fixed point, over a period ending there or a range before it.
  *
  * A new state gets an entry here with at least one code; the test picks it up.
  */

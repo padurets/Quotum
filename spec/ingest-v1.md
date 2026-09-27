@@ -350,9 +350,10 @@ anyone who holds its account, the members of the board see whether it is in use 
 running agents say. About running agents (unless turned
 off): which client, where it runs, since when, whether it works and when it last did,
 and the name of its project (the repository its folder is in, else the folder) and of
-its folder when that differs (unless that is turned off too). The members of a board
-where a subscription you measure is shown see these, as they see its limits, with each project under
-the name its person gave it, and with them the name of the machine each agent runs on.
+its folder when that differs (unless that is turned off too). The members of a board you
+are on where a subscription you measure is shown, whoever brought it, see these, as they
+see its limits, with each project under the name its person gave it, and with them the
+name of the machine each agent runs on.
 
 What the hub keeps of running agents: when each worked, with the machine, subscription,
 where it ran, since when and its project and folder names, as long as samples (90 days);

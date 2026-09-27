@@ -309,7 +309,7 @@ test('a machine gone quiet is credited for a short while, whether or not it is s
   }
 });
 
-test("a board shows the sessions of those who show the subscription on it, each project as its person named it; a device taken off, none", () => {
+test("a board shows the sessions of those on it who measure the subscription, each project as its person named it; a device taken off, none", () => {
   const {store, live, ann, bob, laptop, server} = setup();
   live.report(laptop, ann, [session(laptop, {project: 'quotum', folder: 'quotum.feat'})], start);
   live.report(server, bob, [session(server, {project: 'quotum', working: false})], start);

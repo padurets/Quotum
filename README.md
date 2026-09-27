@@ -165,7 +165,8 @@ day, not a script thrown together over a weekend. In practice that meant:
   person whose agents they are is on the board, its members see them with the name of
   the machine they run on, each project under the name that person gave it, and when and
   how long they worked, by project and machine, from the later of when that person joined
-  the board and when the subscription came to it. The hub keeps when each agent worked,
+  the board and when the subscription came to it (on their own board, all of it). The hub
+  keeps when each agent worked,
   with its machine, project and folder names, for 90 days, and the names you give your
   projects until you undo them; you see and correct your projects in *My machines*. The full list is in the [spec](spec/ingest-v1.md#privacy).
 - **The numbers mean what they say.** Only a real increase inside one reset window
