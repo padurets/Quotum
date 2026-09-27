@@ -1,4 +1,4 @@
-import {test} from 'node:test';
+import {test, type TestContext} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtempSync} from 'node:fs';
 import net from 'node:net';
@@ -331,9 +331,11 @@ test('a reader coming while changes wait to go out has them in the snapshot and 
 });
 
 /** A hub on a clock tests move, with Alice, her token and a stream of her personal board. */
-async function timed(options: Partial<EventsOptions> = {}) {
+async function timed(t: TestContext, options: Partial<EventsOptions> = {}) {
   const clock = new ManualClock(Date.now());
   const h = await hub(options, clock);
+  // Closed after the test, even when signing up fails: a hub left open would hold the file's run.
+  t.after(() => h.app.close());
   const board = await h.person('alice');
   const secret = await h.token('alice');
   const credential = h.ingest.authenticate(`Bearer ${secret}`) as Credential;
@@ -363,8 +365,7 @@ async function timed(options: Partial<EventsOptions> = {}) {
 }
 
 test('what changes with time alone goes out when it does, with nothing told to the hub', async t => {
-  const h = await timed();
-  t.after(() => h.app.close());
+  const h = await timed(t);
   h.deliver(h.clock.now() - MIN, 3 * MIN);
   const s = await reading(h, 'alice');
   t.after(s.close);
@@ -414,8 +415,7 @@ test('what changes with time alone goes out when it does, with nothing told to t
 });
 
 test('every watched board is worked out in full now and then: a change no touch told of arrives all the same', async t => {
-  const h = await timed({recheckMs: 25_000});
-  t.after(() => h.app.close());
+  const h = await timed(t, {recheckMs: 25_000});
   const s = await reading(h, 'alice');
   t.after(s.close);
   // Behind the hub's back: no touch.
@@ -610,8 +610,7 @@ test('her boards cannot be worked out as her own sources and the board change: t
 });
 
 test('a ping finds out what nobody told: a session gone or a place on the board lost behind the hub’s back', async t => {
-  const h = await timed();
-  t.after(() => h.app.close());
+  const h = await timed(t);
   const s = await reading(h, 'alice');
   t.after(s.close);
   h.store.db.prepare('DELETE FROM sessions').run();
@@ -693,7 +692,9 @@ test('only the hub’s own page opens events: without its header, from another o
   assert.deepEqual((await open(h.base, cookie, 'nope')).body, {error: 'board_not_found'});
   assert.deepEqual((await open(h.base, cookie, 'nope', {})).body, {error: 'forbidden_origin'}, 'another page learns nothing of which boards there are');
   assert.equal(
-    (await fetch(`${h.base}/api/events`, {method: 'HEAD', headers: {cookie: cookie!, ...STREAM}})).headers.get('content-type')?.includes('event-stream') ?? false,
+    (await fetch(`${h.base}/api/events`, {method: 'HEAD', headers: {cookie: cookie!, ...STREAM}, signal: AbortSignal.timeout(3000)})).headers
+      .get('content-type')
+      ?.includes('event-stream') ?? false,
     false,
   );
   const same = await open(h.base, cookie, undefined, {...STREAM, 'sec-fetch-site': 'same-origin', origin: h.base});
@@ -843,17 +844,19 @@ test('a lease let go for a newer reader says so once, then is forgotten', async 
 
 test('a hub with open streams and a held poll stops at once, telling them it restarts', async t => {
   const h = await hub({pollMs: 10_000});
-  // Closed here, and after the test too if it fails before: a hub left open would hold the file's run.
-  t.after(() => h.app.close());
+  let s: Stream | undefined;
+  const polling = new AbortController();
+  // Let go after the test, its readers first, even when it fails early: a hub left open would hold the file's run.
+  t.after(() => (s?.close(), polling.abort(), h.app.close()));
   await h.person('alice');
-  const s = await reading(h, 'alice');
+  const stream = (s = await reading(h, 'alice'));
   const lease = (await h.call('GET', '/api/events?mode=poll', {as: 'alice', headers: STREAM})).body.lease;
-  const held = fetch(`${h.base}/api/events?mode=poll&lease=${lease}`, {headers: {cookie: h.cookies.get('alice')!, ...STREAM}});
+  const held = fetch(`${h.base}/api/events?mode=poll&lease=${lease}`, {headers: {cookie: h.cookies.get('alice')!, ...STREAM}, signal: polling.signal});
   await new Promise(resolve => setTimeout(resolve, 100));
   const started = Date.now();
-  await h.app.close();
+  await Promise.race([h.app.close(), new Promise((_, stuck) => setTimeout(() => stuck(new Error('the hub did not stop')), 3000).unref())]);
   assert.ok(Date.now() - started < 1000, `closed in ${Date.now() - started} ms`);
-  assert.deepEqual((await s.next()).data, {reason: 'restart'});
+  assert.deepEqual((await stream.next()).data, {reason: 'restart'});
   const answer = await held;
   assert.deepEqual((await answer.json()).events, [{type: 'bye', data: {reason: 'restart'}}]);
 });
