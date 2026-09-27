@@ -257,8 +257,9 @@ forecast by work: how many hours of work what is left lasts at that spending (or
 lasts to the reset). A widget draws hours of work in bars of an hour (the period's cells
 where those are longer; shorter bars where a range holds fewer than twenty hours), so a
 bar's height is the time agents worked in it, stacked by subscription, project or
-machine, with the work time, how many different agents worked and their time together,
-in all and in each bar's tooltip. Every subscription, project and machine of the period
+machine, with the work time, how many different agents worked and their time together
+in all; a bar's tooltip tells its work time and agents first, while none of its work is
+in a group switched off in the legend, then its parts. Every subscription, project and machine of the period
 is a group of its own, however small; projects and machines take seven colours by their
 hours, and those past them share a neutral one. Each moment is split evenly among
 the agents working then, so a stack is as tall as the time any of them worked; a
@@ -268,7 +269,8 @@ of a period begins with `agentWorkSince`, and on a shared board no earlier than 
 subscription came to it: the part before is said to be unknown, not drawn as idle. The
 pace and the share during work are taken over the work within the steps between samples
 whose spending counts, so a gap counts neither, and need half an hour of it; a pace under
-a twentieth of a percent an hour foresees nothing. The share counts a step that any work
+a twentieth of a percent an hour, or work that would outlast a whole window, foresees
+nothing. Where none of the agents worked, there is no share either. The share counts a step that any work
 touches whole, so it is an upper bound. A board shows the work of its
 members who hold each subscription it shows, but those of hidden cards: on a shared
 board from the later of their joining it and the subscription coming to it, on a

@@ -98,7 +98,8 @@ function workCell(column: WorkColumn, cell: WorkCell, work: SeriesWork, periodFr
     ...(column === 'during' ? [t('work.upperBound')] : []),
     ...known(notes.since),
   ];
-  if ('usedUp' in cell) return {content: t('work.usedUp'), title: known(notes.since).join('\n') || undefined};
+  // Nothing left, whatever is known of the work: as the forecast by time says it, with nothing to add.
+  if ('usedUp' in cell) return {content: t('work.usedUp')};
   if ('untilReset' in cell) return {content: t('work.untilReset'), title: [t('work.untilResetHint', {time: workHours(cell.untilReset), reset: stamp(resetAt!)}), ...lines].join('\n')};
   const content =
     column === 'work'

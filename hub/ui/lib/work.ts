@@ -58,26 +58,35 @@ export function dashOf(reason: Exclude<WorkReason, 'unknown'>, since: number | n
  * the share are taken over the work within steps whose spending is known, and need half an
  * hour of it.
  * `resetInMs`, how long until the window's reset, only in a period up to now: work that
- * lasts beyond it lasts to the reset.
+ * lasts beyond it lasts to the reset. Work that would outlast a whole window (`windowMs`, its
+ * length) foresees nothing, as too slow a pace does: over a range no reset stops it first.
  */
-export function workCells(work: SeriesWork, remaining: number, resetInMs: number | null): Record<WorkColumn, WorkCell> {
+export function workCells(work: SeriesWork, remaining: number, resetInMs: number | null, windowMs: number | null = null): Record<WorkColumn, WorkCell> {
   if (work.ms === null) {
     const unknown = {none: 'unknown'} as const;
     return {work: unknown, perwork: unknown, workleft: unknown, during: unknown};
   }
-  const during: WorkCell = work.consumed > 0 ? {value: (work.duringWork / work.consumed) * 100} : {none: 'nospend'};
   // Nothing left is what the forecast says, however the work went.
   const usedUp = remaining <= 0 ? ({usedUp: true} as const) : null;
-  // With no work at all, all of the spending went elsewhere; with work mostly in gaps between
-  // measurements, whose spending is not known, the share would say 0 of work that was there.
-  if (!work.ms) return {work: {none: 'none'}, perwork: {none: 'none'}, workleft: usedUp ?? {none: 'none'}, during};
+  const none = {none: 'none'} as const;
+  if (!work.ms) return {work: none, perwork: none, workleft: usedUp ?? none, during: none};
+  const during: WorkCell = work.consumed > 0 ? {value: (work.duringWork / work.consumed) * 100} : {none: 'nospend'};
+  // With work mostly in gaps between measurements, whose spending is not known, the share would say 0 of work that was there.
   const short = {none: 'short'} as const;
   if (work.coveredMs < WORK_PACE_FROM) return {work: {value: work.ms}, perwork: short, workleft: usedUp ?? short, during: short};
   const pace = work.consumed / (work.coveredMs / HOUR);
   const leftMs = (remaining / pace) * HOUR;
   const workleft: WorkCell =
     usedUp ??
-    (work.consumed <= 0 ? {none: 'nospend'} : pace < MIN_RATE ? {none: 'slow'} : resetInMs !== null && leftMs >= resetInMs ? {untilReset: leftMs} : {value: leftMs});
+    (work.consumed <= 0
+      ? {none: 'nospend'}
+      : pace < MIN_RATE
+        ? {none: 'slow'}
+        : resetInMs !== null && leftMs >= resetInMs
+          ? {untilReset: leftMs}
+          : windowMs !== null && leftMs >= windowMs
+            ? {none: 'slow'}
+            : {value: leftMs});
   return {work: {value: work.ms}, perwork: {value: pace}, workleft, during};
 }
 
@@ -86,11 +95,11 @@ export function workCells(work: SeriesWork, remaining: number, resetInMs: number
  * the past, what is left is what was left at its last measurement; over a period up to
  * now, what is left now, and the window's reset (`resetAt`) is ahead while it is after `now`.
  */
-export function lineWork(line: Pick<Line, 'work' | 'current' | 'remainingAtEnd'>, range: boolean, resetAt: number | null, now: number): Record<WorkColumn, WorkCell> | null {
+export function lineWork(line: Pick<Line, 'work' | 'current' | 'remainingAtEnd' | 'minutes'>, range: boolean, resetAt: number | null, now: number): Record<WorkColumn, WorkCell> | null {
   const remaining = range ? line.remainingAtEnd : line.current;
   // A line on the table has measurements, so it has an end; one without is not foreseen.
   if (!line.work || remaining === null) return null;
-  return workCells(line.work, remaining, range ? null : resetAt !== null && resetAt > now ? resetAt - now : null);
+  return workCells(line.work, remaining, range ? null : resetAt !== null && resetAt > now ? resetAt - now : null, line.minutes ? line.minutes * 60_000 : null);
 }
 
 /**
@@ -106,6 +115,7 @@ export function workNotes(work: SeriesWork, periodFrom: number): {since: number 
   return {
     since: work.ms !== null && work.from > periodFrom ? work.from : null,
     basis: measured && work.coveredMs < BASIS_SHARE * work.ms! ? work.coveredMs : null,
-    share: share !== null && share < LOW_SHARE ? share : null,
+    // As its line tells it, rounded: a share that reads as half is not told as under it.
+    share: share !== null && Math.round(share) < LOW_SHARE ? share : null,
   };
 }

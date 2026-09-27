@@ -31,7 +31,7 @@ test('each dash says why', () => {
   const none = (cell: WorkCell) => ('none' in cell ? cell.none : null);
   const unknown = workCells(work({ms: null}), 38, null);
   assert.deepEqual(Object.values(unknown).map(none), ['unknown', 'unknown', 'unknown', 'unknown']);
-  assert.deepEqual(Object.values(workCells(work({ms: 0, coveredMs: 0, duringWork: 0}), 38, null)).map(value), [{none: 'none'}, {none: 'none'}, {none: 'none'}, 0], 'spent, and none of it while agents worked');
+  assert.deepEqual(Object.values(workCells(work({ms: 0, coveredMs: 0, duringWork: 0}), 38, null)).map(value), [{none: 'none'}, {none: 'none'}, {none: 'none'}, {none: 'none'}], 'none worked: no share of theirs either');
   const short = workCells(work({coveredMs: 29 * MIN}), 38, null);
   assert.deepEqual([none(short.perwork), none(short.workleft), none(short.during)], ['short', 'short', 'short']);
   const inGaps = workCells(work({coveredMs: 0, duringWork: 0}), 38, null);
@@ -42,6 +42,10 @@ test('each dash says why', () => {
   assert.equal(none(workCells(work({consumed: 0.1}), 38, null).workleft), 'slow', 'spent, but too little an hour of work to foresee');
   assert.equal(none(workCells(work({consumed: 0.63}), 38, null).workleft), 'slow', '0.03% an hour would last over a thousand hours');
   assert.equal(none(workCells(work({consumed: 21 * MIN_RATE}), 38, null).workleft), null);
+  // 5% over 21 hours of work: the 78% left would last over 300 hours, more than a week's window.
+  assert.equal(none(workCells(work({consumed: 5}), 78, null, 7 * DAY).workleft), 'slow', 'longer than a whole window, as over a range');
+  assert.equal(none(workCells(work({consumed: 5}), 78, null, null).workleft), null, 'a window of no known length');
+  assert.ok('untilReset' in workCells(work({consumed: 5}), 78, 2 * DAY, 7 * DAY).workleft, 'up to now, the reset comes first');
   assert.deepEqual(workCells(work(), 0, null).workleft, {usedUp: true}, 'nothing left, nothing to work on');
   assert.deepEqual(workCells(work({coveredMs: 29 * MIN}), 0, null).workleft, {usedUp: true}, 'however the work went');
   assert.deepEqual(workCells(work({ms: 0, coveredMs: 0}), 0, null).workleft, {usedUp: true});
@@ -56,7 +60,7 @@ test('work enough to last beyond the reset says so, in a period up to now', () =
 
 test('over a range what is left is what was left at its end, and the reset is only ahead of a period up to now', () => {
   const now = from + 7 * DAY;
-  const line = {work: work(), current: 80, remainingAtEnd: 38};
+  const line = {work: work(), current: 80, remainingAtEnd: 38, minutes: 7 * 24 * 60};
   const hoursLeft = (cells: ReturnType<typeof lineWork>) => (cells && 'value' in cells.workleft ? Math.round((cells.workleft.value / HOUR) * 10) / 10 : cells?.workleft);
   assert.equal(hoursLeft(lineWork(line, true, now + HOUR, now)), 12.9, 'at the end of the range, and no reset over a range');
   assert.equal(hoursLeft(lineWork(line, false, null, now)), 27.1, 'now');
@@ -75,6 +79,7 @@ test('a tooltip says since when work is known, over how much work the pace is, a
   assert.deepEqual(workNotes(work({coveredMs: 21 * HOUR - 2 * MIN}), from), none, 'a couple of minutes at the edges of the measurements');
   assert.deepEqual(workNotes(work({duringWork: 6.2}), from), {...none, share: 10}, 'a tenth of the spending during work');
   assert.deepEqual(workNotes(work({duringWork: 31}), from), none, 'half of it');
+  assert.deepEqual(workNotes(work({duringWork: 30.8}), from), none, '49.7%, told as half');
   assert.deepEqual(workNotes(work({duringWork: 0, coveredMs: 29 * MIN}), from), none, 'too little work measured to tell a share');
 });
 
