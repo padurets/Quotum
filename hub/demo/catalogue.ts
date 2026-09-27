@@ -705,7 +705,7 @@ const all: DemoSet = {
         {agents: 10, drawn: true},
         {window: 'weekly', level: 'ok', note: 'behind'},
         {forecast: 'weekly', outlook: 'leftPlan', plan: 'behind'},
-        // Its five hours over a range: several points an hour of work, yet what is left outlasts five hours.
+        // Its five hours over a range: a point and a half an hour of work, and what is left outlasts five hours.
         {work: 'session', range: {from: -3 * HOUR, to: -HOUR}, left: 'outlasts', from: 0, to: 0},
       ],
       look: [
@@ -982,15 +982,15 @@ const all: DemoSet = {
       plan: 'pro',
       machines: ['laptop'],
       history: DAY,
-      // Under a point over a day of work: too little an hour of it to foresee by.
+      // Under a point over a day of work: too little an hour of it to tell, yet what is left lasts to the reset.
       windows: [weekly({since: -2 * DAY, use: steady(20, 0.9)})],
       agents: [{machine: 'laptop', origin: 'terminal', project: 'ledger', since: -DAY, works: ALWAYS}],
       expect: [
-        {work: 'weekly', range: '24h', perHour: 0, leftWhy: 'slow', from: 0, to: 0},
-        // Over two hours of it, a tenth of a point an hour: what is left would outlast the week, so it lasts to the reset.
-        {work: 'weekly', range: {from: -3 * HOUR, to: -HOUR}, perHour: 0.1, left: 'outlasts', from: 0, to: 0},
+        {work: 'weekly', range: '24h', perHour: 0, left: 'untilReset', from: 0, to: 0},
+        // Over the last hour but one, a tenth of a point: what is left would outlast the week, so it lasts to the reset.
+        {work: 'weekly', range: {from: -2 * HOUR, to: -HOUR}, perHour: 0.1, left: 'outlasts', from: 0, to: 0},
       ],
-      look: ['In the table, spent per work hour is "≈ 0%/h" and the forecast by work a dash: too little spent per hour of work to foresee'],
+      look: ['In the table, spent per work hour is "≈ 0%/h" and the forecast by work "lasts to the reset": too little spent to tell a number, enough to last'],
     },
 
     // Measured at the hub's pace, one reason each, all by one machine asking every 15 seconds.

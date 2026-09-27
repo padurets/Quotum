@@ -1,7 +1,7 @@
 import {memo, useLayoutEffect, useMemo, useRef, useState, type ReactNode} from 'react';
 import {MINUTE, useNow} from '../lib/api';
 import type {History as HistoryData, Overview, SeriesWork} from '../lib/types';
-import {countdown, duration, num, rateText, stamp, workHours} from '../lib/format';
+import {countdown, duration, num, rateText, shareText, stamp, workHours} from '../lib/format';
 import {level} from '../lib/quota';
 import {FORECAST_WIDTHS, LIVE_COLUMNS, RANGE_COLUMNS, forecastLayout, forecastRow, spentOf, type ForecastColumn, type Outlook, type Pace, type Spent} from '../lib/forecast';
 import {dashOf, lineWork, workNotes, type DashText, type WorkCell, type WorkColumn} from '../lib/work';
@@ -72,6 +72,7 @@ const REASONS: Record<DashText, Key> = {
   nospend: 'work.noSpend',
   nospendSince: 'work.noSpendSince',
   slow: 'work.slow',
+  awaiting: 'forecast.awaiting',
 };
 
 type Cell = {content: ReactNode; title?: string; className?: string};
@@ -94,7 +95,7 @@ function workCell(column: WorkColumn, cell: WorkCell, work: SeriesWork, periodFr
   const lines = [
     ...(column === 'workleft' && perWork !== null ? [t('work.basis', {value: rateText(perWork)})] : []),
     ...(column !== 'work' && notes.basis !== null ? [t('work.basisMeasured', {time: workHours(notes.basis)})] : []),
-    ...(paced && notes.share !== null ? [t('work.lowShare', {value: num(notes.share)})] : []),
+    ...(paced && notes.share !== null ? [t('work.lowShare', {value: shareText(notes.share)})] : []),
     ...(column === 'during' ? [t('work.upperBound')] : []),
     ...known(notes.since),
   ];
@@ -109,7 +110,7 @@ function workCell(column: WorkColumn, cell: WorkCell, work: SeriesWork, periodFr
         ? t('table.perHour', {value: rateText(cell.value)})
         : column === 'workleft'
           ? t('work.left', {time: workHours(cell.value)})
-          : t('work.during', {value: num(cell.value)});
+          : t('work.during', {value: shareText(cell.value)});
   return {content, title: lines.join('\n') || undefined};
 }
 

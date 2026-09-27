@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {dashOf, lineWork, MIN_RATE, workCells, workNotes, WORK_PACE_FROM, type WorkCell} from '../lib/work';
-import {rateText, workHours} from '../lib/format';
+import {rateText, shareText, workHours} from '../lib/format';
 import {setLocale} from '../i18n';
 import type {SeriesWork} from '../lib/types';
 
@@ -41,6 +41,8 @@ test('each dash says why', () => {
   assert.deepEqual([value(idle.perwork), none(idle.workleft), none(idle.during)], [0, 'nospend', 'nospend']);
   assert.equal(none(workCells(work({consumed: 0.1}), 38, null).workleft), 'slow', 'spent, but too little an hour of work to foresee');
   assert.equal(none(workCells(work({consumed: 0.63}), 38, null).workleft), 'slow', '0.03% an hour would last over a thousand hours');
+  assert.ok('untilReset' in workCells(work({consumed: 0.63}), 38, 5 * DAY).workleft, 'however slow, it lasts to a reset that comes first');
+  assert.ok('outlasts' in workCells(work({consumed: 0.63}), 38, null, 7 * DAY).workleft, 'and past a whole window');
   assert.equal(none(workCells(work({consumed: 21 * MIN_RATE}), 38, null).workleft), null);
   // 5% over 21 hours of work: the 78% left would last over 300 hours, more than a week's window.
   assert.deepEqual(workCells(work({consumed: 5}), 78, null, 7 * DAY).workleft, {outlasts: (78 / (5 / 21)) * HOUR, windowMs: 7 * DAY}, 'longer than a whole window, as over a range: it lasts to the reset');
@@ -69,7 +71,8 @@ test('over a range what is left is what was left at its end, and the reset is on
   assert.equal(hoursLeft(lineWork(line, true, now + HOUR, now)), 12.9, 'at the end of the range, and no reset over a range');
   assert.equal(hoursLeft(lineWork(line, false, null, now)), 27.1, 'now');
   assert.ok(lineWork(line, false, now + HOUR, now)?.workleft && 'untilReset' in lineWork(line, false, now + HOUR, now)!.workleft);
-  assert.equal(hoursLeft(lineWork(line, false, now - MIN, now)), 27.1, 'a reset already past, not measured after');
+  assert.deepEqual(lineWork(line, false, now - MIN, now)?.workleft, {none: 'awaiting'}, 'a reset already past, not measured after: what is left is not known');
+  assert.equal(value(lineWork(line, false, now - MIN, now)!.perwork), 2.95, 'the pace over the period is');
   assert.equal(lineWork({...line, work: null}, false, null, now), null, 'a hidden card');
   assert.equal(lineWork({...line, remainingAtEnd: null}, true, null, now), null, 'a range with no measurement has no end to foresee from');
 });
@@ -110,6 +113,7 @@ test('hours of work are minutes within the hour, tenths up to ten, whole hours a
 test('a pace too small to foresee from reads "≈ 0" wherever it is told, and one that foresees never reads 0', () => {
   setLocale('en');
   assert.deepEqual([0, 0.001, 0.03, MIN_RATE, 2.95].map(rateText), ['0', '≈ 0', '≈ 0', '0.1', '3']);
+  assert.deepEqual([0, 0.3, 0.5, 49.6].map(shareText), ['0', '< 1', '1', '50'], 'a share above 0 never reads 0 either');
   for (const consumed of [0.21, 0.63, 1, 5]) {
     const cells = workCells(work({consumed}), 38, null);
     const pace = 'value' in cells.perwork ? cells.perwork.value : 0;

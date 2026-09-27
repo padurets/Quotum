@@ -266,7 +266,7 @@ export const en = {
   'work.basisMeasured': 'Taken over {time} of work, while measurements came',
   'work.upperBound': 'At most: a gap between measurements with work in it counts whole',
   'work.since': 'Known since {time}',
-  'work.lowShare': 'At most {value}% of the spending came while agents worked: the rest went elsewhere, so an hour of work looks dearer',
+  'work.lowShare': 'Only {value}% of the spending came while agents worked: the rest went elsewhere, so an hour of work looks dearer',
   'work.unknown': 'Work time is known only from {time}',
   'work.none': 'No agent this board shows worked on this subscription in the period',
   'work.noneSince': 'No agent this board shows worked on this subscription since {time}; before that is not known',
