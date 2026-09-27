@@ -63,6 +63,18 @@ export type SourceEvent =
 const SAME_EVENT_MS = 15 * 60_000;
 /** A drop of at least this many points before the window's reset time is a reset, not a correction. */
 const RESET_DROP = 5;
+/**
+ * The names a board's history is keyed by (`Store.workKey`), for its people (a JSON list,
+ * given twice) and its subscriptions (likewise): each project a person named that worked
+ * on one of them, and each machine that did. It is read with every overview, so a
+ * machine's sessions are found by project (schema step 4) rather than read through.
+ */
+export const WORK_NAMES =
+  'SELECT group_concat(name, char(31)) AS names FROM (' +
+  'SELECT n.user_id || char(30) || n.reported || char(30) || n.name AS name FROM project_names n WHERE n.user_id IN (SELECT value FROM json_each(?))' +
+  ' AND EXISTS (SELECT 1 FROM devices d JOIN agent_sessions s ON s.device_id = d.id WHERE d.user_id = n.user_id AND s.project = n.reported AND s.source_id IN (SELECT value FROM json_each(?)))' +
+  ' UNION ALL SELECT d.id || char(30) || COALESCE(d.label, d.name) FROM devices d WHERE d.user_id IN (SELECT value FROM json_each(?))' +
+  ' AND EXISTS (SELECT 1 FROM agent_sessions s WHERE s.device_id = d.id AND s.source_id IN (SELECT value FROM json_each(?))) ORDER BY 1)';
 
 type SampleRow = {
   source_id: string;
@@ -190,20 +202,14 @@ export class Store {
    * What the history of a board's agent work depends on besides the data: its subscriptions,
    * whose work it shows from when (`shown`), and the names their people gave the projects
    * and machines that worked on them. A change of any of these asks for the history anew, on
-   * the hub and on the page; a project renamed or a machine added off the board does not.
+   * the hub and on the page. A project or machine that never worked on the board's
+   * subscriptions does not; one that worked on them only before the board shows its work
+   * does, as which did is found without reading when (WORK_NAMES).
    */
   workKey(board: string, shown: Shown): string {
     const people = JSON.stringify([...new Set([...shown.values()].flatMap(s => s.holders.map(h => h.user)))].sort());
     const sources = JSON.stringify([...shown.keys()]);
-    const names = this.db
-      .prepare(
-        'SELECT group_concat(name, char(31)) AS names FROM (' +
-          'SELECT n.user_id || char(30) || n.reported || char(30) || n.name AS name FROM project_names n WHERE n.user_id IN (SELECT value FROM json_each(?))' +
-          ' AND EXISTS (SELECT 1 FROM devices d JOIN agent_sessions s ON s.device_id = d.id WHERE d.user_id = n.user_id AND s.project = n.reported AND s.source_id IN (SELECT value FROM json_each(?)))' +
-          ' UNION ALL SELECT d.id || char(30) || COALESCE(d.label, d.name) FROM devices d WHERE d.user_id IN (SELECT value FROM json_each(?))' +
-          ' AND EXISTS (SELECT 1 FROM agent_sessions s WHERE s.device_id = d.id AND s.source_id IN (SELECT value FROM json_each(?))) ORDER BY 1)',
-      )
-      .get(people, sources, people, sources) as {names: string | null};
+    const names = this.db.prepare(WORK_NAMES).get(people, sources, people, sources) as {names: string | null};
     const key = JSON.stringify([this.sources(board).map(s => s.id), [...shown].map(([id, s]) => [id, s.since, s.holders]), names.names]);
     return createHash('sha256').update(key).digest('base64url').slice(0, 16);
   }

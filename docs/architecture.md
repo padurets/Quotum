@@ -307,7 +307,8 @@ them), kept for 90 days.
   the same people's work under the same names (`Store.workKey`: its sources, whose work
   it shows from when, and the names people gave the projects and machines that worked on
   them), so a card hidden, someone joining or leaving, a project or machine renamed is
-  never served from it, while a name given off the board leaves it be. Work is credited from each machine's list, but an answer is read again when the
+  never served from it, while a name given to a project or machine that never worked on
+  the board's subscriptions leaves it be. Work is credited from each machine's list, but an answer is read again when the
   board's data changes: the work shown is as fresh as the latest measurement, every two
   minutes while agents work. The range is in the past, so the table reads it from its edges: what
   was left at its first and last measurement, what it spent and how fast. The chart

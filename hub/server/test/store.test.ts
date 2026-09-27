@@ -4,7 +4,7 @@ import {mkdtempSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
-import {Store} from '../store/store.js';
+import {Store, WORK_NAMES} from '../store/store.js';
 import {SCHEMA_VERSION} from '../store/schema.js';
 import type {Measurement, Win} from '../domain/quota.js';
 
@@ -203,4 +203,15 @@ test('a database of a development version before 0.2 is refused, not misread', (
   raw.exec('CREATE TABLE sources (id TEXT PRIMARY KEY, board_id TEXT NOT NULL); PRAGMA user_version = 1');
   raw.close();
   assert.throws(() => new Store(file, start), /before 0\.2/);
+});
+
+test('the names a board’s history is keyed by are found by project, not by reading every session of a machine', () => {
+  // Read with every overview: without the index a person with many sessions stalls the hub for each.
+  const store = fresh();
+  const plan = (store.db.prepare(`EXPLAIN QUERY PLAN ${WORK_NAMES}`).all('[]', '[]', '[]', '[]') as {detail: string}[]).map(row => row.detail);
+  assert.ok(
+    plan.some(detail => /agent_sessions_by_project \(device_id=\? AND project=\?/.test(detail)),
+    plan.join('\n'),
+  );
+  store.close();
 });

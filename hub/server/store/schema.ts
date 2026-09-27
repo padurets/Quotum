@@ -103,6 +103,11 @@ export const STEPS = [
   CREATE TABLE project_names (user_id TEXT NOT NULL, reported TEXT NOT NULL, name TEXT NOT NULL,
     PRIMARY KEY (user_id, reported)) WITHOUT ROWID;
   `,
+  // 4 — which projects of a machine worked on a subscription, found without reading all its
+  // sessions: a board's history is keyed by the names of those it shows (Store.workKey).
+  `
+  CREATE INDEX agent_sessions_by_project ON agent_sessions (device_id, project, source_id);
+  `,
 ];
 
 export const SCHEMA_VERSION = STEPS.length;
