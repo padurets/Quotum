@@ -569,6 +569,46 @@ test('what is a reader’s own or the hub’s that cannot be worked out: a new r
   assert.equal(told[1].data.boards.find((b: {id: string}) => b.id === team).name, 'Band');
 });
 
+test('her boards cannot be worked out as her own sources and the board change: the board’s change reaches everyone, and what is hers comes whole next time', async t => {
+  const h = await hub();
+  t.after(() => h.app.close());
+  await h.person('alice');
+  const team = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
+  await h.person('bob', await h.invite('alice', team));
+  const alice = h.directory.credentials('alice@example.com')!.user.id;
+  const bob = h.directory.credentials('bob@example.com')!.user.id;
+  const source = h.store.source('codex', ACCOUNT, Date.now());
+  h.store.hold(source, bob, Date.now());
+  h.store.share(team, source, bob, Date.now());
+  const a = await reading(h, 'alice', team);
+  const b = await reading(h, 'bob', team);
+  t.after(() => [a, b].forEach(s => s.close()));
+  assert.deepEqual(a.snapshot.mine, []);
+
+  const {projection} = h.events as unknown as {projection: Projection};
+  const real = projection.boards.bind(projection);
+  let failing = true;
+  projection.boards = (user: string) => {
+    if (failing && user === alice) {
+      failing = false;
+      throw new Error('disk I/O error');
+    }
+    return real(user);
+  };
+  // Her devices measure it now too: the card changes, and so do her own sources.
+  h.store.hold(source, alice, Date.now());
+  const [heard, told] = [await a.types(), await b.types()];
+  assert.equal(failing, false, 'her boards failed');
+  assert.ok(told.includes('card'), `bob hears the card: ${told}`);
+  assert.ok(heard.includes('card'), `alice hears the card: ${heard}`);
+  assert.ok(!heard.includes('mine'), `nothing of hers half told: ${heard}`);
+
+  // Touched next: what is hers comes whole, with the source her devices now measure.
+  await h.call('POST', `/api/boards/${team}`, {as: 'alice', body: {name: 'Team'}});
+  const later = await a.within();
+  assert.deepEqual(later.find(e => e.type === 'mine')?.data.sources, [source], `alice later: ${later.map(e => e.type)}`);
+});
+
 test('a ping finds out what nobody told: a session gone or a place on the board lost behind the hub’s back', async t => {
   const h = await timed();
   t.after(() => h.app.close());
@@ -801,8 +841,10 @@ test('a lease let go for a newer reader says so once, then is forgotten', async 
   );
 });
 
-test('a hub with open streams and a held poll stops at once, telling them it restarts', async () => {
+test('a hub with open streams and a held poll stops at once, telling them it restarts', async t => {
   const h = await hub({pollMs: 10_000});
+  // Closed here, and after the test too if it fails before: a hub left open would hold the file's run.
+  t.after(() => h.app.close());
   await h.person('alice');
   const s = await reading(h, 'alice');
   const lease = (await h.call('GET', '/api/events?mode=poll', {as: 'alice', headers: STREAM})).body.lease;
