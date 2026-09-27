@@ -124,7 +124,11 @@ test('hours of work are minutes within the hour, tenths up to ten, whole hours a
 
 test('a pace under a twentieth reads "≈ 0" and, with nothing to bound the hundreds of hours it would last, foresees none; one above never reads 0', () => {
   setLocale('en');
-  assert.deepEqual([0, 0.001, 0.03, MIN_RATE, 2.95].map(rateText), ['0', '≈ 0', '≈ 0', '0.1', '3']);
+  assert.deepEqual(
+    [0, 0.001, 0.03, MIN_RATE, 0.07, 0.149, 0.995, 2.95].map(rateText),
+    ['0', '≈ 0', '≈ 0', '0.05', '0.07', '0.15', '1', '3'],
+    'hundredths under 1: at a tenth, 0.05 would read as twice what it is',
+  );
   assert.deepEqual([0, 0.3, 0.5, 49.6].map(shareText), ['0', '< 1', '1', '50'], 'a share above 0 never reads 0 either');
   for (const consumed of [0.21, 0.63, 1, 5]) {
     const cells = workCells(work({consumed}), 38, null);
