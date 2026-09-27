@@ -409,14 +409,16 @@ streams in a row that ended before their first `ping`, closed neither by the pag
 with `bye`; retries back off 1, 2, 5, 10 and 30 s, ±20%, and start over once `live` or
 `polling`. Its timers count in the page's clock; `lostAt`, when the connection was lost,
 in the hub's: entering `connecting` or `retrying` without one sets it to now unless a row
-says otherwise, `live` and `polling` clear it, `paused` keeps it, and the page leaving
-the board (signed out, the board gone) clears it with the board. Waking is `online`, the
-tab shown, `pageshow`, `focus`, or a timer of its own more than 5 s late (a sleep). The
-header says the hub cannot be reached once `lostAt` is 45 s old, unless `paused`.
+says otherwise, `live` and `polling` clear it, `paused` keeps it once a connection was
+lost (`retrying`, or a row that says when) and clears it when one was only opening, and
+the page leaving the board (signed out, the board gone) clears it with the board. Waking
+is `online`, the tab shown, `pageshow`, `focus`, or a timer of its own more than 5 s late
+(a sleep). The header says the hub cannot be reached once `lostAt` is 45 s old, unless
+`paused`.
 
 | # | From | When | Does | To | `lostAt` |
 |---|---|---|---|---|---|
-| 1 | any | another board opened | ends the connection; the page forgets the last board; on a tab hidden for 30 s already (row 18), opens nothing until it is shown | `connecting`; `paused` | as above; kept |
+| 1 | any | another board opened | ends the connection; the page forgets the last board; on a tab hidden for 30 s already (row 18), opens nothing until it is shown | `connecting`; `paused` | as above; as row 18 |
 | 2 | `paused` | the tab shown | | `connecting` | as above |
 | 3 | `connecting` | `200` | waits 10 s more for `hello` and `snapshot` | `connecting` | |
 | 4 | `connecting` | `hello` and `snapshot` on a stream | watches for 2.5 heartbeats without a byte; waits a heartbeat and 10 s for the first `ping` | `live` | cleared |
@@ -436,7 +438,7 @@ header says the hub cannot be reached once `lostAt` is 45 s old, unless `paused`
 | 15a | `connecting`, `polling` | waking after the attempt's time (10 s, or 35 s for a poll) is up; waking before does nothing | opens again at once, the same way | `connecting` | as above; the last byte from `polling` |
 | 16 | `retrying` | its time came, or waking (not sooner than rows 12 and 13 allow) | a stream again once the time for polls is up; opens | `connecting` | as above |
 | 17 | `polling` | a poll answered | applies its events in order, none after `bye`; asks again at once, or opens a stream once the time for polls is up | `polling`, `connecting` | cleared; as above when it opens a stream |
-| 18 | any but `paused` | the tab hidden for 30 s, counted from when it was hidden, whatever board it was given meanwhile, if any | ends the connection and its timers | `paused` | kept |
+| 18 | any but `paused` | the tab hidden for 30 s, counted from when it was hidden (or the page loaded hidden), whatever board it was given meanwhile, if any | ends the connection and its timers | `paused` | kept once lost; cleared while only opening |
 
 In the page, the events go through one reducer into a store (`hub/ui/lib/board.ts`); each
 widget reads its own part of it and renders only when that part changes (a card, its

@@ -109,8 +109,10 @@ export class Live {
   private mode: 'stream' | 'poll' = 'stream';
   private pollUntil = 0;
   private lostAt: number | null = null;
+  /** Whether `lostAt` tells of a connection lost (a retry, or a row that says when it was), not only of one opening. */
+  private lost = false;
   private lastByteAt = 0;
-  /** When the tab was hidden, by the page's clock; null while it shows. */
+  /** When the tab was hidden (or the page loaded hidden), by the page's clock; null while it shows. */
   private hiddenAt: number | null = null;
   /** Streams in a row that ended before their first ping, not by the page nor with `bye`. */
   private short = 0;
@@ -127,7 +129,9 @@ export class Live {
   private retryFloor = 0;
   private readonly timers = new Map<Timer, {handle: unknown; at: number}>();
 
-  constructor(private readonly env: LiveEnv) {}
+  constructor(private readonly env: LiveEnv) {
+    if (!env.visible()) this.hiddenAt = env.now();
+  }
 
   /**
    * Row 1: another board (or the first). A tab hidden meanwhile keeps counting (row 18); one
@@ -152,6 +156,7 @@ export class Live {
     this.board = null;
     this.status = 'stopped';
     this.lostAt = null;
+    this.lost = false;
     this.env.dispatch({type: 'board-close'});
   }
 
@@ -197,12 +202,20 @@ export class Live {
   /**
    * Enters a state. `lostAt`: entering `connecting` or `retrying` while connected sets it
    * to now (hub time), unless a row says when the connection was lost; `live` and
-   * `polling` clear it; `paused` leaves it.
+   * `polling` clear it; `paused` keeps it once a connection was lost, and clears it when
+   * one was only opening: a hidden tab asks the hub nothing, and learns nothing of it.
    */
   private enter(status: ConnectionStatus, lostAt?: number | null) {
     this.status = status;
-    if (status === 'live' || status === 'polling') this.lostAt = null;
-    else if (status !== 'paused' && this.lostAt === null) this.lostAt = lostAt ?? this.env.hubNow();
+    if (status === 'live' || status === 'polling') {
+      this.lostAt = null;
+      this.lost = false;
+    } else if (status === 'paused') {
+      if (!this.lost) this.lostAt = null;
+    } else {
+      if (this.lostAt === null) this.lostAt = lostAt ?? this.env.hubNow();
+      if (status === 'retrying' || (lostAt !== undefined && lostAt !== null)) this.lost = true;
+    }
     this.env.dispatch({type: 'connection', status, lostAt: this.lostAt});
   }
 

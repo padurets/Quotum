@@ -726,7 +726,7 @@ test('row 18: each time the tab is hidden it counts from then, also when it was 
   assert.deepEqual([g.connection()?.status, g.asked.length], ['live', asked]);
 });
 
-test('row 16, 18, 2: a tab hidden for 30 s lets go; shown again, it connects anew; one opened hidden counts from opening', async () => {
+test('row 16, 18, 2: a tab hidden for 30 s lets go; shown again, it connects anew; one loaded hidden counts from loading', async () => {
   const h = harness();
   await h.golive();
   h.hide();
@@ -764,7 +764,9 @@ test('row 16, 18, 2: a tab hidden for 30 s lets go; shown again, it connects ane
 test('row 1 × 18: a board opened on a hidden tab lets go 30 s after it was hidden, and asks nothing if that is past; shown later, the hub is not lost', async () => {
   type H = ReturnType<typeof harness>;
   // What came before, how long before the board opens, and how long after it opens it lets go (null: at once, asking nothing).
-  const cases: {name: string; before: (h: H) => Promise<void>; wait: number; left: number | null}[] = [
+  const cases: {name: string; before: (h: H) => Promise<void>; wait: number; left: number | null; visible?: boolean}[] = [
+    {name: 'loaded hidden', visible: false, before: async () => {}, wait: 10 * S, left: 20 * S},
+    {name: 'loaded hidden, for long', visible: false, before: async () => {}, wait: 5 * MIN, left: null},
     {name: 'hidden with no board open', before: async h => h.hide(), wait: 10 * S, left: 20 * S},
     {
       name: 'hidden, shown and hidden again with no board open',
@@ -802,7 +804,7 @@ test('row 1 × 18: a board opened on a hidden tab lets go 30 s after it was hidd
     },
   ];
   for (const c of cases) {
-    const h = harness();
+    const h = harness({visible: c.visible});
     await c.before(h);
     await h.timers.advance(c.wait);
     const asked = h.asked.length;
@@ -821,6 +823,73 @@ test('row 1 × 18: a board opened on a hidden tab lets go 30 s after it was hidd
     h.show();
     await flush();
     assert.deepEqual([h.last().url, h.connection()], ['/api/events?board=b2', {type: 'connection', status: 'connecting', lostAt: h.timers.t}], c.name);
+  }
+});
+
+test('row 18: pausing keeps when a connection was lost, and forgets when one only began to open', async () => {
+  // Opened 25 s after the tab was hidden, and not answered by the pause (a proxy holding it back).
+  const h = harness();
+  h.hide();
+  await h.timers.advance(25 * S);
+  h.live.open('b1');
+  await flush();
+  await h.timers.advance(5 * S);
+  assert.deepEqual(h.connection(), {type: 'connection', status: 'paused', lostAt: null});
+
+  // Long polls whose time is up 25 s after the tab was hidden: the stream they open is not answered by the pause.
+  const g = harness();
+  await g.gopoll();
+  const until = g.timers.t + 10 * MIN;
+  while (g.timers.t < until - 25 * S) {
+    await g.timers.advance(Math.min(20 * S, until - 25 * S - g.timers.t));
+    await g.last().json(200, {lease: 'L', now: 7, events: []});
+  }
+  g.hide();
+  await g.timers.advance(25 * S);
+  await g.last().json(200, {lease: 'L', now: 7, events: []});
+  assert.equal(g.last().url, '/api/events?board=b1', 'row 17: a stream again');
+  await g.timers.advance(5 * S);
+  assert.deepEqual(g.connection(), {type: 'connection', status: 'paused', lostAt: null});
+
+  // The hub failed before the pause: kept, with another board too, and shown, the header says so at once.
+  const k = harness();
+  k.live.open('b1');
+  await flush();
+  await k.last().json(503, {});
+  const lost = k.connection()!.lostAt;
+  assert.equal(k.connection()?.status, 'retrying');
+  k.hide();
+  await k.timers.advance(30 * S);
+  assert.deepEqual(k.connection(), {type: 'connection', status: 'paused', lostAt: lost});
+  k.live.open('b2');
+  assert.deepEqual(k.connection(), {type: 'connection', status: 'paused', lostAt: lost});
+  await k.timers.advance(60 * MIN);
+  k.show();
+  await flush();
+  assert.match(k.last().url, /^\/api\/events\?board=b2/);
+  assert.deepEqual(k.connection(), {type: 'connection', status: 'connecting', lostAt: lost});
+
+  // Once connected again, or signed out, what was lost is forgotten: an opening cut short by the pause is only that.
+  for (const again of ['connected', 'signed out'] as const) {
+    const j = harness();
+    j.live.open('b1');
+    await flush();
+    await j.last().json(503, {});
+    if (again === 'connected') {
+      await j.timers.advance(2 * S);
+      await j.answer();
+      assert.equal(j.connection()?.status, 'live');
+      j.hide();
+      await j.timers.advance(30 * S);
+      j.show();
+    } else {
+      j.live.close();
+      j.live.open('b1');
+    }
+    await flush();
+    j.hide();
+    await j.timers.advance(30 * S);
+    assert.deepEqual(j.connection(), {type: 'connection', status: 'paused', lostAt: null}, again);
   }
 });
 
