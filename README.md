@@ -113,12 +113,12 @@ Codex         api                  idle     started 25m ago · editor
 - **A table with two forecasts:** what the period spent, how long your agents worked on
   each subscription and what an hour of their work costs; turned on, how much of the
   spending came while they worked (what went elsewhere, claude.ai or a phone, makes an
-  hour of work look dearer). Then where it leads. By time: at each window's pace since it started,
-  whether it runs out before its reset (or before your plan ends, following the plan's
-  shape) and when, or roughly how much will be left, the same whatever period you look
-  at. By work: roughly how many hours of agent work are left. Over a range dragged on
-  the chart it shows what that range cost: what was left at its start and end, what it
-  spent in all and per hour, and what the agents worked.
+  hour of work look dearer). Then where it leads. By time: at each window's pace since it
+  started, whether it runs out before its reset (or before your plan ends, following the
+  plan's shape) and when, or roughly how much will be left, the same whatever period you
+  look at. By work: roughly how many hours of agent work are left. Over a range dragged
+  on the chart it shows what that range cost: what was left at its start and end, what
+  it spent in all and per hour, and what the agents worked.
 - **Agent activity:** hours of agent work over the same period, in bars of up to an hour
   (two hours over a month), stacked by subscription, project or machine, with the work
   time, how many agents worked and their time together. It zooms and moves through time
@@ -128,10 +128,11 @@ Codex         api                  idle     started 25m ago · editor
   can turn them off.
 - **Boards made of widgets** (a card per subscription, agent activity, the chart, the
   table, and a list of every running agent to turn on), like a dashboard in Grafana:
-  the cards show what is left now, the analytics under them share one set of filters. The owner of a board drags them around, makes them wider or
-  narrower, names the cards, hides the ones they don't need (the data keeps coming) and
-  sets the plans; everyone on the board sees it arranged the same way. Once it's set,
-  a lock keeps the widgets from moving under a passing pointer.
+  the cards show what is left now, the analytics under them share one set of filters.
+  The owner of a board drags them around, makes them wider or narrower, names the cards,
+  hides the ones they don't need (the data keeps coming) and sets the plans; everyone on
+  the board sees it arranged the same way. Once it's set, a lock keeps the widgets from
+  moving under a passing pointer.
 - **Your data, shared when you choose.** Everything your machines measure is on your
   personal board. On a shared board a team sees the limits its members share with it:
   each person decides which of their subscriptions it shows. A team subscription

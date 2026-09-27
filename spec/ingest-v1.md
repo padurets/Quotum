@@ -360,6 +360,7 @@ where it ran, since when and its project and folder names, as long as samples (9
 and the names a person gave or merged their projects under, until they undo it. The
 person whose machines they are sees their projects, and corrects them, in *My machines*.
 The members of a shared board see when and for how long your agents worked on a
-subscription you measure that is shown there, whoever brought it, to the minute and with
-how many of them worked, by project and by machine, from the later of when you joined the
-board and when the subscription came to it; you see all of it on your own board.
+subscription you measure that is shown there, whoever brought it, as precisely as the hub
+credits it (not rounded to the minute), with how many of them worked, by project and by
+machine, from the later of when you joined the board and when the subscription came to
+it; you see all of it on your own board.
