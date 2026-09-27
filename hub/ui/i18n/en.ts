@@ -265,6 +265,7 @@ export const en = {
   'work.untilResetSlow': 'Lasts longer than until the reset on {reset}: too little spent per hour of work to tell the hours',
   'work.outlastsSlow': 'Lasts longer than the window ({window}): too little spent per hour of work to tell the hours',
   'work.basis': 'At {value}% per hour of work, as in the period',
+  'work.basisUnder': 'At under {value}% per hour of work, as in the period',
   'work.basisMeasured': 'Taken over {time} of work, while measurements came',
   'work.upperBound': 'At most: a gap between measurements with work in it counts whole',
   'work.since': 'Known since {time}',

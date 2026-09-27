@@ -93,8 +93,11 @@ function workCell(column: WorkColumn, cell: WorkCell, work: SeriesWork, periodFr
     return {content: '—', title: [t(REASONS[dash.text], {time: notes.since === null ? '' : stamp(notes.since)}), ...known(dash.knownFrom)].join('\n')};
   }
   const paced = column === 'perwork' || column === 'workleft';
+  // A pace that reads "≈ 0": past a reset or a window it names no hours, only that they last.
+  const slow = perWork !== null && perWork > 0 && perWork < MIN_RATE;
   const lines = [
-    ...(column === 'workleft' && perWork !== null ? [t('work.basis', {value: rateText(perWork)})] : []),
+    // Beside hours it foresees, "≈ 0" would read as lasting for ever: the tooltip says how small it is.
+    ...(column === 'workleft' && perWork !== null ? [slow ? t('work.basisUnder', {value: num(MIN_RATE, 2)}) : t('work.basis', {value: rateText(perWork)})] : []),
     ...(column !== 'work' && notes.basis !== null ? [t('work.basisMeasured', {time: workHours(notes.basis)})] : []),
     ...(paced && notes.share !== null ? [notes.share === 0 ? t('work.noShare') : t('work.lowShare', {value: shareText(notes.share)})] : []),
     ...(column === 'during' ? [t('work.upperBound')] : []),
@@ -102,8 +105,6 @@ function workCell(column: WorkColumn, cell: WorkCell, work: SeriesWork, periodFr
   ];
   // Nothing left, whatever is known of the work: as the forecast by time says it, with nothing to add.
   if ('usedUp' in cell) return {content: t('work.usedUp')};
-  // A pace too slow for a number of hours names none, only that they last.
-  const slow = perWork !== null && perWork < MIN_RATE;
   if ('untilReset' in cell) {
     const reset = stamp(resetAt!);
     return {content: t('work.untilReset'), title: [slow ? t('work.untilResetSlow', {reset}) : t('work.untilResetHint', {time: workHours(cell.untilReset), reset}), ...lines].join('\n')};

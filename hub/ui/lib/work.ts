@@ -8,9 +8,10 @@ const HOUR = 3_600_000;
  */
 export const WORK_PACE_FROM = 30 * 60_000;
 /**
- * A pace slower than this (percent per hour of work) tells no number of hours: it reads
- * "≈ 0" (`rateText`), and the hundreds of hours it would last are told only as lasting to a
- * reset, or past a whole window, that comes first.
+ * A pace slower than this (percent per hour of work) reads "≈ 0" (`rateText`), and the
+ * hundreds of hours it would last name no number: past a reset or a whole window they are
+ * told only as lasting to it, and where neither bounds them nothing is foreseen. Hours
+ * short of a reset or a window are named at any pace.
  */
 export const MIN_RATE = 0.05;
 /** Under this share of the spending during work, most of it went elsewhere and an hour of work looks dearer than it is. */
@@ -26,8 +27,8 @@ export type WorkColumn = (typeof WORK_COLUMNS)[number];
  * Why a cell has no number: how agents worked is not known in the period (`unknown`), none
  * of the agents the board shows worked (`none`), too little of their work was measured to
  * tell a pace (`short`), nothing was spent (`nospend`), too little per hour of work to
- * foresee anything (`slow`), or what is left is not known since the window's reset went by
- * unmeasured (`awaiting`).
+ * foresee anything where neither a reset nor a window's length bounds it (`slow`), or what
+ * is left is not known since the window's reset went by unmeasured (`awaiting`).
  */
 export type WorkReason = 'unknown' | 'none' | 'short' | 'nospend' | 'slow' | 'awaiting';
 
@@ -80,16 +81,16 @@ export function workCells(work: SeriesWork, remaining: number, resetInMs: number
   if (work.coveredMs < WORK_PACE_FROM) return {work: {value: work.ms}, perwork: short, workleft: usedUp ?? short, during: short};
   const pace = work.consumed / (work.coveredMs / HOUR);
   const leftMs = (remaining / pace) * HOUR;
+  // Short of a reset or a whole window, however slow the pace, what is left runs out before it: that is worth its number.
   const workleft: WorkCell =
     usedUp ??
-    // A pace too slow to foresee from still lasts to a reset that comes first: only a number is left out.
     (work.consumed <= 0
       ? {none: 'nospend'}
       : resetInMs !== null && leftMs >= resetInMs
         ? {untilReset: leftMs}
         : windowMs !== null && leftMs >= windowMs
           ? {outlasts: leftMs, windowMs}
-          : pace < MIN_RATE
+          : pace < MIN_RATE && resetInMs === null && windowMs === null
             ? {none: 'slow'}
             : {value: leftMs});
   return {work: {value: work.ms}, perwork: {value: pace}, workleft, during};

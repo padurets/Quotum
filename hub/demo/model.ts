@@ -127,6 +127,11 @@ export const noReset =
   (window: WindowAt): WindowAt =>
   t => ({...window(t), resetsAt: null});
 
+/** A window as its client reports it, only without its length: it does not know it. */
+export const noLength =
+  (window: WindowAt): WindowAt =>
+  t => ({...window(t), minutes: null});
+
 /** A rolling window nobody used lately: its reset is always its length from the measurement, and its start never comes. */
 export const idle =
   (options: {id?: string; label?: string; minutes?: number} = {}): WindowAt =>

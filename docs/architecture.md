@@ -271,9 +271,12 @@ pace and the share during work are taken over the work within the steps between 
 whose spending counts, so a gap counts neither, and need half an hour of it. Work that
 would outlast the reset, or a whole window where no reset time comes first (a range),
 lasts to the reset, however slow the pace (too slow a pace names no hours for it); short
-of that, a pace under a twentieth of a percent an hour tells no number of hours. A reset
-gone by unmeasured leaves what is left unknown until the next measurement, used up or
-not: both forecasts wait for it. Where none of the agents worked, there is no share either. The share counts a step that any work
+of either, what is left runs out before it, and its hours are named at any pace. Only
+where neither bounds them (a window of no known length with no reset ahead) does a pace
+under a twentieth of a percent an hour foresee nothing. A reset gone by unmeasured leaves
+what is left unknown until the next measurement, used up or not: the forecast by work
+waits for it where agents worked, and where none did says so. Where none of the agents
+worked, there is no share either. The share counts a step that any work
 touches whole, so it is an upper bound. A board shows the work of its
 members who hold each subscription it shows, but those of hidden cards: on a shared
 board from the later of their joining it and the subscription coming to it, on a
