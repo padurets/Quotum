@@ -4,7 +4,7 @@ import type {History as HistoryData, Overview, SeriesWork} from '../lib/types';
 import {countdown, duration, num, rateText, shareText, stamp, workHours} from '../lib/format';
 import {level} from '../lib/quota';
 import {FORECAST_WIDTHS, LIVE_COLUMNS, RANGE_COLUMNS, forecastLayout, forecastRow, spentOf, type ForecastColumn, type Outlook, type Pace, type Spent} from '../lib/forecast';
-import {dashOf, lineWork, workNotes, type DashText, type WorkCell, type WorkColumn} from '../lib/work';
+import {dashOf, lineWork, MIN_RATE, workNotes, type DashText, type WorkCell, type WorkColumn} from '../lib/work';
 import {FORECAST, columnShown, planOf, withColumn, withHidden, type Arrange} from '../lib/view';
 import {linesOf, type Line} from '../lib/lines';
 import {usePrefs} from '../lib/prefs';
@@ -23,6 +23,7 @@ function outlookCell(ahead: Outlook): {text: string; title: string} {
       return {text: '—', title: ''};
     case 'idle':
     case 'needData':
+    case 'awaiting':
       return {text: '—', title: t(`forecast.${ahead.key}`)};
     case 'pastZero':
       return {text: '—', title: [t('forecast.pastZero', {time: stamp(ahead.at)}), t('forecast.awaiting')].join('\n')};
@@ -95,14 +96,22 @@ function workCell(column: WorkColumn, cell: WorkCell, work: SeriesWork, periodFr
   const lines = [
     ...(column === 'workleft' && perWork !== null ? [t('work.basis', {value: rateText(perWork)})] : []),
     ...(column !== 'work' && notes.basis !== null ? [t('work.basisMeasured', {time: workHours(notes.basis)})] : []),
-    ...(paced && notes.share !== null ? [t('work.lowShare', {value: shareText(notes.share)})] : []),
+    ...(paced && notes.share !== null ? [notes.share === 0 ? t('work.noShare') : t('work.lowShare', {value: shareText(notes.share)})] : []),
     ...(column === 'during' ? [t('work.upperBound')] : []),
     ...known(notes.since),
   ];
   // Nothing left, whatever is known of the work: as the forecast by time says it, with nothing to add.
   if ('usedUp' in cell) return {content: t('work.usedUp')};
-  if ('untilReset' in cell) return {content: t('work.untilReset'), title: [t('work.untilResetHint', {time: workHours(cell.untilReset), reset: stamp(resetAt!)}), ...lines].join('\n')};
-  if ('outlasts' in cell) return {content: t('work.untilReset'), title: [t('work.outlastsHint', {time: workHours(cell.outlasts), window: duration(cell.windowMs)}), ...lines].join('\n')};
+  // A pace too slow for a number of hours names none, only that they last.
+  const slow = perWork !== null && perWork < MIN_RATE;
+  if ('untilReset' in cell) {
+    const reset = stamp(resetAt!);
+    return {content: t('work.untilReset'), title: [slow ? t('work.untilResetSlow', {reset}) : t('work.untilResetHint', {time: workHours(cell.untilReset), reset}), ...lines].join('\n')};
+  }
+  if ('outlasts' in cell) {
+    const length = duration(cell.windowMs);
+    return {content: t('work.untilReset'), title: [slow ? t('work.outlastsSlow', {window: length}) : t('work.outlastsHint', {time: workHours(cell.outlasts), window: length}), ...lines].join('\n')};
+  }
   const content =
     column === 'work'
       ? workHours(cell.value)

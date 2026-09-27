@@ -74,6 +74,9 @@ test('over a range what is left is what was left at its end, and the reset is on
   assert.deepEqual(lineWork(line, false, now - MIN, now)?.workleft, {none: 'awaiting'}, 'a reset already past, not measured after: what is left is not known');
   assert.equal(value(lineWork(line, false, now - MIN, now)!.perwork), 2.95, 'the pace over the period is');
   assert.deepEqual(lineWork({...line, work: work({ms: 0, coveredMs: 0})}, false, now - MIN, now)?.workleft, {none: 'none'}, 'with none of them working, none worked');
+  assert.deepEqual(lineWork({...line, current: 0}, false, now - MIN, now)?.workleft, {none: 'awaiting'}, 'used up before the reset, not since');
+  assert.deepEqual(lineWork(line, false, now, now)?.workleft, {none: 'awaiting'}, 'the reset right now');
+  assert.equal(hoursLeft(lineWork(line, true, now - MIN, now)), 12.9, 'a range is of its own end, whatever came after');
   assert.equal(lineWork({...line, work: null}, false, null, now), null, 'a hidden card');
   assert.equal(lineWork({...line, remainingAtEnd: null}, true, null, now), null, 'a range with no measurement has no end to foresee from');
 });
@@ -98,6 +101,7 @@ test('a dash about the whole period says since when, where work is known from la
   assert.deepEqual(dashOf('nospend', since), {text: 'nospendSince', knownFrom: null}, 'the spending before is in the period’s');
   assert.deepEqual(dashOf('short', since), {text: 'short', knownFrom: since}, 'a reason of its own, with since when as a line');
   assert.deepEqual(dashOf('slow', null), {text: 'slow', knownFrom: null});
+  assert.deepEqual(dashOf('awaiting', since), {text: 'awaiting', knownFrom: null}, 'waiting for a measurement is not about the work known');
 });
 
 test('hours of work are minutes within the hour, tenths up to ten, whole hours after, and never days', () => {

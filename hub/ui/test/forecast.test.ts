@@ -131,7 +131,8 @@ test('a window without a forecast says why', () => {
   assert.equal(outlook(week(100, {resetAt: measured + 7 * DAY - 10 * MIN}), measured, measured, DEFAULT_PLAN).key, 'needData');
   assert.deepEqual(outlook(week(0), measured, measured, DEFAULT_PLAN), {key: 'usedUp', tone: 'v-crit'});
   assert.equal(outlook(week(50, {resetAt: null}), measured, measured, null).key, 'none');
-  assert.equal(outlook(week(50), measured, start + 7 * DAY, null).key, 'none', 'the reset has come');
+  assert.equal(outlook(week(50), measured, start + 7 * DAY, null).key, 'awaiting', 'the reset has come, not measured since');
+  assert.equal(outlook(week(0), measured, start + 7 * DAY, null).key, 'awaiting', 'used up before it, not since');
   assert.equal(outlook(undefined, measured, measured, null).key, 'none');
   // Measured by a clock ahead of the page's, after the reset the page has not reached yet.
   assert.equal(outlook(week(50), start + 7 * DAY + MIN, start + 7 * DAY - MIN, null).key, 'none');

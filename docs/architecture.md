@@ -270,10 +270,10 @@ subscription came to it: the part before is said to be unknown, not drawn as idl
 pace and the share during work are taken over the work within the steps between samples
 whose spending counts, so a gap counts neither, and need half an hour of it. Work that
 would outlast the reset, or a whole window where no reset time comes first (a range),
-lasts to the reset, however slow the pace; short of that, a pace under a twentieth of a
-percent an hour tells no number of hours, and a reset gone by unmeasured leaves what is
-left unknown until the next measurement. Where none of the agents worked, there is no
-share either. The share counts a step that any work
+lasts to the reset, however slow the pace (too slow a pace names no hours for it); short
+of that, a pace under a twentieth of a percent an hour tells no number of hours. A reset
+gone by unmeasured leaves what is left unknown until the next measurement, used up or
+not: both forecasts wait for it. Where none of the agents worked, there is no share either. The share counts a step that any work
 touches whole, so it is an upper bound. A board shows the work of its
 members who hold each subscription it shows, but those of hidden cards: on a shared
 board from the later of their joining it and the subscription coming to it, on a

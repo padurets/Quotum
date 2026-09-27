@@ -8,8 +8,9 @@ const HOUR = 3_600_000;
  */
 export const WORK_PACE_FROM = 30 * 60_000;
 /**
- * A pace slower than this (percent per hour of work) spends nothing worth foreseeing: the
- * hundreds of hours it would last say nothing, and the pace itself reads "≈ 0" (`rateText`).
+ * A pace slower than this (percent per hour of work) tells no number of hours: it reads
+ * "≈ 0" (`rateText`), and the hundreds of hours it would last are told only as lasting to a
+ * reset, or past a whole window, that comes first.
  */
 export const MIN_RATE = 0.05;
 /** Under this share of the spending during work, most of it went elsewhere and an hour of work looks dearer than it is. */
@@ -105,9 +106,9 @@ export function lineWork(line: Pick<Line, 'work' | 'current' | 'remainingAtEnd' 
   // A line on the table has measurements, so it has an end; one without is not foreseen.
   if (!line.work || remaining === null) return null;
   const cells = workCells(line.work, remaining, range ? null : resetAt !== null && resetAt > now ? resetAt - now : null, line.minutes ? line.minutes * 60_000 : null);
-  // Where agents worked: with none of them, there is no forecast by work either way.
+  // A window used up too, as the forecast by time says it; where none of the agents worked, that is what it says.
   const reset = !range && resetAt !== null && resetAt <= now;
-  return reset && line.work.ms ? {...cells, workleft: {none: 'awaiting'}} : cells;
+  return reset && line.work.ms !== null ? {...cells, workleft: {none: line.work.ms ? 'awaiting' : 'none'}} : cells;
 }
 
 /**

@@ -22,7 +22,7 @@ export type Pace = {by: 'hour'; rate: number} | {by: 'plan'; k: number};
  * points left then.
  */
 export type Outlook =
-  | {key: 'none' | 'idle' | 'needData'; tone: ''}
+  | {key: 'none' | 'idle' | 'needData' | 'awaiting'; tone: ''}
   | {key: 'usedUp'; tone: 'v-crit'}
   | {key: 'pastZero'; at: number; tone: ''}
   | {key: 'runsOut'; at: number; inMs: number; tone: 'v-crit' | 'v-warn'; pace: Pace}
@@ -85,8 +85,10 @@ function zeroOf(points: [number, number][]): number | null {
 
 /** A window's outlook, and where it goes when there is a forecast to draw. */
 function forecast(live: Win | undefined, measuredAt: number | null, now: number, weekly: WeeklyPlan | null): {outlook: Outlook; projection?: Projection; zero?: number | null} {
+  // A reset gone by, not measured since: what is left, used up or not, is known again from the next measurement.
+  if (live?.resetAt && live.resetAt <= now) return {outlook: {key: 'awaiting', tone: ''}};
   if (live && live.remaining <= 0) return {outlook: {key: 'usedUp', tone: 'v-crit'}};
-  if (!live?.resetAt || !live.minutes || live.resetAt <= now || measuredAt === null || live.resetAt <= measuredAt) return {outlook: {key: 'none', tone: ''}};
+  if (!live?.resetAt || !live.minutes || measuredAt === null || live.resetAt <= measuredAt) return {outlook: {key: 'none', tone: ''}};
   // An idle rolling window starts with its first use; one used and not `started` yet has only just started.
   if (!started(live, measuredAt) && live.used === 0) return {outlook: {key: 'idle', tone: ''}};
   if (measuredAt - (live.resetAt - live.minutes * 60_000) < forecastFrom(live.minutes)) return {outlook: {key: 'needData', tone: ''}};
