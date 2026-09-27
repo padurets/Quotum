@@ -28,7 +28,7 @@ CI runs both the installed app and the extracted ZIP, including a path with spac
 `desktop/smoke/windows-ui.ps1 <app.exe>` also checks ordinary startup with the real
 window-state plugin: a visible, responsive window, restored bounds inside the monitor's
 work area, close/reopen through a second launch, and a second launch while the window is
-open, which shows that window. It disables every provider. Each
+minimized, which restores that very window. It disables every provider. Each
 run starts from a fresh WebView2 profile, as the first start on a machine does: the one
 in `%LOCALAPPDATA%\com.padurets.quotum\EBWebView` is set aside and put back afterwards.
 With `-Diagnostics <dir>` it keeps its report (the times of every close and reopen), the

@@ -25,7 +25,7 @@ $failed = $false
 # Each cycle closes the window and asks a second launch for it again. Times are in
 # milliseconds from the WM_CLOSE of the cycle, except firstWindowMs (from the app's start),
 # searchMs (how long finding the browser process took, before the close) and openHandoffMs
-# (from the second launch while the window is open).
+# (from the second launch while the window is minimized).
 $result = [ordered]@{passed=$false; firstWindowMs=$null; windows=@(); cycles=@(); errors=@()}
 # The browser process of WebView2 of each cycle's window, and when that window was closed.
 $browsers = @{}
@@ -45,6 +45,8 @@ public static class QuotumWindowProbe {
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr window, StringBuilder text, int size);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr window, uint message, IntPtr w, IntPtr l);
+  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr window, int command);
+  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr window);
   [DllImport("user32.dll")] static extern IntPtr SendMessageTimeout(IntPtr window, uint message, IntPtr w, IntPtr l, uint flags, uint timeout, out IntPtr result);
   [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr window, out Rect rect);
   [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr window, uint flags);
@@ -107,12 +109,12 @@ function Update-Browser([int]$Cycle) {
   }
 }
 
-# Whether the app's log has a line with $Text. The app appends to it meanwhile.
-function Test-Logged([string]$Text) {
+# How many lines of the app's log have $Text. The app appends to it meanwhile.
+function Measure-Logged([string]$Text) {
   $path = "$work/app/logs/hub.log"
-  if (-not (Test-Path -LiteralPath $path)) { return $false }
+  if (-not (Test-Path -LiteralPath $path)) { return 0 }
   $reader = [IO.StreamReader]::new([IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite))
-  try { return $reader.ReadToEnd().Contains($Text) } finally { $reader.Dispose() }
+  try { return @($reader.ReadToEnd() -split "`n" | Where-Object { $_.Contains($Text) }).Count } finally { $reader.Dispose() }
 }
 
 # Runs one step of the cleanup: its failure goes into the report and fails the run, and
@@ -199,16 +201,22 @@ try {
     if ($browsers[$cycle]) { $entry.browserAliveAtWindow = -not $browsers[$cycle].HasExited }
   }
   Update-Browser ($cycle - 1)
-  # A second launch while the window is open shows that very window: the app finds it
-  # alive, as a closing one is not.
+  # A second launch while the window is minimized brings that very window back: the app
+  # finds it alive, as a closing one is not, and restores it.
+  $null = [QuotumWindowProbe]::ShowWindowAsync($window, 7) # SW_SHOWMINNOACTIVE
+  $deadline = (Get-Date).AddSeconds(5)
+  while (-not [QuotumWindowProbe]::IsIconic($window) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 50 }
+  if (-not [QuotumWindowProbe]::IsIconic($window)) { throw 'Could not minimize the window' }
+  $found = Measure-Logged 'app: found the window main'
   $asked = $clock.ElapsedMilliseconds
   $second = Start-Process -FilePath $appPath -PassThru
   $null = $second.Handle
-  if (-not $second.WaitForExit(10000) -or $second.ExitCode -ne 0) { throw 'The second instance did not hand off to the first while its window was open' }
+  if (-not $second.WaitForExit(10000) -or $second.ExitCode -ne 0) { throw 'The second instance did not hand off to the first while its window was minimized' }
   $deadline = (Get-Date).AddSeconds(10)
-  while (-not (Test-Logged 'app: found the window main') -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 100 }
-  if (-not (Test-Logged 'app: found the window main')) { throw 'A second launch while the window was open did not find it alive' }
-  if ((Wait-Window) -ne $window) { throw 'A second launch while the window was open did not show that window' }
+  while (((Measure-Logged 'app: found the window main') -le $found -or [QuotumWindowProbe]::IsIconic($window)) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 100 }
+  if ((Measure-Logged 'app: found the window main') -le $found) { throw 'A second launch while the window was minimized did not find it alive' }
+  if ([QuotumWindowProbe]::IsIconic($window)) { throw 'A second launch while the window was minimized did not restore it' }
+  if ((Wait-Window) -ne $window) { throw 'A second launch while the window was minimized did not show that window' }
   $result.openHandoffMs = $clock.ElapsedMilliseconds - $asked
   $result.passed = $true
 } catch {
