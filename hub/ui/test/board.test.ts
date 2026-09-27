@@ -184,6 +184,17 @@ test('the names of the cards stay the same object while no name changes', () => 
   const saved = titlesOf(s.board);
   const drafted = titlesOf(s.board, {s1: 'Home'});
   for (let i = 0; i < 3; i++) assert.deepEqual([titlesOf(s.board) === saved, titlesOf(s.board, {s1: 'Home'}) === drafted], [true, true]);
+  // Another card on the board, or another owner of one: named anew.
+  const more = run(hub({type: 'snapshot', data: snapshot()}), hub({type: 'card', data: card('s3')}), hub({type: 'lineup', data: {sources: ['s1', 's2', 's3']}}));
+  assert.deepEqual(
+    Object.values(titlesOf(more.board)).map(t => t.title),
+    ['Codex', 'Codex 2', 'Codex 3'],
+  );
+  const shared = reduce(s, hub({type: 'card', data: card('s2', 50, {owners: ['Bob']})}));
+  assert.deepEqual(
+    Object.values(titlesOf(shared.board)).map(t => t.title),
+    ['Codex · Ana', 'Codex · Bob'],
+  );
 });
 
 test('a board is shown only as the one opened: another still in the store is nothing, and closing keeps nothing of it', () => {
