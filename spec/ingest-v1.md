@@ -309,8 +309,8 @@ tried again like any failure.
 A board shows a session on the card of its subscription, with its project (as its person
 named it in the dashboard, else as reported) and folder, and the name of its machine
 (as its person named it in the dashboard, else as the machine reports it), only to the
-members of a board where the session's person shows that subscription (their personal board, or a shared
-board they are on).
+members of a board the session's person is on (their personal board, or a shared board)
+where that subscription is shown, whoever brought it.
 
 The hub keeps when each session worked, with its machine, subscription, where it runs,
 since when and its project and folder names: each list counts until the next one, for at

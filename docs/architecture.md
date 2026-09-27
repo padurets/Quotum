@@ -238,7 +238,7 @@ the machine last delivered for that client; only one its person holds; the agent
 out a session of a client signed in anew since it last measured, until it knows which
 account that is) and shows it on
 that card, by project (as that person named it) and folder, to the members of a board
-where that person shows the subscription. Each list also counts until the next one, for at most 200 seconds: the hub
+the person is on where the subscription is shown, whoever brought it. Each list also counts until the next one, for at most 200 seconds: the hub
 keeps when each session worked, with its machine, subscription, where it runs, since
 when and its project and folder names as reported, as long as samples. A session is
 never credited twice for the same time: after the hub's clock goes back, it is credited
