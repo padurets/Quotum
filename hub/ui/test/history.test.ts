@@ -111,15 +111,44 @@ test('all of the history as news (whose work the board shows changed) is read at
   await h.advance(2 * S);
   h.loader.news(0);
   assert.equal(h.reads.length, 4, 'two seconds after the last read: at once');
+  await h.advance(50);
   h.loader.news(0);
   await h.advance(S);
-  assert.equal(h.reads.length, 5, 'and again while it is read, once a run of them stops, its answer no longer the one shown');
+  assert.equal(h.reads.length, 5, 'and again, told while it is read, once a run of them stops, its answer no longer the one shown');
   await h.reads[3].answer({cellMs: MIN});
   assert.notEqual(h.loader.get().history?.cellMs, MIN, 'the answer read before the second is not shown');
   await h.reads[4].answer();
   h.loader.choose('24h', range);
   await h.advance(S);
   assert.equal(h.reads.length, 6, 'the range kept is read again');
+});
+
+test('a new lineup and all of the history as news, told in one message, are read once, and a range read so is kept', async () => {
+  const h = harness();
+  const range = {from: NOW - 3 * 3_600_000, to: NOW - 2 * 3_600_000};
+  h.loader.choose('24h', range);
+  h.loader.open('b1');
+  h.loader.snapshot(['s1']);
+  await h.reads[0].answer({range: `${range.from}-${range.to}`, to: range.to});
+  await h.advance(S);
+  h.loader.lineup(['s1', 's2']);
+  h.loader.news(0);
+  assert.equal(h.reads.length, 2, 'the news reached the hub before the read the lineup began: it holds it');
+  await h.reads[1].answer({range: `${range.from}-${range.to}`, to: range.to});
+  await h.advance(LIVE_MIN_MS);
+  assert.equal(h.reads.length, 2, 'nor is it read again after');
+  h.loader.choose('24h', null);
+  await h.advance(S);
+  await h.reads[2].answer();
+  h.loader.choose('24h', range);
+  await h.advance(S);
+  assert.equal(h.reads.length, 3, 'kept: back to it asks nothing');
+  // Told in a message of its own, after the read began, it may have come after the hub answered.
+  h.loader.lineup(['s1']);
+  await h.advance(50);
+  h.loader.news(0);
+  await h.advance(S);
+  assert.equal(h.reads.length, 5);
 });
 
 test('every snapshot (a connection again) reads the period again, within the same limit, and drops the ranges kept', async () => {
