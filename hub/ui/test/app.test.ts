@@ -204,11 +204,13 @@ test('the question stays while quotum holds the machine, and says so when taking
 test('the question answered stays while the app takes over, and goes once it is done', () => {
   const held = {state: 'held', holder: {yields: true}} as const;
   assert.equal(takeOverQuestion(held, null), held);
-  assert.equal(takeOverQuestion({state: 'taking_over'}, held), held, 'the app says it takes over at once: the question stays, saying so');
+  assert.deepEqual(takeOverQuestion({state: 'taking_over'}, held), held, 'the app says it takes over at once: the question stays, saying so');
   assert.equal(takeOverQuestion({state: 'taking_over'}, null), null, 'not answered here');
   assert.equal(takeOverQuestion({state: 'measuring'}, held), null, 'taken over');
   const failed = {...held, error: '`quotum` (pid 42) still measures this machine'};
   assert.equal(takeOverQuestion(failed, held), failed, 'failed: asked again, with why');
+  const again = takeOverQuestion({state: 'taking_over'}, failed)!;
+  assert.deepEqual([again, takeOverTitle(again)], [held, 'takeover.title'], 'answered again: it takes over, not why it failed before');
 });
 
 test('an empty board promises numbers only while the agent measures', () => {

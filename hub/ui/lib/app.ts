@@ -176,10 +176,15 @@ export const asksToTakeOver = (agent: AgentState | undefined): agent is Extract<
 /**
  * The question the take-over asks: the app's while `quotum` holds the machine, and the one
  * answered (`answered`) while the app takes over, which it says at once, well before it is
- * done. Null when there is none: taken over, or nothing to ask.
+ * done, and not why an attempt before failed. Null when there is none: taken over, or
+ * nothing to ask.
  */
-export const takeOverQuestion = (agent: AgentState | undefined, answered: Extract<AgentState, {state: 'held'}> | null) =>
-  asksToTakeOver(agent) ? agent : answered && agent?.state === 'taking_over' ? answered : null;
+export function takeOverQuestion(agent: AgentState | undefined, answered: Extract<AgentState, {state: 'held'}> | null): Extract<AgentState, {state: 'held'}> | null {
+  if (asksToTakeOver(agent)) return agent;
+  if (!answered || agent?.state !== 'taking_over') return null;
+  const {error, ...question} = answered;
+  return question;
+}
 
 export const takeOverTitle = (agent: Extract<AgentState, {state: 'held'}>): Key => (agent.error ? 'takeover.failedTitle' : 'takeover.title');
 
@@ -193,7 +198,8 @@ export function onboardingText(agent: AgentState | undefined): Key {
     case 'idle':
       return 'local.onboardingIdle';
     default:
-      // Held, taking over or failed: the question or the banner above says what is going on.
+      // Held or failed, the question or the banner above says what is going on; taking over,
+      // the question does if it was answered here, and nothing does after a start or a reload.
       return 'local.onboardingWaiting';
   }
 }
