@@ -1,10 +1,10 @@
 import {memo, useLayoutEffect, useMemo, useRef, useState, type ReactNode} from 'react';
 import {MINUTE, useNow} from '../lib/api';
-import type {History as HistoryData, Overview, SeriesWork} from '../lib/types';
-import {countdown, duration, num, rateText, shareText, stamp, workAbout, workHours} from '../lib/format';
+import type {History as HistoryData, Overview} from '../lib/types';
+import {countdown, num, rateText, stamp} from '../lib/format';
 import {level} from '../lib/quota';
 import {FORECAST_WIDTHS, LIVE_COLUMNS, RANGE_COLUMNS, forecastLayout, forecastRow, spentOf, type ForecastColumn, type Outlook, type Pace, type Spent} from '../lib/forecast';
-import {dashOf, lineWork, MIN_RATE, workNotes, type DashText, type WorkCell, type WorkColumn} from '../lib/work';
+import {lineWork, workText, type WorkColumn} from '../lib/work';
 import {FORECAST, columnShown, planOf, withColumn, withHidden, type Arrange} from '../lib/view';
 import {linesOf, type Line} from '../lib/lines';
 import {usePrefs} from '../lib/prefs';
@@ -65,64 +65,7 @@ const HEADINGS: Record<ForecastColumn, {title: Key; range?: Key; hint?: Key}> = 
 
 const heading = (column: ForecastColumn, range: boolean) => t((range && HEADINGS[column].range) || HEADINGS[column].title);
 
-/** Why a cell about agent work is a dash. */
-const REASONS: Record<DashText, Key> = {
-  none: 'work.none',
-  noneSince: 'work.noneSince',
-  short: 'work.short',
-  nospend: 'work.noSpend',
-  nospendSince: 'work.noSpendSince',
-  slow: 'work.slow',
-  awaiting: 'forecast.awaiting',
-};
-
 type Cell = {content: ReactNode; title?: string; className?: string};
-
-/**
- * A cell about agent work, with a tooltip of a part a line: what an hour of work spent
- * for the forecast (`perWork`), how much work that and the share are taken over, that the
- * share is an upper bound, that little of the spending came during work, since when work is
- * known, or why there is no number.
- */
-function workCell(column: WorkColumn, cell: WorkCell, work: SeriesWork, periodFrom: number, resetAt: number | null, perWork: number | null): Cell {
-  const notes = workNotes(work, periodFrom);
-  const known = (at: number | null) => (at !== null ? [t('work.since', {time: stamp(at)})] : []);
-  if ('none' in cell) {
-    if (cell.none === 'unknown') return {content: '—', title: t('work.unknown', {time: stamp(work.from)})};
-    const dash = dashOf(cell.none, notes.since);
-    return {content: '—', title: [t(REASONS[dash.text], {time: notes.since === null ? '' : stamp(notes.since)}), ...known(dash.knownFrom)].join('\n')};
-  }
-  const paced = column === 'perwork' || column === 'workleft';
-  // A pace that reads "≈ 0": past a reset or a window it names no hours, only that they last.
-  const slow = perWork !== null && perWork > 0 && perWork < MIN_RATE;
-  const lines = [
-    // Beside hours it foresees, "≈ 0" would read as lasting for ever: the tooltip says how small it is.
-    ...(column === 'workleft' && perWork !== null ? [slow ? t('work.basisUnder', {value: num(MIN_RATE, 2)}) : t('work.basis', {value: rateText(perWork)})] : []),
-    ...(column !== 'work' && notes.basis !== null ? [t('work.basisMeasured', {time: workHours(notes.basis)})] : []),
-    ...(paced && notes.share !== null ? [notes.share === 0 ? t('work.noShare') : t('work.lowShare', {value: shareText(notes.share)})] : []),
-    ...(column === 'during' ? [t('work.upperBound')] : []),
-    ...known(notes.since),
-  ];
-  // Nothing left, whatever is known of the work: as the forecast by time says it, with nothing to add.
-  if ('usedUp' in cell) return {content: t('work.usedUp')};
-  if ('untilReset' in cell) {
-    const reset = stamp(resetAt!);
-    return {content: t('work.untilReset'), title: [slow ? t('work.untilResetSlow', {reset}) : t('work.untilResetHint', {time: workAbout(cell.untilReset), reset}), ...lines].join('\n')};
-  }
-  if ('outlasts' in cell) {
-    const length = duration(cell.windowMs);
-    return {content: t('work.untilReset'), title: [slow ? t('work.outlastsSlow', {window: length}) : t('work.outlastsHint', {time: workAbout(cell.outlasts), window: length}), ...lines].join('\n')};
-  }
-  const content =
-    column === 'work'
-      ? workHours(cell.value)
-      : column === 'perwork'
-        ? t('table.perHour', {value: rateText(cell.value)})
-        : column === 'workleft'
-          ? t('work.left', {time: workAbout(cell.value)})
-          : t('work.during', {value: shareText(cell.value)});
-  return {content, title: lines.join('\n') || undefined};
-}
 
 /**
  * The windows of one kind, from what is left to where it leads: what is left and what the
@@ -183,7 +126,7 @@ export const Forecast = memo(function Forecast({
     const work = lineWork(line, range, resetAt, now);
     const perWork = work && 'value' in work.perwork ? work.perwork.value : null;
     const workCells = Object.fromEntries(
-      (['work', 'perwork', 'workleft', 'during'] as const).map(column => [column, work && line.work ? workCell(column, work[column], line.work, history!.since, resetAt, perWork) : {content: '—'}]),
+      (['work', 'perwork', 'workleft', 'during'] as const).map(column => [column, work && line.work ? workText(column, work[column], line.work, history!.since, resetAt, perWork) : {content: '—'}]),
     ) as Record<WorkColumn, Cell>;
     if (range) {
       return {

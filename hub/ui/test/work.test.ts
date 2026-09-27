@@ -1,8 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {dashOf, lineWork, MIN_RATE, workCells, workNotes, WORK_PACE_FROM, type WorkCell} from '../lib/work';
-import {rateText, shareText, workAbout, workHours} from '../lib/format';
-import {setLocale} from '../i18n';
+import {dashOf, lineWork, MIN_RATE, workCells, workNotes, workText, WORK_PACE_FROM, type WorkCell} from '../lib/work';
+import {rateText, shareText, stamp, workAbout, workHours} from '../lib/format';
+import {setLocale, t} from '../i18n';
 import type {SeriesWork} from '../lib/types';
 
 const MIN = 60_000;
@@ -135,4 +135,29 @@ test('a pace under a twentieth reads "≈ 0" and, with nothing to bound the hund
     const pace = 'value' in cells.perwork ? cells.perwork.value : 0;
     assert.equal(rateText(pace) === '≈ 0', 'none' in cells.workleft && cells.workleft.none === 'slow', `${consumed}% over 21 hours`);
   }
+});
+
+test('a cell says what it foresees and its tooltip why, a part a line', () => {
+  setLocale('en');
+  const resetAt = from + 5 * DAY;
+  const lines = (cell: {title?: string}) => cell.title?.split('\n') ?? [];
+  // Some 59 hours at a pace that reads "≈ 0": named, with how small the pace is.
+  const ledger = workText('workleft', {value: 59 * HOUR}, work({consumed: 0.8}), from, resetAt, 0.038);
+  assert.equal(ledger.content, t('work.left', {time: '~59h'}));
+  assert.deepEqual(lines(ledger), [t('work.basisUnder', {value: '0.05'})]);
+  // Past the reset, as slow: no hours, only that they last; at a pace that reads, their number.
+  assert.deepEqual(lines(workText('workleft', {untilReset: 2000 * HOUR}, work(), from, resetAt, 0.019))[0], t('work.untilResetSlow', {reset: stamp(resetAt)}));
+  assert.deepEqual(lines(workText('workleft', {untilReset: 150 * HOUR}, work(), from, resetAt, 0.25))[0], t('work.untilResetHint', {time: '~150h', reset: stamp(resetAt)}));
+  assert.deepEqual(lines(workText('workleft', {outlasts: 2000 * HOUR, windowMs: 7 * DAY}, work(), from, null, 0.019))[0], t('work.outlastsSlow', {window: '7d'}));
+  assert.equal(workText('workleft', {value: 30_000}, work(), from, null, 60).content, t('work.left', {time: '< 1m'}), 'under a minute, not about it');
+  assert.deepEqual(workText('workleft', {usedUp: true}, work(), from, null, 3), {content: t('work.usedUp')}, 'used up, with nothing to add');
+  // A share of the spending during work: none at all, or little, told by the pace and the forecast, not by the hours.
+  const none = work({duringWork: 0});
+  assert.ok(lines(workText('perwork', {value: 3}, none, from, null, 3)).includes(t('work.noShare')));
+  assert.ok(lines(workText('workleft', {value: 13 * HOUR}, none, from, null, 3)).includes(t('work.noShare')));
+  assert.ok(lines(workText('perwork', {value: 3}, work({duringWork: 6.2}), from, null, 3)).includes(t('work.lowShare', {value: '10'})));
+  assert.equal(workText('work', {value: 21 * HOUR}, none, from, null, 3).title, undefined);
+  assert.deepEqual(lines(workText('during', {value: 90}, work(), from, null, 3)), [t('work.upperBound')]);
+  assert.deepEqual(workText('workleft', {none: 'slow'}, work(), from, null, 0.01), {content: '—', title: t('work.slow')});
+  assert.deepEqual(workText('workleft', {none: 'none'}, work(), from - DAY, null, null), {content: '—', title: t('work.noneSince', {time: stamp(from)})}, 'none since work is known');
 });

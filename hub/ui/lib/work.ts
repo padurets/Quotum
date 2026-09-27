@@ -1,3 +1,5 @@
+import {t, type Key} from '../i18n';
+import {duration, num, rateText, shareText, stamp, workAbout, workHours} from './format';
 import type {Line} from './lines';
 import type {SeriesWork} from './types';
 
@@ -130,4 +132,62 @@ export function workNotes(work: SeriesWork, periodFrom: number): {since: number 
     // As its line tells it, rounded: a share that reads as half is not told as under it.
     share: share !== null && Math.round(share) < LOW_SHARE ? share : null,
   };
+}
+
+/** Why a cell about agent work is a dash. */
+const REASONS: Record<DashText, Key> = {
+  none: 'work.none',
+  noneSince: 'work.noneSince',
+  short: 'work.short',
+  nospend: 'work.noSpend',
+  nospendSince: 'work.noSpendSince',
+  slow: 'work.slow',
+  awaiting: 'forecast.awaiting',
+};
+
+/**
+ * What a cell about agent work reads, with a tooltip of a part a line: what an hour of work
+ * spent for the forecast (`perWork`), how much work that and the share are taken over, that
+ * the share is an upper bound, that little of the spending came during work, since when
+ * work is known, or why there is no number. `resetAt` is the window's, which work lasting
+ * beyond it names.
+ */
+export function workText(column: WorkColumn, cell: WorkCell, work: SeriesWork, periodFrom: number, resetAt: number | null, perWork: number | null): {content: string; title?: string} {
+  const notes = workNotes(work, periodFrom);
+  const known = (at: number | null) => (at !== null ? [t('work.since', {time: stamp(at)})] : []);
+  if ('none' in cell) {
+    if (cell.none === 'unknown') return {content: '—', title: t('work.unknown', {time: stamp(work.from)})};
+    const dash = dashOf(cell.none, notes.since);
+    return {content: '—', title: [t(REASONS[dash.text], {time: notes.since === null ? '' : stamp(notes.since)}), ...known(dash.knownFrom)].join('\n')};
+  }
+  const paced = column === 'perwork' || column === 'workleft';
+  // A pace that reads "≈ 0": past a reset or a window it names no hours, only that they last.
+  const slow = perWork !== null && perWork > 0 && perWork < MIN_RATE;
+  const lines = [
+    // Beside hours it foresees, "≈ 0" would read as lasting for ever: the tooltip says how small it is.
+    ...(column === 'workleft' && perWork !== null ? [slow ? t('work.basisUnder', {value: num(MIN_RATE, 2)}) : t('work.basis', {value: rateText(perWork)})] : []),
+    ...(column !== 'work' && notes.basis !== null ? [t('work.basisMeasured', {time: workHours(notes.basis)})] : []),
+    ...(paced && notes.share !== null ? [notes.share === 0 ? t('work.noShare') : t('work.lowShare', {value: shareText(notes.share)})] : []),
+    ...(column === 'during' ? [t('work.upperBound')] : []),
+    ...known(notes.since),
+  ];
+  // Nothing left, whatever is known of the work: as the forecast by time says it, with nothing to add.
+  if ('usedUp' in cell) return {content: t('work.usedUp')};
+  if ('untilReset' in cell) {
+    const reset = stamp(resetAt!);
+    return {content: t('work.untilReset'), title: [slow ? t('work.untilResetSlow', {reset}) : t('work.untilResetHint', {time: workAbout(cell.untilReset), reset}), ...lines].join('\n')};
+  }
+  if ('outlasts' in cell) {
+    const length = duration(cell.windowMs);
+    return {content: t('work.untilReset'), title: [slow ? t('work.outlastsSlow', {window: length}) : t('work.outlastsHint', {time: workAbout(cell.outlasts), window: length}), ...lines].join('\n')};
+  }
+  const content =
+    column === 'work'
+      ? workHours(cell.value)
+      : column === 'perwork'
+        ? t('table.perHour', {value: rateText(cell.value)})
+        : column === 'workleft'
+          ? t('work.left', {time: workAbout(cell.value)})
+          : t('work.during', {value: shareText(cell.value)});
+  return {content, title: lines.join('\n') || undefined};
 }
