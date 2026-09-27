@@ -311,9 +311,10 @@ them), kept for 90 days.
   never served from it, while a name given to a project or machine that never worked on
   the board's subscriptions leaves it be. Work is credited from each machine's list, but an answer is read again when the
   board's data changes: the work shown is as fresh as the latest measurement, every two
-  minutes while agents work. A machine's last list is credited with its next one, or five
-  minutes on (`KEEP_MS`), so a range that ended sooner than that says when to ask again,
-  is not kept on the page, and is read anew then. The range is in the past, so the table reads it from its edges: what
+  minutes while agents work. A machine's last list is credited with its next one or, the
+  machine gone quiet, five minutes on (`KEEP_MS`: when any machine reports or history is
+  read), so a range that ended sooner than that says when to ask again, is not kept on the
+  page, and is read anew then. The range is in the past, so the table reads it from its edges: what
   was left at its first and last measurement, what it spent and how fast. The chart
   begins where the history does, the same for every board: when the database was made,
   or at the oldest sample it keeps when that is older (an agent's spool delivered to a new

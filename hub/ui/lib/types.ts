@@ -176,7 +176,7 @@ export type History = {
   activity: Activity;
   /** What the board showed when this was read (`Overview.workKey`). */
   workKey: string;
-  /** The board has newer data than this answer; a newer answer is ready in this long. */
+  /** A newer answer is ready in this long: the board has newer data than a costly one, or work up to the end of a range is still to be credited. */
   refreshInMs: number | null;
 };
 

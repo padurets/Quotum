@@ -207,7 +207,7 @@ export function useHistory(board: string, period: string | TimeRange, revision: 
           keep(data);
           if (cancelled) return;
           setHistory(data);
-          // A costly history is put together again a while after new data came: asked for then.
+          // A newer answer is ready later (a costly one put together again after new data, a range whose work is still credited): asked for then.
           if (data.refreshInMs !== null) timer = setTimeout(() => setRetry(n => n + 1), data.refreshInMs + 1_000);
         })
         .catch(error => {

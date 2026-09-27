@@ -632,6 +632,31 @@ test('a range ending minutes ago says when to ask again, and is read anew once t
   assert.equal((await call('GET', `/api/history?board=${team}&from=${to - 30 * minute}&to=${to - 15 * minute}`, {as: 'alice'})).body.refreshInMs, null, 'a range ended long enough ago');
 });
 
+test('a machine gone quiet has its last list credited by the time a range ending after it is read in full', async t => {
+  const {call, person} = await hub();
+  await person('alice');
+  const token = (await call('POST', '/api/tokens', {as: 'alice', body: {}})).body.secret;
+  const headers = {authorization: `Bearer ${token}`};
+  await call('POST', '/v1/ingest', {body: batch('alices-laptop-0123456789'), headers});
+  const board = (await call('GET', '/api/overview', {as: 'alice'})).body.board.id;
+  const minute = 60_000;
+  // On the minute, after the hub began: the range is read on a grid of minutes.
+  const end = Math.ceil((Date.now() + 20 * minute) / minute) * minute;
+  const codex = {provider: 'codex', account: 'a1b2c3d4e5f6a1b2c3d4e5f6', origin: 'terminal', project: 'quotum', startedAt: iso(end - 10 * minute), working: true};
+  t.mock.timers.enable({apis: ['Date'], now: end - 4 * minute});
+  const report = (at: number) => {
+    t.mock.timers.setTime(at);
+    return call('POST', '/v1/sessions', {body: {version: 1, agent: 'quotum/0.3.0', machine: machine('alices-laptop-0123456789'), sentAt: iso(at), sessions: [codex]}, headers});
+  };
+  // Two lists two minutes apart, then the lid closes: nothing reports after.
+  await report(end - 4 * minute);
+  await report(end - 2 * minute);
+  t.mock.timers.setTime(end + KEEP_MS);
+  const answer = (await call('GET', `/api/history?board=${board}&from=${end - 15 * minute}&to=${end}`, {as: 'alice'})).body;
+  assert.equal(answer.refreshInMs, null, 'all there is of the range');
+  assert.equal(answer.activity.workMs, 4 * minute, 'the last list counts too, up to the end of the range');
+});
+
 /** Hours of each group of a dimension, one decimal. */
 const hoursBy = (history: any, dimension: string) =>
   Object.fromEntries(history.activity.by[dimension].map((g: any) => [g.name ?? g.key, Math.round(g.ms / 360_000) / 10]));

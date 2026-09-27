@@ -254,6 +254,9 @@ export async function buildApp(hub: Hub) {
     const access = guards.board(request, reply, request.query.board);
     if (!access) return reply;
     const now = Date.now();
+    // A machine gone quiet has its last list credited five minutes on, here as well as when
+    // another machine reports: a range that ended that long ago has all of its work.
+    hub.ingest.live.sweep(now);
     const {from, to} = request.query;
     if (from !== undefined || to !== undefined) {
       // A period selected on the chart, as long as a month at most.
