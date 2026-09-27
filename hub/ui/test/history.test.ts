@@ -401,13 +401,22 @@ test('news the page hears tells the loader its time: a kept past range it falls 
   h.loader.choose('24h', range);
   await h.advance(S);
   await h.reads[1].answer({range: `${range.from}-${range.to}`, to: range.to});
+  const back = async () => {
+    const reads = h.reads.length;
+    h.loader.choose('24h', range);
+    await h.advance(S);
+    return h.reads.length - reads;
+  };
+  h.loader.choose('24h', null);
+  await h.advance(S);
+  // Measurements of a later time than the range: it stays as read.
+  store.dispatch({type: 'hub', event: {type: 'history', data: {sources: ['s1'], since: range.to + 30 * MIN}}});
+  await h.advance(MIN);
+  assert.equal(await back(), 0, 'taken from what was kept');
   h.loader.choose('24h', null);
   await h.advance(S);
   // A machine that was offline delivers measurements of a time inside the range.
   store.dispatch({type: 'hub', event: {type: 'history', data: {sources: ['s1'], since: range.from + 10 * MIN}}});
   await h.advance(MIN);
-  const reads = h.reads.length;
-  h.loader.choose('24h', range);
-  await h.advance(S);
-  assert.equal(h.reads.length, reads + 1, 'read again, not taken from what was kept');
+  assert.equal(await back(), 1, 'read again, not taken from what was kept');
 });
