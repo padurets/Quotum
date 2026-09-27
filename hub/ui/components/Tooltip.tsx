@@ -1,14 +1,17 @@
 import {useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject} from 'react';
 
 /**
- * How far a chart's tooltip rises to stay whole in the window: as far as its bottom (`top`,
- * where it stands unraised, plus its `height`) would pass the window's, less a margin, and
- * never above what covers the top of the page (`cover`, the bars that stick there). A
- * tooltip that passed the bottom of the last widget would lengthen the page, so a pointer
- * near the page's end would scroll it, lose the cell, and the tooltip would come and go.
+ * Where a chart's tooltip stands to stay whole in the window, from where it stands unraised
+ * (`top`) and its own `height`: how far it rises (`by`) and how tall it may be (`room`). It
+ * rises as far as its bottom would pass the window's, less a margin, never above what covers
+ * the top of the page (`cover`, the bars that stick there), and comes down under them when
+ * its chart has scrolled beneath; one taller than the room left below where it stands is cut
+ * to it. A tooltip that passed the bottom of the last widget would lengthen the page, so a
+ * pointer near the page's end would scroll it, lose the cell, and the tooltip would come and go.
  */
-export function liftOf(top: number, height: number, windowHeight: number, cover: number) {
-  return Math.max(0, Math.min(top + height - (windowHeight - 8), top - cover - 8));
+export function placeOf(top: number, height: number, windowHeight: number, cover: number) {
+  const by = Math.min(Math.max(0, top + height - (windowHeight - 8)), top - cover - 8);
+  return {by, room: Math.max(0, windowHeight - 8 - (top - by))};
 }
 
 /**
@@ -17,16 +20,15 @@ export function liftOf(top: number, height: number, windowHeight: number, cover:
  * left, or where there is more room when it fits neither side, narrowed to that room (its
  * names wrap) rather than over the pointer. On a `narrow` chart it spans the chart's width
  * under the plot (`bottom`, in CSS pixels), over what comes below. While it `rises`, it
- * rises as far as keeps it whole in the window (a long list, a phone), though never under
- * the bars that stick at the top; one taller than the room between them and the window's
- * bottom is cut to it, so it never lengthens the page. It is measured after every render while it shows,
+ * stands as `placeOf` says: whole in the window where it can be (a long list, a phone), never
+ * under the bars that stick at the top, and never lengthening the page. It is measured after every render while it shows,
  * whatever changed it (its rows, a new answer moving the chart, the pointer), and as the
  * page scrolls under a pointer that stays.
  */
 export function useTip(svg: RefObject<SVGSVGElement | null>, {width, at, narrow, rises, bottom}: {width: number; at: number; narrow: boolean; rises: boolean; bottom: number}) {
   const tip = useRef<HTMLDivElement>(null);
   const [tipWidth, setTipWidth] = useState(200);
-  /** How far it rises, from where it stands unraised within the chart, and how tall it may be (CSS pixels; 0 for any). */
+  /** How far it rises (below 0, comes down), from where it stands unraised within the chart, and how tall it may be (CSS pixels; 0 for any). */
   const [lift, setLift] = useState({by: 0, from: 0, room: 0});
   const measure = useRef(() => {});
   measure.current = () => {
@@ -38,9 +40,13 @@ export function useTip(svg: RefObject<SVGSVGElement | null>, {width, at, narrow,
     setTipWidth(element.offsetWidth);
     element.style.maxWidth = cap;
     if (!rises || !svg.current) return setLift(same => (same.by || same.room ? {by: 0, from: 0, room: 0} : same));
-    // Where it stands unraised is read with nothing of its own rise, never from where it
-    // is drawn, so what it finds does not depend on what it found before: under the plot
-    // on a narrow chart, else where the stylesheet puts it.
+    // Where it stands unraised, and how tall it is, are read with nothing of its own rise or
+    // cut, never from where and as it is drawn, so what it finds does not depend on what it
+    // found before: under the plot on a narrow chart, else where the stylesheet puts it.
+    const tall = element.style.maxHeight;
+    element.style.maxHeight = '';
+    const height = element.getBoundingClientRect().height;
+    element.style.maxHeight = tall;
     const chart = svg.current.getBoundingClientRect();
     let top: number;
     if (narrow) top = chart.bottom + parseFloat(getComputedStyle(element).marginTop);
@@ -52,8 +58,7 @@ export function useTip(svg: RefObject<SVGSVGElement | null>, {width, at, narrow,
     }
     const bars = [...document.querySelectorAll<HTMLElement>('.topbar, .analytics-head')].filter(bar => getComputedStyle(bar).position === 'sticky');
     const cover = Math.max(0, ...bars.map(bar => bar.getBoundingClientRect().bottom));
-    const room = Math.max(0, innerHeight - cover - 16);
-    const by = liftOf(top, element.getBoundingClientRect().height, innerHeight, cover);
+    const {by, room} = placeOf(top, height, innerHeight, cover);
     const from = narrow ? bottom : top - chart.top;
     setLift(same => (same.by === by && same.from === from && same.room === room ? same : {by, from, room}));
   };

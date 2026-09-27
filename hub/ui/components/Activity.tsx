@@ -218,7 +218,8 @@ function Stacks({
   }, [groups, from, to, barMs, width, height, vertical.max]);
 
   const bar = hover === null ? null : activity.cells.find(([start]) => start === hover);
-  const parts = hover === null ? [] : groups.flatMap(({group, color, name}) => group.cells.filter(([start]) => start === hover).map(([, ms]) => ({key: group.key, color, name, ms})));
+  // What the hovered bar draws: over one whose groups are all switched off, nothing tells of it, as over an empty one.
+  const parts =hover === null ? [] : groups.flatMap(({group, color, name}) => group.cells.filter(([start]) => start === hover).map(([, ms]) => ({key: group.key, color, name, ms})));
   const hoverX = hover === null ? 0 : x(Math.max(from, Math.min(to, hover + barMs / 2)));
   const {tip, style: tipStyle} = useTip(svg, {width, at: hoverX, narrow, rises: true, bottom: height * scale});
   // The label of the part not known shows only where it fits within its hatching, measured
@@ -282,26 +283,22 @@ function Stacks({
           </g>
         </g>
         {drag && <rect x={Math.min(drag.start, drag.end)} width={Math.abs(drag.end - drag.start)} y={top} height={height - top - bottom} className="selection" />}
-        {hover !== null && bar && groups.length > 0 && <rect x={x(hover)} width={Math.max(1, x(hover + barMs) - x(hover))} y={top} height={height - top - bottom} className="hover-band" />}
+        {hover !== null && bar && parts.length > 0 && <rect x={x(hover)} width={Math.max(1, x(hover + barMs) - x(hover))} y={top} height={height - top - bottom} className="hover-band" />}
       </svg>
       {!groups.length && <div className="chart-empty">{t('activity.allOff')}</div>}
-      {hover !== null && bar && groups.length > 0 && !drag && (
+      {hover !== null && bar && parts.length > 0 && !drag && (
         <Tooltip tip={tip} className={narrow ? 'is-below' : ''} style={tipStyle}>
           <div className="tooltip-time">{cellLabel(hover, barMs)}</div>
-          {parts.length > 0 && (
-            <>
-              <div className="tooltip-grid" style={{gridTemplateColumns: '14px minmax(0, 1fr) auto'}}>
-                {parts.map(part => (
-                  <div className="tooltip-row" key={part.key}>
-                    <i className="activity-swatch" style={{background: part.color}} />
-                    <span className="tooltip-name">{part.name}</span>
-                    <strong>{workHours(part.ms)}</strong>
-                  </div>
-                ))}
+          <div className="tooltip-grid" style={{gridTemplateColumns: '14px minmax(0, 1fr) auto'}}>
+            {parts.map(part => (
+              <div className="tooltip-row" key={part.key}>
+                <i className="activity-swatch" style={{background: part.color}} />
+                <span className="tooltip-name">{part.name}</span>
+                <strong>{workHours(part.ms)}</strong>
               </div>
-              <div className="tooltip-sep" />
-            </>
-          )}
+            ))}
+          </div>
+          <div className="tooltip-sep" />
           <div className="tooltip-grid" style={{gridTemplateColumns: 'minmax(0, 1fr) auto'}}>
             <div className="tooltip-row">
               <span className="tooltip-name">{t('activity.work')}</span>
