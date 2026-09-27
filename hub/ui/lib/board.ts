@@ -242,7 +242,8 @@ export const useApp = () => usePage(s => s.app);
 /** A card's name and provider on the board: what the chart, the table and the list of agents call it. */
 export type Title = {title: string; provider: string};
 
-let titles: {key: string; value: Record<string, Title>} = {key: '', value: {}};
+/** The names worked out lately, by what they were worked out of: the same object for the same names, whoever asks. */
+const titles = new Map<string, Record<string, Title>>();
 
 /**
  * Every source of the open board named (`titled`): by the owners when that tells them
@@ -256,12 +257,18 @@ export function titlesOf(board: BoardState | null, names: Record<string, string>
     return card ? [{id, provider: card.provider, owners: card.owners}] : [];
   });
   const key = JSON.stringify([named, names]);
-  if (key !== titles.key) titles = {key, value: Object.fromEntries(titled(named, names).map(s => [s.id, {title: s.title, provider: s.provider}]))};
-  return titles.value;
+  let value = titles.get(key);
+  if (!value) {
+    value = Object.fromEntries(titled(named, names).map(s => [s.id, {title: s.title, provider: s.provider}]));
+    // A few: the saved view and the owner's changes to it are asked for side by side.
+    if (titles.size >= 4) titles.delete(titles.keys().next().value!);
+    titles.set(key, value);
+  }
+  return value;
 }
 
 /** The names of the board's cards (`titlesOf`), by the view on screen when given. */
-export const useTitles = (names?: Record<string, string>) => usePage(s => titlesOf(s.board, names), sameJson);
+export const useTitles = (names?: Record<string, string>) => usePage(s => titlesOf(s.board, names));
 /** One card's name on the board (`titlesOf`). */
 export const useTitle = (id: string, names?: Record<string, string>) => usePage(s => titlesOf(s.board, names)[id]?.title ?? '');
 

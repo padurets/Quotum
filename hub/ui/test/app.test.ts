@@ -1,6 +1,20 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {app, asksToTakeOver, failedTitle, followApp, intervalChoices, intervalMenu, onboardingText, settingsSections, takeOverText, takeOverTitle, type AgentState, type AppState} from '../lib/app';
+import {
+  app,
+  asksToTakeOver,
+  failedTitle,
+  followApp,
+  intervalChoices,
+  intervalMenu,
+  onboardingText,
+  settingsSections,
+  takeOverQuestion,
+  takeOverText,
+  takeOverTitle,
+  type AgentState,
+  type AppState,
+} from '../lib/app';
 
 test('mutations invoke and acknowledge in action order across all app controls', async t => {
   const events: string[] = [];
@@ -185,6 +199,16 @@ test('the question stays while quotum holds the machine, and says so when taking
   assert.equal(takeOverTitle({...held, error: '`quotum` (pid 42) still measures this machine'}), 'takeover.failedTitle');
   for (const state of ['starting', 'taking_over', 'measuring', 'idle'] as const) assert.ok(!asksToTakeOver({state}), state);
   assert.ok(!asksToTakeOver(undefined), 'in a browser');
+});
+
+test('the question answered stays while the app takes over, and goes once it is done', () => {
+  const held = {state: 'held', holder: {yields: true}} as const;
+  assert.equal(takeOverQuestion(held, null), held);
+  assert.equal(takeOverQuestion({state: 'taking_over'}, held), held, 'the app says it takes over at once: the question stays, saying so');
+  assert.equal(takeOverQuestion({state: 'taking_over'}, null), null, 'not answered here');
+  assert.equal(takeOverQuestion({state: 'measuring'}, held), null, 'taken over');
+  const failed = {...held, error: '`quotum` (pid 42) still measures this machine'};
+  assert.equal(takeOverQuestion(failed, held), failed, 'failed: asked again, with why');
 });
 
 test('an empty board promises numbers only while the agent measures', () => {

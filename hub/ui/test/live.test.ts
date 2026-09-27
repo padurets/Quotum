@@ -688,6 +688,38 @@ test('row 18: a tab hidden keeps counting from when it was hidden, when it is gi
   assert.equal(h.last().url, '/api/events?board=b2');
 });
 
+test('row 18: each time the tab is hidden it counts from then, also when it was hidden and shown while no board was open', async () => {
+  // Hidden, shown, and hidden again twenty seconds later: thirty seconds from the second time.
+  const h = harness();
+  const live = await h.golive();
+  await live.write(frame('ping', {now: 1}));
+  h.hide();
+  await h.timers.advance(5 * S);
+  h.show();
+  await h.timers.advance(20 * S);
+  h.hide();
+  await h.timers.advance(29 * S);
+  assert.equal(h.connection()?.status, 'live', 'hidden again: its own thirty seconds');
+
+  // Signed out while hidden, shown, signed in again, hidden for a moment: nothing lets go.
+  const g = harness();
+  const stream = await g.golive();
+  g.hide();
+  await g.timers.advance(10 * S);
+  await stream.write(frame('bye', {reason: 'unauthorized'}));
+  g.show();
+  await g.timers.advance(MIN);
+  g.live.open('b1');
+  await flush();
+  await g.last().stream().write(frame('hello', {epoch: 'e', now: 1, client: null, heartbeatMs: HEARTBEAT}) + frame('snapshot', SNAPSHOT));
+  const asked = g.asked.length;
+  g.hide();
+  await g.timers.advance(2 * S);
+  g.show();
+  await flush();
+  assert.deepEqual([g.connection()?.status, g.asked.length], ['live', asked]);
+});
+
 test('row 16, 18, 2: a tab hidden for 30 s lets go; shown again, it connects anew; one opened hidden counts from opening', async () => {
   const h = harness();
   await h.golive();

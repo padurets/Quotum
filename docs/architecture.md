@@ -390,15 +390,16 @@ stale, a machine's agents no longer shown, a holder falling silent, a past reset
 the history) it tells when that comes: it keeps the moment each board being read next
 changes by itself. A board nobody reads costs nothing, and one the hub cannot work out
 (its data spoilt) fails alone: its readers start over, and a new one is answered an
-error. Every connection starts with the
-board as it is, so a dropped connection, a sleep, a restart of the hub or a tab hidden
-for half a minute (the page lets its connection go then) lose nothing; where a proxy
-holds a stream back, the page reads the same events with long polls for ten minutes. A
-session keeps at most 8 readers, a person 16 and the hub 2000; a new one takes the place
-of the oldest in its limit, so tabs a sleeping laptop left behind never keep a new one
-out. Over plain HTTP/1.1 a browser opens at most six connections to one host and every
-open board keeps one: behind a proxy that speaks HTTP/2 (Caddy in `deploy/`) that is no
-limit, without one more than about five tabs of a hub in one browser wait for each other.
+error. Every connection starts with the board as it is, so a dropped connection, a
+sleep, a restart of the hub or a tab hidden for half a minute (the page lets its
+connection go then) lose nothing; where a proxy holds a stream back, the page reads the
+same events with long polls for ten minutes. A session keeps at most 8 readers, a person
+16 and the hub 2000; a new one takes the place of the oldest of its session, or else of
+its person, so tabs a sleeping laptop left behind never keep a new one out (at the
+hub's limit, someone reading nothing yet is refused). Over plain HTTP/1.1 a browser
+opens at most six connections to one host and every open board keeps one: behind a proxy
+that speaks HTTP/2 (Caddy in `deploy/`) that is no limit, without one more than about
+five tabs of a hub in one browser wait for each other.
 
 ### The page's connection
 
@@ -434,7 +435,7 @@ header says the hub cannot be reached once `lostAt` is 45 s old, unless `paused`
 | 15 | `live` | 2.5 heartbeats without a byte, found by its watch or on waking | opens again at once | `connecting` | the last byte |
 | 15a | `connecting`, `polling` | waking after the attempt's time (10 s, or 35 s for a poll) is up; waking before does nothing | opens again at once, the same way | `connecting` | as above; the last byte from `polling` |
 | 16 | `retrying` | its time came, or waking (not sooner than rows 12 and 13 allow) | a stream again once the time for polls is up; opens | `connecting` | as above |
-| 17 | `polling` | a poll answered | applies its events in order, none after `bye`; asks again at once, or opens a stream once the time for polls is up | `polling`, `connecting` | cleared |
+| 17 | `polling` | a poll answered | applies its events in order, none after `bye`; asks again at once, or opens a stream once the time for polls is up | `polling`, `connecting` | cleared; as above when it opens a stream |
 | 18 | any but `paused` | the tab hidden for 30 s, counted from when it was hidden, whatever board it was given meanwhile | ends the connection and its timers | `paused` | kept |
 
 In the page, the events go through one reducer into a store (`hub/ui/lib/board.ts`); each
@@ -444,8 +445,9 @@ the same object. What shows time (how long ago, how soon, the freshness dot, the
 mark, that the hub cannot be reached) is a small part of its own that tells the page's
 one clock (`hub/ui/lib/clock.ts`) when it reads otherwise, and renders only then: the
 clock keeps one timer for the whole page, none on a hidden tab, and counts in the hub's
-time as the hub's messages tell it. The chart and the table move on a cell of the
-history's grid at a time. History is read again when the hub tells of measurements the
+time as the hub's messages tell it. The chart moves on a cell of the history's grid at
+a time; in the table, the plan and where the pace leads each read otherwise at their
+own moment. History is read again when the hub tells of measurements the
 chart has not shown, at most every ten seconds for a period ending now. Nothing that
 shows data or time keeps a timer of its own (a tooltip or a gesture may wait a moment;
 `hub/ui/test/timers.test.ts` lists where), and `npm run bench` checks that an idle

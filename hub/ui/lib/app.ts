@@ -173,6 +173,14 @@ export function takeOverText(holder: Holder): {who: Key; hub: Key | null; after:
 /** The question stays on screen, with no way to close it, whenever `quotum` holds the machine. */
 export const asksToTakeOver = (agent: AgentState | undefined): agent is Extract<AgentState, {state: 'held'}> => agent?.state === 'held';
 
+/**
+ * The question the take-over asks: the app's while `quotum` holds the machine, and the one
+ * answered (`answered`) while the app takes over, which it says at once, well before it is
+ * done. Null when there is none: taken over, or nothing to ask.
+ */
+export const takeOverQuestion = (agent: AgentState | undefined, answered: Extract<AgentState, {state: 'held'}> | null) =>
+  asksToTakeOver(agent) ? agent : answered && agent?.state === 'taking_over' ? answered : null;
+
 export const takeOverTitle = (agent: Extract<AgentState, {state: 'held'}>): Key => (agent.error ? 'takeover.failedTitle' : 'takeover.title');
 
 /** What an empty board says in the app: the first numbers come soon, or nothing is measured. */

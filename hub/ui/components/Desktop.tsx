@@ -4,11 +4,11 @@ import {PROVIDERS} from '../lib/providers';
 import {errorText} from '../lib/quota';
 import {
   app,
-  asksToTakeOver,
   failedTitle,
   inApp,
   intervalMenu,
   onboardingText,
+  takeOverQuestion,
   takeOverText,
   takeOverTitle,
   type AppState,
@@ -66,19 +66,21 @@ export function OpenInApp() {
  * the window quits too). After a failed attempt it says why and offers another.
  */
 export function TakeOver({onState}: {onState: (state: AppState) => void}) {
-  const agent = useApp()?.agent;
-  const [busy, setBusy] = useState(false);
-  if (!asksToTakeOver(agent)) return null;
+  // The question answered, while the app takes over: it stays, saying so, until the app is done.
+  const [answered, setAnswered] = useState<Parameters<typeof takeOverQuestion>[1]>(null);
+  const agent = takeOverQuestion(useApp()?.agent, answered);
+  if (!agent) return null;
+  const busy = answered !== null;
   const text = takeOverText(agent.holder);
   const takeOver = async () => {
-    setBusy(true);
+    setAnswered(agent);
     try {
       onState(await app.takeOver());
     } catch {
       // The app keeps asking, with why it failed: the state read next says so.
       onState(await app.state());
     } finally {
-      setBusy(false);
+      setAnswered(null);
     }
   };
   return (

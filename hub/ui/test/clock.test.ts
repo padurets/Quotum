@@ -271,7 +271,9 @@ test("a limit's plan says when its mark, its gap or its end show otherwise", () 
   };
   // Close to its plan: the gap grows past the mark the table draws from.
   const close: Win = {...weekly, id: 'c', used: 64.5, remaining: 35.5};
-  for (const w of [weekly, session, close]) {
+  // Left in whole points: the end of the plan is told by its being over, no rounding of the gap there.
+  const whole: Win = {...weekly, id: 'e', used: 38, remaining: 62};
+  for (const w of [weekly, session, close, whole]) {
     const moments = [...Array.from({length: 150}, (_, i) => T0 + i * 1_234_567), ...before(w.resetAt!)].filter(t => t < w.resetAt!);
     changesAtItsMoment(
       `plan ${w.kind}`,

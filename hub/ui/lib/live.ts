@@ -148,11 +148,12 @@ export class Live {
     this.env.dispatch({type: 'board-close'});
   }
 
-  /** The tab was shown or hidden. */
+  /** The tab was shown or hidden. When it was hidden is kept even with no board open: one opened later counts from then (row 18). */
   visibility() {
+    if (this.env.visible()) this.hiddenAt = null;
+    else this.hiddenAt ??= this.env.now();
     if (this.status === 'stopped') return;
     if (!this.env.visible()) return this.hidden();
-    this.hiddenAt = null;
     this.clear('hide');
     // Row 2.
     if (this.status === 'paused') return this.connect();

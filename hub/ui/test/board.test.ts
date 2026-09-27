@@ -180,6 +180,10 @@ test('the names of the cards stay the same object while no name changes', () => 
   const named = reduce(s, hub({type: 'view', data: {view: {...VIEW, names: {s2: 'Work'}}}}));
   assert.equal(titlesOf(named.board).s2.title, 'Work');
   assert.equal(titlesOf(s.board, {s1: 'Home'}).s1.title, 'Home', 'as the owner names it on screen, before the hub saved it');
+  // Read side by side by the saved view and by the owner's changes: each stays the same object.
+  const saved = titlesOf(s.board);
+  const drafted = titlesOf(s.board, {s1: 'Home'});
+  for (let i = 0; i < 3; i++) assert.deepEqual([titlesOf(s.board) === saved, titlesOf(s.board, {s1: 'Home'}) === drafted], [true, true]);
 });
 
 test('a board is shown only as the one opened: another still in the store is nothing, and closing keeps nothing of it', () => {

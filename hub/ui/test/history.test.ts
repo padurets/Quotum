@@ -253,3 +253,70 @@ test('a refusal of a range the page has stepped away from does not drop the one 
   await h.advance(S);
   assert.match(h.reads.at(-1)!.query, new RegExp(`from=${NOW - 4 * HOUR}`), 'the one selected is read');
 });
+
+test('news after a range ends, while it is read, leaves it as read: shown, kept, and not read again', async () => {
+  const h = harness();
+  h.loader.choose('24h', null);
+  h.loader.open('b1');
+  h.loader.snapshot(['s1']);
+  await h.reads[0].answer();
+  await h.advance(LIVE_MIN_MS);
+  const range = {from: NOW - 3 * HOUR, to: NOW - 2 * HOUR};
+  const answer = {range: `${range.from}-${range.to}`, to: range.to};
+  h.loader.choose('24h', range);
+  await h.advance(100);
+  // A steady trickle of measurements taken now, each coming while the range is read.
+  for (let i = 0; i < 5; i++) {
+    h.loader.news(NOW + i * S);
+    await h.advance(S);
+  }
+  await h.reads[1].answer(answer);
+  await h.advance(LIVE_MIN_MS + S);
+  assert.equal(h.reads.length, 2, 'read once');
+  h.loader.choose('24h', null);
+  await h.advance(S);
+  await h.reads.at(-1)!.answer();
+  const reads = h.reads.length;
+  h.loader.choose('24h', range);
+  await h.advance(S);
+  assert.equal(h.reads.length, reads, 'kept');
+});
+
+test('the period ending now: news while it is read, and more of it, give one read more, ten seconds after the last began', async () => {
+  const h = harness();
+  h.loader.choose('24h', null);
+  h.loader.open('b1');
+  h.loader.snapshot(['s1']);
+  await h.advance(S);
+  h.loader.news(NOW);
+  h.loader.news(NOW + S);
+  h.loader.snapshot(['s1']);
+  await h.reads[0].answer();
+  await h.advance(LIVE_MIN_MS - S - 1);
+  assert.equal(h.reads.length, 1, 'not before ten seconds');
+  await h.advance(2);
+  assert.equal(h.reads.length, 2);
+  await h.reads[1].answer();
+  await h.advance(MIN);
+  assert.equal(h.reads.length, 2, 'and no more');
+});
+
+test('a board left (signed out, gone) is read no more, whatever comes due or is chosen', async () => {
+  const h = harness();
+  h.loader.choose('24h', null);
+  h.loader.open('b1');
+  h.loader.snapshot(['s1']);
+  await h.reads[0].answer();
+  await h.advance(S);
+  h.loader.news(NOW);
+  h.loader.close();
+  await h.advance(MIN);
+  h.loader.choose('7d', null);
+  h.loader.news(NOW);
+  await h.advance(MIN);
+  assert.equal(h.reads.length, 1);
+  assert.equal(h.loader.get().history, null, 'nothing of it is shown');
+  h.loader.open('b1');
+  h.loader.snapshot(['s1']);
+  assert.equal(h.reads.length, 2, 'opened again, read again');
+});

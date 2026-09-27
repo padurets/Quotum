@@ -54,8 +54,8 @@ export class HistoryLoader {
   private readonly kept = new Map<string, History>();
   /** The read whose answer goes on screen, and whether news came meanwhile. */
   private reading: {slot: string; again: boolean} | null = null;
-  /** Every read under way, each marked once news or a snapshot may have made its answer old before it comes. */
-  private readonly underway = new Set<{old: boolean}>();
+  /** Every read under way, with the earliest time of the news that came meanwhile (a snapshot: all of it) that its answer may miss. */
+  private readonly underway = new Set<{since: number}>();
   private lastRead: {slot: string; at: number} | null = null;
   private changedAt = 0;
   private readonly timers = new Map<'settle' | 'later' | 'retry', unknown>();
@@ -65,6 +65,14 @@ export class HistoryLoader {
   constructor(private readonly env: HistoryEnv) {}
 
   // ---------- what it hears ----------
+
+  /** The page left the board (signed out, the board gone): nothing is read until another opens. */
+  close() {
+    this.board = null;
+    this.sources = null;
+    this.cancel();
+    this.publish();
+  }
 
   /** Another board is open: nothing of it is read until its snapshot comes. */
   open(board: string) {
@@ -77,7 +85,7 @@ export class HistoryLoader {
 
   /** The board as it is (every connection): whatever came meanwhile is not in the ranges kept, and the period ending now is read again. */
   snapshot(lineup: string[]) {
-    this.forget(() => true);
+    this.forget(-Infinity);
     const sources = keyOf(lineup);
     const moved = sources !== this.sources;
     this.sources = sources;
@@ -93,7 +101,7 @@ export class HistoryLoader {
 
   /** Measurements at `since` or later reached the hub: what was read of that time is read again. */
   news(since: number) {
-    this.forget(answer => since <= answer.to);
+    this.forget(since);
     this.want('news');
   }
 
@@ -172,7 +180,7 @@ export class HistoryLoader {
     if (!target) return;
     const slot = this.slotOf(target);
     const reading = {slot, again: false};
-    const flight = {old: false};
+    const flight = {since: Infinity};
     this.reading = reading;
     this.underway.add(flight);
     this.lastRead = {slot, at: this.env.now()};
@@ -181,14 +189,16 @@ export class HistoryLoader {
         this.underway.delete(flight);
         const data = {...answer, board: target.board};
         // One stepped past on the way is kept all the same: it may be stepped back to. Not
-        // one that news may have made old on its way: it is read again when wanted.
-        if (target.selected && !flight.old && complete(data, target.selected)) this.keep(slot, target.board, data);
+        // one that news of its time came for on its way: it is read again when wanted.
+        const touched = flight.since <= data.to;
+        if (target.selected && !touched && complete(data, target.selected)) this.keep(slot, target.board, data);
         if (this.reading !== reading) return;
         this.reading = null;
         this.shown = data;
         this.publish();
         // A costly history is put together again a while after new data came: read then.
         if (data.refreshInMs !== null) this.timers.set('later', this.env.setTimeout(() => this.read(), data.refreshInMs + 1_000));
+        // News came meanwhile: read again, unless the answer is kept (the news was of a later time).
         else if (reading.again) this.want('news');
       },
       error => {
@@ -211,13 +221,10 @@ export class HistoryLoader {
     if (ofBoard.length > KEPT_RANGES) this.kept.delete(ofBoard[0]);
   }
 
-  /**
-   * Drops the ranges kept of the open board that `hit` says may have changed; an answer
-   * still on its way may have missed it too, whatever its range.
-   */
-  private forget(hit: (answer: History) => boolean) {
-    for (const [slot, answer] of this.kept) if (answer.board === this.board && hit(answer)) this.kept.delete(slot);
-    for (const flight of this.underway) flight.old = true;
+  /** News of measurements at `since` or later: the ranges kept of the open board that hold that time go, and answers on their way are told. */
+  private forget(since: number) {
+    for (const [slot, answer] of this.kept) if (answer.board === this.board && since <= answer.to) this.kept.delete(slot);
+    for (const flight of this.underway) flight.since = Math.min(flight.since, since);
   }
 
   private cancel() {
@@ -245,6 +252,7 @@ export const loader = new HistoryLoader({
 // The page's events, its period and its selection drive the loader; nothing on screen does.
 page.listen((event, state) => {
   if (event.type === 'board-open') loader.open(event.id);
+  else if (event.type === 'board-close') loader.close();
   else if (event.type === 'hub' && event.event.type === 'snapshot') loader.snapshot(state.board?.lineup ?? []);
   else if (event.type === 'hub' && event.event.type === 'lineup') loader.lineup(state.board?.lineup ?? []);
   else if (event.type === 'hub' && event.event.type === 'history') loader.news(event.event.data.since);
