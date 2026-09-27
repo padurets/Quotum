@@ -893,6 +893,162 @@ test('row 18: pausing keeps when a connection was lost, and forgets when one onl
   }
 });
 
+test('row 18 × each row: the pause keeps lostAt once the connection was lost (retrying, or a row that says when), and clears one only opening set', async () => {
+  type H = ReturnType<typeof harness>;
+  const board = (h: H) => [
+    {type: 'hello', data: {epoch: 'e', now: h.timers.t, client: null, heartbeatMs: HEARTBEAT}},
+    {type: 'snapshot', data: SNAPSHOT},
+  ];
+  /** Answers each long poll until 25 s before their time is up, then hides the tab; the next answer opens a stream (row 17), held back. */
+  const pollsOver = async (h: H, until: number) => {
+    while (h.timers.t < until - 25 * S) {
+      await h.timers.advance(Math.min(20 * S, until - 25 * S - h.timers.t));
+      await h.last().json(200, {lease: 'L', now: h.timers.t, events: []});
+    }
+    h.hide();
+    await h.timers.advance(25 * S);
+    await h.last().json(200, {lease: 'L', now: h.timers.t, events: []});
+    assert.equal(h.last().url, '/api/events?board=b1');
+    h.last().stream();
+    await h.timers.advance(6 * S);
+  };
+  // Each runs until the pause and gives the lostAt it keeps: when the connection was lost, or null.
+  const cases: [string, (h: H) => Promise<number | null>][] = [
+    [
+      '4a no first ping',
+      async h => {
+        await h.golive();
+        const last = h.timers.t;
+        await h.timers.advance(10 * S);
+        h.hide();
+        await h.timers.advance(36 * S);
+        return last;
+      },
+    ],
+    [
+      '5 no answer, polls',
+      async h => {
+        h.hide();
+        h.live.open('b1');
+        await h.timers.advance(35 * S);
+        return null;
+      },
+    ],
+    [
+      '9 a 503',
+      async h => {
+        h.live.open('b1');
+        const opened = h.timers.t;
+        await flush();
+        h.hide();
+        await h.last().json(503, {});
+        await h.timers.advance(31 * S);
+        return opened;
+      },
+    ],
+    [
+      '12 bye restart',
+      async h => {
+        const s = await h.golive();
+        h.hide();
+        await h.timers.advance(28 * S);
+        await s.write(frame('ping', {now: 1}) + frame('bye', {reason: 'restart'}));
+        const at = h.timers.t;
+        await h.timers.advance(3 * S);
+        return at;
+      },
+    ],
+    [
+      '15 a silent stream',
+      async h => {
+        const s = await h.golive();
+        await s.write(frame('ping', {now: 1}));
+        const last = h.timers.t;
+        await h.timers.advance(40 * S);
+        h.hide();
+        await h.timers.advance(31 * S);
+        return last;
+      },
+    ],
+    [
+      '15a polling, asleep',
+      async h => {
+        await h.gopoll();
+        const last = h.timers.t;
+        await h.timers.advance(10 * S);
+        h.hide();
+        await h.timers.advance(60 * MIN, true);
+        return last;
+      },
+    ],
+    [
+      '15a opening, asleep',
+      async h => {
+        h.hide();
+        h.live.open('b1');
+        await flush();
+        await h.timers.advance(60 * MIN, true);
+        return null;
+      },
+    ],
+    [
+      '17 polls over, the stream held back',
+      async h => {
+        await h.gopoll();
+        await pollsOver(h, h.timers.t + 10 * MIN);
+        return null;
+      },
+    ],
+    [
+      '17 after the hub restarted meanwhile',
+      async h => {
+        await h.gopoll();
+        const until = h.timers.t + 10 * MIN;
+        await h.timers.advance(5 * S);
+        await h.last().json(200, {lease: 'L', now: h.timers.t, events: [{type: 'bye', data: {reason: 'restart'}}]});
+        assert.equal(h.connection()?.status, 'retrying');
+        await h.timers.advance(3 * S);
+        await h.last().json(200, {lease: 'L', now: h.timers.t, events: board(h)});
+        assert.equal(h.connection()?.status, 'polling');
+        await pollsOver(h, until);
+        return null;
+      },
+    ],
+    [
+      '1 another board while retrying',
+      async h => {
+        h.live.open('b1');
+        const opened = h.timers.t;
+        await flush();
+        h.hide();
+        await h.last().json(503, {});
+        h.live.open('b2');
+        await flush();
+        await h.timers.advance(31 * S);
+        return opened;
+      },
+    ],
+    [
+      '1 another board while opening',
+      async h => {
+        h.live.open('b1');
+        await flush();
+        h.hide();
+        await h.timers.advance(3 * S);
+        h.live.open('b2');
+        await flush();
+        await h.timers.advance(31 * S);
+        return null;
+      },
+    ],
+  ];
+  for (const [name, run] of cases) {
+    const h = harness();
+    const kept = await run(h);
+    assert.deepEqual(h.connection(), {type: 'connection', status: 'paused', lostAt: kept}, name);
+  }
+});
+
 test('events of a connection the page closed never reach the page', async () => {
   const h = harness();
   const stream = await h.golive();
