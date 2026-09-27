@@ -39,6 +39,9 @@ export const polled = (frames: Frame[]) => `[${frames.map(f => `{"type":${JSON.s
 const frame = (type: string, data: unknown): Frame => ({type, data: JSON.stringify(data)});
 const bye = (reason: ByeReason) => frame('bye', {reason});
 
+/** What a working out could not do: boards, readers' own parts, the hub's news. */
+export type Failed = {boards: Set<string>; users: Set<string>; hub: boolean};
+
 /** The hub's clock and timers: tests move them by hand. */
 export type Clock = {now(): number; after(ms: number, run: () => void): () => void};
 
@@ -234,9 +237,10 @@ export class Events implements Touches {
   /**
    * Works out every touched part of the watched boards and sends what differs from what
    * their readers got. A board that cannot be worked out lets its readers go to start over,
-   * and fails no other; the boards it failed are returned.
+   * and fails no other; a reader's own parts or the hub's that cannot, are worked out whole
+   * again by the next touch or recheck. What failed is returned.
    */
-  flush(): Set<string> {
+  flush(): Failed {
     this.stopFlush?.();
     this.stopFlush = null;
     const now = this.clock.now();
@@ -254,7 +258,7 @@ export class Events implements Touches {
     const heads = new Map<string, Frame[]>();
     const tails = new Map<string, Frame[]>();
     const lineups = new Map<string, BoardSource[]>();
-    const failed = new Set<string>();
+    const failed: Failed = {boards: new Set(), users: new Set(), hub: false};
     for (const id of new Set([...whole, ...sources.keys(), ...histories.keys()])) {
       const watched = this.watched.get(id);
       if (!watched) continue;
@@ -266,7 +270,7 @@ export class Events implements Touches {
         }
       } catch (error) {
         trouble(error);
-        failed.add(id);
+        failed.boards.add(id);
         // What its readers got may be half told: they start over with a snapshot. One still opening is refused instead.
         for (const sub of [...watched.subscribers]) if (!sub.fresh) this.end(sub, 'restart');
         continue;
@@ -282,6 +286,7 @@ export class Events implements Touches {
       } catch (error) {
         // Told again by the next touch or recheck.
         trouble(error);
+        failed.hub = true;
       }
     }
 
@@ -297,8 +302,12 @@ export class Events implements Touches {
             if (!lists.has(sub.user)) lists.set(sub.user, this.refreshBoards(sub.user));
             own = [...mines.get(key)!, ...lists.get(sub.user)!];
           } catch (error) {
+            // What was kept of them may be ahead of what they were sent: forgotten, it is sent whole next time.
             trouble(error);
             users.delete(sub.user);
+            failed.users.add(sub.user);
+            for (const key of [...this.mines.keys()]) if (key.startsWith(`${sub.user}\n`)) this.mines.delete(key);
+            this.boardLists.delete(sub.user);
           }
         }
         const frames = [...(heads.get(watched.id) ?? []), ...own, ...(tails.get(watched.id) ?? []), ...news];
@@ -517,7 +526,9 @@ export class Events implements Touches {
     const now = this.clock.now();
     let snapshot;
     try {
-      if (this.flush().has(reader.board)) throw new Error('the board could not be worked out');
+      const failed = this.flush();
+      // The snapshot would miss a part: the reader is refused, as for a board that failed.
+      if (failed.boards.has(reader.board) || failed.users.has(reader.user) || (failed.hub && !this.hub)) throw new Error('the board could not be worked out');
       if (!this.watched.get(reader.board)?.subscribers.has(sub)) {
         this.unsubscribe(sub);
         return null;

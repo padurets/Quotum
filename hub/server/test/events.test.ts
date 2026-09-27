@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtempSync} from 'node:fs';
+import net from 'node:net';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {buildApp} from '../api.js';
@@ -142,7 +143,8 @@ async function hub(options: Partial<EventsOptions> = {}, clock?: Clock) {
   const store = new Store(path.join(mkdtempSync(path.join(tmpdir(), 'quotum-events-')), 'db.sqlite'));
   const directory = new Directory(store.db);
   const ingest = new Ingest(store, directory, new Duty(), new Cadence());
-  const resets = new ResetFeed(undefined, () => {}, {...config.resets, enabled: false});
+  // Trackers nobody runs, on this machine: asked, they fail at once, and no test goes out to the network.
+  const resets = new ResetFeed(undefined, () => {}, {...config.resets, enabled: false, codexApi: 'http://127.0.0.1:1/codex', claudeApi: 'http://127.0.0.1:1/claude'});
   const events = new Events({store, directory, ingest, resets}, {...config.events, recheckMs: 0, ...options}, clock, '/assets/index-test.js');
   const app = await buildApp({store, directory, resets, ingest, pairing: new Pairing(directory), setup: new Setup(true, SETUP), local: null, events});
   await app.listen({host: '127.0.0.1', port: 0});
@@ -453,11 +455,13 @@ test('a board the hub cannot work out fails alone: its readers start over, a new
   const broken = await reading(h, 'alice', team);
   t.after(() => [own, broken].forEach(s => s.close()));
 
-  // Its view spoilt behind the hub's back, then the board touched: the timer's work fails on it.
+  // Its view spoilt behind the hub's back, then both boards touched at once, the broken one
+  // first: the timer's work fails on it, and the other is worked out all the same.
   h.store.db.prepare('UPDATE views SET payload = ? WHERE board_id = ?').run('{not json', team);
   await h.call('POST', `/api/boards/${team}`, {as: 'alice', body: {name: 'Crew'}});
+  await h.call('POST', `/api/boards/${personal}`, {as: 'alice', body: {name: 'Home'}});
   assert.deepEqual((await broken.next()).data, {reason: 'restart'});
-  assert.deepEqual(await own.types(), ['boards'], 'the other board goes on');
+  assert.deepEqual(await own.types(), ['board', 'boards'], 'the other board goes on');
 
   const refused = await h.stream('alice', team);
   assert.equal(refused.status, 500);
@@ -466,6 +470,62 @@ test('a board the hub cannot work out fails alone: its readers start over, a new
   assert.equal(h.events.readers, 1, 'nothing is left of the readers refused');
   await h.call('POST', `/api/boards/${personal}`, {as: 'alice', body: {name: 'Mine'}});
   assert.deepEqual(await own.types(), ['board', 'boards']);
+});
+
+test('a stream its reader stopped reading is let go once it falls too far behind, through the route', async t => {
+  const h = await hub({smoothMs: 5, bufferBytes: 64 * 1024});
+  t.after(() => h.app.close());
+  const board = await h.person('alice');
+  const {port} = new URL(h.base);
+  const socket = net.connect(Number(port), '127.0.0.1');
+  socket.on('error', () => {});
+  t.after(() => socket.destroy());
+  await new Promise(resolve => socket.once('connect', resolve));
+  socket.write(`GET /api/events?board=${board} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nCookie: ${h.cookies.get('alice')}\r\nQuotum-Stream: 1\r\n\r\n`);
+  socket.pause();
+  while (!h.events.readers) await new Promise(resolve => setTimeout(resolve, 10));
+  // A board changing fast, with a large view: what waits for the reader grows past what the socket holds.
+  for (let i = 0; i < 600 && h.events.readers; i++) {
+    const order = Array.from({length: 120}, (_, k) => `source:${i}-${k}-`.padEnd(120, 'x'));
+    await h.call('POST', `/api/boards/${board}/view`, {as: 'alice', body: {order}});
+    await new Promise(resolve => setTimeout(resolve, 15));
+  }
+  assert.equal(h.events.readers, 0);
+});
+
+test('what is a reader’s own or the hub’s that cannot be worked out: a new reader is refused, one reading is sent it whole later', async t => {
+  const h = await hub();
+  t.after(() => h.app.close());
+  const personal = await h.person('alice');
+  const team = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
+  const once = <A extends unknown[], R>(real: (...args: A) => R) => {
+    let failing = true;
+    return (...args: A): R => {
+      if (!failing) return real(...args);
+      failing = false;
+      throw new Error('disk I/O error');
+    };
+  };
+  // The hub's news cannot be read for the first reader: its snapshot would have none.
+  h.store.announcements = once(h.store.announcements.bind(h.store));
+  assert.equal((await h.stream('alice', personal)).status, 500);
+  assert.equal(h.events.readers, 0);
+  const s = await reading(h, 'alice', personal);
+  t.after(s.close);
+  assert.ok(s.snapshot.resets);
+
+  // Her boards cannot be read for her stream as one is renamed: sent, whole, when she is touched next.
+  const {projection} = h.events as unknown as {projection: Projection};
+  projection.boards = once(projection.boards.bind(projection));
+  await h.call('POST', `/api/boards/${team}`, {as: 'alice', body: {name: 'Crew'}});
+  assert.deepEqual(await s.types(), []);
+  await h.call('POST', `/api/boards/${team}`, {as: 'alice', body: {name: 'Band'}});
+  const told = await s.within();
+  assert.deepEqual(
+    told.map(e => e.type),
+    ['mine', 'boards'],
+  );
+  assert.equal(told[1].data.boards.find((b: {id: string}) => b.id === team).name, 'Band');
 });
 
 test('a ping finds out what nobody told: a session gone or a place on the board lost behind the hub’s back', async t => {
