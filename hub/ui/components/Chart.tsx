@@ -6,7 +6,7 @@ import {MINUTE, useNow} from '../lib/api';
 import {gapText, gapTone, readout as readCell, valueAt, type ForecastLine, type PlanLine} from '../lib/readout';
 import type {TimeRange} from '../lib/timeRange';
 import {cellLabel, niceTicks} from '../lib/periods';
-import {Tooltip, useTip} from './Tooltip';
+import {coverOf, Tooltip, useTip} from './Tooltip';
 import {useTimeAxis} from './timeAxis';
 
 /**
@@ -336,6 +336,15 @@ export function Chart({
   // On a narrow chart it spans the chart's width under the plot; a marker's time stands over its label and does not rise.
   const narrow = width < 560;
   const {tip, style: tipStyle} = useTip(svg, {width, at: hoverX, narrow, rises: !edgeMarker, bottom: height * scale});
+  // A marker's time stands over its label, or under it where the bars that stick at the top
+  // would cover it: found from where the label is, never from where the time was drawn.
+  const edgeRow = edgeMarker ? stackRows.get(edgeMarker.key)! : 0;
+  const [edgeBelow, setEdgeBelow] = useState(false);
+  useLayoutEffect(() => {
+    if (!edgeMarker || !tip.current || !svg.current) return;
+    const below = svg.current.getBoundingClientRect().top + (edgeRow - 18) * scale - tip.current.offsetHeight < coverOf() + 8;
+    setEdgeBelow(same => (same === below ? same : below));
+  });
   const bandWidth = Math.max(1, x(Math.min(to, (hover ?? 0) + cellMs)) - x(hover ?? 0));
 
   return (
@@ -476,7 +485,7 @@ export function Chart({
       </svg>
 
       {edgeMarker ? (
-        <Tooltip tip={tip} className="is-edge" style={{right: 0, bottom: `calc(100% - ${(stackRows.get(edgeMarker.key)! - 18) * scale}px)`}}>
+        <Tooltip tip={tip} className="is-edge" style={edgeBelow ? {right: 0, top: `${(edgeRow + 6) * scale}px`} : {right: 0, bottom: `calc(100% - ${(edgeRow - 18) * scale}px)`}}>
           <div className={`tooltip-marker ${edgeMarker.color ? '' : 'is-strong'}`} style={edgeMarker.color ? {color: edgeMarker.color} : undefined}>
             {edgeMarker.label}
           </div>

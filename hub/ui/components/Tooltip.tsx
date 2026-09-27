@@ -14,6 +14,12 @@ export function placeOf(top: number, height: number, windowHeight: number, cover
   return {by, room: Math.max(0, windowHeight - 8 - (top - by))};
 }
 
+/** How far down the window the bars that stick at its top cover the page, in CSS pixels. */
+export function coverOf() {
+  const bars = [...document.querySelectorAll<HTMLElement>('.topbar, .analytics-head')].filter(bar => getComputedStyle(bar).position === 'sticky');
+  return Math.max(0, ...bars.map(bar => bar.getBoundingClientRect().bottom));
+}
+
 /**
  * Where a chart's tooltip stands, for a chart `width` wide (in its own units, which are
  * CSS pixels here) with the pointer `at` across it. Beside the pointer: right of it, or
@@ -56,9 +62,7 @@ export function useTip(svg: RefObject<SVGSVGElement | null>, {width, at, narrow,
       top = element.getBoundingClientRect().top;
       element.style.top = raised;
     }
-    const bars = [...document.querySelectorAll<HTMLElement>('.topbar, .analytics-head')].filter(bar => getComputedStyle(bar).position === 'sticky');
-    const cover = Math.max(0, ...bars.map(bar => bar.getBoundingClientRect().bottom));
-    const {by, room} = placeOf(top, height, innerHeight, cover);
+    const {by, room} = placeOf(top, height, innerHeight, coverOf());
     const from = narrow ? bottom : top - chart.top;
     setLift(same => (same.by === by && same.from === from && same.room === room ? same : {by, from, room}));
   };
