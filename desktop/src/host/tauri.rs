@@ -32,8 +32,10 @@ pub fn run(args: Args) {
         builder = builder
             .plugin(tauri_plugin_single_instance::init(|app, argv, _| {
                 if let Some(shell) = app.try_state::<Arc<Shell>>() {
-                    if !Args::parse(argv).hidden {
-                        window::open(shell.inner());
+                    if Args::parse(argv).hidden {
+                        shell.hub_log.line("app: a second start asks for no window (--hidden)");
+                    } else {
+                        window::open(shell.inner(), "a second start");
                     }
                 }
             }))
@@ -87,7 +89,7 @@ pub fn run(args: Args) {
             }
             tray::create(&handle, &shell);
             if !args.hidden {
-                window::open(&shell);
+                window::open(&shell, "the app's start");
             }
             let hub = shell.clone();
             thread::spawn(move || shell::run_hub(hub));

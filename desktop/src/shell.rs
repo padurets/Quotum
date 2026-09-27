@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use quotum_core::config::Paths;
 
 use crate::agent::Agent;
-use crate::files::{AppJson, Dirs, Log, free_port};
+use crate::files::{self, AppJson, Dirs, Log, free_port};
 use crate::hub::{self, Event, HubState, Proc, Ready, Restarts, Secrets, Signal};
 use crate::notifier::{Notifier, Wake};
 use crate::{agent, host, ipc, smoke, window};
@@ -80,8 +80,10 @@ impl Shell {
         host: host::Host,
     ) -> Shell {
         let app_json = AppJson::load(&dirs.app_json());
+        let hub_log = Arc::new(Log::new(dirs.hub_log()));
+        files::keep_tauri_log(&hub_log);
         Shell {
-            hub_log: Arc::new(Log::new(dirs.hub_log())),
+            hub_log,
             agent_log: Arc::new(Log::new(dirs.agent_log())),
             agent: Mutex::new(Agent::new()),
             agent_ops: Mutex::new(()),

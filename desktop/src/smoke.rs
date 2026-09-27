@@ -129,7 +129,7 @@ impl Smoke {
             1 => {
                 window::close(&shell);
                 thread::sleep(Duration::from_millis(500));
-                window::open(&shell);
+                window::open(&shell, "the smoke run");
             }
             _ => {
                 if let Some(smoke) = &shell.smoke {
