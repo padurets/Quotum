@@ -7,7 +7,7 @@ import {ACTIVITY_BY, setMuted, setPrefs, usePrefs} from '../lib/prefs';
 import {goTo, setTimeRange, useTimeRange, type TimeRange} from '../lib/timeRange';
 import {cellLabel, frameChangesAt, frameOf, measuredTo, niceTicks, step} from '../lib/periods';
 import {ACTIVITY, cardId, isHidden, withHidden, type Arrange} from '../lib/view';
-import {useNamed, type Named} from '../lib/board';
+import {useLineup, useTitles, type Title} from '../lib/board';
 import {hubNow, useClock} from '../lib/clock';
 import {useHistory, useHistoryBegins} from '../lib/history';
 import {t, useLocale, type Key} from '../i18n';
@@ -21,11 +21,8 @@ const MINUTE = 60_000;
 const LABELS: Record<ActivityDimension, Key> = {source: 'activity.bySource', project: 'activity.byProject', device: 'activity.byDevice'};
 
 /** A group as the legend and the tooltip name it. */
-function groupName(group: ActivityGroup, by: ActivityDimension, sources: Named[]) {
-  if (by === 'source') {
-    const source = sources.find(s => s.id === group.key);
-    return source ? sourceLabel(source) : group.key;
-  }
+function groupName(group: ActivityGroup, by: ActivityDimension, titles: Record<string, Title>) {
+  if (by === 'source') return titles[group.key] ? sourceLabel(titles[group.key]) : group.key;
   return group.name ?? (by === 'project' ? t('activity.noProject') : group.key);
 }
 
@@ -56,12 +53,14 @@ function ActivitySettings({arrange}: {arrange: Arrange}) {
  * time together. It follows the period, a range dragged on it or on the chart and moving
  * through time, as the chart and the table do, and shows only what the board shows. The
  * part of the period before the hub knew how agents worked is marked as such rather than
- * drawn empty. It reads the history on screen and the board's cards, as the chart does, and
- * moves with time as it does, a cell of the history's grid at a time.
+ * drawn empty. It reads the history on screen, as the chart does, and of the board's cards
+ * only their names, so a measurement does not render it; it moves with time as the chart
+ * does, a cell of the history's grid at a time.
  */
 export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const {history, loading} = useHistory();
-  const sources = useNamed(arrange.view.names);
+  const lineup = useLineup();
+  const titles = useTitles(arrange.view.names);
   const prefs = usePrefs();
   const by = prefs.activityBy;
   const locale = useLocale();
@@ -75,14 +74,14 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   // What the groups look like changes with the answer, the board and the legend, not with time: the same objects as the clock moves the frame.
   const {groups, colors, names, muted, shown} = useMemo(() => {
     const groups = activity?.by[by] ?? [];
-    const colors = groupColors(groups, by, arrange.view, source => sources.find(s => s.id === source)?.provider ?? '');
-    const names = groups.map(group => groupName(group, by, sources));
+    const colors = groupColors(groups, by, arrange.view, source => titles[source]?.provider ?? '');
+    const names = groups.map(group => groupName(group, by, titles));
     const muted = groups.map(group => !!prefs.muted[mutedKey(by, group.key)]);
     const shown = groups.flatMap((group, i) => (muted[i] ? [] : [{group, color: colors[i], name: names[i]}]));
     return {groups, colors, names, muted, shown};
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activity, by, arrange.view, sources, prefs.muted, locale]);
-  const shownSources = sources.filter(source => !isHidden(arrange.view, cardId(source.id)));
+  }, [activity, by, arrange.view, titles, prefs.muted, locale]);
+  const shownSources = lineup.filter(id => titles[id] && !isHidden(arrange.view, cardId(id)));
   // Known from later than the period the hub answered begins (not the page's frame, whose clock may be a minute behind).
   const since = history && activity?.known && activity.known.from > history.since ? activity.known.from : null;
 
@@ -121,6 +120,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
         <>
           <Stacks
             activity={activity!}
+            origin={history!.since}
             groups={shown}
             from={from}
             to={to}
@@ -150,6 +150,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
  */
 function Stacks({
   activity,
+  origin,
   groups,
   from,
   to,
@@ -158,6 +159,8 @@ function Stacks({
   onStep,
 }: {
   activity: ActivityData;
+  /** Where the answer begins: the bars are drawn from there, so their numbers stay small however old the hub. */
+  origin: number;
   /** The groups switched on in the legend, bottom to top, each with its colour and name. */
   groups: {group: ActivityGroup; color: string; name: string}[];
   from: number;
@@ -194,7 +197,6 @@ function Stacks({
   // the start of the answer (`origin`) and moved into place whole, clipped to the plot: as
   // the clock moves the frame on by a cell, only where they stand changes.
   const perMs = (width - left - right) / span;
-  const origin = activity.since;
   const paths = useMemo(() => {
     const base = new Map<number, number>();
     const edge = (value: number) => value.toFixed(1);
