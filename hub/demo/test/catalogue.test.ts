@@ -328,7 +328,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
     const hours = (cell: (typeof cells)['work']) => ('value' in cell ? tenth(cell.value / 3_600_000) : 'untilReset' in cell ? 'untilReset' : 'usedUp' in cell ? 'usedUp' : undefined);
     // A column off on the board shows nothing to check.
     const on = <T,>(column: 'work' | 'perwork' | 'workleft' | 'during', value: T) => (columnShown(overview.view, FORECAST, column) ? value : 'hidden');
-    const since = workNotes(line.work, history.since).since;
+    const {since, share} = workNotes(line.work, history.since);
     // A dash as its tooltip tells it: a reason about the whole period, since when work is known.
     const why = (cell: (typeof cells)['work']) => ('none' in cell ? (cell.none === 'unknown' ? 'unknown' : dashOf(cell.none, since).text) : undefined);
     Object.assign(values, {
@@ -343,6 +343,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
       leftWhy: on('workleft', why(cells.workleft)),
       duringWhy: on('during', why(cells.during)),
       since: since === null ? null : since - stand.start,
+      lowShare: share === null ? null : Math.round(share),
     });
   }
   if ('reachesBack' in card) {

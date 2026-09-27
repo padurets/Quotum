@@ -235,8 +235,9 @@ export type CardCheck = Span & {board?: string} & (
      * left (to a tenth), 'untilReset' or 'usedUp', the share of spending during work (whole
      * percent), why a cell is a dash as its tooltip tells it (`none` for the work time,
      * `paceWhy`, `leftWhy`, `duringWhy`; `noneSince` and `nospendSince` where work is known
-     * from later than the period begins), and since when work is known where that is after
-     * the period begins (`since`, from `start`).
+     * from later than the period begins), since when work is known where that is after
+     * the period begins (`since`, from `start`), and the share of spending during work the
+     * pace's tooltip tells as little (`lowShare`, whole percent; null for none).
      */
     | {
         work: string;
@@ -250,6 +251,7 @@ export type CardCheck = Span & {board?: string} & (
         leftWhy?: string;
         duringWhy?: string;
         since?: number | null;
+        lowShare?: number | null;
       }
   );
 

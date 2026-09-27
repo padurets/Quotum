@@ -914,6 +914,8 @@ const all: DemoSet = {
         {board: 'team', title: 'Claude · Ana, Ben'},
         {board: 'team', agents: 3, drawn: true},
         {board: 'ben', title: 'Claude'},
+        // Its week spends along the plan whether its agents work or not: little of it while they do, which the pace's tooltip says.
+        {work: 'weekly', board: 'team', range: '7d', lowShare: 1, from: 0, to: 0},
       ],
     },
     {
