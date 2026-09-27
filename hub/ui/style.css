@@ -394,6 +394,8 @@ td.muted, small.muted { color: var(--text-3); }
 .agents-compact-details > span { min-width: 0; overflow-wrap: anywhere; }
 /* The table of limits as a list: a window's name and what is left, then its other values, each with its heading, wrapping whole. */
 .forecast-compact-main { display: flex; align-items: baseline; gap: 10px; min-width: 0; font-size: 13px; }
+/* The gap sets the name after its colour, which the details below line up with. */
+.forecast-compact-main > .swatch { margin-right: 0; }
 .forecast-compact-name { flex: 1; min-width: 0; color: var(--text); overflow-wrap: anywhere; }
 .forecast-compact-main > :last-child:not(.forecast-compact-name) { flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .forecast-compact-details { display: flex; flex-wrap: wrap; gap: 3px 16px; margin: 4px 0 0 13px; color: var(--text-3); font-size: 11.5px; }
