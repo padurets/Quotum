@@ -337,14 +337,24 @@ export function Chart({
   const narrow = width < 560;
   const {tip, style: tipStyle} = useTip(svg, {width, at: hoverX, narrow, rises: !edgeMarker, bottom: height * scale});
   // A marker's time stands over its label, or under it where the bars that stick at the top
-  // would cover it: found from where the label is, never from where the time was drawn.
+  // would cover it: found from where the label is, never from where the time was drawn, after
+  // every render and as the page scrolls under a pointer that stays.
   const edgeRow = edgeMarker ? stackRows.get(edgeMarker.key)! : 0;
   const [edgeBelow, setEdgeBelow] = useState(false);
-  useLayoutEffect(() => {
+  const placeEdge = useRef(() => {});
+  placeEdge.current = () => {
     if (!edgeMarker || !tip.current || !svg.current) return;
     const below = svg.current.getBoundingClientRect().top + (edgeRow - 18) * scale - tip.current.offsetHeight < coverOf() + 8;
     setEdgeBelow(same => (same === below ? same : below));
-  });
+  };
+  useLayoutEffect(() => placeEdge.current());
+  const edgeShown = !!edgeMarker;
+  useEffect(() => {
+    if (!edgeShown) return;
+    const scrolled = () => placeEdge.current();
+    addEventListener('scroll', scrolled, {passive: true});
+    return () => removeEventListener('scroll', scrolled);
+  }, [edgeShown]);
   const bandWidth = Math.max(1, x(Math.min(to, (hover ?? 0) + cellMs)) - x(hover ?? 0));
 
   return (
@@ -485,7 +495,7 @@ export function Chart({
       </svg>
 
       {edgeMarker ? (
-        <Tooltip tip={tip} className="is-edge" style={edgeBelow ? {right: 0, top: `${(edgeRow + 6) * scale}px`} : {right: 0, bottom: `calc(100% - ${(edgeRow - 18) * scale}px)`}}>
+        <Tooltip tip={tip} className="is-edge" style={edgeBelow ? {right: 0, top: `${(edgeRow + 11) * scale}px`} : {right: 0, bottom: `calc(100% - ${(edgeRow - 18) * scale}px)`}}>
           <div className={`tooltip-marker ${edgeMarker.color ? '' : 'is-strong'}`} style={edgeMarker.color ? {color: edgeMarker.color} : undefined}>
             {edgeMarker.label}
           </div>
