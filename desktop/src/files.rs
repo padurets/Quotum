@@ -246,7 +246,7 @@ mod tests {
             "tauri_runtime_wry",
             &format!("failed to navigate to url http://127.0.0.1:23456/local?key={key}: gone"),
         );
-        record(log::Level::Warn, "tauri::manager", "key=");
+        record(log::Level::Warn, "tauri::manager", &format!("?key={key}&x=1 and ?key={key}"));
         record(log::Level::Info, "tauri_runtime_wry", "not a warning");
         record(log::Level::Error, "tao::platform_impl", "not Tauri's");
         let text = fs::read_to_string(dir.join("hub.log")).unwrap();
@@ -255,7 +255,7 @@ mod tests {
             lines,
             [
                 "app: tauri: tauri_runtime_wry: failed to navigate to url http://127.0.0.1:23456/local?key=…: gone",
-                "app: tauri: tauri::manager: key=…",
+                "app: tauri: tauri::manager: ?key=…&x=1 and ?key=…",
             ]
         );
         fs::remove_dir_all(dir).unwrap();
