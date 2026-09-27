@@ -53,6 +53,13 @@ class ManualClock implements Clock {
 
 type Event = {type: string; data: any};
 
+/** Every stream a test opened, let go before its hub is closed: a hub that will not stop fails its own test, not the file's run. */
+const streams = new Set<() => void>();
+const letGo = () => {
+  for (const close of streams) close();
+  streams.clear();
+};
+
 /** A stream of events read as the page reads it: what came, in order, and what comes next. */
 async function open(base: string, cookie: string | undefined, board?: string, headers: Record<string, string> = STREAM) {
   const controller = new AbortController();
@@ -87,6 +94,7 @@ async function open(base: string, cookie: string | undefined, board?: string, he
     ended = true;
     for (const wake of waiting) wake();
   })();
+  streams.add(() => void reader.cancel().catch(() => undefined));
   let read = 0;
   /** The next event but pings, within `ms`. */
   const next = async (ms = 2000): Promise<Event> => {
@@ -215,7 +223,7 @@ async function reading(h: Awaited<ReturnType<typeof hub>>, as: string, board?: s
 
 test('a stream starts with hello and the board as the reader sees it, the same as the projection puts it together and /api/overview answers', async t => {
   const h = await hub();
-  t.after(() => h.app.close());
+  t.after(() => (letGo(), h.app.close()));
   const board = await h.person('alice');
   const secret = await h.token('alice');
   await h.measure(secret, Date.now() - MIN);
@@ -237,7 +245,7 @@ test('a stream starts with hello and the board as the reader sees it, the same a
 
 test('a change goes out once, only as the part it changed, in one event however many touches it took', async t => {
   const h = await hub();
-  t.after(() => h.app.close());
+  t.after(() => (letGo(), h.app.close()));
   await h.person('alice');
   const secret = await h.token('alice');
   await h.measure(secret, Date.now() - 3 * MIN);
@@ -266,7 +274,7 @@ test('a change goes out once, only as the part it changed, in one event however 
 
 test("the board's own events and each reader's own go apart: its owner and a member hear different boards and sources of their own", async t => {
   const h = await hub();
-  t.after(() => h.app.close());
+  t.after(() => (letGo(), h.app.close()));
   await h.person('alice');
   const team = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
   await h.person('bob', await h.invite('alice', team));
@@ -295,7 +303,7 @@ test("the board's own events and each reader's own go apart: its owner and a mem
 
 test('a source taken off and back comes back whole, before the lineup; a reader who comes meanwhile never sees it', async t => {
   const h = await hub();
-  t.after(() => h.app.close());
+  t.after(() => (letGo(), h.app.close()));
   const personal = await h.person('alice');
   const team = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
   await h.measure(await h.token('alice'), Date.now() - MIN);
@@ -316,7 +324,7 @@ test('a source taken off and back comes back whole, before the lineup; a reader 
 
 test('a reader coming while changes wait to go out has them in the snapshot and hears of them no more', async t => {
   const h = await hub({smoothMs: 300});
-  t.after(() => h.app.close());
+  t.after(() => (letGo(), h.app.close()));
   await h.person('alice');
   const secret = await h.token('alice');
   await h.measure(secret, Date.now() - 2 * MIN);
@@ -335,7 +343,7 @@ async function timed(t: TestContext, options: Partial<EventsOptions> = {}) {
   const clock = new ManualClock(Date.now());
   const h = await hub(options, clock);
   // Closed after the test, even when signing up fails: a hub left open would hold the file's run.
-  t.after(() => h.app.close());
+  t.after(() => (letGo(), h.app.close()));
   const board = await h.person('alice');
   const secret = await h.token('alice');
   const credential = h.ingest.authenticate(`Bearer ${secret}`) as Credential;
@@ -427,7 +435,7 @@ test('every watched board is worked out in full now and then: a change no touch 
 
 test('a deadline months off waits for its day: while a reset for everyone stays in the list, an open board costs nothing', async t => {
   const h = await hub();
-  t.after(() => h.app.close());
+  t.after(() => (letGo(), h.app.close()));
   await h.person('alice');
   h.store.announce('codex', {at: Date.now() - 86_400_000, url: 'https://example.com', text: 'reset'});
   let asked = 0;
@@ -447,7 +455,7 @@ test('a deadline months off waits for its day: while a reset for everyone stays 
 
 test('a board the hub cannot work out fails alone: its readers start over, a new one is refused with an error and leaves nothing behind, and the hub goes on', async t => {
   const h = await hub();
-  t.after(() => h.app.close());
+  t.after(() => (letGo(), h.app.close()));
   const personal = await h.person('alice');
   const team = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
   await h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {order: ['history']}});
@@ -474,7 +482,7 @@ test('a board the hub cannot work out fails alone: its readers start over, a new
 
 test('a stream its reader stopped reading is let go once it falls too far behind, through the route', async t => {
   const h = await hub({smoothMs: 5, bufferBytes: 64 * 1024});
-  t.after(() => h.app.close());
+  t.after(() => (letGo(), h.app.close()));
   const board = await h.person('alice');
   const {port} = new URL(h.base);
   const socket = net.connect(Number(port), '127.0.0.1');
@@ -496,7 +504,7 @@ test('a stream its reader stopped reading is let go once it falls too far behind
 
 test('what is a reader’s own or the hub’s that cannot be worked out: a new reader is refused, one reading is sent it whole later, and the rest goes out', async t => {
   const h = await hub();
-  t.after(() => h.app.close());
+  t.after(() => (letGo(), h.app.close()));
   const personal = await h.person('alice');
   const team = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
   const {projection} = h.events as unknown as {projection: Projection};
@@ -571,7 +579,7 @@ test('what is a reader’s own or the hub’s that cannot be worked out: a new r
 
 test('her boards cannot be worked out as her own sources and the board change: the board’s change reaches everyone, and what is hers comes whole next time', async t => {
   const h = await hub();
-  t.after(() => h.app.close());
+  t.after(() => (letGo(), h.app.close()));
   await h.person('alice');
   const team = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
   await h.person('bob', await h.invite('alice', team));
@@ -627,7 +635,7 @@ test('a ping finds out what nobody told: a session gone or a place on the board 
 
 test('signing out, a new password, being removed and a board deleted end the streams they concern with bye, and nothing else', async t => {
   const h = await hub();
-  t.after(() => h.app.close());
+  t.after(() => (letGo(), h.app.close()));
   await h.person('alice');
   const team = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
   await h.person('bob', await h.invite('alice', team));
@@ -671,7 +679,7 @@ test('signing out, a new password, being removed and a board deleted end the str
 
 test('only the hub’s own page opens events: without its header, from another origin or site, or with HEAD, nothing starts', async t => {
   const h = await hub();
-  t.after(() => h.app.close());
+  t.after(() => (letGo(), h.app.close()));
   await h.person('alice');
   const cookie = h.cookies.get('alice');
   const refused = [
@@ -704,7 +712,7 @@ test('only the hub’s own page opens events: without its header, from another o
 
 test('too many streams: a new one takes the place of the oldest of its session, then of its person; past the hub’s limit, another person is refused', async t => {
   const h = await hub({perSession: 2, perUser: 3, maxStreams: 3});
-  t.after(() => h.app.close());
+  t.after(() => (letGo(), h.app.close()));
   await h.person('alice');
   const team = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
   await h.person('bob', await h.invite('alice', team));
@@ -761,7 +769,7 @@ test('a reader too far behind is let go', () => {
 
 test('long polls carry the same events: a lease starts with hello and snapshot, waits for news, and one unknown starts over', async t => {
   const h = await hub({pollMs: 400, leaseMs: 1000});
-  t.after(() => h.app.close());
+  t.after(() => (letGo(), h.app.close()));
   await h.person('alice');
   const secret = await h.token('alice');
   await h.measure(secret, Date.now() - 2 * MIN);
@@ -798,7 +806,7 @@ test('long polls carry the same events: a lease starts with hello and snapshot, 
 
 test('a lease is of its board, and holds no more than a reader may fall behind: past that it starts over', async t => {
   const h = await hub({pollMs: 300, bufferBytes: 64});
-  t.after(() => h.app.close());
+  t.after(() => (letGo(), h.app.close()));
   const personal = await h.person('alice');
   const team = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
   const poll = async (board: string, lease?: string) =>
@@ -822,7 +830,7 @@ test('a lease is of its board, and holds no more than a reader may fall behind: 
 
 test('a lease let go for a newer reader says so once, then is forgotten', async t => {
   const h = await hub({perSession: 1, pollMs: 300});
-  t.after(() => h.app.close());
+  t.after(() => (letGo(), h.app.close()));
   await h.person('alice');
   const poll = async (lease?: string) => (await h.call('GET', `/api/events?mode=poll${lease ? `&lease=${lease}` : ''}`, {as: 'alice', headers: STREAM})).body;
   const held = await poll();
@@ -867,7 +875,7 @@ test('a stream outlives the time a request is given to arrive', async t => {
   Object.assign(http, {requestTimeoutMs: 300, checkMs: 100});
   t.after(() => Object.assign(http, saved));
   const h = await hub({heartbeatMs: 200});
-  t.after(() => h.app.close());
+  t.after(() => (letGo(), h.app.close()));
   await h.person('alice');
   const s = await reading(h, 'alice');
   t.after(s.close);
@@ -878,7 +886,7 @@ test('a stream outlives the time a request is given to arrive', async t => {
 
 test('every change a reader sees is told: what each request touches reaches the streams of the boards it is on, and no other', async t => {
   const h = await hub();
-  t.after(() => h.app.close());
+  t.after(() => (letGo(), h.app.close()));
   const personal = await h.person('alice');
   const team = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
   await h.person('bob', await h.invite('alice', team));
@@ -943,7 +951,7 @@ test('every change a reader sees is told: what each request touches reaches the 
 
 test('what each change of data touches reaches the boards it shows on: people joining and leaving, subscriptions held and let go, agents gone with their machine, the trackers', async t => {
   const h = await hub();
-  t.after(() => h.app.close());
+  t.after(() => (letGo(), h.app.close()));
   const personal = await h.person('alice');
   const team = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
   const bobs = await h.person('bob', await h.invite('alice', team));
