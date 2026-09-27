@@ -61,7 +61,8 @@ export type LiveSession = {
 
 /**
  * How a board is arranged, the same for everyone on it; its owner changes it. Widgets
- * are `source:<id>` cards, the `history` chart and the `forecast` table.
+ * are `source:<id>` cards, the `agents` list, and the analytics: `activity`, the `history`
+ * chart and the `forecast` table.
  */
 export type View = {
   /** Widget ids in order; widgets missing here come after, in the board's order. */

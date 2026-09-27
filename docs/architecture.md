@@ -419,7 +419,7 @@ and re-reads history only when the overview's `revision` says the board's data c
 or its `workKey` that whose work the board shows or how it is named did;
 an answer the same as the one before renders nothing. What changes with time alone (how
 long ago, how soon, the freshness dot, whether the hub answers) reads a clock shared by
-the page, which ticks every 15 seconds, and every minute for the chart and the table:
+the page, which ticks every 15 seconds, and every minute for the analytics:
 only that is rendered again, the board itself reads no clock. Nothing on the page is
 fixed and the widgets are not frosted, so a scroll paints only what comes into view,
 even in a WebKitGTK window that draws without the GPU.
