@@ -232,20 +232,23 @@ export type CardCheck = Span & {board?: string} & (
     /**
      * A window's cells about agent work in the table over `range`, as its board shows them
      * ('hidden' for a column off there): work time, spent per hour of it, hours of work
-     * left (to a tenth) or 'untilReset', the share of spending during work (whole percent),
-     * why a cell is a dash (`none` for the work time, `paceWhy`, `leftWhy`), and since when
-     * work is known where that is after the period begins (`since`, from `start`).
+     * left (to a tenth), 'untilReset' or 'usedUp', the share of spending during work (whole
+     * percent), why a cell is a dash as its tooltip tells it (`none` for the work time,
+     * `paceWhy`, `leftWhy`, `duringWhy`; `noneSince` and `nospendSince` where work is known
+     * from later than the period begins), and since when work is known where that is after
+     * the period begins (`since`, from `start`).
      */
     | {
         work: string;
         range: Period;
         hours?: number;
         perHour?: number;
-        left?: number | 'untilReset';
+        left?: number | 'untilReset' | 'usedUp';
         during?: number | 'hidden';
         none?: string;
         paceWhy?: string;
         leftWhy?: string;
+        duringWhy?: string;
         since?: number | null;
       }
   );
@@ -615,6 +618,9 @@ export function problems(set: DemoSet): string[] {
     if (card.paced && card.machines.length !== 1) found.push(`card ${card.id} is measured at the hub's pace by one machine only`);
     const holders = new Set(holdersOf(set, card));
     const shownOn = (board: string) => (known.has(board) ? holders.has(board) : !!card.on?.[board]);
+    for (const board of boards(set).filter(b => card.on?.[b.id])) {
+      if (![board.owner, ...board.members].some(person => holders.has(person))) found.push(`card ${card.id} is on board ${board.id}, where nobody who measures it is to share it`);
+    }
     if (card.failure) {
       if (card.until === undefined || card.until >= card.failure.from) found.push(`card ${card.id} fails while it is still measured: the next measurement clears the failure`);
       if (delivering(card.machines[0], card.provider).length > 1) found.push(`card ${card.id}: its first machine measures another ${card.provider} subscription, which its failure may go to`);

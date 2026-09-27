@@ -97,7 +97,10 @@ export async function setUp(base: string, set: DemoSet, start: number, setupCode
 
   for (const card of cards(set)) {
     for (const board of Object.keys(card.on ?? {}).filter(key => !stand.people.has(key))) {
-      await stand.people.get(homeOf(set, card))!.share(stand.boards.get(board)!, stand.sources.get(card.id)!);
+      // Shared by one of those who measure it that is on the board, its first machine's person first.
+      const on = boards(set).find(b => b.id === board)!;
+      const sharer = [homeOf(set, card), ...holdersOf(set, card)].find(person => person === on.owner || on.members.includes(person))!;
+      await stand.people.get(sharer)!.share(stand.boards.get(board)!, stand.sources.get(card.id)!);
     }
   }
   for (const [key, board] of stand.boards) await ownerOf(stand, key).saveView(board, viewOf(stand, key));

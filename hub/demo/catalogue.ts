@@ -746,6 +746,7 @@ const all: DemoSet = {
         {title: 'Used up'},
         {window: 'weekly', level: 'crit', note: null},
         {forecast: 'weekly', outlook: 'usedUp', spent: 'points'},
+        {work: 'weekly', range: '24h', left: 'usedUp', from: 0, to: 0},
       ],
     },
     {
@@ -924,14 +925,17 @@ const all: DemoSet = {
       history: 2 * DAY,
       windows: [fiveHours(HOUR, 5), weekly({since: -4 * DAY, use: alongPlan(1)})],
       agents: DAN_ON_BEN,
-      on: {team: {}},
+      on: {team: {}, 'with-dan': {}},
       expect: [
         {forecast: 'weekly', plan: 'even'},
         {board: 'team', title: 'Codex · Ben'},
         // Dan's hours on it show on his board, where its measurements while he worked were too few for a pace;
-        // Team does not show him, and says so of the agents it shows.
+        // Team does not show him, and says so of the agents it shows: over a month, since work is known.
         {work: 'weekly', board: 'dan', range: '7d', hours: 5, paceWhy: 'short', leftWhy: 'short', from: 0, to: 0},
         {work: 'weekly', board: 'team', range: '7d', none: 'none', from: 0, to: 0},
+        {work: 'weekly', board: 'team', range: '30d', none: 'noneSince', since: -10 * DAY, from: 0, to: 0},
+        // Nor a share of the spending during work, on With Dan, where it is on.
+        {work: 'weekly', board: 'with-dan', range: '7d', duringWhy: 'short', from: 0, to: 0},
         {title: 'Codex'},
       ],
     },
@@ -1010,7 +1014,13 @@ const all: DemoSet = {
       paced: true,
       windows: [weekly({since: -3 * DAY, use: () => 60})],
       agents: [{machine: 'pacer', origin: 'terminal', project: 'paced', since: -HOUR, works: ALWAYS}],
-      expect: [{error: null}, {from: 15 * SECOND, to: 75 * SECOND, cadence: 'nextIn', why: 'inUse'}, {work: 'weekly', range: '24h', perHour: 0, leftWhy: 'nospend', from: 0, to: 0}],
+      expect: [
+        {error: null},
+        {from: 15 * SECOND, to: 75 * SECOND, cadence: 'nextIn', why: 'inUse'},
+        {work: 'weekly', range: '24h', perHour: 0, leftWhy: 'nospend', from: 0, to: 0},
+        // Over a month, what it spent before work was known is in the period's: nothing since then.
+        {work: 'weekly', range: '30d', leftWhy: 'nospendSince', since: -10 * DAY, from: 0, to: 0},
+      ],
     },
     {
       kind: 'card',
