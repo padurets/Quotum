@@ -27,13 +27,14 @@ makes setup.exe; then `node desktop/package-windows.mjs` packages that build as 
 CI runs both the installed app and the extracted ZIP, including a path with spaces.
 `desktop/smoke/windows-ui.ps1 <app.exe>` also checks ordinary startup with the real
 window-state plugin: a visible, responsive window, restored bounds inside the monitor's
-work area, and close/reopen through a second launch. It disables every provider. Each
+work area, close/reopen through a second launch, and a second launch while the window is
+open, which shows that window. It disables every provider. Each
 run starts from a fresh WebView2 profile, as the first start on a machine does: the one
 in `%LOCALAPPDATA%\com.padurets.quotum\EBWebView` is set aside and put back afterwards.
 With `-Diagnostics <dir>` it keeps its report (the times of every close and reopen), the
 app's logs and the app's processes there. CI uploads them when the UI smoke fails and in
 every manual run; a manual run of the Desktop workflow takes `ui-runs`, how many times
-the UI smoke runs on each build.
+the UI smoke runs on the installed app and on the portable one each.
 
 Run `node --test desktop/electron/policy.test.cjs` for the Linux bridge/navigation
 policy. CI runs the installed packages with `--smoke`: the hub starts, a stand-in client

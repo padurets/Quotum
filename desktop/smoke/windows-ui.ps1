@@ -4,6 +4,9 @@
 # -Diagnostics <dir> keeps there, passed or not, the report, the app's logs and its processes.
 param([Parameter(Mandatory=$true)][string]$App, [string]$Report, [string]$Diagnostics)
 $ErrorActionPreference = 'Stop'
+# Relative to PowerShell's location: .NET would take them relative to the process's.
+if ($Report) { $Report = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Report) }
+if ($Diagnostics) { $Diagnostics = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Diagnostics) }
 $appPath = (Resolve-Path -LiteralPath $App).Path
 $work = Join-Path $env:TEMP ('quotum-ui-' + [guid]::NewGuid().ToString('N'))
 $stateFile = Join-Path $env:APPDATA 'com.padurets.quotum/.window-state.json'
@@ -20,7 +23,9 @@ $process = $null
 $second = $null
 $failed = $false
 # Each cycle closes the window and asks a second launch for it again. Times are in
-# milliseconds from the WM_CLOSE of the cycle.
+# milliseconds from the WM_CLOSE of the cycle, except firstWindowMs (from the app's start),
+# searchMs (how long finding the browser process took, before the close) and openHandoffMs
+# (from the second launch while the window is open).
 $result = [ordered]@{passed=$false; firstWindowMs=$null; windows=@(); cycles=@(); errors=@()}
 # The browser process of WebView2 of each cycle's window, and when that window was closed.
 $browsers = @{}
@@ -92,7 +97,7 @@ function Select-Browser($Candidates, [int]$Parent, [datetime]$Since, [int[]]$Ski
 # runs, how long it has so far. Read after the close, not between the window and its close.
 function Update-Browser([int]$Cycle) {
   $browser = $browsers[$Cycle]
-  if (-not $browser) { return }
+  if (-not $browser -or -not $closedAt.ContainsKey($Cycle)) { return }
   $entry = $result.cycles[$Cycle]
   if ($browser.HasExited) {
     $entry.browserExitMs = [int]($browser.ExitTime - $closedAt[$Cycle]).TotalMilliseconds
@@ -100,6 +105,14 @@ function Update-Browser([int]$Cycle) {
   } else {
     $entry.aliveAtMs = [int]((Get-Date) - $closedAt[$Cycle]).TotalMilliseconds
   }
+}
+
+# Whether the app's log has a line with $Text. The app appends to it meanwhile.
+function Test-Logged([string]$Text) {
+  $path = "$work/app/logs/hub.log"
+  if (-not (Test-Path -LiteralPath $path)) { return $false }
+  $reader = [IO.StreamReader]::new([IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite))
+  try { return $reader.ReadToEnd().Contains($Text) } finally { $reader.Dispose() }
 }
 
 # Runs one step of the cleanup: its failure goes into the report and fails the run, and
@@ -118,7 +131,7 @@ function Stop-Owned($Owned, [string]$Description) {
 try {
   if (Get-Process quotum-desktop -ErrorAction SilentlyContinue) { throw 'Another Quotum instance is already running' }
   $left = @(Get-ChildItem -LiteralPath $webviewRoot -Filter 'EBWebView.quotum-ui-*' -Directory -ErrorAction SilentlyContinue)
-  if ($left.Count) { throw "A profile of WebView2 set aside by an interrupted run is left: $($left.FullName -join ', '). Put it back as $webview by hand." }
+  if ($left.Count) { throw "A profile of WebView2 set aside by an interrupted run is left: $($left.FullName -join ', '). Put it back as $webview by hand, after removing a fresh one there." }
   New-Item -ItemType Directory -Force "$work/app", "$work/state", (Split-Path $stateFile) | Out-Null
   $env:QUOTUM_APP_DATA_DIR = "$work/app"
   $env:QUOTUM_STATE_DIR = "$work/state"
@@ -186,6 +199,17 @@ try {
     if ($browsers[$cycle]) { $entry.browserAliveAtWindow = -not $browsers[$cycle].HasExited }
   }
   Update-Browser ($cycle - 1)
+  # A second launch while the window is open shows that very window: the app finds it
+  # alive, as a closing one is not.
+  $asked = $clock.ElapsedMilliseconds
+  $second = Start-Process -FilePath $appPath -PassThru
+  $null = $second.Handle
+  if (-not $second.WaitForExit(10000) -or $second.ExitCode -ne 0) { throw 'The second instance did not hand off to the first while its window was open' }
+  $deadline = (Get-Date).AddSeconds(10)
+  while (-not (Test-Logged 'app: found the window main') -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 100 }
+  if (-not (Test-Logged 'app: found the window main')) { throw 'A second launch while the window was open did not find it alive' }
+  if ((Wait-Window) -ne $window) { throw 'A second launch while the window was open did not show that window' }
+  $result.openHandoffMs = $clock.ElapsedMilliseconds - $asked
   $result.passed = $true
 } catch {
   $result.error = $_.Exception.Message
@@ -250,6 +274,7 @@ try {
   # The fresh profile goes and the one set aside comes back. If the fresh one cannot go, the
   # one set aside stays where it is: both are named.
   if ($profileState -ne 'unknown') {
+    $before = $result.errors.Count
     Invoke-Step 'putting the profile of WebView2 back' {
       $deadline = (Get-Date).AddSeconds(10)
       while (Test-Path -LiteralPath $webview) {
@@ -260,8 +285,13 @@ try {
           throw "the fresh profile $webview could not be removed ($($_.Exception.Message))$kept"
         }
       }
-      if ($profileState -eq 'moved') { [IO.Directory]::Move($aside, $webview) }
+      if ($profileState -eq 'moved') {
+        try { [IO.Directory]::Move($aside, $webview) }
+        catch { throw "the previous profile $aside could not be put back as $webview ($($_.Exception.Message))" }
+      }
     }
+    # Seen even when the run failed for another reason, which the error is about.
+    if ($result.errors.Count -gt $before) { Write-Warning "The profile of WebView2 is not back in place: $($result.errors[-1])" }
   }
   Invoke-Step 'restoring the window state' {
     if ($null -ne $savedState) { [IO.File]::WriteAllBytes($stateFile, $savedState) }

@@ -165,7 +165,9 @@ jobs:
           # the app running, would fail all the next ones on their start: that stops them.
           function Ui([string]$Kind, [string]$App) {
             $passed = 0
+            $done = 0
             for ($run = 1; $run -le $runs -and -not $script:stop; $run++) {
+              $done++
               try { ./desktop/smoke/windows-ui.ps1 $App -Diagnostics "$diagnostics\$Kind-$run"; $passed++ }
               catch { $script:failed += "$Kind-$run"; Write-Host "::error::UI smoke $Kind-$run failed: $($_.Exception.Message)" }
               if (Get-ChildItem -LiteralPath $profiles -Filter 'EBWebView.quotum-ui-*' -Directory -ErrorAction SilentlyContinue) {
@@ -174,7 +176,8 @@ jobs:
                 $script:stop = "$Kind-$run left the app running"
               }
             }
-            $script:summary += "${Kind}: $passed/$runs"
+            $skipped = if ($done -lt $runs) { ", $($runs - $done) not run" } else { '' }
+            $script:summary += "${Kind}: $passed/$done$skipped"
           }
           ./desktop/smoke/windows.ps1 check
           # A profile of WebView2 there before the UI smoke, which must set it aside and put it back.
@@ -200,14 +203,14 @@ jobs:
           if ($failed.Count) { throw "UI smoke failed in $($failed.Count) runs: $($failed -join ', ')" }
           if (-not (Test-Path -LiteralPath "$profiles\EBWebView\quotum-ci-sentinel")) { throw 'The UI smoke did not put the profile of WebView2 back' }
       # What the UI smoke saw (its report, the app's logs, its processes): when it failed,
-      # and always in a run by hand.
+      # and always in a run by hand. A failure before the UI smoke leaves nothing to keep.
       - name: UI smoke diagnostics (Windows)
         if: (failure() || github.event_name == 'workflow_dispatch') && runner.os == 'Windows'
         uses: actions/upload-artifact@v7
         with:
           name: quotum-ui-diagnostics-${{ env.QUOTUM_COMMIT }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/quotum-ui-diagnostics
-          if-no-files-found: warn
+          if-no-files-found: ignore
 
       # For the live check: `quotum` of this very commit, next to the app.
       - name: Command-line agent
