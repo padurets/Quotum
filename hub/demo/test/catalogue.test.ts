@@ -325,7 +325,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
     const cells = lineWork(line, typeof card.range !== 'string', live.resetAt, now);
     if (!cells || !line.work) return `no work of ${id}`;
     const tenth = (value: number) => Math.round(value * 10) / 10;
-    const hours = (cell: (typeof cells)['work']) => ('value' in cell ? tenth(cell.value / 3_600_000) : 'untilReset' in cell ? 'untilReset' : 'usedUp' in cell ? 'usedUp' : undefined);
+    const hours = (cell: (typeof cells)['work']) => ('value' in cell ? tenth(cell.value / 3_600_000) : 'untilReset' in cell ? 'untilReset' : 'usedUp' in cell ? 'usedUp' : 'outlasts' in cell ? 'outlasts' : undefined);
     // A column off on the board shows nothing to check.
     const on = <T,>(column: 'work' | 'perwork' | 'workleft' | 'during', value: T) => (columnShown(overview.view, FORECAST, column) ? value : 'hidden');
     const {since, share} = workNotes(line.work, history.since);

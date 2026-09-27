@@ -256,6 +256,7 @@ export const ru = {
   'work.untilReset': 'хватит до сброса',
   'work.usedUp': 'исчерпан',
   'work.untilResetHint': '~{time} работы при этом расходе, дольше, чем до сброса {reset}',
+  'work.outlastsHint': '~{time} работы при этом расходе, дольше, чем длится окно ({window})',
   'work.basis': 'При расходе {value}% за час работы, как за период',
   'work.basisMeasured': 'Посчитано по {time} работы, пока шли замеры',
   'work.upperBound': 'Оценка сверху: промежуток между замерами, в котором шла работа, засчитан целиком',

@@ -269,8 +269,9 @@ of a period begins with `agentWorkSince`, and on a shared board no earlier than 
 subscription came to it: the part before is said to be unknown, not drawn as idle. The
 pace and the share during work are taken over the work within the steps between samples
 whose spending counts, so a gap counts neither, and need half an hour of it; a pace under
-a twentieth of a percent an hour, or work that would outlast a whole window, foresees
-nothing. Where none of the agents worked, there is no share either. The share counts a step that any work
+a twentieth of a percent an hour foresees nothing, and work that would outlast the reset,
+or a whole window where no reset time comes first (a range), lasts to the reset. Where
+none of the agents worked, there is no share either. The share counts a step that any work
 touches whole, so it is an upper bound. A board shows the work of its
 members who hold each subscription it shows, but those of hidden cards: on a shared
 board from the later of their joining it and the subscription coming to it, on a

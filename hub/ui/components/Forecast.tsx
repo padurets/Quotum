@@ -1,7 +1,7 @@
 import {memo, useLayoutEffect, useMemo, useRef, useState, type ReactNode} from 'react';
 import {MINUTE, useNow} from '../lib/api';
 import type {History as HistoryData, Overview, SeriesWork} from '../lib/types';
-import {countdown, num, rateText, stamp, workHours} from '../lib/format';
+import {countdown, duration, num, rateText, stamp, workHours} from '../lib/format';
 import {level} from '../lib/quota';
 import {FORECAST_WIDTHS, LIVE_COLUMNS, RANGE_COLUMNS, forecastLayout, forecastRow, spentOf, type ForecastColumn, type Outlook, type Pace, type Spent} from '../lib/forecast';
 import {dashOf, lineWork, workNotes, type DashText, type WorkCell, type WorkColumn} from '../lib/work';
@@ -101,6 +101,7 @@ function workCell(column: WorkColumn, cell: WorkCell, work: SeriesWork, periodFr
   // Nothing left, whatever is known of the work: as the forecast by time says it, with nothing to add.
   if ('usedUp' in cell) return {content: t('work.usedUp')};
   if ('untilReset' in cell) return {content: t('work.untilReset'), title: [t('work.untilResetHint', {time: workHours(cell.untilReset), reset: stamp(resetAt!)}), ...lines].join('\n')};
+  if ('outlasts' in cell) return {content: t('work.untilReset'), title: [t('work.outlastsHint', {time: workHours(cell.outlasts), window: duration(cell.windowMs)}), ...lines].join('\n')};
   const content =
     column === 'work'
       ? workHours(cell.value)
@@ -288,8 +289,10 @@ export const Forecast = memo(function Forecast({
                 return (
                   <tr key={line.key}>
                     <td>
-                      <span className="swatch" style={{background: line.color}} />
-                      {line.name}
+                      <span className="forecast-name">
+                        <span className="swatch" style={{background: line.color}} />
+                        <span>{line.name}</span>
+                      </span>
                     </td>
                     {columns.map(column => (
                       <td key={column} className={cells[column].className} title={cells[column].title}>

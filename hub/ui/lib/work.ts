@@ -32,9 +32,10 @@ export type WorkReason = 'unknown' | 'none' | 'short' | 'nospend' | 'slow';
 /**
  * A cell about agent work: a number (milliseconds of work, percent per hour of work, or
  * percent of the spending), work enough to last beyond the window's reset (`untilReset`,
- * milliseconds of work left), nothing left to work on (`usedUp`), or why there is none.
+ * milliseconds of work left), or beyond a whole window where no reset time stops it first
+ * (`outlasts`, with the window's length), nothing left to work on (`usedUp`), or why there is none.
  */
-export type WorkCell = {value: number} | {untilReset: number} | {usedUp: true} | {none: WorkReason};
+export type WorkCell = {value: number} | {untilReset: number} | {outlasts: number; windowMs: number} | {usedUp: true} | {none: WorkReason};
 
 /** What a dash's tooltip says why: a reason, or one about the whole period told since when work is known. */
 export type DashText = Exclude<WorkReason, 'unknown'> | 'noneSince' | 'nospendSince';
@@ -58,8 +59,8 @@ export function dashOf(reason: Exclude<WorkReason, 'unknown'>, since: number | n
  * the share are taken over the work within steps whose spending is known, and need half an
  * hour of it.
  * `resetInMs`, how long until the window's reset, only in a period up to now: work that
- * lasts beyond it lasts to the reset. Work that would outlast a whole window (`windowMs`, its
- * length) foresees nothing, as too slow a pace does: over a range no reset stops it first.
+ * lasts beyond it lasts to the reset. So does work that would outlast a whole window
+ * (`windowMs`, its length), where no reset time comes first: over a range, or a reset not told.
  */
 export function workCells(work: SeriesWork, remaining: number, resetInMs: number | null, windowMs: number | null = null): Record<WorkColumn, WorkCell> {
   if (work.ms === null) {
@@ -85,7 +86,7 @@ export function workCells(work: SeriesWork, remaining: number, resetInMs: number
         : resetInMs !== null && leftMs >= resetInMs
           ? {untilReset: leftMs}
           : windowMs !== null && leftMs >= windowMs
-            ? {none: 'slow'}
+            ? {outlasts: leftMs, windowMs}
             : {value: leftMs});
   return {work: {value: work.ms}, perwork: {value: pace}, workleft, during};
 }

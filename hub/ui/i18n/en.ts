@@ -261,6 +261,7 @@ export const en = {
   'work.untilReset': 'lasts to the reset',
   'work.usedUp': 'used up',
   'work.untilResetHint': '~{time} of work at this spending, longer than until the reset on {reset}',
+  'work.outlastsHint': '~{time} of work at this spending, longer than the window lasts ({window})',
   'work.basis': 'At {value}% per hour of work, as in the period',
   'work.basisMeasured': 'Taken over {time} of work, while measurements came',
   'work.upperBound': 'At most: a gap between measurements with work in it counts whole',

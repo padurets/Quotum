@@ -232,7 +232,7 @@ export type CardCheck = Span & {board?: string} & (
     /**
      * A window's cells about agent work in the table over `range`, as its board shows them
      * ('hidden' for a column off there): work time, spent per hour of it, hours of work
-     * left (to a tenth), 'untilReset' or 'usedUp', the share of spending during work (whole
+     * left (to a tenth), 'untilReset', 'outlasts' (a whole window) or 'usedUp', the share of spending during work (whole
      * percent), why a cell is a dash as its tooltip tells it (`none` for the work time,
      * `paceWhy`, `leftWhy`, `duringWhy`; `noneSince` and `nospendSince` where work is known
      * from later than the period begins), since when work is known where that is after
@@ -245,7 +245,7 @@ export type CardCheck = Span & {board?: string} & (
         range: Period;
         hours?: number;
         perHour?: number;
-        left?: number | 'untilReset' | 'usedUp';
+        left?: number | 'untilReset' | 'outlasts' | 'usedUp';
         during?: number | 'hidden';
         none?: string;
         paceWhy?: string;

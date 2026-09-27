@@ -705,6 +705,8 @@ const all: DemoSet = {
         {agents: 10, drawn: true},
         {window: 'weekly', level: 'ok', note: 'behind'},
         {forecast: 'weekly', outlook: 'leftPlan', plan: 'behind'},
+        // Its five hours over a range: several points an hour of work, yet what is left outlasts five hours.
+        {work: 'session', range: {from: -3 * HOUR, to: -HOUR}, left: 'outlasts', from: 0, to: 0},
       ],
       look: [
         'Its long name ends in an ellipsis',
@@ -985,8 +987,8 @@ const all: DemoSet = {
       agents: [{machine: 'laptop', origin: 'terminal', project: 'ledger', since: -DAY, works: ALWAYS}],
       expect: [
         {work: 'weekly', range: '24h', perHour: 0, leftWhy: 'slow', from: 0, to: 0},
-        // Over two hours of it, a tenth of a point an hour: what is left would outlast the week.
-        {work: 'weekly', range: {from: -3 * HOUR, to: -HOUR}, perHour: 0.1, leftWhy: 'slow', from: 0, to: 0},
+        // Over two hours of it, a tenth of a point an hour: what is left would outlast the week, so it lasts to the reset.
+        {work: 'weekly', range: {from: -3 * HOUR, to: -HOUR}, perHour: 0.1, left: 'outlasts', from: 0, to: 0},
       ],
       look: ['In the table, spent per work hour is "≈ 0%/h" and the forecast by work a dash: too little spent per hour of work to foresee'],
     },

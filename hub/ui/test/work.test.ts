@@ -43,9 +43,13 @@ test('each dash says why', () => {
   assert.equal(none(workCells(work({consumed: 0.63}), 38, null).workleft), 'slow', '0.03% an hour would last over a thousand hours');
   assert.equal(none(workCells(work({consumed: 21 * MIN_RATE}), 38, null).workleft), null);
   // 5% over 21 hours of work: the 78% left would last over 300 hours, more than a week's window.
-  assert.equal(none(workCells(work({consumed: 5}), 78, null, 7 * DAY).workleft), 'slow', 'longer than a whole window, as over a range');
-  assert.equal(none(workCells(work({consumed: 5}), 78, null, null).workleft), null, 'a window of no known length');
+  assert.deepEqual(workCells(work({consumed: 5}), 78, null, 7 * DAY).workleft, {outlasts: (78 / (5 / 21)) * HOUR, windowMs: 7 * DAY}, 'longer than a whole window, as over a range: it lasts to the reset');
+  assert.ok('value' in workCells(work({consumed: 5}), 78, null, null).workleft, 'a window of no known length');
   assert.ok('untilReset' in workCells(work({consumed: 5}), 78, 2 * DAY, 7 * DAY).workleft, 'up to now, the reset comes first');
+  // Five hours: 30% over two hours of work is 15% an hour, and the 80% left lasts over five hours; 90% spent would not.
+  const session = (consumed: number, remaining: number) => workCells(work({ms: 2 * HOUR, coveredMs: 2 * HOUR, consumed, duringWork: consumed}), remaining, null, 5 * HOUR).workleft;
+  assert.ok('outlasts' in session(30, 80), 'a pace far from too slow, still no forecast shorter than the window');
+  assert.ok('value' in session(90, 80), 'what runs out within the window is foreseen');
   assert.deepEqual(workCells(work(), 0, null).workleft, {usedUp: true}, 'nothing left, nothing to work on');
   assert.deepEqual(workCells(work({coveredMs: 29 * MIN}), 0, null).workleft, {usedUp: true}, 'however the work went');
   assert.deepEqual(workCells(work({ms: 0, coveredMs: 0}), 0, null).workleft, {usedUp: true});
