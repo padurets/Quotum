@@ -602,10 +602,12 @@ async function worked() {
   const bob = (await call('GET', `/api/boards/${team}/members`, {as: 'alice'})).body.find((m: any) => m.name === 'Bob').id;
   store.db.prepare('UPDATE members SET joined_at = ? WHERE board_id = ? AND user_id = ?').run(ago(2), team, bob);
   const device = (who: string) => (store.db.prepare('SELECT id FROM devices WHERE machine_id = ?').get(`${who}-laptop-0123456789`) as {id: string}).id;
-  const work = (who: string, from: number, to: number, project: string) =>
-    store.creditWork(device(who), ago(from), ago(to), [{source, origin: 'terminal', startedAt: ago(from), project, folder: '', ordinal: 0}]);
+  const work = (who: string, from: number, to: number, project: string, on = source) =>
+    store.creditWork(device(who), ago(from), ago(to), [{source: on, origin: 'terminal', startedAt: ago(from), project, folder: '', ordinal: 0}]);
   work('alice', 6, 5.5, 'early');
   work('alice', 4, 3, 'quotum');
+  // On her second subscription after the first came to the board, but before it did itself.
+  work('alice', 4, 3.5, 'secret', later);
   work('bob', 3, 1, 'billing');
   work('carol', 1.5, 0.5, 'quotum');
   return {call, store, team, alices, bobs, source, later, invite, now, hour, ago, device: device('alice')};
@@ -615,11 +617,16 @@ async function worked() {
 const hoursBy = (history: any, dimension: string) =>
   Object.fromEntries(history.activity.by[dimension].map((g: any) => [g.name ?? g.key, Math.round(g.ms / 360_000) / 10]));
 
-/** What always holds of work in a history: the windows of a subscription share its hours, and the parts of a cell add up to its work. */
+/**
+ * What always holds of work in a history: the windows of a subscription share its hours,
+ * which are its group's in the activity (no group where they are none), and the parts of
+ * a cell add up to its work. A subscription with no measurement in a range has no window
+ * there, though its agents' work is in the activity.
+ */
 function assertWork(history: any) {
   for (const line of history.series) {
-    if (!line.work?.ms) continue;
-    assert.equal(line.work.ms, history.activity.by.source.find((g: any) => g.key === line.sourceId)?.ms, `${line.sourceId} ${line.windowId}`);
+    if (!line.work || line.work.ms === null) continue;
+    assert.equal(history.activity.by.source.find((g: any) => g.key === line.sourceId)?.ms ?? 0, line.work.ms, `${line.sourceId} ${line.windowId}`);
   }
   for (const dimension of ['source', 'project', 'device']) {
     for (const [cell, work] of history.activity.cells) {
@@ -632,7 +639,7 @@ function assertWork(history: any) {
 test('a shared board shows the work of its members on its subscriptions, from their joining and its sharing on; a personal board all of one\'s own', async () => {
   const {call, team, bobs, source, later, ago, hour} = await worked();
   const history = (await call('GET', `/api/history?board=${team}&range=24h`, {as: 'bob'})).body;
-  assert.deepEqual(hoursBy(history, 'project'), {quotum: 2, billing: 1}, "neither Alice's work before the sharing nor Bob's before he joined");
+  assert.deepEqual(hoursBy(history, 'project'), {quotum: 2, billing: 1}, "neither Alice's work before the sharing nor Bob's before he joined, nor hers on a subscription before it came");
   assert.deepEqual([history.activity.workMs / hour, history.activity.agentMs / hour], [2.5, 3], "Bob's and Carol's half hour together counts once in the work");
   assert.deepEqual([history.activity.agents, history.activity.barMs], [3, hour], 'three agents, drawn in hours over a day');
   assert.deepEqual(history.activity.known, {from: ago(5), to: history.now}, 'known from the sharing on, up to now');
@@ -688,6 +695,27 @@ test('the work a board shows follows its cards, members and names at once, a cos
       history.costlyMs = costly;
     }
   }
+});
+
+test('a board’s history is read under a key of what the board shows, which names off the board leave as it is', async () => {
+  const {call, team, later, invite} = await worked();
+  const key = async () => (await call('GET', `/api/overview?board=${team}`, {as: 'alice'})).body.workKey;
+  const read = async () => (await call('GET', `/api/history?board=${team}&range=24h`, {as: 'alice'})).body;
+  assert.equal((await read()).workKey, await key(), 'an answer says under which key it was read');
+
+  // Alice's second subscription leaves the board: the project she worked on only there is off it.
+  await call('DELETE', `/api/boards/${team}/shares/${later}`, {as: 'alice'});
+  const before = await key();
+  await call('POST', '/api/projects', {as: 'alice', body: {groups: ['secret'], name: 'Hidden'}});
+  assert.equal(await key(), before, 'a project renamed off the board');
+  // A machine that measures but has no agents on the board's subscriptions.
+  const secret = (await call('POST', '/api/tokens', {as: 'bob', body: {}})).body.secret;
+  await call('POST', '/v1/ingest', {body: batch('bob-desk-0123456789'), headers: {authorization: `Bearer ${secret}`}});
+  assert.equal(await key(), before, 'a machine added with no agents on the board');
+  // A name the board shows changes the key.
+  await call('POST', '/api/projects', {as: 'alice', body: {groups: ['quotum'], name: 'Quotum hub'}});
+  assert.notEqual(await key(), before);
+  assert.ok(invite);
 });
 
 test('the work of a period is of its known part: a range reads its own, and one before the hub kept work reads none', async () => {

@@ -173,6 +173,8 @@ export type History = {
   series: HistorySeries[];
   events: SourceEvent[];
   activity: Activity;
+  /** What the board showed when this was read (`Overview.workKey`). */
+  workKey: string;
   /** The board has newer data than this answer; a newer answer is ready in this long. */
   refreshInMs: number | null;
 };

@@ -147,6 +147,14 @@ export const historySources = (overview: Pick<Overview, 'sources' | 'workKey'> |
   overview ? `${overview.sources.map(source => source.id).sort().join(',')} ${overview.workKey}` : '';
 
 /**
+ * Whether an answer was read for the board as the page knows it (`historySources`). One
+ * read under another state of it (a card hidden or shown, a project renamed, before the
+ * page heard of it) is shown, but not kept for that state: it would come back if the change
+ * were undone.
+ */
+export const readFor = (sources: string, answer: Pick<History, 'workKey'>) => sources.endsWith(` ${answer.workKey}`);
+
+/**
  * History of a board over a period ending now ('24h', …) or a time range in the past,
  * read again when that changes or, for a period, when the board's data does (`revision`);
  * a range is in the past and stays as read. While another one loads, the one on screen
@@ -177,7 +185,7 @@ export function useHistory(board: string, period: string | TimeRange, revision: 
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
     const keep = (data: History) => {
-      if (!selected || !complete(data, selected)) return;
+      if (!selected || !complete(data, selected) || !readFor(sources, data)) return;
       // Map order is insertion order: the one read last goes to the end, the board's oldest is dropped.
       kept.current.delete(store);
       kept.current.set(store, data);

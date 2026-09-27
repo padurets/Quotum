@@ -305,9 +305,9 @@ them), kept for 90 days.
   most answers longer than a day are such, and measurements on the chart may lag up to a
   quarter of a cell. An answer is reused only while the board shows the same sources and
   the same people's work under the same names (`Store.workKey`: its sources, whose work
-  it shows from when, and the names people gave their projects and machines), so a card
-  hidden, someone joining or leaving, a project or machine renamed is never served from
-  it. Work is credited from each machine's list, but an answer is read again when the
+  it shows from when, and the names people gave the projects and machines that worked on
+  them), so a card hidden, someone joining or leaving, a project or machine renamed is
+  never served from it, while a name given off the board leaves it be. Work is credited from each machine's list, but an answer is read again when the
   board's data changes: the work shown is as fresh as the latest measurement, every two
   minutes while agents work. The range is in the past, so the table reads it from its edges: what
   was left at its first and last measurement, what it spent and how fast. The chart
@@ -445,7 +445,9 @@ the answer it has until the next one comes; a run of quick steps asks the hub on
 where it stops, and the latest few ranges read whole are kept on the page for each board,
 so stepping back and forth over them asks nothing. They are kept for the board's sources
 and whose work it showed under which names, as they were: a source added to the board, a
-card hidden, someone joining or leaving, a project renamed has a range read again.
+card hidden, someone joining or leaving, a project renamed has a range read again. An
+answer says under which key it was read, and one read under another state of the board
+than the page knows of (a card hidden and shown again meanwhile) is shown but not kept.
 Measurements an agent delivers late, into a range already kept, show after a reload.
 
 Both agent lists put working sessions first, then the ones that worked most recently,

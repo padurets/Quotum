@@ -103,6 +103,15 @@ test('two agents half an hour together: work once, agent time twice, and the mom
   assertStacks(result);
 });
 
+test('stretches as the store reads them, agent by agent, stack as they do in time order', () => {
+  // The second agent's work began first and runs across the first's.
+  const stretches = [stretch(at('10:00'), at('10:30'), {session: 1, project: 'a'}), stretch(at('09:00'), at('11:00'), {session: 2, project: 'b'})];
+  const result = activity(stretches, {from: at('09:00'), to: at('12:00')}, HOUR, new Map());
+  assert.deepEqual(parts(result, 'project', '"b"'), {'09:00': 60, '10:00': 45});
+  assert.deepEqual(parts(result, 'project', '"a"'), {'10:00': 15});
+  assertStacks(result);
+});
+
 test('an agent counts once in a bar and in the period, however many stretches it worked', () => {
   const stretches = [stretch(at('10:00'), at('10:10'), {session: 7}), stretch(at('10:40'), at('11:20'), {session: 7}), stretch(at('10:20'), at('10:30'))];
   const result = activity(stretches, {from: at('10:00'), to: at('12:00')}, HOUR, new Map());

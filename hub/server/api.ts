@@ -128,8 +128,9 @@ export async function buildApp(hub: Hub) {
    * changed. A costly one (a month of a busy board takes a good part of a second) is also
    * reused for a quarter of a cell after new data came: a month is drawn in 2-hour cells,
    * where half an hour of news does not show. Such an answer says when a newer one will be
-   * ready (`refreshInMs`), so the page asks again then. The ranges ending now are kept per
-   * board; of the periods selected on charts, the latest few.
+   * ready (`refreshInMs`), so the page asks again then. Each answer says under which
+   * `workKey` it was read, so the page keeps a range only for the board as it was read. The
+   * ranges ending now are kept per board; of the periods selected on charts, the latest few.
    */
   const fixedHistory = new Map<string, Kept>();
   const selectedHistory = new Map<string, Kept>();
@@ -142,9 +143,9 @@ export async function buildApp(hub: Hub) {
     const work = store.workKey(board, shown);
     const hit = cache.get(slot);
     if (hit && hit.cell === cell && hit.work === work) {
-      if (hit.revision === revision) return {...hit.value, refreshInMs: null};
+      if (hit.revision === revision) return {...hit.value, workKey: work, refreshInMs: null};
       const left = hit.at + cellMs / 4 - now;
-      if (hit.costly && left > 0) return {...hit.value, refreshInMs: Math.ceil(left)};
+      if (hit.costly && left > 0) return {...hit.value, workKey: work, refreshInMs: Math.ceil(left)};
     }
     const value = read(shown);
     const costly = Date.now() - now >= config.history.costlyMs;
@@ -152,7 +153,7 @@ export async function buildApp(hub: Hub) {
     cache.delete(slot);
     cache.set(slot, {cell, revision, work, at: now, costly, value});
     if (cache === selectedHistory && cache.size > SELECTED_KEPT) cache.delete(cache.keys().next().value!);
-    return {...value, refreshInMs: null};
+    return {...value, workKey: work, refreshInMs: null};
   };
 
   app.addHook('onRequest', async (request, reply) => {

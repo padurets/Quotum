@@ -351,13 +351,14 @@ running agents say. About running agents (unless turned
 off): which client, where it runs, since when, whether it works and when it last did,
 and the name of its project (the repository its folder is in, else the folder) and of
 its folder when that differs (unless that is turned off too). The members of a board
-where you show a subscription see these, as they see its limits, with each project under
+where a subscription you measure is shown see these, as they see its limits, with each project under
 the name its person gave it, and with them the name of the machine each agent runs on.
 
 What the hub keeps of running agents: when each worked, with the machine, subscription,
 where it ran, since when and its project and folder names, as long as samples (90 days);
 and the names a person gave or merged their projects under, until they undo it. The
 person whose machines they are sees their projects, and corrects them, in *My machines*.
-The members of a shared board see how long your agents worked on a subscription you show
-there, by project and by machine, from when you joined the board and the subscription
-came to it; you see all of it on your own board.
+The members of a shared board see when and for how long your agents worked on a
+subscription you measure that is shown there, whoever brought it, to the minute and with
+how many of them worked, by project and by machine, from the later of when you joined the
+board and when the subscription came to it; you see all of it on your own board.
