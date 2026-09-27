@@ -4,6 +4,7 @@ import Fastify, {type FastifyReply, type FastifyRequest} from 'fastify';
 import staticFiles from '@fastify/static';
 import {config, serviceName, version} from './config.js';
 import type {Ingest} from './ingest.js';
+import {KEEP_MS} from './sessions.js';
 import type {Pairing} from './pairing.js';
 import type {ResetFeed} from './resets.js';
 import type {HistoryActivity, HistorySeries, Shown, SourceEvent, Store} from './store/store.js';
@@ -129,23 +130,28 @@ export async function buildApp(hub: Hub) {
    * reused for a quarter of a cell after new data came: a month is drawn in 2-hour cells,
    * where half an hour of news does not show. Such an answer says when a newer one will be
    * ready (`refreshInMs`), so the page asks again then. Each answer says under which
-   * `workKey` it was read, so the page keeps a range only for the board as it was read. The
-   * ranges ending now are kept per board; of the periods selected on charts, the latest few.
+   * `workKey` it was read, so the page keeps a range only for the board as it was read. Work
+   * up to a range's end is credited from the lists machines send after it, up to `KEEP_MS`
+   * later (server/sessions.ts), without a new revision: until then (`settles`) an answer says
+   * when to ask again, and one read before then is not reused after. The ranges ending now are
+   * kept per board; of the periods selected on charts, the latest few.
    */
   const fixedHistory = new Map<string, Kept>();
   const selectedHistory = new Map<string, Kept>();
   const SELECTED_KEPT = 32;
-  const reused = (cache: Map<string, Kept>, slot: string, board: string, cellMs: number, end: number, read: (shown: Shown) => Answer) => {
+  const reused = (cache: Map<string, Kept>, slot: string, board: string, cellMs: number, end: number, read: (shown: Shown) => Answer, settles = 0) => {
     const now = Date.now();
     const cell = Math.floor(end / cellMs);
     const revision = store.revision(board);
     const shown = store.shown(board, directory.view(board).hidden);
     const work = store.workKey(board, shown);
+    // A newer answer is ready this much later, if at all: the earlier of the two.
+    const refresh = (ms: number | null) => (now < settles ? Math.ceil(Math.min(ms ?? Infinity, settles - now)) : ms);
     const hit = cache.get(slot);
-    if (hit && hit.cell === cell && hit.work === work) {
-      if (hit.revision === revision) return {...hit.value, workKey: work, refreshInMs: null};
+    if (hit && hit.cell === cell && hit.work === work && (hit.at >= settles || now < settles)) {
+      if (hit.revision === revision) return {...hit.value, workKey: work, refreshInMs: refresh(null)};
       const left = hit.at + cellMs / 4 - now;
-      if (hit.costly && left > 0) return {...hit.value, workKey: work, refreshInMs: Math.ceil(left)};
+      if (hit.costly && left > 0) return {...hit.value, workKey: work, refreshInMs: refresh(Math.ceil(left))};
     }
     const value = read(shown);
     const costly = Date.now() - now >= config.history.costlyMs;
@@ -153,7 +159,7 @@ export async function buildApp(hub: Hub) {
     cache.delete(slot);
     cache.set(slot, {cell, revision, work, at: now, costly, value});
     if (cache === selectedHistory && cache.size > SELECTED_KEPT) cache.delete(cache.keys().next().value!);
-    return {...value, workKey: work, refreshInMs: null};
+    return {...value, workKey: work, refreshInMs: refresh(null)};
   };
 
   app.addHook('onRequest', async (request, reply) => {
@@ -256,7 +262,7 @@ export async function buildApp(hub: Hub) {
       const board = access.board.id;
       // A period up to now keeps its entry as now moves on; `reused` tells when it is stale.
       const slot = `${board}:${span.since}:${span.to === now ? 'now' : span.to}`;
-      const answer = reused(selectedHistory, slot, board, span.cellMs, span.to, shown => store.history(board, span.since, span.cellMs, {to: span.to, now, shown}));
+      const answer = reused(selectedHistory, slot, board, span.cellMs, span.to, shown => store.history(board, span.since, span.cellMs, {to: span.to, now, shown}), span.to + KEEP_MS);
       // Named as asked, so the page knows its answer even when the end was cut to now.
       return {range: `${from}-${to}`, now, since: span.since, to: span.to, cellMs: span.cellMs, historyStart: store.historyStart(now), ...answer};
     }

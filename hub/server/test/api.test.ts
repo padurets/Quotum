@@ -13,6 +13,7 @@ import {Pairing} from '../pairing.js';
 import {ResetFeed} from '../resets.js';
 import {Directory} from '../store/directory.js';
 import {Store} from '../store/store.js';
+import {KEEP_MS} from '../sessions.js';
 import {hashPassword, normalizeUserCode, verifyPassword} from '../domain/auth.js';
 import {Setup} from '../setup.js';
 
@@ -612,6 +613,24 @@ async function worked() {
   work('carol', 1.5, 0.5, 'quotum');
   return {call, store, team, alices, bobs, source, later, invite, now, hour, ago, device: device('alice')};
 }
+
+test('a range ending minutes ago says when to ask again, and is read anew once the work up to its end is credited', async t => {
+  const {call, store, team, source, device} = await worked();
+  const minute = 60_000;
+  const to = Date.now() - minute;
+  const read = async () => (await call('GET', `/api/history?board=${team}&from=${to - 15 * minute}&to=${to}`, {as: 'alice'})).body;
+  const first = await read();
+  assert.ok(first.refreshInMs > 3 * minute && first.refreshInMs <= KEEP_MS, 'not all of its work is credited yet');
+  // The machine's last list, credited with its next one, minutes later.
+  store.creditWork(device, to - 2 * minute, to, [{source, origin: 'terminal', startedAt: to - 2 * minute, project: 'quotum', folder: '', ordinal: 0}]);
+  assert.deepEqual((await read()).activity, first.activity, 'meanwhile the answer read is reused');
+  // Its end is where the grid ends it, a cell's end.
+  t.mock.timers.enable({apis: ['Date'], now: first.to + KEEP_MS});
+  const settled = await read();
+  assert.equal(settled.refreshInMs, null);
+  assert.equal(settled.activity.workMs - first.activity.workMs, 2 * minute, 'read anew, with the work credited since');
+  assert.equal((await call('GET', `/api/history?board=${team}&from=${to - 30 * minute}&to=${to - 15 * minute}`, {as: 'alice'})).body.refreshInMs, null, 'a range ended long enough ago');
+});
 
 /** Hours of each group of a dimension, one decimal. */
 const hoursBy = (history: any, dimension: string) =>
