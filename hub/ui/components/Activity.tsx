@@ -219,7 +219,10 @@ function Stacks({
 
   const bar = hover === null ? null : activity.cells.find(([start]) => start === hover);
   // What the hovered bar draws: over one whose groups are all switched off, nothing tells of it, as over an empty one.
-  const parts =hover === null ? [] : groups.flatMap(({group, color, name}) => group.cells.filter(([start]) => start === hover).map(([, ms]) => ({key: group.key, color, name, ms})));
+  const parts = hover === null ? [] : groups.flatMap(({group, color, name}) => group.cells.filter(([start]) => start === hover).map(([, ms]) => ({key: group.key, color, name, ms})));
+  // The bar's totals are of all its work, which its parts add up to: while some of it is in a
+  // group switched off, which cannot be taken out of them (agents worked across groups), they are not told.
+  const whole = !!bar && Math.abs(parts.reduce((sum, part) => sum + part.ms, 0) - bar[1]) < 1000;
   const hoverX = hover === null ? 0 : x(Math.max(from, Math.min(to, hover + barMs / 2)));
   const {tip, style: tipStyle} = useTip(svg, {width, at: hoverX, narrow, rises: true, bottom: height * scale});
   // The label of the part not known shows only where it fits within its hatching, measured
@@ -289,6 +292,22 @@ function Stacks({
       {hover !== null && bar && parts.length > 0 && !drag && (
         <Tooltip tip={tip} className={narrow ? 'is-below' : ''} style={tipStyle}>
           <div className="tooltip-time">{cellLabel(hover, barMs)}</div>
+          {/* The totals come first: a tooltip cut to the window loses the last of its parts, not them. */}
+          {whole && (
+            <>
+              <div className="tooltip-grid" style={{gridTemplateColumns: 'minmax(0, 1fr) auto'}}>
+                <div className="tooltip-row">
+                  <span className="tooltip-name">{t('activity.work')}</span>
+                  <strong>{workHours(bar[1])}</strong>
+                </div>
+                <div className="tooltip-row">
+                  <span className="tooltip-name">{t('activity.agents')}</span>
+                  <strong>{num(bar[3])}</strong>
+                </div>
+              </div>
+              <div className="tooltip-sep" />
+            </>
+          )}
           <div className="tooltip-grid" style={{gridTemplateColumns: '14px minmax(0, 1fr) auto'}}>
             {parts.map(part => (
               <div className="tooltip-row" key={part.key}>
@@ -297,17 +316,6 @@ function Stacks({
                 <strong>{workHours(part.ms)}</strong>
               </div>
             ))}
-          </div>
-          <div className="tooltip-sep" />
-          <div className="tooltip-grid" style={{gridTemplateColumns: 'minmax(0, 1fr) auto'}}>
-            <div className="tooltip-row">
-              <span className="tooltip-name">{t('activity.work')}</span>
-              <strong>{workHours(bar[1])}</strong>
-            </div>
-            <div className="tooltip-row">
-              <span className="tooltip-name">{t('activity.agents')}</span>
-              <strong>{num(bar[3])}</strong>
-            </div>
           </div>
         </Tooltip>
       )}
