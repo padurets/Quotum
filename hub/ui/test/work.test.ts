@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {lineWork, workCells, workNotes, WORK_PACE_FROM, type WorkCell} from '../lib/work';
+import {lineWork, MIN_RATE, perWorkText, workCells, workNotes, WORK_PACE_FROM, type WorkCell} from '../lib/work';
 import {workHours} from '../lib/format';
 import {setLocale} from '../i18n';
 import type {SeriesWork} from '../lib/types';
@@ -33,11 +33,15 @@ test('each dash says why', () => {
   assert.deepEqual(Object.values(unknown).map(none), ['unknown', 'unknown', 'unknown', 'unknown']);
   assert.deepEqual(Object.values(workCells(work({ms: 0, coveredMs: 0, duringWork: 0}), 38, null)).map(value), [{none: 'none'}, {none: 'none'}, {none: 'none'}, 0], 'spent, and none of it while agents worked');
   const short = workCells(work({coveredMs: 29 * MIN}), 38, null);
-  assert.deepEqual([none(short.perwork), none(short.workleft)], ['short', 'short']);
+  assert.deepEqual([none(short.perwork), none(short.workleft), none(short.during)], ['short', 'short', 'short']);
+  const inGaps = workCells(work({coveredMs: 0, duringWork: 0}), 38, null);
+  assert.equal(none(inGaps.during), 'short', 'work all in gaps between measurements: not a share of 0');
   assert.equal(none(workCells(work({coveredMs: WORK_PACE_FROM}), 38, null).perwork), null, 'half an hour is enough');
   const idle = workCells(work({consumed: 0, duringWork: 0}), 38, null);
   assert.deepEqual([value(idle.perwork), none(idle.workleft), none(idle.during)], [0, 'nospend', 'nospend']);
   assert.equal(none(workCells(work({consumed: 0.1}), 38, null).workleft), 'slow', 'spent, but too little an hour of work to foresee');
+  assert.equal(none(workCells(work({consumed: 0.63}), 38, null).workleft), 'slow', '0.03% an hour would last over a thousand hours');
+  assert.equal(none(workCells(work({consumed: 21 * MIN_RATE}), 38, null).workleft), null);
   assert.equal(value(workCells(work(), 0, null).workleft), 0, 'nothing left, nothing to work on');
 });
 
@@ -77,4 +81,14 @@ test('hours of work are minutes within the hour, tenths up to ten, whole hours a
   setLocale('ru');
   assert.deepEqual([45 * MIN, 2.5 * HOUR, 150 * HOUR].map(workHours), ['45 мин', '2,5 ч', '150 ч']);
   setLocale('en');
+});
+
+test('a pace too small to foresee from reads "≈ 0" wherever it is told, and one that foresees never reads 0', () => {
+  setLocale('en');
+  assert.deepEqual([0, 0.001, 0.03, MIN_RATE, 2.95].map(perWorkText), ['0', '≈ 0', '≈ 0', '0.1', '3']);
+  for (const consumed of [0.21, 0.63, 1, 5]) {
+    const cells = workCells(work({consumed}), 38, null);
+    const pace = 'value' in cells.perwork ? cells.perwork.value : 0;
+    assert.equal(perWorkText(pace) === '≈ 0', 'none' in cells.workleft && cells.workleft.none === 'slow', `${consumed}% over 21 hours`);
+  }
 });

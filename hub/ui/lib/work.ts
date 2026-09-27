@@ -1,3 +1,4 @@
+import {num} from './format';
 import type {Line} from './lines';
 import type {SeriesWork} from './types';
 
@@ -7,8 +8,13 @@ const HOUR = 3_600_000;
  * told in whole percents (Codex) jumps it twofold. As long as a window's forecast waits.
  */
 export const WORK_PACE_FROM = 30 * 60_000;
-/** A pace slower than this (percent per hour of work) spends nothing worth foreseeing. */
-const MIN_RATE = 0.01;
+/**
+ * A pace slower than this (percent per hour of work) spends nothing worth foreseeing: the
+ * hundreds of hours it would last say nothing, and the pace itself reads "≈ 0".
+ */
+export const MIN_RATE = 0.05;
+/** What an hour of work spends, in percent, the same in its cell and in the forecast's tooltip: one too small to foresee from reads "≈ 0". */
+export const perWorkText = (value: number) => (value > 0 && value < MIN_RATE ? '≈ 0' : num(value, 1));
 /** The pace is taken over less work than the hours shown when it had less than this share of them: a few minutes at the edges of the measurements do not count. */
 const BASIS_SHARE = 0.9;
 
@@ -35,8 +41,9 @@ export type WorkCell = {value: number} | {untilReset: number} | {none: WorkReaso
  * A window's cells about agent work over the period: how long agents worked on its
  * subscription (`work`), what it spent per hour of their work (`perwork`), how long they
  * can go on working at that pace on what is `remaining` (`workleft`), and how much of the
- * spending fell into steps between measurements they worked in (`during`). The pace is
- * taken over the work within steps whose spending is known, and needs half an hour of it.
+ * spending fell into steps between measurements they worked in (`during`). The pace and
+ * the share are taken over the work within steps whose spending is known, and need half an
+ * hour of it.
  * `resetInMs`, how long until the window's reset, only in a period up to now: work that
  * lasts beyond it lasts to the reset.
  */
@@ -46,8 +53,11 @@ export function workCells(work: SeriesWork, remaining: number, resetInMs: number
     return {work: unknown, perwork: unknown, workleft: unknown, during: unknown};
   }
   const during: WorkCell = work.consumed > 0 ? {value: (work.duringWork / work.consumed) * 100} : {none: 'nospend'};
+  // With no work at all, all of the spending went elsewhere; with work mostly in gaps between
+  // measurements, whose spending is not known, the share would say 0 of work that was there.
   if (!work.ms) return {work: {none: 'none'}, perwork: {none: 'none'}, workleft: {none: 'none'}, during};
-  if (work.coveredMs < WORK_PACE_FROM) return {work: {value: work.ms}, perwork: {none: 'short'}, workleft: {none: 'short'}, during};
+  const short = {none: 'short'} as const;
+  if (work.coveredMs < WORK_PACE_FROM) return {work: {value: work.ms}, perwork: short, workleft: short, during: short};
   const pace = work.consumed / (work.coveredMs / HOUR);
   const leftMs = (remaining / pace) * HOUR;
   const workleft: WorkCell =

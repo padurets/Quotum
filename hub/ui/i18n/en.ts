@@ -266,8 +266,10 @@ export const en = {
   'work.since': 'Known since {time}',
   'work.unknown': 'Work time is known only from {time}',
   'work.none': 'No agent this board shows worked on this subscription in the period',
+  'work.noneSince': 'No agent this board shows worked on this subscription since {time}; before that is not known',
   'work.short': 'Under half an hour of work while measurements came: too little to tell',
   'work.noSpend': 'Nothing spent in this period',
+  'work.noSpendSince': 'Nothing spent since {time}',
   'work.slow': 'Too little spent per hour of work to foresee',
   
   'forecast.title': 'Spending and forecast',

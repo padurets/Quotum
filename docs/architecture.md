@@ -266,9 +266,10 @@ group's own hours are the union of its agents' time, more than its part of the s
 where others worked alongside, so a subscription's hours are the table's. What is known
 of a period begins with `agentWorkSince`, and on a shared board no earlier than the
 subscription came to it: the part before is said to be unknown, not drawn as idle. The
-pace is taken over the work within the steps between samples whose spending counts, so
-a gap counts neither, and needs half an hour of it. The share during work counts a step
-that any work touches whole, so it is an upper bound. A board shows the work of its
+pace and the share during work are taken over the work within the steps between samples
+whose spending counts, so a gap counts neither, and need half an hour of it; a pace under
+a twentieth of a percent an hour foresees nothing. The share counts a step that any work
+touches whole, so it is an upper bound. A board shows the work of its
 members who hold each subscription it shows, but those of hidden cards: on a shared
 board from the later of their joining it and the subscription coming to it, on a
 personal board all of it. Work the board does not show (off the board, from before) is

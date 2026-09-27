@@ -4,7 +4,7 @@ import type {History as HistoryData, Overview, SeriesWork} from '../lib/types';
 import {countdown, num, stamp, workHours} from '../lib/format';
 import {level} from '../lib/quota';
 import {FORECAST_WIDTHS, LIVE_COLUMNS, RANGE_COLUMNS, forecastLayout, forecastRow, spentOf, type ForecastColumn, type Outlook, type Pace, type Spent} from '../lib/forecast';
-import {lineWork, workNotes, type WorkCell, type WorkColumn, type WorkReason} from '../lib/work';
+import {lineWork, perWorkText, workNotes, type WorkCell, type WorkColumn, type WorkReason} from '../lib/work';
 import {FORECAST, columnShown, planOf, withColumn, withHidden, type Arrange} from '../lib/view';
 import {linesOf, type Line} from '../lib/lines';
 import {usePrefs} from '../lib/prefs';
@@ -66,6 +66,8 @@ const heading = (column: ForecastColumn, range: boolean) => t((range && HEADINGS
 
 /** Why a cell about agent work is a dash. */
 const REASONS: Record<Exclude<WorkReason, 'unknown'>, Key> = {none: 'work.none', short: 'work.short', nospend: 'work.noSpend', slow: 'work.slow'};
+/** Where work is known from later than the period begins, a reason about the whole period says since when instead. */
+const REASONS_SINCE: Partial<Record<WorkReason, Key>> = {none: 'work.noneSince', nospend: 'work.noSpendSince'};
 
 type Cell = {content: ReactNode; title?: string; className?: string};
 
@@ -78,10 +80,14 @@ type Cell = {content: ReactNode; title?: string; className?: string};
 function workCell(column: WorkColumn, cell: WorkCell, work: SeriesWork, periodFrom: number, resetAt: number | null, perWork: number | null): Cell {
   const notes = workNotes(work, periodFrom);
   const since = notes.since !== null ? [t('work.since', {time: stamp(notes.since)})] : [];
-  if ('none' in cell) return {content: '—', title: cell.none === 'unknown' ? t('work.unknown', {time: stamp(work.from)}) : [t(REASONS[cell.none]), ...since].join('\n')};
+  if ('none' in cell) {
+    if (cell.none === 'unknown') return {content: '—', title: t('work.unknown', {time: stamp(work.from)})};
+    const sinceKey = REASONS_SINCE[cell.none];
+    return {content: '—', title: notes.since !== null && sinceKey ? t(sinceKey, {time: stamp(notes.since)}) : [t(REASONS[cell.none]), ...since].join('\n')};
+  }
   const paced = column === 'perwork' || column === 'workleft';
   const lines = [
-    ...(column === 'workleft' && perWork !== null ? [t('work.basis', {value: num(perWork, 1)})] : []),
+    ...(column === 'workleft' && perWork !== null ? [t('work.basis', {value: perWorkText(perWork)})] : []),
     ...(paced && notes.basis !== null ? [t('work.basisMeasured', {time: workHours(notes.basis)})] : []),
     ...(column === 'during' ? [t('work.upperBound')] : []),
     ...since,
@@ -91,7 +97,7 @@ function workCell(column: WorkColumn, cell: WorkCell, work: SeriesWork, periodFr
     column === 'work'
       ? workHours(cell.value)
       : column === 'perwork'
-        ? t('table.perHour', {value: cell.value > 0 && cell.value < 0.05 ? '≈ 0' : num(cell.value, 1)})
+        ? t('table.perHour', {value: perWorkText(cell.value)})
         : column === 'workleft'
           ? t('work.left', {time: workHours(cell.value)})
           : t('work.during', {value: num(cell.value)});
