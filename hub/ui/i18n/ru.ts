@@ -344,7 +344,6 @@ export const ru = {
   'auth.signUp': 'Регистрация',
   'auth.signIn': 'Вход',
   'auth.mode': 'Вход или регистрация',
-  'auth.invited': 'Вас пригласили на доску «{board}».',
   'auth.email': 'Почта',
   'auth.name': 'Имя',
   'auth.nameHint': 'Так вас увидят на общих досках',

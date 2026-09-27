@@ -349,7 +349,6 @@ export const en = {
   'auth.signUp': 'Sign up',
   'auth.signIn': 'Sign in',
   'auth.mode': 'Sign in or sign up',
-  'auth.invited': 'You are invited to the board “{board}”.',
   'auth.email': 'Email',
   'auth.name': 'Name',
   'auth.nameHint': 'How others see you on shared boards',
