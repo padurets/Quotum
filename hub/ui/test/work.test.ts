@@ -107,11 +107,11 @@ test('a dash about the whole period says since when, where work is known from la
 test('hours of work are minutes within the hour, tenths up to ten, whole hours after, and never days', () => {
   setLocale('en');
   assert.deepEqual(
-    [20_000, 45 * MIN, 2.5 * HOUR, 21 * HOUR, 150 * HOUR, 0].map(workHours),
-    ['1m', '45m', '2.5h', '21h', '150h', '0m'],
+    [20_000, 40_000, 45 * MIN, 2.5 * HOUR, 21 * HOUR, 150 * HOUR, 0].map(workHours),
+    ['< 1m', '1m', '45m', '2.5h', '21h', '150h', '0m'],
   );
   setLocale('ru');
-  assert.deepEqual([45 * MIN, 2.5 * HOUR, 150 * HOUR].map(workHours), ['45 мин', '2,5 ч', '150 ч']);
+  assert.deepEqual([20_000, 45 * MIN, 2.5 * HOUR, 150 * HOUR].map(workHours), ['< 1 мин', '45 мин', '2,5 ч', '150 ч']);
   setLocale('en');
 });
 
