@@ -129,11 +129,18 @@ export class Live {
 
   constructor(private readonly env: LiveEnv) {}
 
-  /** Row 1: another board (or the first). A tab hidden meanwhile keeps counting (row 18). */
+  /**
+   * Row 1: another board (or the first). A tab hidden meanwhile keeps counting (row 18); one
+   * hidden for 30 s already would let the connection go at once, so it asks nothing until shown.
+   */
   open(board: string) {
     this.drop();
     this.board = board;
     this.env.dispatch({type: 'board-open', id: board});
+    if (!this.env.visible() && this.hiddenAt !== null && this.env.now() - this.hiddenAt >= HIDDEN_MS) {
+      this.clear('hide');
+      return this.enter('paused');
+    }
     this.connect();
     if (!this.env.visible()) this.hidden();
   }

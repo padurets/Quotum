@@ -151,12 +151,17 @@ function harness(options: {visible?: boolean; skew?: number; script?: string | n
     });
     assert.equal(connection()?.status, 'polling');
   };
-  /** Opens the board and brings a stream live: hello and snapshot. */
+  /** The last request answers with a stream that brings the board live: hello and snapshot. */
+  const answer = async () => {
+    const stream = last().stream();
+    await stream.write(frame('hello', {epoch: 'e1', now: timers.t, client: '/assets/index-a.js', heartbeatMs: HEARTBEAT}) + frame('snapshot', SNAPSHOT));
+    return stream;
+  };
+  /** Opens the board and brings a stream live. */
   const golive = async () => {
     live.open('b1');
     await flush();
-    const stream = last().stream();
-    await stream.write(frame('hello', {epoch: 'e1', now: timers.t, client: '/assets/index-a.js', heartbeatMs: HEARTBEAT}) + frame('snapshot', SNAPSHOT));
+    const stream = await answer();
     assert.equal(connection()?.status, 'live');
     return stream;
   };
@@ -170,6 +175,7 @@ function harness(options: {visible?: boolean; skew?: number; script?: string | n
     storage,
     last,
     connection,
+    answer,
     golive,
     gopoll,
     hide: () => {
@@ -711,7 +717,7 @@ test('row 18: each time the tab is hidden it counts from then, also when it was 
   await g.timers.advance(MIN);
   g.live.open('b1');
   await flush();
-  await g.last().stream().write(frame('hello', {epoch: 'e', now: 1, client: null, heartbeatMs: HEARTBEAT}) + frame('snapshot', SNAPSHOT));
+  await g.answer();
   const asked = g.asked.length;
   g.hide();
   await g.timers.advance(2 * S);
@@ -753,6 +759,69 @@ test('row 16, 18, 2: a tab hidden for 30 s lets go; shown again, it connects ane
   k.live.wake();
   await flush();
   assert.equal(k.asked.length, asked + 1);
+});
+
+test('row 1 × 18: a board opened on a hidden tab lets go 30 s after it was hidden, and asks nothing if that is past; shown later, the hub is not lost', async () => {
+  type H = ReturnType<typeof harness>;
+  // What came before, how long before the board opens, and how long after it opens it lets go (null: at once, asking nothing).
+  const cases: {name: string; before: (h: H) => Promise<void>; wait: number; left: number | null}[] = [
+    {name: 'hidden with no board open', before: async h => h.hide(), wait: 10 * S, left: 20 * S},
+    {
+      name: 'hidden, shown and hidden again with no board open',
+      before: async h => {
+        h.hide();
+        await h.timers.advance(5 * MIN);
+        h.show();
+        await h.timers.advance(MIN);
+        h.hide();
+      },
+      wait: 10 * S,
+      left: 20 * S,
+    },
+    {
+      name: 'a board closed on the hidden tab',
+      before: async h => {
+        await h.golive();
+        h.hide();
+        await h.timers.advance(10 * S);
+        h.live.close();
+      },
+      wait: 5 * S,
+      left: 15 * S,
+    },
+    {name: 'hidden with no board open, for 30 s already', before: async h => h.hide(), wait: 30 * S, left: null},
+    {name: 'hidden with no board open, for long', before: async h => h.hide(), wait: 5 * MIN, left: null},
+    {
+      name: 'paused, given another board',
+      before: async h => {
+        await h.golive();
+        h.hide();
+      },
+      wait: 5 * MIN,
+      left: null,
+    },
+  ];
+  for (const c of cases) {
+    const h = harness();
+    await c.before(h);
+    await h.timers.advance(c.wait);
+    const asked = h.asked.length;
+    h.live.open('b2');
+    await flush();
+    if (c.left === null) {
+      assert.deepEqual([h.connection(), h.asked.length], [{type: 'connection', status: 'paused', lostAt: null}, asked], c.name);
+    } else {
+      await h.answer();
+      await h.timers.advance(c.left - S);
+      assert.equal(h.connection()?.status, 'live', c.name);
+      await h.timers.advance(S);
+      assert.equal(h.connection()?.status, 'paused', c.name);
+    }
+    await h.timers.advance(60 * MIN);
+    h.show();
+    await flush();
+    assert.deepEqual([h.last().url, h.connection()], ['/api/events?board=b2', {type: 'connection', status: 'connecting', lostAt: h.timers.t}], c.name);
+  }
 });
 
 test('events of a connection the page closed never reach the page', async () => {
