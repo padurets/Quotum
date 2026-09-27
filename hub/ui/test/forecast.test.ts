@@ -140,6 +140,10 @@ test('a used-up window reads otherwise when its reset goes by, and one waiting f
   const measured = start + 3 * DAY;
   assert.equal(outlookChangesAt(week(0), measured, measured, DEFAULT_PLAN), start + 7 * DAY, 'then it waits for a measurement');
   assert.equal(outlookChangesAt(week(0, {resetAt: null}), measured, measured, null), null, 'no reset to wait for');
+  // Nothing to foresee (a window of no known length, or measured by a clock ahead, past a reset the page has not reached): it waits all the same.
+  assert.equal(outlookChangesAt(week(50, {minutes: null}), measured, measured, null), start + 7 * DAY);
+  assert.equal(outlookChangesAt(week(50), start + 7 * DAY + MIN, start + 7 * DAY - MIN, null), start + 7 * DAY);
+  assert.equal(outlookChangesAt(week(50, {resetAt: null}), measured, measured, null), null);
   assert.equal(outlookChangesAt(week(50), measured, start + 7 * DAY, null), null, 'waiting');
 });
 

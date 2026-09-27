@@ -127,9 +127,9 @@ export const outlook = (live: Win | undefined, measuredAt: number | null, now: n
  */
 export function outlookChangesAt(live: Win | undefined, measuredAt: number | null, now: number, weekly: WeeklyPlan | null): number | null {
   const {outlook: ahead, projection: projected, zero} = forecast(live, measuredAt, now, weekly);
-  if (ahead.key === 'none' || ahead.key === 'awaiting') return null;
-  // Used up, it waits for a measurement once its reset goes by.
-  if (ahead.key === 'usedUp') return live?.resetAt && live.resetAt > now ? live.resetAt : null;
+  if (ahead.key === 'awaiting') return null;
+  // Used up, or with nothing to foresee, it waits for a measurement once its reset goes by.
+  if (ahead.key === 'usedUp' || ahead.key === 'none') return live?.resetAt && live.resetAt > now ? live.resetAt : null;
   const reset = live!.resetAt!;
   const moments = [reset, zero === null || zero === undefined ? null : Math.ceil(zero)];
   if (ahead.key === 'runsOut') {
