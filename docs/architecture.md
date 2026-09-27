@@ -446,14 +446,15 @@ mark, that the hub cannot be reached) is a small part of its own that tells the 
 one clock (`hub/ui/lib/clock.ts`) when it reads otherwise, and renders only then: the
 clock keeps one timer for the whole page, none on a hidden tab, and counts in the hub's
 time as the hub's messages tell it. The chart moves on a cell of the history's grid at
-a time; in the table, the plan and where the pace leads each read otherwise at their
-own moment. History is read again when the hub tells of measurements the
-chart has not shown, at most every ten seconds for a period ending now. Nothing that
-shows data or time keeps a timer of its own (a tooltip or a gesture may wait a moment;
-`hub/ui/test/timers.test.ts` lists where), and `npm run bench` checks that an idle
-board asks the hub nothing and renders nothing but what shows time. Nothing on the
-page is fixed and the widgets are not frosted, so a scroll paints only what comes into
-view, even in a WebKitGTK window that draws without the GPU.
+a time, and as a label past its right edge counts down; in the table, the plan and
+where the pace leads each read otherwise at their own moment. History is read again
+when the hub tells of measurements the chart has not shown, at most every ten seconds
+for a period ending now. Nothing that shows data or time keeps a timer of its own (a
+tooltip or a gesture may wait a moment; `hub/ui/test/timers.test.ts` lists where), and
+`npm run bench` checks that an idle board asks the hub nothing and renders nothing but
+what shows time. Nothing on the page is fixed and the widgets are not frosted, so a
+scroll paints only what comes into view, even in a WebKitGTK window that draws without
+the GPU.
 A card's dot by the logo tells how its measurements go: its colour, and in its tooltip
 when it was measured and, while the hub sets the pace, when the next measurement comes
 and why, each a line of its own.

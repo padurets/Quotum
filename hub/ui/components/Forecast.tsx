@@ -111,7 +111,6 @@ export const Forecast = memo(function Forecast({arrange}: {arrange: Arrange}) {
   return (
     <section
       className={`panel forecast ${selected ? 'is-range' : ''} ${loading ? 'is-loading' : ''}`}
-      data-time="table"
       aria-label={t('forecast.title')}
       aria-busy={loading}
     >

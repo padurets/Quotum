@@ -47,13 +47,14 @@ test('an idle page answers for asking, being told, and working outside what show
   assert.match(problems[4], /script took/);
 });
 
-test('a label shows time at most once a minute, the chart and the table once a cell', () => {
+test('a label shows time at most once a minute, the chart once a cell too', () => {
   // From 10:30 to 12:30 of an hour on five-minute cells: two minutes, no boundary of a cell.
   assert.deepEqual(idleProblems(idle({renders: [part('card:s1', 'ago', 3)]})), [], 'minutes + 1');
   assert.equal(idleProblems(idle({renders: [part('card:s1', 'ago', 4)]})).length, 1);
-  assert.deepEqual(idleProblems(idle({mutations: [part('analytics', 'table', 1)]})), [], 'no boundary in the window: once, as it opens');
-  assert.equal(idleProblems(idle({mutations: [part('analytics', 'table', 2)]})).length, 1, 'a chart that moves each minute is too busy');
-  assert.deepEqual(idleProblems(idle({from: 14 * MIN, to: 16 * MIN, renders: [part('analytics', 'chart', 2)]})), [], 'one boundary: twice');
+  assert.deepEqual(idleProblems(idle({renders: [part('analytics', 'chart', 3)]})), [], 'no boundary in the window: as a label past its edge');
+  assert.equal(idleProblems(idle({renders: [part('analytics', 'chart', 4)]})).length, 1);
+  assert.deepEqual(idleProblems(idle({from: 14 * MIN, to: 16 * MIN, renders: [part('analytics', 'chart', 4)]})), [], 'one boundary: once more');
+  assert.equal(idleProblems(idle({from: 14 * MIN, to: 16 * MIN, renders: [part('analytics', 'chart', 5)]})).length, 1);
 });
 
 test('measurements of a card show on it in time and render nothing of another card or the header', () => {

@@ -16,9 +16,6 @@ export const LATENCY_P95_MS = 1000;
 /** How often the hub tells a stream it is there (spec/dashboard-v1.md, `hello.heartbeatMs`). */
 const HEARTBEAT_MS = 25_000;
 
-/** The chart and the table: they move on with time a cell of the history's grid at a time. */
-const ANALYTICS = new Set(['chart', 'table']);
-
 /** What the idle page did over its window. */
 export type Idle = {
   from: number;
@@ -33,12 +30,16 @@ export type Idle = {
   scriptMsPerSecond: number;
 };
 
-/** What shows time rendered or changed more often than the clock alone would: a label once a minute, the chart and the table once a cell. */
+/**
+ * What shows time rendered or changed more often than the clock alone would: a label once a
+ * minute, and the chart, whose labels past its right edge count down as a label does, once a
+ * cell of the history's grid more.
+ */
 function tooOften(parts: Counted[], from: number, to: number, cellMs: number, what: string): string[] {
   const minutes = Math.ceil((to - from) / 60_000);
   const cells = Math.floor(to / cellMs) - Math.floor(from / cellMs);
   return parts.flatMap(part => {
-    const most = (part.kind && ANALYTICS.has(part.kind) ? cells : minutes) + 1;
+    const most = minutes + (part.kind === 'chart' ? cells : 0) + 1;
     return part.count > most ? [`${part.region} ${part.node} ${what} ${part.count} times, more than ${most}`] : [];
   });
 }
@@ -46,7 +47,7 @@ function tooOften(parts: Counted[], from: number, to: number, cellMs: number, wh
 /**
  * What an idle page did that it may not: ask the hub anything, be told anything but
  * `ping`, render or change anything but what shows time, show time more often than it
- * reads otherwise (a label once a minute, the chart and the table once a cell), or spend
+ * reads otherwise (a label once a minute, the chart once a cell too), or spend
  * more script than its budget. And whether the benchmark could tell: its own reader of the
  * board heard the hub all along.
  */
