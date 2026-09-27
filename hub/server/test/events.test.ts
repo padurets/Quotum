@@ -483,7 +483,8 @@ test('a stream its reader stopped reading is let go once it falls too far behind
   await new Promise(resolve => socket.once('connect', resolve));
   socket.write(`GET /api/events?board=${board} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nCookie: ${h.cookies.get('alice')}\r\nQuotum-Stream: 1\r\n\r\n`);
   socket.pause();
-  while (!h.events.readers) await new Promise(resolve => setTimeout(resolve, 10));
+  for (let waited = 0; !h.events.readers && waited < 5 * S; waited += 10) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(h.events.readers, 1, 'the stream opened');
   // A board changing fast, with a large view: what waits for the reader grows past what the socket holds.
   for (let i = 0; i < 600 && h.events.readers; i++) {
     const order = Array.from({length: 120}, (_, k) => `source:${i}-${k}-`.padEnd(120, 'x'));
@@ -493,37 +494,77 @@ test('a stream its reader stopped reading is let go once it falls too far behind
   assert.equal(h.events.readers, 0);
 });
 
-test('what is a reader’s own or the hub’s that cannot be worked out: a new reader is refused, one reading is sent it whole later', async t => {
+test('what is a reader’s own or the hub’s that cannot be worked out: a new reader is refused, one reading is sent it whole later, and the rest goes out', async t => {
   const h = await hub();
   t.after(() => h.app.close());
   const personal = await h.person('alice');
   const team = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
-  const once = <A extends unknown[], R>(real: (...args: A) => R) => {
-    let failing = true;
-    return (...args: A): R => {
-      if (!failing) return real(...args);
-      failing = false;
-      throw new Error('disk I/O error');
+  const {projection} = h.events as unknown as {projection: Projection};
+  /** The `nth` call of it from now fails, as reading the disk may. */
+  const fail = (on: object, name: string, nth = 1) => {
+    const methods = on as Record<string, (...args: unknown[]) => unknown>;
+    const real = methods[name].bind(on);
+    let calls = 0;
+    methods[name] = (...args: unknown[]) => {
+      if (++calls === nth) throw new Error('disk I/O error');
+      return real(...args);
     };
   };
-  // The hub's news cannot be read for the first reader: its snapshot would have none.
-  h.store.announcements = once(h.store.announcements.bind(h.store));
-  assert.equal((await h.stream('alice', personal)).status, 500);
-  assert.equal(h.events.readers, 0);
+
+  // The hub's news, her boards or her own sources cannot be read for her first stream: its
+  // snapshot would miss them, so it is refused, leaving nothing behind; asked again, it opens.
+  for (const [on, name] of [
+    [h.store, 'announcements'],
+    [projection, 'boards'],
+    [projection, 'mine'],
+  ] as const) {
+    fail(on, name);
+    assert.equal((await h.stream('alice', personal)).status, 500, name);
+    assert.equal(h.events.readers, 0, name);
+  }
   const s = await reading(h, 'alice', personal);
   t.after(s.close);
   assert.ok(s.snapshot.resets);
+  assert.deepEqual(s.snapshot.boards.map((b: {id: string}) => b.id).sort(), [personal, team].sort());
 
-  // Her boards cannot be read for her stream as one is renamed: sent, whole, when she is touched next.
-  const {projection} = h.events as unknown as {projection: Projection};
-  projection.boards = once(projection.boards.bind(projection));
+  // The hub's news cannot be read as another stream opens: the news known goes in its snapshot.
+  fail(h.store, 'announcements');
+  const other = await reading(h, 'alice', team);
+  t.after(other.close);
+  assert.deepEqual(other.snapshot.resets, s.snapshot.resets);
+
+  // Nor as a board is renamed: the rename goes out all the same.
+  fail(h.store, 'announcements');
+  await h.call('POST', `/api/boards/${personal}`, {as: 'alice', body: {name: 'Home'}});
+  h.resets.onChange();
+  assert.deepEqual(await s.types(), ['board', 'boards']);
+  assert.deepEqual(await other.types(), ['boards']);
+
+  // Her own sources cannot be read for one of her streams as a board is renamed: a stream
+  // before it is told her boards now; that one and those after it, whole, when she is
+  // touched next. Her second stream, then her first.
+  fail(projection, 'mine', 2);
   await h.call('POST', `/api/boards/${team}`, {as: 'alice', body: {name: 'Crew'}});
-  assert.deepEqual(await s.types(), []);
-  await h.call('POST', `/api/boards/${team}`, {as: 'alice', body: {name: 'Band'}});
-  const told = await s.within();
+  assert.deepEqual([await s.types(), await other.types()], [['boards'], ['board']]);
+  await h.call('POST', `/api/boards/${team}`, {as: 'alice', body: {name: 'Crew'}});
   assert.deepEqual(
-    told.map(e => e.type),
-    ['mine', 'boards'],
+    [await s.types(), await other.types()],
+    [
+      ['mine', 'boards'],
+      ['mine', 'boards'],
+    ],
+  );
+  fail(projection, 'mine');
+  await h.call('POST', `/api/boards/${team}`, {as: 'alice', body: {name: 'Band'}});
+  assert.deepEqual([await s.types(), await other.types()], [[], ['board']]);
+  await h.call('POST', `/api/boards/${team}`, {as: 'alice', body: {name: 'Band'}});
+  const told = await other.within();
+  assert.deepEqual(
+    [await s.types(), told.map(e => e.type)],
+    [
+      ['mine', 'boards'],
+      ['mine', 'boards'],
+    ],
   );
   assert.equal(told[1].data.boards.find((b: {id: string}) => b.id === team).name, 'Band');
 });

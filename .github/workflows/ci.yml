@@ -13,6 +13,8 @@ permissions:
 jobs:
   hub:
     runs-on: ubuntu-latest
+    # It takes about a minute; a test that hangs fails it instead of holding the runner.
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: hub
