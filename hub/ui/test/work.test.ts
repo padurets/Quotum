@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {dashOf, lineWork, MIN_RATE, workCells, workNotes, workText, WORK_PACE_FROM, type WorkCell} from '../lib/work';
+import {dashOf, lineWork, MIN_RATE, workCells, workLeftChangesAt, workNotes, workText, WORK_PACE_FROM, type WorkCell} from '../lib/work';
 import {rateText, shareText, stamp, workAbout, workHours} from '../lib/format';
 import {setLocale, t} from '../i18n';
 import type {SeriesWork} from '../lib/types';
@@ -84,6 +84,19 @@ test('over a range what is left is what was left at its end, and the reset is on
   assert.equal(hoursLeft(lineWork(line, true, now - MIN, now)), 12.9, 'a range is of its own end, whatever came after');
   assert.equal(lineWork({...line, work: null}, false, null, now), null, 'a hidden card');
   assert.equal(lineWork({...line, remainingAtEnd: null}, true, null, now), null, 'a range with no measurement has no end to foresee from');
+});
+
+test('the hours of work left read otherwise when the reset comes nearer than they are, and when it goes by', () => {
+  const now = from + 7 * DAY;
+  // About 27.1 hours of work left now (80% at 2.95% an hour).
+  const line = {work: work(), current: 80, remainingAtEnd: 38, minutes: 7 * 24 * 60};
+  const left = lineWork(line, false, now + 2 * DAY, now)!.workleft as {value: number};
+  const turns = workLeftChangesAt(line, now + 2 * DAY, now)!;
+  assert.equal(turns, Math.ceil(now + 2 * DAY - left.value), 'when the reset is as near as the hours');
+  assert.ok('value' in lineWork(line, false, now + 2 * DAY, turns - 1)!.workleft && 'untilReset' in lineWork(line, false, now + 2 * DAY, turns)!.workleft, 'named until then, lasting to the reset from then');
+  assert.equal(workLeftChangesAt(line, now + HOUR, now), now + HOUR, 'lasting to the reset already: it waits for a measurement once the reset goes by');
+  assert.equal(workLeftChangesAt(line, now - MIN, now), null, 'waiting: only a measurement changes it');
+  assert.equal(workLeftChangesAt(line, null, now), null, 'no reset told');
 });
 
 test('a tooltip says since when work is known, over how much work the pace is, and that little came during work, only when that matters', () => {

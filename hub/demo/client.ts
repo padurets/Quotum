@@ -53,7 +53,8 @@ export class Person {
     readonly base: string,
     readonly id: string,
     readonly personalBoard: string,
-    private readonly cookie: string,
+    /** The session cookie as `name=value`, as a browser would send it. */
+    readonly cookie: string,
   ) {}
 
   /** Signs someone up: the first person with the setup code, anyone else with an invite. */

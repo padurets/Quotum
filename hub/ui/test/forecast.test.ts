@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {FORECAST_EDGES, FORECAST_WIDTHS, LIVE_COLUMNS, RANGE_COLUMNS, clip, forecastLayout, forecastLine, forecastRow, outlook, type ForecastColumn, type Outlook} from '../lib/forecast';
+import {FORECAST_EDGES, FORECAST_WIDTHS, LIVE_COLUMNS, RANGE_COLUMNS, clip, forecastLayout, forecastLine, outlook, outlookChangesAt, spentOf, type ForecastColumn, type Outlook} from '../lib/forecast';
 import {FORECAST, columnShown} from '../lib/view';
 import {DEFAULT_PLAN, type WeeklyPlan} from '../lib/plan';
 import type {Win} from '../lib/types';
@@ -103,12 +103,10 @@ test('the forecast counts from the measurement: the moment it runs out stays, an
   assert.equal(outlook(week(40), half, half + 30 * HOUR, null).tone, 'v-crit');
 });
 
-test('the period on screen does not change the forecast', () => {
-  const live = week(38);
-  const day = forecastRow({consumed: 40, coveredMs: 20 * HOUR}, live, start + 72 * HOUR, start + 72 * HOUR, DEFAULT_PLAN);
-  const month = forecastRow({consumed: 150, coveredMs: 20 * DAY}, live, start + 72 * HOUR, start + 72 * HOUR, DEFAULT_PLAN);
-  assert.deepEqual(day.outlook, month.outlook);
-  assert.notDeepEqual(day.spent, month.spent);
+test('what the table says a period spent: points, nothing spent while measured, or unknown', () => {
+  assert.deepEqual(spentOf({consumed: 40, coveredMs: 20 * HOUR}), {key: 'points', value: 40});
+  assert.deepEqual(spentOf({consumed: 0, coveredMs: 20 * DAY}), {key: 'unused'});
+  assert.deepEqual(spentOf({consumed: 0, coveredMs: 0}), {key: 'unknown'});
 });
 
 test('a window started too recently waits: half an hour, or a twentieth of the window', () => {
@@ -136,6 +134,13 @@ test('a window without a forecast says why', () => {
   assert.equal(outlook(undefined, measured, measured, null).key, 'none');
   // Measured by a clock ahead of the page's, after the reset the page has not reached yet.
   assert.equal(outlook(week(50), start + 7 * DAY + MIN, start + 7 * DAY - MIN, null).key, 'none');
+});
+
+test('a used-up window reads otherwise when its reset goes by, and one waiting for a measurement only with one', () => {
+  const measured = start + 3 * DAY;
+  assert.equal(outlookChangesAt(week(0), measured, measured, DEFAULT_PLAN), start + 7 * DAY, 'then it waits for a measurement');
+  assert.equal(outlookChangesAt(week(0, {resetAt: null}), measured, measured, null), null, 'no reset to wait for');
+  assert.equal(outlookChangesAt(week(50), measured, start + 7 * DAY, null), null, 'waiting');
 });
 
 test('the deadline is the end of the plan while it runs, else the reset', () => {

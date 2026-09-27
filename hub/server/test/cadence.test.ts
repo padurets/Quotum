@@ -468,7 +468,7 @@ test('S8: a device that does not follow the pace is answered as before', () => {
   assert.deepEqual(answer, {provider: 'codex', measure: true, until: iso(t0)});
   h.deliver('laptop', t0);
   assert.equal(h.ask('laptop', t0 + 15 * S, {paced: false}).measure, true, 'the holder measures whenever it asks');
-  assert.equal(h.ingest.nextMeasurement(h.source(), ACCOUNT, t0 + 15 * S), null, 'and the board shows no plan');
+  assert.equal(h.ingest.nextMeasurement(h.source(), ACCOUNT, t0 + 15 * S).value, null, 'and the board shows no plan');
 });
 
 test('S9: a paced holder asks often without extending its lease; a device waiting out failures does not take duty', () => {
@@ -534,10 +534,10 @@ test('S12: failures reach the pace through the hub, even when the subscription i
   const due = h.follow('laptop', t0 + 5 * MIN, t0 + 7 * MIN).at(-1)!;
   h.deliver('laptop', due + 30 * S, 50, 4 * MIN, 'timeout');
   assert.equal(h.store.state(h.source()).error, null, 'the source is fresh: no failure on the card');
-  assert.equal(h.ingest.nextMeasurement(h.source(), ACCOUNT, due + 45 * S), null, 'the holder waits out its failure');
+  assert.equal(h.ingest.nextMeasurement(h.source(), ACCOUNT, due + 45 * S).value, null, 'the holder waits out its failure');
   assert.equal(h.ask('laptop', due + 45 * S).askInMs, 15 * S);
-  assert.equal(h.ingest.nextMeasurement(h.source(), ACCOUNT, due + 30 * S + 2 * MIN - S), null);
-  assert.notEqual(h.ingest.nextMeasurement(h.source(), ACCOUNT, due + 45 * S + 2 * MIN), null, 'over');
+  assert.equal(h.ingest.nextMeasurement(h.source(), ACCOUNT, due + 30 * S + 2 * MIN - S).value, null);
+  assert.notEqual(h.ingest.nextMeasurement(h.source(), ACCOUNT, due + 45 * S + 2 * MIN).value, null, 'over');
 
   // A device that never delivered for the provider: its failure is about the subscription it was told to measure.
   const g = hub();
@@ -552,9 +552,9 @@ test('S12: failures reach the pace through the hub, even when the subscription i
 test('S13: the overview tells when a paced holder measures next and why', () => {
   const h = hub();
   const last = h.follow('laptop', t0, t0 + 10 * MIN, {}, () => 50).at(-1)!;
-  assert.deepEqual(h.ingest.nextMeasurement(h.source(), ACCOUNT, last + 15 * S), {next: last + 8 * MIN, why: 'idle'});
+  assert.deepEqual(h.ingest.nextMeasurement(h.source(), ACCOUNT, last + 15 * S).value, {next: last + 8 * MIN, why: 'idle'});
   h.working('server', last + 30 * S);
-  assert.deepEqual(h.ingest.nextMeasurement(h.source(), ACCOUNT, last + 30 * S), {next: last + 2 * MIN, why: 'inUse'});
+  assert.deepEqual(h.ingest.nextMeasurement(h.source(), ACCOUNT, last + 30 * S).value, {next: last + 2 * MIN, why: 'inUse'});
 });
 
 test('S15: a check-in with a malformed pace is refused', () => {
@@ -565,4 +565,47 @@ test('S15: a check-in with a malformed pace is refused', () => {
   const parsed = parseCheckin(sub({minIntervalMs: 60_000}));
   assert.deepEqual([parsed.paced, parsed.subscriptions[0].minIntervalMs], [false, 60_000]);
   assert.equal(parseCheckin(body({paced: true})).subscriptions[0].minIntervalMs, null);
+});
+
+test('S15: what the board sees of the pace stays the same until the moment the hub says it changes by itself', () => {
+  /** `view` at `now`, then at moments up to its change (or ten hours on, when only news changes it): all the same. */
+  const steady = (cadence: Cadence, now: number, signals: Signals, what: string) => {
+    const seen = cadence.view('acc', 'laptop', now, signals);
+    const changesAt = cadence.viewChangesAt('acc', 'laptop', now, signals);
+    if (changesAt !== null) assert.ok(changesAt > now, `${what}: a change after now`);
+    const until = changesAt ?? now + 10 * HOUR;
+    for (const t of [now, now + 1, (now + until) / 2, until - 1, ...Array.from({length: 20}, (_, i) => now + ((until - now) * i) / 20)]) {
+      assert.deepEqual(cadence.view('acc', 'laptop', Math.floor(t), signals), seen, `${what}: at +${Math.floor(t) - now} ms`);
+    }
+    return {seen, changesAt};
+  };
+
+  const idle = new Cadence();
+  const last = run(idle, t0, t0 + 30 * MIN).at(-1)!;
+  const silence = steady(idle, last + MIN, quiet, 'idle').changesAt!;
+  assert.equal(idle.view('acc', 'laptop', silence, quiet), null, 'until the holder has been silent too long');
+
+  const lost = new Cadence();
+  let asked = run(lost, t0, t0 + 30 * MIN).at(-1)!;
+  // Told to measure again, and nothing comes back yet.
+  for (let answer; !(answer = lost.answer('acc', 'laptop', 'codex', asked, null, quiet)).measure; ) asked += answer.askInMs;
+  const measuring = steady(lost, asked + 10 * S, quiet, 'measuring');
+  assert.equal(measuring.seen?.next, asked);
+  assert.equal(measuring.changesAt, asked + MIN + 1, 'a measurement under way is over after a minute');
+
+  const failing = new Cadence();
+  const before = run(failing, t0, t0 + 30 * MIN).at(-1)!;
+  failing.failed('acc', 'laptop', 'timeout', before + MIN);
+  const paused = steady(failing, before + 70 * S, quiet, 'paused');
+  assert.deepEqual(paused, {seen: null, changesAt: before + 3 * MIN}, 'hidden until the pause ends');
+
+  const low = new Cadence();
+  const resetAt = t0 + 20 * MIN + 30 * S;
+  const lowSignals = {windows: [win(5, resetAt)], inUse: false};
+  const lowLast = run(low, t0, t0 + 10 * MIN, {windows: () => lowSignals.windows}).at(-1)!;
+  assert.equal(steady(low, lowLast + 15 * S, lowSignals, 'low').seen?.why, 'low');
+
+  const silent = new Cadence();
+  run(silent, t0, t0 + 10 * MIN);
+  assert.deepEqual(steady(silent, t0 + 20 * MIN, quiet, 'silent'), {seen: null, changesAt: null});
 });

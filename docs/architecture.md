@@ -25,8 +25,9 @@ accounts. This document explains how the parts work and why they are built this 
   React UI. It decides which device measures which subscription, stores measurements,
   applies the rules (what counts as spending, what is a reset, what is a gap) and
   serves the dashboard. It never talks to providers itself.
-- **spec/** — the ingest format, the contract between the two. Anything that speaks it
-  can deliver to a hub.
+- **spec/** — the contracts: the [ingest format](../spec/ingest-v1.md) between the two
+  (anything that speaks it can deliver to a hub), and the
+  [dashboard's events](../spec/dashboard-v1.md) between the hub and its page.
 - **desktop/** — the desktop app (Rust with a platform host): the agent's core, the hub and its board in one
   program for one machine (see [Desktop app](#desktop-app)).
 
@@ -426,24 +427,100 @@ and a request has 30 seconds to arrive in full.
 
 ## The dashboard
 
-A single-page React app served by the hub. It reads `/api/overview` every 10 seconds
-and re-reads history only when the overview's `revision` says the board's data changed,
-or its `workKey` that whose work the board shows or how it is named did;
-an answer the same as the one before renders nothing. What changes with time alone (how
-long ago, how soon, the freshness dot, whether the hub answers) reads a clock shared by
-the page, which ticks every 15 seconds, and every minute for the analytics:
-only that is rendered again, the board itself reads no clock. Nothing on the page is
-fixed and the widgets are not frosted, so a scroll paints only what comes into view,
-even in a WebKitGTK window that draws without the GPU.
+A single-page React app served by the hub. It asks nothing again and again: it opens one
+connection to its board's [events](../spec/dashboard-v1.md) (`GET /api/events`), and the
+hub tells it the board as it is, then each part of it that changes, within a tenth of a
+second. On the hub, whatever changes data says what it touched (a source, a board, a
+person); a moment later the hub puts the touched parts of every board being read
+together again (`hub/server/projection.ts`) and sends each reader only what differs from
+what it last got (`hub/server/events.ts`). What changes with time alone (a card going
+stale, a machine's agents no longer shown, a holder falling silent, a past reset leaving
+the history) it tells when that comes: it keeps the moment each board being read next
+changes by itself. A board nobody reads costs nothing, and one the hub cannot work out
+(its data spoilt) fails alone: its readers start over, and a new one is answered an
+error. Every connection starts with the board as it is, so a dropped connection, a
+sleep, a restart of the hub or a tab hidden for half a minute (the page lets its
+connection go then) lose nothing; where a proxy holds a stream back, the page reads the
+same events with long polls for ten minutes. A session keeps at most 8 readers, a person
+16 and the hub 2000; a new one takes the place of the oldest of its session, or else of
+its person, so tabs a sleeping laptop left behind never keep a new one out (at the
+hub's limit, someone reading nothing yet is refused). Over plain HTTP/1.1 a browser
+opens at most six connections to one host and every open board keeps one: behind a proxy
+that speaks HTTP/2 (Caddy in `deploy/`) that is no limit, without one more than about
+five tabs of a hub in one browser wait for each other.
+
+### The page's connection
+
+`hub/ui/lib/live.ts` does what this table says and nothing else; its code and tests name
+the rows. `mode` is a stream or long polls (for ten minutes once chosen); `short` counts
+streams in a row that ended before their first `ping`, closed neither by the page nor
+with `bye`; retries back off 1, 2, 5, 10 and 30 s, ±20%, and start over once `live` or
+`polling`. Its timers count in the page's clock; `lostAt`, when the connection was lost,
+in the hub's: entering `connecting` or `retrying` without one sets it to now unless a row
+says otherwise, `live` and `polling` clear it, `paused` keeps it once a connection was
+lost (`retrying`, or a row that says when) and clears it when one was only opening, and
+the page leaving the board (signed out, the board gone) clears it with the board. Waking
+is `online`, the tab shown, `pageshow`, `focus`, or a timer of its own more than 5 s late
+(a sleep). The header says the hub cannot be reached once `lostAt` is 45 s old, unless
+`paused`.
+
+| # | From | When | Does | To | `lostAt` |
+|---|---|---|---|---|---|
+| 1 | any | another board opened | ends the connection; the page forgets the last board; on a tab hidden for 30 s already (row 18), opens nothing until it is shown | `connecting`; `paused` | as above; as row 18 |
+| 2 | `paused` | the tab shown | | `connecting` | as above |
+| 3 | `connecting` | `200` | waits 10 s more for `hello` and `snapshot` | `connecting` | |
+| 4 | `connecting` | `hello` and `snapshot` on a stream | watches for 2.5 heartbeats without a byte; waits a heartbeat and 10 s for the first `ping` | `live` | cleared |
+| 4a | `live` | no first `ping` in time, its timer on time (a proxy holds small frames back; a timer late is waking) | ends it; long polls | `connecting` | the last byte |
+| 5 | `connecting` (stream) | no answer in 10 s, or no `hello` and `snapshot` 10 s after it | ends it; long polls | `connecting` | as above |
+| 6 | `connecting` (polls) | an answer with `hello` and `snapshot` | asks again at once | `polling` | cleared |
+| 7 | `connecting`, `polling` | `401` | stops; the page asks who is signed in | | cleared |
+| 8 | `connecting`, `polling` | `404` with `board_not_found` | stops; the board leaves the list, the session is read again | | cleared |
+| 9 | `connecting`, `polling` | any other answer (`429`, `403`, `5xx`, a proxy's `404` or sign-in page), a first poll answer without the board, no network, a poll unanswered for 35 s | backs off (`429` never means long polls) | `retrying` | as above |
+| 9a | `connecting` (stream) | the stream ends after `200`, before `hello` and `snapshot` | as row 14 | `retrying` | as above |
+| 10 | `live` | `ping` or an event | the first `ping` clears `short` | `live` | |
+| 11 | `live`, `polling` | `bye unauthorized` or `bye gone` | as rows 7, 8 | | cleared |
+| 12 | `live`, `polling` | `bye restart` | tries again in 1 to 5 s | `retrying` | now |
+| 13 | `live`, `polling` | `bye limit` | tries again, not sooner than in 30 s | `retrying` | now |
+| 14 | `live` | the stream ends, neither by the page nor with `bye` | before its first `ping` it counts in `short`, and the third in a row means long polls; backs off | `retrying` | the last byte |
+| 15 | `live` | 2.5 heartbeats without a byte, found by its watch or on waking | opens again at once | `connecting` | the last byte |
+| 15a | `connecting`, `polling` | waking after the attempt's time (10 s, or 35 s for a poll) is up; waking before does nothing | opens again at once, the same way | `connecting` | as above; the last byte from `polling` |
+| 16 | `retrying` | its time came, or waking (not sooner than rows 12 and 13 allow) | a stream again once the time for polls is up; opens | `connecting` | as above |
+| 17 | `polling` | a poll answered | applies its events in order, none after `bye`; asks again at once, or opens a stream once the time for polls is up | `polling`, `connecting` | cleared; as above when it opens a stream |
+| 18 | any but `paused` | the tab hidden for 30 s, counted from when it was hidden (or the page loaded hidden), whatever board it was given meanwhile, if any | ends the connection and its timers | `paused` | kept once lost; cleared while only opening |
+
+In the page, the events go through one reducer into a store (`hub/ui/lib/board.ts`); each
+widget reads its own part of it and renders only when that part changes (a card, its
+agents, its pace, the list of agents, the chart), and a part the same as before stays
+the same object. What shows time (how long ago, how soon, the freshness dot, the plan's
+mark, that the hub cannot be reached) is a small part of its own that tells the page's
+one clock (`hub/ui/lib/clock.ts`) when it reads otherwise, and renders only then: the
+clock keeps one timer for the whole page, none on a hidden tab, and counts in the hub's
+time as the hub's messages tell it. The chart and agent activity move on a cell of the
+history's grid at a time, and a label past the chart's right edge counts down on its own;
+in the table, the plan, where the pace leads and the hours of work left each read
+otherwise at their own moment. History is read again when the hub tells of measurements
+the chart has not shown, at most every ten seconds for a period ending now, or that whose
+agents' work the board shows, or under which names, changed (`Store.workKey`: a card
+hidden, someone joining or leaving, a project or a machine renamed), when it is all read
+again. Work agents did between measurements shows with the next of them; a range that
+ended within the last five minutes, whose work is still being credited, says when to read
+it again (`refreshInMs`). Nothing that shows data or time keeps a timer of its own (a
+tooltip or a gesture may wait a moment; `hub/ui/test/timers.test.ts` lists where), and
+`npm run bench` checks that an idle board asks the hub nothing and renders nothing but
+what shows time. Nothing on the page is fixed and the widgets are not frosted, so a
+scroll paints only what comes into view, even in a WebKitGTK window that draws without
+the GPU.
 A card's dot by the logo tells how its measurements go: its colour, and in its tooltip
 when it was measured and, while the hub sets the pace, when the next measurement comes
 and why, each a line of its own.
 A board has two areas: the cards (and the list of running agents, when turned on),
 which are about now and show every window, and under
-them the analytics, the chart, the table and agent activity, which show one period
-chosen in the analytics' own head, the chart and the table one window type of it. Each area is arranged on its own grid.
-The board's view comes with the overview; the owner's changes show at once and are
-saved about half a second later, one request per burst (a drag, typing a plan). What
+them the analytics, agent activity, the chart and the table, which show one period
+chosen in the analytics' own head, the chart and the table one window type of it. Each
+area is arranged on its own grid.
+The board's view comes with its events; the owner's changes show at once and are saved
+about half a second later, one request per burst (a drag, typing a plan), and stay on
+screen until the hub tells the view it saved. What
 is only about how one person looks (the analytics' period and window type, the chart's
 horizon, lines and groups switched off in either chart's legend, whether it draws the plan and the forecast, what agent activity is stacked by, reset announcements, the lock on the widgets,
 the agents table's sort order, the chosen board and language) stays in their browser.
@@ -458,11 +535,10 @@ where the chosen period comes back. The chart moves to the new period at once, d
 the answer it has until the next one comes; a run of quick steps asks the hub only for
 where it stops, and the latest few ranges read whole are kept on the page for each board,
 so stepping back and forth over them asks nothing. They are kept for the board's sources
-and whose work it showed under which names, as they were: a source added to the board, a
-card hidden, someone joining or leaving, a project renamed has a range read again. An
-answer says under which key it was read, and one read under another state of the board
-than the page knows of (a card hidden and shown again meanwhile) is shown but not kept.
-Measurements an agent delivers late, into a range already kept, show after a reload.
+as they were: a source added to the board has a range read again, and so has every range
+when the hub tells that whose agents' work the board shows, or under which names,
+changed. Measurements an agent delivers late, into a range already kept, have it read
+again when the hub tells of them.
 
 Both agent lists put working sessions first, then the ones that worked most recently,
 then the newest. The card's panel keeps machine groups, ordered by each one's most
@@ -529,9 +605,10 @@ command-line secrets. EOF tells Electron to quit if the controller dies. A secon
 sends only an Open signal through a per-user Unix socket; the receiver checks peer UID.
 
 Electron starts with renderer sandboxing, context isolation and no Node integration in
-the page. A preload exposes only the six app commands. The main process checks the
-sender is the current main frame and its origin is the current hub; Rust repeats the
-origin check before dispatch. Startup/error pages at `quotum://localhost` can only
+the page. A preload exposes only the six app commands and a way to hear the app's state.
+The main process checks the sender is the current main frame and its origin is the
+current hub; Rust repeats the origin check before dispatch. The app's state goes to the
+window over the same channel and on only to the main frame of the current hub. Startup/error pages at `quotum://localhost` can only
 quit. Navigation, new windows, downloads and permission requests are restricted. No
 inherited Node/Electron debugging switches reach the window process.
 
@@ -568,7 +645,8 @@ the app's environment (`PATH`, the home and temporary folders, the language, and
 `QUOTUM_RESETS`), nothing `NODE_*`. The hub still checks Host and Origin as on a server,
 and the agent reaches it with no proxy in between. The window's bridge to the app is
 open only to pages of the hub's current origin and to six commands: its state, saving
-settings, taking over, start at login, entering again and quitting. The window goes
+settings, taking over, start at login, entering again and quitting; on Windows a seventh,
+`watch_state`, gives the board a channel to hear the app's state on. The window goes
 nowhere else; links open in the system's browser. The app's folder is this user's only.
 
 **Files.** The app's folder is `%LOCALAPPDATA%\com.padurets.quotum` on Windows and
@@ -621,8 +699,12 @@ settings: a change is written to `config.toml` at once, keeping comments, symbol
 and permissions. Windows uses `ReplaceFileW` to preserve an existing file's ACL;
 its temporary file receives the existing DACL when it is created, and its inherited ACEs
 are restored before any contents are written. Unix temporary files start private. New Windows files inherit the profile
-folder's ACL. Saves are serialized, and the board receives the accepted settings at
-once while restarting measurements is debounced. The board waits for each state-changing
+folder's ACL. The app sends its state to the board whenever it changes (the agent's
+state, a measurement, the settings, start at login), numbered, so the board keeps the
+newest; the answer of each command carries the same number. Whatever changes it only
+wakes the app's ticker, which puts the state together and sends it, one at a time, off
+the window's own thread. Saves are serialized, and the board receives the accepted
+settings at once while restarting measurements is debounced. The board waits for each state-changing
 command's response before issuing the next; quitting and reentry do not wait in that queue.
 A change made in the file by hand is
 picked up within seconds.

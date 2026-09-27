@@ -1,14 +1,29 @@
-import {memo, useLayoutEffect, useMemo, useRef, useState, type ReactNode} from 'react';
-import {MINUTE, useNow} from '../lib/api';
-import type {History as HistoryData, Overview} from '../lib/types';
+import {Fragment, memo, useLayoutEffect, useMemo, useRef, useState, type ReactNode} from 'react';
 import {countdown, num, rateText, stamp} from '../lib/format';
 import {level} from '../lib/quota';
-import {FORECAST_WIDTHS, LIVE_COLUMNS, RANGE_COLUMNS, forecastLayout, forecastRow, spentOf, type ForecastColumn, type Outlook, type Pace, type Spent} from '../lib/forecast';
-import {lineWork, workText, type WorkColumn} from '../lib/work';
+import {
+  FORECAST_WIDTHS,
+  LIVE_COLUMNS,
+  RANGE_COLUMNS,
+  forecastLayout,
+  outlook,
+  outlookChangesAt,
+  planCell,
+  spentOf,
+  type ForecastColumn,
+  type Outlook,
+  type Pace,
+  type Spent,
+} from '../lib/forecast';
+import {planChangesAt} from '../lib/plan';
+import {lineWork, workLeftChangesAt, workText, type WorkColumn} from '../lib/work';
 import {FORECAST, columnShown, planOf, withColumn, withHidden, type Arrange} from '../lib/view';
 import {linesOf, type Line} from '../lib/lines';
 import {usePrefs} from '../lib/prefs';
 import {ofTimeRange} from '../lib/timeRange';
+import {useNamed} from '../lib/board';
+import {hubNow, useClock} from '../lib/clock';
+import {useHistory} from '../lib/history';
 import {t, useLocale, type Key} from '../i18n';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
 
@@ -68,6 +83,23 @@ const heading = (column: ForecastColumn, range: boolean) => t((range && HEADINGS
 type Cell = {content: ReactNode; title?: string; className?: string};
 
 /**
+ * A cell that reads otherwise as time passes (the plan, where the pace leads, the hours of
+ * work left): worked out at the hub's time, again at `changesAt`, and marked with what it
+ * shows (`time`, as `npm run bench` counts it).
+ */
+type TimedCell = {time: string; changesAt: (now: number) => number | null; at: (now: number) => Cell};
+
+/** A cell that changes with time, as a part of its own: rendered when it reads otherwise, not the table. */
+function Timed({cell, render}: {cell: TimedCell; render: (cell: Cell, time: string) => ReactNode}) {
+  const now = useClock(cell.changesAt);
+  return render(cell.at(now), cell.time);
+}
+
+/** A cell of either kind, drawn by `render`: one that changes with time as a part of its own. */
+const shown = (key: string, cell: Cell | TimedCell, render: (cell: Cell, time?: string) => ReactNode) =>
+  'at' in cell ? <Timed key={key} cell={cell} render={render} /> : <Fragment key={key}>{render(cell)}</Fragment>;
+
+/**
  * The windows of one kind, from what is left to where it leads: what is left and what the
  * plan expects; what the period spent, how long agents worked on each window's
  * subscription meanwhile, what an hour of their work spent and how much of the spending
@@ -77,28 +109,20 @@ type Cell = {content: ReactNode; title?: string; className?: string};
  * analytics', as the chart's. Over a time range selected on the chart, which is in the
  * past, it shows that range instead: what was left at its start and its end, what it spent
  * in all and per hour, and its agents' work. The board's owner chooses the columns; where
- * they do not fit the widget, each window is a row of a list.
+ * they do not fit the widget, each window is a row of a list. It reads the history on
+ * screen and the board's cards, not their agents or pace; what in it changes with time
+ * (the plan, where the pace leads, the hours of work left) are parts of their own.
  */
-export const Forecast = memo(function Forecast({
-  history,
-  loading,
-  overview,
-  arrange,
-}: {
-  history: HistoryData | null;
-  /** Another period is loading; `history` is the previous one until it comes. */
-  loading: boolean;
-  overview: Overview | null;
-  arrange: Arrange;
-}) {
-  const now = useNow(MINUTE);
+export const Forecast = memo(function Forecast({arrange}: {arrange: Arrange}) {
+  const {history, loading} = useHistory();
+  const sources = useNamed(arrange.view.names);
   const {view} = arrange;
   const {kind} = usePrefs();
   const selected = ofTimeRange(history);
   const range = !!selected;
   // Window names are text: they are rebuilt when the language changes.
   const locale = useLocale();
-  const lines = useMemo(() => linesOf(history, overview, view, kind), [history, overview, view.windows, view.hidden, view.colors, kind, locale]);
+  const lines = useMemo(() => linesOf(history, sources, view, kind), [history, sources, view.windows, view.hidden, view.colors, kind, locale]);
   const modeColumns = range ? RANGE_COLUMNS : LIVE_COLUMNS;
   const columns = useMemo(() => modeColumns.filter(column => columnShown(view, FORECAST, column)), [modeColumns, view]);
   const panel = useRef<HTMLElement>(null);
@@ -118,16 +142,25 @@ export const Forecast = memo(function Forecast({
   }, [columns]);
 
   /** Every cell of a line, by column. */
-  const cellsOf = (line: Line): Record<ForecastColumn, Cell> => {
-    const source = overview?.sources.find(s => s.id === line.sourceId);
+  const cellsOf = (line: Line): Record<ForecastColumn, Cell | TimedCell> => {
+    const source = sources.find(s => s.id === line.sourceId);
     const live = source?.windows.find(w => w.id === line.windowId);
+    const measuredAt = source?.successAt ?? null;
     const resetAt = live?.resetAt ?? null;
     const edge = (value: number | null): Cell => (value === null ? {content: '—'} : {content: `${num(value)}%`, className: `v-${level(value)}`});
-    const work = lineWork(line, range, resetAt, now);
+    // Of the cells about work, only the hours left move with time (below); the rest read the same at any moment.
+    const work = lineWork(line, range, resetAt, hubNow());
     const perWork = work && 'value' in work.perwork ? work.perwork.value : null;
-    const workCells = Object.fromEntries(
-      (['work', 'perwork', 'workleft', 'during'] as const).map(column => [column, work && line.work ? workText(column, work[column], line.work, history!.since, resetAt, perWork) : {content: '—'}]),
-    ) as Record<WorkColumn, Cell>;
+    const workCell = (column: WorkColumn, now: number): Cell => {
+      const cells = column === 'workleft' ? lineWork(line, range, resetAt, now) : work;
+      return cells && line.work ? workText(column, cells[column], line.work, history!.since, resetAt, perWork) : {content: '—'};
+    };
+    const workCells: Record<WorkColumn, Cell | TimedCell> = {
+      work: workCell('work', 0),
+      perwork: workCell('perwork', 0),
+      during: workCell('during', 0),
+      workleft: range ? workCell('workleft', 0) : {time: 'workleft', changesAt: now => workLeftChangesAt(line, resetAt, now), at: now => workCell('workleft', now)},
+    };
     if (range) {
       return {
         ...workCells,
@@ -137,32 +170,45 @@ export const Forecast = memo(function Forecast({
         pace: {content: line.coveredMs >= PACE_FROM ? t('table.perHour', {value: rateText(line.consumed / (line.coveredMs / 3_600_000))}) : '—'},
       } as Record<ForecastColumn, Cell>;
     }
-    const row = forecastRow(line, live, source?.successAt ?? null, now, planOf(view, line.sourceId));
-    const {plan} = row;
-    const ahead = outlookCell(row.outlook);
+    const weekly = planOf(view, line.sourceId);
     return {
       ...workCells,
       now: {content: `${num(line.current)}%`, className: `v-${level(line.current)}`},
       plan: {
-        title: plan?.notable ? t(plan.delta >= 0 ? 'table.behindBy' : 'table.aheadBy', {value: num(Math.abs(plan.delta))}) : undefined,
-        content: plan ? (
-          <>
-            {num(plan.remaining)}%
-            {plan.notable && (
-              <small className={plan.delta < 0 ? 'v-warn' : 'muted'}>
-                {' '}
-                {plan.delta > 0 ? '+' : '−'}
-                {num(Math.abs(plan.delta))}
-              </small>
-            )}
-          </>
-        ) : (
-          '—'
-        ),
+        time: 'plan',
+        changesAt: now => (live ? planChangesAt(live, measuredAt, now, weekly) : null),
+        at: now => {
+          const plan = planCell(live, measuredAt, now, weekly);
+          return {
+            title: plan?.notable ? t(plan.delta >= 0 ? 'table.behindBy' : 'table.aheadBy', {value: num(Math.abs(plan.delta))}) : undefined,
+            content: plan ? (
+              <>
+                {num(plan.remaining)}%
+                {plan.notable && (
+                  <small className={plan.delta < 0 ? 'v-warn' : 'muted'}>
+                    {' '}
+                    {plan.delta > 0 ? '+' : '−'}
+                    {num(Math.abs(plan.delta))}
+                  </small>
+                )}
+              </>
+            ) : (
+              '—'
+            ),
+          };
+        },
       },
-      spent: {content: spentText(row.spent)},
-      forecast: {content: ahead.text, title: ahead.title || undefined, className: row.outlook.tone},
-    } as Record<ForecastColumn, Cell>;
+      spent: {content: spentText(spentOf(line))},
+      forecast: {
+        time: 'forecast',
+        changesAt: now => outlookChangesAt(live, measuredAt, now, weekly),
+        at: now => {
+          const said = outlook(live, measuredAt, now, weekly);
+          const ahead = outlookCell(said);
+          return {content: ahead.text, title: ahead.title || undefined, className: said.tone};
+        },
+      },
+    } as Record<ForecastColumn, Cell | TimedCell>;
   };
 
   // In the list, what is left leads each row; the rest follows under the name, each value with its heading.
@@ -198,20 +244,23 @@ export const Forecast = memo(function Forecast({
                 <div className="forecast-compact-main">
                   <span className="swatch" style={{background: line.color}} />
                   <span className="forecast-compact-name">{line.name}</span>
-                  {columns.includes(lead) && (
-                    <span className={cells[lead].className} title={cells[lead].title}>
-                      <span className="sr-only">{heading(lead, range)}: </span>
-                      {cells[lead].content}
-                    </span>
-                  )}
+                  {columns.includes(lead) &&
+                    shown(lead, cells[lead], (cell, time) => (
+                      <span data-time={time} className={cell.className} title={cell.title}>
+                        <span className="sr-only">{heading(lead, range)}: </span>
+                        {cell.content}
+                      </span>
+                    ))}
                 </div>
                 {details.length > 0 && (
                   <div className="forecast-compact-details">
-                    {details.map(column => (
-                      <span key={column} title={cells[column].title}>
-                        {heading(column, range)} <span className={cells[column].className}>{cells[column].content}</span>
-                      </span>
-                    ))}
+                    {details.map(column =>
+                      shown(column, cells[column], (cell, time) => (
+                        <span data-time={time} title={cell.title}>
+                          {heading(column, range)} <span className={cell.className}>{cell.content}</span>
+                        </span>
+                      )),
+                    )}
                   </div>
                 )}
               </li>
@@ -248,11 +297,13 @@ export const Forecast = memo(function Forecast({
                         <span>{line.name}</span>
                       </span>
                     </td>
-                    {columns.map(column => (
-                      <td key={column} className={cells[column].className} title={cells[column].title}>
-                        {cells[column].content}
-                      </td>
-                    ))}
+                    {columns.map(column =>
+                      shown(column, cells[column], (cell, time) => (
+                        <td data-time={time} className={cell.className} title={cell.title}>
+                          {cell.content}
+                        </td>
+                      )),
+                    )}
                   </tr>
                 );
               })}

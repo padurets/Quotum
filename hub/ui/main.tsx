@@ -1,16 +1,17 @@
-import {useCallback, useEffect, useMemo, useState} from 'react';
+import {useCallback, useEffect, useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import '@fontsource-variable/geist';
 import '@fontsource-variable/geist-mono';
 import './style.css';
-import {historySources, useHistory, useOverview} from './lib/api';
 import {setPrefs, usePrefs} from './lib/prefs';
-import {showBoard, useTimeRange} from './lib/timeRange';
-import {useResets} from './lib/resets';
-import {sourceLabel, titled} from './lib/quota';
+import {showBoard} from './lib/timeRange';
 import {usePath} from './lib/router';
-import {boardTitle, rememberBoard, useBoard, useSession, type Board, type Session, type User} from './lib/session';
+import {boardTitle, rememberBoard, rereadSession, useBoard, useSession, type Board, type Session, type User} from './lib/session';
 import {ACTIVITY, AGENTS, areas, boardState, cardId, FORECAST, HISTORY, isHidden, reordered, spanOf, useView, withHidden, withSpan} from './lib/view';
+import {page, useBoardId, useBoardMeta, useBoards, useLineup, useRole, useServerView, useTitles} from './lib/board';
+import {heardHub, hubNow, wakeDue} from './lib/clock';
+import {startLive} from './lib/live';
+import {UNAUTHORIZED} from './lib/http';
 import {t, useLocale} from './i18n';
 import {Header} from './components/Header';
 import {SERVICE} from './components/Kit';
@@ -28,53 +29,70 @@ import {InvitePage} from './components/InvitePage';
 import {MachinesDialog, type MachinesTab} from './components/Machines';
 import {BoardDialog, type BoardTab} from './components/BoardDialog';
 import {AgentBanner, LocalOnboarding, OpenInApp, QuitButton, TakeOver} from './components/Desktop';
-import {inApp, useAppState} from './lib/app';
+import {followApp, inApp, type AppState} from './lib/app';
+
+/** The page's own entry script, as the hub's `index.html` names it: a page of another build is loaded anew. */
+function entryScript() {
+  const src = document.querySelector<HTMLScriptElement>('script[type="module"][src]')?.getAttribute('src');
+  return src?.startsWith('/') ? src : null;
+}
+
+/** The page's one connection to the hub's events: whatever the board on screen is, it comes this way. */
+const live = startLive({
+  dispatch: page.dispatch,
+  unauthorized: () => window.dispatchEvent(new Event(UNAUTHORIZED)),
+  gone: rereadSession,
+  script: entryScript(),
+  hubNow,
+  heard: (now, at) => {
+    heardHub(now, at);
+    // The hub answering may follow a sleep: whatever came due meanwhile shows at once.
+    wakeDue();
+  },
+});
+
+/** The desktop app's state, as it sends it and as its commands answer: into the page's state, the newest kept. */
+const setAppState = (state: AppState) => page.dispatch({type: 'app', state});
+if (inApp()) followApp(setAppState);
+
+const NO_BOARDS: Board[] = [];
 
 function Dashboard({
   user,
-  boards,
   local,
   refresh,
   onSignedOut,
 }: {
   user: User;
-  boards: Board[];
   /** The desktop app's hub: one person, one board, the app's own settings. */
   local: boolean;
   refresh: () => Promise<void>;
   onSignedOut: () => void;
 }) {
-  // In the app's window: its agent and settings (null in a browser).
-  const {state: appState, refresh: refreshApp, set: setAppState} = useAppState();
-  const [board, selectBoard] = useBoard(boards);
+  const boards = useBoards() ?? NO_BOARDS;
+  const [board, selectBoard] = useBoard();
   const boardId = board?.id ?? '';
-  // A board deleted meanwhile, or one the reader was removed from: the list of boards is read again.
-  const {data, lastOk, reload: reloadOverview} = useOverview(boardId, refresh);
-  const reload = useCallback(() => {
-    reloadOverview();
-    refreshApp();
-  }, [reloadOverview, refreshApp]);
-  const arrange = useView(data, reload);
+  useEffect(() => {
+    if (boardId) live.open(boardId);
+  }, [boardId]);
+  useEffect(() => () => live.close(), []);
+
+  // The board as the hub told it: nothing of it until its snapshot came. Each widget reads
+  // its own part; the board itself renders only when its sources, view or names change.
+  const meta = useBoardMeta(boardId);
+  const role = useRole();
+  const arrange = useView(useBoardId() ?? '', useServerView(), role === 'owner');
+  const lineup = useLineup();
+  const titles = useTitles(arrange.view.names);
   const prefs = usePrefs();
-  const revision = data ? data.revision : null;
-  // The analytics show one period: a time range selected on a chart, else the chosen one.
-  const selected = useTimeRange();
-  // A range kept on the page is of the sources the board had and whose work it showed: one changed since is read again.
-  const sourceIds = useMemo(() => historySources(data), [data]);
-  const {history, loading: historyLoading} = useHistory(boardId, selected ?? prefs.range, revision, sourceIds);
-  const {resets, past, health} = useResets(prefs.showResets);
   const [machines, setMachines] = useState<MachinesTab | null>(null);
   const [people, setPeople] = useState<BoardTab | null>(null);
   const [account, setAccount] = useState(false);
   const closeMachines = useCallback(() => setMachines(null), []);
 
-  // Sources are named from the whole board (owners appear only when they tell sources
-  // apart), or as the board's owner named them.
-  const names = arrange.view.names;
-  const overview = useMemo(() => (data ? {...data, sources: titled(data.sources, names)} : null), [data, names]);
-  const sources = overview?.sources ?? [];
-  const state = overview ? boardState(sources, arrange.view) : null;
+  const state = meta ? boardState(lineup.map(id => ({id})), arrange.view) : null;
   const empty = state === 'onboarding';
+  const personal = meta?.personal ?? true;
 
   useEffect(() => {
     document.title = board?.name ? `${boardTitle(board)} · ${SERVICE}` : SERVICE;
@@ -83,21 +101,13 @@ function Dashboard({
 
   // Every widget of the board: a card per source, the list of agents, and the analytics (agent activity, the chart and the table).
   const cards = new Map<string, Widget>(
-    sources.map(source => [
-      cardId(source.id),
+    lineup.map(id => [
+      cardId(id),
       {
-        id: cardId(source.id),
-        name: sourceLabel(source),
-        span: spanOf(arrange.view, cardId(source.id)),
-        content: (
-          <SourceCard
-            source={source}
-            resets={source.provider === 'claude' || source.provider === 'codex' ? resets[source.provider] : undefined}
-            arrange={arrange}
-            board={board}
-            onChanged={reload}
-          />
-        ),
+        id: cardId(id),
+        name: titles[id]?.title ?? '',
+        span: spanOf(arrange.view, cardId(id)),
+        content: <SourceCard id={id} arrange={arrange} boardId={boardId} personal={personal} />,
       },
     ]),
   );
@@ -106,7 +116,7 @@ function Dashboard({
     id: AGENTS,
     name: t('agents.title'),
     span: spanOf(arrange.view, AGENTS),
-    content: <AgentsPanel sources={sources} arrange={arrange} />,
+    content: <AgentsPanel arrange={arrange} />,
   });
   const panels = new Map<string, Widget>([
     [
@@ -115,7 +125,7 @@ function Dashboard({
         id: HISTORY,
         name: t('widgets.history'),
         span: spanOf(arrange.view, HISTORY),
-        content: <History history={history} loading={historyLoading} overview={overview} resets={resets} past={past} arrange={arrange} />,
+        content: <History arrange={arrange} />,
       },
     ],
     [
@@ -124,7 +134,7 @@ function Dashboard({
         id: FORECAST,
         name: t('forecast.title'),
         span: spanOf(arrange.view, FORECAST),
-        content: <Forecast history={history} loading={historyLoading} overview={overview} arrange={arrange} />,
+        content: <Forecast arrange={arrange} />,
       },
     ],
     [
@@ -133,7 +143,7 @@ function Dashboard({
         id: ACTIVITY,
         name: t('activity.title'),
         span: spanOf(arrange.view, ACTIVITY),
-        content: <Activity history={history} loading={historyLoading} overview={overview} arrange={arrange} />,
+        content: <Activity arrange={arrange} />,
       },
     ],
   ]);
@@ -159,13 +169,11 @@ function Dashboard({
   return (
     <>
       <Header
-        lastOk={lastOk}
         boards={boards}
         board={board}
         onBoard={selectBoard}
-        onBoardsChanged={refresh}
         widgets={
-          arrange.owner && overview && !empty ? (
+          arrange.owner && meta && !empty ? (
             <WidgetsMenu
               groups={[
                 {title: t('widgets.groupCards'), widgets: widgets.filter(widget => widget.id !== AGENTS && cards.has(widget.id))},
@@ -186,15 +194,15 @@ function Dashboard({
         local={local}
       />
       <main>
-        {local && <AgentBanner state={appState} />}
-        {!overview ? (
+        {local && <AgentBanner />}
+        {!meta ? (
           <div className="widgets" aria-hidden="true">
             {[0, 1, 2].map(i => (
               <div key={i} className="card is-loading" />
             ))}
           </div>
         ) : empty && local ? (
-          <LocalOnboarding agent={appState?.agent} onSettings={() => setAccount(true)} />
+          <LocalOnboarding onSettings={() => setAccount(true)} />
         ) : empty && board?.personal ? (
           <section className="panel onboarding">
             <h2>{t('onboarding.title')}</h2>
@@ -223,7 +231,7 @@ function Dashboard({
             {shownCards.length > 0 && grid(shownCards, order => arrange.update(view => reordered(view, [...order, ...ids(shownPanels)])))}
             {shownPanels.length > 0 && (
               <section className="analytics" aria-label={t('analytics.title')}>
-                <AnalyticsHead historyStart={overview?.historyStart ?? 0} />
+                <AnalyticsHead />
                 {grid(shownPanels, order => arrange.update(view => reordered(view, [...ids(shownCards), ...order])))}
               </section>
             )}
@@ -241,28 +249,19 @@ function Dashboard({
       </main>
       {machines && <MachinesDialog tab={machines} onTab={setMachines} onClose={closeMachines} local={local} />}
       {people && board && !board.personal && (
-        <BoardDialog
-          board={board}
-          userId={user.id}
-          tab={people}
-          titles={new Map(sources.map(source => [source.id, sourceLabel(source)]))}
-          onTab={setPeople}
-          onClose={() => setPeople(null)}
-          onChanged={reload}
-        />
+        <BoardDialog board={board} userId={user.id} tab={people} onTab={setPeople} onClose={() => setPeople(null)} />
       )}
       {account && (
         <AccountPanel
           user={user}
-          trackers={health}
           onChanged={refresh}
           onSignedOut={onSignedOut}
           onClose={() => setAccount(false)}
           local={local}
-          app={{state: appState, onState: setAppState}}
+          onAppState={setAppState}
         />
       )}
-      {local && <TakeOver agent={appState?.agent} onState={setAppState} />}
+      {local && <TakeOver onState={setAppState} />}
     </>
   );
 }
@@ -290,13 +289,13 @@ function App() {
 
   if (session.local) {
     if (!session.user) return <OpenInApp />;
-    return <Dashboard user={session.user} boards={session.boards} local refresh={refresh} onSignedOut={() => void refresh()} />;
+    return <Dashboard user={session.user} local refresh={refresh} onSignedOut={() => void refresh()} />;
   }
   if (path === '/device') return <DevicePage session={session} onSession={signedIn} />;
   const invite = path.match(/^\/invite\/([\w-]+)$/);
   if (invite) return <InvitePage secret={invite[1]} session={session} onSession={signedIn} onJoined={id => (rememberBoard(id), void refresh())} />;
   if (!session.user) return <AuthScreen session={session} onSignedIn={signedIn} />;
-  return <Dashboard user={session.user} boards={session.boards} local={false} refresh={refresh} onSignedOut={() => void refresh()} />;
+  return <Dashboard user={session.user} local={false} refresh={refresh} onSignedOut={() => void refresh()} />;
 }
 
 createRoot(document.getElementById('root')!).render(<App />);

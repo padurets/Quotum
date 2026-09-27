@@ -383,7 +383,10 @@ test('a device following the hub’s pace is told when to ask again, and the car
       body: {version: 1, agent: 'quotum/0.4.0', paced, machine: machine('m-0123456789ab'), subscriptions: [{provider: 'codex', account: 'a1b2c3d4e5f6a1b2c3d4e5f6', active: false, ...change}]},
       headers,
     });
-  const cadence = async () => (await call('GET', '/api/overview', {as: 'alice'})).body.sources[0]?.cadence;
+  const cadence = async () => {
+    const board = (await call('GET', '/api/overview', {as: 'alice'})).body;
+    return board.cadence[board.sources[0]?.id];
+  };
 
   const first = (await checkin(true)).body.subscriptions[0];
   assert.deepEqual([first.measure, first.onDuty, first.askInMs, first.nextInMs], [true, true, 15_000, 240_000]);
@@ -611,7 +614,9 @@ async function worked() {
   work('alice', 4, 3.5, 'secret', later);
   work('bob', 3, 1, 'billing');
   work('carol', 1.5, 0.5, 'quotum');
-  return {call, store, team, alices, bobs, source, later, invite, now, hour, ago, device: device('alice')};
+  // Whose agents' work the board shows and under which names: when it changes, open pages hear of it (events.ts).
+  const workKey = () => store.workKey(team, store.shown(team, new Directory(store.db).view(team).hidden));
+  return {call, store, team, alices, bobs, source, later, invite, now, hour, ago, device: device('alice'), workKey};
 }
 
 test('a range ending minutes ago says when to ask again, and is read anew once the work up to its end is credited', async t => {
@@ -705,21 +710,20 @@ test('the work a board shows follows its cards, members and names at once, a cos
   for (const costlyMs of [costly, 0]) {
     history.costlyMs = costlyMs;
     try {
-      const {call, team, source, device, invite} = await worked();
+      const {call, team, source, device, invite, workKey: key} = await worked();
       const read = async () => (await call('GET', `/api/history?board=${team}&range=24h`, {as: 'alice'})).body;
-      const key = async () => (await call('GET', `/api/overview?board=${team}`, {as: 'alice'})).body.workKey;
       const first = await read();
-      const before = await key();
-      assert.equal(await key(), before, 'the same while nothing changes');
+      const before = key();
+      assert.equal(key(), before, 'the same while nothing changes');
 
       // A hidden card: its work is not on the board, and comes back once it is shown again.
       await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {...EMPTY, hidden: [`source:${source}`]}});
       const hidden = await read();
       assert.deepEqual([hidden.activity.workMs, hidden.activity.by.source, hidden.series[0].work], [0, [], null], `hidden, costlyMs ${costlyMs}`);
-      assert.notEqual(await key(), before);
+      assert.notEqual(key(), before);
       await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: EMPTY});
       assert.deepEqual(hoursBy(await read(), 'project'), hoursBy(first, 'project'), 'shown again');
-      assert.equal(await key(), before);
+      assert.equal(key(), before);
 
       // Names given to projects and machines show in the next answer.
       await call('POST', '/api/projects', {as: 'alice', body: {groups: ['quotum'], name: 'Quotum hub'}});
@@ -742,24 +746,19 @@ test('the work a board shows follows its cards, members and names at once, a cos
 });
 
 test('a board’s history is read under a key of what the board shows, which names off the board leave as it is', async () => {
-  const {call, team, later, invite} = await worked();
-  const key = async () => (await call('GET', `/api/overview?board=${team}`, {as: 'alice'})).body.workKey;
-  const read = async () => (await call('GET', `/api/history?board=${team}&range=24h`, {as: 'alice'})).body;
-  assert.equal((await read()).workKey, await key(), 'an answer says under which key it was read');
-
+  const {call, team, later, workKey: key} = await worked();
   // Alice's second subscription leaves the board: the project she worked on only there is off it.
   await call('DELETE', `/api/boards/${team}/shares/${later}`, {as: 'alice'});
-  const before = await key();
+  const before = key();
   await call('POST', '/api/projects', {as: 'alice', body: {groups: ['secret'], name: 'Hidden'}});
-  assert.equal(await key(), before, 'a project renamed off the board');
+  assert.equal(key(), before, 'a project renamed off the board');
   // A machine that measures but has no agents on the board's subscriptions.
   const secret = (await call('POST', '/api/tokens', {as: 'bob', body: {}})).body.secret;
   await call('POST', '/v1/ingest', {body: batch('bob-desk-0123456789'), headers: {authorization: `Bearer ${secret}`}});
-  assert.equal(await key(), before, 'a machine added with no agents on the board');
+  assert.equal(key(), before, 'a machine added with no agents on the board');
   // A name the board shows changes the key.
   await call('POST', '/api/projects', {as: 'alice', body: {groups: ['quotum'], name: 'Quotum hub'}});
-  assert.notEqual(await key(), before);
-  assert.ok(invite);
+  assert.notEqual(key(), before);
 });
 
 test('the work of a period is of its known part: a range reads its own, and one before the hub kept work reads none', async () => {
@@ -795,7 +794,10 @@ test('agents report the coding agents running on their machines; the cards of th
   const guessed = {provider: 'codex', origin: 'editor', startedAt: started, working: false};
   const answer = await report([codex, unknown, guessed]);
   assert.deepEqual([answer.status, answer.body], [200, {accepted: 2}], 'a subscription the hub does not know is left out');
-  const shown = async () => (await call('GET', '/api/overview', {as: 'alice'})).body.sources[0].sessions;
+  const shown = async () => {
+    const board = (await call('GET', '/api/overview', {as: 'alice'})).body;
+    return board.sessions[board.sources[0].id];
+  };
   const [first, second] = await shown();
   assert.deepEqual([first.origin, first.project, first.folder, first.working, first.device.name, first.startedAt], ['terminal', 'quotum', null, true, 'build-01', Date.parse(started)]);
   assert.equal(second.lastWorkedAt, null, 'an older agent omits the date');

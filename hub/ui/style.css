@@ -76,6 +76,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .logo { width: 26px; height: 26px; }
 .logo-mark { fill: none; stroke: #0c0d18; stroke-width: 3.4; stroke-linecap: round; }
 .status { margin-left: auto; display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--text-2); min-width: 0; }
+/* A slot for what shows with time: always there for the clock to render, it takes no room of its own. */
+.time-slot { display: contents; }
 .mono { font-family: var(--mono); font-size: .92em; color: var(--text-2); }
 .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
 .dot-ok { background: var(--ok); box-shadow: 0 0 8px #75d8ad99; }

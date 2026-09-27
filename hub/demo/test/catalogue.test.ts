@@ -16,7 +16,7 @@ import {Store} from '../../server/store/store.js';
 import type {ResetEvent, ResetProvider} from '../../server/domain/resets.js';
 import {setLocale} from '../../ui/i18n/index.js';
 import {agentRows, byActivity, drawn, folderOf, machinesOf} from '../../ui/lib/agents.js';
-import {LIVE_COLUMNS, forecastLayout, forecastRow} from '../../ui/lib/forecast.js';
+import {LIVE_COLUMNS, forecastLayout, outlook, planCell, spentOf} from '../../ui/lib/forecast.js';
 import {dashOf, lineWork, workNotes} from '../../ui/lib/work.js';
 import {activityEmpty} from '../../ui/lib/activity.js';
 import {chartEvents, chartResets, linesOf} from '../../ui/lib/lines.js';
@@ -25,7 +25,8 @@ import {planNote, started} from '../../ui/lib/plan.js';
 import {shown as gathered, type Projects} from '../../ui/lib/projects.js';
 import {cadenceOf, dotOf, level, resetLine, titled, windowName} from '../../ui/lib/quota.js';
 import {resetLabel, type Resets, type TrackerHealth} from '../../ui/lib/resets.js';
-import {ANALYTICS_KINDS, type History, type Overview} from '../../ui/lib/types.js';
+import {ANALYTICS_KINDS, type History, type LiveSession, type Pace, type View} from '../../ui/lib/types.js';
+import type {Snapshot} from '../../ui/lib/board.js';
 import {ACTIVITY, AGENTS, boardState, cardId, columnShown, FORECAST, HISTORY, isHidden, isWindowHidden, planOf, spanOf} from '../../ui/lib/view.js';
 import {SCENES, SETS} from '../catalogue.js';
 import {
@@ -108,6 +109,9 @@ function points(set: DemoSet): number[] {
   return [...new Set(found)].sort((a, b) => a - b);
 }
 
+/** A board as the page puts it together from its snapshot: each card named from the whole board, with its agents and its pace. */
+type Overview = {view: View; historyStart: number; sources: (Snapshot['sources'][number] & {title: string; sessions: LiveSession[]; cadence: Pace})[]};
+
 /** What the hub shows at one moment, read once per board as the page would. */
 class Reading {
   private readonly overviews = new Map<string, Promise<Overview>>();
@@ -132,10 +136,11 @@ class Reading {
       this.overviews.set(
         board,
         this.reader(board)
-          .get<Overview>(`/api/overview?board=${encodeURIComponent(id)}`)
+          .get<Snapshot>(`/api/overview?board=${encodeURIComponent(id)}`)
           .then(data => {
-            const overview = {...data, sources: titled(data.sources, data.view.names)};
-            const ordered = (sessions: Overview['sources'][number]['sessions']) => {
+            const sources = titled(data.sources, data.view.names).map(card => ({...card, sessions: data.sessions[card.id] ?? [], cadence: data.cadence[card.id] ?? null}));
+            const overview: Overview = {view: data.view, historyStart: data.historyStart, sources};
+            const ordered = (sessions: LiveSession[]) => {
               for (let i = 1; i < sessions.length; i++) assert.ok(byActivity(sessions[i - 1], sessions[i]) <= 0, `${board}: activity order`);
             };
             ordered(agentRows(overview.sources, overview.view).rows.map(r => r.session));
@@ -191,7 +196,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
       const [overview, history] = await Promise.all([reading.overview(board), reading.history(board, range)]);
       if (isHidden(overview.view, HISTORY)) return `the chart is hidden on the board ${board}`;
       const frame = frameOf(null, {range: range ?? '24h', horizon: 'auto'}, now, overview.historyStart);
-      const marks = chartResets(told.past, linesOf(history, overview, overview.view, 'weekly'), frame.from, frame.to).filter(m => m.provider === provider);
+      const marks = chartResets(told.past, linesOf(history, overview.sources, overview.view, 'weekly'), frame.from, frame.to).filter(m => m.provider === provider);
       return {marked: provider, resets: marks.length, range};
     }
     const {reset} = check as {reset: 'claude' | 'codex'};
@@ -256,7 +261,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
       const folders = rows.filter(row => row.session.project === agentsOf).map(row => folderOf(row.session));
       return {agentsOf, folders: folders.sort((a, b) => (a ?? '').localeCompare(b ?? ''))};
     }
-    const series = 'weeklySeries' in check ? linesOf(await reading.history(entry.id), overview, overview.view, 'weekly').length : 0;
+    const series = 'weeklySeries' in check ? linesOf(await reading.history(entry.id), overview.sources, overview.view, 'weekly').length : 0;
     return {
       state: boardState(overview.sources, overview.view),
       rows: empty ?? rows.length,
@@ -306,21 +311,23 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
   if ('forecast' in card && live) {
     if (isHidden(overview.view, FORECAST)) return `the table is hidden on the board ${board}`;
     if (!ANALYTICS_KINDS.includes(live.kind)) return `window ${id} is of the kind ${live.kind}: the table shows only weekly and five-hour windows`;
-    const line = linesOf(await reading.history(board), overview, overview.view, live.kind).find(l => l.sourceId === source.id && l.windowId === id);
+    const line = linesOf(await reading.history(board), overview.sources, overview.view, live.kind).find(l => l.sourceId === source.id && l.windowId === id);
     if (!line) return `no line of ${id} in the table`;
-    const row = forecastRow(line, live, source.successAt, now, weekly);
+    // As the table's cells put it (components/Forecast.tsx).
+    const ahead = outlook(live, source.successAt, now, weekly);
+    const plan = planCell(live, source.successAt, now, weekly);
     Object.assign(values, {
       forecast: id,
-      outlook: row.outlook.key,
-      tone: row.outlook.tone,
-      spent: row.spent.key,
-      plan: !row.plan ? 'none' : !row.plan.notable ? 'even' : row.plan.delta >= 0 ? 'behind' : 'ahead',
+      outlook: ahead.key,
+      tone: ahead.tone,
+      spent: spentOf(line).key,
+      plan: !plan ? 'none' : !plan.notable ? 'even' : plan.delta >= 0 ? 'behind' : 'ahead',
     });
   }
   if ('work' in card && live) {
     if (isHidden(overview.view, FORECAST)) return `the table is hidden on the board ${board}`;
     const history = await reading.history(board, card.range);
-    const line = linesOf(history, overview, overview.view, live.kind).find(l => l.sourceId === source.id && l.windowId === id);
+    const line = linesOf(history, overview.sources, overview.view, live.kind).find(l => l.sourceId === source.id && l.windowId === id);
     if (!line) return `no line of ${id} in the table`;
     const cells = lineWork(line, typeof card.range !== 'string', live.resetAt, now);
     if (!cells || !line.work) return `no work of ${id}`;
@@ -357,7 +364,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
     // Marked on the chart as it opens: the weekly windows of the last 24 hours.
     if (isHidden(overview.view, HISTORY)) return `the chart is hidden on the board ${board}`;
     const history = await reading.history(board);
-    const marks = chartEvents(history.events, linesOf(history, overview, overview.view, 'weekly'), frameOf(null, {range: '24h', horizon: 'auto'}, now, overview.historyStart).from);
+    const marks = chartEvents(history.events, linesOf(history, overview.sources, overview.view, 'weekly'), frameOf(null, {range: '24h', horizon: 'auto'}, now, overview.historyStart).from);
     const events = marks.filter(m => m.event.sourceId === source.id).map(m => m.event.kind);
     values.event = events.includes(card.event) ? card.event : events;
   }

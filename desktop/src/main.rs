@@ -11,6 +11,7 @@ mod host;
 mod host;
 mod hub;
 mod ipc;
+mod notifier;
 mod settings;
 mod shell;
 mod smoke;

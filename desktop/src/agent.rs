@@ -228,6 +228,7 @@ impl Shell {
 
     fn set_agent(&self, state: State) {
         self.agent().state = state;
+        self.wake();
     }
 }
 
@@ -280,12 +281,16 @@ fn begin(shell: &Arc<Shell>) {
             agent.config = config;
             agent.state = if idle { State::Idle } else { State::Measuring };
             drop(agent);
+            shell.wake();
             if !idle {
                 run(shell);
             }
             autostart::by_default(shell);
         }
-        Err(error) => agent.state = State::Failed { cause: Cause::Config, error },
+        Err(error) => {
+            agent.state = State::Failed { cause: Cause::Config, error };
+            shell.wake();
+        }
     }
 }
 
@@ -330,6 +335,7 @@ fn measure(
     runner.run(&mut sink, |event| match event {
         Event::Measured(outcome, _) => {
             record(&last, outcome);
+            shell.wake();
             if let (Ok(_), Some(smoke)) = (outcome, &shell.smoke) {
                 smoke.measured(&shell);
             }
@@ -467,6 +473,7 @@ pub fn take_over(shell: &Arc<Shell>) -> Result<(), String> {
         }
         agent.state = State::TakingOver;
     }
+    shell.wake();
     let taken = shell.paths.stop_running(How::Yield).and_then(|_| shell.paths.lock_run(Holder::App).map_err(describe));
     if shell.exiting() {
         return Ok(());
@@ -531,6 +538,7 @@ pub fn tick(shell: &Arc<Shell>) {
                 };
                 // It measures no more: the machine is let go, and a waiting `quotum` goes on.
                 agent.lock.take();
+                shell.wake();
                 return;
             }
             let now = stat(&shell.paths);
@@ -555,6 +563,7 @@ pub fn tick(shell: &Arc<Shell>) {
 /// Changes the settings in config.toml; the agent measures with them in a moment.
 pub fn save_settings(shell: &Arc<Shell>, patch: &Patch) -> Result<(), String> {
     let number = accept_settings(&shell.paths, &shell.agent, &shell.settings_ops, patch)?;
+    shell.wake();
     let shell = shell.clone();
     thread::spawn(move || {
         thread::sleep(Duration::from_millis(1500));

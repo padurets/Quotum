@@ -1,5 +1,5 @@
 import {useEffect, useId, useLayoutEffect, useRef, useState, type PointerEvent} from 'react';
-import {hubNow} from '../lib/api';
+import {hubNow} from '../lib/clock';
 import {draggedRange, type TimeRange} from '../lib/timeRange';
 import {SWIPE, swiped} from '../lib/swipe';
 

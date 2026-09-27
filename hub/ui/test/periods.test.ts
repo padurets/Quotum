@@ -1,7 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {frameOf, periodLabel, periodOf, PERIODS, step} from '../lib/periods';
-import {complete, heardHub, historySources, hubNow, keptFor, readFor} from '../lib/api';
+import {complete} from '../lib/history';
+import {heardHub, hubNow} from '../lib/clock';
 import {setLocale} from '../i18n';
 import type {History} from '../lib/types';
 
@@ -83,15 +84,10 @@ test('‹ stops where history starts, or the hub stops keeping it, and is off th
 test('only an answer that is all there is of a range is kept on the page', () => {
   const cellMs = 5 * minute;
   const range = {from: now - 2 * day - 3 * minute, to: now - day - 3 * minute};
-  const answer = {range: '', now, since: 0, to: Math.ceil(range.to / cellMs) * cellMs, cellMs, historyStart: 0, series: [], events: [], refreshInMs: null, workKey: '', activity: {since: 0, known: null, barMs: 60_000, workMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}}} as History;
+  const answer = {range: '', now, since: 0, to: Math.ceil(range.to / cellMs) * cellMs, cellMs, historyStart: 0, series: [], events: [], refreshInMs: null, activity: {since: 0, known: null, barMs: 60_000, workMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}}} as History;
   assert.equal(complete(answer, range), true);
   assert.equal(complete({...answer, to: now - day - 4 * minute}, range), false, 'cut to the hub’s now');
-  assert.equal(complete({...answer, refreshInMs: 60_000}, range), false, 'a newer one is on its way');
-  const sources = historySources({sources: [{id: 'claude:1'}], workKey: 'a'} as Parameters<typeof historySources>[0]);
-  assert.equal(keptFor({...answer, workKey: 'a'}, range, sources), true);
-  assert.equal(keptFor({...answer, workKey: 'b'}, range, sources), false, 'read under another state of the board than the page knows');
-  assert.equal(keptFor({...answer, workKey: 'a', refreshInMs: 60_000}, range, sources), false);
-  assert.equal(keptFor({...answer, workKey: 'a'}, null, sources), false, 'a period up to now is read again as it moves on');
+  assert.equal(complete({...answer, refreshInMs: 60_000}, range), false, 'a newer one is on its way: a range whose work is still credited too');
 });
 
 test('the page reckons the hub’s clock from the last answer, ahead or behind its own', () => {
@@ -100,15 +96,4 @@ test('the page reckons the hub’s clock from the last answer, ahead or behind i
   heardHub(now + 3 * minute, now);
   assert.equal(hubNow(now), now + 3 * minute);
   heardHub(now, now);
-});
-
-test('ranges kept on the page are read again when the sources of the board or whose work it shows change', () => {
-  const overview = {sources: [{id: 'codex:2'}, {id: 'claude:1'}], workKey: 'a'} as Parameters<typeof historySources>[0];
-  const key = historySources(overview);
-  assert.equal(key, historySources({...overview!, sources: [{id: 'claude:1'}, {id: 'codex:2'}]} as typeof overview), 'in any order');
-  assert.notEqual(historySources({...overview!, workKey: 'b'}), key, 'a card hidden, a project renamed, someone joined');
-  assert.notEqual(historySources({...overview!, sources: [{id: 'claude:1'}]} as typeof overview), key);
-  assert.equal(historySources(null), '');
-  assert.equal(readFor(key, {workKey: 'a'}), true, 'read for the board as the page knows it');
-  assert.equal(readFor(key, {workKey: 'b'}), false, 'read after a change the page has not heard of: not kept for its state');
 });

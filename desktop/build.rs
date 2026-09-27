@@ -23,6 +23,7 @@ fn main() {
             "set_autostart",
             "reenter",
             "quit",
+            "watch_state",
         ]);
         tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest)).expect("tauri-build");
     }

@@ -1,25 +1,29 @@
 import {memo, useLayoutEffect, useMemo, useRef, useState} from 'react';
-import {MINUTE, useNow} from '../lib/api';
-import type {Activity as ActivityData, ActivityDimension, ActivityGroup, History as HistoryData, Overview} from '../lib/types';
+import type {Activity as ActivityData, ActivityDimension, ActivityGroup} from '../lib/types';
 import {clock, num, shortDay, stamp, workHours} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
 import {activityEmpty, activityScale, groupColors, mutedKey} from '../lib/activity';
 import {ACTIVITY_BY, setMuted, setPrefs, usePrefs} from '../lib/prefs';
 import {goTo, setTimeRange, useTimeRange, type TimeRange} from '../lib/timeRange';
-import {cellLabel, frameOf, measuredTo, niceTicks, step} from '../lib/periods';
+import {cellLabel, frameChangesAt, frameOf, measuredTo, niceTicks, step} from '../lib/periods';
 import {ACTIVITY, cardId, isHidden, withHidden, type Arrange} from '../lib/view';
+import {useNamed, type Named} from '../lib/board';
+import {hubNow, useClock} from '../lib/clock';
+import {useHistory, useHistoryBegins} from '../lib/history';
 import {t, useLocale, type Key} from '../i18n';
 import {Segmented} from './Kit';
 import {HideRow, Popover, SlidersIcon} from './Popover';
 import {Tooltip, useTip} from './Tooltip';
 import {useTimeAxis} from './timeAxis';
 
+const MINUTE = 60_000;
+
 const LABELS: Record<ActivityDimension, Key> = {source: 'activity.bySource', project: 'activity.byProject', device: 'activity.byDevice'};
 
 /** A group as the legend and the tooltip name it. */
-function groupName(group: ActivityGroup, by: ActivityDimension, overview: Overview | null) {
+function groupName(group: ActivityGroup, by: ActivityDimension, sources: Named[]) {
   if (by === 'source') {
-    const source = overview?.sources.find(s => s.id === group.key);
+    const source = sources.find(s => s.id === group.key);
     return source ? sourceLabel(source) : group.key;
   }
   return group.name ?? (by === 'project' ? t('activity.noProject') : group.key);
@@ -52,35 +56,27 @@ function ActivitySettings({arrange}: {arrange: Arrange}) {
  * time together. It follows the period, a range dragged on it or on the chart and moving
  * through time, as the chart and the table do, and shows only what the board shows. The
  * part of the period before the hub knew how agents worked is marked as such rather than
- * drawn empty.
+ * drawn empty. It reads the history on screen and the board's cards, as the chart does, and
+ * moves with time as it does, a cell of the history's grid at a time.
  */
-export const Activity = memo(function Activity({
-  history,
-  loading,
-  overview,
-  arrange,
-}: {
-  history: HistoryData | null;
-  /** Another period is loading; `history` is the previous one until it comes. */
-  loading: boolean;
-  overview: Overview | null;
-  arrange: Arrange;
-}) {
-  const now = useNow(MINUTE);
+export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
+  const {history, loading} = useHistory();
+  const sources = useNamed(arrange.view.names);
   const prefs = usePrefs();
   const by = prefs.activityBy;
   useLocale();
   const selected = useTimeRange();
-  const historyStart = overview?.historyStart ?? history?.historyStart ?? 0;
+  const now = useClock(now => frameChangesAt(selected, history?.cellMs ?? 60_000, now));
+  const historyStart = useHistoryBegins();
   const frame = frameOf(selected, prefs, now, historyStart);
   const from = frame.from;
   const to = measuredTo(frame, history, selected, prefs.range);
   const activity = history?.activity ?? null;
   const groups = activity?.by[by] ?? [];
-  const colors = groupColors(groups, by, arrange.view, source => overview?.sources.find(s => s.id === source)?.provider ?? '');
-  const names = groups.map(group => groupName(group, by, overview));
+  const colors = groupColors(groups, by, arrange.view, source => sources.find(s => s.id === source)?.provider ?? '');
+  const names = groups.map(group => groupName(group, by, sources));
   const muted = groups.map(group => !!prefs.muted[mutedKey(by, group.key)]);
-  const shownSources = overview?.sources.filter(source => !isHidden(arrange.view, cardId(source.id))) ?? [];
+  const shownSources = sources.filter(source => !isHidden(arrange.view, cardId(source.id)));
   // Known from later than the period the hub answered begins (not the page's frame, whose clock may be a minute behind).
   const since = history && activity?.known && activity.known.from > history.since ? activity.known.from : null;
 
@@ -94,7 +90,7 @@ export const Activity = memo(function Activity({
         : t(`activity.${said.key}`);
 
   return (
-    <section className={`panel activity ${loading ? 'is-loading' : ''}`} aria-label={t('activity.title')} aria-busy={loading}>
+    <section className={`panel activity ${loading ? 'is-loading' : ''}`} data-time="chart" aria-label={t('activity.title')} aria-busy={loading}>
       <div className="panel-head">
         <h2>{t('activity.title')}</h2>
         <ActivitySettings arrange={arrange} />
@@ -124,7 +120,7 @@ export const Activity = memo(function Activity({
             to={to}
             unknownTo={since}
             onSelect={setTimeRange}
-            onStep={direction => goTo(step(selected, prefs.range, direction, now, historyStart))}
+            onStep={direction => goTo(step(selected, prefs.range, direction, hubNow(), historyStart))}
           />
           <div className="legend">
             {groups.map((group, i) => (

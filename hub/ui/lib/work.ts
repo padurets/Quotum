@@ -117,6 +117,18 @@ export function lineWork(line: Pick<Line, 'work' | 'current' | 'remainingAtEnd' 
 }
 
 /**
+ * When a line's forecast by work over a period up to now reads otherwise as time passes:
+ * hours of work short of the reset come to last to it once the reset is nearer than they
+ * are, and the reset going by unmeasured leaves any of it waiting for a measurement.
+ * Nothing else about work moves with time; null where the reset is not ahead.
+ */
+export function workLeftChangesAt(line: Pick<Line, 'work' | 'current' | 'remainingAtEnd' | 'minutes'>, resetAt: number | null, now: number): number | null {
+  if (resetAt === null || resetAt <= now) return null;
+  const left = lineWork(line, false, resetAt, now)?.workleft;
+  return left && 'value' in left ? Math.min(resetAt, Math.max(now + 1, Math.ceil(resetAt - left.value))) : resetAt;
+}
+
+/**
  * What the tooltips of a window's work cells add: since when its work is known, when that
  * is after the period begins (`since`); how much work the pace and the share are taken over,
  * when that is notably less than the hours shown (`basis`); and the share of the spending

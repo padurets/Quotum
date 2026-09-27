@@ -397,14 +397,20 @@ agent running in the background keeps its version until it is started again.
 **Opening the hub to other machines.** Put it behind HTTPS (sessions are cookies and
 tokens are bearer secrets): [deploy/compose.yaml](deploy/compose.yaml) does it with
 Caddy. Behind a proxy of your own, tell the hub its address and trust the proxy:
-`QUOTUM_PUBLIC_URL=https://quotum.example.com QUOTUM_TRUST_PROXY=true`.
+`QUOTUM_PUBLIC_URL=https://quotum.example.com QUOTUM_TRUST_PROXY=true`. An open
+dashboard keeps one stream (`/api/events`) the hub pushes changes on: let the proxy
+pass it as it comes (nginx does, as the hub asks it to); where a proxy holds it back,
+the page asks with long polls instead. Over HTTP/2, as Caddy serves it, a browser keeps
+up to eight boards live at once (a tab hidden for half a minute lets its stream go);
+over plain HTTP/1.1, about five.
 
 ## More
 
 - [docs/architecture.md](docs/architecture.md): how the parts fit, how measuring and
   scheduling work, people, boards and devices.
 - [spec/ingest-v1.md](spec/ingest-v1.md): what the agent sends to the hub; anything can
-  implement it.
+  implement it. [spec/dashboard-v1.md](spec/dashboard-v1.md): what the hub tells an open
+  dashboard.
 - [CONTRIBUTING.md](CONTRIBUTING.md): checking a change and what to keep in mind;
   [SECURITY.md](SECURITY.md): reporting a vulnerability privately.
 - `npm run demo` in `hub/` (after `npm run build`): a live board on throwaway data with
@@ -421,7 +427,7 @@ install/              the installers for `curl … | sh` and PowerShell
 deploy/               running the hub with Docker Compose behind Caddy (HTTPS)
 desktop/              the desktop app (Rust, Electron on Linux, Tauri on Windows): the agent, its own hub and board in a window
 .github/workflows     tests on every push; everything released from a version tag
-spec/                 the protocol between the agent and the hub
+spec/                 the protocols: the agent to the hub, the hub to its dashboard
 hub/server/domain     the rules: windows, spending, resets, the ingest format
 hub/server/store      SQLite: layout, measurements, people and devices
 hub/server/routes     HTTP routes for people and for agents

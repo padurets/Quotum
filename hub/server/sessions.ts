@@ -82,6 +82,11 @@ export class Sessions {
     for (const device of devices) this.machines.delete(device);
   }
 
+  /** The subscriptions a machine's list shows agents on. */
+  sourcesOf(device: string): string[] {
+    return [...(this.machines.get(device)?.sources.keys() ?? [])];
+  }
+
   /**
    * The sessions running on a subscription on the machines of `people` (those on the
    * board read who measure it, whoever brought it there), by machine name and then by age.
@@ -101,12 +106,24 @@ export class Sessions {
     return found.sort((a, b) => a.device.name.localeCompare(b.device.name) || a.device.id.localeCompare(b.device.id) || a.startedAt - b.startedAt);
   }
 
+  /** When `of` answers otherwise with no new list: a machine's list shown now stops showing. Null when only a new list changes it. */
+  ofChangesAt(source: string, people: string[], now: number): number | null {
+    const ends = [...this.machines.values()].filter(m => now - m.at <= KEEP_MS && people.includes(m.user) && m.sources.get(source)?.length).map(m => m.at + KEEP_MS + 1);
+    return ends.length ? Math.min(...ends) : null;
+  }
+
   /** Whether an agent works on a subscription on any machine, by lists that still count as true. */
   working(source: string, now: number): boolean {
     for (const machine of this.machines.values()) {
       if (now - machine.at <= CREDIT_MS && machine.sources.get(source)?.some(s => s.working)) return true;
     }
     return false;
+  }
+
+  /** When `working` may answer otherwise with no new list: a list that says an agent works stops counting. */
+  workingChangesAt(source: string, now: number): number | null {
+    const ends = [...this.machines.values()].filter(m => now - m.at <= CREDIT_MS && m.sources.get(source)?.some(s => s.working)).map(m => m.at + CREDIT_MS + 1);
+    return ends.length ? Math.min(...ends) : null;
   }
 
   /**

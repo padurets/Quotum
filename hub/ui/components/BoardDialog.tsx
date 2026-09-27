@@ -2,6 +2,7 @@ import {useCallback, useEffect, useState} from 'react';
 import {PROVIDERS} from '../lib/providers';
 import {call} from '../lib/http';
 import {boardTitle, type Board} from '../lib/session';
+import {useTitles} from '../lib/board';
 import {LOGOS} from './logos';
 import {CopyField, ErrorLine, Modal, Segmented} from './Kit';
 import {SwitchRow} from './Popover';
@@ -21,8 +22,10 @@ const Logo = ({provider}: {provider: string}) => <img className="share-logo" src
 /**
  * What a shared board shows and what the reader could add to it. Everyone shares what
  * their own devices measure; the board's owner, or whoever shared a card, takes it off.
+ * The board shows the change when the hub tells it.
  */
-function SharesTab({board, titles, onChanged}: {board: Board; titles: Map<string, string>; onChanged: () => void}) {
+function SharesTab({board}: {board: Board}) {
+  const titles = useTitles();
   const [shares, setShares] = useState<Shares | null>(null);
   const [error, setError] = useState<unknown>(null);
   const load = useCallback(() => {
@@ -36,7 +39,6 @@ function SharesTab({board, titles, onChanged}: {board: Board; titles: Map<string
       const path = `/api/boards/${encodeURIComponent(board.id)}/shares`;
       await (share ? call('POST', path, {source}) : call('DELETE', `${path}/${encodeURIComponent(source)}`));
       load();
-      onChanged();
     } catch (failure) {
       setError(failure);
     }
@@ -53,7 +55,7 @@ function SharesTab({board, titles, onChanged}: {board: Board; titles: Map<string
               <li key={s.source}>
                 <span className="share-name">
                   <Logo provider={s.provider} />
-                  <b>{titles.get(s.source) ?? providerName(s.provider)}</b>
+                  <b>{titles[s.source]?.title ?? providerName(s.provider)}</b>
                 </span>
                 <small>{s.sharedBy && t('shares.sharedBy', {name: s.sharedBy})}</small>
                 {(board.role === 'owner' || s.mine) && (
@@ -91,7 +93,7 @@ function SharesTab({board, titles, onChanged}: {board: Board; titles: Map<string
   );
 }
 
-function MembersTab({board, userId, onChanged}: {board: Board; userId: string; onChanged: () => void}) {
+function MembersTab({board, userId}: {board: Board; userId: string}) {
   const [members, setMembers] = useState<Member[]>([]);
   const [invite, setInvite] = useState<string | null>(null);
   const [reset, setReset] = useState(false);
@@ -115,7 +117,6 @@ function MembersTab({board, userId, onChanged}: {board: Board; userId: string; o
     run(async () => {
       await call('DELETE', `/api/boards/${encodeURIComponent(board.id)}/members/${encodeURIComponent(member.id)}`);
       load();
-      onChanged();
     });
   const create = () => run(async () => setInvite((await call<{url: string}>('POST', `/api/boards/${encodeURIComponent(board.id)}/invites`)).url));
   const revoke = () =>
@@ -172,19 +173,14 @@ export function BoardDialog({
   board,
   userId,
   tab,
-  titles,
   onTab,
   onClose,
-  onChanged,
 }: {
   board: Board;
   userId: string;
   tab: BoardTab;
-  /** The cards' names on the board, for what is shared already. */
-  titles: Map<string, string>;
   onTab: (tab: BoardTab) => void;
   onClose: () => void;
-  onChanged: () => void;
 }) {
   return (
     <Modal title={boardTitle(board)} onClose={onClose} wide>
@@ -198,8 +194,8 @@ export function BoardDialog({
         onChange={onTab}
       />
       <div className="dialog-body">
-        {tab === 'shares' && <SharesTab board={board} titles={titles} onChanged={onChanged} />}
-        {tab === 'members' && <MembersTab board={board} userId={userId} onChanged={onChanged} />}
+        {tab === 'shares' && <SharesTab board={board} />}
+        {tab === 'members' && <MembersTab board={board} userId={userId} />}
       </div>
     </Modal>
   );

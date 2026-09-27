@@ -1,8 +1,8 @@
-import {useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties} from 'react';
-import {clock, countdown, num, shortDay, stamp} from '../lib/format';
-import {t} from '../i18n';
+import {memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties} from 'react';
+import {clock, countdown, countdownChangesAt, num, shortDay, stamp} from '../lib/format';
+import {t, useLocale} from '../i18n';
 import type {Line} from '../lib/lines';
-import {MINUTE, useNow} from '../lib/api';
+import {useClock} from '../lib/clock';
 import {gapText, gapTone, readout as readCell, valueAt, type ForecastLine, type PlanLine} from '../lib/readout';
 import type {TimeRange} from '../lib/timeRange';
 import {cellLabel, niceTicks} from '../lib/periods';
@@ -166,6 +166,56 @@ function MarkerLabel({
 }
 
 /**
+ * A label past the right edge: what comes there and how soon, by the page's clock. A part of
+ * its own, it renders when its countdown reads otherwise, and the chart does not.
+ */
+const EdgeLabel = memo(function EdgeLabel({
+  id,
+  name,
+  at,
+  runsOut,
+  color,
+  x,
+  y,
+  room,
+  fonts,
+  onEdge,
+}: {
+  id: string;
+  name: string;
+  at: number;
+  /** Where a window runs out, named by its series (shortened to what fits), or an announcement. */
+  runsOut: boolean;
+  color?: string;
+  x: number;
+  y: number;
+  room: number;
+  fonts: number;
+  onEdge: (edge: {key: string; tapped: boolean} | null) => void;
+}) {
+  const now = useClock(now => countdownChangesAt(at, now));
+  // Its words are rebuilt when the language changes.
+  useLocale();
+  const say = (label: string) => t(runsOut ? 'chart.runsOut' : 'chart.ahead', {label, time: countdown(at - now)});
+  return (
+    <g data-time="countdown">
+      <MarkerLabel
+        x={x}
+        y={y}
+        end
+        color={color}
+        fonts={fonts}
+        // It ends at the plot's right edge, and its backing, 6 wider than the text, starts within the plot.
+        shorten={runsOut ? {name, say, room} : undefined}
+        onTip={(shown, tapped) => onEdge(shown ? {key: id, tapped} : null)}
+      >
+        {say(name)}
+      </MarkerLabel>
+    </g>
+  );
+});
+
+/**
  * Remaining quota over time for every selected window. All series share one time
  * grid, so hovering anywhere snaps to a cell and reads every series for it — no
  * pixel hunting. Lines break only where a whole cell is empty.
@@ -245,9 +295,6 @@ export function Chart({
   // A cell ahead of now where no line reads anything says only what happens in it.
   const grid = rows.length > 0 && columnCount > 0;
   const markerReadout = hover === null ? [] : markers.filter(m => m.at >= hover && m.at < hover + cellMs);
-  // Past the right edge: an announcement, then where windows run out, each said there,
-  // how soon by the page's clock as the table says it, a series' name shortened to the plot.
-  const pageNow = useNow(MINUTE);
   // Labels are measured: a web font that arrives later makes them as wide as they are drawn.
   const [fonts, setFonts] = useState(0);
   useEffect(() => {
@@ -255,16 +302,15 @@ export function Chart({
     document.fonts?.addEventListener('loadingdone', loaded);
     return () => document.fonts?.removeEventListener('loadingdone', loaded);
   }, []);
+  // Past the right edge: an announcement, then where windows run out, each said there
+  // (`EdgeLabel`), how soon by the page's clock as the table says it.
   const beyond = [
-    ...markers
-      .filter(m => m.strong && !m.past && m.at > to)
-      .map(m => ({key: m.key, label: m.label, time: stamp(m.at), text: t('chart.ahead', {label: m.label, time: countdown(m.at - pageNow)}), color: undefined, say: undefined})),
+    ...markers.filter(m => m.strong && !m.past && m.at > to).map(m => ({key: m.key, label: m.label, at: m.at, time: stamp(m.at), color: undefined, runsOut: false})),
     ...forecasts.flatMap(f => {
       if (f.at === null || f.at <= to) return [];
       // Spaces drawn as one: a name typed with two in a row reads, and measures, as SVG draws it.
       const name = f.name.replace(/\s+/g, ' ');
-      const say = (label: string) => t('chart.runsOut', {label, time: countdown(f.at! - pageNow)});
-      return [{key: `forecast-${f.key}`, label: name, time: t('forecast.runsOutAt', {time: stamp(f.at)}), text: say(name), color: f.color, say}];
+      return [{key: `forecast-${f.key}`, label: name, at: f.at, time: t('forecast.runsOutAt', {time: stamp(f.at)}), color: f.color, runsOut: true}];
     }),
   ];
   /** A label past the right edge pointed at or tapped: the tooltip tells its time instead of the cell's values. */
@@ -457,19 +503,19 @@ export function Chart({
             })}
             {/* Beyond the visible future: at the right edge, with the distance, one under another. */}
             {beyond.map(label => (
-              <MarkerLabel
+              <EdgeLabel
                 key={label.key}
+                id={label.key}
+                name={label.label}
+                at={label.at}
+                runsOut={label.runsOut}
+                color={label.color}
                 x={width - right}
                 y={stackRows.get(label.key)!}
-                end
-                color={label.color}
+                room={width - left - right - 6}
                 fonts={fonts}
-                // It ends at the plot's right edge, and its backing, 6 wider than the text, starts within the plot.
-                shorten={label.say && {name: label.label, say: label.say, room: width - left - right - 6}}
-                onTip={(shown, tapped) => setEdge(shown ? {key: label.key, tapped} : null)}
-              >
-                {label.text}
-              </MarkerLabel>
+                onEdge={setEdge}
+              />
             ))}
             {hover === null &&
               lines.map((line, i) =>

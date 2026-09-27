@@ -9,6 +9,7 @@ import {
   failuresAt,
   historyTimes,
   holdersOf,
+  HOUR,
   homeOf,
   isOn,
   machineInfo,
@@ -21,6 +22,7 @@ import {
   snapshot,
   sourceOf,
   workSince,
+  staleAfter,
   type Card,
   type DemoSet,
   type Machine,
@@ -46,12 +48,17 @@ export type Stand = {
 /** A batch holds at most this many measurements (spec: Batch). */
 const BATCH = 500;
 
+/** How long a still stand's last measurements hold from its start: longer than any run of the benchmark. */
+const STILL_FOR = 3 * HOUR;
+
 /**
  * Brings a set up on a fresh hub through its public requests, as people and agents would:
  * sign-ups and invites, boards, machine tokens and a code, the history of every card, the
- * failures, shares and every board's view. `now` is the hub's clock.
+ * failures, shares and every board's view. `now` is the hub's clock. `still`: the last
+ * measurement of every card still fresh at `start` holds until `start + STILL_FOR`, so no
+ * card goes stale while nothing is measured.
  */
-export async function setUp(base: string, set: DemoSet, start: number, setupCode: string, now: () => number): Promise<Stand> {
+export async function setUp(base: string, set: DemoSet, start: number, setupCode: string, now: () => number, still = false): Promise<Stand> {
   const wrong = problems(set);
   if (wrong.length) throw new Error(`the set ${set.id} is not right: ${wrong.join('; ')}`);
   const stand: Stand = {set, start, people: new Map(), boards: new Map(), agents: new Map(), sources: new Map()};
@@ -83,11 +90,11 @@ export async function setUp(base: string, set: DemoSet, start: number, setupCode
 
   for (const card of cards(set)) {
     stand.sources.set(card.id, sourceOf(card, stand.people.get(homeOf(set, card))!.id));
-    await seed(stand, card, now);
+    await seed(stand, card, now, still);
     // The other machines join: their first measurement (the hub has it already) makes
     // their people hold it, so their agents show on it from the first list.
     const last = historyTimes(set, card).at(-1)!;
-    for (const machine of card.machines.slice(1)) await stand.agents.get(machine)!.ingest([snapshot(card, start, last.t, last.step)], [], now());
+    for (const machine of card.machines.slice(1)) await stand.agents.get(machine)!.ingest([measured(card, start, last, still)], [], now());
   }
   // Failures last: a later measurement of the same client would clear them.
   for (const machine of machines(set).filter(m => awake(m, -MIN))) {
@@ -142,12 +149,18 @@ async function signUpEveryone(base: string, set: DemoSet, setupCode: string, sta
   if (missing.length) throw new Error(`the catalogue invites nobody of ${missing.map(p => p.id).join(', ')} to a board, so they cannot sign up`);
 }
 
+/** A card's seeded measurement at `t`; in a still stand, the last one holds for `STILL_FOR` if it is still fresh at the start. */
+function measured(card: Card, start: number, {t, step}: {t: number; step: number}, still: boolean, last = true) {
+  const taken = snapshot(card, start, t, step);
+  return still && last && t + staleAfter(step) > 0 ? {...taken, staleAfterMs: STILL_FOR - t} : taken;
+}
+
 /** Sends a card's history from its first machine, oldest first; every measurement must be new to the hub. */
-async function seed(stand: Stand, card: Card, now: () => number) {
+async function seed(stand: Stand, card: Card, now: () => number, still: boolean) {
   const agent = stand.agents.get(card.machines[0])!;
   const times = historyTimes(stand.set, card);
   for (let i = 0; i < times.length; i += BATCH) {
-    const batch = times.slice(i, i + BATCH).map(({t, step}) => snapshot(card, stand.start, t, step));
+    const batch = times.slice(i, i + BATCH).map((time, j) => measured(card, stand.start, time, still, i + j === times.length - 1));
     const answer = await agent.ingest(batch, [], now());
     if (answer.accepted !== batch.length || answer.duplicates) {
       throw new Error(`card ${card.id}: the hub took ${answer.accepted} of ${batch.length} measurements (${answer.duplicates} duplicates)`);

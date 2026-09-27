@@ -1,7 +1,7 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {call} from './http';
 import {DEFAULT_PLAN, isValidPlan, type WeeklyPlan} from './plan';
-import {windowKey, type Overview, type View} from './types';
+import {windowKey, type View} from './types';
 import {FALLBACK_COLOR, PROVIDERS} from './providers';
 
 /** Widget ids: the chart, the table of every limit, how agents worked, the list of running agents, and a card per source. */
@@ -172,12 +172,11 @@ export type Arrange = {
 
 /**
  * The board's view. The owner's changes show at once and are saved shortly after; the
- * change stays on screen until the board reports back what was saved, so a poll in
- * between does not undo it. A save that fails puts the board's own view back.
+ * change stays on screen until the hub tells the view it saved (a `view` event), so what
+ * it tells in between does not undo it. A save that fails puts the board's own view back.
  */
-export function useView(overview: Overview | null, reload: () => void): Arrange {
-  const board = overview?.board.id ?? '';
-  const server = overview?.view ?? EMPTY;
+export function useView(board: string, told: View | null, owner: boolean): Arrange {
+  const server = told ?? EMPTY;
   /** The owner's latest change; `saved` is how the hub stored it, once it has. */
   const [draft, setDraft] = useState<{board: string; view: View; saved: View | null} | null>(null);
   const pending = useRef<{board: string; view: View} | null>(null);
@@ -200,13 +199,12 @@ export function useView(overview: Overview | null, reload: () => void): Arrange 
         try {
           const saved = await call<View>('POST', `/api/boards/${encodeURIComponent(saving.board)}/view`, saving.view);
           setDraft(current => (current?.view === saving.view ? {...current, saved} : current));
-          reload();
         } catch {
           setDraft(current => (current?.view === saving.view ? null : current));
         }
       }, SAVE_AFTER);
     },
-    [board, view, reload],
+    [board, view],
   );
 
   // Leaving the page with a change not sent yet: send it on the way out.
@@ -225,6 +223,5 @@ export function useView(overview: Overview | null, reload: () => void): Arrange 
     return () => window.removeEventListener('pagehide', flush);
   }, []);
 
-  const owner = overview?.board.role === 'owner';
   return useMemo(() => ({view, owner, update}), [view, owner, update]);
 }

@@ -9,41 +9,26 @@ import type {Pairing} from './pairing.js';
 import type {ResetFeed} from './resets.js';
 import type {HistoryActivity, HistorySeries, Shown, SourceEvent, Store} from './store/store.js';
 import type {Board, Directory, User} from './store/directory.js';
-import {currentUser, publicOrigin} from './session.js';
+import {CSP, currentUser, sameSite} from './session.js';
 import type {Setup} from './setup.js';
+import {Events} from './events.js';
+import {Projection} from './projection.js';
 import {accountRoutes} from './routes/account.js';
+import {eventRoutes} from './routes/events.js';
 import {agentRoutes} from './routes/agents.js';
 import {localRoutes} from './local.js';
 
-const CSP =
-  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self';" +
-  ` img-src 'self' data:; font-src 'self'; frame-ancestors ${["'self'", ...config.http.frameAncestors].join(' ')}`;
-
-/** `local`: the desktop app's hub, with the key its window enters with (see local.ts); null on a server. */
-export type Hub = {store: Store; directory: Directory; resets: ResetFeed; ingest: Ingest; pairing: Pairing; setup: Setup; local: {key: string} | null};
+/**
+ * `local`: the desktop app's hub, with the key its window enters with (see local.ts); null
+ * on a server. `events`: what open dashboards hear, made here when not given.
+ */
+export type Hub = {store: Store; directory: Directory; resets: ResetFeed; ingest: Ingest; pairing: Pairing; setup: Setup; local: {key: string} | null; events?: Events};
 
 /** Route helpers shared by the route modules. */
 export type Guards = {
   user(request: FastifyRequest, reply: FastifyReply): User | null;
   board(request: FastifyRequest, reply: FastifyReply, boardId: string | undefined): {user: User; board: Board} | null;
 };
-
-/**
- * Whether a page at `origin` belongs to this hub: the public address when one is set,
- * else the same host name and port as the request (default ports aside). The scheme is
- * not compared: behind a TLS-terminating proxy the hub itself sees plain http.
- */
-function sameSite(origin: string, request: FastifyRequest): boolean {
-  let page: URL;
-  try {
-    page = new URL(origin);
-  } catch {
-    return false;
-  }
-  if (config.auth.publicUrl) return page.origin === publicOrigin(request);
-  const own = new URL(`${request.protocol}://${request.host}`);
-  return page.hostname === own.hostname && page.port === own.port;
-}
 
 /** Errors of the framework itself (malformed JSON, a body too large…) in the hub's `{error}` shape. */
 function errorCode(status: number, path: string): string {
@@ -108,7 +93,8 @@ function selected(from: string | undefined, to: string | undefined, now: number)
  * at `/local`, and what is about accounts, sharing and connecting is not there.
  */
 export async function buildApp(hub: Hub) {
-  const {store, directory, resets} = hub;
+  const {store, directory} = hub;
+  const projection = new Projection(hub);
   const {requestTimeoutMs, checkMs} = config.http;
   const app = Fastify({
     logger: false,
@@ -129,12 +115,11 @@ export async function buildApp(hub: Hub) {
    * changed. A costly one (a month of a busy board takes a good part of a second) is also
    * reused for a quarter of a cell after new data came: a month is drawn in 2-hour cells,
    * where half an hour of news does not show. Such an answer says when a newer one will be
-   * ready (`refreshInMs`), so the page asks again then. Each answer says under which
-   * `workKey` it was read, so the page keeps a range only for the board as it was read. Work
-   * up to a range's end is credited from the lists machines send after it, up to `KEEP_MS`
-   * later (server/sessions.ts), without a new revision: until then (`settles`) an answer says
-   * when to ask again, and one read before then is not reused after. The ranges ending now are
-   * kept per board; of the periods selected on charts, the latest few.
+   * ready (`refreshInMs`), so the page asks again then. Work up to a range's end is credited
+   * from the lists machines send after it, up to `KEEP_MS` later (server/sessions.ts),
+   * without a new revision: until then (`settles`) an answer says when to ask again, and one
+   * read before then is not reused after. The ranges ending now are kept per board; of the
+   * periods selected on charts, the latest few.
    */
   const fixedHistory = new Map<string, Kept>();
   const selectedHistory = new Map<string, Kept>();
@@ -149,9 +134,9 @@ export async function buildApp(hub: Hub) {
     const refresh = (ms: number | null) => (now < settles ? Math.ceil(Math.min(ms ?? Infinity, settles - now)) : ms);
     const hit = cache.get(slot);
     if (hit && hit.cell === cell && hit.work === work && (hit.at >= settles || now < settles)) {
-      if (hit.revision === revision) return {...hit.value, workKey: work, refreshInMs: refresh(null)};
+      if (hit.revision === revision) return {...hit.value, refreshInMs: refresh(null)};
       const left = hit.at + cellMs / 4 - now;
-      if (hit.costly && left > 0) return {...hit.value, workKey: work, refreshInMs: refresh(Math.ceil(left))};
+      if (hit.costly && left > 0) return {...hit.value, refreshInMs: refresh(Math.ceil(left))};
     }
     const value = read(shown);
     const costly = Date.now() - now >= config.history.costlyMs;
@@ -159,7 +144,7 @@ export async function buildApp(hub: Hub) {
     cache.delete(slot);
     cache.set(slot, {cell, revision, work, at: now, costly, value});
     if (cache === selectedHistory && cache.size > SELECTED_KEPT) cache.delete(cache.keys().next().value!);
-    return {...value, workKey: work, refreshInMs: refresh(null)};
+    return {...value, refreshInMs: refresh(null)};
   };
 
   app.addHook('onRequest', async (request, reply) => {
@@ -212,42 +197,14 @@ export async function buildApp(hub: Hub) {
 
   app.get('/health', () => ({status: 'ok', service: serviceName, version}));
   // With the resets the trackers reported as far back as the chart can be moved: over the history kept.
-  app.get('/api/resets', () => ({...resets.snapshot(), past: store.announcements(Date.now() - config.retention.sampleDays * 86_400_000)}));
+  app.get('/api/resets', () => projection.hubPart(Date.now()).value);
 
+  // The board as a stream's `snapshot` gives it (spec/dashboard-v1.md), once: for whatever
+  // reads a board at a moment rather than following it.
   app.get<{Querystring: {board?: string}}>('/api/overview', (request, reply) => {
     const access = guards.board(request, reply, request.query.board);
     if (!access) return reply;
-    const now = Date.now();
-    // Whose each source is: the people on this board whose devices measure it.
-    const members = new Map(directory.members(access.board.id).map(m => [m.id, m.name]));
-    const view = directory.view(access.board.id);
-    return {
-      board: access.board,
-      view,
-      historyStart: store.historyStart(now),
-      /** Changes whenever the board's data changes: the page re-reads history when it does. */
-      revision: store.revision(access.board.id),
-      /** Changes whenever whose work the board shows or how it is named does: the page re-reads history, ranges read before too. */
-      workKey: store.workKey(access.board.id, store.shown(access.board.id, view.hidden)),
-      sources: store.sources(access.board.id).map(source => {
-        const state = store.state(source.id);
-        return {
-          ...state,
-          owners: source.holders.flatMap(id => members.get(id) ?? []).sort(),
-          /** Measured by the reader's devices: theirs to take off a shared board. */
-          mine: source.holders.includes(access.user.id),
-          stale: state.successAt === null || state.staleAfterMs === null || now - state.successAt > state.staleAfterMs,
-          /** The coding agents running on it right now, on the machines of those on this board who measure it, whoever brought it. */
-          sessions: hub.ingest.live.of(
-            source.id,
-            source.holders.filter(id => members.has(id)),
-            now,
-          ),
-          /** When it is measured next and why, while its holder follows the hub's pace. */
-          cadence: hub.ingest.nextMeasurement(source.id, source.account, now),
-        };
-      }),
-    };
+    return projection.snapshot(access.user.id, access.board.id, Date.now());
   });
 
   app.get<{Querystring: {range?: string; from?: string; to?: string; board?: string}}>('/api/history', (request, reply) => {
@@ -279,6 +236,11 @@ export async function buildApp(hub: Hub) {
     return {range, now, since: now - durationMs, to: now, cellMs, historyStart: store.historyStart(now), ...answer};
   });
 
+  const events = hub.events ?? new Events(hub);
+  events.attach();
+  // Open streams and held polls would keep the server from closing: they end first.
+  app.addHook('preClose', async () => events.close());
+  eventRoutes(app, directory, events, guards);
   accountRoutes(app, hub, guards);
   agentRoutes(app, hub);
   if (hub.local) localRoutes(app, hub, hub.local.key);

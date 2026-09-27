@@ -6,6 +6,7 @@ import type {Duty} from './duty.js';
 import type {Provider} from './domain/sources.js';
 import type {Device, Directory, Token} from './store/directory.js';
 import type {Store} from './store/store.js';
+import {tell, type Touches} from './touches.js';
 
 export type IngestResult = {accepted: number; duplicates: number; failures: number; device: {id: string}};
 
@@ -36,6 +37,7 @@ const CLOCK_TOLERANCE_MS = 30_000;
 export class Ingest {
   /** The coding agents running on the devices right now. */
   readonly live: Sessions;
+  private observer: Touches | null = null;
 
   constructor(
     private readonly store: Store,
@@ -44,6 +46,11 @@ export class Ingest {
     private readonly cadence: Cadence,
   ) {
     this.live = new Sessions(store);
+  }
+
+  /** Tells `observer` which sources every delivery, check-in and list of agents touches (events of open dashboards). */
+  setObserver(observer: Touches) {
+    this.observer = observer;
   }
 
   /** The credential of an `Authorization` header; 'revoked' for a disconnected device or a revoked token. */
@@ -77,11 +84,14 @@ export class Ingest {
     return this.directory.transaction(() => {
       const device = this.device(credential, batch, now);
       const result: IngestResult = {accepted: 0, duplicates: 0, failures: 0, device: {id: device.id}};
+      // Every source the batch is about: its pace and its holder's duty move even when nothing new is recorded.
+      const touched = new Set<string>();
 
       for (const snapshot of [...batch.snapshots].sort((a, b) => a.observedAt - b.observedAt)) {
         const observedAt = snapshot.observedAt + skew;
         const account = subscriptionKey(snapshot, device.userId);
         const source = this.store.source(snapshot.provider, account, now);
+        touched.add(source);
         this.store.hold(source, device.userId, now);
         this.store.seenDevice(device.id, snapshot.provider, source, now);
         const {successAt} = this.store.state(source);
@@ -102,6 +112,9 @@ export class Ingest {
         // The device waits out its failures, whether or not another device measures the subscription fine.
         const key = this.cadence.measuredBy(device.id, failure.provider) ?? (source && this.store.account(source));
         if (key) this.cadence.failed(key, device.id, failure.error, at);
+        const paused = key && this.store.findSource(failure.provider, key);
+        if (paused) touched.add(paused);
+        if (source) touched.add(source);
         this.store.deviceFailed(device.id, failure.provider, failure.error, failure.detail, at);
         if (!source) continue;
         const state = this.store.state(source);
@@ -110,6 +123,7 @@ export class Ingest {
         this.store.fail(source, failure.error);
         result.failures++;
       }
+      tell(this.observer, o => o.touchSources([...touched]));
       return result;
     });
   }
@@ -123,6 +137,8 @@ export class Ingest {
     const request = parseCheckin(body);
     const device = this.device(credential, request, now);
     const iso = (ms: number) => new Date(ms).toISOString();
+    // Asking moves the pace and who is on duty, which the board shows.
+    tell(this.observer, o => o.touchSources(request.subscriptions.flatMap(s => this.store.findSource(s.provider, subscriptionKey(s, device.userId)) ?? [])));
     return {
       subscriptions: request.subscriptions.map(s => {
         const key = subscriptionKey(s, device.userId);
@@ -149,9 +165,22 @@ export class Ingest {
     };
   }
 
-  /** When a subscription is measured next and why, while its holder follows the hub's pace; null otherwise. */
-  nextMeasurement(source: string, key: string, now: number): {next: number; why: Why} | null {
-    return this.cadence.view(key, this.duty.holder(key), now, this.signals(source, key, now));
+  /**
+   * When a subscription is measured next and why, while its holder follows the hub's pace
+   * (null otherwise), and the first moment that may change with nothing new told to the
+   * hub: the pace's own (Cadence.viewChangesAt), or the subscription no longer in use.
+   */
+  nextMeasurement(source: string, key: string, now: number): {value: {next: number; why: Why} | null; changesAt: number | null} {
+    const holder = this.duty.holder(key);
+    const signals = this.signals(source, key, now);
+    const value = this.cadence.view(key, holder, now, signals);
+    const own = this.cadence.viewChangesAt(key, holder, now, signals);
+    if (value === null || !signals.inUse) return {value, changesAt: own};
+    const activeAt = this.duty.activeAt(key);
+    const ends = [own, this.live.workingChangesAt(source, now), activeAt !== null && activeAt + ACTIVE_WITHIN_MS >= now ? activeAt + ACTIVE_WITHIN_MS + 1 : null].filter(
+      (at): at is number => at !== null,
+    );
+    return {value, changesAt: ends.length ? Math.min(...ends) : null};
   }
 
   /** What the hub knows of a subscription now: its windows, and whether it is in use on any machine. */
@@ -161,6 +190,13 @@ export class Ingest {
       windows: source ? this.store.state(source).windows : [],
       inUse: (source !== null && this.live.working(source, now)) || (activeAt !== null && now - activeAt <= ACTIVE_WITHIN_MS),
     };
+  }
+
+  /** Devices taken off the hub: their agents stop showing at once. */
+  forget(devices: string[]) {
+    const sources = devices.flatMap(device => this.live.sourcesOf(device));
+    this.live.forget(devices);
+    tell(this.observer, o => o.touchSources([...new Set(sources)]));
   }
 
   /**
@@ -185,7 +221,9 @@ export class Ingest {
         const lastWorkedAt = session.lastWorkedAt === null ? null : Math.max(startedAt, Math.min(now, session.lastWorkedAt + skew));
         return [{...session, startedAt, sentStartedAt: session.startedAt, lastWorkedAt, source, device: {id: device.id, name}}];
       });
+      const before = this.live.sourcesOf(device.id);
       this.live.report(device.id, device.userId, sessions, now);
+      tell(this.observer, o => o.touchSources([...new Set([...before, ...sessions.map(s => s.source)])]));
       return {accepted: sessions.length};
     });
   }

@@ -1,14 +1,14 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {AGENT_COLUMNS, AGENT_WIDTHS, agentRows, agentsLayout, byActivity, machinesOf, nextAgentsSort, readAgentsSort, sortedRows, type AgentColumn, type AgentRow} from '../lib/agents';
-import type {LiveSession, SourceState, View} from '../lib/types';
+import {AGENT_COLUMNS, AGENT_WIDTHS, agentRows, agentsLayout, byActivity, machinesOf, nextAgentsSort, readAgentsSort, sortedRows, type AgentColumn, type AgentRow, type AgentSource} from '../lib/agents';
+import type {LiveSession, View} from '../lib/types';
 import {setLocale} from '../i18n';
 
 const session = (project: string | null, change: Partial<LiveSession> = {}): LiveSession => ({
   project, folder: null, device: {id: 'laptop', name: 'laptop'}, startedAt: 100, lastWorkedAt: null, working: false, origin: 'terminal', ...change,
 });
 const row = (project: string | null, change: Partial<LiveSession> = {}, title = 'Codex'): AgentRow => ({
-  session: session(project, change), source: {id: title, provider: 'codex', title} as SourceState,
+  session: session(project, change), source: {id: title, provider: 'codex', title, sessions: []},
 });
 const sort = (rows: AgentRow[], column: AgentColumn, descending = false, shown: readonly AgentColumn[] = AGENT_COLUMNS) => sortedRows(rows, {column, descending}, shown);
 const active = [
@@ -49,7 +49,7 @@ test('card groups and their tray marks follow each machine’s first session; th
   const groups = machinesOf([active[3], {...active[1], device: workstation}, active[4], {...active[2], device: workstation}]);
   assert.deepEqual(groups.map(m => m.name), ['workstation', 'laptop']);
   assert.deepEqual(groups.map(m => m.sessions.map(s => s.project)), [['old working', 'recent work'], ['earlier work', 'new unknown']]);
-  const sources = ['z', 'a'].map(id => ({id, sessions: [session('same')]} as SourceState));
+  const sources = ['z', 'a'].map((id): AgentSource => ({id, provider: 'codex', sessions: [session('same')]}));
   assert.deepEqual(agentRows(sources, {hidden: []} as unknown as View).rows.map(r => r.source.id), ['a', 'z']);
 });
 

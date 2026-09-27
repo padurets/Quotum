@@ -1,7 +1,7 @@
-import type {CadenceWhy, Kind, SourceState} from './types';
+import type {CadenceWhy, Card, Kind, Pace} from './types';
 import {known, t} from '../i18n';
 import {PROVIDERS} from './providers';
-import {duration} from './format';
+import {duration, durationUntilChangesAt} from './format';
 
 export type Level = 'ok' | 'warn' | 'crit';
 
@@ -24,6 +24,12 @@ export type ResetLine = {key: 'resetsIn'; inMs: number} | {key: 'resetPassed'} |
 
 export const resetLine = (w: {resetAt: number | null}, now: number): ResetLine =>
   w.resetAt ? (w.resetAt > now ? {key: 'resetsIn', inMs: w.resetAt - now} : {key: 'resetPassed'}) : {key: 'resetUnknown'};
+
+/** When the line under a limit reads otherwise: the time left, rounded as `duration` rounds it, runs down, or the reset passes. */
+export function resetLineChangesAt(w: {resetAt: number | null}, now: number): number | null {
+  if (!w.resetAt || w.resetAt <= now) return null;
+  return Math.min(w.resetAt, durationUntilChangesAt(w.resetAt, now) ?? w.resetAt);
+}
 
 export const sourceLabel = (source: {provider: string; title?: string}) =>
   source.title ?? PROVIDERS[source.provider]?.name ?? source.provider;
@@ -61,14 +67,15 @@ export function errorText(code: string) {
   return t(known(key) ? key : 'error.failed');
 }
 
-export const problemOf = (source: Pick<SourceState, 'error'>) => (source.error && source.error !== 'waiting' ? errorText(source.error) : null);
+export const problemOf = (source: Pick<Card, 'error'>) => (source.error && source.error !== 'waiting' ? errorText(source.error) : null);
 
 /** A measurement this recent is news: the card's dot pulses. */
 export const PULSE_FOR = 30_000;
 /** How long the dot takes to fade from fresh to grey after that. */
-const FADE_FOR = 5 * 60_000;
+export const FADE_FOR = 5 * 60_000;
 /** The fade goes in this many steps, one every half a minute: in between, nothing on the page changes. */
 const FADE_STEPS = 10;
+const FADE_STEP = FADE_FOR / FADE_STEPS;
 
 export type Dot = {warn: true} | {warn: false; pulsing: boolean; fresh: number};
 
@@ -76,7 +83,7 @@ export type Dot = {warn: true} | {warn: false; pulsing: boolean; fresh: number};
  * The dot by a card's logo: trouble (numbers gone stale, a failure) in its own colour;
  * otherwise from the age of the numbers, pulsing while they are news, then fading (`freshness`).
  */
-export function dotOf(source: Pick<SourceState, 'stale' | 'error' | 'successAt'>, now: number): Dot {
+export function dotOf(source: Pick<Card, 'stale' | 'error' | 'successAt'>, now: number): Dot {
   if (source.stale || problemOf(source)) return {warn: true};
   const age = source.successAt === null ? Infinity : now - source.successAt;
   return {warn: false, pulsing: age < PULSE_FOR, fresh: freshness(age)};
@@ -87,14 +94,32 @@ export const SOON = 15_000;
 
 export type Cadence = {when: 'nextIn' | 'nextSoon'; next: number; why: CadenceWhy};
 
+/** A card with the pace the hub sets for it. */
+export type Paced = Pick<Card, 'stale' | 'error' | 'successAt'> & {cadence: Pace};
+
 /**
  * When the next measurement comes and why, for the dot's tooltip: while the hub sets the
  * pace, and the dot is not telling of trouble.
  */
-export function cadenceOf(source: Pick<SourceState, 'stale' | 'error' | 'successAt' | 'cadence'>, now: number): Cadence | null {
+export function cadenceOf(source: Paced, now: number): Cadence | null {
   if (!source.cadence || dotOf(source, now).warn) return null;
   const {next, why} = source.cadence;
   return {when: next - now <= SOON ? 'nextSoon' : 'nextIn', next, why};
+}
+
+/** When the dot looks otherwise: it stops pulsing, or fades a step. Trouble does not pass with time: the hub says when it does. */
+export function dotChangesAt(source: Pick<Card, 'stale' | 'error' | 'successAt'>, now: number): number | null {
+  if (source.stale || problemOf(source) || source.successAt === null) return null;
+  const age = now - source.successAt;
+  if (age < PULSE_FOR) return source.successAt + PULSE_FOR;
+  const step = Math.floor((age - PULSE_FOR) / FADE_STEP) + 1;
+  return step > FADE_STEPS ? null : source.successAt + PULSE_FOR + step * FADE_STEP;
+}
+
+/** When `cadenceOf` reads otherwise: the next measurement comes within `SOON`. How soon it says is `countdownChangesAt`. */
+export function cadenceChangesAt(source: Paced, now: number): number | null {
+  const cadence = cadenceOf(source, now);
+  return cadence?.when === 'nextIn' ? cadence.next - SOON : null;
 }
 
 /**
@@ -104,6 +129,7 @@ export function cadenceOf(source: Pick<SourceState, 'stale' | 'error' | 'success
  */
 export function freshness(age: number): number {
   if (age <= PULSE_FOR) return 1;
-  const left = Math.ceil((1 - (age - PULSE_FOR) / FADE_FOR) * FADE_STEPS) / FADE_STEPS;
+  // Whole steps counted in whole milliseconds: the dot changes exactly when `dotChangesAt` says.
+  const left = (FADE_STEPS - Math.floor((age - PULSE_FOR) / FADE_STEP)) / FADE_STEPS;
   return left <= 0 ? 0 : left * left;
 }

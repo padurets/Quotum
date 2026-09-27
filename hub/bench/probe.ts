@@ -1,0 +1,209 @@
+/**
+ * What the benchmark puts in the page before its scripts run: a stand-in for React
+ * DevTools' hook, which React calls on every commit, and a MutationObserver. Between them
+ * they count which parts of the board React rendered and which the DOM changed in.
+ *
+ * The functions here run in the page, turned to text: each uses nothing from outside it
+ * but its arguments. `rendered` and `nodeOf` are tested on stand-in fibers.
+ */
+
+/** The parts of a React fiber the probe reads. */
+export type Fiber = {
+  tag: number;
+  flags: number;
+  child: Fiber | null;
+  sibling: Fiber | null;
+  return: Fiber | null;
+  alternate: Fiber | null;
+  stateNode: unknown;
+};
+
+/** What the probe relates work to: a DOM element that can say where it is. */
+export type Place = {closest(selector: string): Place | null};
+
+/**
+ * The parts of the page work is counted by, the nearest first: a label that shows time, a
+ * card, the header, the list of agents, the analytics. Anything else is the page.
+ */
+export const NODES = '[data-time], [data-card], header.topbar, section.agents-panel, section.analytics';
+
+/**
+ * The components that rendered in a commit, found as React DevTools finds them: walking
+ * the new tree beside the old one, and not going down where a subtree was not rendered
+ * (its child is the same object as before: flags there are left from an earlier render).
+ * A component rendered when it was mounted or has React's `PerformedWork` flag (1), which
+ * React sets on components only.
+ */
+export function rendered(current: Fiber): Fiber[] {
+  // Function, class, forwardRef, memo and simple memo components.
+  const composite = (fiber: Fiber) => fiber.tag === 0 || fiber.tag === 1 || fiber.tag === 11 || fiber.tag === 14 || fiber.tag === 15;
+  const found: Fiber[] = [];
+  const stack: [Fiber, Fiber | null][] = [[current, current.alternate]];
+  while (stack.length) {
+    const [next, prev] = stack.pop()!;
+    if (composite(next) && (prev === null || (next.flags & 1) === 1)) found.push(next);
+    if (prev !== null && next.child === prev.child) continue;
+    for (let child = next.child; child; child = child.sibling) stack.push([child, prev === null ? null : child.alternate]);
+  }
+  return found;
+}
+
+/**
+ * The part of the page a component's work shows in: from the DOM of its first host
+ * descendant, as DevTools finds a component's nodes (else its nearest host ancestor, for
+ * one that renders nothing of its own), the nearest element matching `selector`, itself
+ * included; null when none does.
+ */
+export function nodeOf(fiber: Fiber, selector: string): Place | null {
+  const element = (f: Fiber) =>
+    (f.tag === 5 || f.tag === 26 || f.tag === 27) && f.stateNode && typeof (f.stateNode as Place).closest === 'function' ? (f.stateNode as Place) : null;
+  const first = (from: Fiber | null): Place | null => {
+    for (let f = from; f; f = f.sibling) {
+      const found = element(f) ?? first(f.child);
+      if (found) return found;
+    }
+    return null;
+  };
+  let host = first(fiber.child);
+  for (let f = fiber.return; !host && f; f = f.return) host = element(f);
+  return host ? host.closest(selector) : null;
+}
+
+/**
+ * One part of the page and how many times it rendered or changed. `time`: it shows time,
+ * and `kind` is what (its `data-time`: a label, a cell of the table, the chart).
+ */
+export type Counted = {node: string; time: boolean; kind: string | null; region: string; count: number};
+
+/** What the probe counted since its last `reset`. */
+export type Reading = {
+  /** Time the probe itself took, in milliseconds. */
+  instrumentMs: number;
+  commits: number;
+  /** Once per commit for every part of the page React rendered anything in. */
+  renders: Counted[];
+  /** Once per MutationObserver callback for every part of the page the DOM changed in. */
+  mutations: Counted[];
+  /** When the DOM of each card first changed outside what shows time, as `Date.now()` in the page. */
+  cardChanged: Record<string, number>;
+};
+
+/**
+ * Installs the probe as `window.__quotumBench`: `reset()`, `read()`, and for one card at a
+ * time `forgetCards()` and `cardChanged(id)`. Runs in the page, before React loads, with
+ * `rendered` and `nodeOf` passed in.
+ */
+export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf}, selector: string) {
+  type Element = {
+    closest(selector: string): Element | null;
+    hasAttribute(name: string): boolean;
+    getAttribute(name: string): string | null;
+    tagName: string;
+    className: unknown;
+  };
+  const page = globalThis as unknown as {
+    __REACT_DEVTOOLS_GLOBAL_HOOK__: object;
+    __quotumBench: {reset(): void; read(): Reading; forgetCards(): void; cardChanged(id: string): number | null};
+    MutationObserver: new (callback: (records: {target: {nodeType: number; parentElement: Element | null}}[]) => void) => {
+      observe(target: unknown, options: object): void;
+    };
+    document: {body: unknown; readyState: string; addEventListener(type: string, listener: () => void): void};
+    performance: {now(): number; timeOrigin: number};
+  };
+  const clock = page.performance;
+  let instrumentMs = 0;
+  let commits = 0;
+  let renders = new Map<Element | null, number>();
+  let mutations = new Map<Element | null, number>();
+  let cardChanged: Record<string, number> = {};
+  const names = new WeakMap<Element, number>();
+  let named = 0;
+
+  const bump = (counts: Map<Element | null, number>, nodes: Set<Element | null>) => {
+    for (const node of nodes) counts.set(node, (counts.get(node) ?? 0) + 1);
+  };
+  const regionOf = (node: Element | null) => {
+    if (!node) return 'page';
+    const card = node.closest('[data-card]');
+    if (card) return `card:${card.getAttribute('data-card')}`;
+    if (node.closest('header.topbar')) return 'header';
+    if (node.closest('section.agents-panel')) return 'agents';
+    if (node.closest('section.analytics')) return 'analytics';
+    return 'page';
+  };
+  const describe = (node: Element | null) => {
+    if (!node) return 'page';
+    if (!names.has(node)) names.set(node, ++named);
+    const classes = typeof node.className === 'string' && node.className ? `.${node.className.trim().split(/\s+/).join('.')}` : '';
+    const time = node.getAttribute('data-time');
+    return `${node.tagName.toLowerCase()}${classes}${time ? `[data-time=${time}]` : ''}#${names.get(node)}`;
+  };
+  const listed = (counts: Map<Element | null, number>): Counted[] =>
+    [...counts].map(([node, count]) => ({
+      node: describe(node),
+      time: !!node?.hasAttribute('data-time'),
+      kind: node?.getAttribute('data-time') ?? null,
+      region: regionOf(node),
+      count,
+    }));
+
+  page.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
+    supportsFiber: true,
+    isDisabled: false,
+    renderers: new Map(),
+    inject: () => 1,
+    checkDCE: () => {},
+    onCommitFiberUnmount: () => {},
+    onPostCommitFiberRoot: () => {},
+    onCommitFiberRoot(_renderer: number, root: {current: Fiber}) {
+      const began = clock.now();
+      try {
+        commits++;
+        bump(renders, new Set(tools.rendered(root.current).map(fiber => tools.nodeOf(fiber, selector) as Element | null)));
+      } finally {
+        instrumentMs += clock.now() - began;
+      }
+    },
+  };
+
+  const observe = () =>
+    new page.MutationObserver(records => {
+      const began = clock.now();
+      const nodes = new Set<Element | null>();
+      for (const record of records) {
+        const element = record.target.nodeType === 1 ? (record.target as unknown as Element) : record.target.parentElement;
+        nodes.add(element ? element.closest(selector) : null);
+      }
+      bump(mutations, nodes);
+      const at = clock.timeOrigin + clock.now();
+      for (const node of nodes) {
+        if (!node || node.hasAttribute('data-time')) continue;
+        const card = node.closest('[data-card]')?.getAttribute('data-card');
+        if (card && !(card in cardChanged)) cardChanged[card] = at;
+      }
+      instrumentMs += clock.now() - began;
+    }).observe(page.document.body, {subtree: true, childList: true, attributes: true, characterData: true});
+  if (page.document.body) observe();
+  else page.document.addEventListener('DOMContentLoaded', observe);
+
+  page.__quotumBench = {
+    reset() {
+      instrumentMs = 0;
+      commits = 0;
+      renders = new Map();
+      mutations = new Map();
+      cardChanged = {};
+    },
+    read: () => ({instrumentMs, commits, renders: listed(renders), mutations: listed(mutations), cardChanged}),
+    forgetCards() {
+      cardChanged = {};
+    },
+    cardChanged: id => cardChanged[id] ?? null,
+  };
+}
+
+/**
+ * The probe as a script for `Page.addScriptToEvaluateOnNewDocument`. The functions are
+ * sent as their source; `__name` stands in for the helper a transpiler may leave in it.
+ */
+export const probeScript = () => `(() => { const __name = f => f; (${probe})({rendered: ${rendered}, nodeOf: ${nodeOf}}, ${JSON.stringify(NODES)}); })();`;
