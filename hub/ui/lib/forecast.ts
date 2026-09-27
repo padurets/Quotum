@@ -1,6 +1,7 @@
 import type {Win} from './types';
 import type {Line} from './lines';
 import {PLAN_TOLERANCE, planAt, started, weeklyPlanRemaining, type WeeklyPlan} from './plan';
+import {countdownChangesAt, earliest} from './format';
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -116,6 +117,24 @@ function forecast(live: Win | undefined, measuredAt: number | null, now: number,
 export const outlook = (live: Win | undefined, measuredAt: number | null, now: number, weekly: WeeklyPlan | null): Outlook => forecast(live, measuredAt, now, weekly).outlook;
 
 /**
+ * When `outlook` reads otherwise as time passes: the window resets, the forecast's zero
+ * comes (it ran out, as foreseen), how soon it runs out ticks over (`countdown`), or it
+ * comes near enough to say so louder. Nothing else in it moves with time.
+ */
+export function outlookChangesAt(live: Win | undefined, measuredAt: number | null, now: number, weekly: WeeklyPlan | null): number | null {
+  const {outlook: ahead, projection: projected, zero} = forecast(live, measuredAt, now, weekly);
+  if (ahead.key === 'usedUp' || ahead.key === 'none') return null;
+  const reset = live!.resetAt!;
+  const moments = [reset, zero === null || zero === undefined ? null : Math.ceil(zero)];
+  if (ahead.key === 'runsOut') {
+    moments.push(countdownChangesAt(ahead.at, now));
+    // Louder once it runs out in less than half the time left to the deadline.
+    if (projected && ahead.tone === 'v-warn') moments.push(Math.floor(2 * ahead.at - projected.deadline) + 1);
+  }
+  return earliest(...moments.map(at => (at !== null && at > now ? at : null)));
+}
+
+/**
  * The forecast as a line over [from, to]: from the window's last value at the moment it
  * was measured, at its pace, to zero or to the reset, whichever comes first; cut at the
  * edges. `at` is where it runs out when the table says it does, wherever the line is cut.
@@ -157,11 +176,3 @@ export function planCell(live: Win | undefined, measuredAt: number | null, now: 
   return {remaining: plan.remaining, delta, notable: Math.abs(delta) >= PLAN_TOLERANCE};
 }
 
-/** A line of the table over a period up to now: what the period spent, the plan, and where the window's pace leads. */
-export type ForecastRow = {spent: Spent; plan: PlanCell | null; outlook: Outlook};
-
-export const forecastRow = (line: Pick<Line, 'consumed' | 'coveredMs'>, live: Win | undefined, measuredAt: number | null, now: number, weekly: WeeklyPlan | null): ForecastRow => ({
-  spent: spentOf(line),
-  plan: planCell(live, measuredAt, now, weekly),
-  outlook: outlook(live, measuredAt, now, weekly),
-});

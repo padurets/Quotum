@@ -43,6 +43,8 @@ export class ResetFeed {
   private health: TrackerHealth[];
   private timer?: NodeJS.Timeout;
   private closing = false;
+  /** Hears of every round: what the feed tells may have changed. */
+  onChange: () => void = () => {};
 
   constructor(
     private readonly remember: (provider: ResetProvider, reset: ResetEvent) => void = () => {},
@@ -104,5 +106,6 @@ export class ResetFeed {
       result.status === 'rejected' ? [{url: new URL(url).origin + new URL(url).pathname, detail: describeFailure(result.reason)}] : [];
     const failures = [...failed(codexApi, codex), ...failed(claudeApi, catalogue)];
     this.log({event: 'resets', codex: codex.status, claude: catalogue.status, ...(failures.length ? {failures} : {})});
+    this.onChange();
   }
 }

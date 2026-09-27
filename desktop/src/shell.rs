@@ -17,7 +17,8 @@ use quotum_core::config::Paths;
 use crate::agent::Agent;
 use crate::files::{self, AppJson, Dirs, Log, free_port};
 use crate::hub::{self, Event, HubState, Proc, Ready, Restarts, Secrets, Signal};
-use crate::{agent, host, smoke, window};
+use crate::notifier::{Notifier, Wake};
+use crate::{agent, host, ipc, smoke, window};
 
 /// How long a start of the hub may take until it says it listens.
 const START_LIMIT: Duration = Duration::from_secs(20);
@@ -25,6 +26,8 @@ const START_LIMIT: Duration = Duration::from_secs(20);
 const EXIT_LIMIT: Duration = Duration::from_secs(3);
 /// The pause before the hub is started again.
 const RESTART_PAUSE: Duration = Duration::from_secs(1);
+/// How often the ticker looks at what may change without the app (see `agent::tick`).
+const TICK: Duration = Duration::from_secs(5);
 
 pub struct Shell {
     pub dirs: Dirs,
@@ -47,6 +50,9 @@ pub struct Shell {
     /// Held by a worker thread while it creates the window, never by the main thread.
     pub window_lock: Mutex<()>,
     pub window_intent: window::OpenIntent,
+    /// Sends the app's state to the board when it changes (see notifier.rs).
+    pub notifier: Notifier,
+    wakes: Wake,
     exiting: AtomicBool,
     proc: Mutex<Option<Arc<Proc>>>,
     app_json: Mutex<AppJson>,
@@ -91,6 +97,8 @@ impl Shell {
             state: Mutex::new(State { hub: HubState::Starting, generation: 0, capabilities: Vec::new() }),
             window_lock: Mutex::new(()),
             window_intent: window::OpenIntent::default(),
+            notifier: Notifier::default(),
+            wakes: Wake::new(),
             exiting: AtomicBool::new(false),
             proc: Mutex::new(None),
             app_json: Mutex::new(app_json),
@@ -114,6 +122,11 @@ impl Shell {
 
     pub fn exiting(&self) -> bool {
         self.exiting.load(Ordering::SeqCst)
+    }
+
+    /// The app's state changed: the ticker sends it to the board in a moment. Never blocks.
+    pub fn wake(&self) {
+        self.wakes.wake();
     }
 
     fn app_json(&self) -> MutexGuard<'_, AppJson> {
@@ -380,11 +393,20 @@ pub fn shutdown(shell: &Arc<Shell>, fast: bool, from_exit_event: bool) {
     host::exit(shell, from_exit_event);
 }
 
-/// Every five seconds while the app runs, window or not (see `agent::tick`).
+/// Every five seconds while the app runs, window or not (see `agent::tick`), and whenever
+/// something woke it: then the app's state goes to the board, if it changed.
 pub fn run_ticker(shell: Arc<Shell>) {
+    let mut due = Instant::now() + TICK;
     while !shell.exiting() {
-        thread::sleep(Duration::from_secs(5));
-        agent::tick(&shell);
+        shell.wakes.wait(due.saturating_duration_since(Instant::now()));
+        if shell.exiting() {
+            return;
+        }
+        if Instant::now() >= due {
+            agent::tick(&shell);
+            due = Instant::now() + TICK;
+        }
+        ipc::publish(&shell);
     }
 }
 

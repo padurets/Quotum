@@ -1,13 +1,16 @@
 import {memo, useMemo} from 'react';
-import {MINUTE, useNow} from '../lib/api';
-import type {History as HistoryData, Overview} from '../lib/types';
+import type {Win} from '../lib/types';
 import {countdown, num, stamp} from '../lib/format';
 import {level} from '../lib/quota';
-import {forecastRow, spentOf, type Outlook, type Pace, type Spent} from '../lib/forecast';
+import {outlook, outlookChangesAt, planCell, spentOf, type Outlook, type Pace, type Spent} from '../lib/forecast';
+import {planChangesAt, type WeeklyPlan} from '../lib/plan';
 import {FORECAST, planOf, withHidden, type Arrange} from '../lib/view';
 import {linesOf} from '../lib/lines';
 import {usePrefs} from '../lib/prefs';
 import {ofTimeRange} from '../lib/timeRange';
+import {useNamed} from '../lib/board';
+import {useClock} from '../lib/clock';
+import {useHistory} from '../lib/history';
 import {t, useLocale} from '../i18n';
 import {HideRow, Popover, SlidersIcon} from './Popover';
 
@@ -43,6 +46,48 @@ function outlookCell(ahead: Outlook): {text: string; title: string} {
 
 const spentText = (spent: Spent) => (spent.key === 'points' ? t('table.points', {value: num(spent.value, 1)}) : spent.key === 'unused' ? t('table.unused') : '—');
 
+/** What a limit's cells need to say what they say now. */
+type LimitNow = {live: Win | undefined; measuredAt: number | null; weekly: WeeklyPlan | null};
+
+/**
+ * The plan's column of a limit: what the plan expects to be left now, and the gap to it.
+ * A part of its own, moved when what it shows changes, as the mark on the card is.
+ */
+function PlanCell({live, measuredAt, weekly}: LimitNow) {
+  const now = useClock(now => (live ? planChangesAt(live, measuredAt, now, weekly) : null));
+  const plan = planCell(live, measuredAt, now, weekly);
+  return (
+    <td data-time="plan" title={plan?.notable ? t(plan.delta >= 0 ? 'table.behindBy' : 'table.aheadBy', {value: num(Math.abs(plan.delta))}) : ''}>
+      {plan ? (
+        <>
+          {num(plan.remaining)}%
+          {plan.notable && (
+            <small className={plan.delta < 0 ? 'v-warn' : 'muted'}>
+              {' '}
+              {plan.delta > 0 ? '+' : '−'}
+              {num(Math.abs(plan.delta))}
+            </small>
+          )}
+        </>
+      ) : (
+        '—'
+      )}
+    </td>
+  );
+}
+
+/** Where the window's pace leads: a part of its own, rendered when that reads otherwise. */
+function OutlookCell({live, measuredAt, weekly}: LimitNow) {
+  const now = useClock(now => outlookChangesAt(live, measuredAt, now, weekly));
+  const ahead = outlook(live, measuredAt, now, weekly);
+  const cell = outlookCell(ahead);
+  return (
+    <td data-time="forecast" className={ahead.tone} title={cell.title}>
+      {cell.text}
+    </td>
+  );
+}
+
 /** How long a line must have been measured without gaps for its pace to mean something. */
 const PACE_FROM = 10 * 60_000;
 
@@ -50,30 +95,25 @@ const PACE_FROM = 10 * 60_000;
  * The windows of one kind: what is left, what the plan expects, what the period spent,
  * and where each window's own pace leads, whatever the period. Its period and window type are the analytics', as the chart's. Over a
  * time range selected on the chart, which is in the past, it shows that range instead:
- * what was left at its start and its end, what it spent and how fast.
+ * what was left at its start and its end, what it spent and how fast. What in it changes
+ * with time (the plan, where the pace leads) are parts of their own.
  */
-export const Forecast = memo(function Forecast({
-  history,
-  loading,
-  overview,
-  arrange,
-}: {
-  history: HistoryData | null;
-  /** Another period is loading; `history` is the previous one until it comes. */
-  loading: boolean;
-  overview: Overview | null;
-  arrange: Arrange;
-}) {
-  const now = useNow(MINUTE);
+export const Forecast = memo(function Forecast({arrange}: {arrange: Arrange}) {
+  const {history, loading} = useHistory();
+  const sources = useNamed(arrange.view.names);
   const {view} = arrange;
   const {kind} = usePrefs();
   const selected = ofTimeRange(history);
   // Window names are text: they are rebuilt when the language changes.
   const locale = useLocale();
-  const lines = useMemo(() => linesOf(history, overview, view, kind), [history, overview, view.windows, view.hidden, view.colors, kind, locale]);
+  const lines = useMemo(() => linesOf(history, sources, view, kind), [history, sources, view.windows, view.hidden, view.colors, kind, locale]);
 
   return (
-    <section className={`panel forecast ${selected ? 'is-range' : ''} ${loading ? 'is-loading' : ''}`} aria-label={t('forecast.title')} aria-busy={loading}>
+    <section
+      className={`panel forecast ${selected ? 'is-range' : ''} ${loading ? 'is-loading' : ''}`}
+      aria-label={t('forecast.title')}
+      aria-busy={loading}
+    >
       <div className="panel-head">
         <h2>{t('forecast.title')}</h2>
         {arrange.owner && (
@@ -129,37 +169,15 @@ export const Forecast = memo(function Forecast({
                     </tr>
                   );
                 }
-                const source = overview?.sources.find(s => s.id === line.sourceId);
-                const live = source?.windows.find(w => w.id === line.windowId);
-                const measuredAt = source?.successAt ?? null;
-                const row = forecastRow(line, live, measuredAt, now, planOf(view, line.sourceId));
-                const {plan} = row;
-                const spent = <td>{spentText(row.spent)}</td>;
-                const ahead = outlookCell(row.outlook);
+                const source = sources.find(s => s.id === line.sourceId);
+                const limit = {live: source?.windows.find(w => w.id === line.windowId), measuredAt: source?.successAt ?? null, weekly: planOf(view, line.sourceId)};
                 return (
                   <tr key={line.key}>
                     {name}
                     <td className={`v-${level(line.current)}`}>{num(line.current)}%</td>
-                    <td title={plan?.notable ? t(plan.delta >= 0 ? 'table.behindBy' : 'table.aheadBy', {value: num(Math.abs(plan.delta))}) : ''}>
-                      {plan ? (
-                        <>
-                          {num(plan.remaining)}%
-                          {plan.notable && (
-                            <small className={plan.delta < 0 ? 'v-warn' : 'muted'}>
-                              {' '}
-                              {plan.delta > 0 ? '+' : '−'}
-                              {num(Math.abs(plan.delta))}
-                            </small>
-                          )}
-                        </>
-                      ) : (
-                        '—'
-                      )}
-                    </td>
-                    {spent}
-                    <td className={row.outlook.tone} title={ahead.title}>
-                      {ahead.text}
-                    </td>
+                    <PlanCell {...limit} />
+                    <td>{spentText(spentOf(line))}</td>
+                    <OutlookCell {...limit} />
                   </tr>
                 );
               })}

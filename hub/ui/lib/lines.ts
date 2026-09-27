@@ -1,4 +1,4 @@
-import type {History, HistorySeries, Kind, Overview, SourceEvent, View} from './types';
+import type {History, HistorySeries, Kind, SourceEvent, View, Win} from './types';
 import type {PastResets} from './resets';
 import {windowKey} from './types';
 import {seriesName} from './quota';
@@ -14,12 +14,12 @@ export type Line = HistorySeries & {key: string; name: string; color: string; da
  * hidden on the board, or any of a card hidden on the board is left out. A source's windows share its colour and differ by
  * dash.
  */
-export function linesOf(history: History | null, overview: Overview | null, view: View, kind: Kind): Line[] {
-  if (!history || !overview) return [];
+export function linesOf(history: History | null, sources: {id: string; provider: string; title?: string; windows: Win[]}[] | null, view: View, kind: Kind): Line[] {
+  if (!history || !sources) return [];
   const perSource: Record<string, number> = {};
   const hidden = new Set([...view.windows, ...view.hidden]);
   return history.series.flatMap(entry => {
-    const source = hidden.has(cardId(entry.sourceId)) ? undefined : overview.sources.find(s => s.id === entry.sourceId);
+    const source = hidden.has(cardId(entry.sourceId)) ? undefined : sources.find(s => s.id === entry.sourceId);
     const live = source?.windows.find(w => w.id === entry.windowId);
     if (!source || !live || entry.kind !== kind || !entry.points.length || hidden.has(windowKey(entry.sourceId, entry.windowId))) return [];
     const index = (perSource[entry.sourceId] = (perSource[entry.sourceId] ?? -1) + 1);

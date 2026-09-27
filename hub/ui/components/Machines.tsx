@@ -1,6 +1,5 @@
 import {useCallback, useEffect, useRef, useState, type FormEvent} from 'react';
-import {useNow} from '../lib/api';
-import {ago, stamp} from '../lib/format';
+import {stamp} from '../lib/format';
 import {PROVIDERS} from '../lib/providers';
 import {merging, renaming, restoring, shown, timeless, type ProjectGroup, type Projects as ProjectList} from '../lib/projects';
 import {errorText} from '../lib/quota';
@@ -8,7 +7,8 @@ import {call} from '../lib/http';
 import {LOGOS} from './logos';
 import {CopyField, ErrorLine, Field, Modal, Segmented} from './Kit';
 import {Popover} from './Popover';
-import {t} from '../i18n';
+import {rich, t} from '../i18n';
+import {Ago} from './Time';
 
 export type MachinesTab = 'devices' | 'projects' | 'connect';
 
@@ -148,7 +148,6 @@ function DeviceName({device, onRenamed}: {device: Device; onRenamed: () => void}
 
 /** The reader's devices; on the desktop app's board, its one machine, which cannot be disconnected (it is the app's own agent). */
 function Devices({local}: {local: boolean}) {
-  const now = useNow();
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [error, setError] = useState<unknown>(null);
   const load = useCallback(() => {
@@ -195,7 +194,7 @@ function Devices({local}: {local: boolean}) {
               <td>
                 <Agents device={device} />
               </td>
-              <td title={device.lastSeenAt ? stamp(device.lastSeenAt) : undefined}>{device.lastSeenAt ? ago(device.lastSeenAt, now) : '—'}</td>
+              <td title={device.lastSeenAt ? stamp(device.lastSeenAt) : undefined}>{device.lastSeenAt ? <Ago at={device.lastSeenAt} /> : '—'}</td>
               <td>
                 {!local && (
                   <button type="button" className="link-button danger" onClick={() => revoke(device)}>
@@ -217,7 +216,6 @@ function Devices({local}: {local: boolean}) {
  * the time kept. The rules are in ui/lib/projects.ts.
  */
 function Projects() {
-  const now = useNow();
   const [list, setList] = useState<ProjectList | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [merge, setMerge] = useState(false);
@@ -341,7 +339,7 @@ function Projects() {
                     )}
                   </td>
                   <td>{group.machines.map(machine => machine.name).join(', ') || '—'}</td>
-                  <td title={unknown || !group.lastAt ? undefined : stamp(group.lastAt)}>{unknown ? '—' : ago(group.lastAt, now)}</td>
+                  <td title={unknown || !group.lastAt ? undefined : stamp(group.lastAt)}>{unknown ? '—' : <Ago at={group.lastAt} />}</td>
                 </tr>
               );
             })}
@@ -365,7 +363,6 @@ function Projects() {
 }
 
 function Connect() {
-  const now = useNow();
   const [tokens, setTokens] = useState<Token[]>([]);
   const [name, setName] = useState('');
   const [created, setCreated] = useState<{secret: string; name: string} | null>(null);
@@ -440,7 +437,7 @@ function Connect() {
                 <span>
                   <b>{tokenName(token)}</b> <span className="mono">{token.hint}</span>
                 </span>
-                <small title={token.lastUsedAt ? stamp(token.lastUsedAt) : undefined}>{token.lastUsedAt ? t('connect.used', {ago: ago(token.lastUsedAt, now)}) : t('connect.unused')}</small>
+                <small title={token.lastUsedAt ? stamp(token.lastUsedAt) : undefined}>{token.lastUsedAt ? rich('connect.used', {ago: <Ago at={token.lastUsedAt} />}) : t('connect.unused')}</small>
                 <button type="button" className="link-button danger" onClick={() => revoke(token)}>
                   {t('connect.revoke')}
                 </button>

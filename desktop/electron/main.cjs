@@ -65,6 +65,16 @@ function receive(message) {
       target = 'quotum://localhost/index.html#quit';
       if (window) navigate(target);
       break;
+    case 'app_state':
+      // The app's state, to the board of the hub's current start only, in the window's main frame.
+      if (window && message.generation === generation) {
+        try {
+          if (policy.mayInvoke(window.webContents.mainFrame.url, target, 'app_state')) window.webContents.send('quotum:state', message.state);
+        } catch {
+          // The page's renderer is gone: nobody to tell, and no fault of the app's. A page loaded again reads the state itself.
+        }
+      }
+      break;
     case 'close': finish(); break;
     case 'response': {
       const waiter = pending.get(message.id);

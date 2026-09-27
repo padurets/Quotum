@@ -1,6 +1,7 @@
 import type {DatabaseSync} from 'node:sqlite';
 import {newId, secretHash} from '../domain/auth.js';
 import {EMPTY_VIEW, type View} from '../domain/view.js';
+import {tell, type Touches} from '../touches.js';
 
 export type User = {id: string; email: string; name: string; createdAt: number};
 export type Board = {id: string; name: string; personal: boolean; role: 'owner' | 'member'};
@@ -75,7 +76,14 @@ const token = (r: any): Token => ({id: r.id, userId: r.user_id, name: r.name, hi
  * stored as hashes only.
  */
 export class Directory {
+  private observer: Touches | null = null;
+
   constructor(private readonly db: DatabaseSync) {}
+
+  /** Tells `observer` what every change touches (events of open dashboards). */
+  setObserver(observer: Touches) {
+    this.observer = observer;
+  }
 
   /** Runs `work` as one write transaction of the hub's database, which the store shares; inside one already, as part of it. */
   transaction<T>(work: () => T): T {
@@ -132,12 +140,15 @@ export class Directory {
   }
 
   deleteSession(secret: string) {
+    const row = this.db.prepare('SELECT user_id FROM sessions WHERE id = ?').get(secretHash(secret)) as {user_id: string} | undefined;
     this.db.prepare('DELETE FROM sessions WHERE id = ?').run(secretHash(secret));
+    if (row) tell(this.observer, o => o.dropSessions(row.user_id));
   }
 
   /** Every session of a person ends. */
   deleteSessions(userId: string) {
     this.db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
+    tell(this.observer, o => o.dropSessions(userId));
   }
 
   /** The one person of a hub that has only one (the desktop app's). */
@@ -154,7 +165,10 @@ export class Directory {
       if (change.passwordHash !== undefined) {
         this.db.prepare('UPDATE users SET password = ? WHERE id = ?').run(change.passwordHash, id);
         this.db.prepare('DELETE FROM sessions WHERE user_id = ? AND id IS NOT ?').run(id, keepSession ? secretHash(keepSession) : null);
+        tell(this.observer, o => o.dropSessions(id));
       }
+      // Their name is on the cards they measure, as one of the owners.
+      if (change.name !== undefined) tell(this.observer, o => o.touchBoards(this.boards(id).map(b => b.id)));
     });
   }
 
@@ -169,6 +183,7 @@ export class Directory {
 
   saveView(boardId: string, view: View, by: string, now: number) {
     this.db.prepare('INSERT OR REPLACE INTO views VALUES (?, ?, ?, ?)').run(boardId, JSON.stringify(view), by, now);
+    tell(this.observer, o => o.touchBoards([boardId]));
   }
 
   // ---------- boards, members, invites ----------
@@ -200,18 +215,32 @@ export class Directory {
    * people who measure them.
    */
   deleteBoard(id: string) {
+    const members = this.observer ? this.members(id).map(m => m.id) : [];
     for (const table of ['members', 'invites', 'views', 'boards']) {
       this.db.prepare(`DELETE FROM ${table} WHERE ${table === 'boards' ? 'id' : 'board_id'} = ?`).run(id);
     }
+    tell(this.observer, o => {
+      o.dropBoard(id);
+      for (const member of members) o.touchUser(member);
+    });
   }
 
   /** Someone leaves a board, or its owner removes them. What they shared goes with them (Store.unshareOrphans). */
   removeMember(boardId: string, userId: string) {
-    this.db.prepare("DELETE FROM members WHERE board_id = ? AND user_id = ? AND role <> 'owner'").run(boardId, userId);
+    if (!this.db.prepare("DELETE FROM members WHERE board_id = ? AND user_id = ? AND role <> 'owner'").run(boardId, userId).changes) return;
+    tell(this.observer, o => {
+      o.dropMember(boardId, userId);
+      o.touchBoards([boardId]);
+      o.touchUser(userId);
+    });
   }
 
   renameBoard(id: string, name: string) {
     this.db.prepare('UPDATE boards SET name = ? WHERE id = ?').run(name, id);
+    tell(this.observer, o => {
+      o.touchBoards([id]);
+      for (const member of this.members(id)) o.touchUser(member.id);
+    });
   }
 
   createBoard(name: string, userId: string, now: number): Board {
@@ -220,6 +249,7 @@ export class Directory {
       this.db.prepare('INSERT INTO boards VALUES (?, ?, 0, ?, ?)').run(id, name, userId, now);
       this.db.prepare('INSERT INTO members VALUES (?, ?, ?, ?)').run(id, userId, 'owner', now);
     });
+    tell(this.observer, o => o.touchUser(userId));
     return {id, name, personal: false, role: 'owner'};
   }
 
@@ -232,7 +262,11 @@ export class Directory {
   }
 
   addMember(boardId: string, userId: string, now: number) {
-    this.db.prepare('INSERT OR IGNORE INTO members VALUES (?, ?, ?, ?)').run(boardId, userId, 'member', now);
+    if (!this.db.prepare('INSERT OR IGNORE INTO members VALUES (?, ?, ?, ?)').run(boardId, userId, 'member', now).changes) return;
+    tell(this.observer, o => {
+      o.touchBoards([boardId]);
+      o.touchUser(userId);
+    });
   }
 
   createInvite(secret: string, boardId: string, userId: string, now: number, ttlMs: number) {

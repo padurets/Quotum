@@ -11,10 +11,11 @@ import {emailOf, Live, PASSWORD, setUp, type Stand} from './setup.js';
 import {Trackers} from './trackers.js';
 
 /**
- * `npm run demo -- [set] [--resets <scene>]`: a hub on throwaway data, filled with the
- * catalogue (demo/catalogue.ts) through its public requests and kept alive: machines
- * measure, agents start, work and stop, one machine sleeps. The reset trackers are stood
- * in for, so nothing goes to the network. Ctrl+C stops it and leaves nothing behind.
+ * `npm run demo -- [set] [--resets <scene>] [--still]`: a hub on throwaway data, filled with
+ * the catalogue (demo/catalogue.ts) through its public requests and kept alive: machines
+ * measure, agents start, work and stop, one machine sleeps; with `--still`, nothing changes
+ * but the time (see `Demo`). The reset trackers are stood in for, so nothing goes to the
+ * network. Ctrl+C stops it and leaves nothing behind.
  *
  * It runs the built hub (`npm run build` first), as `npm start` does, with the
  * developer's address settings (QUOTUM_PORT, QUOTUM_BIND, QUOTUM_ALLOWED_HOSTS,
@@ -32,21 +33,23 @@ const SETTLE_MS = 1_000;
 /** How often machines tell their lists of running agents, as agents do. */
 const TICK = 15 * SECOND;
 
-class Stop extends Error {}
+export class Stop extends Error {}
 
 const usage = () =>
   [
-    'Usage: npm run demo -- [set] [--resets <scene>]',
+    'Usage: npm run demo -- [set] [--resets <scene>] [--still]',
     `  sets:   ${SETS.map(set => `${set.id} (${set.about})`).join(', ')}`,
     `  scenes: ${SCENES.map(scene => scene.id).join(', ')}`,
   ].join('\n');
 
-export function parseArgs(argv: string[]): {set: DemoSet; scene: string} {
+export function parseArgs(argv: string[]): {set: DemoSet; scene: string; still: boolean} {
   let set: DemoSet | undefined;
   let scene: string | undefined;
+  let still = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === '--resets') {
+    if (arg === '--still') still = true;
+    else if (arg === '--resets') {
       scene = argv[++i];
       if (!SCENES.some(s => s.id === scene)) throw new Stop(`Unknown reset scene "${scene ?? ''}".\n${usage()}`);
     } else if (!arg.startsWith('-') && !set) {
@@ -55,7 +58,7 @@ export function parseArgs(argv: string[]): {set: DemoSet; scene: string} {
     } else throw new Stop(`Unknown argument "${arg}".\n${usage()}`);
   }
   set ??= SETS[0];
-  return {set, scene: scene ?? set.scene};
+  return {set, scene: scene ?? set.scene, still};
 }
 
 /**
@@ -94,66 +97,41 @@ class Output {
   }
 }
 
-async function main() {
-  const {set, scene} = parseArgs(process.argv.slice(2));
-  for (const built of ['dist/server/index.js', 'dist/client/index.html']) {
-    if (!existsSync(path.join(HUB, built))) throw new Stop(`The hub is not built (no ${built}): run npm run build first.`);
+/**
+ * A hub on throwaway data, filled with a set and kept alive until `stop`: machines measure,
+ * agents start, work and stop, one machine sleeps. `still` keeps it still instead: nothing
+ * is measured after the history, no machine checks in, every machine awake at the start
+ * tells the same list of running agents again, and the last measurements hold for hours
+ * (setup.ts), so the board changes only with the clock (the benchmark's idle page).
+ * `onExit` hears of the hub stopping by itself: 0 for a clean exit (Ctrl+C reached it
+ * first), else 1, its output already printed.
+ */
+export class Demo {
+  readonly start = Math.floor(Date.now() / MIN) * MIN;
+  private readonly dir = mkdtempSync(path.join(os.tmpdir(), 'quotum-demo-'));
+  private readonly output = new Output();
+  private hub: ChildProcess | undefined;
+  private trackers: Trackers | undefined;
+  private timer: NodeJS.Timeout | undefined;
+  stopping = false;
+
+  constructor(
+    private readonly options: {set: DemoSet; scene: string; still: boolean; address: ReturnType<typeof addressOf>; onExit: (code: number) => void},
+  ) {}
+
+  get pid() {
+    return this.hub?.pid;
   }
-  const address = addressOf(process.env);
-  await portFree(address.bind, address.port);
 
-  const start = Math.floor(Date.now() / MIN) * MIN;
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'quotum-demo-'));
-  const output = new Output();
-  let hub: ChildProcess | undefined;
-  let trackers: Trackers | undefined;
-  let timer: NodeJS.Timeout | undefined;
-  let stopping = false;
-
-  const stop = async (code: number) => {
-    if (stopping) return;
-    stopping = true;
-    clearTimeout(timer);
-    // Whatever the demo was sending (the history, a tick) goes no further.
-    haltRequests();
-    if (hub && hub.exitCode === null && hub.signalCode === null) {
-      const exited = new Promise(resolve => hub!.once('exit', resolve));
-      hub.kill('SIGTERM');
-      const late = setTimeout(() => hub!.kill('SIGKILL'), STOP_MS);
-      await exited;
-      clearTimeout(late);
-    }
-    await trackers?.close();
-    rmSync(dir, {recursive: true, force: true, maxRetries: 5});
-    process.exit(code);
-  };
-  // A terminal closed (SIGHUP) stops it as Ctrl+C does.
-  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(signal, () => void stop(0));
-  /**
-   * Ctrl+C reaches the hub too, and a request can fail on its closing before the demo hears
-   * of the signal: before calling a failed request a failure, give the signal and the hub's
-   * exit a moment to arrive.
-   */
-  const settled = () =>
-    new Promise<void>(resolve => {
-      if (!hub || hub.exitCode !== null || hub.signalCode !== null) return resolve();
-      const exited = () => {
-        clearTimeout(wait);
-        resolve();
-      };
-      const wait = setTimeout(() => {
-        hub!.off('exit', exited);
-        resolve();
-      }, SETTLE_MS);
-      hub.once('exit', exited);
-    });
-
-  try {
-    trackers = await Trackers.start(SCENES, start);
-    const urls = trackers.urls(scene);
+  /** Brings the hub up and fills it; the stand it returns is kept alive until `stop`. */
+  async run(): Promise<Stand> {
+    const {set, scene, still, address} = this.options;
+    this.trackers = await Trackers.start(SCENES, this.start);
+    const urls = this.trackers.urls(scene);
     const env: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('QUOTUM_') || ADDRESS.includes(key)));
     Object.assign(env, {
-      QUOTUM_DATA_DIR: dir,
+      QUOTUM_PORT: String(address.port),
+      QUOTUM_DATA_DIR: this.dir,
       QUOTUM_SETUP_CODE: SETUP_CODE,
       QUOTUM_SIGNUP: 'invite',
       QUOTUM_RESETS: 'on',
@@ -161,39 +139,112 @@ async function main() {
       QUOTUM_RESETS_CLAUDE_URL: urls.claude,
       QUOTUM_ALLOWED_HOSTS: address.hosts,
     });
-    hub = spawn(process.execPath, ['dist/server/index.js'], {cwd: HUB, env, stdio: ['ignore', 'pipe', 'pipe']});
-    hub.stdout!.on('data', chunk => output.add(chunk));
-    hub.stderr!.on('data', chunk => output.add(chunk));
+    const hub = (this.hub = spawn(process.execPath, ['dist/server/index.js'], {cwd: HUB, env, stdio: ['ignore', 'pipe', 'pipe']}));
+    hub.stdout!.on('data', chunk => this.output.add(chunk));
+    hub.stderr!.on('data', chunk => this.output.add(chunk));
     hub.on('exit', (code, signal) => {
-      if (stopping) return;
+      if (this.stopping) return;
       // Ctrl+C reaches the hub too, which may be done before the demo hears of it: a clean exit is a stop.
-      if (code === 0) return void stop(0);
-      console.error(`\nThe hub stopped by itself (${signal ? `killed by ${signal}` : `exit ${code}`}). Its output:\n${output}`);
-      void stop(1);
+      if (code === 0) return this.options.onExit(0);
+      console.error(`\nThe hub stopped by itself (${signal ? `killed by ${signal}` : `exit ${code}`}). Its output:\n${this.output}`);
+      this.options.onExit(1);
     });
 
-    await ready(hub, address.base, output);
-    const stand = await setUp(address.base, set, start, SETUP_CODE, () => Date.now());
-    await selfCheck(stand, trackers);
+    await ready(hub, address.base, this.output);
+    const stand = await setUp(address.base, set, this.start, SETUP_CODE, () => Date.now(), still);
+    await selfCheck(stand, this.trackers);
 
     const live = new Live(stand, card => liveStep(card), true);
     const tick = async () => {
-      const t = Date.now() - start;
+      const t = Date.now() - this.start;
       try {
-        await live.report(t, Date.now());
-        await live.pace(t, Date.now());
-        await live.measure(t, Date.now());
+        if (still) await live.report(0, Date.now());
+        else {
+          await live.report(t, Date.now());
+          await live.pace(t, Date.now());
+          await live.measure(t, Date.now());
+        }
       } catch (error) {
-        await settled();
-        if (!stopping) console.error(`demo: ${(error as Error).message}`);
+        await this.settled();
+        if (!this.stopping) console.error(`demo: ${(error as Error).message}`);
       }
-      if (!stopping) timer = setTimeout(() => void tick(), TICK - ((Date.now() - start) % TICK));
+      if (!this.stopping) this.timer = setTimeout(() => void tick(), TICK - ((Date.now() - this.start) % TICK));
     };
     await tick();
-    if (!stopping) greet(stand, address, hub.pid!, scene, process.uptime());
+    return stand;
+  }
+
+  /** Stops the hub and the stand-in trackers, and leaves nothing behind; once. */
+  async stop() {
+    if (this.stopping) return;
+    this.stopping = true;
+    clearTimeout(this.timer);
+    // Whatever the demo was sending (the history, a tick) goes no further.
+    haltRequests();
+    const hub = this.hub;
+    if (hub && hub.exitCode === null && hub.signalCode === null) {
+      const exited = new Promise(resolve => hub.once('exit', resolve));
+      hub.kill('SIGTERM');
+      const late = setTimeout(() => hub.kill('SIGKILL'), STOP_MS);
+      await exited;
+      clearTimeout(late);
+    }
+    await this.trackers?.close();
+    rmSync(this.dir, {recursive: true, force: true, maxRetries: 5});
+  }
+
+  /**
+   * Ctrl+C reaches the hub too, and a request can fail on its closing before the demo hears
+   * of the signal: before calling a failed request a failure, give the signal and the hub's
+   * exit a moment to arrive.
+   */
+  settled() {
+    return new Promise<void>(resolve => {
+      const hub = this.hub;
+      if (!hub || hub.exitCode !== null || hub.signalCode !== null) return resolve();
+      const exited = () => {
+        clearTimeout(wait);
+        resolve();
+      };
+      const wait = setTimeout(() => {
+        hub.off('exit', exited);
+        resolve();
+      }, SETTLE_MS);
+      hub.once('exit', exited);
+    });
+  }
+}
+
+/** Checks the hub is built and the port free before anything starts. */
+export async function prepare(address: ReturnType<typeof addressOf>) {
+  for (const built of ['dist/server/index.js', 'dist/client/index.html']) {
+    if (!existsSync(path.join(HUB, built))) throw new Stop(`The hub is not built (no ${built}): run npm run build first.`);
+  }
+  await portFree(address.bind, address.port);
+}
+
+async function main() {
+  const {set, scene, still} = parseArgs(process.argv.slice(2));
+  const address = addressOf(process.env);
+  await prepare(address);
+
+  let exiting = false;
+  const stop = async (code: number) => {
+    if (exiting) return;
+    exiting = true;
+    await demo.stop();
+    process.exit(code);
+  };
+  const demo = new Demo({set, scene, still, address, onExit: code => void stop(code)});
+  // A terminal closed (SIGHUP) stops it as Ctrl+C does.
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(signal, () => void stop(0));
+
+  try {
+    const stand = await demo.run();
+    if (!demo.stopping) greet(stand, address, demo.pid!, scene, still, process.uptime());
   } catch (error) {
-    if (!(error instanceof Stop)) await settled();
-    if (stopping) return;
+    if (!(error instanceof Stop)) await demo.settled();
+    if (demo.stopping) return;
     console.error(error instanceof Stop ? error.message : `The demo could not start: ${(error as Error).stack ?? error}`);
     await stop(1);
   }
@@ -230,7 +281,7 @@ async function selfCheck(stand: Stand, trackers: Trackers) {
 }
 
 /** Where to go and how to sign in; `took` is seconds since the command started. */
-function greet(stand: Stand, address: ReturnType<typeof addressOf>, pid: number, scene: string, took: number) {
+function greet(stand: Stand, address: ReturnType<typeof addressOf>, pid: number, scene: string, still: boolean, took: number) {
   const url = process.env.QUOTUM_PUBLIC_URL || address.base;
   const others = SETS.filter(s => s.id !== stand.set.id).map(s => s.id);
   console.log(
@@ -240,6 +291,7 @@ function greet(stand: Stand, address: ReturnType<typeof addressOf>, pid: number,
       '',
       `  set    ${stand.set.id}: ${stand.set.about}`,
       `  resets ${scene}`,
+      ...(still ? ['  still  nothing is measured: only the time moves'] : []),
       '',
       `  Sign in as (password ${PASSWORD}):`,
       ...people(stand.set).map(p => `    ${emailOf(p.id).padEnd(20)} ${p.name}`),

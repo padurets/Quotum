@@ -1,6 +1,7 @@
-import {countdown, stamp} from '../lib/format';
-import {freeResetExpiry, type ResetLabel, type ResetStatus} from '../lib/resets';
-import type {SourceState} from '../lib/types';
+import {countdown, countdownChangesAt, earliest, stamp} from '../lib/format';
+import {freeResetExpiry, resetLabel, resetLabelChangesAt, type ResetLabel, type ResetStatus} from '../lib/resets';
+import type {FreeResets as Free} from '../lib/types';
+import {useClock} from '../lib/clock';
 import {rich, t} from '../i18n';
 import {Popover} from './Popover';
 
@@ -72,7 +73,16 @@ const host = (url: string) => {
  * Its panel tells what and when, the tracker's words, where they come from and whose
  * data it is: the trackers are credited wherever their data is shown.
  */
-export function ResetMark({label, credit, now}: {label: ResetLabel; credit: ResetStatus['credit']; now: number}) {
+export function ResetNews({status}: {status: ResetStatus}) {
+  const now = useClock(now => {
+    const label = resetLabel(status, now);
+    return earliest(resetLabelChangesAt(status, now), label?.key === 'in' || label?.key === 'bankedIn' ? countdownChangesAt(label.at, now) : null);
+  });
+  const label = resetLabel(status, now);
+  return label && <ResetMark label={label} credit={status.credit} now={now} />;
+}
+
+function ResetMark({label, credit, now}: {label: ResetLabel; credit: ResetStatus['credit']; now: number}) {
   const head = headline(label, now);
   const text = markText(label, now);
   const hint = label.tone === 'accent' ? t('reset.hintScheduled') : label.key === 'possible' ? t('reset.hintWatch') : '';
@@ -138,7 +148,7 @@ const TicketIcon = () => (
  * has now. A ticket, so it never reads as the news of a reset for everyone. Its panel is
  * a table, a row per time they expire; its name says the same a line a row.
  */
-export function FreeResets({resets}: {resets: NonNullable<SourceState['resets']>}) {
+export function FreeResets({resets}: {resets: Free}) {
   const count = t('card.freeResets', {count: resets.available});
   const groups = freeResetExpiry(resets);
   const label = [

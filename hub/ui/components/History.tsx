@@ -1,19 +1,19 @@
 import {memo, useMemo} from 'react';
-import {MINUTE, useNow} from '../lib/api';
-import type {History as HistoryData, Overview} from '../lib/types';
-import {num} from '../lib/format';
+import {earliest, num} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
 import {planAt, started, weeklyPlanLine} from '../lib/plan';
 import {forecastLine, outlook} from '../lib/forecast';
 import {PROVIDERS} from '../lib/providers';
 import {HORIZONS, setMuted, setPrefs, usePrefs} from '../lib/prefs';
 import {goTo, setTimeRange, timeRangeKey, useTimeRange} from '../lib/timeRange';
-import {frameOf, step} from '../lib/periods';
+import {frameChangesAt, frameOf, step} from '../lib/periods';
 import {HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
 import {chartEvents, chartResets, linesOf} from '../lib/lines';
 import {Chart, type Marker} from './Chart';
 import type {ForecastLine, PlanLine} from '../lib/readout';
-import type {PastResets, Resets} from '../lib/resets';
+import {useNamed, usePastResets, useResetsFor} from '../lib/board';
+import {hubNow, useClock} from '../lib/clock';
+import {useHistory, useHistoryBegins} from '../lib/history';
 import {t, useLocale} from '../i18n';
 import {Segmented} from './Kit';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
@@ -61,36 +61,31 @@ function HistorySettings({arrange, planAvailable, forecastAvailable, horizonNote
   );
 }
 
-/** The remaining share of every window of one kind over the period, with its legend. */
-export const History = memo(function History({
-  history,
-  loading,
-  overview,
-  resets,
-  past,
-  arrange,
-}: {
-  history: HistoryData | null;
-  /** Another period is loading; `history` is the previous one until it comes. */
-  loading: boolean;
-  overview: Overview | null;
-  resets: Resets;
-  past: PastResets;
-  arrange: Arrange;
-}) {
-  const now = useNow(MINUTE);
+/**
+ * The remaining share of every window of one kind over the period, with its legend. It
+ * reads the history on screen (`useHistory`, which another answer replaces while loading)
+ * and the board's cards, not their agents or pace; with time it moves on a cell of the
+ * history's grid at a time, and a label past its right edge counts down on its own.
+ */
+export const History = memo(function History({arrange}: {arrange: Arrange}) {
+  const {history, loading} = useHistory();
+  const sources = useNamed(arrange.view.names);
   const prefs = usePrefs();
   const {view} = arrange;
   // Series names and markers are text: they are rebuilt when the language changes.
   const locale = useLocale();
-
-  const lines = useMemo(() => linesOf(history, overview, view, prefs.kind), [history, overview, prefs.kind, view.windows, view.hidden, view.colors, locale]);
-
-  const visible = useMemo(() => lines.filter(line => !prefs.muted[line.key]), [lines, prefs.muted]);
   // The chart moves to the period asked for at once, drawing the answer it has until the
   // next one comes. A time range is in the past: the chart shows just it, without the future.
   const selected = useTimeRange();
-  const historyStart = overview?.historyStart ?? history?.historyStart ?? 0;
+  // On with the next cell, or when what the chart points at past its right edge comes due: drawn within it then.
+  const now = useClock(now => earliest(frameChangesAt(selected, history?.cellMs ?? 60_000, now), ...pointed.filter(at => at > now)));
+  const codex = useResetsFor('codex');
+  const past = usePastResets();
+
+  const lines = useMemo(() => linesOf(history, sources, view, prefs.kind), [history, sources, prefs.kind, view.windows, view.hidden, view.colors, locale]);
+
+  const visible = useMemo(() => lines.filter(line => !prefs.muted[line.key]), [lines, prefs.muted]);
+  const historyStart = useHistoryBegins();
   const frame = frameOf(selected, prefs, now, historyStart);
   const {from, future} = frame;
   // Measurements end at the page's clock, or at the hub's when that is ahead and the answer
@@ -99,7 +94,7 @@ export const History = memo(function History({
   const answered = history && history.range === (selected ? timeRangeKey(selected) : prefs.range) ? history : null;
   const measuredTo = answered ? Math.max(frame.to, selected ? Math.min(answered.to, selected.to) : answered.to) : frame.to;
   // An announced Codex reset matters only where Codex is on the chart.
-  const announced = frame.live && visible.some(line => line.provider === 'codex') ? (resets.codex?.scheduled?.scheduledFor ?? null) : null;
+  const announced = frame.live && visible.some(line => line.provider === 'codex') ? (codex?.scheduled?.scheduledFor ?? null) : null;
   // The spending plan applies to weekly windows, when a line on the chart has a plan.
   const planAvailable = prefs.kind === 'weekly' && visible.some(line => planOf(view, line.sourceId) !== null);
   const planShown = planAvailable && prefs.showPlan;
@@ -107,14 +102,14 @@ export const History = memo(function History({
   const ahead = useMemo(
     () =>
       visible.flatMap(line => {
-        const source = overview?.sources.find(s => s.id === line.sourceId);
+        const source = sources.find(s => s.id === line.sourceId);
         const live = source?.windows.find(w => w.id === line.windowId);
         const measuredAt = source?.successAt ?? null;
         const weekly = planOf(view, line.sourceId);
         const said = outlook(live, measuredAt, now, weekly);
         return 'pace' in said ? [{line, live, measuredAt, weekly, runsOut: said.key === 'runsOut' ? said.at : null}] : [];
       }),
-    [visible, overview, now, view],
+    [visible, sources, now, view],
   );
   // A range in the past has no forecast, so nothing to switch.
   const forecastAvailable = frame.live && ahead.length > 0;
@@ -142,7 +137,7 @@ export const History = memo(function History({
     }
     const seen = new Set<string>();
     for (const line of visible) {
-      const source = overview?.sources.find(s => s.id === line.sourceId);
+      const source = sources.find(s => s.id === line.sourceId);
       const live = source?.windows.find(w => w.id === line.windowId);
       // A reset is marked for a window that has started, whether or not the board plans it.
       if (!live?.resetAt || live.resetAt <= measuredTo || live.resetAt > to || !started(live, source?.successAt ?? null)) continue;
@@ -153,7 +148,7 @@ export const History = memo(function History({
     }
     // What happened to the sources on the chart: their limits came back early, or free resets were granted.
     for (const {event, lines: shown} of chartEvents(history?.events ?? [], visible, from)) {
-      const source = overview?.sources.find(s => s.id === event.sourceId);
+      const source = sources.find(s => s.id === event.sourceId);
       const name = source ? sourceLabel(source) : shown[0].provider;
       list.push({
         key: `${event.kind}-${event.sourceId}-${event.at}`,
@@ -175,7 +170,7 @@ export const History = memo(function History({
       });
     }
     return list;
-  }, [announced, visible, overview, history, past, from, to, measuredTo, view, locale]);
+  }, [announced, visible, sources, history, past, from, to, measuredTo, view, locale]);
 
   // One plan line per distinct weekly window; windows of a source that share a reset
   // (e.g. Claude weekly and Fable) share one plan.
@@ -183,7 +178,7 @@ export const History = memo(function History({
     if (!planShown) return [];
     const seen = new Map<string, PlanLine>();
     for (const line of visible) {
-      const source = overview?.sources.find(s => s.id === line.sourceId);
+      const source = sources.find(s => s.id === line.sourceId);
       const live = source?.windows.find(w => w.id === line.windowId);
       const plan = planOf(view, line.sourceId);
       // Idle rolling windows (reset = now + 7 days) have not started: no plan to show.
@@ -202,7 +197,7 @@ export const History = memo(function History({
       });
     }
     return [...seen.values()];
-  }, [visible, overview, from, to, now, planShown, view, locale]);
+  }, [visible, sources, from, to, now, planShown, view, locale]);
 
   const forecasts: ForecastLine[] = useMemo(
     () =>
@@ -214,9 +209,11 @@ export const History = memo(function History({
           }),
     [ahead, forecastShown, now, from, to],
   );
+  // What the chart points at past its right edge (Chart.tsx): an announced reset, where a window runs out.
+  const pointed = [...markers.filter(m => m.strong && !m.past && m.at > to).map(m => m.at), ...forecasts.flatMap(f => (f.at !== null && f.at > to ? [f.at] : []))];
 
   return (
-    <section className={`panel history ${loading ? 'is-loading' : ''}`} aria-label={t('history.label')} aria-busy={loading}>
+    <section className={`panel history ${loading ? 'is-loading' : ''}`} data-time="chart" aria-label={t('history.label')} aria-busy={loading}>
       <div className="panel-head">
         <h2>{t('history.title')}</h2>
         <HistorySettings arrange={arrange} planAvailable={planAvailable} forecastAvailable={forecastAvailable} horizonNote={frame.live && !planShown && !forecastShown} />
@@ -241,7 +238,7 @@ export const History = memo(function History({
         {!lines.length && <span className="legend-empty">{t('history.noLines')}</span>}
       </div>
 
-      {history ? <Chart lines={visible} plans={plans} forecasts={forecasts} markers={markers} from={from} now={measuredTo} to={to} cellMs={history.cellMs} empty={lines.length ? t('chart.empty') : null} onSelect={setTimeRange} onStep={direction => goTo(step(selected, prefs.range, direction, now, historyStart))} /> : <div className="chart chart-loading">{t('history.loading')}</div>}
+      {history ? <Chart lines={visible} plans={plans} forecasts={forecasts} markers={markers} from={from} now={measuredTo} to={to} cellMs={history.cellMs} empty={lines.length ? t('chart.empty') : null} onSelect={setTimeRange} onStep={direction => goTo(step(selected, prefs.range, direction, hubNow(), historyStart))} /> : <div className="chart chart-loading">{t('history.loading')}</div>}
     </section>
   );
 });

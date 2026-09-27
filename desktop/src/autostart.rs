@@ -20,6 +20,7 @@ pub fn set(shell: &Arc<Shell>, on: bool) -> Result<(), String> {
     let done =
         if on { safe().and_then(|_| host::set_autostart(shell, true)) } else { host::set_autostart(shell, false) };
     shell.mark_autostart_defaulted();
+    shell.wake();
     done
 }
 
@@ -31,6 +32,7 @@ pub fn by_default(shell: &Arc<Shell>) {
     match safe().and_then(|_| host::set_autostart(shell, true)) {
         Ok(()) => {
             shell.mark_autostart_defaulted();
+            shell.wake();
             shell.agent_log.line("app: starts at login from now on (the settings turn it off)");
         }
         Err(e) => shell.agent_log.line(&format!("app: does not start at login: {e}")),

@@ -134,6 +134,27 @@ export const config = {
     sampleDays: 90,
   },
 
+  /**
+   * The events open dashboards get (spec/dashboard-v1.md). A stream hears a `ping` every
+   * `heartbeatMs`; a watched board is worked out again in full every `recheckMs` (0: never),
+   * so a change no touch told of arrives all the same. Changes close together go out as
+   * one after `smoothMs`. A long poll waits up to `pollMs`; its lease lives `leaseMs` after
+   * its last answer. A reader more than `bufferBytes` behind is let go. Streams and leases
+   * count together against `perSession`, `perUser` and `maxStreams`: a new one takes the
+   * place of the oldest where it hits a limit, else it is refused.
+   */
+  events: {
+    heartbeatMs: 25_000,
+    recheckMs: 25_000,
+    smoothMs: 100,
+    pollMs: 25_000,
+    leaseMs: 60_000,
+    bufferBytes: 256 * 1024,
+    perSession: 8,
+    perUser: 16,
+    maxStreams: 2000,
+  },
+
   history: {
     /**
      * The periods the chart offers, each ending now. Every period, one of these or a time

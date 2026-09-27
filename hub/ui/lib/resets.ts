@@ -1,5 +1,3 @@
-import {useEffect, useState} from 'react';
-import {call, unlessSame} from './http';
 import type {Expiring, FreeResets} from './types';
 
 /**
@@ -58,6 +56,15 @@ export function resetLabel(status: ResetStatus | undefined, now: number): ResetL
   return null;
 }
 
+/** When `resetLabel` reads otherwise: an announced reset's time comes, a possible one runs out, news gets old. */
+export function resetLabelChangesAt(status: ResetStatus | undefined, now: number): number | null {
+  if (!status) return null;
+  const {scheduled, watch, latest, policy} = status;
+  const moments = [scheduled?.scheduledFor ?? null, watch?.expiresAt ?? null, latest ? latest.at + RECENT_RESET_MS : null, policy ? policy.at + RECENT_POLICY_MS : null];
+  const later = moments.filter((at): at is number => at !== null && at > now);
+  return later.length ? Math.min(...later) : null;
+}
+
 /**
  * When a card's free resets expire: how many when, soonest first, and those the client
  * gives no time for (or that no group tells of) in one group last.
@@ -68,36 +75,4 @@ export function freeResetExpiry(resets: FreeResets): Expiring[] {
   if (rest <= 0) return groups;
   const last = groups.at(-1);
   return last?.expiresAt === null ? [...groups.slice(0, -1), {count: last.count + rest, expiresAt: null}] : [...groups, {count: rest, expiresAt: null}];
-}
-
-const POLL_MS = 60_000;
-
-/** Announcements turned off: always these, so what is given them is not rendered again. */
-const NONE = {resets: {}, past: {}, health: []};
-
-type Answer = {resets: Resets; trackers: TrackerHealth[]; past: PastResets};
-
-/** Reads `/api/resets` every minute while announcements are enabled in this browser. */
-export function useResets(enabled: boolean): {resets: Resets; past: PastResets; health: TrackerHealth[]} {
-  const [state, setState] = useState<Answer>({resets: {}, trackers: [], past: {}});
-  useEffect(() => {
-    if (!enabled) return;
-    let done = false;
-    let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
-      try {
-        const answer = await call<Answer>('GET', '/api/resets', undefined, 10_000);
-        if (!done) setState(unlessSame(answer));
-      } catch {
-        /* keep the last answer */
-      }
-      if (!done) timer = setTimeout(poll, POLL_MS);
-    };
-    void poll();
-    return () => {
-      done = true;
-      clearTimeout(timer);
-    };
-  }, [enabled]);
-  return enabled ? {resets: state.resets, past: state.past, health: state.trackers} : NONE;
 }

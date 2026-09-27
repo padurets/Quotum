@@ -385,14 +385,20 @@ account = "work"        # различает две подписки Antigravity
 **Как открыть хаб другим машинам.** Поставьте его за HTTPS (сессии — это cookies, а
 токены — bearer-секреты): [deploy/compose.yaml](deploy/compose.yaml) делает это с
 Caddy. За своим прокси сообщите хабу его адрес и разрешите верить прокси:
-`QUOTUM_PUBLIC_URL=https://quotum.example.com QUOTUM_TRUST_PROXY=true`.
+`QUOTUM_PUBLIC_URL=https://quotum.example.com QUOTUM_TRUST_PROXY=true`. Открытый
+дашборд держит один поток (`/api/events`), по которому хаб присылает перемены: пусть
+прокси отдаёт его сразу, как он идёт (nginx так и делает — хаб его об этом просит); если
+прокси его придерживает, страница спрашивает длинными запросами. По HTTP/2, как отдаёт
+Caddy, браузер держит живыми до восьми досок сразу (вкладка, скрытая полминуты,
+отпускает свой поток); по обычному HTTP/1.1 — около пяти.
 
 ## Подробнее
 
 - [docs/architecture.md](docs/architecture.md) — как части складываются вместе, как
   устроены замеры и расписание, люди, доски и устройства (на английском).
 - [spec/ingest-v1.md](spec/ingest-v1.md) — что агент отправляет хабу; реализовать это
-  может кто угодно.
+  может кто угодно. [spec/dashboard-v1.md](spec/dashboard-v1.md) — что хаб сообщает
+  открытому дашборду.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — как проверить изменение и что учесть (на английском);
   [SECURITY.md](SECURITY.md) — как сообщить об уязвимости, не публикуя её.
 - `npm run demo` в `hub/` (после `npm run build`) — живая доска на одноразовых данных со
@@ -410,7 +416,7 @@ install/              установщики для `curl … | sh` и PowerShel
 deploy/               запуск хаба через Docker Compose за Caddy (HTTPS)
 desktop/              десктопное приложение (Rust, Electron на Linux, Tauri на Windows): агент, свой хаб и доска в окне
 .github/workflows     тесты на каждый push; весь релиз по тегу версии
-spec/                 протокол между агентом и хабом
+spec/                 протоколы: агент — хабу, хаб — дашборду
 hub/server/domain     правила: окна, расход, сбросы, формат замеров
 hub/server/store      SQLite: схема, замеры, люди и устройства
 hub/server/routes     HTTP-маршруты для людей и для агентов

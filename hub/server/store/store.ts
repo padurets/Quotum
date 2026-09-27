@@ -5,6 +5,7 @@ import {onGrid, series, type Kind, type Measurement, type Sample, type SourceSta
 import type {Origin} from '../domain/ingest.js';
 import type {Stretch} from '../domain/work.js';
 import {members, projectGroups, type ProjectGroup} from '../domain/projects.js';
+import {tell, type Touches} from '../touches.js';
 import {migrate} from './schema.js';
 
 /** A session credited with work (server/sessions.ts): its names as reported, '' for none. */
@@ -74,6 +75,7 @@ export class Store {
   private readonly created: number;
   private readonly revisions = new Map<string, number>();
   private readonly started = Date.now();
+  private observer: Touches | null = null;
 
   constructor(file: string, now = Date.now()) {
     this.db = new DatabaseSync(file);
@@ -92,6 +94,11 @@ export class Store {
     const kept = now - config.retention.sampleDays * 86_400_000;
     const oldest = (this.db.prepare('SELECT MIN(at) AS at FROM samples WHERE at >= ?').get(kept) as {at: number | null}).at;
     return oldest === null ? this.created : Math.min(this.created, oldest);
+  }
+
+  /** Tells `observer` what every change touches (events of open dashboards). */
+  setObserver(observer: Touches) {
+    this.observer = observer;
   }
 
   /** Changes whenever something a board shows changes; its history is cached by it. */
@@ -177,6 +184,11 @@ export class Store {
     if (this.db.prepare('INSERT OR IGNORE INTO holders VALUES (?, ?, ?)').run(source, userId, now).changes) {
       const personal = this.db.prepare('SELECT id FROM boards WHERE created_by = ? AND personal = 1').get(userId) as {id: string} | undefined;
       if (personal) this.changed(personal.id);
+      // It comes to their personal board, and its owners change where it is shared.
+      tell(this.observer, o => {
+        o.touchBoards(this.boardsOf(source));
+        o.touchUser(userId);
+      });
     }
   }
 
@@ -194,7 +206,12 @@ export class Store {
       )
       .all(userId, userId) as {source_id: string}[];
     for (const {source_id: source} of orphans) {
+      const shown = this.observer ? this.boardsOf(source) : [];
       if (!this.db.prepare('DELETE FROM holders WHERE source_id = ? AND user_id = ?').run(source, userId).changes) continue;
+      tell(this.observer, o => {
+        o.touchBoards(shown);
+        o.touchUser(userId);
+      });
       const personal = this.db.prepare('SELECT id FROM boards WHERE created_by = ? AND personal = 1').get(userId) as {id: string} | undefined;
       if (personal) this.changed(personal.id);
       const shared = this.db.prepare('SELECT board_id FROM shares WHERE source_id = ?').all(source) as {board_id: string}[];
@@ -205,12 +222,18 @@ export class Store {
   // ---------- sharing ----------
 
   share(board: string, source: string, userId: string, now: number) {
-    if (this.db.prepare('INSERT OR IGNORE INTO shares VALUES (?, ?, ?, ?)').run(board, source, userId, now).changes) this.changed(board);
+    if (this.db.prepare('INSERT OR IGNORE INTO shares VALUES (?, ?, ?, ?)').run(board, source, userId, now).changes) {
+      this.changed(board);
+      tell(this.observer, o => o.touchBoards([board]));
+    }
   }
 
   unshare(board: string, source: string): boolean {
     const removed = this.db.prepare('DELETE FROM shares WHERE board_id = ? AND source_id = ?').run(board, source).changes > 0;
-    if (removed) this.changed(board);
+    if (removed) {
+      this.changed(board);
+      tell(this.observer, o => o.touchBoards([board]));
+    }
     return removed;
   }
 
@@ -222,7 +245,10 @@ export class Store {
           ' (SELECT h.source_id FROM holders h JOIN members m ON m.user_id = h.user_id WHERE m.board_id = ?)',
       )
       .run(board, board).changes;
-    if (removed) this.changed(board);
+    if (removed) {
+      this.changed(board);
+      tell(this.observer, o => o.touchBoards([board]));
+    }
   }
 
   /** Forgets what a deleted board showed; the sources stay with their people (Directory.deleteBoard does the rest). */
@@ -288,12 +314,17 @@ export class Store {
       throw error;
     }
     this.changed(...this.boardsOf(id));
+    tell(this.observer, o => {
+      o.touchSources([id]);
+      o.history(id, measurement.observedAt);
+    });
   }
 
   /** Records a failed attempt; the last good values stay on screen. */
   fail(id: string, error: string) {
     this.db.prepare('INSERT OR REPLACE INTO state VALUES (?, ?)').run(id, JSON.stringify({...this.state(id), error}));
     this.changed(...this.boardsOf(id));
+    tell(this.observer, o => o.touchSources([id]));
   }
 
   /** Remembers which source a device last delivered for a provider; its failures for the provider are over. */
@@ -398,7 +429,9 @@ export class Store {
 
   /** Keeps a reset the trackers reported; the same one reported again is kept once. */
   announce(provider: string, announcement: Announcement) {
-    this.db.prepare('INSERT OR IGNORE INTO announcements VALUES (?, ?, ?, ?)').run(provider, announcement.at, announcement.url, announcement.text);
+    if (this.db.prepare('INSERT OR IGNORE INTO announcements VALUES (?, ?, ?, ?)').run(provider, announcement.at, announcement.url, announcement.text).changes) {
+      tell(this.observer, o => o.touchHub());
+    }
   }
 
   /** Resets the trackers reported since `from`, by provider, oldest first. */
@@ -510,12 +543,15 @@ export class Store {
     this.restoreProjects(user, [...reported].filter(r => !name || r === name));
     const give = this.db.prepare('INSERT INTO project_names VALUES (?, ?, ?) ON CONFLICT (user_id, reported) DO UPDATE SET name = excluded.name');
     if (name) for (const r of reported) if (r !== name) give.run(user, r, name);
+    // Their agents are shown under the new names.
+    tell(this.observer, o => o.touchSources(this.held(user).map(s => s.id)));
   }
 
   /** Reported names shown under their own name again. */
   restoreProjects(user: string, reported: string[]) {
     const remove = this.db.prepare('DELETE FROM project_names WHERE user_id = ? AND reported = ?');
     for (const r of reported) remove.run(user, r);
+    tell(this.observer, o => o.touchSources(this.held(user).map(s => s.id)));
   }
 
   /** The names a person gave the projects their machines report: reported → shown. */

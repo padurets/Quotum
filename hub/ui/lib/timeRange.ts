@@ -6,8 +6,6 @@ export type TimeRange = {from: number; to: number};
 
 /** The shortest and longest periods the hub reads (config.history.minSpanMs, maxSpanMs). */
 export const MIN_TIME_RANGE = 15 * 60_000;
-/** How far the page's clock may be behind the hub's: a range ending there is not too short for it. */
-const CLOCK_SLACK = 5 * 60_000;
 const MAX_TIME_RANGE = 31 * 86_400_000;
 const DAY = 86_400_000;
 
@@ -21,18 +19,19 @@ export const ofTimeRange = (history: {range: string} | null) => !!history && his
 /**
  * The selection lives in the address (`?from=…&to=…`, with the board it was selected on):
  * a reload keeps it, a link to a burst of work can be shared with the others on the
- * board, and Back undoes a selection.
+ * board, and Back undoes a selection. Only its form and length are checked here: its end
+ * may be past the page's clock, which the hub's may be ahead of. The hub cuts it at its
+ * own now, and refuses one too short then; the chosen period comes back (`dropTimeRange`).
  */
-export function parseTimeRange(search: string, now: number): TimeRange | null {
+export function parseTimeRange(search: string): TimeRange | null {
   const params = new URLSearchParams(search);
   const [from, to] = [params.get('from'), params.get('to')].map(value => (value && /^\d{1,15}$/.test(value) ? Number(value) : NaN));
-  const end = Math.min(to, now + CLOCK_SLACK);
-  return end - from >= MIN_TIME_RANGE && to - from <= MAX_TIME_RANGE ? {from, to} : null;
+  return to - from >= MIN_TIME_RANGE && to - from <= MAX_TIME_RANGE ? {from, to} : null;
 }
 
 // Tests import the helpers below without a page.
 const page = typeof location !== 'undefined';
-let current = page ? parseTimeRange(location.search, Date.now()) : null;
+let current = page ? parseTimeRange(location.search) : null;
 let search = page ? location.search : '';
 let board = '';
 const listeners = new Set<() => void>();
@@ -40,7 +39,7 @@ const listeners = new Set<() => void>();
 function changed() {
   if (location.search === search) return;
   search = location.search;
-  current = parseTimeRange(search, Date.now());
+  current = parseTimeRange(search);
   for (const listener of listeners) listener();
 }
 
@@ -97,23 +96,25 @@ function popped() {
   if (board) showBoard(board);
 }
 
+/** Hears of every change of the selection, as the page's history loader does; the page's components use `useTimeRange`. */
+export function onTimeRange(listener: () => void) {
+  listeners.add(listener);
+  if (listeners.size === 1) {
+    window.addEventListener('popstate', popped);
+    // The address may have changed while nothing was listening.
+    changed();
+  }
+  return () => {
+    listeners.delete(listener);
+    if (!listeners.size) window.removeEventListener('popstate', popped);
+  };
+}
+
+/** The selection now: none when the chosen period is shown. */
+export const timeRange = () => current;
+
 export function useTimeRange(): TimeRange | null {
-  return useSyncExternalStore(
-    listener => {
-      listeners.add(listener);
-      if (listeners.size === 1) {
-        window.addEventListener('popstate', popped);
-        // The address may have changed while nothing was listening.
-        changed();
-      }
-      return () => {
-        listeners.delete(listener);
-        if (!listeners.size) window.removeEventListener('popstate', popped);
-      };
-    },
-    () => current,
-    () => current,
-  );
+  return useSyncExternalStore(onTimeRange, timeRange, timeRange);
 }
 
 /** How the hub names the history of a selected time range (its `range`). */

@@ -1,4 +1,4 @@
-import {useState, type FormEvent} from 'react';
+import {useEffect, useState, type FormEvent} from 'react';
 import {call} from '../lib/http';
 import {stamp} from '../lib/format';
 import {setPrefs, usePrefs} from '../lib/prefs';
@@ -9,6 +9,7 @@ import {ErrorLine, Field, LanguageSelect, Modal} from './Kit';
 import {SwitchRow} from './Popover';
 import {AppSection, Measuring} from './Desktop';
 import {inApp, settingsSections, type AppState} from '../lib/app';
+import {useApp} from '../lib/board';
 
 type Status = {busy?: boolean; done?: boolean; error?: unknown};
 
@@ -118,8 +119,34 @@ function trackerDetail(detail: string) {
   return known(key) ? t(key) : detail;
 }
 
+/** How each tracker answered when last asked, read when shown: when it was checked changes every round, and nothing else here needs it. */
+function Trackers() {
+  const [trackers, setTrackers] = useState<TrackerHealth[]>([]);
+  useEffect(() => {
+    let shown = true;
+    call<{trackers: TrackerHealth[]}>('GET', '/api/resets', undefined, 10_000).then(
+      answer => shown && setTrackers(answer.trackers),
+      () => {},
+    );
+    return () => void (shown = false);
+  }, []);
+  return (
+    <div className="trackers">
+      {trackers.map(tracker => (
+        <div key={tracker.name} className="tracker" title={tracker.at ? t('settings.checkedAt', {time: stamp(tracker.at)}) : ''}>
+          <i className={`dot ${tracker.ok === true ? 'dot-ok' : tracker.ok === false ? 'dot-warn' : 'dot-idle'}`} />
+          <a href={tracker.url} target="_blank" rel="noopener noreferrer">
+            {tracker.name}
+          </a>
+          <span>{trackerDetail(tracker.detail)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** What this browser (or the app's window) keeps for itself: the language and reset announcements. */
-function Browser({trackers, title}: {trackers: TrackerHealth[]; title: string}) {
+function Browser({title}: {title: string}) {
   const prefs = usePrefs();
   return (
     <section className="drawer-section">
@@ -133,19 +160,7 @@ function Browser({trackers, title}: {trackers: TrackerHealth[]; title: string}) 
         <SwitchRow on={prefs.showResets} onChange={on => setPrefs({showResets: on})}>
           {t('settings.resets')}
         </SwitchRow>
-        {prefs.showResets && (
-          <div className="trackers">
-            {trackers.map(tracker => (
-              <div key={tracker.name} className="tracker" title={tracker.at ? t('settings.checkedAt', {time: stamp(tracker.at)}) : ''}>
-                <i className={`dot ${tracker.ok === true ? 'dot-ok' : tracker.ok === false ? 'dot-warn' : 'dot-idle'}`} />
-                <a href={tracker.url} target="_blank" rel="noopener noreferrer">
-                  {tracker.name}
-                </a>
-                <span>{trackerDetail(tracker.detail)}</span>
-              </div>
-            ))}
-          </div>
-        )}
+        {prefs.showResets && <Trackers />}
         <p className="drawer-note">
           {rich('settings.resetsNote', {
             claude: (
@@ -178,21 +193,21 @@ const SignOutIcon = () => (
  */
 export function AccountPanel({
   user,
-  trackers,
   onChanged,
   onSignedOut,
   onClose,
   local,
-  app,
+  onAppState,
 }: {
   user: User;
-  trackers: TrackerHealth[];
   onChanged: () => Promise<void>;
   onSignedOut: () => void;
   onClose: () => void;
   local: boolean;
-  app: {state: AppState | null; onState: (state: AppState) => void};
+  /** The app's state as its commands answer it (lib/app.ts). */
+  onAppState: (state: AppState) => void;
 }) {
+  const appState = useApp();
   const signOut = async () => {
     await call('POST', '/api/auth/logout').catch(() => {});
     onSignedOut();
@@ -217,9 +232,9 @@ export function AccountPanel({
           <Password />
         </>
       )}
-      {sections.includes('measuring') && app.state && <Measuring state={app.state} onState={app.onState} />}
-      {sections.includes('app') && app.state && <AppSection state={app.state} onState={app.onState} />}
-      <Browser trackers={trackers} title={t(local ? 'settings.view' : 'account.browser')} />
+      {sections.includes('measuring') && appState && <Measuring state={appState} onState={onAppState} />}
+      {sections.includes('app') && appState && <AppSection state={appState} onState={onAppState} />}
+      <Browser title={t(local ? 'settings.view' : 'account.browser')} />
     </Modal>
   );
 }

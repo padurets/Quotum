@@ -1,12 +1,12 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {agentRows, DRAWN, drawn, folderOf} from '../lib/agents';
+import {agentRows, DRAWN, drawn, folderOf, type AgentSource} from '../lib/agents';
 import {chartEvents, chartResets, type Line} from '../lib/lines';
 import {planCell} from '../lib/forecast';
 import {DEFAULT_PLAN, planNote} from '../lib/plan';
-import {cadenceOf, dotOf, PULSE_FOR, resetLine} from '../lib/quota';
+import {cadenceOf, dotOf, PULSE_FOR, resetLine, type Paced} from '../lib/quota';
 import {resetLabel, type ResetStatus} from '../lib/resets';
-import type {LiveSession, SourceState, View, Win} from '../lib/types';
+import type {Card, LiveSession, View, Win} from '../lib/types';
 import {boardState, cardId, isWindowHidden} from '../lib/view';
 
 const HOUR = 3_600_000;
@@ -60,7 +60,7 @@ test('agents are drawn up to ten; the table leaves out hidden cards and says why
   const session = (): LiveSession => ({device: {id: 'd', name: 'laptop'}, origin: 'terminal', project: null, folder: null, startedAt: now, lastWorkedAt: null, working: true});
   assert.equal(drawn(Array.from({length: DRAWN}, session)), true);
   assert.equal(drawn(Array.from({length: DRAWN + 1}, session)), false);
-  const source = (id: string, sessions: LiveSession[]) => ({id, sessions}) as unknown as SourceState;
+  const source = (id: string, sessions: LiveSession[]): AgentSource => ({id, provider: 'codex', sessions});
   const hidden = {...EMPTY, hidden: [cardId('b')]};
   assert.equal(agentRows([source('a', []), source('b', [session()])], hidden).empty, 'noneShown');
   assert.equal(agentRows([source('a', []), source('b', [])], hidden).empty, 'none');
@@ -82,7 +82,7 @@ test('a board without subscriptions invites to connect one; with every widget hi
   assert.equal(boardState([{id: 'a'}], {...EMPTY, hidden: [cardId('a'), 'history', 'forecast'], shown: ['agents']}), 'widgets');
   assert.equal(isWindowHidden({...EMPTY, windows: ['a/weekly']}, 'a', 'weekly'), true);
   assert.equal(resetLine({resetAt: null}, now).key, 'resetUnknown');
-  const measured = (age: number, change: Partial<SourceState> = {}) => ({stale: false, error: null, successAt: now - age, ...change});
+  const measured = (age: number, change: Partial<Card> = {}) => ({stale: false, error: null, successAt: now - age, ...change});
   assert.deepEqual(dotOf(measured(PULSE_FOR - 1), now), {warn: false, pulsing: true, fresh: 1});
   assert.deepEqual(dotOf(measured(PULSE_FOR), now), {warn: false, pulsing: false, fresh: 1});
   assert.deepEqual(dotOf(measured(0, {stale: true}), now), {warn: true}, 'numbers gone stale outweigh their age');
@@ -92,8 +92,7 @@ test('a board without subscriptions invites to connect one; with every widget hi
 
 test('the dot tells when the next measurement comes and why, while the hub sets the pace and nothing is wrong', () => {
   const MIN = 60_000;
-  const source = (next: number, change: Partial<SourceState> = {}) =>
-    ({stale: false, error: null, successAt: now - MIN, cadence: {next, why: 'idle' as const}, ...change}) as Pick<SourceState, 'stale' | 'error' | 'successAt' | 'cadence'>;
+  const source = (next: number, change: Partial<Paced> = {}): Paced => ({stale: false, error: null, successAt: now - MIN, cadence: {next, why: 'idle' as const}, ...change});
   assert.deepEqual(cadenceOf(source(now + 3 * MIN), now), {when: 'nextIn', next: now + 3 * MIN, why: 'idle'});
   assert.equal(cadenceOf(source(now + 15_001), now)?.when, 'nextIn');
   assert.equal(cadenceOf(source(now + 15_000), now)?.when, 'nextSoon');

@@ -1,7 +1,10 @@
 import {useLayoutEffect, useRef, useState, type ReactNode} from 'react';
 import type {LiveSession} from '../lib/types';
 import {DRAWN} from '../lib/agents';
+import {useClock} from '../lib/clock';
+import {resetLabel, resetLabelChangesAt, type ResetStatus} from '../lib/resets';
 import {Agents} from './Agents';
+import {ResetNews} from './ResetMarks';
 
 /** Whether a tray, as it is laid out now, has room for its agents' marks. */
 function hasRoom(tray: HTMLElement) {
@@ -24,13 +27,16 @@ function hasRoom(tray: HTMLElement) {
  * resets, then the agents running on it). Nothing in it shrinks or wraps; when there is no
  * room, the agents' marks go, all at once, and their count stays. That is settled again
  * when anything in the tray changes size (the window, a font, the language, a mark's text)
- * or the agents change, not as time passes.
+ * or the agents change, not as time passes: the tray itself renders with time only when
+ * news comes or goes, what the news says is a part of its own (`ResetNews`).
  */
-export function Tray({news, current, sessions, now}: {news: ReactNode; current: ReactNode; sessions: LiveSession[]; now: number}) {
+export function Tray({resets, current, sessions}: {resets: ResetStatus | undefined; current: ReactNode; sessions: LiveSession[]}) {
   const tray = useRef<HTMLElement>(null);
   const [roomy, setRoomy] = useState(true);
+  const now = useClock(now => resetLabelChangesAt(resets, now));
+  const news = !!resetLabel(resets, now);
   // What adds or removes something to watch; a change of size within is caught by the observer.
-  const layout = `${!!news}/${!!current}/${Math.min(sessions.length, DRAWN + 1)}`;
+  const layout = `${news}/${!!current}/${Math.min(sessions.length, DRAWN + 1)}`;
 
   useLayoutEffect(() => {
     const element = tray.current;
@@ -44,10 +50,14 @@ export function Tray({news, current, sessions, now}: {news: ReactNode; current: 
   }, [layout]);
 
   return (
-    <footer className="card-foot" ref={tray}>
-      {news && <div className="tray-news">{news}</div>}
+    <footer className="card-foot" ref={tray} data-time="tray">
+      {news && resets && (
+        <div className="tray-news">
+          <ResetNews status={resets} />
+        </div>
+      )}
       {current}
-      <Agents sessions={sessions} now={now} roomy={roomy} />
+      <Agents sessions={sessions} roomy={roomy} />
     </footer>
   );
 }

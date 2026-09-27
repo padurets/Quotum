@@ -13,6 +13,8 @@ permissions:
 jobs:
   hub:
     runs-on: ubuntu-latest
+    # It takes about a minute; a test that hangs fails it instead of holding the runner.
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: hub
@@ -27,6 +29,27 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+
+  # What an open dashboard costs, measured in Chrome on the built hub and page (hub/bench).
+  # A release does not wait for it: the commit it tags already passed it.
+  bench:
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    # It takes about four minutes; a browser that hangs fails it instead of holding the runner.
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: hub
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: hub/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci
 
   # On every system the agent ships for: its process handling differs between them.
   agent:

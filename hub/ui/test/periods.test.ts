@@ -1,7 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {frameOf, periodLabel, periodOf, PERIODS, step} from '../lib/periods';
-import {complete, heardHub, hubNow} from '../lib/api';
+import {complete} from '../lib/history';
+import {heardHub, hubNow} from '../lib/clock';
 import {setLocale} from '../i18n';
 import type {History} from '../lib/types';
 
