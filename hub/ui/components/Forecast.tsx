@@ -1,7 +1,7 @@
 import {memo, useLayoutEffect, useMemo, useRef, useState, type ReactNode} from 'react';
 import {MINUTE, useNow} from '../lib/api';
 import type {History as HistoryData, Overview, SeriesWork} from '../lib/types';
-import {countdown, duration, num, rateText, shareText, stamp, workHours} from '../lib/format';
+import {countdown, duration, num, rateText, shareText, stamp, workAbout, workHours} from '../lib/format';
 import {level} from '../lib/quota';
 import {FORECAST_WIDTHS, LIVE_COLUMNS, RANGE_COLUMNS, forecastLayout, forecastRow, spentOf, type ForecastColumn, type Outlook, type Pace, type Spent} from '../lib/forecast';
 import {dashOf, lineWork, MIN_RATE, workNotes, type DashText, type WorkCell, type WorkColumn} from '../lib/work';
@@ -107,11 +107,11 @@ function workCell(column: WorkColumn, cell: WorkCell, work: SeriesWork, periodFr
   if ('usedUp' in cell) return {content: t('work.usedUp')};
   if ('untilReset' in cell) {
     const reset = stamp(resetAt!);
-    return {content: t('work.untilReset'), title: [slow ? t('work.untilResetSlow', {reset}) : t('work.untilResetHint', {time: workHours(cell.untilReset), reset}), ...lines].join('\n')};
+    return {content: t('work.untilReset'), title: [slow ? t('work.untilResetSlow', {reset}) : t('work.untilResetHint', {time: workAbout(cell.untilReset), reset}), ...lines].join('\n')};
   }
   if ('outlasts' in cell) {
     const length = duration(cell.windowMs);
-    return {content: t('work.untilReset'), title: [slow ? t('work.outlastsSlow', {window: length}) : t('work.outlastsHint', {time: workHours(cell.outlasts), window: length}), ...lines].join('\n')};
+    return {content: t('work.untilReset'), title: [slow ? t('work.outlastsSlow', {window: length}) : t('work.outlastsHint', {time: workAbout(cell.outlasts), window: length}), ...lines].join('\n')};
   }
   const content =
     column === 'work'
@@ -119,7 +119,7 @@ function workCell(column: WorkColumn, cell: WorkCell, work: SeriesWork, periodFr
       : column === 'perwork'
         ? t('table.perHour', {value: rateText(cell.value)})
         : column === 'workleft'
-          ? t('work.left', {time: workHours(cell.value)})
+          ? t('work.left', {time: workAbout(cell.value)})
           : t('work.during', {value: shareText(cell.value)});
   return {content, title: lines.join('\n') || undefined};
 }

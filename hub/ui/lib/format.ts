@@ -27,16 +27,19 @@ export function duration(ms: number, short = false) {
 }
 
 /**
- * How long agents worked: minutes within the hour (any work that would read 0 reads "< 1",
- * so the parts of a minute's bar do not each read as the whole), hours to a tenth up to ten,
- * whole hours after that. Never days: "150h" of work is not "6d 6h".
+ * How long agents worked: minutes within the hour (any work short of a whole minute reads
+ * "< 1", so the parts of a minute's bar do not each read as the whole), hours to a tenth up
+ * to ten, whole hours after that. Never days: "150h" of work is not "6d 6h".
  */
 export function workHours(ms: number) {
   const minutes = Math.round(ms / 60_000);
-  if (minutes < 60) return t('time.minutes', {n: ms > 0 && minutes === 0 ? '< 1' : minutes});
+  if (minutes < 60) return t('time.minutes', {n: ms > 0 && ms < 60_000 ? '< 1' : minutes});
   const hours = ms / 3_600_000;
   return t('time.hours', {n: hours < 10 ? num(hours, 1) : num(Math.round(hours))});
 }
+
+/** Hours of work foreseen: about so many ("~45m"), and under a minute as it is ("< 1m"), not about that. */
+export const workAbout = (ms: number) => (ms > 0 && ms < 60_000 ? workHours(ms) : t('work.about', {time: workHours(ms)}));
 
 /**
  * How long until something, for a mark or a heading with little room: minutes within the

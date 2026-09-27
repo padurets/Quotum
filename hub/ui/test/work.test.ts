@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {dashOf, lineWork, MIN_RATE, workCells, workNotes, WORK_PACE_FROM, type WorkCell} from '../lib/work';
-import {rateText, shareText, workHours} from '../lib/format';
+import {rateText, shareText, workAbout, workHours} from '../lib/format';
 import {setLocale} from '../i18n';
 import type {SeriesWork} from '../lib/types';
 
@@ -110,9 +110,11 @@ test('a dash about the whole period says since when, where work is known from la
 test('hours of work are minutes within the hour, tenths up to ten, whole hours after, and never days', () => {
   setLocale('en');
   assert.deepEqual(
-    [20_000, 40_000, 45 * MIN, 2.5 * HOUR, 21 * HOUR, 150 * HOUR, 0].map(workHours),
-    ['< 1m', '1m', '45m', '2.5h', '21h', '150h', '0m'],
+    [20_000, 30_000, 59_000, MIN, 45 * MIN, 2.5 * HOUR, 21 * HOUR, 150 * HOUR, 0].map(workHours),
+    ['< 1m', '< 1m', '< 1m', '1m', '45m', '2.5h', '21h', '150h', '0m'],
+    'two agents half a minute each are not a minute each',
   );
+  assert.deepEqual([30_000, 45 * MIN].map(workAbout), ['< 1m', '~45m'], 'foreseen, about so many, but under a minute as it is');
   setLocale('ru');
   assert.deepEqual([20_000, 45 * MIN, 2.5 * HOUR, 150 * HOUR].map(workHours), ['< 1 мин', '45 мин', '2,5 ч', '150 ч']);
   setLocale('en');
