@@ -237,7 +237,8 @@ export type CardCheck = Span & {board?: string} & (
      * `paceWhy`, `leftWhy`, `duringWhy`; `noneSince` and `nospendSince` where work is known
      * from later than the period begins), since when work is known where that is after
      * the period begins (`since`, from `start`), and the share of spending during work the
-     * pace's tooltip tells as little (`lowShare`, whole percent; null for none).
+     * tooltips of the pace and the forecast by work tell as little (`lowShare`, whole
+     * percent; null for none, 'hidden' with both columns off).
      */
     | {
         work: string;
@@ -251,7 +252,7 @@ export type CardCheck = Span & {board?: string} & (
         leftWhy?: string;
         duringWhy?: string;
         since?: number | null;
-        lowShare?: number | null;
+        lowShare?: number | null | 'hidden';
       }
   );
 

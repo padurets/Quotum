@@ -936,8 +936,9 @@ const all: DemoSet = {
         {work: 'weekly', board: 'dan', range: '7d', hours: 5, paceWhy: 'short', leftWhy: 'short', from: 0, to: 0},
         {work: 'weekly', board: 'team', range: '7d', none: 'none', from: 0, to: 0},
         {work: 'weekly', board: 'team', range: '30d', none: 'noneSince', since: -10 * DAY, from: 0, to: 0},
-        // Nor a share of the spending during work, on With Dan, where it is on.
+        // Nor a share of the spending during work, on With Dan, where it is on; over a day, when none worked, none at all.
         {work: 'weekly', board: 'with-dan', range: '7d', duringWhy: 'short', from: 0, to: 0},
+        {work: 'weekly', board: 'with-dan', range: '24h', duringWhy: 'none', from: 0, to: 0},
         {title: 'Codex'},
       ],
     },
@@ -982,7 +983,11 @@ const all: DemoSet = {
       // Under a point over a day of work: too little an hour of it to foresee by.
       windows: [weekly({since: -2 * DAY, use: steady(20, 0.9)})],
       agents: [{machine: 'laptop', origin: 'terminal', project: 'ledger', since: -DAY, works: ALWAYS}],
-      expect: [{work: 'weekly', range: '24h', perHour: 0, leftWhy: 'slow', from: 0, to: 0}],
+      expect: [
+        {work: 'weekly', range: '24h', perHour: 0, leftWhy: 'slow', from: 0, to: 0},
+        // Over two hours of it, a tenth of a point an hour: what is left would outlast the week.
+        {work: 'weekly', range: {from: -3 * HOUR, to: -HOUR}, perHour: 0.1, leftWhy: 'slow', from: 0, to: 0},
+      ],
       look: ['In the table, spent per work hour is "≈ 0%/h" and the forecast by work a dash: too little spent per hour of work to foresee'],
     },
 

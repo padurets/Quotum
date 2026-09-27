@@ -343,7 +343,8 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
       leftWhy: on('workleft', why(cells.workleft)),
       duringWhy: on('during', why(cells.during)),
       since: since === null ? null : since - stand.start,
-      lowShare: share === null ? null : Math.round(share),
+      // Told in the tooltips of the pace and the forecast by work: nowhere with both off.
+      lowShare: columnShown(overview.view, FORECAST, 'perwork') || columnShown(overview.view, FORECAST, 'workleft') ? (share === null ? null : Math.round(share)) : 'hidden',
     });
   }
   if ('reachesBack' in card) {
