@@ -46,6 +46,7 @@ test('each dash says why', () => {
   // 1% left at 0.03% an hour: some 33 hours of work, short of a reset in five days or of a week.
   assert.equal(Math.round((value(workCells(work({consumed: 0.63}), 1, 5 * DAY).workleft) as number) / HOUR), 33, 'however slow, what runs out before the reset is named');
   assert.ok('value' in workCells(work({consumed: 0.63}), 1, null, 7 * DAY).workleft, 'and what runs out within a window');
+  assert.ok('value' in workCells(work({consumed: 0.63}), 1, null).workleft, 'with neither, some 33 hours are still short of a week');
   assert.equal(none(workCells(work({consumed: 21 * MIN_RATE}), 38, null).workleft), null);
   // 5% over 21 hours of work: the 78% left would last over 300 hours, more than a week's window.
   assert.deepEqual(workCells(work({consumed: 5}), 78, null, 7 * DAY).workleft, {outlasts: (78 / (5 / 21)) * HOUR, windowMs: 7 * DAY}, 'longer than a whole window, as over a range: it lasts to the reset');
@@ -121,7 +122,7 @@ test('hours of work are minutes within the hour, tenths up to ten, whole hours a
   setLocale('en');
 });
 
-test('a pace under a twentieth reads "≈ 0" and, with nothing to bound the hours it would last, foresees none; one above never reads 0', () => {
+test('a pace under a twentieth reads "≈ 0" and, with nothing to bound the hundreds of hours it would last, foresees none; one above never reads 0', () => {
   setLocale('en');
   assert.deepEqual([0, 0.001, 0.03, MIN_RATE, 2.95].map(rateText), ['0', '≈ 0', '≈ 0', '0.1', '3']);
   assert.deepEqual([0, 0.3, 0.5, 49.6].map(shareText), ['0', '< 1', '1', '50'], 'a share above 0 never reads 0 either');

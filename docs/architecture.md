@@ -273,7 +273,7 @@ would outlast the reset, or a whole window where no reset time comes first (a ra
 lasts to the reset, however slow the pace (too slow a pace names no hours for it); short
 of either, what is left runs out before it, and its hours are named at any pace. Only
 where neither bounds them (a window of no known length with no reset ahead) does a pace
-under a twentieth of a percent an hour foresee nothing. A reset gone by unmeasured leaves
+under a twentieth of a percent an hour foresee nothing past a week of work. A reset gone by unmeasured leaves
 what is left unknown until the next measurement, used up or not: the forecast by work
 waits for it where agents worked, and where none did says so. Where none of the agents
 worked, there is no share either. The share counts a step that any work

@@ -10,10 +10,12 @@ export const WORK_PACE_FROM = 30 * 60_000;
 /**
  * A pace slower than this (percent per hour of work) reads "≈ 0" (`rateText`), and the
  * hundreds of hours it would last name no number: past a reset or a whole window they are
- * told only as lasting to it, and where neither bounds them nothing is foreseen. Hours
- * short of a reset or a window are named at any pace.
+ * told only as lasting to it, and where neither bounds them, past `UNBOUNDED_MS`, nothing
+ * is foreseen. Hours short of all that are named at any pace.
  */
 export const MIN_RATE = 0.05;
+/** Where neither a reset nor a window's length bounds the hours of work left, a pace under `MIN_RATE` names none past a week of them. */
+const UNBOUNDED_MS = 7 * 24 * HOUR;
 /** Under this share of the spending during work, most of it went elsewhere and an hour of work looks dearer than it is. */
 const LOW_SHARE = 50;
 /** The pace is taken over less work than the hours shown when it had less than this share of them: a few minutes at the edges of the measurements do not count. */
@@ -81,7 +83,7 @@ export function workCells(work: SeriesWork, remaining: number, resetInMs: number
   if (work.coveredMs < WORK_PACE_FROM) return {work: {value: work.ms}, perwork: short, workleft: usedUp ?? short, during: short};
   const pace = work.consumed / (work.coveredMs / HOUR);
   const leftMs = (remaining / pace) * HOUR;
-  // Short of a reset or a whole window, however slow the pace, what is left runs out before it: that is worth its number.
+  // Short of a reset, a whole window or a week where neither bounds it, however slow the pace, that is worth its number.
   const workleft: WorkCell =
     usedUp ??
     (work.consumed <= 0
@@ -90,7 +92,7 @@ export function workCells(work: SeriesWork, remaining: number, resetInMs: number
         ? {untilReset: leftMs}
         : windowMs !== null && leftMs >= windowMs
           ? {outlasts: leftMs, windowMs}
-          : pace < MIN_RATE && resetInMs === null && windowMs === null
+          : pace < MIN_RATE && resetInMs === null && windowMs === null && leftMs >= UNBOUNDED_MS
             ? {none: 'slow'}
             : {value: leftMs});
   return {work: {value: work.ms}, perwork: {value: pace}, workleft, during};
