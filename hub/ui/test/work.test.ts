@@ -47,6 +47,9 @@ test('each dash says why', () => {
   assert.equal(Math.round((value(workCells(work({consumed: 0.63}), 1, 5 * DAY).workleft) as number) / HOUR), 33, 'however slow, what runs out before the reset is named');
   assert.ok('value' in workCells(work({consumed: 0.63}), 1, null, 7 * DAY).workleft, 'and what runs out within a window');
   assert.ok('value' in workCells(work({consumed: 0.63}), 1, null).workleft, 'with neither, some 33 hours are still short of a week');
+  // 0.03% an hour: 5% lasts some 167 hours, 5.1% some 170, past a week.
+  assert.ok('value' in workCells(work({consumed: 0.63}), 5, null).workleft);
+  assert.equal(none(workCells(work({consumed: 0.63}), 5.1, null).workleft), 'slow', 'a week bounds what is named');
   assert.equal(none(workCells(work({consumed: 21 * MIN_RATE}), 38, null).workleft), null);
   // 5% over 21 hours of work: the 78% left would last over 300 hours, more than a week's window.
   assert.deepEqual(workCells(work({consumed: 5}), 78, null, 7 * DAY).workleft, {outlasts: (78 / (5 / 21)) * HOUR, windowMs: 7 * DAY}, 'longer than a whole window, as over a range: it lasts to the reset');
@@ -153,24 +156,43 @@ test('a pace under a twentieth reads "≈ 0" and, with nothing to bound the hund
 test('a cell says what it foresees and its tooltip why, a part a line', () => {
   setLocale('en');
   const resetAt = from + 5 * DAY;
+  const reset = stamp(resetAt);
   const lines = (cell: {title?: string}) => cell.title?.split('\n') ?? [];
+  const basis = (value: string) => t('work.basis', {value});
+  const under = t('work.basisUnder', {value: '0.05'});
   // Some 59 hours at a pace that reads "≈ 0": named, with how small the pace is.
   const ledger = workText('workleft', {value: 59 * HOUR}, work({consumed: 0.8}), from, resetAt, 0.038);
-  assert.equal(ledger.content, t('work.left', {time: '~59h'}));
-  assert.deepEqual(lines(ledger), [t('work.basisUnder', {value: '0.05'})]);
-  // Past the reset, as slow: no hours, only that they last; at a pace that reads, their number.
-  assert.deepEqual(lines(workText('workleft', {untilReset: 2000 * HOUR}, work(), from, resetAt, 0.019))[0], t('work.untilResetSlow', {reset: stamp(resetAt)}));
-  assert.deepEqual(lines(workText('workleft', {untilReset: 150 * HOUR}, work(), from, resetAt, 0.25))[0], t('work.untilResetHint', {time: '~150h', reset: stamp(resetAt)}));
-  assert.deepEqual(lines(workText('workleft', {outlasts: 2000 * HOUR, windowMs: 7 * DAY}, work(), from, null, 0.019))[0], t('work.outlastsSlow', {window: '7d'}));
+  assert.deepEqual([ledger.content, lines(ledger)], [t('work.left', {time: '~59h'}), [under]]);
+  assert.deepEqual(lines(workText('workleft', {value: 13 * HOUR}, work(), from, resetAt, 2.95)), [basis('3')], 'a pace that reads, told as it reads');
+  // Past the reset, or a whole window: as slow, no hours, only that they last; at a pace that reads, their number.
+  assert.deepEqual(lines(workText('workleft', {untilReset: 2000 * HOUR}, work(), from, resetAt, 0.019)), [t('work.untilResetSlow', {reset}), under]);
+  assert.deepEqual(lines(workText('workleft', {untilReset: 150 * HOUR}, work(), from, resetAt, 0.25)), [t('work.untilResetHint', {time: '~150h', reset}), basis('0.25')]);
+  assert.deepEqual(lines(workText('workleft', {outlasts: 2000 * HOUR, windowMs: 7 * DAY}, work(), from, null, 0.019)), [t('work.outlastsSlow', {window: '7d'}), under]);
+  assert.deepEqual(lines(workText('workleft', {outlasts: 782 * HOUR, windowMs: 7 * DAY}, work(), from, null, 0.1)), [t('work.outlastsHint', {time: '~782h', window: '7d'}), basis('0.1')]);
   assert.equal(workText('workleft', {value: 30_000}, work(), from, null, 60).content, t('work.left', {time: '< 1m'}), 'under a minute, not about it');
   assert.deepEqual(workText('workleft', {usedUp: true}, work(), from, null, 3), {content: t('work.usedUp')}, 'used up, with nothing to add');
+  // The pace itself, to a hundredth under 1.
+  assert.equal(workText('perwork', {value: 0.07}, work(), from, null, 0.07).content, t('table.perHour', {value: '0.07'}));
   // A share of the spending during work: none at all, or little, told by the pace and the forecast, not by the hours.
   const none = work({duringWork: 0});
-  assert.ok(lines(workText('perwork', {value: 3}, none, from, null, 3)).includes(t('work.noShare')));
-  assert.ok(lines(workText('workleft', {value: 13 * HOUR}, none, from, null, 3)).includes(t('work.noShare')));
-  assert.ok(lines(workText('perwork', {value: 3}, work({duringWork: 6.2}), from, null, 3)).includes(t('work.lowShare', {value: '10'})));
-  assert.equal(workText('work', {value: 21 * HOUR}, none, from, null, 3).title, undefined);
+  assert.deepEqual(lines(workText('perwork', {value: 3}, none, from, null, 3)), [t('work.noShare')]);
+  assert.deepEqual(lines(workText('workleft', {value: 13 * HOUR}, none, from, null, 3)), [basis('3'), t('work.noShare')]);
+  assert.deepEqual(lines(workText('perwork', {value: 3}, work({duringWork: 6.2}), from, null, 3)), [t('work.lowShare', {value: '10'})]);
   assert.deepEqual(lines(workText('during', {value: 90}, work(), from, null, 3)), [t('work.upperBound')]);
-  assert.deepEqual(workText('workleft', {none: 'slow'}, work(), from, null, 0.01), {content: '—', title: t('work.slow')});
-  assert.deepEqual(workText('workleft', {none: 'none'}, work(), from - DAY, null, null), {content: '—', title: t('work.noneSince', {time: stamp(from)})}, 'none since work is known');
+  // Taken over less work than the hours shown, and work known from later than the period begins: a line each, the hours of work too.
+  const later = work({coveredMs: 12 * HOUR});
+  assert.deepEqual(lines(workText('workleft', {value: 13 * HOUR}, later, from - DAY, null, 3)), [basis('3'), t('work.basisMeasured', {time: '12h'}), t('work.since', {time: stamp(from)})]);
+  assert.deepEqual(lines(workText('work', {value: 21 * HOUR}, later, from - DAY, null, 3)), [t('work.since', {time: stamp(from)})]);
+  assert.equal(workText('work', {value: 21 * HOUR}, none, from, null, 3).title, undefined);
+  // Each dash says why.
+  const dash = (reason: Parameters<typeof dashOf>[0] | 'unknown', periodFrom = from) => workText('workleft', {none: reason}, work(), periodFrom, null, null);
+  assert.deepEqual(dash('slow'), {content: '—', title: [t('work.slow'), under].join('\n')}, 'over a week of work, and how small the pace is');
+  assert.deepEqual(dash('none', from - DAY), {content: '—', title: t('work.noneSince', {time: stamp(from)})}, 'none since work is known');
+  assert.deepEqual(dash('none'), {content: '—', title: t('work.none')});
+  assert.deepEqual(dash('short'), {content: '—', title: t('work.short')});
+  assert.deepEqual(dash('short', from - DAY), {content: '—', title: [t('work.short'), t('work.since', {time: stamp(from)})].join('\n')});
+  assert.deepEqual(dash('nospend'), {content: '—', title: t('work.noSpend')});
+  assert.deepEqual(dash('nospend', from - DAY), {content: '—', title: t('work.noSpendSince', {time: stamp(from)})});
+  assert.deepEqual(dash('awaiting', from - DAY), {content: '—', title: t('forecast.awaiting')}, 'waiting for a measurement, not about the work known');
+  assert.deepEqual(dash('unknown'), {content: '—', title: t('work.unknown', {time: stamp(from)})});
 });

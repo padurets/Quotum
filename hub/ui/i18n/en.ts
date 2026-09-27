@@ -278,7 +278,7 @@ export const en = {
   'work.short': 'Under half an hour of work while measurements came: too little to tell',
   'work.noSpend': 'Nothing spent in this period',
   'work.noSpendSince': 'Nothing spent since {time}',
-  'work.slow': 'Too little spent per hour of work to foresee',
+  'work.slow': 'Lasts over a week of work',
   
   'forecast.title': 'Spending and forecast',
   'forecast.settings': 'Table settings',

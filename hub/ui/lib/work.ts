@@ -30,9 +30,10 @@ export type WorkColumn = (typeof WORK_COLUMNS)[number];
 /**
  * Why a cell has no number: how agents worked is not known in the period (`unknown`), none
  * of the agents the board shows worked (`none`), too little of their work was measured to
- * tell a pace (`short`), nothing was spent (`nospend`), too little per hour of work to
- * foresee anything where neither a reset nor a window's length bounds it (`slow`), or what
- * is left is not known since the window's reset went by unmeasured (`awaiting`).
+ * tell a pace (`short`), nothing was spent (`nospend`), so little per hour of work that
+ * what is left lasts over a week of it, with neither a reset nor a window's length to bound
+ * it (`slow`), or what is left is not known since the window's reset went by unmeasured
+ * (`awaiting`).
  */
 export type WorkReason = 'unknown' | 'none' | 'short' | 'nospend' | 'slow' | 'awaiting';
 
@@ -170,7 +171,9 @@ export function workText(column: WorkColumn, cell: WorkCell, work: SeriesWork, p
   if ('none' in cell) {
     if (cell.none === 'unknown') return {content: '—', title: t('work.unknown', {time: stamp(work.from)})};
     const dash = dashOf(cell.none, notes.since);
-    return {content: '—', title: [t(REASONS[dash.text], {time: notes.since === null ? '' : stamp(notes.since)}), ...known(dash.knownFrom)].join('\n')};
+    // Over a week of work names no hours, only how small the pace is that makes them so many.
+    const pace = cell.none === 'slow' ? [t('work.basisUnder', {value: num(MIN_RATE, 2)})] : [];
+    return {content: '—', title: [t(REASONS[dash.text], {time: notes.since === null ? '' : stamp(notes.since)}), ...pace, ...known(dash.knownFrom)].join('\n')};
   }
   const paced = column === 'perwork' || column === 'workleft';
   // A pace that reads "≈ 0": past a reset or a window it names no hours, only that they last.
