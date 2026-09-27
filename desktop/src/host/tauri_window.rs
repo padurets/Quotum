@@ -48,6 +48,7 @@ fn open_now(shell: &Arc<Shell>, from: &'static str) {
         // shows nothing, and the request would be spent: a new window comes once it has gone.
         match alive(shell, window.clone(), start + WAIT_LIMIT) {
             Some(true) => {
+                // The UI smoke (desktop/smoke/windows-ui.ps1) reads this line.
                 shell.hub_log.line(&format!("app: found the window {LABEL} at {} ms", ms(start)));
                 let _ = window.unminimize();
                 let _ = window.show();
@@ -73,13 +74,14 @@ fn open_now(shell: &Arc<Shell>, from: &'static str) {
                 }
                 shell.hub_log.line(&format!("app: the window {LABEL} went at {} ms", ms(start)));
             }
-            // No answer for as long as a closing window may take to go: the main thread is
-            // stuck, and neither showing a window nor creating one would get through it.
+            // No answer by the deadline, which counts from the request and so includes its wait
+            // for the lock: the main thread is stuck or far behind. A new window cannot be made
+            // while the label is taken, and a show queued now could come long after it was asked
+            // for: the request ends here, in the log.
             None => {
-                shell.hub_log.line(&format!(
-                    "app: the main thread did not tell within {} ms whether the window {LABEL} is there",
-                    ms(start)
-                ));
+                shell
+                    .hub_log
+                    .line(&format!("app: no answer within {} ms whether the window {LABEL} is still there", ms(start)));
                 return;
             }
         }
