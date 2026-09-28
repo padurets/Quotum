@@ -69,6 +69,8 @@ type Gesture = {
   grab: Point;
   offset: Point;
   active: boolean;
+  /** Whether the pointer has gone further than a click's jitter: only then does the page scroll under it. */
+  moved: boolean;
   cell: Point;
   frame: number;
   stop: () => void;
@@ -241,7 +243,7 @@ export function Widgets({
     if (!current?.active || (current.kind !== 'drag' && !tall(current.kind))) return;
     const y = current.pointer.y;
     const scroll = y < EDGE ? y - EDGE : y > innerHeight - EDGE ? y - innerHeight + EDGE : 0;
-    if (scroll) window.scrollBy(0, scroll / 4);
+    if (scroll && current.moved) window.scrollBy(0, scroll / 4);
     if (current.kind === 'drag') {
       retarget();
       follow();
@@ -322,8 +324,9 @@ export function Widgets({
       const current = gesture.current;
       if (!current || e.pointerId !== event.pointerId) return;
       current.pointer = {x: e.clientX, y: e.clientY};
+      current.moved ||= Math.hypot(e.clientX - pointer.x, e.clientY - pointer.y) > DRAG_AFTER;
       if (kind === 'drag') {
-        if (!current.active && Math.hypot(e.clientX - pointer.x, e.clientY - pointer.y) > DRAG_AFTER) {
+        if (!current.active && current.moved) {
           current.active = true;
           document.body.classList.add('is-dragging');
           setPreview({id, kind, items: current.items});
@@ -345,11 +348,7 @@ export function Widgets({
         }
         follow();
       }
-      if (tall(kind)) {
-        // Only a pointer that has moved scrolls the page: a click on an edge at the window's bottom stays a click.
-        if (!current.frame && Math.hypot(e.clientX - pointer.x, e.clientY - pointer.y) > DRAG_AFTER) current.frame = requestAnimationFrame(frame);
-        changed = aim(current) || changed;
-      }
+      if (tall(kind)) changed = aim(current) || changed;
       if (changed) show(current);
     };
     const up = (e: PointerEvent) => {
@@ -385,6 +384,7 @@ export function Widgets({
       grab: {x: pointer.x - rect.left, y: pointer.y - rect.top},
       offset: {x: 0, y: 0},
       active: kind !== 'drag',
+      moved: false,
       cell: {x: item.x, y: item.y},
       frame: 0,
       stop: () => {
@@ -398,6 +398,8 @@ export function Widgets({
     if (kind !== 'drag') {
       document.body.classList.add('is-resizing', `is-resizing-${kind}`);
       setPreview({id, kind, items: origin});
+      // Each frame follows the page as it scrolls, by the wheel too, but scrolls it only for a pointer that moved: a click on an edge at the window's bottom stays a click.
+      if (tall(kind)) current.frame = requestAnimationFrame(frame);
     }
   };
   const press = (id: string) => (event: ReactPointerEvent<HTMLDivElement>) => {
