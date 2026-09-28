@@ -7,7 +7,7 @@ use std::{
 };
 use windows_sys::Win32::{
     Foundation::*,
-    Graphics::Gdi::*,
+    Graphics::{Dwm::*, Gdi::*},
     System::LibraryLoader::GetModuleHandleW,
     UI::{HiDpi::*, Input::KeyboardAndMouse::SetFocus, WindowsAndMessaging::*},
 };
@@ -73,6 +73,7 @@ impl Panel {
                 }
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, self as *const Self as isize);
                 self.hwnd.set(hwnd);
+                disable_transitions(hwnd);
             }
             let anchor = anchor.unwrap_or_else(|| {
                 let mut p: POINT = std::mem::zeroed();
@@ -277,6 +278,19 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
             0
         }
         _ => unsafe { DefWindowProcW(hwnd, message, w, l) },
+    }
+}
+
+/// The two native windows form one popup. DWM must not animate their show/hide handoff.
+pub fn disable_transitions(hwnd: HWND) {
+    let disabled: i32 = 1;
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_TRANSITIONS_FORCEDISABLED as u32,
+            (&disabled as *const i32).cast(),
+            std::mem::size_of_val(&disabled) as u32,
+        );
     }
 }
 

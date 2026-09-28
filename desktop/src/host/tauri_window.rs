@@ -382,6 +382,7 @@ fn build(
         }
         if compact {
             if let Ok(hwnd) = ready.hwnd() {
+                crate::windows_loading::disable_transitions(hwnd.0);
                 crate::windows_loading::round(hwnd.0);
             }
             paint.placed.store(true, Ordering::SeqCst);
