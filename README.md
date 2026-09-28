@@ -360,8 +360,10 @@ command and the app share them.
   itself when the app quits, so `quotum run` as a service keeps working; an older one
   stops (update it). A hub that `quotum` delivered to gets nothing from this machine
   while the app runs.
-- **Its data**, the board's history and the logs, is in
+- **Its data**, including the board's history, is in
   `%LOCALAPPDATA%\com.padurets.quotum` or `~/.local/share/com.padurets.quotum`.
+  The logs are in `%LOCALAPPDATA%\com.padurets.quotum\logs` on Windows and
+  `~/.cache/com.padurets.quotum/logs` on Linux.
 - **What leaves the machine:** nothing but the reset announcements the board reads from
   Codex Resets and Claude Resets, as every hub does (`QUOTUM_RESETS=off` in the app's
   environment turns that off). Its hub listens on `127.0.0.1` alone, behind a key only
