@@ -36,10 +36,10 @@ export function sideOf(height: number, above: number, below: number, up: boolean
 
 /**
  * How far down the window the bars that stick at its top cover what stands at `y` (CSS
- * pixels from the window's top): the top bar, and the analytics' head where it stands above
- * `y`, stuck or not. The head further down, under the cards, covers nothing of theirs.
+ * pixels from the window's top): those that end above it, stuck or not. The analytics'
+ * head covers nothing of the cards above it, nor of its own period's list.
  */
 export function coverOf(y: number) {
   const bars = [...document.querySelectorAll<HTMLElement>('.topbar, .analytics-head')].filter(bar => getComputedStyle(bar).position === 'sticky');
-  return Math.max(0, ...bars.map(bar => bar.getBoundingClientRect()).filter(bar => bar.top < y).map(bar => bar.bottom));
+  return Math.max(0, ...bars.map(bar => bar.getBoundingClientRect().bottom).filter(bottom => bottom <= y));
 }
