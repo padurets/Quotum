@@ -68,9 +68,18 @@ pub fn close_panel(webview: Webview, shell: State<'_, Arc<Shell>>) -> Result<Val
 pub fn report_panel_height(
     webview: Webview,
     shell: State<'_, Arc<Shell>>,
-    height_css_px: f64,
+    request: tauri::ipc::Request<'_>,
 ) -> Result<Value, String> {
-    execute(webview, shell, Request::ReportPanelHeight { height_css_px })
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields, rename_all = "camelCase")]
+    struct Height {
+        height_css_px: f64,
+    }
+    let tauri::ipc::InvokeBody::Json(value) = request.body() else {
+        return Err("invalid panel height".into());
+    };
+    let height: Height = serde_json::from_value(value.clone()).map_err(|_| "invalid panel height")?;
+    execute(webview, shell, Request::ReportPanelHeight { height_css_px: height.height_css_px })
 }
 #[tauri::command(async)]
 pub fn app_state(webview: Webview, shell: State<'_, Arc<Shell>>) -> Result<Value, String> {

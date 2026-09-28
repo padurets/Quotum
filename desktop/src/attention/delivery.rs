@@ -211,3 +211,25 @@ pub fn attempt(shell: &Arc<Shell>, mut intent: Intent, call: impl FnOnce(String,
     }
     shell.attention.delivery.report(shell, call(title, body));
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn queued_candidates_follow_latest_names_and_visibility() {
+        let mut board = Board::default();
+        board.snapshot(json!({"view":{"hidden":[],"windows":[],"names":{}},"sources":[{"id":"one","provider":"codex","windows":[{"id":"week"}]},{"id":"two","provider":"codex","windows":[{"id":"week"}]}]}));
+        let mut candidate: Candidate = serde_json::from_value(json!({"id":"event","kind":"low","at":10,"observedFrom":1,"observedAt":2,"sourceId":"two","windowId":"week","provider":"codex","name":"old name","window":{"kind":"weekly","label":null,"minutes":10080},"remaining":29,"resetAt":null})).unwrap();
+        assert!(board.resolve(&mut candidate));
+        assert!(matches!(&candidate, Candidate::Quota(q) if q.name == "Codex 2"));
+        board.apply("view", json!({"view":{"hidden":[],"windows":[],"names":{"two":"New name"}}}));
+        assert!(board.resolve(&mut candidate));
+        assert!(matches!(&candidate, Candidate::Quota(q) if q.name == "New name"));
+        board.apply("view", json!({"view":{"hidden":[],"windows":["two/week"],"names":{}}}));
+        assert!(!board.resolve(&mut candidate));
+        board.apply("lineup", json!({"sources":["one"]}));
+        board.apply("view", json!({"view":{"hidden":[],"windows":[],"names":{}}}));
+        assert!(!board.resolve(&mut candidate));
+    }
+}

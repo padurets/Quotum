@@ -11,7 +11,7 @@ export const ru = {
   "desktop.limits": "Лимиты",
   "desktop.empty": "Нет видимых лимитов",
   "desktop.working": "Работают: {count}",
-  "desktop.total": "Агентов: {count}",
+  "desktop.total": {one: "{count} агент", few: "{count} агента", many: "{count} агентов", other: "{count} агента"},
   "desktop.remaining": "Осталось {remaining}%",
   "desktop.resetAt": "Сброс {at}",
   "desktop.resetUnknown": "Время сброса неизвестно",

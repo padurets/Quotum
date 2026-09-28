@@ -343,13 +343,27 @@ an AppImage's start-at-login entry also needs to point to the intended file.
 
 The app opens its board, and the first numbers come within a minute. The gear opens its
 settings: which providers are measured and how often, running agents, start at login,
-the version and *Quit*. These are `quotum`'s own settings ([Configuration](#agent)): the
-command and the app share them.
+the version and *Quit*. Measuring settings are shared with `quotum` ([Configuration](#agent));
+notification preferences and language belong to the app.
 
-- **Closing the window** leaves it measuring; the tray icon or starting the app again
-  opens the window. *Quit* is in the settings and in the tray's menu. GNOME shows tray
+- **Closing the window** leaves it measuring. *Open Quotum* in the tray menu or starting
+  the app again opens the full window. *Quit* is in the settings and in the tray's menu. GNOME shows tray
   icons only with an extension (AppIndicator); without one, start the app again to open
   its window.
+- **Limits in the tray.** The icon follows the tightest visible limit: green above 30%,
+  amber from 10% through 30%, red below 10%. A separate mark means some figures are
+  stale or unavailable; no figures never means a full quota. Click the icon on Windows,
+  or choose *Limits* from its menu on Linux, for a compact panel of the same limits,
+  reset times and working agents as the board. It closes on Escape or losing focus.
+- **Notifications** announce low and critical quota, a reset confirmed by a measurement,
+  and newly announced scheduled resets from community trackers. Each kind has its own
+  switch, on by default. Hidden cards and windows are excluded. Thresholds are notified
+  once per confirmed cycle; jumping straight to critical gives only that alert. Starting,
+  waking or reconnecting establishes a fresh baseline, without replaying missed events.
+  Gaps and ambiguous provider corrections may hide a reset; the timer alone is not
+  evidence. System notification settings and Do Not Disturb can suppress delivery.
+  The app requests no sound. Windows portable builds use the same native delivery as
+  installed builds. Missing Linux tray or notification services do not stop measurements.
 - **Start at login** turns on by itself the first time the app measures and starts it
   without the window. Turn it off in the settings, and do that before uninstalling. The
   entry names the AppImage or Windows portable EXE by its path: keep it where it is

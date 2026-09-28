@@ -4,10 +4,10 @@ import {useApp, useCard, useConnection, useVisibleLimits, useServerView, useSess
 import {app, inApp} from '../lib/app';
 import {cardId, isHidden, isWindowHidden} from '../lib/view';
 import {ordered} from '../lib/grid';
-import {level, problemOf, windowName} from '../lib/quota';
+import {level, windowName} from '../lib/quota';
 import {num} from '../lib/format';
 import {t, useLocale} from '../i18n';
-import {ResetLine} from './SourceCard';
+import {CardMark, ResetLine} from './SourceCard';
 import type {startLive} from '../lib/live';
 
 const Row = memo(function Row({id}: {id: string}) {
@@ -20,11 +20,10 @@ const Row = memo(function Row({id}: {id: string}) {
   const windows = card.windows.filter(w => !isWindowHidden(view, id, w.id));
   if (card.windows.length && !windows.length) return null;
   return <section className="card compact-card">
-    <h2>{title}</h2>
-    {(card.stale || card.error) && <p className="compact-quality">{problemOf(card) ?? t('desktop.partial')}</p>}
+    <div className="card-head"><CardMark source={card} /><h2>{title}</h2></div>
     {!windows.length && <p>{t('desktop.unavailable')}</p>}
     {windows.map(w => <div className="compact-limit" key={w.id}>
-      <div className="limit-top"><span>{windowName(w)}</span><strong className={`v-${level(w.remaining)}`}>{num(w.remaining)}%</strong></div>
+      <div className="limit-top"><span className="compact-window-name">{windowName(w).split(' · ').map((part, i) => <span key={i}>{part}</span>)}</span><strong className={`v-${level(w.remaining)}`}>{num(w.remaining)}%</strong></div>
       <small><ResetLine w={w} /></small>
     </div>)}
     <footer><span>{t('desktop.working', {count: sessions.filter(s => s.working).length})}</span><small>{t('desktop.total', {count: sessions.length})}</small></footer>
@@ -62,10 +61,9 @@ export function Compact({live}: {live: ReturnType<typeof startLive>}) {
   }, []);
   const ids = view ? ordered(view.layout, lineup.map(cardId)).map(w => w.id).filter(id => !isHidden(view, id)).map(id => id.slice(7)) : [];
   return <div className="compact glass" ref={root}>
-    <header><h1>{t('desktop.limits')}</h1>{inApp() && <button className="button" onClick={() => void app.closePanel()} aria-label={t('common.close')}>×</button>}</header>
+    <header><h1>{t('desktop.limits')}</h1><button className="button" onClick={() => inApp() ? void app.openMain() : location.assign('/')}>{t('desktop.open')}</button>{inApp() && <button className="button" onClick={() => void app.closePanel()} aria-label={t('common.close')}>×</button>}</header>
     {connection.status !== 'live' && <p className="compact-quality">{t('desktop.disconnected')}</p>}
     {!ids.length && <p>{t('desktop.empty')}</p>}
     {ids.map(id => <Row key={id} id={id} />)}
-    <button className="button primary compact-open" onClick={() => inApp() ? void app.openMain() : location.assign('/')}>{t('desktop.open')}</button>
   </div>;
 }

@@ -320,7 +320,7 @@ function AllHidden({source, arrange}: {source: Card; arrange: Arrange}) {
  * when they were measured and when the next measurement comes and why. It is what of a
  * card changes with time: it renders at those moments, the card does not.
  */
-function CardMark({source}: {source: Card}) {
+export function CardMark({source}: {source: Card}) {
   const pace = useCadence(source.id);
   const paced = {...source, cadence: pace};
   const now = useClock(now => {

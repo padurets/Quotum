@@ -143,3 +143,39 @@ dashboard and have Chrome.
   provider's own command-line client, the way the existing three do.
 
 [docs/architecture.md](docs/architecture.md) explains how the parts fit together.
+
+### Tray, compact panel and notifications
+
+The desktop's background reader must work with both windows closed. Use isolated
+`QUOTUM_APP_DATA_DIR`, `QUOTUM_STATE_DIR` and `QUOTUM_CONFIG`, with providers disabled
+or stand-ins. Never send real system notifications from ordinary unit tests.
+
+For native acceptance on Windows, test both the installer and a portable ZIP in a
+path with spaces, including a clean profile without an earlier installation. On
+Linux test the packaged app with a tray watcher and notification daemon, then without
+each and after restarting them. Use synthetic measurements to cross 30% and 10%,
+confirm a reset, and supply a scheduled tracker fixture. Check the icon and actual
+notification display with both windows closed, each setting off/on, notification
+activation, and no replay after restart or sleep. OS suppression is distinct from a
+successful native API call. On Windows restarting Explorer must restore one icon.
+
+Open the compact panel, then the main window; close and reopen each in both orders.
+Check long names, hidden windows, empty data, both languages, small displays and DPI
+changes. Panel height is clamped to its monitor and never saved as the main window's
+geometry. Its commands must fail from the main window, subframes, foreign origins and
+closed instances. `node --test desktop/electron/policy.test.cjs` exercises the Linux
+transport policy and two-window registry; native smoke remains necessary.
+
+The demo's `/compact` page uses the same fixtures and store as its dashboard. It is
+also available in a browser for visual inspection; native actions require the app's
+bridge. Check it in English and Russian after `npm run build && npm run demo`.
+
+For an isolated, explicit check of real native delivery, run the packaged executable
+with `--smoke=notifications`. It creates temporary app/config/state directories,
+disables every provider and tracker, then feeds synthetic 35%, 29%, 9% and 100%
+measurements five seconds apart. Expect no initial alert, then low, critical and a
+confirmed early reset. Close both windows before the sequence to check background
+operation. This mode intentionally submits real silent notifications; ordinary smoke
+and unit tests do not. It stays open for inspection until *Quit* and prints the
+isolated directory, which can be removed afterwards. Tracker announcement semantics
+are covered separately by fixtures, and real sleep/resume still needs native QA.

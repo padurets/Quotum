@@ -183,6 +183,9 @@ impl Attention {
         *status = next.clone();
         drop(status);
         host::attention_changed(shell, &next);
+        if let Some(smoke) = &shell.smoke {
+            smoke.attention_seen(shell, &next);
+        }
         shell.wake();
     }
     pub fn start(&self, shell: &Arc<Shell>) {
@@ -205,9 +208,9 @@ impl Attention {
 }
 
 pub struct Context {
-    shell: Weak<Shell>,
+    current: Box<dyn Fn() -> bool + Send + Sync>,
     generation: u64,
-    epoch: u64,
+    epoch: Option<u64>,
     cancel: Arc<AtomicBool>,
     gate: Arc<clock::Gate>,
 }
@@ -218,10 +221,7 @@ impl fmt::Debug for Context {
 }
 impl Context {
     fn check(&self) -> io::Result<()> {
-        if self.cancel.load(Ordering::SeqCst)
-            || self.shell.upgrade().is_none_or(|s| s.exiting() || s.generation() != self.generation)
-            || self.gate.check(true) != Some(self.epoch)
-        {
+        if self.cancel.load(Ordering::SeqCst) || !(self.current)() || self.gate.check(true) != self.epoch {
             return Err(io::Error::new(io::ErrorKind::Interrupted, "attention observation ended"));
         }
         Ok(())
@@ -249,12 +249,15 @@ fn run(weak: Weak<Shell>) {
             continue;
         };
         shell.attention.gate.invalidate();
-        let Some(epoch) = shell.attention.gate.check(true) else {
-            thread::sleep(Duration::from_secs(1));
-            continue;
-        };
+        let epoch = shell.attention.gate.check(true);
+        if epoch.is_none() {
+            shell.attention.delivery.report(&shell, false);
+        }
+        let current_shell = weak.clone();
         let context = Arc::new(Context {
-            shell: weak.clone(),
+            current: Box::new(move || {
+                current_shell.upgrade().is_some_and(|s| !s.exiting() && s.generation() == generation)
+            }),
             generation,
             epoch,
             cancel: shell.attention.cancel.clone(),
@@ -385,7 +388,9 @@ fn stream(
                     }
                     seq = frame.seq;
                     if frame.baseline {
-                        if !frame.notifications.is_empty() || !context.gate.baseline(context.epoch) {
+                        if !frame.notifications.is_empty()
+                            || context.epoch.is_some_and(|epoch| !context.gate.baseline(epoch))
+                        {
                             return Err("attention invalid baseline");
                         }
                         baseline = Some(frame.now);
@@ -401,12 +406,15 @@ fn stream(
                         if !seen.insert(candidate.id().to_owned()) {
                             continue;
                         }
+                        let Some(epoch) = context.epoch else {
+                            continue;
+                        };
                         shell.attention.delivery.send(
                             shell,
                             Intent {
                                 candidate,
                                 generation: context.generation,
-                                epoch: context.epoch,
+                                epoch,
                                 baseline: baseline.unwrap(),
                                 hub_now: frame.now,
                                 queued: Instant::now(),

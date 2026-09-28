@@ -16,7 +16,7 @@ export const en = {
   "desktop.limits": "Limits",
   "desktop.empty": "No visible limits",
   "desktop.working": "{count} working",
-  "desktop.total": "{count} agents",
+  "desktop.total": {one: "{count} agent", other: "{count} agents"},
   "desktop.remaining": "{remaining}% left",
   "desktop.resetAt": "Resets {at}",
   "desktop.resetUnknown": "Reset time unknown",

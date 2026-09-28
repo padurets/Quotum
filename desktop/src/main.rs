@@ -47,6 +47,7 @@ impl Args {
                 Some("--hidden") => parsed.hidden = true,
                 Some("--software-rendering") => parsed.software_rendering = true,
                 Some("--smoke") => parsed.smoke = Some(smoke::Mode::Normal),
+                Some("--smoke=notifications") => parsed.smoke = Some(smoke::Mode::Notifications),
                 Some("--smoke=crash") => parsed.smoke = Some(smoke::Mode::Crash),
                 _ => {}
             }
@@ -71,7 +72,11 @@ fn main() {
             std::env::set_var(name, without_proxy_for_loopback(std::env::var(name).ok()));
         }
     }
-    host::run(Args::parse(std::env::args_os()));
+    let args = Args::parse(std::env::args_os());
+    if args.smoke == Some(smoke::Mode::Notifications) {
+        smoke::prepare_notifications();
+    }
+    host::run(args);
 }
 
 #[cfg(test)]

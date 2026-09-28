@@ -607,22 +607,22 @@ and start-at-login settings. Moving a portable folder requires updating its auto
 entry by turning start at login off and on again.
 Windows are created on worker threads; restoring, fitting and showing them is queued
 on the event loop after the window-state plugin's initialization. This keeps its state
-locks on the same thread as native window events. Closing the window destroys it with its
-web view. A request to open it asks the event loop whether the window it finds is still
+locks on the same thread as native window events. Closing a window destroys it with its
+web view. The compact panel has its own label and never persists main-window geometry. A request to open it asks the event loop whether the window it finds is still
 there: a second start can arrive while a closed window still holds its label, and that
 one does not count as open. The new window is created once it has gone, and the app's
 `hub.log` tells each request, attempt and outcome.
 
 **Linux rendering and lifetime.** The Rust controller uses a D-Bus StatusNotifierItem
 through `ksni`; it does not link GTK or WebKit. It waits for the desktop's tray watcher
-when starting early at login and registers again when that watcher restarts. Opening the window starts an Electron
-process; closing it ends that process and its renderers. The Rust agent and Node hub
+when starting early at login and registers again when that watcher restarts. Opening a window starts an Electron
+process; it holds at most the main board and a compact panel. Closing both ends that process and its renderers. The Rust agent and Node hub
 continue. A socket pair inherited as fd 3 carries typed messages, not a TCP listener or
 command-line secrets. EOF tells Electron to quit if the controller dies. A second start
 sends only an Open signal through a per-user Unix socket; the receiver checks peer UID.
 
 Electron starts with renderer sandboxing, context isolation and no Node integration in
-the page. A preload exposes only the six app commands and a way to hear the app's state.
+the page. A preload exposes only the app commands allowed for its window role and a way to hear the app's state.
 The main process checks the sender is the current main frame and its origin is the
 current hub; Rust repeats the origin check before dispatch. The app's state goes to the
 window over the same channel and on only to the main frame of the current hub. Startup/error pages at `quotum://localhost` can only
@@ -661,9 +661,11 @@ and are kept nowhere else: no file, no log. Node gets only a short list of varia
 the app's environment (`PATH`, the home and temporary folders, the language, and
 `QUOTUM_RESETS`), nothing `NODE_*`. The hub still checks Host and Origin as on a server,
 and the agent reaches it with no proxy in between. The window's bridge to the app is
-open only to pages of the hub's current origin and to six commands: its state, saving
-settings, taking over, start at login, entering again and quitting; on Windows a seventh,
-`watch_state`, gives the board a channel to hear the app's state on. The window goes
+open only to pages of the hub's current origin and to the commands in `ipc.rs`. The main window can read state, save measuring and app
+settings, take over, change start at login, reenter and quit. The compact panel can read
+state, reenter, open the main window, close itself and report its content height. The
+host clamps that height; no command accepts a window id, position or arbitrary URL.
+On Windows `watch_state` registers a channel for each trusted window instance. The window goes
 nowhere else; links open in the system's browser. The app's folder is this user's only.
 
 **Files.** The app's folder is `%LOCALAPPDATA%\com.padurets.quotum` on Windows and
@@ -693,6 +695,28 @@ including a transition whose page has not loaded yet. A stopped agent worker kee
 spool until delivery ends; a replacement waits for that handover.
 The last window's close is resolved after any startup or takeover operation, so closing
 while the question is being prepared cannot leave an unseen consent request running.
+
+**Background attention.** One cancellable Rust reader enters the local hub using its
+key, keeps the session cookie in memory and reads the desktop variant of its SSE stream
+(spec/dashboard-v1.md). The hub shares level, visibility and naming with the board.
+A persistent window ledger consumes each threshold once per confirmed cycle inside the
+measurement transaction; candidates leave only after commit. Scheduled tracker news has
+its own watermark. Every connection starts from an empty notification baseline; old
+spooled observations cannot become live events through a new receipt time.
+
+The reader uses paired suspend-aware and awake clocks plus a reader-progress barrier.
+Sleep, a pause or a hub generation change invalidates pending native intents. The sink
+checks the generation, observation epoch, visibility, current names, settings and age
+again after its bounded queue. A failed clock detector suppresses notifications while
+status reading continues. This promises at most one native attempt, not an OS display:
+crashes and system suppression may lose an event, and nothing replays it.
+
+Linux keeps one ksni handle and uses session D-Bus notifications independently of its
+tray watcher. Windows owns one Shell_NotifyIcon control window, used for its status,
+menu and silent notifications in both installer and portable builds. Explorer restart
+registers only the current icon. Native text is generated from the same EN/RU catalogs
+as the page; settings and language are saved atomically in `app.json` and published to
+both windows in the common numbered AppState.
 
 **Taking over from `quotum`.** One agent measures a machine: whoever holds `run.lock` in
 the state folder, and `run.info` next to it names its process, version and hub. When a

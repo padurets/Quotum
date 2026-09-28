@@ -18,6 +18,8 @@ use windows_sys::Win32::{
 const COMMAND: u32 = WM_APP + 1;
 const CALLBACK: u32 = WM_APP + 2;
 const ID: u32 = 1;
+// The SDK defines this as a macro, which windows-sys does not export.
+const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
 
 pub struct Handle {
     queue: SyncSender<Command>,
