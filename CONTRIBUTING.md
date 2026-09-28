@@ -94,6 +94,10 @@ the analytics separately in English and Russian, with the same viewport and pref
 Keep a weekly window with its plan, forecast and a forecast label at the chart’s right
 edge in view. Update `docs/dashboard.png`, `docs/dashboard.ru.png`, `docs/analytics.png`
 and `docs/analytics.ru.png`, and refresh `docs/social-preview.png` with the current board.
+Keep the existing presentation: the README images sit in a browser-window frame on
+the coloured backdrop, with one card’s agents panel open; the social preview uses
+the tilted board beneath its title. Preserve the typography, proportions and backdrop
+when replacing the underlying screenshots, and compress the PNGs with pngquant.
 Use only the demo’s synthetic accounts and machines.
 
 `npm run bench` (after `npm run build`) runs such a still demo, opens Ana's board in
