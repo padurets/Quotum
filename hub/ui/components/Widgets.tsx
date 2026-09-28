@@ -489,20 +489,23 @@ export function Widgets({
   useLayoutEffect(() => {
     const was = before.current;
     before.current = null;
+    // A step can move the widget in the reading order, and its node with it: the handle takes the focus back, in sight.
+    const again = refocus.current;
+    refocus.current = null;
+    // Stepped by an edge, the widget stands where it went at once, so bringing its handle into sight sees it there.
+    const stays = again && again.handle !== 'move' ? again.id : null;
     if (was && !still())
       for (const [id, node] of places.current) {
         const from = was.get(id);
         if (!from || id === gesture.current?.id) continue;
         for (const animation of node.getAnimations()) animation.cancel();
+        if (id === stays) continue;
         const to = node.getBoundingClientRect();
         const dx = from.left - to.left,
           dy = from.top - to.top;
         if (Math.abs(dx) + Math.abs(dy) > 1) node.animate([{transform: `translate(${dx}px, ${dy}px)`}, {transform: 'none'}], SLIDE);
       }
     follow();
-    // A step can move the widget in the reading order, and its node with it: the handle takes the focus back, in sight.
-    const again = refocus.current;
-    refocus.current = null;
     const handle = again && handles.current.get(`${again.id}/${again.handle}`);
     if (handle) {
       handle.focus();
