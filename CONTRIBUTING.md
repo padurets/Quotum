@@ -25,6 +25,8 @@ builds deb, rpm and AppImage; its packaging tools are `dpkg-deb`, `rpmbuild` and
 `mksquashfs`. On Windows, `npx @tauri-apps/cli@2.11.5 build --target x86_64-pc-windows-msvc`
 makes setup.exe; then `node desktop/package-windows.mjs` packages that build as a portable ZIP.
 CI runs both the installed app and the extracted ZIP, including a path with spaces.
+The release workflow calls the same Desktop workflow and publishes its packages only
+after these checks pass; ordinary CI runs also keep the versioned release packages.
 `desktop/smoke/windows-ui.ps1 <app.exe>` also checks ordinary startup with the real
 window-state plugin: a visible, responsive window, restored bounds inside the monitor's
 work area, close/reopen through a second launch, and a second launch while the window is
