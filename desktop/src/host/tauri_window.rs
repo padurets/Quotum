@@ -11,6 +11,7 @@ use std::{
 use tauri::webview::{NewWindowResponse, PageLoadEvent};
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_window_state::{StateFlags, WindowExt};
+use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 /// Whether the window is open (it may be on its way out).
 pub fn is_open(shell: &Shell) -> bool {
     [Role::Main, Role::Compact].iter().any(|role| shell.host.app.get_webview_window(role.label()).is_some())
@@ -210,7 +211,13 @@ fn build(
                 // Dismiss only after this panel has actually been visible and focused.
                 if *active && closing.is_visible().unwrap_or(false) {
                     focused.store(true, Ordering::SeqCst);
-                } else if !*active && focused.swap(false, Ordering::SeqCst) {
+                } else if !*active
+                    && focused.load(Ordering::SeqCst)
+                    && closing.hwnd().is_ok_and(|handle| unsafe { GetForegroundWindow() != handle.0 })
+                {
+                    // Moving keyboard focus into WebView2 can report a blur while
+                    // this top-level window still owns the foreground.
+                    focused.store(false, Ordering::SeqCst);
                     let _ = closing.close();
                 }
             }

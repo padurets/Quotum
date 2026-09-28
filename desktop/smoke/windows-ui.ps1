@@ -252,10 +252,14 @@ try {
     $bounds = [QuotumWindowProbe]::Bounds($panel)
     if ($bounds[0] -lt $bounds[4] -or $bounds[1] -lt $bounds[5] -or $bounds[2] -gt $bounds[6] -or $bounds[3] -gt $bounds[7]) { throw "Panel exceeds its monitor work area: $bounds" }
     $result.panels += ,$bounds
-    if (-not [QuotumWindowProbe]::PostMessage($panel, 0x10, [IntPtr]::Zero, [IntPtr]::Zero)) { throw 'Could not close the panel' }
+    if ($cycle -eq 0) {
+      $second = Start-Process -FilePath $appPath -PassThru
+      $null = $second.Handle
+      if (-not $second.WaitForExit(10000) -or $second.ExitCode -ne 0) { throw 'Could not activate the main window beside the panel' }
+    } elseif (-not [QuotumWindowProbe]::PostMessage($panel, 0x10, [IntPtr]::Zero, [IntPtr]::Zero)) { throw 'Could not close the panel' }
     $deadline = (Get-Date).AddSeconds(5)
     while ([QuotumWindowProbe]::IsWindowVisible($panel) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 50 }
-    if ([QuotumWindowProbe]::IsWindowVisible($panel)) { throw 'The panel did not close' }
+    if ([QuotumWindowProbe]::IsWindowVisible($panel)) { throw 'The panel did not close after dismissal or foreground activation of the main window' }
     if (-not [QuotumWindowProbe]::IsWindowVisible($window) -or ($before -join ',') -ne ([QuotumWindowProbe]::Bounds($window) -join ',')) { throw 'The panel changed the main window geometry' }
   }
   $result.passed = $true
