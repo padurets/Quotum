@@ -81,6 +81,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .mono { font-family: var(--mono); font-size: .92em; color: var(--text-2); }
 .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
 .dot-ok { background: var(--ok); box-shadow: 0 0 8px #75d8ad99; }
+.dot-pending { background: var(--surface); box-shadow: inset 0 0 0 1.5px var(--text-2); }
 .dot-warn { background: var(--warn); box-shadow: 0 0 8px #f6c56e99; }
 
 /* ---------- header widgets ---------- */
@@ -152,9 +153,6 @@ body.is-resizing, body.is-resizing * { cursor: ew-resize !important; user-select
 }
 .card { padding: 20px 22px 22px; display: flex; flex-direction: column; gap: 22px; }
 .card-head { display: flex; align-items: center; gap: 12px; }
-.card-refresh { flex: none; }
-.card-refresh .refresh-note { white-space: pre-line; color: var(--text-2); font-size: 13px; }
-.card-refresh [aria-disabled=true] { color: var(--text-4); cursor: default; }
 .provider-logo { width: 32px; height: 32px; padding: 7px; border-radius: 10px; background: linear-gradient(180deg, #ffffff0d, #ffffff04); border: 1px solid var(--hair); box-shadow: inset 0 1px 0 #ffffff0a; }
 .card-title { display: flex; align-items: center; gap: 9px; min-width: 0; }
 /* The name is cut rather than wrapped, so the header never grows. */
@@ -242,6 +240,7 @@ body.is-resizing, body.is-resizing * { cursor: ew-resize !important; user-select
 .popover-title { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-4); padding: 4px 8px 8px; }
 .popover-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 8px; border: 0; border-radius: 8px; background: none; font-size: 13px; color: var(--text-2); text-align: left; }
 .popover-row:hover { background: #ffffff08; color: var(--text); }
+.popover-row[aria-disabled=true] { color: var(--text-4); cursor: default; }
 .row-icon { flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; opacity: .8; }
 .popover-row span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .popover-row.is-danger { color: var(--crit); }

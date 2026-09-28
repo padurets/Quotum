@@ -200,7 +200,7 @@ export const ru = {
   'card.freeResetsCount': 'Сбросов',
   'card.freeResetsNever': 'без срока',
 
-  'source.settings': 'Настройки · {source}',
+  'source.menu': 'Меню карточки: {source}',
   'source.show': 'Показывать лимиты',
   'source.plan': 'План расхода',
   'source.color': 'Цвет',

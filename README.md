@@ -138,9 +138,9 @@ Codex         api                  idle     started 25m ago · editor
   hides the ones they don't need (the data keeps coming) and sets the plans; everyone on
   the board sees it arranged the same way. Once it's set, a lock keeps the widgets from
   moving under a passing pointer.
-- **Fresh limits on demand.** The refresh button on a card asks the device on duty for
-  fresh numbers. It shows the wait or the result, respects the device’s interval and
-  error pauses, and accepts one new request per minute per subscription. Every reader
+- **Fresh limits on demand.** Choose **Refresh limits** in a card’s menu to ask the device
+  on duty for fresh numbers. The logo’s dot shows the request’s state. Refresh respects
+  the device’s interval and error pauses, and accepts one new request per minute per subscription. Every reader
   of a shared card can use it.
 
 - **Your data, shared when you choose.** Everything your machines measure is on your

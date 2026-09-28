@@ -1057,7 +1057,7 @@ const all: DemoSet = {
       kind: 'card' as const, id, provider: 'codex' as const, plan: 'pro', machines: [id], history: DAY, paced: true,
       refresh, windows: [weekly({since: -3 * DAY, use: () => 35})],
       on: {ana: {name: id.replaceAll('-', ' ')}}, expect: expect as import('./model.js').CardCheck[],
-      look: ['Refresh stays in the header without changing card height; check keyboard, touch, narrow cards and both languages'],
+      look: ['Refresh is an action in the existing card menu; acceptance closes it, with request state in the logo dot. Check keyboard, touch, viewers, narrow cards and both languages'],
     })),
 
     // Measured at the hub's pace, one reason each, all by one machine asking every 15 seconds.

@@ -205,7 +205,7 @@ export const en = {
   'card.freeResetsCount': 'Resets',
   'card.freeResetsNever': 'no end date',
 
-  'source.settings': 'Settings · {source}',
+  'source.menu': 'Card menu: {source}',
   'source.show': 'Show limits',
   'source.plan': 'Spending plan',
   'source.color': 'Colour',

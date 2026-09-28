@@ -9,12 +9,13 @@ import {LOGOS} from './logos';
 import {cardId, colorOf, isWindowHidden, planOf, weeklyPlanOf, withColor, withHidden, withName, withPlan, withPlanned, withWindowHidden, type Arrange} from '../lib/view';
 import {CARD_COLORS, MIDDLE_STEP, PROVIDERS} from '../lib/providers';
 import {call} from '../lib/http';
-import {useCadence, useCard, useMine, useResetsFor, useSessions, useTitle} from '../lib/board';
+import {useCadence, useCard, useMine, useRefresh, useResetsFor, useSessions, useTitle} from '../lib/board';
 import {useClock} from '../lib/clock';
 import {FreeResets} from './ResetMarks';
 import {Tray} from './Tray';
 import {EyeOffIcon, HideRow, Popover, SlidersIcon, SwitchRow, TakeOffIcon} from './Popover';
-import {RefreshButton} from './RefreshButton';
+import {RefreshAction} from './RefreshAction';
+import {refreshChangesAt, refreshPending, refreshText} from '../lib/refresh';
 import {ErrorLine} from './Kit';
 
 /** Where the plan expects the limit to be now: a mark on its meter, in whole percent, moved when that changes. */
@@ -222,12 +223,14 @@ function CardColor({source, arrange}: {source: Card; arrange: Arrange}) {
 }
 
 /**
- * A card's menu. The board's owner names the card, gives it a colour, picks its limits,
+ * A card's menu: any reader can request fresh limits. The board's owner names the card,
+ * gives it a colour, picks its limits,
  * sets the weekly plan or switches it off, hides it; on a shared board the owner, or whoever's devices measure it, also
  * takes it off the board: it goes when the board tells so.
  */
 function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Card; title: string; arrange: Arrange; boardId: string; takeOff: boolean}) {
   const [error, setError] = useState<unknown>(null);
+  const [open, setOpen] = useState(false);
   const hidden = new Set(arrange.view.windows);
   const hasWeekly = source.windows.some(w => w.kind === 'weekly');
   const planned = planOf(arrange.view, source.id) !== null;
@@ -243,10 +246,11 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
   };
 
   return (
-    <Popover label={t('source.settings', {source: title})} icon={<SlidersIcon />}>
+    <Popover label={t('source.menu', {source: title})} icon={<SlidersIcon />} open={open} onOpenChange={setOpen}>
+      <RefreshAction id={source.id} board={boardId} onAccepted={() => setOpen(false)} />
       {owner && (
         <>
-          <div className="popover-title">{t('source.name')}</div>
+          <div className="popover-title popover-section">{t('source.name')}</div>
           <CardName source={source} arrange={arrange} />
         </>
       )}
@@ -323,10 +327,19 @@ function AllHidden({source, arrange}: {source: Card; arrange: Arrange}) {
  */
 function CardMark({source}: {source: Card}) {
   const pace = useCadence(source.id);
+  const refresh = useRefresh(source.id);
+  const pending = refreshPending(refresh);
+  const outcome = refresh?.request?.status;
+  const failed = outcome === 'failed' || outcome === 'unavailable' || outcome === 'no_result';
   const paced = {...source, cadence: pace};
   const now = useClock(now => {
     const cadence = cadenceOf(paced, now);
-    return earliest(dotChangesAt(source, now), cadenceChangesAt(paced, now), cadence?.when === 'nextIn' ? countdownChangesAt(cadence.next, now) : null);
+    return earliest(
+      dotChangesAt(source, now),
+      cadenceChangesAt(paced, now),
+      cadence?.when === 'nextIn' ? countdownChangesAt(cadence.next, now) : null,
+      refresh?.request ? refreshChangesAt(refresh, now) : null,
+    );
   });
   const problem = problemOf(source);
   const dot = dotOf(source, now);
@@ -336,9 +349,10 @@ function CardMark({source}: {source: Card}) {
   // Then when the next measurement comes (how soon, and the time) and why, each a line of its own.
   const cadence = cadenceOf(paced, now);
   const lines = [
+    ...(refresh?.request ? refreshText(refresh, now).split('\n') : []),
     status,
-    ...(cadence ? (cadence.when === 'nextSoon' ? [t('source.nextSoon')] : [t('source.nextIn', {time: countdown(cadence.next - now)}), stamp(cadence.next)]) : []),
-    ...(cadence ? [t(`source.why.${cadence.why}`)] : []),
+    ...(!pending && cadence ? (cadence.when === 'nextSoon' ? [t('source.nextSoon')] : [t('source.nextIn', {time: countdown(cadence.next - now)}), stamp(cadence.next)]) : []),
+    ...(!pending && cadence ? [t(`source.why.${cadence.why}`)] : []),
   ];
   // The dot's tooltip is one bubble everywhere: under the pointer on a desktop (style.css),
   // and for a while after a tap on a touch screen, which has nothing to hover.
@@ -355,17 +369,24 @@ function CardMark({source}: {source: Card}) {
   }, [tip]);
   return (
     <span
-      className={`provider-mark ${dot.warn ? 'is-warn' : ''} ${tip ? 'is-tipped' : ''}`}
+      className={`provider-mark ${dot.warn || failed ? 'is-warn' : ''} ${tip ? 'is-tipped' : ''}`}
       data-time="mark"
+      data-refresh={outcome ?? 'idle'}
       aria-label={lines.join('\n')}
       role="img"
       onPointerUp={event => event.pointerType === 'touch' && setTip(true)}
     >
       <img className="provider-logo" src={LOGOS[source.provider]} alt="" />
-      {dot.warn ? <i className="dot dot-warn" /> : <i className={`dot dot-fresh ${dot.pulsing ? 'is-pulsing' : ''}`} style={{'--fresh': dot.fresh} as CSSProperties} />}
+      {dot.warn || failed ? (
+        <i className="dot dot-warn" />
+      ) : pending ? (
+        <i className="dot dot-pending" />
+      ) : (
+        <i className={`dot dot-fresh ${dot.pulsing ? 'is-pulsing' : ''}`} style={{'--fresh': dot.fresh} as CSSProperties} />
+      )}
       <span className="dot-tip glass" aria-hidden="true">
-        {lines.map(line => (
-          <span key={line}>{line}</span>
+        {lines.map((line, index) => (
+          <span key={index}>{line}</span>
         ))}
       </span>
     </span>
@@ -401,8 +422,7 @@ export const SourceCard = memo(function SourceCard({id, arrange, boardId, person
           <h2>{title}</h2>
           {source.plan && <span className="plan">{source.plan.replace(/^Claude\s+/i, '')}</span>}
         </div>
-        <RefreshButton key={boardId} id={id} board={boardId} />
-        {(arrange.owner || takeOff) && <SourceSettings source={source} title={title} arrange={arrange} boardId={boardId} takeOff={takeOff} />}
+        <SourceSettings key={boardId} source={source} title={title} arrange={arrange} boardId={boardId} takeOff={takeOff} />
       </div>
 
       <div className="limits">
