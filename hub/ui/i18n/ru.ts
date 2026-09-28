@@ -177,6 +177,7 @@ export const ru = {
   'agents.ascending': 'По возрастанию',
   'agents.descending': 'По убыванию',
   'agents.columns': 'Колонки',
+  'agents.more': {one: 'Ещё {count} агент', few: 'Ещё {count} агента', many: 'Ещё {count} агентов', other: 'Ещё {count} агента'},
   'card.freeResets': {one: '{count} бесплатный сброс', few: '{count} бесплатных сброса', many: '{count} бесплатных сбросов', other: '{count} бесплатного сброса'},
   'card.freeResetsBy': '{count} до {date}',
   'card.freeResetsNoDate': '{count} без срока',

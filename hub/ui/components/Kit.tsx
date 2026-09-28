@@ -16,13 +16,30 @@ let pageFocus: HTMLElement | null = null;
  * A dialog over the page, centred or as a panel on its side; closes on Escape and on a
  * click outside. Without `onClose` it cannot be closed at all (a question that needs an
  * answer). It is placed in <body>, so a header with a backdrop filter or a moved widget
- * it was opened from cannot box it in.
+ * it was opened from cannot box it in. Closed, it gives the focus back to what had it, or,
+ * where that is gone from the page meanwhile, to what `restore` finds.
  */
-export function Modal({title, onClose, children, wide, side}: {title: string; onClose?: () => void; children: ReactNode; wide?: boolean; side?: boolean}) {
+export function Modal({
+  title,
+  onClose,
+  children,
+  wide,
+  side,
+  restore,
+}: {
+  title: string;
+  onClose?: () => void;
+  children: ReactNode;
+  wide?: boolean;
+  side?: boolean;
+  restore?: () => HTMLElement | null;
+}) {
   const panel = useRef<HTMLDivElement>(null);
-  // The latest handler, so the effect below runs once: focus moves in when the dialog opens and back when it closes.
+  // The latest handlers, so the effect below runs once: focus moves in when the dialog opens and back when it closes.
   const close = useRef(onClose);
   close.current = onClose;
+  const back = useRef(restore);
+  back.current = restore;
   // Taken while rendering: a field of the dialog with autoFocus would be it by the effect.
   const [previous] = useState(() => document.activeElement as HTMLElement | null);
   useLayoutEffect(() => {
@@ -80,8 +97,10 @@ export function Modal({title, onClose, children, wide, side}: {title: string; on
         return;
       }
       page.style.overflow = pageOverflow;
+      // Out of reach until the page is no longer inert.
       if (root) root.inert = pageInert;
       if (pageFocus?.isConnected) pageFocus.focus();
+      else back.current?.()?.focus();
       pageFocus = null;
     };
   }, []);

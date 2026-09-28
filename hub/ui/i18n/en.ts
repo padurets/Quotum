@@ -182,6 +182,7 @@ export const en = {
   'agents.ascending': 'Ascending',
   'agents.descending': 'Descending',
   'agents.columns': 'Columns',
+  'agents.more': {one: '{count} more agent', other: '{count} more agents'},
   'card.freeResets': {one: '{count} free reset', other: '{count} free resets'},
   'card.freeResetsBy': '{count} by {date}',
   'card.freeResetsNoDate': '{count} with no end date',
