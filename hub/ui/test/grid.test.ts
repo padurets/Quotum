@@ -9,6 +9,7 @@ import {
   placesOf,
   reading,
   rowsOf,
+  samePlaces,
   settle,
   starts,
   stepped,
@@ -22,6 +23,16 @@ const item = (id: string, x = 0, w = 3, h = 7): Item => ({id, x, w, h});
 const board = settle([item('P'), item('Q', 3), item('R'), item('S', 3)], 6);
 const coords = (spots: Spot[]) => Object.fromEntries(spots.map(({id, x, y}) => [id, [x, y]]));
 const at = (spots: Spot[], id: string) => spots.find(s => s.id === id)!;
+
+test('Home on an already top-right card is a no-op regardless of the result order', () => {
+  const next = stepped(board, 'Q', 'Home', 6);
+  assert.notDeepEqual(next.map(item => item.id), board.map(item => item.id));
+  assert.equal(samePlaces(next, board), true);
+  assert.equal(samePlaces(board, next), true);
+  assert.equal(samePlaces(stepped(board, 'R', 'Home', 6), board), false);
+  assert.equal(samePlaces(widened(board, 'P', 2, 6), board), false);
+  assert.equal(samePlaces(board.slice(1), board), false);
+});
 
 test('content fills whole rows supported only by the columns beneath it', () => {
   assert.deepEqual([274, 293, 305].map(rowsOf), [7, 7, 7]);

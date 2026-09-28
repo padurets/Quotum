@@ -88,6 +88,16 @@ export function stepped(origin: Spot[], id: string, key: string, columns: number
 }
 
 export const placesOf = (spots: Spot[]): Record<string, Place> => Object.fromEntries(spots.map(({id, x, y, w}) => [id, {x, y, w}]));
+
+/** Reading order may change without moving anything, for example Home on the top-right card. */
+export function samePlaces(a: Spot[], b: Spot[]): boolean {
+  const places = placesOf(a);
+  return a.length === b.length && b.every(({id, x, y, w}) => {
+    const place = places[id];
+    return place?.x === x && place.y === y && place.w === w;
+  });
+}
+
 type Stored = {layout?: Layout; order?: string[]; sizes?: Record<string, number>};
 export function withPlaces<T extends Stored>(view: T, places: Record<string, Place>): Omit<T, 'order' | 'sizes' | 'layout'> & {layout: Layout} {
   const {order, sizes, layout, ...rest} = view;

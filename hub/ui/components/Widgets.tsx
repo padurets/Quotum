@@ -13,6 +13,7 @@ import {
   reading,
   ROW,
   rowsOf,
+  samePlaces,
   settle,
   stepped,
   widened,
@@ -297,7 +298,7 @@ export function Widgets({
         event.preventDefault();
         next = stepped(origin, id, event.key, layout.columns);
       }
-      if (JSON.stringify(placesOf(next)) === JSON.stringify(placesOf(origin))) return;
+      if (samePlaces(next, origin)) return;
       remember();
       refocus.current = resize ? null : id;
       onPlaces(placesOf(next));
