@@ -20,6 +20,7 @@ import {
   widened,
   widenedLeft,
   widths,
+  withArranged,
   withHeights,
   withPlaces,
   type Item,
@@ -141,6 +142,7 @@ test('a chosen height is kept apart from what content needs: the widget takes th
   assert.equal(rowsFor({min: 150, natural: 2424}, 8), 8);
   // Before its content is measured a chosen height is taken as it is, never a guess.
   assert.equal(rowsFor(undefined, 8), 8);
+  assert.equal(rowsFor(undefined, 2), 2);
   assert.equal(rowsFor(undefined, undefined), rowsOf(224));
   const layout = {columns: 6, places: {a: {x: 0, y: 0, w: 3, h: 9}, b: {x: 3, y: 0, w: 3}}};
   const items = ordered(layout, ['a', 'b']);
@@ -180,8 +182,7 @@ test('saving places carries every chosen height over; only the height named chan
   assert.deepEqual(reset, {a: {x: 3, y: 0, w: 3}, b: {x: 0, y: 0, w: 3}});
   assert.ok(!('h' in reset.a), 'no key, not undefined or null');
   // As the page applies it: every change works on the latest view, saved or not yet.
-  const apply = (view: {layout: Layout}, places: Record<string, Place>, height?: {id: string; rows: number | null}) =>
-    withPlaces(view, withHeights(view.layout.places, places, height));
+  const apply = withArranged<{layout: Layout}>;
   let view: {layout: Layout} = {layout: {columns: 6, places: saved}};
   view = apply(view, {a: {x: 0, y: 0, w: 3}, b: {x: 3, y: 0, w: 3}}, {id: 'b', rows: 12});
   view = apply(view, moved);

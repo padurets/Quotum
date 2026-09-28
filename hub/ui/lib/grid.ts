@@ -166,6 +166,10 @@ export function withPlaces<T extends Stored>(view: T, places: Record<string, Pla
   return {...rest, layout: {columns: layout?.columns ?? COLUMNS, places: {...layout?.places, ...places}}};
 }
 
+/** What a gesture or a key does to the view: applied to the latest one, saved or not yet, so the chosen heights come from it. */
+export const withArranged = <T extends Stored & {layout: Layout}>(view: T, places: Record<string, Place>, height?: Height) =>
+  withPlaces(view, withHeights(view.layout.places, places, height));
+
 export function narrowed(items: Item[], columns: 2 | 1, wideColumns: number): Spot[] {
   const skyline = Array<number>(columns).fill(0);
   return items.map(item => {
