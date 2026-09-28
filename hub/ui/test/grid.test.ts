@@ -156,6 +156,8 @@ test('the height asked for is saved only when it changes what shows, in the dire
     ['a chosen 8 below its least of 10, pulled to 9', [10, 10, 9, 10], undefined],
     ['the same, pulled to 11', [10, 10, 11, 10], 11],
     ['a list of 51 rows that can show 4, pulled to 8', [51, 51, 8, 4], 8],
+    ['the same list pulled past its least: it stops there', [51, 51, 2, 4], 4],
+    ['a chosen 12 whose content needs 5, pulled to 2', [12, 12, 2, 5], 5],
     ['the corner moved only sideways, its least now 12', [10, 10, 10, 12], undefined],
     ['the corner narrowed a chart whose legend wraps, pulled up a row', [8, 9, 7, 9], undefined],
     ['a card grown from 6 to 7 meanwhile, pulled up', [6, 7, 5, 7], undefined],

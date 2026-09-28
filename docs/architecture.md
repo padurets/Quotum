@@ -549,12 +549,15 @@ drawn: each is a strip along its whole length in the gap beside it, with the cur
 its axis; under the pointer the widget's own border on that side lights up a little, in
 focus it takes the accent. Only the bottom corners have marks. The right and
 bottom edges take the arrow keys too. A height is saved only where a gesture or a key
-changes what shows, the way it pulled (`heightIntent` in `ui/lib/grid.ts`): pushing a
-widget below the least its content can show, or a corner moved only sideways, keeps the
-height it had, chosen or its content's. A double click on the bottom edge or a bottom corner, or
-Enter or Space on the bottom edge, gives a widget back the height of its content. At 1000 px and below the
-page uses two columns, at 680 and below one, in reading order, with the heights chosen
-where the content fits them; arranging is available only on the wide grid.
+changes what shows, the way it pulled (`heightIntent` in `ui/lib/grid.ts`): pushed below
+the least its content can show, a widget stops there; one already there, a click, or a
+corner moved only sideways keeps the height it had, chosen or its content's. The page's
+scrolling counts as a pull once the pointer or the wheel moves, and the page scrolls
+under a pointer only toward the edge it was taken to. A double click on the bottom edge
+or a bottom corner, or Enter or Space on the bottom edge, gives a widget back the height
+of its content. At 1000 px and below the page uses two columns, at 680 and below one, in
+reading order, with the heights chosen where the least their content can show fits them;
+arranging is available only on the wide grid.
 The page translates views saved before the grid, retaining hidden and absent widgets;
 the next save writes only the new layout. The hub requires that layout when saving,
 so an old page cannot overwrite it. Its view route allows 64 KiB per request, so a full

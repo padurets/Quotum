@@ -124,9 +124,10 @@ export const rowsFor = (size: {min: number; natural: number} | undefined, reques
  * The height a widget's owner chose by a gesture or a key, in rows, or undefined when
  * nothing is to be saved. `start` is how many rows it took when they began, `requested` how
  * many they asked for; `baseline` how many it takes now with the height it had (its content
- * may have changed meanwhile), `min` how few it can take. A widget pushed below its least,
- * or asked for what it already shows, keeps its height, whether chosen or its content's; one
- * that would only follow its content against the way it was pulled does too.
+ * may have changed meanwhile), `min` how few it can take. A widget pushed below its least
+ * stops there; one already there, or asked for what it already shows, keeps its height,
+ * whether chosen or its content's; one that would only follow its content against the way
+ * it was pulled does too.
  */
 export function heightIntent(start: number, baseline: number, requested: number, min: number): number | undefined {
   if (requested === start || min > MAX_ROWS) return undefined;
