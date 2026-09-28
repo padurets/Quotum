@@ -1,6 +1,7 @@
 import {t} from '../i18n';
+import {clock, day, stamp} from './format';
 import type {Horizon} from './prefs';
-import type {TimeRange} from './timeRange';
+import {timeRangeKey, type TimeRange} from './timeRange';
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -34,8 +35,8 @@ export const periodOf = (id: string): Period => PERIODS.find(period => period.id
 export const periodLabel = ({ms}: Period) => (ms < 2 * DAY ? t('history.hours', {count: ms / HOUR}) : t('history.days', {count: ms / DAY}));
 
 /**
- * What the chart and the table look at: the chosen period, ending now (`live`), or a time
- * range in the past, dragged across the chart or moved to. `from` starts no earlier than
+ * What the analytics look at: the chosen period, ending now (`live`), or a time range in
+ * the past, dragged across a chart or moved to. `from` starts no earlier than
  * the history does; `length` is the period's own, as asked for. `future` is how much of it
  * the chart may keep on its right: none for a range.
  */
@@ -54,6 +55,41 @@ export function frameOf(selected: TimeRange | null, prefs: {range: string; horiz
   const period = periodOf(prefs.range);
   const future = prefs.horizon === 'auto' ? period.future : Math.min(HORIZON[prefs.horizon], period.ms);
   return {from: Math.max(now - period.ms, historyStart), to: now, length: period.ms, future, live: true};
+}
+
+/**
+ * Where measurements end on a chart of the frame: at the page's clock, or at the hub's
+ * when that is ahead and `history` answers this very period (`range` chosen, or the time
+ * range `selected`): a browser a few minutes behind still draws the latest ones, up to the
+ * end of a range dragged to the edge of a period ending now.
+ */
+export function measuredTo(frame: Frame, history: {range: string; to: number} | null, selected: TimeRange | null, range: string): number {
+  const answered = history && history.range === (selected ? timeRangeKey(selected) : range) ? history : null;
+  return answered ? Math.max(frame.to, selected ? Math.min(answered.to, selected.to) : answered.to) : frame.to;
+}
+
+/** The times along a chart's axis from `from` to `to`, about `count` of them on round local times, and whether they fall on days. */
+export function niceTicks(from: number, to: number, count: number) {
+  const span = to - from;
+  const steps = [5, 10, 15, 30, 60, 120, 180, 360, 720, 1440, 2880, 10080].map(minutes => minutes * 60_000);
+  const step = steps.find(candidate => span / candidate <= count) ?? steps.at(-1)!;
+  const offset = new Date().getTimezoneOffset() * 60_000;
+  const ticks: number[] = [];
+  for (let t = Math.ceil((from - offset) / step) * step + offset; t <= to; t += step) ticks.push(t);
+  return {ticks, daily: step >= 86_400_000};
+}
+
+const sameDay = (a: number, b: number) => new Date(a).toDateString() === new Date(b).toDateString();
+
+/**
+ * A cell's times under its day. Cells are laid on UTC, so one may cross midnight here, and
+ * then each end names its day; a time within a cell, shorter than a day, then reads as one
+ * moment, save for the hour the clocks go back.
+ */
+export function cellLabel(at: number, cellMs: number) {
+  if (!cellMs) return stamp(at);
+  const end = at + cellMs;
+  return sameDay(at, end - 1) ? `${day(at)} ${clock(at)}–${clock(end)}` : `${stamp(at)} – ${stamp(end)}`;
 }
 
 /**

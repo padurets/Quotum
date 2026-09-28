@@ -78,8 +78,9 @@ test('an agent shows its folder under its project only where the folder tells it
 test('a board without subscriptions invites to connect one; with every widget hidden, offers them back', () => {
   assert.equal(boardState([], EMPTY), 'onboarding');
   assert.equal(boardState([{id: 'a'}], EMPTY), 'widgets');
-  assert.equal(boardState([{id: 'a'}], {...EMPTY, hidden: [cardId('a'), 'history', 'forecast']}), 'allHidden');
-  assert.equal(boardState([{id: 'a'}], {...EMPTY, hidden: [cardId('a'), 'history', 'forecast'], shown: ['agents']}), 'widgets');
+  assert.equal(boardState([{id: 'a'}], {...EMPTY, hidden: [cardId('a'), 'history', 'forecast', 'activity']}), 'allHidden');
+  assert.equal(boardState([{id: 'a'}], {...EMPTY, hidden: [cardId('a'), 'history', 'forecast']}), 'widgets', 'agent activity is a widget of its own, on by default');
+  assert.equal(boardState([{id: 'a'}], {...EMPTY, hidden: [cardId('a'), 'history', 'forecast', 'activity'], shown: ['agents']}), 'widgets');
   assert.equal(isWindowHidden({...EMPTY, windows: ['a/weekly']}, 'a', 'weekly'), true);
   assert.equal(resetLine({resetAt: null}, now).key, 'resetUnknown');
   const measured = (age: number, change: Partial<Card> = {}) => ({stale: false, error: null, successAt: now - age, ...change});

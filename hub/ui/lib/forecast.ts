@@ -18,12 +18,13 @@ export type Pace = {by: 'hour'; rate: number} | {by: 'plan'; k: number};
 /**
  * Where a window's own pace leads, as the table's last column says it, and in which tone:
  * nothing to say (`none`), a rolling window not started yet (`idle`), started too
- * recently to tell (`needData`), used up, due to have run out already at `at`
+ * recently to tell (`needData`), its reset gone by unmeasured (`awaiting`, used up or
+ * not), used up, due to have run out already at `at`
  * (`pastZero`), runs out at `at`, on pace to spend it all by the deadline, or `left`
  * points left then.
  */
 export type Outlook =
-  | {key: 'none' | 'idle' | 'needData'; tone: ''}
+  | {key: 'none' | 'idle' | 'needData' | 'awaiting'; tone: ''}
   | {key: 'usedUp'; tone: 'v-crit'}
   | {key: 'pastZero'; at: number; tone: ''}
   | {key: 'runsOut'; at: number; inMs: number; tone: 'v-crit' | 'v-warn'; pace: Pace}
@@ -86,8 +87,10 @@ function zeroOf(points: [number, number][]): number | null {
 
 /** A window's outlook, and where it goes when there is a forecast to draw. */
 function forecast(live: Win | undefined, measuredAt: number | null, now: number, weekly: WeeklyPlan | null): {outlook: Outlook; projection?: Projection; zero?: number | null} {
+  // A reset gone by, not measured since: what is left, used up or not, is known again from the next measurement.
+  if (live?.resetAt && live.resetAt <= now) return {outlook: {key: 'awaiting', tone: ''}};
   if (live && live.remaining <= 0) return {outlook: {key: 'usedUp', tone: 'v-crit'}};
-  if (!live?.resetAt || !live.minutes || live.resetAt <= now || measuredAt === null || live.resetAt <= measuredAt) return {outlook: {key: 'none', tone: ''}};
+  if (!live?.resetAt || !live.minutes || measuredAt === null || live.resetAt <= measuredAt) return {outlook: {key: 'none', tone: ''}};
   // An idle rolling window starts with its first use; one used and not `started` yet has only just started.
   if (!started(live, measuredAt) && live.used === 0) return {outlook: {key: 'idle', tone: ''}};
   if (measuredAt - (live.resetAt - live.minutes * 60_000) < forecastFrom(live.minutes)) return {outlook: {key: 'needData', tone: ''}};
@@ -117,13 +120,16 @@ function forecast(live: Win | undefined, measuredAt: number | null, now: number,
 export const outlook = (live: Win | undefined, measuredAt: number | null, now: number, weekly: WeeklyPlan | null): Outlook => forecast(live, measuredAt, now, weekly).outlook;
 
 /**
- * When `outlook` reads otherwise as time passes: the window resets, the forecast's zero
- * comes (it ran out, as foreseen), how soon it runs out ticks over (`countdown`), or it
- * comes near enough to say so louder. Nothing else in it moves with time.
+ * When `outlook` reads otherwise as time passes: the window resets (then it waits for a
+ * measurement, used up or not), the forecast's zero comes (it ran out, as foreseen), how
+ * soon it runs out ticks over (`countdown`), or it comes near enough to say so louder.
+ * Nothing else in it moves with time.
  */
 export function outlookChangesAt(live: Win | undefined, measuredAt: number | null, now: number, weekly: WeeklyPlan | null): number | null {
   const {outlook: ahead, projection: projected, zero} = forecast(live, measuredAt, now, weekly);
-  if (ahead.key === 'usedUp' || ahead.key === 'none') return null;
+  if (ahead.key === 'awaiting') return null;
+  // Used up, or with nothing to foresee, it waits for a measurement once its reset goes by.
+  if (ahead.key === 'usedUp' || ahead.key === 'none') return live?.resetAt && live.resetAt > now ? live.resetAt : null;
   const reset = live!.resetAt!;
   const moments = [reset, zero === null || zero === undefined ? null : Math.ceil(zero)];
   if (ahead.key === 'runsOut') {
@@ -176,3 +182,45 @@ export function planCell(live: Win | undefined, measuredAt: number | null, now: 
   return {remaining: plan.remaining, delta, notable: Math.abs(delta) >= PLAN_TOLERANCE};
 }
 
+/**
+ * The table's columns after the window's name, which the board's owner turns on and off:
+ * over a period up to now, and over a range. They go from what is left, through what was
+ * spent and what agents worked for it, to where it leads: by the time on the clock and by
+ * hours of agent work. What they spent, and the columns about agent work, are the same in
+ * both, so turning one off turns it off in both.
+ */
+export const LIVE_COLUMNS = ['now', 'plan', 'spent', 'work', 'perwork', 'during', 'forecast', 'workleft'] as const;
+export const RANGE_COLUMNS = ['start', 'end', 'spent', 'pace', 'work', 'perwork', 'during', 'workleft'] as const;
+export type ForecastColumn = (typeof LIVE_COLUMNS)[number] | (typeof RANGE_COLUMNS)[number];
+
+/**
+ * Room for the widest heading or value in either language, measured on the demo board,
+ * and the least room a window's name gets (`limit`), which wraps beyond it. On a widget as
+ * wide as the board every column on by default fits; with the share during work as well,
+ * they do not, which is why that column is off until the owner turns it on.
+ */
+export const FORECAST_WIDTHS: Record<ForecastColumn | 'limit', number> = {
+  limit: 180,
+  now: 72,
+  plan: 74,
+  spent: 142,
+  work: 114,
+  perwork: 166,
+  during: 134,
+  forecast: 220,
+  workleft: 146,
+  start: 82,
+  end: 74,
+  pace: 122,
+};
+
+/**
+ * What the outer columns take beyond their budgets: they keep the panel's padding at the
+ * widget's edges (22) rather than a cell's (10), on either side.
+ */
+export const FORECAST_EDGES = 2 * (22 - 10);
+
+/** A table where the chosen columns fit the widget, otherwise a list of rows. */
+export function forecastLayout(columns: readonly ForecastColumn[], width: number): 'table' | 'list' {
+  return columns.reduce((sum, column) => sum + FORECAST_WIDTHS[column], FORECAST_WIDTHS.limit + FORECAST_EDGES) <= width ? 'table' : 'list';
+}

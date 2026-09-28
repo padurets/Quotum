@@ -1,6 +1,6 @@
 import {useSyncExternalStore} from 'react';
 import {readAgentsSort, type AgentsSort} from './agents';
-import {ANALYTICS_KINDS, type Kind} from './types';
+import {ANALYTICS_KINDS, type ActivityDimension, type Kind} from './types';
 import {DEFAULT_PERIOD, periodOf} from './periods';
 
 /** How far the chart looks ahead: `auto` follows the period. */
@@ -8,8 +8,10 @@ export type Horizon = 'auto' | '1d' | '3d' | '7d';
 
 /**
  * How this reader looks at the dashboard, whatever the board: the period and window type
- * of its analytics (the chart and the table), the chart's horizon, lines switched off in
- * its legend and whether it draws the plan and the forecast, reset announcements, and whether the widgets are locked in place. How a
+ * of its analytics (agent activity, the chart and the table), the chart's horizon, lines
+ * and groups switched off in either chart's legend, whether it draws the plan and the
+ * forecast, what the activity widget stacks by, reset announcements, and whether the
+ * widgets are locked in place. How a
  * board is arranged is the board's own (lib/view.ts).
  */
 export type Prefs = {
@@ -28,11 +30,14 @@ export type Prefs = {
   locked: boolean;
   /** How this viewer orders agents, shared by all boards. */
   agentsSort: AgentsSort;
+  /** What the activity widget stacks its hours by. */
+  activityBy: ActivityDimension;
 };
 
 const KEY = 'quotum.prefs';
 export const HORIZONS: Horizon[] = ['auto', '1d', '3d', '7d'];
-const DEFAULTS: Prefs = {muted: {}, range: DEFAULT_PERIOD, kind: 'weekly', horizon: 'auto', showPlan: true, showForecast: true, showResets: true, locked: false, agentsSort: null};
+export const ACTIVITY_BY: ActivityDimension[] = ['source', 'project', 'device'];
+const DEFAULTS: Prefs = {muted: {}, range: DEFAULT_PERIOD, kind: 'weekly', horizon: 'auto', showPlan: true, showForecast: true, showResets: true, locked: false, agentsSort: null, activityBy: 'project'};
 
 function read(): Prefs {
   try {
@@ -42,8 +47,9 @@ function read(): Prefs {
     stored.range = periodOf(String(stored.range)).id;
     if (!ANALYTICS_KINDS.includes(stored.kind)) stored.kind = DEFAULTS.kind;
     if (!HORIZONS.includes(stored.horizon)) stored.horizon = DEFAULTS.horizon;
-    const {muted, range, kind, horizon, showPlan, showForecast, showResets, locked} = stored;
-    return {muted, range, kind, horizon, showPlan, showForecast, showResets, locked: locked === true, agentsSort: readAgentsSort(stored.agentsSort)};
+    if (!ACTIVITY_BY.includes(stored.activityBy)) stored.activityBy = DEFAULTS.activityBy;
+    const {muted, range, kind, horizon, showPlan, showForecast, showResets, locked, activityBy} = stored;
+    return {muted, range, kind, horizon, showPlan, showForecast, showResets, locked: locked === true, agentsSort: readAgentsSort(stored.agentsSort), activityBy};
   } catch {
     return DEFAULTS;
   }

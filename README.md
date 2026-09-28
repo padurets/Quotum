@@ -110,20 +110,29 @@ Codex         api                  idle     started 25m ago · editor
   when free resets were granted. Drag across it to zoom into a burst of work (on a
   phone, hold a finger on it first); ‹ and ›, or a swipe sideways, move it back and
   forth through time by half its length.
-- **A table with a forecast:** what the period spent and, at each window's pace since
-  it started, whether it runs out before its reset (or before your plan ends, following
-  the plan's shape) and when, or roughly how much will be left. The forecast is the
-  same whatever period you look at. Over a range dragged on the chart it shows what
-  that range cost: what was left at its start and end, what it spent and how fast.
+- **A table with two forecasts:** what the period spent, how long your agents worked on
+  each subscription and what an hour of their work costs; turned on, how much of the
+  spending came while they worked (what went elsewhere, claude.ai or a phone, makes an
+  hour of work look dearer). Then where it leads. By time: at each window's pace since it
+  started, whether it runs out before its reset (or before your plan ends, following the
+  plan's shape) and when, or roughly how much will be left, the same whatever period you
+  look at. By work: roughly how many hours of agent work are left. Over a range dragged
+  on the chart it shows what that range cost: what was left at its start and end, what
+  it spent in all and per hour, and what the agents worked.
+- **Agent activity:** hours of agent work over the same period, in bars of up to an hour
+  (two hours over a month), stacked by subscription, project or machine, with the work
+  time, how many agents worked and their time together. It zooms and moves through time
+  as the chart does.
 - **Reset announcements** from the community trackers [Codex Resets](https://codex-resets.com)
   and [Claude Resets](https://claude-resets.com), with a link to the source. You
   can turn them off.
-- **Boards made of widgets** (a card per subscription, the chart, the table, and a
-  list of every running agent to turn on), like a dashboard in Grafana: the cards show
-  what is left now, the chart and the table under them share one set of filters. The owner of a board drags them around, makes them wider or
-  narrower, names the cards, hides the ones they don't need (the data keeps coming) and
-  sets the plans; everyone on the board sees it arranged the same way. Once it's set,
-  a lock keeps the widgets from moving under a passing pointer.
+- **Boards made of widgets** (a card per subscription, agent activity, the chart, the
+  table, and a list of every running agent to turn on), like a dashboard in Grafana:
+  the cards show what is left now, the analytics under them share one set of filters.
+  The owner of a board drags them around, makes them wider or narrower, names the cards,
+  hides the ones they don't need (the data keeps coming) and sets the plans; everyone on
+  the board sees it arranged the same way. Once it's set, a lock keeps the widgets from
+  moving under a passing pointer.
 - **Your data, shared when you choose.** Everything your machines measure is on your
   personal board. On a shared board a team sees the limits its members share with it:
   each person decides which of their subscriptions it shows. A team subscription
@@ -154,12 +163,14 @@ day, not a script thrown together over a weekend. In practice that meant:
   and folder (`sessions = false` and `projects = false` turn that off). With each
   question to the hub, whether its client is in use on the machine: a card tells the
   members of its boards that the subscription is in use right now, whatever those
-  settings say. A board shows
-  them, with the name of the machine they run on, to its members only where the person
-  whose agents they are shows that subscription, each project under the name that person
-  gave it. The hub keeps when each agent worked,
-  with its machine, project and folder names, for 90 days, and the names you give your
-  projects until you undo them; you see and correct your projects in *My machines*. The full list is in the [spec](spec/ingest-v1.md#privacy).
+  settings say. Where a board shows that subscription, whoever brought it, and the
+  person whose agents they are is on the board, its members see them with the name of
+  the machine they run on, each project under the name that person gave it, and when and
+  how long they worked, by project and machine, from the later of when that person joined
+  the board and when the subscription came to it (on their own board, all of it). The hub
+  keeps when each agent worked, with its machine, project and folder names, for 90 days,
+  and the names you give your projects until you undo them; you see and correct your
+  projects in *My machines*. The full list is in the [spec](spec/ingest-v1.md#privacy).
 - **The numbers mean what they say.** Only a real increase inside one reset window
   counts as spending. Resets, corrections and gaps in the data never show up as
   consumption. The agent says when its next measurement is due, so a sparse series isn't

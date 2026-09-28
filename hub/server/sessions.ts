@@ -88,8 +88,8 @@ export class Sessions {
   }
 
   /**
-   * The sessions running on a subscription on the machines of `people` (those who show
-   * it on the board read), by machine name and then by age.
+   * The sessions running on a subscription on the machines of `people` (those on the
+   * board read who measure it, whoever brought it there), by machine name and then by age.
    */
   of(source: string, people: string[], now: number): BoardSession[] {
     const found: BoardSession[] = [];

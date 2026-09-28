@@ -58,6 +58,12 @@ export class HistoryLoader {
   /** Every read under way, with the earliest time of the news that came meanwhile (a snapshot: all of it) that its answer may miss. */
   private readonly underway = new Set<{since: number}>();
   private lastRead: {slot: string; at: number} | null = null;
+  /**
+   * The read begun in the task under way, with its flight: news told in the same message as
+   * what began it (a new lineup comes with all of the history as news) reached the hub
+   * before it, so its answer holds that news.
+   */
+  private begun: {reading: {slot: string; again: boolean}; flight: {since: number}} | null = null;
   private changedAt = 0;
   private readonly timers = new Map<'settle' | 'later' | 'retry', unknown>();
   private readonly listeners = new Set<() => void>();
@@ -100,10 +106,15 @@ export class HistoryLoader {
     this.want('change');
   }
 
-  /** Measurements at `since` or later reached the hub: what was read of that time is read again. */
+  /**
+   * Measurements at `since` or later reached the hub: what was read of that time is read
+   * again. All of it (`since` 0) is whose work the board shows, or under which names,
+   * changing: like a new lineup, that is read at once.
+   */
   news(since: number) {
-    this.forget(since);
-    this.want('news');
+    const begun = this.begun && this.reading === this.begun.reading ? this.begun : null;
+    this.forget(since, begun?.flight);
+    if (!begun) this.want(since === 0 ? 'change' : 'news');
   }
 
   /** The chosen period or the selected range changed. */
@@ -185,6 +196,10 @@ export class HistoryLoader {
     this.reading = reading;
     this.underway.add(flight);
     this.lastRead = {slot, at: this.env.now()};
+    const begun = (this.begun = {reading, flight});
+    queueMicrotask(() => {
+      if (this.begun === begun) this.begun = null;
+    });
     this.env.read(target.board, target.query).then(
       answer => {
         this.underway.delete(flight);
@@ -222,10 +237,10 @@ export class HistoryLoader {
     if (ofBoard.length > KEPT_RANGES) this.kept.delete(ofBoard[0]);
   }
 
-  /** News of measurements at `since` or later: the ranges kept of the open board that hold that time go, and answers on their way are told. */
-  private forget(since: number) {
+  /** News of measurements at `since` or later: the ranges kept of the open board that hold that time go, and answers on their way are told, but one asked for after the news reached the hub. */
+  private forget(since: number, after?: {since: number}) {
     for (const [slot, answer] of this.kept) if (answer.board === this.board && since <= answer.to) this.kept.delete(slot);
-    for (const flight of this.underway) flight.since = Math.min(flight.since, since);
+    for (const flight of this.underway) if (flight !== after) flight.since = Math.min(flight.since, since);
   }
 
   private cancel() {

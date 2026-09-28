@@ -384,7 +384,10 @@ export class Directory {
 
   /** Names a device on the hub; an empty name gives it back the name the machine reports. */
   renameDevice(userId: string, id: string, label: string): boolean {
-    return this.db.prepare('UPDATE devices SET label = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL').run(label || null, id, userId).changes > 0;
+    const renamed = this.db.prepare('UPDATE devices SET label = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL').run(label || null, id, userId).changes > 0;
+    // The history of their boards shows the machine's agents under its name.
+    if (renamed) tell(this.observer, o => o.touchBoards(this.boards(userId).map(b => b.id)));
+    return renamed;
   }
 
   revokeDevice(userId: string, id: string, now: number): boolean {

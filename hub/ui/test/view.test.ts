@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {AGENTS, arranged, colorOf, columnShown, isHidden, planOf, withColumn, reordered, spanOf, weeklyPlanOf, withColor, withHidden, withPlan, withPlanned, withSpan, withWindowHidden} from '../lib/view';
+import {ACTIVITY, AGENTS, ANALYTICS, FORECAST, HISTORY, areas, arranged, colorOf, columnShown, isHidden, planOf, withColumn, reordered, spanOf, weeklyPlanOf, withColor, withHidden, withPlan, withPlanned, withSpan, withWindowHidden} from '../lib/view';
 import {CARD_COLORS, PROVIDERS} from '../lib/providers';
 import {DEFAULT_PLAN} from '../lib/plan';
 import type {View} from '../lib/types';
@@ -16,6 +16,22 @@ test('widgets follow the board’s order; a new one comes next to its natural ne
   const card = ['source:a', 'source:b', 'source:c', 'source:d', 'history'];
   assert.deepEqual(arranged(view, card), ['history', 'source:c', 'source:d', 'source:a', 'source:b'], 'a new card after the one before it');
   assert.deepEqual(arranged({...EMPTY, order: ['source:gone', 'source:b']}, board), ['source:a', 'source:b', 'source:c', 'history']);
+});
+
+test('the cards and the analytics are arranged each on their own, so a new widget stays in its area', () => {
+  // A board arranged before agent activity, with a card hidden after the analytics and the list of agents new.
+  const view = {...EMPTY, order: ['source:a', FORECAST, HISTORY, 'source:b']};
+  assert.deepEqual(areas(view, ['source:a', 'source:b', AGENTS]), {cards: ['source:a', 'source:b', AGENTS], analytics: [ACTIVITY, FORECAST, HISTORY]});
+  // Arranged together, agent activity would follow the list of agents, after the rest of the analytics.
+  assert.deepEqual(arranged(view, ['source:a', 'source:b', AGENTS, ...ANALYTICS]).filter(id => ANALYTICS.includes(id)), [FORECAST, HISTORY, ACTIVITY]);
+});
+
+test('agent activity stands over what is left, on a new board and on one arranged before it', () => {
+  assert.deepEqual(arranged(EMPTY, ANALYTICS), [ACTIVITY, HISTORY, FORECAST]);
+  assert.deepEqual(arranged({...EMPTY, order: ['source:a', AGENTS, FORECAST, HISTORY]}, ANALYTICS), [ACTIVITY, FORECAST, HISTORY], 'first of the analytics, whatever order they were given');
+  // Moving widgets puts the hidden ones after the shown: a card or the list of agents may stand after the analytics.
+  assert.deepEqual(arranged({...EMPTY, order: ['source:a', FORECAST, HISTORY, 'source:b']}, ANALYTICS), [ACTIVITY, FORECAST, HISTORY], 'a hidden card after them');
+  assert.deepEqual(arranged({...EMPTY, order: ['source:a', HISTORY, FORECAST, AGENTS]}, ANALYTICS), [ACTIVITY, HISTORY, FORECAST], 'the list of agents after them');
 });
 
 test('moving the shown widgets keeps the hidden ones behind them', () => {
@@ -82,6 +98,17 @@ test('a card is half the grid wide by default, a third at least and the whole gr
   assert.deepEqual(withSpan(EMPTY, 'source:new', 2).sizes, {'source:new': 4});
 });
 
+
+test("the table's columns are on until the owner turns one off, but the share during work, and off in a range and a period alike", () => {
+  assert.ok(['now', 'spent', 'work', 'perwork', 'workleft'].every(column => columnShown(EMPTY, FORECAST, column)), 'a view saved before them');
+  assert.equal(columnShown(EMPTY, FORECAST, 'during'), false);
+  const off = withColumn(EMPTY, FORECAST, 'work', false);
+  assert.deepEqual(off.columns, {forecast: ['work']});
+  assert.deepEqual([columnShown(off, FORECAST, 'work'), columnShown(off, FORECAST, 'spent')], [false, true]);
+  const during = withColumn(EMPTY, FORECAST, 'during', true);
+  assert.deepEqual(during.shownColumns, {forecast: ['during']});
+  assert.equal(columnShown(during, FORECAST, 'during'), true);
+});
 
 test('state is off by default; the owner explicitly shows it without reviving an old hidden column', () => {
   assert.equal(columnShown(EMPTY, AGENTS, 'state'), false);

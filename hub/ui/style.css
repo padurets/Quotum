@@ -14,6 +14,8 @@
   --ok: #75d8ad;
   --warn: #f6c56e;
   --crit: #f17870;
+  /* The colour of the projects and machines of a stack of hours past the palette's: a neutral, 3:1 on the surface. */
+  --other: #6c6b7b;
   /* An announced reset: news that changes how the rest of a limit should be spent. */
   --reset: #a29cff;
   --reset-glow: #7b6fffaa;
@@ -91,8 +93,8 @@ main { max-width: 1240px; margin: 0 auto; padding: 28px 28px 56px; display: flex
 /* ---------- widgets ---------- */
 .widgets { position: relative; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 16px; }
 
-/* The analytics under the cards: one head with the filters of the chart and the table,
-   which stays under the top bar while they scroll by. */
+/* The analytics under the cards: one head with the filters of agent activity, the chart
+   and the table, which stays under the top bar while they scroll by. */
 .analytics { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
 .analytics-head { position: sticky; top: 60px; z-index: 5; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 10px 0; }
 .analytics-head::before { content: ''; position: absolute; inset: 0 -28px; z-index: -1; background: #0b0b0ecc; -webkit-backdrop-filter: blur(16px) saturate(140%); backdrop-filter: blur(16px) saturate(140%); }
@@ -382,16 +384,26 @@ td.muted, small.muted { color: var(--text-3); }
 .agents-sort-arrow { width: 10px; flex-shrink: 0; }
 .agents-controls { display: flex; gap: 6px; margin-left: auto; }
 .agents-panel .panel-head { gap: 8px; }
-.agents-compact { list-style: none; margin: 18px calc(-1 * var(--panel-pad)) 0; padding: 0; }
-.agents-compact > li { padding: 11px var(--panel-pad); border-bottom: 1px solid var(--hair); color: var(--text-2); }
-.agents-compact > li:last-child { border-bottom: 0; }
-.agents-compact > li:hover { background: #ffffff04; }
+.agents-compact, .forecast-compact { list-style: none; margin: 18px calc(-1 * var(--panel-pad)) 0; padding: 0; }
+.agents-compact > li, .forecast-compact > li { padding: 11px var(--panel-pad); border-bottom: 1px solid var(--hair); color: var(--text-2); }
+.agents-compact > li:last-child, .forecast-compact > li:last-child { border-bottom: 0; }
+.agents-compact > li:hover, .forecast-compact > li:hover { background: #ffffff04; }
 .agents-compact > li.is-working { color: var(--text); }
 .agents-compact-main { display: flex; align-items: center; gap: 10px; min-width: 0; font-size: 12.5px; }
 .agents-compact-main > .agent, .agents-compact-main > .agents-origin, .agents-compact-main > .agents-age { flex-shrink: 0; }
 .agents-compact-main > .agents-project { flex: 1; }
 .agents-compact-details { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 4px 0 0 15px; color: var(--text-3); font-size: 11.5px; }
 .agents-compact-details > span { min-width: 0; overflow-wrap: anywhere; }
+/* The table of limits as a list: a window's name and what is left, then its other values, each with its heading, wrapping whole. */
+.forecast-compact-main { display: flex; align-items: baseline; gap: 10px; min-width: 0; font-size: 13px; }
+/* The gap sets the name after its colour, which the details below line up with. */
+.forecast-compact-main > .swatch { margin-right: 0; }
+.forecast-compact-name { flex: 1; min-width: 0; color: var(--text); overflow-wrap: anywhere; }
+.forecast-compact-main > :last-child:not(.forecast-compact-name) { flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.forecast-compact-details { display: flex; flex-wrap: wrap; gap: 3px 16px; margin: 4px 0 0 13px; color: var(--text-3); font-size: 11.5px; }
+/* A heading wraps where the row is narrow (a phone); its value stays whole. */
+.forecast-compact-details > span { min-width: 0; overflow-wrap: anywhere; }
+.forecast-compact-details > span > span { color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .agents-list { box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; width: min(340px, calc(100vw - 48px)); max-width: 100%; overflow: hidden auto; padding: 0 0 4px; }
 .agents-machine h3 { display: flex; align-items: baseline; gap: 8px; margin: 0 8px 4px; font-size: 12.5px; font-weight: 560; color: var(--text); }
 .agents-machine h3 span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -434,14 +446,17 @@ td.muted, small.muted { color: var(--text-3); }
 .period-name { display: flex; align-items: center; gap: 6px; }
 .period-name svg { flex-shrink: 0; }
 
-.legend { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 18px 0 4px; }
-.legend-item { display: flex; align-items: center; gap: 8px; padding: 4px 0; border: 0; background: none; font-size: 12.5px; color: var(--text-2); transition: opacity .15s; }
-.legend-item b { color: var(--text); font-weight: 500; }
+/* Under its chart, as on either chart. */
+.legend { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 12px 0 0; }
+.legend-item { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 0; border: 0; background: none; font-size: 12.5px; color: var(--text-2); text-align: left; transition: opacity .15s; }
+/* A long name (a project's path) breaks anywhere rather than widening the row; its value stays whole. */
+.legend-item span { min-width: 0; overflow-wrap: anywhere; }
+.legend-item b { color: var(--text); font-weight: 500; white-space: nowrap; }
 .legend-item[aria-pressed=false] { opacity: .35; }
 .legend-item:hover { opacity: 1; color: var(--text); }
 .legend-empty { font-size: 12.5px; color: var(--text-4); padding: 4px 0; }
 
-.chart { position: relative; margin-top: 10px; }
+.chart { position: relative; margin-top: 18px; }
 /* Dimmed while the next period loads. Not the chart itself: that would lay its tooltip under the next widget. */
 .panel .chart > svg, .panel .table-wrap { transition: opacity .2s; }
 .panel.is-loading .chart > svg, .panel.is-loading .table-wrap { opacity: .5; }
@@ -449,6 +464,18 @@ td.muted, small.muted { color: var(--text-3); }
 .chart > svg { display: block; width: 100%; height: auto; touch-action: pan-y; overflow: visible; }
 .chart-loading, .chart-empty { min-height: 220px; display: grid; place-items: center; color: var(--text-3); font-size: 13px; }
 .chart-empty { position: absolute; inset: 0; min-height: 0; pointer-events: none; }
+/* Agent activity: its totals a quieter line under the title, each a whole, its value as the legend's. */
+.activity-totals { display: flex; flex-wrap: wrap; gap: 2px 16px; margin-top: 6px; font-size: 12.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.activity-totals > span { white-space: nowrap; }
+.activity-totals b { color: var(--text); font-weight: 500; }
+.activity-totals + .chart { margin-top: 12px; }
+.activity-since { font-size: 11px; color: var(--text-2); border: 1px solid var(--hair-2); padding: 0 6px; border-radius: 5px; }
+.activity .chart-loading { min-height: 200px; }
+/* Parts of a stack stand apart by a hair of the surface, so two of one colour do not run together. */
+.activity-stack { stroke: var(--surface); stroke-width: .75; }
+.activity-hatch { stroke: var(--hair-2); stroke-width: 1.5; }
+.activity-unknown-label { fill: var(--text-3); font-size: 11.5px; }
+.activity-swatch { display: inline-block; flex-shrink: 0; width: 10px; height: 10px; border-radius: 2px; }
 .grid { stroke: #ffffff0a; stroke-width: 1; stroke-dasharray: 2 4; }
 .axis-line { stroke: var(--hair-2); stroke-width: 1; }
 .threshold { stroke-width: 1; stroke-dasharray: 1 3; }
@@ -480,7 +507,7 @@ td.muted, small.muted { color: var(--text-3); }
 .chart svg.is-selectable { cursor: crosshair; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
 .selection { fill: color-mix(in oklab, var(--accent) 14%, transparent); stroke: color-mix(in oklab, var(--accent) 50%, transparent); stroke-width: 1; }
 .tooltip {
-  position: absolute; top: 8px; z-index: 4; pointer-events: none; width: max-content; min-width: 190px; max-width: min(360px, 100%);
+  position: absolute; top: 8px; z-index: 4; pointer-events: none; width: max-content; min-width: 190px; max-width: min(360px, 100%); overflow: hidden;
   border-radius: 10px; padding: 9px 11px; font-size: 12px;
 }
 /* Over the widgets below (their handles are 2), under the sticky bars (5) and the popovers. */
@@ -527,6 +554,11 @@ th:last-child, td:last-child { padding-right: var(--table-edge, 12px); }
 /* A table scrolls within the dialog rather than widening it past a narrow screen. */
 .dialog .table-wrap { --table-edge: 24px; margin-inline: -24px; contain: inline-size; }
 td:first-child { color: var(--text); }
+/* A window's name wraps rather than widening the table past its widget: the columns beside it keep their room. Its lines start after its colour, as in the list. */
+.panel.forecast td:first-child { white-space: normal; overflow-wrap: anywhere; }
+.forecast-name { display: flex; align-items: baseline; }
+.forecast-name > .swatch { flex-shrink: 0; }
+.forecast-name > :last-child { min-width: 0; }
 /* A row's colour, marked like the card it belongs to. */
 .swatch { display: inline-block; width: 3px; height: 13px; border-radius: 2px; margin-right: 10px; vertical-align: -2px; }
 
@@ -742,10 +774,6 @@ tr:hover .device-name .icon-button, .device-name .icon-button:focus-visible { op
   /* The list takes what room the arrows leave; a long time range wraps in it. */
   .period .picker { flex: 1; min-width: 0; }
   .period .text-button { flex: 1; justify-content: center; height: auto; min-height: 28px; padding: 4px 10px; white-space: normal; text-align: center; }
-  .forecast th:nth-child(4), .forecast td:nth-child(4) { display: none; }
-  /* Over a selected time range what it spent matters most; its pace goes instead. */
-  .forecast.is-range th:nth-child(4), .forecast.is-range td:nth-child(4) { display: table-cell; }
-  .forecast.is-range th:nth-child(5), .forecast.is-range td:nth-child(5) { display: none; }
   td:first-child { white-space: normal; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }

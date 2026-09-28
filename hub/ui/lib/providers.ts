@@ -31,3 +31,13 @@ export const CARD_COLORS: string[][] = [
 
 /** Windows of one source are distinguished by dash pattern within its colour. */
 export const DASHES = ['', '7 5', '2 4', '10 3 2 3'];
+
+/**
+ * Colours of projects and machines on the activity widget, by their rank in the period:
+ * first hues no provider has (teal, violet, lime), then the rest. Every one stands clear
+ * of the status colours (ΔE2000 at least 20 from --ok, --warn and --crit) and of the
+ * providers' own (14), 17 at least from each other and from the neutral of the rest
+ * (--other in style.css), and keeps 3:1 contrast with the surface; ui/test/activity.test.ts
+ * checks all of it.
+ */
+export const CATEGORY_COLORS = ['#67cfe3', '#cd93ff', '#75a322', '#0593bf', '#97854b', '#3f8f7f', '#eab0d1'];

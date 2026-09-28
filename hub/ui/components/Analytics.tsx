@@ -37,9 +37,10 @@ const ChevronIcon = () => (
 );
 
 /**
- * The period of both the chart and the table: one of a list, ending now, or a time range
- * in the past, dragged across the chart or stepped back to with ‹. ‹ and › move either by
- * half its length; › up to now brings the chosen period back, as clearing a range does.
+ * The period of the analytics (agent activity, the chart and the table): one of a list,
+ * ending now, or a time range in the past, dragged across a chart or stepped back to with
+ * ‹. ‹ and › move either by half its length; › up to now brings the chosen period back,
+ * as clearing a range does.
  * The button of the list is named by what it shows. The arrows stand together at the end,
  * where a label of any length leaves them in place for the next click. Where they go is
  * reckoned at the click; the clock renders them only when ‹ turns on or off.

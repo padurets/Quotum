@@ -4,7 +4,7 @@ import {mkdtempSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
-import {Store} from '../store/store.js';
+import {Store, WORK_NAMES} from '../store/store.js';
 import {SCHEMA_VERSION} from '../store/schema.js';
 import type {Measurement, Win} from '../domain/quota.js';
 
@@ -77,7 +77,7 @@ test('a period of history ends where it is asked to and is read from its edges',
   const store = fresh();
   const codex = seen(store, 'codex', 'account-a');
   for (const [minutes, used] of [[0, 20], [4, 25], [8, 31]]) store.record(codex, measurement({observedAt: start + minutes * 60_000, windows: [win({used})]}));
-  const [series] = store.history(BOARD, start - 1, 60_000, start + 5 * 60_000).series;
+  const [series] = store.history(BOARD, start - 1, 60_000, {to: start + 5 * 60_000}).series;
   assert.deepEqual([series.samples, series.consumed, series.remainingAtStart, series.remainingAtEnd], [2, 5, 80, 75]);
   assert.equal(series.points.at(-1)![0], start + 4 * 60_000, 'nothing after its end');
   store.close();
@@ -203,4 +203,15 @@ test('a database of a development version before 0.2 is refused, not misread', (
   raw.exec('CREATE TABLE sources (id TEXT PRIMARY KEY, board_id TEXT NOT NULL); PRAGMA user_version = 1');
   raw.close();
   assert.throws(() => new Store(file, start), /before 0\.2/);
+});
+
+test('the names a board’s history is keyed by are found by project, not by reading every session of a machine', () => {
+  // Read with every answer of history and every look at a watched board: without the index a person with many sessions stalls the hub for each.
+  const store = fresh();
+  const plan = (store.db.prepare(`EXPLAIN QUERY PLAN ${WORK_NAMES}`).all('[]', '[]', '[]', '[]') as {detail: string}[]).map(row => row.detail);
+  assert.ok(
+    plan.some(detail => /agent_sessions_by_project \(device_id=\? AND project=\?/.test(detail)),
+    plan.join('\n'),
+  );
+  store.close();
 });

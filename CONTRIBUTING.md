@@ -72,8 +72,9 @@ cd hub && npm run build && npm run demo
 ```
 
 It starts the built hub on throwaway data (in the system's temporary folder), fills it
-with the catalogue in `hub/demo/catalogue.ts` and keeps it alive: machines measure,
-agents start, work and stop, a machine sleeps. The reset trackers are stood in for, so
+with the catalogue in `hub/demo/catalogue.ts`, with the days its agents worked before it
+started, and keeps it alive: machines measure, agents start, work and stop, a machine
+sleeps. The reset trackers are stood in for, so
 it needs no network and no account. It prints the address and how to sign in; Ctrl+C
 stops it and leaves nothing behind. `npm run demo -- showcase` opens the clean board
 the README images come from; `--resets <scene>` picks what the reset trackers say (one

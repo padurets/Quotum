@@ -56,7 +56,8 @@ const anotherWeek = (elapsed: number, n: number) => ((60 + 8 * mod(n, 4)) * elap
  * A weekly window whose current cycle began at `since` (before `start`), so it resets a
  * week after. With `early`, the cycle before was due to reset then but came back at
  * `since`: an early reset (a free one used, or one for everyone). `use` gives the used
- * share `elapsed` into the current cycle, `before` into cycle `n` of the others (-1 the
+ * share `elapsed` into the current cycle, and, with `work`, the work done in it so far
+ * (`busy`, ms), as a rolling window's does; `before` into cycle `n` of the others (-1 the
  * one before…).
  */
 export function weekly(options: {
@@ -64,14 +65,16 @@ export function weekly(options: {
   label?: string;
   since: number;
   early?: number;
-  use: (elapsed: number) => number;
+  use: (elapsed: number, busy: number) => number;
+  work?: Work;
   before?: (elapsed: number, n: number) => number;
 }): WindowAt {
-  const {id = 'weekly', label = null, since, early, use, before = anotherWeek} = options;
+  const {id = 'weekly', label = null, since, early, use, work, before = anotherWeek} = options;
   return t => {
     const cycle = cycleOf(t, since, early);
     const elapsed = t - cycle.begin;
-    return {id, kind: 'weekly', minutes: 7 * 24 * 60, label, used: share(cycle.n === 0 ? use(elapsed) : before(elapsed, cycle.n)), resetsAt: cycle.reset};
+    const used = cycle.n === 0 ? use(elapsed, work ? work(cycle.begin, t) : 0) : before(elapsed, cycle.n);
+    return {id, kind: 'weekly', minutes: 7 * 24 * 60, label, used: share(used), resetsAt: cycle.reset};
   };
 }
 
@@ -123,6 +126,11 @@ export function rolling(options: {id?: string; label?: string; minutes?: number;
 export const noReset =
   (window: WindowAt): WindowAt =>
   t => ({...window(t), resetsAt: null});
+
+/** A window as its client reports it, only without its length: it does not know it. */
+export const noLength =
+  (window: WindowAt): WindowAt =>
+  t => ({...window(t), minutes: null});
 
 /** A rolling window nobody used lately: its reset is always its length from the measurement, and its start never comes. */
 export const idle =
@@ -200,6 +208,9 @@ export type CardView = {name?: string; color?: string; span?: number; hidden?: b
 /** A time within which an expectation holds, from `start`: [from, to], by default the first twelve hours. */
 export type Span = {from?: number; to?: number};
 
+/** A period of the analytics: one up to now ('24h', …), or a time range selected on the chart, from `start`. */
+export type Period = string | {from: number; to: number};
+
 /**
  * What an entry shows, as codes the rules of the dashboard (hub/ui/lib) compute from what
  * the hub answers; the catalogue test checks each over its span. A card's codes are read
@@ -223,6 +234,31 @@ export type CardCheck = Span & {board?: string} & (
     | {cadence: Cadence['when'] | null; why?: CadenceWhy}
     /** How many whole days back ‹ takes the chart from 30 days, step by step, on the card's board: where the history starts. */
     | {reachesBack: number}
+    /**
+     * A window's cells about agent work in the table over `range`, as its board shows them
+     * ('hidden' for a column off there): work time, spent per hour of it, hours of work
+     * left (to a tenth), 'untilReset', 'outlasts' (a whole window) or 'usedUp', the share of spending during work (whole
+     * percent), why a cell is a dash as its tooltip tells it (`none` for the work time,
+     * `paceWhy`, `leftWhy`, `duringWhy`; `noneSince` and `nospendSince` where work is known
+     * from later than the period begins), since when work is known where that is after
+     * the period begins (`since`, from `start`), and the share of spending during work the
+     * tooltips of the pace and the forecast by work tell as little (`lowShare`, whole
+     * percent; null for none, 'hidden' with both columns off).
+     */
+    | {
+        work: string;
+        range: Period;
+        hours?: number;
+        perHour?: number;
+        left?: number | 'untilReset' | 'outlasts' | 'usedUp';
+        during?: number | 'hidden';
+        none?: string;
+        paceWhy?: string;
+        leftWhy?: string;
+        duringWhy?: string;
+        since?: number | null;
+        lowShare?: number | null | 'hidden';
+      }
   );
 
 /**
@@ -246,6 +282,21 @@ export type BoardCheck = Span &
      * it): the folders shown under it, by name, none where the folder is the project.
      */
     | {agentsOf: string; folders: (string | null)[]}
+    /**
+     * The activity widget over `range`, split by subscription (named by card id), project or
+     * machine (by its name shown): every group and its own hours, to a tenth.
+     */
+    | {activity: 'source' | 'project' | 'device'; range: Period; groups: Record<string, number>}
+    /** One group of the activity widget and its own hours, whatever the others (null: not among the groups). */
+    | {activityOf: string; by: 'project' | 'device'; range: Period; hours: number | null}
+    /** The activity widget's totals over `range`: hours of work, how many different agents worked, and their hours together. */
+    | {activityTotals: {work: number; agents: number; agentTime: number}; range: Period}
+    /** Since when, from `start`, the activity widget knows how agents worked over `range`. */
+    | {activityKnownFrom: number; range: Period}
+    /** What the activity widget says instead of its stacks over `range` (`ui/lib/activity.ts` `activityEmpty`), or null for stacks. */
+    | {activityEmpty: 'noSources' | 'knownFrom' | 'none' | 'noneSince' | null; range: Period}
+    /** The table of limits as a table or a list of rows, on a board as wide as a wide screen. */
+    | {tableLayout: 'table' | 'list'}
   );
 
 export type SceneCheck = Span &
@@ -322,7 +373,17 @@ export type Machine = {
  * table of running agents on, and in «My machines». `projects` are the names they give the
  * projects their machines report, before any agent reports one (reported → shown).
  */
-export type Person = {kind: 'person'; id: string; name: string; agents?: boolean; agentsSpan?: number; projects?: Record<string, string>; expect: (BoardCheck | ProjectCheck)[]; look?: string[]};
+export type Person = {
+  kind: 'person';
+  id: string;
+  name: string;
+  agents?: boolean;
+  agentsSpan?: number;
+  forecastSpan?: number;
+  projects?: Record<string, string>;
+  expect: (BoardCheck | ProjectCheck)[];
+  look?: string[];
+};
 
 export type Board = {
   kind: 'board';
@@ -333,6 +394,11 @@ export type Board = {
   /** The table of running agents is turned on. */
   agents?: boolean;
   agentsSpan?: number;
+  forecastSpan?: number;
+  /** When members joined it, from `start`, where later than it was made: work before is not the board's. */
+  joined?: Record<string, number>;
+  /** Columns of the table, off by default, that the board turns on. */
+  tableColumns?: string[];
   expect: BoardCheck[];
   look?: string[];
 };
@@ -421,6 +487,12 @@ export function historyTimes(set: DemoSet, card: Card): {t: number; step: number
 
 /** The earliest measurement a set seeds: where the chart's history begins. */
 export const earliest = (set: DemoSet) => Math.min(...cards(set).flatMap(card => historyTimes(set, card).slice(0, 1).map(s => s.t)));
+
+/** How far back the demo's hub has kept how agents worked: before it, that is not known. */
+export const WORK_SINCE = -10 * DAY;
+
+/** Since when a set's hub knows how agents worked: ten days back, or where its history begins when that is later. */
+export const workSince = (set: DemoSet) => Math.max(WORK_SINCE, earliest(set));
 
 const iso = (start: number, t: number) => new Date(start + t).toISOString();
 
@@ -524,6 +596,10 @@ export function problems(set: DemoSet): string[] {
     // A person's id names their personal board.
     if (known.has(board.id)) found.push(`board ${board.id} is named as a person`);
     for (const person of [board.owner, ...board.members]) if (!known.has(person)) found.push(`board ${board.id} names nobody known: ${person}`);
+    for (const [person, at] of Object.entries(board.joined ?? {})) {
+      if (!board.members.includes(person)) found.push(`board ${board.id}: ${person} joins it without being a member`);
+      if (at < workSince(set) || at > 0) found.push(`board ${board.id}: ${person} joins it before the board was made or after the start`);
+    }
   }
   for (const person of people(set)) {
     for (const [reported, name] of Object.entries(person.projects ?? {})) {
@@ -550,6 +626,9 @@ export function problems(set: DemoSet): string[] {
     if (card.paced && card.machines.length !== 1) found.push(`card ${card.id} is measured at the hub's pace by one machine only`);
     const holders = new Set(holdersOf(set, card));
     const shownOn = (board: string) => (known.has(board) ? holders.has(board) : !!card.on?.[board]);
+    for (const board of boards(set).filter(b => card.on?.[b.id])) {
+      if (![board.owner, ...board.members].some(person => holders.has(person))) found.push(`card ${card.id} is on board ${board.id}, where nobody who measures it is to share it`);
+    }
     if (card.failure) {
       if (card.until === undefined || card.until >= card.failure.from) found.push(`card ${card.id} fails while it is still measured: the next measurement clears the failure`);
       if (delivering(card.machines[0], card.provider).length > 1) found.push(`card ${card.id}: its first machine measures another ${card.provider} subscription, which its failure may go to`);

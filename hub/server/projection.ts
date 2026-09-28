@@ -65,6 +65,15 @@ export class Projection {
     return {board: found, view: this.hub.directory.view(board), lineup: lineup.map(s => s.id)};
   }
 
+  /**
+   * Whose agents' work the board's history shows, from when and under which names
+   * (Store.workKey): when it changes, all of that history reads otherwise.
+   */
+  workKey(board: string): string {
+    const {store, directory} = this.hub;
+    return store.workKey(board, store.shown(board, directory.view(board).hidden));
+  }
+
   /** The people on a board, by id, with their names: whose each source is, and whose agents it shows. */
   members(board: string): Map<string, string> {
     return new Map(this.hub.directory.members(board).map(m => [m.id, m.name]));

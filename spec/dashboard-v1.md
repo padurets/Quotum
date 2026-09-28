@@ -71,7 +71,7 @@ change as it was.
 | `cadence` | `{id, cadence}` | When a source is measured next, or why, changed. |
 | `mine` | `{sources: string[]}` | Which sources of the board the reader's devices measure changed. |
 | `boards` | `{boards}` | The reader's boards changed: made, deleted, renamed, joined, left. |
-| `history` | `{sources: string[], since}` | These sources have measurements taken at `since` or later that the chart has not shown. |
+| `history` | `{sources: string[], since}` | These sources have measurements taken at `since` or later that the chart has not shown; with `since` 0, all of the board's history reads otherwise: whose agents' work it shows, or under which names, changed (a card hidden or shown, someone joining or leaving, a project or a machine renamed). |
 | `resets` | `{resets, trackers, past}` | The reset trackers' news changed. |
 | `ping` | `{now}` | Every `heartbeatMs`, with the hub's clock. |
 | `bye` | `{reason}` | Last: the hub lets the reader go (see below). |

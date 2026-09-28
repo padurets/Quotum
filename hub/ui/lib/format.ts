@@ -10,6 +10,16 @@ export function num(value: number, digits: 0 | 1 | 2 = 0) {
   return formatter.format(value);
 }
 
+/**
+ * A rate, percent an hour, the same wherever it is told: to a hundredth under 1, where a
+ * tenth would be off by as much as half and the hours foreseen from it would not add up, to
+ * a tenth above; one above 0 too small to read so reads "≈ 0".
+ */
+export const rateText = (value: number) => (value > 0 && value < 0.05 ? '≈ 0' : num(value, value < 1 ? 2 : 1));
+
+/** A share, whole percent, the same wherever it is told: one above 0 that would read 0 reads "< 1". */
+export const shareText = (value: number) => (value > 0 && value < 0.5 ? '< 1' : num(value));
+
 export function duration(ms: number, short = false) {
   const minutes = Math.max(0, Math.round(ms / 60000));
   if (minutes < 1) return t('time.underMinute');
@@ -73,6 +83,21 @@ export function agoChangesAt(time: number | null, now: number): number | null {
     seconds < 45 ? 45 : seconds < 3600 ? Math.min(3600, 60 * Math.round(seconds / 60) + 30) : seconds < 86_400 ? 3600 * (Math.floor(seconds / 3600) + 1) : 86_400 * (Math.floor(seconds / 86_400) + 1);
   return time + (next - 0.5) * 1000;
 }
+
+/**
+ * How long agents worked: minutes within the hour (any work short of a whole minute reads
+ * "< 1", so the parts of a minute's bar do not each read as the whole), hours to a tenth up
+ * to ten, whole hours after that. Never days: "150h" of work is not "6d 6h".
+ */
+export function workHours(ms: number) {
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 60) return t('time.minutes', {n: ms > 0 && ms < 60_000 ? '< 1' : minutes});
+  const hours = ms / 3_600_000;
+  return t('time.hours', {n: hours < 10 ? num(hours, 1) : num(Math.round(hours))});
+}
+
+/** Hours of work foreseen: about so many ("~45m"), and under a minute as it is ("< 1m"), not about that. */
+export const workAbout = (ms: number) => (ms > 0 && ms < 60_000 ? workHours(ms) : t('work.about', {time: workHours(ms)}));
 
 /**
  * How long until something, for a mark or a heading with little room: minutes within the

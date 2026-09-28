@@ -7,7 +7,8 @@ import {fileURLToPath} from 'node:url';
 import {firstSignup, haltRequests, healthy} from './client.js';
 import {SCENES, SETS} from './catalogue.js';
 import {earliest, liveStep, MIN, people, SECOND, type DemoSet} from './model.js';
-import {emailOf, Live, PASSWORD, setUp, type Stand} from './setup.js';
+import {Store} from '../server/store/store.js';
+import {emailOf, Live, PASSWORD, seedWork, setUp, type Stand} from './setup.js';
 import {Trackers} from './trackers.js';
 
 /**
@@ -152,6 +153,14 @@ export class Demo {
 
     await ready(hub, address.base, this.output);
     const stand = await setUp(address.base, set, this.start, SETUP_CODE, () => Date.now(), still);
+    // How agents worked before the demo started goes straight into the running hub's
+    // database (it waits for nothing meanwhile): its requests cannot tell the past.
+    const store = new Store(path.join(this.dir, 'quotum.sqlite'));
+    try {
+      seedWork(store, stand);
+    } finally {
+      store.close();
+    }
     await selfCheck(stand, this.trackers);
 
     const live = new Live(stand, card => liveStep(card), true);

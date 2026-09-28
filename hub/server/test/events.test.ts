@@ -288,14 +288,16 @@ test("the board's own events and each reader's own go apart: its owner and a mem
 
   await h.call('POST', `/api/boards/${team}/shares`, {as: 'alice', body: {source}});
   const [ofAlice, ofBob] = await Promise.all([alice.within(), bob.within()]);
+  // Whose agents' work the board shows changed with it: all of its history reads otherwise.
   assert.deepEqual(
     ofAlice.map(e => e.type),
-    ['card', 'sessions', 'cadence', 'lineup', 'mine'],
+    ['card', 'sessions', 'cadence', 'lineup', 'mine', 'history'],
   );
-  assert.deepEqual(ofAlice.at(-1)!.data, {sources: [source]});
+  assert.deepEqual(ofAlice.at(-2)!.data, {sources: [source]});
+  assert.deepEqual(ofAlice.at(-1)!.data, {sources: [source], since: 0});
   assert.deepEqual(
     ofBob.map(e => e.type),
-    ['card', 'sessions', 'cadence', 'lineup'],
+    ['card', 'sessions', 'cadence', 'lineup', 'history'],
     "not Bob's: no mine for him",
   );
   for (const event of ofBob) assert.ok(!JSON.stringify(event.data).includes('"role"'), 'no role in what the board tells everyone');
@@ -313,13 +315,13 @@ test('a source taken off and back comes back whole, before the lineup; a reader 
   t.after(s.close);
 
   await h.call('DELETE', `/api/boards/${team}/shares/${source}`, {as: 'alice'});
-  assert.deepEqual(await s.types(), ['lineup', 'mine']);
+  assert.deepEqual(await s.types(), ['lineup', 'mine'], 'no history of no sources to read again');
   const later = await reading(h, 'alice', team);
   later.close();
   assert.deepEqual([later.snapshot.sources, later.snapshot.sessions, later.snapshot.cadence], [[], {}, {}]);
 
   await h.call('POST', `/api/boards/${team}/shares`, {as: 'alice', body: {source}});
-  assert.deepEqual(await s.types(), ['card', 'sessions', 'cadence', 'lineup', 'mine'], 'with no measurement in between');
+  assert.deepEqual(await s.types(), ['card', 'sessions', 'cadence', 'lineup', 'mine', 'history'], 'with no measurement in between, its work shown again');
 });
 
 test('a reader coming while changes wait to go out has them in the snapshot and hears of them no more', async t => {
@@ -949,6 +951,37 @@ test('every change a reader sees is told: what each request touches reaches the 
   }
 });
 
+test('all of a board’s history is news when whose agents’ work it shows, or under which names, changes: a card hidden, a project or a machine renamed', async t => {
+  const h = await hub();
+  t.after(() => (letGo(), h.app.close()));
+  const board = await h.person('alice');
+  const secret = await h.token('alice');
+  await h.measure(secret, Date.now() - 10 * MIN);
+  const source = h.store.sources(board)[0].id;
+  // Two lists of a working agent: the time between them is credited, so the laptop and its project worked on the board.
+  const session = {provider: 'codex', account: ACCOUNT, origin: 'app', project: 'quotum', folder: null, startedAt: iso(Date.now() - 5 * MIN), lastWorkedAt: null, working: true};
+  const report = () => h.call('POST', '/v1/sessions', {token: secret, body: {version: 1, agent: 'quotum/0.4.0', machine: h.machine('laptop'), sentAt: iso(Date.now()), sessions: [session]}});
+  await report();
+  await new Promise(resolve => setTimeout(resolve, 5));
+  await report();
+  const laptop = (await h.call('GET', '/api/devices', {as: 'alice'})).body[0].id;
+  const s = await reading(h, 'alice', board);
+  t.after(s.close);
+  const all = {sources: [source], since: 0};
+  const history = async () => (await s.within()).filter(e => e.type === 'history').map(e => e.data);
+
+  await h.call('POST', `/api/boards/${board}/view`, {as: 'alice', body: {hidden: [`source:${source}`]}});
+  assert.deepEqual(await history(), [all], 'a card hidden: its work is off the board');
+  await h.call('POST', `/api/boards/${board}/view`, {as: 'alice', body: {}});
+  assert.deepEqual(await history(), [all], 'and shown again');
+  await h.call('POST', '/api/projects', {as: 'alice', body: {groups: ['quotum'], name: 'Quotum'}});
+  assert.deepEqual(await history(), [all], 'a project renamed');
+  await h.call('POST', `/api/devices/${laptop}`, {as: 'alice', body: {name: 'Book'}});
+  assert.deepEqual(await history(), [all], 'a machine renamed');
+  await h.call('POST', `/api/boards/${board}/view`, {as: 'alice', body: {order: ['history']}});
+  assert.deepEqual(await history(), [], 'the widgets moved: the work it shows is the same');
+});
+
 test('what each change of data touches reaches the boards it shows on: people joining and leaving, subscriptions held and let go, agents gone with their machine, the trackers', async t => {
   const h = await hub();
   t.after(() => (letGo(), h.app.close()));
@@ -991,13 +1024,14 @@ test('what each change of data touches reaches the boards it shows on: people jo
   type Row = [string, () => unknown, string[], string[], string[]];
   const rows: Row[] = [
     ['someone joins a board', () => h.directory.addMember(team, id('carol'), Date.now()), [], [], ['boards']],
-    ['someone leaves it, what they shared left behind for now: they no longer own it there', () => h.directory.removeMember(team, id('bob')), [], ['card'], []],
-    ['what nobody on the board holds leaves it', () => h.store.unshareOrphans(team), [], ['lineup'], []],
+    // Whose agents' work the board shows changes too: its history reads otherwise.
+    ['someone leaves it, what they shared left behind for now: they no longer own it there', () => h.directory.removeMember(team, id('bob')), [], ['card', 'history'], []],
+    ['what nobody on the board holds leaves it, and no source with it', () => h.store.unshareOrphans(team), [], ['lineup'], []],
     [
       'a subscription measured for the first time',
       () => h.measure(desk, Date.now() - MIN, {account: 'c0c0c0c0c0c0c0c0c0c0c0c0', device: 'box'}),
-      // Sent whole as it comes; the page reads its history for the new lineup.
-      ['card', 'sessions', 'cadence', 'lineup', 'mine'],
+      // Sent whole as it comes; the page reads its history for the new lineup, all of it.
+      ['card', 'sessions', 'cadence', 'lineup', 'mine', 'history'],
       [],
       [],
     ],

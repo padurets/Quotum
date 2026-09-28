@@ -314,6 +314,8 @@ test('where the pace leads says when it reads otherwise: its countdown, its tone
     ['runs out along the plan', week(20), DEFAULT_PLAN],
     ['left at the end of the plan', week(38), DEFAULT_PLAN],
     ['a five-hour window', {id: 's', kind: 'session', label: null, used: 70, remaining: 30, resetAt: T0 + 2 * HOUR, minutes: 300}, null],
+    ['used up', week(0), null],
+    ['of no known length', week(50, {minutes: null}), null],
   ];
   for (const [what, live, plan] of cases) {
     const moments = [...Array.from({length: 300}, (_, i) => T0 + i * 1_987_654), ...Array.from({length: 300}, (_, i) => T0 + i * 13_331)];

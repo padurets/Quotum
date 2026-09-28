@@ -309,8 +309,8 @@ tried again like any failure.
 A board shows a session on the card of its subscription, with its project (as its person
 named it in the dashboard, else as reported) and folder, and the name of its machine
 (as its person named it in the dashboard, else as the machine reports it), only to the
-members of a board where the session's person shows that subscription (their personal board, or a shared
-board they are on).
+members of a board the session's person is on (their personal board, or a shared board)
+where that subscription is shown, whoever brought it.
 
 The hub keeps when each session worked, with its machine, subscription, where it runs,
 since when and its project and folder names: each list counts until the next one, for at
@@ -350,11 +350,17 @@ anyone who holds its account, the members of the board see whether it is in use 
 running agents say. About running agents (unless turned
 off): which client, where it runs, since when, whether it works and when it last did,
 and the name of its project (the repository its folder is in, else the folder) and of
-its folder when that differs (unless that is turned off too). The members of a board
-where you show a subscription see these, as they see its limits, with each project under
-the name its person gave it, and with them the name of the machine each agent runs on.
+its folder when that differs (unless that is turned off too). The members of a board you
+are on where a subscription you measure is shown, whoever brought it, see these, as they
+see its limits, with each project under the name its person gave it, and with them the
+name of the machine each agent runs on.
 
 What the hub keeps of running agents: when each worked, with the machine, subscription,
 where it ran, since when and its project and folder names, as long as samples (90 days);
 and the names a person gave or merged their projects under, until they undo it. The
 person whose machines they are sees their projects, and corrects them, in *My machines*.
+The members of a shared board see when and for how long your agents worked on a
+subscription you measure that is shown there, whoever brought it, as precisely as the hub
+credits it (not rounded to the minute), with how many of them worked, by project and by
+machine, from the later of when you joined the board and when the subscription came to
+it; you see all of it on your own board.

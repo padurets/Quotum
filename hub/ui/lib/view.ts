@@ -4,11 +4,19 @@ import {DEFAULT_PLAN, isValidPlan, type WeeklyPlan} from './plan';
 import {windowKey, type View} from './types';
 import {FALLBACK_COLOR, PROVIDERS} from './providers';
 
-/** Widget ids: the chart, the table of every limit, the list of running agents, and a card per source. */
+/** Widget ids: the chart, the table of every limit, how agents worked, the list of running agents, and a card per source. */
 export const HISTORY = 'history';
 export const FORECAST = 'forecast';
+export const ACTIVITY = 'activity';
 export const AGENTS = 'agents';
 export const cardId = (sourceId: string) => `source:${sourceId}`;
+
+/**
+ * The analytics' widgets in the order a board has them until its owner moves them: how
+ * agents worked first, over what is left and the table. A board arranged before one of
+ * them existed gets it by its neighbour here (`arranged`).
+ */
+export const ANALYTICS = [ACTIVITY, HISTORY, FORECAST];
 
 /** Widgets a board goes without until its owner turns them on: the cards already show the agents. */
 const OFF_BY_DEFAULT = [AGENTS];
@@ -18,7 +26,7 @@ const EMPTY: View = {order: [], sizes: {}, names: {}, hidden: [], shown: [], win
 
 /**
  * The grid has twelve columns: a card takes half of it by default, so two stand side by
- * side, and a third at least, so three at most; the chart and the table take all of it.
+ * side, and a third at least, so three at most; the widgets of the analytics take all of it.
  */
 export const COLUMNS = 12;
 export const MIN_SPAN = 4;
@@ -59,6 +67,13 @@ export function arranged(view: View, ids: string[]): string[] {
   return order;
 }
 
+/**
+ * The board's widgets by area, each arranged on its own (`arranged`): the cards and the
+ * list of agents, which are about now, and the analytics under them. A widget new to the
+ * board takes its place among its own area's, never after a card the order put last.
+ */
+export const areas = (view: View, cards: string[]) => ({cards: arranged(view, cards), analytics: arranged(view, ANALYTICS)});
+
 /** A new order of the shown widgets; hidden ones keep theirs after them. */
 export const reordered = (view: View, shown: string[]): View => ({
   ...view,
@@ -72,8 +87,12 @@ export const withHidden = (view: View, id: string, hidden: boolean): View =>
     ? {...view, shown: hidden ? view.shown.filter(other => other !== id) : [...new Set([...view.shown, id])]}
     : {...view, hidden: hidden ? [...new Set([...view.hidden, id])] : view.hidden.filter(other => other !== id)};
 
-/** Columns whose marks already tell the state; the owner can still ask for words. */
-const OFF_BY_DEFAULT_COLUMNS: Record<string, string[]> = {[AGENTS]: ['state']};
+/**
+ * Columns off until the owner turns them on: the agents' state, which their marks already
+ * tell; the table's share of spending during work, which does not fit a widget as wide as
+ * the board beside the rest (see FORECAST_WIDTHS).
+ */
+const OFF_BY_DEFAULT_COLUMNS: Record<string, string[]> = {[AGENTS]: ['state'], [FORECAST]: ['during']};
 const columnOffByDefault = (widget: string, column: string) => OFF_BY_DEFAULT_COLUMNS[widget]?.includes(column) ?? false;
 
 /** Whether a column of a widget's table is shown. */
@@ -98,7 +117,7 @@ export const isWindowHidden = (view: View, sourceId: string, windowId: string) =
  */
 export function boardState(sources: {id: string}[], view: View): 'onboarding' | 'widgets' | 'allHidden' {
   if (!sources.length) return 'onboarding';
-  const widgets = [...sources.map(source => cardId(source.id)), AGENTS, HISTORY, FORECAST];
+  const widgets = [...sources.map(source => cardId(source.id)), AGENTS, ...ANALYTICS];
   return widgets.every(id => isHidden(view, id)) ? 'allHidden' : 'widgets';
 }
 

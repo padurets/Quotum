@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {clip, forecastLine, outlook, spentOf, type Outlook} from '../lib/forecast';
+import {FORECAST_EDGES, FORECAST_WIDTHS, LIVE_COLUMNS, RANGE_COLUMNS, clip, forecastLayout, forecastLine, outlook, outlookChangesAt, spentOf, type ForecastColumn, type Outlook} from '../lib/forecast';
+import {FORECAST, columnShown} from '../lib/view';
 import {DEFAULT_PLAN, type WeeklyPlan} from '../lib/plan';
 import type {Win} from '../lib/types';
 
@@ -128,10 +129,22 @@ test('a window without a forecast says why', () => {
   assert.equal(outlook(week(100, {resetAt: measured + 7 * DAY - 10 * MIN}), measured, measured, DEFAULT_PLAN).key, 'needData');
   assert.deepEqual(outlook(week(0), measured, measured, DEFAULT_PLAN), {key: 'usedUp', tone: 'v-crit'});
   assert.equal(outlook(week(50, {resetAt: null}), measured, measured, null).key, 'none');
-  assert.equal(outlook(week(50), measured, start + 7 * DAY, null).key, 'none', 'the reset has come');
+  assert.equal(outlook(week(50), measured, start + 7 * DAY, null).key, 'awaiting', 'the reset has come, not measured since');
+  assert.equal(outlook(week(0), measured, start + 7 * DAY, null).key, 'awaiting', 'used up before it, not since');
   assert.equal(outlook(undefined, measured, measured, null).key, 'none');
   // Measured by a clock ahead of the page's, after the reset the page has not reached yet.
   assert.equal(outlook(week(50), start + 7 * DAY + MIN, start + 7 * DAY - MIN, null).key, 'none');
+});
+
+test('a used-up window reads otherwise when its reset goes by, and one waiting for a measurement only with one', () => {
+  const measured = start + 3 * DAY;
+  assert.equal(outlookChangesAt(week(0), measured, measured, DEFAULT_PLAN), start + 7 * DAY, 'then it waits for a measurement');
+  assert.equal(outlookChangesAt(week(0, {resetAt: null}), measured, measured, null), null, 'no reset to wait for');
+  // Nothing to foresee (a window of no known length, or measured by a clock ahead, past a reset the page has not reached): it waits all the same.
+  assert.equal(outlookChangesAt(week(50, {minutes: null}), measured, measured, null), start + 7 * DAY);
+  assert.equal(outlookChangesAt(week(50), start + 7 * DAY + MIN, start + 7 * DAY - MIN, null), start + 7 * DAY);
+  assert.equal(outlookChangesAt(week(50, {resetAt: null}), measured, measured, null), null);
+  assert.equal(outlookChangesAt(week(50), measured, start + 7 * DAY, null), null, 'waiting');
 });
 
 test('the deadline is the end of the plan while it runs, else the reset', () => {
@@ -197,4 +210,23 @@ test('no line where the table has no forecast', () => {
   assert.equal(none(week(100, {resetAt: measured + 7 * DAY - 10 * MIN})), null, 'just started');
   assert.equal(none(week(38), measured + 3 * DAY), null, 'past its zero');
   assert.equal(none(week(50, {resetAt: null})), null, 'no reset known');
+});
+
+test('the table stays a table while its chosen columns fit the widget, and becomes a list when they do not', () => {
+  for (const columns of [LIVE_COLUMNS, RANGE_COLUMNS, ['now', 'work'] as const]) {
+    const width = columns.reduce((sum, column) => sum + FORECAST_WIDTHS[column], FORECAST_WIDTHS.limit + FORECAST_EDGES);
+    assert.equal(forecastLayout(columns, width - 1), 'list');
+    assert.equal(forecastLayout(columns, width), 'table');
+  }
+  assert.equal(forecastLayout(['now'], 360), 'table', 'fewer columns, a table on a narrower widget');
+  assert.equal(forecastLayout(LIVE_COLUMNS, 360), 'list');
+  // A widget as wide as the board: the page's content is 1184 pixels, less the panel's border.
+  const view = {order: [], sizes: {}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
+  const shown = (columns: readonly ForecastColumn[]) => columns.filter(column => columnShown(view, FORECAST, column));
+  assert.equal(forecastLayout(shown(LIVE_COLUMNS), 1182), 'table', 'every column on by default, on a widget as wide as the board');
+  // As measured on the board, with the padding of the cells at the table's edges.
+  assert.equal(forecastLayout(shown(LIVE_COLUMNS), 1138), 'table');
+  assert.equal(forecastLayout(shown(LIVE_COLUMNS), 1137), 'list');
+  assert.equal(forecastLayout(shown(RANGE_COLUMNS), 1182), 'table');
+  assert.deepEqual(LIVE_COLUMNS.filter(column => !shown(LIVE_COLUMNS).includes(column)), ['during'], 'the share during work does not fit beside them');
 });

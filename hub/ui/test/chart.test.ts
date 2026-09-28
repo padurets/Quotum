@@ -1,6 +1,9 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {cellLabel, edgeRows, fitting, graphemes, liftOf, shortName, slideOf} from '../components/Chart';
+import {edgeRows, fitting, graphemes, shortName} from '../components/Chart';
+import {slideOf} from '../components/timeAxis';
+import {placeOf} from '../components/Tooltip';
+import {cellLabel} from '../lib/periods';
 import {setLocale} from '../i18n';
 import {preferring} from './browser';
 
@@ -38,15 +41,19 @@ test('a step through time slides the chart in from the side it came from; the cl
   assert.equal(slideOf(live, {from: now - 7 * 24 * hour, end: now, to: now}, 1000), 0, 'another period');
 });
 
-test('a tooltip under a narrow chart rises as far as keeps it in the window, never under the bars, and the same once found again', () => {
-  // Under the plot at 400, 350 tall, in a window 800 tall under bars ending at 60.
-  assert.equal(liftOf(400, 350, 800, 60), 0, 'it fits');
-  assert.equal(liftOf(500, 350, 800, 60), 58, 'its bottom kept 8 above the window’s');
-  assert.equal(liftOf(300, 700, 800, 60), 208, 'taller: higher, still under the bars');
-  assert.equal(liftOf(300, 800, 800, 60), 232, 'too tall to fit: no higher than 8 under the bars');
+test('a chart\'s tooltip stands whole in the window where it can, never under the bars, and the same once found again', () => {
+  // Unraised at 400, 350 tall, in a window 800 tall under bars ending at 60.
+  assert.deepEqual(placeOf(400, 350, 800, 60), {by: 0, room: 392}, 'it fits');
+  assert.deepEqual(placeOf(500, 350, 800, 60), {by: 58, room: 350}, 'its bottom kept 8 above the window’s');
+  assert.deepEqual(placeOf(300, 700, 800, 60), {by: 208, room: 700}, 'taller: higher, still under the bars');
+  assert.deepEqual(placeOf(300, 800, 800, 60), {by: 232, room: 724}, 'too tall to fit: 8 under the bars, cut 8 above the window’s bottom');
+  // Its chart scrolled under bars ending at 114, in a window 640 tall: it comes down to 8
+  // under them, and is cut to what is left below there, not to where it stood hidden.
+  assert.deepEqual(placeOf(-38, 548, 640, 114), {by: -160, room: 510});
+  assert.deepEqual(placeOf(100, 300, 640, 114), {by: -22, room: 510}, 'partly under them');
   // Measured from where it was drawn, raised, it would find less and sink back, then rise
   // again: that is why where it stands unraised is read from the chart.
-  assert.notEqual(liftOf(500 - 58, 350, 800, 60), 58);
+  assert.notDeepEqual(placeOf(500 - 58, 350, 800, 60), placeOf(500, 350, 800, 60));
 });
 
 test('a label at the chart\'s edge keeps as much of a name as fits, an emoji whole', () => {

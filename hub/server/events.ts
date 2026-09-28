@@ -86,6 +86,8 @@ type Watched = {
   lineup: string[];
   /** When each source's parts change by themselves. */
   changes: Map<string, number>;
+  /** Whose agents' work its history shows and under which names (Projection.workKey), as last worked out; null before. */
+  work: string | null;
   deadline: {at: number; cancel: () => void} | null;
   stopRecheck: () => void;
 };
@@ -264,7 +266,7 @@ export class Events implements Touches {
       if (!watched) continue;
       try {
         if (whole.has(id) || sources.has(id)) {
-          const head = this.refresh(watched, whole.has(id), sources.get(id) ?? new Set(), now, lineups);
+          const head = this.refresh(watched, whole.has(id), sources.get(id) ?? new Set(), now, lineups, histories);
           if (!head) continue;
           heads.set(id, head);
         }
@@ -330,9 +332,18 @@ export class Events implements Touches {
   /**
    * The events of one board: its name and view when touched as a whole, then the touched
    * sources, sources new to it first, then its sources when they changed. Null once the
-   * board is gone: its readers are let go.
+   * board is gone: its readers are let go. Touched as a whole, it also says whether whose
+   * agents' work its history shows, or under which names, changed: then all of its
+   * history is news (`histories`), from its start.
    */
-  private refresh(watched: Watched, whole: boolean, touched: Set<string>, now: number, lineups: Map<string, BoardSource[]>): Frame[] | null {
+  private refresh(
+    watched: Watched,
+    whole: boolean,
+    touched: Set<string>,
+    now: number,
+    lineups: Map<string, BoardSource[]>,
+    histories: Map<string, Map<string, number>>,
+  ): Frame[] | null {
     const {projection} = this;
     const lineup = projection.lineup(watched.id);
     lineups.set(watched.id, lineup);
@@ -361,6 +372,9 @@ export class Events implements Touches {
       ids = part.lineup;
       watched.lineup = ids;
       computed = lineup;
+      const work = projection.workKey(watched.id);
+      if (watched.work !== null && watched.work !== work) histories.set(watched.id, new Map(ids.map(id => [id, 0])));
+      watched.work = work;
     }
     if (computed.length) {
       const members = projection.members(watched.id);
@@ -509,6 +523,7 @@ export class Events implements Touches {
         base: new Map(),
         lineup: [],
         changes: new Map(),
+        work: null,
         deadline: null,
         stopRecheck: this.every(this.options.recheckMs, () => this.touchBoards([id])),
       };

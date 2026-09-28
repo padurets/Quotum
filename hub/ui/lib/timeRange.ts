@@ -11,7 +11,7 @@ const DAY = 86_400_000;
 
 /**
  * Whether history on screen is of a selected range (the hub names it `<from>-<to>`), not a
- * period ending now: what the chart and the table show follows the data they have, so the
+ * period ending now: what the analytics show follows the data they have, so the
  * headings of a range never stand over a period's numbers while the next answer loads.
  */
 export const ofTimeRange = (history: {range: string} | null) => !!history && history.range.includes('-');

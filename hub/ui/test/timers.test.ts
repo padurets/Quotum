@@ -23,8 +23,10 @@ const TIMERS = [
   'components/Kit.tsx',
   // The tooltip of a card's dot after a tap, in its `CardMark`.
   'components/SourceCard.tsx',
-  // The chart's tooltip, and holding a press before a drag.
+  // The chart's tooltip after a tap on a label past its edge.
   'components/Chart.tsx',
+  // Holding a press before a drag, on either chart along the analytics' time.
+  'components/timeAxis.ts',
 ];
 
 function sources(dir: string): string[] {

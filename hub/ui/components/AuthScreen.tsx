@@ -52,7 +52,8 @@ export function AuthScreen({
       <form className="auth-card" onSubmit={submit}>
         <Brand />
         <h1>{heading}</h1>
-        {invite && <p className="auth-note">{t('auth.invited', {board: invite.board})}</p>}
+        {/* Signing in from an invitation joins the board at once: what its members will see is told here as on the invitation. */}
+        {invite && <p className="auth-note">{t('invite.text', {board: invite.board})}</p>}
         {note && <p className="auth-note">{note}</p>}
         {canSignUp && !session.signup.first && (
           <Segmented

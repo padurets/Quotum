@@ -1,9 +1,10 @@
+import {createHash} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import {config} from '../config.js';
 import {providers, sourceId, type Provider, type Source} from '../domain/sources.js';
 import {onGrid, series, type Kind, type Measurement, type Sample, type SourceState} from '../domain/quota.js';
 import type {Origin} from '../domain/ingest.js';
-import type {Stretch} from '../domain/work.js';
+import {activity, barOf, seriesWork, union, type Activity, type SeriesWork, type Stretch} from '../domain/work.js';
 import {members, projectGroups, type ProjectGroup} from '../domain/projects.js';
 import {tell, type Touches} from '../touches.js';
 import {migrate} from './schema.js';
@@ -26,7 +27,25 @@ export type HistorySeries = {
   /** How long its last value holds without a newer one before a gap begins. */
   staleAfterMs: number;
   points: (readonly [number, number, number])[];
+  /** How agents worked on its subscription meanwhile; null when the board does not show whose work it is (a hidden card). */
+  work: SeriesWork | null;
 };
+
+/**
+ * How agents worked over a period, as the board shows it (see `Store.shown`): `since`,
+ * since when that is known on the board; `known`, the part of the period that is (null
+ * when none of it is).
+ */
+export type HistoryActivity = Activity & {since: number; known: {from: number; to: number} | null};
+
+/**
+ * Whose work a board shows on each of its subscriptions but those of hidden cards: the
+ * people on the board who hold it, each from when (`from`), and since when the
+ * subscription is on the board (`since`). A shared board shows a holder's work from the
+ * later of their joining it and the subscription coming to it; a personal board shows all
+ * of it.
+ */
+export type Shown = Map<string, {since: number; holders: {user: string; from: number}[]}>;
 
 export type DeviceFailure = {device: string; provider: Provider; error: string; detail: string | null; at: number};
 
@@ -45,6 +64,20 @@ export type SourceEvent =
 const SAME_EVENT_MS = 15 * 60_000;
 /** A drop of at least this many points before the window's reset time is a reset, not a correction. */
 const RESET_DROP = 5;
+/**
+ * The names a board's history is keyed by (`Store.workKey`), for its people (a JSON list,
+ * given twice) and its subscriptions (likewise): each project a person named that worked
+ * on one of them, and each machine that did. It is read with every answer of history and
+ * whenever the hub works out a watched board whole (at least every `recheckMs`), so a
+ * machine's sessions are found by project (schema step 4) rather than read through.
+ * Fields and entries are JSON arrays: names may themselves contain any separators.
+ */
+export const WORK_NAMES =
+  'SELECT json_group_array(json(name)) AS names FROM (' +
+  'SELECT json_array(n.user_id, n.reported, n.name) AS name FROM project_names n WHERE n.user_id IN (SELECT value FROM json_each(?))' +
+  ' AND EXISTS (SELECT 1 FROM devices d JOIN agent_sessions s ON s.device_id = d.id WHERE d.user_id = n.user_id AND s.project = n.reported AND s.source_id IN (SELECT value FROM json_each(?)))' +
+  ' UNION ALL SELECT json_array(d.id, COALESCE(d.label, d.name)) FROM devices d WHERE d.user_id IN (SELECT value FROM json_each(?))' +
+  ' AND EXISTS (SELECT 1 FROM agent_sessions s WHERE s.device_id = d.id AND s.source_id IN (SELECT value FROM json_each(?))) ORDER BY 1)';
 
 type SampleRow = {
   source_id: string;
@@ -152,6 +185,42 @@ export class Store {
     return this.db
       .prepare('SELECT s.id, s.provider, s.account FROM holders h JOIN sources s ON s.id = h.source_id WHERE h.user_id = ? ORDER BY h.since, s.rowid')
       .all(userId) as Source[];
+  }
+
+  /** Whose work a board shows (`Shown`), but for the subscriptions of the cards `hidden` (view ids, `source:<id>`). */
+  shown(board: string, hidden: readonly string[]): Shown {
+    const kind = this.db.prepare('SELECT personal FROM boards WHERE id = ?').get(board) as {personal: number} | undefined;
+    if (!kind) return new Map();
+    const joined = new Map(
+      (this.db.prepare('SELECT user_id, joined_at FROM members WHERE board_id = ?').all(board) as {user_id: string; joined_at: number}[]).map(m => [m.user_id, m.joined_at]),
+    );
+    const sharedAt = new Map(
+      (this.db.prepare('SELECT source_id, shared_at FROM shares WHERE board_id = ?').all(board) as {source_id: string; shared_at: number}[]).map(s => [s.source_id, s.shared_at]),
+    );
+    const shown: Shown = new Map();
+    for (const source of this.sources(board)) {
+      if (hidden.includes(`source:${source.id}`)) continue;
+      const since = kind.personal ? 0 : (sharedAt.get(source.id) ?? 0);
+      const holders = source.holders.filter(user => joined.has(user)).map(user => ({user, from: kind.personal ? 0 : Math.max(joined.get(user)!, since)}));
+      shown.set(source.id, {since, holders});
+    }
+    return shown;
+  }
+
+  /**
+   * What the history of a board's agent work depends on besides the data: its subscriptions,
+   * whose work it shows from when (`shown`), and the names their people gave the projects
+   * and machines that worked on them. A change of any of these asks for the history anew, on
+   * the hub and on the page. A project or machine that never worked on the board's
+   * subscriptions does not; one that worked on them only before the board shows its work
+   * does, as which did is found without reading when (WORK_NAMES).
+   */
+  workKey(board: string, shown: Shown): string {
+    const people = JSON.stringify([...new Set([...shown.values()].flatMap(s => s.holders.map(h => h.user)))].sort());
+    const sources = JSON.stringify([...shown.keys()]);
+    const names = this.db.prepare(WORK_NAMES).get(people, sources, people, sources) as {names: string};
+    const key = JSON.stringify([this.sources(board).map(s => s.id), [...shown].map(([id, s]) => [id, s.since, s.holders]), names.names]);
+    return createHash('sha256').update(key).digest('base64url').slice(0, 16);
   }
 
   holds(userId: string, source: string): boolean {
@@ -360,8 +429,18 @@ export class Store {
     return rows.map(r => ({device: r.device_id, provider: r.provider, error: r.error, detail: r.detail, at: r.at}));
   }
 
-  /** Every source/window series from `from` to `to` on a shared grid, ready for the chart and the table, and what happened meanwhile. */
-  history(board: string, from: number, cellMs: number, to = Number.MAX_SAFE_INTEGER): {series: HistorySeries[]; events: SourceEvent[]} {
+  /**
+   * Every source/window series from `from` to `to` on a shared grid, ready for the chart
+   * and the table, what happened meanwhile, and how the agents the board shows (`shown`)
+   * worked, up to `now` at the latest. A period up to now has no `to`: a sample an agent
+   * whose clock is a little fast dated a few seconds ahead is on the chart all the same.
+   */
+  history(
+    board: string,
+    from: number,
+    cellMs: number,
+    {to = Number.MAX_SAFE_INTEGER, now = Date.now(), shown = this.shown(board, [])}: {to?: number; now?: number; shown?: Shown} = {},
+  ): {series: HistorySeries[]; events: SourceEvent[]; activity: HistoryActivity} {
     const ids = JSON.stringify(this.sources(board).map(s => s.id));
     const states = this.states(board);
     // One window at a time: the primary key (source, window, time) finds just the period,
@@ -400,11 +479,13 @@ export class Store {
       return (source < 0 ? states.length : source) * 100 + (window < 0 ? 99 : window);
     };
 
+    const work = this.work(from, Math.min(to, now), cellMs, shown);
     const lines = [...groups.values()]
       .sort((a, b) => rank(a[0]) - rank(b[0]))
       .map(samples => {
         const last = samples.at(-1)!;
         const {points, ...summary} = series(samples);
+        const source = shown.get(last.sourceId);
         return {
           sourceId: last.sourceId,
           provider: last.provider,
@@ -415,9 +496,55 @@ export class Store {
           staleAfterMs: last.staleAfterMs,
           ...summary,
           points: onGrid(points, cellMs).map(p => [p.at, Math.round(p.remaining * 100) / 100, p.segment] as const),
+          // Spending before the subscription came to the board is not set against work the board does not show.
+          work: source ? seriesWork(samples, work.worked.get(last.sourceId) ?? [], {from: Math.max(work.from, source.since), to: work.to}) : null,
         };
       });
-    return {series: lines, events: [...earlyResets([...groups.values()]), ...this.grants(ids, from, to)].sort((a, b) => a.at - b.at)};
+    return {
+      series: lines,
+      events: [...earlyResets([...groups.values()]), ...this.grants(ids, from, to)].sort((a, b) => a.at - b.at),
+      activity: work.activity,
+    };
+  }
+
+  /**
+   * How the agents a board shows worked from `from` to `to`: the activity, in bars of up
+   * to an hour gathered from the chart's cells `cellMs` long, and when each subscription
+   * had any of them working. What is known begins with the hub keeping it
+   * (`agentWorkSince`) and, on a shared board, the first subscription coming to it.
+   */
+  private work(from: number, to: number, cellMs: number, shown: Shown) {
+    const since = Math.max(this.agentWorkSince(), ...(shown.size ? [Math.min(...[...shown.values()].map(s => s.since))] : []));
+    const known = {from: Math.max(from, since), to};
+    const holders = new Map([...shown].map(([id, s]) => [id, new Map(s.holders.map(h => [h.user, h.from]))]));
+    // Only the work of the people the board shows each subscription for, from when it shows it.
+    const stretches: Stretch[] = [];
+    for (const s of known.to > known.from && shown.size ? this.agentWork(known.from, known.to, [...shown.keys()]) : []) {
+      const after = holders.get(s.source)?.get(s.user);
+      if (after === undefined || s.to <= after) continue;
+      stretches.push(s.from < after ? {...s, from: after} : s);
+    }
+    const bySource = new Map<string, Stretch[]>();
+    for (const s of stretches) {
+      if (!bySource.has(s.source)) bySource.set(s.source, []);
+      bySource.get(s.source)!.push(s);
+    }
+    const devices = [...new Set(stretches.map(s => s.device))];
+    const names = new Map(
+      (
+        this.db.prepare('SELECT id, COALESCE(label, name) AS name FROM devices WHERE id IN (SELECT value FROM json_each(?))').all(JSON.stringify(devices)) as {
+          id: string;
+          name: string;
+        }[]
+      ).map(d => [d.id, d.name]),
+    );
+    const barMs = barOf(cellMs, to - from);
+    const none = {barMs, workMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}};
+    return {
+      ...known,
+      worked: new Map([...bySource].map(([id, list]) => [id, union(list)])),
+      activity: known.to > known.from ? {since, known, ...activity(stretches, known, barMs, names)} : {since, known: null, ...none},
+    };
   }
 
   private grants(ids: string, from: number, to: number): SourceEvent[] {
@@ -480,38 +607,32 @@ export class Store {
 
   /** Every stretch agents worked within [from, to), of the given subscriptions or all, projects named as their people corrected them. */
   agentWork(from: number, to: number, sources?: string[]): Stretch[] {
-    const rows = this.db
-      .prepare(
-"SELECT s.source_id, s.device_id, d.user_id, s.origin, s.started_at, COALESCE(n.name, NULLIF(s.project, '')) AS project," +
-          " NULLIF(s.folder, '') AS folder, max(w.from_at, ?) AS from_at, min(w.to_at, ?) AS to_at" +
-          ' FROM agent_work w JOIN agent_sessions s ON s.id = w.session_id JOIN devices d ON d.id = s.device_id' +
-          ' LEFT JOIN project_names n ON n.user_id = d.user_id AND n.reported = s.project' +
-          ' WHERE w.to_at > ? AND w.from_at < ?' +
-          (sources ? ' AND s.source_id IN (SELECT value FROM json_each(?))' : '') +
-          ' ORDER BY s.id, w.from_at',
-      )
-      .all(from, to, from, to, ...(sources ? [JSON.stringify(sources)] : [])) as {
-      source_id: string;
-      device_id: string;
-      user_id: string;
-      origin: Origin;
-      started_at: number;
-      project: string | null;
-      folder: string | null;
-      from_at: number;
-      to_at: number;
-    }[];
-    return rows.map(r => ({
-      source: r.source_id,
-      device: r.device_id,
-      user: r.user_id,
-      origin: r.origin,
-      project: r.project,
-      folder: r.folder,
-      startedAt: r.started_at,
-      from: r.from_at,
-      to: r.to_at,
-    }));
+    // A month of a busy board is tens of thousands of rows, read as arrays: half the time of objects. The
+    // index on time, even for the order: else a day would go through every stretch the hub keeps.
+    const read = this.db.prepare(
+      'SELECT w.session_id, max(w.from_at, ?), min(w.to_at, ?) FROM agent_work w INDEXED BY agent_work_by_end JOIN agent_sessions s ON s.id = w.session_id' +
+        ' WHERE w.to_at > ? AND w.from_at < ?' +
+        (sources ? ' AND s.source_id IN (SELECT value FROM json_each(?))' : '') +
+        ' ORDER BY w.session_id, w.from_at',
+    );
+    read.setReturnArrays(true);
+    const rows = read.all(from, to, from, to, ...(sources ? [JSON.stringify(sources)] : [])) as unknown as [number, number, number][];
+    // What is said of a session is read once rather than with each of its stretches: that takes most of the time.
+    const sessions = new Map(
+      (
+        this.db
+          .prepare(
+            "SELECT s.id, s.source_id AS source, s.device_id AS device, d.user_id AS user, s.origin, COALESCE(n.name, NULLIF(s.project, '')) AS project," +
+              " NULLIF(s.folder, '') AS folder, s.started_at AS startedAt FROM agent_sessions s JOIN devices d ON d.id = s.device_id" +
+              ' LEFT JOIN project_names n ON n.user_id = d.user_id AND n.reported = s.project WHERE s.id IN (SELECT value FROM json_each(?))',
+          )
+          .all(JSON.stringify([...new Set(rows.map(([id]) => id))])) as ({id: number} & Omit<Stretch, 'session' | 'from' | 'to'>)[]
+      ).map(({id, ...session}) => [id, session]),
+    );
+    return rows.map(([id, start, end]) => {
+      const s = sessions.get(id)!;
+      return {session: id, source: s.source, device: s.device, user: s.user, origin: s.origin, project: s.project, folder: s.folder, startedAt: s.startedAt, from: start, to: end};
+    });
   }
 
   /** The projects a person's machines worked on since `since`, under the names the person gave them. */
@@ -543,15 +664,23 @@ export class Store {
     this.restoreProjects(user, [...reported].filter(r => !name || r === name));
     const give = this.db.prepare('INSERT INTO project_names VALUES (?, ?, ?) ON CONFLICT (user_id, reported) DO UPDATE SET name = excluded.name');
     if (name) for (const r of reported) if (r !== name) give.run(user, r, name);
-    // Their agents are shown under the new names.
-    tell(this.observer, o => o.touchSources(this.held(user).map(s => s.id)));
+    this.renamed(user);
   }
 
   /** Reported names shown under their own name again. */
   restoreProjects(user: string, reported: string[]) {
     const remove = this.db.prepare('DELETE FROM project_names WHERE user_id = ? AND reported = ?');
     for (const r of reported) remove.run(user, r);
-    tell(this.observer, o => o.touchSources(this.held(user).map(s => s.id)));
+    this.renamed(user);
+  }
+
+  /** A person's projects are shown under new names: their agents, and the history of the boards that show them. */
+  private renamed(user: string) {
+    const held = this.held(user).map(s => s.id);
+    tell(this.observer, o => {
+      o.touchSources(held);
+      o.touchBoards([...new Set(held.flatMap(id => this.boardsOf(id)))]);
+    });
   }
 
   /** The names a person gave the projects their machines report: reported → shown. */

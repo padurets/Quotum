@@ -16,7 +16,9 @@ import {Store} from '../../server/store/store.js';
 import type {ResetEvent, ResetProvider} from '../../server/domain/resets.js';
 import {setLocale} from '../../ui/i18n/index.js';
 import {agentRows, byActivity, drawn, folderOf, machinesOf} from '../../ui/lib/agents.js';
-import {outlook, planCell, spentOf} from '../../ui/lib/forecast.js';
+import {LIVE_COLUMNS, forecastLayout, outlook, planCell, spentOf} from '../../ui/lib/forecast.js';
+import {dashOf, lineWork, workNotes} from '../../ui/lib/work.js';
+import {activityEmpty} from '../../ui/lib/activity.js';
 import {chartEvents, chartResets, linesOf} from '../../ui/lib/lines.js';
 import {frameOf, step} from '../../ui/lib/periods.js';
 import {planNote, started} from '../../ui/lib/plan.js';
@@ -25,7 +27,7 @@ import {cadenceOf, dotOf, level, resetLine, titled, windowName} from '../../ui/l
 import {resetLabel, type Resets, type TrackerHealth} from '../../ui/lib/resets.js';
 import {ANALYTICS_KINDS, type History, type LiveSession, type Pace, type View} from '../../ui/lib/types.js';
 import type {Snapshot} from '../../ui/lib/board.js';
-import {AGENTS, boardState, cardId, FORECAST, HISTORY, isHidden, isWindowHidden, planOf} from '../../ui/lib/view.js';
+import {ACTIVITY, AGENTS, boardState, cardId, columnShown, FORECAST, HISTORY, isHidden, isWindowHidden, planOf, spanOf} from '../../ui/lib/view.js';
 import {SCENES, SETS} from '../catalogue.js';
 import {
   awake,
@@ -50,9 +52,10 @@ import {
   type DemoSet,
   type Entry,
   type Machine,
+  type Period,
   type Span,
 } from '../model.js';
-import {Live, setUp, type Stand} from '../setup.js';
+import {Live, seedWork, setUp, type Stand} from '../setup.js';
 import {Trackers} from '../trackers.js';
 
 setLocale('en');
@@ -75,6 +78,7 @@ async function hubFor(trackers: Trackers, scene: string, start: number) {
   const base = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
   return {
     base,
+    store,
     /** One round of the hub's own trackers, as its timer runs it, and what the page reads then. */
     async told(): Promise<Told> {
       await resets.round();
@@ -153,11 +157,12 @@ class Reading {
   }
 
   /** The board's history over `range`: the last 24 hours, as the chart opens, unless another is asked for. */
-  history(board: string, range = '24h'): Promise<History> {
-    const key = `${board} ${range}`;
+  history(board: string, range: Period = '24h'): Promise<History> {
+    const key = `${board} ${JSON.stringify(range)}`;
     if (!this.histories.has(key)) {
       const id = this.stand.boards.get(board)!;
-      this.histories.set(key, this.reader(board).get<History>(`/api/history?range=${range}&board=${encodeURIComponent(id)}`));
+      const period = typeof range === 'string' ? `range=${range}` : `from=${this.stand.start + range.from}&to=${this.stand.start + range.to}`;
+      this.histories.set(key, this.reader(board).get<History>(`/api/history?${period}&board=${encodeURIComponent(id)}`));
     }
     return this.histories.get(key)!;
   }
@@ -215,6 +220,38 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
   }
   if (entry.kind === 'person' || entry.kind === 'board') {
     const overview = await reading.overview(entry.id);
+    if ('tableLayout' in check) {
+      // On a screen wide enough for the whole board: twelve columns of 84 pixels and gaps of 16, less the panel's border.
+      const span = spanOf(overview.view, FORECAST);
+      const columns = LIVE_COLUMNS.filter(column => columnShown(overview.view, FORECAST, column));
+      return {tableLayout: forecastLayout(columns, span * 84 + (span - 1) * 16 - 2)};
+    }
+    if ('activity' in check || 'activityOf' in check || 'activityTotals' in check || 'activityKnownFrom' in check || 'activityEmpty' in check) {
+      if (isHidden(overview.view, ACTIVITY)) return `the activity widget is hidden on the board ${entry.id}`;
+      const {range} = check as unknown as {range: Period};
+      const history = await reading.history(entry.id, range);
+      const {activity} = history;
+      if ('activityEmpty' in check) {
+        const shown = overview.sources.filter(source => !isHidden(overview.view, cardId(source.id))).length;
+        return {activityEmpty: activityEmpty(history, shown)?.key ?? null, range};
+      }
+      const tenth = (ms: number) => Math.round(ms / 360_000) / 10;
+      const cardOf = (source: string) => [...stand.sources].find(([, id]) => id === source)?.[0] ?? source;
+      const named = (by: 'source' | 'project' | 'device') =>
+        Object.fromEntries(activity.by[by].map(g => [by === 'source' ? cardOf(g.key) : String(g.name), tenth(g.ms)]));
+      if ('activity' in check) {
+        const {activity: by} = check as {activity: 'source' | 'project' | 'device'};
+        return {activity: by, range, groups: named(by)};
+      }
+      if ('activityOf' in check) {
+        const {activityOf: name, by} = check as {activityOf: string; by: 'project' | 'device'};
+        return {activityOf: name, by, range, hours: named(by)[name] ?? null};
+      }
+      if ('activityTotals' in check) {
+        return {activityTotals: {work: tenth(activity.workMs), agents: activity.agents, agentTime: tenth(activity.agentMs)}, range};
+      }
+      return {activityKnownFrom: activity.known ? activity.known.from - stand.start : null, range};
+    }
     // A widget hidden on the board shows none of its codes.
     if (('rows' in check || 'agentsOf' in check) && isHidden(overview.view, AGENTS)) return `the table of running agents is hidden on the board ${entry.id}`;
     if ('weeklySeries' in check && isHidden(overview.view, HISTORY)) return `the chart is hidden on the board ${entry.id}`;
@@ -251,7 +288,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
     cadence: cadenceOf(source, now)?.when ?? null,
     why: cadenceOf(source, now)?.why,
   };
-  const id = 'window' in card ? card.window : 'forecast' in card ? card.forecast : null;
+  const id = 'window' in card ? card.window : 'forecast' in card ? card.forecast : 'work' in card ? card.work : null;
   const live = id === null ? undefined : source.windows.find(w => w.id === id);
   if (id !== null && !live) return `no window ${id}`;
   const weekly = planOf(overview.view, source.id);
@@ -285,6 +322,36 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
       tone: ahead.tone,
       spent: spentOf(line).key,
       plan: !plan ? 'none' : !plan.notable ? 'even' : plan.delta >= 0 ? 'behind' : 'ahead',
+    });
+  }
+  if ('work' in card && live) {
+    if (isHidden(overview.view, FORECAST)) return `the table is hidden on the board ${board}`;
+    const history = await reading.history(board, card.range);
+    const line = linesOf(history, overview.sources, overview.view, live.kind).find(l => l.sourceId === source.id && l.windowId === id);
+    if (!line) return `no line of ${id} in the table`;
+    const cells = lineWork(line, typeof card.range !== 'string', live.resetAt, now);
+    if (!cells || !line.work) return `no work of ${id}`;
+    const tenth = (value: number) => Math.round(value * 10) / 10;
+    const hours = (cell: (typeof cells)['work']) => ('value' in cell ? tenth(cell.value / 3_600_000) : 'untilReset' in cell ? 'untilReset' : 'usedUp' in cell ? 'usedUp' : 'outlasts' in cell ? 'outlasts' : undefined);
+    // A column off on the board shows nothing to check.
+    const on = <T,>(column: 'work' | 'perwork' | 'workleft' | 'during', value: T) => (columnShown(overview.view, FORECAST, column) ? value : 'hidden');
+    const {since, share} = workNotes(line.work, history.since);
+    // A dash as its tooltip tells it: a reason about the whole period, since when work is known.
+    const why = (cell: (typeof cells)['work']) => ('none' in cell ? (cell.none === 'unknown' ? 'unknown' : dashOf(cell.none, since).text) : undefined);
+    Object.assign(values, {
+      work: id,
+      range: card.range,
+      hours: on('work', hours(cells.work)),
+      perHour: on('perwork', 'value' in cells.perwork ? tenth(cells.perwork.value) : undefined),
+      left: on('workleft', hours(cells.workleft)),
+      during: on('during', 'value' in cells.during ? Math.round(cells.during.value) : undefined),
+      none: on('work', why(cells.work)),
+      paceWhy: on('perwork', why(cells.perwork)),
+      leftWhy: on('workleft', why(cells.workleft)),
+      duringWhy: on('during', why(cells.during)),
+      since: since === null ? null : since - stand.start,
+      // Told in the tooltips of the pace and the forecast by work: nowhere with both off.
+      lowShare: columnShown(overview.view, FORECAST, 'perwork') || columnShown(overview.view, FORECAST, 'workleft') ? (share === null ? null : Math.round(share)) : 'hidden',
     });
   }
   if ('reachesBack' in card) {
@@ -358,6 +425,7 @@ async function bringUp(t: TestContext, set: DemoSet, start: number) {
     await trackers.close();
   });
   const stand = await setUp(hub.base, set, start, SETUP, () => Date.now());
+  seedWork(hub.store, stand);
   return {stand, trackers, hub};
 }
 

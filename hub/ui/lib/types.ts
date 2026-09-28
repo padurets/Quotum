@@ -59,7 +59,8 @@ export type LiveSession = {
 
 /**
  * How a board is arranged, the same for everyone on it; its owner changes it. Widgets
- * are `source:<id>` cards, the `history` chart and the `forecast` table.
+ * are `source:<id>` cards, the `agents` list, and the analytics: `activity`, the `history`
+ * chart and the `forecast` table.
  */
 export type View = {
   /** Widget ids in order; widgets missing here come after, in the board's order. */
@@ -102,6 +103,47 @@ export type HistorySeries = {
   staleAfterMs: number;
   /** [cell start, remaining percent, line segment] */
   points: [number, number, number][];
+  /** How agents worked on its subscription meanwhile (null for a hidden card). */
+  work: SeriesWork | null;
+};
+
+/**
+ * How agents worked on a window's subscription over a period, and what the window spent
+ * meanwhile, all from `from` on, since when that is known: `ms`, how long any of them
+ * worked (null when nothing of the period is known); `consumed`, what the window spent
+ * over the steps between measurements the hub can prove; `coveredMs`, how long agents
+ * worked during those steps; `duringWork`, what those of the steps agents worked in spent
+ * (an upper bound: a step work touches counts whole).
+ */
+export type SeriesWork = {from: number; ms: number | null; consumed: number; coveredMs: number; duringWork: number};
+
+export type ActivityDimension = 'source' | 'project' | 'device';
+
+/**
+ * A subscription, project or machine agents worked on: how long its own agents worked
+ * (`ms`, overlaps counted once) and its part of each bar's work ([bar start, ms], only
+ * bars it has a part in); `name` is null for a subscription (named from the board) and
+ * for no project. Every one the period has is a group of its own, the longest first.
+ */
+export type ActivityGroup = {key: string; name: string | null; ms: number; cells: [number, number][]};
+
+/**
+ * How the agents the board shows worked over the period: since when that is known on the
+ * board, the part of the period that is (null when none), how long any of them worked, all
+ * of them together, and how many different agents did, in all and bar by bar (`barMs`
+ * long: [bar start, work, agent time, agents], only bars with work), and split by
+ * subscription, project and machine. Each moment is split evenly among the agents working
+ * then, so a bar's parts add up to its work.
+ */
+export type Activity = {
+  since: number;
+  known: {from: number; to: number} | null;
+  barMs: number;
+  workMs: number;
+  agentMs: number;
+  agents: number;
+  cells: [number, number, number, number][];
+  by: Record<ActivityDimension, ActivityGroup[]>;
 };
 
 export type History = {
@@ -118,7 +160,8 @@ export type History = {
   historyStart: number;
   series: HistorySeries[];
   events: SourceEvent[];
-  /** The board has newer data than this answer; a newer answer is ready in this long. */
+  activity: Activity;
+  /** A newer answer is ready in this long: the board has newer data than a costly one, or work up to the end of a range is still to be credited. */
   refreshInMs: number | null;
 };
 
