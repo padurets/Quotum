@@ -6,9 +6,9 @@ fix, open an issue first so we can agree on the approach before you spend time o
 ## Checking a change
 
 ```sh
-cd hub && npm ci && npm run typecheck && npm test && npm run build
-cd agent && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
-node desktop/prepare.mjs && cd desktop && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+(cd hub && npm ci && npm run typecheck && npm test && npm run build)
+(cd agent && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked)
+node desktop/prepare.mjs && (cd desktop && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked)
 ```
 
 CI runs the same on every push, the agent on Linux, macOS and Windows. `npm start` in
@@ -86,6 +86,13 @@ A new state of the board gets an entry in the catalogue, with the codes it shows
 `expect` (the file's header explains them): `npm test` then checks it holds, and it is
 on the board for the next person. `npm run demo -- --still` keeps the board still:
 nothing is measured after the start, and no card goes stale for three hours.
+
+For README screenshots, use `npm run demo -- showcase --still`. Capture the cards and
+the analytics separately in English and Russian, with the same viewport and preferences.
+Keep a weekly window with its plan, forecast and a forecast label at the chart’s right
+edge in view. Update `docs/dashboard.png`, `docs/dashboard.ru.png`, `docs/analytics.png`
+and `docs/analytics.ru.png`, and refresh `docs/social-preview.png` with the current board.
+Use only the demo’s synthetic accounts and machines.
 
 `npm run bench` (after `npm run build`) runs such a still demo, opens Ana's board in
 headless Chrome and holds it to the budget in `hub/bench/budget.ts`: for two minutes

@@ -140,6 +140,8 @@ Codex         api                  idle     started 25m ago · editor
 
 The interface is available in English and Russian.
 
+![Agent activity, remaining limits and spending forecasts](docs/analytics.png)
+
 ## What I paid attention to
 
 It's a pet project, but I wanted a tool I'd be comfortable running on every machine all
@@ -176,12 +178,12 @@ day, not a script thrown together over a weekend. In practice that meant:
   consumption. The agent says when its next measurement is due, so a sparse series isn't
   mistaken for a gap.
 - **Few moving parts.** The agent has nine direct dependencies. The hub is Fastify and
-  the SQLite built into Node, and the UI is plain React with about 100 KB of gzipped
+  the SQLite built into Node, and the UI is plain React with about 140 KB of gzipped
   JavaScript. There is no telemetry; the only requests the hub makes on its own are to
   the two reset trackers (or the mirror you name), every ten minutes, and
   `QUOTUM_RESETS=off` turns them off.
 - **Written down and tested.** The protocol between the agent and the hub is a spec
-  ([spec/ingest-v1.md](spec/ingest-v1.md)). About 180 tests cover the spending rules,
+  ([spec/ingest-v1.md](spec/ingest-v1.md)). Tests cover the spending rules,
   resets, duty, scheduling, permissions, sharing, device pairing, the clients' answers and the
   translations. The TypeScript is strict and the Rust passes `clippy`.
 
@@ -274,6 +276,23 @@ licences) and as a bare binary (`quotum-cli-<platform>`, what the installers and
 [build provenance](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations)
 (`gh attestation verify <file> -R padurets/quotum`). **From source:**
 `cd agent && cargo build --release` (Rust 1.85 or newer) gives `target/release/quotum`.
+
+## Updating
+
+Before replacing the hub, stop it and back up its data directory (the Docker volume
+`quotum` in the examples). Start the new image with that same volume; it migrates the
+database automatically. A rollback needs the old image and the backup from before the
+upgrade: an older hub refuses a newer database layout.
+
+When upgrading from 0.3 to 0.4, subscription measurements, boards and settings remain.
+The old totals of agent work are replaced by per-session history: work time and
+forecasts based on it become available from the upgrade onward. The earlier limit
+history remains on the chart.
+
+On each machine, run `quotum update`, then restart the background agent with
+`quotum stop` and `quotum start` (or restart its service). With npm, use the latest
+`quotum` package. Update the hub first: older agents still deliver measurements to the
+new hub; the new agents follow its measuring schedule.
 
 ## Desktop app
 
@@ -444,29 +463,47 @@ hub's image.
 
 ### Releasing
 
-Set the new version in `agent/Cargo.toml` (`[workspace.package]`), `desktop/Cargo.toml`
-and `hub/package.json`, let the lock files follow, push the commit, then tag it with the release notes as the
-tag's message. A release that brings a new database layout step also adds its hash to
-`RELEASED` in `hub/server/test/schema.test.ts` in that commit: from then on the step
-never changes.
+Prepare a release branch and a pull request into `main`. Set the new version in
+`agent/Cargo.toml` (`[workspace.package]`), `desktop/Cargo.toml` and `hub/package.json`,
+then update their lock files. The npm package template stays at `0.0.0`:
+`npm/build.mjs` sets the published packages' version from the agent's manifest.
+Add the hashes of any new database layout steps to `RELEASED` in
+`hub/server/test/schema.test.ts`; every step shipped by a release is frozen.
+Refresh both README screenshots from the demo board, check the upgrade instructions
+and prepare the release notes outside the repository.
+
+For example, to prepare 0.4.0 on that branch:
 
 ```sh
-(cd hub && npm version 0.2.0 --no-git-tag-version)   # package.json and package-lock.json
-# agent/Cargo.toml and desktop/Cargo.toml: version = "0.2.0"
-(cd agent && cargo check)                            # Cargo.lock
-(cd desktop && cargo metadata --format-version 1 >/dev/null)   # its Cargo.lock, with no build
-git commit -am "Version 0.2.0" && git push origin main
-git tag -a v0.2.0 -F notes.md --cleanup=verbatim   # annotated, its message kept whole: the release notes
-git push origin v0.2.0
+(cd hub && npm version 0.4.0 --no-git-tag-version)
+# agent/Cargo.toml and desktop/Cargo.toml: version = "0.4.0"
+(cd agent && cargo metadata --format-version 1 >/dev/null)
+(cd desktop && cargo metadata --format-version 1 >/dev/null)
+```
+
+Run the [full checks](CONTRIBUTING.md#checking-a-change), including the dashboard
+benchmark, and wait for CI and Desktop checks. The maintainer approves and squash-merges
+the pull request. Wait for the checks on the resulting `main` commit too: that is the
+commit to tag. Only after the maintainer approves that specific release:
+
+```sh
+git fetch origin
+git switch main
+git pull --ff-only origin main
+git tag -a v0.4.0 -F /path/to/release-notes.md --cleanup=verbatim
+git push origin v0.4.0
 ```
 
 [release.yml](.github/workflows/release.yml) refuses a tag that is not annotated or
-whose version differs from any of those six files. It checks everything again, builds
-the agent for every platform, publishes the hub's image and the npm packages, and
-creates the GitHub release with the binaries. npm accepts the packages from that workflow alone,
-without a token (trusted publishing). A new npm package, for a new platform, is
-published once by hand and then trusted with `node npm/trust.mjs`. npm trusts the
-repository by its name: after renaming it, run that again, and it replaces the old trusts.
+whose version differs from any of those six files. The tag's message becomes the
+release notes. The workflow checks the code again, builds the agent for every platform,
+publishes the hub's image and the npm packages, and creates the GitHub release with
+the binaries. A tag publishes packages and images; an npm version cannot be reused.
+
+npm accepts the packages from that workflow alone, without a token (trusted publishing).
+A new npm package, for a new platform, is published once by hand and then trusted with
+`node npm/trust.mjs`. npm trusts the repository by its name: after renaming it, run that
+again, and it replaces the old trusts.
 
 ### Adding a language
 
