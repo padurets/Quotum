@@ -642,3 +642,25 @@ test('the activity example puts two working agents above recent and morning work
     }
   }
 });
+
+test('a silent demo device checks in once even when the first live tick is after the rounded start', async t => {
+  const all = setOf('all');
+  const set: DemoSet = {
+    ...all,
+    entries: all.entries.filter(e => e.kind !== 'card' || e.id === 'refresh-silent')
+      .map(e => e.kind === 'person' ? {...e, expect: e.expect.filter(check => !('project' in check))} : e),
+  };
+  const start = Math.floor(Date.now() / MIN) * MIN;
+  const {stand} = await bringUp(t, set, start);
+  const live = new Live(stand, cadence, true);
+  const source = stand.sources.get('refresh-silent')!;
+  const reader = stand.people.get('ana')!;
+  const state = async () => (await reader.get<Snapshot>('/api/overview')).refresh[source];
+  t.mock.timers.setTime(start + 35 * SECOND);
+  await live.pace(35 * SECOND, Date.now());
+  assert.equal((await state()).unavailable, null);
+  t.mock.timers.setTime(start + MIN);
+  await live.pace(MIN, Date.now());
+  t.mock.timers.setTime(start + 155 * SECOND + 1);
+  assert.equal((await state()).unavailable, 'silent', 'later ticks leave the device silent');
+});

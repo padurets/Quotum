@@ -301,6 +301,7 @@ export class Live {
   /** Up to when each machine has measured. */
   private readonly measured = new Map<string, number>();
   private readonly requested = new Set<string>();
+  private readonly checked = new Set<string>();
   private readonly pending = new Map<string, {at: number; next: number}>();
 
   constructor(
@@ -355,7 +356,7 @@ export class Live {
   async pace(t: number, now: number) {
     const {set, start} = this.stand;
     for (const machine of machines(set)) {
-      const paced = cards(set).filter(card => card.paced && card.machines[0] === machine.id && delivered(card, t) && (card.refresh?.silentAfter === undefined || t <= card.refresh.silentAfter));
+      const paced = cards(set).filter(card => card.paced && card.machines[0] === machine.id && delivered(card, t) && (!card.refresh?.silent || !this.checked.has(card.id)));
       if (!paced.length || !awake(machine, t)) continue;
       const agent = this.stand.agents.get(machine.id)!;
       const asks = paced.map(card => {
@@ -363,6 +364,7 @@ export class Live {
         return {provider, account, accountName, active: false, ...(card.refresh?.minimum ? {minIntervalMs: card.refresh.minimum} : {})};
       });
       const {subscriptions} = await agent.checkin(asks, !paced.some(card => card.refresh?.legacy));
+      for (const card of paced) this.checked.add(card.id);
       for (const [i, card] of paced.entries()) {
         const answer = subscriptions[i];
         if (answer.measure && answer.nextInMs && !this.pending.has(card.id))
@@ -376,7 +378,7 @@ export class Live {
       }
     }
     for (const card of cards(set)) {
-      if (!card.refresh || t < card.refresh.at || this.requested.has(card.id) || card.refresh.legacy || card.refresh.silentAfter !== undefined) continue;
+      if (!card.refresh || t < card.refresh.at || this.requested.has(card.id) || card.refresh.legacy || card.refresh.silent) continue;
       this.requested.add(card.id);
       const person = this.stand.people.get(homeOf(set, card))!;
       await person.post(`/api/boards/${person.personalBoard}/sources/${this.stand.sources.get(card.id)}/refresh`);

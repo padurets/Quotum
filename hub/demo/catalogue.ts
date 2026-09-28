@@ -1052,7 +1052,7 @@ const all: DemoSet = {
       {id: 'refresh-failed', refresh: {at: 15 * SECOND, response: 'failed' as const}, expect: [{refresh: 'failed', unavailable: 'paused', from: MIN, to: 105 * SECOND}]},
       {id: 'refresh-no-result', refresh: {at: 15 * SECOND, response: 'lost' as const}, expect: [{refresh: 'no_result', from: 6 * MIN, to: 6 * MIN + 45 * SECOND}]},
       {id: 'refresh-legacy', refresh: {at: 0, legacy: true}, expect: [{unavailable: 'unsupported', from: 0, to: 4 * MIN}]},
-      {id: 'refresh-silent', refresh: {at: 0, silentAfter: 0}, expect: [{unavailable: 'silent', from: 135 * SECOND, to: 4 * MIN}]},
+      {id: 'refresh-silent', refresh: {at: 0, silent: true}, expect: [{unavailable: 'silent', from: 135 * SECOND, to: 4 * MIN}]},
     ].map(({id, refresh, expect}) => ({
       kind: 'card' as const, id, provider: 'codex' as const, plan: 'pro', machines: [id], history: DAY, paced: true,
       refresh, windows: [weekly({since: -3 * DAY, use: () => 35})],

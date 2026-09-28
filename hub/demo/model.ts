@@ -337,7 +337,7 @@ export type Card = {
    */
   paced?: boolean;
   /** A public refresh request and a controllable stand-in response for the demo. */
-  refresh?: {at: number; minimum?: number; delay?: number; response?: 'lost' | 'failed'; legacy?: boolean; silentAfter?: number};
+  refresh?: {at: number; minimum?: number; delay?: number; response?: 'lost' | 'failed'; legacy?: boolean; silent?: boolean};
   windows: WindowAt[];
   /** Free resets at `t`: how many, and how many expire when (left out when not given). */
   resets?: (t: number) => {available: number; expiring?: {count: number; expiresAt: number | null}[]};
