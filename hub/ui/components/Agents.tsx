@@ -421,11 +421,14 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
     // All but the rows and the last one: the head, a table's headers, the spacing.
     const shell = outer - (items.at(-1)!.getBoundingClientRect().bottom - items[0].getBoundingClientRect().top);
     const footer = layer.at(-1)!.getBoundingClientRect().height;
-    const border = parseFloat(getComputedStyle(layout === 'table' ? items[0].firstElementChild! : items[0]).borderBottomWidth) || 0;
+    // A table's rows share the border between them, so the last one gives up only its half.
+    const border = layout === 'table' ? (parseFloat(getComputedStyle(items[0].firstElementChild!).borderBottomWidth) || 0) / 2 : parseFloat(getComputedStyle(items[0]).borderBottomWidth) || 0;
     let heights: number[];
     if (manual) {
       const at = tops(layer);
       heights = at.slice(0, -1).map((top, i) => at[i + 1] - top);
+      // The first row as it shows: under a table's headers it has half of theirs, which the unseen table has not.
+      if (items.length > 1) heights[0] = items[1].getBoundingClientRect().top - items[0].getBoundingClientRect().top;
     } else {
       // Following its content the widget shows every row, the last one without its border.
       const at = tops(items);
