@@ -4,6 +4,7 @@ use crate::{
     shell::{self, Shell},
     window,
 };
+use std::cell::{Cell, RefCell};
 use std::sync::{
     Arc, Weak,
     atomic::{AtomicIsize, Ordering},
@@ -84,8 +85,8 @@ fn copy_wide<const N: usize>(to: &mut [u16; N], text: &str) {
 struct Context {
     shell: Weak<Shell>,
     queue: Receiver<Command>,
-    icon: HICON,
-    status: Status,
+    icon: Cell<HICON>,
+    status: RefCell<Status>,
     restart: u32,
 }
 
@@ -125,21 +126,21 @@ pub fn create(_: &tauri::AppHandle, shell: &Arc<Shell>) {
             return;
         }
         let status = weak.upgrade().map(|s| s.attention.status()).unwrap_or_default();
-        let mut context = Context {
+        let context = Box::new(Context {
             shell: weak,
             queue: receive,
-            icon: std::ptr::null_mut(),
-            status,
+            icon: Cell::new(std::ptr::null_mut()),
+            status: RefCell::new(status),
             restart: RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()),
-        };
-        SetWindowLongPtrW(control, GWLP_USERDATA, (&mut context as *mut Context) as isize);
+        });
+        SetWindowLongPtrW(control, GWLP_USERDATA, (&*context as *const Context) as isize);
         hwnd.store(control as isize, Ordering::SeqCst);
         if context.shell.upgrade().is_none_or(|s| s.exiting()) {
             DestroyWindow(control);
             hwnd.store(0, Ordering::SeqCst);
             return;
         }
-        update(control, &mut context, true);
+        update(control, &context, true);
         PostMessageW(control, COMMAND, 0, 0);
         let mut message: MSG = std::mem::zeroed();
         while GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) > 0 {
@@ -149,8 +150,8 @@ pub fn create(_: &tauri::AppHandle, shell: &Arc<Shell>) {
         hwnd.store(0, Ordering::SeqCst);
         let data = identity(control);
         Shell_NotifyIconW(NIM_DELETE, &data);
-        if !context.icon.is_null() {
-            DestroyIcon(context.icon);
+        if !context.icon.get().is_null() {
+            DestroyIcon(context.icon.get());
         }
         SetWindowLongPtrW(control, GWLP_USERDATA, 0);
         DestroyWindow(control);
@@ -166,11 +167,13 @@ unsafe fn identity(hwnd: HWND) -> NOTIFYICONDATAW {
     data.uID = ID;
     data
 }
-unsafe fn update(hwnd: HWND, context: &mut Context, add: bool) {
+unsafe fn update(hwnd: HWND, context: &Context, add: bool) {
     let Some(shell) = context.shell.upgrade() else {
         return;
     };
-    let file = shell.hub_dir.parent().unwrap().join("tray").join(format!("{}.ico", context.status.icon()));
+    // Shell calls can dispatch another window message. No mutable borrow survives them.
+    let status = context.status.borrow().clone();
+    let file = shell.hub_dir.parent().unwrap().join("tray").join(format!("{}.ico", status.icon()));
     let icon = unsafe {
         LoadImageW(
             std::ptr::null_mut(),
@@ -188,7 +191,7 @@ unsafe fn update(hwnd: HWND, context: &mut Context, add: bool) {
         data.uFlags |= NIF_ICON;
         data.hIcon = icon;
     }
-    copy_wide(&mut data.szTip, &crate::native_text::tooltip(shell.locale(), &context.status));
+    copy_wide(&mut data.szTip, &crate::native_text::tooltip(shell.locale(), &status));
     unsafe {
         Shell_NotifyIconW(if add { NIM_ADD } else { NIM_MODIFY }, &data);
         if add {
@@ -196,19 +199,19 @@ unsafe fn update(hwnd: HWND, context: &mut Context, add: bool) {
             Shell_NotifyIconW(NIM_SETVERSION, &data);
         }
         if !icon.is_null() {
-            if !context.icon.is_null() {
-                DestroyIcon(context.icon);
+            let old = context.icon.replace(icon);
+            if !old.is_null() {
+                DestroyIcon(old);
             }
-            context.icon = icon;
         }
     }
 }
 unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPARAM) -> LRESULT {
-    let pointer = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut Context;
+    let pointer = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *const Context;
     if pointer.is_null() {
         return unsafe { DefWindowProcW(hwnd, message, w, l) };
     }
-    let context = unsafe { &mut *pointer };
+    let context = unsafe { &*pointer };
     if message == context.restart {
         unsafe {
             update(hwnd, context, true);
@@ -220,7 +223,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
             while let Ok(command) = context.queue.try_recv() {
                 match command {
                     Command::Status(status) => {
-                        context.status = status;
+                        *context.status.borrow_mut() = status;
                         unsafe {
                             update(hwnd, context, false);
                         }
