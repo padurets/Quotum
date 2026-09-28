@@ -237,12 +237,18 @@ export function Widgets({
     current.items = landed(current.origin, current.id, cell, layout.columns);
     show(current);
   };
-  // The page scrolls under a pointer held at the window's edge, so a widget goes where the window does not reach.
+  /** How far down the window the bars stuck over this grid reach: the page's, and over the analytics their head. */
+  const cover = () => {
+    const bars = [document.querySelector<HTMLElement>('.topbar'), grid.current!.closest('.analytics')?.querySelector<HTMLElement>('.analytics-head')];
+    return Math.max(0, ...bars.map(bar => (bar && bar.getBoundingClientRect().top <= parseFloat(getComputedStyle(bar).top) + 1 ? bar.getBoundingClientRect().bottom : 0)));
+  };
+  // The page scrolls under a pointer held at the window's bottom or under the bars at its top, so a widget goes where the window does not reach.
   const frame = () => {
     const current = gesture.current;
     if (!current?.active || (current.kind !== 'drag' && !tall(current.kind))) return;
     const y = current.pointer.y;
-    const scroll = y < EDGE ? y - EDGE : y > innerHeight - EDGE ? y - innerHeight + EDGE : 0;
+    const top = cover() + EDGE;
+    const scroll = y < top ? y - top : y > innerHeight - EDGE ? y - innerHeight + EDGE : 0;
     if (scroll && current.moved) window.scrollBy(0, scroll / 4);
     if (current.kind === 'drag') {
       retarget();
