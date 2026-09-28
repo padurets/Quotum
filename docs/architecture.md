@@ -626,8 +626,10 @@ uses the tray's activation coordinates, or the pointer when its menu gives none.
 anchor determines its monitor and stays put while the content changes height; native
 Wayland leaves positioning to the compositor. Where X11 is available, GTK and Electron
 use that same backend. The controller shows the native loader immediately, then
-hands off to the browser only after its first paint. Both are unmanaged popup
-surfaces, without taskbar entries or ordinary-window placement animations. Request
+hands off to the browser only after its first paint. The loader is a native popup
+with skip-taskbar hints; the browser is an unmanaged popup. While the browser is
+visible, the native owner stays transparent and accepts no pointer input, preserving
+keyboard focus across XWayland. Both close together. Neither is a taskbar entry. Request
 numbers prevent a cancelled or superseded load from appearing later. The loader
 and ready panel both dismiss on an outside click or Escape. Without X11 the app
 keeps the compositor-managed browser path. A direct tray activation toggles it; the blur and activation

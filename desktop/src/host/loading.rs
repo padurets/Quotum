@@ -44,7 +44,7 @@ pub fn init() -> bool {
     gtk::init().is_ok()
 }
 pub fn install(shell: &Arc<Shell>) {
-    let window = gtk::Window::new(gtk::WindowType::Popup);
+    let window = gtk::Window::new(gtk::WindowType::Toplevel);
     window.set_title("Quotum");
     window.set_role("quotum-loading");
     window.set_decorated(false);
@@ -125,6 +125,18 @@ fn pointer() -> Option<(i32, i32)> {
     Some((x, y))
 }
 impl Panel {
+    fn conceal(&mut self) {
+        if let Some(timeout) = self.timeout.take() {
+            timeout.remove();
+        }
+        self.spinner.stop();
+        // Keep the managed focus owner while Chromium's popup is visible. Hiding
+        // it here would restore the previous Wayland app's keyboard focus.
+        if let Some(native) = self.window.window() {
+            native.set_opacity(0.0);
+            native.input_shape_combine_region(&gtk::cairo::Region::create(), 0, 0);
+        }
+    }
     fn hide(&mut self) {
         if let Some(timeout) = self.timeout.take() {
             timeout.remove();
@@ -170,10 +182,16 @@ impl Panel {
             );
         }
         shell.hub_log.line(&format!("app: loading panel {request}"));
-        self.window.show_all();
-        if let Some(native) = self.window.window().and_then(|w| w.downcast::<gdkx11::X11Window>().ok()) {
-            native_window(native.xid(), true);
+        if let Some(native) = self.window.window() {
+            native.set_opacity(1.0);
+            use glib::translate::ToGlibPtr;
+            // NULL restores the full input region (the generated binding is non-null).
+            unsafe {
+                gdk::ffi::gdk_window_input_shape_combine_region(native.to_glib_none().0, std::ptr::null_mut(), 0, 0);
+            }
         }
+        self.window.show_all();
+        self.window.present();
         open_at(shell, Role::Compact, anchor, false, Some(request));
         let weak = Arc::downgrade(shell);
         self.timeout = Some(glib::timeout_add_local_once(Duration::from_secs(15), move || {
@@ -245,7 +263,7 @@ pub fn ready(shell: &Arc<Shell>, gui: Arc<Gui>, request: u64, instance: u64, han
 pub fn visible(shell: &Arc<Shell>, request: u64) {
     dispatch(shell.clone(), move |panel, _| {
         if panel.request == request && panel.intent.wanted() {
-            panel.hide();
+            panel.conceal();
             panel.phase = Phase::Browser;
             native_window(panel.handle, true);
         }
@@ -274,7 +292,7 @@ pub fn failed(shell: &Arc<Shell>, request: u64) {
 
 // A tray popup is an unmanaged X11 surface, as a native menu is. Chromium's
 // normal window mapping overwrites skip-taskbar hints and asks the WM to animate
-// it. Configure before mapping, then focus it after the native loader is hidden.
+// it. Configure before mapping, then focus it after the loader becomes transparent.
 fn native_window(handle: u64, focus: bool) -> bool {
     use glib::translate::*;
     use x11::xlib;

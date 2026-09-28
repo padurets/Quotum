@@ -41,6 +41,16 @@ def check_panel(bus, item, child, root):
     if not display:
         raise RuntimeError('the panel smoke needs Xvfb')
 
+    def property_values(window, name):
+        actual, length, left, data = C.c_ulong(), C.c_ulong(), C.c_ulong(), C.c_void_p()
+        form = C.c_int()
+        x.XGetWindowProperty(display, window, x.XInternAtom(display, name, 0), 0, 32, 0, 0, C.byref(actual), C.byref(form), C.byref(length), C.byref(left), C.byref(data))
+        try:
+            return list(C.cast(data, C.POINTER(C.c_ulong))[:length.value]) if form.value == 32 and data else []
+        finally:
+            if data:
+                x.XFree(data)
+
     def visible(owner):
         parent = C.c_ulong()
         screen = C.c_ulong()
@@ -53,17 +63,11 @@ def check_panel(bus, item, child, root):
             x.XFree(children)
         found = []
         for window in ids:
-            actual, length, left, data = C.c_ulong(), C.c_ulong(), C.c_ulong(), C.c_void_p()
-            form = C.c_int()
-            x.XGetWindowProperty(display, window, x.XInternAtom(display, b'_NET_WM_PID', 0), 0, 1, 0, 0, C.byref(actual), C.byref(form), C.byref(length), C.byref(left), C.byref(data))
-            try:
-                matches = form.value == 32 and length.value == 1 and C.cast(data, C.POINTER(C.c_ulong))[0] == owner
-            finally:
-                if data:
-                    x.XFree(data)
+            matches = property_values(window, b'_NET_WM_PID') == [owner] and property_values(window, b'_NET_WM_WINDOW_OPACITY') != [0]
             if matches:
                 attributes = Attributes()
                 if x.XGetWindowAttributes(display, window, C.byref(attributes)) and attributes.map_state == 2:
+                    attributes.skip_taskbar = x.XInternAtom(display, b'_NET_WM_STATE_SKIP_TASKBAR', 0) in property_values(window, b'_NET_WM_STATE')
                     found.append(attributes)
         return found
 
@@ -91,7 +95,7 @@ def check_panel(bus, item, child, root):
         for cancel in [False, True]:
             activate()
             loader = wait(lambda: visible(child.pid))
-            assert len(loader) == 1 and loader[0].override, 'loader must be a native popup'
+            assert len(loader) == 1 and loader[0].skip_taskbar, 'loader must stay out of the taskbar'
             pid = wait(engine)
             os.kill(pid, signal.SIGSTOP)
             try:
