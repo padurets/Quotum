@@ -339,7 +339,8 @@ export function Widgets({
         if (current.edge) current.edge.px = px;
         const w = nearest(allowed, (px + GAP) / pitch());
         if (current.items.find(item => item.id === id)!.w !== w) {
-          current.items = leftward(kind) ? widenedLeft(origin, id, w, layout.columns) : widened(origin, id, w, layout.columns);
+          // Back at its width, the layout is the one it started from, in its order too, so there is nothing to save.
+          current.items = w === item.w ? origin : leftward(kind) ? widenedLeft(origin, id, w, layout.columns) : widened(origin, id, w, layout.columns);
           changed = true;
         }
         follow();
