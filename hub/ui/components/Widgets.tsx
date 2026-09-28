@@ -344,7 +344,11 @@ export function Widgets({
         }
         follow();
       }
-      if (tall(kind)) changed = aim(current) || changed;
+      if (tall(kind)) {
+        // Only a pointer that has moved scrolls the page: a click on an edge at the window's bottom stays a click.
+        if (!current.frame && Math.hypot(e.clientX - pointer.x, e.clientY - pointer.y) > DRAG_AFTER) current.frame = requestAnimationFrame(frame);
+        changed = aim(current) || changed;
+      }
       if (changed) show(current);
     };
     const up = (e: PointerEvent) => {
@@ -393,7 +397,6 @@ export function Widgets({
     if (kind !== 'drag') {
       document.body.classList.add('is-resizing', `is-resizing-${kind}`);
       setPreview({id, kind, items: origin});
-      if (tall(kind)) current.frame = requestAnimationFrame(frame);
     }
   };
   const press = (id: string) => (event: ReactPointerEvent<HTMLDivElement>) => {
