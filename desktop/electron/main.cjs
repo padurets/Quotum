@@ -17,7 +17,8 @@ const send = message => { if (!channel.destroyed) channel.write(`${JSON.stringif
 const surfaces = new Map();
 let engineConfig;
 let nextInstance = 0;
-const requested = new Set();
+const requested = new Map();
+let focusRole = null;
 let target = 'quotum://localhost/index.html';
 let generation = -1;
 let quitting = false;
@@ -63,7 +64,7 @@ function receive(message) {
     }
     case 'focus':
       if (!['main', 'compact'].includes(message.role)) return finish();
-      openSurface(message.role); break;
+      openSurface(message.role, message.anchor); break;
     case 'panel': {
       const entry = surfaces.get('compact');
       if (!entry || entry.instance !== message.instance || message.generation !== generation) break;
@@ -187,8 +188,8 @@ Promise.all([initialized, app.whenReady()]).then(([config]) => {
   session.defaultSession.setPermissionCheckHandler(() => false);
   session.defaultSession.on('will-download', event => event.preventDefault());
   engineConfig = config;
-  requested.add(config.role ?? 'main');
-  for (const role of requested) openSurface(role);
+  const opening = new Map([[config.role ?? 'main', config.anchor], ...requested]);
+  for (const [role, anchor] of opening) openSurface(role, anchor);
   requested.clear();
 });
 function resizePanel(entry) {
@@ -198,11 +199,23 @@ function resizePanel(entry) {
   const height = Math.max(100, Math.min(Math.ceil(entry.height), 600, Math.floor(area.height * 0.8)));
   const [currentWidth, currentHeight] = entry.window.getContentSize();
   if (currentWidth !== width || currentHeight !== height) entry.window.setContentSize(width, height);
+  placePanel(entry);
 }
-function openSurface(role) {
-  if (!engineConfig) { requested.add(role); return; }
+function placePanel(entry) {
+  const point = entry.anchor;
+  // Wayland owns placement. A menu without activation coordinates does too.
+  if (process.env?.WAYLAND_DISPLAY || !Array.isArray(point) || point.length !== 2 || !point.every(Number.isInteger)) return;
+  const area = screen.getDisplayNearestPoint({x: point[0], y: point[1]}).workArea;
+  const bounds = entry.window.getBounds();
+  const x = Math.max(area.x, Math.min(point[0] - bounds.width, area.x + area.width - bounds.width));
+  const y = Math.max(area.y, Math.min(point[1] - bounds.height, area.y + area.height - bounds.height));
+  if (bounds.x !== x || bounds.y !== y) entry.window.setPosition(x, y);
+}
+function openSurface(role, anchor) {
+  if (!engineConfig) { requested.set(role, anchor); return; }
+  focusRole = role;
   const existing = surfaces.get(role);
-  if (existing && !existing.window.isDestroyed()) { if (existing.window.isMinimized()) existing.window.restore(); existing.window.show(); existing.window.focus(); return; }
+  if (existing && !existing.window.isDestroyed()) { if (existing.window.isMinimized()) existing.window.restore(); existing.window.show(); existing.window.focus(); if (role === 'compact' && anchor) { existing.anchor = anchor; placePanel(existing); } return; }
   const config = engineConfig;
   const compact = role === 'compact';
   let loaded = false;
@@ -225,14 +238,16 @@ function openSurface(role) {
       devTools: config.inspect === true, spellcheck: false, navigateOnDragDrop: false,
     },
   });
-  const entry = {window, role, instance: ++nextInstance, height: 180};
+  const entry = {window, role, instance: ++nextInstance, height: 180, anchor};
   surfaces.set(role, entry);
   send({type: 'surface', role, instance: entry.instance, open: true});
   window.setMenu(null);
   if (compact) { window.on('blur', () => { if (revealed && !quitting) window.close(); }); window.on('move', () => resizePanel(entry)); }
   window.once('ready-to-show', () => {
     if (quitting) return;
-    window.show(); revealed = true;
+    if (compact) resizePanel(entry);
+    if (focusRole === role) window.show(); else window.showInactive();
+    revealed = true;
     if (loaded && !compact) send({type: 'loaded', url: window.webContents.getURL()});
     scheduleGraphics();
   });

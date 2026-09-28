@@ -43,7 +43,8 @@ async function mainProcess() {
     show() {}
     focus() {}
     close() { this.emit('close'); this.destroyed = true; this.emit('closed'); }
-    getBounds() { return {x: 0, y: 0, width: this.size[0], height: this.size[1]}; }
+    getBounds() { return {x: this.position?.[0] ?? 0, y: this.position?.[1] ?? 0, width: this.size[0], height: this.size[1]}; }
+    setPosition(x, y) { this.position = [x, y]; }
     getContentSize() { return this.size; }
     setContentSize(w, h) { this.size = [w, h]; }
     loadURL(url) { navigations.push(url); return new Promise(() => {}); }
@@ -54,7 +55,7 @@ async function mainProcess() {
         app, BrowserWindow, ipcMain: {handle(_, handler) { invoke = handler; }, on() {}},
         protocol: {registerSchemesAsPrivileged() {}, handle() {}},
         session: {defaultSession: {setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, on() {}}},
-        screen: {getAllDisplays: () => [], getDisplayMatching: () => ({workArea: {width: 800, height: 600}})},
+        screen: {getAllDisplays: () => [], getDisplayMatching: () => ({workArea: {x: 0, y: 0, width: 800, height: 600}}), getDisplayNearestPoint: () => ({workArea: {x: 0, y: 0, width: 800, height: 600}})},
       };
       if (name === 'node:net') return {Socket: class extends EventEmitter {
         constructor() { super(); channel = this; }
@@ -187,4 +188,17 @@ test('two surfaces keep separate geometry and reject commands from subframes or 
   main.deliver({type: 'panel', instance: 2, generation: 1, action: 'close'});
   assert.equal(reopened.destroyed, false);
   assert.equal(board.destroyed, false);
+});
+
+
+test('activation coordinates keep the compact surface inside its work area', async () => {
+  const main = await mainProcess();
+  main.deliver({type: 'state', generation: 1, url: hub});
+  main.deliver({type: 'focus', role: 'compact', anchor: [790, 590]});
+  const panel = main.windows.at(-1);
+  panel.emit('ready-to-show');
+  assert.deepEqual(panel.position, [390, 410]);
+  main.deliver({type: 'panel', instance: 2, generation: 1, action: 'height', height: 1000});
+  assert.deepEqual(panel.size, [400, 480]);
+  assert.deepEqual(panel.position, [390, 110]);
 });

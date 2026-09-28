@@ -37,6 +37,7 @@ struct Gui {
     writer: Mutex<UnixStream>,
     pid: u32,
     initial: window::Role,
+    anchor: Option<(i32, i32)>,
     windows: Mutex<std::collections::BTreeMap<window::Role, u64>>,
 }
 impl Gui {
@@ -194,6 +195,9 @@ pub fn open_panel(shell: &Arc<Shell>) {
     open_role(shell, window::Role::Compact);
 }
 fn open_role(shell: &Arc<Shell>, role: window::Role) {
+    open_at(shell, role, None);
+}
+fn open_at(shell: &Arc<Shell>, role: window::Role, anchor: Option<(i32, i32)>) {
     let opening = window::opening(shell);
     let shell = shell.clone();
     thread::spawn(move || {
@@ -204,10 +208,10 @@ fn open_role(shell: &Arc<Shell>, role: window::Role) {
         }
         let gui = shell.host.gui.lock().unwrap_or_else(|e| e.into_inner()).clone();
         if let Some(gui) = gui {
-            let _ = gui.send(&json!({"type":"focus", "role":role}));
+            let _ = gui.send(&json!({"type":"focus", "role":role, "anchor":anchor}));
             return;
         }
-        if let Err(e) = launch(&shell, role) {
+        if let Err(e) = launch(&shell, role, anchor) {
             shell.hub_log.line(&format!("app: the Chromium window did not open: {e}"));
             if shell.smoke.is_some() {
                 smoke::fail("the Chromium window did not open");
@@ -216,7 +220,7 @@ fn open_role(shell: &Arc<Shell>, role: window::Role) {
     });
 }
 
-fn launch(shell: &Arc<Shell>, role: window::Role) -> io::Result<()> {
+fn launch(shell: &Arc<Shell>, role: window::Role, anchor: Option<(i32, i32)>) -> io::Result<()> {
     let (parent, child) = UnixStream::pair()?;
     parent.set_write_timeout(Some(Duration::from_secs(2)))?;
     let reader = parent.try_clone()?;
@@ -265,7 +269,13 @@ fn launch(shell: &Arc<Shell>, role: window::Role) -> io::Result<()> {
     }
     let mut process = command.spawn()?;
     drop(child);
-    let gui = Arc::new(Gui { writer: Mutex::new(parent), pid: process.id(), initial: role, windows: Mutex::default() });
+    let gui = Arc::new(Gui {
+        writer: Mutex::new(parent),
+        pid: process.id(),
+        initial: role,
+        anchor,
+        windows: Mutex::default(),
+    });
     *shell.host.gui.lock().unwrap_or_else(|e| e.into_inner()) = Some(gui.clone());
     shell.hub_log.line(&format!("app: Chromium starts (pid {})", gui.pid));
     let logging = shell.clone();
@@ -348,7 +358,7 @@ fn read_messages(shell: &Arc<Shell>, gui: &Arc<Gui>, socket: UnixStream) {
         };
         match message {
             Message::Ready => {
-                let _ = gui.send(&json!({"type":"init", "role": gui.initial, "inspect": shell.host.inspector.is_some(), "profile": shell.dirs.webview.clone().unwrap_or_else(|| shell.dirs.data.join("chromium")), "geometry": shell.dirs.data.join("window.json")}));
+                let _ = gui.send(&json!({"type":"init", "role": gui.initial, "anchor": gui.anchor, "inspect": shell.host.inspector.is_some(), "profile": shell.dirs.webview.clone().unwrap_or_else(|| shell.dirs.data.join("chromium")), "geometry": shell.dirs.data.join("window.json")}));
                 send_state(shell, gui, false);
             }
             Message::Surface { role, instance, open } => {
@@ -532,8 +542,8 @@ impl ksni::Tray for Tray {
             ..Default::default()
         }
     }
-    fn activate(&mut self, _: i32, _: i32) {
-        open_panel(&self.shell);
+    fn activate(&mut self, x: i32, y: i32) {
+        open_at(&self.shell, window::Role::Compact, Some((x, y)));
     }
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
         let locale = self.shell.locale();
