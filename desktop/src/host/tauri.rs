@@ -15,9 +15,10 @@ use tauri::{AppHandle, Manager, RunEvent};
 use tauri_plugin_autostart::ManagerExt;
 pub struct Host {
     pub app: AppHandle,
-    pub navigation: Mutex<window::Navigation>,
+    pub tray: Mutex<Option<crate::tray::Handle>>,
+    pub navigation: Mutex<std::collections::BTreeMap<window::Role, window::Navigation>>,
     /// Where the board in the window hears the app's state (`watch_state`).
-    pub watching: Mutex<Option<tauri::ipc::Channel<serde_json::Value>>>,
+    pub watching: Mutex<std::collections::BTreeMap<window::Role, (u64, tauri::ipc::Channel<serde_json::Value>)>>,
 }
 pub fn run(args: Args) {
     // No inherited debugging listeners in a packaged application.
@@ -40,7 +41,12 @@ pub fn run(args: Args) {
                 }
             }))
             // Restore while hidden, then fit the window to the current work area.
-            .plugin(tauri_plugin_window_state::Builder::default().skip_initial_state(window::LABEL).build());
+            .plugin(
+                tauri_plugin_window_state::Builder::default()
+                    .skip_initial_state(window::LABEL)
+                    .with_denylist(&["compact"])
+                    .build(),
+            );
     }
     let app = builder
         // Its JavaScript API is not given to any page: the app itself turns it on and off.
@@ -48,11 +54,15 @@ pub fn run(args: Args) {
         .invoke_handler(tauri::generate_handler![
             tauri_ipc::app_state,
             tauri_ipc::save_settings,
+            tauri_ipc::save_desktop_settings,
             tauri_ipc::take_over,
             tauri_ipc::set_autostart,
             tauri_ipc::reenter,
             tauri_ipc::quit,
-            tauri_ipc::watch_state
+            tauri_ipc::watch_state,
+            tauri_ipc::open_main,
+            tauri_ipc::close_panel,
+            tauri_ipc::report_panel_height
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -75,7 +85,12 @@ pub fn run(args: Args) {
                 hub_dir,
                 smoke.map(smoke::Smoke::new),
                 lock,
-                Host { app: handle.clone(), navigation: Mutex::default(), watching: Mutex::default() },
+                Host {
+                    app: handle.clone(),
+                    tray: Mutex::default(),
+                    navigation: Mutex::default(),
+                    watching: Mutex::default(),
+                },
             ));
             app.manage(shell.clone());
             app.add_capability(tauri_ipc::own_capability())?;
@@ -123,11 +138,17 @@ pub fn run(args: Args) {
 }
 
 pub fn grant_port(shell: &Shell, port: u16) {
+    if let Err(e) = shell.host.app.add_capability(tauri_ipc::panel_capability(port)) {
+        shell.hub_log.line(&format!("app: compact capability failed: {e}"));
+    }
     if let Err(e) = shell.host.app.add_capability(tauri_ipc::hub_capability(port)) {
         shell.hub_log.line(&format!("app: the board on port {port} gets no commands: {e}"));
     }
 }
 pub fn exit(shell: &Arc<Shell>, from_exit_event: bool) {
+    if let Some(tray) = shell.host.tray.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        tray.stop();
+    }
     for (_, window) in shell.host.app.webview_windows() {
         let _ = window.destroy();
     }
@@ -143,4 +164,12 @@ pub fn set_autostart(shell: &Shell, on: bool) -> Result<(), String> {
     (if on { launch.enable() } else { launch.disable() }).map_err(|e| e.to_string())
 }
 pub use crate::tauri_ipc::push_state;
-pub use crate::tauri_window::{close, follow, is_open, leave, open, reenter};
+pub use crate::tauri_window::{
+    close, close_panel, follow, is_open, leave, open, open_main_from_panel, open_panel, panel_height, reenter_role,
+};
+
+pub fn attention_changed(shell: &Arc<Shell>, status: &crate::attention::Status) {
+    if let Some(tray) = shell.host.tray.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        tray.send(crate::tray::Command::Status(status.clone()));
+    }
+}

@@ -10,6 +10,30 @@ use url::Url;
 use crate::hub::HubState;
 use crate::{agent, shell::Shell};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    Main,
+    Compact,
+}
+#[cfg(not(target_os = "linux"))]
+impl Role {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Main => "main",
+            Self::Compact => "compact",
+        }
+    }
+}
+#[cfg(not(target_os = "linux"))]
+pub fn panel_target(state: &HubState) -> Url {
+    let mut url = target(state);
+    if matches!(state, HubState::Ready(_)) {
+        url.query_pairs_mut().append_pair("view", "compact");
+    }
+    url
+}
+
 /// An explicit request counts as foreground while its native window is being created.
 #[derive(Default)]
 pub struct OpenIntent(AtomicUsize);
@@ -140,7 +164,7 @@ pub fn guard(url: &Url, state: &HubState) -> bool {
     matches!(state, HubState::Ready(ready) if same_origin(url, &ready.origin()))
 }
 
-pub use crate::host::{close, follow, is_open, leave, open, reenter};
+pub use crate::host::{close, follow, is_open, leave, open};
 
 #[cfg(test)]
 mod tests {

@@ -1,7 +1,9 @@
 //! The machine controller is independent of the window engine.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod agent;
+mod attention;
 mod autostart;
+mod desktop_settings;
 mod files;
 #[cfg(target_os = "linux")]
 #[path = "host/linux.rs"]
@@ -11,6 +13,7 @@ mod host;
 mod host;
 mod hub;
 mod ipc;
+mod native_text;
 mod notifier;
 mod settings;
 mod shell;

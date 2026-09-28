@@ -14,12 +14,13 @@ protocol.registerSchemesAsPrivileged([{scheme: 'quotum', privileges: {standard: 
 const channel = new net.Socket({fd: 3, readable: true, writable: true});
 channel.setEncoding('utf8');
 const send = message => { if (!channel.destroyed) channel.write(`${JSON.stringify(message)}\n`); };
-let window;
+const surfaces = new Map();
+let engineConfig;
+let nextInstance = 0;
+const requested = new Set();
 let target = 'quotum://localhost/index.html';
 let generation = -1;
 let quitting = false;
-let loaded = false;
-let revealed = false;
 let buffer = '';
 let nextId = 0;
 let initialize;
@@ -55,21 +56,30 @@ function receive(message) {
       generation = message.generation;
       target = message.url;
       // getURL() is the last committed document; an older navigation may be pending.
-      if (window && (message.force || changed)) navigate(target);
+      if (message.force || changed) for (const entry of surfaces.values()) navigate(entry);
       break;
     }
     case 'focus':
-      if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); }
+      if (!['main', 'compact'].includes(message.role)) return finish();
+      openSurface(message.role); break;
+    case 'panel': {
+      const entry = surfaces.get('compact');
+      if (!entry || entry.instance !== message.instance || message.generation !== generation) break;
+      if (message.action === 'close') entry.window.close();
+      if (message.action === 'main') { openSurface('main'); entry.window.close(); }
+      if (message.action === 'height' && Number.isFinite(message.height) && message.height > 0 && message.height <= 100000) { entry.height = message.height; resizePanel(entry); }
       break;
+    }
     case 'leave':
       target = 'quotum://localhost/index.html#quit';
-      if (window) navigate(target);
+      for (const entry of surfaces.values()) navigate(entry);
       break;
     case 'app_state':
       // The app's state, to the board of the hub's current start only, in the window's main frame.
-      if (window && message.generation === generation) {
+      for (const entry of surfaces.values()) if (message.generation === generation) {
+        const window = entry.window;
         try {
-          if (policy.mayInvoke(window.webContents.mainFrame.url, target, 'app_state')) window.webContents.send('quotum:state', message.state);
+          if (policy.mayInvoke(window.webContents.mainFrame.url, target, 'app_state', entry.role)) window.webContents.send('quotum:state', message.state);
         } catch {
           // The page's renderer is gone: nobody to tell, and no fault of the app's. A page loaded again reads the state itself.
         }
@@ -80,7 +90,8 @@ function receive(message) {
       const waiter = pending.get(message.id);
       if (waiter) {
         pending.delete(message.id); clearTimeout(waiter.timer);
-        if (message.error) waiter.reject(new Error(message.error)); else waiter.resolve(message.value);
+        if (surfaces.get(waiter.entry.role) !== waiter.entry || generation !== waiter.generation) waiter.reject(new Error('stale window'));
+        else if (message.error) waiter.reject(new Error(message.error)); else waiter.resolve(message.value);
       }
       break;
     }
@@ -91,7 +102,14 @@ function belongs(url, destination) {
   if (policy.origin(url) !== policy.origin(destination)) return false;
   return policy.origin(destination) !== policy.OWN || new URL(url).pathname === new URL(destination).pathname;
 }
-function navigate(url) {
+function destination(role) {
+  const url = new URL(target);
+  if (role === 'compact' && url.protocol === 'http:') url.searchParams.set('view', 'compact');
+  return url.href;
+}
+function navigate(entry) {
+  const url = destination(entry.role);
+  const window = entry.window;
   // Error messages can include the entry key. Log only an error code, never the URL.
   window.loadURL(url).catch(error => {
     if (!quitting && error.code !== 'ERR_ABORTED') send({type: 'fault', process: 'navigation', reason: error.code || 'load failed'});
@@ -99,16 +117,16 @@ function navigate(url) {
 }
 
 ipcMain.handle('quotum:invoke', (event, command, args) => {
-  if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || !policy.mayInvoke(event.senderFrame.url, target, command)) throw new Error('not the board of the running hub');
+  const entry = [...surfaces.values()].find(e => event.sender === e.window.webContents);
+  if (!entry || event.senderFrame !== entry.window.webContents.mainFrame || !policy.mayInvoke(event.senderFrame.url, target, command, entry.role)) throw new Error('not the board of the running hub');
   if (pending.size >= 16) throw new Error('too many pending app commands');
   const request = {command};
-  if (command === 'save_settings' || command === 'set_autostart') request.args = args;
-  const message = {type: 'request', id: ++nextId, origin: event.senderFrame.url, request};
+  if (['save_settings', 'save_desktop_settings', 'set_autostart', 'report_panel_height'].includes(command)) request.args = args;
+  const message = {type: 'request', id: ++nextId, origin: event.senderFrame.url, role: entry.role, instance: entry.instance, generation, request};
   if (Buffer.byteLength(JSON.stringify(message)) > 60000) throw new Error('app command too large');
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => { pending.delete(message.id); reject(new Error('app command timed out')); }, 60000);
-    pending.set(message.id, {resolve, reject, timer});
-    send(message);
+    pending.set(message.id, {resolve, reject, timer, entry, generation}); send(message);
   });
 });
 // Observability stays in the private transport; the page gets no extra command.
@@ -120,7 +138,7 @@ function scheduleGraphics() {
   graphicsTimer.unref();
 }
 function reportGraphics() {
-  if (!window || quitting) return;
+  if (!surfaces.size || quitting) return;
   // Read Chromium's cached policy. Routine logging needs no device enumeration or
   // subscription that could do work again whenever GPU information changes.
   const features = app.getGPUFeatureStatus();
@@ -133,7 +151,8 @@ function reportGraphics() {
   if (text !== previousGraphics) { previousGraphics = text; send(message); }
 }
 ipcMain.on('quotum:renderer-sandbox', (event, sandboxed) => {
-  if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) return;
+  const entry = [...surfaces.values()].find(e => event.sender === e.window.webContents);
+  if (!entry || event.senderFrame !== entry.window.webContents.mainFrame) return;
   if (sandboxed !== true) { send({type: 'fault', process: 'renderer', reason: 'sandbox disabled'}); app.exit(1); }
 });
 app.on('child-process-gone', (_, details) => {
@@ -165,14 +184,37 @@ Promise.all([initialized, app.whenReady()]).then(([config]) => {
   session.defaultSession.setPermissionRequestHandler((_, __, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
   session.defaultSession.on('will-download', event => event.preventDefault());
+  engineConfig = config;
+  requested.add(config.role ?? 'main');
+  for (const role of requested) openSurface(role);
+  requested.clear();
+});
+function resizePanel(entry) {
+  if (entry.window.isDestroyed()) return;
+  const area = screen.getDisplayMatching(entry.window.getBounds()).workArea;
+  const width = Math.min(400, area.width);
+  const height = Math.max(100, Math.min(Math.ceil(entry.height), 600, Math.floor(area.height * 0.8)));
+  const [currentWidth, currentHeight] = entry.window.getContentSize();
+  if (currentWidth !== width || currentHeight !== height) entry.window.setContentSize(width, height);
+}
+function openSurface(role) {
+  if (!engineConfig) { requested.add(role); return; }
+  const existing = surfaces.get(role);
+  if (existing && !existing.window.isDestroyed()) { if (existing.window.isMinimized()) existing.window.restore(); existing.window.show(); existing.window.focus(); return; }
+  const config = engineConfig;
+  const compact = role === 'compact';
+  let loaded = false;
+  let revealed = false;
   let geometry = {};
   try {
+    if (compact) throw new Error('panel geometry is temporary');
     const saved = JSON.parse(fs.readFileSync(config.geometry, 'utf8'));
     const {x, y, width, height} = saved;
     if ([x, y, width, height].every(Number.isInteger) && width >= 480 && height >= 400 && width <= 16384 && height <= 16384 && screen.getAllDisplays().some(({workArea: a}) => x < a.x + a.width && x + width > a.x && y < a.y + a.height && y + 40 > a.y)) geometry = {x, y, width, height};
   } catch {}
-  window = new BrowserWindow({
-    title: 'Quotum', width: 1280, height: 800, ...geometry, minWidth: 480, minHeight: 400,
+  const window = new BrowserWindow({
+    title: 'Quotum', width: compact ? 400 : 1280, height: compact ? 180 : 800, ...geometry, minWidth: compact ? 160 : 480, minHeight: compact ? 100 : 400,
+    alwaysOnTop: compact, skipTaskbar: compact, resizable: !compact,
     backgroundColor: '#0b0b0e', show: false, autoHideMenuBar: true,
     icon: path.join(__dirname, '..', 'icon.png'),
     webPreferences: {
@@ -181,11 +223,15 @@ Promise.all([initialized, app.whenReady()]).then(([config]) => {
       devTools: config.inspect === true, spellcheck: false, navigateOnDragDrop: false,
     },
   });
+  const entry = {window, role, instance: ++nextInstance, height: 180};
+  surfaces.set(role, entry);
+  send({type: 'surface', role, instance: entry.instance, open: true});
   window.setMenu(null);
+  if (compact) { window.on('blur', () => { if (revealed && !quitting) window.close(); }); window.on('move', () => resizePanel(entry)); }
   window.once('ready-to-show', () => {
     if (quitting) return;
     window.show(); revealed = true;
-    if (loaded) send({type: 'loaded', url: window.webContents.getURL()});
+    if (loaded && !compact) send({type: 'loaded', url: window.webContents.getURL()});
     scheduleGraphics();
   });
   const contents = window.webContents;
@@ -200,15 +246,19 @@ Promise.all([initialized, app.whenReady()]).then(([config]) => {
   contents.on('will-attach-webview', event => event.preventDefault());
   contents.on('render-process-gone', (_, details) => { if (!['clean-exit', 'killed'].includes(details.reason)) send({type: 'fault', process: 'renderer', reason: details.reason}); });
   contents.on('did-finish-load', () => {
-    if (!quitting && !belongs(contents.getURL(), target)) { navigate(target); return; }
+    if (!quitting && !belongs(contents.getURL(), target)) { navigate(entry); return; }
     loaded = true;
-    if (revealed) send({type: 'loaded', url: contents.getURL()});
+    if (revealed && !compact) send({type: 'loaded', url: contents.getURL()});
   });
   window.on('close', () => {
-    if (loaded) {
+    if (loaded && !compact) {
       try { fs.writeFileSync(`${config.geometry}.new`, JSON.stringify(window.getNormalBounds())); fs.renameSync(`${config.geometry}.new`, config.geometry); } catch {}
     }
   });
-  window.on('closed', () => { window = null; });
-  navigate(target);
-});
+  window.on('closed', () => {
+    if (surfaces.get(role) === entry) surfaces.delete(role);
+    send({type: 'surface', role, instance: entry.instance, open: false});
+    for (const [id, waiter] of pending) if (waiter.entry === entry) { clearTimeout(waiter.timer); pending.delete(id); waiter.reject(new Error('window closed')); }
+  });
+  navigate(entry);
+}

@@ -55,6 +55,7 @@ function apply() {
 apply();
 
 export function setLocale(next: Locale) {
+  if (next === locale) return;
   locale = next;
   apply();
   try {

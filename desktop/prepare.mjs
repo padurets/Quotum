@@ -24,6 +24,8 @@ import {chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, rea
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {prepareText} from './prepare-text.mjs';
+import {prepareTray} from './prepare-tray.mjs';
 import {prepareElectron} from './prepare-electron.mjs';
 import {thirdPartyLicenses} from '../npm/licenses.mjs';
 
@@ -127,6 +129,9 @@ if (!existsSync(path.join(icons, 'icon.png'))) {
     shell: process.platform === 'win32',
   });
 }
+
+prepareTray(here, hub);
+await prepareText(here, hub);
 
 if (!windows) {
   await prepareElectron(path.join(here, 'resources'));

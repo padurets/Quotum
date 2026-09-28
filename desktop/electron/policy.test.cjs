@@ -11,6 +11,8 @@ const vm = require('node:vm');
 async function mainProcess() {
   let channel;
   let window;
+  const windows = [];
+  let invoke;
   const navigations = [];
   const sent = [];
   const quits = [];
@@ -20,8 +22,10 @@ async function mainProcess() {
     whenReady: () => Promise.resolve(), quit() { quits.push('quit'); },
   });
   class BrowserWindow extends EventEmitter {
-    constructor() {
+    constructor(options) {
       super();
+      this.options = options; this.destroyed = false; this.size = [options.width, options.height];
+      windows.push(this);
       window = this;
       this.url = '';
       const frame = this;
@@ -34,15 +38,23 @@ async function mainProcess() {
       });
     }
     setMenu() {}
+    isDestroyed() { return this.destroyed; }
+    isMinimized() { return false; }
+    show() {}
+    focus() {}
+    close() { this.emit('close'); this.destroyed = true; this.emit('closed'); }
+    getBounds() { return {x: 0, y: 0, width: this.size[0], height: this.size[1]}; }
+    getContentSize() { return this.size; }
+    setContentSize(w, h) { this.size = [w, h]; }
     loadURL(url) { navigations.push(url); return new Promise(() => {}); }
   }
   const context = vm.createContext({
     require(name) {
       if (name === 'electron') return {
-        app, BrowserWindow, ipcMain: {handle() {}, on() {}},
+        app, BrowserWindow, ipcMain: {handle(_, handler) { invoke = handler; }, on() {}},
         protocol: {registerSchemesAsPrivileged() {}, handle() {}},
         session: {defaultSession: {setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, on() {}}},
-        screen: {getAllDisplays: () => []},
+        screen: {getAllDisplays: () => [], getDisplayMatching: () => ({workArea: {width: 800, height: 600}})},
       };
       if (name === 'node:net') return {Socket: class extends EventEmitter {
         constructor() { super(); channel = this; }
@@ -59,7 +71,8 @@ async function mainProcess() {
   deliver({type: 'init', profile: '/isolated/profile', geometry: '/isolated/window.json'});
   await new Promise(setImmediate);
   return {
-    navigations, deliver, sent, quits,
+    navigations, deliver, sent, quits, windows,
+    invoke: (...args) => invoke(...args),
     commit(url) { window.url = url; window.webContents.emit('did-finish-load'); },
     crash() { gone = true; },
   };
@@ -137,4 +150,38 @@ test('only main-frame external navigation opens the browser', () => {
   assert.equal(navigation('https://example.org/', hub, false), 'deny');
   assert.equal(navigation('http://127.0.0.1:23456/', hub, true), 'allow');
   assert.equal(navigation('file:///tmp/example', hub, true), 'deny');
+});
+
+
+test('compact capabilities never include settings, takeover or arbitrary geometry', () => {
+  for (const command of ['app_state', 'reenter', 'open_main', 'close_panel', 'report_panel_height']) assert.ok(mayInvoke(hub, hub, command, 'compact'));
+  for (const command of ['save_settings', 'save_desktop_settings', 'take_over', 'set_autostart', 'quit']) assert.equal(mayInvoke(hub, hub, command, 'compact'), false);
+  for (const command of ['open_main', 'close_panel', 'report_panel_height']) assert.equal(mayInvoke(hub, hub, command, 'main'), false);
+  assert.equal(mayInvoke(hub, hub, 'app_state', 'spoofed'), false);
+  assert.equal(mayInvoke('https://foreign.invalid', hub, 'close_panel', 'compact'), false);
+});
+
+test('two surfaces keep separate geometry and reject commands from subframes or a closed instance', async () => {
+  const main = await mainProcess();
+  main.deliver({type: 'state', generation: 1, url: hub});
+  main.deliver({type: 'focus', role: 'compact'});
+  assert.equal(main.windows.length, 2);
+  const [board, panel] = main.windows;
+  assert.equal(panel.options.width, 400);
+  assert.ok(main.navigations.at(-1).endsWith('&view=compact'));
+  panel.url = 'http://127.0.0.1:23456/compact';
+  assert.throws(() => main.invoke({sender: panel.webContents, senderFrame: panel.webContents.mainFrame}, 'save_settings', {role: 'main'}), /not the board/);
+  assert.throws(() => main.invoke({sender: panel.webContents, senderFrame: {}}, 'app_state'), /not the board/);
+  main.deliver({type: 'panel', instance: 2, generation: 1, action: 'height', height: 1000});
+  assert.deepEqual(panel.size, [400, 480]);
+  assert.deepEqual(board.size, [1280, 800]);
+  main.deliver({type: 'panel', instance: 1, generation: 1, action: 'close'});
+  assert.equal(panel.destroyed, false);
+  panel.close();
+  assert.throws(() => main.invoke({sender: panel.webContents, senderFrame: panel.webContents.mainFrame}, 'app_state'), /not the board/);
+  main.deliver({type: 'focus', role: 'compact'});
+  const reopened = main.windows.at(-1);
+  main.deliver({type: 'panel', instance: 2, generation: 1, action: 'close'});
+  assert.equal(reopened.destroyed, false);
+  assert.equal(board.destroyed, false);
 });

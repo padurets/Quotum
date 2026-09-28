@@ -52,6 +52,7 @@ pub struct Shell {
     pub window_intent: window::OpenIntent,
     /// Sends the app's state to the board when it changes (see notifier.rs).
     pub notifier: Notifier,
+    pub attention: crate::attention::Attention,
     wakes: Wake,
     exiting: AtomicBool,
     proc: Mutex<Option<Arc<Proc>>>,
@@ -98,6 +99,7 @@ impl Shell {
             window_lock: Mutex::new(()),
             window_intent: window::OpenIntent::default(),
             notifier: Notifier::default(),
+            attention: crate::attention::Attention::default(),
             wakes: Wake::new(),
             exiting: AtomicBool::new(false),
             proc: Mutex::new(None),
@@ -135,11 +137,34 @@ impl Shell {
 
     /// Changes what `app.json` remembers and writes it.
     fn remember(&self, change: impl FnOnce(&mut AppJson)) {
-        let mut json = self.app_json();
-        change(&mut json);
-        if let Err(e) = json.save(&self.dirs.app_json()) {
-            self.agent_log.line(&format!("app: {}: {e}", self.dirs.app_json().display()));
+        if let Err(e) = self.remember_checked(change) {
+            self.agent_log.line(&format!("app: settings save failed: {e}"));
         }
+    }
+
+    fn remember_checked(&self, change: impl FnOnce(&mut AppJson)) -> std::io::Result<()> {
+        let mut json = self.app_json();
+        let mut next = json.clone();
+        change(&mut next);
+        next.save(&self.dirs.app_json())?;
+        *json = next;
+        Ok(())
+    }
+    pub fn desktop_settings(
+        &self,
+    ) -> (crate::desktop_settings::Notifications, Option<crate::desktop_settings::Locale>) {
+        let json = self.app_json();
+        (json.notifications.clone(), json.locale)
+    }
+    pub fn locale(&self) -> crate::desktop_settings::Locale {
+        self.app_json().locale.unwrap_or_else(crate::desktop_settings::Locale::system)
+    }
+    pub fn save_desktop_settings(self: &Arc<Self>, patch: &crate::desktop_settings::Patch) -> Result<(), String> {
+        let _saving = self.settings_ops.lock().unwrap_or_else(|e| e.into_inner());
+        self.remember_checked(|json| patch.apply(json)).map_err(|e| e.to_string())?;
+        host::attention_changed(self, &self.attention.status());
+        self.wake();
+        Ok(())
     }
 
     pub fn take_over_confirmed(&self) -> bool {
@@ -260,6 +285,7 @@ pub fn next(ending: Ending, port_retried: bool, exiting: bool, restarts: &mut Re
 /// for starts it again, with a new key and token, up to three times in five minutes.
 /// A new start waits until the one before exited: two would share the database.
 pub fn run_hub(shell: Arc<Shell>) {
+    shell.attention.start(&shell);
     let mut restarts = Restarts::default();
     let mut port_retried = false;
     loop {
@@ -379,6 +405,7 @@ pub fn shutdown(shell: &Arc<Shell>, fast: bool, from_exit_event: bool) {
     if !fast {
         window::leave(shell);
     }
+    shell.attention.stop();
     // 2–3. The agent stops and lets the machine go. The app lock stays held through teardown.
     agent::quit(shell, if fast { Duration::from_secs(1) } else { Duration::from_secs(5) });
     // 4. The hub ends by itself once its stdin closes.

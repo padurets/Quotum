@@ -294,6 +294,12 @@ export function Measuring({state, onState}: {state: AppState; onState: (state: A
 /** Start at login, which build this is, and quitting. */
 export function AppSection({state, onState}: {state: AppState; onState: (state: AppState) => void}) {
   const [error, setError] = useState<string | null>(null);
+  const notifications = state.notifications;
+  const notify = async (kind: keyof NonNullable<AppState['notifications']>, on: boolean) => {
+    setError(null);
+    try { onState(await app.saveDesktopSettings({notifications: {[kind]: on}})); }
+    catch (failure) { setError((failure as Error).message); }
+  };
   const autostart = async (on: boolean) => {
     setError(null);
     try {
@@ -305,6 +311,14 @@ export function AppSection({state, onState}: {state: AppState; onState: (state: 
   return (
     <section className="drawer-section">
       <h3>{t('appSection.title')}</h3>
+      {notifications && <>
+        <h4>{t('desktop.notifications')}</h4>
+        {(['low', 'critical', 'reset', 'announcement'] as const).map(kind => <div className="drawer-switch" key={kind}>
+          <SwitchRow on={notifications[kind]} onChange={on => void notify(kind, on)}>{t(`desktop.${kind}`)}</SwitchRow>
+        </div>)}
+        <p className="drawer-note">{t(state.notificationDelivery === 'available' ? 'desktop.deliveryAvailable' : state.notificationDelivery === 'unavailable' ? 'desktop.deliveryUnavailable' : 'desktop.deliveryUnknown')}</p>
+        <p className="drawer-note">{t('desktop.deliveryHint')}</p>
+      </>}
       <div className="drawer-switch">
         <SwitchRow on={state.autostart} onChange={on => void autostart(on)}>
           {t('appSection.autostart')}

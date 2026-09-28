@@ -777,3 +777,13 @@ tr:hover .device-name .icon-button, .device-name .icon-button:focus-visible { op
   td:first-child { white-space: normal; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+.compact { padding: 16px; min-width: 0; }
+.compact > header, .compact-card > footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.compact h1 { font-size: 18px; margin: 0; }
+.compact-card { padding: 14px; margin: 12px 0; }
+.compact-card h2 { font-size: 15px; margin: 0 0 10px; overflow-wrap: anywhere; }
+.compact-limit { margin: 10px 0; }
+.compact-limit small, .compact-card footer small, .compact-quality { color: var(--muted); }
+.compact-card footer { font-size: 12px; padding-top: 6px; }
+.compact-open { width: 100%; }

@@ -1,4 +1,4 @@
-import type {Key} from '../i18n';
+import {setLocale, type Key, type Locale} from '../i18n';
 
 /**
  * The desktop app, when the board is shown in its window (the hub's local mode): what it
@@ -43,6 +43,10 @@ export type AppState = {
   logPath: string;
   version: string;
   commit: string;
+  notifications?: Record<'low' | 'critical' | 'reset' | 'announcement', boolean>;
+  locale?: Locale | null;
+  effectiveLocale?: Locale;
+  notificationDelivery?: 'available' | 'unavailable' | 'unknown';
 };
 /** `intervalS: null` takes the provider's own interval out of the file. */
 export type Patch = {providers?: Partial<Record<ProviderId, {enabled?: boolean; intervalS?: number | null; account?: string}>>; sessions?: boolean};
@@ -81,6 +85,10 @@ function change(command: string, args?: Record<string, unknown>): Promise<AppSta
 }
 
 export const app = {
+  saveDesktopSettings: (patch: {notifications?: Partial<NonNullable<AppState['notifications']>>; locale?: Locale}) => change('save_desktop_settings', {patch}),
+  openMain: () => ask<void>('open_main'),
+  closePanel: () => ask<void>('close_panel'),
+  reportPanelHeight: (heightCssPx: number) => ask<void>('report_panel_height', {heightCssPx}),
   state: () => ask<AppState>('app_state'),
   saveSettings: (patch: Patch) => change('save_settings', {patch}),
   takeOver: () => change('take_over'),
@@ -210,4 +218,24 @@ export const failedTitle = (cause: Cause): Key => (cause === 'config' ? 'failed.
 export function settingsSections(local: boolean, bridged: boolean): ('measuring' | 'app' | 'account' | 'browser')[] {
   if (!local) return ['account', 'browser'];
   return bridged ? ['measuring', 'app', 'browser'] : ['browser'];
+}
+
+/** A desktop choice is accepted only once persisted; pushed changes never echo-save. */
+export async function chooseLocale(locale: Locale) {
+  if (!inApp()) { setLocale(locale); return; }
+  const state = await app.saveDesktopSettings({locale});
+  if (state.effectiveLocale) setLocale(state.effectiveLocale);
+}
+let localeSeq = -1;
+let migratedLocale = false;
+export function appLocale(state: AppState) {
+  if (state.seq < localeSeq) return;
+  localeSeq = state.seq;
+  if (!migratedLocale && state.locale === null && location.pathname !== '/compact') {
+    migratedLocale = true;
+    let saved: string | null = null;
+    try { saved = localStorage.getItem('quotum.locale'); } catch { /* no browser storage */ }
+    if (saved === 'en' || saved === 'ru') { void app.saveDesktopSettings({locale: saved}).then(appLocale).catch(() => {}); return; }
+  }
+  if (state.effectiveLocale) setLocale(state.effectiveLocale);
 }

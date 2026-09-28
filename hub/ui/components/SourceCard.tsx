@@ -54,7 +54,7 @@ function PlanNote({w, measuredAt, weekly}: {w: Win; measuredAt: number | null; w
 }
 
 /** When the limit resets: in how long, that the time has passed, or that it is not known. */
-function ResetLine({w}: {w: Win}) {
+export function ResetLine({w}: {w: Win}) {
   const now = useClock(now => resetLineChangesAt(w, now));
   const reset = resetLine(w, now);
   return (

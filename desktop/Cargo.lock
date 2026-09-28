@@ -2856,6 +2856,7 @@ dependencies = [
 name = "quotum-desktop"
 version = "0.4.0"
 dependencies = [
+ "chrono",
  "getrandom 0.4.3",
  "ksni",
  "libc",
@@ -2872,8 +2873,10 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-window-state",
  "toml_edit 0.25.15+spec-1.1.0",
+ "ureq",
  "url",
  "windows-sys 0.61.2",
+ "zbus",
 ]
 
 [[package]]

@@ -1,6 +1,7 @@
+import {chooseLocale} from '../lib/app';
 import {useLayoutEffect, useId, useRef, useState, type InputHTMLAttributes, type ReactNode} from 'react';
 import {createPortal} from 'react-dom';
-import {LOCALES, setLocale, t, useLocale, type Locale} from '../i18n';
+import {LOCALES, t, useLocale, type Locale} from '../i18n';
 import {messageOf} from '../lib/http';
 
 export const SERVICE = 'Quotum';
@@ -207,7 +208,7 @@ export function LanguageSelect() {
   return (
     <label className="language">
       <span className="sr-only">{t('common.language')}</span>
-      <select value={locale} onChange={event => setLocale(event.target.value as Locale)}>
+      <select value={locale} onChange={event => void chooseLocale(event.target.value as Locale).catch(() => {})}>
         {(Object.keys(LOCALES) as Locale[]).map(code => (
           <option key={code} value={code} lang={code}>
             {LOCALES[code].name}
