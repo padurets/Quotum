@@ -7,7 +7,7 @@ import {ordered} from '../lib/grid';
 import {level, windowName} from '../lib/quota';
 import {num} from '../lib/format';
 import {t, useLocale} from '../i18n';
-import {CardMark, ResetLine} from './SourceCard';
+import {CardMark, LimitMeter, ResetLine} from './SourceCard';
 import type {startLive} from '../lib/live';
 
 const Row = memo(function Row({id}: {id: string}) {
@@ -19,14 +19,21 @@ const Row = memo(function Row({id}: {id: string}) {
   if (!card || !view) return null;
   const windows = card.windows.filter(w => !isWindowHidden(view, id, w.id));
   if (card.windows.length && !windows.length) return null;
+  const working = t('desktop.working', {count: sessions.filter(s => s.working).length});
   return <section className="card compact-card">
-    <div className="card-head"><CardMark source={card} /><h2>{title}</h2></div>
-    {!windows.length && <p>{t('desktop.unavailable')}</p>}
+    <div className="card-head">
+      <CardMark source={card} /><h2 title={title}>{title}</h2>
+      {sessions.length > 0 && <small className="compact-agents" title={t('desktop.total', {count: sessions.length})}>{working}</small>}
+    </div>
+    {!windows.length && <p className="compact-quality">{t('desktop.unavailable')}</p>}
     {windows.map(w => <div className="compact-limit" key={w.id}>
-      <div className="limit-top"><span className="compact-window-name">{windowName(w).split(' · ').map((part, i) => <span key={i}>{part}</span>)}</span><strong className={`v-${level(w.remaining)}`}>{num(w.remaining)}%</strong></div>
-      <small><ResetLine w={w} /></small>
+      <div className="compact-window-name">
+        <span title={windowName(w).replaceAll(' · ', '\n')}>{windowName(w).split(' · ').map((part, i) => <span key={i}>{part}</span>)}</span>
+      </div>
+      <LimitMeter w={w} />
+      <strong className={`v-${level(w.remaining)}`}>{num(w.remaining)}%</strong>
+      <small className="compact-reset"><ResetLine w={w} short /></small>
     </div>)}
-    <footer><span>{t('desktop.working', {count: sessions.filter(s => s.working).length})}</span><small>{t('desktop.total', {count: sessions.length})}</small></footer>
   </section>;
 });
 
@@ -61,7 +68,7 @@ export function Compact({live}: {live: ReturnType<typeof startLive>}) {
   }, []);
   const ids = view ? ordered(view.layout, lineup.map(cardId)).map(w => w.id).filter(id => !isHidden(view, id)).map(id => id.slice(7)) : [];
   return <div className="compact glass" ref={root}>
-    <header><h1>{t('desktop.limits')}</h1><button className="button" onClick={() => inApp() ? void app.openMain() : location.assign('/')}>{t('desktop.open')}</button>{inApp() && <button className="button" onClick={() => void app.closePanel()} aria-label={t('common.close')}>×</button>}</header>
+    <header><h1>{t('desktop.limits')}</h1><button className="button" onClick={() => inApp() ? void app.openMain() : location.assign('/')}>{t('desktop.open')}</button>{inApp() && <button className="icon-button" onClick={() => void app.closePanel()} aria-label={t('common.close')}>×</button>}</header>
     {!['live', 'polling'].includes(connection.status) && <p className="compact-quality">{t('desktop.disconnected')}</p>}
     {!ids.length && <p>{t('desktop.empty')}</p>}
     {ids.map(id => <Row key={id} id={id} />)}

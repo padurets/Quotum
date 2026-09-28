@@ -1,5 +1,5 @@
 /** A checked subset of the UI catalogs for native delivery; no second translation table. */
-import {mkdirSync, writeFileSync} from 'node:fs';
+import {mkdirSync, writeFileSync, readFileSync} from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 export async function prepareText(here, hub) {
@@ -14,4 +14,7 @@ export async function prepareText(here, hub) {
   }
   mkdirSync(path.join(here, 'resources'), {recursive: true});
   writeFileSync(path.join(here, 'resources/desktop-i18n.json'), JSON.stringify(result));
+  const style = readFileSync(path.join(hub, 'ui/style.css'), 'utf8');
+  const colour = name => { const value = style.match(new RegExp(`--${name}: (#[a-f0-9]+);`))?.[1]; if (!value) throw new Error(`missing colour ${name}`); return value; };
+  writeFileSync(path.join(here, 'resources/loading.css'), `window { background-color: ${colour('bg')}; } label, spinner { color: ${colour('text-2')}; }`);
 }

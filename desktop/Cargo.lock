@@ -2857,7 +2857,9 @@ name = "quotum-desktop"
 version = "0.4.0"
 dependencies = [
  "chrono",
+ "gdkx11",
  "getrandom 0.4.3",
+ "gtk",
  "ksni",
  "libc",
  "log",
@@ -2876,6 +2878,7 @@ dependencies = [
  "ureq",
  "url",
  "windows-sys 0.61.2",
+ "x11",
  "zbus",
 ]
 

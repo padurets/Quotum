@@ -1,4 +1,4 @@
-import {memo, useEffect, useRef, useState, type CSSProperties} from 'react';
+import {memo, useEffect, useRef, useState, type CSSProperties, type ReactNode} from 'react';
 import type {Card, Win} from '../lib/types';
 import {windowKey} from '../lib/types';
 import {countdown, countdownChangesAt, duration, earliest, num, stamp} from '../lib/format';
@@ -54,13 +54,25 @@ function PlanNote({w, measuredAt, weekly}: {w: Win; measuredAt: number | null; w
 }
 
 /** When the limit resets: in how long, that the time has passed, or that it is not known. */
-export function ResetLine({w}: {w: Win}) {
+export function ResetLine({w, short = false}: {w: Win; short?: boolean}) {
   const now = useClock(now => resetLineChangesAt(w, now));
   const reset = resetLine(w, now);
+  const text = reset.key === 'resetsIn' ? t('limit.resetsIn', {time: duration(reset.inMs)}) : t(`limit.${reset.key}`);
+  const date = w.resetAt ? stamp(w.resetAt) : '';
   return (
-    <span data-time="reset" title={w.resetAt ? stamp(w.resetAt) : ''}>
-      {reset.key === 'resetsIn' ? t('limit.resetsIn', {time: duration(reset.inMs)}) : t(`limit.${reset.key}`)}
+    <span data-time="reset" title={short ? [text, date].filter(Boolean).join('\n') : date} aria-label={short ? text : undefined}>
+      {short ? <><span aria-hidden="true">↻ </span>{reset.key === 'resetsIn' ? duration(reset.inMs) : '—'}</> : text}
     </span>
+  );
+}
+
+/** The same remaining-quota meter in a card and in the tray's compact rows. */
+export function LimitMeter({w, children}: {w: Win; children?: ReactNode}) {
+  return (
+    <div className="meter" role="progressbar" aria-label={windowName(w).replaceAll(' · ', '\n')} aria-valuenow={Math.round(w.remaining)} aria-valuemin={0} aria-valuemax={100}>
+      <span className="meter-track"><i className={`fill fill-${level(w.remaining)}`} style={{width: `${Math.max(w.remaining, 1)}%`}} /></span>
+      {children}
+    </div>
   );
 }
 
@@ -75,12 +87,9 @@ function Limit({w, measuredAt, weekly}: {w: Win; measuredAt: number | null; week
           <small>%</small>
         </span>
       </div>
-      <div className="meter" role="progressbar" aria-label={windowName(w)} aria-valuenow={Math.round(w.remaining)} aria-valuemin={0} aria-valuemax={100}>
-        <span className="meter-track">
-          <i className={`fill fill-${state}`} style={{width: `${Math.max(w.remaining, 1)}%`}} />
-        </span>
+      <LimitMeter w={w}>
         <PlanMark w={w} measuredAt={measuredAt} weekly={weekly} />
-      </div>
+      </LimitMeter>
       <div className="limit-bottom">
         <ResetLine w={w} />
         <PlanNote w={w} measuredAt={measuredAt} weekly={weekly} />

@@ -27,13 +27,11 @@ impl Role {
 }
 
 /// One tray press can blur the panel before its activation is delivered.
-#[cfg(any(test, not(target_os = "linux")))]
 #[derive(Default)]
 pub struct PanelToggle {
     wanted: bool,
     blurred: Option<(std::time::Instant, (i32, i32))>,
 }
-#[cfg(any(test, not(target_os = "linux")))]
 impl PanelToggle {
     pub fn wanted(&self) -> bool {
         self.wanted

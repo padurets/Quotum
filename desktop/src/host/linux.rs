@@ -1,4 +1,6 @@
 //! A small background controller: D-Bus tray and one disposable Chromium process.
+#[path = "loading.rs"]
+mod loading;
 use crate::{
     Args, agent,
     files::Dirs,
@@ -25,6 +27,7 @@ use std::time::Duration;
 use url::Url;
 
 pub struct Host {
+    native_panel: bool,
     resources: PathBuf,
     electron: PathBuf,
     software: bool,
@@ -38,6 +41,7 @@ struct Gui {
     writer: Mutex<UnixStream>,
     pid: u32,
     initial: window::Role,
+    request: Option<u64>,
     anchor: Option<(i32, i32)>,
     windows: Mutex<std::collections::BTreeMap<window::Role, u64>>,
 }
@@ -96,7 +100,9 @@ fn start(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     } else {
         packaged_node
     };
+    let native_panel = loading::init();
     let host = Host {
+        native_panel,
         electron: resources.join("electron/electron"),
         resources: resources.clone(),
         software: args.software_rendering,
@@ -119,6 +125,9 @@ fn start(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         env!("CARGO_PKG_VERSION"),
         env!("QUOTUM_COMMIT")
     ));
+    if native_panel {
+        loading::install(&shell);
+    }
     let accepting = shell.clone();
     thread::spawn(move || {
         for mut socket in listener.incoming().flatten() {
@@ -163,6 +172,9 @@ fn start(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     thread::spawn(move || shell::run_hub(hub));
     let ticker = shell.clone();
     thread::spawn(move || shell::run_ticker(ticker));
+    if native_panel {
+        gtk::main();
+    }
     loop {
         thread::park();
     }
@@ -191,15 +203,23 @@ pub fn is_open(shell: &Shell) -> bool {
 }
 /// Shows the window. Only the Tauri host logs who asked for it (`_from`).
 pub fn open(shell: &Arc<Shell>, _from: &'static str) {
-    open_role(shell, window::Role::Main);
+    if shell.host.native_panel {
+        loading::main(shell);
+    } else {
+        open_role(shell, window::Role::Main);
+    }
 }
 pub fn open_panel(shell: &Arc<Shell>) {
-    open_role(shell, window::Role::Compact);
+    if shell.host.native_panel {
+        loading::activate(shell, None, false);
+    } else {
+        open_role(shell, window::Role::Compact);
+    }
 }
 fn open_role(shell: &Arc<Shell>, role: window::Role) {
-    open_at(shell, role, None, false);
+    open_at(shell, role, None, false, None);
 }
-fn open_at(shell: &Arc<Shell>, role: window::Role, anchor: Option<(i32, i32)>, toggle: bool) {
+fn open_at(shell: &Arc<Shell>, role: window::Role, anchor: Option<(i32, i32)>, toggle: bool, request: Option<u64>) {
     let opening = window::opening(shell);
     let shell = shell.clone();
     thread::spawn(move || {
@@ -210,11 +230,19 @@ fn open_at(shell: &Arc<Shell>, role: window::Role, anchor: Option<(i32, i32)>, t
         }
         let gui = shell.host.gui.lock().unwrap_or_else(|e| e.into_inner()).clone();
         if let Some(gui) = gui {
-            let _ = gui.send(&json!({"type":"focus", "role":role, "anchor":anchor, "toggle":toggle}));
+            let message = if let Some(request) = request {
+                json!({"type":"panel_intent", "request":request, "open":true, "anchor":anchor})
+            } else {
+                json!({"type":"focus", "role":role, "anchor":anchor, "toggle":toggle})
+            };
+            let _ = gui.send(&message);
             return;
         }
-        if let Err(e) = launch(&shell, role, anchor) {
+        if let Err(e) = launch(&shell, role, anchor, request) {
             shell.hub_log.line(&format!("app: the Chromium window did not open: {e}"));
+            if let Some(request) = request {
+                loading::failed(&shell, request);
+            }
             if shell.smoke.is_some() {
                 smoke::fail("the Chromium window did not open");
             }
@@ -222,7 +250,7 @@ fn open_at(shell: &Arc<Shell>, role: window::Role, anchor: Option<(i32, i32)>, t
     });
 }
 
-fn launch(shell: &Arc<Shell>, role: window::Role, anchor: Option<(i32, i32)>) -> io::Result<()> {
+fn launch(shell: &Arc<Shell>, role: window::Role, anchor: Option<(i32, i32)>, request: Option<u64>) -> io::Result<()> {
     let (parent, child) = UnixStream::pair()?;
     parent.set_write_timeout(Some(Duration::from_secs(2)))?;
     let reader = parent.try_clone()?;
@@ -243,7 +271,7 @@ fn launch(shell: &Arc<Shell>, role: window::Role, anchor: Option<(i32, i32)>) ->
         }
     }
     // This driver is verified with XWayland; choose it before Chromium initializes Ozone.
-    if std::env::var_os("DISPLAY").is_some() && nvidia() {
+    if std::env::var_os("DISPLAY").is_some() && (shell.host.native_panel || nvidia()) {
         command.arg("--ozone-platform=x11").env("GDK_BACKEND", "x11");
     }
     // An unpacked/AppImage helper is not setuid. Chromium still uses its userns sandbox.
@@ -275,6 +303,7 @@ fn launch(shell: &Arc<Shell>, role: window::Role, anchor: Option<(i32, i32)>) ->
         writer: Mutex::new(parent),
         pid: process.id(),
         initial: role,
+        request,
         anchor,
         windows: Mutex::default(),
     });
@@ -313,6 +342,9 @@ fn launch(shell: &Arc<Shell>, role: window::Role, anchor: Option<(i32, i32)>) ->
         waiting.host.stopped.notify_all();
         drop(current);
         if !waiting.exiting() {
+            if waiting.host.native_panel {
+                loading::engine_ended(&waiting, status.as_ref().is_ok_and(|s| s.success()));
+            }
             agent::window_closed(&waiting);
         }
     });
@@ -337,6 +369,9 @@ enum Message {
     Request { id: u64, origin: String, role: window::Role, instance: u64, generation: u64, request: Value },
     Surface { role: window::Role, instance: u64, open: bool },
     Loaded { url: String },
+    PanelReady { request: u64, instance: u64, handle: u64 },
+    PanelVisible { request: u64 },
+    PanelClosed { request: u64, blur: bool },
     Fault { process: String, reason: String },
     Graphics { electron: String, chromium: String, backend: String, compositing: String, rasterization: String },
 }
@@ -361,7 +396,7 @@ fn read_messages(shell: &Arc<Shell>, gui: &Arc<Gui>, socket: UnixStream) {
         match message {
             Message::Ready => {
                 let height = *shell.host.panel_height.lock().unwrap_or_else(|e| e.into_inner());
-                let _ = gui.send(&json!({"type":"init", "role": gui.initial, "anchor": gui.anchor, "panelHeight": height, "inspect": shell.host.inspector.is_some(), "profile": shell.dirs.webview.clone().unwrap_or_else(|| shell.dirs.data.join("chromium")), "geometry": shell.dirs.data.join("window.json")}));
+                let _ = gui.send(&json!({"type":"init", "role": gui.initial, "anchor": gui.anchor, "nativePanel":shell.host.native_panel, "panelRequest":gui.request, "panelHeight": height, "inspect": shell.host.inspector.is_some(), "profile": shell.dirs.webview.clone().unwrap_or_else(|| shell.dirs.data.join("chromium")), "geometry": shell.dirs.data.join("window.json")}));
                 send_state(shell, gui, false);
             }
             Message::Surface { role, instance, open } => {
@@ -390,6 +425,17 @@ fn read_messages(shell: &Arc<Shell>, gui: &Arc<Gui>, socket: UnixStream) {
                 if gui.send(&response).is_err() {
                     break;
                 }
+            }
+            Message::PanelReady { request, instance, handle } => {
+                loading::ready(shell, gui.clone(), request, instance, handle)
+            }
+            Message::PanelVisible { request } => {
+                shell.hub_log.line(&format!("app: panel {request} visible"));
+                loading::visible(shell, request);
+            }
+            Message::PanelClosed { request, blur } => {
+                shell.hub_log.line(&format!("app: panel {request} closed (blur {blur})"));
+                loading::closed(shell, request, blur);
             }
             Message::Loaded { url } => {
                 if let (Some(smoke), Ok(url)) = (&shell.smoke, Url::parse(&url)) {
@@ -546,7 +592,11 @@ impl ksni::Tray for Tray {
         }
     }
     fn activate(&mut self, x: i32, y: i32) {
-        open_at(&self.shell, window::Role::Compact, Some((x, y)), true);
+        if self.shell.host.native_panel {
+            loading::activate(&self.shell, Some((x, y)), true);
+        } else {
+            open_at(&self.shell, window::Role::Compact, Some((x, y)), true, None);
+        }
     }
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
         let locale = self.shell.locale();
@@ -603,8 +653,10 @@ pub fn reenter_role(shell: &Arc<Shell>, role: window::Role) {
     if let Some(gui) = gui {
         let (state, generation) = shell.hub();
         let _ = gui.send(&json!({"type":"state", "generation":generation, "url":window::target(&state).as_str(), "force":true, "role":role}));
+    } else if role == window::Role::Compact {
+        open_panel(shell);
     } else {
-        open_role(shell, role);
+        open(shell, "reenter");
     }
 }
 fn panel_message(shell: &Arc<Shell>, instance: u64, action: &str, height: Option<f64>) {

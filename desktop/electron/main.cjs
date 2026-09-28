@@ -25,6 +25,7 @@ let generation = -1;
 let quitting = false;
 let idleExit;
 let panelBlur;
+let panelRequest = -1;
 const TRAY_GESTURE_MS = 500;
 let buffer = '';
 let nextId = 0;
@@ -64,6 +65,16 @@ function receive(message) {
       if (message.force || changed) for (const entry of surfaces.values()) {
         if (!entry.dismissed && (changed || !message.role || message.role === entry.role)) navigate(entry);
       }
+      break;
+    }
+    case 'panel_intent':
+      if (!Number.isSafeInteger(message.request) || message.request < 0 || typeof message.open !== 'boolean') return finish();
+      if (!engineConfig) requested.push(message);
+      else presentPanel(message);
+      break;
+    case 'panel_reveal': {
+      const entry = surfaces.get('compact');
+      if (entry && !entry.dismissed && entry.instance === message.instance && entry.request === message.request && entry.painted) entry.reveal();
       break;
     }
     case 'focus':
@@ -201,17 +212,30 @@ Promise.all([initialized, app.whenReady()]).then(([config]) => {
   session.defaultSession.setPermissionCheckHandler(() => false);
   session.defaultSession.on('will-download', event => event.preventDefault());
   engineConfig = config;
-  openSurface(config.role ?? 'main', config.anchor);
-  for (const message of requested.splice(0)) present(message);
+  if (Number.isSafeInteger(config.panelRequest)) panelRequest = config.panelRequest;
+  openSurface(config.role ?? 'main', config.anchor, config.panelRequest);
+  for (const message of requested.splice(0)) {
+    if (message.type === 'panel_intent') presentPanel(message); else present(message);
+  }
 });
 function pointer() {
   try { return screen.getCursorScreenPoint(); } catch { return undefined; }
 }
-function dismiss(entry) {
+function reportClose(entry, blur = false) {
+  if (Number.isSafeInteger(entry.request) && !entry.closeReported) { entry.closeReported = true; send({type: 'panel_closed', request: entry.request, blur}); }
+}
+function dismiss(entry, blur = false) {
   entry.reopen = undefined;
   if (entry.dismissed || entry.window.isDestroyed()) return;
   entry.dismissed = true;
+  reportClose(entry, blur);
   entry.window.close();
+}
+function presentPanel(message) {
+  if (message.request < panelRequest) return;
+  panelRequest = message.request;
+  if (message.open) openSurface('compact', message.anchor, message.request);
+  else { const entry = surfaces.get('compact'); if (entry) dismiss(entry); }
 }
 function present(message) {
   if (message.role !== 'compact' || !message.toggle) return openSurface(message.role, message.anchor);
@@ -251,15 +275,22 @@ function panelAnchor(anchor) {
   // loading the panel, so a later content resize cannot move it to another monitor.
   try { return screen.getCursorScreenPoint(); } catch { return; }
 }
-function openSurface(role, anchor) {
+function openSurface(role, anchor, request) {
   clearTimeout(idleExit);
   panelBlur = undefined;
   focusRole = role;
   if (role === 'main') { const panel = surfaces.get('compact'); if (panel && !panel.window.isDestroyed()) dismiss(panel); }
   const point = role === 'compact' ? panelAnchor(anchor) : undefined;
   const existing = surfaces.get(role);
-  if (existing?.dismissed && !existing.window.isDestroyed()) { existing.reopen = {role, anchor}; return; }
-  if (existing && !existing.window.isDestroyed()) { if (existing.window.isMinimized()) existing.window.restore(); if (role === 'compact') { existing.anchor = point; resizePanel(existing); } existing.window.show(); existing.window.focus(); return; }
+  if (existing?.dismissed && !existing.window.isDestroyed()) { existing.reopen = {role, anchor, request}; return; }
+  if (existing && !existing.window.isDestroyed()) {
+    if (Number.isSafeInteger(request)) existing.request = request;
+    if (existing.window.isMinimized()) existing.window.restore();
+    if (role === 'compact') { existing.anchor = point; resizePanel(existing); }
+    if (existing.request !== undefined) { if (existing.painted) existing.ready(); }
+    else { existing.window.show(); existing.window.focus(); }
+    return;
+  }
   const config = engineConfig;
   const compact = role === 'compact';
   const panelHeight = Number.isFinite(config.panelHeight) ? Math.max(100, Math.min(config.panelHeight, 600)) : 180;
@@ -274,7 +305,7 @@ function openSurface(role, anchor) {
   } catch {}
   const window = new BrowserWindow({
     title: 'Quotum', width: compact ? 400 : 1280, height: compact ? panelHeight : 800, ...geometry, minWidth: compact ? 160 : 480, minHeight: compact ? 100 : 400,
-    frame: !compact,
+    frame: !compact, hasShadow: !compact,
     alwaysOnTop: compact, skipTaskbar: compact, resizable: !compact,
     backgroundColor: '#0b0b0e', show: false, autoHideMenuBar: true,
     icon: path.join(__dirname, '..', 'icon.png'),
@@ -284,22 +315,35 @@ function openSurface(role, anchor) {
       devTools: config.inspect === true, spellcheck: false, navigateOnDragDrop: false,
     },
   });
-  const entry = {window, role, instance: ++nextInstance, height: compact ? panelHeight : 180, anchor: point, dismissed: false};
+  const entry = {window, role, instance: ++nextInstance, height: compact ? panelHeight : 180, anchor: point, dismissed: false, request: compact && config.nativePanel && Number.isSafeInteger(request) ? request : undefined};
   surfaces.set(role, entry);
   send({type: 'surface', role, instance: entry.instance, open: true});
   window.setMenu(null);
   if (compact) {
+    window.on('focus', () => { entry.focused = true; });
     window.on('blur', () => {
-      if (revealed && !quitting && !entry.dismissed) {
+      if (revealed && !quitting && !entry.dismissed && (entry.request === undefined || entry.focused)) {
         panelBlur = {at: performance.now(), point: pointer()};
-        dismiss(entry);
+        dismiss(entry, true);
       }
     });
     window.on('move', () => resizePanel(entry));
   }
+  entry.reveal = () => {
+    if (quitting || entry.dismissed || window.isDestroyed()) return;
+    revealed = true; window.show(); window.focus();
+    send({type: 'panel_visible', request: entry.request});
+    scheduleGraphics();
+  };
+  entry.ready = () => {
+    const handle = window.getNativeWindowHandle();
+    send({type: 'panel_ready', request: entry.request, instance: entry.instance, handle: handle.readUInt32LE(0)});
+  };
   window.once('ready-to-show', () => {
     if (quitting || entry.dismissed || window.isDestroyed()) return;
     if (compact) resizePanel(entry);
+    entry.painted = true;
+    if (entry.request !== undefined) { entry.ready(); return; }
     if (!revealed) { if (focusRole === role) window.show(); else window.showInactive(); }
     revealed = true;
     if (loaded && !compact) send({type: 'loaded', url: window.webContents.getURL()});
@@ -324,6 +368,7 @@ function openSurface(role, anchor) {
   });
   window.on('close', () => {
     entry.dismissed = true;
+    reportClose(entry);
     if (loaded && !compact) {
       try { fs.writeFileSync(`${config.geometry}.new`, JSON.stringify(window.getNormalBounds())); fs.renameSync(`${config.geometry}.new`, config.geometry); } catch {}
     }
@@ -333,10 +378,10 @@ function openSurface(role, anchor) {
     if (current) surfaces.delete(role);
     send({type: 'surface', role, instance: entry.instance, open: false});
     for (const [id, waiter] of pending) if (waiter.entry === entry) { clearTimeout(waiter.timer); pending.delete(id); waiter.reject(new Error('window closed')); }
-    if (current && entry.reopen && !quitting) openSurface(entry.reopen.role, entry.reopen.anchor);
+    if (current && entry.reopen && !quitting) openSurface(entry.reopen.role, entry.reopen.anchor, entry.reopen.request);
   });
   navigate(entry);
   // The tray responds before Chromium has loaded the page. Once revealed, an
   // outside click must still dismiss it while the renderer is starting.
-  if (compact) { resizePanel(entry); revealed = true; window.show(); }
+  if (compact) { resizePanel(entry); if (entry.request === undefined) { revealed = true; window.show(); } }
 }

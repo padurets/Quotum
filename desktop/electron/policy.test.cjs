@@ -8,7 +8,7 @@ const vm = require('node:vm');
 
 // Run the real main process handlers with a web view whose navigations commit
 // only when the test asks. No Electron, display, filesystem writes or clients.
-async function mainProcess({cursor = () => ({x: 790, y: 590}), displays = [{workArea: {x: 0, y: 0, width: 800, height: 600}}], backend = '', env = {}, startup = [], panelHeight, deferClose = false} = {}) {
+async function mainProcess({cursor = () => ({x: 790, y: 590}), displays = [{workArea: {x: 0, y: 0, width: 800, height: 600}}], backend = '', env = {}, startup = [], panelHeight, nativePanel = false, panelRequest, deferClose = false} = {}) {
   let channel;
   let window;
   const windows = [];
@@ -45,6 +45,7 @@ async function mainProcess({cursor = () => ({x: 790, y: 590}), displays = [{work
       });
     }
     setMenu() {}
+    getNativeWindowHandle() { const handle = Buffer.alloc(8); handle.writeUInt32LE(windows.indexOf(this) + 100); return handle; }
     isDestroyed() { return this.destroyed; }
     isMinimized() { return false; }
     show() { this.visible = true; this.shows = (this.shows ?? 0) + 1; }
@@ -86,7 +87,7 @@ async function mainProcess({cursor = () => ({x: 790, y: 590}), displays = [{work
   });
   vm.runInContext(readFileSync(`${__dirname}/main.cjs`, 'utf8'), context);
   const deliver = (...messages) => channel.emit('data', messages.map(message => JSON.stringify(message) + '\n').join(''));
-  deliver({type: 'init', profile: '/isolated/profile', geometry: '/isolated/window.json', panelHeight}, ...startup);
+  deliver({type: 'init', profile: '/isolated/profile', geometry: '/isolated/window.json', panelHeight, nativePanel, panelRequest}, ...startup);
   await new Promise(setImmediate);
   return {
     navigations, deliver, sent, traffic, quits, windows,
@@ -335,4 +336,40 @@ test('closing a loading panel is not a navigation failure, but a live page faili
   main.windows[0].failNavigation('ERR_FAILED');
   await new Promise(setImmediate);
   assert.deepEqual(main.traffic.filter(m => m.type === 'fault'), [{type: 'fault', process: 'navigation', reason: 'ERR_FAILED'}]);
+});
+
+
+test('a native loader hands off only to a painted panel of its current request', async () => {
+  const main = await mainProcess({nativePanel: true});
+  main.deliver({type: 'panel_intent', request: 1, open: true, anchor: [790, 590]});
+  const panel = main.windows[1];
+  assert.equal(panel.visible, undefined);
+  main.deliver({type: 'panel_reveal', request: 1, instance: 2});
+  assert.equal(panel.visible, undefined, 'never reveal an unpainted browser');
+  panel.emit('ready-to-show');
+  assert.deepEqual(main.traffic.filter(m => m.type === 'panel_ready'), [{type: 'panel_ready', request: 1, instance: 2, handle: 101}]);
+  main.deliver({type: 'panel_reveal', request: 0, instance: 2});
+  assert.equal(panel.visible, undefined);
+  main.deliver({type: 'panel_reveal', request: 1, instance: 2});
+  assert.equal(panel.visible, true);
+  panel.emit('focus');
+  panel.emit('blur');
+  assert.equal(panel.destroyed, true);
+  assert.deepEqual(main.traffic.filter(m => m.type === 'panel_closed'), [{type: 'panel_closed', request: 1, blur: true}]);
+});
+
+test('cancelled native requests cannot reappear after paint or a delayed reveal', async () => {
+  const main = await mainProcess({nativePanel: true, deferClose: true});
+  main.deliver({type: 'panel_intent', request: 1, open: true}, {type: 'panel_intent', request: 1, open: false});
+  const old = main.windows[1];
+  main.deliver({type: 'panel_intent', request: 2, open: true});
+  old.emit('ready-to-show');
+  main.deliver({type: 'panel_reveal', request: 1, instance: 2});
+  assert.equal(old.visible, undefined);
+  main.finishClosing();
+  const current = main.windows[2];
+  main.deliver({type: 'panel_intent', request: 1, open: false});
+  current.emit('ready-to-show');
+  main.deliver({type: 'panel_reveal', request: 2, instance: 3});
+  assert.equal(current.visible, true, 'an older cancellation cannot close the newer request');
 });

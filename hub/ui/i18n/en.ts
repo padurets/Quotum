@@ -14,6 +14,8 @@ export const en = {
   "desktop.announcement": "Announced early reset",
   "desktop.open": "Open Quotum",
   "desktop.limits": "Limits",
+  "desktop.loading": "Loading…",
+  "desktop.windowFailed": "Couldn’t open the panel. Try again.",
   "desktop.empty": "No visible limits",
   "desktop.working": "{count} working",
   "desktop.total": {one: "{count} agent", other: "{count} agents"},

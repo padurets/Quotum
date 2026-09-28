@@ -18,7 +18,7 @@ measures this machine once.
 **The desktop app** (`desktop/`) shares a Rust controller between Electron on Linux
 and Tauri/WebView2 on Windows. `node desktop/prepare.mjs` builds the hub, downloads
 checksum-pinned runtimes, and writes icons and license notices. Run it before the
-checks above. Linux needs `libssl-dev` for the Rust build, `unzip` for preparation,
+checks above. Linux needs `libssl-dev` and `libgtk-3-dev` for the Rust build, `unzip` for preparation,
 and Chromium's runtime libraries (`libnss3 libgtk-3-0 libgbm1 libasound2` on Debian).
 `cargo run` in `desktop/` starts a prepared debug build. `node desktop/package-linux.mjs`
 builds deb, rpm and AppImage; its packaging tools are `dpkg-deb`, `rpmbuild` and
@@ -163,8 +163,13 @@ successful native API call. On Windows restarting Explorer must restore one icon
 
 Open the compact panel, then the main window; close and reopen each in both orders.
 Repeat a tray click while the panel is visible and while it is loading: both dismiss
-it. Check a click outside followed by a new tray click too, so the blur from the same
-press cannot reopen it or consume a different gesture.
+it. On X11/XWayland, the native loading surface appears before Chromium starts;
+check Escape and outside clicks during loading too. Neither loading nor ready panel
+belongs in the taskbar. `QUOTUM_TEST_PANEL=1 xvfb-run -a sh desktop/smoke/tray.sh <app>`
+checks the native handoff and cancellation with its own suspended browser on a
+private bus, with providers disabled. Check a click outside followed by a new tray
+click too, so the blur from the same press cannot reopen it or consume a different
+gesture.
 Check long names, hidden windows, empty data, both languages, small displays and DPI
 changes. Panel height is clamped to its monitor and never saved as the main window's
 geometry. Its commands must fail from the main window, subframes, foreign origins and

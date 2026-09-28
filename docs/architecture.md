@@ -617,13 +617,20 @@ one does not count as open. The new window is created once it has gone, and the 
 `hub.log` tells each request, attempt and outcome.
 
 **Linux rendering and lifetime.** The Rust controller uses a D-Bus StatusNotifierItem
-through `ksni`; it does not link GTK or WebKit. It waits for the desktop's tray watcher
+through `ksni`. A small GTK loading surface responds before Chromium starts; GTK
+draws only a spinner and a localized label, never subscription data. No second web
+engine is linked. It waits for the desktop's tray watcher
 when starting early at login and registers again when that watcher restarts. Opening a window starts an Electron
 process; it holds at most the main board and a compact panel. On X11/XWayland the panel
 uses the tray's activation coordinates, or the pointer when its menu gives none. That
 anchor determines its monitor and stays put while the content changes height; native
-Wayland leaves positioning to the compositor. The native panel is shown before its
-page finishes loading. A direct tray activation toggles it; the blur and activation
+Wayland leaves positioning to the compositor. Where X11 is available, GTK and Electron
+use that same backend. The controller shows the native loader immediately, then
+hands off to the browser only after its first paint. Both are unmanaged popup
+surfaces, without taskbar entries or ordinary-window placement animations. Request
+numbers prevent a cancelled or superseded load from appearing later. The loader
+and ready panel both dismiss on an outside click or Escape. Without X11 the app
+keeps the compositor-managed browser path. A direct tray activation toggles it; the blur and activation
 of the same pointer gesture cannot close and immediately reopen it. The menu's
 *Limits* command explicitly opens it. Closing both destroys their renderers and ends
 the process after a half-second gesture window; no browser or hidden page stays
@@ -640,11 +647,19 @@ window over the same channel and on only to the main frame of the current hub. S
 quit. Navigation, new windows, downloads and permission requests are restricted. No
 inherited Node/Electron debugging switches reach the window process.
 
-On NVIDIA with an available X11 display the launcher selects X11/XWayland before
-Chromium initializes Ozone. Other systems use Chromium's default display selection.
+With an available X11 display the native loading surface selects X11/XWayland before
+Chromium initializes Ozone; the NVIDIA launcher does so even if the loader could not
+initialize. Other systems use Chromium's default display selection.
 `--software-rendering` disables hardware acceleration for that launch. No driver,
 kernel or desktop settings are changed. Both the native window and the page use the
 same background colour while newly exposed areas are painted during a resize.
+
+The compact view keeps each quota on one row: its name, the board's shared remaining
+meter, percentage and a short reset countdown with the full date in its tooltip.
+The provider header carries its measurement indicator and the working-agent count;
+the total agent count is in that count's tooltip. Hidden windows and the owner's
+ordering are shared with the board. Large lists can scroll, but ordinary subscriptions
+do not reserve a separate footer or a second line for every reset.
 
 The engine version and archive checksum are pinned in `desktop/prepare-electron.mjs`;
 updating Chromium means rebuilding the Linux packages. `desktop/package-linux.mjs`

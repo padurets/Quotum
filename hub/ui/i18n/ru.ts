@@ -9,6 +9,8 @@ export const ru = {
   "desktop.announcement": "Объявленный досрочный сброс",
   "desktop.open": "Открыть Quotum",
   "desktop.limits": "Лимиты",
+  "desktop.loading": "Загрузка…",
+  "desktop.windowFailed": "Не удалось открыть панель. Попробуйте ещё раз.",
   "desktop.empty": "Нет видимых лимитов",
   "desktop.working": "Работают: {count}",
   "desktop.total": {one: "{count} агент", few: "{count} агента", many: "{count} агентов", other: "{count} агента"},

@@ -36,6 +36,10 @@ windows-sys = { version = "0.61.2", features = ["Win32_Security", "Win32_Storage
 zbus = { version = "5.13.2", features = ["blocking-api"] }
 ksni = { version = "0.3.6", features = ["blocking"] }
 signal-hook = "0.3.18"
+# A small loading surface can respond before the disposable browser starts.
+gtk = "0.18.2"
+gdkx11 = "0.18.2"
+x11 = { version = "2.21.0", features = ["xlib"] }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 tauri = { version = "2.11.6", features = ["tray-icon"] }
