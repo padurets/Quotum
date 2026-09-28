@@ -816,6 +816,9 @@ tr:hover .device-name .icon-button, .device-name .icon-button:focus-visible { op
   .controls { width: 100%; flex-direction: column; align-items: stretch; }
   .controls .segmented { flex: 1; }
   .controls .segmented button { flex: 1; padding: 6px; }
+  /* A dialog's tabs share its width rather than running past it. */
+  .dialog > .segmented { align-self: stretch; }
+  .dialog > .segmented button { flex: 1; padding: 5px 6px; }
   /* The list takes what room the arrows leave; a long time range wraps in it. */
   .period .picker { flex: 1; min-width: 0; }
   .period .text-button { flex: 1; justify-content: center; height: auto; min-height: 28px; padding: 4px 10px; white-space: normal; text-align: center; }
