@@ -104,8 +104,6 @@ main { max-width: 1240px; margin: 0 auto; padding: 28px 28px 56px; display: flex
 .widget-body { position: relative; display: flex; flex-direction: column; min-width: 0; }
 .widget-body > .panel::after { content: ''; display: block; height: var(--fill, 0px); }
 .widgets.is-movable .widget-body > .card > .card-head, .widgets.is-movable .widget-body > .panel > .panel-head { cursor: grab; touch-action: none; }
-.grid-columns { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 16px; pointer-events: none; }
-.grid-columns > i { background: color-mix(in oklab, var(--accent) 5%, transparent); border-inline: 1px solid var(--hair-2); border-radius: 8px; }
 /* While dragged, the widget's place stays outlined: that is where it lands. */
 .widget.is-lifted { z-index: 30; }
 .widget.is-lifted::before { content: ''; position: absolute; inset: 0; border: 1.5px dashed #bbc0fe59; border-radius: 14px; background: #bbc0fe08; }

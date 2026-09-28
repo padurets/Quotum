@@ -330,16 +330,8 @@ export function Widgets({
     refocus.current = null;
   });
 
-  const bottom = Math.max(1, ...spots.map(item => item.y + item.h));
   return (
     <div className={`widgets ${movable ? 'is-movable' : ''}`} ref={grid} style={{'--columns': columns} as CSSProperties}>
-      {activePreview && (
-        <div className="grid-columns" aria-hidden="true" style={{gridColumn: '1 / -1', gridRow: `1 / span ${bottom}`}}>
-          {Array.from({length: columns}, (_, i) => (
-            <i key={i} />
-          ))}
-        </div>
-      )}
       {reading(spots).map(spot => {
         const widget = byId.get(spot.id)!;
         const fill = heights[spot.id] === undefined ? 0 : Math.max(0, spot.h * ROW - GAP - heights[spot.id]);
