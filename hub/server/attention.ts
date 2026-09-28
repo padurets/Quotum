@@ -23,7 +23,7 @@ export class Attention {
           const row = this.store.db.prepare('SELECT payload FROM attention_windows WHERE source_id = ? AND window_id = ?').get(source.id, window.id) as {payload: string} | undefined;
           const previous = row ? readLedger(row.payload) : null;
           const sample = {...window, at: measurement.observedAt, staleAfterMs: measurement.staleAfterMs};
-          const {ledger, event} = advanceWindow(previous, sample, observing && previous !== null && previous.previous.at >= this.startedAt);
+          const {ledger, event} = advanceWindow(previous, sample, observing && previous !== null && previous.previous.at >= this.startedAt && source.windows.some(w => w.id === window.id));
           this.store.db.prepare('INSERT OR REPLACE INTO attention_windows VALUES (?, ?, ?, ?, ?)').run(source.id, window.id, ledger.cycle, sample.at, JSON.stringify(ledger));
           if (event && previous) candidates.push({
             id: `${source.id}/${window.id}/${ledger.cycle}/${event}`, kind: event, at: now,

@@ -213,3 +213,14 @@ test('candidate overflow gives a new empty baseline, never replay', t => {
   assert.ok(attention.every(f => f.baseline && !f.notifications.length));
   assert.ok(attention[1].seq > attention[0].seq);
 });
+
+test('a window missing from the previous measurement returns silently, keeping its ledger', t => {
+  const h = setup(t);
+  h.deliver([[T, 35]]);
+  const source = h.store.states(h.board)[0];
+  h.store.record(source.id, {observedAt: T + 1000, plan: 'pro', windows: [{...sample(50), id: 'other'}], staleAfterMs: 204_000, resets: null});
+  h.deliver([[T + 2000, 29]]);
+  assert.equal(h.candidates.length, 0, 'a missing window is not continuous observation');
+  h.deliver([[T + 3000, 9]]);
+  assert.deepEqual(h.candidates.map(c => c.kind), ['critical'], 'the next observed crossing is still eligible');
+});
