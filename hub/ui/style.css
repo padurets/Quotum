@@ -149,7 +149,7 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
 .resize-handle.is-bottom-left::after { left: 4px; border-width: 0 0 2px 2px; border-radius: 0 0 0 4px; }
 .resize-handle.is-bottom-right::after { right: 4px; border-width: 0 2px 2px 0; border-radius: 0 0 4px 0; }
 .widget:hover > .widget-body > .resize-handle::after, .widget.is-resizing .resize-handle::after { opacity: 1; }
-@media (hover: none) { .resize-handle::after { opacity: .7; } }
+@media (hover: none) { .resize-handle:is(.is-bottom-left, .is-bottom-right)::after { opacity: .7; } }
 .resize-handle:hover::after, body.is-resizing-bottom-left .widget.is-resizing .is-bottom-left::after, body.is-resizing-bottom-right .widget.is-resizing .is-bottom-right::after { border-color: var(--text-2); }
 .widget.is-resizing { z-index: 30; }
 .widget.is-resizing::before { content: ''; position: absolute; inset: 0; border: 1.5px dashed #bbc0fe59; border-radius: 14px; background: #bbc0fe08; }
