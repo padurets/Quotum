@@ -200,12 +200,15 @@ from what it sees of the subscription everywhere, which no single machine does:
 data through its existing card menu, above the action to hide the widget, in the web
 dashboard and the desktop app. The header also refreshes all non-hidden cards on the
 current board through those same requests, up to four at a time. A refused request
-does not stop the rest; a receipt shows which requests were accepted and the reasons
-for refusals. The charts and tables receive the new measurements through the usual
+does not stop the rest; a tooltip at the header button shows progress, accepted requests
+and reasons for refusals without moving the widgets. While its refresh is pending,
+clicking the button only opens or closes that information. An individual card cannot
+be requested again until its refresh finishes either. Already pending subscriptions
+need no additional POST from the board action. The charts and tables receive new measurements through the usual
 events. Leaving the board stops requests that have not started.
 The accepted card action closes the menu; a circular loader replaces the logo's dot
 while the request is queued or waiting, then its ordinary status and tooltip show the outcome
-without adding a control or a line to the card. The menu action remains clickable:
+without adding a control or a line to the card. Outside an active request the menu action remains clickable:
 the hub rechecks availability, and a refused request explains the reason and next step
 in the menu. Nothing is sent while the page is disconnected. One request per subscription is
 accepted each minute across the hub; another click joins a pending request. Cadence

@@ -15,7 +15,7 @@ import {startLive} from './lib/live';
 import {UNAUTHORIZED} from './lib/http';
 import {t, useLocale} from './i18n';
 import {Header} from './components/Header';
-import {RefreshAll, RefreshResult, type RefreshReport} from './components/RefreshAll';
+import {RefreshAll} from './components/RefreshAll';
 import {SERVICE} from './components/Kit';
 import {SourceCard} from './components/SourceCard';
 import {AgentsPanel} from './components/Agents';
@@ -96,8 +96,6 @@ function Dashboard({
   const [machines, setMachines] = useState<MachinesTab | null>(null);
   const [people, setPeople] = useState<BoardTab | null>(null);
   const [account, setAccount] = useState(false);
-  const [refreshReport, setRefreshReport] = useState<RefreshReport | null>(null);
-  useEffect(() => setRefreshReport(null), [boardId]);
   const closeMachines = useCallback(() => setMachines(null), []);
 
   const state = meta ? boardState(lineup.map(id => ({id})), arrange.view) : null;
@@ -177,7 +175,7 @@ function Dashboard({
         boards={boards}
         board={board}
         onBoard={selectBoard}
-        refresh={meta && <RefreshAll key={boardId} board={boardId} ids={lineup.filter(id => !isHidden(arrange.view, cardId(id)))} onReport={setRefreshReport} />}
+        refresh={meta && <RefreshAll key={boardId} board={boardId} ids={lineup.filter(id => !isHidden(arrange.view, cardId(id)))} />}
         widgets={
           arrange.owner && meta && !empty ? (
             <WidgetsMenu
@@ -200,7 +198,6 @@ function Dashboard({
         local={local}
       />
       <main>
-        {refreshReport?.board === boardId && <RefreshResult report={refreshReport} onClose={() => setRefreshReport(null)} />}
         {local && <AgentBanner />}
         {!meta ? (
           <div className="widgets" aria-hidden="true">

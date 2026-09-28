@@ -2,7 +2,7 @@ import {Fragment, useRef, useState} from 'react';
 import {t, useLocale} from '../i18n';
 import {useConnection, useRefresh} from '../lib/board';
 import {useClock} from '../lib/clock';
-import {refreshErrorChangesAt, refreshErrorText, requestRefresh} from '../lib/refresh';
+import {refreshErrorChangesAt, refreshErrorText, refreshPending, requestRefresh} from '../lib/refresh';
 
 export const RefreshIcon = () => (
   <svg className="row-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
@@ -23,6 +23,7 @@ export function RefreshAction({id, board, onAccepted}: {id: string; board: strin
   const [failure, setFailure] = useState<Failure | null>(null);
   const now = useClock(now => (failure?.kind === 'request' ? refreshErrorChangesAt(failure.error, state, now) : null));
   const connected = connection.status === 'live' || connection.status === 'polling';
+  const pending = refreshPending(state);
   const message =
     failure?.kind === 'offline' && !connected
       ? t('refresh.offline')
@@ -30,7 +31,7 @@ export function RefreshAction({id, board, onAccepted}: {id: string; board: strin
         ? refreshErrorText(failure.error, state, now)
         : null;
   const send = async () => {
-    if (busy.current) return;
+    if (busy.current || pending) return;
     setFailure(null);
     if (!connected) {
       setFailure({kind: 'offline'});
@@ -52,9 +53,9 @@ export function RefreshAction({id, board, onAccepted}: {id: string; board: strin
   };
   return (
     <div data-time="refresh">
-      <button ref={action} type="button" className="popover-row" onClick={() => void send()}>
-        <RefreshIcon />
-        <span>{t(sending ? 'refresh.sending' : 'refresh.action')}</span>
+      <button ref={action} type="button" className="popover-row" disabled={sending || pending} onClick={() => void send()}>
+        {sending || pending ? <i className="spinner" aria-hidden="true" /> : <RefreshIcon />}
+        <span>{t(pending ? 'refresh.inProgress' : sending ? 'refresh.sending' : 'refresh.action')}</span>
       </button>
       {message && (
         <p className="form-error" role="alert">
