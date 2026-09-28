@@ -151,7 +151,8 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select:
 .widget:hover > .widget-body > .resize-handle::after, .widget.is-resizing .resize-handle::after { opacity: 1; }
 @media (hover: none) { .resize-handle:is(.is-bottom-left, .is-bottom-right)::after { opacity: .7; } }
 .resize-handle:hover::after, body.is-resizing-bottom-left .widget.is-resizing .is-bottom-left::after, body.is-resizing-bottom-right .widget.is-resizing .is-bottom-right::after { border-color: var(--text-2); }
-.widget.is-resizing { z-index: 30; }
+/* Over its neighbours' edges and corners, under the sticky heads it may be drawn past while the page scrolls. */
+.widget.is-resizing { z-index: 4; }
 .widget.is-resizing::before { content: ''; position: absolute; inset: 0; border: 1.5px dashed #bbc0fe59; border-radius: 14px; background: #bbc0fe08; }
 .widget.is-resizing > .widget-body > .card, .widget.is-resizing > .widget-body > .panel { background: var(--surface); border-color: #bbc0fe59; box-shadow: inset 0 1px 0 #ffffff0a, 0 30px 60px -20px #000; }
 body.is-resizing, body.is-resizing * { user-select: none; }
