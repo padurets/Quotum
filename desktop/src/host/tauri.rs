@@ -16,6 +16,7 @@ use tauri_plugin_autostart::ManagerExt;
 pub struct Host {
     pub app: AppHandle,
     pub tray: Mutex<Option<crate::tray::Handle>>,
+    pub panel_height: Mutex<f64>,
     pub navigation: Mutex<std::collections::BTreeMap<window::Role, window::Navigation>>,
     /// Where the board in the window hears the app's state (`watch_state`).
     pub watching: Mutex<std::collections::BTreeMap<window::Role, (u64, tauri::ipc::Channel<serde_json::Value>)>>,
@@ -88,6 +89,7 @@ pub fn run(args: Args) {
                 Host {
                     app: handle.clone(),
                     tray: Mutex::default(),
+                    panel_height: Mutex::new(180.0),
                     navigation: Mutex::default(),
                     watching: Mutex::default(),
                 },

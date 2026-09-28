@@ -182,7 +182,7 @@ fn build(
         .on_page_load(move |_, payload| {
             if payload.event() == PageLoadEvent::Finished {
                 if !belongs(payload.url(), &loading.hub().0) {
-                    navigate_current(&loading, true);
+                    navigate_current(&loading, true, Some(role));
                 }
                 if let Some(smoke) = loading.smoke.as_ref().filter(|_| !compact) {
                     smoke.page_loaded(&loading, payload.url());
@@ -195,9 +195,17 @@ fn build(
     let window = builder.build()?;
     if compact {
         let closing = window.clone();
+        let resizing = shell.clone();
+        *shell.host.panel_height.lock().unwrap_or_else(|e| e.into_inner()) = 180.0;
         window.on_window_event(move |event| {
             if matches!(event, tauri::WindowEvent::Focused(false)) {
                 let _ = closing.close();
+            }
+            if matches!(event, tauri::WindowEvent::ScaleFactorChanged { .. } | tauri::WindowEvent::Moved(_)) {
+                let height = *resizing.host.panel_height.lock().unwrap_or_else(|e| e.into_inner());
+                if let Ok(hwnd) = closing.hwnd() {
+                    panel_height(&resizing, hwnd.0 as u64, height);
+                }
             }
         });
     }
@@ -266,10 +274,10 @@ fn fit_on_screen(window: &tauri::WebviewWindow) -> tauri::Result<()> {
 
 /// Navigate from the requested generation, not the last document that committed.
 pub fn follow(shell: &Arc<Shell>) {
-    navigate_current(shell, false);
+    navigate_current(shell, false, None);
 }
 
-fn navigate_current(shell: &Arc<Shell>, force: bool) {
+fn navigate_current(shell: &Arc<Shell>, force: bool, only: Option<Role>) {
     let queued = shell.clone();
     // Ordering native requests on the event loop prevents a delayed worker from
     // navigating back to a snapshot that another worker already superseded.
@@ -278,6 +286,9 @@ fn navigate_current(shell: &Arc<Shell>, force: bool) {
             return;
         }
         for role in [Role::Main, Role::Compact] {
+            if only.is_some_and(|only| only != role) {
+                continue;
+            }
             let Some(window) = queued.host.app.get_webview_window(role.label()) else {
                 continue;
             };
@@ -297,16 +308,6 @@ fn navigate_current(shell: &Arc<Shell>, force: bool) {
     });
 }
 
-/// Leads the window to the board again, entering with the key of the hub's current start
-/// (a window that lost its session), or to the app's own page while the hub is not ready.
-pub fn reenter(shell: &Arc<Shell>) {
-    if is_open(shell) {
-        navigate_current(shell, true);
-    } else {
-        open(shell, "reenter");
-    }
-}
-
 /// Takes the window off the hub's pages while the app quits.
 pub fn leave(shell: &Arc<Shell>) {
     for role in [Role::Main, Role::Compact] {
@@ -324,8 +325,14 @@ pub fn close(shell: &Arc<Shell>) {
     }
 }
 
-pub fn reenter_role(shell: &Arc<Shell>, _: Role) {
-    reenter(shell);
+/// Leads the window to the board again, entering with the key of the hub's current start
+/// (a window that lost its session), or to the app's own page while the hub is not ready.
+pub fn reenter_role(shell: &Arc<Shell>, role: Role) {
+    if shell.host.app.get_webview_window(role.label()).is_some() {
+        navigate_current(shell, true, Some(role));
+    } else {
+        open_role(shell, "reenter", role);
+    }
 }
 fn current_panel(shell: &Shell, instance: u64) -> Option<tauri::WebviewWindow> {
     shell.host.app.get_webview_window("compact").filter(|w| w.hwnd().is_ok_and(|h| h.0 as u64 == instance))
@@ -355,6 +362,7 @@ pub fn panel_height(shell: &Arc<Shell>, instance: u64, height: f64) {
         let Some(window) = current_panel(&queued, instance) else {
             return;
         };
+        *queued.host.panel_height.lock().unwrap_or_else(|e| e.into_inner()) = height;
         let Ok(Some(monitor)) = window.current_monitor() else {
             return;
         };
@@ -362,7 +370,10 @@ pub fn panel_height(shell: &Arc<Shell>, instance: u64, height: f64) {
         let area = monitor.work_area();
         let width = 400.0_f64.min(f64::from(area.size.width) / scale);
         let height = height.min(600.0).min(f64::from(area.size.height) / scale * 0.8).max(100.0);
-        let _ = window.set_size(tauri::LogicalSize::new(width, height));
+        let requested = tauri::LogicalSize::new(width, height).to_physical::<u32>(scale);
+        if window.inner_size().is_ok_and(|size| size != requested) {
+            let _ = window.set_size(tauri::LogicalSize::new(width, height));
+        }
         place_panel(&queued, &window);
         let _ = fit_on_screen(&window);
     });
@@ -377,8 +388,9 @@ fn place_panel(shell: &Shell, window: &tauri::WebviewWindow) {
         return;
     };
     let Some(monitor) = monitors.iter().find(|m| {
-        let a = m.work_area();
-        rect.left >= a.position.x && rect.left < a.position.x + a.size.width as i32
+        let p = m.position();
+        let s = m.size();
+        rect.left >= p.x && rect.left < p.x + s.width as i32 && rect.top >= p.y && rect.top < p.y + s.height as i32
     }) else {
         return;
     };
@@ -391,5 +403,8 @@ fn place_panel(shell: &Shell, window: &tauri::WebviewWindow) {
     let x = (rect.right - width).clamp(a.position.x, a.position.x + a.size.width as i32 - width);
     let y = if rect.top - height >= a.position.y { rect.top - height } else { rect.bottom };
     let y = y.clamp(a.position.y, a.position.y + a.size.height as i32 - height);
-    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+    let position = tauri::PhysicalPosition::new(x, y);
+    if window.outer_position().is_ok_and(|current| current != position) {
+        let _ = window.set_position(position);
+    }
 }

@@ -202,19 +202,21 @@ export function Brand({href}: {href?: string}) {
   );
 }
 
-/** The dashboard's languages; the choice is kept in this browser. */
+/** The language lives in app settings on desktop, otherwise in this browser. */
 export function LanguageSelect() {
   const locale = useLocale();
+  const [failed, setFailed] = useState(false);
   return (
     <label className="language">
       <span className="sr-only">{t('common.language')}</span>
-      <select value={locale} onChange={event => void chooseLocale(event.target.value as Locale).catch(() => {})}>
+      <select value={locale} onChange={event => { setFailed(false); void chooseLocale(event.target.value as Locale).catch(() => setFailed(true)); }}>
         {(Object.keys(LOCALES) as Locale[]).map(code => (
           <option key={code} value={code} lang={code}>
             {LOCALES[code].name}
           </option>
         ))}
       </select>
+      {failed && <small className="form-error" role="alert">{t('measure.saveFailed')}</small>}
     </label>
   );
 }

@@ -121,7 +121,7 @@ export function ago(time: number | null, now: number) {
   return t('time.daysAgo', {n: Math.floor(seconds / 86_400)});
 }
 
-export const clock = (time: number) => new Date(time).toLocaleTimeString(formatLocale(), {hour: '2-digit', minute: '2-digit', hour12: false});
+export const clock = (time: number) => new Date(time).toLocaleTimeString(formatLocale(), {hour: '2-digit', minute: '2-digit', hourCycle: 'h23'});
 
 /** "22 Sept": the scale along a chart's axis, which has little room; saying when is `stamp`. */
 export const shortDay = (time: number) => new Date(time).toLocaleDateString(formatLocale(), {day: 'numeric', month: 'short'});

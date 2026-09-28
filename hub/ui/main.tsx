@@ -291,7 +291,7 @@ function App() {
   const signedIn = (next: Session) => setSession(next);
 
   if (session.local) {
-    if (!session.user) return <OpenInApp />;
+    if (!session.user) return <OpenInApp compact={path === '/compact'} />;
     if (path === '/compact') return <Compact live={live} />;
     return <Dashboard user={session.user} local refresh={refresh} onSignedOut={() => void refresh()} />;
   }

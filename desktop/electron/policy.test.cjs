@@ -168,6 +168,9 @@ test('two surfaces keep separate geometry and reject commands from subframes or 
   assert.equal(main.windows.length, 2);
   const [board, panel] = main.windows;
   assert.equal(panel.options.width, 400);
+  main.navigations.length = 0;
+  main.deliver({type: 'state', generation: 1, url: hub, force: true, role: 'compact'});
+  assert.equal(main.navigations.length, 1, 'reenter affects only the requesting surface');
   assert.ok(main.navigations.at(-1).endsWith('&view=compact'));
   panel.url = 'http://127.0.0.1:23456/compact';
   assert.throws(() => main.invoke({sender: panel.webContents, senderFrame: panel.webContents.mainFrame}, 'save_settings', {role: 'main'}), /not the board/);

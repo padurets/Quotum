@@ -418,14 +418,6 @@ pub fn follow(shell: &Arc<Shell>) {
         send_state(shell, &gui, false);
     }
 }
-pub fn reenter(shell: &Arc<Shell>) {
-    let gui = shell.host.gui.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    if let Some(gui) = gui {
-        send_state(shell, &gui, true);
-    } else {
-        open(shell, "reenter");
-    }
-}
 pub fn leave(shell: &Arc<Shell>) {
     if let Some(gui) = shell.host.gui.lock().unwrap_or_else(|e| e.into_inner()).clone() {
         let _ = gui.send(&json!({"type":"leave"}));
@@ -593,8 +585,14 @@ pub fn attention_changed(shell: &Arc<Shell>, status: &crate::attention::Status) 
     }
 }
 
-pub fn reenter_role(shell: &Arc<Shell>, _: window::Role) {
-    reenter(shell);
+pub fn reenter_role(shell: &Arc<Shell>, role: window::Role) {
+    let gui = shell.host.gui.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if let Some(gui) = gui {
+        let (state, generation) = shell.hub();
+        let _ = gui.send(&json!({"type":"state", "generation":generation, "url":window::target(&state).as_str(), "force":true, "role":role}));
+    } else {
+        open_role(shell, role);
+    }
 }
 fn panel_message(shell: &Arc<Shell>, instance: u64, action: &str, height: Option<f64>) {
     if let Some(gui) = shell.host.gui.lock().unwrap_or_else(|e| e.into_inner()).clone() {

@@ -40,7 +40,7 @@ export function QuitButton({className = 'button'}: {className?: string}) {
  * port, or the app's window after the hub started again. The window can enter again, or
  * quit; a browser only learns where the board is.
  */
-export function OpenInApp() {
+export function OpenInApp({compact = false}: {compact?: boolean}) {
   return (
     <div className="auth">
       <Brand />
@@ -52,7 +52,7 @@ export function OpenInApp() {
             <button type="button" className="button primary" onClick={() => void app.reenter()}>
               {t('local.reenter')}
             </button>
-            <QuitButton />
+            {compact ? <button className="button" onClick={() => void app.closePanel()}>{t('common.close')}</button> : <QuitButton />}
           </div>
         )}
       </div>
@@ -326,7 +326,7 @@ export function AppSection({state, onState}: {state: AppState; onState: (state: 
       </div>
       {error && (
         <div className="form-error" role="alert">
-          {t('appSection.autostartFailed')}
+          {t('measure.saveFailed')}
           <Detail text={error} />
         </div>
       )}

@@ -32,7 +32,7 @@ pub fn clean(text: &str, max: usize) -> String {
 pub fn tooltip(locale: Locale, status: &Status) -> String {
     let mut parts = vec!["Quotum".into()];
     if let Some(minimum) = status.state.as_ref().and_then(|s| s.minimum.as_ref()) {
-        parts.push(fill(locale, "desktop.remaining", "remaining", &format!("{:.0}", minimum.remaining)));
+        parts.push(fill(locale, "desktop.remaining", "remaining", &format!("{:.0}", minimum.remaining.round())));
     }
     if !status.connected {
         parts.push(text(locale, "desktop.disconnected").into());
@@ -85,7 +85,7 @@ pub fn notification(locale: Locale, candidate: &Candidate) -> (String, String) {
                 clean(&title, 128),
                 format!(
                     "{prefix}{}\n{reset}",
-                    fill(locale, "desktop.remaining", "remaining", &format!("{:.0}", q.remaining))
+                    fill(locale, "desktop.remaining", "remaining", &format!("{:.0}", q.remaining.round()))
                 ),
             )
         }

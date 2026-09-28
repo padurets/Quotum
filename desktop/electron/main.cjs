@@ -56,7 +56,9 @@ function receive(message) {
       generation = message.generation;
       target = message.url;
       // getURL() is the last committed document; an older navigation may be pending.
-      if (message.force || changed) for (const entry of surfaces.values()) navigate(entry);
+      if (message.force || changed) for (const entry of surfaces.values()) {
+        if (changed || !message.role || message.role === entry.role) navigate(entry);
+      }
       break;
     }
     case 'focus':
