@@ -592,8 +592,8 @@ export function Widgets({
                     title={t('widgets.heightHint')}
                     onPointerDown={e => begin(spot.id, 'bottom', e)}
                     onKeyDown={key(spot.id, 'bottom')}
-                    // Enter and Space, and a screen reader's own activation: a click with no count.
-                    onClick={e => e.detail === 0 && fit(spot.id, 'bottom')}
+                    // Enter and Space, and a screen reader's own activation: a click with no count and no pointer (some browsers count no tap that began a gesture).
+                    onClick={e => e.detail === 0 && !(e.nativeEvent as PointerEvent).pointerType && fit(spot.id, 'bottom')}
                     onDoubleClick={() => twice(spot.id)}
                     ref={handleRef(spot.id, 'bottom')}
                   />
