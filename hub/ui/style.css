@@ -213,12 +213,14 @@ body.is-resizing, body.is-resizing * { cursor: ew-resize !important; user-select
 /*
  * No room for all of it on either side (Popover measures): it scrolls, or its list does
  * while the rest stays, down to a couple of rows; with less room, the whole of it scrolls
- * rather than lose the legend. Scrolling on past either end never scrolls the page.
+ * rather than lose the legend. Scrolling on past either end never scrolls the page. The
+ * list holds its rows' names for screen readers, which would otherwise stand out below it
+ * and give the panel more to scroll.
  */
 .popover.is-capped { overflow-y: auto; overscroll-behavior: contain; }
 .popover.is-capped:has(.agents-list) { display: flex; flex-direction: column; }
 .popover.is-capped:has(.agents-list) > * { flex-shrink: 0; }
-.popover.is-capped .agents-list { flex-shrink: 1; min-height: 88px; overscroll-behavior: contain; }
+.popover.is-capped .agents-list { position: relative; flex-shrink: 1; min-height: 88px; overscroll-behavior: contain; }
 /*
  * What is behind shows through, blurred, under a faint sheen at the top edge. Popover,
  * Modal and the tooltips of our own (the chart's, a card's dot's) wear it; a new floating
