@@ -391,8 +391,9 @@ const all: DemoSet = {
       id: 'ana',
       name: 'Ana',
       agents: true,
-      // Heights she chose, which the benchmark renders too: the list after all her cards however many, eight rows tall; the analytics taller than drawn by themselves.
-      agentsPlace: {x: 0, y: 99, w: 6, h: 8},
+      // Heights she chose, which the benchmark renders too: the list after all her cards however many, 32 rows tall, so most of its
+      // agents show with their running times and a few are left to the dialog; the analytics taller than drawn by themselves.
+      agentsPlace: {x: 0, y: 99, w: 6, h: 32},
       places: {activity: {x: 0, y: 0, w: 6, h: 12}, history: {x: 0, y: 1, w: 6, h: 16}, forecast: {x: 0, y: 2, w: 6, h: 30}},
       projects: {'docs-site': 'docs'},
       // Each group has a working agent that works within the first twenty minutes.
@@ -420,7 +421,7 @@ const all: DemoSet = {
       ],
       look: [
         'The table of agents lists many rows, by activity',
-        'The list of agents is eight rows tall: the first agents that fit whole, then "N more agents", which opens them all in a dialog, in the same order and columns, sorted there as in the widget',
+        'The list of agents is 32 rows tall: the first agents that fit whole, then "N more agents", which opens them all in a dialog, in the same order and columns, sorted there as in the widget',
         'Agent activity and the chart are taller than they draw themselves: the room goes to the plot, the totals, heads and legends stay whole',
         'The table is 30 rows tall: room under it on a wide screen; on a narrow one, where it is a list, it is as tall as its rows',
         'The chart\'s tooltip has a row for every line in the legend\'s order, with what is left, the plan and the gap in columns up to now, and after it the plan and where each forecast leads; on a phone it stays whole on the screen',

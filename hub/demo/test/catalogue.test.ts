@@ -548,7 +548,7 @@ test('every entry of the whole catalogue shows what it claims for twelve hours',
       }
       // The heights chosen on the boards the benchmark and the look go through.
       const ana = (await reading.overview('ana')).view.layout.places;
-      assert.deepEqual([ana.agents, ana.activity, ana.history, ana.forecast].map(place => place.h), [8, 12, 16, 30]);
+      assert.deepEqual([ana.agents, ana.activity, ana.history, ana.forecast].map(place => place.h), [32, 12, 16, 30]);
       assert.deepEqual(
         await Promise.all(['ben', 'team', 'quiet'].map(async board => (await reading.overview(board)).view.layout.places.agents.h)),
         [2, 5, 2],
@@ -639,7 +639,7 @@ test('the activity example puts two working agents above recent and morning work
     await live.measure(at, start + at);
     const reading = new Reading(stand, start + at, new Map([[set.scene, await hub.told()]]));
     assert.deepEqual(await checkAll(stand, set.entries, reading, at, checked), []);
-    assert.equal((await reading.overview('compact')).view.layout.places.agents.w, 2);
+    assert.deepEqual((await reading.overview('compact')).view.layout.places.agents, {x: 3, y: 1, w: 2, h: 8});
     if (at >= 2 * MIN) {
       const overview = await reading.overview('ana');
       assert.deepEqual(agentRows(overview.sources, overview.view).rows.map(r => r.session.project),
