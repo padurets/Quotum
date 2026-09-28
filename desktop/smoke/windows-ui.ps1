@@ -338,7 +338,12 @@ try {
       $deadline=(Get-Date).AddSeconds(15)
       do {$panel=[QuotumWindowProbe]::FindOther($process.Id,$window);if($panel -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 50}while((Get-Date) -lt $deadline)
       if($panel -eq [IntPtr]::Zero -or -not [QuotumWindowProbe]::Rounded($panel)){throw 'Rounded browser panel did not replace the loader'}
+      # ShowWindow and hiding the loader are separate native messages. Observe
+      # the completed handoff, not the brief interval where both are visible.
+      $deadline=(Get-Date).AddSeconds(2)
+      while([QuotumWindowProbe]::Loading($process.Id) -ne [IntPtr]::Zero -and (Get-Date) -lt $deadline){Start-Sleep -Milliseconds 10}
       if([QuotumWindowProbe]::Loading($process.Id) -ne [IntPtr]::Zero){throw 'Loader stayed over the ready panel'}
+      if(-not [QuotumWindowProbe]::IsWindowVisible($panel) -or -not [QuotumWindowProbe]::Responsive($panel)){throw 'The panel disappeared during handoff'}
       [void][QuotumWindowProbe]::PostMessage($panel,0x10,[IntPtr]::Zero,[IntPtr]::Zero)
       $deadline=(Get-Date).AddSeconds(5)
       while([QuotumWindowProbe]::IsWindowVisible($panel) -and (Get-Date) -lt $deadline){Start-Sleep -Milliseconds 50}
