@@ -247,7 +247,8 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
   // ---------- views ----------
 
   // The owner arranges a board for everyone on it, as a dashboard is in Grafana.
-  app.post<{Params: {board: string}}>('/api/boards/:board/view', {bodyLimit: 96 * 1024}, (request, reply) => {
+  // A full view must also fit the page's keepalive save when it leaves before the debounce.
+  app.post<{Params: {board: string}}>('/api/boards/:board/view', {bodyLimit: 64 * 1024}, (request, reply) => {
     const access = guards.board(request, reply, request.params.board);
     if (!access) return reply;
     if (!isOwner(access.board)) return forbidden(reply);

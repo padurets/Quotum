@@ -531,7 +531,8 @@ thirds or the whole grid. At 1000 px and below the page uses two columns, at 680
 below one, in reading order; arranging is available only on the wide grid.
 The page translates views saved before the grid, retaining hidden and absent widgets;
 the next save writes only the new layout. The hub requires that layout when saving,
-so an old page cannot overwrite it. Its view route allows 96 KiB per request, with no
+so an old page cannot overwrite it. Its view route allows 64 KiB per request, so a full
+view also fits the browser's keepalive save when leaving before the debounce, with no
 separate limit on the number of places: new visible neighbours can get their places
 without removing the ids kept by old views.
 The board's view comes with its events; the owner's changes show at once and are saved

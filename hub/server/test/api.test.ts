@@ -296,10 +296,28 @@ test('a migrated view can save new neighbours after 400 retained places, within 
   const tooLarge = {...changed, layout: {columns: 6, places: Object.fromEntries(
     Array.from({length: 800}, (_, i) => [String(i).padEnd(120, 'x'), {x: 0, y: i, w: 6}]),
   )}};
-  assert.ok(Buffer.byteLength(JSON.stringify(tooLarge)) > 96 * 1024);
+  assert.ok(Buffer.byteLength(JSON.stringify(tooLarge)) > 64 * 1024);
   assert.equal((await call('POST', `/api/boards/${board}/view`, {as: 'alice', body: tooLarge})).status, 413);
   const tooManyNames = {...changed, names: Object.fromEntries(Array.from({length: 201}, (_, i) => [String(i), 'Name']))};
   assert.equal((await call('POST', `/api/boards/${board}/view`, {as: 'alice', body: tooManyNames})).status, 400, 'other maps keep their count limits');
+});
+
+test('a full view request fits the browser keepalive byte budget', async t => {
+  const {app, call, person} = await hub();
+  t.after(() => app.close());
+  const board = await person('alice');
+  for (const unit of ['x', 'я']) {
+    const empty = {...EMPTY, padding: ''};
+    const room = 65536 - Buffer.byteLength(JSON.stringify(empty));
+    const unitBytes = Buffer.byteLength(unit);
+    // An ignored field fills the request without changing any validated view settings.
+    const exact = {...empty, padding: unit.repeat(Math.floor(room / unitBytes)) + 'x'.repeat(room % unitBytes)};
+    assert.equal(Buffer.byteLength(JSON.stringify(exact)), 65536);
+    assert.equal((await call('POST', `/api/boards/${board}/view`, {as: 'alice', body: exact})).status, 200);
+    const over = {...exact, padding: exact.padding + 'x'};
+    assert.equal(Buffer.byteLength(JSON.stringify(over)), 65537);
+    assert.equal((await call('POST', `/api/boards/${board}/view`, {as: 'alice', body: over})).status, 413);
+  }
 });
 
 test('the owner removes people and resets invite links; what someone shared leaves with them; deleting a board keeps the data', async () => {
