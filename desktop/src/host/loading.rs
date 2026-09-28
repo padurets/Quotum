@@ -6,7 +6,7 @@ use crate::{
 };
 use gtk::{gdk, glib, prelude::*};
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -68,6 +68,28 @@ pub fn install(shell: &Arc<Shell>) {
     window.style_context().add_provider(&css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
     label.style_context().add_provider(&css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
     spinner.style_context().add_provider(&css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+    let clipped = Cell::new((0, 0, 0));
+    window.connect_size_allocate(move |widget, allocation| {
+        if let Some(native) = widget.window() {
+            let width = allocation.width();
+            let height = allocation.height();
+            if clipped.replace((width, height, widget.scale_factor())) == (width, height, widget.scale_factor()) {
+                return;
+            }
+            let radius = (native_text::popup_radius() as i32).min(width / 2).min(height / 2);
+            let region = gtk::cairo::Region::create();
+            for y in 0..height {
+                let inset = if y < radius || y >= height - radius {
+                    let dy = f64::from(if y < radius { radius - y } else { y - (height - radius) + 1 }) - 0.5;
+                    (f64::from(radius) - (f64::from(radius * radius) - dy * dy).max(0.0).sqrt()).ceil() as i32
+                } else {
+                    0
+                };
+                let _ = region.union_rectangle(&gtk::cairo::RectangleInt::new(inset, y, (width - 2 * inset).max(1), 1));
+            }
+            native.shape_combine_region(Some(&region), 0, 0);
+        }
+    });
     let weak = Arc::downgrade(shell);
     window.connect_focus_out_event(move |_, _| {
         if let Some(shell) = weak.upgrade() {

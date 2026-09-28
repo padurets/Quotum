@@ -16,5 +16,8 @@ export async function prepareText(here, hub) {
   writeFileSync(path.join(here, 'resources/desktop-i18n.json'), JSON.stringify(result));
   const style = readFileSync(path.join(hub, 'ui/style.css'), 'utf8');
   const colour = name => { const value = style.match(new RegExp(`--${name}: (#[a-f0-9]+);`))?.[1]; if (!value) throw new Error(`missing colour ${name}`); return value; };
+  const radius = Number(style.match(/--popup-radius: (\d+)px;/)?.[1]);
+  if (!Number.isFinite(radius)) throw new Error('missing popup radius');
+  writeFileSync(path.join(here, 'resources/native-theme.json'), JSON.stringify({bg: colour('bg'), text: colour('text-2'), radius}));
   writeFileSync(path.join(here, 'resources/loading.css'), `window { background-color: ${colour('bg')}; } label, spinner { color: ${colour('text-2')}; }`);
 }

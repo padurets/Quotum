@@ -45,6 +45,7 @@ async function mainProcess({cursor = () => ({x: 790, y: 590}), displays = [{work
       });
     }
     setMenu() {}
+    setShape(rects) { this.shape = rects; }
     getNativeWindowHandle() { const handle = Buffer.alloc(8); handle.writeUInt32LE(windows.indexOf(this) + 100); return handle; }
     isDestroyed() { return this.destroyed; }
     isMinimized() { return false; }
@@ -372,4 +373,19 @@ test('cancelled native requests cannot reappear after paint or a delayed reveal'
   current.emit('ready-to-show');
   main.deliver({type: 'panel_reveal', request: 2, instance: 3});
   assert.equal(current.visible, true, 'an older cancellation cannot close the newer request');
+});
+
+
+test('the compact surface rounds drawing and pointer input without cropping its centre', async () => {
+  const main = await mainProcess();
+  main.deliver({type: 'focus', role: 'compact'});
+  const panel = main.windows[1];
+  const contains = (x,y) => panel.shape.some(r => x >= r.x && x < r.x+r.width && y >= r.y && y < r.y+r.height);
+  assert.equal(panel.options.transparent, true);
+  assert.equal(contains(0,0), false);
+  assert.equal(contains(panel.size[0]-1,panel.size[1]-1), false);
+  assert.equal(contains(panel.size[0]/2,panel.size[1]/2), true);
+  main.deliver({type: 'panel', instance: 2, generation: -1, action: 'height', height: 300});
+  assert.equal(contains(panel.size[0]/2,299), true);
+  assert.equal(main.windows[0].shape, undefined);
 });

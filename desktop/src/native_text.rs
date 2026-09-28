@@ -13,6 +13,21 @@ fn catalog() -> &'static Value {
             .expect("prepared native catalogs")
     })
 }
+fn theme() -> &'static Value {
+    static THEME: OnceLock<Value> = OnceLock::new();
+    THEME.get_or_init(|| {
+        serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/resources/native-theme.json")))
+            .expect("prepared native theme")
+    })
+}
+pub fn popup_radius() -> f64 {
+    theme()["radius"].as_f64().unwrap_or(12.0)
+}
+#[cfg(not(target_os = "linux"))]
+pub fn native_colour(name: &str) -> u32 {
+    let rgb = u32::from_str_radix(theme()[name].as_str().unwrap_or("#000000").trim_start_matches('#'), 16).unwrap_or(0);
+    ((rgb & 0xff) << 16) | (rgb & 0xff00) | ((rgb >> 16) & 0xff)
+}
 pub fn text(locale: Locale, key: &str) -> &'static str {
     catalog()[locale.key()][key].as_str().unwrap_or("")
 }

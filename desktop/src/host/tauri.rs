@@ -8,7 +8,10 @@ use crate::{
 use std::{
     io,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64},
+    },
     thread,
 };
 use tauri::{AppHandle, Manager, RunEvent};
@@ -17,6 +20,8 @@ pub struct Host {
     pub app: AppHandle,
     pub tray: Mutex<Option<crate::tray::Handle>>,
     pub panel_height: Mutex<f64>,
+    pub panel_ready: AtomicU64,
+    pub panel_closing: AtomicBool,
     pub panel_toggle: Mutex<window::PanelToggle>,
     pub navigation: Mutex<std::collections::BTreeMap<window::Role, window::Navigation>>,
     /// Where the board in the window hears the app's state (`watch_state`).
@@ -91,6 +96,8 @@ pub fn run(args: Args) {
                     app: handle.clone(),
                     tray: Mutex::default(),
                     panel_height: Mutex::new(180.0),
+                    panel_ready: AtomicU64::new(0),
+                    panel_closing: AtomicBool::new(false),
                     panel_toggle: Mutex::default(),
                     navigation: Mutex::default(),
                     watching: Mutex::default(),
@@ -150,7 +157,8 @@ pub fn grant_port(shell: &Shell, port: u16) {
     }
 }
 pub fn exit(shell: &Arc<Shell>, from_exit_event: bool) {
-    if let Some(tray) = shell.host.tray.lock().unwrap_or_else(|e| e.into_inner()).take() {
+    let tray = shell.host.tray.lock().unwrap_or_else(|e| e.into_inner()).take();
+    if let Some(tray) = tray {
         tray.stop();
     }
     for (_, window) in shell.host.app.webview_windows() {

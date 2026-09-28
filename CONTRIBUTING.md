@@ -33,7 +33,9 @@ work area, close/reopen through a second launch, and a second launch while the w
 minimized, which restores that very window. It disables every provider. Each
 run also opens and closes the tray panel three times, including a repeated tray
 activation, checking that it stays visible and fits its monitor without changing the main window's geometry. Each
-run starts from a fresh WebView2 profile, as the first start on a machine does: the one
+run also pauses only its own app UI thread and checks that the native loader stays
+responsive, rounded and cancellable before WebView2 finishes. The thread is always
+resumed. Each run starts from a fresh WebView2 profile, as the first start on a machine does: the one
 in `%LOCALAPPDATA%\com.padurets.quotum\EBWebView` is set aside and put back afterwards.
 With `-Diagnostics <dir>` it keeps its report (the times of every close and reopen), the
 app's logs and the app's processes there. CI uploads them when the UI smoke fails and in

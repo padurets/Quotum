@@ -396,7 +396,7 @@ fn read_messages(shell: &Arc<Shell>, gui: &Arc<Gui>, socket: UnixStream) {
         match message {
             Message::Ready => {
                 let height = *shell.host.panel_height.lock().unwrap_or_else(|e| e.into_inner());
-                let _ = gui.send(&json!({"type":"init", "role": gui.initial, "anchor": gui.anchor, "nativePanel":shell.host.native_panel, "panelRequest":gui.request, "panelHeight": height, "inspect": shell.host.inspector.is_some(), "profile": shell.dirs.webview.clone().unwrap_or_else(|| shell.dirs.data.join("chromium")), "geometry": shell.dirs.data.join("window.json")}));
+                let _ = gui.send(&json!({"type":"init", "role": gui.initial, "anchor": gui.anchor, "nativePanel":shell.host.native_panel, "panelRequest":gui.request, "panelHeight": height, "popupRadius":crate::native_text::popup_radius(), "inspect": shell.host.inspector.is_some(), "profile": shell.dirs.webview.clone().unwrap_or_else(|| shell.dirs.data.join("chromium")), "geometry": shell.dirs.data.join("window.json")}));
                 send_state(shell, gui, false);
             }
             Message::Surface { role, instance, open } => {

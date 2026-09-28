@@ -21,28 +21,72 @@ pub fn is_open(shell: &Shell) -> bool {
 /// asked, for the log.
 pub fn open(shell: &Arc<Shell>, from: &'static str) {
     shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).close();
+    crate::tray::loading(shell, false);
     open_role(shell, from, Role::Main);
 }
 pub fn open_panel(shell: &Arc<Shell>) {
     shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).show();
+    crate::tray::loading(shell, true);
     open_role(shell, "the tray", Role::Compact);
 }
 pub fn toggle_panel(shell: &Arc<Shell>, point: Option<(i32, i32)>) {
     let show = shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).toggle(Instant::now(), point);
     if show {
+        crate::tray::loading(shell, true);
         open_role(shell, "the tray", Role::Compact);
     } else {
-        let queued = shell.clone();
-        let _ = shell.host.app.run_on_main_thread(move || {
-            if queued.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).wanted() {
-                return;
-            }
+        crate::tray::loading(shell, false);
+        close_unwanted_panel(shell);
+    }
+}
+pub fn dismiss_panel(shell: &Arc<Shell>, blur: bool) {
+    {
+        let mut toggle = shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner());
+        if blur {
+            toggle.blur(Instant::now(), crate::tray::cursor_position());
+        } else {
+            toggle.close();
+        }
+    }
+    crate::tray::loading(shell, false);
+    close_unwanted_panel(shell);
+}
+fn close_unwanted_panel(shell: &Arc<Shell>) {
+    let queued = shell.clone();
+    let _ = shell.host.app.run_on_main_thread(move || {
+        if !queued.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).wanted() {
             if let Some(panel) = queued.host.app.get_webview_window("compact") {
                 let _ = panel.close();
             }
-        });
+        }
+    });
+}
+#[derive(Default)]
+struct PanelPaint {
+    placed: AtomicBool,
+    loaded: AtomicBool,
+    shown: AtomicBool,
+    cancelled: AtomicBool,
+}
+fn reveal_panel(shell: &Arc<Shell>, window: &tauri::WebviewWindow, gate: &PanelPaint) {
+    if shell.exiting()
+        || !gate.placed.load(Ordering::SeqCst)
+        || !gate.loaded.load(Ordering::SeqCst)
+        || gate.cancelled.load(Ordering::SeqCst)
+    {
+        return;
+    }
+    if !shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).wanted() {
+        let _ = window.close();
+        return;
+    }
+    if !gate.shown.swap(true, Ordering::SeqCst) {
+        if let Ok(handle) = window.hwnd() {
+            crate::tray::present_panel(shell, handle.0 as u64);
+        }
     }
 }
+
 fn open_role(shell: &Arc<Shell>, from: &'static str, role: Role) {
     let intent = opening(shell);
     let shell = shell.clone();
@@ -88,8 +132,16 @@ fn open_now(shell: &Arc<Shell>, from: &'static str, role: Role) {
                 {
                     return;
                 }
-                let _ = window.show();
-                let _ = window.set_focus();
+                if role == Role::Compact {
+                    if let Ok(hwnd) = window.hwnd() {
+                        if shell.host.panel_ready.load(Ordering::SeqCst) == hwnd.0 as u64 {
+                            crate::tray::present_panel(shell, hwnd.0 as u64);
+                        }
+                    }
+                } else {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
                 drop(_creating);
                 follow(shell);
                 return;
@@ -153,7 +205,9 @@ fn alive(shell: &Shell, window: tauri::WebviewWindow, deadline: Instant) -> Opti
         .host
         .app
         .run_on_main_thread(move || {
-            let _ = answer.send(window.is_visible().is_ok());
+            let closing = window.label() == "compact"
+                && window.app_handle().state::<Arc<Shell>>().host.panel_closing.load(Ordering::SeqCst);
+            let _ = answer.send(!closing && window.is_visible().is_ok());
         })
         .ok()?;
     answered.recv_timeout(deadline.saturating_duration_since(Instant::now())).ok()
@@ -172,6 +226,12 @@ fn build(
     let app = &shell.host.app;
     let navigating = shell.clone();
     let loading = shell.clone();
+    let paint = Arc::new(PanelPaint::default());
+    let loaded_paint = paint.clone();
+    if compact {
+        shell.host.panel_ready.store(0, Ordering::SeqCst);
+        shell.host.panel_closing.store(false, Ordering::SeqCst);
+    }
     let url = if compact { panel_target(state) } else { target(state) };
     {
         let mut navigation = shell.host.navigation.lock().unwrap_or_else(|e| e.into_inner());
@@ -212,10 +272,18 @@ fn build(
             }
             NewWindowResponse::Deny
         })
-        .on_page_load(move |_, payload| {
+        .on_page_load(move |view, payload| {
             if payload.event() == PageLoadEvent::Finished {
                 if !belongs(payload.url(), &loading.hub().0) {
                     navigate_current(&loading, true, Some(role));
+                    return;
+                }
+                if compact && !loaded_paint.cancelled.load(Ordering::SeqCst) {
+                    loaded_paint.loaded.store(true, Ordering::SeqCst);
+                    if let Ok(hwnd) = view.hwnd() {
+                        loading.host.panel_ready.store(hwnd.0 as u64, Ordering::SeqCst);
+                    }
+                    reveal_panel(&loading, &view, &loaded_paint);
                 }
                 if let Some(smoke) = loading.smoke.as_ref().filter(|_| !compact) {
                     smoke.page_loaded(&loading, payload.url());
@@ -230,6 +298,7 @@ fn build(
         let closing = window.clone();
         let resizing = shell.clone();
         let focused = AtomicBool::new(false);
+        let closing_paint = paint.clone();
         window.on_window_event(move |event| {
             if let tauri::WindowEvent::Focused(active) = event {
                 // WebView2 sends focus changes while the window is still hidden.
@@ -252,8 +321,21 @@ fn build(
                     let _ = closing.close();
                 }
             }
-            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
-                resizing.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).closed();
+            if matches!(event, tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed) {
+                closing_paint.cancelled.store(true, Ordering::SeqCst);
+                if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                    resizing.host.panel_closing.store(true, Ordering::SeqCst);
+                    resizing.host.panel_ready.store(0, Ordering::SeqCst);
+                    resizing.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).closed();
+                }
+                if !resizing.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).wanted() {
+                    crate::tray::loading(&resizing, false);
+                }
+            }
+            if matches!(event, tauri::WindowEvent::Resized(_)) {
+                if let Ok(hwnd) = closing.hwnd() {
+                    crate::windows_loading::round(hwnd.0);
+                }
             }
             if matches!(event, tauri::WindowEvent::ScaleFactorChanged { .. } | tauri::WindowEvent::Moved(_)) {
                 let height = *resizing.host.panel_height.lock().unwrap_or_else(|e| e.into_inner());
@@ -282,6 +364,7 @@ fn build(
             return;
         }
         if compact && !shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).wanted() {
+            shell.host.panel_closing.store(true, Ordering::SeqCst);
             let _ = ready.destroy();
             return;
         }
@@ -296,6 +379,14 @@ fn build(
             if let Ok(hwnd) = ready.hwnd() {
                 panel_height(&shell, hwnd.0 as u64, height);
             }
+        }
+        if compact {
+            if let Ok(hwnd) = ready.hwnd() {
+                crate::windows_loading::round(hwnd.0);
+            }
+            paint.placed.store(true, Ordering::SeqCst);
+            reveal_panel(&shell, &ready, &paint);
+            return;
         }
         if let Err(error) = ready.show() {
             shell.hub_log.line(&format!("app: the window could not be shown: {error}"));
@@ -381,6 +472,7 @@ pub fn leave(shell: &Arc<Shell>) {
 }
 
 pub fn close(shell: &Arc<Shell>) {
+    crate::tray::loading(shell, false);
     for role in [Role::Main, Role::Compact] {
         if let Some(window) = shell.host.app.get_webview_window(role.label()) {
             let _ = window.destroy();

@@ -255,6 +255,18 @@ function resizePanel(entry) {
   const height = Math.max(100, Math.min(Math.ceil(entry.height), 600, Math.floor(area.height * 0.8)));
   const [currentWidth, currentHeight] = entry.window.getContentSize();
   if (currentWidth !== width || currentHeight !== height) entry.window.setContentSize(width, height);
+  const radius = Math.min(Math.round(engineConfig.popupRadius ?? 12), Math.floor(width / 2), Math.floor(height / 2));
+  const shapeKey = `${width}:${height}:${radius}`;
+  if (typeof entry.window.setShape === 'function' && entry.shapeKey !== shapeKey) {
+    const shape = [{x: 0, y: radius, width, height: height - 2 * radius}];
+    for (let y = 0; y < radius; y++) {
+      const dy = radius - y - 0.5;
+      const inset = Math.ceil(radius - Math.sqrt(Math.max(0, radius * radius - dy * dy)));
+      shape.push({x: inset, y, width: width - 2 * inset, height: 1}, {x: inset, y: height - y - 1, width: width - 2 * inset, height: 1});
+    }
+    entry.window.setShape(shape);
+    entry.shapeKey = shapeKey;
+  }
   placePanel(entry);
 }
 function placePanel(entry) {
@@ -307,7 +319,7 @@ function openSurface(role, anchor, request) {
     title: 'Quotum', width: compact ? 400 : 1280, height: compact ? panelHeight : 800, ...geometry, minWidth: compact ? 160 : 480, minHeight: compact ? 100 : 400,
     frame: !compact, hasShadow: !compact,
     alwaysOnTop: compact, skipTaskbar: compact, resizable: !compact,
-    backgroundColor: '#0b0b0e', show: false, autoHideMenuBar: true,
+    transparent: compact, backgroundColor: compact ? '#00000000' : '#0b0b0e', show: false, autoHideMenuBar: true,
     icon: path.join(__dirname, '..', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'), sandbox: true, contextIsolation: true,

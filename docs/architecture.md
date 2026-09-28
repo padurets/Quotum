@@ -605,6 +605,11 @@ files together and requires the system WebView2 runtime; the installer can insta
 that runtime. Both variants use the same Windows profile directories, instance lock
 and start-at-login settings. Moving a portable folder requires updating its autostart
 entry by turning start at login off and on again.
+On a Windows tray activation, the tray thread shows a small Win32 loading surface
+before WebView2 creation can occupy the app event loop. Its spinner, Escape and
+blur handling remain responsive even while that loop is busy. The panel replaces
+it only after placement and page loading have both completed. A second click
+cancels either phase. No web view is retained just to warm the next opening.
 Windows are created on worker threads; restoring, fitting and showing them is queued
 on the event loop after the window-state plugin's initialization. This keeps its state
 locks on the same thread as native window events. Closing a window destroys it with its
@@ -655,6 +660,11 @@ initialize. Other systems use Chromium's default display selection.
 `--software-rendering` disables hardware acceleration for that launch. No driver,
 kernel or desktop settings are changed. Both the native window and the page use the
 same background colour while newly exposed areas are painted during a resize.
+
+Both loading and ready panels have a rounded native drawing/input boundary, using
+the popup radius prepared from the shared style tokens. The header has matching
+icon buttons for opening the board and closing the panel, with localized labels
+and tooltips.
 
 The compact view keeps each quota on one row: its name, the board's shared remaining
 meter, percentage and a short reset countdown with the full date in its tooltip.

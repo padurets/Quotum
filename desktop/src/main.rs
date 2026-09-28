@@ -27,6 +27,9 @@ mod tauri_window;
 #[cfg(not(target_os = "linux"))]
 mod tray;
 mod window;
+#[cfg(not(target_os = "linux"))]
+#[path = "host/windows_loading.rs"]
+mod windows_loading;
 use std::ffi::OsString;
 
 /// What the app was started with. Looked for anywhere among the arguments: the command of

@@ -30,6 +30,8 @@ pub struct Handle {
 pub enum Command {
     Status(Status),
     Notify(Box<crate::attention::Intent>),
+    Loading(bool),
+    PanelReady(u64),
 }
 impl Handle {
     pub fn stop(mut self) {
@@ -48,14 +50,7 @@ impl Handle {
         if hwnd.is_null() {
             return None;
         }
-        unsafe {
-            let mut identifier: NOTIFYICONIDENTIFIER = std::mem::zeroed();
-            identifier.cbSize = std::mem::size_of::<NOTIFYICONIDENTIFIER>() as u32;
-            identifier.hWnd = hwnd;
-            identifier.uID = ID;
-            let mut rect = std::mem::zeroed();
-            (Shell_NotifyIconGetRect(&identifier, &mut rect) >= 0).then_some(rect)
-        }
+        icon_rect(hwnd)
     }
 
     pub fn send(&self, command: Command) {
@@ -67,6 +62,16 @@ impl Handle {
                 }
             }
         }
+    }
+}
+fn icon_rect(hwnd: HWND) -> Option<RECT> {
+    unsafe {
+        let mut identifier: NOTIFYICONIDENTIFIER = std::mem::zeroed();
+        identifier.cbSize = std::mem::size_of::<NOTIFYICONIDENTIFIER>() as u32;
+        identifier.hWnd = hwnd;
+        identifier.uID = ID;
+        let mut rect = std::mem::zeroed();
+        (Shell_NotifyIconGetRect(&identifier, &mut rect) >= 0).then_some(rect)
     }
 }
 fn wide(text: &str) -> Vec<u16> {
@@ -92,6 +97,7 @@ struct Context {
     icon: Cell<HICON>,
     status: RefCell<Status>,
     restart: u32,
+    loading: crate::windows_loading::Panel,
 }
 
 pub fn create(_: &tauri::AppHandle, shell: &Arc<Shell>) {
@@ -131,6 +137,7 @@ pub fn create(_: &tauri::AppHandle, shell: &Arc<Shell>) {
         }
         let status = weak.upgrade().map(|s| s.attention.status()).unwrap_or_default();
         let context = Box::new(Context {
+            loading: crate::windows_loading::Panel::new(weak.clone()),
             shell: weak,
             queue: receive,
             icon: Cell::new(std::ptr::null_mut()),
@@ -226,6 +233,9 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
         COMMAND => {
             while let Ok(command) = context.queue.try_recv() {
                 match command {
+                    Command::Loading(true) => context.loading.show(icon_rect(hwnd)),
+                    Command::Loading(false) => context.loading.hide(),
+                    Command::PanelReady(handle) => context.loading.present(handle),
                     Command::Status(status) => {
                         *context.status.borrow_mut() = status;
                         unsafe {
@@ -315,5 +325,16 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
             0
         }
         _ => unsafe { DefWindowProcW(hwnd, message, w, l) },
+    }
+}
+
+pub fn loading(shell: &Shell, show: bool) {
+    if let Some(tray) = shell.host.tray.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        tray.send(Command::Loading(show));
+    }
+}
+pub fn present_panel(shell: &Shell, handle: u64) {
+    if let Some(tray) = shell.host.tray.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        tray.send(Command::PanelReady(handle));
     }
 }

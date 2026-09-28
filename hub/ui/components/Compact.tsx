@@ -67,8 +67,16 @@ export function Compact({live}: {live: ReturnType<typeof startLive>}) {
     return () => { observer.disconnect(); cancelAnimationFrame(frame); document.removeEventListener('keydown', key); };
   }, []);
   const ids = view ? ordered(view.layout, lineup.map(cardId)).map(w => w.id).filter(id => !isHidden(view, id)).map(id => id.slice(7)) : [];
-  return <div className="compact glass" ref={root}>
-    <header><h1>{t('desktop.limits')}</h1><button className="button" onClick={() => inApp() ? void app.openMain() : location.assign('/')}>{t('desktop.open')}</button>{inApp() && <button className="icon-button" onClick={() => void app.closePanel()} aria-label={t('common.close')}>×</button>}</header>
+  return <div className={`compact glass${inApp() ? " is-native" : ""}`} ref={root}>
+    <header>
+      <h1>{t('desktop.limits')}</h1>
+      <button className="icon-button" title={t('desktop.open')} aria-label={t('desktop.open')} onClick={() => inApp() ? void app.openMain() : location.assign('/')}>
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M9 2h5v5M14 2L7 9M6 3H2v11h11v-4" /></svg>
+      </button>
+      {inApp() && <button className="icon-button" title={t('common.close')} onClick={() => void app.closePanel()} aria-label={t('common.close')}>
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+      </button>}
+    </header>
     {!['live', 'polling'].includes(connection.status) && <p className="compact-quality">{t('desktop.disconnected')}</p>}
     {!ids.length && <p>{t('desktop.empty')}</p>}
     {ids.map(id => <Row key={id} id={id} />)}
