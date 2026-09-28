@@ -423,8 +423,8 @@ td.muted, small.muted { color: var(--text-3); }
 .agents-compact > li.agents-more > .agents-more-button { padding: 11px var(--panel-pad); }
 tr.agents-more > td { padding: 0; }
 tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
-/* The rows a shorter list leaves out, laid out unseen to be measured: as wide as it is, taking no room. */
-.agents-measure { height: 0; overflow: hidden; visibility: hidden; }
+/* The rows a shorter list measures, laid out unseen: as wide as it is, taking no room. Positioned, so what its rows name for screen readers is cut with them rather than lengthening the page. */
+.agents-measure { position: relative; height: 0; overflow: hidden; visibility: hidden; }
 /* All the agents in a dialog: its list's rows light up inset, as a menu's do. */
 .agents-dialog-head { display: flex; align-items: center; gap: 8px; min-height: 26px; }
 .agents-dialog .agents-compact { margin: 8px -8px 0; }
