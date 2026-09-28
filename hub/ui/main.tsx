@@ -31,7 +31,7 @@ import {InvitePage} from './components/InvitePage';
 import {MachinesDialog, type MachinesTab} from './components/Machines';
 import {BoardDialog, type BoardTab} from './components/BoardDialog';
 import {AgentBanner, LocalOnboarding, OpenInApp, QuitButton, TakeOver} from './components/Desktop';
-import {appLocale, followApp, inApp, type AppState} from './lib/app';
+import {app, appLocale, followApp, inApp, type AppState} from './lib/app';
 
 /** The page's own entry script, as the hub's `index.html` names it: a page of another build is loaded anew. */
 function entryScript() {
@@ -282,7 +282,7 @@ function App() {
           <div className="splash-text">
             {t('app.reconnecting')}
             {/* The app's window can always be quit, even with its hub gone. */}
-            {inApp() && <QuitButton />}
+            {inApp() && (path === '/compact' ? <button className="button" onClick={() => void app.closePanel()}>{t('common.close')}</button> : <QuitButton />)}
           </div>
         )}
       </div>
