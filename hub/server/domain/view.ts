@@ -48,7 +48,7 @@ export const EMPTY_VIEW: View = {
 };
 
 const COLUMNS = 6;
-const LIMITS = {widgets: 200, places: 400, windows: 500, id: 120, name: 60, columns: 20};
+const LIMITS = {widgets: 200, windows: 500, id: 120, name: 60, columns: 20};
 
 const ids = (value: unknown, max: number): string[] | null =>
   Array.isArray(value) && value.length <= max && value.every(id => typeof id === 'string' && id.length > 0 && id.length <= LIMITS.id)
@@ -81,7 +81,8 @@ const parseLayout = (value: unknown): Layout | null => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const input = value as Record<string, unknown>;
   if (input.columns !== COLUMNS || input.places === undefined) return null;
-  const places = byId(input.places, isPlace, LIMITS.places);
+  // New visible neighbours need places too; the view route bounds their total by bytes.
+  const places = byId(input.places, isPlace, Infinity);
   return places ? {columns: COLUMNS, places} : null;
 };
 const isName = (value: unknown): value is string => typeof value === 'string' && value.trim() === value && value.length > 0 && value.length <= LIMITS.name;

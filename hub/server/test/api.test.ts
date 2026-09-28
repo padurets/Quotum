@@ -16,6 +16,7 @@ import {Store} from '../store/store.js';
 import {KEEP_MS} from '../sessions.js';
 import {hashPassword, normalizeUserCode, verifyPassword} from '../domain/auth.js';
 import {Setup} from '../setup.js';
+import {legacyLayout, ordered, placesOf, settle, widened, withPlaces} from '../../ui/lib/grid.js';
 
 const iso = (ms: number) => new Date(ms).toISOString();
 const ORIGIN = 'http://localhost';
@@ -246,11 +247,10 @@ test('people share their subscriptions with a shared board; its owner arranges, 
   for (const layout of [
     {columns: 12, places: {}},
     ...[{x: 1, y: 0, w: 3}, {x: 0, y: 0, w: 5}, {x: 4, y: 0, w: 3}, {x: 0, y: -1, w: 3}, {x: 0, y: 1.5, w: 3}, {x: 0, y: 100000, w: 3}, {x: 0, y: 0, w: 3, h: 7}].map(p => ({columns: 6, places: {history: p}})),
-    {columns: 6, places: Object.fromEntries(Array.from({length: 401}, (_, i) => [String(i).padEnd(120, 'x'), {x: 0, y: i, w: 6}]))},
   ]) assert.equal((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {...view, layout}})).status, 400, JSON.stringify(layout));
   const {layout: omitted, ...legacy} = view;
   assert.equal((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: legacy})).status, 400, 'old pages cannot erase a grid');
-  const large = {columns: 6, places: Object.fromEntries(Array.from({length: 400}, (_, i) => [String(i).padEnd(120, 'x'), {x: 0, y: i, w: 6}]))};
+  const large = {columns: 6, places: Object.fromEntries(Array.from({length: 401}, (_, i) => [String(i).padEnd(120, 'x'), {x: 0, y: i, w: 6}]))};
   assert.equal((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {...view, layout: large}})).status, 200);
   const clean = await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {...view, order: ['history'], sizes: {history: 3}}});
   assert.deepEqual(clean.body, view, 'POST discards the old format');
@@ -268,6 +268,38 @@ test('people share their subscriptions with a shared board; its owner arranges, 
   assert.equal((await call('POST', `/api/boards/${personal}`, {as: 'bob', body: {name: 'Work'}})).body.name, 'Work');
   assert.equal((await call('POST', `/api/boards/${personal}`, {as: 'bob', body: {name: ''}})).body.name, '', 'a personal board gets its default name back');
   assert.equal((await call('GET', `/api/boards/${personal}/shares`, {as: 'bob'})).status, 403, 'a personal board shows everything of its person by itself');
+});
+
+test('a migrated view can save new neighbours after 400 retained places, within the byte limit', async t => {
+  const {app, call, person, store} = await hub();
+  t.after(() => app.close());
+  const board = await person('alice');
+  const legacy = {
+    order: Array.from({length: 200}, (_, i) => `source:o${i}`),
+    sizes: Object.fromEntries(Array.from({length: 200}, (_, i) => [`source:s${i}`, 4])),
+  };
+  assert.ok(Buffer.byteLength(JSON.stringify(legacy)) < 16 * 1024, 'the old route could store this view');
+  store.db.prepare('INSERT OR REPLACE INTO views VALUES (?, ?, ?, ?)').run(board, JSON.stringify(legacy), 'alice', Date.now());
+  const old = (await call('GET', `/api/overview?board=${board}`, {as: 'alice'})).body.view;
+  const ids = ['source:s0', 'source:new'];
+  const migrated = legacyLayout(old, {cards: ids, analytics: []}, []);
+  assert.equal(Object.keys(migrated.layout.places).length, 400);
+  const origin = settle(ordered(migrated.layout, ids).map(item => ({...item, h: 7})), 6);
+  const changed = withPlaces(migrated, placesOf(widened(origin, 'source:s0', 4, 6)));
+  assert.equal(Object.keys(changed.layout.places).length, 401);
+  assert.deepEqual(changed.layout.places['source:s0'], {x: 0, y: 0, w: 4});
+  assert.deepEqual(changed.layout.places['source:new'], {x: 2, y: 7, w: 3}, 'the neighbour moves down, not sideways');
+  assert.ok(Object.keys(migrated.layout.places).every(id => Object.hasOwn(changed.layout.places, id)), 'all retained settings survive');
+  assert.equal((await call('POST', `/api/boards/${board}/view`, {as: 'alice', body: changed})).status, 200);
+  assert.deepEqual((await call('GET', `/api/overview?board=${board}`, {as: 'alice'})).body.view.layout, changed.layout);
+
+  const tooLarge = {...changed, layout: {columns: 6, places: Object.fromEntries(
+    Array.from({length: 800}, (_, i) => [String(i).padEnd(120, 'x'), {x: 0, y: i, w: 6}]),
+  )}};
+  assert.ok(Buffer.byteLength(JSON.stringify(tooLarge)) > 96 * 1024);
+  assert.equal((await call('POST', `/api/boards/${board}/view`, {as: 'alice', body: tooLarge})).status, 413);
+  const tooManyNames = {...changed, names: Object.fromEntries(Array.from({length: 201}, (_, i) => [String(i), 'Name']))};
+  assert.equal((await call('POST', `/api/boards/${board}/view`, {as: 'alice', body: tooManyNames})).status, 400, 'other maps keep their count limits');
 });
 
 test('the owner removes people and resets invite links; what someone shared leaves with them; deleting a board keeps the data', async () => {
