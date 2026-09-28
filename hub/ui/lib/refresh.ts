@@ -1,6 +1,7 @@
 import {countdown, countdownChangesAt, earliest, stamp} from './format';
-import {t} from '../i18n';
+import {known, t} from '../i18n';
 import type {Refresh} from './types';
+import {ApiError, messageOf} from './http';
 
 export function refreshTime(state: Refresh): number | null {
   if (state.request?.status === 'queued') return state.request.notBefore;
@@ -36,3 +37,28 @@ export function refreshText(state: Refresh, now: number): string {
 }
 
 export const refreshPending = (state: Refresh | null) => state?.request?.status === 'queued' || state?.request?.status === 'waiting';
+
+const refusalTime = (error: unknown, state: Refresh | null) => {
+  if (!(error instanceof ApiError)) return null;
+  if (error.code === 'refresh_too_soon') return state?.retryAt ?? null;
+  if (error.code === 'refresh_unavailable') return state?.availableAt ?? null;
+  return null;
+};
+
+/** A refused action explains what prevents it and what the reader can do. */
+export function refreshErrorText(error: unknown, state: Refresh | null, now: number): string {
+  if (!(error instanceof ApiError)) return t('refresh.uncertain');
+  const at = refusalTime(error, state);
+  const reason =
+    error.code === 'refresh_unavailable' && state?.unavailable
+      ? t(`refresh.${state.unavailable}`)
+      : known(`api.${error.code}`)
+        ? messageOf(error)
+        : t('refresh.failed');
+  return [reason, ...(at !== null && at > now ? [t('refresh.retry', {time: countdown(at - now)}), stamp(at)] : [])].join('\n');
+}
+
+export function refreshErrorChangesAt(error: unknown, state: Refresh | null, now: number): number | null {
+  const at = refusalTime(error, state);
+  return at !== null && at > now ? earliest(at, countdownChangesAt(at, now)) : null;
+}

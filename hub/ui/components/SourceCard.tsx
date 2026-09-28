@@ -380,7 +380,7 @@ function CardMark({source}: {source: Card}) {
       {dot.warn || failed ? (
         <i className="dot dot-warn" />
       ) : pending ? (
-        <i className="dot dot-pending" />
+        <i className="dot dot-idle" />
       ) : (
         <i className={`dot dot-fresh ${dot.pulsing ? 'is-pulsing' : ''}`} style={{'--fresh': dot.fresh} as CSSProperties} />
       )}

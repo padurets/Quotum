@@ -664,3 +664,28 @@ test('a silent demo device checks in once even when the first live tick is after
   t.mock.timers.setTime(start + 155 * SECOND + 1);
   assert.equal((await state()).unavailable, 'silent', 'later ticks leave the device silent');
 });
+
+test('ordinary demo cards accept refresh requests; only the explicit legacy scene lacks support', async t => {
+  const all = setOf('all');
+  const example = cards(all).find(card => card.id === 'claude-max')!;
+  const extra: Card[] = Array.from({length: 17}, (_, i) => ({...example, id: `refresh-batch-${i}`, history: 5 * MIN, agents: [], on: undefined, expect: [{error: null}]}));
+  const set: DemoSet = {...all, entries: [...all.entries, ...extra]};
+  const start = Math.floor(Date.now() / MIN) * MIN;
+  const {stand} = await bringUp(t, set, start);
+  const live = new Live(stand, cadence, true);
+  t.mock.timers.setTime(start);
+  await live.pace(0, start);
+  const ana = stand.people.get('ana')!;
+  const overview = await ana.get<Snapshot>('/api/overview');
+  const ordinary = cards(set).filter(card => !card.paced && !card.failure && card.until === undefined && card.machines.includes('laptop'));
+  assert.ok(ordinary.length > 16, 'the protocol batch limit is exercised');
+  for (const card of ordinary) assert.equal(overview.refresh[stand.sources.get(card.id)!].unavailable, null, card.id);
+  assert.equal(overview.refresh[stand.sources.get('refresh-legacy')!].unavailable, 'unsupported');
+  const source = stand.sources.get(ordinary[0].id)!;
+  t.mock.timers.setTime(start + 10 * SECOND);
+  await ana.post(`/api/boards/${ana.personalBoard}/sources/${source}/refresh`);
+  assert.equal((await ana.get<Snapshot>('/api/overview')).refresh[source].request?.status, 'queued');
+  t.mock.timers.setTime(start + MIN);
+  await live.pace(MIN, start + MIN);
+  assert.equal((await ana.get<Snapshot>('/api/overview')).refresh[source].request?.status, 'updated');
+});

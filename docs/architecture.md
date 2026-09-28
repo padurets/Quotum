@@ -199,7 +199,9 @@ from what it sees of the subscription everywhere, which no single machine does:
 **Refresh from a card.** Any reader of a subscription on a board can request fresh
 limits through its existing card menu, in the web dashboard and the desktop app. The
 accepted action closes the menu; the logo’s dot and its tooltip show the wait and outcome
-without adding a control or a line to the card. One request per subscription is
+without adding a control or a line to the card. The menu action remains clickable:
+the hub rechecks availability, and a refused request explains the reason and next step
+in the menu. Nothing is sent while the page is disconnected. One request per subscription is
 accepted each minute across the hub; another click joins a pending request. Cadence
 shortens the ordinary wait to the earliest permitted measurement, respecting the
 one-minute floor, the device's minimum interval, failure pauses and unanswered-command

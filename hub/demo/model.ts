@@ -332,8 +332,8 @@ export type Card = {
   /** Measured every quarter of an hour, as an agent does a subscription nobody uses (eco mode). */
   eco?: boolean;
   /**
-   * Measured live at the hub's pace, its one machine asking every 15 seconds (spec:
-   * Following the hub's pace); its dot then says when the next measurement comes.
+   * Has pace-specific expectations, checked on the live loop's 15-second ticks.
+   * These scenes use one machine so other devices do not move the asserted schedule.
    */
   paced?: boolean;
   /** A public refresh request and a controllable stand-in response for the demo. */
