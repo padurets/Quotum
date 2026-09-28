@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useState} from 'react';
+import {useCallback, useEffect, useMemo, useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import '@fontsource-variable/geist';
 import '@fontsource-variable/geist-mono';
@@ -7,7 +7,8 @@ import {setPrefs, usePrefs} from './lib/prefs';
 import {showBoard} from './lib/timeRange';
 import {usePath} from './lib/router';
 import {boardTitle, rememberBoard, rereadSession, useBoard, useSession, type Board, type Session, type User} from './lib/session';
-import {ACTIVITY, AGENTS, areas, boardState, cardId, FORECAST, HISTORY, isHidden, reordered, spanOf, useView, withHidden, withSpan} from './lib/view';
+import {ACTIVITY, AGENTS, ANALYTICS, boardState, cardId, FORECAST, HISTORY, isHidden, useView, withHidden} from './lib/view';
+import {legacyLayout, ordered, withPlaces} from './lib/grid';
 import {page, useBoardId, useBoardMeta, useBoards, useLineup, useRole, useServerView, useTitles} from './lib/board';
 import {heardHub, hubNow, wakeDue} from './lib/clock';
 import {startLive} from './lib/live';
@@ -81,8 +82,14 @@ function Dashboard({
   // its own part; the board itself renders only when its sources, view or names change.
   const meta = useBoardMeta(boardId);
   const role = useRole();
-  const arrange = useView(useBoardId() ?? '', useServerView(), role === 'owner');
   const lineup = useLineup();
+  const serverView = useServerView();
+  const translated = useMemo(() => {
+    if (!serverView) return null;
+    const areas = {cards: [...lineup.map(cardId), AGENTS], analytics: ANALYTICS};
+    return legacyLayout(serverView, areas, [...areas.cards, ...areas.analytics].filter(id => isHidden(serverView, id)));
+  }, [serverView, lineup]);
+  const arrange = useView(useBoardId() ?? '', translated, role === 'owner');
   const titles = useTitles(arrange.view.names);
   const prefs = usePrefs();
   const [machines, setMachines] = useState<MachinesTab | null>(null);
@@ -106,7 +113,6 @@ function Dashboard({
       {
         id: cardId(id),
         name: titles[id]?.title ?? '',
-        span: spanOf(arrange.view, cardId(id)),
         content: <SourceCard id={id} arrange={arrange} boardId={boardId} personal={personal} />,
       },
     ]),
@@ -115,7 +121,6 @@ function Dashboard({
   cards.set(AGENTS, {
     id: AGENTS,
     name: t('agents.title'),
-    span: spanOf(arrange.view, AGENTS),
     content: <AgentsPanel arrange={arrange} />,
   });
   const panels = new Map<string, Widget>([
@@ -124,7 +129,6 @@ function Dashboard({
       {
         id: HISTORY,
         name: t('widgets.history'),
-        span: spanOf(arrange.view, HISTORY),
         content: <History arrange={arrange} />,
       },
     ],
@@ -133,7 +137,6 @@ function Dashboard({
       {
         id: FORECAST,
         name: t('forecast.title'),
-        span: spanOf(arrange.view, FORECAST),
         content: <Forecast arrange={arrange} />,
       },
     ],
@@ -142,27 +145,26 @@ function Dashboard({
       {
         id: ACTIVITY,
         name: t('activity.title'),
-        span: spanOf(arrange.view, ACTIVITY),
         content: <Activity arrange={arrange} />,
       },
     ],
   ]);
   // The cards are about now; agent activity, the chart and the table below them, with their
   // filters, are the analytics. Each area is arranged on its own grid, and on its own.
-  const area = areas(arrange.view, [...cards.keys()]);
-  const cardWidgets = area.cards.map(id => cards.get(id)!);
-  const panelWidgets = area.analytics.map(id => panels.get(id)!);
-  const widgets = [...cardWidgets, ...panelWidgets];
+  const cardWidgets = [...cards.values()];
+  const panelWidgets = ANALYTICS.map(id => panels.get(id)!);
+  const menuOrder = (list: Widget[]) => ordered(arrange.view.layout, list.map(w => w.id)).map(item => list.find(w => w.id === item.id)!);
+  const widgets = [...menuOrder(cardWidgets), ...menuOrder(panelWidgets)];
   const shownOf = (list: Widget[]) => list.filter(widget => !isHidden(arrange.view, widget.id));
   const shownCards = shownOf(cardWidgets);
   const shownPanels = shownOf(panelWidgets);
-  const ids = (list: Widget[]) => list.map(widget => widget.id);
-  const grid = (list: Widget[], onMove: (order: string[]) => void) => (
+  const grid = (list: Widget[], area: string) => (
     <Widgets
+      key={`${boardId}/${area}`}
       widgets={list}
+      layout={arrange.view.layout}
       movable={arrange.owner && !prefs.locked}
-      onMove={onMove}
-      onResize={(id, span) => arrange.update(view => withSpan(view, id, span))}
+      onPlaces={places => arrange.update(view => withPlaces(view, places))}
     />
   );
 
@@ -228,11 +230,11 @@ function Dashboard({
           </section>
         ) : state === 'widgets' ? (
           <>
-            {shownCards.length > 0 && grid(shownCards, order => arrange.update(view => reordered(view, [...order, ...ids(shownPanels)])))}
+            {shownCards.length > 0 && grid(shownCards, 'cards')}
             {shownPanels.length > 0 && (
               <section className="analytics" aria-label={t('analytics.title')}>
                 <AnalyticsHead />
-                {grid(shownPanels, order => arrange.update(view => reordered(view, [...ids(shownCards), ...order])))}
+                {grid(shownPanels, 'analytics')}
               </section>
             )}
           </>

@@ -132,7 +132,9 @@ Codex         api                  idle     started 25m ago · editor
 - **Boards made of widgets** (a card per subscription, agent activity, the chart, the
   table, and a list of every running agent to turn on), like a dashboard in Grafana:
   the cards show what is left now, the analytics under them share one set of filters.
-  The owner of a board drags them around, makes them wider or narrower, names the cards,
+  The owner places them on a six-column grid by dragging their heads, and resizes them
+  to a third, a half, two thirds or the whole width. Each fills only the rows its content
+  needs, so cards stack beside a tall list. The owner names the cards,
   hides the ones they don't need (the data keeps coming) and sets the plans; everyone on
   the board sees it arranged the same way. Once it's set, a lock keeps the widgets from
   moving under a passing pointer.

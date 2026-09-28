@@ -18,7 +18,7 @@ const card = (id: string, used = 50, extra: Partial<Card> = {}): Card => ({
   ...extra,
 });
 
-const VIEW = {order: [], sizes: {}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
+const VIEW = {layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
 const session = {device: {id: 'd', name: 'laptop'}, origin: 'terminal' as const, project: 'quotum', folder: null, startedAt: 1, lastWorkedAt: null, working: true};
 
 function snapshot(change: Partial<Snapshot> = {}): Snapshot {

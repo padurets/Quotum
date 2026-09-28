@@ -76,6 +76,16 @@ change as it was.
 | `ping` | `{now}` | Every `heartbeatMs`, with the hub's clock. |
 | `bye` | `{reason}` | Last: the hub lets the reader go (see below). |
 
+The board's `view` includes `layout: {columns: 6, places: {<widget id>: {x, y, w}}}`.
+`x` is a column starting at zero, `y` a row starting at zero used for reading order;
+heights are measured by the page. Widths are 2, 3, 4 or 6 columns and starts are 0, 2,
+3 or 4, with `x + w <= 6`. Stored views from before the grid can still contain `order`
+and `sizes`, with an empty layout: the page translates them, including hidden or absent
+widgets. Saving a view requires `layout`; the hub drops the old fields. A save is
+limited to 64 KiB (65,536 UTF-8 bytes), so it fits the page's keepalive request when
+leaving before the debounced save. There is no separate count limit on places; each
+place is validated.
+
 In a `snapshot`, `sources` are the cards of the board's sources in its order; `sessions`
 and `cadence` are by source id, for those sources only. `board` is `{id, name,
 personal}`; the reader's role is in `boards`, each `{id, name, personal, role}`, as it is

@@ -481,7 +481,7 @@ const all: DemoSet = {
       name: 'With Dan',
       owner: 'ana',
       members: ['dan'],
-      forecastSpan: 4,
+      forecastWidth: 2,
       tableColumns: ['during'],
       expect: [{state: 'widgets'}, {tableLayout: 'list'}],
       look: ['The table, a third of the board wide, is a list: each window its name and what is left, then the rest with their headings; nothing scrolls sideways'],
@@ -495,6 +495,11 @@ const all: DemoSet = {
       agents: true,
       // No agent on it: over a month, only from when work was known.
       expect: [{rows: 'none'}, {activityEmpty: 'none', range: '24h', from: 0, to: 0}, {activityEmpty: 'noneSince', range: '30d', from: 0, to: 0}],
+    },
+    {
+      kind: 'board', id: 'grid', name: 'Grid', owner: 'ana', members: [], agents: true,
+      agentsPlace: {x: 0, y: 0, w: 3}, expect: [{state: 'widgets'}],
+      look: ['The agents stand on the left half; Claude, Codex and Antigravity stack on the right at their own heights, their trays at the bottom of their rows'],
     },
     {kind: 'board', id: 'night', name: 'Night shift', owner: 'ana', members: [], agents: true, expect: [{rows: 'noneShown'}, {activityEmpty: 'noSources', range: '24h', from: 0, to: 0}]},
     {kind: 'board', id: 'empty', name: 'Empty board', owner: 'ana', members: ['cleo'], expect: [{state: 'onboarding'}]},
@@ -539,7 +544,7 @@ const all: DemoSet = {
         weekly({id: 'weekly:fable', label: 'Fable', since: -1.5 * DAY, use: through([0, 0], [0.5, 6], [1.5, 12])}),
       ],
       agents: MAX_AGENTS,
-      on: {ana: {}, team: {hidden: true}},
+      on: {ana: {}, team: {hidden: true}, grid: {place: {x: 3, y: 0, w: 3}}},
       expect: [
         {title: 'Claude'},
         {error: null},
@@ -576,7 +581,7 @@ const all: DemoSet = {
         rolling({id: 'flash:window-1440', kind: 'other', label: 'Flash', minutes: 1440, offset: -8 * HOUR, use: elapsed => (1.5 * elapsed) / HOUR}),
         fixed({id: 'credits', label: 'Credits', used: 40}),
       ],
-      on: {ana: {plan: 'off'}},
+      on: {ana: {plan: 'off'}, grid: {plan: 'off', place: {x: 3, y: 2, w: 3}}},
       expect: [
         {title: 'Antigravity'},
         {window: 'gemini:session', name: 'Gemini Pro · 5 hours'},
@@ -653,7 +658,7 @@ const all: DemoSet = {
                   ],
                 },
       agents: PRO_AGENTS,
-      on: {ana: {}, night: {hidden: true}},
+      on: {grid: {place: {x: 3, y: 1, w: 3}}, ana: {}, night: {hidden: true}},
       expect: [
         {work: 'session', range: '24h', left: 'untilReset', from: 0, to: 0},
         {title: 'Codex'},
@@ -680,7 +685,7 @@ const all: DemoSet = {
       history: 2 * DAY,
       windows: [fiveHours(-60 * MIN, 36, agentsWork(AHEAD_AGENTS, shifts(9))), weekly({since: -2.5 * DAY, use: through([0, 0], [1.5, 62.5], [2.5, 77.5])})],
       agents: AHEAD_AGENTS,
-      on: {ana: {name: 'Ahead of the plan', span: 4}},
+      on: {ana: {name: 'Ahead of the plan', width: 2}},
       expect: [
         {title: 'Ahead of the plan'},
         {agents: 1, drawn: true},
@@ -705,7 +710,7 @@ const all: DemoSet = {
       windows: [fiveHours(90 * MIN, 6, agentsWork(ON_CALL_AGENTS, shifts(12))), weekly({since: -2 * DAY, use: alongPlan(-15, WEEK_PLAN_FLAT)})],
       resets: () => ({available: 3, expiring: [{count: 3, expiresAt: 25 * DAY}]}),
       agents: ON_CALL_AGENTS,
-      on: {ana: {name: 'Codex Pro for the platform team and the on-call rotation', color: '#43aca1', plan: WEEK_PLAN_FLAT, span: 4}},
+      on: {ana: {name: 'Codex Pro for the platform team and the on-call rotation', color: '#43aca1', plan: WEEK_PLAN_FLAT, width: 2}},
       expect: [
         {title: 'Codex Pro for the platform team and the on-call rotation'},
         {agents: 10, drawn: true},
@@ -730,7 +735,7 @@ const all: DemoSet = {
       machines: ['laptop'],
       history: 2 * DAY,
       windows: [fiveHours(10 * MIN, 5, onAndOff(14)), weekly({since: -4 * DAY, use: through([0, 0], [3, 87.2], [4, 93])})],
-      on: {ana: {name: 'Running low', span: 4}, quiet: {}},
+      on: {ana: {name: 'Running low', width: 2}, quiet: {}},
       expect: [
         {title: 'Running low'},
         {agents: 0, drawn: true},
@@ -1168,7 +1173,7 @@ const showcase: DemoSet = {
         weekly({id: 'weekly:fable', label: 'Fable', since: -(3 * DAY + 21 * HOUR), use: through([0, 0], [3, 42], [4, 45])}),
       ],
       agents: PLATFORM_AGENTS,
-      on: {demo: {name: 'Platform team', span: 8}},
+      on: {demo: {name: 'Platform team', width: 4}},
       expect: [{title: 'Platform team'}, {agents: 5, drawn: true}, {error: null}],
     },
     {
@@ -1184,7 +1189,7 @@ const showcase: DemoSet = {
         weekly({id: 'claude:weekly', label: 'Claude', since: -(3 * DAY + HOUR), use: through([0, 0], [3, 62], [4, 70])}),
       ],
       agents: RESEARCH_AGENTS,
-      on: {demo: {name: 'Research', span: 4, plan: 'off'}},
+      on: {demo: {name: 'Research', width: 2, plan: 'off'}},
       expect: [{title: 'Research'}, {agents: 1, drawn: true}],
     },
     {
@@ -1230,7 +1235,7 @@ const showcase: DemoSet = {
       history: 7 * DAY,
       windows: [fiveHours(-2 * HOUR - 44 * MIN, 8, agentsWork(ANNA_AGENTS, ALWAYS)), weekly({since: -(2 * DAY + HOUR), use: through([0, 0], [1, 12], [2, 20])})],
       agents: ANNA_AGENTS,
-      on: {demo: {name: 'Anna', span: 5}},
+      on: {demo: {name: 'Anna', width: 3}},
       expect: [{title: 'Anna'}, {agents: 2, drawn: true}],
     },
     {
@@ -1242,7 +1247,7 @@ const showcase: DemoSet = {
       history: 7 * DAY,
       windows: [fiveHours(-4 * HOUR - 14 * MIN, 8, agentsWork(PERSONAL_AGENTS, ALWAYS)), weekly({since: -(5 * DAY + 15 * HOUR), use: through([0, 0], [4.6, 80], [5.6, 88])})],
       agents: PERSONAL_AGENTS,
-      on: {demo: {name: 'Personal', span: 7}},
+      on: {demo: {name: 'Personal', width: 4}},
       expect: [{title: 'Personal'}, {agents: 1, drawn: true}],
     },
   ],
@@ -1265,7 +1270,7 @@ const activity: DemoSet = {
   scene: 'quiet',
   entries: [
     {kind: 'person', id: 'ana', name: 'Ana', agents: true, expect: [{rows: 12}, {firstMachines: ['workstation', 'workstation', 'laptop', 'laptop'], from: 2 * MIN, to: 10 * MIN}], look: ['At full width, sortable headers; two agents on workstation rise to the top after a minute']},
-    {kind: 'board', id: 'compact', name: 'Compact agents', owner: 'ana', members: [], agents: true, agentsSpan: 4, expect: [{rows: 12}], look: ['At 4 of 12 columns the widget is a compact list, with a sort menu']},
+    {kind: 'board', id: 'compact', name: 'Compact agents', owner: 'ana', members: [], agents: true, agentsWidth: 2, expect: [{rows: 12}], look: ['At a third of the grid the widget is a compact list, with a sort menu']},
     {
       kind: 'card', id: 'activity', provider: 'codex', plan: 'pro', machines: ['workstation', 'laptop', 'server'], history: DAY,
       windows: [weekly({since: -2 * DAY, use: steady(0, 10)})], agents: SORT_AGENTS,
