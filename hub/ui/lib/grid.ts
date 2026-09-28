@@ -3,7 +3,10 @@ export const COLUMNS = 6;
 export const ROW = 48;
 export const GAP = 16;
 export const rowsOf = (px: number) => Math.max(1, Math.ceil((px + GAP) / ROW));
-export type Place = {x: number; y: number; w: number};
+/** The tallest a board's owner makes a widget, in rows; the hub holds a height to it too. */
+export const MAX_ROWS = 200;
+/** Where a widget stands, and the height in rows its owner chose for it; none: as tall as its content. */
+export type Place = {x: number; y: number; w: number; h?: number};
 export type Layout = {columns: number; places: Record<string, Place>};
 export type Item = {id: string; x: number; w: number; h: number};
 export type Spot = Item & {y: number};
@@ -26,7 +29,9 @@ export function settle(items: Item[], columns: number): Spot[] {
 /** New widgets follow their natural neighbour, even on an already arranged board. */
 export function ordered(layout: Layout, ids: string[], hidden: string[] = []): Omit<Item, 'h'>[] {
   const visible = ids.filter(id => !hidden.includes(id));
-  const items = reading(visible.filter(id => Object.hasOwn(layout.places, id)).map(id => ({id, ...layout.places[id]}))) as Omit<Item, 'h'>[];
+  // The chosen height stays in the layout: what a widget takes is worked out from it and its content.
+  const saved = visible.filter(id => Object.hasOwn(layout.places, id)).map(id => ({id, x: layout.places[id].x, y: layout.places[id].y, w: layout.places[id].w}));
+  const items: Omit<Item, 'h'>[] = reading(saved);
   visible.forEach((id, i) => {
     if (items.some(item => item.id === id)) return;
     const prev = items.find(item => item.id === visible[i - 1]);
@@ -88,6 +93,43 @@ export function stepped(origin: Spot[], id: string, key: string, columns: number
 }
 
 export const placesOf = (spots: Spot[]): Record<string, Place> => Object.fromEntries(spots.map(({id, x, y, w}) => [id, {x, y, w}]));
+
+/**
+ * The rows a widget takes: as many as its content needs, or as many as its owner chose
+ * (`requested`), never fewer than the least it can show (`min`, in pixels). Before its
+ * content is first measured, a chosen height is taken as it is.
+ */
+export const rowsFor = (size: {min: number; natural: number} | undefined, requested: number | undefined) =>
+  requested === undefined ? rowsOf(size?.natural ?? 224) : Math.max(requested, size ? rowsOf(size.min) : 1);
+
+/**
+ * The height a widget's owner chose by a gesture or a key, in rows, or undefined when
+ * nothing is to be saved. `start` is how many rows it took when they began, `requested` how
+ * many they asked for; `baseline` how many it takes now with the height it had (its content
+ * may have changed meanwhile), `min` how few it can take. A widget pushed below its least,
+ * or asked for what it already shows, keeps its height, whether chosen or its content's; one
+ * that would only follow its content against the way it was pulled does too.
+ */
+export function heightIntent(start: number, baseline: number, requested: number, min: number): number | undefined {
+  if (requested === start || min > MAX_ROWS) return undefined;
+  const rows = Math.min(MAX_ROWS, Math.max(1, min, requested));
+  if (rows === baseline || Math.sign(rows - baseline) !== Math.sign(requested - start)) return undefined;
+  return rows;
+}
+
+/**
+ * Places a gesture or a key put widgets in, with every chosen height carried over from the
+ * layout they change (the latest, not yet saved one); only `height` changes one, and a null
+ * there gives that widget back the height of its content.
+ */
+export function withHeights(saved: Record<string, Place>, places: Record<string, Place>, height?: {id: string; rows: number | null}) {
+  return Object.fromEntries(
+    Object.entries(places).map(([id, {x, y, w}]) => {
+      const h = height?.id === id ? height.rows : saved[id]?.h;
+      return [id, h == null ? {x, y, w} : {x, y, w, h}];
+    }),
+  ) as Record<string, Place>;
+}
 
 /** Reading order may change without moving anything, for example Home on the top-right card. */
 export function samePlaces(a: Spot[], b: Spot[]): boolean {

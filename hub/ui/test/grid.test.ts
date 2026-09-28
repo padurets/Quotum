@@ -2,12 +2,15 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {
   cellOf,
+  heightIntent,
   landed,
   legacyLayout,
+  MAX_ROWS,
   narrowed,
   ordered,
   placesOf,
   reading,
+  rowsFor,
   rowsOf,
   samePlaces,
   settle,
@@ -15,8 +18,11 @@ import {
   stepped,
   widened,
   widths,
+  withHeights,
   withPlaces,
   type Item,
+  type Layout,
+  type Place,
   type Spot,
 } from '../lib/grid';
 const item = (id: string, x = 0, w = 3, h = 7): Item => ({id, x, w, h});
@@ -120,6 +126,69 @@ test('new widgets follow natural neighbours and hidden places survive changes', 
   const next = withPlaces({layout, order: [], sizes: {}}, {agents: {x: 0, y: 12, w: 6}});
   assert.deepEqual(next.layout.places['source:c'], layout.places['source:c']);
   assert.ok(!('order' in next) && !('sizes' in next));
+});
+
+test('a chosen height is kept apart from what content needs: the widget takes the larger, the layout keeps the choice', () => {
+  // Pixels whose rows are 7 and 10.
+  const px = {7: 300, 10: 450};
+  const size = (rows: 7 | 10) => ({min: px[rows], natural: px[rows]});
+  assert.deepEqual([7, 10, 7].map(rows => rowsFor(size(rows as 7 | 10), 8)), [8, 10, 8]);
+  assert.deepEqual([7, 10, 7].map(rows => rowsFor(size(rows as 7 | 10), undefined)), [7, 10, 7]);
+  // A list can show fewer rows than all of it: its least is below what it needs whole.
+  assert.equal(rowsFor({min: 150, natural: 2424}, undefined), 51);
+  assert.equal(rowsFor({min: 150, natural: 2424}, 8), 8);
+  // Before its content is measured a chosen height is taken as it is, never a guess.
+  assert.equal(rowsFor(undefined, 8), 8);
+  assert.equal(rowsFor(undefined, undefined), rowsOf(224));
+  const layout = {columns: 6, places: {a: {x: 0, y: 0, w: 3, h: 9}, b: {x: 3, y: 0, w: 3}}};
+  const items = ordered(layout, ['a', 'b']);
+  assert.ok(items.every(item => !('h' in item)), 'the chosen height never becomes the measured one');
+  assert.deepEqual(placesOf(settle(items.map(item => ({...item, h: 12})), 6)), {a: {x: 0, y: 0, w: 3}, b: {x: 3, y: 0, w: 3}});
+});
+
+test('the height asked for is saved only when it changes what shows, in the direction pulled', () => {
+  for (const [what, [start, baseline, requested, min], expected] of [
+    ['a card at its least, pulled up', [7, 7, 6, 7], undefined],
+    ['a chosen 8 below its least of 10, pulled to 9', [10, 10, 9, 10], undefined],
+    ['the same, pulled to 11', [10, 10, 11, 10], 11],
+    ['a list of 51 rows that can show 4, pulled to 8', [51, 51, 8, 4], 8],
+    ['the corner moved only sideways, its least now 12', [10, 10, 10, 12], undefined],
+    ['the corner narrowed a chart whose legend wraps, pulled up a row', [8, 9, 7, 9], undefined],
+    ['a card grown from 6 to 7 meanwhile, pulled up', [6, 7, 5, 7], undefined],
+    ['a card needing more than the most', [210, 210, 209, 210], undefined],
+    ['a list of 250 rows, pulled down', [250, 250, 251, 4], undefined],
+    ['two agents that need all their rows, one row up', [3, 3, 2, 3], undefined],
+    ['pulled past the most', [10, 10, 250, 4], MAX_ROWS],
+    ['at the most, one row down', [MAX_ROWS, MAX_ROWS, MAX_ROWS + 1, 4], undefined],
+    ['before its least is known', [8, 8, 9, 1], 9],
+    ['snapping on release wraps a card taller, pulled down a row', [6, 8, 7, 8], undefined],
+    ['the corner widened a widget that now needs 6, pulled up to 7', [8, 6, 7, 6], undefined],
+    ['not moved', [8, 8, 8, 1], undefined],
+  ] as const)
+    assert.equal(heightIntent(start, baseline, requested, min), expected, what);
+  assert.equal(MAX_ROWS, 200);
+});
+
+test('saving places carries every chosen height over; only the height named changes, and null takes it away', () => {
+  const saved: Record<string, Place> = {a: {x: 0, y: 0, w: 3, h: 8}, b: {x: 3, y: 0, w: 3}, hidden: {x: 0, y: 30, w: 6, h: 5}};
+  const moved = {a: {x: 3, y: 0, w: 3}, b: {x: 0, y: 0, w: 3}};
+  assert.deepEqual(withHeights(saved, moved), {a: {x: 3, y: 0, w: 3, h: 8}, b: {x: 0, y: 0, w: 3}});
+  assert.deepEqual(withHeights(saved, moved, {id: 'b', rows: 4}), {a: {x: 3, y: 0, w: 3, h: 8}, b: {x: 0, y: 0, w: 3, h: 4}});
+  const reset = withHeights(saved, moved, {id: 'a', rows: null});
+  assert.deepEqual(reset, {a: {x: 3, y: 0, w: 3}, b: {x: 0, y: 0, w: 3}});
+  assert.ok(!('h' in reset.a), 'no key, not undefined or null');
+  // As the page applies it: every change works on the latest view, saved or not yet.
+  const apply = (view: {layout: Layout}, places: Record<string, Place>, height?: {id: string; rows: number | null}) =>
+    withPlaces(view, withHeights(view.layout.places, places, height));
+  let view: {layout: Layout} = {layout: {columns: 6, places: saved}};
+  view = apply(view, {a: {x: 0, y: 0, w: 3}, b: {x: 3, y: 0, w: 3}}, {id: 'b', rows: 12});
+  view = apply(view, moved);
+  assert.deepEqual(view.layout.places, {a: {x: 3, y: 0, w: 3, h: 8}, b: {x: 0, y: 0, w: 3, h: 12}, hidden: {x: 0, y: 30, w: 6, h: 5}}, 'a step then a move before saving keeps both, and the hidden place');
+  view = apply(view, moved, {id: 'b', rows: null});
+  assert.deepEqual(view.layout.places.b, {x: 0, y: 0, w: 3});
+  view = apply(view, moved, {id: 'a', rows: 9});
+  view = apply(view, moved, {id: 'a', rows: null});
+  assert.ok(!('h' in view.layout.places.a), 'a step and a reset before saving leave no height');
 });
 
 test('narrow screens keep sides and reading order; the middle third takes the shorter stack', () => {

@@ -8,7 +8,7 @@ import {showBoard} from './lib/timeRange';
 import {usePath} from './lib/router';
 import {boardTitle, rememberBoard, rereadSession, useBoard, useSession, type Board, type Session, type User} from './lib/session';
 import {ACTIVITY, AGENTS, ANALYTICS, boardState, cardId, FORECAST, HISTORY, isHidden, useView, withHidden} from './lib/view';
-import {legacyLayout, ordered, withPlaces} from './lib/grid';
+import {legacyLayout, ordered, withHeights, withPlaces} from './lib/grid';
 import {page, useBoardId, useBoardMeta, useBoards, useLineup, useRole, useServerView, useTitles} from './lib/board';
 import {heardHub, hubNow, wakeDue} from './lib/clock';
 import {startLive} from './lib/live';
@@ -164,7 +164,7 @@ function Dashboard({
       widgets={list}
       layout={arrange.view.layout}
       movable={arrange.owner && !prefs.locked}
-      onPlaces={places => arrange.update(view => withPlaces(view, places))}
+      onPlaces={(places, height) => arrange.update(view => withPlaces(view, withHeights(view.layout.places, places, height)))}
     />
   );
 

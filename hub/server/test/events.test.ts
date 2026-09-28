@@ -243,6 +243,31 @@ test('a stream starts with hello and the board as the reader sees it, the same a
   assert.deepEqual(await s.types(300), [], 'nothing changed: nothing more');
 });
 
+test('a height the owner chose reaches every reader: in the view event of one already reading, in the snapshot of one who comes later', async t => {
+  const h = await hub();
+  t.after(() => (letGo(), h.app.close()));
+  await h.person('alice');
+  const team = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
+  await h.person('bob', await h.invite('alice', team));
+  const bob = await reading(h, 'bob', team);
+  t.after(bob.close);
+  const layout = {columns: 6, places: {history: {x: 0, y: 0, w: 6, h: 12}, agents: {x: 0, y: 12, w: 3}}};
+  const saved = await h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {layout}});
+  assert.deepEqual(saved.body.layout, layout);
+  const told = (await bob.within()).filter(e => e.type === 'view');
+  assert.deepEqual(told.map(e => e.data.view.layout), [layout]);
+  const later = await reading(h, 'bob', team);
+  t.after(later.close);
+  assert.deepEqual(later.snapshot.view.layout, layout);
+  assert.deepEqual((await h.call('GET', `/api/overview?board=${team}`, {as: 'bob'})).body.view.layout, layout);
+  // Given back to its content: the key goes, for everyone.
+  const auto = {columns: 6, places: {history: {x: 0, y: 0, w: 6}, agents: {x: 0, y: 12, w: 3}}};
+  await h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {layout: auto}});
+  const again = (await bob.within()).filter(e => e.type === 'view');
+  assert.deepEqual(again.map(e => e.data.view.layout), [auto]);
+  assert.ok(!('h' in again[0].data.view.layout.places.history));
+});
+
 test('a change goes out once, only as the part it changed, in one event however many touches it took', async t => {
   const h = await hub();
   t.after(() => (letGo(), h.app.close()));
@@ -936,6 +961,8 @@ test('every change a reader sees is told: what each request touches reaches the 
     ['a project renamed', () => h.call('POST', '/api/projects', {as: 'alice', body: {groups: ['quotum'], name: 'Quotum'}}), ['sessions'], ['sessions'], []],
     ['a project given its name back', () => h.call('POST', '/api/projects/restore', {as: 'alice', body: {reported: ['quotum']}}), ['sessions'], ['sessions'], []],
     ['a view saved', () => h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {layout: {columns: 6, places: {history: {x: 0, y: 0, w: 6}}}}}), [], ['view'], []],
+    ['a height chosen', () => h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {layout: {columns: 6, places: {history: {x: 0, y: 0, w: 6, h: 9}}}}}), [], ['view'], []],
+    ['the height given back to the content', () => h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {layout: {columns: 6, places: {history: {x: 0, y: 0, w: 6}}}}}), [], ['view'], []],
     ['a board renamed', () => h.call('POST', `/api/boards/${team}`, {as: 'alice', body: {name: 'Crew'}}), ['boards'], ['board', 'boards'], ['boards']],
     ['a board made', () => h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Solo'}}), ['boards'], ['boards'], []],
     ['a name changed', () => h.call('POST', '/api/account', {as: 'alice', body: {name: 'Alicia'}}), ['card'], ['card'], []],

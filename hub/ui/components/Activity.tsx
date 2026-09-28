@@ -15,6 +15,7 @@ import {Segmented} from './Kit';
 import {HideRow, Popover, SlidersIcon} from './Popover';
 import {Tooltip, useTip} from './Tooltip';
 import {useTimeAxis} from './timeAxis';
+import {usePlot} from './sizing';
 
 const MINUTE = 60_000;
 
@@ -59,6 +60,9 @@ function ActivitySettings({arrange}: {arrange: Arrange}) {
  */
 export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const {history, loading} = useHistory();
+  const panel = useRef<HTMLElement>(null);
+  // Made taller by its owner, the widget gives the room to the stacks, as the chart does.
+  const {plot, onBase} = usePlot(panel);
   const lineup = useLineup();
   const titles = useTitles(arrange.view.names);
   const prefs = usePrefs();
@@ -95,7 +99,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
         : t(`activity.${said.key}`);
 
   return (
-    <section className={`panel activity ${loading ? 'is-loading' : ''}`} data-time="chart" aria-label={t('activity.title')} aria-busy={loading}>
+    <section ref={panel} className={`panel activity ${loading ? 'is-loading' : ''}`} data-time="chart" aria-label={t('activity.title')} aria-busy={loading}>
       <div className="panel-head">
         <h2>{t('activity.title')}</h2>
         <ActivitySettings arrange={arrange} />
@@ -115,7 +119,9 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
         </div>
       )}
       {empty ? (
-        <div className="chart chart-loading">{empty}</div>
+        <div className="chart chart-loading" style={plot === undefined ? undefined : {height: plot}}>
+          {empty}
+        </div>
       ) : (
         <>
           <Stacks
@@ -127,6 +133,8 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
             unknownTo={since}
             onSelect={setTimeRange}
             onStep={direction => goTo(step(selected, prefs.range, direction, hubNow(), historyStart))}
+            plot={plot}
+            onBase={onBase}
           />
           <div className="legend">
             {groups.map((group, i) => (
@@ -143,10 +151,14 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   );
 });
 
+/** How tall the stacks are drawn by themselves, in their units: lower on a narrow widget. */
+export const stacksHeight = (width: number) => (width < 560 ? 160 : 200);
+
 /**
  * The stacks of the period's bars, of the groups shown, with the part before work was known
  * marked, and a bar's tooltip: its groups' parts, its work time and how many agents worked
- * in it. It reads, and moves through time, as the chart does (`useTimeAxis`).
+ * in it. It reads, and moves through time, as the chart does (`useTimeAxis`), and is made
+ * taller as the chart is (`plot`, `onBase`).
  */
 function Stacks({
   activity,
@@ -157,6 +169,8 @@ function Stacks({
   unknownTo,
   onSelect,
   onStep,
+  plot,
+  onBase,
 }: {
   activity: ActivityData;
   /** Where the answer begins: the bars are drawn from there, so their numbers stay small however old the hub. */
@@ -169,6 +183,8 @@ function Stacks({
   unknownTo: number | null;
   onSelect: (range: TimeRange) => void;
   onStep: (direction: -1 | 1) => void;
+  plot: number | undefined;
+  onBase: (height: number) => void;
 }) {
   const barMs = activity.barMs;
   // Room for the scale's longest label ("30 мин") within the widget.
@@ -176,7 +192,9 @@ function Stacks({
   const right = 12;
   const {box, svg, width, scale, hover, drag, x, clip, handlers} = useTimeAxis({from, to, end: to, cellMs: barMs, left, right, onSelect, onStep});
   const narrow = width < 560;
-  const height = narrow ? 160 : 200;
+  const base = stacksHeight(width);
+  const height = plot === undefined ? base : Math.max(base, plot / scale);
+  useLayoutEffect(() => onBase(base * scale), [base, scale, onBase]);
   const top = 12;
   const bottom = 28;
   const span = Math.max(MINUTE, to - from);

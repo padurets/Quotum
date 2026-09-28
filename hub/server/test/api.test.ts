@@ -16,7 +16,8 @@ import {Store} from '../store/store.js';
 import {KEEP_MS} from '../sessions.js';
 import {hashPassword, normalizeUserCode, verifyPassword} from '../domain/auth.js';
 import {Setup} from '../setup.js';
-import {legacyLayout, ordered, placesOf, settle, widened, withPlaces} from '../../ui/lib/grid.js';
+import {legacyLayout, MAX_ROWS, ordered, placesOf, settle, widened, withPlaces} from '../../ui/lib/grid.js';
+import {MAX_ROWS as HUB_MAX_ROWS} from '../domain/view.js';
 
 const iso = (ms: number) => new Date(ms).toISOString();
 const ORIGIN = 'http://localhost';
@@ -213,7 +214,7 @@ test('a disconnected machine takes along what only it measured, from every board
 
 test('people share their subscriptions with a shared board; its owner arranges, names, hides and takes them off', async () => {
   const {call, person, store} = await hub();
-  await person('alice');
+  const alices = await person('alice');
   const team = (await call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
   await person('bob', (await call('POST', `/api/boards/${team}/invites`, {as: 'alice'})).body.url.split('/invite/')[1]);
   const bobs = (await call('POST', '/api/tokens', {as: 'bob', body: {}})).body.secret;
@@ -246,8 +247,19 @@ test('people share their subscriptions with a shared board; its owner arranges, 
   assert.deepEqual((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: older})).body.shownColumns, {});
   for (const layout of [
     {columns: 12, places: {}},
-    ...[{x: 1, y: 0, w: 3}, {x: 0, y: 0, w: 5}, {x: 4, y: 0, w: 3}, {x: 0, y: -1, w: 3}, {x: 0, y: 1.5, w: 3}, {x: 0, y: 100000, w: 3}, {x: 0, y: 0, w: 3, h: 7}].map(p => ({columns: 6, places: {history: p}})),
+    ...[{x: 1, y: 0, w: 3}, {x: 0, y: 0, w: 5}, {x: 4, y: 0, w: 3}, {x: 0, y: -1, w: 3}, {x: 0, y: 1.5, w: 3}, {x: 0, y: 100000, w: 3}, {x: 0, y: 0, w: 3, z: 1}].map(p => ({columns: 6, places: {history: p}})),
+    ...[0, -1, 1.5, MAX_ROWS + 1, null, '7', true].map(h => ({columns: 6, places: {history: {x: 0, y: 0, w: 3, h}}})),
+    {columns: 6, places: {history: {x: 0, y: 0, w: 3, h: 7, z: 1}}},
   ]) assert.equal((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {...view, layout}})).status, 400, JSON.stringify(layout));
+  // A height the owner chose goes with its place; none while the widget follows its content.
+  assert.equal(HUB_MAX_ROWS, MAX_ROWS, 'the page and the hub hold a height to the same most');
+  for (const h of [1, 8, MAX_ROWS]) {
+    const tall = {...view, layout: {columns: 6, places: {...view.layout.places, history: {x: 0, y: 0, w: 6, h}}}};
+    assert.deepEqual((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: tall})).body, tall, `h ${h}`);
+    assert.deepEqual((await call('GET', `/api/overview?board=${team}`, {as: 'bob'})).body.view, tall, 'a member sees the chosen height');
+  }
+  assert.equal((await call('POST', `/api/boards/${team}/view`, {as: 'bob', body: {...view, layout: {columns: 6, places: {history: {x: 0, y: 0, w: 6, h: 9}}}}})).status, 403, 'only the owner chooses a height');
+  assert.equal((await call('POST', `/api/boards/${alices}/view`, {as: 'bob', body: {...view, layout: {columns: 6, places: {history: {x: 0, y: 0, w: 6, h: 9}}}}})).status, 404);
   const {layout: omitted, ...legacy} = view;
   assert.equal((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: legacy})).status, 400, 'old pages cannot erase a grid');
   const large = {columns: 6, places: Object.fromEntries(Array.from({length: 401}, (_, i) => [String(i).padEnd(120, 'x'), {x: 0, y: i, w: 6}]))};
@@ -306,14 +318,18 @@ test('a full view request fits the browser keepalive byte budget', async t => {
   const {app, call, person} = await hub();
   t.after(() => app.close());
   const board = await person('alice');
+  // Places with chosen heights count as any other part of the view.
+  const places = Object.fromEntries(Array.from({length: 50}, (_, i) => [`source:${i}`, {x: 0, y: i * 10, w: 6, h: i % 2 ? MAX_ROWS : 1}]));
   for (const unit of ['x', 'я']) {
-    const empty = {...EMPTY, padding: ''};
+    const empty = {...EMPTY, layout: {columns: 6, places}, padding: ''};
     const room = 65536 - Buffer.byteLength(JSON.stringify(empty));
     const unitBytes = Buffer.byteLength(unit);
     // An ignored field fills the request without changing any validated view settings.
     const exact = {...empty, padding: unit.repeat(Math.floor(room / unitBytes)) + 'x'.repeat(room % unitBytes)};
     assert.equal(Buffer.byteLength(JSON.stringify(exact)), 65536);
-    assert.equal((await call('POST', `/api/boards/${board}/view`, {as: 'alice', body: exact})).status, 200);
+    const saved = await call('POST', `/api/boards/${board}/view`, {as: 'alice', body: exact});
+    assert.equal(saved.status, 200);
+    assert.deepEqual(saved.body.layout.places, places);
     const over = {...exact, padding: exact.padding + 'x'};
     assert.equal(Buffer.byteLength(JSON.stringify(over)), 65537);
     assert.equal((await call('POST', `/api/boards/${board}/view`, {as: 'alice', body: over})).status, 413);
