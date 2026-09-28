@@ -1,3 +1,4 @@
+import {Attention} from './attention.js';
 import {STATUS_CODES} from 'node:http';
 import type {Socket} from 'node:net';
 import Fastify, {type FastifyReply, type FastifyRequest} from 'fastify';
@@ -238,9 +239,15 @@ export async function buildApp(hub: Hub) {
 
   const events = hub.events ?? new Events(hub);
   events.attach();
+  if (hub.local) {
+    const attention = new Attention(store, Date.now());
+    hub.ingest.attention = attention;
+    attention.onCandidates = candidates => events.candidates(candidates);
+    hub.resets.onAttention = (provider, status, ok, now) => attention.announcement(provider, status, ok, now);
+  }
   // Open streams and held polls would keep the server from closing: they end first.
   app.addHook('preClose', async () => events.close());
-  eventRoutes(app, directory, events, guards);
+  eventRoutes(app, directory, events, guards, !!hub.local);
   accountRoutes(app, hub, guards);
   agentRoutes(app, hub);
   if (hub.local) localRoutes(app, hub, hub.local.key);

@@ -171,4 +171,4 @@ export type SourceEvent =
   | {sourceId: string; at: number; kind: 'resets_granted'; count: number};
 
 /** Hidden windows and chart series are keyed by source + window, never by provider. */
-export const windowKey = (sourceId: string, windowId: string) => `${sourceId}/${windowId}`;
+export {windowKey} from '../../server/domain/presentation';

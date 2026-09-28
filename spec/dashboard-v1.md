@@ -159,3 +159,59 @@ no session ids.
 While a board is read, the hub keeps in memory what its readers last got of each part,
 and a lease's events until it is asked; it writes nothing of them to disk. A board nobody
 reads costs nothing.
+
+## Desktop attention stream
+
+In local mode a session may request `GET /api/events?desktop=1`, with the same
+`Quotum-Stream: 1`, session, origin and resource limits as the board. This mode is
+stream-only: combining it with `mode=poll`, or requesting it outside local mode,
+returns `400 invalid_request`. A machine token does not grant access.
+
+After `hello` and `snapshot` comes `attention`:
+
+```ts
+{
+  seq: number; now: number; baseline: boolean;
+  state: {
+    boardId: string;
+    level: 'ok' | 'warn' | 'crit' | null;
+    quality: 'current' | 'partial' | 'unavailable';
+    minimum: {sourceId: string; windowId: string; remaining: number} | null;
+  };
+  notifications: Candidate[];
+}
+```
+
+`seq` increases within this connection; `hello.epoch` identifies the hub start.
+The first attention frame is a baseline, with no notifications. Later frames follow
+the corresponding board changes. The minimum includes only visible windows of
+visible cards. Levels match the board: above 30 is ok, 10 through 30 warn, below 10
+crit. Last known figures retain their level; missing, stale, failed or reset-past
+measurements make their quality partial. No visible figures means unavailable,
+never a fictitious full quota.
+
+A quota candidate has `id`, `kind` (`low`, `critical`, `reset`), `at`,
+`observedFrom`, `observedAt`, `sourceId`, `windowId`, `provider`, `name`,
+`window: {kind, label, minutes}`, `remaining` and nullable `resetAt`.
+`at` is the hub's receipt time; the observation times are the corrected sample
+clocks, unchanged by batch delivery. Both observations must belong to the reader's
+current baseline (`observedFrom >= baseline.now`, `observedAt > observedFrom`).
+Thresholds are consumed once per confirmed window cycle, even while hidden or
+notifications are disabled. A reset needs measurement evidence; a timer alone is
+never a reset. One delivery gives at most one current notification per window,
+keeping the most severe threshold, or the reset with the resulting remainder.
+
+An announcement candidate has `id`, `kind: 'announcement'`, `at`, `provider`,
+nullable `scheduledFor`, nullable `resetKind` (`regular` or `banked`), `credit:
+{name, url}` and `url`. It describes a newly learned scheduled tracker event,
+not proof that a subscription reset. The first successful tracker answer and
+recovery after a failure are silent baselines. Names and links are data, never
+instructions to the native host.
+
+Candidates leave ingestion only after its transaction commits. They are not
+reconstructed from coalesced card frames. The pending candidate buffer is bounded
+by the stream's buffer limit; overflow discards pending events and starts a new
+attention baseline. Disconnected readers retain no notification queue. There is
+no replay through `Last-Event-ID`, after restart, or across a baseline. A crash
+between consumption and native delivery may lose a notification; successful
+native submission does not guarantee the operating system displayed it.

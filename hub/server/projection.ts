@@ -1,3 +1,5 @@
+import {level, type AttentionState, type Candidate} from './domain/attention.js';
+import {sourceHidden, isWindowHidden, titled} from './domain/presentation.js';
 import {config} from './config.js';
 import type {Ingest} from './ingest.js';
 import type {ResetFeed, TrackerHealth} from './resets.js';
@@ -89,8 +91,43 @@ export class Projection {
     const cadence = ingest.nextMeasurement(source.id, source.account, now);
     return {
       value: {card, sessions: ingest.live.of(source.id, people, now), cadence: cadence.value},
-      changesAt: earliest(stale ? null : state.successAt! + state.staleAfterMs! + 1, ingest.live.ofChangesAt(source.id, people, now), cadence.changesAt),
+      changesAt: earliest(...state.windows.map(w => w.resetAt !== null && w.resetAt > now ? w.resetAt : null), stale ? null : state.successAt! + state.staleAfterMs! + 1, ingest.live.ofChangesAt(source.id, people, now), cadence.changesAt),
     };
+  }
+
+  /** The same visible figures as the cards, with data quality independent of their level. */
+  attention(board: string, now: number): AttentionState {
+    const view = this.hub.directory.view(board);
+    const cards = this.attentionCards(board, now).filter(c => !sourceHidden(view, c.id));
+    let minimum: AttentionState['minimum'] = null;
+    let partial = false;
+    for (const card of cards) {
+      const windows = card.windows.filter(w => !isWindowHidden(view, card.id, w.id));
+      // A waiting source has no windows yet; it still makes a known minimum partial.
+      if (!card.windows.length || windows.length) partial ||= card.stale || !!card.error || card.successAt === null;
+      for (const w of windows) {
+        if (!Number.isFinite(w.remaining)) { partial = true; continue; }
+        if (!minimum || w.remaining < minimum.remaining) minimum = {sourceId: card.id, windowId: w.id, remaining: w.remaining};
+        if (w.resetAt !== null && w.resetAt <= now) partial = true;
+      }
+    }
+    return {boardId: board, level: minimum ? level(minimum.remaining) : null, quality: minimum ? partial ? 'partial' : 'current' : 'unavailable', minimum};
+  }
+
+  private attentionCards(board: string, now: number) {
+    const members = this.members(board);
+    return this.lineup(board).map(s => this.sourcePart(s, members, now).value.card);
+  }
+
+  /** Visibility and names are resolved again at delivery, after any intervening edit. */
+  visibleCandidates(board: string, candidates: Candidate[], now: number): Candidate[] {
+    const view = this.hub.directory.view(board);
+    const cards = titled(this.attentionCards(board, now), view.names).filter(c => !sourceHidden(view, c.id));
+    return candidates.flatMap((c): Candidate[] => {
+      if (c.kind === 'announcement') return cards.some(s => s.provider === c.provider && s.windows.some(w => !isWindowHidden(view, s.id, w.id))) ? [c] : [];
+      const source = cards.find(s => s.id === c.sourceId);
+      return source?.windows.some(w => w.id === c.windowId && !isWindowHidden(view, source.id, w.id)) ? [{...c, name: source.title}] : [];
+    });
   }
 
   /** What is the reader's own on a board: which of its sources their devices measure. */

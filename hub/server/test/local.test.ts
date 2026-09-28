@@ -318,3 +318,20 @@ test('a local hub on a taken port says so and exits', async t => {
   assert.equal(await within(hub.exited, 5000), 1);
   assert.ok(hub.lines.includes('{"event":"error","code":"port_in_use"}'), hub.lines.join(' | '));
 });
+
+test('desktop events require a local session, same origin and streaming mode', async () => {
+  const db = database();
+  const local = await db.start();
+  const {cookie} = await local.enter();
+  assert.ok(cookie);
+  const headers = {cookie, 'quotum-stream': '1'};
+  assert.equal((await local.call('GET', '/api/events?desktop=1', {headers: {'quotum-stream': '1'}})).status, 401);
+  assert.equal((await local.call('GET', '/api/events?desktop=1', {headers: {...headers, origin: 'https://foreign.invalid'}})).status, 403);
+  assert.equal((await local.call('GET', '/api/events?desktop=1&mode=poll', {headers})).status, 400);
+  assert.equal((await local.call('GET', '/api/events?desktop=2', {headers})).status, 400);
+  await local.app.close();
+  const server = await db.start({local: false});
+  assert.equal((await server.call('GET', '/api/events?desktop=1', {headers})).status, 400);
+  await server.app.close();
+  db.store.close();
+});

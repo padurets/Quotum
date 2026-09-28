@@ -1,3 +1,4 @@
+import type {Attention} from './attention.js';
 import {secretKind} from './domain/auth.js';
 import {Invalid, parseBatch, parseCheckin, parseSessions, subscriptionKey, toMeasurement, type AgentSender} from './domain/ingest.js';
 import {Sessions} from './sessions.js';
@@ -38,6 +39,7 @@ export class Ingest {
   /** The coding agents running on the devices right now. */
   readonly live: Sessions;
   private observer: Touches | null = null;
+  attention: Attention | null = null;
 
   constructor(
     private readonly store: Store,
@@ -81,7 +83,8 @@ export class Ingest {
     const future = [...batch.snapshots, ...batch.failures].find(item => item.observedAt + skew > now + CLOCK_TOLERANCE_MS);
     if (future) throw new Invalid('observedAt');
 
-    return this.directory.transaction(() => {
+    const attention = this.attention?.begin();
+    const accepted = this.directory.transaction(() => {
       const device = this.device(credential, batch, now);
       const result: IngestResult = {accepted: 0, duplicates: 0, failures: 0, device: {id: device.id}};
       // Every source the batch is about: its pace and its holder's duty move even when nothing new is recorded.
@@ -100,7 +103,9 @@ export class Ingest {
           result.duplicates++;
           continue;
         }
-        this.store.record(source, {...toMeasurement(snapshot), observedAt});
+        const measurement = {...toMeasurement(snapshot), observedAt};
+        attention?.record(this.store.state(source), measurement, now);
+        this.store.record(source, measurement);
         result.accepted++;
         this.duty.delivered(account, device.id, observedAt, snapshot.staleAfterMs, now);
         this.cadence.delivered(account, device.id, snapshot.windows, observedAt, snapshot.staleAfterMs, this.signals(source, account, now).inUse, now);
@@ -126,6 +131,8 @@ export class Ingest {
       tell(this.observer, o => o.touchSources([...touched]));
       return result;
     });
+    attention?.committed();
+    return accepted;
   }
 
   /**

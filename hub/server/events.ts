@@ -1,3 +1,4 @@
+import type {Candidate} from './domain/attention.js';
 import {randomBytes} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import path from 'node:path';
@@ -66,6 +67,7 @@ export type Reader = {
   secret: string;
   board: string;
   kind: 'stream' | 'lease';
+  desktop?: boolean;
   /** Hands events over. */
   send(frames: Frame[]): void;
   /** How much of what was handed over has not gone out yet: a reader too far behind is let go. */
@@ -75,7 +77,7 @@ export type Reader = {
 };
 
 /** A reader the hub keeps; a `fresh` one is being given its snapshot and gets no events yet. */
-type Subscriber = Reader & {id: number; fresh: boolean; stopPing: () => void};
+type Subscriber = Reader & {id: number; fresh: boolean; stopPing: () => void; seq: number; baselineAt: number; attentionKey: string; pending: Candidate[]; pendingBytes: number; rebaseline: boolean};
 
 /** A board someone looks at: what its readers last got of each part, and when those parts change by themselves. */
 type Watched = {
@@ -161,6 +163,38 @@ export class Events implements Touches {
     this.parts.directory.setObserver(this);
     this.parts.ingest.setObserver(this);
     this.parts.resets.onChange = () => this.touchHub();
+  }
+
+  /** Post-commit only. Each reader has its own observation boundary and bounded queue. */
+  candidates(candidates: Candidate[]) {
+    if (this.closed) return;
+    const now = this.clock.now();
+    for (const sub of this.subscribers.values()) {
+      if (!sub.desktop || sub.fresh || sub.rebaseline) continue;
+      const visible = this.projection.visibleCandidates(sub.board, candidates, now).filter(c =>
+        c.kind === 'announcement' || (c.observedFrom >= sub.baselineAt && c.observedAt > c.observedFrom));
+      sub.pendingBytes += visible.reduce((sum, c) => sum + Buffer.byteLength(JSON.stringify(c)), 0);
+      if (sub.pendingBytes > this.options.bufferBytes) {
+        sub.pending = [];
+        sub.pendingBytes = 0;
+        sub.rebaseline = true;
+      } else sub.pending.push(...visible);
+      if (visible.length) this.touchBoards([sub.board]);
+    }
+  }
+
+  private attentionFrame(sub: Subscriber, baseline: boolean, now: number): Frame | null {
+    const state = this.projection.attention(sub.board, now);
+    const key = JSON.stringify(state);
+    if (baseline) sub.baselineAt = now;
+    const notifications = baseline ? [] : this.projection.visibleCandidates(sub.board, sub.pending, now).filter(c =>
+      now - c.at <= 60_000 && (c.kind === 'announcement' || (c.observedFrom >= sub.baselineAt && c.observedAt > c.observedFrom)));
+    sub.pending = [];
+    sub.pendingBytes = 0;
+    sub.rebaseline = false;
+    if (!baseline && key === sub.attentionKey && !notifications.length) return null;
+    sub.attentionKey = key;
+    return frame('attention', {seq: ++sub.seq, now, baseline, state, notifications});
   }
 
   // ---------- touches ----------
@@ -313,7 +347,12 @@ export class Events implements Touches {
           }
         }
         const frames = [...(heads.get(watched.id) ?? []), ...own, ...(tails.get(watched.id) ?? []), ...news];
-        if (!frames.length || sub.fresh) continue;
+        if (sub.fresh) continue;
+        if (sub.desktop && (frames.length || sub.pending.length || sub.rebaseline)) {
+          const attention = this.attentionFrame(sub, sub.rebaseline, now);
+          if (attention) frames.push(attention);
+        }
+        if (!frames.length) continue;
         sub.send(frames);
         if ((sub.backlog?.() ?? 0) > this.options.bufferBytes) this.end(sub, 'limit');
       }
@@ -529,7 +568,7 @@ export class Events implements Touches {
       };
       this.watched.set(id, watched);
     }
-    const sub: Subscriber = {...reader, id: this.next++, fresh: true, stopPing: () => {}};
+    const sub: Subscriber = {...reader, id: this.next++, fresh: true, stopPing: () => {}, seq: 0, baselineAt: 0, attentionKey: '', pending: [], pendingBytes: 0, rebaseline: false};
     this.subscribers.set(sub.id, sub);
     watched.subscribers.add(sub);
     if (!this.stopHubRecheck) this.stopHubRecheck = this.every(this.options.recheckMs, () => this.touchHub());
@@ -568,7 +607,9 @@ export class Events implements Touches {
     sub.fresh = false;
     if (sub.kind === 'stream') sub.stopPing = this.every(this.options.heartbeatMs, () => this.ping(sub));
     const hello = {epoch: this.epoch, now, client: this.client, heartbeatMs: this.options.heartbeatMs};
-    return {sub, frames: [frame('hello', hello), frame('snapshot', snapshot)]};
+    const frames = [frame('hello', hello), frame('snapshot', snapshot)];
+    if (sub.desktop) frames.push(this.attentionFrame(sub, true, now)!);
+    return {sub, frames};
   }
 
   /** Whether a new reader fits: the oldest to let go for it where it hits a limit, or 'refuse'. */
