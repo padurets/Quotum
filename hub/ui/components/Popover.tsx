@@ -1,4 +1,5 @@
 import {useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type ReactNode} from 'react';
+import {coverOf, sideOf} from '../lib/place';
 
 /** A button with an anchored panel; closes on outside click, Escape and focus moving out. */
 export function Popover({
@@ -19,7 +20,7 @@ export function Popover({
   trigger?: ReactNode;
   /** How a text trigger looks, when not as plain text; such a trigger is named by `label`, not by what it shows. */
   triggerClass?: string;
-  /** Opens above the button (from the bottom of a card), or below it when there is no room above. */
+  /** Opens above the button (from the bottom of a card) rather than below it, where there is room. */
   up?: boolean;
   badge?: number;
   children: ReactNode;
@@ -33,9 +34,6 @@ export function Popover({
   const box = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
-  // Measured once it is open (below): a panel opening upwards opens downwards instead when
-  // it does not fit above whole.
-  const [down, setDown] = useState(false);
   // The panel moves sideways to stay on the screen (from a card at the edge of a narrow
   // one), again when the window turns or is resized; the page's width leaves out its scrollbar.
   useLayoutEffect(() => {
@@ -54,44 +52,29 @@ export function Popover({
     return () => removeEventListener('resize', place);
   }, [open]);
 
-  // A panel is as tall as its content and scrolls only when that is taller than the screen
-  // under the top bar: a large screen shows it whole. One opening upwards does so only where
-  // it fits whole, as nothing shows it past the top bar; otherwise it opens downwards, where
-  // the page scrolls to the rest of it, and on opening scrolls as far as shows it or as keeps
-  // its button in sight. It is measured again as its content changes.
-  const [cap, setCap] = useState<number | null>(null);
+  // A panel never scrolls the page nor lengthens it: it stays whole in the window, under the
+  // bars that stick at its top, on the side of its button that `sideOf` picks, cut to the
+  // room there and scrolling inside. Where it stands on either side is read, not assumed, as
+  // a text trigger is taller than an icon. It is measured again as its content changes and
+  // the window is resized, not as the page scrolls: it goes with its button.
+  const [side, setSide] = useState<{up: boolean; cap: number | null} | null>(null);
   useLayoutEffect(() => {
     const element = panel.current;
     const trigger = button.current;
-    if (!open || !element || !trigger) {
-      setDown(false);
-      return setCap(null);
-    }
-    let opening = true;
+    if (!open || !element || !trigger) return setSide(null);
     const fit = () => {
       element.style.maxHeight = '';
-      element.classList.remove('is-capped');
-      const natural = element.getBoundingClientRect().height;
-      const at = trigger.getBoundingClientRect();
-      const bar = document.querySelector('.topbar')?.getBoundingClientRect().bottom ?? 0;
-      const screen = innerHeight - bar - 16;
-      const upwards = up && natural <= at.top - bar - 14;
-      const capped = natural > screen ? screen : null;
+      element.classList.remove('is-capped', 'is-up');
+      const below = element.getBoundingClientRect();
+      element.classList.add('is-up');
+      const above = element.getBoundingClientRect();
+      const cover = coverOf(trigger.getBoundingClientRect().top);
+      const next = sideOf(below.height, above.bottom - cover - 8, innerHeight - 8 - below.top, up);
       // Set here as well as through state, so what is measured next is what shows.
-      element.style.maxHeight = capped === null ? '' : `${capped}px`;
-      element.classList.toggle('is-capped', capped !== null);
-      element.classList.toggle('is-up', upwards);
-      if (opening && !upwards) {
-        // The button stays below the bars that stick over it: the analytics' head, above a
-        // button of its section, sticks under the top bar as the page scrolls.
-        const heads = [...document.querySelectorAll<HTMLElement>('.analytics-head')].filter(head => getComputedStyle(head).position === 'sticky');
-        const cover = Math.max(bar, ...heads.map(head => head.getBoundingClientRect()).filter(head => head.top < at.top).map(head => bar + head.height));
-        const hidden = element.getBoundingClientRect().bottom + 8 - innerHeight;
-        if (hidden > 0) scrollBy(0, Math.min(hidden, Math.max(0, at.top - cover - 8)));
-      }
-      opening = false;
-      setDown(up && !upwards);
-      setCap(capped);
+      element.classList.toggle('is-up', next.up);
+      element.classList.toggle('is-capped', next.cap !== null);
+      element.style.maxHeight = next.cap === null ? '' : `${next.cap}px`;
+      setSide(same => (same?.up === next.up && same.cap === next.cap ? same : next));
     };
     fit();
     // A refit may change the cap and wake the observer once more; then the panel stays as it is.
@@ -148,8 +131,8 @@ export function Popover({
       </button>
       {open && (
         <div
-          className={`popover glass ${align === 'left' ? 'is-left' : ''} ${up && !down ? 'is-up' : ''} ${cap !== null ? 'is-capped' : ''}`}
-          style={cap !== null ? {maxHeight: cap} : undefined}
+          className={`popover glass ${align === 'left' ? 'is-left' : ''} ${(side?.up ?? up) ? 'is-up' : ''} ${side?.cap != null ? 'is-capped' : ''}`}
+          style={side?.cap != null ? {maxHeight: side.cap} : undefined}
           role="dialog"
           aria-label={label}
           ref={panel}

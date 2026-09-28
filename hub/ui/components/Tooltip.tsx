@@ -1,24 +1,5 @@
 import {useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject} from 'react';
-
-/**
- * Where a chart's tooltip stands to stay whole in the window, from where it stands unraised
- * (`top`) and its own `height`: how far it rises (`by`) and how tall it may be (`room`). It
- * rises as far as its bottom would pass the window's, less a margin, never above what covers
- * the top of the page (`cover`, the bars that stick there), and comes down under them when
- * its chart has scrolled beneath; one taller than the room left below where it stands is cut
- * to it. A tooltip that passed the bottom of the last widget would lengthen the page, so a
- * pointer near the page's end would scroll it, lose the cell, and the tooltip would come and go.
- */
-export function placeOf(top: number, height: number, windowHeight: number, cover: number) {
-  const by = Math.min(Math.max(0, top + height - (windowHeight - 8)), top - cover - 8);
-  return {by, room: Math.max(0, windowHeight - 8 - (top - by))};
-}
-
-/** How far down the window the bars that stick at its top cover the page, in CSS pixels. */
-export function coverOf() {
-  const bars = [...document.querySelectorAll<HTMLElement>('.topbar, .analytics-head')].filter(bar => getComputedStyle(bar).position === 'sticky');
-  return Math.max(0, ...bars.map(bar => bar.getBoundingClientRect().bottom));
-}
+import {coverOf, placeOf} from '../lib/place';
 
 /**
  * Where a chart's tooltip stands, for a chart `width` wide (in its own units, which are
@@ -62,7 +43,7 @@ export function useTip(svg: RefObject<SVGSVGElement | null>, {width, at, narrow,
       top = element.getBoundingClientRect().top;
       element.style.top = raised;
     }
-    const {by, room} = placeOf(top, height, innerHeight, coverOf());
+    const {by, room} = placeOf(top, height, innerHeight, coverOf(chart.bottom));
     const from = narrow ? bottom : top - chart.top;
     setLift(same => (same.by === by && same.from === from && same.room === room ? same : {by, from, room}));
   };
