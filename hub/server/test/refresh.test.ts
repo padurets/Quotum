@@ -398,3 +398,23 @@ test('three provider responses sent sequentially keep the last request waiting f
   }
   assert.equal(h.ingest.refresh(source, T + MIN + 150_000).value.request?.status, 'updated');
 });
+
+test('an error pause is not advertised as a return time for a legacy device', t => {
+  const h = hub(t);
+  h.ask(0); h.deliver(0); h.ask(1, MIN, 'laptop', false);
+  h.deliver(10_000, {failure: 'failed'});
+  const before = h.refresh(10_000);
+  assert.equal(before.unavailable, 'unsupported');
+  assert.equal(before.availableAt, null, 'ending the pause cannot make a legacy device available');
+  assert.deepEqual(h.refresh(130_000), before, 'no refresh event just because an irrelevant pause ended');
+});
+
+test('an expired duty lease does not advertise its former holder’s pause or change when it ends', t => {
+  const h = hub(t);
+  h.ask(0); h.deliver(0, {stale: MIN});
+  h.deliver(10_000, {failure: 'failed'});
+  const before = h.refresh(MIN);
+  assert.equal(before.unavailable, 'no_device');
+  assert.equal(before.availableAt, null);
+  assert.deepEqual(h.refresh(130_000), before);
+});

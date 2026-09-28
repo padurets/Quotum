@@ -140,8 +140,8 @@ wait for a measurement and carries no state: only snapshots and events replace s
 so a late POST response cannot undo a result already received.
 
 `refresh` is `{unavailable, availableAt, retryAt, request}`. `unavailable` is null, or
-`no_device`, `unsupported`, `silent`, `paused`; `availableAt` is the end of a known error
-pause, otherwise null. `retryAt` is the end of a still-active one-minute cooldown,
+`no_device`, `unsupported`, `silent`, `paused`; `availableAt` is the end of the error
+pause when `unavailable` is `paused`, otherwise null. `retryAt` is the end of a still-active one-minute cooldown,
 otherwise null. These describe the ability to create a NEW request.
 
 `request` is null or `{requestedAt, notBefore, dispatchAt, deadline, status, finishedAt}`.

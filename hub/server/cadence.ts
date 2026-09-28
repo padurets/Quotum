@@ -139,7 +139,7 @@ export class Cadence {
     }
     const retryAt = stored && stored.view.requestedAt + MIN_INTERVAL_MS > now ? stored.view.requestedAt + MIN_INTERVAL_MS : null;
     for (const at of [duty.until, silentAt, pause, retryAt]) if (at !== null && at > now) changes.push(at);
-    return {value: {unavailable, availableAt: pause, retryAt, request}, changesAt: changes.length ? Math.min(...changes) : null};
+    return {value: {unavailable, availableAt: unavailable === 'paused' ? pause : null, retryAt, request}, changesAt: changes.length ? Math.min(...changes) : null};
   }
 
   /** Freeze elapsed transitions before a mutation changes their evidence. */
