@@ -247,7 +247,6 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
 
   return (
     <Popover label={t('source.menu', {source: title})} icon={<SlidersIcon />} open={open} onOpenChange={setOpen}>
-      <RefreshAction id={source.id} board={boardId} onAccepted={() => setOpen(false)} />
       {owner && (
         <>
           <div className="popover-title popover-section">{t('source.name')}</div>
@@ -286,7 +285,10 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
           )}
         </div>
       )}
-      {owner && <HideRow onHide={() => arrange.update(view => withHidden(view, cardId(source.id), true))}>{t('widget.hide')}</HideRow>}
+      <div className={owner ? 'popover-section' : undefined}>
+        <RefreshAction id={source.id} board={boardId} onAccepted={() => setOpen(false)} />
+        {owner && <HideRow section={false} onHide={() => arrange.update(view => withHidden(view, cardId(source.id), true))}>{t('widget.hide')}</HideRow>}
+      </div>
       {takeOff && (
         <div className={owner ? '' : 'popover-section'}>
           <button type="button" className="popover-row is-danger" onClick={unshare}>
@@ -377,10 +379,10 @@ function CardMark({source}: {source: Card}) {
       onPointerUp={event => event.pointerType === 'touch' && setTip(true)}
     >
       <img className="provider-logo" src={LOGOS[source.provider]} alt="" />
-      {dot.warn || failed ? (
+      {pending ? (
+        <i className="spinner" aria-hidden="true" />
+      ) : dot.warn || failed ? (
         <i className="dot dot-warn" />
-      ) : pending ? (
-        <i className="dot dot-idle" />
       ) : (
         <i className={`dot dot-fresh ${dot.pulsing ? 'is-pulsing' : ''}`} style={{'--fresh': dot.fresh} as CSSProperties} />
       )}

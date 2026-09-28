@@ -2,8 +2,13 @@ import {Fragment, useRef, useState} from 'react';
 import {t, useLocale} from '../i18n';
 import {useConnection, useRefresh} from '../lib/board';
 import {useClock} from '../lib/clock';
-import {call} from '../lib/http';
-import {refreshErrorChangesAt, refreshErrorText} from '../lib/refresh';
+import {refreshErrorChangesAt, refreshErrorText, requestRefresh} from '../lib/refresh';
+
+export const RefreshIcon = () => (
+  <svg className="row-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+    <path d="M13 6.5a5 5 0 1 0 0 4M13 2.5v4H9" />
+  </svg>
+);
 
 type Failure = {kind: 'offline'} | {kind: 'request'; error: unknown; previous: number | null};
 
@@ -35,7 +40,7 @@ export function RefreshAction({id, board, onAccepted}: {id: string; board: strin
     setSending(true);
     const previous = state?.request?.requestedAt ?? null;
     try {
-      await call('POST', `/api/boards/${encodeURIComponent(board)}/sources/${encodeURIComponent(id)}/refresh`);
+      await requestRefresh(board, id);
       // A late reply must not close a menu opened again in the meantime.
       if (action.current) onAccepted();
     } catch (error) {
@@ -48,9 +53,7 @@ export function RefreshAction({id, board, onAccepted}: {id: string; board: strin
   return (
     <div data-time="refresh">
       <button ref={action} type="button" className="popover-row" onClick={() => void send()}>
-        <svg className="row-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-          <path d="M13 6.5a5 5 0 1 0 0 4M13 2.5v4H9" />
-        </svg>
+        <RefreshIcon />
         <span>{t(sending ? 'refresh.sending' : 'refresh.action')}</span>
       </button>
       {message && (

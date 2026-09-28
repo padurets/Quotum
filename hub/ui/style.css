@@ -80,6 +80,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .time-slot { display: contents; }
 .mono { font-family: var(--mono); font-size: .92em; color: var(--text-2); }
 .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--hair-2); border-top-color: var(--accent); border-radius: 50%; animation: spin .9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .dot-ok { background: var(--ok); box-shadow: 0 0 8px #75d8ad99; }
 .dot-warn { background: var(--warn); box-shadow: 0 0 8px #f6c56e99; }
 
@@ -159,6 +161,7 @@ body.is-resizing, body.is-resizing * { cursor: ew-resize !important; user-select
 .plan { font-size: 10px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); border: 1px solid var(--hair-2); padding: 1px 7px; border-radius: 5px; white-space: nowrap; }
 .provider-mark { position: relative; flex-shrink: 0; display: grid; }
 .provider-mark .dot { position: absolute; right: -2px; bottom: -2px; width: 8px; height: 8px; border: 2px solid var(--surface); box-sizing: content-box; }
+.provider-mark .spinner { position: absolute; right: -2px; bottom: -2px; width: 12px; height: 12px; background: var(--surface); }
 /*
  * How fresh the numbers are, in the card's colour (the colour of its lines): full when
  * just measured, fading to grey; never a warning.

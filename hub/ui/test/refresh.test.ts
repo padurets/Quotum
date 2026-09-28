@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {refreshChangesAt, refreshPending, refreshText, refreshErrorText, refreshErrorChangesAt} from '../lib/refresh';
+import {refreshChangesAt, refreshPending, refreshText, refreshErrorText, refreshErrorChangesAt, requestRefreshAll} from '../lib/refresh';
 import {ApiError} from '../lib/http';
 import {setLocale} from '../i18n';
 import type {Refresh} from '../lib/types';
@@ -18,6 +18,37 @@ const queued: Refresh = {
     finishedAt: null,
   },
 };
+
+test('refreshing a board deduplicates subscriptions, limits concurrency and continues after refusals', async () => {
+  const called: string[] = [];
+  let running = 0;
+  let peak = 0;
+  const rejected = new ApiError(429, 'refresh_too_soon');
+  const result = await requestRefreshAll('board', ['a', 'b', 'a', 'c', 'd', 'e', 'f'], async (board, id) => {
+    assert.equal(board, 'board');
+    called.push(id);
+    peak = Math.max(peak, ++running);
+    await new Promise(resolve => setImmediate(resolve));
+    running--;
+    if (id === 'b') throw rejected;
+  });
+  assert.equal(peak, 4);
+  assert.deepEqual(called.sort(), ['a', 'b', 'c', 'd', 'e', 'f']);
+  assert.deepEqual(result, {total: 6, accepted: 5, failures: [{id: 'b', error: rejected}]});
+});
+
+test('leaving the board stops requests that have not started', async () => {
+  let current = true;
+  const called: string[] = [];
+  await requestRefreshAll('board', ['a', 'b', 'c', 'd', 'e', 'f'], async (_board, id) => {
+    called.push(id);
+    await new Promise(resolve => setImmediate(resolve));
+    current = false;
+  }, () => current);
+  assert.deepEqual(called, ['a', 'b', 'c', 'd']);
+  const empty = await requestRefreshAll('board', [], async () => assert.fail('no request for an empty board'));
+  assert.deepEqual(empty, {total: 0, accepted: 0, failures: []});
+});
 
 test('refresh wording stays identical until its declared next clock boundary', () => {
   for (const state of [

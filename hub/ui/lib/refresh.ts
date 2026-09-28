@@ -1,7 +1,7 @@
 import {countdown, countdownChangesAt, earliest, stamp} from './format';
 import {known, t} from '../i18n';
 import type {Refresh} from './types';
-import {ApiError, messageOf} from './http';
+import {ApiError, call, messageOf} from './http';
 
 export function refreshTime(state: Refresh): number | null {
   if (state.request?.status === 'queued') return state.request.notBefore;
@@ -37,6 +37,35 @@ export function refreshText(state: Refresh, now: number): string {
 }
 
 export const refreshPending = (state: Refresh | null) => state?.request?.status === 'queued' || state?.request?.status === 'waiting';
+
+export const requestRefresh = (board: string, id: string) =>
+  call('POST', `/api/boards/${encodeURIComponent(board)}/sources/${encodeURIComponent(id)}/refresh`);
+
+export type RefreshBatch = {total: number; accepted: number; failures: {id: string; error: unknown}[]};
+
+/** Each subscription keeps its own checks; a refusal must not stop the other cards. */
+export async function requestRefreshAll(
+  board: string,
+  ids: string[],
+  request = requestRefresh,
+  current: () => boolean = () => true,
+): Promise<RefreshBatch> {
+  const queue = [...new Set(ids)];
+  const result: RefreshBatch = {total: queue.length, accepted: 0, failures: []};
+  let next = 0;
+  await Promise.all(Array.from({length: Math.min(4, queue.length)}, async () => {
+    while (next < queue.length && current()) {
+      const id = queue[next++];
+      try {
+        await request(board, id);
+        result.accepted++;
+      } catch (error) {
+        result.failures.push({id, error});
+      }
+    }
+  }));
+  return result;
+}
 
 const refusalTime = (error: unknown, state: Refresh | null) => {
   if (!(error instanceof ApiError)) return null;
