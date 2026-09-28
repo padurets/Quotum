@@ -134,7 +134,11 @@ Codex         api                  idle     started 25m ago · editor
   the cards show what is left now, the analytics under them share one set of filters.
   The owner places them on a six-column grid by dragging their heads, and resizes them
   to a third, a half, two thirds or the whole width. Each fills only the rows its content
-  needs, so cards stack beside a tall list. The owner names the cards,
+  needs, so cards stack beside a tall list, unless the owner drags its bottom edge (or
+  its corner) to make it taller, or the list of agents shorter: the charts grow with it,
+  a card never gets shorter than its content, and a shorter list ends with how many
+  more agents run, which opens them all. A double click on that edge, or Enter on it,
+  gives a widget back the height of its content. The owner names the cards,
   hides the ones they don't need (the data keeps coming) and sets the plans; everyone on
   the board sees it arranged the same way. Once it's set, a lock keeps the widgets from
   moving under a passing pointer.

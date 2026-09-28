@@ -409,7 +409,8 @@ them), kept for 90 days.
   its view, never the measurements.
 - **The view** of a board is how it is arranged: the order of its widgets (a card per
   source, the list of running agents, the chart, the table and agent activity), their places on a
-  six-column grid (`x`, `y`, `w`; heights are measured, never stored), names and colours
+  six-column grid (`x`, `y`, `w`, and `h` where the owner chose a height; what the content
+  needs is measured, never stored), names and colours
   given to cards, the hidden widgets (and those
   off by default, the list of agents, turned on), the columns hidden in a widget's table,
   the agents' and the limits' (and those off by default turned on), the windows hidden inside cards and the spending
@@ -521,14 +522,31 @@ them the analytics, agent activity, the chart and the table, which show one peri
 chosen in the analytics' own head, the chart and the table one window type of it. Each
 area is arranged on its own grid. A row is 48 px (a 32 px track and a 16 px gap).
 Each widget fills the fewest whole rows that contain its content, with any spare room
-above a card's tray or at the bottom of a panel. Widgets float up within their columns
-without stretching their neighbours. Saved `y` gives the reading order; each viewer's
-measured heights determine the actual rows. Dragging by the head places a widget by
+above a card's tray or at the bottom of a panel, unless the owner chose a height for it
+(`h`, in rows). A chosen height is a request, not what shows: a card or the table never
+gets shorter than its content, and grows past the chosen rows while its content needs
+more, back to them when it needs less, without the view changing. Both charts give a
+chosen height to their plot, never drawing it lower than they do by themselves, their
+heads, totals and legends whole. The list of agents can be shorter than its rows: it
+shows the most whole rows that fit, in its own order, and a last row saying how many
+more, which opens them all in a dialog; the rows it leaves out are laid out unseen
+beside it, without their running times, to be measured. Such a widget tells the grid
+through a context of its own (`ui/components/sizing.ts`) the least it can show and what
+it needs whole, and reads how tall it is to be; only these read it, so a neighbour's
+height renders none of them. Widgets float up within their columns without stretching
+their neighbours. Saved `y` gives the reading order; each viewer's measured content and
+the chosen heights determine the actual rows. Dragging by the head places a widget by
 its top-left corner against the original layout: it goes after widgets whose top is
 above that row, taking an occupied slot unless its neighbour can rise into the place
 it left. Neighbours move down, never sideways. Widths snap to a third, a half, two
-thirds or the whole grid. At 1000 px and below the page uses two columns, at 680 and
-below one, in reading order; arranging is available only on the wide grid.
+thirds or the whole grid, by the right edge; heights to whole rows, by the bottom edge;
+both by the corner. A height is saved only where a gesture or a key changes what shows,
+the way it pulled (`heightIntent` in `ui/lib/grid.ts`): pushing a widget below what its
+content needs, or a corner moved only sideways, keeps the height it had, chosen or its
+content's. A double click on the bottom edge or the corner, or Enter or Space on the
+bottom edge, gives a widget back the height of its content. At 1000 px and below the
+page uses two columns, at 680 and below one, in reading order, with the heights chosen
+where the content fits them; arranging is available only on the wide grid.
 The page translates views saved before the grid, retaining hidden and absent widgets;
 the next save writes only the new layout. The hub requires that layout when saving,
 so an old page cannot overwrite it. Its view route allows 64 KiB per request, so a full

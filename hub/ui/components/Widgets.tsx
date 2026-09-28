@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useId,
   useLayoutEffect,
@@ -84,12 +85,15 @@ function useColumns() {
   return columns;
 }
 
-/** A widget's part of the board's sizing, made of its own numbers only: a neighbour's height renders nothing of it. */
-function Sized({id, manual, allocated, report, children}: {id: string; manual: boolean; allocated: number; report: (id: string, size: Size | null) => void; children: ReactNode}) {
+/**
+ * A widget's part of the board's sizing, made of its own numbers only: a neighbour's height
+ * renders nothing of it, neither the widget nor this (the same content, the same numbers).
+ */
+const Sized = memo(function Sized({id, manual, allocated, report, children}: {id: string; manual: boolean; allocated: number; report: (id: string, size: Size | null) => void; children: ReactNode}) {
   const bound = useCallback((size: Size | null) => report(id, size), [id, report]);
   const value = useMemo(() => ({manual, allocated, report: bound}), [manual, allocated, bound]);
   return <SizingContext.Provider value={value}>{children}</SizingContext.Provider>;
-}
+});
 
 /**
  * Places, the heights their owner chose and measured content determine the grid: a widget

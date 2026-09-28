@@ -542,10 +542,17 @@ test('every entry of the whole catalogue shows what it claims for twelve hours',
     wrong.push(...(await checkAll(stand, entries, reading, at, checked)));
     if (set.id === 'all' && at === 0) {
       const {layout} = (await reading.overview('grid')).view;
-      assert.deepEqual(layout.places.agents, {x: 0, y: 0, w: 3});
-      for (const [i, id] of ['claude-max', 'codex-pro', 'antigravity'].entries()) {
-        assert.deepEqual(layout.places[cardId(stand.sources.get(id)!)], {x: 3, y: i, w: 3});
+      assert.deepEqual(layout.places.agents, {x: 0, y: 0, w: 3, h: 16});
+      for (const [i, id, h] of [[0, 'claude-max'], [1, 'codex-pro', 9], [2, 'antigravity', 8]] as const) {
+        assert.deepEqual(layout.places[cardId(stand.sources.get(id)!)], {x: 3, y: i, w: 3, ...(h ? {h} : {})});
       }
+      // The heights chosen on the boards the benchmark and the look go through.
+      const ana = (await reading.overview('ana')).view.layout.places;
+      assert.deepEqual([ana.agents, ana.activity, ana.history, ana.forecast].map(place => place.h), [8, 12, 16, 30]);
+      assert.deepEqual(
+        await Promise.all(['ben', 'team', 'quiet'].map(async board => (await reading.overview(board)).view.layout.places.agents.h)),
+        [2, 5, 2],
+      );
     }
     previous = at;
   }
