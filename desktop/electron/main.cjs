@@ -4,6 +4,7 @@ const {app, BrowserWindow, ipcMain, protocol, session, shell, screen} = require(
 const net = require('node:net');
 const fs = require('node:fs');
 const path = require('node:path');
+const {performance} = require('node:perf_hooks');
 const policy = require('./policy.cjs');
 app.setName('Quotum');
 app.setDesktopName('quotum.desktop');
@@ -17,17 +18,20 @@ const send = message => { if (!channel.destroyed) channel.write(`${JSON.stringif
 const surfaces = new Map();
 let engineConfig;
 let nextInstance = 0;
-const requested = new Map();
+const requested = [];
 let focusRole = null;
 let target = 'quotum://localhost/index.html';
 let generation = -1;
 let quitting = false;
+let idleExit;
+let panelBlur;
+const TRAY_GESTURE_MS = 500;
 let buffer = '';
 let nextId = 0;
 let initialize;
 const initialized = new Promise(resolve => { initialize = resolve; });
 const pending = new Map();
-function finish() { quitting = true; app.quit(); }
+function finish() { quitting = true; clearTimeout(idleExit); app.quit(); }
 channel.on('error', finish);
 channel.on('end', finish);
 channel.on('data', chunk => {
@@ -58,19 +62,21 @@ function receive(message) {
       target = message.url;
       // getURL() is the last committed document; an older navigation may be pending.
       if (message.force || changed) for (const entry of surfaces.values()) {
-        if (changed || !message.role || message.role === entry.role) navigate(entry);
+        if (!entry.dismissed && (changed || !message.role || message.role === entry.role)) navigate(entry);
       }
       break;
     }
     case 'focus':
       if (!['main', 'compact'].includes(message.role)) return finish();
-      openSurface(message.role, message.anchor); break;
+      if (!engineConfig) requested.push(message);
+      else present(message);
+      break;
     case 'panel': {
       const entry = surfaces.get('compact');
       if (!entry || entry.instance !== message.instance || message.generation !== generation) break;
-      if (message.action === 'close') entry.window.close();
-      if (message.action === 'main') { openSurface('main'); entry.window.close(); }
-      if (message.action === 'height' && Number.isFinite(message.height) && message.height > 0 && message.height <= 100000) { entry.height = message.height; resizePanel(entry); }
+      if (message.action === 'close') dismiss(entry);
+      if (message.action === 'main') { openSurface('main'); dismiss(entry); }
+      if (message.action === 'height' && Number.isFinite(message.height) && message.height > 0 && message.height <= 100000) { engineConfig.panelHeight = entry.height = message.height; resizePanel(entry); }
       break;
     }
     case 'leave':
@@ -80,6 +86,7 @@ function receive(message) {
     case 'app_state':
       // The app's state, to the board of the hub's current start only, in the window's main frame.
       for (const entry of surfaces.values()) if (message.generation === generation) {
+        if (entry.dismissed) continue;
         const window = entry.window;
         try {
           if (policy.mayInvoke(window.webContents.mainFrame.url, target, 'app_state', entry.role)) window.webContents.send('quotum:state', message.state);
@@ -93,7 +100,7 @@ function receive(message) {
       const waiter = pending.get(message.id);
       if (waiter) {
         pending.delete(message.id); clearTimeout(waiter.timer);
-        if (surfaces.get(waiter.entry.role) !== waiter.entry || generation !== waiter.generation) waiter.reject(new Error('stale window'));
+        if (waiter.entry.dismissed || surfaces.get(waiter.entry.role) !== waiter.entry || generation !== waiter.generation) waiter.reject(new Error('stale window'));
         else if (message.error) waiter.reject(new Error(message.error)); else waiter.resolve(message.value);
       }
       break;
@@ -115,13 +122,13 @@ function navigate(entry) {
   const window = entry.window;
   // Error messages can include the entry key. Log only an error code, never the URL.
   window.loadURL(url).catch(error => {
-    if (!quitting && error.code !== 'ERR_ABORTED') send({type: 'fault', process: 'navigation', reason: error.code || 'load failed'});
+    if (!quitting && !entry.dismissed && !window.isDestroyed() && error.code !== 'ERR_ABORTED') send({type: 'fault', process: 'navigation', reason: error.code || 'load failed'});
   });
 }
 
 ipcMain.handle('quotum:invoke', (event, command, args) => {
   const entry = [...surfaces.values()].find(e => event.sender === e.window.webContents);
-  if (!entry || event.senderFrame !== entry.window.webContents.mainFrame || !policy.mayInvoke(event.senderFrame.url, target, command, entry.role)) throw new Error('not the board of the running hub');
+  if (!entry || entry.dismissed || event.senderFrame !== entry.window.webContents.mainFrame || !policy.mayInvoke(event.senderFrame.url, target, command, entry.role)) throw new Error('not the board of the running hub');
   if (pending.size >= 16) throw new Error('too many pending app commands');
   const request = {command};
   if (['save_settings', 'save_desktop_settings', 'set_autostart', 'report_panel_height'].includes(command)) request.args = args;
@@ -164,7 +171,13 @@ app.on('child-process-gone', (_, details) => {
     scheduleGraphics();
   }
 });
-app.on('window-all-closed', finish);
+app.on('window-all-closed', () => {
+  if (quitting) return;
+  // A tray press can dismiss the panel before its activation reaches us. Keep
+  // the gesture record alive for the matching release, without retaining a page.
+  clearTimeout(idleExit);
+  idleExit = setTimeout(() => { if (!surfaces.size) finish(); }, TRAY_GESTURE_MS);
+});
 app.on('before-quit', () => { quitting = true; });
 process.on('SIGTERM', finish);
 process.on('SIGINT', finish);
@@ -188,10 +201,29 @@ Promise.all([initialized, app.whenReady()]).then(([config]) => {
   session.defaultSession.setPermissionCheckHandler(() => false);
   session.defaultSession.on('will-download', event => event.preventDefault());
   engineConfig = config;
-  const opening = new Map([[config.role ?? 'main', config.anchor], ...requested]);
-  for (const [role, anchor] of opening) openSurface(role, anchor);
-  requested.clear();
+  openSurface(config.role ?? 'main', config.anchor);
+  for (const message of requested.splice(0)) present(message);
 });
+function pointer() {
+  try { return screen.getCursorScreenPoint(); } catch { return undefined; }
+}
+function dismiss(entry) {
+  entry.reopen = undefined;
+  if (entry.dismissed || entry.window.isDestroyed()) return;
+  entry.dismissed = true;
+  entry.window.close();
+}
+function present(message) {
+  if (message.role !== 'compact' || !message.toggle) return openSurface(message.role, message.anchor);
+  const panel = surfaces.get('compact');
+  if (panel && !panel.window.isDestroyed() && (!panel.dismissed || panel.reopen)) { panelBlur = undefined; dismiss(panel); return; }
+  const recent = panelBlur;
+  panelBlur = undefined;
+  const point = pointer();
+  if (recent && performance.now() - recent.at < TRAY_GESTURE_MS &&
+      (!point || !recent.point || (Math.abs(point.x - recent.point.x) <= 8 && Math.abs(point.y - recent.point.y) <= 8))) return;
+  openSurface('compact', message.anchor);
+}
 function resizePanel(entry) {
   if (entry.window.isDestroyed()) return;
   const area = (entry.anchor ? screen.getDisplayNearestPoint(entry.anchor) : screen.getDisplayMatching(entry.window.getBounds())).workArea;
@@ -220,13 +252,17 @@ function panelAnchor(anchor) {
   try { return screen.getCursorScreenPoint(); } catch { return; }
 }
 function openSurface(role, anchor) {
-  if (!engineConfig) { requested.set(role, anchor); return; }
+  clearTimeout(idleExit);
+  panelBlur = undefined;
   focusRole = role;
+  if (role === 'main') { const panel = surfaces.get('compact'); if (panel && !panel.window.isDestroyed()) dismiss(panel); }
   const point = role === 'compact' ? panelAnchor(anchor) : undefined;
   const existing = surfaces.get(role);
+  if (existing?.dismissed && !existing.window.isDestroyed()) { existing.reopen = {role, anchor}; return; }
   if (existing && !existing.window.isDestroyed()) { if (existing.window.isMinimized()) existing.window.restore(); if (role === 'compact') { existing.anchor = point; resizePanel(existing); } existing.window.show(); existing.window.focus(); return; }
   const config = engineConfig;
   const compact = role === 'compact';
+  const panelHeight = Number.isFinite(config.panelHeight) ? Math.max(100, Math.min(config.panelHeight, 600)) : 180;
   let loaded = false;
   let revealed = false;
   let geometry = {};
@@ -237,7 +273,7 @@ function openSurface(role, anchor) {
     if ([x, y, width, height].every(Number.isInteger) && width >= 480 && height >= 400 && width <= 16384 && height <= 16384 && screen.getAllDisplays().some(({workArea: a}) => x < a.x + a.width && x + width > a.x && y < a.y + a.height && y + 40 > a.y)) geometry = {x, y, width, height};
   } catch {}
   const window = new BrowserWindow({
-    title: 'Quotum', width: compact ? 400 : 1280, height: compact ? 180 : 800, ...geometry, minWidth: compact ? 160 : 480, minHeight: compact ? 100 : 400,
+    title: 'Quotum', width: compact ? 400 : 1280, height: compact ? panelHeight : 800, ...geometry, minWidth: compact ? 160 : 480, minHeight: compact ? 100 : 400,
     frame: !compact,
     alwaysOnTop: compact, skipTaskbar: compact, resizable: !compact,
     backgroundColor: '#0b0b0e', show: false, autoHideMenuBar: true,
@@ -248,15 +284,23 @@ function openSurface(role, anchor) {
       devTools: config.inspect === true, spellcheck: false, navigateOnDragDrop: false,
     },
   });
-  const entry = {window, role, instance: ++nextInstance, height: 180, anchor: point};
+  const entry = {window, role, instance: ++nextInstance, height: compact ? panelHeight : 180, anchor: point, dismissed: false};
   surfaces.set(role, entry);
   send({type: 'surface', role, instance: entry.instance, open: true});
   window.setMenu(null);
-  if (compact) { window.on('blur', () => { if (revealed && !quitting) window.close(); }); window.on('move', () => resizePanel(entry)); }
+  if (compact) {
+    window.on('blur', () => {
+      if (revealed && !quitting && !entry.dismissed) {
+        panelBlur = {at: performance.now(), point: pointer()};
+        dismiss(entry);
+      }
+    });
+    window.on('move', () => resizePanel(entry));
+  }
   window.once('ready-to-show', () => {
-    if (quitting) return;
+    if (quitting || entry.dismissed || window.isDestroyed()) return;
     if (compact) resizePanel(entry);
-    if (focusRole === role) window.show(); else window.showInactive();
+    if (!revealed) { if (focusRole === role) window.show(); else window.showInactive(); }
     revealed = true;
     if (loaded && !compact) send({type: 'loaded', url: window.webContents.getURL()});
     scheduleGraphics();
@@ -273,19 +317,26 @@ function openSurface(role, anchor) {
   contents.on('will-attach-webview', event => event.preventDefault());
   contents.on('render-process-gone', (_, details) => { if (!['clean-exit', 'killed'].includes(details.reason)) send({type: 'fault', process: 'renderer', reason: details.reason}); });
   contents.on('did-finish-load', () => {
+    if (entry.dismissed || window.isDestroyed()) return;
     if (!quitting && !belongs(contents.getURL(), target)) { navigate(entry); return; }
     loaded = true;
     if (revealed && !compact) send({type: 'loaded', url: contents.getURL()});
   });
   window.on('close', () => {
+    entry.dismissed = true;
     if (loaded && !compact) {
       try { fs.writeFileSync(`${config.geometry}.new`, JSON.stringify(window.getNormalBounds())); fs.renameSync(`${config.geometry}.new`, config.geometry); } catch {}
     }
   });
   window.on('closed', () => {
-    if (surfaces.get(role) === entry) surfaces.delete(role);
+    const current = surfaces.get(role) === entry;
+    if (current) surfaces.delete(role);
     send({type: 'surface', role, instance: entry.instance, open: false});
     for (const [id, waiter] of pending) if (waiter.entry === entry) { clearTimeout(waiter.timer); pending.delete(id); waiter.reject(new Error('window closed')); }
+    if (current && entry.reopen && !quitting) openSurface(entry.reopen.role, entry.reopen.anchor);
   });
   navigate(entry);
+  // The tray responds before Chromium has loaded the page. Once revealed, an
+  // outside click must still dismiss it while the renderer is starting.
+  if (compact) { resizePanel(entry); revealed = true; window.show(); }
 }

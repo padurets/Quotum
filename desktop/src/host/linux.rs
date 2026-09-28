@@ -32,6 +32,7 @@ pub struct Host {
     gui: Mutex<Option<Arc<Gui>>>,
     stopped: Condvar,
     tray: Mutex<Option<ksni::blocking::Handle<Tray>>>,
+    panel_height: Mutex<f64>,
 }
 struct Gui {
     writer: Mutex<UnixStream>,
@@ -109,6 +110,7 @@ fn start(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         gui: Mutex::new(None),
         stopped: Condvar::new(),
         tray: Mutex::new(None),
+        panel_height: Mutex::new(180.0),
     };
     let _ = window::HUB_LOG.set(dirs.hub_log().display().to_string());
     let shell = Arc::new(Shell::new(dirs, node, resources.join("hub"), args.smoke.map(smoke::Smoke::new), lock, host));
@@ -195,9 +197,9 @@ pub fn open_panel(shell: &Arc<Shell>) {
     open_role(shell, window::Role::Compact);
 }
 fn open_role(shell: &Arc<Shell>, role: window::Role) {
-    open_at(shell, role, None);
+    open_at(shell, role, None, false);
 }
-fn open_at(shell: &Arc<Shell>, role: window::Role, anchor: Option<(i32, i32)>) {
+fn open_at(shell: &Arc<Shell>, role: window::Role, anchor: Option<(i32, i32)>, toggle: bool) {
     let opening = window::opening(shell);
     let shell = shell.clone();
     thread::spawn(move || {
@@ -208,7 +210,7 @@ fn open_at(shell: &Arc<Shell>, role: window::Role, anchor: Option<(i32, i32)>) {
         }
         let gui = shell.host.gui.lock().unwrap_or_else(|e| e.into_inner()).clone();
         if let Some(gui) = gui {
-            let _ = gui.send(&json!({"type":"focus", "role":role, "anchor":anchor}));
+            let _ = gui.send(&json!({"type":"focus", "role":role, "anchor":anchor, "toggle":toggle}));
             return;
         }
         if let Err(e) = launch(&shell, role, anchor) {
@@ -358,7 +360,8 @@ fn read_messages(shell: &Arc<Shell>, gui: &Arc<Gui>, socket: UnixStream) {
         };
         match message {
             Message::Ready => {
-                let _ = gui.send(&json!({"type":"init", "role": gui.initial, "anchor": gui.anchor, "inspect": shell.host.inspector.is_some(), "profile": shell.dirs.webview.clone().unwrap_or_else(|| shell.dirs.data.join("chromium")), "geometry": shell.dirs.data.join("window.json")}));
+                let height = *shell.host.panel_height.lock().unwrap_or_else(|e| e.into_inner());
+                let _ = gui.send(&json!({"type":"init", "role": gui.initial, "anchor": gui.anchor, "panelHeight": height, "inspect": shell.host.inspector.is_some(), "profile": shell.dirs.webview.clone().unwrap_or_else(|| shell.dirs.data.join("chromium")), "geometry": shell.dirs.data.join("window.json")}));
                 send_state(shell, gui, false);
             }
             Message::Surface { role, instance, open } => {
@@ -543,7 +546,7 @@ impl ksni::Tray for Tray {
         }
     }
     fn activate(&mut self, x: i32, y: i32) {
-        open_at(&self.shell, window::Role::Compact, Some((x, y)));
+        open_at(&self.shell, window::Role::Compact, Some((x, y)), true);
     }
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
         let locale = self.shell.locale();
@@ -615,6 +618,7 @@ pub fn close_panel(shell: &Arc<Shell>, instance: u64) {
     panel_message(shell, instance, "close", None);
 }
 pub fn panel_height(shell: &Arc<Shell>, instance: u64, height: f64) {
+    *shell.host.panel_height.lock().unwrap_or_else(|e| e.into_inner()) = height;
     panel_message(shell, instance, "height", Some(height));
 }
 pub fn open_main_from_panel(shell: &Arc<Shell>, instance: u64) {

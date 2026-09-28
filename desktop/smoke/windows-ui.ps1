@@ -236,7 +236,7 @@ try {
   $result.openHandoffMs = $clock.ElapsedMilliseconds - $asked
   # WebView2 may send focus changes before its hidden panel is shown. A logged
   # creation is not enough: it must stay visible and leave the main window intact.
-  for ($cycle = 0; $cycle -lt 2; $cycle++) {
+  for ($cycle = 0; $cycle -lt 3; $cycle++) {
     $before = [QuotumWindowProbe]::Bounds($window)
     if (-not [QuotumWindowProbe]::OpenPanel($process.Id)) { throw 'Could not activate the tray panel' }
     $deadline = (Get-Date).AddSeconds(15)
@@ -256,10 +256,12 @@ try {
       $second = Start-Process -FilePath $appPath -PassThru
       $null = $second.Handle
       if (-not $second.WaitForExit(10000) -or $second.ExitCode -ne 0) { throw 'Could not activate the main window beside the panel' }
-    } elseif (-not [QuotumWindowProbe]::PostMessage($panel, 0x10, [IntPtr]::Zero, [IntPtr]::Zero)) { throw 'Could not close the panel' }
+    } elseif ($cycle -eq 1) {
+      if (-not [QuotumWindowProbe]::PostMessage($panel, 0x10, [IntPtr]::Zero, [IntPtr]::Zero)) { throw 'Could not close the panel' }
+    } elseif (-not [QuotumWindowProbe]::OpenPanel($process.Id)) { throw 'Could not toggle the panel through the tray' }
     $deadline = (Get-Date).AddSeconds(5)
     while ([QuotumWindowProbe]::IsWindowVisible($panel) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 50 }
-    if ([QuotumWindowProbe]::IsWindowVisible($panel)) { throw 'The panel did not close after dismissal or foreground activation of the main window' }
+    if ([QuotumWindowProbe]::IsWindowVisible($panel)) { throw 'The panel did not close after dismissal, main-window activation or a repeated tray click' }
     if (-not [QuotumWindowProbe]::IsWindowVisible($window) -or ($before -join ',') -ne ([QuotumWindowProbe]::Bounds($window) -join ',')) { throw 'The panel changed the main window geometry' }
   }
   $result.passed = $true

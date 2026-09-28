@@ -31,8 +31,8 @@ after these checks pass; ordinary CI runs also keep the versioned release packag
 window-state plugin: a visible, responsive window, restored bounds inside the monitor's
 work area, close/reopen through a second launch, and a second launch while the window is
 minimized, which restores that very window. It disables every provider. Each
-run also opens and closes the tray panel twice, checking that it stays visible and
-fits its monitor without changing the main window's geometry. Each
+run also opens and closes the tray panel three times, including a repeated tray
+activation, checking that it stays visible and fits its monitor without changing the main window's geometry. Each
 run starts from a fresh WebView2 profile, as the first start on a machine does: the one
 in `%LOCALAPPDATA%\com.padurets.quotum\EBWebView` is set aside and put back afterwards.
 With `-Diagnostics <dir>` it keeps its report (the times of every close and reopen), the
@@ -162,6 +162,9 @@ activation, and no replay after restart or sleep. OS suppression is distinct fro
 successful native API call. On Windows restarting Explorer must restore one icon.
 
 Open the compact panel, then the main window; close and reopen each in both orders.
+Repeat a tray click while the panel is visible and while it is loading: both dismiss
+it. Check a click outside followed by a new tray click too, so the blur from the same
+press cannot reopen it or consume a different gesture.
 Check long names, hidden windows, empty data, both languages, small displays and DPI
 changes. Panel height is clamped to its monitor and never saved as the main window's
 geometry. Its commands must fail from the main window, subframes, foreign origins and

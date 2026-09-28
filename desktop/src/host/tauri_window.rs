@@ -20,10 +20,28 @@ pub fn is_open(shell: &Shell) -> bool {
 /// Shows the window: creates it if there is none, on a thread of its own. `from` names who
 /// asked, for the log.
 pub fn open(shell: &Arc<Shell>, from: &'static str) {
+    shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).close();
     open_role(shell, from, Role::Main);
 }
 pub fn open_panel(shell: &Arc<Shell>) {
+    shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).show();
     open_role(shell, "the tray", Role::Compact);
+}
+pub fn toggle_panel(shell: &Arc<Shell>, point: Option<(i32, i32)>) {
+    let show = shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).toggle(Instant::now(), point);
+    if show {
+        open_role(shell, "the tray", Role::Compact);
+    } else {
+        let queued = shell.clone();
+        let _ = shell.host.app.run_on_main_thread(move || {
+            if queued.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).wanted() {
+                return;
+            }
+            if let Some(panel) = queued.host.app.get_webview_window("compact") {
+                let _ = panel.close();
+            }
+        });
+    }
 }
 fn open_role(shell: &Arc<Shell>, from: &'static str, role: Role) {
     let intent = opening(shell);
@@ -53,6 +71,9 @@ fn open_now(shell: &Arc<Shell>, from: &'static str, role: Role) {
     }
     shell.hub_log.line(&format!("app: {from} asks for the window"));
     let _creating = shell.window_lock.lock().unwrap_or_else(|e| e.into_inner());
+    if role == Role::Compact && !shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).wanted() {
+        return;
+    }
     let app = &shell.host.app;
     if let Some(window) = app.get_webview_window(label) {
         // A second start can hand over while Tauri still holds a closed window under its
@@ -63,6 +84,10 @@ fn open_now(shell: &Arc<Shell>, from: &'static str, role: Role) {
                 // The UI smoke (desktop/smoke/windows-ui.ps1) reads this line.
                 shell.hub_log.line(&format!("app: found the window {label} at {} ms", ms(start)));
                 let _ = window.unminimize();
+                if role == Role::Compact && !shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).wanted()
+                {
+                    return;
+                }
                 let _ = window.show();
                 let _ = window.set_focus();
                 drop(_creating);
@@ -143,6 +168,7 @@ fn build(
 ) -> tauri::Result<tauri::WebviewWindow> {
     let label = role.label();
     let compact = role == Role::Compact;
+    let height = if compact { *shell.host.panel_height.lock().unwrap_or_else(|e| e.into_inner()) } else { 800.0 };
     let app = &shell.host.app;
     let navigating = shell.clone();
     let loading = shell.clone();
@@ -164,7 +190,7 @@ fn build(
         .decorations(!compact)
         // Match the board's --bg while the web view has not painted a newly exposed area yet.
         .background_color(tauri::utils::config::Color(0x0b, 0x0b, 0x0e, 255))
-        .inner_size(if compact { 400.0 } else { 1280.0 }, if compact { 180.0 } else { 800.0 })
+        .inner_size(if compact { 400.0 } else { 1280.0 }, if compact { height.min(600.0) } else { height })
         .min_inner_size(if compact { 160.0 } else { 480.0 }, if compact { 100.0 } else { 400.0 })
         .always_on_top(compact)
         .skip_taskbar(compact)
@@ -204,7 +230,6 @@ fn build(
         let closing = window.clone();
         let resizing = shell.clone();
         let focused = AtomicBool::new(false);
-        *shell.host.panel_height.lock().unwrap_or_else(|e| e.into_inner()) = 180.0;
         window.on_window_event(move |event| {
             if let tauri::WindowEvent::Focused(active) = event {
                 // WebView2 sends focus changes while the window is still hidden.
@@ -218,8 +243,17 @@ fn build(
                     // Moving keyboard focus into WebView2 can report a blur while
                     // this top-level window still owns the foreground.
                     focused.store(false, Ordering::SeqCst);
+                    resizing
+                        .host
+                        .panel_toggle
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .blur(Instant::now(), crate::tray::cursor_position());
                     let _ = closing.close();
                 }
+            }
+            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                resizing.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).closed();
             }
             if matches!(event, tauri::WindowEvent::ScaleFactorChanged { .. } | tauri::WindowEvent::Moved(_)) {
                 let height = *resizing.host.panel_height.lock().unwrap_or_else(|e| e.into_inner());
@@ -247,6 +281,10 @@ fn build(
         if shell.exiting() {
             return;
         }
+        if compact && !shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).wanted() {
+            let _ = ready.destroy();
+            return;
+        }
         if !compact && shell.smoke.is_none() {
             let _ = ready.restore_state(StateFlags::all() & !StateFlags::VISIBLE);
         }
@@ -255,6 +293,9 @@ fn build(
         }
         if compact {
             place_panel(&shell, &ready);
+            if let Ok(hwnd) = ready.hwnd() {
+                panel_height(&shell, hwnd.0 as u64, height);
+            }
         }
         if let Err(error) = ready.show() {
             shell.hub_log.line(&format!("app: the window could not be shown: {error}"));
@@ -352,6 +393,8 @@ pub fn close(shell: &Arc<Shell>) {
 pub fn reenter_role(shell: &Arc<Shell>, role: Role) {
     if shell.host.app.get_webview_window(role.label()).is_some() {
         navigate_current(shell, true, Some(role));
+    } else if role == Role::Compact {
+        open_panel(shell);
     } else {
         open_role(shell, "reenter", role);
     }
@@ -361,6 +404,7 @@ fn current_panel(shell: &Shell, instance: u64) -> Option<tauri::WebviewWindow> {
 }
 pub fn close_panel(shell: &Arc<Shell>, instance: u64) {
     if let Some(w) = current_panel(shell, instance) {
+        shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).close();
         let _ = w.close();
     }
 }
@@ -370,6 +414,7 @@ pub fn open_main_from_panel(shell: &Arc<Shell>, instance: u64) {
         if current_panel(&shell, instance).is_none() {
             return;
         }
+        shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).close();
         open_now(&shell, "the compact panel", Role::Main);
         close_panel(&shell, instance);
     });

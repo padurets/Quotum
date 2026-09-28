@@ -8,15 +8,21 @@ const vm = require('node:vm');
 
 // Run the real main process handlers with a web view whose navigations commit
 // only when the test asks. No Electron, display, filesystem writes or clients.
-async function mainProcess({cursor = () => ({x: 790, y: 590}), displays = [{workArea: {x: 0, y: 0, width: 800, height: 600}}], backend = '', env = {}} = {}) {
+async function mainProcess({cursor = () => ({x: 790, y: 590}), displays = [{workArea: {x: 0, y: 0, width: 800, height: 600}}], backend = '', env = {}, startup = [], panelHeight, deferClose = false} = {}) {
   let channel;
   let window;
   const windows = [];
   let invoke;
   const navigations = [];
   const sent = [];
+  const traffic = [];
   const quits = [];
   let gone = false;
+  let now = 0;
+  const timers = [];
+  const closing = [];
+  const later = (run, delay) => { const timer = {run, at: now + delay, active: true, unref() {}}; timers.push(timer); return timer; };
+  const cancel = timer => { if (timer) timer.active = false; };
   const app = Object.assign(new EventEmitter(), {
     setName() {}, setDesktopName() {}, enableSandbox() {}, setPath() {},
     whenReady: () => Promise.resolve(), quit() { quits.push('quit'); },
@@ -41,14 +47,20 @@ async function mainProcess({cursor = () => ({x: 790, y: 590}), displays = [{work
     setMenu() {}
     isDestroyed() { return this.destroyed; }
     isMinimized() { return false; }
-    show() {}
+    show() { this.visible = true; this.shows = (this.shows ?? 0) + 1; }
+    showInactive() { this.show(); }
     focus() {}
-    close() { this.emit('close'); this.destroyed = true; this.emit('closed'); }
+    close() {
+      if (this.destroyed || this.closing) return;
+      this.closing = true; this.emit('close'); this.emit('blur');
+      const finish = () => { this.visible = false; this.destroyed = true; this.emit('closed'); if (windows.every(w => w.destroyed)) app.emit('window-all-closed'); };
+      if (deferClose) closing.push(finish); else finish();
+    }
     getBounds() { return {x: this.position?.[0] ?? 0, y: this.position?.[1] ?? 0, width: this.size[0], height: this.size[1]}; }
     setPosition(x, y) { this.position = [x, y]; }
     getContentSize() { return this.size; }
     setContentSize(w, h) { this.size = [w, h]; }
-    loadURL(url) { navigations.push(url); return new Promise(() => {}); }
+    loadURL(url) { navigations.push(url); return new Promise((_, reject) => { this.failNavigation = code => reject(Object.assign(new Error('private entry URL'), {code})); }); }
   }
   const context = vm.createContext({
     require(name) {
@@ -64,22 +76,25 @@ async function mainProcess({cursor = () => ({x: 790, y: 590}), displays = [{work
       if (name === 'node:net') return {Socket: class extends EventEmitter {
         constructor() { super(); channel = this; }
         setEncoding() {}
-        write() {}
+        write(data) { traffic.push(JSON.parse(data)); }
       }};
       if (name === 'node:fs') return {mkdirSync() {}, readFileSync() { throw new Error('no saved geometry'); }};
+      if (name === 'node:perf_hooks') return {performance: {now: () => now}};
       return require(name);
     },
-    process: {argv: [], env, on() {}}, __dirname, URL, Buffer, setTimeout, clearTimeout,
+    process: {argv: [], env, on() {}}, __dirname, URL, Buffer, setTimeout: later, clearTimeout: cancel,
   });
   vm.runInContext(readFileSync(`${__dirname}/main.cjs`, 'utf8'), context);
   const deliver = (...messages) => channel.emit('data', messages.map(message => JSON.stringify(message) + '\n').join(''));
-  deliver({type: 'init', profile: '/isolated/profile', geometry: '/isolated/window.json'});
+  deliver({type: 'init', profile: '/isolated/profile', geometry: '/isolated/window.json', panelHeight}, ...startup);
   await new Promise(setImmediate);
   return {
-    navigations, deliver, sent, quits, windows,
+    navigations, deliver, sent, traffic, quits, windows,
     invoke: (...args) => invoke(...args),
     commit(url) { window.url = url; window.webContents.emit('did-finish-load'); },
     crash() { gone = true; },
+    tick(ms) { now += ms; for (const timer of timers) if (timer.active && timer.at <= now) { timer.active = false; timer.run(); } },
+    finishClosing() { for (const finish of closing.splice(0)) finish(); },
   };
 }
 
@@ -235,4 +250,89 @@ test('native Wayland never asks for unsupported global pointer coordinates', asy
   panel.emit('ready-to-show');
   assert.equal(panel.position, undefined);
   assert.deepEqual(panel.size, [400, 180]);
+});
+
+test('the tray toggles a visible or loading panel and consumes the preceding blur of the same click', async () => {
+  let point = {x: 790, y: 590};
+  const main = await mainProcess({cursor: () => point});
+  main.deliver({type: 'state', generation: 1, url: hub});
+  const toggle = () => main.deliver({type: 'focus', role: 'compact', toggle: true});
+  toggle();
+  const first = main.windows.at(-1);
+  assert.equal(first.visible, true, 'the native panel appears before the page is ready');
+  toggle();
+  assert.equal(first.destroyed, true, 'a second click also cancels a loading panel');
+  first.emit('ready-to-show');
+  assert.equal(first.shows, 1, 'a late ready event cannot reveal it again');
+  toggle();
+  const second = main.windows.at(-1);
+  second.emit('blur');
+  main.tick(80);
+  toggle();
+  assert.equal(main.windows.at(-1), second, 'the tray click that caused the blur must not reopen the panel');
+  toggle();
+  const third = main.windows.at(-1);
+  assert.equal(third.destroyed, false, 'the next distinct activation can open it');
+  point = {x: 50, y: 50};
+  third.emit('blur');
+  point = {x: 790, y: 590};
+  main.tick(30);
+  toggle();
+  assert.notEqual(main.windows.at(-1), third, 'an outside click followed by a tray click is a new request');
+});
+
+test('queued tray activations retain their order and the engine exits after the gesture ends', async () => {
+  const main = await mainProcess({startup: [
+    {type: 'focus', role: 'compact', toggle: true},
+    {type: 'focus', role: 'compact', toggle: true},
+  ]});
+  assert.equal(main.windows.filter(w => !w.destroyed).length, 1, 'two activations during startup leave only the main window');
+  main.windows[0].close();
+  main.tick(499);
+  assert.deepEqual(main.quits, []);
+  main.tick(1);
+  assert.deepEqual(main.quits, ['quit'], 'no permanent renderer or engine cache');
+});
+
+test('only the panel height is reused when its renderer is recreated', async () => {
+  const main = await mainProcess({panelHeight: 900});
+  main.deliver({type: 'state', generation: 1, url: hub}, {type: 'focus', role: 'compact'});
+  const panel = main.windows.at(-1);
+  assert.deepEqual(panel.size, [400, 480], 'cached height is still clamped to this monitor');
+  main.deliver({type: 'panel', instance: 2, generation: 1, action: 'height', height: 250});
+  main.deliver({type: 'panel', instance: 2, generation: 1, action: 'close'});
+  main.deliver({type: 'focus', role: 'compact'});
+  assert.deepEqual(main.windows.at(-1).size, [400, 250]);
+  assert.deepEqual(main.windows[0].size, [1280, 800]);
+});
+
+test('rapid toggles retain their final intent while the previous renderer is closing', async () => {
+  for (const count of [2, 3, 4]) {
+    const main = await mainProcess({deferClose: true, startup: Array.from({length: count}, () => ({type: 'focus', role: 'compact', toggle: true}))});
+    main.finishClosing();
+    const panels = main.windows.filter(w => w.options.frame === false && !w.destroyed);
+    assert.equal(panels.length, count % 2, `${count} queued activations`);
+  }
+  const main = await mainProcess({deferClose: true});
+  main.deliver({type: 'state', generation: 1, url: hub}, {type: 'focus', role: 'compact', toggle: true});
+  const panel = main.windows.at(-1);
+  panel.url = 'http://127.0.0.1:23456/compact';
+  main.deliver({type: 'focus', role: 'compact', toggle: true});
+  assert.throws(() => main.invoke({sender: panel.webContents, senderFrame: panel.webContents.mainFrame}, 'open_main'), /not the board/);
+  main.deliver({type: 'focus', role: 'compact', toggle: true}, {type: 'focus', role: 'main'});
+  main.finishClosing();
+  assert.equal(main.windows.filter(w => !w.destroyed).length, 1, 'opening the board cancels a pending panel reopen');
+});
+
+test('closing a loading panel is not a navigation failure, but a live page failing still is', async () => {
+  const main = await mainProcess();
+  main.deliver({type: 'state', generation: 1, url: hub}, {type: 'focus', role: 'compact'});
+  const panel = main.windows.at(-1);
+  panel.close();
+  panel.failNavigation('ERR_FAILED');
+  await new Promise(setImmediate);
+  assert.deepEqual(main.traffic.filter(m => m.type === 'fault'), []);
+  main.windows[0].failNavigation('ERR_FAILED');
+  await new Promise(setImmediate);
+  assert.deepEqual(main.traffic.filter(m => m.type === 'fault'), [{type: 'fault', process: 'navigation', reason: 'ERR_FAILED'}]);
 });

@@ -72,6 +72,10 @@ impl Handle {
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(Some(0)).collect()
 }
+pub fn cursor_position() -> Option<(i32, i32)> {
+    let mut point: POINT = unsafe { std::mem::zeroed() };
+    (unsafe { GetCursorPos(&mut point) } != 0).then_some((point.x, point.y))
+}
 fn copy_wide<const N: usize>(to: &mut [u16; N], text: &str) {
     let units: Vec<_> =
         text.chars().filter(|c| !c.is_control() || *c == '\n').collect::<String>().encode_utf16().collect();
@@ -260,7 +264,8 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
             if let Some(shell) = context.shell.upgrade() {
                 match (l as u32) & 0xffff {
                     NIN_BALLOONUSERCLICK => window::open(&shell, "a notification"),
-                    NIN_SELECT | NIN_KEYSELECT => crate::host::open_panel(&shell),
+                    NIN_SELECT => crate::host::toggle_panel(&shell, cursor_position()),
+                    NIN_KEYSELECT => crate::host::toggle_panel(&shell, None),
                     WM_CONTEXTMENU => unsafe {
                         let menu = CreatePopupMenu();
                         AppendMenuW(

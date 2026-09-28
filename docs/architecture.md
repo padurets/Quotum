@@ -609,7 +609,8 @@ Windows are created on worker threads; restoring, fitting and showing them is qu
 on the event loop after the window-state plugin's initialization. This keeps its state
 locks on the same thread as native window events. Closing a window destroys it with its
 web view. The compact panel has no native window frame, has its own label and never
-persists main-window geometry. Its initial hidden focus changes do not dismiss it;
+persists main-window geometry. Only its last content height stays in the controller,
+so the next panel can start at that height, clamped to its current monitor. Its initial hidden focus changes do not dismiss it;
 losing focus after it has been shown and focused does. A request to open it asks the event loop whether the window it finds is still
 there: a second start can arrive while a closed window still holds its label, and that
 one does not count as open. The new window is created once it has gone, and the app's
@@ -621,7 +622,12 @@ when starting early at login and registers again when that watcher restarts. Ope
 process; it holds at most the main board and a compact panel. On X11/XWayland the panel
 uses the tray's activation coordinates, or the pointer when its menu gives none. That
 anchor determines its monitor and stays put while the content changes height; native
-Wayland leaves positioning to the compositor. Closing both ends that process and its renderers. The Rust agent and Node hub
+Wayland leaves positioning to the compositor. The native panel is shown before its
+page finishes loading. A direct tray activation toggles it; the blur and activation
+of the same pointer gesture cannot close and immediately reopen it. The menu's
+*Limits* command explicitly opens it. Closing both destroys their renderers and ends
+the process after a half-second gesture window; no browser or hidden page stays
+resident afterwards. The Rust agent and Node hub
 continue. A socket pair inherited as fd 3 carries typed messages, not a TCP listener or
 command-line secrets. EOF tells Electron to quit if the controller dies. A second start
 sends only an Open signal through a per-user Unix socket; the receiver checks peer UID.

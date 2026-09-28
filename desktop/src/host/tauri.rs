@@ -17,6 +17,7 @@ pub struct Host {
     pub app: AppHandle,
     pub tray: Mutex<Option<crate::tray::Handle>>,
     pub panel_height: Mutex<f64>,
+    pub panel_toggle: Mutex<window::PanelToggle>,
     pub navigation: Mutex<std::collections::BTreeMap<window::Role, window::Navigation>>,
     /// Where the board in the window hears the app's state (`watch_state`).
     pub watching: Mutex<std::collections::BTreeMap<window::Role, (u64, tauri::ipc::Channel<serde_json::Value>)>>,
@@ -90,6 +91,7 @@ pub fn run(args: Args) {
                     app: handle.clone(),
                     tray: Mutex::default(),
                     panel_height: Mutex::new(180.0),
+                    panel_toggle: Mutex::default(),
                     navigation: Mutex::default(),
                     watching: Mutex::default(),
                 },
@@ -168,6 +170,7 @@ pub fn set_autostart(shell: &Shell, on: bool) -> Result<(), String> {
 pub use crate::tauri_ipc::push_state;
 pub use crate::tauri_window::{
     close, close_panel, follow, is_open, leave, open, open_main_from_panel, open_panel, panel_height, reenter_role,
+    toggle_panel,
 };
 
 pub fn attention_changed(shell: &Arc<Shell>, status: &crate::attention::Status) {
