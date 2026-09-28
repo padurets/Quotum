@@ -544,8 +544,9 @@ by its left edge a widget keeps its row, and what it covers there goes after it,
 right edge sends its neighbour down. Heights snap to whole rows, by the bottom edge; both
 by either bottom corner. The top has no edge: a widget floats up to what is above it, so
 its top has no place of its own to pull, and it is moved by its head. The edges are not
-drawn: each is a strip along its whole length in the gap beside it, which shows a thin
-line under the pointer or in focus; only the bottom corners have marks. The right and
+drawn: each is a strip along its whole length in the gap beside it, with the cursor of
+its axis; under the pointer the widget's own border on that side lights up a little, in
+focus it takes the accent. Only the bottom corners have marks. The right and
 bottom edges take the arrow keys too. A height is saved only where a gesture or a key
 changes what shows, the way it pulled (`heightIntent` in `ui/lib/grid.ts`): pushing a
 widget below what its content needs, or a corner moved only sideways, keeps the height it
