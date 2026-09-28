@@ -7,11 +7,11 @@ export type Place = {x: number; y: number; w: number};
 export type Layout = {columns: number; places: Record<string, Place>};
 export type Item = {id: string; x: number; w: number; h: number};
 export type Spot = Item & {y: number};
-export const widths = (columns: number, x = 0) => [columns / 3, columns / 2, columns * 2 / 3, columns].filter(w => x + w <= columns);
-export const starts = (columns: number, w: number) => [0, columns / 3, columns / 2, columns * 2 / 3].filter(x => x + w <= columns);
-export const defaultWidth = (id: string, columns: number) => id.startsWith('source:') ? columns / 2 : columns;
+export const widths = (columns: number, x = 0) => [columns / 3, columns / 2, (columns * 2) / 3, columns].filter(w => x + w <= columns);
+export const starts = (columns: number, w: number) => [0, columns / 3, columns / 2, (columns * 2) / 3].filter(x => x + w <= columns);
+export const defaultWidth = (id: string, columns: number) => (id.startsWith('source:') ? columns / 2 : columns);
 export const reading = <T extends Place>(items: T[]): T[] => [...items].sort((a, b) => a.y - b.y || a.x - b.x);
-export const nearest = (values: number[], target: number) => values.reduce((best, n) => Math.abs(n - target) < Math.abs(best - target) ? n : best);
+export const nearest = (values: number[], target: number) => values.reduce((best, n) => (Math.abs(n - target) < Math.abs(best - target) ? n : best));
 
 /** Only columns underneath a widget support it; it never passes a preceding widget. */
 export function settle(items: Item[], columns: number): Spot[] {
@@ -31,7 +31,7 @@ export function ordered(layout: Layout, ids: string[], hidden: string[] = []): O
     if (items.some(item => item.id === id)) return;
     const prev = items.find(item => item.id === visible[i - 1]);
     const w = defaultWidth(id, layout.columns);
-    const x = prev ? starts(layout.columns, w).find(x => x >= prev.x + prev.w) ?? 0 : 0;
+    const x = prev ? (starts(layout.columns, w).find(x => x >= prev.x + prev.w) ?? 0) : 0;
     items.splice(prev ? items.indexOf(prev) + 1 : 0, 0, {id, x, w});
   });
   return items;
@@ -57,7 +57,10 @@ export function landed(origin: Spot[], id: string, cell: {x: number; y: number},
 }
 
 export const widened = (origin: Spot[], id: string, w: number, columns: number) =>
-  settle(origin.map(item => item.id === id ? {...item, w} : item), columns);
+  settle(
+    origin.map(item => (item.id === id ? {...item, w} : item)),
+    columns,
+  );
 
 export function stepped(origin: Spot[], id: string, key: string, columns: number): Spot[] {
   const item = origin.find(item => item.id === id)!;
@@ -76,7 +79,10 @@ export function stepped(origin: Spot[], id: string, key: string, columns: number
   for (const y of ys) {
     const next = landed(origin, id, {x: item.x, y}, columns);
     const delta = (next.find(other => other.id === id)!.y - item.y) * (down ? 1 : -1);
-    if (delta > 0 && delta < distance) { best = next; distance = delta; }
+    if (delta > 0 && delta < distance) {
+      best = next;
+      distance = delta;
+    }
   }
   return best;
 }
@@ -102,17 +108,23 @@ export function narrowed(items: Item[], columns: 2 | 1, wideColumns: number): Sp
 
 /** Translate every saved id, including hidden and absent widgets, without reserving visible space for them. */
 export function legacyLayout<T extends Stored>(view: T, areas: {cards: string[]; analytics: string[]}, hidden: string[]) {
+  // Keep a current server view intact: useView compares its saved acknowledgement with this value.
+  if (view.layout && !view.order && !view.sizes) return view as Omit<T, 'order' | 'sizes' | 'layout'> & {layout: Layout};
   if (Object.keys(view.layout?.places ?? {}).length || (!view.order && !view.sizes)) return withPlaces(view, {});
   const saved = new Set([...(view.order ?? []), ...Object.keys(view.sizes ?? {})]);
   const columns = view.layout?.columns ?? COLUMNS;
   const places: Record<string, Place> = {};
-  const areaOf = (id: string) => areas.cards.includes(id) ? 'cards' : areas.analytics.includes(id) ? 'analytics' : id.startsWith('source:') || id === 'agents' ? 'cards' : 'analytics';
+  const areaOf = (id: string) =>
+    areas.cards.includes(id) ? 'cards' : areas.analytics.includes(id) ? 'analytics' : id.startsWith('source:') || id === 'agents' ? 'cards' : 'analytics';
   for (const area of ['cards', 'analytics'] as const) {
     const ids = areas[area];
     const order = (view.order ?? []).filter(id => areaOf(id) === area);
     ids.forEach((id, i) => {
       if (order.includes(id)) return;
-      const prev = ids.slice(0, i).reverse().find(other => order.includes(other));
+      const prev = ids
+        .slice(0, i)
+        .reverse()
+        .find(other => order.includes(other));
       order.splice(prev === undefined ? 0 : order.indexOf(prev) + 1, 0, id);
     });
     order.push(...[...saved].filter(id => areaOf(id) === area && !order.includes(id)).sort());
@@ -121,7 +133,7 @@ export function legacyLayout<T extends Stored>(view: T, areas: {cards: string[];
     order.forEach((id, y) => {
       const span = Math.max(4, Math.min(12, view.sizes?.[id] ?? (id.startsWith('source:') ? 6 : 12)));
       // Reversing the candidates makes an exact tie choose the wider one.
-      const w = nearest(widths(columns).reverse(), span * columns / 12);
+      const w = nearest(widths(columns).reverse(), (span * columns) / 12);
       const fullX = starts(columns, w).find(x => x >= fullCursor) ?? 0;
       fullCursor = fullX + w;
       let x = fullX;

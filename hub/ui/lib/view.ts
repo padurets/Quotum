@@ -14,7 +14,7 @@ export const cardId = (sourceId: string) => `source:${sourceId}`;
 /**
  * The analytics' widgets in the order a board has them until its owner moves them: how
  * agents worked first, over what is left and the table. A board arranged before one of
- * them existed gets it by its neighbour here (`arranged`).
+ * them existed gets it by its neighbour here (`ordered`).
  */
 export const ANALYTICS = [ACTIVITY, HISTORY, FORECAST];
 
@@ -22,24 +22,7 @@ export const ANALYTICS = [ACTIVITY, HISTORY, FORECAST];
 const OFF_BY_DEFAULT = [AGENTS];
 export const isOffByDefault = (id: string) => OFF_BY_DEFAULT.includes(id);
 
-const EMPTY: View = {order: [], sizes: {}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
-
-/**
- * The grid has twelve columns: a card takes half of it by default, so two stand side by
- * side, and a third at least, so three at most; the widgets of the analytics take all of it.
- */
-export const COLUMNS = 12;
-export const MIN_SPAN = 4;
-export const defaultSpan = (id: string) => (id.startsWith('source:') ? COLUMNS / 2 : COLUMNS);
-const clamped = (span: number) => Math.max(MIN_SPAN, Math.min(COLUMNS, Math.round(span)));
-export const spanOf = (view: View, id: string) => clamped(view.sizes[id] ?? defaultSpan(id));
-
-export const withSpan = (view: View, id: string, span: number): View => {
-  const sizes = {...view.sizes};
-  if (clamped(span) === defaultSpan(id)) delete sizes[id];
-  else sizes[id] = clamped(span);
-  return {...view, sizes};
-};
+const EMPTY: View = {layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
 
 /** A card's own name; empty gives it back the automatic one. */
 export const withName = (view: View, sourceId: string, name: string): View => {
@@ -51,34 +34,6 @@ export const withName = (view: View, sourceId: string, name: string): View => {
 };
 /** Changes in a burst (a drag, typing a plan) are saved once, this long after the last one. */
 const SAVE_AFTER = 600;
-
-/**
- * The widgets in the board's order. One the order does not know yet (a new source's
- * card, a new kind of widget) goes right after its neighbour in `ids`, the natural
- * order, rather than to the end of the board.
- */
-export function arranged(view: View, ids: string[]): string[] {
-  const order = view.order.filter(id => ids.includes(id));
-  ids.forEach((id, i) => {
-    if (order.includes(id)) return;
-    const before = ids.slice(0, i).reverse().find(other => order.includes(other));
-    order.splice(before === undefined ? 0 : order.indexOf(before) + 1, 0, id);
-  });
-  return order;
-}
-
-/**
- * The board's widgets by area, each arranged on its own (`arranged`): the cards and the
- * list of agents, which are about now, and the analytics under them. A widget new to the
- * board takes its place among its own area's, never after a card the order put last.
- */
-export const areas = (view: View, cards: string[]) => ({cards: arranged(view, cards), analytics: arranged(view, ANALYTICS)});
-
-/** A new order of the shown widgets; hidden ones keep theirs after them. */
-export const reordered = (view: View, shown: string[]): View => ({
-  ...view,
-  order: [...shown, ...view.order.filter(id => !shown.includes(id))],
-});
 
 export const isHidden = (view: View, id: string) => (isOffByDefault(id) ? !view.shown.includes(id) : view.hidden.includes(id));
 

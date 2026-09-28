@@ -1,213 +1,256 @@
 import {useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode} from 'react';
 import {t} from '../i18n';
 import {Popover, SwitchRow} from './Popover';
-import {COLUMNS, isOffByDefault, MIN_SPAN} from '../lib/view';
+import {isOffByDefault} from '../lib/view';
+import {
+  cellOf,
+  GAP,
+  landed,
+  narrowed,
+  nearest,
+  ordered,
+  placesOf,
+  reading,
+  ROW,
+  rowsOf,
+  settle,
+  stepped,
+  widened,
+  widths,
+  type Item,
+  type Layout,
+  type Place,
+  type Spot,
+} from '../lib/grid';
 
-/** A widget on the grid: `span` columns of the twelve wide; its height follows its content. */
-export type Widget = {id: string; name: string; span: number; content: ReactNode};
-
+export type Widget = {id: string; name: string; content: ReactNode};
 type Point = {x: number; y: number};
-
-/** A drag in progress; kept outside React state, it changes on every frame. */
-type Drag = {
+type Gesture = {
   id: string;
+  kind: 'drag' | 'resize';
+  signature: string;
+  origin: Spot[];
+  items: Item[];
   start: Point;
   pointer: Point;
-  /** Where the widget was grabbed, from its top-left corner. */
   grab: Point;
-  /** How far the dragged widget is from its place in the grid. */
   offset: Point;
   active: boolean;
-  order: string[];
+  cell: Point;
   frame: number;
   stop: () => void;
 };
-
-/** A widget's place in the grid, in the grid's coordinates; slides of other widgets do not move it. */
-type Place = {id: string; left: number; top: number; right: number; bottom: number; full: boolean};
-
-/** A press becomes a drag after moving this far, so a click on the handle is not a drag. */
 const DRAG_AFTER = 4;
-/** Near the viewport's top or bottom edge the page scrolls under the dragged widget. */
 const EDGE = 72;
 const SLIDE = {duration: 200, easing: 'cubic-bezier(.2, .7, .2, 1)'};
-
-const moved = (order: string[], id: string, to: number) => {
-  const next = order.filter(other => other !== id);
-  next.splice(to, 0, id);
-  return next;
-};
 const still = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-/**
- * Where a dragged widget goes among the others, which are laid out in rows. Next to a
- * row that is one widget as wide as the grid (the chart, or any card on a phone), or
- * when the dragged widget is that wide itself, it goes before or after the whole row,
- * by the half of the row the pointer is in; it never takes one card's place in a row of
- * three. Inside a row of cards it goes before the first card whose middle is right of
- * the pointer. The pointer between or beyond rows counts for the nearest one.
- */
-export function dropIndex(others: Place[], pointer: Point, wide: boolean): number {
-  const rows: {top: number; bottom: number; items: Place[]}[] = [];
-  for (const place of others) {
-    const row = rows.at(-1);
-    if (row && !place.full && !row.items[0].full && Math.abs(row.top - place.top) < 2) {
-      row.items.push(place);
-      row.bottom = Math.max(row.bottom, place.bottom);
-    } else rows.push({top: place.top, bottom: place.bottom, items: [place]});
-  }
-  if (!rows.length) return 0;
-  const away = (row: {top: number; bottom: number}) => Math.max(row.top - pointer.y, pointer.y - row.bottom, 0);
-  const row = rows.reduce((best, next) => (away(next) < away(best) ? next : best));
-  const first = others.indexOf(row.items[0]);
-  const last = others.indexOf(row.items.at(-1)!);
-  if (wide || row.items[0].full || away(row) > 0) return pointer.y < (row.top + row.bottom) / 2 ? first : last + 1;
-  const next = row.items.find(place => pointer.x < (place.left + place.right) / 2);
-  return next ? others.indexOf(next) : last + 1;
+// Keep these breakpoints with the loading grid in style.css.
+const mode = () => (matchMedia('(max-width: 680px)').matches ? 1 : matchMedia('(max-width: 1000px)').matches ? 2 : 6);
+function useColumns() {
+  const [columns, setColumns] = useState(mode);
+  useLayoutEffect(() => {
+    const queries = [matchMedia('(max-width: 680px)'), matchMedia('(max-width: 1000px)')];
+    const changed = () => setColumns(mode());
+    queries.forEach(query => query.addEventListener('change', changed));
+    return () => queries.forEach(query => query.removeEventListener('change', changed));
+  }, []);
+  return columns;
 }
 
-/**
- * The board's widgets on a twelve-column grid, in the board's order. Its owner moves
- * them by the handle at the top of each: with a pointer (the place it will land stays
- * outlined, the page scrolls near its edges, Escape puts it back) or with the arrow
- * keys; the others slide to their new places. The owner also makes a widget wider or
- * narrower by its right edge: it follows the pointer, and its place snaps to whole
- * columns, from a third of the grid to its right edge. Its height always follows its
- * content, so nothing scrolls inside a widget.
- */
+/** Places and measured content heights determine the grid; a gesture only changes its intended order. */
 export function Widgets({
   widgets,
-  movable,
-  onMove,
-  onResize,
+  layout,
+  movable: editable,
+  onPlaces,
 }: {
   widgets: Widget[];
+  layout: Layout;
   movable: boolean;
-  onMove: (order: string[]) => void;
-  onResize: (id: string, span: number) => void;
+  onPlaces: (places: Record<string, Place>) => void;
 }) {
+  const columns = useColumns();
+  const movable = editable && columns === 6;
   const grid = useRef<HTMLDivElement>(null);
-  /** Each widget's place in the grid; it slides as a whole when the order changes. */
   const places = useRef(new Map<string, HTMLDivElement>());
-  /** What is dragged: the widget's content, while its place stays outlined. */
   const bodies = useRef(new Map<string, HTMLDivElement>());
   const handles = useRef(new Map<string, HTMLButtonElement>());
-  const drag = useRef<Drag | null>(null);
-  /** Where every widget was seen before the order changed, to slide them from there. */
+  const gesture = useRef<Gesture | null>(null);
   const before = useRef<Map<string, DOMRect> | null>(null);
   const refocus = useRef<string | null>(null);
-  const [preview, setPreview] = useState<{id: string; order: string[]} | null>(null);
-  /** A widget being resized, at the width it would have now. */
-  const [resizing, setResizing] = useState<{id: string; span: number} | null>(null);
-  const resized = useRef<string | null>(null);
-  const [said, say] = useState('');
+  const [heights, setHeights] = useState<Record<string, number>>({});
+  const [preview, setPreview] = useState<{id: string; kind: Gesture['kind']; items: Item[]} | null>(null);
+  const [said, say] = useState<string[]>([]);
   const hint = useId();
-  // Handlers attached to the window for a drag read the latest props from here.
-  const latest = useRef({widgets, onMove, onResize});
-  latest.current = {widgets, onMove, onResize};
-
+  const ids = widgets.map(widget => widget.id);
+  const base = ordered(layout, ids);
+  const withHeights = (items: Omit<Item, 'h'>[]) => items.map(item => ({...item, h: rowsOf(heights[item.id] ?? 224)}));
+  const signature = JSON.stringify(base.map(({id, x, w}) => [id, x, w]));
+  const activePreview = movable && gesture.current?.signature === signature ? preview : null;
+  const items = withHeights(activePreview?.items ?? base);
+  const spots = columns === 6 ? settle(items, layout.columns) : narrowed(items, columns as 1 | 2, layout.columns);
   const byId = new Map(widgets.map(widget => [widget.id, widget]));
-  const order = preview ? preview.order.filter(id => byId.has(id)) : widgets.map(widget => widget.id);
-
+  const latest = useRef({spots, heights, onPlaces});
+  latest.current = {spots, heights, onPlaces};
+  // Height changes and our preview never invalidate the frozen origin. External placement changes do.
   const remember = () => {
     before.current = new Map([...places.current].map(([id, node]) => [id, node.getBoundingClientRect()]));
   };
+  const pitch = () => (grid.current!.clientWidth + GAP) / layout.columns;
 
-  const placeOf = (id: string): Place => {
-    const node = places.current.get(id)!;
-    const full = node.offsetWidth >= grid.current!.clientWidth - 1;
-    return {id, left: node.offsetLeft, top: node.offsetTop, right: node.offsetLeft + node.offsetWidth, bottom: node.offsetTop + node.offsetHeight, full};
+  const measure = () => {
+    const next: Record<string, number> = {};
+    for (const [id, body] of bodies.current) {
+      const root = body.querySelector<HTMLElement>(':scope > .card, :scope > .panel');
+      if (!root) continue;
+      const fill = parseFloat(getComputedStyle(places.current.get(id)!).getPropertyValue('--fill')) || 0;
+      next[id] = Math.round((root.getBoundingClientRect().height - fill) * 64) / 64;
+    }
+    setHeights(old => (Object.keys(next).length === Object.keys(old).length && Object.entries(next).every(([id, h]) => old[id] === h) ? old : next));
+    return next;
   };
+  // Before paint on the first render; later one observer measures content, never the row's stretched box.
+  useLayoutEffect(() => {
+    measure();
+  });
+  useLayoutEffect(() => {
+    const observer = new ResizeObserver(() => measure());
+    for (const body of bodies.current.values()) {
+      const root = body.querySelector(':scope > .card, :scope > .panel');
+      if (root) observer.observe(root);
+    }
+    return () => observer.disconnect();
+  }, [ids.join()]);
 
-  /** Keeps the dragged content under the pointer, wherever the grid has put its place. */
   const follow = () => {
-    const current = drag.current;
-    const place = current && places.current.get(current.id);
-    const body = current && bodies.current.get(current.id);
-    if (!current || !place || !body) return;
-    const rect = place.getBoundingClientRect();
-    const x = current.pointer.x - current.grab.x - rect.left;
-    const y = current.pointer.y - current.grab.y - rect.top;
-    current.offset = {x, y};
-    body.style.transform = `translate(${x}px, ${y}px)`;
+    const current = gesture.current;
+    if (!current?.active || current.kind !== 'drag') return;
+    const node = places.current.get(current.id);
+    const body = bodies.current.get(current.id);
+    if (!node || !body) return;
+    const rect = node.getBoundingClientRect();
+    current.offset = {x: current.pointer.x - current.grab.x - rect.left, y: current.pointer.y - current.grab.y - rect.top};
+    body.style.transform = `translate(${current.offset.x}px, ${current.offset.y}px)`;
   };
-
-  /** Moves the dragged widget's place to where the pointer says. */
   const retarget = () => {
-    const current = drag.current!;
+    const current = gesture.current;
+    if (!current?.active || current.kind !== 'drag') return;
     const box = grid.current!.getBoundingClientRect();
-    const others = current.order.filter(id => id !== current.id).map(placeOf);
-    const to = dropIndex(others, {x: current.pointer.x - box.left, y: current.pointer.y - box.top}, placeOf(current.id).full);
-    if (current.order.indexOf(current.id) === to) return;
-    current.order = moved(current.order, current.id, to);
+    const w = current.origin.find(item => item.id === current.id)!.w;
+    const cell = cellOf({x: current.pointer.x - current.grab.x - box.left, y: current.pointer.y - current.grab.y - box.top}, pitch(), w, layout.columns);
+    if (cell.x === current.cell.x && cell.y === current.cell.y) return;
+    current.cell = cell;
+    current.items = landed(current.origin, current.id, cell, layout.columns);
     remember();
-    setPreview({id: current.id, order: current.order});
+    setPreview({id: current.id, kind: current.kind, items: current.items});
   };
-
   const frame = () => {
-    const current = drag.current;
-    if (!current?.active) return;
-    const {y} = current.pointer;
+    const current = gesture.current;
+    if (!current?.active || current.kind !== 'drag') return;
+    const y = current.pointer.y;
     const scroll = y < EDGE ? y - EDGE : y > innerHeight - EDGE ? y - innerHeight + EDGE : 0;
     if (scroll) window.scrollBy(0, scroll / 4);
     retarget();
     follow();
     current.frame = requestAnimationFrame(frame);
   };
-
   const finish = (drop: boolean) => {
-    const current = drag.current;
+    const current = gesture.current;
     if (!current) return;
-    drag.current = null;
+    if (drop) retarget();
+    gesture.current = null;
     current.stop();
     cancelAnimationFrame(current.frame);
-    document.body.classList.remove('is-dragging');
-    if (!current.active) return;
+    document.body.classList.remove('is-dragging', 'is-resizing');
     const body = bodies.current.get(current.id);
-    const {widgets, onMove} = latest.current;
     if (body) {
-      // It settles into its outlined place from where it was let go.
       body.style.transform = '';
-      if (!still()) body.animate([{transform: `translate(${current.offset.x}px, ${current.offset.y}px)`}, {transform: 'none'}], SLIDE);
+      body.style.width = drop && current.kind === 'resize' ? `${current.items.find(item => item.id === current.id)!.w * pitch() - GAP}px` : '';
     }
-    if (drop) {
-      if (current.order.join() !== widgets.map(widget => widget.id).join()) onMove(current.order);
-    } else remember();
+    if (current.active && drop) {
+      // Measure after removing the smooth resize width, at the final snapped width.
+      const measured = measure();
+      const result = settle(
+        current.items.map(item => ({...item, h: rowsOf(measured[item.id] ?? latest.current.heights[item.id] ?? 224)})),
+        layout.columns,
+      );
+      const intention = (items: Item[]) => JSON.stringify(items.map(({id, x, w}) => [id, x, w]));
+      if (intention(current.items) !== intention(current.origin)) latest.current.onPlaces(placesOf(result));
+      if (body && current.kind === 'drag' && !still())
+        body.animate([{transform: `translate(${current.offset.x}px, ${current.offset.y}px)`}, {transform: 'none'}], SLIDE);
+    }
+    if (body) body.style.width = '';
     setPreview(null);
   };
+  useLayoutEffect(() => {
+    if (!movable) finish(false);
+  }, [movable]);
+  useLayoutEffect(() => {
+    finish(false);
+  }, [signature]);
+  useLayoutEffect(() => () => finish(false), []);
 
-  const press = (id: string) => (event: ReactPointerEvent<HTMLButtonElement>) => {
-    if (!event.isPrimary || event.button !== 0 || drag.current) return;
+  const begin = (id: string, kind: Gesture['kind'], event: ReactPointerEvent<HTMLElement>) => {
+    if (!movable || !event.isPrimary || event.button !== 0 || gesture.current) return;
+    const body = bodies.current.get(id)!;
     const rect = places.current.get(id)!.getBoundingClientRect();
     const pointer = {x: event.clientX, y: event.clientY};
-    // The grid reorders the page's nodes under the pointer, which ends a pointer
-    // capture: the window follows the drag instead.
+    const origin = reading(latest.current.spots);
+    const item = origin.find(item => item.id === id)!;
+    const allowed = widths(layout.columns, item.x);
+    const width = (w: number) => w * pitch() - GAP;
+    const rightGrab = pointer.x - body.getBoundingClientRect().right;
+    if (kind === 'resize') event.preventDefault();
     const move = (e: PointerEvent) => {
-      const current = drag.current;
+      const current = gesture.current;
       if (!current || e.pointerId !== event.pointerId) return;
       current.pointer = {x: e.clientX, y: e.clientY};
-      if (!current.active && Math.hypot(e.clientX - current.start.x, e.clientY - current.start.y) > DRAG_AFTER) {
+      if (kind === 'resize') {
+        const px = Math.max(width(allowed[0]), Math.min(width(allowed.at(-1)!), e.clientX - rightGrab - rect.left));
+        body.style.width = `${px}px`;
+        const w = nearest(allowed, (px + GAP) / pitch());
+        if (current.items.find(item => item.id === id)!.w !== w) {
+          current.items = widened(origin, id, w, layout.columns);
+          remember();
+          setPreview({id, kind, items: current.items});
+        }
+      } else if (!current.active && Math.hypot(e.clientX - pointer.x, e.clientY - pointer.y) > DRAG_AFTER) {
         current.active = true;
         document.body.classList.add('is-dragging');
-        setPreview({id, order: current.order});
+        setPreview({id, kind, items: current.items});
         current.frame = requestAnimationFrame(frame);
       }
     };
-    const up = (e: PointerEvent) => e.pointerId === event.pointerId && finish(true);
-    const cancel = (e: PointerEvent) => e.pointerId === event.pointerId && finish(false);
-    const escape = (e: globalThis.KeyboardEvent) => e.key === 'Escape' && finish(false);
+    const up = (e: PointerEvent) => {
+      if (e.pointerId !== event.pointerId) return;
+      move(e);
+      finish(true);
+    };
+    const cancel = (e: PointerEvent) => {
+      if (e.pointerId === event.pointerId) finish(false);
+    };
+    const escape = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        finish(false);
+      }
+    };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
     window.addEventListener('pointercancel', cancel);
     window.addEventListener('keydown', escape);
-    drag.current = {
+    gesture.current = {
       id,
+      kind,
+      signature,
+      origin,
+      items: origin,
       start: pointer,
       pointer,
       grab: {x: pointer.x - rect.left, y: pointer.y - rect.top},
       offset: {x: 0, y: 0},
-      active: false,
-      order,
+      active: kind === 'resize',
+      cell: {x: item.x, y: item.y},
       frame: 0,
       stop: () => {
         window.removeEventListener('pointermove', move);
@@ -216,145 +259,107 @@ export function Widgets({
         window.removeEventListener('keydown', escape);
       },
     };
+    if (kind === 'resize') {
+      document.body.classList.add('is-resizing');
+      setPreview({id, kind, items: origin});
+    }
   };
-
-  const key = (id: string) => (event: KeyboardEvent<HTMLButtonElement>) => {
-    const index = order.indexOf(id);
-    const targets: Record<string, number> = {ArrowLeft: index - 1, ArrowUp: index - 1, ArrowRight: index + 1, ArrowDown: index + 1, Home: 0, End: order.length - 1};
-    const to = targets[event.key] as number | undefined;
-    if (to === undefined) return;
-    event.preventDefault();
-    if (to < 0 || to >= order.length || to === index) return;
-    remember();
-    refocus.current = id;
-    onMove(moved(order, id, to));
-    say(t('widgets.moved', {name: byId.get(id)!.name, position: to + 1, count: order.length}));
+  const press = (id: string) => (event: ReactPointerEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement;
+    const handle = target.closest('.drag-handle');
+    if (
+      !handle &&
+      (!target.closest('.card-head, .panel-head') ||
+        target.closest('button, a, input, select, textarea, label, summary, [role="button"], [role="menuitem"], [contenteditable]'))
+    )
+      return;
+    // Popovers may be children of the head but are never drag surfaces.
+    if (target.closest('.popover, [role="dialog"]')) return;
+    begin(id, 'drag', event);
   };
-
-  /**
-   * The grid's columns as a widget sees them: how wide `span` columns are, the span a
-   * width comes closest to, and how many columns there are from the widget's left edge
-   * to the grid's right one (a widget grows only that far, as in Grafana).
-   */
-  const columns = (id: string) => {
-    const box = grid.current!;
-    const gap = parseFloat(getComputedStyle(box).columnGap) || 0;
-    const column = (box.clientWidth - gap * (COLUMNS - 1)) / COLUMNS;
-    const from = places.current.get(id)!.getBoundingClientRect().left - box.getBoundingClientRect().left;
-    const room = Math.max(MIN_SPAN, Math.min(COLUMNS, Math.round((box.clientWidth - from + gap) / (column + gap))));
-    const width = (span: number) => span * column + (span - 1) * gap;
-    const nearest = (px: number) => Math.max(MIN_SPAN, Math.min(room, Math.round((px + gap) / (column + gap))));
-    return {room, width, nearest};
-  };
-
-  /**
-   * Resizing by the right edge: the widget follows the pointer smoothly, its place in
-   * the grid (outlined) snaps to whole columns and the others make room for it; let go,
-   * it settles into its place.
-   */
-  const resizeStart = (id: string) => (event: ReactPointerEvent<HTMLButtonElement>) => {
-    if (!event.isPrimary || event.button !== 0 || drag.current) return;
-    event.preventDefault();
-    const body = bodies.current.get(id)!;
-    const {room, width, nearest} = columns(id);
-    const left = body.getBoundingClientRect().left;
-    // Where on the handle it was taken, so the edge does not jump to the pointer.
-    const grab = event.clientX - body.getBoundingClientRect().right;
-    const start = byId.get(id)!.span;
-    let span = start;
-    let px = body.getBoundingClientRect().width;
-    document.body.classList.add('is-resizing');
-    resized.current = id;
-    body.style.width = `${px}px`;
-    setResizing({id, span});
-    const move = (e: PointerEvent) => {
-      if (e.pointerId !== event.pointerId) return;
-      px = Math.max(width(MIN_SPAN), Math.min(width(room), e.clientX - grab - left));
-      body.style.width = `${px}px`;
-      const next = nearest(px);
-      if (next === span) return;
+  const key =
+    (id: string, resize = false) =>
+    (event: KeyboardEvent<HTMLButtonElement>) => {
+      if (!movable || gesture.current) return;
+      const origin = reading(spots);
+      const item = origin.find(item => item.id === id)!;
+      let next: Spot[];
+      if (resize) {
+        const step = {ArrowLeft: -1, ArrowDown: -1, ArrowRight: 1, ArrowUp: 1}[event.key];
+        if (!step) return;
+        event.preventDefault();
+        const allowed = widths(layout.columns, item.x);
+        const w = allowed[allowed.indexOf(item.w) + step];
+        if (w === undefined) return;
+        next = widened(origin, id, w, layout.columns);
+      } else {
+        if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+        event.preventDefault();
+        next = stepped(origin, id, event.key, layout.columns);
+      }
+      if (JSON.stringify(placesOf(next)) === JSON.stringify(placesOf(origin))) return;
       remember();
-      setResizing({id, span: (span = next)});
+      refocus.current = resize ? null : id;
+      onPlaces(placesOf(next));
+      const moved = next.find(item => item.id === id)!;
+      say(
+        resize
+          ? [t('widgets.resized', {name: byId.get(id)!.name, span: moved.w, count: layout.columns})]
+          : [
+              t('widgets.moved', {name: byId.get(id)!.name, position: reading(next).findIndex(item => item.id === id) + 1, count: next.length}),
+              t('widgets.movedColumn', {column: moved.x + 1, columns: layout.columns}),
+            ],
+      );
     };
-    const end = (e: PointerEvent, keep: boolean) => {
-      if (e.pointerId !== event.pointerId) return;
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-      window.removeEventListener('pointercancel', cancel);
-      document.body.classList.remove('is-resizing');
-      resized.current = null;
-      const final = keep ? span : start;
-      body.style.width = '';
-      if (!still()) body.animate([{width: `${px}px`}, {width: `${width(final)}px`}], SLIDE);
-      if (final !== span) remember();
-      setResizing(null);
-      if (keep && span !== start) latest.current.onResize(id, span);
-    };
-    const up = (e: PointerEvent) => end(e, true);
-    const cancel = (e: PointerEvent) => end(e, false);
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-    window.addEventListener('pointercancel', cancel);
-  };
 
-  const resizeKey = (id: string) => (event: KeyboardEvent<HTMLButtonElement>) => {
-    const step = {ArrowLeft: -1, ArrowDown: -1, ArrowRight: 1, ArrowUp: 1}[event.key as string];
-    if (!step) return;
-    event.preventDefault();
-    const widget = byId.get(id)!;
-    const span = Math.max(MIN_SPAN, Math.min(columns(id).room, widget.span + step));
-    if (span === widget.span) return;
-    remember();
-    onResize(id, span);
-    say(t('widgets.resized', {name: widget.name, span, count: COLUMNS}));
-  };
-
-  // After the order changed: the others slide from where they were, the dragged one
-  // stays under the pointer, and a widget moved with the keyboard keeps the focus.
   useLayoutEffect(() => {
     const was = before.current;
     before.current = null;
-    if (was && !still()) {
+    if (was && !still())
       for (const [id, node] of places.current) {
         const from = was.get(id);
-        if (!from || id === drag.current?.id || id === resized.current) continue;
-        // `from` is where it was seen, mid-slide or not; `to` is its place without any slide.
+        if (!from || id === gesture.current?.id) continue;
         for (const animation of node.getAnimations()) animation.cancel();
         const to = node.getBoundingClientRect();
-        const dx = from.left - to.left;
-        const dy = from.top - to.top;
+        const dx = from.left - to.left,
+          dy = from.top - to.top;
         if (Math.abs(dx) + Math.abs(dy) > 1) node.animate([{transform: `translate(${dx}px, ${dy}px)`}, {transform: 'none'}], SLIDE);
       }
-    }
     follow();
     if (refocus.current) handles.current.get(refocus.current)?.focus();
     refocus.current = null;
-  }, [order.join(), resizing?.span, widgets.map(widget => widget.span).join()]);
+  });
 
-  useLayoutEffect(() => () => finish(false), []);
-
+  const bottom = Math.max(1, ...spots.map(item => item.y + item.h));
   return (
-    <div className="widgets" ref={grid}>
-      {order.map(id => {
-        const widget = byId.get(id)!;
-        const span = resizing?.id === id ? resizing.span : widget.span;
-        // On narrower screens the grid shows half or whole widths only.
-        const style = {'--span': span, '--span-md': span <= COLUMNS / 2 ? COLUMNS / 2 : COLUMNS} as CSSProperties;
+    <div className={`widgets ${movable ? 'is-movable' : ''}`} ref={grid} style={{'--columns': columns} as CSSProperties}>
+      {activePreview && (
+        <div className="grid-columns" aria-hidden="true" style={{gridColumn: '1 / -1', gridRow: `1 / span ${bottom}`}}>
+          {Array.from({length: columns}, (_, i) => (
+            <i key={i} />
+          ))}
+        </div>
+      )}
+      {reading(spots).map(spot => {
+        const widget = byId.get(spot.id)!;
+        const fill = heights[spot.id] === undefined ? 0 : Math.max(0, spot.h * ROW - GAP - heights[spot.id]);
         return (
           <div
-            key={id}
-            className={`widget ${preview?.id === id ? 'is-lifted' : ''} ${resizing?.id === id ? 'is-resizing' : ''}`}
-            style={style}
+            key={spot.id}
+            data-widget={spot.id}
+            className={`widget ${activePreview?.id === spot.id ? (activePreview.kind === 'drag' ? 'is-lifted' : 'is-resizing') : ''}`}
+            style={{gridColumn: `${spot.x + 1} / span ${spot.w}`, gridRow: `${spot.y + 1} / span ${spot.h}`, '--fill': `${fill}px`} as CSSProperties}
             ref={node => {
-              if (node) places.current.set(id, node);
-              else places.current.delete(id);
+              if (node) places.current.set(spot.id, node);
+              else places.current.delete(spot.id);
             }}
           >
             <div
               className="widget-body"
+              onPointerDown={press(spot.id)}
               ref={node => {
-                if (node) bodies.current.set(id, node);
-                else bodies.current.delete(id);
+                if (node) bodies.current.set(spot.id, node);
+                else bodies.current.delete(spot.id);
               }}
             >
               {movable && (
@@ -364,11 +369,10 @@ export function Widgets({
                   aria-label={t('widgets.move', {name: widget.name})}
                   aria-describedby={hint}
                   title={t('widgets.moveHint')}
-                  onPointerDown={press(id)}
-                  onKeyDown={key(id)}
+                  onKeyDown={key(spot.id)}
                   ref={node => {
-                    if (node) handles.current.set(id, node);
-                    else handles.current.delete(id);
+                    if (node) handles.current.set(spot.id, node);
+                    else handles.current.delete(spot.id);
                   }}
                 >
                   <svg viewBox="0 0 20 8" width="20" height="8" aria-hidden="true">
@@ -383,8 +387,8 @@ export function Widgets({
                   className="resize-handle"
                   aria-label={t('widgets.resize', {name: widget.name})}
                   title={t('widgets.resizeHint')}
-                  onPointerDown={resizeStart(id)}
-                  onKeyDown={resizeKey(id)}
+                  onPointerDown={e => begin(spot.id, 'resize', e)}
+                  onKeyDown={key(spot.id, true)}
                 />
               )}
             </div>
@@ -397,7 +401,9 @@ export function Widgets({
             {t('widgets.moveHint')}
           </p>
           <div className="sr-only" aria-live="polite">
-            {said}
+            {said.map((line, i) => (
+              <div key={i}>{line}</div>
+            ))}
           </div>
         </>
       )}

@@ -91,7 +91,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 main { max-width: 1240px; margin: 0 auto; padding: 28px 28px 56px; display: flex; flex-direction: column; gap: 20px; }
 
 /* ---------- widgets ---------- */
-.widgets { position: relative; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 16px; }
+.widgets { position: relative; display: grid; grid-template-columns: repeat(var(--columns, 6), minmax(0, 1fr)); grid-auto-rows: 32px; gap: 16px; }
 
 /* The analytics under the cards: one head with the filters of agent activity, the chart
    and the table, which stays under the top bar while they scroll by. */
@@ -99,10 +99,13 @@ main { max-width: 1240px; margin: 0 auto; padding: 28px 28px 56px; display: flex
 .analytics-head { position: sticky; top: 60px; z-index: 5; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 10px 0; }
 .analytics-head::before { content: ''; position: absolute; inset: 0 -28px; z-index: -1; background: #0b0b0ecc; -webkit-backdrop-filter: blur(16px) saturate(140%); backdrop-filter: blur(16px) saturate(140%); }
 .analytics-head h2 { margin: 0; font-size: 17px; font-weight: 560; letter-spacing: -.015em; }
-.widget { position: relative; display: flex; flex-direction: column; min-width: 0; grid-column: span var(--span, 4); }
-.widgets > .card.is-loading { grid-column: span 4; }
-.widget-body { position: relative; flex: 1; display: flex; flex-direction: column; min-width: 0; }
-.widget-body > .card, .widget-body > .panel { flex: 1; }
+.widget { position: relative; display: flex; flex-direction: column; min-width: 0; }
+.widgets > .card.is-loading { grid-column: span 2; grid-row: span 5; }
+.widget-body { position: relative; display: flex; flex-direction: column; min-width: 0; }
+.widget-body > .panel::after { content: ''; display: block; height: var(--fill, 0px); }
+.widgets.is-movable .widget-body > .card > .card-head, .widgets.is-movable .widget-body > .panel > .panel-head { cursor: grab; touch-action: none; }
+.grid-columns { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 16px; pointer-events: none; }
+.grid-columns > i { background: color-mix(in oklab, var(--accent) 5%, transparent); border-inline: 1px solid var(--hair-2); border-radius: 8px; }
 /* While dragged, the widget's place stays outlined: that is where it lands. */
 .widget.is-lifted { z-index: 30; }
 .widget.is-lifted::before { content: ''; position: absolute; inset: 0; border: 1.5px dashed #bbc0fe59; border-radius: 14px; background: #bbc0fe08; }
@@ -312,8 +315,6 @@ body.is-resizing, body.is-resizing * { cursor: ew-resize !important; user-select
 .plan-note { color: var(--text-3); }
 td.muted, small.muted { color: var(--text-3); }
 .card-empty { color: var(--text-3); font-size: 13px; padding: 12px 0; }
-/* With no limits to show, the card says why in the middle of the room they would take. */
-.limits:has(> .card-empty) { flex: 1; justify-content: center; }
 .card-empty { display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; text-wrap: balance; }
 .card-empty b { font-weight: 560; color: var(--text-2); }
 .card-empty svg { width: 20px; height: 20px; margin-bottom: 4px; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
@@ -321,9 +322,9 @@ td.muted, small.muted { color: var(--text-3); }
 /* The card's tray: a strip along its bottom edge, a step below the card as if pressed
    into it and tinted with the card's colour, always there. What a card says besides its
    limits lives in it: news on the left, what it has now (free resets, the agents running
-   on it) on the right. Cards in a row are as tall as the tallest, so the trays line up. */
+   on it) on the right. Cards fill their own whole rows, so trays in the same rows line up. */
 .card-foot {
-  display: flex; align-items: center; justify-content: flex-end; gap: 6px; min-height: 42px; margin: auto -22px -22px; padding: 0 8px;
+  display: flex; align-items: center; justify-content: flex-end; gap: 6px; min-height: 42px; margin: var(--fill, 0px) -22px -22px; padding: 0 8px;
   border-radius: 0 0 15px 15px; background: color-mix(in oklab, var(--card-color, #000) 7%, #00000038);
   box-shadow: inset 0 1px 0 #00000059, inset 0 3px 6px -3px #00000080, 0 -1px 0 #ffffff08;
 }
@@ -744,8 +745,8 @@ tr:hover .device-name .icon-button, .device-name .icon-button:focus-visible { op
 @keyframes shimmer { to { background-position: -200% 0; } }
 
 @media (max-width: 1000px) {
-  .widget { grid-column: span var(--span-md, 6); }
-  .widgets > .card.is-loading { grid-column: span 6; }
+  .widgets { --columns: 2; }
+  .widgets > .card.is-loading { grid-column: span 1; }
   .resize-handle { display: none; }
 }
 @media (max-width: 680px) {
@@ -765,7 +766,8 @@ tr:hover .device-name .icon-button, .device-name .icon-button:focus-visible { op
   .brand span { display: none; }
   .status { gap: 10px; font-size: 12px; }
   main { padding: 16px 16px 32px; gap: 16px; }
-  .widget, .widgets > .card.is-loading { grid-column: span 12; }
+  .widgets { --columns: 1; }
+  .widgets > .card.is-loading { grid-column: span 1; }
   .offline span { display: none; }
   .panel { --panel-pad: 16px; padding: 18px var(--panel-pad); }
   .controls { width: 100%; flex-direction: column; align-items: stretch; }

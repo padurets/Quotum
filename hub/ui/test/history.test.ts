@@ -398,7 +398,7 @@ test('a range reaching past now, its end cut to now: news of a time after that, 
 /** A board as its snapshot tells it, for the page's events that drive the loader (`follow`). */
 const SNAPSHOT: Snapshot = {
   board: {id: 'b1', name: 'Home', personal: true},
-  view: {order: [], sizes: {}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}},
+  view: {layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}},
   historyStart: 0,
   sources: [],
   sessions: {},

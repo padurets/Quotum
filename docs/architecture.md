@@ -408,8 +408,9 @@ them), kept for 90 days.
   more (its last holder left or was removed). Deleting a board deletes its sharing and
   its view, never the measurements.
 - **The view** of a board is how it is arranged: the order of its widgets (a card per
-  source, the list of running agents, the chart, the table and agent activity), their widths on a
-  twelve-column grid, names and colours given to cards, the hidden widgets (and those
+  source, the list of running agents, the chart, the table and agent activity), their places on a
+  six-column grid (`x`, `y`, `w`; heights are measured, never stored), names and colours
+  given to cards, the hidden widgets (and those
   off by default, the list of agents, turned on), the columns hidden in a widget's table,
   the agents' and the limits' (and those off by default turned on), the windows hidden inside cards and the spending
   plans, or that a card has none. The list of agents shows only the subscriptions whose cards are shown.
@@ -518,7 +519,20 @@ A board has two areas: the cards (and the list of running agents, when turned on
 which are about now and show every window, and under
 them the analytics, agent activity, the chart and the table, which show one period
 chosen in the analytics' own head, the chart and the table one window type of it. Each
-area is arranged on its own grid.
+area is arranged on its own grid. A row is 48 px (a 32 px track and a 16 px gap).
+Each widget fills the fewest whole rows that contain its content, with any spare room
+above a card's tray or at the bottom of a panel. Widgets float up within their columns
+without stretching their neighbours. Saved `y` gives the reading order; each viewer's
+measured heights determine the actual rows. Dragging by the head places a widget by
+its top-left corner against the original layout: it goes after widgets whose top is
+above that row, taking an occupied slot unless its neighbour can rise into the place
+it left. Neighbours move down, never sideways. Widths snap to a third, a half, two
+thirds or the whole grid. At 1000 px and below the page uses two columns, at 680 and
+below one, in reading order; arranging is available only on the wide grid.
+The page translates views saved before the grid, retaining hidden and absent widgets;
+the next save writes only the new layout. The hub requires that layout when saving,
+so an old page cannot overwrite it. Its view route allows 96 KiB for up to 400 saved
+places, including the ids kept by old views.
 The board's view comes with its events; the owner's changes show at once and are saved
 about half a second later, one request per burst (a drag, typing a plan), and stay on
 screen until the hub tells the view it saved. What
