@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {refreshChangesAt, refreshPending, refreshText, refreshErrorText, refreshErrorChangesAt, requestRefreshAll} from '../lib/refresh';
+import {refreshChangesAt, refreshPending, refreshText, refreshErrorText, refreshErrorChangesAt, requestRefreshAll, startRefreshRows, observeRefreshRows, answerRefreshRow} from '../lib/refresh';
 import {ApiError} from '../lib/http';
 import {setLocale} from '../i18n';
 import type {Refresh} from '../lib/types';
@@ -18,6 +18,53 @@ const queued: Refresh = {
     finishedAt: null,
   },
 };
+
+test('the full receipt includes pending cards and never calls an old result a new success', () => {
+  const old = {...queued, request: {...queued.request!, status: 'updated' as const, finishedAt: 20_000}};
+  const rows = startRefreshRows(['old', 'pending', 'new', 'old'], {old, pending: queued});
+  assert.deepEqual(rows.map(row => [row.id, row.status]), [['old', 'sending'], ['pending', 'queued'], ['new', 'sending']]);
+  const answered = answerRefreshRow(rows[0], old);
+  assert.equal(answered.status, 'waiting');
+  assert.equal(observeRefreshRows([answered], {old})[0].status, 'waiting');
+  const fresh = {...old, request: {...old.request, requestedAt: 80_000, finishedAt: 90_000}};
+  assert.equal(observeRefreshRows([answered], {old: fresh})[0].status, 'updated');
+});
+
+test('each completed outcome stays in the receipt after retirement or a different request', () => {
+  const rows = startRefreshRows(['a', 'b'], {a: queued, b: queued});
+  const updated = {...queued, request: {...queued.request!, status: 'updated' as const, finishedAt: 20_000}};
+  const failed = {...queued, request: {...queued.request!, status: 'failed' as const, finishedAt: 21_000}};
+  const finished = observeRefreshRows(rows, {a: updated, b: failed});
+  assert.deepEqual(finished.map(row => row.status), ['updated', 'failed']);
+  assert.equal(observeRefreshRows(finished, {a: {...queued, request: null}, b: queued}, true), finished);
+});
+
+test('a late HTTP error cannot replace an event proving that the data arrived', () => {
+  const row = startRefreshRows(['a'], {})[0];
+  const updated = {...queued, request: {...queued.request!, status: 'updated' as const, finishedAt: 20_000}};
+  const observed = observeRefreshRows([row], {a: updated})[0];
+  assert.equal(answerRefreshRow(observed, updated, new Error('lost response')), observed);
+});
+
+test('refusals stay separate from accepted requests and a lost reply can be resolved by events', () => {
+  const rows = startRefreshRows(['a', 'b'], {});
+  const error = new ApiError(409, 'refresh_unavailable');
+  const refused = answerRefreshRow(rows[0], {...queued, request: null, unavailable: 'unsupported'}, error);
+  const uncertain = answerRefreshRow(rows[1], undefined, new Error('lost response'));
+  assert.equal(refused.status, 'refused');
+  assert.equal(refused.error, error);
+  assert.equal(uncertain.status, 'unknown');
+  const received = observeRefreshRows([refused, uncertain], {b: queued});
+  assert.equal(received[0], refused);
+  assert.equal(received[1].status, 'queued');
+  assert.equal(received[1].error, null);
+});
+
+test('reconnecting after a missed outcome does not invent success or leave a loader forever', () => {
+  const rows = startRefreshRows(['a'], {a: queued});
+  assert.equal(observeRefreshRows(rows, {a: {...queued, request: null}}, true)[0].status, 'unknown');
+  assert.equal(observeRefreshRows(rows, {}, true)[0].status, 'unknown');
+});
 
 test('refreshing a board deduplicates subscriptions, limits concurrency and continues after refusals', async () => {
   const called: string[] = [];

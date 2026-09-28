@@ -247,6 +247,8 @@ body.is-resizing, body.is-resizing * { cursor: ew-resize !important; user-select
 .popover-row.is-danger { color: var(--crit); }
 .popover-row.is-danger:hover { background: #f1787014; color: var(--crit); }
 .popover-row b { font-weight: 450; font-variant-numeric: tabular-nums; color: var(--text-3); }
+.refresh-list { width: 328px; max-width: calc(100vw - 50px); }
+.refresh-list .spinner, .refresh-list b { flex-shrink: 0; }
 .popover-row[aria-checked=false] span, .popover-row[aria-checked=false] b { opacity: .45; }
 .popover-row.is-lock span, .popover-row.is-lock[aria-checked=false] span { opacity: 1; display: flex; align-items: center; gap: 8px; }
 .popover-row.is-lock svg { flex: none; fill: none; stroke: currentColor; stroke-width: 1.4; }

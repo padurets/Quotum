@@ -200,8 +200,12 @@ from what it sees of the subscription everywhere, which no single machine does:
 data through its existing card menu, above the action to hide the widget, in the web
 dashboard and the desktop app. The header also refreshes all non-hidden cards on the
 current board through those same requests, up to four at a time. A refused request
-does not stop the rest; a tooltip at the header button shows progress, accepted requests
-and reasons for refusals without moving the widgets. While its refresh is pending,
+does not stop the rest; a tooltip at the header button lists every requested card in
+one compact row, with its name, status icon and short outcome. Error details expand
+by clicking the row. Each outcome stays in this attempt's receipt after the hub retires
+its status, also while the tooltip is closed. An old outcome cannot stand in for a new
+request, and a reconnect with a missing outcome says it is unknown. Nothing moves the
+widgets. While its refresh is pending,
 clicking the button only opens or closes that information. An individual card cannot
 be requested again until its refresh finishes either. Already pending subscriptions
 need no additional POST from the board action. The charts and tables receive new measurements through the usual
