@@ -121,13 +121,16 @@ export function ago(time: number | null, now: number) {
   return t('time.daysAgo', {n: Math.floor(seconds / 86_400)});
 }
 
-export const clock = (time: number) => new Date(time).toLocaleTimeString(formatLocale(), {hour: '2-digit', minute: '2-digit'});
+export const clock = (time: number) => new Date(time).toLocaleTimeString(formatLocale(), {hour: '2-digit', minute: '2-digit', hour12: false});
 
 /** "22 Sept": the scale along a chart's axis, which has little room; saying when is `stamp`. */
 export const shortDay = (time: number) => new Date(time).toLocaleDateString(formatLocale(), {day: 'numeric', month: 'short'});
 
 /** "26 September": the day, its month in a word. */
-export const day = (time: number) => new Date(time).toLocaleDateString(formatLocale(), {day: 'numeric', month: 'long'});
+export const day = (time: number) => {
+  const parts = new Intl.DateTimeFormat(formatLocale(), {day: 'numeric', month: 'long'}).formatToParts(time);
+  return ['day', 'month'].map(type => parts.find(part => part.type === type)?.value ?? '').join(' ');
+};
 
 /**
  * "26 September 14:00": the one way the board says when, with no dots or commas between

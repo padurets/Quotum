@@ -3,10 +3,11 @@ use super::{Candidate, Intent};
 use crate::{native_text, shell::Shell};
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 #[cfg(target_os = "linux")]
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::AtomicBool,
     mpsc::{self, SyncSender},
 };
 #[cfg(target_os = "linux")]
@@ -136,13 +137,14 @@ impl Delivery {
             let stop = self.stop.clone();
             *self.worker.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::thread::spawn(move || {
                 let mut client = None;
-                while !stop.load(Ordering::SeqCst) {
-                    if let Ok(intent) = receiver.recv_timeout(Duration::from_millis(200)) {
-                        let Some(shell) = weak.upgrade() else {
-                            return;
-                        };
-                        super::linux::send(&shell, intent, &mut client);
+                while let Ok(intent) = receiver.recv() {
+                    if stop.load(Ordering::SeqCst) {
+                        return;
                     }
+                    let Some(shell) = weak.upgrade() else {
+                        return;
+                    };
+                    super::linux::send(&shell, intent, &mut client);
                 }
             }));
         }
@@ -159,7 +161,7 @@ impl Delivery {
         }
         #[cfg(windows)]
         if let Some(tray) = shell.host.tray.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-            tray.send(crate::tray::Command::Notify(intent));
+            tray.send(crate::tray::Command::Notify(Box::new(intent)));
         }
     }
     pub fn stop(&self) {
@@ -177,6 +179,7 @@ impl Delivery {
 pub fn attempt(shell: &Arc<Shell>, mut intent: Intent, call: impl FnOnce(String, String) -> bool) {
     if shell.exiting()
         || shell.generation() != intent.generation
+        || shell.attention.serial.load(Ordering::SeqCst) != intent.serial
         || intent.queued.elapsed() > Duration::from_secs(5)
         || !shell.attention.gate.allows(intent.epoch)
     {
@@ -206,7 +209,11 @@ pub fn attempt(shell: &Arc<Shell>, mut intent: Intent, call: impl FnOnce(String,
         return;
     }
     let (title, body) = native_text::notification(shell.locale(), &intent.candidate);
-    if !shell.attention.gate.allows(intent.epoch) || shell.generation() != intent.generation {
+    if !shell.attention.gate.allows(intent.epoch)
+        || shell.generation() != intent.generation
+        || shell.attention.serial.load(Ordering::SeqCst) != intent.serial
+        || intent.queued.elapsed() > Duration::from_secs(5)
+    {
         return;
     }
     shell.attention.delivery.report(shell, call(title, body));

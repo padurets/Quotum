@@ -28,7 +28,7 @@ pub struct Handle {
 }
 pub enum Command {
     Status(Status),
-    Notify(crate::attention::Intent),
+    Notify(Box<crate::attention::Intent>),
 }
 impl Handle {
     pub fn stop(mut self) {
@@ -147,8 +147,8 @@ pub fn create(_: &tauri::AppHandle, shell: &Arc<Shell>) {
             DispatchMessageW(&message);
         }
         hwnd.store(0, Ordering::SeqCst);
-        let mut data = identity(control);
-        Shell_NotifyIconW(NIM_DELETE, &mut data);
+        let data = identity(control);
+        Shell_NotifyIconW(NIM_DELETE, &data);
         if !context.icon.is_null() {
             DestroyIcon(context.icon);
         }
@@ -190,10 +190,10 @@ unsafe fn update(hwnd: HWND, context: &mut Context, add: bool) {
     }
     copy_wide(&mut data.szTip, &crate::native_text::tooltip(shell.locale(), &context.status));
     unsafe {
-        Shell_NotifyIconW(if add { NIM_ADD } else { NIM_MODIFY }, &mut data);
+        Shell_NotifyIconW(if add { NIM_ADD } else { NIM_MODIFY }, &data);
         if add {
             data.Anonymous.uVersion = NOTIFYICON_VERSION_4;
-            Shell_NotifyIconW(NIM_SETVERSION, &mut data);
+            Shell_NotifyIconW(NIM_SETVERSION, &data);
         }
         if !icon.is_null() {
             if !context.icon.is_null() {
@@ -227,13 +227,13 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                     }
                     Command::Notify(intent) => {
                         if let Some(shell) = context.shell.upgrade() {
-                            crate::attention::delivery::attempt(&shell, intent, |title, body| unsafe {
+                            crate::attention::delivery::attempt(&shell, *intent, |title, body| unsafe {
                                 let mut data = identity(hwnd);
                                 data.uFlags = NIF_INFO | NIF_REALTIME;
                                 data.dwInfoFlags = NIIF_NOSOUND | NIIF_RESPECT_QUIET_TIME;
                                 copy_wide(&mut data.szInfoTitle, &title);
                                 copy_wide(&mut data.szInfo, &body);
-                                Shell_NotifyIconW(NIM_MODIFY, &mut data) != 0
+                                Shell_NotifyIconW(NIM_MODIFY, &data) != 0
                             });
                         }
                     }

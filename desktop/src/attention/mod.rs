@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt;
 use std::io::{self, Read};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -133,6 +133,7 @@ pub struct Intent {
     pub generation: u64,
     pub epoch: u64,
     pub baseline: i64,
+    pub serial: u64,
     pub hub_now: i64,
     pub queued: Instant,
 }
@@ -144,6 +145,7 @@ pub struct Attention {
     pub gate: Arc<clock::Gate>,
     board: Mutex<delivery::Board>,
     pub delivery: delivery::Delivery,
+    serial: AtomicU64,
 }
 impl Default for Attention {
     fn default() -> Self {
@@ -154,6 +156,7 @@ impl Default for Attention {
             gate: Arc::new(clock::Gate::default()),
             board: Mutex::default(),
             delivery: delivery::Delivery::default(),
+            serial: AtomicU64::new(0),
         }
     }
 }
@@ -353,6 +356,7 @@ fn stream(
     let mut decoder = sse::Decoder::default();
     let mut reader = response.body_mut().as_reader();
     let mut bytes = [0_u8; 8192];
+    let mut serial = 0;
     let mut seen = std::collections::HashSet::new();
     let (mut hello, mut snapshot, mut seq, mut baseline) = (false, false, 0, None);
     loop {
@@ -393,6 +397,7 @@ fn stream(
                         {
                             return Err("attention invalid baseline");
                         }
+                        serial = shell.attention.serial.fetch_add(1, Ordering::SeqCst) + 1;
                         baseline = Some(frame.now);
                     }
                     if baseline.is_none() {
@@ -416,6 +421,7 @@ fn stream(
                                 generation: context.generation,
                                 epoch,
                                 baseline: baseline.unwrap(),
+                                serial,
                                 hub_now: frame.now,
                                 queued: Instant::now(),
                             },

@@ -43,6 +43,25 @@ pub fn tooltip(locale: Locale, status: &Status) -> String {
     }
     parts.join("\n")
 }
+fn duration(locale: Locale, minutes: i64) -> String {
+    if minutes < 1 {
+        return text(locale, "time.underMinute").into();
+    }
+    if minutes < 60 {
+        return fill(locale, "time.minutes", "n", &minutes.to_string());
+    }
+    let hours = minutes / 60;
+    if hours < 24 {
+        if minutes % 60 == 0 {
+            return fill(locale, "time.hours", "n", &hours.to_string());
+        }
+        return fill(locale, "time.hoursMinutes", "h", &hours.to_string()).replace("{m}", &(minutes % 60).to_string());
+    }
+    if hours % 24 == 0 {
+        return fill(locale, "time.days", "n", &(hours / 24).to_string());
+    }
+    fill(locale, "time.daysHours", "d", &(hours / 24).to_string()).replace("{h}", &(hours % 24).to_string())
+}
 pub fn notification(locale: Locale, candidate: &Candidate) -> (String, String) {
     match candidate {
         Candidate::Quota(q) => {
@@ -51,7 +70,7 @@ pub fn notification(locale: Locale, candidate: &Candidate) -> (String, String) {
                 "weekly" => text(locale, "kind.title.weekly"),
                 _ => "",
             };
-            let minutes = q.window.minutes.map(|m| format!("{m}m")).unwrap_or_default();
+            let minutes = q.window.minutes.map(|m| duration(locale, m)).unwrap_or_default();
             let kind = if q.window.kind == "other" { &minutes } else { kind };
             let label = q.window.label.as_deref().unwrap_or("");
             let title =
@@ -92,5 +111,21 @@ pub fn notification(locale: Locale, candidate: &Candidate) -> (String, String) {
                 clean(&format!("{date}{}", fill(locale, "desktop.credit", "name", &a.credit.name)), 512),
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn dates_follow_local_wall_time_and_both_catalogs() {
+        for (hour, minute) in [(1, 30), (3, 30), (14, 0)] {
+            let date = Local.with_ymd_and_hms(2026, 9, 26, hour, minute, 0).single().unwrap();
+            assert_eq!(stamp(Locale::En, date.timestamp_millis()), format!("26 September {hour:02}:{minute:02}"));
+            assert_eq!(stamp(Locale::Ru, date.timestamp_millis()), format!("26 сентября {hour:02}:{minute:02}"));
+        }
+        assert_eq!(duration(Locale::En, 1440), "1d");
+        assert_eq!(duration(Locale::En, 90), "1h 30m");
+        assert_eq!(clean("name\u{0}\u{1}\nnext", 30), "name\nnext");
     }
 }

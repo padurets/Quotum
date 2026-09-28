@@ -6,7 +6,7 @@ export async function prepareText(here, hub) {
   const result = {};
   for (const language of ['en', 'ru']) {
     const module = await import(pathToFileURL(path.join(hub, `ui/i18n/${language}.ts`)));
-    result[language] = Object.fromEntries(Object.entries(module[language]).filter(([key]) => (key.startsWith('desktop.') && !['desktop.total', 'desktop.working'].includes(key)) || key.startsWith('kind.')));
+    result[language] = Object.fromEntries(Object.entries(module[language]).filter(([key]) => (key.startsWith('desktop.') && !['desktop.total', 'desktop.working'].includes(key)) || key.startsWith('kind.') || key.startsWith('time.')));
   }
   const parameters = value => [...value.matchAll(/\{\w+\}/g)].map(m => m[0]).sort().join(',');
   for (const [key, value] of Object.entries(result.en)) {
