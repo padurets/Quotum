@@ -117,12 +117,14 @@ export function heightIntent(start: number, baseline: number, requested: number,
   return rows;
 }
 
+/** A height chosen for one widget, in rows; null gives it back the height of its content. */
+export type Height = {id: string; rows: number | null};
+
 /**
  * Places a gesture or a key put widgets in, with every chosen height carried over from the
- * layout they change (the latest, not yet saved one); only `height` changes one, and a null
- * there gives that widget back the height of its content.
+ * layout they change (the latest, not yet saved one); only `height` changes one.
  */
-export function withHeights(saved: Record<string, Place>, places: Record<string, Place>, height?: {id: string; rows: number | null}) {
+export function withHeights(saved: Record<string, Place>, places: Record<string, Place>, height?: Height) {
   return Object.fromEntries(
     Object.entries(places).map(([id, {x, y, w}]) => {
       const h = height?.id === id ? height.rows : saved[id]?.h;

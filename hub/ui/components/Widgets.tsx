@@ -33,6 +33,7 @@ import {
   stepped,
   widened,
   widths,
+  type Height,
   type Item,
   type Layout,
   type Place,
@@ -65,7 +66,6 @@ type Gesture = {
   frame: number;
   stop: () => void;
 };
-export type Height = {id: string; rows: number | null};
 const DRAG_AFTER = 4;
 const EDGE = 72;
 const SLIDE = {duration: 200, easing: 'cubic-bezier(.2, .7, .2, 1)'};
@@ -145,8 +145,8 @@ export function Widgets({
   const items = (activePreview?.items ?? base).map(item => ({...item, h: rowsFor(sizeOf(item.id), intended(item.id))}));
   const spots = columns === 6 ? settle(items, layout.columns) : narrowed(items, columns as 1 | 2, layout.columns);
   const byId = new Map(widgets.map(widget => [widget.id, widget]));
-  const latest = useRef({spots, heights, onPlaces, bounds, sizeOf, saved});
-  latest.current = {spots, heights, onPlaces, bounds, sizeOf, saved};
+  const latest = useRef({spots, onPlaces, bounds, sizeOf, saved});
+  latest.current = {spots, onPlaces, bounds, sizeOf, saved};
   const report = useCallback(
     (id: string, size: Size | null) =>
       setSizes(old => {
