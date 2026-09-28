@@ -20,6 +20,7 @@ import {
   GAP,
   heightIntent,
   landed,
+  leftWidths,
   narrowed,
   nearest,
   ordered,
@@ -32,6 +33,7 @@ import {
   settle,
   stepped,
   widened,
+  widenedLeft,
   widths,
   type Height,
   type Item,
@@ -42,10 +44,13 @@ import {
 
 export type Widget = {id: string; name: string; content: ReactNode};
 type Point = {x: number; y: number};
-/** What a gesture changes: the place (by the head), the width (the right edge), the height (the bottom edge) or both (the corner). */
-type Kind = 'drag' | 'width' | 'height' | 'corner';
-/** The handles that take the keyboard: the corner is the pointer's only. */
-type Handle = 'move' | 'width' | 'height';
+/**
+ * What a gesture changes: the place (by the head), the width (by the left or the right
+ * edge, the other one staying), the height (by the bottom edge) or both (by a bottom corner).
+ */
+type Kind = 'drag' | 'left' | 'right' | 'bottom' | 'bottom-left' | 'bottom-right';
+/** The handles that take the keyboard: the left edge and the corners are the pointer's only. */
+type Handle = 'move' | 'right' | 'bottom';
 type Gesture = {
   id: string;
   kind: Kind;
@@ -57,6 +62,8 @@ type Gesture = {
   intent: number | undefined;
   /** Where it began down the grid, which the page may scroll meanwhile. */
   top: number;
+  /** By the left edge: where the right one stays, and how wide the widget is drawn meanwhile (CSS pixels). */
+  edge: {right: number; px: number} | null;
   start: Point;
   pointer: Point;
   grab: Point;
@@ -70,8 +77,9 @@ const DRAG_AFTER = 4;
 const EDGE = 72;
 const SLIDE = {duration: 200, easing: 'cubic-bezier(.2, .7, .2, 1)'};
 const still = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
-const tall = (kind: Kind) => kind === 'height' || kind === 'corner';
-const wide = (kind: Kind) => kind === 'width' || kind === 'corner';
+const tall = (kind: Kind) => kind.startsWith('bottom');
+const wide = (kind: Kind) => kind !== 'drag' && kind !== 'bottom';
+const leftward = (kind: Kind) => kind === 'left' || kind === 'bottom-left';
 // Keep these breakpoints with the loading grid in style.css.
 const mode = () => (matchMedia('(max-width: 680px)').matches ? 1 : matchMedia('(max-width: 1000px)').matches ? 2 : 6);
 function useColumns() {
@@ -206,11 +214,13 @@ export function Widgets({
   };
   const follow = () => {
     const current = gesture.current;
-    if (!current?.active || current.kind !== 'drag') return;
-    const node = places.current.get(current.id);
-    const body = bodies.current.get(current.id);
-    if (!node || !body) return;
+    const node = current && places.current.get(current.id);
+    const body = current && bodies.current.get(current.id);
+    if (!current?.active || !node || !body) return;
     const rect = node.getBoundingClientRect();
+    // Drawn from where its right edge stays, however its place moved meanwhile.
+    if (current.edge) body.style.transform = `translateX(${current.edge.right - current.edge.px - rect.left}px)`;
+    if (current.kind !== 'drag') return;
     current.offset = {x: current.pointer.x - current.grab.x - rect.left, y: current.pointer.y - current.grab.y - rect.top};
     body.style.transform = `translate(${current.offset.x}px, ${current.offset.y}px)`;
   };
@@ -228,7 +238,7 @@ export function Widgets({
   // The page scrolls under a pointer held at the window's edge, so a widget goes where the window does not reach.
   const frame = () => {
     const current = gesture.current;
-    if (!current?.active || current.kind === 'width') return;
+    if (!current?.active || (current.kind !== 'drag' && !tall(current.kind))) return;
     const y = current.pointer.y;
     const scroll = y < EDGE ? y - EDGE : y > innerHeight - EDGE ? y - innerHeight + EDGE : 0;
     if (scroll) window.scrollBy(0, scroll / 4);
@@ -299,9 +309,10 @@ export function Widgets({
     const pointer = {x: event.clientX, y: event.clientY};
     const origin = reading(latest.current.spots);
     const item = origin.find(item => item.id === id)!;
-    const allowed = widths(layout.columns, item.x);
+    const allowed = leftward(kind) ? leftWidths(layout.columns, item.x + item.w) : widths(layout.columns, item.x);
     const width = (w: number) => w * pitch() - GAP;
     const rightGrab = pointer.x - body.getBoundingClientRect().right;
+    const leftGrab = pointer.x - body.getBoundingClientRect().left;
     if (kind !== 'drag') {
       event.preventDefault();
       // Its release, and the second click of a double one, come back to the handle however far the pointer went.
@@ -322,13 +333,16 @@ export function Widgets({
       }
       let changed = false;
       if (wide(kind)) {
-        const px = Math.max(width(allowed[0]), Math.min(width(allowed.at(-1)!), e.clientX - rightGrab - rect.left));
+        const drawn = leftward(kind) ? rect.right - (e.clientX - leftGrab) : e.clientX - rightGrab - rect.left;
+        const px = Math.max(width(allowed[0]), Math.min(width(allowed.at(-1)!), drawn));
         body.style.width = `${px}px`;
+        if (current.edge) current.edge.px = px;
         const w = nearest(allowed, (px + GAP) / pitch());
         if (current.items.find(item => item.id === id)!.w !== w) {
-          current.items = widened(origin, id, w, layout.columns);
+          current.items = leftward(kind) ? widenedLeft(origin, id, w, layout.columns) : widened(origin, id, w, layout.columns);
           changed = true;
         }
+        follow();
       }
       if (tall(kind)) changed = aim(current) || changed;
       if (changed) show(current);
@@ -360,6 +374,7 @@ export function Widgets({
       rows: item.h,
       intent: undefined,
       top: pointer.y - grid.current!.getBoundingClientRect().top,
+      edge: leftward(kind) ? {right: rect.right, px: rect.width} : null,
       start: pointer,
       pointer,
       grab: {x: pointer.x - rect.left, y: pointer.y - rect.top},
@@ -420,7 +435,7 @@ export function Widgets({
     let next: Spot[];
     let height: Height | undefined;
     let lines: string[];
-    if (handle === 'width') {
+    if (handle === 'right') {
       const step = {ArrowLeft: -1, ArrowDown: -1, ArrowRight: 1, ArrowUp: 1}[event.key];
       if (!step) return;
       event.preventDefault();
@@ -429,7 +444,7 @@ export function Widgets({
       if (w === undefined) return;
       next = widened(origin, id, w, layout.columns);
       lines = [t('widgets.resized', {name, span: w, count: layout.columns})];
-    } else if (handle === 'height') {
+    } else if (handle === 'bottom') {
       const step = {ArrowUp: -1, ArrowDown: 1}[event.key];
       if (!step) return;
       event.preventDefault();
@@ -533,28 +548,38 @@ export function Widgets({
               </Sized>
               {movable && (
                 <>
+                  <span className="resize-handle is-left" aria-hidden="true" title={t('widgets.leftHint')} onPointerDown={e => begin(spot.id, 'left', e)} />
                   <button
                     type="button"
-                    className="resize-handle is-width"
+                    className="resize-handle is-right"
                     aria-label={t('widgets.resize', {name: widget.name})}
                     title={t('widgets.resizeHint')}
-                    onPointerDown={e => begin(spot.id, 'width', e)}
-                    onKeyDown={key(spot.id, 'width')}
-                    ref={handleRef(spot.id, 'width')}
+                    onPointerDown={e => begin(spot.id, 'right', e)}
+                    onKeyDown={key(spot.id, 'right')}
+                    ref={handleRef(spot.id, 'right')}
                   />
                   <button
                     type="button"
-                    className="resize-handle is-height"
+                    className="resize-handle is-bottom"
                     aria-label={t('widgets.height', {name: widget.name})}
                     title={t('widgets.heightHint')}
-                    onPointerDown={e => begin(spot.id, 'height', e)}
-                    onKeyDown={key(spot.id, 'height')}
+                    onPointerDown={e => begin(spot.id, 'bottom', e)}
+                    onKeyDown={key(spot.id, 'bottom')}
                     // Enter and Space, and a screen reader's own activation: a click with no count.
-                    onClick={e => e.detail === 0 && fit(spot.id, 'height')}
+                    onClick={e => e.detail === 0 && fit(spot.id, 'bottom')}
                     onDoubleClick={() => twice(spot.id)}
-                    ref={handleRef(spot.id, 'height')}
+                    ref={handleRef(spot.id, 'bottom')}
                   />
-                  <span className="resize-handle is-corner" aria-hidden="true" title={t('widgets.cornerHint')} onPointerDown={e => begin(spot.id, 'corner', e)} onDoubleClick={() => twice(spot.id)} />
+                  {(['bottom-left', 'bottom-right'] as const).map(corner => (
+                    <span
+                      key={corner}
+                      className={`resize-handle is-${corner}`}
+                      aria-hidden="true"
+                      title={t('widgets.cornerHint')}
+                      onPointerDown={e => begin(spot.id, corner, e)}
+                      onDoubleClick={() => twice(spot.id)}
+                    />
+                  ))}
                 </>
               )}
             </div>

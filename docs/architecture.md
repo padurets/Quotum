@@ -539,12 +539,18 @@ the chosen heights determine the actual rows. Dragging by the head places a widg
 its top-left corner against the original layout: it goes after widgets whose top is
 above that row, taking an occupied slot unless its neighbour can rise into the place
 it left. Neighbours move down, never sideways. Widths snap to a third, a half, two
-thirds or the whole grid, by the right edge; heights to whole rows, by the bottom edge;
-both by the corner. A height is saved only where a gesture or a key changes what shows,
-the way it pulled (`heightIntent` in `ui/lib/grid.ts`): pushing a widget below what its
-content needs, or a corner moved only sideways, keeps the height it had, chosen or its
-content's. A double click on the bottom edge or the corner, or Enter or Space on the
-bottom edge, gives a widget back the height of its content. At 1000 px and below the
+thirds or the whole grid, by the left or the right edge, the other one staying; widened
+by its left edge a widget keeps its row, and what it covers there goes after it, as the
+right edge sends its neighbour down. Heights snap to whole rows, by the bottom edge; both
+by either bottom corner. The top has no edge: a widget floats up to what is above it, so
+its top has no place of its own to pull, and it is moved by its head. The edges are not
+drawn: each is a strip along its whole length in the gap beside it, which shows a thin
+line under the pointer or in focus; only the bottom corners have marks. The right and
+bottom edges take the arrow keys too. A height is saved only where a gesture or a key
+changes what shows, the way it pulled (`heightIntent` in `ui/lib/grid.ts`): pushing a
+widget below what its content needs, or a corner moved only sideways, keeps the height it
+had, chosen or its content's. A double click on the bottom edge or a bottom corner, or
+Enter or Space on the bottom edge, gives a widget back the height of its content. At 1000 px and below the
 page uses two columns, at 680 and below one, in reading order, with the heights chosen
 where the content fits them; arranging is available only on the wide grid.
 The page translates views saved before the grid, retaining hidden and absent widgets;

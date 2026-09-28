@@ -120,32 +120,45 @@ main { max-width: 1240px; margin: 0 auto; padding: 28px 28px 56px; display: flex
 @media (hover: none) { .drag-handle { opacity: .7; } }
 body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select: none; }
 /*
- * The edges a board's owner resizes a widget by, in the gaps beside it rather than over its
- * content: the right one a column at a time, the bottom one a row at a time, the corner
- * both. None of them crosses another.
+ * The edges a board's owner resizes a widget by, left, right and bottom, are not drawn: each
+ * is a strip along its whole edge, in the gap beside it (two neighbours' strips meet halfway
+ * across), with the cursor of its axis and a thin line along the edge under the pointer,
+ * in focus or held. Only the bottom corners, which change both, show a mark on hover.
  */
 .resize-handle {
-  position: absolute; z-index: 2; padding: 0; border: 0; border-radius: 6px; background: none;
-  touch-action: none; opacity: 0; transition: opacity .15s;
+  position: absolute; z-index: 2; padding: 0; border: 0; border-radius: 0; background: none;
+  touch-action: none; outline: none;
 }
-.resize-handle::after { content: ''; position: absolute; border-radius: 2px; background: var(--text-4); }
-.resize-handle.is-width { top: 50%; right: -9px; transform: translateY(-50%); width: 10px; height: 44px; cursor: ew-resize; }
-.resize-handle.is-width::after { inset: 6px 3px; }
-.resize-handle.is-height { left: 50%; bottom: -9px; transform: translateX(-50%); width: 44px; height: 10px; cursor: ns-resize; }
-.resize-handle.is-height::after { inset: 3px 6px; }
-.resize-handle.is-corner { right: -9px; bottom: -9px; width: 14px; height: 14px; cursor: nwse-resize; }
-.resize-handle.is-corner::after { inset: 2px 5px 5px 2px; border: solid var(--text-4); border-width: 0 2px 2px 0; border-radius: 0 0 4px 0; background: none; }
-.widget:hover .resize-handle, .resize-handle:focus-visible, .widget.is-resizing .resize-handle { opacity: 1; }
-/* The handle under the pointer, and the one a gesture holds. */
-.resize-handle:hover::after, body.is-resizing-width .widget.is-resizing .is-width::after, body.is-resizing-height .widget.is-resizing .is-height::after { background: var(--accent); }
-.resize-handle.is-corner:hover::after, body.is-resizing-corner .widget.is-resizing .is-corner::after { border-color: var(--accent); background: none; }
+.resize-handle::after { content: ''; position: absolute; border-radius: 1px; background: var(--accent); opacity: 0; transition: opacity .15s; }
+.resize-handle.is-left, .resize-handle.is-right { top: 0; bottom: 0; width: 8px; cursor: ew-resize; }
+.resize-handle.is-left { left: -8px; }
+.resize-handle.is-right { right: -8px; }
+.resize-handle.is-left::after, .resize-handle.is-right::after { top: 14px; bottom: 14px; width: 2px; }
+.resize-handle.is-left::after { right: 3px; }
+.resize-handle.is-right::after { left: 3px; }
+.resize-handle.is-bottom { left: 0; right: 0; bottom: -8px; height: 8px; cursor: ns-resize; }
+.resize-handle.is-bottom::after { left: 14px; right: 14px; top: 3px; height: 2px; }
+.resize-handle.is-bottom-left, .resize-handle.is-bottom-right { z-index: 3; bottom: -8px; width: 12px; height: 12px; }
+.resize-handle.is-bottom-left { left: -8px; cursor: nesw-resize; }
+.resize-handle.is-bottom-right { right: -8px; cursor: nwse-resize; }
+.resize-handle.is-bottom-left::after, .resize-handle.is-bottom-right::after { top: 1px; width: 7px; height: 7px; border: solid var(--text-4); background: none; }
+.resize-handle.is-bottom-left::after { left: 4px; border-width: 0 0 2px 2px; border-radius: 0 0 0 4px; }
+.resize-handle.is-bottom-right::after { right: 4px; border-width: 0 2px 2px 0; border-radius: 0 0 4px 0; }
+.widget:hover > .widget-body > .is-bottom-left::after, .widget:hover > .widget-body > .is-bottom-right::after, .widget.is-resizing .is-bottom-left::after, .widget.is-resizing .is-bottom-right::after { opacity: 1; }
+@media (hover: none) { .resize-handle.is-bottom-left::after, .resize-handle.is-bottom-right::after { opacity: .7; } }
+/* The edge under the pointer or in focus, and the one a gesture holds. */
+.resize-handle:hover::after, .resize-handle:focus-visible::after,
+body.is-resizing-left .widget.is-resizing .is-left::after, body.is-resizing-right .widget.is-resizing .is-right::after, body.is-resizing-bottom .widget.is-resizing .is-bottom::after { opacity: 1; }
+.resize-handle.is-bottom-left:hover::after, .resize-handle.is-bottom-right:hover::after,
+body.is-resizing-bottom-left .widget.is-resizing .is-bottom-left::after, body.is-resizing-bottom-right .widget.is-resizing .is-bottom-right::after { border-color: var(--accent); }
 .widget.is-resizing { z-index: 30; }
 .widget.is-resizing::before { content: ''; position: absolute; inset: 0; border: 1.5px dashed #bbc0fe59; border-radius: 14px; background: #bbc0fe08; }
 .widget.is-resizing > .widget-body > .card, .widget.is-resizing > .widget-body > .panel { background: var(--surface); border-color: #bbc0fe59; box-shadow: inset 0 1px 0 #ffffff0a, 0 30px 60px -20px #000; }
 body.is-resizing, body.is-resizing * { user-select: none; }
-body.is-resizing-width, body.is-resizing-width * { cursor: ew-resize !important; }
-body.is-resizing-height, body.is-resizing-height * { cursor: ns-resize !important; }
-body.is-resizing-corner, body.is-resizing-corner * { cursor: nwse-resize !important; }
+body.is-resizing-left, body.is-resizing-left *, body.is-resizing-right, body.is-resizing-right * { cursor: ew-resize !important; }
+body.is-resizing-bottom, body.is-resizing-bottom * { cursor: ns-resize !important; }
+body.is-resizing-bottom-left, body.is-resizing-bottom-left * { cursor: nesw-resize !important; }
+body.is-resizing-bottom-right, body.is-resizing-bottom-right * { cursor: nwse-resize !important; }
 
 /* ---------- surfaces ---------- */
 /* Dense enough that the dot grid does not show through: widgets are not frosted (see body::after). No wide soft shadow either: it is costly to paint and all but lost on the dark page. */

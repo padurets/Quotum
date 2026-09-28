@@ -74,6 +74,7 @@ export const ru = {
   'widgets.resize': 'Ширина «{name}»',
   'widgets.resizeHint': 'Тяните за край или используйте стрелки влево и вправо',
   'widgets.resized': '«{name}»: {span} из {count} колонок',
+  'widgets.leftHint': 'Тяните за край, чтобы изменить ширину',
   'widgets.height': 'Высота «{name}»',
   'widgets.heightHint': 'Тяните за край или используйте стрелки вверх и вниз. Двойной щелчок, Enter или пробел — высота по содержимому',
   'widgets.cornerHint': 'Тяните, чтобы изменить ширину и высоту. Двойной щелчок — высота по содержимому',

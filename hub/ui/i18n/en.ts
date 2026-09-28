@@ -79,6 +79,7 @@ export const en = {
   'widgets.resize': 'Width of “{name}”',
   'widgets.resizeHint': 'Drag the edge, or use the left and right arrow keys',
   'widgets.resized': '“{name}”: {span} of {count} columns',
+  'widgets.leftHint': 'Drag the edge to change the width',
   'widgets.height': 'Height of “{name}”',
   'widgets.heightHint': 'Drag the edge, or use the up and down arrow keys. Double-click, Enter or Space: as tall as its content',
   'widgets.cornerHint': 'Drag to change the width and the height. Double-click: as tall as its content',

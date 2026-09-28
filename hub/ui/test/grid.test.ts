@@ -4,6 +4,7 @@ import {
   cellOf,
   heightIntent,
   landed,
+  leftWidths,
   legacyLayout,
   MAX_ROWS,
   narrowed,
@@ -17,6 +18,7 @@ import {
   starts,
   stepped,
   widened,
+  widenedLeft,
   widths,
   withHeights,
   withPlaces,
@@ -189,6 +191,25 @@ test('saving places carries every chosen height over; only the height named chan
   view = apply(view, moved, {id: 'a', rows: 9});
   view = apply(view, moved, {id: 'a', rows: null});
   assert.ok(!('h' in view.layout.places.a), 'a step and a reset before saving leave no height');
+});
+
+test('the left edge keeps the right one in place and the widget in its row; what it covers goes after it', () => {
+  assert.deepEqual([6, 4, 3, 2].map(right => leftWidths(6, right)), [[2, 3, 4, 6], [2, 4], [3], [2]]);
+  // P and Q side by side, R and S under them: Q taken leftwards to two thirds.
+  const wider = widenedLeft(board, 'Q', 4, 6);
+  assert.deepEqual(coords(wider), {Q: [2, 0], P: [0, 7], S: [3, 7], R: [0, 14]});
+  assert.equal(at(wider, 'Q').w, 4);
+  assert.deepEqual(coords(widenedLeft(board, 'Q', 6, 6)), {Q: [0, 0], P: [0, 7], S: [3, 7], R: [0, 14]});
+  // Narrower from the left: the right edge stays, nothing moves but it.
+  const narrow = widenedLeft(board, 'Q', 2, 6);
+  assert.deepEqual([at(narrow, 'Q').x, at(narrow, 'Q').w], [4, 2]);
+  assert.deepEqual(coords(narrow), {P: [0, 0], Q: [4, 0], R: [0, 7], S: [3, 7]});
+  // A widget above is not passed: over its columns the widget goes under it.
+  const tall = settle([item('A', 0, 3, 12), item('B', 3, 3, 4), item('C', 3, 3, 4)], 6);
+  assert.deepEqual(coords(widenedLeft(tall, 'C', 4, 6)), {A: [0, 0], B: [3, 0], C: [2, 12]});
+  const copy = structuredClone(board);
+  widenedLeft(board, 'P', 3, 6);
+  assert.deepEqual(board, copy, 'the origin stays as it was');
 });
 
 test('narrow screens keep sides and reading order; the middle third takes the shorter stack', () => {

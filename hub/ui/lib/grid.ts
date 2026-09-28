@@ -67,6 +67,24 @@ export const widened = (origin: Spot[], id: string, w: number, columns: number) 
     columns,
   );
 
+/** Widths a widget can take by its left edge, its right one staying at `right`. */
+export const leftWidths = (columns: number, right: number) => widths(columns).filter(w => w <= right && starts(columns, w).includes(right - w));
+
+/**
+ * Wider or narrower by its left edge: its right edge stays, and it keeps its row, the
+ * widgets of that row it now covers going after it, as the right edge sends its neighbour
+ * down. It cannot pass the widgets above it.
+ */
+export function widenedLeft(origin: Spot[], id: string, w: number, columns: number): Spot[] {
+  const item = origin.find(item => item.id === id)!;
+  return landed(
+    origin.map(other => (other.id === id ? {...other, w} : other)),
+    id,
+    {x: item.x + item.w - w, y: item.y},
+    columns,
+  );
+}
+
 export function stepped(origin: Spot[], id: string, key: string, columns: number): Spot[] {
   const item = origin.find(item => item.id === id)!;
   const bottom = Math.max(...origin.map(item => item.y + item.h));
