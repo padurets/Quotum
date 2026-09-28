@@ -369,7 +369,7 @@ function AgentsDialog({
  * measurement does not render it. How long each has run is a part of its own. In a widget
  * made shorter than its agents it shows the first of them that fit whole and a last row
  * saying how many more, which opens them all in a dialog; it tells the board what it needs
- * (`useSizing`), measuring the rows it leaves out unseen, beside the ones it shows.
+ * (`useSizing`), measuring all its rows unseen beside the ones it shows.
  */
 export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrange}) {
   useLocale();

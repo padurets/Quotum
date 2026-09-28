@@ -550,8 +550,8 @@ its axis; under the pointer the widget's own border on that side lights up a lit
 focus it takes the accent. Only the bottom corners have marks. The right and
 bottom edges take the arrow keys too. A height is saved only where a gesture or a key
 changes what shows, the way it pulled (`heightIntent` in `ui/lib/grid.ts`): pushing a
-widget below what its content needs, or a corner moved only sideways, keeps the height it
-had, chosen or its content's. A double click on the bottom edge or a bottom corner, or
+widget below the least its content can show, or a corner moved only sideways, keeps the
+height it had, chosen or its content's. A double click on the bottom edge or a bottom corner, or
 Enter or Space on the bottom edge, gives a widget back the height of its content. At 1000 px and below the
 page uses two columns, at 680 and below one, in reading order, with the heights chosen
 where the content fits them; arranging is available only on the wide grid.

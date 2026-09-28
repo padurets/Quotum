@@ -107,7 +107,8 @@ const Sized = memo(function Sized({id, manual, allocated, report, children}: {id
 
 /**
  * Places, the heights their owner chose and measured content determine the grid: a widget
- * takes the rows its content needs, or the rows chosen for it where its content fits them.
+ * takes the rows its content needs, or the rows chosen for it where the least its content
+ * can show fits them.
  * A gesture only changes its intended order, width and height.
  */
 export function Widgets({
