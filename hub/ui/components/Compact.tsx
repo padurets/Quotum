@@ -62,7 +62,7 @@ export function Compact({live}: {live: ReturnType<typeof startLive>}) {
   const ids = view ? ordered(view.layout, lineup.map(cardId)).map(w => w.id).filter(id => !isHidden(view, id)).map(id => id.slice(7)) : [];
   return <div className="compact glass" ref={root}>
     <header><h1>{t('desktop.limits')}</h1><button className="button" onClick={() => inApp() ? void app.openMain() : location.assign('/')}>{t('desktop.open')}</button>{inApp() && <button className="button" onClick={() => void app.closePanel()} aria-label={t('common.close')}>×</button>}</header>
-    {connection.status !== 'live' && <p className="compact-quality">{t('desktop.disconnected')}</p>}
+    {!['live', 'polling'].includes(connection.status) && <p className="compact-quality">{t('desktop.disconnected')}</p>}
     {!ids.length && <p>{t('desktop.empty')}</p>}
     {ids.map(id => <Row key={id} id={id} />)}
   </div>;
