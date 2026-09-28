@@ -778,6 +778,7 @@ tr:hover .device-name .icon-button, .device-name .icon-button:focus-visible { op
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 
+html:has(.compact) { scrollbar-gutter: auto; }
 body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .compact { padding: 16px; min-width: 0; }
 .compact > header, .compact-card > footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; }

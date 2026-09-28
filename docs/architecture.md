@@ -608,7 +608,9 @@ entry by turning start at login off and on again.
 Windows are created on worker threads; restoring, fitting and showing them is queued
 on the event loop after the window-state plugin's initialization. This keeps its state
 locks on the same thread as native window events. Closing a window destroys it with its
-web view. The compact panel has its own label and never persists main-window geometry. A request to open it asks the event loop whether the window it finds is still
+web view. The compact panel has no native window frame, has its own label and never
+persists main-window geometry. Its initial hidden focus changes do not dismiss it;
+losing focus after it has been shown and focused does. A request to open it asks the event loop whether the window it finds is still
 there: a second start can arrive while a closed window still holds its label, and that
 one does not count as open. The new window is created once it has gone, and the app's
 `hub.log` tells each request, attempt and outcome.
@@ -616,7 +618,10 @@ one does not count as open. The new window is created once it has gone, and the 
 **Linux rendering and lifetime.** The Rust controller uses a D-Bus StatusNotifierItem
 through `ksni`; it does not link GTK or WebKit. It waits for the desktop's tray watcher
 when starting early at login and registers again when that watcher restarts. Opening a window starts an Electron
-process; it holds at most the main board and a compact panel. Closing both ends that process and its renderers. The Rust agent and Node hub
+process; it holds at most the main board and a compact panel. On X11/XWayland the panel
+uses the tray's activation coordinates, or the pointer when its menu gives none. That
+anchor determines its monitor and stays put while the content changes height; native
+Wayland leaves positioning to the compositor. Closing both ends that process and its renderers. The Rust agent and Node hub
 continue. A socket pair inherited as fd 3 carries typed messages, not a TCP listener or
 command-line secrets. EOF tells Electron to quit if the controller dies. A second start
 sends only an Open signal through a per-user Unix socket; the receiver checks peer UID.

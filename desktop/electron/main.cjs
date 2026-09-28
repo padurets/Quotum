@@ -194,7 +194,7 @@ Promise.all([initialized, app.whenReady()]).then(([config]) => {
 });
 function resizePanel(entry) {
   if (entry.window.isDestroyed()) return;
-  const area = screen.getDisplayMatching(entry.window.getBounds()).workArea;
+  const area = (entry.anchor ? screen.getDisplayNearestPoint(entry.anchor) : screen.getDisplayMatching(entry.window.getBounds())).workArea;
   const width = Math.min(400, area.width);
   const height = Math.max(100, Math.min(Math.ceil(entry.height), 600, Math.floor(area.height * 0.8)));
   const [currentWidth, currentHeight] = entry.window.getContentSize();
@@ -203,19 +203,28 @@ function resizePanel(entry) {
 }
 function placePanel(entry) {
   const point = entry.anchor;
-  // Wayland owns placement. A menu without activation coordinates does too.
-  if (process.env?.WAYLAND_DISPLAY || !Array.isArray(point) || point.length !== 2 || !point.every(Number.isInteger)) return;
-  const area = screen.getDisplayNearestPoint({x: point[0], y: point[1]}).workArea;
+  if (!point) return;
+  const area = screen.getDisplayNearestPoint(point).workArea;
   const bounds = entry.window.getBounds();
-  const x = Math.max(area.x, Math.min(point[0] - bounds.width, area.x + area.width - bounds.width));
-  const y = Math.max(area.y, Math.min(point[1] - bounds.height, area.y + area.height - bounds.height));
+  const x = Math.max(area.x, Math.min(point.x - bounds.width, area.x + area.width - bounds.width));
+  const y = Math.max(area.y, Math.min(point.y - bounds.height, area.y + area.height - bounds.height));
   if (bounds.x !== x || bounds.y !== y) entry.window.setPosition(x, y);
+}
+function panelAnchor(anchor) {
+  const backend = app.commandLine.getSwitchValue('ozone-platform');
+  // XWayland supports placement even in a Wayland session; native Wayland owns it.
+  if (backend !== 'x11' && (backend === 'wayland' || process.env?.WAYLAND_DISPLAY)) return;
+  if (Array.isArray(anchor) && anchor.length === 2 && anchor.every(Number.isInteger)) return {x: anchor[0], y: anchor[1]};
+  // A tray menu's activation has no coordinates. Capture the pointer once, before
+  // loading the panel, so a later content resize cannot move it to another monitor.
+  try { return screen.getCursorScreenPoint(); } catch { return; }
 }
 function openSurface(role, anchor) {
   if (!engineConfig) { requested.set(role, anchor); return; }
   focusRole = role;
+  const point = role === 'compact' ? panelAnchor(anchor) : undefined;
   const existing = surfaces.get(role);
-  if (existing && !existing.window.isDestroyed()) { if (existing.window.isMinimized()) existing.window.restore(); existing.window.show(); existing.window.focus(); if (role === 'compact' && anchor) { existing.anchor = anchor; placePanel(existing); } return; }
+  if (existing && !existing.window.isDestroyed()) { if (existing.window.isMinimized()) existing.window.restore(); if (role === 'compact') { existing.anchor = point; resizePanel(existing); } existing.window.show(); existing.window.focus(); return; }
   const config = engineConfig;
   const compact = role === 'compact';
   let loaded = false;
@@ -229,6 +238,7 @@ function openSurface(role, anchor) {
   } catch {}
   const window = new BrowserWindow({
     title: 'Quotum', width: compact ? 400 : 1280, height: compact ? 180 : 800, ...geometry, minWidth: compact ? 160 : 480, minHeight: compact ? 100 : 400,
+    frame: !compact,
     alwaysOnTop: compact, skipTaskbar: compact, resizable: !compact,
     backgroundColor: '#0b0b0e', show: false, autoHideMenuBar: true,
     icon: path.join(__dirname, '..', 'icon.png'),
@@ -238,7 +248,7 @@ function openSurface(role, anchor) {
       devTools: config.inspect === true, spellcheck: false, navigateOnDragDrop: false,
     },
   });
-  const entry = {window, role, instance: ++nextInstance, height: 180, anchor};
+  const entry = {window, role, instance: ++nextInstance, height: 180, anchor: point};
   surfaces.set(role, entry);
   send({type: 'surface', role, instance: entry.instance, open: true});
   window.setMenu(null);

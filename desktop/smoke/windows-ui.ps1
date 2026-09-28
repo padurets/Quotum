@@ -26,7 +26,7 @@ $failed = $false
 # milliseconds from the WM_CLOSE of the cycle, except firstWindowMs (from the app's start),
 # searchMs (how long finding the browser process took, before the close) and openHandoffMs
 # (from the second launch while the window is minimized).
-$result = [ordered]@{passed=$false; firstWindowMs=$null; windows=@(); cycles=@(); errors=@()}
+$result = [ordered]@{passed=$false; firstWindowMs=$null; windows=@(); cycles=@(); panels=@(); errors=@()}
 # The browser process of WebView2 of each cycle's window, and when that window was closed.
 $browsers = @{}
 $closedAt = @{}
@@ -43,6 +43,7 @@ public static class QuotumWindowProbe {
   [DllImport("user32.dll")] static extern bool EnumWindows(EnumCallback callback, IntPtr data);
   [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr window, StringBuilder text, int size);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr window, StringBuilder text, int size);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr window, uint message, IntPtr w, IntPtr l);
   [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr window, int command);
@@ -52,15 +53,30 @@ public static class QuotumWindowProbe {
   [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr window, uint flags);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo info);
   public static IntPtr Find(int process) {
+    return FindOther(process,IntPtr.Zero);
+  }
+  public static IntPtr FindOther(int process, IntPtr except) {
     IntPtr found=IntPtr.Zero;
     EnumWindows((window,data) => {
       uint owner; GetWindowThreadProcessId(window,out owner);
-      if(owner!=(uint)process || !IsWindowVisible(window)) return true;
+      if(owner!=(uint)process || window==except || !IsWindowVisible(window)) return true;
       var text=new StringBuilder(256); GetWindowText(window,text,text.Capacity);
       if(text.ToString()!="Quotum") return true;
       found=window; return false;
     },IntPtr.Zero);
     return found;
+  }
+  public static bool OpenPanel(int process) {
+    IntPtr tray=IntPtr.Zero;
+    EnumWindows((window,data) => {
+      uint owner; GetWindowThreadProcessId(window,out owner);
+      if(owner!=(uint)process) return true;
+      var name=new StringBuilder(256); GetClassName(window,name,name.Capacity);
+      if(name.ToString()!="QuotumTray") return true;
+      tray=window; return false;
+    },IntPtr.Zero);
+    // The Shell icon's version-4 NIN_SELECT callback (icon 1).
+    return tray!=IntPtr.Zero && PostMessage(tray,0x8002,IntPtr.Zero,new IntPtr(0x10400));
   }
   public static bool Responsive(IntPtr window) {
     IntPtr result;
@@ -218,6 +234,30 @@ try {
   if ([QuotumWindowProbe]::IsIconic($window)) { throw 'A second launch while the window was minimized did not restore it' }
   if ((Wait-Window) -ne $window) { throw 'A second launch while the window was minimized did not show that window' }
   $result.openHandoffMs = $clock.ElapsedMilliseconds - $asked
+  # WebView2 may send focus changes before its hidden panel is shown. A logged
+  # creation is not enough: it must stay visible and leave the main window intact.
+  for ($cycle = 0; $cycle -lt 2; $cycle++) {
+    $before = [QuotumWindowProbe]::Bounds($window)
+    if (-not [QuotumWindowProbe]::OpenPanel($process.Id)) { throw 'Could not activate the tray panel' }
+    $deadline = (Get-Date).AddSeconds(15)
+    $panel = [IntPtr]::Zero
+    do {
+      $panel = [QuotumWindowProbe]::FindOther($process.Id, $window)
+      if ($panel -ne [IntPtr]::Zero -and [QuotumWindowProbe]::Responsive($panel)) { break }
+      Start-Sleep -Milliseconds 50
+    } while ((Get-Date) -lt $deadline)
+    if ($panel -eq [IntPtr]::Zero) { throw 'The tray panel did not become visible' }
+    Start-Sleep -Seconds 1
+    if (-not [QuotumWindowProbe]::IsWindowVisible($panel) -or -not [QuotumWindowProbe]::Responsive($panel)) { throw 'The tray panel disappeared after creation' }
+    $bounds = [QuotumWindowProbe]::Bounds($panel)
+    if ($bounds[0] -lt $bounds[4] -or $bounds[1] -lt $bounds[5] -or $bounds[2] -gt $bounds[6] -or $bounds[3] -gt $bounds[7]) { throw "Panel exceeds its monitor work area: $bounds" }
+    $result.panels += ,$bounds
+    if (-not [QuotumWindowProbe]::PostMessage($panel, 0x10, [IntPtr]::Zero, [IntPtr]::Zero)) { throw 'Could not close the panel' }
+    $deadline = (Get-Date).AddSeconds(5)
+    while ([QuotumWindowProbe]::IsWindowVisible($panel) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 50 }
+    if ([QuotumWindowProbe]::IsWindowVisible($panel)) { throw 'The panel did not close' }
+    if (-not [QuotumWindowProbe]::IsWindowVisible($window) -or ($before -join ',') -ne ([QuotumWindowProbe]::Bounds($window) -join ',')) { throw 'The panel changed the main window geometry' }
+  }
   $result.passed = $true
 } catch {
   $result.error = $_.Exception.Message

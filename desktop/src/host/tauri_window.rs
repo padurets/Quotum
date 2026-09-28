@@ -1,6 +1,10 @@
 use crate::{hub::HubState, shell::Shell, window::*};
 use std::{
-    sync::{Arc, mpsc},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -155,6 +159,8 @@ fn build(
     let mut builder = WebviewWindowBuilder::new(app, label, url)
         .title("Quotum")
         .visible(false)
+        .focused(!compact)
+        .decorations(!compact)
         // Match the board's --bg while the web view has not painted a newly exposed area yet.
         .background_color(tauri::utils::config::Color(0x0b, 0x0b, 0x0e, 255))
         .inner_size(if compact { 400.0 } else { 1280.0 }, if compact { 180.0 } else { 800.0 })
@@ -196,10 +202,17 @@ fn build(
     if compact {
         let closing = window.clone();
         let resizing = shell.clone();
+        let focused = AtomicBool::new(false);
         *shell.host.panel_height.lock().unwrap_or_else(|e| e.into_inner()) = 180.0;
         window.on_window_event(move |event| {
-            if matches!(event, tauri::WindowEvent::Focused(false)) {
-                let _ = closing.close();
+            if let tauri::WindowEvent::Focused(active) = event {
+                // WebView2 sends focus changes while the window is still hidden.
+                // Dismiss only after this panel has actually been visible and focused.
+                if *active && closing.is_visible().unwrap_or(false) {
+                    focused.store(true, Ordering::SeqCst);
+                } else if !*active && focused.swap(false, Ordering::SeqCst) {
+                    let _ = closing.close();
+                }
             }
             if matches!(event, tauri::WindowEvent::ScaleFactorChanged { .. } | tauri::WindowEvent::Moved(_)) {
                 let height = *resizing.host.panel_height.lock().unwrap_or_else(|e| e.into_inner());
@@ -238,6 +251,8 @@ fn build(
         }
         if let Err(error) = ready.show() {
             shell.hub_log.line(&format!("app: the window could not be shown: {error}"));
+        } else if compact {
+            let _ = ready.set_focus();
         }
     })?;
     Ok(window)

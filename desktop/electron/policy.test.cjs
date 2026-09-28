@@ -8,7 +8,7 @@ const vm = require('node:vm');
 
 // Run the real main process handlers with a web view whose navigations commit
 // only when the test asks. No Electron, display, filesystem writes or clients.
-async function mainProcess() {
+async function mainProcess({cursor = () => ({x: 790, y: 590}), displays = [{workArea: {x: 0, y: 0, width: 800, height: 600}}], backend = '', env = {}} = {}) {
   let channel;
   let window;
   const windows = [];
@@ -20,6 +20,7 @@ async function mainProcess() {
   const app = Object.assign(new EventEmitter(), {
     setName() {}, setDesktopName() {}, enableSandbox() {}, setPath() {},
     whenReady: () => Promise.resolve(), quit() { quits.push('quit'); },
+    commandLine: {getSwitchValue: () => backend},
   });
   class BrowserWindow extends EventEmitter {
     constructor(options) {
@@ -55,7 +56,10 @@ async function mainProcess() {
         app, BrowserWindow, ipcMain: {handle(_, handler) { invoke = handler; }, on() {}},
         protocol: {registerSchemesAsPrivileged() {}, handle() {}},
         session: {defaultSession: {setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, on() {}}},
-        screen: {getAllDisplays: () => [], getDisplayMatching: () => ({workArea: {x: 0, y: 0, width: 800, height: 600}}), getDisplayNearestPoint: () => ({workArea: {x: 0, y: 0, width: 800, height: 600}})},
+        screen: {
+          getAllDisplays: () => displays, getDisplayMatching: () => displays[0], getCursorScreenPoint: cursor,
+          getDisplayNearestPoint: ({x, y}) => displays.find(({workArea: a}) => x >= a.x && x < a.x + a.width && y >= a.y && y < a.y + a.height) ?? displays[0],
+        },
       };
       if (name === 'node:net') return {Socket: class extends EventEmitter {
         constructor() { super(); channel = this; }
@@ -65,7 +69,7 @@ async function mainProcess() {
       if (name === 'node:fs') return {mkdirSync() {}, readFileSync() { throw new Error('no saved geometry'); }};
       return require(name);
     },
-    process: {argv: [], on() {}}, __dirname, URL, Buffer, setTimeout, clearTimeout,
+    process: {argv: [], env, on() {}}, __dirname, URL, Buffer, setTimeout, clearTimeout,
   });
   vm.runInContext(readFileSync(`${__dirname}/main.cjs`, 'utf8'), context);
   const deliver = (...messages) => channel.emit('data', messages.map(message => JSON.stringify(message) + '\n').join(''));
@@ -169,6 +173,8 @@ test('two surfaces keep separate geometry and reject commands from subframes or 
   assert.equal(main.windows.length, 2);
   const [board, panel] = main.windows;
   assert.equal(panel.options.width, 400);
+  assert.equal(panel.options.frame, false);
+  assert.equal(board.options.frame, true);
   main.navigations.length = 0;
   main.deliver({type: 'state', generation: 1, url: hub, force: true, role: 'compact'});
   assert.equal(main.navigations.length, 1, 'reenter affects only the requesting surface');
@@ -201,4 +207,32 @@ test('activation coordinates keep the compact surface inside its work area', asy
   main.deliver({type: 'panel', instance: 2, generation: 1, action: 'height', height: 1000});
   assert.deepEqual(panel.size, [400, 480]);
   assert.deepEqual(panel.position, [390, 110]);
+});
+
+test('a tray menu uses its monitor on XWayland and keeps that anchor through content resizing', async () => {
+  let point = {x: 1800, y: 900};
+  const main = await mainProcess({
+    cursor: () => point, backend: 'x11', env: {WAYLAND_DISPLAY: 'wayland-0'},
+    displays: [{workArea: {x: 0, y: 0, width: 800, height: 600}}, {workArea: {x: 800, y: 0, width: 1200, height: 1000}}],
+  });
+  main.deliver({type: 'state', generation: 1, url: hub}, {type: 'focus', role: 'compact'});
+  const panel = main.windows.at(-1);
+  panel.emit('ready-to-show');
+  assert.deepEqual(panel.position, [1400, 720]);
+  point = {x: 400, y: 200};
+  main.deliver({type: 'panel', instance: 2, generation: 1, action: 'height', height: 1000});
+  assert.deepEqual(panel.size, [400, 600], 'height comes from the activation monitor');
+  assert.deepEqual(panel.position, [1400, 300], 'moving the pointer does not move an open panel');
+  main.deliver({type: 'focus', role: 'compact'});
+  assert.deepEqual(panel.size, [400, 480]);
+  assert.deepEqual(panel.position, [0, 0], 'a new menu activation uses its current monitor');
+});
+
+test('native Wayland never asks for unsupported global pointer coordinates', async () => {
+  const main = await mainProcess({backend: 'wayland', cursor() { throw new Error('unsupported global pointer'); }});
+  main.deliver({type: 'state', generation: 1, url: hub}, {type: 'focus', role: 'compact', anchor: [790, 590]});
+  const panel = main.windows.at(-1);
+  panel.emit('ready-to-show');
+  assert.equal(panel.position, undefined);
+  assert.deepEqual(panel.size, [400, 180]);
 });
