@@ -4,12 +4,18 @@ name: Desktop
 # put together (desktop/prepare.mjs), checked, built into its installers, and run from what
 # was built: once end to end and once crashing (desktop/smoke). Each installer, and the
 # command-line agent of the same commit, is kept as an artifact of its own, the file as it
-# is. Releases do not use it yet.
+# is. A release calls this same build and smoke gate, then publishes its versioned packages.
 # Third-party actions are pinned by commit.
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
+    inputs:
+      ui-runs:
+        description: How many times to run the Windows UI smoke on each package
+        type: number
+        default: 1
   workflow_dispatch:
     inputs:
       ui-runs:
@@ -21,7 +27,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: desktop-${{ github.ref }}
+  group: desktop-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -275,3 +281,25 @@ jobs:
         with:
           path: out/quotum-cli-${{ env.QUOTUM_COMMIT }}-${{ matrix.platform }}.exe
           archive: false
+
+      # The release downloads these only after every package above passed its smoke checks.
+      # Produce them on ordinary CI runs too, so the release filenames are exercised there.
+      - name: Release packages
+        shell: bash
+        run: |
+          mkdir -p release
+          app=out/quotum-desktop-$VERSION-$QUOTUM_COMMIT-${{ matrix.platform }}
+          dest=release/quotum-desktop-$VERSION-${{ matrix.platform }}
+          if [ "$RUNNER_OS" = Windows ]; then
+            cp "$app-setup.exe" "$dest-setup.exe"
+            cp "$app-portable.zip" "$dest-portable.zip"
+          else
+            cp "$app.deb" "$dest.deb"
+            cp "$app.rpm" "$dest.rpm"
+            cp "$app.AppImage" "$dest.AppImage"
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-release-${{ matrix.platform }}
+          path: release/
+          if-no-files-found: error

@@ -1,3 +1,4 @@
+import {COLUMNS, defaultWidth, starts, type Layout} from '../ui/lib/grid.js';
 import type {Store, WorkKey} from '../server/store/store.js';
 import {parseSessions} from '../server/domain/ingest.js';
 import {Agent, Person} from './client.js';
@@ -177,8 +178,7 @@ export function viewOf(stand: Stand, key: string) {
   const shown = cards(set).filter(card => (personal ? holdersOf(set, card).includes(key) : !!card.on?.[key]));
   const board = boards(set).find(b => b.id === key) ?? people(set).find(p => p.id === key);
   const view = {
-    order: [...shown.map(card => `source:${stand.sources.get(card.id)}`), 'agents', 'activity', 'history', 'forecast'],
-    sizes: {} as Record<string, number>,
+    layout: {columns: COLUMNS, places: {}} as Layout,
     names: {} as Record<string, string>,
     hidden: [] as string[],
     shown: board?.agents ? ['agents'] : [],
@@ -189,12 +189,18 @@ export function viewOf(stand: Stand, key: string) {
     columns: {},
     shownColumns: board?.kind === 'board' && board.tableColumns ? {forecast: board.tableColumns} : {},
   };
-  if (board?.agentsSpan) view.sizes.agents = board.agentsSpan;
-  if (board?.forecastSpan) view.sizes.forecast = board.forecastSpan;
+  let cursor = 0;
+  let rank = 0;
+  const place = (w: number) => {
+    const x = starts(COLUMNS, w).find(x => x >= cursor) ?? 0;
+    cursor = x + w;
+    return {x, y: rank++, w};
+  };
   for (const card of shown) {
     const source = stand.sources.get(card.id)!;
     const looks = card.on?.[key] ?? {};
-    if (looks.span) view.sizes[`source:${source}`] = looks.span;
+    const id = `source:${source}`;
+    view.layout.places[id] = looks.place ?? place(looks.width ?? defaultWidth(id, COLUMNS));
     if (looks.name) view.names[source] = looks.name;
     if (looks.color) view.colors[source] = looks.color;
     if (looks.hidden) view.hidden.push(`source:${source}`);
@@ -202,6 +208,9 @@ export function viewOf(stand: Stand, key: string) {
     if (looks.plan === 'off') view.unplanned.push(source);
     else if (looks.plan) view.plans[source] = looks.plan;
   }
+  view.layout.places.agents = board?.agentsPlace ?? place(board?.agentsWidth ?? COLUMNS);
+  rank = cursor = 0;
+  for (const id of ['activity', 'history', 'forecast']) view.layout.places[id] = place(id === 'forecast' ? board?.forecastWidth ?? COLUMNS : COLUMNS);
   return view;
 }
 

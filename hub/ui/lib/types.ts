@@ -64,10 +64,10 @@ export type LiveSession = {
  * chart and the `forecast` table.
  */
 export type View = {
-  /** Widget ids in order; widgets missing here come after, in the board's order. */
-  order: string[];
-  /** Columns of the twelve a widget spans, where not its default. */
-  sizes: Record<string, number>;
+  layout: import('./grid').Layout;
+  /** Boards arranged before the grid: the page translates these; POST never saves them. */
+  order?: string[];
+  sizes?: Record<string, number>;
   /** Names the board's owner gave cards, by source id. */
   names: Record<string, string>;
   hidden: string[];

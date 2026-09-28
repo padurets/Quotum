@@ -1,3 +1,4 @@
+import type {Place} from '../ui/lib/grid.js';
 import {createHash} from 'node:crypto';
 import {sourceId, type Provider} from '../server/domain/sources.js';
 import {subscriptionKey} from '../server/domain/ingest.js';
@@ -204,7 +205,7 @@ export type Origin = 'terminal' | 'editor' | 'app';
 export type Agent = {machine: string; origin: Origin; project: string | null; folder?: string; since: number; until?: number; works?: Wave};
 
 /** How a card looks on one board: its name, colour, width, whether it or some of its windows are hidden, its plan. */
-export type CardView = {name?: string; color?: string; span?: number; hidden?: boolean; windows?: string[]; plan?: WeeklyPlan | 'off'};
+export type CardView = {name?: string; color?: string; width?: number; place?: Place; hidden?: boolean; windows?: string[]; plan?: WeeklyPlan | 'off'};
 
 /** A time within which an expectation holds, from `start`: [from, to], by default the first twelve hours. */
 export type Span = {from?: number; to?: number};
@@ -383,8 +384,9 @@ export type Person = {
   id: string;
   name: string;
   agents?: boolean;
-  agentsSpan?: number;
-  forecastSpan?: number;
+  agentsWidth?: number;
+  agentsPlace?: Place;
+  forecastWidth?: number;
   projects?: Record<string, string>;
   expect: (BoardCheck | ProjectCheck)[];
   look?: string[];
@@ -398,8 +400,9 @@ export type Board = {
   members: string[];
   /** The table of running agents is turned on. */
   agents?: boolean;
-  agentsSpan?: number;
-  forecastSpan?: number;
+  agentsWidth?: number;
+  agentsPlace?: Place;
+  forecastWidth?: number;
   /** When members joined it, from `start`, where later than it was made: work before is not the board's. */
   joined?: Record<string, number>;
   /** Columns of the table, off by default, that the board turns on. */
@@ -658,7 +661,7 @@ export function problems(set: DemoSet): string[] {
       else if (known.has(board) && !holders.has(board)) found.push(`card ${card.id} has looks on the board of ${board}, who does not measure it`);
       if (looks.name !== undefined && (looks.name.trim() !== looks.name || !looks.name || looks.name.length > 60)) found.push(`card ${card.id}: a name the hub does not take`);
       if (looks.color !== undefined && !/^#[0-9a-f]{6}$/.test(looks.color)) found.push(`card ${card.id}: a colour the hub does not take`);
-      if (looks.span !== undefined && (!Number.isInteger(looks.span) || looks.span < 4 || looks.span > 12)) found.push(`card ${card.id}: a width the hub does not take`);
+      if (looks.width !== undefined && ![2, 3, 4, 6].includes(looks.width)) found.push(`card ${card.id}: a width the hub does not take`);
     }
     for (const check of card.expect) {
       if (check.board !== undefined && !shownOn(check.board)) found.push(`card ${card.id} expects something on ${check.board}, where it is not shown`);

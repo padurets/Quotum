@@ -6,9 +6,9 @@ fix, open an issue first so we can agree on the approach before you spend time o
 ## Checking a change
 
 ```sh
-cd hub && npm ci && npm run typecheck && npm test && npm run build
-cd agent && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
-node desktop/prepare.mjs && cd desktop && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+(cd hub && npm ci && npm run typecheck && npm test && npm run build)
+(cd agent && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked)
+node desktop/prepare.mjs && (cd desktop && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked)
 ```
 
 CI runs the same on every push, the agent on Linux, macOS and Windows. `npm start` in
@@ -25,6 +25,8 @@ builds deb, rpm and AppImage; its packaging tools are `dpkg-deb`, `rpmbuild` and
 `mksquashfs`. On Windows, `npx @tauri-apps/cli@2.11.5 build --target x86_64-pc-windows-msvc`
 makes setup.exe; then `node desktop/package-windows.mjs` packages that build as a portable ZIP.
 CI runs both the installed app and the extracted ZIP, including a path with spaces.
+The release workflow calls the same Desktop workflow and publishes its packages only
+after these checks pass; ordinary CI runs also keep the versioned release packages.
 `desktop/smoke/windows-ui.ps1 <app.exe>` also checks ordinary startup with the real
 window-state plugin: a visible, responsive window, restored bounds inside the monitor's
 work area, close/reopen through a second launch, and a second launch while the window is
@@ -86,6 +88,17 @@ A new state of the board gets an entry in the catalogue, with the codes it shows
 `expect` (the file's header explains them): `npm test` then checks it holds, and it is
 on the board for the next person. `npm run demo -- --still` keeps the board still:
 nothing is measured after the start, and no card goes stale for three hours.
+
+For README screenshots, use `npm run demo -- showcase --still`. Capture the cards and
+the analytics separately in English and Russian, with the same viewport and preferences.
+Keep a weekly window with its plan, forecast and a forecast label at the chart’s right
+edge in view. Update `docs/dashboard.png`, `docs/dashboard.ru.png`, `docs/analytics.png`
+and `docs/analytics.ru.png`, and refresh `docs/social-preview.png` with the current board.
+Keep the existing presentation: the README images sit in a browser-window frame on
+the coloured backdrop, with one card’s agents panel open; the social preview uses
+the tilted board beneath its title. Preserve the typography, proportions and backdrop
+when replacing the underlying screenshots, and compress the PNGs with pngquant.
+Use only the demo’s synthetic accounts and machines.
 
 `npm run bench` (after `npm run build`) runs such a still demo, opens Ana's board in
 headless Chrome and holds it to the budget in `hub/bench/budget.ts`: for two minutes

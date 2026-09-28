@@ -221,7 +221,7 @@ test('the table stays a table while its chosen columns fit the widget, and becom
   assert.equal(forecastLayout(['now'], 360), 'table', 'fewer columns, a table on a narrower widget');
   assert.equal(forecastLayout(LIVE_COLUMNS, 360), 'list');
   // A widget as wide as the board: the page's content is 1184 pixels, less the panel's border.
-  const view = {order: [], sizes: {}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
+  const view = {layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
   const shown = (columns: readonly ForecastColumn[]) => columns.filter(column => columnShown(view, FORECAST, column));
   assert.equal(forecastLayout(shown(LIVE_COLUMNS), 1182), 'table', 'every column on by default, on a widget as wide as the board');
   // As measured on the board, with the padding of the cells at the table's edges.

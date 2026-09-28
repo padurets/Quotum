@@ -13,6 +13,9 @@ whole team. You host it yourself, and it never touches your provider tokens.
 
 ![The Quotum dashboard](docs/dashboard.png)
 
+For one machine, [download the desktop app](#desktop-app) for Windows or Linux: no hub
+or account to set up. For several machines or a team, run the hub and agent below.
+
 **Quick start**
 
 ```sh
@@ -129,7 +132,9 @@ Codex         api                  idle     started 25m ago · editor
 - **Boards made of widgets** (a card per subscription, agent activity, the chart, the
   table, and a list of every running agent to turn on), like a dashboard in Grafana:
   the cards show what is left now, the analytics under them share one set of filters.
-  The owner of a board drags them around, makes them wider or narrower, names the cards,
+  The owner places them on a six-column grid by dragging their heads, and resizes them
+  to a third, a half, two thirds or the whole width. Each fills only the rows its content
+  needs, so cards stack beside a tall list. The owner names the cards,
   hides the ones they don't need (the data keeps coming) and sets the plans; everyone on
   the board sees it arranged the same way. Once it's set, a lock keeps the widgets from
   moving under a passing pointer.
@@ -144,6 +149,8 @@ Codex         api                  idle     started 25m ago · editor
   measured by several people is one card.
 
 The interface is available in English and Russian.
+
+![Agent activity, remaining limits and spending forecasts](docs/analytics.png)
 
 ## What I paid attention to
 
@@ -181,12 +188,12 @@ day, not a script thrown together over a weekend. In practice that meant:
   consumption. The agent says when its next measurement is due, so a sparse series isn't
   mistaken for a gap.
 - **Few moving parts.** The agent has nine direct dependencies. The hub is Fastify and
-  the SQLite built into Node, and the UI is plain React with about 100 KB of gzipped
+  the SQLite built into Node, and the UI is plain React with about 140 KB of gzipped
   JavaScript. There is no telemetry; the only requests the hub makes on its own are to
   the two reset trackers (or the mirror you name), every ten minutes, and
   `QUOTUM_RESETS=off` turns them off.
 - **Written down and tested.** The protocol between the agent and the hub is a spec
-  ([spec/ingest-v1.md](spec/ingest-v1.md)). About 180 tests cover the spending rules,
+  ([spec/ingest-v1.md](spec/ingest-v1.md)). Tests cover the spending rules,
   resets, duty, scheduling, permissions, sharing, device pairing, the clients' answers and the
   translations. The TypeScript is strict and the Rust passes `clippy`.
 
@@ -195,8 +202,9 @@ day, not a script thrown together over a weekend. In practice that meant:
 It works: I use it every day. The agent installs with one command, or runs through npm
 as `quotum`, with prebuilt binaries for Linux (x64 and arm64, any distribution), macOS
 and Windows; the hub is a Docker image (`ghcr.io/padurets/quotum-hub`, amd64 and arm64).
-A [desktop app](#desktop-app) for Windows and Linux is built and tested by CI but not
-released yet; autostart of the agent is next ([roadmap](#roadmap)).
+A [desktop app](#desktop-app) for Windows and Linux brings the agent, hub and board
+together on one machine. Automatic desktop updates and agent service registration
+are still ahead ([roadmap](#roadmap)).
 
 - Clients: Claude Code, Codex CLI, Antigravity CLI (`agy` 1.1.11 or newer).
 - Platforms: I run it on Linux. The macOS and Windows binaries are cross-compiled and
@@ -280,17 +288,40 @@ licences) and as a bare binary (`quotum-cli-<platform>`, what the installers and
 (`gh attestation verify <file> -R padurets/quotum`). **From source:**
 `cd agent && cargo build --release` (Rust 1.85 or newer) gives `target/release/quotum`.
 
+## Updating
+
+Before replacing the hub, stop it and back up its data directory (the Docker volume
+`quotum` in the examples). Start the new image with that same volume; it migrates the
+database automatically. A rollback needs the old image and the backup from before the
+upgrade: an older hub refuses a newer database layout.
+
+When upgrading from 0.3 to 0.4, subscription measurements, boards and settings remain.
+The old totals of agent work are replaced by per-session history: work time and
+forecasts based on it become available from the upgrade onward. The earlier limit
+history remains on the chart.
+
+On each machine, run `quotum update`, then restart the background agent with
+`quotum stop` and `quotum start` (or restart its service). With npm, use the latest
+`quotum` package. Update the hub first: older agents still deliver measurements to the
+new hub; the new agents follow its measuring schedule.
+
 ## Desktop app
 
 For one machine there is an app for Windows and Linux (macOS comes later): the agent of
 this machine, a hub of its own and its board in a window, with a tray icon. No account,
-no server. It has no release yet: the [Desktop workflow](.github/workflows/desktop.yml)
-builds every commit on `main` and in pull requests and keeps each installer as an
-artifact of the run (`quotum-desktop-<version>-<commit>-linux-x64.deb`, `.rpm`,
-`.AppImage`, `…-windows-x64-setup.exe` and `…-windows-x64-portable.zip`; downloading
-them takes a GitHub account). To build it yourself, see [CONTRIBUTING.md](CONTRIBUTING.md).
+no server. Download it from [Releases](https://github.com/padurets/quotum/releases/latest):
 
-- **Windows 10 and 11:** run `Quotum_<version>_x64-setup.exe`. It installs for you
+| System | Package |
+|---|---|
+| Windows x64 | `quotum-desktop-<version>-windows-x64-setup.exe` or `…-windows-x64-portable.zip` |
+| Linux x64 | `quotum-desktop-<version>-linux-x64.deb`, `.rpm` or `.AppImage` |
+
+The release includes `SHA256SUMS` and build provenance for these packages too.
+The [Desktop workflow](.github/workflows/desktop.yml) builds and smoke-tests the same
+packages on each pull request and on `main`; its development artifacts also carry the
+commit in their names. To build it yourself, see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+- **Windows 10 and 11:** run `quotum-desktop-<version>-windows-x64-setup.exe`. It installs for you
   alone, into `%LOCALAPPDATA%\Quotum`, with no administrator rights, and brings WebView2
   if Windows lacks it. The installer isn't signed yet, so SmartScreen asks first: *More
   info → Run anyway*.
@@ -328,15 +359,18 @@ command and the app share them.
   without the window. Turn it off in the settings, and do that before uninstalling. The
   entry names the AppImage or Windows portable EXE by its path: keep it where it is
   (after a move, turn start at login off and on again).
-- **A newer build** installs over the old one: quit the app first. For the portable
+- **Updates are manual.** Download the newer release and quit the app before installing
+  it over the old one. For the portable
   version, replace the whole extracted folder; your data stays in your Windows profile.
 - **With `quotum`.** One agent measures a machine. If `quotum` already does, the app
   asks once whether to take over. A `quotum` of this version then waits and goes on by
   itself when the app quits, so `quotum run` as a service keeps working; an older one
   stops (update it). A hub that `quotum` delivered to gets nothing from this machine
   while the app runs.
-- **Its data**, the board's history and the logs, is in
+- **Its data**, including the board's history, is in
   `%LOCALAPPDATA%\com.padurets.quotum` or `~/.local/share/com.padurets.quotum`.
+  The logs are in `%LOCALAPPDATA%\com.padurets.quotum\logs` on Windows and
+  `~/.cache/com.padurets.quotum/logs` on Linux.
 - **What leaves the machine:** nothing but the reset announcements the board reads from
   Codex Resets and Claude Resets, as every hub does (`QUOTUM_RESETS=off` in the app's
   environment turns that off). Its hub listens on `127.0.0.1` alone, behind a key only
@@ -449,29 +483,49 @@ hub's image.
 
 ### Releasing
 
-Set the new version in `agent/Cargo.toml` (`[workspace.package]`), `desktop/Cargo.toml`
-and `hub/package.json`, let the lock files follow, push the commit, then tag it with the release notes as the
-tag's message. A release that brings a new database layout step also adds its hash to
-`RELEASED` in `hub/server/test/schema.test.ts` in that commit: from then on the step
-never changes.
+Prepare a release branch and a pull request into `main`. Set the new version in
+`agent/Cargo.toml` (`[workspace.package]`), `desktop/Cargo.toml` and `hub/package.json`,
+then update their lock files. The npm package template stays at `0.0.0`:
+`npm/build.mjs` sets the published packages' version from the agent's manifest.
+Add the hashes of any new database layout steps to `RELEASED` in
+`hub/server/test/schema.test.ts`; every step shipped by a release is frozen.
+Refresh the README screenshots in both languages from the demo board, check the upgrade
+instructions and prepare the release notes outside the repository.
+
+For example, to prepare 0.4.0 on that branch:
 
 ```sh
-(cd hub && npm version 0.2.0 --no-git-tag-version)   # package.json and package-lock.json
-# agent/Cargo.toml and desktop/Cargo.toml: version = "0.2.0"
-(cd agent && cargo check)                            # Cargo.lock
-(cd desktop && cargo metadata --format-version 1 >/dev/null)   # its Cargo.lock, with no build
-git commit -am "Version 0.2.0" && git push origin main
-git tag -a v0.2.0 -F notes.md --cleanup=verbatim   # annotated, its message kept whole: the release notes
-git push origin v0.2.0
+(cd hub && npm version 0.4.0 --no-git-tag-version)
+# agent/Cargo.toml and desktop/Cargo.toml: version = "0.4.0"
+(cd agent && cargo metadata --format-version 1 >/dev/null)
+(cd desktop && cargo metadata --format-version 1 >/dev/null)
+```
+
+Run the [full checks](CONTRIBUTING.md#checking-a-change), including the dashboard
+benchmark, and wait for CI and Desktop checks. The maintainer approves and squash-merges
+the pull request. Wait for the checks on the resulting `main` commit too: that is the
+commit to tag. Only after the maintainer approves that specific release:
+
+```sh
+git fetch origin
+git switch main
+git pull --ff-only origin main
+git tag -a v0.4.0 -F /path/to/release-notes.md --cleanup=verbatim
+git push origin v0.4.0
 ```
 
 [release.yml](.github/workflows/release.yml) refuses a tag that is not annotated or
-whose version differs from any of those six files. It checks everything again, builds
-the agent for every platform, publishes the hub's image and the npm packages, and
-creates the GitHub release with the binaries. npm accepts the packages from that workflow alone,
-without a token (trusted publishing). A new npm package, for a new platform, is
-published once by hand and then trusted with `node npm/trust.mjs`. npm trusts the
-repository by its name: after renaming it, run that again, and it replaces the old trusts.
+whose version differs from any of those six files. The tag's message becomes the
+release notes. The workflow checks the code again, builds the agent for every platform
+and runs the desktop packages through their installation and smoke checks. Only after
+all binaries are ready does it publish the hub's image and npm packages, then create
+the GitHub release with the CLI and desktop downloads, checksums and provenance.
+A tag publishes packages and images; an npm version cannot be reused.
+
+npm accepts the packages from that workflow alone, without a token (trusted publishing).
+A new npm package, for a new platform, is published once by hand and then trusted with
+`node npm/trust.mjs`. npm trusts the repository by its name: after renaming it, run that
+again, and it replaces the old trusts.
 
 ### Adding a language
 
@@ -485,7 +539,7 @@ language has is there.
 
 1. A team view on shared boards: people × providers at a glance.
 2. Autostart: a systemd user service, launchd, Windows.
-3. Releases of the desktop app with installers, then the app on macOS.
+3. Automatic updates of the desktop app, then the app on macOS.
 
 ## Credits and license
 

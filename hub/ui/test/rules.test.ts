@@ -12,7 +12,7 @@ import {boardState, cardId, isWindowHidden} from '../lib/view';
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const now = Date.parse('2026-09-24T12:00:00Z');
-const EMPTY: View = {order: [], sizes: {}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
+const EMPTY: View = {layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
 
 test('a reset announced or possible outranks one that happened, which outranks a change of limits', () => {
   const event = (at: number) => ({url: 'https://codex-resets.com/', text: '', at});

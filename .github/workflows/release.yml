@@ -1,10 +1,11 @@
 name: Release
 
-# An annotated version tag (`git tag -a v0.2.0`) releases everything from one commit:
+# An annotated version tag (`git tag -a v0.4.0`) releases everything from one commit:
 #   - the agent on a GitHub release, with checksums and build provenance: archives
 #     (quotum-cli-<version>-<platform>) for people, and bare binaries
 #     (quotum-cli-<platform>) with the installers (install.sh, install.ps1) for
 #     `curl … | sh`, PowerShell and `quotum update`, which fetch one file each;
+#   - the desktop app for Linux and Windows, built and smoke-tested by desktop.yml;
 #   - the hub's image ghcr.io/<owner>/quotum-hub for linux/amd64 and linux/arm64;
 #   - the npm packages `quotum` and `@quotum/<platform>`, published without any token:
 #     npm trusts this workflow's `npm` job (trusted publishing, bound to the `npm`
@@ -59,6 +60,10 @@ jobs:
             if [ "$(git cat-file -t "$GITHUB_REF")" != tag ]; then echo "::error::$GITHUB_REF_NAME is a lightweight tag; use git tag -a"; exit 1; fi
           fi
           echo "version=$agent" >> "$GITHUB_OUTPUT"
+
+  desktop:
+    needs: [checks, version]
+    uses: ./.github/workflows/desktop.yml
 
   # The same recipe as a local `node npm/build.mjs`: every platform cross-compiled
   # with cargo-zigbuild, Linux ones static.
@@ -124,6 +129,45 @@ jobs:
           name: npm
           path: npm-dist.tgz
 
+  assets:
+    needs: [version, agent, desktop]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release
+          path: release
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: desktop-release-*
+          merge-multiple: true
+          path: release
+      - name: Complete release checksums
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          cd release
+          for package in linux-x64.deb linux-x64.rpm linux-x64.AppImage windows-x64-setup.exe windows-x64-portable.zip; do
+            test -s "quotum-desktop-$VERSION-$package"
+          done
+          sha256sum -- quotum-cli-* install.sh install.ps1 quotum-desktop-* > SHA256SUMS
+          sha256sum --check SHA256SUMS
+      - if: github.ref_type == 'tag'
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            release/quotum-desktop-*
+            release/SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-complete
+          path: release
+          if-no-files-found: error
+
   npm:
     needs: [agent, image]
     runs-on: ubuntu-latest
@@ -144,7 +188,7 @@ jobs:
       - run: node npm/publish.mjs ${{ env.PUBLISH != 'true' && '--dry-run' || '' }}
 
   image:
-    needs: [checks, version]
+    needs: [version, assets]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -188,7 +232,7 @@ jobs:
 
   release:
     if: github.ref_type == 'tag'
-    needs: [version, agent, npm, image]
+    needs: [version, assets, npm, image]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -196,7 +240,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
-          name: release
+          name: release-complete
           path: release
       - name: GitHub release
         env:

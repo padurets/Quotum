@@ -27,7 +27,7 @@ import {cadenceOf, dotOf, level, resetLine, titled, windowName} from '../../ui/l
 import {resetLabel, type Resets, type TrackerHealth} from '../../ui/lib/resets.js';
 import {ANALYTICS_KINDS, type History, type LiveSession, type Pace, type View} from '../../ui/lib/types.js';
 import type {Snapshot} from '../../ui/lib/board.js';
-import {ACTIVITY, AGENTS, boardState, cardId, columnShown, FORECAST, HISTORY, isHidden, isWindowHidden, planOf, spanOf} from '../../ui/lib/view.js';
+import {ACTIVITY, AGENTS, boardState, cardId, columnShown, FORECAST, HISTORY, isHidden, isWindowHidden, planOf} from '../../ui/lib/view.js';
 import {SCENES, SETS} from '../catalogue.js';
 import {
   awake,
@@ -221,10 +221,10 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
   if (entry.kind === 'person' || entry.kind === 'board') {
     const overview = await reading.overview(entry.id);
     if ('tableLayout' in check) {
-      // On a screen wide enough for the whole board: twelve columns of 84 pixels and gaps of 16, less the panel's border.
-      const span = spanOf(overview.view, FORECAST);
+      // On a screen wide enough for the whole board: six columns of 184 pixels and gaps of 16, less the panel's border.
+      const span = overview.view.layout.places[FORECAST]?.w ?? 6;
       const columns = LIVE_COLUMNS.filter(column => columnShown(overview.view, FORECAST, column));
-      return {tableLayout: forecastLayout(columns, span * 84 + (span - 1) * 16 - 2)};
+      return {tableLayout: forecastLayout(columns, span * 184 + (span - 1) * 16 - 2)};
     }
     if ('activity' in check || 'activityOf' in check || 'activityTotals' in check || 'activityKnownFrom' in check || 'activityEmpty' in check) {
       if (isHidden(overview.view, ACTIVITY)) return `the activity widget is hidden on the board ${entry.id}`;
@@ -542,6 +542,13 @@ test('every entry of the whole catalogue shows what it claims for twelve hours',
     await live.measure(at, start + at);
     const reading = new Reading(stand, start + at, await told(hubs));
     wrong.push(...(await checkAll(stand, entries, reading, at, checked)));
+    if (set.id === 'all' && at === 0) {
+      const {layout} = (await reading.overview('grid')).view;
+      assert.deepEqual(layout.places.agents, {x: 0, y: 0, w: 3});
+      for (const [i, id] of ['claude-max', 'codex-pro', 'antigravity'].entries()) {
+        assert.deepEqual(layout.places[cardId(stand.sources.get(id)!)], {x: 3, y: i, w: 3});
+      }
+    }
     previous = at;
   }
 
@@ -627,7 +634,7 @@ test('the activity example puts two working agents above recent and morning work
     await live.measure(at, start + at);
     const reading = new Reading(stand, start + at, new Map([[set.scene, await hub.told()]]));
     assert.deepEqual(await checkAll(stand, set.entries, reading, at, checked), []);
-    assert.equal((await reading.overview('compact')).view.sizes.agents, 4);
+    assert.equal((await reading.overview('compact')).view.layout.places.agents.w, 2);
     if (at >= 2 * MIN) {
       const overview = await reading.overview('ana');
       assert.deepEqual(agentRows(overview.sources, overview.view).rows.map(r => r.session.project),

@@ -462,7 +462,7 @@ test('a board the hub cannot work out fails alone: its readers start over, a new
   t.after(() => (letGo(), h.app.close()));
   const personal = await h.person('alice');
   const team = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
-  await h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {order: ['history']}});
+  await h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {layout: {columns: 6, places: {history: {x: 0, y: 0, w: 6}}}}});
   const own = await reading(h, 'alice', personal);
   const broken = await reading(h, 'alice', team);
   t.after(() => [own, broken].forEach(s => s.close()));
@@ -500,7 +500,7 @@ test('a stream its reader stopped reading is let go once it falls too far behind
   // A board changing fast, with a large view: what waits for the reader grows past what the socket holds.
   for (let i = 0; i < 600 && h.events.readers; i++) {
     const order = Array.from({length: 120}, (_, k) => `source:${i}-${k}-`.padEnd(120, 'x'));
-    await h.call('POST', `/api/boards/${board}/view`, {as: 'alice', body: {order}});
+    assert.equal((await h.call('POST', `/api/boards/${board}/view`, {as: 'alice', body: {layout: {columns: 6, places: Object.fromEntries(order.map((id, y) => [id, {x: 0, y, w: 6}]))}}})).status, 200);
     await new Promise(resolve => setTimeout(resolve, 15));
   }
   assert.equal(h.events.readers, 0);
@@ -937,7 +937,7 @@ test('every change a reader sees is told: what each request touches reaches the 
     ],
     ['a project renamed', () => h.call('POST', '/api/projects', {as: 'alice', body: {groups: ['quotum'], name: 'Quotum'}}), ['sessions'], ['sessions'], []],
     ['a project given its name back', () => h.call('POST', '/api/projects/restore', {as: 'alice', body: {reported: ['quotum']}}), ['sessions'], ['sessions'], []],
-    ['a view saved', () => h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {order: ['history']}}), [], ['view'], []],
+    ['a view saved', () => h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {layout: {columns: 6, places: {history: {x: 0, y: 0, w: 6}}}}}), [], ['view'], []],
     ['a board renamed', () => h.call('POST', `/api/boards/${team}`, {as: 'alice', body: {name: 'Crew'}}), ['boards'], ['board', 'boards'], ['boards']],
     ['a board made', () => h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Solo'}}), ['boards'], ['boards'], []],
     ['a name changed', () => h.call('POST', '/api/account', {as: 'alice', body: {name: 'Alicia'}}), ['card'], ['card'], []],
@@ -972,15 +972,15 @@ test('all of a board’s history is news when whose agents’ work it shows, or 
   const all = {sources: [source], since: 0};
   const history = async () => (await s.within()).filter(e => e.type === 'history').map(e => e.data);
 
-  await h.call('POST', `/api/boards/${board}/view`, {as: 'alice', body: {hidden: [`source:${source}`]}});
+  await h.call('POST', `/api/boards/${board}/view`, {as: 'alice', body: {layout: {columns: 6, places: {}}, hidden: [`source:${source}`]}});
   assert.deepEqual(await history(), [all], 'a card hidden: its work is off the board');
-  await h.call('POST', `/api/boards/${board}/view`, {as: 'alice', body: {}});
+  await h.call('POST', `/api/boards/${board}/view`, {as: 'alice', body: {layout: {columns: 6, places: {}}}});
   assert.deepEqual(await history(), [all], 'and shown again');
   await h.call('POST', '/api/projects', {as: 'alice', body: {groups: ['quotum'], name: 'Quotum'}});
   assert.deepEqual(await history(), [all], 'a project renamed');
   await h.call('POST', `/api/devices/${laptop}`, {as: 'alice', body: {name: 'Book'}});
   assert.deepEqual(await history(), [all], 'a machine renamed');
-  await h.call('POST', `/api/boards/${board}/view`, {as: 'alice', body: {order: ['history']}});
+  await h.call('POST', `/api/boards/${board}/view`, {as: 'alice', body: {layout: {columns: 6, places: {history: {x: 0, y: 0, w: 6}}}}});
   assert.deepEqual(await history(), [], 'the widgets moved: the work it shows is the same');
 });
 
