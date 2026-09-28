@@ -710,6 +710,16 @@ command's response before issuing the next; quitting and reentry do not wait in 
 A change made in the file by hand is
 picked up within seconds.
 
+## Releases
+
+An annotated version tag runs `.github/workflows/release.yml` from that commit. It
+checks the shared version, runs CI, builds the CLI, and calls `desktop.yml` for the
+Linux and Windows packages and their installation and smoke checks. The complete set
+of binaries is assembled with one `SHA256SUMS` before the hub image or npm packages
+are published. CLI and desktop downloads have build provenance; the tag's message is
+the GitHub release's description. The desktop app is updated by downloading and
+installing a newer package; it has no automatic updater yet.
+
 ## Roadmap
 
 1. ~~Ingest format, the agent (three providers, schedule, spool), hub ingest.~~
@@ -725,5 +735,5 @@ picked up within seconds.
    latest version is read from where `releases/latest` redirects, one request with no
    API behind it.~~ Next: autostart registration.
 7. ~~The desktop app for Windows and Linux: the agent, its own hub and board,
-   tray and settings, built and tested by CI.~~ Next: its releases and installers, then
+   tray and settings, built and tested by CI.~~ Next: automatic updates, then
    macOS.
