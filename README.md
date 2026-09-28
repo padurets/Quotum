@@ -138,8 +138,8 @@ Codex         api                  idle     started 25m ago · editor
   a bottom corner) to make it taller, or the list of agents shorter: the charts grow
   with it, a card never gets shorter than its content, and a shorter list ends with how
   many more agents run, which opens them all. Either side edge changes the width. A
-  double click on the bottom edge, or Enter on it, gives a widget back the height of its
-  content. The owner names the cards,
+  double click on the bottom edge or a bottom corner, or Enter or Space on the bottom
+  edge, gives a widget back the height of its content. The owner names the cards,
   hides the ones they don't need (the data keeps coming) and sets the plans; everyone on
   the board sees it arranged the same way. Once it's set, a lock keeps the widgets from
   moving under a passing pointer.

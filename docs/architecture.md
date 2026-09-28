@@ -529,8 +529,8 @@ more, back to them when it needs less, without the view changing. Both charts gi
 chosen height to their plot, never drawing it lower than they do by themselves, their
 heads, totals and legends whole. The list of agents can be shorter than its rows: it
 shows the most whole rows that fit, in its own order, and a last row saying how many
-more, which opens them all in a dialog; the rows it leaves out are laid out unseen
-beside it, without their running times, to be measured. Such a widget tells the grid
+more, which opens them all in a dialog; to know how many fit, it lays all its rows out
+unseen beside it, their running times standing still. Such a widget tells the grid
 through a context of its own (`ui/components/sizing.ts`) the least it can show and what
 it needs whole, and reads how tall it is to be; only these read it, so a neighbour's
 height renders none of them. Widgets float up within their columns without stretching
@@ -540,8 +540,9 @@ its top-left corner against the original layout: it goes after widgets whose top
 above that row, taking an occupied slot unless its neighbour can rise into the place
 it left. Neighbours move down, never sideways. Widths snap to a third, a half, two
 thirds or the whole grid, by the left or the right edge, the other one staying; widened
-by its left edge a widget keeps its row, and what it covers there goes after it, as the
-right edge sends its neighbour down. Heights snap to whole rows, by the bottom edge; both
+by its left edge a widget keeps its row unless a widget above reaches into the columns it
+takes, and what it covers there goes after it, as the right edge sends its neighbour
+down. Heights snap to whole rows, by the bottom edge; both
 by either bottom corner. The top has no edge: a widget floats up to what is above it, so
 its top has no place of its own to pull, and it is moved by its head. The edges are not
 drawn: each is a strip along its whole length in the gap beside it, with the cursor of
