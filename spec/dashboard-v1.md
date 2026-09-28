@@ -62,13 +62,14 @@ change as it was.
 | `event` | `data` | When |
 |---|---|---|
 | `hello` | `{epoch, now, client, heartbeatMs}` | First. `epoch`: when this start of the hub began, base 36. `now`: the hub's clock. `client`: the path of the page's entry script the hub serves (`/assets/index-<hash>.js`), null without a build. `heartbeatMs`: 25000. |
-| `snapshot` | `{board, view, historyStart, sources, sessions, cadence, mine, boards, resets}` | Second: the board for this reader. |
+| `snapshot` | `{board, view, historyStart, sources, sessions, cadence, refresh, mine, boards, resets}` | Second: the board for this reader. |
 | `board` | `{board: {id, name, personal}}` | The board was renamed. |
 | `view` | `{view}` | The board's view was saved. |
 | `lineup` | `{sources: string[]}` | The board's sources, in order, changed. |
 | `card` | a card | A source's state changed. |
 | `sessions` | `{id, sessions}` | The agents running on a source, on the machines of its people on this board, changed. |
 | `cadence` | `{id, cadence}` | When a source is measured next, or why, changed. |
+| `refresh` | `{id, refresh}` | A source’s refresh availability, request or cooldown changed. |
 | `mine` | `{sources: string[]}` | Which sources of the board the reader's devices measure changed. |
 | `boards` | `{boards}` | The reader's boards changed: made, deleted, renamed, joined, left. |
 | `history` | `{sources: string[], since}` | These sources have measurements taken at `since` or later that the chart has not shown; with `since` 0, all of the board's history reads otherwise: whose agents' work it shows, or under which names, changed (a card hidden or shown, someone joining or leaving, a project or a machine renamed). |
@@ -76,8 +77,8 @@ change as it was.
 | `ping` | `{now}` | Every `heartbeatMs`, with the hub's clock. |
 | `bye` | `{reason}` | Last: the hub lets the reader go (see below). |
 
-In a `snapshot`, `sources` are the cards of the board's sources in its order; `sessions`
-and `cadence` are by source id, for those sources only. `board` is `{id, name,
+In a `snapshot`, `sources` are the cards of the board's sources in its order; `sessions`,
+`cadence` and `refresh` are by source id, for those sources only. `board` is `{id, name,
 personal}`; the reader's role is in `boards`, each `{id, name, personal, role}`, as it is
 theirs alone. `resets` is what `GET /api/resets` answers. `historyStart` is when the
 board's history begins as of the snapshot; `GET /api/history` tells it later.
@@ -90,7 +91,7 @@ numbers get too old.
 
 Each event carries its part whole; the page puts it in place of what it had. What changes
 at the same moment goes out together, in this order: `board`, `view`, the sources'
-`card`, `sessions` and `cadence` (sources new to the board before `lineup`), `lineup`,
+`card`, `sessions`, `cadence` and `refresh` (sources new to the board before `lineup`), `lineup`,
 `mine`, `boards`, `history`, `resets`. A part goes out only when it differs from what the
 reader last got; a change reaches the page within a tenth of a second. What changes with
 time alone (a card going stale, a machine's list of agents no longer shown, a holder
@@ -104,6 +105,67 @@ falling silent, a past reset leaving the history) goes out when it does.
 | `gone` | The board was deleted, or the reader is no longer on it. | Opens another board. |
 | `restart` | The hub stops, or could not work out the board. | Connects again in a few seconds. |
 | `limit` | A newer reader took its place, or it fell 256 KiB behind. | Connects again, not sooner than in 30 seconds. |
+
+## Requesting fresh limits
+
+```
+POST /api/boards/<board>/sources/<source>/refresh
+```
+
+No body is needed. Any signed-in reader of that source on that board may ask, including
+members who do not own the subscription and the desktop app's local reader. The usual
+Host, Origin and session checks apply before the board and source are checked.
+
+| Status | Body | Meaning |
+|---|---|---|
+| 202 | `{ok:true}` | Accepted, or joined the same unfinished request. |
+| 429 | `{error:"refresh_too_soon"}` | A new request was accepted less than a minute ago; `Retry-After` is seconds rounded up. |
+| 409 | `{error:"refresh_unavailable"}` | No device can fulfil a new request now. |
+| 401 | `{error:"unauthorized"}` | No session. |
+| 404 | `{error:"board_not_found"}` or `{error:"not_found"}` | No access to the board, or the source is not on it. |
+
+One request and one cooldown belong to the subscription across the hub. A retry after a
+lost HTTP answer joins the unfinished request without extending it. The POST does not
+wait for a measurement and carries no state: only snapshots and events replace state,
+so a late POST response cannot undo a result already received.
+
+`refresh` is `{unavailable, availableAt, retryAt, request}`. `unavailable` is null, or
+`no_device`, `unsupported`, `silent`, `paused`; `availableAt` is the end of a known error
+pause, otherwise null. `retryAt` is the end of a still-active one-minute cooldown,
+otherwise null. These describe the ability to create a NEW request.
+
+`request` is null or `{requestedAt, notBefore, dispatchAt, deadline, status, finishedAt}`.
+All times are epoch milliseconds on the hub. `dispatchAt` and `finishedAt` may be null.
+`notBefore` is the earliest permitted measurement time, not proof of a client starting.
+
+| Status | Meaning |
+|---|---|
+| `queued` | Waiting for the device's permitted interval and check-in. |
+| `waiting` | A measurement has been asked for; waiting for fresh data. |
+| `updated` | A newer accepted measurement met the freshness boundary, even with unchanged percentages. |
+| `failed` | A relevant new failure came from the bound device. Previous limits may still be representative. |
+| `unavailable` | The request lost its executor or became impossible. |
+| `no_result` | No fresh data arrived before the deadline. This says nothing about whether the client started. |
+
+Before dispatch the deadline is five minutes after `notBefore`; after dispatch, five
+minutes after the command. Joining an outstanding command waits five minutes after the
+request, with no extension on retries. Silence over 120 seconds ends a queued request;
+a dispatched request keeps waiting until its deadline, since providers are measured
+sequentially. Its `unavailable` can therefore be `silent` while it is still `waiting`.
+Lease expiry, revocation, a changed holder, a return to the legacy protocol and an error
+pause still end it. Terminal results remain for one minute; an allowed new request can
+replace one immediately. The state is in memory and resets with the hub.
+
+A success must be newer than the success at acceptance and no earlier than 30 seconds
+before the request (or the original command when joining one already outstanding), using
+ingest's corrected clock. It may arrive from another device of the same subscription.
+There is no request id in ingest and no assertion that this click caused that particular
+measurement. After a terminal outcome, late data update the usual card only.
+
+Snapshots, SSE and long polls expose the same state to every reader of the subscription.
+Time boundaries emit events without page polling. No requester identity, device id or
+device name is exposed by refresh state, and no state is returned before board access
+is checked.
 
 ## The board at once
 

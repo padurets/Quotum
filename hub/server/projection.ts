@@ -1,3 +1,4 @@
+import type {Refresh} from './domain/refresh.js';
 import {config} from './config.js';
 import type {Ingest} from './ingest.js';
 import type {ResetFeed, TrackerHealth} from './resets.js';
@@ -30,7 +31,7 @@ export type Card = SourceState & {owners: string[]; stale: boolean};
 export type Cadence = {next: number; why: Why} | null;
 
 export type BoardPart = {board: {id: string; name: string; personal: boolean}; view: View; lineup: string[]};
-export type SourcePart = {card: Card; sessions: BoardSession[]; cadence: Cadence};
+export type SourcePart = {card: Card; sessions: BoardSession[]; cadence: Cadence; refresh: Refresh};
 export type ReaderPart = {mine: string[]; boards: Board[]};
 export type HubPart = {resets: Partial<Record<ResetProvider, ResetStatus>>; trackers: TrackerHealth[]; past: Record<string, Announcement[]>};
 
@@ -40,6 +41,7 @@ export type Snapshot = Omit<BoardPart, 'lineup'> & {
   sources: Card[];
   sessions: Record<string, BoardSession[]>;
   cadence: Record<string, Cadence>;
+  refresh: Record<string, Refresh>;
 } & ReaderPart & {resets: HubPart};
 
 /** The first of several moments, null when there is none. */
@@ -86,10 +88,11 @@ export class Projection {
     const stale = state.successAt === null || state.staleAfterMs === null || now - state.successAt > state.staleAfterMs;
     const card: Card = {...state, owners: source.holders.flatMap(id => members.get(id) ?? []).sort(), stale};
     const people = source.holders.filter(id => members.has(id));
+    const refresh = ingest.refresh(source.id, now);
     const cadence = ingest.nextMeasurement(source.id, source.account, now);
     return {
-      value: {card, sessions: ingest.live.of(source.id, people, now), cadence: cadence.value},
-      changesAt: earliest(stale ? null : state.successAt! + state.staleAfterMs! + 1, ingest.live.ofChangesAt(source.id, people, now), cadence.changesAt),
+      value: {card, sessions: ingest.live.of(source.id, people, now), cadence: cadence.value, refresh: refresh.value},
+      changesAt: earliest(stale ? null : state.successAt! + state.staleAfterMs! + 1, ingest.live.ofChangesAt(source.id, people, now), cadence.changesAt, refresh.changesAt),
     };
   }
 
@@ -126,6 +129,7 @@ export class Projection {
       sources: sources.map(s => s.card),
       sessions: Object.fromEntries(lineup.map((s, i) => [s.id, sources[i].sessions])),
       cadence: Object.fromEntries(lineup.map((s, i) => [s.id, sources[i].cadence])),
+      refresh: Object.fromEntries(lineup.map((s, i) => [s.id, sources[i].refresh])),
       mine: this.mine(user, lineup),
       boards: this.boards(user),
       resets: this.hubPart(now).value,

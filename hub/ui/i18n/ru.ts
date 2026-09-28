@@ -2,6 +2,27 @@ import type {Catalog} from './index';
 
 /** Русский. Разница двух долей лимита тоже в «%»: всё здесь — доля лимита. */
 export const ru = {
+  'api.refresh_too_soon': 'Между новыми запросами обновления должна пройти минута',
+  'api.refresh_unavailable': 'Сейчас ни одно устройство не может измерить эту подписку',
+  'refresh.nextCheckin': 'Ждём, когда устройство выйдет на связь',
+  'refresh.retry': 'Новый запрос через {time}',
+  'refresh.action': 'Обновить лимиты',
+  'refresh.ready': 'Запросить свежие лимиты',
+  'refresh.queued': 'Ждём разрешённого устройством интервала',
+  'refresh.waiting': 'Ожидаем свежие данные',
+  'refresh.updated': 'Свежие данные получены',
+  'refresh.failed': 'Замер завершился ошибкой',
+  'refresh.unavailable': 'Устройство больше не может выполнить запрос',
+  'refresh.no_result': 'Свежие данные пока не получены',
+  'refresh.no_device': 'Сейчас нет дежурного устройства',
+  'refresh.unsupported': 'Устройство не следует темпу хаба',
+  'refresh.silent': 'Устройство перестало выходить на связь',
+  'refresh.paused': 'Замеры приостановлены после ошибки',
+  'refresh.after': 'Замер разрешён через {time}',
+  'refresh.offline': 'Ожидаем соединения с хабом',
+  'refresh.sending': 'Запрашиваем свежие данные…',
+  'refresh.uncertain': 'Ответ не получен. Хаб мог принять запрос.',
+
   'common.offline': 'Нет связи с хабом',
   'common.close': 'Закрыть',
   'common.copy': 'Копировать',

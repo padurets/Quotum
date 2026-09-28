@@ -1,3 +1,4 @@
+export type {Refresh, RefreshRequest} from '../../server/domain/refresh';
 /** A window's length as the agent classifies it. */
 export type Kind = 'session' | 'weekly' | 'other';
 

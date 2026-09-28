@@ -1,0 +1,400 @@
+import {test, type TestContext} from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtempSync, rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import {Cadence, type Signals} from '../cadence.js';
+import {Duty} from '../duty.js';
+import {Ingest, type Credential} from '../ingest.js';
+import {newSecret} from '../domain/auth.js';
+import {Store} from '../store/store.js';
+import {Directory} from '../store/directory.js';
+import {Projection} from '../projection.js';
+import {ResetFeed} from '../resets.js';
+import {Events, type Frame} from '../events.js';
+import {buildApp} from '../api.js';
+import {Pairing} from '../pairing.js';
+import {Setup} from '../setup.js';
+
+const T = Date.parse('2026-09-28T00:00:00Z');
+const MIN = 60_000;
+const ACCOUNT = 'a1b2c3d4e5f6a1b2c3d4e5f6';
+const iso = (at: number) => new Date(at).toISOString();
+
+function hub(t: TestContext) {
+  const folder = mkdtempSync(path.join(tmpdir(), 'quotum-refresh-'));
+  const store = new Store(path.join(folder, 'db.sqlite'), T);
+  t.after(() => {
+    store.close();
+    rmSync(folder, {recursive: true});
+  });
+  const directory = new Directory(store.db);
+  const duty = new Duty();
+  const cadence = new Cadence();
+  const ingest = new Ingest(store, directory, duty, cadence);
+  const user = directory.createUser('a@example.com', 'Alice', 'x', T);
+  const board = directory.boards(user.id)[0].id;
+  const secret = newSecret('qt_m');
+  const token = directory.createToken(secret, '…', user.id, 'test', T);
+  const credential = ingest.authenticate(`Bearer ${secret}`) as Credential;
+  const agent = (name: string) => ({version: 1, agent: 'quotum/0.4.0', machine: {id: `${name}-0123456789abcd`, name, os: 'linux', arch: 'x86_64'}});
+  const source = () => store.findSource('codex', ACCOUNT)!;
+  const ask = (at: number, minimum = MIN, name = 'laptop', paced = true) =>
+    ingest.checkin(
+      credential,
+      {
+        ...agent(name),
+        paced,
+        subscriptions: [{provider: 'codex', account: ACCOUNT, active: false, minIntervalMs: minimum}],
+      },
+      T + at,
+    ).subscriptions[0];
+  const deliver = (at: number, options: {observed?: number; name?: string; failure?: string; used?: number; stale?: number} = {}) => {
+    const observedAt = iso(T + (options.observed ?? at));
+    return ingest.accept(
+      credential,
+      {
+        ...agent(options.name ?? 'laptop'),
+        sentAt: iso(T + at),
+        snapshots: options.failure
+          ? []
+          : [
+              {
+                provider: 'codex',
+                account: ACCOUNT,
+                observedAt,
+                via: 'codex/app-server',
+                staleAfterMs: options.stale ?? 3_600_000,
+                windows: [{id: 'weekly', kind: 'weekly', usedPercent: options.used ?? 50}],
+              },
+            ],
+        failures: options.failure ? [{provider: 'codex', error: options.failure, observedAt}] : [],
+      },
+      T + at,
+    );
+  };
+  const refresh = (at: number) => ingest.refresh(source(), T + at).value;
+  const request = (at: number) => ingest.requestRefresh(source(), T + at);
+  const device = (name = 'laptop') => directory.deviceByMachine(user.id, agent(name).machine.id)!.id;
+  const resets = new ResetFeed(undefined, () => {});
+  const parts = {store, directory, ingest, resets};
+  const projection = new Projection(parts);
+  return {
+    store,
+    directory,
+    duty,
+    cadence,
+    ingest,
+    user,
+    board,
+    credential,
+    secret,
+    token,
+    ask,
+    deliver,
+    source,
+    refresh,
+    request,
+    device,
+    parts,
+    projection,
+    agent,
+  };
+}
+
+test('refresh shortens the automatic wait, with one command and the same automatic promise', t => {
+  const h = hub(t);
+  h.ask(0);
+  h.deliver(0);
+  assert.equal(h.request(10_000).status, 'accepted');
+  const queued = h.refresh(10_000).request!;
+  assert.equal(queued.status, 'queued');
+  assert.equal(queued.notBefore, T + MIN);
+  assert.equal(h.ask(MIN - 1).measure, false);
+  assert.deepEqual(h.ask(MIN), {provider: 'codex', measure: true, onDuty: true, askInMs: 15_000, nextInMs: 4 * MIN, until: iso(T + MIN + 15_000)});
+  assert.equal(h.request(MIN + 1).status, 'accepted');
+  assert.equal(h.refresh(MIN + 1).request?.requestedAt, T + 10_000);
+  assert.equal(h.ask(MIN + 1).measure, false);
+  h.deliver(MIN + 2);
+  assert.equal(h.refresh(MIN + 2).request?.status, 'updated', 'unchanged percentages still count');
+  assert.equal(h.request(69_999).status, 'too_soon');
+  assert.equal(h.request(70_000).status, 'accepted');
+});
+
+test('queued refresh follows changed device minima in both directions, and the normal path respects a raised floor', t => {
+  const h = hub(t);
+  h.ask(0);
+  h.deliver(0, {stale: 132_000});
+  h.request(10_000);
+  assert.equal(h.ask(15_000, 5 * MIN).measure, false);
+  assert.equal(h.refresh(15_000).request?.notBefore, T + 5 * MIN);
+  assert.equal(h.ask(30_000, 2 * MIN).measure, false);
+  assert.equal(h.refresh(30_000).request?.notBefore, T + 2 * MIN);
+  assert.equal(h.ask(2 * MIN - 1, 2 * MIN).measure, false);
+  assert.equal(h.ask(2 * MIN, 2 * MIN).measure, true);
+  h.deliver(2 * MIN);
+  assert.equal(h.ask(4 * MIN, 10 * MIN).measure, false, 'old promise cannot override a raised floor');
+});
+
+for (const manual of [false, true])
+  test(`old accepted data cannot acknowledge a command or bypass retries, refresh=${manual}`, t => {
+    const h = hub(t);
+    h.ask(0);
+    h.deliver(0, {used: 95, stale: 132_000});
+    assert.equal(h.ask(MIN).measure, true);
+    if (manual) h.request(61_000);
+    assert.equal(h.deliver(65_000, {observed: 10_000, used: 95, stale: 132_000}).accepted, 1);
+    for (const at of [75_000, 149_999]) assert.equal(h.ask(at).measure, false);
+    assert.equal(h.ask(150_000).measure, true);
+    if (manual) {
+      assert.equal(h.refresh(150_000).request?.status, 'unavailable', 'the old snapshot lease expires before the retry');
+      assert.equal(h.refresh(150_000).request?.deadline, T + 361_000, 'retry never extends request deadline');
+    }
+  });
+
+test('answer timestamp tolerance and success after a failure protect the shared producer', () => {
+  const signals: Signals = {windows: [], inUse: false};
+  for (const failure of [false, true])
+    for (const delta of [30_000, 30_001]) {
+      const c = new Cadence();
+      c.answer('s', 'd', 'codex', T, MIN, signals);
+      if (failure) c.failed('s', 'd', 'failed', T - delta);
+      else c.delivered('s', 'd', [], T - delta, 132_000, false, T + 1);
+      const at = c.view('s', 'd', T + 1, signals)?.next;
+      if (!failure) assert.equal(at, delta === 30_000 ? T + MIN : T, 'accepted answer still respects command floor');
+      if (failure) {
+        c.delivered('s', 'd', [], T - delta - 1, 132_000, false, T + 2);
+        assert.notEqual(c.pausedUntil('s', 'd', T + 2), null, 'old success does not clear the pause');
+        c.delivered('s', 'd', [], T + 3, 132_000, false, T + 3);
+        assert.equal(c.pausedUntil('s', 'd', T + 3), null);
+      }
+    }
+});
+
+test('waiting survives a sequential provider measurement beyond silence, including repeated POST and snapshot', t => {
+  const h = hub(t);
+  h.ask(0);
+  h.deliver(0);
+  h.request(10_000);
+  h.ask(MIN);
+  const deadline = h.refresh(MIN).request?.deadline;
+  const silent = MIN + 120_001;
+  assert.equal(h.refresh(silent).unavailable, 'silent');
+  assert.equal(h.refresh(silent).request?.status, 'waiting');
+  assert.equal(h.request(silent).status, 'accepted');
+  assert.equal(h.projection.snapshot(h.user.id, h.board, T + silent)?.refresh[h.source()].request?.deadline, deadline);
+  h.deliver(MIN + 150_000);
+  assert.equal(h.refresh(MIN + 150_000).request?.status, 'updated');
+});
+
+test('timeout, terminal expiry and late delivery behave the same without any open page', t => {
+  const h = hub(t);
+  h.ask(0);
+  h.deliver(0);
+  h.request(10_000);
+  h.ask(MIN);
+  assert.equal(h.refresh(6 * MIN - 1).request?.status, 'waiting');
+  assert.equal(h.refresh(6 * MIN).request?.status, 'no_result');
+  h.deliver(6 * MIN + 1);
+  assert.equal(h.refresh(6 * MIN + 1).request?.status, 'no_result');
+  assert.equal(h.refresh(7 * MIN).request, null);
+});
+
+test('availability checks capability per subscription, silence, lease, and error pauses', t => {
+  const h = hub(t);
+  h.deliver(0);
+  assert.equal(h.request(1).status, 'unavailable');
+  assert.equal(h.refresh(1).unavailable, 'unsupported');
+  h.ask(2);
+  h.deliver(3);
+  h.ask(4, MIN, 'laptop', false);
+  assert.equal(h.refresh(4).unavailable, 'unsupported');
+  assert.equal(h.request(4).status, 'unavailable');
+  h.ask(5);
+  assert.equal(h.refresh(120_005).unavailable, null);
+  assert.equal(h.refresh(120_006).unavailable, 'silent');
+  h.ask(120_007);
+  h.deliver(120_008, {failure: 'failed'});
+  assert.equal(h.refresh(120_008).unavailable, 'paused');
+  assert.equal(h.request(120_008).status, 'unavailable');
+  assert.equal(h.refresh(120_008).retryAt, null);
+  h.ask(240_007);
+  assert.equal(h.refresh(240_007).unavailable, 'paused');
+  assert.equal(h.refresh(240_008).unavailable, null);
+  assert.equal(h.refresh(3_600_004).unavailable, 'no_device');
+});
+
+test('queued silence has a fixed terminal time and cannot be revived by a later check-in', t => {
+  const h = hub(t);
+  h.ask(0, 5 * MIN);
+  h.deliver(0);
+  h.request(10_000);
+  assert.equal(h.refresh(120_000).request?.status, 'queued');
+  assert.equal(h.refresh(120_001).request?.finishedAt, T + 120_001);
+  assert.deepEqual(h.refresh(120_002).request, h.refresh(120_001).request);
+  h.ask(120_003, 5 * MIN);
+  assert.equal(h.refresh(120_003).request?.status, 'unavailable');
+});
+
+test('freshness boundaries, duplicates, other-device success and failures stay distinct', t => {
+  const h = hub(t);
+  h.ask(0);
+  h.deliver(0);
+  h.request(40_000);
+  h.deliver(41_000, {observed: 9_999});
+  assert.equal(h.refresh(41_000).request?.status, 'queued');
+  h.deliver(42_000, {name: 'other', failure: 'failed'});
+  assert.equal(h.refresh(42_000).request?.status, 'queued');
+  h.deliver(43_000, {observed: 10_000, name: 'other'});
+  assert.equal(h.refresh(43_000).request?.status, 'updated');
+  h.ask(100_000);
+  h.request(100_000);
+  h.ask(100_000);
+  h.deliver(101_000, {observed: 10_000});
+  assert.equal(h.refresh(101_000).request?.status, 'waiting');
+  h.deliver(102_000, {failure: 'failed'});
+  assert.equal(h.refresh(102_000).request?.status, 'failed');
+  assert.equal(h.store.state(h.source()).error, null, 'fresh previous limits remain good');
+});
+
+test('revocation reaches requests with no sessions, and losing the lease ends waiting', t => {
+  const h = hub(t);
+  h.ask(0);
+  h.deliver(0);
+  h.request(10_000);
+  h.directory.revokeToken(h.user.id, h.token.id, T + 11_000);
+  h.ingest.forget([h.device()], T + 11_000);
+  assert.equal(h.refresh(11_000).request?.status, 'unavailable');
+  assert.equal(h.refresh(11_000).unavailable, 'no_device');
+  assert.equal(h.refresh(11_000).request?.finishedAt, T + 11_000);
+});
+
+test('projection changesAt remains a future boundary through silence, deadline and terminal expiry', t => {
+  const h = hub(t);
+  h.ask(0);
+  h.deliver(0);
+  h.request(10_000);
+  h.ask(MIN);
+  let now = T + MIN;
+  while (now < T + 8 * MIN) {
+    const read = h.ingest.refresh(h.source(), now);
+    const next = read.changesAt ?? T + 8 * MIN;
+    assert.ok(next > now);
+    for (const at of [now, now + 1, Math.floor((now + next) / 2), next - 1]) assert.deepEqual(h.ingest.refresh(h.source(), at).value, read.value);
+    now = next;
+  }
+});
+
+test('the board action, events and check-in share one request across viewers and reject outsiders', async t => {
+  const h = hub(t);
+  let now = T;
+  t.mock.method(Date, 'now', () => now);
+  const frames: Frame[] = [];
+  const events = new Events(h.parts, undefined, {now: () => now, after: () => () => {}});
+  h.ingest.setObserver(events);
+  const app = await buildApp({...h.parts, events, pairing: new Pairing(h.directory), setup: new Setup(false, null), local: null});
+  t.after(async () => {
+    events.close();
+    await app.close();
+  });
+  const viewer = h.directory.createUser('v@example.com', 'Viewer', 'x', T);
+  const team = h.directory.createBoard('Team', h.user.id, T);
+  h.directory.addMember(team.id, viewer.id, T);
+  const session = newSecret('qt_s');
+  h.directory.createSession(session, viewer.id, T, 86_400_000);
+  h.ask(0);
+  h.deliver(0);
+  h.store.share(team.id, h.source(), h.user.id, T);
+  const opened = events.open({user: viewer.id, secret: session, board: team.id, kind: 'stream', send: got => frames.push(...got), end: () => {}});
+  assert.ok(opened && opened !== 'limit');
+  const action = (board = team.id, source = h.source(), cookie = `quotum_session=${session}`, origin?: string) =>
+    app.inject({method: 'POST', url: `/api/boards/${board}/sources/${source}/refresh`, headers: {cookie, ...(origin ? {origin} : {})}});
+  now += 10_000;
+  assert.equal((await action(team.id, h.source(), '')).statusCode, 401);
+  assert.equal((await action(h.board)).statusCode, 404);
+  assert.equal((await action(team.id, 'other')).statusCode, 404);
+  assert.equal((await action(team.id, h.source(), undefined, 'https://evil.example')).statusCode, 403);
+  assert.equal((await action()).statusCode, 202);
+  assert.equal((await action()).statusCode, 202);
+  events.flush();
+  assert.equal(JSON.parse(frames.find(f => f.type === 'refresh')!.data).refresh.request.status, 'queued');
+  assert.equal(h.refresh(10_000).request?.requestedAt, now);
+  now = T + MIN;
+  h.ask(MIN);
+  events.flush();
+  assert.equal(JSON.parse(frames.filter(f => f.type === 'refresh').at(-1)!.data).refresh.request.status, 'waiting');
+  now++;
+  h.deliver(MIN + 1);
+  events.flush();
+  assert.equal(JSON.parse(frames.filter(f => f.type === 'refresh').at(-1)!.data).refresh.request.status, 'updated');
+  const refused = await action();
+  assert.equal(refused.statusCode, 429);
+  assert.equal(refused.headers['retry-after'], '10');
+  const snapshot = h.projection.snapshot(viewer.id, team.id, now)!;
+  assert.deepEqual(snapshot.refresh[h.source()], h.refresh(MIN + 1));
+  assert.equal(JSON.stringify(snapshot.refresh).includes(h.device()), false);
+});
+
+test('handover ends a queued or waiting request instead of moving it to the next device', t => {
+  for (const waiting of [false, true]) {
+    const h = hub(t);
+    h.ask(0);
+    h.deliver(0);
+    h.ask(11 * MIN);
+    h.deliver(11 * MIN);
+    h.request(11 * MIN + 1);
+    if (waiting) h.ask(12 * MIN);
+    const at = 12 * MIN + 1;
+    h.ingest.checkin(h.credential, {...h.agent('other'), paced: true, subscriptions: [{provider: 'codex', account: ACCOUNT, active: true}]}, T + at);
+    assert.equal(h.refresh(at).request?.status, 'unavailable');
+    assert.equal(h.refresh(at).request?.finishedAt, T + at);
+    assert.equal(h.duty.holder(ACCOUNT), h.device('other'));
+  }
+});
+
+test('revoking a device after the deadline preserves the earlier timeout', t => {
+  const h = hub(t);
+  h.ask(0);
+  h.deliver(0);
+  h.request(10_000);
+  h.ask(MIN);
+  h.directory.revokeDevice(h.user.id, h.device(), T + 6 * MIN + 1);
+  h.ingest.forget([h.device()], T + 6 * MIN + 1);
+  assert.equal(h.refresh(6 * MIN + 1).request?.status, 'no_result');
+  assert.equal(h.refresh(6 * MIN + 1).request?.finishedAt, T + 6 * MIN);
+});
+
+test('an old failure does not turn a fresh pending request into a failure', t => {
+  const h = hub(t);
+  h.ask(0);
+  h.deliver(0);
+  h.request(10_000);
+  h.deliver(11_000, {failure: 'failed', observed: 0});
+  assert.equal(h.refresh(11_000).request?.status, 'queued');
+});
+
+test('three provider responses sent sequentially keep the last request waiting for 150 seconds', t => {
+  const h = hub(t);
+  const subscriptions = (['claude', 'codex', 'antigravity'] as const).map((provider, i) => ({provider, account: ['a', 'b', 'c'][i].repeat(24), active: false}));
+  const snapshots = subscriptions.map(({provider, account}) => ({
+    provider,
+    account,
+    observedAt: iso(T),
+    via: 'stand-in',
+    staleAfterMs: 3_600_000,
+    windows: [{id: 'weekly', kind: 'weekly', usedPercent: 50}],
+  }));
+  h.ingest.accept(h.credential, {...h.agent('laptop'), sentAt: iso(T), snapshots, failures: []}, T);
+  h.ingest.checkin(h.credential, {...h.agent('laptop'), paced: true, subscriptions}, T);
+  const source = h.store.findSource('antigravity', 'c'.repeat(24))!;
+  for (const {provider, account} of subscriptions)
+    assert.equal(h.ingest.requestRefresh(h.store.findSource(provider, account)!, T + 10_000).status, 'accepted');
+  const answer = h.ingest.checkin(h.credential, {...h.agent('laptop'), paced: true, subscriptions}, T + MIN);
+  assert.ok(answer.subscriptions.every(s => s.measure));
+  for (const [i, snapshot] of snapshots.entries()) {
+    const at = T + MIN + (i + 1) * 50_000;
+    if (i === 2) assert.equal(h.ingest.refresh(source, T + MIN + 120_001).value.request?.status, 'waiting');
+    h.ingest.accept(h.credential, {...h.agent('laptop'), sentAt: iso(at), snapshots: [{...snapshot, observedAt: iso(at)}], failures: []}, at);
+  }
+  assert.equal(h.ingest.refresh(source, T + MIN + 150_000).value.request?.status, 'updated');
+});

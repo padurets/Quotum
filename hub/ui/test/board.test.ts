@@ -28,6 +28,7 @@ function snapshot(change: Partial<Snapshot> = {}): Snapshot {
     historyStart: 0,
     sources: [card('s1'), card('s2')],
     sessions: {s1: [session], s2: []},
+    refresh: {s1: {unavailable: null, availableAt: null, retryAt: null, request: null}},
     cadence: {s1: {next: 5000, why: 'idle'}, s2: null},
     mine: ['s1', 's2'],
     boards: [{id: 'b1', name: '', personal: true, role: 'owner'}],
@@ -214,4 +215,20 @@ test("the trackers' news keeps each provider's the same object while it says the
   const next = reduce(s, hub({type: 'resets', data: JSON.parse(JSON.stringify(news))}));
   assert.notEqual(next.resets!.resets.codex, s.resets!.resets.codex);
   assert.equal(next.resets!.resets.claude, s.resets!.resets.claude, 'the cards of the other provider read the same');
+});
+
+test('refresh is an independent slice, restored by snapshots and removed with its card', () => {
+  const before = run(hub({type: 'snapshot', data: snapshot()}));
+  const refresh = {unavailable: null, availableAt: null, retryAt: 70_000, request: {
+    requestedAt: 10_000, notBefore: 60_000, dispatchAt: null, deadline: 360_000, status: 'queued' as const, finishedAt: null,
+  }};
+  const after = reduce(before, hub({type: 'refresh', data: {id: 's1', refresh}}));
+  same(before, after);
+  assert.notEqual(before.board!.refresh.s1, after.board!.refresh.s1);
+  assert.equal(reduce(after, hub({type: 'refresh', data: {id: 's1', refresh}})), after);
+  const reconnected = reduce(after, hub({type: 'snapshot', data: snapshot({refresh: {s1: refresh}})}));
+  assert.equal(reconnected.board, after.board);
+  const gone = reduce(after, hub({type: 'lineup', data: {sources: ['s2']}}));
+  assert.equal(gone.board!.refresh.s1, undefined);
+  assert.equal(reduce(after, {type: 'board-open', id: 'another'}).board, null);
 });

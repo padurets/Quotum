@@ -3,6 +3,7 @@ import {useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type Reac
 /** A button with an anchored panel; closes on outside click, Escape and focus moving out. */
 export function Popover({
   label,
+  ariaDisabled,
   icon,
   trigger,
   badge,
@@ -14,6 +15,8 @@ export function Popover({
   up = false,
 }: {
   label: string;
+  /** Still focusable and opens its explanation when the action is unavailable. */
+  ariaDisabled?: boolean;
   icon?: ReactNode;
   /** A text trigger instead of an icon button. */
   trigger?: ReactNode;
@@ -138,6 +141,7 @@ export function Popover({
         type="button"
         className={trigger ? `text-button ${triggerClass ?? ''}` : 'icon-button'}
         aria-expanded={open}
+        aria-disabled={ariaDisabled}
         ref={button}
         aria-label={trigger && !triggerClass ? undefined : label}
         title={label}

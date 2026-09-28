@@ -14,6 +14,7 @@ import {useClock} from '../lib/clock';
 import {FreeResets} from './ResetMarks';
 import {Tray} from './Tray';
 import {EyeOffIcon, HideRow, Popover, SlidersIcon, SwitchRow, TakeOffIcon} from './Popover';
+import {RefreshButton} from './RefreshButton';
 import {ErrorLine} from './Kit';
 
 /** Where the plan expects the limit to be now: a mark on its meter, in whole percent, moved when that changes. */
@@ -400,6 +401,7 @@ export const SourceCard = memo(function SourceCard({id, arrange, boardId, person
           <h2>{title}</h2>
           {source.plan && <span className="plan">{source.plan.replace(/^Claude\s+/i, '')}</span>}
         </div>
+        <RefreshButton key={boardId} id={id} board={boardId} />
         {(arrange.owner || takeOff) && <SourceSettings source={source} title={title} arrange={arrange} boardId={boardId} takeOff={takeOff} />}
       </div>
 

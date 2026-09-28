@@ -249,6 +249,25 @@ keeps asking: the hub waits them out, longer each time in a row (15 minutes for
 a healthy device takes it as before. Such a device on duty, or with no other device on
 duty, is answered `onDuty: true` until its pause is over.
 
+A reader may ask the hub for fresh limits from the subscription's card. The next
+permitted check-in of its current paced holder then asks for a measurement using the
+same fields above. This never bypasses the one-minute minimum, the device's
+`minIntervalMs`, a failure pause or the retry delay of an unanswered command; repeated
+clicks join one request. Raising the minimum after an earlier promise takes precedence
+over that promise, so the old measurement can become stale before the next is allowed.
+Both ordinary and requested measurements respect the minimum after the later of the
+last measurement and the last command to this holder. A new holder keeps the usual
+first-measurement policy.
+
+An accepted delivery acknowledges the holder's outstanding command only if its corrected
+time is at least the command's time minus the 30-second clock tolerance. Older data can
+still update the usual card, but cannot acknowledge a newer command or clear a later
+failure pause. A success clears a pause only if taken after that failure.
+
+A refresh asks for fresh data, not an acknowledgement of process startup. The agent
+measures providers sequentially, so neither a check-in within 15 seconds nor a result
+within a minute is guaranteed. No fields or identifiers are added to agent traffic.
+
 A paced device that gets no answer keeps asking every 15 seconds, and measures on its own
 once the hub has been silent for 4 minutes and the promised time has passed. An answer
 that does not have `askInMs` is read as one without `"paced"`.
@@ -354,6 +373,10 @@ its folder when that differs (unless that is turned off too). The members of a b
 are on where a subscription you measure is shown, whoever brought it, see these, as they
 see its limits, with each project under the name its person gave it, and with them the
 name of the machine each agent runs on.
+
+A dashboard refresh sends only the board and source ids to the hub. Its shared state
+contains times and outcomes, without the requester or the device’s identity. No new
+information leaves the agent.
 
 What the hub keeps of running agents: when each worked, with the machine, subscription,
 where it ran, since when and its project and folder names, as long as samples (90 days);

@@ -7,6 +7,27 @@ import type {Message} from './types';
  * everything here is a share of a limit.
  */
 export const en = {
+  'api.refresh_too_soon': 'Wait a minute between new refresh requests',
+  'api.refresh_unavailable': 'No device can measure this subscription right now',
+  'refresh.nextCheckin': 'Waiting for the device to check in',
+  'refresh.retry': 'Another request in {time}',
+  'refresh.action': 'Refresh limits',
+  'refresh.ready': 'Ask for fresh limits',
+  'refresh.queued': 'Waiting for the device’s permitted interval',
+  'refresh.waiting': 'Waiting for fresh data',
+  'refresh.updated': 'Fresh data received',
+  'refresh.failed': 'The measurement failed',
+  'refresh.unavailable': 'The device can no longer fulfil this request',
+  'refresh.no_result': 'Fresh data have not arrived yet',
+  'refresh.no_device': 'No device is on duty right now',
+  'refresh.unsupported': 'The device does not follow the hub’s pace',
+  'refresh.silent': 'The device has stopped checking in',
+  'refresh.paused': 'Measurements are paused after an error',
+  'refresh.after': 'Measurement permitted in {time}',
+  'refresh.offline': 'Waiting for the connection to the hub',
+  'refresh.sending': 'Requesting fresh data…',
+  'refresh.uncertain': 'The reply did not arrive. The hub may have accepted the request.',
+
   'common.offline': 'Can’t reach the hub',
   'common.close': 'Close',
   'common.copy': 'Copy',

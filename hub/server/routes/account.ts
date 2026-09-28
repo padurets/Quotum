@@ -51,6 +51,17 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
     setSession(request, reply, secret);
   };
 
+  app.post<{Params: {board: string; source: string}}>('/api/boards/:board/sources/:source/refresh', (request, reply) => {
+    const {board, source} = request.params;
+    if (!guards.board(request, reply, board)) return;
+    if (!store.sources(board).some(s => s.id === source)) return notFound(reply);
+    const now = Date.now();
+    const result = hub.ingest.requestRefresh(source, now);
+    if (result.status === 'too_soon') return reply.header('Retry-After', Math.ceil((result.retryAt! - now) / 1000)).code(429).send({error: 'refresh_too_soon'});
+    if (result.status === 'unavailable') return reply.code(409).send({error: 'refresh_unavailable'});
+    return reply.code(202).send({ok: true});
+  });
+
   app.get('/api/session', request => {
     const user = currentUser(request, directory);
     const first = !local && directory.userCount() === 0;

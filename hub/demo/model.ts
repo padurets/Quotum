@@ -2,6 +2,7 @@ import {createHash} from 'node:crypto';
 import {sourceId, type Provider} from '../server/domain/sources.js';
 import {subscriptionKey} from '../server/domain/ingest.js';
 import type {Cadence, Level, ResetLine} from '../ui/lib/quota.js';
+import type {Refresh, RefreshRequest} from '../server/domain/refresh.js';
 import type {CadenceWhy} from '../ui/lib/types.js';
 import type {Outlook, Spent} from '../ui/lib/forecast.js';
 import type {ResetLabel} from '../ui/lib/resets.js';
@@ -232,6 +233,8 @@ export type CardCheck = Span & {board?: string} & (
     | {event: 'early_reset' | 'resets_granted'}
     /** What the dot's tooltip says of the next measurement, while the card is measured at the hub's pace, and why. */
     | {cadence: Cadence['when'] | null; why?: CadenceWhy}
+    | {refresh: RefreshRequest['status']; unavailable?: Refresh['unavailable']}
+    | {unavailable: Refresh['unavailable']}
     /** How many whole days back ‹ takes the chart from 30 days, step by step, on the card's board: where the history starts. */
     | {reachesBack: number}
     /**
@@ -332,6 +335,8 @@ export type Card = {
    * Following the hub's pace); its dot then says when the next measurement comes.
    */
   paced?: boolean;
+  /** A public refresh request and a controllable stand-in response for the demo. */
+  refresh?: {at: number; minimum?: number; delay?: number; response?: 'lost' | 'failed'; legacy?: boolean; silentAfter?: number};
   windows: WindowAt[];
   /** Free resets at `t`: how many, and how many expire when (left out when not given). */
   resets?: (t: number) => {available: number; expiring?: {count: number; expiresAt: number | null}[]};

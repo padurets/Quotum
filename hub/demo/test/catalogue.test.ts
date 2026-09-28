@@ -110,7 +110,7 @@ function points(set: DemoSet): number[] {
 }
 
 /** A board as the page puts it together from its snapshot: each card named from the whole board, with its agents and its pace. */
-type Overview = {view: View; historyStart: number; sources: (Snapshot['sources'][number] & {title: string; sessions: LiveSession[]; cadence: Pace})[]};
+type Overview = {view: View; historyStart: number; sources: (Snapshot['sources'][number] & {title: string; sessions: LiveSession[]; cadence: Pace; refresh: Snapshot['refresh'][string]})[]};
 
 /** What the hub shows at one moment, read once per board as the page would. */
 class Reading {
@@ -138,7 +138,7 @@ class Reading {
         this.reader(board)
           .get<Snapshot>(`/api/overview?board=${encodeURIComponent(id)}`)
           .then(data => {
-            const sources = titled(data.sources, data.view.names).map(card => ({...card, sessions: data.sessions[card.id] ?? [], cadence: data.cadence[card.id] ?? null}));
+            const sources = titled(data.sources, data.view.names).map(card => ({...card, sessions: data.sessions[card.id] ?? [], cadence: data.cadence[card.id] ?? null, refresh: data.refresh[card.id]}));
             const overview: Overview = {view: data.view, historyStart: data.historyStart, sources};
             const ordered = (sessions: LiveSession[]) => {
               for (let i = 1; i < sessions.length; i++) assert.ok(byActivity(sessions[i - 1], sessions[i]) <= 0, `${board}: activity order`);
@@ -287,6 +287,8 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
     drawn: drawn(source.sessions),
     cadence: cadenceOf(source, now)?.when ?? null,
     why: cadenceOf(source, now)?.why,
+    refresh: source.refresh.request?.status,
+    unavailable: source.refresh.unavailable,
   };
   const id = 'window' in card ? card.window : 'forecast' in card ? card.forecast : 'work' in card ? card.work : null;
   const live = id === null ? undefined : source.windows.find(w => w.id === id);
@@ -374,7 +376,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
 const clock = (t: number) => `start + ${Math.floor(t / 3_600_000)}h ${Math.floor((t % 3_600_000) / MIN)}m ${(t % MIN) / 1000}s`;
 
 /** A code of what the dot says of the next measurement: checked only where the machine asks at the hub's pace. */
-const paceCode = (check: object) => 'cadence' in check;
+const paceCode = (check: object) => 'cadence' in check || 'refresh' in check || 'unavailable' in check;
 
 /**
  * Checks every code of `entries` whose span holds `t` (or all of them); returns what was

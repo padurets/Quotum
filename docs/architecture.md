@@ -196,6 +196,27 @@ from what it sees of the subscription everywhere, which no single machine does:
 - The lease is as before: only a delivery extends it, and it lasts past the next
   planned measurement, so a holder waiting for its pace keeps duty.
 
+**Refresh from a card.** Any reader of a subscription on a board can request fresh
+limits, in the web dashboard and the desktop app. One request per subscription is
+accepted each minute across the hub; another click joins a pending request. Cadence
+shortens the ordinary wait to the earliest permitted measurement, respecting the
+one-minute floor, the device's minimum interval, failure pauses and unanswered-command
+backoff. A raised minimum takes precedence over an earlier staleness promise. The floor
+applies after the later of the last measurement and command for the current holder;
+an old delivery cannot acknowledge a newer command outside the 30-second clock tolerance,
+and only a success taken after a failure clears its pause.
+
+Refresh capability comes from that subscription's latest check-in, not the agent version:
+the live duty holder must follow the hub's pace and have asked within 120 seconds. A
+request never claims duty or extends its lease. Queued requests end on silence; requests
+already dispatched keep waiting through silence for up to five minutes, as providers
+are measured sequentially. Loss of duty, revocation, legacy check-in, an error or deadline
+ends the request. A fresh accepted snapshot of the same subscription, from any device,
+can satisfy it even if its percentages are unchanged. The protocol has no request id or
+startup acknowledgement; the card says it is waiting for data, not that a client started.
+Terminal outcomes show for a minute. Refresh is its own projection and event, so time
+boundaries and reconnect work without polling or rendering other cards.
+
 Duty and the pace are kept in memory; after a restart of the hub the first devices to
 check in take duty again and measure at once. An agent that cannot ask keeps asking
 every 15 seconds while it waits for a measurement the hub promised, and measures on its

@@ -1039,6 +1039,22 @@ const all: DemoSet = {
       look: ['In the table, the tooltips of spent per work hour and the forecast by work say nothing was spent while agents worked'],
     },
 
+    // Real requests through the board API, with stand-in devices and controlled answers.
+    ...[
+      {id: 'refresh-updated', refresh: {at: 15 * SECOND}, expect: [{refresh: 'queued', from: 15 * SECOND, to: 45 * SECOND}, {refresh: 'updated', from: MIN, to: 105 * SECOND}]},
+      {id: 'refresh-queued', refresh: {at: 15 * SECOND, minimum: 5 * MIN}, expect: [{refresh: 'queued', from: 15 * SECOND, to: 4 * MIN}]},
+      {id: 'refresh-waiting', refresh: {at: 15 * SECOND, delay: 150 * SECOND}, expect: [{refresh: 'waiting', from: MIN, to: 3 * MIN}]},
+      {id: 'refresh-failed', refresh: {at: 15 * SECOND, response: 'failed' as const}, expect: [{refresh: 'failed', unavailable: 'paused', from: MIN, to: 105 * SECOND}]},
+      {id: 'refresh-no-result', refresh: {at: 15 * SECOND, response: 'lost' as const}, expect: [{refresh: 'no_result', from: 6 * MIN, to: 6 * MIN + 45 * SECOND}]},
+      {id: 'refresh-legacy', refresh: {at: 0, legacy: true}, expect: [{unavailable: 'unsupported', from: 0, to: 4 * MIN}]},
+      {id: 'refresh-silent', refresh: {at: 0, silentAfter: 0}, expect: [{unavailable: 'silent', from: 135 * SECOND, to: 4 * MIN}]},
+    ].map(({id, refresh, expect}) => ({
+      kind: 'card' as const, id, provider: 'codex' as const, plan: 'pro', machines: [id], history: DAY, paced: true,
+      refresh, windows: [weekly({since: -3 * DAY, use: () => 35})],
+      on: {ana: {name: id.replaceAll('-', ' ')}}, expect: expect as import('./model.js').CardCheck[],
+      look: ['Refresh stays in the header without changing card height; check keyboard, touch, narrow cards and both languages'],
+    })),
+
     // Measured at the hub's pace, one reason each, all by one machine asking every 15 seconds.
     {
       kind: 'card',
