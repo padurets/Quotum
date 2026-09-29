@@ -500,10 +500,13 @@ test('a restarted hub goes on from what it kept, else from the latest sample: ne
   drive(h, every(first, spoke, 2 * MIN), used);
   assert.equal(h.read(spoke + 3000).value.weekly.asOf, spoke);
   h.forecasts.save();
-  // Nothing measured since what it kept: that, as it was.
+  // Nothing measured since what it kept: that, as it was, however many hours later.
   const same = hub(undefined, store);
   const kept = same.read(spoke + 10 * MIN).value.weekly;
   assert.deepEqual([kept.asOf, kept.state], [spoke, 'lasts']);
+  const late = hub(undefined, store);
+  assert.deepEqual(late.read(spoke + 2 * HOUR + 17 * MIN).value.weekly, kept);
+  assert.deepEqual(late.worked.map(w => [w.why, w.asOf]), [['first', spoke]]);
   // Measured since: on the latest sample, and nothing more until a sample after the next hour.
   for (const t of every(spoke + 2 * MIN, spoke + 30 * MIN, 2 * MIN)) h.measure(t, used(t));
   const again = hub(undefined, store);
