@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {AGENT_COLUMNS, AGENT_WIDTHS, agentRows, agentsLayout, byActivity, machinesOf, nextAgentsSort, readAgentsSort, sortedRows, type AgentColumn, type AgentRow, type AgentSource} from '../lib/agents';
+import {AGENT_COLUMNS, AGENT_WIDTHS, agentRows, agentsFit, agentsLayout, byActivity, machinesOf, nextAgentsSort, readAgentsSort, sortedRows, type AgentColumn, type AgentRow, type AgentSource} from '../lib/agents';
 import type {LiveSession, View} from '../lib/types';
 import {setLocale} from '../i18n';
 
@@ -109,4 +109,28 @@ test('layout follows the widget’s width and the owner’s columns at either si
   }
   assert.equal(agentsLayout(AGENT_COLUMNS, 320), 'list');
   assert.equal(agentsLayout(['project'], 320), 'table');
+});
+
+test('a list made shorter than its agents shows the most whole rows that fit, in its order, and says how many more', () => {
+  const fit = (budget: number, rows = [40, 60, 50, 30], border = 0) => agentsFit({shell: 30, rows, footer: 20, border, budget});
+  assert.deepEqual(fit(180), {shown: 2, hidden: 2, min: 90, natural: 210});
+  assert.deepEqual(fit(210), {shown: 4, hidden: 0, min: 90, natural: 210}, 'all fit: no row says more');
+  assert.equal(fit(209).shown, 3, 'a pixel short: the last row gives way to the one saying it');
+  assert.equal(fit(209.5).shown, 4, 'measured pixels are fractions: half a pixel over still fits');
+  assert.equal(fit(209.4).shown, 3);
+  assert.equal(fit(149.5).shown, 2, 'so it does for the rows over the one saying the rest');
+  assert.equal(fit(149.4).shown, 1);
+  // Rows as they stand in the list have a border under each; the last one shown alone has none.
+  assert.equal(fit(213, [41, 61, 51, 31], 1).shown, 4, 'exactly as tall as all of them without the last border');
+  assert.equal(fit(212, [41, 61, 51, 31], 1).shown, 3);
+  // A row does not stand in for a shorter one later on: the rest is said, in order.
+  assert.deepEqual(fit(150, [40, 80, 10, 10]), {shown: 1, hidden: 3, min: 90, natural: 170});
+  assert.deepEqual(fit(100, [200, 40]), {shown: 1, hidden: 1, min: 250, natural: 270}, 'a first row taller than the room: the widget grows to it');
+  assert.deepEqual(agentsFit({shell: 30, rows: [200, 40], footer: 20, border: 0, budget: 100}).min, 250);
+  assert.deepEqual(fit(10, [40]), {shown: 1, hidden: 0, min: 70, natural: 70}, 'one row is all there is to show');
+  assert.deepEqual(fit(10, []), {shown: 0, hidden: 0, min: 30, natural: 30});
+  // Two rows that need less than one and the row saying the rest: their least is all of them.
+  assert.deepEqual(fit(0, [10, 10]), {shown: 1, hidden: 1, min: 50, natural: 50});
+  assert.deepEqual(fit(50, [10, 10]).shown, 2);
+  assert.ok(fit(Infinity, Array(37).fill(64)).natural > fit(Infinity, Array(37).fill(64)).min, 'the least of a long list is not all of it');
 });

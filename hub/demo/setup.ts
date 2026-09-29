@@ -208,9 +208,12 @@ export function viewOf(stand: Stand, key: string) {
     if (looks.plan === 'off') view.unplanned.push(source);
     else if (looks.plan) view.plans[source] = looks.plan;
   }
-  view.layout.places.agents = board?.agentsPlace ?? place(board?.agentsWidth ?? COLUMNS);
+  view.layout.places.agents = board?.agentsPlace ?? place(COLUMNS);
   rank = cursor = 0;
-  for (const id of ['activity', 'history', 'forecast']) view.layout.places[id] = place(id === 'forecast' ? board?.forecastWidth ?? COLUMNS : COLUMNS);
+  for (const id of ['activity', 'history', 'forecast'] as const) {
+    const auto = place(id === 'forecast' ? board?.forecastWidth ?? COLUMNS : COLUMNS);
+    view.layout.places[id] = board?.places?.[id] ?? auto;
+  }
   return view;
 }
 

@@ -106,3 +106,27 @@ export const AGENT_WIDTHS: Record<AgentColumn, number> = {project: 180, state: 1
 export function agentsLayout(columns: readonly AgentColumn[], width: number): 'table' | 'list' {
   return columns.reduce((sum, column) => sum + AGENT_WIDTHS[column], 0) <= width ? 'table' : 'list';
 }
+
+/**
+ * How many of the agents a list shows in a widget of `budget` CSS pixels, in its own order:
+ * all where they fit whole, otherwise the most whole rows that fit with a last row saying
+ * how many more there are (`footer` high), and at least one. `rows` are the rows' heights as
+ * they stand one above another, each with the border under it, which the last row shown
+ * without a row after it does not have (`border`); `shell` is the rest of the widget. The
+ * least the widget needs is its first row and the one saying the rest, or all of them where
+ * that is less; `natural`, all of them.
+ */
+export function agentsFit({shell, rows, footer, border, budget}: {shell: number; rows: number[]; footer: number; border: number; budget: number}) {
+  const natural = shell + rows.reduce((sum, row) => sum + row, 0) - (rows.length ? border : 0);
+  if (rows.length < 2) return {shown: rows.length, hidden: 0, min: natural, natural};
+  const min = Math.min(natural, shell + rows[0] + footer);
+  // Measured pixels are fractions: what fits to half a pixel fits.
+  const fits = (height: number) => height <= budget + 0.5;
+  let shown = rows.length;
+  if (!fits(natural)) {
+    shown = 1;
+    let used = shell + rows[0];
+    while (shown < rows.length - 1 && fits(used + rows[shown] + footer)) used += rows[shown++];
+  }
+  return {shown, hidden: rows.length - shown, min, natural};
+}

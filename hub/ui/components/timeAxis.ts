@@ -2,6 +2,7 @@ import {useEffect, useId, useLayoutEffect, useRef, useState, type PointerEvent} 
 import {hubNow} from '../lib/clock';
 import {draggedRange, type TimeRange} from '../lib/timeRange';
 import {SWIPE, swiped} from '../lib/swipe';
+import {useSizing} from './sizing';
 
 /** How long a finger rests on a chart before it starts a range. */
 const HOLD_MS = 450;
@@ -94,14 +95,24 @@ export function useTimeAxis({
     return () => element.removeEventListener('wheel', wheel);
   }, []);
 
+  const measured = useRef<number | null>(null);
+  const measure = (next: number) => {
+    // At a fractional scale the same box reads a hair apart (a 60th of a pixel) by its rect and by the observer: no new width.
+    if (measured.current !== null && Math.abs(next - measured.current) < 1 / 32) return;
+    measured.current = next;
+    const drawn = Math.max(280, Math.round(next));
+    setWidth(drawn);
+    setScale(next ? next / drawn : 1);
+  };
+  // Read before paint too, first and whenever the board gives the chart another width: shown for a frame
+  // at a width it is not at, it would be as tall as that width draws it, and move whatever is below it.
+  const given = useSizing()?.width;
+  useLayoutEffect(() => {
+    if (box.current) measure(box.current.getBoundingClientRect().width);
+  }, [given]);
   useEffect(() => {
     if (!box.current) return;
-    const observer = new ResizeObserver(entries => {
-      const measured = entries[0].contentRect.width;
-      const drawn = Math.max(280, Math.round(measured));
-      setWidth(drawn);
-      setScale(measured ? measured / drawn : 1);
-    });
+    const observer = new ResizeObserver(entries => measure(entries[0].contentRect.width));
     observer.observe(box.current);
     return () => observer.disconnect();
   }, []);

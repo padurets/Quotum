@@ -1,4 +1,4 @@
-import {memo, useMemo} from 'react';
+import {memo, useMemo, useRef} from 'react';
 import {earliest, num} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
 import {planAt, started, weeklyPlanLine} from '../lib/plan';
@@ -17,6 +17,7 @@ import {useHistory, useHistoryBegins} from '../lib/history';
 import {t, useLocale} from '../i18n';
 import {Segmented} from './Kit';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
+import {usePlot} from './sizing';
 
 /**
  * The chart's own settings: whether it draws the plan and the forecast (where either has
@@ -69,6 +70,9 @@ function HistorySettings({arrange, planAvailable, forecastAvailable, horizonNote
  */
 export const History = memo(function History({arrange}: {arrange: Arrange}) {
   const {history, loading} = useHistory();
+  const panel = useRef<HTMLElement>(null);
+  // Made taller by its owner, the widget gives the room to the plot, not to empty space under the legend.
+  const {plot, onBase} = usePlot(panel);
   const sources = useNamed(arrange.view.names);
   const prefs = usePrefs();
   const {view} = arrange;
@@ -209,13 +213,33 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
   const pointed = [...markers.filter(m => m.strong && !m.past && m.at > to).map(m => m.at), ...forecasts.flatMap(f => (f.at !== null && f.at > to ? [f.at] : []))];
 
   return (
-    <section className={`panel history ${loading ? 'is-loading' : ''}`} data-time="chart" aria-label={t('history.label')} aria-busy={loading}>
+    <section ref={panel} className={`panel history ${loading ? 'is-loading' : ''}`} data-time="chart" aria-label={t('history.label')} aria-busy={loading}>
       <div className="panel-head">
         <h2>{t('history.title')}</h2>
         <HistorySettings arrange={arrange} planAvailable={planAvailable} forecastAvailable={forecastAvailable} horizonNote={frame.live && !planShown && !forecastShown} />
       </div>
 
-      {history ? <Chart lines={visible} plans={plans} forecasts={forecasts} markers={markers} from={from} now={measured} to={to} cellMs={history.cellMs} empty={lines.length ? t('chart.empty') : null} onSelect={setTimeRange} onStep={direction => goTo(step(selected, prefs.range, direction, hubNow(), historyStart))} /> : <div className="chart chart-loading">{t('history.loading')}</div>}
+      {history ? (
+        <Chart
+          lines={visible}
+          plans={plans}
+          forecasts={forecasts}
+          markers={markers}
+          from={from}
+          now={measured}
+          to={to}
+          cellMs={history.cellMs}
+          empty={lines.length ? t('chart.empty') : null}
+          onSelect={setTimeRange}
+          onStep={direction => goTo(step(selected, prefs.range, direction, hubNow(), historyStart))}
+          plot={plot}
+          onBase={onBase}
+        />
+      ) : (
+        <div className="chart chart-loading" style={plot === undefined ? undefined : {height: plot}}>
+          {t('history.loading')}
+        </div>
+      )}
 
       <div className="legend">
         {lines.map(line => (
