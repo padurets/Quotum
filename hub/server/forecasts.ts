@@ -113,7 +113,7 @@ export class Forecasts {
     let changesAt: number | null = null;
     for (const window of state.windows) {
       if (window.kind !== 'weekly') continue;
-      const entry = this.refresh(source, state, window, hour, reads);
+      const entry = this.refresh(source, state, window, hour, Math.floor(now / HOUR) * HOUR, reads);
       value[window.id] = entry.forecast;
       if (state.successAt > entry.asOf) changesAt = Math.min(changesAt ?? Infinity, Math.floor(entry.asOf / HOUR) * HOUR + HOUR + shift);
     }
@@ -132,17 +132,18 @@ export class Forecasts {
     }
   }
 
-  private refresh(source: string, state: SourceState, window: Win, hour: number, reads: Reads): Entry {
+  private refresh(source: string, state: SourceState, window: Win, hour: number, whole: number, reads: Reads): Entry {
     const key = keyOf(source, window.id);
     const successAt = state.successAt!;
     let entry = this.series.get(key);
     if (!entry) {
       // The first since the hub started: from where it was, if that took in the latest
-      // sample, else on the latest sample, as of this hour when it came before it. Never as
-      // of an hour before it: that would be worked out again at the next, with no sample
-      // new to a board that stands still.
+      // sample, else on the latest sample, as of the last whole hour when it came before it
+      // (whole, not this source's: nothing spreads a first working out, and a hub running
+      // all along has it so from this source's hour). Never as of an hour before it: that
+      // would be worked out again at the next, with no sample new to a board that stands still.
       const kept = this.read(key);
-      const asOf = kept && kept.asOf >= successAt ? kept.asOf : Math.max(hour, successAt);
+      const asOf = kept && kept.asOf >= successAt ? kept.asOf : Math.max(whole, successAt);
       entry = this.work(key, source, window, asOf, kept ? (kept.asOf === asOf ? kept.memoryIn : kept.memoryOut) : null, successAt, reads, 'first');
     }
     // A sample of the time a forecast stands on, come late (another device's): the same moment worked out again.

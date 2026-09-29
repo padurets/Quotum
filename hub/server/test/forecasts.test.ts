@@ -110,8 +110,10 @@ test('a hub that measures nothing more after it starts works each series out onc
       const times = every(T0 + 30_000, end, 2 * MIN);
       for (const t of times) h.measure(t, steady(0.6)(t));
       const at = end + wait;
-      // As of its hour, when the sample came before it: as a hub running all along would have it.
-      const hour = Math.floor((at - hourShift(h.source)) / HOUR) * HOUR;
+      // As of the last whole hour when the sample came before it, even before the hour of its
+      // subscription comes: as a hub running all along has it from then on. A sample in the
+      // hour stays as of itself, as after a sample that contradicts a forecast.
+      const hour = Math.floor(at / HOUR) * HOUR;
       const first = h.read(at);
       const what = `:${minute}, read ${wait / MIN} min on`;
       assert.deepEqual([first.value.weekly.asOf, first.value.weekly.anchor!.at, first.changesAt], [Math.max(hour, times.at(-1)!), times.at(-1), null], what);
