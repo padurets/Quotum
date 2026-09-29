@@ -521,6 +521,17 @@ test('a window on a schedule keeps the idle hours before its first spending in t
   near(f.F, 94.01);
   assert.equal(f.comfy, true);
   near(hoursOf(f), 48.17);
+  // Its first sample within ten minutes of a window begun on the schedule, and nothing spent
+  // in that one: it saw the window begin, yet the idle week is history too.
+  const begun = Date.UTC(2026, 8, 10, 10);
+  const weeks = sampled(begun + 5 * MINUTE, begun + 7 * DAY + 6 * HOUR, 2 * MINUTE, t => {
+    const start = begun + Math.floor((t - begun) / (7 * DAY)) * 7 * DAY;
+    return {used: start === begun ? 0 : Math.floor((t - start) / HOUR), resetAt: start + WEEK * MINUTE};
+  });
+  const g = upTo(weeks, begun + 7 * DAY + 6 * HOUR);
+  assert.equal(g.state, 'lasts');
+  near(g.F, 67.58, 0.01);
+  near(hoursOf(g), 174, 0.01);
 });
 
 test("a series whose life began before what the hub reads keeps its history: a break is not its beginning", () => {

@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {forecastOf, type Memory} from '../domain/forecast.js';
 import type {Win} from '../domain/quota.js';
-import {Forecasts, hourShift, type Why} from '../forecasts.js';
+import {Forecasts, hourShift, told, type Why} from '../forecasts.js';
 import {Store} from '../store/store.js';
 
 const MIN = 60_000;
@@ -467,8 +467,8 @@ test('a sample that contradicts a forecast works it out again from the memory th
   const samples = h.store.seriesSamples(h.source, 'weekly', wake - 23 * DAY, wake);
   const pure = (memory: Memory) => forecastOf({samples, plan: null, since: null}, wake, memory).forecast;
   assert.notEqual(pure(out()).state, pure(left).state, 'the two memories tell apart here');
-  assert.equal(g.state, pure(left).state);
-  assert.equal(g.F, pure(left).F);
+  // As the hub tells it: points by minutes from the anchor, moments in whole milliseconds.
+  assert.deepEqual(g, told(pure(left)));
 });
 
 test('a restarted hub goes on from what it kept, else from the latest sample: never from the hour before it', () => {
