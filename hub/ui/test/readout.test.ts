@@ -58,7 +58,7 @@ test('a gap reads with its sign, and one ahead of the plan by 3 or more is marke
 
 test('ahead of now a line reads where its pace leads, beside its plan, until it runs out', () => {
   const lines = [line('weekly', [[now - 5 * minute, 40, 0]]), line('other', [[now - 5 * minute, 70, 0]])];
-  const forecast: ForecastLine = {key: 'weekly', name: 'Weekly', color: '', dash: '', points: [[now, 40], [now + 40 * minute, 0]], at: now + 40 * minute};
+  const forecast: ForecastLine = {key: 'weekly', name: 'Weekly', color: '', dash: '', points: [[now, 40], [now + 40 * minute, 0]], zero: now + 40 * minute, at: now + 40 * minute};
   const ahead = now + 10 * minute;
   const {rows, columns} = readout(lines, [plan(['weekly'], 50)].map(p => ({...p, runs: [[[now - 60 * minute, 50], [now + 60 * minute, 50]]]})), ahead, cellMs, now, now + 60 * minute, [forecast]);
   assert.deepEqual(columns, {left: false, plan: true, gap: false, forecast: true});
@@ -73,7 +73,7 @@ test('ahead of now a line reads where its pace leads, beside its plan, until it 
 
 test('columns stay put up to now, and ahead of it are the values the cell reads', () => {
   const lines = [line('weekly', [[now - 5 * minute, 40, 0]])];
-  const forecast: ForecastLine = {key: 'weekly', name: 'Weekly', color: '', dash: '', points: [[now, 40], [now + 40 * minute, 0]], at: now + 40 * minute};
+  const forecast: ForecastLine = {key: 'weekly', name: 'Weekly', color: '', dash: '', points: [[now, 40], [now + 40 * minute, 0]], zero: now + 40 * minute, at: now + 40 * minute};
   const planned = [{...plan(['weekly'], 50), runs: [[[now - 60 * minute, 50], [now + 20 * minute, 50]]] as PlanLine['runs']}];
   const at = (cell: number, plans: PlanLine[], forecasts: ForecastLine[]) => readout(lines, plans, cell, cellMs, now, now + 60 * minute, forecasts).columns;
   assert.deepEqual(at(cell, planned, [forecast]), {left: true, plan: true, gap: true, forecast: false}, 'before now');
