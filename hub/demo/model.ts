@@ -377,6 +377,9 @@ export type Machine = {
   look?: string[];
 };
 
+/** Where a board's owner put agent activity, the chart and the table, with the heights they chose, where not as they come. */
+export type AnalyticsPlaces = Partial<Record<'activity' | 'history' | 'forecast', Place>>;
+
 /**
  * Someone on the hub; their codes are read on their personal board, where `agents` turns the
  * table of running agents on, and in «My machines». `projects` are the names they give the
@@ -387,9 +390,9 @@ export type Person = {
   id: string;
   name: string;
   agents?: boolean;
-  agentsWidth?: number;
   agentsPlace?: Place;
   forecastWidth?: number;
+  places?: AnalyticsPlaces;
   projects?: Record<string, string>;
   expect: (BoardCheck | ProjectCheck)[];
   look?: string[];
@@ -403,9 +406,9 @@ export type Board = {
   members: string[];
   /** The table of running agents is turned on. */
   agents?: boolean;
-  agentsWidth?: number;
   agentsPlace?: Place;
   forecastWidth?: number;
+  places?: AnalyticsPlaces;
   /** When members joined it, from `start`, where later than it was made: work before is not the board's. */
   joined?: Record<string, number>;
   /** Columns of the table, off by default, that the board turns on. */
