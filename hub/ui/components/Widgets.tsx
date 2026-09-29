@@ -99,9 +99,9 @@ function useColumns() {
  * A widget's part of the board's sizing, made of its own numbers only: a neighbour's height
  * renders nothing of it, neither the widget nor this (the same content, the same numbers).
  */
-const Sized = memo(function Sized({id, manual, allocated, report, children}: {id: string; manual: boolean; allocated: number; report: (id: string, size: Report | null) => void; children: ReactNode}) {
+const Sized = memo(function Sized({id, manual, allocated, columns, report, children}: {id: string; manual: boolean; allocated: number; columns: number; report: (id: string, size: Report | null) => void; children: ReactNode}) {
   const bound = useCallback((size: Report | null) => report(id, size), [id, report]);
-  const value = useMemo(() => ({manual, allocated, report: bound}), [manual, allocated, bound]);
+  const value = useMemo(() => ({manual, allocated, columns, report: bound}), [manual, allocated, columns, bound]);
   return <SizingContext.Provider value={value}>{children}</SizingContext.Provider>;
 });
 
@@ -584,7 +584,7 @@ export function Widgets({
                   </svg>
                 </button>
               )}
-              <Sized id={spot.id} manual={manual} allocated={manual ? allocated : 0} report={report}>
+              <Sized id={spot.id} manual={manual} allocated={manual ? allocated : 0} columns={columns} report={report}>
                 {widget.content}
               </Sized>
               {movable && (

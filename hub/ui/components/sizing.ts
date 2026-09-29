@@ -11,9 +11,11 @@ export type Report = Size & {shown: number};
  * that fills a chosen height with more of itself rather than with empty room (the charts,
  * the list of agents) reads it at its root and tells the board what it needs and shows
  * (`report`) as it lays itself out anew, so the board fills the rest before that paints;
- * the rest of the board neither reads it nor renders for it.
+ * the rest of the board neither reads it nor renders for it. The board's columns are in it so
+ * that such a widget lays itself out anew with them, in the frame the styles that give it its
+ * form change.
  */
-export type Sizing = {manual: boolean; allocated: number; report: (report: Report | null) => void};
+export type Sizing = {manual: boolean; allocated: number; columns: number; report: (report: Report | null) => void};
 export const SizingContext = createContext<Sizing | null>(null);
 export const useSizing = () => useContext(SizingContext);
 
