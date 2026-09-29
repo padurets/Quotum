@@ -99,7 +99,7 @@ const within = (entry: Entry, check: Span, t: number) => {
 };
 
 /** A board as the page puts it together from its snapshot: each card named from the whole board, with its agents and its pace. */
-type Overview = {view: View; historyStart: number; sources: (Snapshot['sources'][number] & {title: string; sessions: LiveSession[]; cadence: Pace; forecast: SourceForecast})[]};
+type Overview = {view: View; historyStart: number; sources: (Snapshot['sources'][number] & {title: string; sessions: LiveSession[]; cadence: Pace; refresh: Snapshot['refresh'][string]; forecast: SourceForecast})[]};
 
 /** What the hub shows at one moment, read once per board as the page would. */
 class Reading {
@@ -131,6 +131,7 @@ class Reading {
               ...card,
               sessions: data.sessions[card.id] ?? [],
               cadence: data.cadence[card.id] ?? null,
+              refresh: data.refresh[card.id],
               forecast: data.forecast[card.id] ?? {},
             }));
             const overview: Overview = {view: data.view, historyStart: data.historyStart, sources};
@@ -281,6 +282,8 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
     drawn: drawn(source.sessions),
     cadence: cadenceOf(source, now)?.when ?? null,
     why: cadenceOf(source, now)?.why,
+    refresh: source.refresh.request?.status,
+    unavailable: source.refresh.unavailable,
   };
   const id = 'window' in card ? card.window : 'forecast' in card ? card.forecast : 'work' in card ? card.work : null;
   const live = id === null ? undefined : source.windows.find(w => w.id === id);
@@ -368,7 +371,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
 const clock = (t: number) => `start + ${Math.floor(t / 3_600_000)}h ${Math.floor((t % 3_600_000) / MIN)}m ${(t % MIN) / 1000}s`;
 
 /** A code of what the dot says of the next measurement: checked only where the machine asks at the hub's pace. */
-const paceCode = (check: object) => 'cadence' in check;
+const paceCode = (check: object) => 'cadence' in check || 'refresh' in check || 'unavailable' in check;
 
 /**
  * Checks every code of `entries` whose span holds `t` (or all of them); returns what was
@@ -557,11 +560,11 @@ test('every entry of the whole catalogue shows what it claims over its span', {t
 test('cards measured at the hub’s pace say when the next measurement comes and why', {timeout: 120_000}, async t => {
   const all = setOf('all');
   // Only them, so nothing else measured by the same machines moves their pace; people's
-  // projects go with the cards whose agents work on them.
+  // projects go with the cards whose agents work on them. Refresh scenes have a test of their own.
   const set: DemoSet = {
     ...all,
     entries: all.entries
-      .filter(e => e.kind !== 'card' || e.paced)
+      .filter(e => e.kind !== 'card' || (e.paced && !e.refresh))
       .map(e => (e.kind === 'person' ? {...e, expect: e.expect.filter(check => !('project' in check))} : e)),
   };
   const paced = set.entries.filter((e): e is Card => e.kind === 'card' && !!e.paced);
@@ -596,6 +599,80 @@ test('cards measured at the hub’s pace say when the next measurement comes and
   for (const why of ['low', 'inUse', 'changed', 'idle', 'reset']) assert.ok(shown.some(c => c.why === why), `a card says ${why}`);
   for (const when of ['nextIn', 'nextSoon']) assert.ok(shown.some(c => c.cadence === when), `a card says ${when}`);
 });
+
+// The live demo's loop starts when the demo is up, up to a minute past the minute its time counts from.
+for (const first of [0, 59 * SECOND])
+  test(`a card whose machine sleeps goes stale in the live demo too, where the hub sets the pace, its first tick ${first / SECOND} s in`, {timeout: 120_000}, async t => {
+    const all = setOf('all');
+    // Staleness that comes and goes with a machine's sleep: the live demo measures these
+    // cards when the hub says, not on the rhythm the twelve hours above follow.
+    const sleepy = cards(all).filter(card => card.expect.some(check => 'stale' in check && check.stale && 'to' in check));
+    assert.ok(sleepy.length, 'the catalogue has a card going stale for a while');
+    const set: DemoSet = {
+      ...all,
+      entries: all.entries
+        .filter(e => e.kind !== 'card' || sleepy.includes(e))
+        .map(e => (e.kind === 'person' ? {...e, expect: e.expect.filter(check => !('project' in check))} : e)),
+    };
+    const checks = sleepy.map(card => ({...card, expect: card.expect.filter(check => 'stale' in check)}));
+    const points = [...new Set(checks.flatMap(card => (card.expect as Span[]).flatMap(check => [check.from ?? 0, ((check.from ?? 0) + (check.to ?? HOLDS)) / 2, check.to ?? HOLDS])))].sort((a, b) => a - b);
+    const start = Math.floor(Date.now() / MIN) * MIN;
+    const {stand, hub} = await bringUp(t, set, start);
+    const live = new Live(stand, cadence, true);
+    const checked = new Set<string>();
+    const wrong: string[] = [];
+    // Then on the next multiple of 15 seconds, as the live demo's loop does.
+    let at = first;
+    for (const point of points) {
+      for (; at <= point; at = (Math.floor(at / TICK) + 1) * TICK) {
+        t.mock.timers.setTime(start + at);
+        await live.report(at, start + at);
+        await live.pace(at, start + at);
+        await live.measure(at, start + at);
+      }
+      t.mock.timers.setTime(start + point);
+      const reading = new Reading(stand, start + point, new Map([[set.scene, await hub.told()]]));
+      wrong.push(...(await checkAll(stand, checks, reading, point, checked)));
+    }
+    assert.deepEqual(wrong, [], `start ${new Date(start).toISOString()}`);
+    assert.equal(checked.size, checks.reduce((count, card) => count + card.expect.length, 0), 'every such code is checked');
+  });
+
+// A refresh scene counts from the machines' first asking; the live demo asks next on its 15-second grid.
+for (const first of [0, 59 * SECOND])
+  test(`refresh scenes show what they say from the first asking, ${first / SECOND} s into the live demo`, {timeout: 120_000}, async t => {
+    const all = setOf('all');
+    const scenes = cards(all).filter(card => card.refresh);
+    assert.ok(scenes.length, 'the catalogue has refresh scenes');
+    const set: DemoSet = {
+      ...all,
+      entries: all.entries
+        .filter(e => e.kind !== 'card' || scenes.includes(e))
+        .map(e => (e.kind === 'person' ? {...e, expect: e.expect.filter(check => !('project' in check))} : e)),
+    };
+    // Their codes, moved to the demo's time.
+    const checks = scenes.map(card => ({...card, expect: (card.expect as Span[]).map(check => ({...check, from: (check.from ?? 0) + first, to: (check.to ?? HOLDS) + first}))}));
+    const points = [...new Set(checks.flatMap(card => card.expect.flatMap(check => [check.from, (check.from + check.to) / 2, check.to])))].sort((a, b) => a - b);
+    const start = Math.floor(Date.now() / MIN) * MIN;
+    const {stand, hub} = await bringUp(t, set, start);
+    const live = new Live(stand, cadence, true);
+    const checked = new Set<string>();
+    const wrong: string[] = [];
+    let at = first;
+    for (const point of points) {
+      for (; at <= point; at = (Math.floor(at / TICK) + 1) * TICK) {
+        t.mock.timers.setTime(start + at);
+        await live.report(at, start + at);
+        await live.pace(at, start + at);
+        await live.measure(at, start + at);
+      }
+      t.mock.timers.setTime(start + point);
+      const reading = new Reading(stand, start + point, new Map([[set.scene, await hub.told()]]));
+      wrong.push(...(await checkAll(stand, checks as Card[], reading, point, checked, 'pace')));
+    }
+    assert.deepEqual(wrong, [], `start ${new Date(start).toISOString()}`);
+    assert.equal(checked.size, checks.reduce((count, card) => count + card.expect.length, 0), 'every such code is checked');
+  });
 
 test('the showcase comes up clean', {timeout: 60_000}, async t => {
   const set = setOf('showcase');
@@ -634,4 +711,51 @@ test('the activity example puts two working agents above recent and morning work
         ['web', 'api', 'recent-1', 'recent-2', 'recent-3', 'recent-4', 'morning-1', 'morning-2', 'morning-3', 'morning-4', 'new-session', null]);
     }
   }
+});
+
+test('a silent demo device checks in once even when the first live tick is after the rounded start', async t => {
+  const all = setOf('all');
+  const set: DemoSet = {
+    ...all,
+    entries: all.entries.filter(e => e.kind !== 'card' || e.id === 'refresh-silent')
+      .map(e => e.kind === 'person' ? {...e, expect: e.expect.filter(check => !('project' in check))} : e),
+  };
+  const start = Math.floor(Date.now() / MIN) * MIN;
+  const {stand} = await bringUp(t, set, start);
+  const live = new Live(stand, cadence, true);
+  const source = stand.sources.get('refresh-silent')!;
+  const reader = stand.people.get('ana')!;
+  const state = async () => (await reader.get<Snapshot>('/api/overview')).refresh[source];
+  t.mock.timers.setTime(start + 35 * SECOND);
+  await live.pace(35 * SECOND, Date.now());
+  assert.equal((await state()).unavailable, null);
+  t.mock.timers.setTime(start + MIN);
+  await live.pace(MIN, Date.now());
+  t.mock.timers.setTime(start + 155 * SECOND + 1);
+  assert.equal((await state()).unavailable, 'silent', 'later ticks leave the device silent');
+});
+
+test('ordinary demo cards accept refresh requests; only the explicit legacy scene lacks support', async t => {
+  const all = setOf('all');
+  const example = cards(all).find(card => card.id === 'claude-max')!;
+  const extra: Card[] = Array.from({length: 17}, (_, i) => ({...example, id: `refresh-batch-${i}`, history: 5 * MIN, agents: [], on: undefined, expect: [{error: null}]}));
+  const set: DemoSet = {...all, entries: [...all.entries, ...extra]};
+  const start = Math.floor(Date.now() / MIN) * MIN;
+  const {stand} = await bringUp(t, set, start);
+  const live = new Live(stand, cadence, true);
+  t.mock.timers.setTime(start);
+  await live.pace(0, start);
+  const ana = stand.people.get('ana')!;
+  const overview = await ana.get<Snapshot>('/api/overview');
+  const ordinary = cards(set).filter(card => !card.paced && !card.failure && card.until === undefined && card.machines.includes('laptop'));
+  assert.ok(ordinary.length > 16, 'the protocol batch limit is exercised');
+  for (const card of ordinary) assert.equal(overview.refresh[stand.sources.get(card.id)!].unavailable, null, card.id);
+  assert.equal(overview.refresh[stand.sources.get('refresh-legacy')!].unavailable, 'unsupported');
+  const source = stand.sources.get(ordinary[0].id)!;
+  t.mock.timers.setTime(start + 10 * SECOND);
+  await ana.post(`/api/boards/${ana.personalBoard}/sources/${source}/refresh`);
+  assert.equal((await ana.get<Snapshot>('/api/overview')).refresh[source].request?.status, 'queued');
+  t.mock.timers.setTime(start + MIN);
+  await live.pace(MIN, start + MIN);
+  assert.equal((await ana.get<Snapshot>('/api/overview')).refresh[source].request?.status, 'updated');
 });

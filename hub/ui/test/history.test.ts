@@ -403,6 +403,7 @@ const SNAPSHOT: Snapshot = {
   sources: [],
   sessions: {},
   cadence: {},
+  refresh: {},
   forecast: {},
   mine: [],
   boards: [],
