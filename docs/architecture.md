@@ -623,8 +623,9 @@ there: a second start can arrive while a closed window still holds its label, an
 one does not count as open. The new window is created once it has gone, and the app's
 `hub.log` tells each request, attempt and outcome.
 Panel presentations carry the controller's request revision. Retiring an old window
-cannot close or blur a newer request; an existing live window adopted by a new request
-uses that revision too. Cancellation marks the presentation before queuing its close.
+cannot close or blur a newer request; each native window keeps its request for life.
+A newer request retires that window before creating its own. Cancellation marks the
+presentation before queuing its close, and stale loader commands cannot cover a ready panel.
 
 **Linux rendering and lifetime.** The Rust controller uses a D-Bus StatusNotifierItem
 through `ksni`. A small GTK loading surface responds before Chromium starts; GTK

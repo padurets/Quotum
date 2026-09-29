@@ -2,7 +2,7 @@ use crate::{hub::HubState, shell::Shell, window::*};
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
         mpsc,
     },
     thread,
@@ -26,12 +26,23 @@ pub fn open(shell: &Arc<Shell>, from: &'static str) {
     open_role(shell, from, Role::Main);
 }
 pub fn open_panel(shell: &Arc<Shell>) {
-    shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).show();
+    {
+        let mut toggle = shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner());
+        toggle.show();
+        shell.host.panel_ready.store(0, Ordering::SeqCst);
+    }
     crate::tray::loading(shell, true);
     open_role(shell, "the tray", Role::Compact);
 }
 pub fn toggle_panel(shell: &Arc<Shell>, point: Option<(i32, i32)>) {
-    let show = shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).toggle(Instant::now(), point);
+    let show = {
+        let mut toggle = shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner());
+        let show = toggle.toggle(Instant::now(), point);
+        if show {
+            shell.host.panel_ready.store(0, Ordering::SeqCst);
+        }
+        show
+    };
     if show {
         crate::tray::loading(shell, true);
         open_role(shell, "the tray", Role::Compact);
@@ -55,8 +66,7 @@ pub fn dismiss_panel(shell: &Arc<Shell>, blur: bool) {
 fn close_unwanted_panel(shell: &Arc<Shell>) {
     let paint = shell.host.panel_paint.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let Some(paint) = paint else { return };
-    if shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).requested(paint.request.load(Ordering::SeqCst))
-    {
+    if shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).requested(paint.request) {
         return;
     }
     retire_panel(shell, paint);
@@ -80,7 +90,7 @@ fn retire_panel(shell: &Arc<Shell>, paint: Arc<PanelPaint>) {
 }
 #[derive(Default)]
 pub struct PanelPaint {
-    request: AtomicU64,
+    request: u64,
     focused: AtomicBool,
     placed: AtomicBool,
     loaded: AtomicBool,
@@ -99,15 +109,14 @@ fn reveal_panel(shell: &Arc<Shell>, window: &tauri::WebviewWindow, gate: &Arc<Pa
     {
         return;
     }
-    if !shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).requested(gate.request.load(Ordering::SeqCst))
-    {
+    let Ok(handle) = window.hwnd() else { return };
+    let toggle = shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner());
+    if !toggle.requested(gate.request) || gate.cancelled.load(Ordering::SeqCst) || !current_paint(shell, gate) {
         return;
     }
-    if let Ok(handle) = window.hwnd() {
-        shell.host.panel_ready.store(handle.0 as u64, Ordering::SeqCst);
-        if !gate.shown.swap(true, Ordering::SeqCst) {
-            crate::tray::present_panel(shell, handle.0 as u64);
-        }
+    shell.host.panel_ready.store(handle.0 as u64, Ordering::SeqCst);
+    if !gate.shown.swap(true, Ordering::SeqCst) {
+        crate::tray::present_panel(shell, handle.0 as u64);
     }
 }
 
@@ -147,7 +156,23 @@ fn open_now(shell: &Arc<Shell>, from: &'static str, role: Role) {
         // A second start can hand over while Tauri still holds a closed window under its
         // label: off the screen and without its web view, but not destroyed yet. Showing it
         // shows nothing, and the request would be spent: a new window comes once it has gone.
-        match alive(shell, window.clone(), start + WAIT_LIMIT) {
+        let mut present = alive(shell, window.clone(), start + WAIT_LIMIT);
+        if role == Role::Compact && present == Some(true) {
+            let paint = shell.host.panel_paint.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            let revision = shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).revision();
+            if paint.as_ref().is_none_or(|p| p.request != revision || p.cancelled.load(Ordering::SeqCst)) {
+                // A native HWND keeps its request for life. Reusing it for a new
+                // request would relabel old queued close/focus events as current.
+                if let Some(paint) = paint {
+                    retire_panel(shell, paint);
+                } else {
+                    shell.host.panel_closing.store(true, Ordering::SeqCst);
+                    let _ = window.close();
+                }
+                present = Some(false);
+            }
+        }
+        match present {
             Some(true) => {
                 // The UI smoke (desktop/smoke/windows-ui.ps1) reads this line.
                 shell.hub_log.line(&format!("app: found the window {label} at {} ms", ms(start)));
@@ -162,16 +187,6 @@ fn open_now(shell: &Arc<Shell>, from: &'static str, role: Role) {
                     if paint.cancelled.load(Ordering::SeqCst) || shell.host.panel_closing.load(Ordering::SeqCst) {
                         return;
                     }
-                    let toggle = shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner());
-                    if !toggle.wanted() {
-                        return;
-                    }
-                    paint.request.store(toggle.revision(), Ordering::SeqCst);
-                    paint
-                        .focused
-                        .store(window.hwnd().is_ok_and(|h| unsafe { GetForegroundWindow() == h.0 }), Ordering::SeqCst);
-                    paint.shown.store(false, Ordering::SeqCst);
-                    drop(toggle);
                     reveal_panel(shell, &window, &paint);
                 } else {
                     let _ = window.show();
@@ -264,12 +279,12 @@ fn build(
     let app = &shell.host.app;
     let navigating = shell.clone();
     let loading = shell.clone();
-    let paint = Arc::new(PanelPaint::default());
+    let paint = Arc::new(PanelPaint {
+        request: shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).revision(),
+        ..PanelPaint::default()
+    });
     let loaded_paint = paint.clone();
     if compact {
-        paint
-            .request
-            .store(shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).revision(), Ordering::SeqCst);
         *shell.host.panel_paint.lock().unwrap_or_else(|e| e.into_inner()) = Some(paint.clone());
         shell.host.panel_ready.store(0, Ordering::SeqCst);
         shell.host.panel_closing.store(false, Ordering::SeqCst);
@@ -363,7 +378,7 @@ fn build(
                             .panel_toggle
                             .lock()
                             .unwrap_or_else(|e| e.into_inner())
-                            .closed_at(escape_paint.request.load(Ordering::SeqCst));
+                            .closed_at(escape_paint.request);
                         escape_paint.cancelled.store(true, Ordering::SeqCst);
                         if current_paint(&shell, &escape_paint) {
                             shell.host.panel_closing.store(true, Ordering::SeqCst);
@@ -404,7 +419,7 @@ fn build(
                     // this top-level window still owns the foreground.
                     closing_paint.focused.store(false, Ordering::SeqCst);
                     let accepted = resizing.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).blur_at(
-                        closing_paint.request.load(Ordering::SeqCst),
+                        closing_paint.request,
                         Instant::now(),
                         crate::tray::cursor_position(),
                     );
@@ -425,7 +440,7 @@ fn build(
                         .panel_toggle
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
-                        .closed_at(closing_paint.request.load(Ordering::SeqCst));
+                        .closed_at(closing_paint.request);
                 }
                 if matches!(event, tauri::WindowEvent::Destroyed) {
                     let mut current = resizing.host.panel_paint.lock().unwrap_or_else(|e| e.into_inner());
@@ -470,12 +485,7 @@ fn build(
         }
         if compact
             && (paint.cancelled.load(Ordering::SeqCst)
-                || !shell
-                    .host
-                    .panel_toggle
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .requested(paint.request.load(Ordering::SeqCst)))
+                || !shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).requested(paint.request))
         {
             paint.cancelled.store(true, Ordering::SeqCst);
             shell.host.panel_closing.store(true, Ordering::SeqCst);
@@ -622,24 +632,22 @@ fn current_panel(shell: &Shell, instance: u64) -> Option<tauri::WebviewWindow> {
 pub fn close_panel(shell: &Arc<Shell>, instance: u64) {
     let paint = shell.host.panel_paint.lock().unwrap_or_else(|e| e.into_inner()).clone();
     if let Some(paint) = paint.filter(|p| current_paint(shell, p) && current_panel(shell, instance).is_some()) {
-        shell
-            .host
-            .panel_toggle
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .closed_at(paint.request.load(Ordering::SeqCst));
+        shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).closed_at(paint.request);
         retire_panel(shell, paint);
     }
 }
 pub fn open_main_from_panel(shell: &Arc<Shell>, instance: u64) {
     let shell = shell.clone();
     thread::spawn(move || {
-        if current_panel(&shell, instance).is_none() {
+        let paint = shell.host.panel_paint.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let Some(paint) = paint.filter(|p| current_paint(&shell, p) && current_panel(&shell, instance).is_some())
+        else {
             return;
-        }
-        shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).close();
+        };
+        let request = paint.request;
+        shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).closed_at(request);
         open_now(&shell, "the compact panel", Role::Main);
-        close_panel(&shell, instance);
+        retire_panel(&shell, paint);
     });
 }
 pub fn panel_height(shell: &Arc<Shell>, instance: u64, height: f64) {

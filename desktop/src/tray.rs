@@ -232,8 +232,19 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                 let command = context.queue.lock().unwrap_or_else(|e| e.into_inner()).pop();
                 let Some(command) = command else { break };
                 match command {
-                    Command::Loading(true) => context.loading.show(icon_rect(hwnd)),
-                    Command::Loading(false) => context.loading.hide(),
+                    Command::Loading(true) => {
+                        // A ready presentation may have overtaken this queued show.
+                        if context.shell.upgrade().is_some_and(|s| s.host.panel_ready.load(Ordering::SeqCst) == 0) {
+                            context.loading.show(icon_rect(hwnd));
+                        }
+                    }
+                    Command::Loading(false) => {
+                        if context.shell.upgrade().is_none_or(|s| {
+                            s.exiting() || !s.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).wanted()
+                        }) {
+                            context.loading.hide();
+                        }
+                    }
                     Command::PanelReady(handle) => context.loading.present(handle),
                     Command::Status(status) => {
                         *context.status.borrow_mut() = status;
@@ -328,6 +339,12 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
 }
 
 pub fn loading(shell: &Shell, show: bool) {
+    // Keep the intent check and enqueue in the same order as tray activations.
+    // A late hide from a retired presentation cannot replace a newer show.
+    let toggle = shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner());
+    if !shell.exiting() && toggle.wanted() != show {
+        return;
+    }
     if let Some(tray) = shell.host.tray.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
         tray.send(Command::Loading(show));
     }
