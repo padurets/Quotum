@@ -3,6 +3,7 @@ import {known, t} from '../i18n';
 import type {Refresh, RefreshRequest} from './types';
 import {ApiError, call, messageOf} from './http';
 import {createStore, useSelect} from './store';
+import {hubNow} from './clock';
 
 /** When a new request may go: after the cooldown and after a pause, whichever ends later. */
 const retryTime = (state: Refresh | null) => {
@@ -48,6 +49,7 @@ const sending = createStore<ReadonlySet<string>, ReadonlySet<string>>((_state, n
 const sentKey = (board: string, id: string) => `${board}\n${id}`;
 
 /** Whether this page is still waiting for the hub to take a card's request. */
+export const isSending = (board: string, id: string) => sending.get().has(sentKey(board, id));
 export const useSending = (board: string, id: string) => useSelect(sending, keys => keys.has(sentKey(board, id)));
 
 /** One request per card at a time: asking again before the hub answers waits for the same answer. */
@@ -65,13 +67,21 @@ export function requestRefresh(board: string, id: string): Promise<unknown> {
   return request;
 }
 
+/** `answeredAt`: when the hub's reply (or its failure) came, by the hub's clock as the page reads it. */
 export type RefreshRow = {
   id: string;
   before: number | null;
   status: RefreshRequest['status'] | 'sending' | 'refused' | 'unknown';
   state: Refresh | null;
   error: unknown;
+  answeredAt: number | null;
 };
+
+/**
+ * How much later than its reply a request may still be the row's own: the page reads the hub's
+ * clock only so well. One accepted blocks another for a minute, so a later one is someone else's.
+ */
+const REPLY_SLACK_MS = 30_000;
 
 export const refreshRowPending = (row: RefreshRow) => row.status === 'sending' || row.status === 'queued' || row.status === 'waiting';
 /**
@@ -88,7 +98,7 @@ export const refreshAllStarts = (rows: RefreshRow[]) => rows.length === 0;
 export const startRefreshRows = (ids: string[], states: Record<string, Refresh>): RefreshRow[] => [...new Set(ids)].map(id => {
   const state = states[id] ?? null;
   const pending = refreshPending(state);
-  return {id, before: state?.request?.requestedAt ?? null, status: pending ? state!.request!.status : 'sending', state: pending ? state : null, error: null};
+  return {id, before: state?.request?.requestedAt ?? null, status: pending ? state!.request!.status : 'sending', state: pending ? state : null, error: null, answeredAt: null};
 });
 
 /** Keep each outcome after the hub retires its short-lived status, even with the popup closed. */
@@ -106,7 +116,9 @@ export function observeRefreshRows(rows: RefreshRow[], states: Record<string, Re
       // follow someone else's request or wait for ever.
       return {...row, status: 'unknown' as const, error: null};
     }
-    if (request && request.requestedAt !== row.before) return {...row, status: request.status, state, error: null};
+    // Not seen yet: its own request, made before the reply, not one made later by someone else.
+    const own = request && request.requestedAt !== row.before && (row.answeredAt === null || request.requestedAt <= row.answeredAt + REPLY_SLACK_MS);
+    if (own) return {...row, status: request.status, state, error: null};
     // A reconnect may arrive after the entire request, including its retained outcome.
     // No record of it is not evidence of success, nor a reason to show an endless loader.
     if (snapshot && row.status !== 'sending' && refreshRowPending(row) && !request) return {...row, status: 'unknown' as const, state: null, error: null};
@@ -116,10 +128,10 @@ export function observeRefreshRows(rows: RefreshRow[], states: Record<string, Re
 }
 
 /** The HTTP reply cannot overwrite a request or outcome already received through events. */
-export function answerRefreshRow(row: RefreshRow, state: Refresh | undefined, error: unknown = null): RefreshRow {
+export function answerRefreshRow(row: RefreshRow, state: Refresh | undefined, error: unknown = null, now = hubNow()): RefreshRow {
   const observed = observeRefreshRows([row], state ? {[row.id]: state} : {})[0];
   if (observed.state?.request && observed.status !== 'refused' && observed.status !== 'unknown') return observed;
-  return {...row, state: error ? state ?? null : null, error, status: error ? error instanceof ApiError ? 'refused' : 'unknown' : 'waiting'};
+  return {...row, state: error ? state ?? null : null, error, status: error ? error instanceof ApiError ? 'refused' : 'unknown' : 'waiting', answeredAt: now};
 }
 
 /** Each subscription keeps its own checks; a refusal must not stop the other cards. */

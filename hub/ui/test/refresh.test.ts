@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {refreshAllStarts, refreshChangesAt, refreshPending, refreshText, refreshErrorText, refreshErrorChangesAt, requestRefresh, requestRefreshAll, startRefreshRows, observeRefreshRows, answerRefreshRow} from '../lib/refresh';
+import {isSending, refreshAllStarts, refreshChangesAt, refreshPending, refreshText, refreshErrorText, refreshErrorChangesAt, requestRefresh, requestRefreshAll, startRefreshRows, observeRefreshRows, answerRefreshRow} from '../lib/refresh';
 import {ApiError} from '../lib/http';
 import {setLocale} from '../i18n';
 import type {Refresh} from '../lib/types';
@@ -204,16 +204,35 @@ test('a queued request past its earliest moment shows no time already gone', () 
 test('asking again for a card before the hub answers sends nothing more and gets the same answer', async t => {
   const answers: ((response: Response) => void)[] = [];
   const fetch = t.mock.method(globalThis, 'fetch', () => new Promise<Response>(resolve => answers.push(resolve)));
+  assert.equal(isSending('board', 'a'), false);
   const first = requestRefresh('board', 'a');
   const second = requestRefresh('board', 'a');
   const other = requestRefresh('board', 'b');
   assert.equal(fetch.mock.callCount(), 2);
+  assert.deepEqual([isSending('board', 'a'), isSending('board', 'b'), isSending('elsewhere', 'a')], [true, true, false], 'the card\'s menu waits too');
   for (const answer of answers) answer(new Response(JSON.stringify({error: 'refresh_too_soon'}), {status: 429}));
   await assert.rejects(first, ApiError);
   await assert.rejects(second, ApiError);
   await assert.rejects(other, ApiError);
+  assert.deepEqual([isSending('board', 'a'), isSending('board', 'b')], [false, false], 'a refusal frees the card');
   const again = requestRefresh('board', 'a');
   assert.equal(fetch.mock.callCount(), 3, 'once answered, a new request goes');
   answers.at(-1)!(new Response(JSON.stringify({ok: true}), {status: 202}));
   await again;
+  assert.equal(isSending('board', 'a'), false);
+});
+
+test('a row that has not seen its request takes only one made before its reply', () => {
+  const [row] = startRefreshRows(['a'], {a: {...queued, request: null}});
+  const later = {...queued, request: {...queued.request!, requestedAt: 80_000}};
+  const own = {...queued, request: {...queued.request!, requestedAt: 19_500}};
+  // The reply was lost on the way: the request may or may not have been made.
+  const lost = answerRefreshRow(row, {...queued, request: null}, new Error('lost response'), 20_000);
+  assert.equal(observeRefreshRows([lost], {a: later})[0].status, 'unknown', 'made a minute after the reply: someone else\'s');
+  assert.equal(observeRefreshRows([lost], {a: own})[0].status, 'queued');
+  // Accepted, then a lineup before its event: the event may still come, a later request is not it.
+  const early = observeRefreshRows([answerRefreshRow(row, {...queued, request: null}, null, 20_000)], {a: {...queued, request: null}}, true);
+  assert.equal(early[0].status, 'unknown');
+  assert.equal(observeRefreshRows(early, {a: later})[0].status, 'unknown');
+  assert.equal(observeRefreshRows(early, {a: own})[0].status, 'queued');
 });

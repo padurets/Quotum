@@ -31,10 +31,11 @@ export function RefreshAll({board, ids}: {board: string; ids: string[]}) {
     return () => { alive.current = false; stop(); };
   }, [board]);
   const pending = rows.some(refreshRowPending);
+  const connected = connection.status === 'live' || connection.status === 'polling';
   const send = async () => {
     const state = page.get();
     if (busy.current || pending) return;
-    if (connection.status !== 'live' && connection.status !== 'polling') {
+    if (!connected) {
       setOffline(true);
       return;
     }
@@ -47,7 +48,8 @@ export function RefreshAll({board, ids}: {board: string; ids: string[]}) {
     const current = () => alive.current && page.get().board?.id === board;
     const answered = (id: string, error: unknown = null) => {
       if (!current()) return;
-      setRows(previous => previous.map(row => row.id === id ? answerRefreshRow(row, page.get().board?.refresh[id], error) : row));
+      const at = hubNow();
+      setRows(previous => previous.map(row => row.id === id ? answerRefreshRow(row, page.get().board?.refresh[id], error, at) : row));
     };
     try {
       await requestRefreshAll(board, next.filter(row => row.status === 'sending').map(row => row.id), async (board, id) => {
@@ -81,7 +83,7 @@ export function RefreshAll({board, ids}: {board: string; ids: string[]}) {
           <span>{t('refresh.again')}</span>
         </button>
       )}
-      {offline && <div className="popover-note dialog-text" role="status">{t('refresh.offline')}</div>}
+      {offline && !connected && <div className="popover-note dialog-text" role="status">{t('refresh.offline')}</div>}
       {rows.length > 0 && (
         <div className="popover-section">
           <div className="popover-note dialog-text" role="status">{t('refresh.summary', {done: rows.filter(row => !refreshRowPending(row)).length, total: rows.length})}</div>
