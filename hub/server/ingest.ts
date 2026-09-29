@@ -83,6 +83,11 @@ export class Ingest {
       const result: IngestResult = {accepted: 0, duplicates: 0, failures: 0, device: {id: device.id}};
       // Every source the batch is about: its pace and its holder's duty move even when nothing new is recorded.
       const touched = new Set<string>();
+      // Heard from, the device is not silent: nor are the subscriptions it holds and delivers nothing for now.
+      const held = this.cadence.keysOf([device.id]).filter(key => this.duty.holder(key) === device.id);
+      for (const key of held) this.cadence.settleRefresh(key, this.refreshDuty(key), now);
+      this.cadence.heard(device.id, now);
+      for (const source of held.flatMap(key => providers.flatMap(provider => this.store.findSource(provider, key) ?? []))) touched.add(source);
 
       for (const snapshot of [...batch.snapshots].sort((a, b) => a.observedAt - b.observedAt)) {
         const observedAt = snapshot.observedAt + skew;

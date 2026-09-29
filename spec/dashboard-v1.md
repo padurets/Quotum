@@ -142,7 +142,9 @@ so a late POST response cannot undo a result already received.
 `refresh` is `{unavailable, availableAt, retryAt, request}`. `unavailable` is null, or
 `no_device`, `unsupported`, `silent`, `paused`; `availableAt` is the end of the error
 pause when `unavailable` is `paused`, otherwise null. `retryAt` is the end of a still-active one-minute cooldown,
-otherwise null. These describe the ability to create a NEW request.
+otherwise null. These describe the ability to create a NEW request. `silent` is 120
+seconds without a word from the holder: a check-in with the subscription, or, within
+five minutes after it, a delivery of any measurement or failure by that device.
 
 `request` is null or `{requestedAt, notBefore, dispatchAt, deadline, status, finishedAt}`.
 All times are epoch milliseconds on the hub. `dispatchAt` and `finishedAt` may be null.

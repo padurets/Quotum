@@ -235,8 +235,10 @@ an old delivery or failure cannot acknowledge a newer command outside the 30-sec
 and only a success taken after a failure clears its pause.
 
 Refresh capability comes from that subscription's latest check-in, not the agent version:
-the live duty holder must follow the hub's pace and have asked within 120 seconds, or be
-measuring what it was told to. A request never claims duty or extends its lease. A
+the live duty holder must follow the hub's pace and have been heard from within 120
+seconds, or be measuring what it was told to. It is heard from when it asks, and when it
+delivers a measurement or a failure of any subscription within five minutes of asking:
+while it measures its providers one by one, the ones done are not silent. A request never claims duty or extends its lease. A
 click joins a command to the holder while it is under way: until the holder asks again,
 for at most five minutes, as long as duty stays with it for that. A holder that asks
 again without answering lost the command, and the request waits for its retry. A lapsed lease ends nothing while the same device holds duty: a holder that

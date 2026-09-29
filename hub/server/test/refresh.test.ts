@@ -585,6 +585,80 @@ test('a request joins a command however long the holder measures without asking,
   assert.equal(h.ingest.refresh(other, T + 6 * MIN).value.unavailable, 'no_device');
 });
 
+/** A laptop holding three subscriptions, told at a minute to measure them all. */
+function threeTold(t: TestContext) {
+  const h = hub(t);
+  const subscriptions = (['claude', 'codex', 'antigravity'] as const).map((provider, i) => ({provider, account: ['a', 'b', 'c'][i].repeat(24), active: false}));
+  const snapshot = (i: number, at: number) => ({...subscriptions[i], observedAt: iso(at), via: 'stand-in', staleAfterMs: 3_600_000, windows: [{id: 'weekly', kind: 'weekly', usedPercent: 95}]});
+  const deliver = (i: number, at: number) => h.ingest.accept(h.credential, {...h.agent('laptop'), sentAt: iso(at), snapshots: [snapshot(i, at)], failures: []}, at);
+  h.ingest.accept(h.credential, {...h.agent('laptop'), sentAt: iso(T), snapshots: [0, 1, 2].map(i => snapshot(i, T)), failures: []}, T);
+  h.ingest.checkin(h.credential, {...h.agent('laptop'), paced: true, subscriptions}, T);
+  assert.ok(h.ingest.checkin(h.credential, {...h.agent('laptop'), paced: true, subscriptions}, T + MIN).subscriptions.every(s => s.measure));
+  const source = (i: number) => h.store.findSource(subscriptions[i].provider, subscriptions[i].account)!;
+  return {...h, deliver, source};
+}
+
+test('a holder measuring its providers one by one is not silent while it delivers, for five minutes after asking', t => {
+  const h = threeTold(t);
+  h.deliver(0, T + 90_000);
+  // Two minutes after asking, the first one measured is not silent while the others come.
+  h.deliver(1, T + 170_000);
+  assert.equal(h.ingest.refresh(h.source(0), T + 215_000).value.unavailable, null);
+  assert.equal(h.ingest.requestRefresh(h.source(0), T + 215_000).status, 'accepted');
+  assert.equal(h.ingest.refresh(h.source(0), T + 215_000).value.request?.status, 'queued');
+  h.deliver(2, T + 250_000);
+  const quiet = h.ingest.refresh(h.source(0), T + 370_000);
+  assert.deepEqual([quiet.value.unavailable, quiet.value.request?.status, quiet.changesAt], [null, 'queued', T + 370_001]);
+  const silent = h.ingest.refresh(h.source(0), T + 370_001).value;
+  assert.deepEqual([silent.unavailable, silent.request?.status, silent.request?.finishedAt], ['silent', 'unavailable', T + 370_001]);
+  // What it delivers more than five minutes after asking is not the measuring it was told to do.
+  const late = threeTold(t);
+  late.deliver(0, T + 90_000);
+  late.deliver(1, T + 200_000);
+  late.deliver(2, T + 300_000);
+  late.deliver(1, T + 400_000);
+  assert.equal(late.ingest.refresh(late.source(0), T + 480_000).value.unavailable, null);
+  assert.equal(late.ingest.refresh(late.source(0), T + 480_001).value.unavailable, 'silent');
+});
+
+test('a delivery after the holder fell silent leaves a request its silence ended ended, and tells the boards it is back', t => {
+  const h = threeTold(t);
+  let now = T + 90_000;
+  const frames: Frame[] = [];
+  const events = new Events(h.parts, undefined, {now: () => now, after: () => () => {}});
+  h.ingest.setObserver(events);
+  t.after(() => events.close());
+  const session = newSecret('qt_s');
+  h.directory.createSession(session, h.user.id, T, 86_400_000);
+  const opened = events.open({user: h.user.id, secret: session, board: h.board, kind: 'stream', send: got => frames.push(...got), end: () => {}});
+  assert.ok(opened && opened !== 'limit');
+  h.deliver(0, now);
+  now = T + 100_000;
+  assert.equal(h.ingest.requestRefresh(h.source(0), now).status, 'accepted');
+  // The next provider takes over two minutes: the queued request ends with the silence.
+  now = T + 215_000;
+  events.flush();
+  const done = (i: number) => frames.filter(f => f.type === 'refresh' && JSON.parse(f.data).id === h.source(i)).map(f => JSON.parse(f.data).refresh);
+  assert.equal(done(0).at(-1).unavailable, 'silent');
+  now = T + 250_000;
+  h.deliver(1, now);
+  events.flush();
+  const after = h.ingest.refresh(h.source(0), now).value;
+  assert.deepEqual([after.unavailable, after.request?.status, after.request?.finishedAt], [null, 'unavailable', T + 210_001]);
+  assert.deepEqual(done(0).at(-1), after);
+});
+
+test('the end of a holder\'s measuring is announced when nothing else changes then', t => {
+  const h = hub(t);
+  h.ask(0);
+  h.deliver(0, {used: 95, stale: 3_600_000});
+  assert.equal(h.ask(MIN).measure, true);
+  // Its lease runs for an hour; its measuring, five minutes after the command.
+  const measuring = h.ingest.refresh(h.source(), T + 4 * MIN);
+  assert.deepEqual([measuring.value.unavailable, measuring.changesAt], [null, T + 6 * MIN]);
+  assert.equal(h.refresh(6 * MIN).unavailable, 'silent');
+});
+
 test('another machine of the subscription does not take duty while the holder measures what it was told to', t => {
   const h = hub(t);
   h.ask(0);
