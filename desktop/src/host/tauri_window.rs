@@ -11,7 +11,7 @@ use std::{
 use tauri::webview::{NewWindowResponse, PageLoadEvent};
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_window_state::{StateFlags, WindowExt};
-use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, IsWindowVisible};
 /// Whether the window is open (it may be on its way out).
 pub fn is_open(shell: &Shell) -> bool {
     [Role::Main, Role::Compact].iter().any(|role| shell.host.app.get_webview_window(role.label()).is_some())
@@ -116,7 +116,27 @@ fn reveal_panel(shell: &Arc<Shell>, window: &tauri::WebviewWindow, gate: &Arc<Pa
     }
     shell.host.panel_ready.store(handle.0 as u64, Ordering::SeqCst);
     if !gate.shown.swap(true, Ordering::SeqCst) {
-        crate::tray::present_panel(shell, handle.0 as u64);
+        drop(toggle);
+        let handle = handle.0 as u64;
+        let ready = window.clone();
+        let showing = shell.clone();
+        let paint = gate.clone();
+        let _ = window.run_on_main_thread(move || {
+            if paint.cancelled.load(Ordering::SeqCst)
+                || !current_paint(&showing, &paint)
+                || !showing.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).requested(paint.request)
+            {
+                return;
+            }
+            // Tauri owns this HWND and its visibility state. Showing it from the
+            // tray thread races focus messages with WebView2 destruction.
+            if let Err(error) = ready.show() {
+                showing.hub_log.line(&format!("app: the panel could not be shown: {error}"));
+                return;
+            }
+            let _ = ready.set_focus();
+            crate::tray::present_panel(&showing, handle);
+        });
     }
 }
 
@@ -406,14 +426,13 @@ fn build(
                 // Dismiss only after this panel has actually been visible and focused.
                 if *active
                     && !closing_paint.cancelled.load(Ordering::SeqCst)
-                    && closing.is_visible().unwrap_or(false)
-                    && closing.hwnd().is_ok_and(|h| unsafe { GetForegroundWindow() == h.0 })
+                    && unsafe { IsWindowVisible(hwnd as _) != 0 && GetForegroundWindow() as usize == hwnd }
                 {
                     closing_paint.focused.store(true, Ordering::SeqCst);
                 } else if !*active
                     && !closing_paint.cancelled.load(Ordering::SeqCst)
                     && closing_paint.focused.load(Ordering::SeqCst)
-                    && closing.hwnd().is_ok_and(|handle| unsafe { GetForegroundWindow() != handle.0 })
+                    && unsafe { GetForegroundWindow() as usize != hwnd }
                 {
                     // Moving keyboard focus into WebView2 can report a blur while
                     // this top-level window still owns the foreground.
@@ -430,6 +449,11 @@ fn build(
             }
             if matches!(event, tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed) {
                 closing_paint.cancelled.store(true, Ordering::SeqCst);
+                if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                    // Move focus away while the WebView2 controller still exists.
+                    // A queued activation must not focus it during destruction.
+                    let _ = closing.hide();
+                }
                 if matches!(event, tauri::WindowEvent::CloseRequested { .. })
                     && current_paint(&resizing, &closing_paint)
                 {

@@ -149,22 +149,20 @@ impl Panel {
             }
         }
     }
-    pub fn present(&self, handle: u64) {
+    pub fn complete(&self, handle: u64) {
         let Some(shell) = self.shell.upgrade().filter(|s| !s.exiting()) else {
             return;
         };
-        if !shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).wanted() {
+        if shell.host.panel_ready.load(std::sync::atomic::Ordering::SeqCst) != handle
+            || !shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).wanted()
+        {
             return;
         }
         let hwnd = handle as HWND;
         unsafe {
-            if IsWindow(hwnd) == 0 {
+            if IsWindowVisible(hwnd) == 0 {
                 return;
             }
-            // Mark the handoff before activation sends a blur to the loader.
-            self.visible.set(false);
-            ShowWindow(hwnd, SW_SHOW);
-            SetForegroundWindow(hwnd);
             self.hide();
         }
     }
@@ -273,7 +271,15 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
         }
         WM_ACTIVATE if w & 0xffff == WA_INACTIVE as usize => {
             if panel.visible.get() {
-                panel.dismiss(true);
+                let handoff = panel.shell.upgrade().is_some_and(|s| {
+                    let ready = s.host.panel_ready.load(std::sync::atomic::Ordering::SeqCst);
+                    ready != 0 && unsafe { GetForegroundWindow() as u64 == ready }
+                });
+                if handoff {
+                    panel.hide();
+                } else {
+                    panel.dismiss(true);
+                }
             }
             0
         }

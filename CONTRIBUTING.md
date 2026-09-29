@@ -41,6 +41,8 @@ With `-Diagnostics <dir>` it keeps its report (the times of every close and reop
 app's logs and the app's processes there. CI uploads them when the UI smoke fails and in
 every manual run; a manual run of the Desktop workflow takes `ui-runs`, how many times
 the UI smoke runs on the installed app and on the portable one each.
+The queued-close check runs with the main window open and with only the compact
+panel: a delayed close must neither lose the latest open nor crash the last WebView.
 
 Run `node --test desktop/electron/policy.test.cjs` for the Linux bridge/navigation
 policy. CI runs the installed packages with `--smoke`: the hub starts, a stand-in client

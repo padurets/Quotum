@@ -201,6 +201,35 @@ function Stop-Owned($Owned, [string]$Description) {
   if (-not $Owned.WaitForExit(10000)) { throw "$Description still runs after Kill ($why)" }
 }
 
+# Completion of an old close must not overwrite a newer tray-open request.
+# Check with another WebView present and with the compact panel as the only one.
+function Test-QueuedPanelReopen([IntPtr]$Except) {
+  if(-not [QuotumWindowProbe]::OpenPanel($process.Id)){throw 'Cannot open panel for queued-close check'}
+  $deadline=(Get-Date).AddSeconds(15)
+  do {$panel=[QuotumWindowProbe]::FindOther($process.Id,$Except);if($panel -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 50}while((Get-Date) -lt $deadline)
+  if($process.HasExited){throw "Controller exited during queued reopen: $($process.ExitCode)"}
+  if($panel -eq [IntPtr]::Zero){throw 'No panel for queued-close check'}
+  $paused=[QuotumWindowProbe]::PauseUi($panel,$process.Id)
+  try {
+    [void][QuotumWindowProbe]::PostMessage($panel,0x10,[IntPtr]::Zero,[IntPtr]::Zero)
+    if(-not [QuotumWindowProbe]::OpenPanel($process.Id)){throw 'Cannot toggle queued panel closed'}
+    Start-Sleep -Milliseconds 100
+    if(-not [QuotumWindowProbe]::OpenPanel($process.Id)){throw 'Cannot request panel reopen'}
+    Start-Sleep -Milliseconds 100
+  } finally { [QuotumWindowProbe]::ResumeUi($paused) }
+  $deadline=(Get-Date).AddSeconds(15)
+  Start-Sleep -Seconds 2
+  do {$panel=[QuotumWindowProbe]::FindOther($process.Id,$Except);if($panel -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 50}while((Get-Date) -lt $deadline)
+  if($process.HasExited){throw "Controller exited during queued reopen: $($process.ExitCode)"}
+  if($panel -eq [IntPtr]::Zero){throw 'Old CloseRequested lost the latest panel open'}
+  Start-Sleep -Seconds 1
+  if(-not [QuotumWindowProbe]::IsWindowVisible($panel)){throw 'The reopened panel disappeared after old callbacks'}
+  [QuotumWindowProbe]::Escape($panel,$process.Id)
+  $deadline=(Get-Date).AddSeconds(5)
+  while([QuotumWindowProbe]::IsWindowVisible($panel) -and (Get-Date) -lt $deadline){Start-Sleep -Milliseconds 50}
+  if([QuotumWindowProbe]::IsWindowVisible($panel)){throw 'Cannot close the current panel after queued reopen'}
+}
+
 try {
   if (Get-Process quotum-desktop -ErrorAction SilentlyContinue) { throw 'Another Quotum instance is already running' }
   $left = @(Get-ChildItem -LiteralPath $webviewRoot -Filter 'EBWebView.quotum-ui-*' -Directory -ErrorAction SilentlyContinue)
@@ -319,30 +348,18 @@ try {
     if ([QuotumWindowProbe]::IsWindowVisible($panel)) { throw 'The panel did not close after dismissal, main-window activation or a repeated tray click' }
     if (-not [QuotumWindowProbe]::IsWindowVisible($window) -or ($before -join ',') -ne ([QuotumWindowProbe]::Bounds($window) -join ',')) { throw 'The panel changed the main window geometry' }
   }
-  # Completion of an old close must not overwrite a newer tray-open request.
-  if(-not [QuotumWindowProbe]::OpenPanel($process.Id)){throw 'Cannot open panel for queued-close check'}
-  $deadline=(Get-Date).AddSeconds(15)
-  do {$panel=[QuotumWindowProbe]::FindOther($process.Id,$window);if($panel -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 50}while((Get-Date) -lt $deadline)
-  if($panel -eq [IntPtr]::Zero){throw 'No panel for queued-close check'}
-  $paused=[QuotumWindowProbe]::PauseUi($panel,$process.Id)
-  try {
-    [void][QuotumWindowProbe]::PostMessage($panel,0x10,[IntPtr]::Zero,[IntPtr]::Zero)
-    if(-not [QuotumWindowProbe]::OpenPanel($process.Id)){throw 'Cannot toggle queued panel closed'}
-    Start-Sleep -Milliseconds 100
-    if(-not [QuotumWindowProbe]::OpenPanel($process.Id)){throw 'Cannot request panel reopen'}
-    Start-Sleep -Milliseconds 100
-  } finally { [QuotumWindowProbe]::ResumeUi($paused) }
-  $deadline=(Get-Date).AddSeconds(15)
-  Start-Sleep -Seconds 2
-  do {$panel=[QuotumWindowProbe]::FindOther($process.Id,$window);if($panel -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 50}while((Get-Date) -lt $deadline)
-  if($panel -eq [IntPtr]::Zero){throw 'Old CloseRequested lost the latest panel open'}
-  Start-Sleep -Seconds 1
-  if(-not [QuotumWindowProbe]::IsWindowVisible($panel)){throw 'The reopened panel disappeared after old callbacks'}
-  [QuotumWindowProbe]::Escape($panel,$process.Id)
+  Test-QueuedPanelReopen $window
+  [void][QuotumWindowProbe]::PostMessage($window,0x10,[IntPtr]::Zero,[IntPtr]::Zero)
   $deadline=(Get-Date).AddSeconds(5)
-  while([QuotumWindowProbe]::IsWindowVisible($panel) -and (Get-Date) -lt $deadline){Start-Sleep -Milliseconds 50}
-  if([QuotumWindowProbe]::IsWindowVisible($panel)){throw 'Cannot close the current panel after queued reopen'}
+  while([QuotumWindowProbe]::IsWindowVisible($window) -and (Get-Date) -lt $deadline){Start-Sleep -Milliseconds 50}
+  if($process.HasExited -or [QuotumWindowProbe]::IsWindowVisible($window)){throw 'Could not close main before the last-WebView check'}
+  Test-QueuedPanelReopen ([IntPtr]::Zero)
   $result.queuedPanelReopen=$true
+  $result.queuedPanelReopenWithoutMain=$true
+  $second=Start-Process -FilePath $appPath -PassThru
+  $null=$second.Handle
+  if(-not $second.WaitForExit(10000) -or $second.ExitCode -ne 0){throw 'Could not reopen main after the last-WebView check'}
+  $window=Wait-Window
   # A blocked WebView/UI thread must not stop the tray's native loading surface.
   # Only this test process's already-verified UI thread is paused, always resumed.
   [void][QuotumWindowProbe]::ShowWindowAsync($window,6)

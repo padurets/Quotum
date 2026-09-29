@@ -667,7 +667,9 @@ entry by turning start at login off and on again.
 On a Windows tray activation, the tray thread shows a small Win32 loading surface
 before WebView2 creation can occupy the app event loop. Its spinner, Escape and
 blur handling remain responsive even while that loop is busy. The panel replaces
-it only after placement and page loading have both completed. Both surfaces disable
+it only after placement and page loading have both completed. Tauri shows and focuses
+the browser on its own event loop; the tray thread only dismisses the loader when
+that current browser takes over. Both surfaces disable
 DWM transitions so their handoff does not animate as a second window opening. A second click
 cancels either phase. No web view is retained just to warm the next opening.
 The host handles Escape before page scripts, including on startup/error pages.
@@ -685,6 +687,8 @@ Panel presentations carry the controller's request revision. Retiring an old win
 cannot close or blur a newer request; each native window keeps its request for life.
 A newer request retires that window before creating its own. Cancellation marks the
 presentation before queuing its close, and stale loader commands cannot cover a ready panel.
+The panel is hidden before its WebView2 controller is destroyed, so focus leaves while
+that controller can still handle native messages.
 
 **Linux rendering and lifetime.** The Rust controller uses a D-Bus StatusNotifierItem
 through `ksni`. A small GTK loading surface responds before Chromium starts; GTK

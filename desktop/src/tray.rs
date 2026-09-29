@@ -245,7 +245,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                             context.loading.hide();
                         }
                     }
-                    Command::PanelReady(handle) => context.loading.present(handle),
+                    Command::PanelReady(handle) => context.loading.complete(handle),
                     Command::Status(status) => {
                         *context.status.borrow_mut() = status;
                         unsafe {
