@@ -224,9 +224,9 @@ function CardColor({source, arrange}: {source: Card; arrange: Arrange}) {
 
 /**
  * A card's menu: any reader can request fresh limits. The board's owner names the card,
- * gives it a colour, picks its limits,
- * sets the weekly plan or switches it off, hides it; on a shared board the owner, or whoever's devices measure it, also
- * takes it off the board: it goes when the board tells so.
+ * gives it a colour, picks its limits, sets the weekly plan or switches it off, hides it;
+ * on a shared board the owner, or whoever's devices measure it, also takes it off the
+ * board: it goes when the board tells so.
  */
 function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Card; title: string; arrange: Arrange; boardId: string; takeOff: boolean}) {
   const [error, setError] = useState<unknown>(null);

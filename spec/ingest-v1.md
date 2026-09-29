@@ -263,19 +263,19 @@ same fields above. This never bypasses the one-minute minimum, the device's
 `minIntervalMs`, a failure pause or the retry delay of an unanswered command; repeated
 clicks join one request, and a click while the holder measures what it was told to
 (before it asks again, for at most five minutes) waits for that command instead of
-asking again; meanwhile its silence does not make refresh unavailable. Raising the minimum after an earlier promise takes
-precedence over that promise, so the old measurement can become stale before the next is
-allowed, and the holder's duty can lapse before then: until it asks again, no refresh can
-be requested, and another device of the subscription may take duty and measure at once.
-Both ordinary and requested measurements respect the minimum after the later of the
-last measurement and the last command to this holder. A new holder keeps the usual
-first-measurement policy.
+asking again; meanwhile its silence does not make refresh unavailable. Raising the
+minimum after an earlier promise takes precedence over that promise, so the old
+measurement can become stale before the next is allowed, and the holder's duty can lapse
+before then: until it asks again, no refresh can be requested, and another device of the
+subscription may take duty and measure at once. Both ordinary and requested measurements
+respect the minimum after the later of the last measurement and the last command to this
+holder. A new holder keeps the usual first-measurement policy.
 
 An accepted delivery or a reported failure acknowledges the holder's outstanding command
 only if its corrected time is at least the command's time minus the 30-second clock
-tolerance. Older data can
-still update the usual card, but cannot acknowledge a newer command or clear a later
-failure pause. A success clears a pause only if taken after that failure.
+tolerance. Older data can still update the usual card, but cannot acknowledge a newer
+command or clear a later failure pause. A success clears a pause only if taken after
+that failure.
 
 A refresh asks for fresh data, not an acknowledgement of process startup. The agent
 measures providers sequentially, so neither a check-in within 15 seconds nor a result
@@ -388,7 +388,7 @@ see its limits, with each project under the name its person gave it, and with th
 name of the machine each agent runs on.
 
 A dashboard refresh sends only the board and source ids to the hub. Its shared state
-contains times and outcomes, without the requester or the device’s identity. No new
+contains times and outcomes, without the requester or the device's identity. No new
 information leaves the agent.
 
 What the hub keeps of running agents: when each worked, with the machine, subscription,

@@ -69,7 +69,7 @@ change as it was.
 | `card` | a card | A source's state changed. |
 | `sessions` | `{id, sessions}` | The agents running on a source, on the machines of its people on this board, changed. |
 | `cadence` | `{id, cadence}` | When a source is measured next, or why, changed. |
-| `refresh` | `{id, refresh}` | A source’s refresh availability, request or cooldown changed. |
+| `refresh` | `{id, refresh}` | A source's refresh availability, request or cooldown changed. |
 | `mine` | `{sources: string[]}` | Which sources of the board the reader's devices measure changed. |
 | `boards` | `{boards}` | The reader's boards changed: made, deleted, renamed, joined, left. |
 | `history` | `{sources: string[], since}` | These sources have measurements taken at `since` or later that the chart has not shown; with `since` 0, all of the board's history reads otherwise: whose agents' work it shows, or under which names, changed (a card hidden or shown, someone joining or leaving, a project or a machine renamed). |
@@ -87,11 +87,12 @@ limited to 64 KiB (65,536 UTF-8 bytes), so it fits the page's keepalive request 
 leaving before the debounced save. There is no separate count limit on places; each
 place is validated.
 
-In a `snapshot`, `sources` are the cards of the board's sources in its order; `sessions`,
-`cadence` and `refresh` are by source id, for those sources only. `board` is `{id, name,
-personal}`; the reader's role is in `boards`, each `{id, name, personal, role}`, as it is
-theirs alone. `resets` is what `GET /api/resets` answers. `historyStart` is when the
-board's history begins as of the snapshot; `GET /api/history` tells it later.
+In a `snapshot`, `sources` are the cards of the board's sources in its order;
+`sessions`, `cadence` and `refresh` are by source id, for those sources only. `board` is
+`{id, name, personal}`; the reader's role is in `boards`, each
+`{id, name, personal, role}`, as it is theirs alone. `resets` is what `GET /api/resets`
+answers. `historyStart` is when the board's history begins as of the snapshot;
+`GET /api/history` tells it later.
 
 A card is `{id, provider, plan, successAt, error, stale, windows, resets, owners,
 staleAfterMs}`: the source's last measurement (`successAt`, its `windows` and free
@@ -99,13 +100,14 @@ staleAfterMs}`: the source's last measurement (`successAt`, its `windows` and fr
 its numbers hold. `stale` is the hub's to say, and it says so: a card sent when its
 numbers get too old.
 
-Each event carries its part whole; the page puts it in place of what it had. What changes
-at the same moment goes out together, in this order: `board`, `view`, the sources'
-`card`, `sessions`, `cadence` and `refresh` (sources new to the board before `lineup`), `lineup`,
-`mine`, `boards`, `history`, `resets`. A part goes out only when it differs from what the
-reader last got; a change reaches the page within a tenth of a second. What changes with
-time alone (a card going stale, a machine's list of agents no longer shown, a holder
-falling silent, a past reset leaving the history) goes out when it does.
+Each event carries its part whole; the page puts it in place of what it had. What
+changes at the same moment goes out together, in this order: `board`, `view`, the
+sources' `card`, `sessions`, `cadence` and `refresh` (sources new to the board before
+`lineup`), `lineup`, `mine`, `boards`, `history`, `resets`. A part goes out only when it
+differs from what the reader last got; a change reaches the page within a tenth of a
+second. What changes with time alone (a card going stale, a machine's list of agents no
+longer shown, a holder falling silent, a past reset leaving the history) goes out when
+it does.
 
 `bye` tells why the reader is let go, and the connection ends:
 
@@ -141,14 +143,16 @@ so a late POST response cannot undo a result already received.
 
 `refresh` is `{unavailable, availableAt, retryAt, request}`. `unavailable` is null, or
 `no_device`, `unsupported`, `silent`, `paused`; `availableAt` is the end of the error
-pause when `unavailable` is `paused`, otherwise null. `retryAt` is the end of a still-active one-minute cooldown,
-otherwise null. These describe the ability to create a NEW request. `silent` is 120
-seconds without a word from the holder: a check-in with the subscription, or, within
-five minutes after it, a delivery of any measurement or failure by that device.
+pause when `unavailable` is `paused`, otherwise null. `retryAt` is the end of a
+still-active one-minute cooldown, otherwise null. These describe the ability to create a
+new request. `silent` is 120 seconds without a word from the holder: a check-in with the
+subscription, or, within five minutes after it, a delivery of any measurement or failure
+by that device.
 
-`request` is null or `{requestedAt, notBefore, dispatchAt, deadline, status, finishedAt}`.
-All times are epoch milliseconds on the hub. `dispatchAt` and `finishedAt` may be null.
-`notBefore` is the earliest permitted measurement time, not proof of a client starting.
+`request` is null or
+`{requestedAt, notBefore, dispatchAt, deadline, status, finishedAt}`. All times are
+epoch milliseconds on the hub. `dispatchAt` and `finishedAt` may be null. `notBefore` is
+the earliest permitted measurement time, not proof of a client starting.
 
 | Status | Meaning |
 |---|---|
@@ -159,21 +163,22 @@ All times are epoch milliseconds on the hub. `dispatchAt` and `finishedAt` may b
 | `unavailable` | The request lost its executor or became impossible. |
 | `no_result` | No fresh data arrived before the deadline. This says nothing about whether the client started. |
 
-A request joins a command to the holder that is still under way: one the holder has
-not asked past, since it asks nothing while it measures, for at most five minutes after
-the command; meanwhile the holder is not `silent`. A holder that asks again
-without answering lost the command, and the request is queued for the command's retry,
-which it never brings forward. Before dispatch the deadline is five minutes after
-`notBefore` (never counted from a moment already past, when the device lowers its
-minimum); after dispatch, five minutes after the command. Joining a command waits five
-minutes after the request, with no extension on retries. Silence over 120 seconds ends a
-queued request. A dispatched request keeps waiting until its deadline: providers are
-measured sequentially, and a holder busy measuring neither asks nor delivers the others.
-Its `unavailable` can therefore be `silent` or `no_device` once the five minutes after
-the command are over, while a joined request is still `waiting`. A lapsed lease ends neither while the same
-device holds duty. Revocation, a changed holder, a return to the legacy protocol and an
-error pause end either. Terminal results remain for one minute; an allowed new request can replace one
-immediately. The state is in memory and resets with the hub.
+A request joins a command to the holder that is still under way: one the holder has not
+asked past, since it asks nothing while it measures, for at most five minutes after the
+command; meanwhile the holder is not `silent`. A holder that asks again without
+answering lost the command, and the request is queued for the command's retry, which it
+never brings forward. Before dispatch the deadline is five minutes after `notBefore`
+(never counted from a moment already past, when the device lowers its minimum); after
+dispatch, five minutes after the command. Joining a command waits five minutes after the
+request, with no extension on retries. Silence over 120 seconds ends a queued request. A
+dispatched request keeps waiting until its deadline: providers are measured
+sequentially, and a holder busy measuring neither asks nor delivers the others. Its
+`unavailable` can therefore be `silent` or `no_device` once the five minutes after the
+command are over, while a joined request is still `waiting`. A lapsed lease ends neither
+while the same device holds duty. Revocation, a changed holder, a return to the legacy
+protocol and an error pause end either. Terminal results remain for one minute; an
+allowed new request can replace one immediately. The state is in memory and resets with
+the hub.
 
 A success must be newer than the success at acceptance and no earlier than 30 seconds
 before the request (or the original command when joining one already outstanding), using
