@@ -1,3 +1,5 @@
+import type {Win} from './quota.js';
+
 /**
  * Where the recent pace of a weekly window leads: the forecast of one series, a
  * subscription's window of one kind followed through its resets of any kind (a scheduled
@@ -139,10 +141,38 @@ type Cells = {t0: number; n: number; counted: Float64Array; spent: Float64Array}
 type Hour = {t: number; pace: number};
 type Rate = number | ((t: number) => number);
 
-/** Whether a window had started by `at`: something was spent, or its start is more than a moment before. */
-export function started(window: {used: number; resetAt: number; minutes: number}, at: number): boolean {
-  return window.used > 0 || window.resetAt - window.minutes * MINUTE < at - STARTED_AFTER;
+/**
+ * Whether a window measured at `at` had started: an idle rolling window reports "now plus
+ * its length" as its reset, so it has not while its start is that moment. The board's
+ * `started` (ui/lib/plan.ts), with the same tolerance: the hub's code does not reach the
+ * board's, and a test checks the two agree.
+ */
+export function started(window: {resetAt: number | null; minutes: number | null}, at: number): boolean {
+  return !!window.resetAt && !!window.minutes && window.resetAt - window.minutes * MINUTE < at - STARTED_AFTER;
 }
+
+/** Whether a sample's window had begun: something spent, or started by its time. */
+const begun = (s: Measured) => s.used > 0 || started(s, s.at);
+
+/**
+ * Why a window's cells cannot count now, as its card has it: the window used up
+ * (`atZero`), or a model's window while the subscription's weekly window (the one without a
+ * label) is used up and resets no earlier than it (`weeklyAtZero`). Such a series gains
+ * no history until a reset. Null when they count. The board tells the same by a copy.
+ */
+export function uncounted(windows: readonly Win[], window: Win): 'atZero' | 'weeklyAtZero' | null {
+  if (window.used >= AT_ZERO) return 'atZero';
+  const weekly = subscriptionWeekly(windows);
+  if (!weekly || weekly.id === window.id || weekly.resetAt === null || window.resetAt === null) return null;
+  return weekly.used >= AT_ZERO && weekly.resetAt >= window.resetAt - TOLERANCE ? 'weeklyAtZero' : null;
+}
+
+/**
+ * The subscription's own weekly window, which a model's windows are within: the weekly one
+ * without a label (Claude's and Codex's `weekly`). Antigravity labels all of its windows and
+ * has none.
+ */
+export const subscriptionWeekly = (windows: readonly Win[]): Win | null => windows.find(w => w.kind === 'weekly' && w.label === null) ?? null;
 
 /** Whether `b` is in the window of `a`: `edge` of domain/quota.ts without its gap and correction, a drop of used being spending of none. */
 function sameWindow(a: Measured, b: Measured): boolean {
@@ -241,13 +271,13 @@ function cellsOf(samples: Measured[], windows: Window[], of: number[], plan: Mea
   let from = 0;
   if (young) {
     const first = samples[0];
-    if (!started(first, first.at)) {
+    if (!begun(first)) {
       // Seen not started: the history begins with the first window that started.
-      const k = samples.findIndex(s => started(s, s.at));
+      const k = samples.findIndex(begun);
       from = k > 0 ? Math.floor((samples[k].resetAt - samples[k].minutes * MINUTE - t0) / CELL) : n;
     } else {
       // The first window the series saw start and that started; nothing spent before it, nothing before it counts.
-      const j = windows.findIndex((w, index) => w.start >= first.at - SAW_START && samples.some((s, i) => of[i] === index && started(s, s.at)));
+      const j = windows.findIndex((w, index) => w.start >= first.at - SAW_START && samples.some((s, i) => of[i] === index && begun(s)));
       if (j >= 0) {
         const boundary = Math.max(0, Math.floor((windows[j].start - t0) / CELL));
         // The cell the window begins in is left out: with a start inside it, it holds the first spending already.

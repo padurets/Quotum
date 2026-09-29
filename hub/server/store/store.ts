@@ -3,6 +3,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {config} from '../config.js';
 import {providers, sourceId, type Provider, type Source} from '../domain/sources.js';
 import {onGrid, series, type Kind, type Measurement, type Sample, type SourceState} from '../domain/quota.js';
+import type {PlanChange, SeriesSample} from '../domain/forecast.js';
 import type {Origin} from '../domain/ingest.js';
 import {activity, barOf, seriesWork, union, type Activity, type SeriesWork, type Stretch} from '../domain/work.js';
 import {members, projectGroups, type ProjectGroup} from '../domain/projects.js';
@@ -345,9 +346,13 @@ export class Store {
   }
 
   /**
-   * Stores a measurement: a sample per window, the new state of the source, and free
-   * resets granted since the last one. A savepoint keeps it whole on its own and inside
-   * a batch's transaction alike.
+   * Stores a measurement: a sample per window, the new state of the source, free resets
+   * granted since the last one, and its plan when that is new. A savepoint keeps it whole
+   * on its own and inside a batch's transaction alike.
+   *
+   * Besides free resets granted, `events` keeps a subscription's plan (kind `plan`,
+   * detail: its name) from each moment it was reported otherwise, the first one included:
+   * a forecast's history begins anew after a change (domain/forecast.ts, `planSince`).
    */
   record(id: string, measurement: Measurement) {
     const previous = this.state(id);
@@ -375,6 +380,10 @@ export class Store {
       this.db.prepare('INSERT OR REPLACE INTO state VALUES (?, ?)').run(id, JSON.stringify(state));
       if (granted > 0 && previous.successAt !== null) {
         this.db.prepare('INSERT OR IGNORE INTO events VALUES (?, ?, ?, ?)').run(id, measurement.observedAt, 'resets_granted', String(granted));
+      }
+      // Measurements come in time order (only newer than the last are recorded), and so do the plans.
+      if (measurement.plan !== '' && measurement.plan !== this.lastPlan(id)) {
+        this.db.prepare('INSERT OR IGNORE INTO events VALUES (?, ?, ?, ?)').run(id, measurement.observedAt, 'plan', measurement.plan);
       }
       this.db.exec('RELEASE record');
     } catch (error) {
@@ -554,6 +563,65 @@ export class Store {
     return rows.map(r => ({sourceId: r.source_id, at: r.at, kind: 'resets_granted', count: Number(r.detail)}));
   }
 
+  private lastPlan(source: string): string | null {
+    const row = this.db.prepare("SELECT detail FROM events WHERE source_id = ? AND kind = 'plan' ORDER BY at DESC LIMIT 1").get(source) as {detail: string} | undefined;
+    return row?.detail ?? null;
+  }
+
+  /** The plans a subscription was reported with up to `upTo`, each from when it was new, oldest first. */
+  planChanges(source: string, upTo: number): PlanChange[] {
+    const rows = this.db.prepare("SELECT at, detail FROM events WHERE source_id = ? AND kind = 'plan' AND at <= ? ORDER BY at").all(source, upTo) as {at: number; detail: string}[];
+    return rows.map(r => ({at: r.at, plan: r.detail}));
+  }
+
+  /**
+   * A window's samples from `from` up to `to`, and the last one before `from`, oldest
+   * first: what a forecast reads. Weeks of samples every two minutes are read as arrays,
+   * a few times faster than as objects.
+   */
+  seriesSamples(source: string, window: string, from: number, to: number): SeriesSample[] {
+    const read = this.db.prepare(
+      'SELECT at, used, reset_at, minutes FROM samples WHERE source_id = ? AND window_id = ? AND at <= ? AND at >= ' +
+        '(SELECT coalesce(max(at), ?) FROM samples WHERE source_id = ? AND window_id = ? AND at < ?) ORDER BY at',
+    );
+    read.setReturnArrays(true);
+    const rows = read.all(source, window, to, from, source, window, from) as unknown as [number, number, number | null, number | null][];
+    return rows.map(([at, used, resetAt, minutes]) => ({at, used, resetAt, minutes}));
+  }
+
+  /** Whether a window has a sample after `after` up to `upTo`. */
+  sampled(source: string, window: string, after: number, upTo: number): boolean {
+    return !!this.db.prepare('SELECT 1 FROM samples WHERE source_id = ? AND window_id = ? AND at > ? AND at <= ? LIMIT 1').get(source, window, after, upTo);
+  }
+
+  /** A window's sample at `at` and the next one: when each was taken and how long it held. */
+  sampleAndNext(source: string, window: string, at: number): {at: number; staleAfterMs: number}[] {
+    const rows = this.db
+      .prepare('SELECT at, stale_after_ms FROM samples WHERE source_id = ? AND window_id = ? AND at >= ? ORDER BY at LIMIT 2')
+      .all(source, window, at) as {at: number; stale_after_ms: number}[];
+    return rows.map(r => ({at: r.at, staleAfterMs: r.stale_after_ms}));
+  }
+
+  /** What was kept under `key` (server/forecasts.ts: a series' forecast memory), as JSON; null when nothing. */
+  kept(key: string): string | null {
+    const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get(key) as {value: string} | undefined;
+    return row?.value ?? null;
+  }
+
+  /** Keeps values under their keys, in one transaction. */
+  keep(entries: [string, string][]) {
+    const put = this.db.prepare('INSERT OR REPLACE INTO meta VALUES (?, ?)');
+    this.db.exec('SAVEPOINT keep');
+    try {
+      for (const [key, value] of entries) put.run(key, value);
+      this.db.exec('RELEASE keep');
+    } catch (error) {
+      this.db.exec('ROLLBACK TO keep');
+      this.db.exec('RELEASE keep');
+      throw error;
+    }
+  }
+
   /** Keeps a reset the trackers reported; the same one reported again is kept once. */
   announce(provider: string, announcement: Announcement) {
     if (this.db.prepare('INSERT OR IGNORE INTO announcements VALUES (?, ?, ?, ?)').run(provider, announcement.at, announcement.url, announcement.text).changes) {
@@ -694,15 +762,27 @@ export class Store {
     return Number((this.db.prepare("SELECT value FROM meta WHERE key = 'agentWorkSince'").get() as {value: string}).value);
   }
 
-  /** Forgets samples, events, announcements and agents' work older than the retention period; corrected project names stay until undone. */
+  /**
+   * Forgets samples, events, announcements, agents' work and forecasts' memory older than
+   * the retention period; corrected project names stay until undone, and so does the plan
+   * a subscription has while it has it.
+   */
   prune(now: number) {
     const cutoff = now - config.retention.sampleDays * 86_400_000;
     this.db.prepare('DELETE FROM samples WHERE at < ?').run(cutoff);
     this.db.prepare('DELETE FROM agent_work WHERE to_at < ?').run(cutoff);
     // A session without work is not needed; one still running is made again when credited.
     this.db.prepare('DELETE FROM agent_sessions WHERE NOT EXISTS (SELECT 1 FROM agent_work WHERE session_id = agent_sessions.id)').run();
-    this.db.prepare('DELETE FROM events WHERE at < ?').run(cutoff);
+    this.db
+      .prepare(
+        "DELETE FROM events WHERE at < ? AND NOT (kind = 'plan' AND at = (SELECT max(at) FROM events e WHERE e.source_id = events.source_id AND e.kind = 'plan' AND e.at < ?))",
+      )
+      .run(cutoff, cutoff);
     this.db.prepare('DELETE FROM announcements WHERE at < ?').run(cutoff);
+    // What a forecast kept is read as JSON: anything else is forgotten too.
+    this.db
+      .prepare("DELETE FROM meta WHERE key LIKE 'forecast:%' AND CASE WHEN json_valid(value) THEN coalesce(json_extract(value, '$.asOf') < ?, 1) ELSE 1 END")
+      .run(cutoff);
   }
 
   close() {

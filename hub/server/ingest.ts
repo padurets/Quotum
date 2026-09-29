@@ -1,5 +1,6 @@
 import {secretKind} from './domain/auth.js';
 import {Invalid, parseBatch, parseCheckin, parseSessions, subscriptionKey, toMeasurement, type AgentSender} from './domain/ingest.js';
+import {Forecasts} from './forecasts.js';
 import {Sessions} from './sessions.js';
 import {ACTIVE_WITHIN_MS, type Cadence, type Signals, type Why} from './cadence.js';
 import type {Duty} from './duty.js';
@@ -37,6 +38,8 @@ const CLOCK_TOLERANCE_MS = 30_000;
 export class Ingest {
   /** The coding agents running on the devices right now. */
   readonly live: Sessions;
+  /** Where the recent pace of each weekly window leads, one forecast per window for every board and /api/overview. */
+  readonly forecasts: Forecasts;
   private observer: Touches | null = null;
 
   constructor(
@@ -46,6 +49,7 @@ export class Ingest {
     private readonly cadence: Cadence,
   ) {
     this.live = new Sessions(store);
+    this.forecasts = new Forecasts(store);
   }
 
   /** Tells `observer` which sources every delivery, check-in and list of agents touches (events of open dashboards). */

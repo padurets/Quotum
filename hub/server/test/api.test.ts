@@ -135,7 +135,7 @@ test('someone with an account who signs in from an invite link joins the board',
 });
 
 test('a machine token lets any number of machines deliver as its person; revoking it disconnects them and tells them so', async () => {
-  const {call, person} = await hub();
+  const {call, person, store} = await hub();
   await person('alice');
   const token = await call('POST', '/api/tokens', {as: 'alice', body: {name: 'Dev images'}});
   assert.match(token.body.secret, /^qt_m_/);
@@ -151,6 +151,11 @@ test('a machine token lets any number of machines deliver as its person; revokin
   const overview = (await call('GET', '/api/overview', {as: 'alice'})).body;
   const [codex] = overview.sources;
   assert.deepEqual([overview.sources.length, codex.provider, codex.windows[0].remaining, codex.windows[0].kind, codex.owners], [1, 'codex', 92, 'weekly', ['Alice']]);
+  // A weekly window measured just now has no hour of history to go by yet.
+  assert.deepEqual(Object.keys(overview.forecast), [codex.id]);
+  assert.equal(overview.forecast[codex.id].weekly.state, 'needData');
+  assert.ok(overview.forecast[codex.id].weekly.basis.hours < 1);
+  assert.ok(store.kept(`forecast:${codex.id}:weekly`), 'what it worked out is kept for a restart');
   assert.deepEqual(devices.map((d: any) => [d.via, d.sources.map((s: any) => s.source)]), [['token', [codex.id]], ['token', [codex.id]]]);
   assert.equal(devices[0].machineId, undefined, 'machine ids stay on the hub');
 
