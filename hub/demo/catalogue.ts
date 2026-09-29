@@ -74,7 +74,9 @@ import {
  * measured at the hub's pace (`paced`) say what their dot tells of the next measurement
  * for minutes from `start`, one resetting ten minutes in: a test of their own asks every
  * 15 seconds as their machine does, while the long one measures them on its rhythm and
- * leaves those codes out. How agents worked before `start` is written into the hub (as it
+ * leaves those codes out. The live demo measures every card at the hub's pace, so what
+ * comes and goes in its first hours (a card going stale while its machine sleeps, where a
+ * young series' week leads) is checked at that pace too, by tests of their own. How agents worked before `start` is written into the hub (as it
  * would have credited it, from ten days back: the part before is unknown) and read at
  * `start` alone: the codes of the activity widget and of the table's work are at that
  * fixed point, over a period ending there or a range before it.
@@ -1228,7 +1230,8 @@ const all: DemoSet = {
         {title: 'Begins with Quotum'},
         {forecast: 'weekly', outlook: 'idle', to: 55 * MIN},
         // Its history begins with its week: no forecast for the first three quarters of an hour of it, then a cautious one.
-        {forecast: 'weekly', outlook: 'needData', why: 'hour', from: 65 * MIN, to: 95 * MIN},
+        // At the hub's pace, which measures it every quarter of an hour while unused, the live demo sees its week begun up to 20 minutes late.
+        {forecast: 'weekly', outlook: 'needData', why: 'hour', from: 85 * MIN, to: 95 * MIN},
         {forecast: 'weekly', outlook: 'runsOut', tone: 'v-warn', cold: true, from: 2 * HOUR, to: 3 * HOUR},
       ],
     },

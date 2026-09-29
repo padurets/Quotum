@@ -646,6 +646,44 @@ for (const first of [0, 59 * SECOND])
     assert.equal(checked.size, checks.reduce((count, card) => count + card.expect.length, 0), 'every such code is checked');
   });
 
+// The live demo's loop starts when the demo is up, up to a minute past the minute its time counts from.
+for (const first of [0, 59 * SECOND])
+  test(`where a young series' week leads reads the same in the live demo, where the hub sets the pace, its first tick ${first / SECOND} s in`, {timeout: 180_000}, async t => {
+    const all = setOf('all');
+    // A weekly window's forecast that lives by design over a span of its own: a series young
+    // at `start`, which the hub measures when it says, and less often while it is unused.
+    const young = (card: Card) => card.expect.filter(check => 'forecast' in check && 'to' in check && card.windows.some(w => w(0).id === check.forecast && w(0).kind === 'weekly'));
+    const scenes = cards(all).filter(card => young(card).length);
+    assert.ok(scenes.length >= 2, 'the catalogue has young series');
+    const set: DemoSet = {
+      ...all,
+      entries: all.entries
+        .filter(e => e.kind !== 'card' || scenes.includes(e))
+        .map(e => (e.kind === 'person' ? {...e, expect: e.expect.filter(check => !('project' in check))} : e)),
+    };
+    const checks = scenes.map(card => ({...card, expect: young(card)}));
+    const points = [...new Set(checks.flatMap(card => (card.expect as Span[]).flatMap(check => [check.from ?? 0, ((check.from ?? 0) + (check.to ?? HOLDS)) / 2, check.to ?? HOLDS])))].sort((a, b) => a - b);
+    const start = Math.floor(Date.now() / MIN) * MIN;
+    const {stand, hub} = await bringUp(t, set, start);
+    const live = new Live(stand, cadence, true);
+    const checked = new Set<string>();
+    const wrong: string[] = [];
+    let at = first;
+    for (const point of points) {
+      for (; at <= point; at = (Math.floor(at / TICK) + 1) * TICK) {
+        t.mock.timers.setTime(start + at);
+        await live.report(at, start + at);
+        await live.pace(at, start + at);
+        await live.measure(at, start + at);
+      }
+      t.mock.timers.setTime(start + point);
+      const reading = new Reading(stand, start + point, new Map([[set.scene, await hub.told()]]));
+      wrong.push(...(await checkAll(stand, checks, reading, point, checked)));
+    }
+    assert.deepEqual(wrong, [], `start ${new Date(start).toISOString()}`);
+    assert.equal(checked.size, checks.reduce((count, card) => count + card.expect.length, 0), 'every such code is checked');
+  });
+
 // A refresh scene counts from the machines' first asking; the live demo asks next on its 15-second grid.
 for (const first of [0, 59 * SECOND])
   test(`refresh scenes show what they say from the first asking, ${first / SECOND} s into the live demo`, {timeout: 120_000}, async t => {
