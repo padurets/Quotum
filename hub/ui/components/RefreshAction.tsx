@@ -2,7 +2,7 @@ import {Fragment, useRef, useState} from 'react';
 import {t, useLocale} from '../i18n';
 import {useConnection, useRefresh} from '../lib/board';
 import {useClock} from '../lib/clock';
-import {refreshErrorChangesAt, refreshErrorText, refreshPending, requestRefresh} from '../lib/refresh';
+import {refreshErrorChangesAt, refreshErrorText, refreshPending, requestRefresh, useSending} from '../lib/refresh';
 
 export const RefreshIcon = () => (
   <svg className="row-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
@@ -17,8 +17,8 @@ export function RefreshAction({id, board, onAccepted}: {id: string; board: strin
   useLocale();
   const state = useRefresh(id);
   const connection = useConnection();
-  const [sending, setSending] = useState(false);
-  const busy = useRef(false);
+  // Sent from this menu, one opened before or the header: the item waits for that answer.
+  const sending = useSending(board, id);
   const action = useRef<HTMLButtonElement>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
   const now = useClock(now => (failure?.kind === 'request' ? refreshErrorChangesAt(failure.error, state, now) : null));
@@ -31,14 +31,12 @@ export function RefreshAction({id, board, onAccepted}: {id: string; board: strin
         ? refreshErrorText(failure.error, state, now)
         : null;
   const send = async () => {
-    if (busy.current || pending) return;
+    if (sending || pending) return;
     setFailure(null);
     if (!connected) {
       setFailure({kind: 'offline'});
       return;
     }
-    busy.current = true;
-    setSending(true);
     const previous = state?.request?.requestedAt ?? null;
     try {
       await requestRefresh(board, id);
@@ -46,9 +44,6 @@ export function RefreshAction({id, board, onAccepted}: {id: string; board: strin
       if (action.current) onAccepted();
     } catch (error) {
       setFailure({kind: 'request', error, previous});
-    } finally {
-      busy.current = false;
-      setSending(false);
     }
   };
   return (

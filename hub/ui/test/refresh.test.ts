@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {refreshChangesAt, refreshPending, refreshText, refreshErrorText, refreshErrorChangesAt, requestRefreshAll, startRefreshRows, observeRefreshRows, answerRefreshRow} from '../lib/refresh';
+import {refreshAllStarts, refreshChangesAt, refreshPending, refreshText, refreshErrorText, refreshErrorChangesAt, requestRefresh, requestRefreshAll, startRefreshRows, observeRefreshRows, answerRefreshRow} from '../lib/refresh';
 import {ApiError} from '../lib/http';
 import {setLocale} from '../i18n';
 import type {Refresh} from '../lib/types';
@@ -36,7 +36,9 @@ test('each completed outcome stays in the receipt after retirement or a differen
   const failed = {...queued, request: {...queued.request!, status: 'failed' as const, finishedAt: 21_000}};
   const finished = observeRefreshRows(rows, {a: updated, b: failed});
   assert.deepEqual(finished.map(row => row.status), ['updated', 'failed']);
-  assert.equal(observeRefreshRows(finished, {a: {...queued, request: null}, b: queued}, true), finished);
+  const another = {...queued, request: {...queued.request!, requestedAt: 80_000}};
+  assert.equal(observeRefreshRows(finished, {a: {...queued, request: null}, b: another}, true), finished);
+  assert.equal(observeRefreshRows(finished, {a: another, b: another}), finished, 'a later request is not this outcome');
 });
 
 test('a late HTTP error cannot replace an event proving that the data arrived', () => {
@@ -71,7 +73,7 @@ test('refreshing a board deduplicates subscriptions, limits concurrency and cont
   let running = 0;
   let peak = 0;
   const rejected = new ApiError(429, 'refresh_too_soon');
-  const result = await requestRefreshAll('board', ['a', 'b', 'a', 'c', 'd', 'e', 'f'], async (board, id) => {
+  await requestRefreshAll('board', ['a', 'b', 'a', 'c', 'd', 'e', 'f'], async (board, id) => {
     assert.equal(board, 'board');
     called.push(id);
     peak = Math.max(peak, ++running);
@@ -80,8 +82,7 @@ test('refreshing a board deduplicates subscriptions, limits concurrency and cont
     if (id === 'b') throw rejected;
   });
   assert.equal(peak, 4);
-  assert.deepEqual(called.sort(), ['a', 'b', 'c', 'd', 'e', 'f']);
-  assert.deepEqual(result, {total: 6, accepted: 5, failures: [{id: 'b', error: rejected}]});
+  assert.deepEqual(called.sort(), ['a', 'b', 'c', 'd', 'e', 'f'], 'the refusal of b stops no other card');
 });
 
 test('leaving the board stops requests that have not started', async () => {
@@ -93,8 +94,7 @@ test('leaving the board stops requests that have not started', async () => {
     current = false;
   }, () => current);
   assert.deepEqual(called, ['a', 'b', 'c', 'd']);
-  const empty = await requestRefreshAll('board', [], async () => assert.fail('no request for an empty board'));
-  assert.deepEqual(empty, {total: 0, accepted: 0, failures: []});
+  await requestRefreshAll('board', [], async () => assert.fail('no request for an empty board'));
 });
 
 test('refresh wording stays identical until its declared next clock boundary', () => {
@@ -149,4 +149,71 @@ test('a refusal countdown changes only at its declared clock boundary', () => {
       assert.equal(refreshErrorText(error, state, at), refreshErrorText(error, state, now));
     now = next;
   }
+});
+
+test('a request followed to its end unseen settles as unknown, and nobody else\'s request takes its place', () => {
+  const [row] = startRefreshRows(['a'], {a: queued});
+  const waiting = observeRefreshRows([row], {a: {...queued, request: {...queued.request!, status: 'waiting', dispatchAt: 300_000}}});
+  assert.equal(waiting[0].status, 'waiting');
+  // A laptop asleep past the deadline and the minute after it: the hub says only that nothing is pending.
+  const gone = observeRefreshRows(waiting, {a: {...queued, request: null}});
+  assert.equal(gone[0].status, 'unknown');
+  const later = {...queued, request: {...queued.request!, requestedAt: 900_000}};
+  assert.equal(observeRefreshRows(gone, {a: later}), gone);
+  const replaced = observeRefreshRows(waiting, {a: later});
+  assert.equal(replaced[0].status, 'unknown', 'a newer request is not the one this row followed');
+});
+
+test('an accepted row whose request no event has shown yet still takes it after a lineup', () => {
+  const [row] = startRefreshRows(['a'], {a: {...queued, request: null}});
+  const accepted = answerRefreshRow(row, {...queued, request: null});
+  assert.equal(accepted.status, 'waiting');
+  // A lineup sent before the request was accepted may come after its reply.
+  const early = observeRefreshRows([accepted], {a: {...queued, request: null}}, true);
+  assert.equal(early[0].status, 'unknown');
+  assert.equal(observeRefreshRows(early, {a: queued})[0].status, 'queued');
+});
+
+test('a refusal is the outcome of its row, whatever is requested after it', () => {
+  const [row] = startRefreshRows(['a'], {});
+  const refused = answerRefreshRow(row, {...queued, request: null}, new ApiError(429, 'refresh_too_soon'));
+  assert.equal(refused.status, 'refused');
+  assert.equal(observeRefreshRows([refused], {a: {...queued, request: {...queued.request!, requestedAt: 80_000}}})[0], refused);
+});
+
+test('the header list opens on its last attempt; only a first open starts one', () => {
+  assert.equal(refreshAllStarts([]), true);
+  const finished = observeRefreshRows(startRefreshRows(['a'], {a: queued}), {a: {...queued, request: {...queued.request!, status: 'updated', finishedAt: 20_000}}});
+  assert.equal(refreshAllStarts(finished), false);
+  assert.equal(refreshAllStarts(startRefreshRows(['a'], {})), false);
+});
+
+test('a card waits out whichever ends later, its cooldown or its pause', () => {
+  const state: Refresh = {unavailable: 'paused', availableAt: 600_000, retryAt: 60_000, request: {...queued.request!, status: 'failed', finishedAt: 20_000}};
+  assert.match(refreshText(state, 30_000), /try again in 9m\n/);
+  assert.ok(refreshChangesAt(state, 30_000)! > 60_000, 'the end of the cooldown changes nothing shown');
+  assert.match(refreshErrorText(new ApiError(429, 'refresh_too_soon'), state, 30_000), /try again in 9m\n/);
+});
+
+test('a queued request past its earliest moment shows no time already gone', () => {
+  const text = refreshText(queued, 300_000);
+  assert.match(text, /Waiting for new limits/);
+  assert.equal(text.split('\n').length, 1);
+});
+
+test('asking again for a card before the hub answers sends nothing more and gets the same answer', async t => {
+  const answers: ((response: Response) => void)[] = [];
+  const fetch = t.mock.method(globalThis, 'fetch', () => new Promise<Response>(resolve => answers.push(resolve)));
+  const first = requestRefresh('board', 'a');
+  const second = requestRefresh('board', 'a');
+  const other = requestRefresh('board', 'b');
+  assert.equal(fetch.mock.callCount(), 2);
+  for (const answer of answers) answer(new Response(JSON.stringify({error: 'refresh_too_soon'}), {status: 429}));
+  await assert.rejects(first, ApiError);
+  await assert.rejects(second, ApiError);
+  await assert.rejects(other, ApiError);
+  const again = requestRefresh('board', 'a');
+  assert.equal(fetch.mock.callCount(), 3, 'once answered, a new request goes');
+  answers.at(-1)!(new Response(JSON.stringify({ok: true}), {status: 202}));
+  await again;
 });

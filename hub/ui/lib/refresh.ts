@@ -2,11 +2,18 @@ import {countdown, countdownChangesAt, earliest, stamp} from './format';
 import {known, t} from '../i18n';
 import type {Refresh, RefreshRequest} from './types';
 import {ApiError, call, messageOf} from './http';
+import {createStore, useSelect} from './store';
+
+/** When a new request may go: after the cooldown and after a pause, whichever ends later. */
+const retryTime = (state: Refresh | null) => {
+  const times = [state?.retryAt, state?.availableAt].filter((at): at is number => at != null);
+  return times.length ? Math.max(...times) : null;
+};
 
 export function refreshTime(state: Refresh): number | null {
   if (state.request?.status === 'queued') return state.request.notBefore;
   if (state.request?.status === 'waiting') return null;
-  return state.retryAt ?? state.availableAt;
+  return retryTime(state);
 }
 
 export const refreshChangesAt = (state: Refresh, now: number) => {
@@ -23,25 +30,40 @@ export function refreshText(state: Refresh, now: number): string {
         ? t(`refresh.${status}`)
         : state.unavailable
           ? t(`refresh.${state.unavailable}`)
-          : t('refresh.ready');
+          : '';
   const reason = status && status !== 'queued' && status !== 'waiting' && state.unavailable ? t(`refresh.${state.unavailable}`) : '';
   const at = refreshTime(state);
-  return [
-    main,
-    reason,
-    at !== null && at > now ? t(status === 'queued' ? 'refresh.after' : 'refresh.retry', {time: countdown(at - now)}) : '',
-    at !== null ? stamp(at) : '',
-  ]
+  // A time already past says nothing about what comes next.
+  const ahead = at !== null && at > now;
+  return [main, reason, ahead ? t(status === 'queued' ? 'refresh.after' : 'refresh.retry', {time: countdown(at - now)}) : '', ahead ? stamp(at) : '']
     .filter(Boolean)
     .join('\n');
 }
 
 export const refreshPending = (state: Refresh | null) => state?.request?.status === 'queued' || state?.request?.status === 'waiting';
 
-export const requestRefresh = (board: string, id: string) =>
-  call('POST', `/api/boards/${encodeURIComponent(board)}/sources/${encodeURIComponent(id)}/refresh`);
+/** The cards this page is asking the hub to refresh, from a card's menu or the header, by board and card. */
+const sent = new Map<string, Promise<unknown>>();
+const sending = createStore<ReadonlySet<string>, ReadonlySet<string>>((_state, next) => next, new Set());
+const sentKey = (board: string, id: string) => `${board}\n${id}`;
 
-export type RefreshBatch = {total: number; accepted: number; failures: {id: string; error: unknown}[]};
+/** Whether this page is still waiting for the hub to take a card's request. */
+export const useSending = (board: string, id: string) => useSelect(sending, keys => keys.has(sentKey(board, id)));
+
+/** One request per card at a time: asking again before the hub answers waits for the same answer. */
+export function requestRefresh(board: string, id: string): Promise<unknown> {
+  const key = sentKey(board, id);
+  let request = sent.get(key);
+  if (!request) {
+    request = call('POST', `/api/boards/${encodeURIComponent(board)}/sources/${encodeURIComponent(id)}/refresh`).finally(() => {
+      sent.delete(key);
+      sending.dispatch(new Set(sent.keys()));
+    });
+    sent.set(key, request);
+    sending.dispatch(new Set(sent.keys()));
+  }
+  return request;
+}
 
 export type RefreshRow = {
   id: string;
@@ -52,7 +74,15 @@ export type RefreshRow = {
 };
 
 export const refreshRowPending = (row: RefreshRow) => row.status === 'sending' || row.status === 'queued' || row.status === 'waiting';
-const finishedRow = (row: RefreshRow) => ['updated', 'failed', 'unavailable', 'no_result'].includes(row.status);
+/**
+ * Rows told what became of their request, and those whose request ended unseen (an unknown
+ * row keeps the last it saw of it). A lost reply, or a request not seen yet, may still turn up.
+ */
+const settledRow = (row: RefreshRow) =>
+  ['updated', 'failed', 'unavailable', 'no_result', 'refused'].includes(row.status) || (row.status === 'unknown' && row.error === null && row.state !== null);
+
+/** Opening the header's list shows the last attempt; only with none yet does it start one. */
+export const refreshAllStarts = (rows: RefreshRow[]) => rows.length === 0;
 
 /** A receipt starts afresh, except for subscriptions already waiting for their data. */
 export const startRefreshRows = (ids: string[], states: Record<string, Refresh>): RefreshRow[] => [...new Set(ids)].map(id => {
@@ -64,18 +94,22 @@ export const startRefreshRows = (ids: string[], states: Record<string, Refresh>)
 /** Keep each outcome after the hub retires its short-lived status, even with the popup closed. */
 export function observeRefreshRows(rows: RefreshRow[], states: Record<string, Refresh>, snapshot = false): RefreshRow[] {
   const next = rows.map(row => {
-    if (finishedRow(row)) return row;
+    if (settledRow(row)) return row;
     const state = states[row.id];
     const request = state?.request;
-    const inherited = refreshRowPending(row) && row.state?.request?.requestedAt === row.before;
-    if (request && (request.requestedAt !== row.before || inherited)) {
-      return row.state === state && row.status === request.status && row.error === null ? row : {...row, status: request.status, state, error: null};
+    const followed = refreshRowPending(row) ? row.state?.request : null;
+    if (followed) {
+      if (request?.requestedAt === followed.requestedAt) {
+        return row.state === state && row.status === request.status ? row : {...row, status: request.status, state, error: null};
+      }
+      // Its request is gone or replaced, and no event told how it ended: say so rather than
+      // follow someone else's request or wait for ever.
+      return {...row, status: 'unknown' as const, error: null};
     }
+    if (request && request.requestedAt !== row.before) return {...row, status: request.status, state, error: null};
     // A reconnect may arrive after the entire request, including its retained outcome.
     // No record of it is not evidence of success, nor a reason to show an endless loader.
-    if (snapshot && row.status !== 'sending' && refreshRowPending(row) && !request) {
-      return {...row, status: 'unknown' as const, state: null};
-    }
+    if (snapshot && row.status !== 'sending' && refreshRowPending(row) && !request) return {...row, status: 'unknown' as const, state: null, error: null};
     return row;
   });
   return next.every((row, index) => row === rows[index]) ? rows : next;
@@ -92,32 +126,21 @@ export function answerRefreshRow(row: RefreshRow, state: Refresh | undefined, er
 export async function requestRefreshAll(
   board: string,
   ids: string[],
-  request = requestRefresh,
+  request: (board: string, id: string) => Promise<unknown> = requestRefresh,
   current: () => boolean = () => true,
-): Promise<RefreshBatch> {
+): Promise<void> {
   const queue = [...new Set(ids)];
-  const result: RefreshBatch = {total: queue.length, accepted: 0, failures: []};
   let next = 0;
   await Promise.all(Array.from({length: Math.min(4, queue.length)}, async () => {
     while (next < queue.length && current()) {
       const id = queue[next++];
-      try {
-        await request(board, id);
-        result.accepted++;
-      } catch (error) {
-        result.failures.push({id, error});
-      }
+      await request(board, id).catch(() => {});
     }
   }));
-  return result;
 }
 
-const refusalTime = (error: unknown, state: Refresh | null) => {
-  if (!(error instanceof ApiError)) return null;
-  if (error.code === 'refresh_too_soon') return state?.retryAt ?? null;
-  if (error.code === 'refresh_unavailable') return state?.availableAt ?? null;
-  return null;
-};
+const refusalTime = (error: unknown, state: Refresh | null) =>
+  error instanceof ApiError && (error.code === 'refresh_too_soon' || error.code === 'refresh_unavailable') ? retryTime(state) : null;
 
 /** A refused action explains what prevents it and what the reader can do. */
 export function refreshErrorText(error: unknown, state: Refresh | null, now: number): string {

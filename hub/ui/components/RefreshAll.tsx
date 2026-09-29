@@ -1,7 +1,7 @@
 import {useEffect, useId, useRef, useState} from 'react';
 import {t, useLocale} from '../i18n';
 import {page, useConnection, useTitle} from '../lib/board';
-import {refreshErrorText, requestRefresh, requestRefreshAll, startRefreshRows, observeRefreshRows, answerRefreshRow, refreshRowPending, type RefreshRow} from '../lib/refresh';
+import {refreshAllStarts, refreshErrorText, requestRefresh, requestRefreshAll, startRefreshRows, observeRefreshRows, answerRefreshRow, refreshRowPending, type RefreshRow} from '../lib/refresh';
 import {hubNow} from '../lib/clock';
 import {RefreshIcon} from './RefreshAction';
 import {Popover} from './Popover';
@@ -19,10 +19,14 @@ export function RefreshAll({board, ids}: {board: string; ids: string[]}) {
   const alive = useRef(false);
   useEffect(() => {
     alive.current = true;
-    const stop = page.listen((event, state) => {
-      if (state.board?.id !== board) return;
+    const stop = page.listen(event => {
       const snapshot = event.type === 'hub' && (event.event.type === 'snapshot' || event.event.type === 'lineup');
-      setRows(previous => observeRefreshRows(previous, state.board!.refresh, snapshot));
+      // The page as it is when the rows update, as for an HTTP reply: a state kept from an
+      // earlier event would take a row back to before its own request.
+      setRows(previous => {
+        const current = page.get().board;
+        return current?.id === board ? observeRefreshRows(previous, current.refresh, snapshot) : previous;
+      });
     });
     return () => { alive.current = false; stop(); };
   }, [board]);
@@ -68,17 +72,23 @@ export function RefreshAll({board, ids}: {board: string; ids: string[]}) {
       open={open}
       onOpenChange={next => {
         setOpen(next);
-        if (next) void send();
+        if (next && refreshAllStarts(rows)) void send();
       }}
     >
+      {rows.length > 0 && !pending && !sending && (
+        <button type="button" className="popover-row" onClick={() => void send()}>
+          <RefreshIcon />
+          <span>{t('refresh.again')}</span>
+        </button>
+      )}
       {offline && <div className="popover-note dialog-text" role="status">{t('refresh.offline')}</div>}
       {rows.length > 0 && (
-        <>
+        <div className="popover-section">
           <div className="popover-note dialog-text" role="status">{t('refresh.summary', {done: rows.filter(row => !refreshRowPending(row)).length, total: rows.length})}</div>
           <div className="refresh-list">
             {rows.map(row => <RefreshItem key={`${attempt}/${row.id}`} row={row} />)}
           </div>
-        </>
+        </div>
       )}
     </Popover>
   );
