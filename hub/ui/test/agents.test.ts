@@ -116,6 +116,8 @@ test('a list made shorter than its agents shows the most whole rows that fit, in
   assert.deepEqual(fit(180), {shown: 2, hidden: 2, min: 90, natural: 210});
   assert.deepEqual(fit(210), {shown: 4, hidden: 0, min: 90, natural: 210}, 'all fit: no row says more');
   assert.equal(fit(209).shown, 3, 'a pixel short: the last row gives way to the one saying it');
+  assert.equal(fit(209.5).shown, 4, 'measured pixels are fractions: half a pixel over still fits');
+  assert.equal(fit(209.4).shown, 3);
   // Rows as they stand in the list have a border under each; the last one shown alone has none.
   assert.equal(fit(213, [41, 61, 51, 31], 1).shown, 4, 'exactly as tall as all of them without the last border');
   assert.equal(fit(212, [41, 61, 51, 31], 1).shown, 3);
