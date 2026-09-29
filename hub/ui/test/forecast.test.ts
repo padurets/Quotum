@@ -226,7 +226,7 @@ test('a window without a forecast says why in its tooltip', () => {
 
 // ---------- the line on the chart ----------
 
-test("a weekly window's line is the hub's, from its anchor to zero or to the reset, cut at the chart's edges", () => {
+test("a weekly window's line is the hub's, from the card's last value to zero or to the reset, cut at the chart's edges", () => {
   const ahead = runsOut(40 * HOUR);
   const line = forecastLine(week(60), measured, measured, ahead, context(), start, reset + DAY)!;
   assert.deepEqual(line.points, [
@@ -249,6 +249,27 @@ test("a weekly window's line is the hub's, from its anchor to zero or to the res
   assert.deepEqual([toReset.points.at(-1), toReset.zero, toReset.at], [[reset, 1], null, null]);
   const left = forecastLine(week(60), measured, measured, lasts(), context(), start, reset + DAY)!;
   assert.deepEqual([left.points.at(-1), left.zero, left.at], [[reset, 20], null, null]);
+  // Lasting, though its line reaches zero just before the reset: cut there, and no label.
+  const justEnough = lasts({F: -2, zero: reset - 2 * HOUR, shownLeft: null, comfy: false, points: [[0, 60], [(4 * DAY) / MIN, -2]]});
+  const pace = forecastLine(week(60), measured, measured, justEnough, context(), start, reset + DAY)!;
+  assert.equal(pace.points.at(-1)![1], 0);
+  assert.deepEqual([pace.zero, pace.at], [null, null]);
+});
+
+test("measured since the hour its forecast stands on, a weekly window's line starts at the card's last value, in the same shape", () => {
+  const hour = measured + HOUR;
+  // Spending faster than foreseen: 50 left an hour on, where the line had 58.5.
+  const faster = forecastLine(week(50), hour, hour, runsOut(40 * HOUR), context(), start, reset + DAY)!;
+  assert.deepEqual(faster.points[0], [hour, 50]);
+  assert.equal(faster.points.at(-1)![1], 0);
+  assert.ok(Math.abs(faster.zero! - (measured + 34 * HOUR + 20 * MIN)) < 1000, String((faster.zero! - measured) / HOUR));
+  assert.equal(faster.at, measured + 40 * HOUR, 'said at the moment the table says');
+  // Slower: 65 left where a line reaching zero at the reset had 59.4; moved up, it reaches none.
+  const slower = forecastLine(week(65), hour, hour, runsOut(96 * HOUR), context(), start, reset + DAY)!;
+  assert.deepEqual(slower.points[0], [hour, 65]);
+  assert.deepEqual([slower.points.at(-1)![0], slower.zero, slower.at], [reset, null, null]);
+  // Measured at the hour itself: the hub's line as it is.
+  assert.deepEqual(forecastLine(week(60), measured, measured, runsOut(40 * HOUR), context(), start, reset + DAY)!.points[0], [measured, 60]);
 });
 
 test('no line where the table has no forecast', () => {

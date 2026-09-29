@@ -107,6 +107,21 @@ function zeroOf(points: [number, number][]): number | null {
   return null;
 }
 
+/**
+ * A weekly window's line as the chart draws it. Within its hour the hub's forecast stands on
+ * the sample of the hour's start: when the card has measured since, the line starts at its
+ * last value and goes on in the same shape, moved by as much, so it neither starts above nor
+ * below what the card says. Its zero is the moved line's; the moment the table says stays
+ * the hub's.
+ */
+export function weeklyLine(ahead: SeriesForecast, left: number, measuredAt: number | null): {points: [number, number][]; zero: number | null} {
+  const points = lineOf(ahead);
+  if (!points.length || measuredAt === null || measuredAt <= points[0][0] || measuredAt >= points.at(-1)![0]) return {points, zero: ahead.zero};
+  const by = left - valueAt(points, measuredAt);
+  const moved: [number, number][] = [[measuredAt, left], ...points.filter(([t]) => t > measuredAt).map(([t, value]): [number, number] => [t, value + by])];
+  return {points: moved, zero: zeroOf(moved)};
+}
+
 /** Louder than a warning only when nothing may bring the limit back first: never in a series' first day, with free resets to use, or before an announced reset. */
 const capped = (ahead: SeriesForecast, at: number, context: Context) =>
   (isBasis(ahead.basis) && ahead.basis.cold) || context.freeResets > 0 || (context.announced !== null && context.announced < at);
@@ -295,11 +310,12 @@ export function outlookText(said: Outlook, live: Win | undefined, ahead: SeriesF
 
 /**
  * The forecast as a line over [from, to]: from the window's last value to zero or to the
- * reset, whichever comes first, cut at the edges. A weekly window's is the hub's line (it
- * may end high above zero at the reset while the series is new: the cell is cautious, the
- * line shows where the first hours lead); a five-hour window's, its straight line. `zero`
- * is where the line reaches zero, when the table says it runs out; `at`, the moment the
- * table says. Null for a window without a forecast.
+ * reset, whichever comes first, cut at the edges. A weekly window's is the hub's line from
+ * the card's last value (`weeklyLine`; it may end high above zero at the reset while the
+ * series is new: the cell is cautious, the line shows where the first hours lead); a
+ * five-hour window's, its straight line. `zero` is where the line reaches zero, when the
+ * table says it runs out; `at`, the moment the table says. Null for a window without a
+ * forecast.
  */
 export function forecastLine(
   live: Win | undefined,
@@ -312,9 +328,10 @@ export function forecastLine(
 ): {points: [number, number][]; zero: number | null; at: number | null} | null {
   const said = outlook(live, measuredAt, now, ahead, context);
   if (said.key !== 'runsOut' && said.key !== 'pace' && said.key !== 'left') return null;
-  const whole = live!.kind === 'weekly' ? lineOf(ahead!) : session(live as Win & {resetAt: number; minutes: number}, measuredAt!, now).points!;
+  const weekly = live!.kind === 'weekly' ? weeklyLine(ahead!, live!.remaining, measuredAt) : null;
+  const whole = weekly ? weekly.points : session(live as Win & {resetAt: number; minutes: number}, measuredAt!, now).points!;
   if (!whole.length) return null;
-  const zero = live!.kind === 'weekly' ? ahead!.zero : zeroOf(whole);
+  const zero = weekly ? weekly.zero : zeroOf(whole);
   const end = Math.min(zero ?? live!.resetAt!, live!.resetAt!);
   const points = whole.filter(([t]) => t < end).concat([[end, Math.max(0, valueAt(whole, end))]]);
   const runsOut = said.key === 'runsOut' && zero !== null;

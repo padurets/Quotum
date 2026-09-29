@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {gapText, gapTone, readout, type ForecastLine, type PlanLine} from '../lib/readout';
+import {gapText, gapTone, lastRunOut, readout, runOutPast, type ForecastLine, type PlanLine} from '../lib/readout';
 import type {Line} from '../lib/lines';
 
 const minute = 60_000;
@@ -82,4 +82,16 @@ test('columns stay put up to now, and ahead of it are the values the cell reads'
   assert.deepEqual(at(now + 30 * minute, planned, [forecast]), {left: false, plan: false, gap: false, forecast: true}, 'past the plan’s end');
   assert.deepEqual(at(now + 45 * minute, planned, [forecast]), {left: false, plan: false, gap: false, forecast: false}, 'past the plan and where it runs out');
   assert.deepEqual(at(now + 10 * minute, [], []), {left: false, plan: false, gap: false, forecast: false}, 'nothing drawn ahead');
+});
+
+test('the chart stretches to where a line reaches zero, and points past its edge at the moment the table says', () => {
+  const hour = 60 * minute;
+  const f = (key: string, zero: number | null, at: number | null): ForecastLine => ({key, name: key, color: 'c', dash: '', points: [], zero, at});
+  // Its zero and the moment the table says differ: that moves only past a dead band.
+  const soon = f('soon', now + 5 * hour, now + 9 * hour);
+  const later = f('later', now + 20 * hour, now + 3 * hour);
+  const held = f('held', null, null);
+  assert.equal(lastRunOut([soon, later, held], now + 10 * hour), now + 5 * hour, 'to the zero within reach');
+  assert.equal(lastRunOut([later, held], now + 10 * hour), 0, 'none within reach');
+  assert.deepEqual(runOutPast([soon, later, held], now + 8 * hour), [{key: 'later', name: 'later', color: 'c', at: now + 3 * hour}]);
 });

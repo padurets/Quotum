@@ -10,7 +10,7 @@ import {frameChangesAt, frameOf, measuredTo, step} from '../lib/periods';
 import {HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
 import {chartEvents, chartResets, linesOf} from '../lib/lines';
 import {Chart, type Marker} from './Chart';
-import type {ForecastLine, PlanLine} from '../lib/readout';
+import {lastRunOut, type ForecastLine, type PlanLine} from '../lib/readout';
 import {useForecastsOf, useLineup, useNamed, usePastResets, useResetNews, useResetsFor} from '../lib/board';
 import {hubNow, useClock} from '../lib/clock';
 import {useHistory, useHistoryBegins} from '../lib/history';
@@ -121,14 +121,13 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
   // forecast says a window runs out within reach: it may take up to ~40% of the width,
   // anything further out is pointed at from the edge instead. A chosen horizon is kept as is.
   const reach = measured + (measured - from) * 0.75;
-  // Where a line reaches zero: the moment the table says may differ a little (it moves only past a dead band).
-  const lastRunOut = forecastShown ? Math.max(0, ...ahead.map(a => (a.drawn.zero !== null && a.drawn.zero <= reach ? a.drawn.zero : 0))) : 0;
+  const runOut = forecastShown ? lastRunOut(ahead.map(a => a.drawn), reach) : 0;
   const to = !(planShown || forecastShown) || !frame.live
     ? measured
     : prefs.horizon === 'auto'
       ? Math.max(
           announced && announced > measured && announced + future * 0.25 > measured + future ? Math.min(reach, announced + future * 0.25) : measured + future,
-          lastRunOut,
+          runOut,
         )
       : measured + future;
 

@@ -3,7 +3,7 @@ import {clock, countdown, countdownChangesAt, num, shortDay, stamp} from '../lib
 import {t, useLocale} from '../i18n';
 import type {Line} from '../lib/lines';
 import {useClock} from '../lib/clock';
-import {gapText, gapTone, readout as readCell, valueAt, type ForecastLine, type PlanLine} from '../lib/readout';
+import {gapText, gapTone, readout as readCell, runOutPast, valueAt, type ForecastLine, type PlanLine} from '../lib/readout';
 import type {TimeRange} from '../lib/timeRange';
 import {cellLabel, niceTicks} from '../lib/periods';
 import {coverOf, Tooltip, useTip} from './Tooltip';
@@ -306,13 +306,8 @@ export function Chart({
   // (`EdgeLabel`), how soon by the page's clock as the table says it.
   const beyond = [
     ...markers.filter(m => m.strong && !m.past && m.at > to).map(m => ({key: m.key, label: m.label, at: m.at, time: stamp(m.at), color: undefined, runsOut: false})),
-    ...forecasts.flatMap(f => {
-      // The line's zero past the edge, said at the moment the table says.
-      if (f.zero === null || f.at === null || f.zero <= to) return [];
-      // Spaces drawn as one: a name typed with two in a row reads, and measures, as SVG draws it.
-      const name = f.name.replace(/\s+/g, ' ');
-      return [{key: `forecast-${f.key}`, label: name, at: f.at, time: t('forecast.runsOutAt', {time: stamp(f.at)}), color: f.color, runsOut: true}];
-    }),
+    // Spaces drawn as one: a name typed with two in a row reads, and measures, as SVG draws it.
+    ...runOutPast(forecasts, to).map(f => ({key: `forecast-${f.key}`, label: f.name.replace(/\s+/g, ' '), at: f.at, time: t('forecast.runsOutAt', {time: stamp(f.at)}), color: f.color, runsOut: true})),
   ];
   /** A label past the right edge pointed at or tapped: the tooltip tells its time instead of the cell's values. */
   const [edge, setEdge] = useState<{key: string; tapped: boolean} | null>(null);

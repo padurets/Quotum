@@ -12,6 +12,20 @@ export type PlanLine = {key: string; lines: string[]; color: string; runs: [numb
  */
 export type ForecastLine = {key: string; name: string; color: string; dash: string; points: [number, number][]; zero: number | null; at: number | null};
 
+/**
+ * Where the chart stretches to on `auto` for its forecasts: the last zero of a line within
+ * `reach`, or 0 for none. The line's zero, not the moment the table says, which moves only
+ * past a dead band: the chart shows where the line goes.
+ */
+export const lastRunOut = (forecasts: Pick<ForecastLine, 'zero'>[], reach: number): number => Math.max(0, ...forecasts.map(f => (f.zero !== null && f.zero <= reach ? f.zero : 0)));
+
+/**
+ * The forecasts pointed at from the right edge `to`: those whose line reaches zero past it,
+ * each said at the moment the table says (`at`).
+ */
+export const runOutPast = (forecasts: ForecastLine[], to: number): {key: string; name: string; color: string; at: number}[] =>
+  forecasts.flatMap(f => (f.zero === null || f.at === null || f.zero <= to ? [] : [{key: f.key, name: f.name, color: f.color, at: f.at}]));
+
 /** Value of a piecewise-linear run at time `at`, or undefined outside it. */
 export function valueAt(runs: [number, number][][], at: number) {
   for (const run of runs) {
