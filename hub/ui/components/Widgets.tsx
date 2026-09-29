@@ -143,8 +143,13 @@ export function Widgets({
   const ids = widgets.map(widget => widget.id);
   const base = ordered(layout, ids);
   const saved = (id: string) => layout.places[id]?.h;
-  const sizeOf = (id: string, measured = heights): Size | undefined =>
-    sizes[id] ?? (measured[id] === undefined ? undefined : {min: measured[id], natural: measured[id]});
+  const sizeOf = (id: string, measured = heights): Size | undefined => {
+    const size = sizes[id], shown = measured[id];
+    if (!size) return shown === undefined ? undefined : {min: shown, natural: shown};
+    // Following its content, a chart or the list of agents shows all of itself, and the board measures that as soon as
+    // styles change it (at a breakpoint), before the widget renders; stretched to a height, it tells what it needs.
+    return intended(id) === undefined && shown !== undefined ? {min: size.min, natural: shown} : size;
+  };
   /** How few rows a widget can take, and how many it takes with the height it has, at its width and content now. */
   const bounds = (id: string, measured = heights) => {
     const size = sizeOf(id, measured);
