@@ -60,10 +60,8 @@ type Gesture = {
   /** How many rows the widget took when it began, and the height it asks for since: none keeps the one it had. */
   rows: number;
   intent: number | undefined;
-  /** Where it began down the grid, which scrolling the gesture did not do carries along (`aim`). */
-  top: number;
-  /** How far the page was scrolled when the gesture last looked, with what the gesture scrolled it by itself since. */
-  scroll: number;
+  /** How far the gesture scrolled the page by itself (CSS pixels): as much a pull as the pointer's way. */
+  scrolled: number;
   /** By the left edge: where the right one stays, and how wide the widget is drawn meanwhile (CSS pixels). */
   edge: {right: number; px: number} | null;
   start: Point;
@@ -207,18 +205,16 @@ export function Widgets({
     setPreview({id: current.id, kind: current.kind, items: current.items, intent: current.intent});
   };
   /**
-   * The height the pointer asks for now, as `heightIntent` takes it: rows the pointer moved,
-   * with the page the gesture scrolled under it, against what the widget needs at its width
-   * and content now. Whether that changed what the gesture asks for.
+   * The height the pointer asks for now, as `heightIntent` takes it: rows the pointer moved
+   * down the window, with the page the gesture scrolled under it, against what the widget
+   * needs at its width and content now. Whether that changed what the gesture asks for.
    */
   const aim = (current: Gesture, measured?: Record<string, number>) => {
     const {min, baseline} = latest.current.bounds(current.id, measured);
-    // Scrolling the gesture did not do is no pull: a wheel, a key, a glide from before the press, the browser keeping its place
-    // as the preview grows or the page's end comes up. Where the pull began goes with the grid.
-    current.top += scrollY - current.scroll;
-    current.scroll = scrollY;
-    const at = current.pointer.y - grid.current!.getBoundingClientRect().top;
-    const intent = heightIntent(current.rows, baseline, current.rows + Math.round((at - current.top) / ROW), min);
+    // Nothing else pulls: not a wheel, a key or a glide from before the press, nor the grid moving
+    // down the page as what is above it grows, nor the browser keeping its place meanwhile.
+    const pulled = current.pointer.y - current.start.y + current.scrolled;
+    const intent = heightIntent(current.rows, baseline, current.rows + Math.round(pulled / ROW), min);
     if (intent === current.intent) return false;
     current.intent = intent;
     return true;
@@ -256,14 +252,17 @@ export function Widgets({
   const frame = () => {
     const current = gesture.current;
     if (!current?.active || (current.kind !== 'drag' && !tall(current.kind))) return;
-    const y = current.pointer.y;
+    const {y} = current.pointer;
+    const {y: from} = current.start;
     const top = cover() + EDGE;
-    const scroll = y < top && y < current.start.y - PULL ? y - top : y > innerHeight - EDGE && y > current.start.y + PULL ? y - innerHeight + EDGE : 0;
+    // Half a row toward the edge, or half the room left to it where a full screen leaves less.
+    const toward = (room: number) => Math.min(PULL, Math.max(DRAG_AFTER, room / 2));
+    const scroll = y < top && y < from - toward(from) ? y - top : y > innerHeight - EDGE && y > from + toward(innerHeight - from) ? y - innerHeight + EDGE : 0;
     if (scroll) {
-      const from = scrollY;
+      const before = scrollY;
       window.scrollBy(0, scroll / 4);
       // What the gesture scrolls the page by is a pull: the edge goes on with the pointer held at the window's.
-      current.scroll += scrollY - from;
+      current.scrolled += scrollY - before;
     }
     if (current.kind === 'drag') {
       retarget();
@@ -398,8 +397,7 @@ export function Widgets({
       items: origin,
       rows: item.h,
       intent: undefined,
-      top: pointer.y - grid.current!.getBoundingClientRect().top,
-      scroll: scrollY,
+      scrolled: 0,
       edge: leftward(kind) ? {right: rect.right, px: rect.width} : null,
       start: pointer,
       pointer,
