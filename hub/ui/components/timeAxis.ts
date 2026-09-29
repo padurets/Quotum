@@ -95,10 +95,14 @@ export function useTimeAxis({
     return () => element.removeEventListener('wheel', wheel);
   }, []);
 
-  const measure = (measured: number) => {
-    const drawn = Math.max(280, Math.round(measured));
+  const measured = useRef<number | null>(null);
+  const measure = (next: number) => {
+    // At a fractional scale the same box reads a hair apart (a 60th of a pixel) by its rect and by the observer: no new width.
+    if (measured.current !== null && Math.abs(next - measured.current) < 1 / 32) return;
+    measured.current = next;
+    const drawn = Math.max(280, Math.round(next));
     setWidth(drawn);
-    setScale(measured ? measured / drawn : 1);
+    setScale(next ? next / drawn : 1);
   };
   // Read before paint too, first and whenever the board gives the chart another width: shown for a frame
   // at a width it is not at, it would be as tall as that width draws it, and move whatever is below it.
