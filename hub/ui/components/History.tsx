@@ -10,7 +10,7 @@ import {frameChangesAt, frameOf, measuredTo, step} from '../lib/periods';
 import {HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
 import {chartEvents, chartResets, linesOf} from '../lib/lines';
 import {Chart, type Marker} from './Chart';
-import {lastRunOut, type ForecastLine, type PlanLine} from '../lib/readout';
+import {lastRunOut, runOutPast, type ForecastLine, type PlanLine} from '../lib/readout';
 import {useForecastsOf, useLineup, useNamed, usePastResets, useResetNews, useResetsFor} from '../lib/board';
 import {hubNow, useClock} from '../lib/clock';
 import {useHistory, useHistoryBegins} from '../lib/history';
@@ -98,7 +98,7 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
   const planAvailable = prefs.kind === 'weekly' && visible.some(line => planOf(view, line.sourceId) !== null);
   const planShown = planAvailable && prefs.showPlan;
   // Where each window leads, for the lines that have a forecast to draw: a weekly window as
-  // the hub foresees it, the line as it stands; a five-hour one by its own pace.
+  // the hub foresees it, from the card's last value; a five-hour one by its own pace.
   const ahead = useMemo(
     () =>
       visible.flatMap(line => {
@@ -210,8 +210,9 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
           }),
     [ahead, forecastShown, from, to],
   );
-  // What the chart points at past its right edge (Chart.tsx): an announced reset, where a window runs out.
-  const pointed = [...markers.filter(m => m.strong && !m.past && m.at > to).map(m => m.at), ...forecasts.flatMap(f => (f.zero !== null && f.zero > to ? [f.zero] : []))];
+  // What the chart points at past its right edge (Chart.tsx): an announced reset, and where a
+  // window runs out, at the moment the table says, which is when its label reads otherwise.
+  const pointed = [...markers.filter(m => m.strong && !m.past && m.at > to).map(m => m.at), ...runOutPast(forecasts, to).map(f => f.at)];
 
   return (
     <section className={`panel history ${loading ? 'is-loading' : ''}`} data-time="chart" aria-label={t('history.label')} aria-busy={loading}>
