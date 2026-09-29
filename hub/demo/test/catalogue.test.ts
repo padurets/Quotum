@@ -625,10 +625,10 @@ for (const first of [0, 59 * SECOND])
     const live = new Live(stand, cadence, true);
     const checked = new Set<string>();
     const wrong: string[] = [];
-    // Every 15 seconds, as the live demo's loop does.
+    // Then on the next multiple of 15 seconds, as the live demo's loop does.
     let at = first;
     for (const point of points) {
-      for (; at <= point; at += TICK) {
+      for (; at <= point; at = (Math.floor(at / TICK) + 1) * TICK) {
         t.mock.timers.setTime(start + at);
         await live.report(at, start + at);
         await live.pace(at, start + at);
