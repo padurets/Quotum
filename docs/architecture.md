@@ -175,8 +175,9 @@ subscription:
   stale or, once that has passed while it measures, when its five minutes end; sooner,
   in a minute if someone works on that machine, otherwise in up to ten minutes.
 - A holder that asks again without answering what it was told keeps duty no longer than
-  the others were told to wait, and until it answers one, telling it to measure again
-  keeps it no duty: one that keeps asking but never delivers loses duty as any other.
+  the others were told to wait, and until it answers the last command, however late,
+  telling it to measure again keeps it no duty: one that keeps asking but never delivers
+  loses duty as any other.
 - Duty moves to a device where someone works if the holder has been idle for ten
   minutes, so the numbers come from where the subscription is actually being used.
 - A holder that goes quiet (asleep, switched off) loses duty when its last measurement

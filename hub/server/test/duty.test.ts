@@ -128,6 +128,35 @@ test('a holder that asks again without answering keeps duty no longer than the d
   assert.equal(retried('server', false, t0 + 204_000), true);
   assert.equal(retried('server', true, t0 + 160_000), true, 'an idle holder measuring a retry is not measuring what it was told to');
 
+  // Nor when it took its lapsed lease again by asking first, nor when all it sends is older than the command.
+  const retaken = new Duty();
+  retaken.claim('acc', 'laptop', false, t0);
+  retaken.delivered('acc', 'laptop', t0, 132_000, t0);
+  retaken.asked('acc', 'laptop', t0 + MIN);
+  retaken.claim('acc', 'laptop', false, t0 + 75_000);
+  retaken.claim('acc', 'laptop', false, t0 + 150_000);
+  retaken.asked('acc', 'laptop', t0 + 5 * MIN);
+  assert.equal(retaken.until('acc'), t0 + 450_000, 'a new lease on asking, as any holder takes');
+  assert.equal(retaken.claim('acc', 'server', true, t0 + 310_000).measure, true);
+  const old = new Duty();
+  old.claim('acc', 'laptop', false, t0);
+  old.delivered('acc', 'laptop', t0, 132_000, t0);
+  old.asked('acc', 'laptop', t0 + MIN);
+  old.claim('acc', 'laptop', false, t0 + 75_000);
+  old.delivered('acc', 'laptop', t0 + 20_000, 132_000, t0 + 80_000);
+  old.asked('acc', 'laptop', t0 + 150_000);
+  assert.equal(old.until('acc'), t0 + 152_000, 'as long as that measurement, no longer');
+  // A retry replaces the command on record: what was taken before it, less the tolerance, answers neither.
+  const replaced = new Duty();
+  replaced.claim('acc', 'laptop', false, t0);
+  replaced.delivered('acc', 'laptop', t0, 132_000, t0);
+  replaced.asked('acc', 'laptop', t0 + MIN);
+  replaced.claim('acc', 'laptop', false, t0 + 75_000);
+  replaced.asked('acc', 'laptop', t0 + 150_000);
+  replaced.delivered('acc', 'laptop', t0 + 100_000, 132_000, t0 + 160_000);
+  replaced.asked('acc', 'laptop', t0 + 200_000);
+  assert.equal(replaced.until('acc'), t0 + 232_000);
+
   // Answering again, even the command it asked past, it keeps duty while it measures once more.
   for (const [answer, at] of [['failure', 100_000], ['delivery', 100_000], ['late failure', 150_000], ['late delivery', 150_000]] as const) {
     const back = new Duty();

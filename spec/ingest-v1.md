@@ -207,9 +207,11 @@ pace (below) that is told `measure: true` also keeps duty while it measures, sin
 asks nothing while it measures its providers one by one: until it delivers, reports a
 failure for it or asks again, for at most five minutes; meanwhile no other device takes
 duty, not even one where someone is working. A waiting device is told to come back, at
-the latest, when the holder's last measurement goes stale or, once that has passed while it measures,
-when the five minutes end. A holder that asks again without answering keeps duty no
-longer than that, and until it answers again, being told `measure: true` keeps it none. Errors are as for ingest (`400 invalid_request`, `401`, `403`). An agent
+the latest, when the holder's last measurement goes stale or, once that has passed
+while it measures, when the five minutes end. A holder that asks again without
+answering keeps duty no longer than that, and until it answers the last command,
+however late, being told `measure: true` keeps it none. Errors are as for ingest
+(`400 invalid_request`, `401`, `403`). An agent
 that cannot reach the hub, or gets any other answer, measures anyway: at worst two
 devices measure the same subscription for a while.
 
