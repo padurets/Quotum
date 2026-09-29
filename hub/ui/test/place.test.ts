@@ -62,6 +62,9 @@ test('a panel already open keeps to its side while it has room there worth havin
   assert.deepEqual(sideOf(200, 250, 280, true), {up: true, cap: null}, 'still on its side where it fits whole');
   // A button partly under the bars leaves no room above it.
   assert.deepEqual(sideOf(200, -20, 280, true, true), {up: false, cap: null});
+  // What the other side would give it is what it would take there, not all the room there is.
+  assert.deepEqual(sideOf(250, 400, 150, false, true), {up: false, cap: 150}, 'above it would take 250, less than twice the 150 below');
+  assert.deepEqual(sideOf(100, -30, -10, false, true), {up: false, cap: 0}, 'no room either way: none, never less');
 });
 
 test('a panel has the room between its button, set off by the gap, and the bars or the window\'s bottom', () => {
@@ -86,6 +89,8 @@ test('a cut panel scrolls whole when its list would have less room than it asks 
 test('a panel moves sideways to keep 8 inside its width', () => {
   assert.equal(shiftOf(100, 380, 390), 0, 'inside');
   assert.equal(shiftOf(8, 382, 390), 0, 'at the margins');
+  assert.equal(shiftOf(4, 284, 390), 4, 'inside the window, not its margin');
+  assert.equal(shiftOf(100, 386, 390), -4);
   assert.equal(shiftOf(-92, 188, 390), 100, 'past the left');
   assert.equal(shiftOf(150, 430, 390), -48, 'past the right');
   assert.equal(shiftOf(-20, 420, 390), 28, 'wider than the width: its left edge in');
@@ -100,6 +105,8 @@ test('the bars cover what stands below where they end; a panel, only where they 
   // A widget of the analytics at the window's bottom, under the head where it stands on the page:
   // a chart's tooltip lies under the head, a panel over it. A panel's button is 28 tall.
   assert.equal(coverAt([topbar, inFlow], 690, false), 657, 'a tooltip');
+  assert.equal(coverAt([topbar, stuck], 100, false), 60, 'a tooltip beside the head, not below it');
+  assert.equal(coverAt([topbar, stuck], 114, false), 114, 'a tooltip right under the head');
   assert.equal(coverAt([topbar, inFlow], 718, true), 60, 'a panel');
   assert.equal(coverAt([topbar, stuck], 328, true), 114, 'the head stuck: it covers a panel too');
   assert.equal(coverAt([topbar, {...stuck, holds: true}], 101, true), 60, 'a button in the head is not under it');
@@ -114,4 +121,8 @@ test('the bars cover what stands below where they end; a panel, only where they 
   assert.equal(coverAt([topbar, stuck], 48, true), 60, 'under the top bar');
   assert.equal(coverAt([topbar, stuck], 21, true), 60, 'past the window\'s top, the rest under the top bar');
   assert.equal(coverAt([topbar, {top: 40, bottom: 94, sticks: 60}], 58, true), 94, 'under the top bar and the head pushed up under it');
+  // The bars listed as they lie over each other: the head pushed up lies under the top bar and
+  // covers none of its buttons, while the top bar covers the head's.
+  assert.equal(coverAt([{...topbar, holds: true}, {top: 30, bottom: 84, sticks: 60}], 43, true), 0, 'a button in the top bar, the head pushed up under it');
+  assert.equal(coverAt([topbar, {top: 40, bottom: 94, sticks: 60, holds: true}], 80, true), 60, 'a button in the head pushed up under the top bar');
 });
