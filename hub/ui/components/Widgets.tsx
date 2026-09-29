@@ -135,8 +135,8 @@ export function Widgets({
   /** Whether each of the last two presses on a handle saved a size or was given up: a double click after two that did neither fits the content. */
   const presses = useRef<boolean[]>([]);
   const [heights, setHeights] = useState<Record<string, number>>({});
-  // What the charts and the list of agents tell they need, and show: a chosen height fills them, so what they show is not what they need.
-  const [sizes, setSizes] = useState<Record<string, Report>>({});
+  // What the charts and the list of agents tell they need: a chosen height fills them, so what they show is not it.
+  const [sizes, setSizes] = useState<Record<string, Size>>({});
   const [preview, setPreview] = useState<{id: string; kind: Kind; items: Item[]; intent?: number} | null>(null);
   const [said, say] = useState<string[]>([]);
   const hint = useId();
@@ -158,16 +158,16 @@ export function Widgets({
   const byId = new Map(widgets.map(widget => [widget.id, widget]));
   const latest = useRef({spots, onPlaces, bounds, sizeOf, saved});
   latest.current = {spots, onPlaces, bounds, sizeOf, saved};
-  const report = useCallback(
-    (id: string, size: Report | null) =>
-      setSizes(old => {
-        const was = old[id];
-        if (size ? same(was?.min, size.min) && same(was?.natural, size.natural) && same(was?.shown, size.shown) : !was) return old;
-        const {[id]: _, ...rest} = old;
-        return size ? {...rest, [id]: size} : rest;
-      }),
-    [],
-  );
+  const report = useCallback((id: string, size: Report | null) => {
+    setSizes(old => {
+      const was = old[id];
+      if (size ? same(was?.min, size.min) && same(was?.natural, size.natural) : !was) return old;
+      const {[id]: _, ...rest} = old;
+      return size ? {...rest, [id]: {min: size.min, natural: size.natural}} : rest;
+    });
+    // What it shows is what the board measures of it, told as it lays itself out anew, before that paints; the later of the two holds.
+    if (size) setHeights(old => (same(old[id], size.shown) ? old : {...old, [id]: size.shown}));
+  }, []);
   // Height changes and our preview never invalidate the frozen origin. External placement changes do.
   const remember = () => {
     before.current = new Map([...places.current].map(([id, node]) => [id, node.getBoundingClientRect()]));
@@ -531,9 +531,7 @@ export function Widgets({
       {reading(spots).map(spot => {
         const widget = byId.get(spot.id)!;
         const allocated = spot.h * ROW - GAP;
-        // Under what the widget shows: a chart or the list of agents tells it as it lays itself out, before that paints.
-        const shown = sizes[spot.id]?.shown ?? heights[spot.id];
-        const fill = shown === undefined ? 0 : Math.max(0, allocated - shown);
+        const fill = heights[spot.id] === undefined ? 0 : Math.max(0, allocated - heights[spot.id]);
         const manual = intended(spot.id) !== undefined;
         return (
           <div
