@@ -555,11 +555,11 @@ changes what shows, the way it pulled (`heightIntent` in `ui/lib/grid.ts`): push
 the least its content can show, a widget stops there; one already there, a click, or a
 corner moved only sideways keeps the height it had, chosen or its content's. Only the
 pointer's way down the window pulls, with the page the gesture scrolls under it: near an
-edge of the window the page scrolls once the pointer is taken half a row toward it (to
-the edge itself from a press nearer to it than that, never by a click's jitter), and
-nothing else that moves the page or the grid
-(the wheel, a key, what is above growing, the browser keeping its place) changes the
-height. A double click on the bottom edge
+edge of the window the page scrolls once the pointer is taken half a row toward it, or
+to the edge itself from a press nearer to it than that, never by a click's jitter nor by
+a corner or a widget's head moved along the edge (`edgeScroll`), and nothing else that
+moves the page or the grid (the wheel, a key, what is above growing, the browser keeping
+its place) changes the height. A double click on the bottom edge
 or a bottom corner, or Enter or Space on the bottom edge, gives a widget back the height
 of its content. At 1000 px and below the page uses two columns, at 680 and below one, in
 reading order, with the heights chosen where the least their content can show fits them;

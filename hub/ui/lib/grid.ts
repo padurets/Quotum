@@ -136,6 +136,28 @@ export function heightIntent(start: number, baseline: number, requested: number,
   return rows;
 }
 
+/** How near an edge of the window a gesture's pointer scrolls the page, in CSS pixels. */
+export const EDGE = 72;
+/** How far toward that edge the pointer goes, at most, before it does: half a row, past a hand's or a finger's drift. */
+export const PULL = 24;
+
+/**
+ * How deep a gesture's pointer is in the band along an edge of the window, in CSS pixels
+ * (negative at the top), or 0 where the page stays: `y` is the pointer and `from` where it
+ * was pressed, `top` where the bars stuck at the top of the window end and `bottom` the
+ * window's height. The page scrolls under a pointer that has gone past a click's jitter
+ * (`moved`) and toward that edge: half a row, or, from a press nearer to it than that, to
+ * the edge itself. A gesture that also goes sideways (a corner, a widget carried by its head)
+ * goes a pixel toward the edge at least, so moving along it scrolls nothing.
+ */
+export function edgeScroll({y, from, top, bottom, moved, sideways}: {y: number; from: number; top: number; bottom: number; moved: boolean; sideways: boolean}) {
+  if (!moved) return 0;
+  const toward = (room: number) => Math.min(PULL, sideways ? Math.max(1, room - 2) : room - 2);
+  if (y < top + EDGE && y < from - toward(from)) return y - top - EDGE;
+  if (y > bottom - EDGE && y > from + toward(bottom - from)) return y - bottom + EDGE;
+  return 0;
+}
+
 /** A height chosen for one widget, in rows; null gives it back the height of its content. */
 export type Height = {id: string; rows: number | null};
 

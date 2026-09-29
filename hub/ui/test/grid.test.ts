@@ -2,6 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {
   cellOf,
+  edgeScroll,
   heightIntent,
   landed,
   leftWidths,
@@ -173,6 +174,31 @@ test('the height asked for is saved only when it changes what shows, in the dire
   ] as const)
     assert.equal(heightIntent(start, baseline, requested, min), expected, what);
   assert.equal(MAX_ROWS, 200);
+});
+
+test('the page scrolls under a pointer taken toward an edge of the window, never under a click or a drift', () => {
+  // A window 900 px high under bars that end at 64: the bands are 64–136 and 828–900.
+  const at = (y: number, from: number, {moved = true, sideways = false} = {}) => edgeScroll({y, from, top: 64, bottom: 900, moved, sideways});
+  for (const [what, scroll, expected] of [
+    ['a click\'s jitter at the bottom', at(899, 895, {moved: false}), 0],
+    ['pulled down into the band', at(880, 500), 52],
+    ['above the band', at(820, 500), 0],
+    ['pressed in the band, a drift short of half a row', at(870, 850), 0],
+    ['the same, half a row on', at(875, 850), 47],
+    ['pressed 20 px from the bottom, a drift of 16', at(896, 880), 0],
+    ['the same, taken to the edge', at(898.5, 880), 70.5],
+    ['the bottom edge pressed on the last pixel, moved along it', at(899, 899), 71],
+    ['a corner pressed on the last pixel, moved along it', at(899, 899, {sideways: true}), 0],
+    ['a corner pressed 2 px from the bottom, down to the last pixel', at(899, 898, {sideways: true}), 0],
+    ['a corner pressed 3 px from the bottom, down to the last pixel', at(899, 897, {sideways: true}), 71],
+    ['a corner pressed 20 px from the bottom, a drift sideways and down', at(890, 880, {sideways: true}), 0],
+    ['pulled up under the bars', at(100, 400), -36],
+    ['pressed under the bars, a drift up', at(120, 130), 0],
+    ['the same, half a row on', at(100, 130), -36],
+    ['in the band at the top, going down', at(120, 100), 0],
+    ['in the middle of the window', at(500, 400, {sideways: true}), 0],
+  ] as const)
+    assert.equal(scroll, expected, what);
 });
 
 test('saving places carries every chosen height over; only the height named changes, and null takes it away', () => {

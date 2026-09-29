@@ -17,6 +17,7 @@ import {SizingContext, type Report, type Size} from './sizing';
 import {isOffByDefault} from '../lib/view';
 import {
   cellOf,
+  edgeScroll,
   GAP,
   heightIntent,
   landed,
@@ -76,9 +77,6 @@ type Gesture = {
   stop: () => void;
 };
 const DRAG_AFTER = 4;
-/** How far toward an edge of the window the pointer goes, at most, before the page scrolls under it: half a row, past a hand's or a finger's drift. */
-const PULL = 24;
-const EDGE = 72;
 const SLIDE = {duration: 200, easing: 'cubic-bezier(.2, .7, .2, 1)'};
 const still = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 const tall = (kind: Kind) => kind.startsWith('bottom');
@@ -247,17 +245,11 @@ export function Widgets({
     const bars = [document.querySelector<HTMLElement>('.topbar'), grid.current!.closest('.analytics')?.querySelector<HTMLElement>('.analytics-head')];
     return Math.max(0, ...bars.map(bar => (bar && bar.getBoundingClientRect().top <= parseFloat(getComputedStyle(bar).top) + 1 ? bar.getBoundingClientRect().bottom : 0)));
   };
-  // The page scrolls under a pointer taken to the window's bottom or under the bars at its top, so a widget goes where the window does not reach;
-  // only toward where the pointer went: one held where it began, or moved sideways, near an edge leaves the page where it is.
+  // The page scrolls under a pointer taken to the window's bottom or under the bars at its top, so a widget goes where the window does not reach.
   const frame = () => {
     const current = gesture.current;
     if (!current?.active || (current.kind !== 'drag' && !tall(current.kind))) return;
-    const {y} = current.pointer;
-    const {y: from} = current.start;
-    const top = cover() + EDGE;
-    // Half a row toward the edge, or, from a press nearer to it than that, to the edge itself; never within a click's jitter.
-    const toward = (room: number) => Math.min(PULL, room - 2);
-    const scroll = !current.moved ? 0 : y < top && y < from - toward(from) ? y - top : y > innerHeight - EDGE && y > from + toward(innerHeight - from) ? y - innerHeight + EDGE : 0;
+    const scroll = edgeScroll({y: current.pointer.y, from: current.start.y, top: cover(), bottom: innerHeight, moved: current.moved, sideways: current.kind !== 'bottom'});
     if (scroll) {
       const before = scrollY;
       window.scrollBy(0, scroll / 4);
