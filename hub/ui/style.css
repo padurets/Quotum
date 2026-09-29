@@ -103,8 +103,9 @@ main { max-width: 1240px; margin: 0 auto; padding: 28px 28px 56px; display: flex
 .widgets > .card.is-loading { grid-column: span 2; grid-row: span 5; }
 .widget-body { position: relative; display: flex; flex-direction: column; min-width: 0; }
 .widget-body > .panel::after { content: ''; display: block; height: var(--fill, 0px); }
-/* A head carries its widget: the pointer's way to where it lifts selects none of its words, which the next press would drag instead. */
+/* A head carries its widget: the pointer's way to where it lifts selects none of its words, which the next press would drag instead. The menus it opens keep theirs. */
 .widgets.is-movable .widget-body > .card > .card-head, .widgets.is-movable .widget-body > .panel > .panel-head { cursor: grab; touch-action: none; user-select: none; }
+.widgets.is-movable :is(.card-head, .panel-head) .popover { user-select: text; }
 /* While dragged, the widget's place stays outlined: that is where it lands. */
 .widget.is-lifted { z-index: 30; }
 .widget.is-lifted::before { content: ''; position: absolute; inset: 0; border: 1.5px dashed #bbc0fe59; border-radius: 14px; background: #bbc0fe08; }
