@@ -214,9 +214,9 @@ body.is-resizing, body.is-resizing * { cursor: ew-resize !important; user-select
  * No room for all of it on either side (Popover measures): it scrolls, or its list does
  * (`.popover-scroll`) while the rest stays, as long as the list has the room it asks for
  * (`--least`); with less (`is-cramped`), the whole of it scrolls, the list with it, rather
- * than lose the rest. Scrolling on past the end never scrolls the page. The list holds its
- * rows' names for screen readers, which would otherwise stand out below it and give the
- * panel more to scroll.
+ * than lose the rest. Scrolling on past the end of what scrolls never scrolls the page; over
+ * what stays, the page scrolls as it does under any panel. The list holds its rows' names for
+ * screen readers, which would otherwise stand out below it and give the panel more to scroll.
  */
 .popover.is-capped { overflow-y: auto; overscroll-behavior: contain; }
 .popover.is-capped:not(.is-cramped):has(.popover-scroll) { display: flex; flex-direction: column; }

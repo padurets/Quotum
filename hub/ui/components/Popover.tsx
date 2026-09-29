@@ -34,32 +34,16 @@ export function Popover({
   const box = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
-  // The panel moves sideways to stay on the screen (from a card at the edge of a narrow
-  // one), again when the window turns or is resized; the page's width leaves out its scrollbar.
-  useLayoutEffect(() => {
-    const element = panel.current;
-    if (!open || !element) return;
-    const place = () => {
-      element.style.translate = '';
-      const rect = element.getBoundingClientRect();
-      const width = document.documentElement.clientWidth;
-      const edge = 8;
-      const shift = rect.left < edge ? edge - rect.left : rect.right > width - edge ? width - edge - rect.right : 0;
-      if (shift) element.style.translate = `${shift}px 0`;
-    };
-    place();
-    addEventListener('resize', place);
-    return () => removeEventListener('resize', place);
-  }, [open]);
-
-  // A panel never scrolls the page nor lengthens it: it opens whole in the window, under the
-  // bars stuck at its top, on the side of its button that `sideOf` picks, cut to the room
-  // there and scrolling inside. Where it stands on either side is read, not assumed, as a text
-  // trigger is taller than an icon. It is measured again as its content changes, keeping to
-  // the side it is on while it fits there, and once the board has been laid out for a resized
-  // window; not as the page scrolls: it goes with its button. A list of it that scrolls on its
-  // own while the rest stays (`.popover-scroll`) has at least the room it asks for (`--least`),
-  // or the whole panel scrolls, the list with it (`is-cramped`).
+  // A panel never scrolls the page, lengthens it nor widens it: it opens whole in the window,
+  // under the bars stuck at its top, on the side of its button that `sideOf` picks, cut to the
+  // room there and scrolling inside, and moves sideways as far as keeps it on the screen (from a
+  // card at the edge of a narrow one). Where it stands is read, not assumed, as a text trigger is
+  // taller than an icon. It is measured again as its content changes, keeping to the side it is
+  // on while it fits there, and as the window or the page changes size, whatever moved its
+  // button: the board lays itself out again after a resize, a widget above grows. Not as the page
+  // scrolls: it goes with its button. A list of it that scrolls on its own while the rest stays
+  // (`.popover-scroll`) has at least the room it asks for (`--least`), or the whole panel
+  // scrolls, the list with it (`is-cramped`).
   const [side, setSide] = useState<{up: boolean; cap: number | null; cramped: boolean} | null>(null);
   useLayoutEffect(() => {
     const element = panel.current;
@@ -68,9 +52,12 @@ export function Popover({
     let upwards = up;
     const fit = () => {
       const list = element.querySelector<HTMLElement>('.popover-scroll');
-      // Measuring takes the cut off, which would lose how far its reader had scrolled.
-      const scrolled = [element.scrollTop, list?.scrollTop ?? 0];
+      // Measuring takes the cut off, and what scrolls may change: how far its reader has scrolled
+      // is kept as a place in the list where there is one (at its top, the panel's top, the
+      // title in sight).
+      const read = !list ? element.scrollTop : element.classList.contains('is-cramped') ? element.scrollTop - list.offsetTop : list.scrollTop || -list.offsetTop;
       element.style.maxHeight = '';
+      element.style.translate = '';
       element.classList.remove('is-capped', 'is-cramped', 'is-up');
       const below = element.getBoundingClientRect();
       element.classList.add('is-up');
@@ -85,26 +72,26 @@ export function Popover({
       element.classList.toggle('is-capped', cap !== null);
       element.classList.toggle('is-cramped', cramped);
       element.style.maxHeight = cap === null ? '' : `${cap}px`;
-      element.scrollTop = scrolled[0];
-      if (list) list.scrollTop = scrolled[1];
+      if (!list) element.scrollTop = read;
+      else if (cramped) element.scrollTop = read + list.offsetTop;
+      else list.scrollTop = read;
+      // Sideways as it now stands, a cut panel wider by its scrollbar; the page's width leaves out its own.
+      const rect = element.getBoundingClientRect();
+      const width = document.documentElement.clientWidth;
+      const shift = rect.left < 8 ? 8 - rect.left : rect.right > width - 8 ? width - 8 - rect.right : 0;
+      if (shift) element.style.translate = `${shift}px 0`;
       setSide(same => (same?.up === next && same.cap === cap && same.cramped === cramped ? same : {up: next, cap, cramped}));
     };
     fit();
     // A refit may change the cap and wake the observer once more; then the panel stays as it is.
+    // The page changes size as the board lays itself out anew, in as many passes as it takes.
     const observer = new ResizeObserver(fit);
     observer.observe(element);
-    // The board takes its new columns after the resize is told (they follow a media query):
-    // the panel is measured once it has, in the frame that shows it.
-    let frame = 0;
-    const resized = () => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(fit);
-    };
-    addEventListener('resize', resized);
+    observer.observe(document.body);
+    addEventListener('resize', fit);
     return () => {
       observer.disconnect();
-      cancelAnimationFrame(frame);
-      removeEventListener('resize', resized);
+      removeEventListener('resize', fit);
     };
   }, [open, up]);
 

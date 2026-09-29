@@ -44,6 +44,8 @@ test('a panel that fits neither side opens where there is more room, cut to that
   // With as much room either way, it stays on its own side.
   assert.deepEqual(sideOf(500, 300, 300, true), {up: true, cap: 300});
   assert.deepEqual(sideOf(500, 300, 300, false), {up: false, cap: 300});
+  // A window lower than the bars leave room for: no room, never less.
+  assert.deepEqual(sideOf(100, -20, -30, false), {up: true, cap: 0});
 });
 
 test('the bars cover what stands below where they end; a panel, only where they are stuck at the top', () => {
@@ -61,4 +63,7 @@ test('the bars cover what stands below where they end; a panel, only where they 
   assert.equal(coverAt([topbar, below], 469, true), 60, 'a card above the analytics');
   assert.equal(coverAt([topbar, {top: 40, bottom: 94, sticks: 60}], 300, true), 94, 'the head pushed up at the end of its section');
   assert.equal(coverAt([topbar], 17, true), 0, 'a button in the top bar');
+  assert.equal(coverAt([topbar, stuck], 114, true), 114, 'a button right under the head');
+  assert.equal(coverAt([topbar, {top: 60.3, bottom: 114.3, sticks: 60}], 300, true), 114.3, 'stuck, to a fraction of a pixel');
+  assert.equal(coverAt([topbar, {top: 61, bottom: 115, sticks: 60}], 300, true), 60, 'a pixel short of sticking: in the page still');
 });
