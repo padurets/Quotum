@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {isSending, refreshAllStarts, refreshChangesAt, refreshPending, refreshText, refreshErrorText, refreshErrorChangesAt, requestRefresh, requestRefreshAll, startRefreshRows, observeRefreshRows, answerRefreshRow} from '../lib/refresh';
+import {isSending, refreshAllStarts, refreshRowPending, refreshChangesAt, refreshPending, refreshText, refreshErrorText, refreshErrorChangesAt, requestRefresh, requestRefreshAll, startRefreshRows, observeRefreshRows, answerRefreshRow} from '../lib/refresh';
 import {ApiError} from '../lib/http';
 import {setLocale} from '../i18n';
 import type {Refresh} from '../lib/types';
@@ -174,6 +174,14 @@ test('an accepted row whose request no event has shown yet still takes it after 
   assert.equal(observeRefreshRows(early, {a: queued})[0].status, 'queued');
 });
 
+test('an accepted row that missed its request settles as unknown when a reconnect shows only a later one', () => {
+  const [row] = startRefreshRows(['a'], {a: {...queued, request: null}});
+  const accepted = answerRefreshRow(row, {...queued, request: null}, null, 20_000);
+  const later = {...queued, request: {...queued.request!, requestedAt: 80_000}};
+  const reconnected = observeRefreshRows([accepted], {a: later}, true);
+  assert.deepEqual([reconnected[0].status, refreshRowPending(reconnected[0])], ['unknown', false]);
+});
+
 test('a refusal is the outcome of its row, whatever is requested after it', () => {
   const [row] = startRefreshRows(['a'], {});
   const refused = answerRefreshRow(row, {...queued, request: null}, new ApiError(429, 'refresh_too_soon'));
@@ -230,6 +238,8 @@ test('a row that has not seen its request takes only one made before its reply',
   const lost = answerRefreshRow(row, {...queued, request: null}, new Error('lost response'), 20_000);
   assert.equal(observeRefreshRows([lost], {a: later})[0].status, 'unknown', 'made a minute after the reply: someone else\'s');
   assert.equal(observeRefreshRows([lost], {a: own})[0].status, 'queued');
+  // The page reads the hub's clock a little off: a request up to half a minute past the reply is still its own.
+  assert.equal(observeRefreshRows([lost], {a: {...queued, request: {...queued.request!, requestedAt: 49_999}}})[0].status, 'queued');
   // Accepted, then a lineup before its event: the event may still come, a later request is not it.
   const early = observeRefreshRows([answerRefreshRow(row, {...queued, request: null}, null, 20_000)], {a: {...queued, request: null}}, true);
   assert.equal(early[0].status, 'unknown');

@@ -32,6 +32,10 @@ export function RefreshAll({board, ids}: {board: string; ids: string[]}) {
   }, [board]);
   const pending = rows.some(refreshRowPending);
   const connected = connection.status === 'live' || connection.status === 'polling';
+  // The note answers a click made while disconnected; the connection back, it is moot.
+  useEffect(() => {
+    if (connected) setOffline(false);
+  }, [connected]);
   const send = async () => {
     const state = page.get();
     if (busy.current || pending) return;
@@ -77,10 +81,10 @@ export function RefreshAll({board, ids}: {board: string; ids: string[]}) {
         if (next && refreshAllStarts(rows)) void send();
       }}
     >
-      {rows.length > 0 && !pending && !sending && (
+      {!pending && !sending && (
         <button type="button" className="popover-row" onClick={() => void send()}>
           <RefreshIcon />
-          <span>{t('refresh.again')}</span>
+          <span>{t(rows.length ? 'refresh.again' : 'refresh.all')}</span>
         </button>
       )}
       {offline && !connected && <div className="popover-note dialog-text" role="status">{t('refresh.offline')}</div>}

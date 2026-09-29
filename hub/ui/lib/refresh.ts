@@ -50,7 +50,7 @@ const sentKey = (board: string, id: string) => `${board}\n${id}`;
 
 /** Whether this page is still waiting for the hub to take a card's request. */
 export const isSending = (board: string, id: string) => sending.get().has(sentKey(board, id));
-export const useSending = (board: string, id: string) => useSelect(sending, keys => keys.has(sentKey(board, id)));
+export const useSending = (board: string, id: string) => useSelect(sending, () => isSending(board, id));
 
 /** One request per card at a time: asking again before the hub answers waits for the same answer. */
 export function requestRefresh(board: string, id: string): Promise<unknown> {
@@ -119,9 +119,10 @@ export function observeRefreshRows(rows: RefreshRow[], states: Record<string, Re
     // Not seen yet: its own request, made before the reply, not one made later by someone else.
     const own = request && request.requestedAt !== row.before && (row.answeredAt === null || request.requestedAt <= row.answeredAt + REPLY_SLACK_MS);
     if (own) return {...row, status: request.status, state, error: null};
-    // A reconnect may arrive after the entire request, including its retained outcome.
-    // No record of it is not evidence of success, nor a reason to show an endless loader.
-    if (snapshot && row.status !== 'sending' && refreshRowPending(row) && !request) return {...row, status: 'unknown' as const, state: null, error: null};
+    // A reconnect may arrive after the entire request, including its retained outcome, and
+    // someone else's since. No record of it is not evidence of success, nor a reason to show
+    // an endless loader.
+    if (snapshot && row.status !== 'sending' && refreshRowPending(row)) return {...row, status: 'unknown' as const, state: null, error: null};
     return row;
   });
   return next.every((row, index) => row === rows[index]) ? rows : next;
