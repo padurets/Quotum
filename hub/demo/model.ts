@@ -336,7 +336,10 @@ export type Card = {
    * These scenes use one machine so other devices do not move the asserted schedule.
    */
   paced?: boolean;
-  /** A public refresh request and a controllable stand-in response for the demo. */
+  /**
+   * A public refresh request and a controllable stand-in response for the demo. Its `at`
+   * and the card's codes count from the machines' first asking, not from the demo's time.
+   */
   refresh?: {at: number; minimum?: number; delay?: number; response?: 'lost' | 'failed'; legacy?: boolean; silent?: boolean};
   windows: WindowAt[];
   /** Free resets at `t`: how many, and how many expire when (left out when not given). */

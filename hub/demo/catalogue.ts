@@ -1046,13 +1046,15 @@ const all: DemoSet = {
       look: ['In the table, the tooltips of spent per work hour and the forecast by work say nothing was spent while agents worked'],
     },
 
-    // Real requests through the board API, with stand-in devices and controlled answers.
+    // Real requests through the board API, with stand-in devices and controlled answers. Times
+    // count from the machines' first asking, 15 seconds apart from then on in the demo's own
+    // steps: a step happens up to 15 seconds after the time it is due.
     ...[
-      {id: 'refresh-updated', refresh: {at: 15 * SECOND}, expect: [{refresh: 'queued', from: 15 * SECOND, to: 45 * SECOND}, {refresh: 'updated', from: MIN, to: 105 * SECOND}]},
-      {id: 'refresh-queued', refresh: {at: 15 * SECOND, minimum: 5 * MIN}, expect: [{refresh: 'queued', from: 15 * SECOND, to: 4 * MIN}]},
-      {id: 'refresh-waiting', refresh: {at: 15 * SECOND, delay: 150 * SECOND}, expect: [{refresh: 'waiting', from: MIN, to: 3 * MIN}]},
-      {id: 'refresh-failed', refresh: {at: 15 * SECOND, response: 'failed' as const}, expect: [{refresh: 'failed', unavailable: 'paused', from: MIN, to: 105 * SECOND}]},
-      {id: 'refresh-no-result', refresh: {at: 15 * SECOND, response: 'lost' as const}, expect: [{refresh: 'no_result', from: 6 * MIN, to: 6 * MIN + 45 * SECOND}]},
+      {id: 'refresh-updated', refresh: {at: 15 * SECOND}, expect: [{refresh: 'queued', from: 30 * SECOND, to: 55 * SECOND}, {refresh: 'updated', from: 75 * SECOND, to: 115 * SECOND}]},
+      {id: 'refresh-queued', refresh: {at: 15 * SECOND, minimum: 5 * MIN}, expect: [{refresh: 'queued', from: 30 * SECOND, to: 4 * MIN}]},
+      {id: 'refresh-waiting', refresh: {at: 15 * SECOND, delay: 150 * SECOND}, expect: [{refresh: 'waiting', from: 75 * SECOND, to: 3 * MIN}]},
+      {id: 'refresh-failed', refresh: {at: 15 * SECOND, response: 'failed' as const}, expect: [{refresh: 'failed', unavailable: 'paused', from: 75 * SECOND, to: 115 * SECOND}]},
+      {id: 'refresh-no-result', refresh: {at: 15 * SECOND, response: 'lost' as const}, expect: [{refresh: 'no_result', from: 6 * MIN + 15 * SECOND, to: 6 * MIN + 45 * SECOND}]},
       {id: 'refresh-legacy', refresh: {at: 0, legacy: true}, expect: [{unavailable: 'unsupported', from: 0, to: 4 * MIN}]},
       {id: 'refresh-silent', refresh: {at: 0, silent: true}, expect: [{unavailable: 'silent', from: 135 * SECOND, to: 4 * MIN}]},
     ].map(({id, refresh, expect}) => ({

@@ -303,6 +303,8 @@ export class Live {
   private readonly requested = new Set<string>();
   private readonly checked = new Set<string>();
   private readonly pending = new Map<string, {at: number; next: number}>();
+  /** When the machines first asked: the live demo starts asking up to a minute into its time. */
+  private first: number | null = null;
 
   constructor(
     private readonly stand: Stand,
@@ -355,6 +357,7 @@ export class Live {
    */
   async pace(t: number, now: number) {
     const {set, start} = this.stand;
+    this.first ??= t;
     for (const machine of machines(set)) {
       const live = cards(set).filter(card => card.machines.includes(machine.id) && delivered(card, t) && (!card.refresh?.silent || !this.checked.has(card.id)));
       if (!live.length || !awake(machine, t)) continue;
@@ -382,7 +385,8 @@ export class Live {
       }
     }
     for (const card of cards(set)) {
-      if (!card.refresh || t < card.refresh.at || this.requested.has(card.id) || card.refresh.legacy || card.refresh.silent) continue;
+      // A request counts from the first asking, as everything else its card shows does.
+      if (!card.refresh || t - this.first < card.refresh.at || this.requested.has(card.id) || card.refresh.legacy || card.refresh.silent) continue;
       this.requested.add(card.id);
       const person = this.stand.people.get(homeOf(set, card))!;
       await person.post(`/api/boards/${person.personalBoard}/sources/${this.stand.sources.get(card.id)}/refresh`);

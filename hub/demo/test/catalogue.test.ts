@@ -564,11 +564,11 @@ test('every entry of the whole catalogue shows what it claims for twelve hours',
 test('cards measured at the hub’s pace say when the next measurement comes and why', {timeout: 120_000}, async t => {
   const all = setOf('all');
   // Only them, so nothing else measured by the same machines moves their pace; people's
-  // projects go with the cards whose agents work on them.
+  // projects go with the cards whose agents work on them. Refresh scenes have a test of their own.
   const set: DemoSet = {
     ...all,
     entries: all.entries
-      .filter(e => e.kind !== 'card' || e.paced)
+      .filter(e => e.kind !== 'card' || (e.paced && !e.refresh))
       .map(e => (e.kind === 'person' ? {...e, expect: e.expect.filter(check => !('project' in check))} : e)),
   };
   const paced = set.entries.filter((e): e is Card => e.kind === 'card' && !!e.paced);
@@ -637,6 +637,42 @@ for (const first of [0, 59 * SECOND])
       t.mock.timers.setTime(start + point);
       const reading = new Reading(stand, start + point, new Map([[set.scene, await hub.told()]]));
       wrong.push(...(await checkAll(stand, checks, reading, point, checked)));
+    }
+    assert.deepEqual(wrong, [], `start ${new Date(start).toISOString()}`);
+    assert.equal(checked.size, checks.reduce((count, card) => count + card.expect.length, 0), 'every such code is checked');
+  });
+
+// A refresh scene counts from the machines' first asking; the live demo asks next on its 15-second grid.
+for (const first of [0, 59 * SECOND])
+  test(`refresh scenes show what they say from the first asking, ${first / SECOND} s into the live demo`, {timeout: 120_000}, async t => {
+    const all = setOf('all');
+    const scenes = cards(all).filter(card => card.refresh);
+    assert.ok(scenes.length, 'the catalogue has refresh scenes');
+    const set: DemoSet = {
+      ...all,
+      entries: all.entries
+        .filter(e => e.kind !== 'card' || scenes.includes(e))
+        .map(e => (e.kind === 'person' ? {...e, expect: e.expect.filter(check => !('project' in check))} : e)),
+    };
+    // Their codes, moved to the demo's time.
+    const checks = scenes.map(card => ({...card, expect: (card.expect as Span[]).map(check => ({...check, from: (check.from ?? 0) + first, to: (check.to ?? HOLDS) + first}))}));
+    const points = [...new Set(checks.flatMap(card => card.expect.flatMap(check => [check.from, (check.from + check.to) / 2, check.to])))].sort((a, b) => a - b);
+    const start = Math.floor(Date.now() / MIN) * MIN;
+    const {stand, hub} = await bringUp(t, set, start);
+    const live = new Live(stand, cadence, true);
+    const checked = new Set<string>();
+    const wrong: string[] = [];
+    let at = first;
+    for (const point of points) {
+      for (; at <= point; at = (Math.floor(at / TICK) + 1) * TICK) {
+        t.mock.timers.setTime(start + at);
+        await live.report(at, start + at);
+        await live.pace(at, start + at);
+        await live.measure(at, start + at);
+      }
+      t.mock.timers.setTime(start + point);
+      const reading = new Reading(stand, start + point, new Map([[set.scene, await hub.told()]]));
+      wrong.push(...(await checkAll(stand, checks as Card[], reading, point, checked, 'pace')));
     }
     assert.deepEqual(wrong, [], `start ${new Date(start).toISOString()}`);
     assert.equal(checked.size, checks.reduce((count, card) => count + card.expect.length, 0), 'every such code is checked');
