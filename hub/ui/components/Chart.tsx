@@ -419,6 +419,8 @@ export function Chart({
       <svg
         ref={svg}
         viewBox={`0 0 ${width} ${height}`}
+        // As tall as drawn, not as the width it last knew makes it: a new width is heard only after it shows, and the board measures what shows.
+        style={{height: `${height * scale}px`}}
         role="img"
         aria-label={t('chart.label')}
         className={onSelect ? 'is-selectable' : undefined}

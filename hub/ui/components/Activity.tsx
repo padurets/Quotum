@@ -264,7 +264,7 @@ function Stacks({
 
   return (
     <div className="chart activity-chart" ref={box}>
-      <svg ref={svg} viewBox={`0 0 ${width} ${height}`} role="img" aria-label={t('activity.label')} className="is-selectable" {...handlers}>
+      <svg ref={svg} viewBox={`0 0 ${width} ${height}`} style={{height: `${height * scale}px`}} role="img" aria-label={t('activity.label')} className="is-selectable" {...handlers}>
         <defs>
           <clipPath id={clip}>
             <rect x={left} y={0} width={width - left - right} height={height} />
