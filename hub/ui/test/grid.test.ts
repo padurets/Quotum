@@ -197,6 +197,7 @@ test('the page scrolls under a pointer taken toward an edge of the window, never
     ['at a half, pressed 10 px from the bottom, taken to the last pixel of the screen', at(898, 890, {pixel: 2}), 70],
     ['at a quarter, pressed 20 px from the bottom, taken to the last pixel of the screen', at(896, 880, {pixel: 4}), 68],
     ['the same without the zoom, 2 px short of the edge', at(896, 880), 0],
+    ['at a third, the screen\'s last pixel, whose size comes a hair over 3', at(897, 880, {pixel: 1 / Math.fround(1 / 3)}), 69],
     ['pulled up under the bars', at(100, 400), -36],
     ['pressed under the bars, a drift up', at(120, 130), 0],
     ['the same, a pixel short of half a row', at(107, 130), 0],
