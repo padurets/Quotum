@@ -67,13 +67,21 @@ const setOf = (id: string) => SETS.find(set => set.id === id)!;
 /** What the trackers of a scene told, as `/api/resets` answers: the status per provider, their health and the resets kept. */
 type Told = {resets: Resets; trackers: TrackerHealth[]; past: Partial<Record<ResetProvider, ResetEvent[]>>};
 
+/**
+ * How long a hub waits for a scene's trackers: a moment where they are to time out, so the
+ * test does not wait for them as long as a hub would; elsewhere long enough that a machine
+ * under load, stalling the test a moment, does not make a tracker that answers time out.
+ */
+const timeoutOf = (scene: string) =>
+  SCENES.find(s => s.id === scene)!.expect.some(check => 'health' in check && check.health === 'timeout') ? 300 : 5_000;
+
 /** A hub in this process on a free port, its trackers read from the stand-in's `scene`. */
 async function hubFor(trackers: Trackers, scene: string, start: number) {
   const dir = mkdtempSync(path.join(tmpdir(), 'quotum-demo-test-'));
   const store = new Store(path.join(dir, 'db.sqlite'), start);
   const directory = new Directory(store.db);
   const urls = trackers.urls(scene);
-  const resets = new ResetFeed((provider, reset) => store.announce(provider, reset), () => {}, {enabled: true, codexApi: urls.codex, claudeApi: urls.claude, timeoutMs: 300});
+  const resets = new ResetFeed((provider, reset) => store.announce(provider, reset), () => {}, {enabled: true, codexApi: urls.codex, claudeApi: urls.claude, timeoutMs: timeoutOf(scene)});
   const app = await buildApp({store, directory, resets, ingest: new Ingest(store, directory, new Duty(), new Cadence()), pairing: new Pairing(directory), setup: new Setup(true, SETUP), local: null});
   await app.listen({host: '127.0.0.1', port: 0});
   const base = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
