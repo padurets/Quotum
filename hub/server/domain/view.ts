@@ -1,6 +1,7 @@
 import {isValidPlan} from './plan.js';
 
-export type Place = {x: number; y: number; w: number};
+/** `h`: the height in rows the board's owner chose; none while a widget is as tall as its content. */
+export type Place = {x: number; y: number; w: number; h?: number};
 export type Layout = {columns: number; places: Record<string, Place>};
 
 /**
@@ -48,6 +49,8 @@ export const EMPTY_VIEW: View = {
 };
 
 const COLUMNS = 6;
+/** The tallest a widget is made, in rows (ui/lib/grid.ts has the same). */
+export const MAX_ROWS = 200;
 const LIMITS = {widgets: 200, windows: 500, id: 120, name: 60, columns: 20};
 
 const ids = (value: unknown, max: number): string[] | null =>
@@ -67,8 +70,9 @@ function byId<T>(value: unknown, valid: (entry: unknown) => entry is T, limit = 
 const isPlace = (value: unknown): value is Place => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const p = value as Record<string, unknown>;
+  const keys = Object.keys(p).sort().join();
   return (
-    Object.keys(p).length === 3 &&
+    (keys === 'w,x,y' || (keys === 'h,w,x,y' && Number.isInteger(p.h) && (p.h as number) >= 1 && (p.h as number) <= MAX_ROWS)) &&
     ['x', 'y', 'w'].every(key => Number.isInteger(p[key])) &&
     [0, 2, 3, 4].includes(p.x as number) &&
     [2, 3, 4, 6].includes(p.w as number) &&

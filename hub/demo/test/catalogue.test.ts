@@ -548,10 +548,17 @@ test('every entry of the whole catalogue shows what it claims over its span', {t
     wrong.push(...(await checkAll(stand, entries, reading, at, checked)));
     if (set.id === 'all' && at === 0) {
       const {layout} = (await reading.overview('grid')).view;
-      assert.deepEqual(layout.places.agents, {x: 0, y: 0, w: 3});
-      for (const [i, id] of ['claude-max', 'codex-pro', 'antigravity'].entries()) {
-        assert.deepEqual(layout.places[cardId(stand.sources.get(id)!)], {x: 3, y: i, w: 3});
+      assert.deepEqual(layout.places.agents, {x: 0, y: 0, w: 3, h: 16});
+      for (const [i, id, h] of [[0, 'claude-max'], [1, 'codex-pro', 9], [2, 'antigravity', 8]] as const) {
+        assert.deepEqual(layout.places[cardId(stand.sources.get(id)!)], {x: 3, y: i, w: 3, ...(h ? {h} : {})});
       }
+      // The heights chosen on the boards the benchmark and the look go through.
+      const ana = (await reading.overview('ana')).view.layout.places;
+      assert.deepEqual([ana.agents, ana.activity, ana.history, ana.forecast].map(place => place.h), [32, 12, 16, 30]);
+      assert.deepEqual(
+        await Promise.all(['ben', 'team', 'quiet'].map(async board => (await reading.overview(board)).view.layout.places.agents.h)),
+        [2, 5, 2],
+      );
     }
     previous = at;
   }
@@ -753,7 +760,7 @@ test('the activity example puts two working agents above recent and morning work
     await live.measure(at, start + at);
     const reading = new Reading(stand, start + at, new Map([[set.scene, await hub.told()]]));
     assert.deepEqual(await checkAll(stand, set.entries, reading, at, checked), []);
-    assert.equal((await reading.overview('compact')).view.layout.places.agents.w, 2);
+    assert.deepEqual((await reading.overview('compact')).view.layout.places.agents, {x: 3, y: 1, w: 2, h: 8});
     if (at >= 2 * MIN) {
       const overview = await reading.overview('ana');
       assert.deepEqual(agentRows(overview.sources, overview.view).rows.map(r => r.session.project),

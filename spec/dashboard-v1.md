@@ -78,10 +78,16 @@ change as it was.
 | `ping` | `{now}` | Every `heartbeatMs`, with the hub's clock. |
 | `bye` | `{reason}` | Last: the hub lets the reader go (see below). |
 
-The board's `view` includes `layout: {columns: 6, places: {<widget id>: {x, y, w}}}`.
-`x` is a column starting at zero, `y` a row starting at zero used for reading order;
-heights are measured by the page. Widths are 2, 3, 4 or 6 columns and starts are 0, 2,
-3 or 4, with `x + w <= 6`. Stored views from before the grid can still contain `order`
+The board's `view` includes `layout: {columns: 6, places: {<widget id>: {x, y, w, h?}}}`.
+`x` is a column starting at zero, `y` a row starting at zero used for reading order.
+Widths are 2, 3, 4 or 6 columns and starts are 0, 2, 3 or 4, with `x + w <= 6`. `h`, when
+present, is the height in rows the owner chose for the widget, a whole number from 1 to
+200 (`MAX_ROWS`); without it the widget is as tall as its content. The page measures the
+content: a widget never takes fewer rows than the least its content can show (all of a card
+or the table, a chart as tall as it draws by itself, the first agent of the list and how
+many more), so `h` is what the owner asked for, not what shows, and the hub does not check
+it against the content. A place has exactly `x`, `y`, `w` and, optionally, `h`; anything
+else is refused. Stored views from before the grid can still contain `order`
 and `sizes`, with an empty layout: the page translates them, including hidden or absent
 widgets. Saving a view requires `layout`; the hub drops the old fields. A save is
 limited to 64 KiB (65,536 UTF-8 bytes), so it fits the page's keepalive request when
