@@ -153,7 +153,7 @@ export const PULL = 24;
  */
 export function edgeScroll({y, from, top, bottom, moved, sideways, pixel = 1}: {y: number; from: number; top: number; bottom: number; moved: boolean; sideways: boolean; pixel?: number}) {
   if (!moved) return 0;
-  // The screen's pixel comes in floating point (a third is 3.00000009 CSS pixels): up to a 64th, as the page lays out.
+  // The screen's pixel comes in floating point (at a third, a hair under 3 CSS pixels: 2.99999991): up to a 64th, as the page lays out.
   const edge = Math.max(2, Math.ceil(pixel * 64) / 64);
   const toward = (room: number) => Math.min(PULL, sideways ? Math.max(1, room - edge) : room - edge);
   if (y < top + EDGE && y <= from - toward(from)) return y - top - EDGE;
