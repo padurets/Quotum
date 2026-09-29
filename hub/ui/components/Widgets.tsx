@@ -76,7 +76,7 @@ type Gesture = {
   stop: () => void;
 };
 const DRAG_AFTER = 4;
-/** How far toward an edge of the window the pointer goes before the page scrolls under it: half a row, past a hand's or a finger's drift. */
+/** How far toward an edge of the window the pointer goes, at most, before the page scrolls under it: half a row, past a hand's or a finger's drift. */
 const PULL = 24;
 const EDGE = 72;
 const SLIDE = {duration: 200, easing: 'cubic-bezier(.2, .7, .2, 1)'};
@@ -255,9 +255,9 @@ export function Widgets({
     const {y} = current.pointer;
     const {y: from} = current.start;
     const top = cover() + EDGE;
-    // Half a row toward the edge, or half the room left to it where a full screen leaves less.
-    const toward = (room: number) => Math.min(PULL, Math.max(DRAG_AFTER, room / 2));
-    const scroll = y < top && y < from - toward(from) ? y - top : y > innerHeight - EDGE && y > from + toward(innerHeight - from) ? y - innerHeight + EDGE : 0;
+    // Half a row toward the edge, or, from a press nearer to it than that, to the edge itself; never within a click's jitter.
+    const toward = (room: number) => Math.min(PULL, Math.max(1, room - 2));
+    const scroll = !current.moved ? 0 : y < top && y < from - toward(from) ? y - top : y > innerHeight - EDGE && y > from + toward(innerHeight - from) ? y - innerHeight + EDGE : 0;
     if (scroll) {
       const before = scrollY;
       window.scrollBy(0, scroll / 4);
