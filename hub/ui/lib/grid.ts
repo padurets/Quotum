@@ -143,7 +143,8 @@ export const PULL = 24;
 
 /**
  * Whether a pointer has gone further than a click's jitter (`dx`, `dy` in CSS pixels): four of
- * the screen's pixels, which zoomed out (`pixel`, one of them in CSS pixels) are more CSS pixels.
+ * the screen's pixels, which zoomed out (`pixel`, one of them in CSS pixels) are more CSS
+ * pixels, and never fewer than four CSS pixels, as on a dense screen or zoomed in.
  */
 export const pastClick = (dx: number, dy: number, pixel = 1) => Math.hypot(dx, dy) > 4 * Math.max(1, pixel);
 

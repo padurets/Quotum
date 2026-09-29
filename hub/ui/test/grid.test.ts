@@ -217,7 +217,8 @@ test('a click\'s jitter is four of the screen\'s pixels, however far the page is
   assert.equal(pastClick(3, 3), true, 'a pixel on the screen is a CSS pixel at 100 %');
   assert.equal(pastClick(3, 3, 3), false, 'at a third, a CSS pixel is a third of one on the screen');
   assert.equal(pastClick(9, 9, 3), true);
-  assert.equal(pastClick(3, 3, 0.5), true, 'zoomed in, still four CSS pixels');
+  assert.equal(pastClick(3, 0, 0.5), false, 'on a dense screen or zoomed in, never fewer than four CSS pixels');
+  assert.equal(pastClick(4.1, 0, 0.5), true);
 });
 
 test('saving places carries every chosen height over; only the height named changes, and null takes it away', () => {
