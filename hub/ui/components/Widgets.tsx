@@ -164,8 +164,8 @@ export function Widgets({
   const items = (activePreview?.items ?? base).map(item => ({...item, h: rowsFor(sizeOf(item.id), intended(item.id))}));
   const spots = columns === 6 ? settle(items, layout.columns) : narrowed(items, columns as 1 | 2, layout.columns);
   const byId = new Map(widgets.map(widget => [widget.id, widget]));
-  const latest = useRef({spots, onPlaces, bounds, sizeOf, saved});
-  latest.current = {spots, onPlaces, bounds, sizeOf, saved};
+  const latest = useRef({spots, onPlaces, bounds, sizeOf, saved, sizes});
+  latest.current = {spots, onPlaces, bounds, sizeOf, saved, sizes};
   const report = useCallback((id: string, size: Report | null) => {
     setSizes(old => {
       const was = old[id];
@@ -182,8 +182,10 @@ export function Widgets({
   };
   const pitch = () => (grid.current!.clientWidth + GAP) / layout.columns;
 
-  const measure = () => {
+  /** What every widget shows, kept for the next render, but on a gesture's `release` what the charts and the list show: they draw themselves at a new width only later, and tell it then. */
+  const measure = (release = false) => {
     const next: Record<string, number> = {};
+    const reported = latest.current.sizes;
     const room: Record<string, {rows: number; px: number}> = {};
     const spans = new Map(latest.current.spots.map(spot => [spot.id, spot.h]));
     for (const [id, body] of bodies.current) {
@@ -197,7 +199,7 @@ export function Widgets({
       if (rows !== undefined && !same(rows * ROW - GAP, px)) room[id] = {rows, px};
     }
     setHeights(old => {
-      const kept = Object.fromEntries(Object.entries(next).map(([id, h]) => [id, same(old[id], h) ? old[id] : h]));
+      const kept = Object.fromEntries(Object.entries(next).map(([id, h]) => [id, same(old[id], h) || (release && reported[id] && old[id] !== undefined) ? old[id] : h]));
       return Object.keys(kept).length === Object.keys(old).length && Object.entries(kept).every(([id, h]) => old[id] === h) ? old : kept;
     });
     setRooms(old => (JSON.stringify(old) === JSON.stringify(room) ? old : room));
@@ -298,7 +300,7 @@ export function Widgets({
     if (current.active && drop) {
       // Measure after removing the smooth resize width, at the final snapped width: the cards
       // and the table need what that shows; the charts and the list tell theirs when they can.
-      const measured = measure();
+      const measured = measure(true);
       const {sizeOf, saved, onPlaces} = latest.current;
       if (tall(current.kind)) aim(current, measured);
       const height = current.intent === undefined ? undefined : {id: current.id, rows: current.intent};
