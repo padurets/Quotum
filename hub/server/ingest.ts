@@ -1,9 +1,9 @@
 import {secretKind} from './domain/auth.js';
-import {Invalid, parseBatch, parseCheckin, parseSessions, subscriptionKey, toMeasurement, type AgentSender} from './domain/ingest.js';
+import {CLOCK_TOLERANCE_MS, Invalid, parseBatch, parseCheckin, parseSessions, subscriptionKey, toMeasurement, type AgentSender} from './domain/ingest.js';
 import {Sessions} from './sessions.js';
 import {ACTIVE_WITHIN_MS, type Cadence, type Signals, type Why} from './cadence.js';
 import type {Duty} from './duty.js';
-import type {Provider} from './domain/sources.js';
+import {providers, type Provider} from './domain/sources.js';
 import type {Device, Directory, Token} from './store/directory.js';
 import type {Store} from './store/store.js';
 import {tell, type Touches} from './touches.js';
@@ -24,9 +24,6 @@ export class IngestError extends Error {
     super(code);
   }
 }
-
-/** Clocks within this of the hub's are taken as they are; beyond it, agent times are shifted. */
-const CLOCK_TOLERANCE_MS = 30_000;
 
 /**
  * Measurements pushed by agents (ingest format v1). A batch is parsed whole, then
@@ -100,9 +97,13 @@ export class Ingest {
           result.duplicates++;
           continue;
         }
+        this.cadence.settleRefresh(account, this.refreshDuty(account), now);
+        this.cadence.refreshResult(account, device.id, observedAt, true, now);
         this.store.record(source, {...toMeasurement(snapshot), observedAt});
         result.accepted++;
         this.duty.delivered(account, device.id, observedAt, snapshot.staleAfterMs, now);
+        // A delivery can hand duty to its device: the request of the one before ends now, not when next read.
+        this.cadence.settleRefresh(account, this.refreshDuty(account), now);
         this.cadence.delivered(account, device.id, snapshot.windows, observedAt, snapshot.staleAfterMs, this.signals(source, account, now).inUse, now);
       }
 
@@ -111,7 +112,14 @@ export class Ingest {
         const source = this.store.deviceSource(device.id, failure.provider);
         // The device waits out its failures, whether or not another device measures the subscription fine.
         const key = this.cadence.measuredBy(device.id, failure.provider) ?? (source && this.store.account(source));
-        if (key) this.cadence.failed(key, device.id, failure.error, at);
+        if (key) {
+          this.cadence.settleRefresh(key, this.refreshDuty(key), now);
+          if (this.cadence.failed(key, device.id, failure.error, at)) {
+            this.duty.failed(key, device.id, at);
+            this.cadence.refreshResult(key, device.id, at, false, now);
+          }
+          this.cadence.settleRefresh(key, this.refreshDuty(key), now);
+        }
         const paused = key && this.store.findSource(failure.provider, key);
         if (paused) touched.add(paused);
         if (source) touched.add(source);
@@ -123,6 +131,12 @@ export class Ingest {
         this.store.fail(source, failure.error);
         result.failures++;
       }
+      // Heard from, the device is not silent: nor are the subscriptions it holds, those its
+      // measurements just handed it included, and delivers nothing for now.
+      const held = this.cadence.keysOf([device.id]).filter(key => this.duty.holder(key) === device.id);
+      for (const key of held) this.cadence.settleRefresh(key, this.refreshDuty(key), now);
+      this.cadence.heard(device.id, held, now);
+      for (const source of held.flatMap(key => providers.flatMap(provider => this.store.findSource(provider, key) ?? []))) touched.add(source);
       tell(this.observer, o => o.touchSources([...touched]));
       return result;
     });
@@ -142,8 +156,12 @@ export class Ingest {
     return {
       subscriptions: request.subscriptions.map(s => {
         const key = subscriptionKey(s, device.userId);
+        this.cadence.settleRefresh(key, this.refreshDuty(key), now);
+        this.cadence.capability(key, device.id, request.paced, s.minIntervalMs, now);
+        this.cadence.settleRefresh(key, this.refreshDuty(key), now);
         if (!request.paced) {
           const directive = this.duty.claim(key, device.id, s.active, now);
+          this.cadence.settleRefresh(key, this.refreshDuty(key), now);
           return {provider: s.provider, measure: directive.measure, until: iso(directive.until)};
         }
         const paused = this.cadence.pausedUntil(key, device.id, now);
@@ -155,11 +173,13 @@ export class Ingest {
           return {provider: s.provider, measure: false, onDuty: !(holder !== null && holder !== device.id && leased), askInMs, until: iso(now + askInMs)};
         }
         const directive = this.duty.claim(key, device.id, s.active, now);
+        this.cadence.settleRefresh(key, this.refreshDuty(key), now);
         if (!directive.measure) {
           return {provider: s.provider, measure: false, onDuty: false, askInMs: directive.until - now, until: iso(directive.until)};
         }
         const source = this.store.findSource(s.provider, key);
         const answer = this.cadence.answer(key, device.id, s.provider, now, s.minIntervalMs, this.signals(source, key, now));
+        if (answer.measure) this.duty.asked(key, device.id, now);
         return {provider: s.provider, ...answer, until: iso(now + answer.askInMs)};
       }),
     };
@@ -177,10 +197,29 @@ export class Ingest {
     const own = this.cadence.viewChangesAt(key, holder, now, signals);
     if (value === null || !signals.inUse) return {value, changesAt: own};
     const activeAt = this.duty.activeAt(key);
-    const ends = [own, this.live.workingChangesAt(source, now), activeAt !== null && activeAt + ACTIVE_WITHIN_MS >= now ? activeAt + ACTIVE_WITHIN_MS + 1 : null].filter(
-      (at): at is number => at !== null,
-    );
+    const ends = [
+      own,
+      this.live.workingChangesAt(source, now),
+      activeAt !== null && activeAt + ACTIVE_WITHIN_MS >= now ? activeAt + ACTIVE_WITHIN_MS + 1 : null,
+    ].filter((at): at is number => at !== null);
     return {value, changesAt: ends.length ? Math.min(...ends) : null};
+  }
+
+  private refreshDuty(key: string) {
+    const holder = this.duty.holder(key);
+    return {holder, until: this.duty.until(key), live: holder !== null && this.directory.deviceLive(holder)};
+  }
+
+  refresh(source: string, now: number) {
+    const key = this.store.account(source)!;
+    return this.cadence.refresh(key, this.refreshDuty(key), now);
+  }
+
+  requestRefresh(source: string, now: number) {
+    const key = this.store.account(source)!;
+    const result = this.cadence.requestRefresh(key, this.refreshDuty(key), this.store.state(source).successAt, now);
+    tell(this.observer, o => o.touchSources([source]));
+    return result;
   }
 
   /** What the hub knows of a subscription now: its windows, and whether it is in use on any machine. */
@@ -193,8 +232,13 @@ export class Ingest {
   }
 
   /** Devices taken off the hub: their agents stop showing at once. */
-  forget(devices: string[]) {
-    const sources = devices.flatMap(device => this.live.sourcesOf(device));
+  forget(devices: string[], now = Date.now()) {
+    for (const key of this.cadence.keysOf(devices)) this.cadence.settleRefresh(key, this.refreshDuty(key), now);
+    const keys = this.cadence.forget(devices, now);
+    const sources = [
+      ...devices.flatMap(device => [...this.live.sourcesOf(device), ...providers.flatMap(provider => this.store.deviceSource(device, provider) ?? [])]),
+      ...keys.flatMap(key => providers.flatMap(provider => this.store.findSource(provider, key) ?? [])),
+    ];
     this.live.forget(devices);
     tell(this.observer, o => o.touchSources([...new Set(sources)]));
   }

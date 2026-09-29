@@ -273,6 +273,7 @@ export function Header({
   board,
   onBoard,
   widgets,
+  refresh,
   onDevices,
   onPeople,
   user,
@@ -283,6 +284,7 @@ export function Header({
   board: Board | null;
   onBoard: (id: string) => void;
   widgets: ReactNode;
+  refresh: ReactNode;
   onDevices: () => void;
   /** A shared board's people and what they share; null on a personal board. */
   onPeople: (() => void) | null;
@@ -298,6 +300,7 @@ export function Header({
         {!local && <BoardSwitcher boards={boards} board={board} onSelect={onBoard} />}
         <div className="status">
           <Offline />
+          {refresh}
           {widgets}
           {onPeople && (
             <button type="button" className="icon-button" aria-label={t('header.people')} title={t('header.people')} onClick={onPeople}>

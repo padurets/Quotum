@@ -81,7 +81,7 @@ type Subscriber = Reader & {id: number; fresh: boolean; stopPing: () => void};
 type Watched = {
   id: string;
   subscribers: Set<Subscriber>;
-  /** The last part sent, as JSON, with its value (a snapshot is made of them): `board`, `view`, `lineup`, `card:<id>`, `sessions:<id>`, `cadence:<id>`. */
+  /** The last part sent, as JSON, with its value (a snapshot is made of them): `board`, `view`, `lineup`, `card:<id>`, `sessions:<id>`, `cadence:<id>`, `refresh:<id>`. */
   base: Map<string, {json: string; value: unknown}>;
   lineup: string[];
   /** When each source's parts change by themselves. */
@@ -366,7 +366,7 @@ export class Events implements Touches {
       // Sources that left take what was sent of them along: one that comes back is sent whole.
       for (const id of watched.lineup) {
         if (part.lineup.includes(id)) continue;
-        for (const key of [`card:${id}`, `sessions:${id}`, `cadence:${id}`]) base.delete(key);
+        for (const key of [`card:${id}`, `sessions:${id}`, `cadence:${id}`, `refresh:${id}`]) base.delete(key);
         watched.changes.delete(id);
       }
       ids = part.lineup;
@@ -387,6 +387,8 @@ export class Events implements Touches {
         if (sessions !== null) frames.push({type: 'sessions', data: `{"id":${id},"sessions":${sessions}}`});
         const cadence = this.changed(base, `cadence:${source.id}`, value.cadence);
         if (cadence !== null) frames.push({type: 'cadence', data: `{"id":${id},"cadence":${cadence}}`});
+        const refresh = this.changed(base, `refresh:${source.id}`, value.refresh);
+        if (refresh !== null) frames.push({type: 'refresh', data: `{"id":${id},"refresh":${refresh}}`});
         if (changesAt === null) watched.changes.delete(source.id);
         else watched.changes.set(source.id, changesAt);
       }
@@ -556,6 +558,7 @@ export class Events implements Touches {
         sources: watched.lineup.map(id => value(`card:${id}`)),
         sessions: Object.fromEntries(watched.lineup.map(id => [id, value(`sessions:${id}`)])),
         cadence: Object.fromEntries(watched.lineup.map(id => [id, value(`cadence:${id}`)])),
+        refresh: Object.fromEntries(watched.lineup.map(id => [id, value(`refresh:${id}`)])),
         mine: JSON.parse(this.mines.get(`${reader.user}\n${reader.board}`) ?? '[]'),
         boards: this.boardLists.get(reader.user)?.value ?? [],
         resets: this.hub?.value,
