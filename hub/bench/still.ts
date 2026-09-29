@@ -7,13 +7,15 @@ const HOUR = 3_600_000;
 /**
  * What the benchmark reads of a card to tell whether the board stands still, with its
  * forecasts by window, which `/api/overview` keeps beside the cards rather than in them
- * (`stillCards`). None when the card has no weekly window.
+ * (`overviewCards`); empty or none when the card has no weekly window.
  */
-export type StillCard = {id: string; successAt: number | null; staleAfterMs: number | null; windows: {resetAt: number | null}[]; forecast: Record<string, {asOf: number}> | undefined};
+type StillCard = {id: string; successAt: number | null; staleAfterMs: number | null; windows: {resetAt: number | null}[]; forecast: Record<string, {asOf: number}> | undefined};
 
-/** The cards of `/api/overview`, each with its forecasts. */
-export const stillCards = (overview: Pick<Snapshot, 'sources' | 'forecast'>): StillCard[] =>
-  overview.sources.map(card => ({...card, forecast: overview.forecast[card.id]}));
+/** A board's cards as `/api/overview` tells them (`get` asks the hub), each with its forecasts. */
+export async function overviewCards(get: (path: string) => Promise<Snapshot>, board: string): Promise<StillCard[]> {
+  const {sources, forecast} = await get(`/api/overview?board=${encodeURIComponent(board)}`);
+  return sources.map(card => ({...card, forecast: forecast[card.id]}));
+}
 
 /**
  * A moment this close to the window counts as in it: the hub works forecasts out when its
@@ -34,25 +36,14 @@ export function warmUntil(cards: StillCard[], opened: number): number {
 
 /**
  * When the hub works a card's forecasts out again by itself: at the card's own hour after
- * a measurement they have not taken in (server/forecasts.ts), or never.
+ * a measurement they have not taken in (server/forecasts.ts), or never. A still hub has
+ * taken in every one since its first forecasts, which stand on the latest: never there.
  */
 export function foreseenAt(card: StillCard): number | null {
   const behind = Object.values(card.forecast ?? {})
     .map(f => f.asOf)
     .filter(asOf => card.successAt !== null && card.successAt > asOf);
   return behind.length ? Math.floor(Math.min(...behind) / HOUR) * HOUR + HOUR + hourShift(card.id) : null;
-}
-
-/**
- * Where a window of `length` may begin, at `from` or later, with no card's forecasts
- * worked out again in it or within `MARGIN_MS` of it: past each such moment by
- * `SETTLE_MS`. A still hub works them out once more at most, up to ten minutes past the hour.
- */
-export function stillFrom(cards: StillCard[], from: number, length: number): number {
-  let begin = from;
-  const moments = cards.map(foreseenAt).filter((at): at is number => at !== null);
-  for (const at of moments.sort((a, b) => a - b)) if (at >= begin - MARGIN_MS && at <= begin + length + MARGIN_MS) begin = at + SETTLE_MS;
-  return begin;
 }
 
 /**

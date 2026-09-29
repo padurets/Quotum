@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {FADE_FOR, PULSE_FOR} from '../../ui/lib/quota.js';
 import {hourShift} from '../../server/forecasts.js';
 import type {Snapshot} from '../../server/projection.js';
-import {DOT_STILL_AFTER, foreseenAt, MARGIN_MS, SETTLE_MS, stillCards, stillFrom, stillProblems, warmUntil} from '../still.js';
+import {DOT_STILL_AFTER, foreseenAt, MARGIN_MS, overviewCards, SETTLE_MS, stillProblems, warmUntil} from '../still.js';
 import {scriptPerSecond, tally} from '../report.js';
 
 const MIN = 60_000;
@@ -36,38 +36,40 @@ test('a stand that would change by itself during the window is told, card by car
  * Cards as the benchmark reads them from `/api/overview`: the cards, and their forecasts
  * beside them by source, with only what it reads of either.
  */
-const overview = (cards: {id: string; successAt: number; asOf: number[]}[]) =>
-  stillCards({
-    sources: cards.map(({id, successAt}) => ({id, successAt, staleAfterMs: 3 * HOUR, windows: []})) as unknown as Snapshot['sources'],
-    forecast: Object.fromEntries(cards.map(({id, asOf}) => [id, Object.fromEntries(asOf.map((at, i) => [`w${i}`, {asOf: at}]))])) as unknown as Snapshot['forecast'],
-  });
+async function overview(cards: {id: string; successAt: number; asOf: number[]}[]) {
+  const asked: string[] = [];
+  const read = await overviewCards(async path => {
+    asked.push(path);
+    return {
+      sources: cards.map(({id, successAt}) => ({id, successAt, staleAfterMs: 3 * HOUR, windows: []})),
+      forecast: Object.fromEntries(cards.map(({id, asOf}) => [id, Object.fromEntries(asOf.map((at, i) => [`w${i}`, {asOf: at}]))])),
+    } as unknown as Snapshot;
+  }, 'board 1');
+  assert.deepEqual(asked, ['/api/overview?board=board%201']);
+  return read;
+}
 
-test("the window goes past each card's own hour when the hub works its forecasts out again", () => {
-  const from = 10 * HOUR + 3 * MIN;
+test("a card's forecasts worked out again by themselves are told, as the overview keeps them beside the cards", async () => {
   // Measured after the hour its forecasts are of: worked out again at its next hour, some minutes past it.
-  const [late, taken, two, none] = overview([
+  const [late, taken, two, none] = await overview([
     {id: 'codex:late', successAt: 10 * HOUR + MIN, asOf: [10 * HOUR]},
-    {id: 'codex:taken', successAt: 10 * HOUR - MIN, asOf: [10 * HOUR]},
+    {id: 'codex:taken', successAt: 10 * HOUR + MIN, asOf: [10 * HOUR + MIN]},
     {id: 'codex:two', successAt: 10 * HOUR + MIN, asOf: [10 * HOUR, 9 * HOUR]},
     {id: 'codex:none', successAt: 10 * HOUR + MIN, asOf: []},
   ]);
   const lateAt = 11 * HOUR + hourShift('codex:late');
-  assert.equal(foreseenAt(late), lateAt, 'its forecasts, read beside the cards');
-  assert.equal(foreseenAt(taken), null, 'its forecasts took in its last measurement');
+  assert.equal(foreseenAt(late), lateAt);
+  assert.equal(foreseenAt(taken), null, 'its forecasts took in its last measurement, as a still hub\'s do');
   assert.equal(foreseenAt(none), null, 'no weekly window');
   assert.equal(foreseenAt(two), 10 * HOUR + hourShift('codex:two'), 'the earlier of its windows');
 
-  assert.deepEqual(stillProblems([late], lateAt - MIN, lateAt + MIN), ['codex:late has its forecasts worked out again']);
-  assert.deepEqual(stillProblems([late], lateAt + MARGIN_MS / 2, lateAt + 3 * MIN), ['codex:late has its forecasts worked out again'], 'just before the window: its frame may come in it');
+  const told = ['codex:late has its forecasts worked out again'];
+  assert.deepEqual(stillProblems([late], lateAt - MIN, lateAt + MIN), told);
+  // Within a few seconds of either end: its frame may come in the window.
+  assert.deepEqual(stillProblems([late], lateAt + MARGIN_MS / 2, lateAt + 3 * MIN), told);
+  assert.deepEqual(stillProblems([late], lateAt - 3 * MIN, lateAt - MARGIN_MS / 2), told);
   assert.deepEqual(stillProblems([late], lateAt + MARGIN_MS + 1, lateAt + 3 * MIN), []);
-  assert.equal(stillFrom([late], from, 2 * MIN), from, 'the window ends well before it');
-  assert.equal(stillFrom([late], lateAt - MIN, 2 * MIN), lateAt + SETTLE_MS);
-  assert.equal(stillFrom([late], lateAt - 2 * MIN - 1, 2 * MIN), lateAt + SETTLE_MS, 'the window would end just before it');
-  // One past the other: the window moves past both.
-  const [other] = overview([{id: 'claude:other', successAt: 10 * HOUR + MIN, asOf: [10 * HOUR]}]);
-  const [first, second] = [lateAt, 11 * HOUR + hourShift('claude:other')].sort((a, b) => a - b);
-  assert.ok(second - first < 5 * MIN, 'the two are close enough to move the window twice');
-  assert.equal(stillFrom([late, other], first - MIN, 5 * MIN), second + SETTLE_MS);
+  assert.deepEqual(stillProblems([late], lateAt - 3 * MIN, lateAt - MARGIN_MS - 1), []);
 });
 
 test('the report adds up work outside what shows time by region, and the busiest label', () => {

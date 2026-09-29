@@ -9,7 +9,7 @@ import {idleProblems, measuredProblems, percentile} from './budget.js';
 import {attachedChrome, findChrome, launchChrome, openTab, type Browser, type Cdp} from './cdp.js';
 import {probeScript, type Reading} from './probe.js';
 import {delta, round, scriptPerSecond, tally, type Metrics} from './report.js';
-import {stillCards, stillFrom, stillProblems, warmUntil} from './still.js';
+import {overviewCards, stillProblems, warmUntil} from './still.js';
 import {hear, type Heard} from './stream.js';
 
 /**
@@ -127,7 +127,7 @@ async function main() {
     const stand = await demo.run();
     const ana = stand.people.get(people(set)[0].id)!;
     const board = ana.personalBoard;
-    const overview = async () => stillCards(await ana.get<Snapshot>(`/api/overview?board=${encodeURIComponent(board)}`));
+    const overview = () => overviewCards(path => ana.get<Snapshot>(path), board);
     heard = await hear(address.base, ana.cookie, board);
 
     browser = options.cdp ? attachedChrome(options.cdp) : await launchChrome(chrome!, !process.env.CI);
@@ -149,9 +149,7 @@ async function main() {
       await sleep(250);
     }
     const opened = Date.now();
-    // Past the hour when the hub may work out forecasts again, if the window would hold it.
-    const cards = await overview();
-    const warm = stillFrom(cards, warmUntil(cards, opened), seconds * 1000);
+    const warm = warmUntil(await overview(), opened);
     say(`the board is open; it settles for ${Math.round((warm - Date.now()) / 1000)} s`);
     await sleep(warm - Date.now());
 
