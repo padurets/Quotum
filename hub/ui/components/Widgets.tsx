@@ -13,7 +13,7 @@ import {
 } from 'react';
 import {t} from '../i18n';
 import {Popover, SwitchRow} from './Popover';
-import {same, SizingContext, type Report, type Size} from './sizing';
+import {pixels, same, SizingContext, type Report, type Size} from './sizing';
 import {isOffByDefault} from '../lib/view';
 import {
   cellOf,
@@ -135,6 +135,8 @@ export function Widgets({
   /** Whether each of the last two presses on a handle saved a size or was given up: a double click after two that did neither fits the content. */
   const presses = useRef<boolean[]>([]);
   const [heights, setHeights] = useState<Record<string, number>>({});
+  // The room a widget's rows give it where the screen draws them shorter than they add up to (at 110 % or 133 %, a tall widget's by pixels).
+  const [rooms, setRooms] = useState<Record<string, {rows: number; px: number}>>({});
   // What the charts and the list of agents tell they need: a chosen height fills them, so what they show is not it.
   const [sizes, setSizes] = useState<Record<string, Size>>({});
   const [preview, setPreview] = useState<{id: string; kind: Kind; items: Item[]; intent?: number} | null>(null);
@@ -181,16 +183,23 @@ export function Widgets({
 
   const measure = () => {
     const next: Record<string, number> = {};
+    const room: Record<string, {rows: number; px: number}> = {};
+    const spans = new Map(latest.current.spots.map(spot => [spot.id, spot.h]));
     for (const [id, body] of bodies.current) {
       const root = body.querySelector<HTMLElement>(':scope > .card, :scope > .panel');
+      const place = places.current.get(id)!;
       if (!root) continue;
-      const fill = parseFloat(getComputedStyle(places.current.get(id)!).getPropertyValue('--fill')) || 0;
+      const fill = parseFloat(getComputedStyle(place).getPropertyValue('--fill')) || 0;
       next[id] = Math.round((root.getBoundingClientRect().height - fill) * 64) / 64;
+      const rows = spans.get(id);
+      const px = pixels(place.getBoundingClientRect().height);
+      if (rows !== undefined && !same(rows * ROW - GAP, px)) room[id] = {rows, px};
     }
     setHeights(old => {
       const kept = Object.fromEntries(Object.entries(next).map(([id, h]) => [id, same(old[id], h) ? old[id] : h]));
       return Object.keys(kept).length === Object.keys(old).length && Object.entries(kept).every(([id, h]) => old[id] === h) ? old : kept;
     });
+    setRooms(old => (JSON.stringify(old) === JSON.stringify(room) ? old : room));
     return next;
   };
   // Before paint on the first render; later one observer measures content, never the row's stretched box.
@@ -535,7 +544,7 @@ export function Widgets({
     <div className={`widgets ${movable ? 'is-movable' : ''}`} ref={grid} style={{'--columns': columns} as CSSProperties}>
       {reading(spots).map(spot => {
         const widget = byId.get(spot.id)!;
-        const allocated = spot.h * ROW - GAP;
+        const allocated = rooms[spot.id]?.rows === spot.h ? rooms[spot.id].px : spot.h * ROW - GAP;
         const fill = heights[spot.id] === undefined ? 0 : Math.max(0, allocated - heights[spot.id]);
         const manual = intended(spot.id) !== undefined;
         return (
