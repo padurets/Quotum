@@ -139,8 +139,8 @@ export class Agent {
   }
 
   /** Asks whether to measure its subscriptions now, following the hub's pace (spec: Asking whether to measure). */
-  async checkin(subscriptions: object[]) {
-    const body = {version: 1, agent: Agent.VERSION, paced: true, machine: this.machine, subscriptions};
+  async checkin(subscriptions: object[], paced = true) {
+    const body = {version: 1, agent: Agent.VERSION, paced, machine: this.machine, subscriptions};
     type Told = {provider: string; measure: boolean; onDuty?: boolean; askInMs?: number; nextInMs?: number};
     return (await call<{subscriptions: Told[]}>(this.base, 'POST', '/v1/checkin', {body, token: this.token})).body;
   }

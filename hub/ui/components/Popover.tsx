@@ -181,9 +181,9 @@ export const SlidersIcon = () => (
 );
 
 /** The last row of a widget's menu, for the board's owner: hides the widget (its data stays). */
-export function HideRow({children, onHide}: {children: ReactNode; onHide: () => void}) {
+export function HideRow({children, onHide, section = true}: {children: ReactNode; onHide: () => void; section?: boolean}) {
   return (
-    <div className="popover-section">
+    <div className={section ? 'popover-section' : undefined}>
       <button type="button" className="popover-row" onClick={onHide}>
         <EyeOffIcon />
         <span>{children}</span>

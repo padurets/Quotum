@@ -335,3 +335,24 @@ test('desktop events require a local session, same origin and streaming mode', a
   await server.app.close();
   db.store.close();
 });
+
+test('the app window can request fresh limits through the same board action', async t => {
+  const db = database();
+  const {app, call, enter} = await db.start();
+  t.after(async () => {await app.close(); db.store.close();});
+  const {cookie} = await enter();
+  const headers = {cookie: cookie!};
+  const agent = batch('codex', {account: 'a1b2c3d4e5f6a1b2c3d4e5f6'});
+  const authorization = `Bearer ${TOKEN}`;
+  assert.equal((await call('POST', '/v1/ingest', {body: agent, headers: {authorization}})).status, 200);
+  assert.equal((await call('POST', '/v1/checkin', {body: {
+    version: 1, agent: agent.agent, machine: agent.machine, paced: true,
+    subscriptions: [{provider: 'codex', account: 'a1b2c3d4e5f6a1b2c3d4e5f6', active: false}],
+  }, headers: {authorization}})).status, 200);
+  const overview = (await call('GET', '/api/overview', {headers})).body;
+  const url = `/api/boards/${overview.board.id}/sources/${overview.sources[0].id}/refresh`;
+  assert.equal((await call('POST', url)).status, 401);
+  assert.equal((await call('POST', url, {headers})).status, 202);
+  const after = (await call('GET', '/api/overview', {headers})).body;
+  assert.equal(after.refresh[overview.sources[0].id].request.status, 'queued');
+});

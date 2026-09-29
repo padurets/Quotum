@@ -294,12 +294,17 @@ export type Rhythm = (card: Card, machine: Machine, t: number) => number;
 /**
  * What the machines of a stand send as time goes on: their measurements on each card's
  * rhythm while awake, their failures every five minutes, and their lists of running
- * agents. The demo's loop and the catalogue test both drive it. With `paced`, the cards
- * measured at the hub's pace are left to `pace` instead.
+ * agents. The demo's loop and the catalogue test both drive it. With `paced`, live
+ * measurements follow the hub; only the explicit legacy scene measures on its own.
  */
 export class Live {
   /** Up to when each machine has measured. */
   private readonly measured = new Map<string, number>();
+  private readonly requested = new Set<string>();
+  private readonly checked = new Set<string>();
+  private readonly pending = new Map<string, {at: number; next: number}>();
+  /** When the machines first asked: the live demo starts asking up to a minute into its time. */
+  private first: number | null = null;
 
   constructor(
     private readonly stand: Stand,
@@ -329,7 +334,7 @@ export class Live {
       if (t <= from) continue;
       this.measured.set(machine.id, t);
       const snapshots = cards(set)
-        .filter(card => card.machines.includes(machine.id) && !(this.paced && card.paced))
+        .filter(card => card.machines.includes(machine.id) && (!this.paced || card.refresh?.legacy))
         .flatMap(card =>
           this.times(card, machine, from, t)
             .filter(at => awake(machine, at) && delivered(card, at))
@@ -346,23 +351,45 @@ export class Live {
   }
 
   /**
-   * Every machine awake asks the hub about its cards measured at the hub's pace, in one
-   * check-in as agents do every 15 seconds, and delivers those it is told to measure,
+   * Every machine awake asks the hub about its cards every 15 seconds, and delivers
+   * those it is told to measure,
    * promising the next as the hub did.
    */
   async pace(t: number, now: number) {
     const {set, start} = this.stand;
+    this.first ??= t;
     for (const machine of machines(set)) {
-      const paced = cards(set).filter(card => card.paced && card.machines[0] === machine.id && delivered(card, t));
-      if (!paced.length || !awake(machine, t)) continue;
+      const live = cards(set).filter(card => card.machines.includes(machine.id) && delivered(card, t) && (!card.refresh?.silent || !this.checked.has(card.id)));
+      if (!live.length || !awake(machine, t)) continue;
       const agent = this.stand.agents.get(machine.id)!;
-      const asks = paced.map(card => {
-        const {provider, account, accountName} = snapshot(card, start, t, MIN) as {provider: string; account?: string; accountName?: string};
-        return {provider, account, accountName, active: false};
-      });
-      const {subscriptions} = await agent.checkin(asks);
-      const told = paced.flatMap((card, i) => (subscriptions[i].measure && subscriptions[i].nextInMs ? [snapshot(card, start, t, subscriptions[i].nextInMs)] : []));
-      if (told.length) await agent.ingest(told, [], now);
+      // The catalogue can put many example accounts on a machine; the protocol takes 16 at a time.
+      for (let offset = 0; offset < live.length; offset += 16) {
+        const batch = live.slice(offset, offset + 16);
+        const asks = batch.map(card => {
+          const {provider, account, accountName} = snapshot(card, start, t, MIN) as {provider: string; account?: string; accountName?: string};
+          return {provider, account, accountName, active: false, ...(card.refresh?.minimum ? {minIntervalMs: card.refresh.minimum} : {})};
+        });
+        const {subscriptions} = await agent.checkin(asks, !batch.some(card => card.refresh?.legacy));
+        for (const card of batch) this.checked.add(card.id);
+        for (const [i, card] of batch.entries()) {
+          const answer = subscriptions[i];
+          if (answer.measure && answer.nextInMs && !this.pending.has(card.id))
+            this.pending.set(card.id, {at: t + (this.requested.has(card.id) ? card.refresh?.delay ?? 0 : 0), next: answer.nextInMs});
+          const pending = this.pending.get(card.id);
+          if (pending && t >= pending.at) {
+            this.pending.delete(card.id);
+            if (this.requested.has(card.id) && card.refresh?.response === 'failed') await agent.ingest([], [{provider: card.provider, observedAt: new Date(now).toISOString(), error: 'failed'}], now);
+            else if (!this.requested.has(card.id) || card.refresh?.response !== 'lost') await agent.ingest([snapshot(card, start, t, pending.next)], [], now);
+          }
+        }
+      }
+    }
+    for (const card of cards(set)) {
+      // A request counts from the first asking, as everything else its card shows does.
+      if (!card.refresh || t - this.first < card.refresh.at || this.requested.has(card.id) || card.refresh.legacy || card.refresh.silent) continue;
+      this.requested.add(card.id);
+      const person = this.stand.people.get(homeOf(set, card))!;
+      await person.post(`/api/boards/${person.personalBoard}/sources/${this.stand.sources.get(card.id)}/refresh`);
     }
   }
 

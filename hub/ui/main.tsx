@@ -16,6 +16,7 @@ import {UNAUTHORIZED} from './lib/http';
 import {t, useLocale} from './i18n';
 import {Compact} from './components/Compact';
 import {Header} from './components/Header';
+import {RefreshAll} from './components/RefreshAll';
 import {SERVICE} from './components/Kit';
 import {SourceCard} from './components/SourceCard';
 import {AgentsPanel} from './components/Agents';
@@ -175,6 +176,7 @@ function Dashboard({
         boards={boards}
         board={board}
         onBoard={selectBoard}
+        refresh={meta && <RefreshAll key={boardId} board={boardId} ids={lineup.filter(id => !isHidden(arrange.view, cardId(id)))} />}
         widgets={
           arrange.owner && meta && !empty ? (
             <WidgetsMenu
