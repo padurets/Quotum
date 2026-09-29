@@ -16,7 +16,7 @@ import {Store} from '../../server/store/store.js';
 import type {ResetEvent, ResetProvider} from '../../server/domain/resets.js';
 import {setLocale} from '../../ui/i18n/index.js';
 import {agentRows, byActivity, drawn, folderOf, machinesOf} from '../../ui/lib/agents.js';
-import {LIVE_COLUMNS, forecastLayout, outlook, planCell, spentOf} from '../../ui/lib/forecast.js';
+import {LIVE_COLUMNS, announcedOf, forecastLayout, planCell, spentOf} from '../../ui/lib/forecast.js';
 import {dashOf, lineWork, workNotes} from '../../ui/lib/work.js';
 import {activityEmpty} from '../../ui/lib/activity.js';
 import {chartEvents, chartResets, linesOf} from '../../ui/lib/lines.js';
@@ -25,7 +25,7 @@ import {planNote, started} from '../../ui/lib/plan.js';
 import {shown as gathered, type Projects} from '../../ui/lib/projects.js';
 import {cadenceOf, dotOf, level, resetLine, titled, windowName} from '../../ui/lib/quota.js';
 import {resetLabel, type Resets, type TrackerHealth} from '../../ui/lib/resets.js';
-import {ANALYTICS_KINDS, type History, type LiveSession, type Pace, type View} from '../../ui/lib/types.js';
+import {ANALYTICS_KINDS, type History, type LiveSession, type Pace, type SourceForecast, type View} from '../../ui/lib/types.js';
 import type {Snapshot} from '../../ui/lib/board.js';
 import {ACTIVITY, AGENTS, boardState, cardId, columnShown, FORECAST, HISTORY, isHidden, isWindowHidden, planOf} from '../../ui/lib/view.js';
 import {SCENES, SETS} from '../catalogue.js';
@@ -45,18 +45,19 @@ import {
   SECOND,
   sessionsAt,
   snapshot,
+  spanOf,
   staleAfter,
   type Agent,
   type Card,
   type CardCheck,
   type DemoSet,
   type Entry,
-  type Machine,
   type Period,
   type Span,
 } from '../model.js';
 import {Live, seedWork, setUp, type Stand} from '../setup.js';
 import {Trackers} from '../trackers.js';
+import {cadence, forecastCodes, points} from './reads.js';
 
 setLocale('en');
 const SETUP = 'BCDF-GHJK';
@@ -92,25 +93,13 @@ async function hubFor(trackers: Trackers, scene: string, start: number) {
   };
 }
 
-/** How often the test measures: a minute at first and on the sleeping machine, then up to five (eco: its quarter of an hour). */
-const cadence = (card: Card, machine: Machine, t: number) => (card.eco ? 15 * MIN : machine.sleeps || t < 30 * MIN ? MIN : 5 * MIN);
-
-const within = (span: Span, t: number) => t >= (span.from ?? 0) && t <= (span.to ?? HOLDS);
-
-/** Where the test looks: every hour, and where every code's span begins, is halfway and ends. */
-function points(set: DemoSet): number[] {
-  const found = Array.from({length: HOLDS / 3_600_000 + 1}, (_, hour) => hour * 3_600_000);
-  for (const entry of [...set.entries, ...SCENES]) {
-    for (const check of entry.expect as Span[]) {
-      const [from, to] = [check.from ?? 0, check.to ?? HOLDS];
-      found.push(from, (from + to) / 2, to);
-    }
-  }
-  return [...new Set(found)].sort((a, b) => a - b);
-}
+const within = (entry: Entry, check: Span, t: number) => {
+  const {from, to} = spanOf(entry, check);
+  return t >= from && t <= to;
+};
 
 /** A board as the page puts it together from its snapshot: each card named from the whole board, with its agents and its pace. */
-type Overview = {view: View; historyStart: number; sources: (Snapshot['sources'][number] & {title: string; sessions: LiveSession[]; cadence: Pace})[]};
+type Overview = {view: View; historyStart: number; sources: (Snapshot['sources'][number] & {title: string; sessions: LiveSession[]; cadence: Pace; forecast: SourceForecast})[]};
 
 /** What the hub shows at one moment, read once per board as the page would. */
 class Reading {
@@ -138,7 +127,12 @@ class Reading {
         this.reader(board)
           .get<Snapshot>(`/api/overview?board=${encodeURIComponent(id)}`)
           .then(data => {
-            const sources = titled(data.sources, data.view.names).map(card => ({...card, sessions: data.sessions[card.id] ?? [], cadence: data.cadence[card.id] ?? null}));
+            const sources = titled(data.sources, data.view.names).map(card => ({
+              ...card,
+              sessions: data.sessions[card.id] ?? [],
+              cadence: data.cadence[card.id] ?? null,
+              forecast: data.forecast[card.id] ?? {},
+            }));
             const overview: Overview = {view: data.view, historyStart: data.historyStart, sources};
             const ordered = (sessions: LiveSession[]) => {
               for (let i = 1; i < sessions.length; i++) assert.ok(byActivity(sessions[i - 1], sessions[i]) <= 0, `${board}: activity order`);
@@ -313,13 +307,13 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
     if (!ANALYTICS_KINDS.includes(live.kind)) return `window ${id} is of the kind ${live.kind}: the table shows only weekly and five-hour windows`;
     const line = linesOf(await reading.history(board), overview.sources, overview.view, live.kind).find(l => l.sourceId === source.id && l.windowId === id);
     if (!line) return `no line of ${id} in the table`;
-    // As the table's cells put it (components/Forecast.tsx).
-    const ahead = outlook(live, source.successAt, now, weekly);
+    // As the table's cells put it (components/Forecast.tsx), with the news the set's hub tells of resets for everyone.
+    const forecast = live.kind === 'weekly' ? (source.forecast[live.id] ?? null) : null;
+    const context = {windows: source.windows, freeResets: source.resets?.available ?? 0, announced: announcedOf(reading.scenes.get(set.scene)?.resets, source.provider, source.successAt)};
     const plan = planCell(live, source.successAt, now, weekly);
     Object.assign(values, {
       forecast: id,
-      outlook: ahead.key,
-      tone: ahead.tone,
+      ...forecastCodes(live, source.successAt, now, forecast, context),
       spent: spentOf(line).key,
       plan: !plan ? 'none' : !plan.notable ? 'even' : plan.delta >= 0 ? 'behind' : 'ahead',
     });
@@ -385,7 +379,7 @@ async function checkAll(stand: Stand, entries: Entry[], reading: Reading, t: num
   const wrong: string[] = [];
   for (const entry of entries) {
     for (const [i, check] of (entry.expect as Span[]).entries()) {
-      if (t !== null && !within(check, t)) continue;
+      if (t !== null && !within(entry, check, t)) continue;
       if (paceCode(check) !== (codes === 'pace')) continue;
       checked.add(`${entry.kind} ${entry.id} #${i}`);
       const values = await shown(stand, entry, check, reading);
@@ -509,9 +503,10 @@ test('the demo is the same whenever it starts: everything is timed from the star
   for (const set of SETS) assert.equal(everything(set, start + 1.37 * 86_400_000), everything(set, start), set.id);
 });
 
-test('every entry of the whole catalogue shows what it claims for twelve hours', {timeout: 180_000}, async t => {
+test('every entry of the whole catalogue shows what it claims over its span', {timeout: 180_000}, async t => {
   const set = setOf('all');
-  const start = Math.floor(Date.now() / MIN) * MIN;
+  // A few minutes past the hour, as the hub works out forecasts from whole hours: the same minute every run.
+  const start = Math.floor(Date.now() / HOUR) * HOUR + 7 * MIN;
   const {stand, trackers, hub} = await bringUp(t, set, start);
   const live = new Live(stand, cadence);
   const hubs = new Map([[set.scene, hub], ...(await sceneHubs(t, trackers, set.scene, start - MIN))]);

@@ -67,7 +67,8 @@ answers and stand-in programs, so they cost nothing and don't depend on your acc
 
 ## The demo board
 
-A change to the dashboard is looked at on the demo board, with every state it can meet:
+A change to the dashboard is looked at on the demo board, with every state it can meet
+that lasts:
 
 ```sh
 cd hub && npm run build && npm run demo
@@ -86,7 +87,8 @@ and start the demo again.
 
 A new state of the board gets an entry in the catalogue, with the codes it shows in
 `expect` (the file's header explains them): `npm test` then checks it holds, and it is
-on the board for the next person. `npm run demo -- --still` keeps the board still:
+on the board for the next person. One a live hub never holds for long is named in the
+header instead, with the tests that hold it. `npm run demo -- --still` keeps the board still:
 nothing is measured after the start, and no card goes stale for three hours.
 
 For README screenshots, use `npm run demo -- showcase --still`. Capture the cards and
