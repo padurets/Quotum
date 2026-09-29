@@ -504,7 +504,7 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 .panel .chart > svg, .panel .table-wrap { transition: opacity .2s; }
 .panel.is-loading .chart > svg, .panel.is-loading .table-wrap { opacity: .5; }
 .panel-loading, .panel-empty { margin: 18px 0 0; min-height: 96px; display: grid; place-items: center; color: var(--text-3); font-size: 13px; }
-.chart > svg { display: block; width: 100%; height: auto; touch-action: pan-y; overflow: visible; }
+.chart > svg { display: block; width: 100%; touch-action: pan-y; overflow: visible; }
 .chart-loading, .chart-empty { min-height: 220px; display: grid; place-items: center; color: var(--text-3); font-size: 13px; }
 .chart-empty { position: absolute; inset: 0; min-height: 0; pointer-events: none; }
 /* Agent activity: its totals a quieter line under the title, each a whole, its value as the legend's. */

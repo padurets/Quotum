@@ -419,8 +419,10 @@ export function Chart({
       <svg
         ref={svg}
         viewBox={`0 0 ${width} ${height}`}
-        // As tall as drawn, not as the width it last knew makes it: a new width is heard only after it shows, and the board measures what shows.
+        // A width the board does not give it (a gesture's, the window's) is heard only after it shows, and the board measures what shows:
+        // until then the chart keeps the height it is drawn at, and what is drawn stays by its scale on the left, not in the middle.
         style={{height: `${height * scale}px`}}
+        preserveAspectRatio="xMinYMin meet"
         role="img"
         aria-label={t('chart.label')}
         className={onSelect ? 'is-selectable' : undefined}
