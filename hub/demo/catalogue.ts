@@ -613,13 +613,14 @@ const all: DemoSet = {
         {work: 'gemini:weekly', range: '24h', paceWhy: 'short', leftWhy: 'short', from: 0, to: 0},
         {title: 'Antigravity 2'},
         {stale: false, to: 3 * MIN},
-        // Stale while it sleeps, as the live demo, measured at the hub's pace, shows it too.
-        {stale: true, from: 6 * MIN, to: 13 * MIN},
+        // Stale while it sleeps, as the live demo, measured at the hub's pace, shows it too,
+        // whenever in its first minute its loop starts.
+        {stale: true, from: 8 * MIN, to: 13 * MIN},
         {stale: false, from: 15 * MIN, to: 46 * MIN},
         {agents: 2, drawn: true, to: 6 * MIN},
         {agents: 0, drawn: true, from: 7 * MIN, to: 14 * MIN},
         {agents: 2, drawn: true, from: 15 * MIN, to: 46 * MIN},
-        {stale: true, from: 52 * MIN, to: 58 * MIN},
+        {stale: true, from: 53 * MIN, to: 58 * MIN},
         {agents: 0, drawn: true, from: 52 * MIN, to: 59 * MIN},
         // Asleep or not, the forecast stays.
         {forecast: 'gemini:weekly', outlook: 'runsOut', tone: 'v-warn'},

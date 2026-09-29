@@ -604,41 +604,43 @@ test('cards measured at the hub’s pace say when the next measurement comes and
   for (const when of ['nextIn', 'nextSoon']) assert.ok(shown.some(c => c.cadence === when), `a card says ${when}`);
 });
 
-test('a card whose machine sleeps goes stale in the live demo too, where the hub sets the pace', {timeout: 120_000}, async t => {
-  const all = setOf('all');
-  // Staleness that comes and goes with a machine's sleep: the live demo measures these
-  // cards when the hub says, not on the rhythm the twelve hours above follow.
-  const sleepy = cards(all).filter(card => card.expect.some(check => 'stale' in check && check.stale && 'to' in check));
-  assert.ok(sleepy.length, 'the catalogue has a card going stale for a while');
-  const set: DemoSet = {
-    ...all,
-    entries: all.entries
-      .filter(e => e.kind !== 'card' || sleepy.includes(e))
-      .map(e => (e.kind === 'person' ? {...e, expect: e.expect.filter(check => !('project' in check))} : e)),
-  };
-  const checks = sleepy.map(card => ({...card, expect: card.expect.filter(check => 'stale' in check)}));
-  const points = [...new Set(checks.flatMap(card => (card.expect as Span[]).flatMap(check => [check.from ?? 0, ((check.from ?? 0) + (check.to ?? HOLDS)) / 2, check.to ?? HOLDS])))].sort((a, b) => a - b);
-  const start = Math.floor(Date.now() / MIN) * MIN;
-  const {stand, hub} = await bringUp(t, set, start);
-  const live = new Live(stand, cadence, true);
-  const checked = new Set<string>();
-  const wrong: string[] = [];
-  // Every 15 seconds, as the live demo's loop does.
-  let at = 0;
-  for (const point of points) {
-    for (; at <= point; at += TICK) {
-      t.mock.timers.setTime(start + at);
-      await live.report(at, start + at);
-      await live.pace(at, start + at);
-      await live.measure(at, start + at);
+// The live demo's loop starts when the demo is up, up to a minute past the minute its time counts from.
+for (const first of [0, 59 * SECOND])
+  test(`a card whose machine sleeps goes stale in the live demo too, where the hub sets the pace, its first tick ${first / SECOND} s in`, {timeout: 120_000}, async t => {
+    const all = setOf('all');
+    // Staleness that comes and goes with a machine's sleep: the live demo measures these
+    // cards when the hub says, not on the rhythm the twelve hours above follow.
+    const sleepy = cards(all).filter(card => card.expect.some(check => 'stale' in check && check.stale && 'to' in check));
+    assert.ok(sleepy.length, 'the catalogue has a card going stale for a while');
+    const set: DemoSet = {
+      ...all,
+      entries: all.entries
+        .filter(e => e.kind !== 'card' || sleepy.includes(e))
+        .map(e => (e.kind === 'person' ? {...e, expect: e.expect.filter(check => !('project' in check))} : e)),
+    };
+    const checks = sleepy.map(card => ({...card, expect: card.expect.filter(check => 'stale' in check)}));
+    const points = [...new Set(checks.flatMap(card => (card.expect as Span[]).flatMap(check => [check.from ?? 0, ((check.from ?? 0) + (check.to ?? HOLDS)) / 2, check.to ?? HOLDS])))].sort((a, b) => a - b);
+    const start = Math.floor(Date.now() / MIN) * MIN;
+    const {stand, hub} = await bringUp(t, set, start);
+    const live = new Live(stand, cadence, true);
+    const checked = new Set<string>();
+    const wrong: string[] = [];
+    // Every 15 seconds, as the live demo's loop does.
+    let at = first;
+    for (const point of points) {
+      for (; at <= point; at += TICK) {
+        t.mock.timers.setTime(start + at);
+        await live.report(at, start + at);
+        await live.pace(at, start + at);
+        await live.measure(at, start + at);
+      }
+      t.mock.timers.setTime(start + point);
+      const reading = new Reading(stand, start + point, new Map([[set.scene, await hub.told()]]));
+      wrong.push(...(await checkAll(stand, checks, reading, point, checked)));
     }
-    t.mock.timers.setTime(start + point);
-    const reading = new Reading(stand, start + point, new Map([[set.scene, await hub.told()]]));
-    wrong.push(...(await checkAll(stand, checks, reading, point, checked)));
-  }
-  assert.deepEqual(wrong, [], `start ${new Date(start).toISOString()}`);
-  assert.equal(checked.size, checks.reduce((count, card) => count + card.expect.length, 0), 'every such code is checked');
-});
+    assert.deepEqual(wrong, [], `start ${new Date(start).toISOString()}`);
+    assert.equal(checked.size, checks.reduce((count, card) => count + card.expect.length, 0), 'every such code is checked');
+  });
 
 test('the showcase comes up clean', {timeout: 60_000}, async t => {
   const set = setOf('showcase');
