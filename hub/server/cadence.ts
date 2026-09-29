@@ -85,20 +85,19 @@ const signatureOf = (windows: {id: string; usedPercent: number}[]) =>
 
 export type RefreshDuty = {holder: string | null; until: number | null; live: boolean};
 type Request = {view: RefreshRequest; device: string; baseline: number | null; freshnessFrom: number};
-type Capability = {paced: boolean; at: number; minIntervalMs: number | null};
+/** `heardAt`: its last word on the subscription, asking or, within five minutes of asking, delivering. */
+type Capability = {paced: boolean; at: number; minIntervalMs: number | null; heardAt: number};
 const pending = (request: RefreshRequest) => request.finishedAt === null;
 
 export class Cadence {
   private readonly requests = new Map<string, Request>();
   private readonly capabilities = new Map<string, Map<string, Capability>>();
-  /** When each device last delivered, by the hub's clock. */
-  private readonly heardAt = new Map<string, number>();
 
   /** The latest check-in of this subscription, including a return to the legacy protocol. */
   capability(key: string, device: string, paced: boolean, minIntervalMs: number | null, now: number) {
     let devices = this.capabilities.get(key);
     if (!devices) this.capabilities.set(key, (devices = new Map()));
-    devices.set(device, {paced, at: now, minIntervalMs});
+    devices.set(device, {paced, at: now, minIntervalMs, heardAt: now});
     const request = this.requests.get(key);
     if (request && pending(request.view) && request.device === device && request.view.dispatchAt === null) {
       request.view.notBefore = this.notBefore(this.paces.get(key), minIntervalMs, request.view.requestedAt);
@@ -111,10 +110,8 @@ export class Cadence {
   refresh(key: string, duty: RefreshDuty, now: number): {value: Refresh; changesAt: number | null} {
     const capability = duty.holder === null ? undefined : this.capabilities.get(key)?.get(duty.holder);
     const pause = duty.holder === null ? null : this.pausedUntil(key, duty.holder, now);
-    // Silence counts from the holder's last word: asking, or delivering what it measures one by
-    // one after asking, for at most as long as it measures.
-    const heardAt = capability ? Math.min(this.heardAt.get(duty.holder!) ?? capability.at, capability.at + REFRESH_WAIT_MS) : null;
-    const silentAt = capability ? Math.max(capability.at, heardAt!) + SILENT_AFTER_MS + 1 : null;
+    // Silence counts from the holder's last word: asking, or delivering what it measures one by one.
+    const silentAt = capability ? capability.heardAt + SILENT_AFTER_MS + 1 : null;
     // A holder measuring what it was told to asks nothing: its silence is expected then.
     const working = this.workingUntil(key, duty.holder, capability, now);
     const unavailable: Refresh['unavailable'] =
@@ -205,14 +202,19 @@ export class Cadence {
     return [...keys];
   }
 
-  /** A device delivered measurements or failures: none of its subscriptions is silent then. */
-  heard(device: string, now: number) {
-    this.heardAt.set(device, Math.max(now, this.heardAt.get(device) ?? now));
+  /**
+   * A device delivered measurements or failures: none of `keys` it asked about is silent
+   * then. Only for as long as it measures after asking: past that, it no longer asks about them.
+   */
+  heard(device: string, keys: string[], now: number) {
+    for (const key of keys) {
+      const capability = this.capabilities.get(key)?.get(device);
+      if (capability && now <= capability.at + REFRESH_WAIT_MS) capability.heardAt = Math.max(capability.heardAt, now);
+    }
   }
 
   /** Revocation also reaches subscriptions with no running coding agents. */
   forget(devices: string[], now: number): string[] {
-    for (const device of devices) this.heardAt.delete(device);
     const keys = new Set<string>();
     for (const [key, capabilities] of this.capabilities) for (const device of devices) if (capabilities.delete(device)) keys.add(key);
     for (const [key, request] of this.requests)

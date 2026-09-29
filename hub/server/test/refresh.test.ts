@@ -611,17 +611,28 @@ test('a holder measuring its providers one by one is not silent while it deliver
   assert.deepEqual([quiet.value.unavailable, quiet.value.request?.status, quiet.changesAt], [null, 'queued', T + 370_001]);
   const silent = h.ingest.refresh(h.source(0), T + 370_001).value;
   assert.deepEqual([silent.unavailable, silent.request?.status, silent.request?.finishedAt], ['silent', 'unavailable', T + 370_001]);
+  // A failure is a word from it too.
+  const failing = threeTold(t);
+  failing.deliver(0, T + 90_000);
+  failing.ingest.accept(failing.credential, {...failing.agent('laptop'), sentAt: iso(T + 170_000), snapshots: [], failures: [{provider: 'codex', error: 'failed', observedAt: iso(T + 170_000)}]}, T + 170_000);
+  assert.equal(failing.ingest.refresh(failing.source(0), T + 215_000).value.unavailable, null);
   // What it delivers more than five minutes after asking is not the measuring it was told to do.
   const late = threeTold(t);
   late.deliver(0, T + 90_000);
   late.deliver(1, T + 200_000);
   late.deliver(2, T + 300_000);
   late.deliver(1, T + 400_000);
-  assert.equal(late.ingest.refresh(late.source(0), T + 480_000).value.unavailable, null);
-  assert.equal(late.ingest.refresh(late.source(0), T + 480_001).value.unavailable, 'silent');
+  assert.equal(late.ingest.refresh(late.source(0), T + 420_000).value.unavailable, null);
+  assert.equal(late.ingest.refresh(late.source(0), T + 420_001).value.unavailable, 'silent');
+  // Heard from past the five minutes, it is not measuring what it was told to any more: a click queues.
+  const joined = threeTold(t);
+  joined.deliver(0, T + 90_000);
+  joined.deliver(1, T + 350_000);
+  assert.equal(joined.ingest.requestRefresh(joined.source(2), T + 370_000).status, 'accepted');
+  assert.equal(joined.ingest.refresh(joined.source(2), T + 370_000).value.request?.status, 'queued');
 });
 
-test('a delivery after the holder fell silent leaves a request its silence ended ended, and tells the boards it is back', t => {
+test('a delivery after the holder fell silent does not reopen a request its silence ended, and tells the boards it is back', t => {
   const h = threeTold(t);
   let now = T + 90_000;
   const frames: Frame[] = [];

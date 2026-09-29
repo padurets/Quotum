@@ -86,7 +86,7 @@ export class Ingest {
       // Heard from, the device is not silent: nor are the subscriptions it holds and delivers nothing for now.
       const held = this.cadence.keysOf([device.id]).filter(key => this.duty.holder(key) === device.id);
       for (const key of held) this.cadence.settleRefresh(key, this.refreshDuty(key), now);
-      this.cadence.heard(device.id, now);
+      this.cadence.heard(device.id, held, now);
       for (const source of held.flatMap(key => providers.flatMap(provider => this.store.findSource(provider, key) ?? []))) touched.add(source);
 
       for (const snapshot of [...batch.snapshots].sort((a, b) => a.observedAt - b.observedAt)) {
