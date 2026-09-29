@@ -199,9 +199,10 @@ function SortMenu({active, headers, sortBy}: Sorting) {
 /**
  * Whether the agents read as a table or a compact list: a table where the chosen columns
  * fit the width of the widget or the dialog they are in (`box` is inside it), decided
- * before they are first drawn, and again as it is resized.
+ * before they are first drawn, and again as it is resized: before that paints too where
+ * the board gives the widget another width (`width`, its key of the board's sizing).
  */
-function useAgentsLayout(box: RefObject<HTMLElement | null>, shown: readonly AgentColumn[]) {
+function useAgentsLayout(box: RefObject<HTMLElement | null>, shown: readonly AgentColumn[], width?: string) {
   const [layout, setLayout] = useState<'table' | 'list'>('list');
   useLayoutEffect(() => {
     // The table runs edge to edge of the widget or the dialog: as wide as it is inside its border.
@@ -214,7 +215,7 @@ function useAgentsLayout(box: RefObject<HTMLElement | null>, shown: readonly Age
     observer.observe(element);
     fit();
     return () => observer.disconnect();
-  }, [box, shown]);
+  }, [box, shown, width]);
   return layout;
 }
 
@@ -399,7 +400,7 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
   const working = rows.filter(row => row.session.working).length;
   const columns = useMemo(() => COLUMNS.filter(column => columnShown(arrange.view, AGENTS, column.id)), [arrange.view]);
   const shown = useMemo(() => ['project' as const, ...columns.map(column => column.id)], [columns]);
-  const layout = useAgentsLayout(panel, shown);
+  const layout = useAgentsLayout(panel, shown, sizing?.width);
   const active = visibleAgentsSort(agentsSort, shown);
   const ordered = sortedRows(rows, active, shown);
   const headers = [{id: 'project' as const, title: 'agents.project' as const}, ...columns];
