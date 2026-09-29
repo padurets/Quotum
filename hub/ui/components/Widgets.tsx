@@ -168,6 +168,8 @@ export function Widgets({
   const items = (activePreview?.items ?? base).map(item => ({...item, h: rowsFor(sizeOf(item.id), intended(item.id))}));
   const spots = columns === 6 ? settle(items, layout.columns) : narrowed(items, columns as 1 | 2, layout.columns);
   const byId = new Map(widgets.map(widget => [widget.id, widget]));
+  // The widths the board gives, not a gesture's preview: meanwhile the width follows the pointer, which a chart hears after it shows.
+  const given = new Map(base.map(item => [item.id, `${columns} ${item.w} ${released[item.id] ?? 0}`]));
   const latest = useRef({spots, onPlaces, bounds, sizeOf, saved, sizes});
   latest.current = {spots, onPlaces, bounds, sizeOf, saved, sizes};
   const report = useCallback((id: string, size: Report | null) => {
@@ -331,7 +333,7 @@ export function Widgets({
         body.animate([{transform: `translate(${current.offset.x}px, ${current.offset.y}px)`}, {transform: 'none'}], SLIDE);
     }
     if (body) body.style.width = '';
-    if (wide(current.kind)) setReleased(old => ({...old, [current.id]: (old[current.id] ?? 0) + 1}));
+    if (wide(current.kind) && current.moved) setReleased(old => ({...old, [current.id]: (old[current.id] ?? 0) + 1}));
     presses.current = [...presses.current, wrote || !drop].slice(-2);
     setPreview(null);
   };
@@ -591,7 +593,7 @@ export function Widgets({
                   </svg>
                 </button>
               )}
-              <Sized id={spot.id} manual={manual} allocated={manual ? allocated : 0} width={`${columns} ${spot.w} ${released[spot.id] ?? 0}`} report={report}>
+              <Sized id={spot.id} manual={manual} allocated={manual ? allocated : 0} width={given.get(spot.id)!} report={report}>
                 {widget.content}
               </Sized>
               {movable && (
