@@ -1,7 +1,7 @@
 import {useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type ReactNode} from 'react';
 import {barsOf, coverOf, crampedOf, roomOf, shiftOf, sideOf} from '../lib/place';
 
-/** A button with an anchored panel; closes on outside click, Escape, focus moving out and its button scrolled out of sight. */
+/** A button with an anchored panel; closes on outside click, Escape, focus moving out and its button going out of sight. */
 export function Popover({
   label,
   icon,
@@ -39,16 +39,16 @@ export function Popover({
   // room there and scrolling inside, and moves sideways as far as keeps it on the screen (from a
   // card at the edge of a narrow one) or in its dialog. Where it stands is read, not assumed, as
   // a text trigger is taller than an icon. It is placed again as its content changes, keeping to
-  // the side it is on while it has room there, and as the window, the page's content or a widget
-  // changes size or a widget slides to a new place: the board lays itself out anew after a
-  // resize, in as many passes as it takes, and its widgets may trade places without the page
-  // changing size. It is only ever placed from its button in sight: where the page's layout takes
-  // the button out of sight, past the window's edge or under the bars, the panel hides until the
-  // page brings it back. Not placed again as the page scrolls, it goes along with its button, and
-  // a scroll that takes the button out of sight closes it, as placed from where the button went
-  // it would stand wrong by the time its reader scrolled back. A list of it that scrolls on its
-  // own while the rest stays (`.popover-scroll`) has at least the room it asks for (`--least`), or
-  // the whole panel scrolls, the list with it (`is-cramped`).
+  // the side it is on while it has room there, and as the page is laid out anew: the window or
+  // the page's content changes size, the board lays itself out again after a resize, in as many
+  // passes as it takes, its widgets change size, trade places or slide to new ones. Only ever from
+  // its button in sight: while the page is laid out it follows the button, hidden where that is
+  // out of sight, past the window's edge or under the bars, and once the page is still, a button
+  // out of sight closes it. Not placed again as the page scrolls, it goes along with its button,
+  // and a scroll that takes the button out of sight closes it, as placed from where the button
+  // went it would stand wrong by the time its reader scrolled back. A list of it that scrolls on
+  // its own while the rest stays (`.popover-scroll`) has at least the room it asks for
+  // (`--least`), or the whole panel scrolls, the list with it (`is-cramped`).
   const [side, setSide] = useState<{up: boolean; cap: number | null; cramped: boolean} | null>(null);
   useLayoutEffect(() => {
     const element = panel.current;
@@ -57,9 +57,7 @@ export function Popover({
     if (!open || !element || !trigger || !picker) return setSide(null);
     // The side it stands on, once placed.
     let upwards: boolean | null = null;
-    let away = false;
-    let live = true;
-    // The bars are found again as it is placed, not at every scroll.
+    // The bars are found again as the page is laid out, not at every scroll.
     let bars = barsOf();
     const seen = () => {
       const at = picker.getBoundingClientRect();
@@ -74,7 +72,6 @@ export function Popover({
       setOpen(false);
     };
     const place = () => {
-      away = false;
       element.style.display = '';
       const list = element.querySelector<HTMLElement>('.popover-scroll');
       // Measuring takes the cut off, and what scrolls may change: its reader keeps their place in
@@ -109,49 +106,81 @@ export function Popover({
       if (shift) element.style.translate = `${shift}px 0`;
       setSide(same => (same?.up === next && same.cap === cap && same.cramped === cramped ? same : {up: next, cap, cramped}));
     };
-    const fit = () => {
-      bars = barsOf();
-      // A widget sliding to a new place is measured where it slides from, so it is measured again
-      // once there.
-      const sliding = trigger.closest('.widget')?.getAnimations() ?? [];
-      if (sliding.length) Promise.all(sliding.map(animation => animation.finished)).then(() => live && fit(), () => {});
+    const follow = () => {
       if (seen()) return place();
-      away = true;
       unfocus();
       element.style.display = 'none';
     };
     // Opened out of sight, from the keyboard (its focus under the bars, or left on it as its panel
     // closed), the button comes into sight first, 8 under the bars or above the window's bottom:
     // its reader asked for the panel. Not to the nearest edge, as a button under the bars is in
-    // the window for the browser.
+    // the window for the browser; the panel, not placed yet, hidden meanwhile so as not to widen
+    // the page; and again if other bars stick at the top once the page has moved.
     if (!seen()) {
-      trigger.style.scrollMargin = `${coverOf(Infinity, trigger, bars) + 8}px 0 8px`;
-      trigger.scrollIntoView({block: picker.getBoundingClientRect().top >= innerHeight ? 'end' : 'start'});
+      element.style.display = 'none';
+      const block = picker.getBoundingClientRect().top >= innerHeight ? 'end' : 'start';
+      let margin = NaN;
+      for (let pass = 0; pass < 3; pass++) {
+        const next = coverOf(Infinity, trigger, bars) + 8;
+        if (next === margin) break;
+        margin = next;
+        trigger.style.scrollMargin = `${margin}px 0 8px`;
+        trigger.scrollIntoView({block});
+      }
       trigger.style.scrollMargin = '';
     }
     place();
-    // A refit may change the cap and wake the observer once more; then the panel stays as it is.
-    // The page's content (the body, at least as tall as the window, would not tell on a short
+    // As the page is laid out anew the panel follows its button, and is settled once the page is
+    // still: a frame goes by with nothing laid out anew and no widget of it sliding. Decided at
+    // each step the page takes, it would be decided wrong: the board passes through layouts that
+    // take the button out of sight and bring it back, and scrolls the page as it does (keeping
+    // what is focused, or what is in sight, in its place), as the reader would. Frames, not time,
+    // and only while the page moves.
+    let frame = 0;
+    let stirred = false;
+    const settle = () => {
+      if (stirred || trigger.closest('.widget')?.getAnimations().length) {
+        stirred = false;
+        frame = requestAnimationFrame(settle);
+        return;
+      }
+      frame = 0;
+      if (seen()) place();
+      else close();
+    };
+    const moved = () => {
+      bars = barsOf();
+      stirred = true;
+      follow();
+      frame ||= requestAnimationFrame(settle);
+    };
+    // Placing it again may change the cap and wake the observer once more; then the panel stays as
+    // it is. The page's content (the body, at least as tall as the window, would not tell on a short
     // board), the widgets, each of which a new layout may give another size, and the dialog the
-    // button is in, whose content may move it.
-    const observer = new ResizeObserver(fit);
-    for (const watched of [element, document.getElementById('root')!, ...document.querySelectorAll('.widget'), trigger.closest('.dialog')]) {
+    // button is in, whose content may move it; as well as the widgets' places (the style that sets
+    // them) and their number, as they may trade places keeping their size.
+    const observer = new ResizeObserver(moved);
+    const shifts = new MutationObserver(moved);
+    const widgets = document.querySelectorAll('.widget');
+    for (const watched of [element, document.getElementById('root')!, ...widgets, trigger.closest('.dialog')]) {
       if (watched) observer.observe(watched);
     }
-    const resized = () => fit();
-    // Any scroll but the panel's own: the reader's, but also the page's own as it is laid out
-    // anew, which brings a hidden panel's button back into sight.
+    for (const widget of widgets) shifts.observe(widget, {attributes: true, attributeFilter: ['style']});
+    const grid = document.querySelector('.widgets');
+    if (grid) shifts.observe(grid, {childList: true});
+    // Any scroll but the panel's own. While the page is laid out, one of its own.
     const scrolled = (event: Event) => {
       if (event.target instanceof Node && element.contains(event.target)) return;
-      if (!seen()) close();
-      else if (away) fit();
+      if (frame) follow();
+      else if (!seen()) close();
     };
-    addEventListener('resize', resized);
+    addEventListener('resize', moved);
     addEventListener('scroll', scrolled, {capture: true, passive: true});
     return () => {
-      live = false;
+      cancelAnimationFrame(frame);
       observer.disconnect();
-      removeEventListener('resize', resized);
+      shifts.disconnect();
+      removeEventListener('resize', moved);
       removeEventListener('scroll', scrolled, {capture: true});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

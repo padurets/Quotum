@@ -125,4 +125,5 @@ test('the bars cover what stands below where they end; a panel, only where they 
   // covers none of its buttons, while the top bar covers the head's.
   assert.equal(coverAt([{...topbar, holds: true}, {top: 30, bottom: 84, sticks: 60}], 43, true), 0, 'a button in the top bar, the head pushed up under it');
   assert.equal(coverAt([topbar, {top: 40, bottom: 94, sticks: 60, holds: true}], 80, true), 60, 'a button in the head pushed up under the top bar');
+  assert.equal(coverAt([topbar, {top: -10, bottom: 44, sticks: 60}], 328, true), 60, 'the head pushed up wholly under the top bar');
 });

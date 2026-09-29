@@ -101,13 +101,13 @@ is open.
   `Modal` (`hub/ui/components/Kit.tsx`). They are glass: the `glass` class and its
   tokens in `hub/ui/style.css`, as are the tooltips of our own (the charts', from
   `hub/ui/components/Tooltip.tsx`, a card's dot's). A new floating surface uses one of
-  them rather than styling its own. Nothing floating scrolls the page or lengthens it: a
-  panel opens whole in the window, under the bars stuck at its top, on the side of its
-  button where it fits, or where there is more room, cut to that room and scrolling
-  inside (`sideOf` in `hub/ui/lib/place.ts`); a chart's tooltip keeps to the window too
-  (`placeOf`). A chart along the analytics' time reads and moves through `useTimeAxis`
-  (`hub/ui/components/timeAxis.ts`), keeps its own options in its settings, and has its
-  legend under it, each entry switched off and on by a click.
+  them rather than styling its own. Nothing floating scrolls the page, lengthens it or
+  widens it: a panel opens whole in the window, under the bars stuck at its top, on the
+  side of its button where it fits, or where there is more room, cut to that room and
+  scrolling inside (`sideOf` in `hub/ui/lib/place.ts`); a chart's tooltip keeps to the
+  window too (`placeOf`). A chart along the analytics' time reads and moves through
+  `useTimeAxis` (`hub/ui/components/timeAxis.ts`), keeps its own options in its settings,
+  and has its legend under it, each entry switched off and on by a click.
 - Scrollbars have one style, set once at the top of `hub/ui/style.css`; nothing styles its own.
 - Widgets on the board are a `.card` (a source) or a `.panel` (the list of agents, agent activity, the chart, the table).
 - **Keep the board cheap to render.** Nothing on the page is `position: fixed` or has a
