@@ -796,7 +796,8 @@ const all: DemoSet = {
       plan: 'Plus',
       machines: ['laptop'],
       history: 2 * DAY,
-      windows: [fiveHours(10 * MIN, 5, onAndOff(14)), weekly({since: -4 * DAY, use: through([0, 0], [3, 87.2], [4, 93])})],
+      // A fast start, then 5.5 points a day over the two days it was measured: at that, it runs out some 30 hours on.
+      windows: [fiveHours(10 * MIN, 5, onAndOff(14)), weekly({since: -4 * DAY, use: through([0, 0], [2, 82], [4, 93])})],
       on: {ana: {name: 'Running low', width: 2}, quiet: {}},
       expect: [
         {title: 'Running low'},
