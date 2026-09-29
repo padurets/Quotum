@@ -249,7 +249,7 @@ export function Widgets({
   const frame = () => {
     const current = gesture.current;
     if (!current?.active || (current.kind !== 'drag' && !tall(current.kind))) return;
-    const scroll = edgeScroll({y: current.pointer.y, from: current.start.y, top: cover(), bottom: innerHeight, moved: current.moved, sideways: current.kind !== 'bottom'});
+    const scroll = edgeScroll({y: current.pointer.y, from: current.start.y, top: cover(), bottom: innerHeight, moved: current.moved, sideways: current.kind !== 'bottom', pixel: 1 / devicePixelRatio});
     if (scroll) {
       const before = scrollY;
       window.scrollBy(0, scroll / 4);

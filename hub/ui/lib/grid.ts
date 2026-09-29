@@ -147,14 +147,16 @@ export const PULL = 24;
  * was pressed, `top` where the bars stuck at the top of the window end and `bottom` the
  * window's height. The page scrolls under a pointer that has gone past a click's jitter
  * (`moved`) and toward that edge: half a row, or, from a press nearer to it than that, to
- * the edge itself. A gesture that also goes sideways (a corner, a widget carried by its head)
- * goes a pixel toward the edge at least, so moving along it scrolls nothing.
+ * the edge itself, its last two pixels or, zoomed out, the last pixel of the screen
+ * (`pixel`, in CSS pixels). A gesture that also goes sideways (a corner, a widget carried by
+ * its head) goes a pixel toward the edge at least, so moving along it scrolls nothing.
  */
-export function edgeScroll({y, from, top, bottom, moved, sideways}: {y: number; from: number; top: number; bottom: number; moved: boolean; sideways: boolean}) {
+export function edgeScroll({y, from, top, bottom, moved, sideways, pixel = 1}: {y: number; from: number; top: number; bottom: number; moved: boolean; sideways: boolean; pixel?: number}) {
   if (!moved) return 0;
-  const toward = (room: number) => Math.min(PULL, sideways ? Math.max(1, room - 2) : room - 2);
-  if (y < top + EDGE && y < from - toward(from)) return y - top - EDGE;
-  if (y > bottom - EDGE && y > from + toward(bottom - from)) return y - bottom + EDGE;
+  const edge = Math.max(2, pixel);
+  const toward = (room: number) => Math.min(PULL, sideways ? Math.max(1, room - edge) : room - edge);
+  if (y < top + EDGE && y <= from - toward(from)) return y - top - EDGE;
+  if (y > bottom - EDGE && y >= from + toward(bottom - from)) return y - bottom + EDGE;
   return 0;
 }
 

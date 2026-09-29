@@ -178,7 +178,7 @@ test('the height asked for is saved only when it changes what shows, in the dire
 
 test('the page scrolls under a pointer taken toward an edge of the window, never under a click or a drift', () => {
   // A window 900 px high under bars that end at 64: the bands are 64–136 and 828–900.
-  const at = (y: number, from: number, {moved = true, sideways = false} = {}) => edgeScroll({y, from, top: 64, bottom: 900, moved, sideways});
+  const at = (y: number, from: number, {moved = true, sideways = false, pixel = 1} = {}) => edgeScroll({y, from, top: 64, bottom: 900, moved, sideways, pixel});
   for (const [what, scroll, expected] of [
     ['a click\'s jitter at the bottom', at(899, 895, {moved: false}), 0],
     ['pulled down into the band', at(880, 500), 52],
@@ -189,12 +189,17 @@ test('the page scrolls under a pointer taken toward an edge of the window, never
     ['the same, taken to the edge', at(898.5, 880), 70.5],
     ['the bottom edge pressed on the last pixel, moved along it', at(899, 899), 71],
     ['a corner pressed on the last pixel, moved along it', at(899, 899, {sideways: true}), 0],
-    ['a corner pressed 2 px from the bottom, down to the last pixel', at(899, 898, {sideways: true}), 0],
+    ['a corner pressed 2 px from the bottom, down to the last pixel', at(899, 898, {sideways: true}), 71],
     ['a corner pressed 3 px from the bottom, down to the last pixel', at(899, 897, {sideways: true}), 71],
     ['a corner pressed 20 px from the bottom, a drift sideways and down', at(890, 880, {sideways: true}), 0],
+    // Zoomed out to a half or a quarter, the screen's last pixel begins 2 or 4 px above the window's bottom.
+    ['at a half, pressed 10 px from the bottom, taken to the last pixel of the screen', at(898, 890, {pixel: 2}), 70],
+    ['at a quarter, pressed 20 px from the bottom, taken to the last pixel of the screen', at(896, 880, {pixel: 4}), 68],
+    ['the same without the zoom, 2 px short of the edge', at(896, 880), 0],
     ['pulled up under the bars', at(100, 400), -36],
     ['pressed under the bars, a drift up', at(120, 130), 0],
-    ['the same, half a row on', at(100, 130), -36],
+    ['the same, exactly half a row on', at(106, 130), -30],
+    ['the same, further on', at(100, 130), -36],
     ['in the band at the top, going down', at(120, 100), 0],
     ['in the middle of the window', at(500, 400, {sideways: true}), 0],
   ] as const)
