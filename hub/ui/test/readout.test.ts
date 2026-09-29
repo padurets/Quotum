@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {gapText, gapTone, lastRunOut, readout, runOutPast, type ForecastLine, type PlanLine} from '../lib/readout';
+import {chartMoments, gapText, gapTone, lastRunOut, readout, runOutPast, type ForecastLine, type PlanLine} from '../lib/readout';
 import type {Line} from '../lib/lines';
 
 const minute = 60_000;
@@ -94,4 +94,21 @@ test('the chart stretches to where a line reaches zero, and points past its edge
   assert.equal(lastRunOut([soon, later, held], now + 10 * hour), now + 5 * hour, 'to the zero within reach');
   assert.equal(lastRunOut([later, held], now + 10 * hour), 0, 'none within reach');
   assert.deepEqual(runOutPast([soon, later, held], now + 8 * hour), [{key: 'later', name: 'later', color: 'c', at: now + 3 * hour}]);
+});
+
+test('the chart reads otherwise when a strong marker past its edge comes due, and when a forecast is drawn no more', () => {
+  const hour = 60 * minute;
+  // Past the edge at 8 hours, only a strong marker still ahead; within the chart, none.
+  const markers = [
+    {at: now + 10 * hour, strong: true},
+    {at: now + 11 * hour},
+    {at: now + 12 * hour, strong: true, past: true},
+    {at: now + 2 * hour, strong: true},
+  ];
+  // Every line it may draw, shown or not, within the chart or past it.
+  const drawn = [{until: now + 4 * hour}, {until: now + 30 * hour}];
+  assert.deepEqual(
+    chartMoments(markers, drawn, now + 8 * hour).sort((a, b) => a - b),
+    [now + 4 * hour, now + 10 * hour, now + 30 * hour],
+  );
 });

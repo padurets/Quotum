@@ -7,7 +7,7 @@ import {resetLabel, resetLabelChangesAt, type ResetStatus} from '../lib/resets';
 import {DEFAULT_PLAN, planAt, planChangesAt, planNote} from '../lib/plan';
 import {since, sinceChangesAt} from '../lib/agents';
 import {frameChangesAt, step, stepChangesAt} from '../lib/periods';
-import {cellChangesAt, outlook, outlookText, planCell, planEndOf, type Context} from '../lib/forecast';
+import {cellChangesAt, forecastLine, outlook, outlookText, planCell, planEndOf, type Context} from '../lib/forecast';
 import type {SeriesForecast, Win} from '../lib/types';
 
 const S = 1000;
@@ -300,7 +300,7 @@ test('the arrows of the analytics say when they turn on or off; the frame moves 
   assert.equal(frameChangesAt({from: T0 - DAY, to: T0 + HOUR}, 5 * MIN, T0), T0 + 5 * MIN, 'one reaching past now does not');
 });
 
-test('the forecast cell says when it reads otherwise: its countdown, its tone, its moment, the end of the plan it tells of, the reset', () => {
+test('the forecast cell says when it reads otherwise: its countdown, its tone, its moment, the end of the plan it tells of, the reset; and when its line is drawn no more', () => {
   const start = T0 - 72 * HOUR;
   const reset = start + 7 * DAY;
   const week = (remaining: number, change: Partial<Win> = {}): Win => ({id: 'w', kind: 'weekly', label: null, used: 100 - remaining, remaining, resetAt: reset, minutes: 10080, ...change});
@@ -333,8 +333,11 @@ test('the forecast cell says when it reads otherwise: its countdown, its tone, i
   };
   // A plan the owner chose that ends two days before the reset.
   const early = [20, 20, 20, 20, 20, 0, 0];
+  const held = ahead(38, -60);
   const cases: [string, Win, SeriesForecast | null, Context, number[] | null][] = [
     ['runs out', week(38), ahead(38, -60), plain, null],
+    // The line reaches zero two hours before the moment the table goes on saying.
+    ['runs out, at the moment said before', week(38), {...held, shownZero: held.zero! + 2 * HOUR}, plain, null],
     // Runs out in 59 hours of the 96 left: said louder once under half of what is left.
     ['runs out later', week(45), ahead(45, -28), plain, null],
     ['runs out, never louder with free resets', week(45), ahead(45, -28), {...plain, freeResets: 1}, null],
@@ -344,6 +347,9 @@ test('the forecast cell says when it reads otherwise: its countdown, its tone, i
     ['just enough', week(40), ahead(40, 2), plain, null],
     ['too little history', week(99), ahead(99, 50, {state: 'needData', basis: {hours: 0.5}}), plain, null],
     ['a five-hour window', {id: 's', kind: 'session', label: null, used: 70, remaining: 30, resetAt: T0 + 2 * HOUR, minutes: 300}, null, plain, null],
+    ['a five-hour window that lasts', {id: 's', kind: 'session', label: null, used: 20, remaining: 80, resetAt: T0 + 2 * HOUR, minutes: 300}, null, plain, null],
+    // Reaches zero a little before the reset, on its pace: said on pace until then.
+    ['a five-hour window on pace', {id: 's', kind: 'session', label: null, used: 60.2, remaining: 39.8, resetAt: T0 + 2 * HOUR, minutes: 300}, null, plain, null],
     ['used up', week(0), null, plain, null],
     ['of no known length', week(50, {minutes: null}), null, plain, null],
   ];
@@ -352,5 +358,7 @@ test('the forecast cell says when it reads otherwise: its countdown, its tone, i
     const said = outlook(live, T0, T0, forecast, context);
     const moments = [...Array.from({length: 300}, (_, i) => T0 + i * 1_987_654), ...Array.from({length: 300}, (_, i) => T0 + i * 13_331), ...(said.key === 'runsOut' ? before(said.at) : [])];
     changesAtItsMoment(what, shown(live, forecast, context, plan), now => cellChangesAt(live, T0, now, forecast, context, plan), moments);
+    const line = (now: number) => forecastLine(live, T0, now, forecast, context, -Infinity, Infinity);
+    changesAtItsMoment(`${what}: its line`, line, now => line(now)?.until ?? null, [...moments, ...(line(T0) ? before(line(T0)!.until) : [])]);
   }
 });

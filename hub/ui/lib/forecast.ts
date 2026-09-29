@@ -320,8 +320,9 @@ export function outlookText(said: Outlook, live: Win | undefined, ahead: SeriesF
  * the card's last value (`weeklyLine`; it may end high above zero at the reset while the
  * series is new: the cell is cautious, the line shows where the first hours lead); a
  * five-hour window's, its straight line. `zero` is where the line reaches zero, when the
- * table says it runs out; `at`, the moment the table says. Null for a window without a
- * forecast.
+ * table says it runs out; `at`, the moment the table says; `until`, when the table no
+ * longer says where the window leads and the line is drawn no more. Null for a window
+ * without a forecast.
  */
 export function forecastLine(
   live: Win | undefined,
@@ -331,7 +332,7 @@ export function forecastLine(
   context: Context,
   from: number,
   to: number,
-): {points: [number, number][]; zero: number | null; at: number | null} | null {
+): {points: [number, number][]; zero: number | null; at: number | null; until: number} | null {
   const said = outlook(live, measuredAt, now, ahead, context);
   if (said.key !== 'runsOut' && said.key !== 'pace' && said.key !== 'left') return null;
   const weekly = live!.kind === 'weekly' ? weeklyLine(ahead!, live!.remaining, measuredAt) : null;
@@ -341,7 +342,9 @@ export function forecastLine(
   const end = Math.min(zero ?? live!.resetAt!, live!.resetAt!);
   const points = whole.filter(([t]) => t < end).concat([[end, Math.max(0, valueAt(whole, end))]]);
   const runsOut = said.key === 'runsOut' && zero !== null;
-  return {points: clip(points, from, to), zero: runsOut ? zero : null, at: runsOut ? said.at : null};
+  // Drawn until the reset, or the moment the table says it runs out if sooner (a five-hour line, until it reaches zero).
+  const until = Math.min(live!.resetAt!, said.key === 'runsOut' ? said.at : weekly ? Infinity : end);
+  return {points: clip(points, from, to), zero: runsOut ? zero : null, at: runsOut ? said.at : null, until};
 }
 
 /** A line of [time, value] cut to [from, to], with its ends where it crosses them. */

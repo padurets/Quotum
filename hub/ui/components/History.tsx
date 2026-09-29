@@ -10,7 +10,7 @@ import {frameChangesAt, frameOf, measuredTo, step} from '../lib/periods';
 import {HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
 import {chartEvents, chartResets, linesOf} from '../lib/lines';
 import {Chart, type Marker} from './Chart';
-import {lastRunOut, runOutPast, type ForecastLine, type PlanLine} from '../lib/readout';
+import {chartMoments, lastRunOut, type ForecastLine, type PlanLine} from '../lib/readout';
 import {useForecastsOf, useLineup, useNamed, usePastResets, useResetNews, useResetsFor} from '../lib/board';
 import {hubNow, useClock} from '../lib/clock';
 import {useHistory, useHistoryBegins} from '../lib/history';
@@ -65,7 +65,8 @@ function HistorySettings({arrange, planAvailable, forecastAvailable, horizonNote
  * The remaining share of every window of one kind over the period, with its legend under
  * it. It reads the history on screen (`useHistory`, which another answer replaces while
  * loading) and the board's cards, not their agents or pace; with time it moves on a cell of
- * the history's grid at a time, and a label past its right edge counts down on its own.
+ * the history's grid at a time, a label past its right edge counts down on its own, and a
+ * forecast's line goes when the table no longer says where its window leads.
  */
 export const History = memo(function History({arrange}: {arrange: Arrange}) {
   const {history, loading} = useHistory();
@@ -80,8 +81,9 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
   // The chart moves to the period asked for at once, drawing the answer it has until the
   // next one comes. A time range is in the past: the chart shows just it, without the future.
   const selected = useTimeRange();
-  // On with the next cell, or when what the chart points at past its right edge comes due: drawn within it then.
-  const now = useClock(now => earliest(frameChangesAt(selected, history?.cellMs ?? 60_000, now), ...pointed.filter(at => at > now)));
+  // On with the next cell, when what the chart points at past its right edge comes due (drawn
+  // within it then), or when a forecast is drawn no more.
+  const now = useClock(now => earliest(frameChangesAt(selected, history?.cellMs ?? 60_000, now), ...moments.filter(at => at > now)));
   const codex = useResetsFor('codex');
   const past = usePastResets();
 
@@ -210,9 +212,9 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
           }),
     [ahead, forecastShown, from, to],
   );
-  // What the chart points at past its right edge (Chart.tsx): an announced reset, and where a
-  // window runs out, at the moment the table says, which is when its label reads otherwise.
-  const pointed = [...markers.filter(m => m.strong && !m.past && m.at > to).map(m => m.at), ...runOutPast(forecasts, to).map(f => f.at)];
+  // When an announced reset the chart points at past its right edge (Chart.tsx) comes due,
+  // and when a line it may draw, shown or not, is drawn no more.
+  const moments = chartMoments(markers, ahead.map(a => a.drawn), to);
 
   return (
     <section className={`panel history ${loading ? 'is-loading' : ''}`} data-time="chart" aria-label={t('history.label')} aria-busy={loading}>

@@ -606,9 +606,10 @@ mark, that the hub cannot be reached) is a small part of its own that tells the 
 one clock (`hub/ui/lib/clock.ts`) when it reads otherwise, and renders only then: the
 clock keeps one timer for the whole page, none on a hidden tab, and counts in the hub's
 time as the hub's messages tell it. The chart and agent activity move on a cell of the
-history's grid at a time, and a label past the chart's right edge counts down on its own;
-in the table, the plan, where the pace leads and the hours of work left each read
-otherwise at their own moment. History is read again when the hub tells of measurements
+history's grid at a time; a label past the chart's right edge counts down on its own, and
+a forecast's line goes at the moment the table says it runs out, or at the reset; in the
+table, the plan, where the pace leads and the hours of work left each read otherwise at
+their own moment. History is read again when the hub tells of measurements
 the chart has not shown, at most every ten seconds for a period ending now, or that whose
 agents' work the board shows, or under which names, changed (`Store.workKey`: a card
 hidden, someone joining or leaving, a project or a machine renamed), when it is all read
