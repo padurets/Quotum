@@ -403,6 +403,7 @@ fn stream(
                     seq = frame.seq;
                     if frame.baseline {
                         if !frame.notifications.is_empty()
+                            || !frame.invalidations.is_empty()
                             || context.epoch.is_some_and(|epoch| !context.gate.baseline(epoch))
                         {
                             return Err("attention invalid baseline");
