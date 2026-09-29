@@ -186,6 +186,7 @@ test('the page scrolls under a pointer taken toward an edge of the window, never
     ['pressed in the band, a drift short of half a row', at(870, 850), 0],
     ['the same, half a row on', at(875, 850), 47],
     ['pressed 20 px from the bottom, a drift of 16', at(896, 880), 0],
+    ['the same, a pixel short of the edge\'s last two', at(897, 880), 0],
     ['the same, taken to the edge', at(898.5, 880), 70.5],
     ['the bottom edge pressed on the last pixel, moved along it', at(899, 899), 71],
     ['a corner pressed on the last pixel, moved along it', at(899, 899, {sideways: true}), 0],
@@ -198,9 +199,11 @@ test('the page scrolls under a pointer taken toward an edge of the window, never
     ['the same without the zoom, 2 px short of the edge', at(896, 880), 0],
     ['pulled up under the bars', at(100, 400), -36],
     ['pressed under the bars, a drift up', at(120, 130), 0],
+    ['the same, a pixel short of half a row', at(107, 130), 0],
     ['the same, exactly half a row on', at(106, 130), -30],
     ['the same, further on', at(100, 130), -36],
     ['in the band at the top, going down', at(120, 100), 0],
+    ['pressed just under the bars, a drift up over them: half a row counts from the window\'s top', at(66, 80), 0],
     ['in the middle of the window', at(500, 400, {sideways: true}), 0],
   ] as const)
     assert.equal(scroll, expected, what);
