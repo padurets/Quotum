@@ -187,7 +187,9 @@ test('waiting survives a sequential provider measurement beyond silence, includi
   h.ask(MIN);
   const deadline = h.refresh(MIN).request?.deadline;
   const silent = MIN + 120_001;
-  assert.equal(h.refresh(silent).unavailable, 'silent');
+  assert.equal(h.refresh(silent).unavailable, null, 'measuring what it was told to, it is not silent');
+  assert.equal(h.refresh(6 * MIN - 1).unavailable, null);
+  assert.equal(h.refresh(6 * MIN).unavailable, 'silent', 'not for more than five minutes');
   assert.equal(h.refresh(silent).request?.status, 'waiting');
   assert.equal(h.request(silent).status, 'accepted');
   assert.equal(h.projection.snapshot(h.user.id, h.board, T + silent)?.refresh[h.source()].request?.deadline, deadline);
@@ -423,9 +425,18 @@ test('handover ends a queued or waiting request instead of moving it to the next
     h.ask(11 * MIN);
     h.deliver(11 * MIN);
     h.request(11 * MIN + 1);
-    if (waiting) h.ask(12 * MIN);
-    const at = 12 * MIN + 1;
-    h.ingest.checkin(h.credential, {...h.agent('other'), paced: true, subscriptions: [{provider: 'codex', account: ACCOUNT, active: true}]}, T + at);
+    const other = (at: number) => h.ingest.checkin(h.credential, {...h.agent('other'), paced: true, subscriptions: [{provider: 'codex', account: ACCOUNT, active: true}]}, T + at).subscriptions[0];
+    let at = 12 * MIN + 1;
+    if (waiting) {
+      h.ask(12 * MIN);
+      // Someone works on the other machine while the laptop measures: it does not take over halfway.
+      assert.equal(other(at).measure, false);
+      assert.equal(h.refresh(at).request?.status, 'waiting');
+      // Asking again, the laptop is done measuring.
+      h.ask(12 * MIN + 15_000);
+      at = 12 * MIN + 15_001;
+    }
+    assert.equal(other(at).measure, true);
     assert.equal(h.refresh(at).request?.status, 'unavailable');
     assert.equal(h.refresh(at).request?.finishedAt, T + at);
     assert.equal(h.refresh(at + 5_000).request?.finishedAt, T + at, 'the handover is kept as it happened');
@@ -543,6 +554,35 @@ test('a request joins a command for as long as its holder measures, however many
   deliver(1, T + 160_000);
   deliver(2, T + 210_000);
   assert.equal(h.ingest.refresh(source, T + 210_000).value.request?.status, 'updated');
+});
+
+test('a holder that asks but never delivers loses duty as before, retries of its commands notwithstanding', t => {
+  const h = hub(t);
+  assert.equal(h.ask(0).measure, true);
+  // The desk is told to come back when the laptop's first lease runs out.
+  assert.equal(h.ask(1_000, MIN, 'desk').askInMs, 299_000);
+  // The laptop asks every 15 seconds and is retried at 90 and 210 s; nothing it measures arrives.
+  for (let at = 15_000; at < 300_000; at += 15_000) h.ask(at);
+  assert.equal(h.ask(300_000, MIN, 'desk').measure, true);
+  assert.equal(h.duty.holder(ACCOUNT), h.device('desk'));
+});
+
+test('a request joins a command however long the holder measures without asking, up to five minutes', t => {
+  const h = hub(t);
+  const subscriptions = (['claude', 'codex', 'antigravity'] as const).map((provider, i) => ({provider, account: ['a', 'b', 'c'][i].repeat(24), active: false}));
+  const snapshots = subscriptions.map(s => ({...s, observedAt: iso(T), via: 'stand-in', staleAfterMs: 204_000, windows: [{id: 'weekly', kind: 'weekly', usedPercent: 95}]}));
+  h.ingest.accept(h.credential, {...h.agent('laptop'), sentAt: iso(T), snapshots, failures: []}, T);
+  h.ingest.checkin(h.credential, {...h.agent('laptop'), paced: true, subscriptions}, T);
+  assert.ok(h.ingest.checkin(h.credential, {...h.agent('laptop'), paced: true, subscriptions}, T + MIN).subscriptions.every(s => s.measure));
+  const source = h.store.findSource('antigravity', 'c'.repeat(24))!;
+  // Two minutes and more without a word from the laptop: it measures the others first.
+  assert.equal(h.ingest.refresh(source, T + 185_000).value.unavailable, null);
+  assert.equal(h.ingest.requestRefresh(source, T + 185_000).status, 'accepted');
+  assert.equal(h.ingest.refresh(source, T + 185_000).value.request?.status, 'waiting');
+  // Five minutes after the command, a holder that still has not asked is taken as gone, its duty with it.
+  const other = h.store.findSource('codex', 'b'.repeat(24))!;
+  assert.equal(h.ingest.refresh(other, T + 6 * MIN - 1).value.unavailable, null);
+  assert.equal(h.ingest.refresh(other, T + 6 * MIN).value.unavailable, 'no_device');
 });
 
 test('another machine of the subscription does not take duty while the holder measures what it was told to', t => {

@@ -59,6 +59,34 @@ test('a holder told to measure keeps duty while it does, until it answers', () =
   assert.equal(duty.until('acc'), t0 + 5 * MIN);
 });
 
+test('a holder measuring what it was told to is done once it answers within the clock tolerance, or asks again', () => {
+  const told = () => {
+    const duty = new Duty();
+    duty.claim('acc', 'laptop', false, t0);
+    duty.delivered('acc', 'laptop', t0, 132_000, t0);
+    duty.asked('acc', 'laptop', t0 + MIN);
+    return duty;
+  };
+  for (const [kind, at, done] of [['failure', t0 + 30_000, true], ['failure', t0 + 29_999, false], ['delivery', t0 + 30_000, true], ['delivery', t0 + 29_999, false]] as const) {
+    const duty = told();
+    if (kind === 'failure') duty.failed('acc', 'laptop', at);
+    else duty.delivered('acc', 'laptop', at, 132_000, t0 + 2 * MIN);
+    assert.equal(duty.until('acc') === t0 + 6 * MIN, !done, `${kind} taken at ${at - t0}`);
+  }
+  // Another device's measurement does not take duty from a holder measuring.
+  const other = told();
+  other.delivered('acc', 'server', t0 + 3 * MIN, 132_000, t0 + 3 * MIN);
+  assert.equal(other.holder('acc'), 'laptop');
+  // A waiting device is told to come back when the holder is done at the latest.
+  assert.deepEqual(told().claim('acc', 'server', false, t0 + 3 * MIN), {measure: false, until: t0 + 6 * MIN});
+  // Nor does a device in use take over halfway; once the holder asks again, it may.
+  const busy = told();
+  assert.equal(busy.claim('acc', 'server', true, t0 + 2 * MIN).measure, false);
+  busy.claim('acc', 'laptop', false, t0 + 2 * MIN + 15_000);
+  assert.equal(busy.until('acc'), t0 + 132_000, 'asking again, it is done measuring');
+  assert.equal(busy.claim('acc', 'server', true, t0 + 2 * MIN + 16_000).measure, true);
+});
+
 test('a device in use takes duty from an idle holder, never from a busy one', () => {
   const duty = new Duty();
   duty.claim('acc', 'server', true, t0);

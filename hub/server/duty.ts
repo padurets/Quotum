@@ -10,7 +10,7 @@
 
 import {CLOCK_TOLERANCE_MS} from './domain/ingest.js';
 
-/** A holder that has not delivered yet keeps duty this long, and one told to measure while it does. */
+/** A holder that has not delivered yet keeps duty this long; one told to measure, at most this long while it does. */
 const FIRST_LEASE_MS = 5 * 60_000;
 /** How long a waiting device sleeps before asking again: sooner where someone works. */
 const WAIT_ACTIVE_MS = 60_000;
@@ -18,7 +18,7 @@ const WAIT_IDLE_MS = 10 * 60_000;
 /** Duty moves to a working device only when its holder has been idle this long. */
 const HANDOVER_IDLE_MS = 10 * 60_000;
 
-/** `askedAt`: when the holder was last told to measure, until that is answered. */
+/** `askedAt`: when the holder was told to measure, while it measures: until it answers or asks again. */
 type Holder = {device: string; until: number; activeAt: number; askedAt: number | null};
 
 /**
@@ -27,6 +27,7 @@ type Holder = {device: string; until: number; activeAt: number; askedAt: number 
  * through its providers and pass to a device that would measure the same again.
  */
 const leaseOf = (holder: Holder) => Math.max(holder.until, holder.askedAt === null ? 0 : holder.askedAt + FIRST_LEASE_MS);
+const measuring = (holder: Holder, now: number) => holder.askedAt !== null && holder.askedAt + FIRST_LEASE_MS > now;
 
 /** Whether something taken at `at` answers what the holder was told to measure (the pace's rule, spec). */
 const answers = (holder: Holder, at: number) => holder.askedAt !== null && at >= holder.askedAt - CLOCK_TOLERANCE_MS;
@@ -43,11 +44,13 @@ export class Duty {
     const activeAt = active ? now : mine ? holder!.activeAt : 0;
 
     if (!holder || mine || leaseOf(holder) <= now) {
-      // Asking again does not extend a lease: only delivering, or being told to measure, does.
-      this.holders.set(subscription, mine && leaseOf(holder!) > now ? {...holder!, activeAt} : {device, until: now + FIRST_LEASE_MS, activeAt, askedAt: null});
+      // Asking again does not extend a lease: only delivering does. A holder that asks is no
+      // longer measuring what it was told to, answered or not.
+      this.holders.set(subscription, mine && leaseOf(holder!) > now ? {...holder!, activeAt, askedAt: null} : {device, until: now + FIRST_LEASE_MS, activeAt, askedAt: null});
       return {measure: true, until: now};
     }
-    if (active && now - holder.activeAt > HANDOVER_IDLE_MS) {
+    // Nor does a device where someone works take over halfway through the holder's measuring.
+    if (active && now - holder.activeAt > HANDOVER_IDLE_MS && !measuring(holder, now)) {
       this.holders.set(subscription, {device, until: now + FIRST_LEASE_MS, activeAt: now, askedAt: null});
       return {measure: true, until: now};
     }

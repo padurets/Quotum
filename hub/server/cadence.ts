@@ -110,12 +110,14 @@ export class Cadence {
     const capability = duty.holder === null ? undefined : this.capabilities.get(key)?.get(duty.holder);
     const pause = duty.holder === null ? null : this.pausedUntil(key, duty.holder, now);
     const silentAt = capability ? capability.at + SILENT_AFTER_MS + 1 : null;
+    // A holder measuring what it was told to asks nothing: its silence is expected then.
+    const working = this.workingUntil(key, duty.holder, capability, now);
     const unavailable: Refresh['unavailable'] =
       !duty.holder || !duty.live || duty.until === null || duty.until <= now
         ? 'no_device'
         : !capability?.paced
           ? 'unsupported'
-          : silentAt! <= now
+          : silentAt! <= now && working === null
             ? 'silent'
             : pause !== null
               ? 'paused'
@@ -141,7 +143,7 @@ export class Cadence {
       else changes.push(hideAt);
     }
     const retryAt = stored && stored.view.requestedAt + MIN_INTERVAL_MS > now ? stored.view.requestedAt + MIN_INTERVAL_MS : null;
-    for (const at of [duty.until, silentAt, pause, retryAt]) if (at !== null && at > now) changes.push(at);
+    for (const at of [duty.until, silentAt, working, pause, retryAt]) if (at !== null && at > now) changes.push(at);
     return {value: {unavailable, availableAt: unavailable === 'paused' ? pause : null, retryAt, request}, changesAt: changes.length ? Math.min(...changes) : null};
   }
 
@@ -163,9 +165,8 @@ export class Cadence {
     const pace = this.paces.get(key);
     const device = duty.holder!;
     const capability = this.capabilities.get(key)!.get(device)!;
-    // A command is under way until its holder asks again: it asks nothing while it measures.
-    // Asking with no answer given means the command was lost, and the request waits for its retry.
-    const dispatchAt = pace?.askedDevice === device && !pace.answered && pace.askedAt !== null && capability.at <= pace.askedAt ? pace.askedAt : null;
+    // Joins the command under way; one given up waits for its retry.
+    const dispatchAt = this.workingUntil(key, device, capability, now) === null ? null : pace!.askedAt;
     const notBefore = this.notBefore(pace, capability.minIntervalMs, now);
     this.requests.set(key, {
       device,
@@ -209,6 +210,18 @@ export class Cadence {
         if (pending(request.view)) request.view = {...request.view, status: 'unavailable', finishedAt: now};
       }
     return [...keys];
+  }
+
+  /**
+   * Until when the holder is measuring what it was told to, null when it is not: it asks
+   * nothing while it measures its providers one by one. Asking again with no answer given
+   * means the command was lost. At most as long as duty stays with it for that (Duty).
+   */
+  private workingUntil(key: string, holder: string | null, capability: Capability | undefined, now: number): number | null {
+    const pace = this.paces.get(key);
+    if (!holder || !capability || !pace || pace.askedDevice !== holder || pace.answered || pace.askedAt === null || capability.at > pace.askedAt) return null;
+    const until = pace.askedAt + REFRESH_WAIT_MS;
+    return until > now ? until : null;
   }
 
   /** The earliest a device may be told to measure: past its floor after the last measurement or command, and past the retry of a command left unanswered. */

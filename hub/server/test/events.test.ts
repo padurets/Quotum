@@ -1078,14 +1078,16 @@ test('refresh deadlines and terminal expiry reach both boards without polling', 
   h.clock.advance(start + 70 * S + 200 - h.clock.now());
   assert.equal((await states()).retryAt, null);
   h.clock.advance(start + 181 * S + 200 - h.clock.now());
-  const silent = await states();
-  assert.equal(silent.unavailable, 'silent');
-  assert.equal(silent.request.status, 'waiting');
+  // Silent for two minutes, but measuring what it was told to: nothing to tell.
+  const quiet = await Promise.all([own.within(200), shared.within(200)]);
+  assert.deepEqual(quiet.map(list => list.filter(e => e.type === 'refresh')), [[], []]);
   const reconnected = await reading(h, 'alice');
-  assert.deepEqual(reconnected.snapshot.refresh[source], silent);
+  const measuring = reconnected.snapshot.refresh[source];
+  assert.deepEqual([measuring.unavailable, measuring.request.status], [null, 'waiting']);
   reconnected.close();
   h.clock.advance(start + 6 * MIN + 200 - h.clock.now());
-  assert.equal((await states()).request.status, 'no_result');
+  const ended = await states();
+  assert.deepEqual([ended.request.status, ended.unavailable], ['no_result', 'silent']);
   h.clock.advance(start + 7 * MIN + 200 - h.clock.now());
   assert.equal((await states()).request, null);
 });
