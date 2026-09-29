@@ -451,7 +451,7 @@ over plain HTTP/1.1, about five.
 - [CONTRIBUTING.md](CONTRIBUTING.md): checking a change and what to keep in mind;
   [SECURITY.md](SECURITY.md): reporting a vulnerability privately.
 - `npm run demo` in `hub/` (after `npm run build`): a live board on throwaway data with
-  every state the dashboard knows that lasts, no network or account needed; Ctrl+C stops
+  every state the dashboard knows that lasts but failures, no network or account needed; Ctrl+C stops
   it and leaves nothing behind. `npm run demo -- showcase` is the board of the images above.
 
 Project layout:

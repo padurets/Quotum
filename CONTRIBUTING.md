@@ -68,7 +68,7 @@ answers and stand-in programs, so they cost nothing and don't depend on your acc
 ## The demo board
 
 A change to the dashboard is looked at on the demo board, with every state it can meet
-that lasts:
+that lasts, but failures:
 
 ```sh
 cd hub && npm run build && npm run demo

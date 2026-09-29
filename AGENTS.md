@@ -52,8 +52,8 @@ already running); CI runs it on every push and fails over budget.
 
 `npm start` in `hub/` serves the built dashboard on `127.0.0.1:8080` (a new hub prints
 the setup code of the first account to its log). `npm run demo` in `hub/` serves it on
-throwaway data with every state the board knows that lasts, needing no network or account; see
-*The demo board* in [CONTRIBUTING.md](CONTRIBUTING.md). `cargo run -p quotum` in `agent/`
+throwaway data with every state the board knows that lasts but failures, needing no network or
+account; see *The demo board* in [CONTRIBUTING.md](CONTRIBUTING.md). `cargo run -p quotum` in `agent/`
 measures this machine once through the clients installed on it; that makes no model
 requests, but it does start the real clients. `cargo run` in `desktop/` starts the app
 with its hub and agent, which measures with this machine's `quotum` settings and state

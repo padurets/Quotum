@@ -431,7 +431,7 @@ const TRAVEL_WAKES = 10 * MIN;
 
 const all: DemoSet = {
   id: 'all',
-  about: 'every state the dashboard knows that lasts',
+  about: 'every state the dashboard knows that lasts, but failures',
   scene: 'announced',
   entries: [
     // People and boards. Ana is the first person: her personal board holds almost everything.
