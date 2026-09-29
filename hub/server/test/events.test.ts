@@ -465,7 +465,8 @@ test("a weekly window's forecast goes out after the source's cadence, the same o
     deliver(last);
   }
   h.clock.advance(hour + shift + 30 * S - h.clock.now());
-  deliver(h.clock.now() - 10 * S);
+  const latest = h.clock.now() - 10 * S;
+  deliver(latest);
 
   let read = 0;
   const samples = h.store.seriesSamples.bind(h.store);
@@ -476,10 +477,11 @@ test("a weekly window's forecast goes out after the source's cadence, the same o
   t.after(shared.close);
   const forecast = own.snapshot.forecast[source];
   assert.deepEqual(Object.keys(forecast), ['weekly']);
-  assert.equal(forecast.weekly.asOf, hour);
+  // The first since the hub started, on the latest sample.
+  assert.equal(forecast.weekly.asOf, latest);
   assert.equal(forecast.weekly.state, 'lasts');
   assert.deepEqual(shared.snapshot.forecast[source], forecast);
-  assert.equal(JSON.parse(h.store.kept(`forecast:${source}:weekly`)!).asOf, hour, 'kept for a restart');
+  assert.equal(JSON.parse(h.store.kept(`forecast:${source}:weekly`)!).asOf, latest, 'kept for a restart');
   const overview = (await h.call('GET', `/api/overview?board=${team}`, {as: 'alice'})).body;
   assert.deepEqual(overview.forecast[source], forecast);
   assert.equal(read, 1, 'worked out once for both boards and the overview');

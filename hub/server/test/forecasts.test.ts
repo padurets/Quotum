@@ -101,6 +101,24 @@ test('a series is worked out once an hour after a sample: reads and samples with
   assert.deepEqual(later.value, next.value);
 });
 
+test('a hub that measures nothing more after it starts works each series out once, on the latest sample, whatever the minute', () => {
+  for (const minute of [0, 3, 9, 30, 55, 59]) {
+    // Measured before the board is read, as a stand set up before it opens.
+    const h = hub(hourShift);
+    const end = T0 + 2 * DAY + minute * MIN;
+    const times = every(T0 + 30_000, end, 2 * MIN);
+    for (const t of times) h.measure(t, steady(0.6)(t));
+    const first = h.read(end + 30_000);
+    assert.deepEqual([first.value.weekly.asOf, first.changesAt], [times.at(-1), null], `:${minute}`);
+    for (const later of [end + HOUR, end + 2 * HOUR + 11 * MIN, end + DAY]) h.read(later);
+    assert.deepEqual(
+      h.worked.map(w => w.why),
+      ['first'],
+      `:${minute}`,
+    );
+  }
+});
+
 test('a series with too little history is worked out at every sample, and speaks at the first with an hour of it', () => {
   const h = hub();
   const first = T0 + 3 * DAY + 10 * MIN + 30_000;
@@ -155,7 +173,7 @@ test('a sample that contradicts the forecast has it worked out at once, on the s
     h.measure(end + 2 * MIN, [weekly(10, T0 + 7 * DAY)]);
     assert.equal(at(h, end + 2 * MIN), 'drop');
   }
-  // The moment shown has come, a sample at that very moment, and something is left. First read on the hour: nothing shown before to hold.
+  // The moment shown has come, a sample at that very moment, and something is left. First read on the hour's first sample: nothing shown before to hold.
   {
     const h = hub();
     const hour = T0 + 66 * HOUR;
@@ -164,8 +182,8 @@ test('a sample that contradicts the forecast has it worked out at once, on the s
     drive(h, every(hour + 30_000, hour + 38 * MIN + 30_000, 2 * MIN), used);
     const shown = h.read(hour + 39 * MIN).value.weekly;
     assert.equal(shown.state, 'runsOut');
-    assert.equal(shown.asOf, hour);
-    assert.ok(Math.abs(shown.shownZero! - (hour + 40 * MIN)) < 10_000, String(shown.shownZero! - hour));
+    assert.equal(shown.asOf, hour + 30_000);
+    assert.ok(Math.abs(shown.shownZero! - (hour + 40 * MIN)) < MIN, String(shown.shownZero! - hour));
     h.measure(shown.shownZero!, [weekly(99, T0 + 7 * DAY)]);
     assert.equal(at(h, shown.shownZero!), 'refuted');
   }
@@ -364,9 +382,11 @@ test("a model's window counts only while its subscription's weekly, the window w
 test('a plan held for an hour starts the history anew: a day with no word of "left"', () => {
   const h = hub();
   const change = T0 + 3 * DAY;
-  for (const t of every(T0 + 30_000, change + 2 * HOUR, 10 * MIN)) h.measure(t, steady(0.2)(t), 3.4 * MIN, t < change ? 'pro' : 'max');
+  const times = every(T0 + 30_000, change + 2 * HOUR, 10 * MIN);
+  for (const t of times.filter(t => t < change)) h.measure(t, steady(0.2)(t), 3.4 * MIN, 'pro');
   const before = h.read(change - MIN).value.weekly;
   assert.equal(before.comfy, true);
+  for (const t of times.filter(t => t >= change)) h.measure(t, steady(0.2)(t), 3.4 * MIN, 'max');
   const after = h.read(change + 2 * HOUR).value.weekly;
   assert.equal(after.state, 'lasts');
   assert.equal(after.comfy, false);
@@ -451,19 +471,37 @@ test('a sample that contradicts a forecast works it out again from the memory th
   assert.equal(g.F, pure(left).F);
 });
 
-test('a restarted hub goes on from what it kept: a forecast worked out on a sample is not worked out again on the hour before it', () => {
+test('a restarted hub goes on from what it kept, else from the latest sample: never from the hour before it', () => {
   const store = new Store(':memory:', T0 - 60 * DAY);
   const h = hub(undefined, store);
   const first = T0 + 3 * DAY + 10 * MIN + 30_000;
   const spoke = first + 50 * MIN;
-  drive(h, every(first, spoke, 2 * MIN), t => [weekly((t - first) / HOUR, T0 + 7 * DAY)]);
+  const used = (t: number) => [weekly((t - first) / HOUR, T0 + 7 * DAY)];
+  drive(h, every(first, spoke, 2 * MIN), used);
   assert.equal(h.read(spoke + 3000).value.weekly.asOf, spoke);
   h.forecasts.save();
-  for (const t of every(spoke + 2 * MIN, spoke + 30 * MIN, 2 * MIN)) h.measure(t, [weekly((t - first) / HOUR, T0 + 7 * DAY)]);
+  // Nothing measured since what it kept: that, as it was.
+  const same = hub(undefined, store);
+  const kept = same.read(spoke + 10 * MIN).value.weekly;
+  assert.deepEqual([kept.asOf, kept.state], [spoke, 'lasts']);
+  // Measured since: on the latest sample, and nothing more until a sample after the next hour.
+  for (const t of every(spoke + 2 * MIN, spoke + 30 * MIN, 2 * MIN)) h.measure(t, used(t));
   const again = hub(undefined, store);
-  const f = again.read(spoke + 30 * MIN + 3000).value.weekly;
-  assert.equal(f.asOf, spoke);
-  assert.equal(f.state, 'lasts');
+  const f = again.read(spoke + 30 * MIN + 3000);
+  assert.deepEqual([f.value.weekly.asOf, f.value.weekly.state, f.changesAt], [spoke + 30 * MIN, 'lasts', null]);
+  assert.deepEqual(
+    again.worked.map(w => w.why),
+    ['first'],
+  );
+  // Worked out on the hour after its last sample: after a restart, that same forecast.
+  const other = new Store(':memory:', T0 - 60 * DAY);
+  const g = hub(undefined, other);
+  const end = T0 + 2 * DAY - 90_000;
+  drive(g, every(T0 + 30_000, end, 2 * MIN), steady(0.6), {until: end + 10 * MIN});
+  const before = g.read(end + 10 * MIN).value;
+  assert.equal(before.weekly.asOf, T0 + 2 * DAY);
+  g.forecasts.save();
+  assert.deepEqual(hub(undefined, other).read(end + 20 * MIN).value, before);
 });
 
 test('a series that fails is none and failed, alone, until the next hour, and keeps nothing', () => {

@@ -380,8 +380,10 @@ them), kept for 90 days.
   measurement first reports it and whenever it changes); Claude Max 5x and 20x report the
   same plan (`max`), so a change between them does not.
 
-  The hub works a series out again at its subscription's hour after a sample the forecast
-  has not taken in (the hour whole, worked out up to ten minutes after it, by the
+  After it starts, the hub works a series out first on its latest sample (or goes on from
+  what it kept, if that took the sample in), so a board measured no more is told nothing
+  more. It works it out again at its subscription's hour after a sample the forecast has
+  not taken in (the hour whole, worked out up to ten minutes after it, by the
   subscription's id, so a hub's forecasts are not all worked out at once), and at once
   when a sample contradicts it: a series coming back from zero or reaching its first hour,
   a new window begun, the used share falling by 5 points or more, the moment it showed

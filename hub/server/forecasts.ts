@@ -137,10 +137,11 @@ export class Forecasts {
     const successAt = state.successAt!;
     let entry = this.series.get(key);
     if (!entry) {
-      // The first since the hub started: from where it was, if it kept that, else on this hour.
+      // The first since the hub started: from where it was, if that took in the latest
+      // sample, else on the latest sample. Not on the hour: one after it would have it worked
+      // out again at the next, with no sample new to a board that stands still.
       const kept = this.read(key);
-      let asOf = Math.max(hour, kept?.asOf ?? -Infinity);
-      if (!this.store.sampled(source, window.id, Number.MIN_SAFE_INTEGER, asOf)) asOf = successAt;
+      const asOf = kept && kept.asOf >= successAt ? kept.asOf : successAt;
       entry = this.work(key, source, window, asOf, kept ? (kept.asOf === asOf ? kept.memoryIn : kept.memoryOut) : null, successAt, reads, 'first');
     }
     // A sample of the time a forecast stands on, come late (another device's): the same moment worked out again.
