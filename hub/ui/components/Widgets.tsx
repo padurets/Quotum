@@ -256,7 +256,7 @@ export function Widgets({
     const {y: from} = current.start;
     const top = cover() + EDGE;
     // Half a row toward the edge, or, from a press nearer to it than that, to the edge itself; never within a click's jitter.
-    const toward = (room: number) => Math.min(PULL, Math.max(1, room - 2));
+    const toward = (room: number) => Math.min(PULL, room - 2);
     const scroll = !current.moved ? 0 : y < top && y < from - toward(from) ? y - top : y > innerHeight - EDGE && y > from + toward(innerHeight - from) ? y - innerHeight + EDGE : 0;
     if (scroll) {
       const before = scrollY;
