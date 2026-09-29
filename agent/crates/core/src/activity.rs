@@ -1,11 +1,12 @@
 //! Which coding agents run on this machine, and whether they are working: read from the
-//! process table alone. Nothing of the clients is read or changed (no settings, hooks or
-//! session files): a session is a client's process, and it works while it and what it
-//! started (tools, builds, tests) spend CPU time.
+//! process metadata alone. No client settings, hooks or session files are read or changed:
+//! a session is a client's process, and it works while it and what it started (tools,
+//! builds, tests) spend CPU time.
 //!
 //! The agent may check this often, so a check is one pass over the process list for
 //! names and parents; start times, CPU times and folders are read only for the clients'
-//! own process trees. No program is started for it.
+//! own process trees. On Linux, a bounded invocation prefix of this user's Codex processes
+//! distinguishes known service roles; no program is started for it.
 //!
 //! A session's project is the git repository its folder is in, found once per session and
 //! folder by the `.git` above it (see [`place`]); git is not run and none of its settings
@@ -80,6 +81,68 @@ pub struct Proc {
     pub name: String,
     /// Its start and CPU time, when the list gives them at no extra cost (Linux).
     pub times: Option<(Millis, u64)>,
+    /// A proven service invocation, otherwise unknown and eligible to be a session.
+    pub role: Role,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    Unknown,
+    Service,
+}
+
+/// Read only enough of a NUL-separated invocation to recognise a known service role.
+/// There is no read-ahead, no argument dump, and nothing after the role is read. Unknown
+/// options or a partial/unreadable prefix keep the process eligible to be a session.
+#[cfg(any(target_os = "linux", test))]
+fn codex_role(mut input: impl Read) -> Role {
+    let mut byte = [0];
+    // argv[0] is the executable's name, not a role. Bound even that skip.
+    let mut ended = false;
+    for _ in 0..2048 {
+        if input.read_exact(&mut byte).is_err() {
+            return Role::Unknown;
+        }
+        if byte[0] == 0 {
+            ended = true;
+            break;
+        }
+    }
+    if !ended || invocation_word(&mut input, &[b"app-server\0"]) != Some(0) {
+        return Role::Unknown;
+    }
+    match invocation_word(&mut input, &[b"proxy\0", b"daemon\0"]) {
+        Some(0) => Role::Service,
+        Some(1) if invocation_word(&mut input, &[b"pid-update-loop\0"]) == Some(0) => Role::Service,
+        _ => Role::Unknown,
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn invocation_word(input: &mut impl Read, words: &[&[u8]]) -> Option<usize> {
+    let mut possible: Vec<usize> = (0..words.len()).collect();
+    for at in 0..words.iter().map(|word| word.len()).max()? {
+        let mut byte = [0];
+        input.read_exact(&mut byte).ok()?;
+        possible.retain(|&i| words[i].get(at) == Some(&byte[0]));
+        if possible.is_empty() {
+            return None;
+        }
+        if byte[0] == 0 {
+            return possible.first().copied();
+        }
+    }
+    None
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn with_role(mut before: Proc, role: Role, after: Option<Proc>) -> Option<Proc> {
+    let after = after?;
+    if before.pid != after.pid || before.name != after.name || before.times.map(|t| t.0) != after.times.map(|t| t.0) {
+        return None;
+    }
+    before.role = role;
+    Some(before)
 }
 
 /// What the last look saw of a session.
@@ -281,11 +344,12 @@ fn provider_of(name: &str) -> Option<Provider> {
     }
 }
 
-/// The sessions among `procs`. Not sessions: clients started by the agent itself to measure (below this
-/// process `own` or any `quotum`), and a client under another of the same kind (a
-/// launcher and the program it runs). A session under a session of another kind is its
+/// The sessions among `procs`. Not sessions: clients started by the agent itself to
+/// measure (below this process `own` or any `quotum`), known service roles, and a client
+/// under another of the same kind (a launcher and the program it runs). A session under a session of another kind is its
 /// own, and its tree is not counted in the one above. `exe` gives the path of a program,
-/// asked only of what runs a session and its name does not tell (see [`origin`]).
+/// asked only of what runs a session and its name does not tell (see [`origin`]). A service
+/// ancestor does not hide a real client: an updater may restart a server that serves work.
 pub fn sessions(procs: &[Proc], own: u32, exe: &dyn Fn(u32) -> Option<String>) -> Vec<Found> {
     let by_pid: HashMap<u32, &Proc> = procs.iter().map(|p| (p.pid, p)).collect();
     let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
@@ -302,11 +366,12 @@ pub fn sessions(procs: &[Proc], own: u32, exe: &dyn Fn(u32) -> Option<String>) -
         }
         list
     };
+    let client = |p: &Proc| (p.role != Role::Service).then(|| provider_of(&p.name)).flatten();
     let session = |p: &Proc| -> Option<(Provider, Origin)> {
-        let provider = provider_of(&p.name)?;
+        let provider = client(p)?;
         let above: Vec<&Proc> = ancestors(p.pid).iter().filter_map(|a| by_pid.get(a).copied()).collect();
         let measuring = p.pid == own || above.iter().any(|q| q.pid == own || is_quotum(&q.name));
-        let launched = above.iter().find_map(|q| provider_of(&q.name)) == Some(provider);
+        let launched = above.iter().find_map(|q| client(q)) == Some(provider);
         (!measuring && !launched).then(|| (provider, origin(&above, exe)))
     };
     let found: HashMap<u32, (Provider, Origin)> = procs.iter().filter_map(|p| Some((p.pid, session(p)?))).collect();
@@ -612,7 +677,7 @@ mod sys {
     use std::path::PathBuf;
     use std::sync::OnceLock;
 
-    use super::Proc;
+    use super::{Proc, Role};
     use crate::model::Millis;
 
     /// A process from /proc/<pid>/stat: its name, parent, start and the CPU time it and its
@@ -631,12 +696,29 @@ mod sys {
         let tick = ticks_per_second();
         let started = boot_time().map(|boot| boot * 1000 + (start * 1000 / tick) as Millis);
         let times = started.map(|at| (at, cpu * 1000 / tick));
-        Some(Proc { pid, parent: parent as u32, name: name.to_string(), times })
+        Some(Proc { pid, parent: parent as u32, name: name.to_string(), times, role: Role::Unknown })
     }
 
     pub fn processes() -> Vec<Proc> {
         let Ok(entries) = fs::read_dir("/proc") else { return Vec::new() };
-        entries.filter_map(|e| e.ok()?.file_name().to_str()?.parse::<u32>().ok()).filter_map(stat).collect()
+        entries
+            .filter_map(|e| e.ok()?.file_name().to_str()?.parse::<u32>().ok())
+            .filter_map(stat)
+            .filter_map(|p| {
+                if super::provider_of(&p.name) != Some(crate::model::Provider::Codex)
+                    || !mine(p.pid)
+                    || p.times.is_none()
+                {
+                    return Some(p);
+                }
+                let role =
+                    fs::File::open(format!("/proc/{}/cmdline", p.pid)).map(super::codex_role).unwrap_or(Role::Unknown);
+                // The role must belong to the process we listed, even if it exited and its
+                // pid was reused during the read. Never cache a role by pid alone.
+                let pid = p.pid;
+                super::with_role(p, role, stat(pid))
+            })
+            .collect()
     }
 
     pub fn times(pid: u32) -> Option<(Millis, u64)> {
@@ -686,7 +768,7 @@ mod sys {
     use std::path::PathBuf;
     use std::sync::OnceLock;
 
-    use super::Proc;
+    use super::{Proc, Role};
     use crate::model::Millis;
 
     /// `flavor` of `pid` into a zeroed `T`, when the system gives all of it.
@@ -726,7 +808,7 @@ mod sys {
                 {
                     name = client.to_string();
                 }
-                Some(Proc { pid: pid as u32, parent: bsd.pbi_ppid, name, times: None })
+                Some(Proc { pid: pid as u32, parent: bsd.pbi_ppid, name, times: None, role: Role::Unknown })
             })
             .collect()
     }
@@ -806,7 +888,7 @@ mod sys {
     use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
     use windows_sys::Win32::System::Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
 
-    use super::Proc;
+    use super::{Proc, Role};
     use crate::model::Millis;
 
     pub fn processes() -> Vec<Proc> {
@@ -823,7 +905,13 @@ mod sys {
             while more {
                 let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
                 let name = String::from_utf16_lossy(&entry.szExeFile[..len]);
-                list.push(Proc { pid: entry.th32ProcessID, parent: entry.th32ParentProcessID, name, times: None });
+                list.push(Proc {
+                    pid: entry.th32ProcessID,
+                    parent: entry.th32ParentProcessID,
+                    name,
+                    times: None,
+                    role: Role::Unknown,
+                });
                 more = Process32NextW(snapshot, &mut entry) != 0;
             }
             CloseHandle(snapshot);
@@ -901,7 +989,7 @@ mod tests {
     use super::*;
 
     fn p(pid: u32, parent: u32, name: &str) -> Proc {
-        Proc { pid, parent, name: name.into(), times: None }
+        Proc { pid, parent, name: name.into(), times: None, role: Role::Unknown }
     }
 
     fn found(procs: &[Proc]) -> Vec<(Provider, u32, Vec<u32>)> {
@@ -910,6 +998,107 @@ mod tests {
 
     fn origins(procs: &[Proc]) -> Vec<(u32, Origin)> {
         sessions(procs, 900, &|_| None).into_iter().map(|f| (f.pid, f.origin)).collect()
+    }
+
+    fn codex(pid: u32, parent: u32, invocation: &[u8]) -> Proc {
+        Proc { role: codex_role(invocation), ..p(pid, parent, "codex") }
+    }
+
+    #[test]
+    fn codex_services_are_not_sessions_but_their_real_clients_are() {
+        let procs = [
+            p(1, 0, "init"),
+            codex(10, 1, b"codex\0app-server\0daemon\0pid-update-loop\0"),
+            // An updater can restart a server that actually serves remote work.
+            codex(11, 10, b"codex\0app-server\0--listen\0unix://\0--managed-daemon\0"),
+            p(12, 11, "bash"),
+            codex(20, 1, b"codex\0app-server\0proxy\0--sock\0local.sock\0"),
+            p(30, 1, "codex"),
+            codex(31, 30, b"codex\0app-server\0--listen\0unix://\0--managed-daemon\0"),
+            codex(32, 30, b"codex\0app-server\0proxy\0"),
+            p(40, 1, "code"),
+            codex(41, 40, b"codex\0app-server\0"),
+            p(50, 1, "ChatGPT"),
+            codex(51, 50, b"codex\0app-server\0"),
+            p(900, 1, "quotum"),
+            codex(901, 900, b"codex\0app-server\0"),
+        ];
+        assert_eq!(
+            origins(&procs),
+            vec![(11, Origin::Terminal), (30, Origin::Terminal), (41, Origin::Editor), (51, Origin::App)]
+        );
+        assert_eq!(
+            found(&procs),
+            vec![
+                (Provider::Codex, 11, vec![11, 12]),
+                (Provider::Codex, 30, vec![30, 31, 32]),
+                (Provider::Codex, 41, vec![41]),
+                (Provider::Codex, 51, vec![51]),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_service_role_is_an_exact_invocation_prefix() {
+        for invocation in [b"codex\0app-server\0daemon\0pid-update-loop\0".as_slice(), b"codex\0app-server\0proxy\0"] {
+            assert_eq!(codex_role(invocation), Role::Service);
+            for end in 0..invocation.len() {
+                assert_eq!(codex_role(&invocation[..end]), Role::Unknown, "partial prefix at {end}");
+            }
+        }
+        for invocation in [
+            b"codex\0exec\0app-server daemon pid-update-loop\0".as_slice(),
+            b"codex\0app-server daemon pid-update-loop\0",
+            b"codex\0--config\0app-server\0daemon\0pid-update-loop\0",
+            b"codex\0--\0app-server\0daemon\0pid-update-loop\0",
+            b"codex\0app-server\0--listen\0proxy\0",
+            b"codex\0app-server\0daemon\0pid-update-loop-later\0",
+            b"codex\0app-server\0proxying\0",
+            b"codex\0app-server\0daemon\0restart\0",
+            b"codex\0app-server\0--managed-daemon\0",
+        ] {
+            let proc = codex(10, 1, invocation);
+            assert_eq!(proc.role, Role::Unknown);
+            assert_eq!(found(&[proc]), vec![(Provider::Codex, 10, vec![10])]);
+        }
+        let long = vec![b'x'; 2048];
+        assert_eq!(codex_role(long.as_slice()), Role::Unknown);
+    }
+
+    #[test]
+    fn reading_a_role_stops_before_other_arguments_and_on_the_first_unknown_byte() {
+        use std::io::Cursor;
+        let prefix = b"codex\0app-server\0daemon\0pid-update-loop\0";
+        let bytes = [prefix.as_slice(), b"--restore-release\0value\0"].concat();
+        let mut input = Cursor::new(bytes);
+        assert_eq!(codex_role(&mut input), Role::Service);
+        assert_eq!(input.position(), prefix.len() as u64);
+        let mut input = Cursor::new(b"codex\0private user task\0");
+        assert_eq!(codex_role(&mut input), Role::Unknown);
+        assert_eq!(input.position(), b"codex\0p".len() as u64);
+        let mut input = Cursor::new(vec![b'x'; 4096]);
+        assert_eq!(codex_role(&mut input), Role::Unknown);
+        assert_eq!(input.position(), 2048);
+        struct Denied;
+        impl Read for Denied {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+            }
+        }
+        assert_eq!(codex_role(Denied), Role::Unknown);
+    }
+
+    #[test]
+    fn a_role_is_not_attached_to_an_exited_or_reused_process() {
+        let before = Proc { times: Some((100, 20)), ..p(10, 1, "codex") };
+        assert!(with_role(before.clone(), Role::Service, None).is_none());
+        let reused = Proc { times: Some((200, 0)), ..before.clone() };
+        assert!(with_role(before.clone(), Role::Service, Some(reused)).is_none());
+        let replaced = Proc { name: "bash".into(), ..before.clone() };
+        assert!(with_role(before.clone(), Role::Service, Some(replaced)).is_none());
+        let later = Proc { times: Some((100, 50)), ..before.clone() };
+        assert_eq!(with_role(before.clone(), Role::Unknown, Some(later.clone())).unwrap().role, Role::Unknown);
+        assert_eq!(with_role(before, Role::Service, Some(later)).unwrap().role, Role::Service);
     }
 
     #[test]
