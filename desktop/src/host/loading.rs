@@ -169,7 +169,7 @@ fn fallback_anchor(bounds: gdk::Rectangle, area: gdk::Rectangle, width: i32, hei
     } else {
         // An auto-hidden panel reserves no edge. Keep the first menu opening
         // within the primary monitor until an activation supplies its position.
-        (area.x() + (area.width() + width) / 2, area.y() + (area.height() + height) / 2)
+        ((area.x() + (area.width() + width) / 2).min(end_x), (area.y() + (area.height() + height) / 2).min(end_y))
     }
 }
 impl Panel {
@@ -429,5 +429,7 @@ mod tests {
         let right = gdk::Rectangle::new(1200, 171, 3404, 1440);
         assert_eq!(fallback_anchor(bounds, right, 400, 368), (4603, 1610));
         assert_eq!(fallback_anchor(bounds, bounds, 400, 368), (3120, 1075));
+        let narrow = gdk::Rectangle::new(-300, 0, 300, 200);
+        assert_eq!(fallback_anchor(narrow, narrow, 300, 160), (-1, 180));
     }
 }
