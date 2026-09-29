@@ -13,7 +13,7 @@ import {
 } from 'react';
 import {t} from '../i18n';
 import {Popover, SwitchRow} from './Popover';
-import {SizingContext, type Report, type Size} from './sizing';
+import {same, SizingContext, type Report, type Size} from './sizing';
 import {isOffByDefault} from '../lib/view';
 import {
   cellOf,
@@ -162,7 +162,7 @@ export function Widgets({
     (id: string, size: Report | null) =>
       setSizes(old => {
         const was = old[id];
-        if (size ? was?.min === size.min && was.natural === size.natural && was.shown === size.shown : !was) return old;
+        if (size ? same(was?.min, size.min) && same(was?.natural, size.natural) && same(was?.shown, size.shown) : !was) return old;
         const {[id]: _, ...rest} = old;
         return size ? {...rest, [id]: size} : rest;
       }),
@@ -182,7 +182,10 @@ export function Widgets({
       const fill = parseFloat(getComputedStyle(places.current.get(id)!).getPropertyValue('--fill')) || 0;
       next[id] = Math.round((root.getBoundingClientRect().height - fill) * 64) / 64;
     }
-    setHeights(old => (Object.keys(next).length === Object.keys(old).length && Object.entries(next).every(([id, h]) => old[id] === h) ? old : next));
+    setHeights(old => {
+      const kept = Object.fromEntries(Object.entries(next).map(([id, h]) => [id, same(old[id], h) ? old[id] : h]));
+      return Object.keys(kept).length === Object.keys(old).length && Object.entries(kept).every(([id, h]) => old[id] === h) ? old : kept;
+    });
     return next;
   };
   // Before paint on the first render; later one observer measures content, never the row's stretched box.

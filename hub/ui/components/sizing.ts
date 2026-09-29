@@ -20,6 +20,15 @@ export const useSizing = () => useContext(SizingContext);
 /** Pixels as measured, to 1/64: the same layout reads the same, and nothing renders for less. */
 export const pixels = (value: number) => Math.round(value * 64) / 64;
 
+/**
+ * Whether a widget measured again (`now`) is as tall as it was: within a pixel of the screen.
+ * Boxes snap to the screen's pixels, which at a fractional scale (125 %, 150 %) are no whole
+ * CSS pixels, so the same content measures a little differently over another fill; taking that
+ * for a new height would change the fill again, and so on without end.
+ */
+export const same = (was: number | undefined, now: number | undefined) =>
+  was === now || (was !== undefined && now !== undefined && Math.abs(now - was) < 1 / devicePixelRatio);
+
 /** The widget's `--fill`: the empty room the board adds under a panel's content to fill its rows. */
 export const fillOf = (element: Element) => parseFloat(getComputedStyle(element).getPropertyValue('--fill')) || 0;
 
@@ -47,7 +56,7 @@ export function usePlot(panel: RefObject<HTMLElement | null>) {
     const min = pixels(chrome + own);
     sizing.report({min, natural: min, shown: pixels(shown)});
     const next = sizing.manual ? pixels(Math.max(own, sizing.allocated - chrome)) : undefined;
-    setPlot(was => (was === next ? was : next));
+    setPlot(was => (same(was, next) ? was : next));
   };
   useLayoutEffect(() => measure.current());
   useLayoutEffect(() => {
