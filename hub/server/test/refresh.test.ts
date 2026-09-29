@@ -624,12 +624,31 @@ test('a holder measuring its providers one by one is not silent while it deliver
   late.deliver(1, T + 400_000);
   assert.equal(late.ingest.refresh(late.source(0), T + 420_000).value.unavailable, null);
   assert.equal(late.ingest.refresh(late.source(0), T + 420_001).value.unavailable, 'silent');
+  // Five minutes to the millisecond.
+  for (const [at, heard] of [[360_000, true], [360_001, false]] as const) {
+    const edge = threeTold(t);
+    edge.deliver(0, T + 90_000);
+    edge.deliver(1, T + at);
+    assert.equal(edge.ingest.refresh(edge.source(0), T + 400_000).value.unavailable, heard ? null : 'silent', `delivered at ${at}`);
+  }
   // Heard from past the five minutes, it is not measuring what it was told to any more: a click queues.
   const joined = threeTold(t);
   joined.deliver(0, T + 90_000);
   joined.deliver(1, T + 350_000);
   assert.equal(joined.ingest.requestRefresh(joined.source(2), T + 370_000).status, 'accepted');
   assert.equal(joined.ingest.refresh(joined.source(2), T + 370_000).value.request?.status, 'queued');
+});
+
+test('a device that takes duty by delivering is heard from by that delivery', t => {
+  const h = hub(t);
+  h.ask(0);
+  h.deliver(0, {used: 95, stale: 132_000});
+  assert.equal(h.ask(100_000, MIN, 'desk').measure, false);
+  // The laptop goes quiet; the desk measures on its own and delivers after the laptop's lease.
+  h.deliver(200_000, {name: 'desk', used: 95, stale: 132_000});
+  assert.equal(h.duty.holder(ACCOUNT), h.device('desk'));
+  assert.equal(h.refresh(250_000).unavailable, null);
+  assert.equal(h.request(250_000).status, 'accepted');
 });
 
 test('a delivery after the holder fell silent does not reopen a request its silence ended, and tells the boards it is back', t => {
