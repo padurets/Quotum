@@ -450,13 +450,20 @@ test("a weekly window's forecast goes out after the source's cadence, the same o
       },
       h.clock.now(),
     );
-  for (let at = start + HOUR; at < h.clock.now() - MIN; at += 10 * MIN) deliver(at);
+  let last = start + HOUR;
+  for (; last + 10 * MIN < h.clock.now() - MIN; last += 10 * MIN) deliver(last);
+  deliver(last);
   const source = h.store.sources(h.board)[0].id;
   const team = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
   await h.call('POST', `/api/boards/${team}/shares`, {as: 'alice', body: {source}});
   // Just past the hour this subscription's forecasts are worked out on, with a sample after it.
   const shift = hourShift(source);
   const hour = Math.floor((h.clock.now() - shift) / HOUR) * HOUR + HOUR;
+  // Measured every ten minutes up to then, whatever minute the test starts at: no gap for the hub to work out at once.
+  for (last += 10 * MIN; last < hour + shift; last += 10 * MIN) {
+    h.clock.advance(last + S - h.clock.now());
+    deliver(last);
+  }
   h.clock.advance(hour + shift + 30 * S - h.clock.now());
   deliver(h.clock.now() - 10 * S);
 
