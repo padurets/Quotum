@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {forecastOf, started as hubStarted, uncounted as hubUncounted, type Memory} from '../../server/domain/forecast.js';
 import {told} from '../../server/forecasts.js';
-import {outlook, uncounted as boardUncounted} from '../../ui/lib/forecast.js';
+import {lineOf, outlook, uncounted as boardUncounted} from '../../ui/lib/forecast.js';
 import {started as boardStarted} from '../../ui/lib/plan.js';
 import type {Win} from '../../ui/lib/types.js';
 
@@ -66,4 +66,24 @@ test("the board says the golden cases as the reference did: left or just enough,
     assert.equal(said.key, c.expected.state, c.id);
     assert.equal(said.tone, c.expected.tone === 'red' ? 'v-crit' : c.expected.tone === 'yellow' ? 'v-warn' : c.expected.state === 'usedUp' ? 'v-crit' : '', c.id);
   }
+});
+
+test("the board reads the hub's line as the model drew it, and a window's forecast stays within a few kilobytes", () => {
+  const golden = JSON.parse(readFileSync(new URL('../../server/test/fixtures/forecast-golden.json', import.meta.url), 'utf8')) as {cases: Golden[]};
+  let lines = 0;
+  for (const c of golden.cases) {
+    const samples = c.samples.map(([at, used, resetAt, minutes]) => ({at: at * MIN, used, resetAt: resetAt * MIN, minutes}));
+    const drawn = forecastOf({samples, plan: null, since: null}, Date.parse(c.t), c.memoryIn).forecast;
+    const ahead = told(drawn);
+    assert.ok(JSON.stringify(ahead).length <= 3 * 1024, `${c.id}: ${JSON.stringify(ahead).length} bytes`);
+    if (!drawn.points) continue;
+    lines++;
+    const read = lineOf(ahead);
+    assert.equal(read.length, drawn.points.length, c.id);
+    for (let i = 0; i < read.length; i++) {
+      assert.ok(Math.abs(read[i][0] - drawn.points[i][0]) <= 60, `${c.id}: point ${i} at ${read[i][0] - drawn.points[i][0]} ms`);
+      assert.ok(Math.abs(read[i][1] - drawn.points[i][1]) <= 0.05, `${c.id}: point ${i} left ${read[i][1]} against ${drawn.points[i][1]}`);
+    }
+  }
+  assert.ok(lines >= 10, `${lines} cases with a line`);
 });

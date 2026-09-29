@@ -110,6 +110,17 @@ test('the time between the last sample before a reset and the start of the new w
   assert.equal(hoursOf(forecast(samples, R + 2 * HOUR).forecast), 167);
 });
 
+test('a sample past the reset of the one before is of a new window, however far its own reset moved', () => {
+  // Weekly windows on a schedule; the device was off for 8 days across a reset.
+  const s0 = T0 - 30 * DAY;
+  const value = (t: number): Value => {
+    const start = s0 + Math.floor((t - s0) / (7 * DAY)) * 7 * DAY;
+    return {used: Math.floor((0.5 * (t - start)) / HOUR), resetAt: start + 7 * DAY};
+  };
+  const samples = [...sampled(s0, T0 - 12 * DAY, 10 * MINUTE, value), ...sampled(T0 - 4 * DAY, T0, 10 * MINUTE, value)];
+  assert.equal(hoursOf(forecast(samples, T0).forecast), 648);
+});
+
 test('a reset time that went back leaves the spending of its pairs unknown', () => {
   const R = T0 + 7 * DAY;
   const clean = sampled(T0 + HOUR, T0 + 4 * DAY, 10 * MINUTE, t => ({used: (0.5 * (t - T0 - HOUR)) / HOUR, resetAt: R}));
@@ -176,13 +187,16 @@ test('after a plan change the series is as young as the change: its history begi
 test("a model's window does not count while the subscription's weekly is used up and resets no earlier", () => {
   const R = T0 + 7 * DAY;
   const samples = sampled(T0, T0 + 3 * DAY, 10 * MINUTE, t => ({used: (0.2 * (t - T0)) / HOUR, resetAt: R}));
-  const weekly = (shift: number) =>
-    sampled(T0, T0 + 3 * DAY, 10 * MINUTE, t => ({used: t >= T0 + 2 * DAY && t < T0 + 2 * DAY + 10 * HOUR ? 100 : 50, resetAt: R + shift}));
-  const hours = (shift: number) => hoursOf(forecast(samples, T0 + 3 * DAY, null, {plan: weekly(shift)}).forecast);
+  const weekly = (shift: number, zero = 100) =>
+    sampled(T0, T0 + 3 * DAY, 10 * MINUTE, t => ({used: t >= T0 + 2 * DAY && t < T0 + 2 * DAY + 10 * HOUR ? zero : 50, resetAt: R + shift}));
+  const hours = (shift: number, zero?: number) => hoursOf(forecast(samples, T0 + 3 * DAY, null, {plan: weekly(shift, zero)}).forecast);
   assert.equal(hours(0), 62);
   assert.equal(hours(-30_000), 62);
   assert.equal(hours(DAY), 62);
   assert.equal(hours(-DAY), 72);
+  // At zero from 99.5: Claude tells its share in fractions.
+  assert.equal(hours(0, 99.7), 62);
+  assert.equal(hours(0, 99.4), 72);
 });
 
 // ---------- speaking ----------
@@ -324,7 +338,7 @@ test('a moment already past is not held', () => {
   assert.equal(f.shownZero, zero);
 });
 
-test('"runs out" holds for the same window only, within a minute of its reset time', () => {
+test('"runs out" holds for the same window only, within a minute of its reset time, while the line ends up to 2 over zero', () => {
   const R = T0 + 7 * DAY;
   const samples = sampled(T0, T0 + 5 * DAY, 10 * MINUTE, t => ({used: (0.61 * (t - T0)) / HOUR, resetAt: R}));
   const asOf = T0 + 5 * DAY;
@@ -333,6 +347,19 @@ test('"runs out" holds for the same window only, within a minute of its reset ti
   assert.equal(base.state, 'lasts');
   assert.equal(forecast(samples, asOf, {win: R + 7 * DAY, out: true, Z: R - 2 * HOUR, X: null, comfy: false}).forecast.state, 'lasts');
   assert.equal(forecast(samples, asOf, {win: R + 30_000, out: true, Z: base.zero ?? R, X: null, comfy: false}).forecast.state, 'runsOut');
+  // A line ending just over zero reaches none: held, it runs out at the reset, or at the moment shown before while that moved less than its dead zone.
+  const over = sampled(T0, T0 + 5 * DAY, 10 * MINUTE, t => ({used: (0.595 * (t - T0)) / HOUR, resetAt: R}));
+  const lasting = forecast(over, asOf).forecast;
+  assert.ok(lasting.F! > 0 && lasting.F! <= 2, String(lasting.F));
+  assert.equal(lasting.state, 'lasts');
+  const held = forecast(over, asOf, {win: R, out: true, Z: null, X: null, comfy: false});
+  assert.equal(held.forecast.state, 'runsOut');
+  assert.equal(held.forecast.zero, null);
+  assert.equal(held.forecast.shownZero, R);
+  assert.equal(held.memory!.Z, R);
+  const shown = forecast(over, asOf, {win: R, out: true, Z: R - 2 * HOUR, X: null, comfy: false}).forecast;
+  assert.equal(shown.state, 'runsOut');
+  assert.equal(shown.shownZero, R - 2 * HOUR);
 });
 
 test('no forecast without samples or when the last has no reset time; the memory stays as it was', () => {
@@ -429,6 +456,10 @@ test("a cold series that saw its window start blends with the window's mean from
   const g = upTo(series(true), go + 52 * MINUTE);
   assert.equal(g.state, 'runsOut');
   near(g.F, -55.91);
+  // Its first sample 5 minutes into the window: it still saw the window start.
+  const begun = Date.UTC(2026, 8, 9, 10);
+  const late = sampled(begun + 5 * MINUTE, begun + 2 * HOUR, 2 * MINUTE, t => ({used: Math.round((15 * (t - begun)) / HOUR) / 10, resetAt: begun + WEEK * MINUTE}));
+  near(upTo(late, begun + 75 * MINUTE).F, -153.87, 0.01);
 });
 
 test("a young window's mean only lifts the pace a cold series knows from before the reset", () => {

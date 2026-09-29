@@ -95,6 +95,10 @@ test('a series is worked out once an hour after a sample: reads and samples with
   assert.equal(h.worked.at(-1)!.why, 'hour');
   assert.equal(next.value.weekly.asOf, end + HOUR);
   assert.equal(next.changesAt, null, 'nothing new since');
+  const m = h.worked.length;
+  const later = h.read(end + 3 * HOUR + 1);
+  assert.equal(h.worked.length, m, 'hours with no sample work out nothing');
+  assert.deepEqual(later.value, next.value);
 });
 
 test('a series with too little history is worked out at every sample, and speaks at the first with an hour of it', () => {
@@ -151,7 +155,7 @@ test('a sample that contradicts the forecast has it worked out at once, on the s
     h.measure(end + 2 * MIN, [weekly(10, T0 + 7 * DAY)]);
     assert.equal(at(h, end + 2 * MIN), 'drop');
   }
-  // The moment shown has come, and something is left. First read on the hour: nothing shown before to hold.
+  // The moment shown has come, a sample at that very moment, and something is left. First read on the hour: nothing shown before to hold.
   {
     const h = hub();
     const hour = T0 + 66 * HOUR;
@@ -162,8 +166,8 @@ test('a sample that contradicts the forecast has it worked out at once, on the s
     assert.equal(shown.state, 'runsOut');
     assert.equal(shown.asOf, hour);
     assert.ok(Math.abs(shown.shownZero! - (hour + 40 * MIN)) < 10_000, String(shown.shownZero! - hour));
-    h.measure(hour + 40 * MIN + 30_000, [weekly(99, T0 + 7 * DAY)]);
-    assert.equal(at(h, hour + 40 * MIN + 30_000), 'refuted');
+    h.measure(shown.shownZero!, [weekly(99, T0 + 7 * DAY)]);
+    assert.equal(at(h, shown.shownZero!), 'refuted');
   }
   // The first sample after an hour or more without one.
   {
@@ -185,6 +189,33 @@ test('a pause shorter than an hour waits for the hour, however short the samples
   h.measure(pause + 30 * MIN, steady(0.6)(pause + 30 * MIN));
   h.read(pause + 30 * MIN + 3000);
   assert.equal(h.worked.length, n);
+});
+
+test('what does not contradict the forecast waits for the hour: a correction of a few points, a pause no longer than samples last', () => {
+  // The used share a few points lower in the same window: the provider correcting itself.
+  {
+    const h = hub();
+    const end = T0 + 2 * DAY + 20 * MIN + 30_000;
+    drive(h, every(T0 + 30_000, end, 2 * MIN), steady(0.6));
+    const n = h.worked.length;
+    h.measure(end + 2 * MIN, [weekly(steady(0.6)(end)[0].used - 4, T0 + 7 * DAY)]);
+    h.read(end + 2 * MIN + 3000);
+    assert.equal(h.worked.length, n);
+  }
+  // More than an hour between samples said to last longer still: the hour's forecast, not a gap.
+  {
+    const h = hub();
+    const pause = T0 + 2 * DAY - 90_000;
+    const stale = 2.4 * HOUR;
+    drive(h, every(T0 + 30_000, pause, 2 * MIN), steady(0.6), {stale, until: pause + 70 * MIN - 1});
+    const n = h.worked.length;
+    h.measure(pause + 70 * MIN, steady(0.6)(pause + 70 * MIN), stale);
+    h.read(pause + 70 * MIN + 3000);
+    assert.deepEqual(
+      h.worked.slice(n).map(w => w.why),
+      ['hour'],
+    );
+  }
 });
 
 test('after a gap nobody read through, the hour worked out on the sample before it is checked again', () => {
@@ -390,6 +421,34 @@ test('a sample come late for the moment a forecast stands on works it out again 
   assert.equal(g.state, 'runsOut');
   assert.equal(g.state, pure.state);
   assert.equal(g.F, pure.F);
+});
+
+test('a sample that contradicts a forecast works it out again from the memory that forecast left, not the one it went in with', () => {
+  const store = new Store(':memory:', T0 - 60 * DAY);
+  const h = hub(undefined, store);
+  const key = `forecast:${h.source}:weekly`;
+  const hour = T0 + 4 * DAY;
+  for (const t of every(T0 + 30_000, hour, 10 * MIN)) h.measure(t, tenMinutes(0.575)(t));
+  // Worked out on the hour going in "runs out", it came out lasting: the two memories differ.
+  store.keep([[key, JSON.stringify({asOf: hour, memoryIn: out(), memoryOut: null})]]);
+  assert.equal(h.read(hour + 5000).value.weekly.state, 'lasts');
+  h.forecasts.save();
+  const left: Memory = JSON.parse(store.kept(key)!).memoryOut;
+  assert.equal(left.out, false);
+  // The first sample after more than an hour, a point more spent.
+  const wake = hour + 70 * MIN;
+  h.measure(wake, [weekly(tenMinutes(0.575)(wake)[0].used + 1, T0 + 7 * DAY)]);
+  const n = h.worked.length;
+  const g = h.read(wake + 3000).value.weekly;
+  assert.deepEqual(
+    h.worked.slice(n).map(w => w.why),
+    ['gap'],
+  );
+  const samples = h.store.seriesSamples(h.source, 'weekly', wake - 23 * DAY, wake);
+  const pure = (memory: Memory) => forecastOf({samples, plan: null, since: null}, wake, memory).forecast;
+  assert.notEqual(pure(out()).state, pure(left).state, 'the two memories tell apart here');
+  assert.equal(g.state, pure(left).state);
+  assert.equal(g.F, pure(left).F);
 });
 
 test('a restarted hub goes on from what it kept: a forecast worked out on a sample is not worked out again on the hour before it', () => {
