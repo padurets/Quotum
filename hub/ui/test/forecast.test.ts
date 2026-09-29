@@ -167,7 +167,7 @@ test("the cell's tooltip says a part a line, each only where it applies, in plur
     assert.match(text.title[7], /^Сброс для всех — /);
     for (const line of text.title) assert.ok(!line.includes(' · ') && !line.includes('\n'), line);
     const day = (lastDay: number | null) => outlookText(said(lasts()), week(60), lasts({basis: {hours: 200, cold: false, usualPerDay: 0.3, lastDay, burst: null}}), context(), null).title;
-    assert.deepEqual(day(1.05), ['Обычно уходит ~< 1% в сутки', 'Чтобы хватило до сброса — до ~15% в сутки'], 'as usual: no line');
+    assert.deepEqual(day(1.05), ['Обычно уходит < 1% в сутки', 'Чтобы хватило до сброса — до ~15% в сутки'], 'as usual: no line, and under a point no "~"');
     assert.equal(day(0.05)[1], 'Последние сутки — почти без трат');
     assert.equal(day(0.5)[1], 'Последние сутки — в 2 раза меньше обычного');
     assert.equal(day(1.52)[1], 'Последние сутки — в 1,5 раза больше обычного');
@@ -179,6 +179,7 @@ test("the cell's tooltip says a part a line, each only where it applies, in plur
     assert.equal(en.text, 'runs out in ~30h');
     assert.equal(en.title[2], 'The last day: 5 times the usual');
     assert.equal(outlookText(said(lasts()), week(60), lasts({basis: {hours: 1, cold: true, usualPerDay: 3, lastDay: null, burst: null}}), context(), null).title[0], 'By the first 1 hour');
+    assert.equal(outlookText(said(lasts()), week(60), lasts({basis: {hours: 200, cold: false, usualPerDay: 0, lastDay: null, burst: null}}), context(), null).title[0], 'Usually 0% a day');
   } finally {
     setLocale('en');
   }

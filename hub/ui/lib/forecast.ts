@@ -77,6 +77,12 @@ export function announcedOf(resets: Resets | null | undefined, provider: string,
 
 const isBasis = (basis: SeriesForecast['basis']): basis is ForecastBasis => !!basis && 'cold' in basis;
 
+/** A share a day as the tooltip says it: roughly, but "< 1" under half a point and "0" for none. */
+const perDay = (value: number) => {
+  const text = shareText(value);
+  return text === '< 1' || value === 0 ? text : `~${text}`;
+};
+
 /** A weekly window's forecast line as moments: [time, left], from its anchor to the reset. */
 export const lineOf = (ahead: SeriesForecast): [number, number][] =>
   ahead.points && ahead.anchor ? ahead.points.map(([minutes, left]): [number, number] => [ahead.anchor!.at + minutes * MINUTE, left]) : [];
@@ -265,7 +271,7 @@ export function outlookText(said: Outlook, live: Win | undefined, ahead: SeriesF
   const basis = isBasis(ahead.basis) ? ahead.basis : null;
   if (basis?.cold) title.push(t('forecast.cold', {count: Math.floor(basis.hours)}));
   else if (basis) {
-    title.push(t('forecast.usual', {value: shareText(basis.usualPerDay)}));
+    title.push(t('forecast.usual', {value: perDay(basis.usualPerDay)}));
     const x = basis.lastDay;
     if (x !== null) {
       if (x < 0.1) title.push(t('forecast.lastDayQuiet'));
@@ -276,7 +282,7 @@ export function outlookText(said: Outlook, live: Win | undefined, ahead: SeriesF
   const burst = basis?.burst ?? null;
   if (burst) title.push(t('forecast.burst', times(burst.times)), t('forecast.burstAt', {time: stamp(burst.zero)}));
   if (ahead.anchor && ahead.resetAt !== null && ahead.resetAt > ahead.anchor.at) {
-    title.push(t('forecast.allowed', {value: shareText(ahead.anchor.left / ((ahead.resetAt - ahead.anchor.at) / DAY))}));
+    title.push(t('forecast.allowed', {value: perDay(ahead.anchor.left / ((ahead.resetAt - ahead.anchor.at) / DAY))}));
   }
   if (planEnd) {
     const time = stamp(planEnd.at);
