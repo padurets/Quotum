@@ -4,6 +4,7 @@ import {
   cellOf,
   edgeScroll,
   heightIntent,
+  pastClick,
   landed,
   leftWidths,
   legacyLayout,
@@ -208,6 +209,15 @@ test('the page scrolls under a pointer taken toward an edge of the window, never
     ['in the middle of the window', at(500, 400, {sideways: true}), 0],
   ] as const)
     assert.equal(scroll, expected, what);
+});
+
+test('a click\'s jitter is four of the screen\'s pixels, however far the page is zoomed out', () => {
+  assert.equal(pastClick(4, 0), false);
+  assert.equal(pastClick(4.1, 0), true);
+  assert.equal(pastClick(3, 3), true, 'a pixel on the screen is a CSS pixel at 100 %');
+  assert.equal(pastClick(3, 3, 3), false, 'at a third, a CSS pixel is a third of one on the screen');
+  assert.equal(pastClick(9, 9, 3), true);
+  assert.equal(pastClick(3, 3, 0.5), true, 'zoomed in, still four CSS pixels');
 });
 
 test('saving places carries every chosen height over; only the height named changes, and null takes it away', () => {

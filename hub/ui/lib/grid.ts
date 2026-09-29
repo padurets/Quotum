@@ -142,6 +142,12 @@ export const EDGE = 72;
 export const PULL = 24;
 
 /**
+ * Whether a pointer has gone further than a click's jitter (`dx`, `dy` in CSS pixels): four of
+ * the screen's pixels, which zoomed out (`pixel`, one of them in CSS pixels) are more CSS pixels.
+ */
+export const pastClick = (dx: number, dy: number, pixel = 1) => Math.hypot(dx, dy) > 4 * Math.max(1, pixel);
+
+/**
  * How deep a gesture's pointer is in the band along an edge of the window, in CSS pixels
  * (negative at the top), or 0 where the page stays: `y` is the pointer and `from` where it
  * was pressed, `top` where the bars stuck at the top of the window end and `bottom` the

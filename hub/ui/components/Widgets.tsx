@@ -19,6 +19,7 @@ import {
   cellOf,
   edgeScroll,
   GAP,
+  pastClick,
   heightIntent,
   landed,
   leftWidths,
@@ -70,13 +71,12 @@ type Gesture = {
   grab: Point;
   offset: Point;
   active: boolean;
-  /** Whether the pointer has gone further than a click's jitter: a drag begins then. */
+  /** Whether the pointer has gone further than a click's jitter (`pastClick`): a drag begins then, and the page may scroll. */
   moved: boolean;
   cell: Point;
   frame: number;
   stop: () => void;
 };
-const DRAG_AFTER = 4;
 const SLIDE = {duration: 200, easing: 'cubic-bezier(.2, .7, .2, 1)'};
 const still = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 const tall = (kind: Kind) => kind.startsWith('bottom');
@@ -356,7 +356,7 @@ export function Widgets({
       const current = gesture.current;
       if (!current || e.pointerId !== event.pointerId) return;
       current.pointer = {x: e.clientX, y: e.clientY};
-      current.moved ||= Math.hypot(e.clientX - pointer.x, e.clientY - pointer.y) > DRAG_AFTER;
+      current.moved ||= pastClick(e.clientX - pointer.x, e.clientY - pointer.y, 1 / devicePixelRatio);
       if (kind === 'drag') {
         if (!current.active && current.moved) {
           current.active = true;
