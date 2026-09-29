@@ -18,16 +18,20 @@ const WAIT_IDLE_MS = 10 * 60_000;
 /** Duty moves to a working device only when its holder has been idle this long. */
 const HANDOVER_IDLE_MS = 10 * 60_000;
 
-/** `askedAt`: when the holder was told to measure, while it measures: until it answers or asks again. */
-type Holder = {device: string; until: number; activeAt: number; askedAt: number | null};
+/**
+ * `askedAt`: when the holder was told to measure, until it answers or asks again.
+ * `answering`: false once it asked again leaving a command unanswered; until it answers
+ * one, being told to measure keeps it no duty.
+ */
+type Holder = {device: string; until: number; activeAt: number; askedAt: number | null; answering: boolean};
 
 /**
  * How long a holder keeps duty: until its measurement goes stale, and while it measures one
  * it was told to. It asks nothing meanwhile, so its lease might otherwise run out halfway
  * through its providers and pass to a device that would measure the same again.
  */
-const leaseOf = (holder: Holder) => Math.max(holder.until, holder.askedAt === null ? 0 : holder.askedAt + FIRST_LEASE_MS);
-const measuring = (holder: Holder, now: number) => holder.askedAt !== null && holder.askedAt + FIRST_LEASE_MS > now;
+const leaseOf = (holder: Holder) => Math.max(holder.until, holder.askedAt !== null && holder.answering ? holder.askedAt + FIRST_LEASE_MS : 0);
+const measuring = (holder: Holder, now: number) => holder.askedAt !== null && holder.answering && holder.askedAt + FIRST_LEASE_MS > now;
 
 /** Whether something taken at `at` answers what the holder was told to measure (the pace's rule, spec). */
 const answers = (holder: Holder, at: number) => holder.askedAt !== null && at >= holder.askedAt - CLOCK_TOLERANCE_MS;
@@ -45,16 +49,28 @@ export class Duty {
 
     if (!holder || mine || leaseOf(holder) <= now) {
       // Asking again does not extend a lease: only delivering does. A holder that asks is no
-      // longer measuring what it was told to, answered or not.
-      this.holders.set(subscription, mine && leaseOf(holder!) > now ? {...holder!, activeAt, askedAt: null} : {device, until: now + FIRST_LEASE_MS, activeAt, askedAt: null});
+      // longer measuring what it was told to, answered or not. Left unanswered, the command
+      // keeps it on duty no longer than the devices waiting were told: past its measurement
+      // going stale, until the five minutes end, as it might otherwise take a new lease
+      // before they come back.
+      const answering = !mine || (holder!.answering && holder!.askedAt === null);
+      this.holders.set(
+        subscription,
+        mine && leaseOf(holder!) > now
+          ? {...holder!, until: holder!.until > now ? holder!.until : leaseOf(holder!), activeAt, askedAt: null, answering}
+          : {device, until: now + FIRST_LEASE_MS, activeAt, askedAt: null, answering},
+      );
       return {measure: true, until: now};
     }
     // Nor does a device where someone works take over halfway through the holder's measuring.
     if (active && now - holder.activeAt > HANDOVER_IDLE_MS && !measuring(holder, now)) {
-      this.holders.set(subscription, {device, until: now + FIRST_LEASE_MS, activeAt: now, askedAt: null});
+      this.holders.set(subscription, {device, until: now + FIRST_LEASE_MS, activeAt: now, askedAt: null, answering: true});
       return {measure: true, until: now};
     }
-    return {measure: false, until: Math.min(leaseOf(holder), now + (active ? WAIT_ACTIVE_MS : WAIT_IDLE_MS))};
+    // Come back when its measurement goes stale, as if it were not measuring: it may ask
+    // again first without answering. Only then, while it measures, when the five minutes end.
+    const lease = holder.until > now ? holder.until : leaseOf(holder);
+    return {measure: false, until: Math.min(lease, now + (active ? WAIT_ACTIVE_MS : WAIT_IDLE_MS))};
   }
 
   /** The holder was told to measure: it keeps duty while it does, as a new holder does until it delivers. */
@@ -66,7 +82,7 @@ export class Duty {
   /** The holder failed to measure: done measuring, it keeps duty only as long as its last measurement. */
   failed(subscription: string, device: string, at: number) {
     const holder = this.holders.get(subscription);
-    if (holder?.device === device && answers(holder, at)) this.holders.set(subscription, {...holder, askedAt: null});
+    if (holder?.device === device && answers(holder, at)) this.holders.set(subscription, {...holder, askedAt: null, answering: true});
   }
 
   /** A measurement arrived: its sender holds duty until the measurement goes stale. */
@@ -76,8 +92,9 @@ export class Duty {
     const mine = holder?.device === device;
     const activeAt = mine ? holder.activeAt : 0;
     // An older measurement, sent late, does not answer what the holder is measuring now.
-    const askedAt = mine && !answers(holder, observedAt) ? holder.askedAt : null;
-    this.holders.set(subscription, {device, until: Math.max(observedAt + staleAfterMs, now + 30_000), activeAt, askedAt});
+    const late = mine && !answers(holder, observedAt);
+    const [askedAt, answering] = late ? [holder.askedAt, holder.answering] : [null, true];
+    this.holders.set(subscription, {device, until: Math.max(observedAt + staleAfterMs, now + 30_000), activeAt, askedAt, answering});
   }
 
   holder(subscription: string): string | null {

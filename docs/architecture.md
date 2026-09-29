@@ -167,12 +167,16 @@ subscription:
 - The first device to ask gets duty. It keeps it while it delivers: each measurement
   extends duty until the measurement goes stale. Asking does not extend it; a holder
   that keeps asking but never delivers loses duty after five minutes.
-- A holder told to measure keeps duty while it measures: until it delivers, fails or
-  asks again, for at most five minutes. It asks nothing meanwhile, measuring its
-  providers one by one, and another device taking over halfway, even one where someone
-  works, would measure the same again.
-- The others are told to wait and when to ask again: in a minute if someone works on
-  that machine, otherwise in up to ten minutes.
+- A holder following the pace that is told to measure keeps duty while it measures:
+  until it delivers, fails or asks again, for at most five minutes. It asks nothing
+  meanwhile, measuring its providers one by one, and another device taking over halfway,
+  even one where someone works, would measure the same again.
+- The others are told to wait and when to ask again: when the holder's measurement goes
+  stale or, once that has passed while it measures, when its five minutes end; sooner,
+  in a minute if someone works on that machine, otherwise in up to ten minutes.
+- A holder that asks again without answering what it was told keeps duty no longer than
+  the others were told to wait, and until it answers one, telling it to measure again
+  keeps it no duty: one that keeps asking but never delivers loses duty as any other.
 - Duty moves to a device where someone works if the holder has been idle for ten
   minutes, so the numbers come from where the subscription is actually being used.
 - A holder that goes quiet (asleep, switched off) loses duty when its last measurement

@@ -83,8 +83,59 @@ test('a holder measuring what it was told to is done once it answers within the 
   const busy = told();
   assert.equal(busy.claim('acc', 'server', true, t0 + 2 * MIN).measure, false);
   busy.claim('acc', 'laptop', false, t0 + 2 * MIN + 15_000);
-  assert.equal(busy.until('acc'), t0 + 132_000, 'asking again, it is done measuring');
-  assert.equal(busy.claim('acc', 'server', true, t0 + 2 * MIN + 16_000).measure, true);
+  assert.equal(busy.claim('acc', 'server', true, t0 + 2 * MIN + 16_000).measure, true, 'asking again, it is done measuring');
+});
+
+test('a holder that asks again without answering keeps duty no longer than the devices waiting were told, and its retries keep none', () => {
+  // Told before its measurement goes stale: the others come back then, as if it were not measuring.
+  const early = new Duty();
+  early.claim('acc', 'laptop', false, t0);
+  early.delivered('acc', 'laptop', t0, 204_000, t0);
+  early.asked('acc', 'laptop', t0 + MIN);
+  assert.deepEqual(early.claim('acc', 'server', false, t0 + MIN + 1_000), {measure: false, until: t0 + 204_000});
+  early.claim('acc', 'laptop', false, t0 + 150_000);
+  early.asked('acc', 'laptop', t0 + 150_000);
+  assert.equal(early.until('acc'), t0 + 204_000, 'the retry of a command left unanswered keeps no duty');
+  assert.equal(early.claim('acc', 'server', false, t0 + 204_000).measure, true);
+
+  // Told after it went stale, and a device waits for the five minutes to end: the holder keeps
+  // duty until then, taking no new lease first, and not past it.
+  const late = new Duty();
+  late.claim('acc', 'laptop', false, t0);
+  late.delivered('acc', 'laptop', t0, 132_000, t0);
+  late.asked('acc', 'laptop', t0 + 3 * MIN);
+  assert.deepEqual(late.claim('acc', 'server', false, t0 + 3 * MIN + 1_000), {measure: false, until: t0 + 8 * MIN});
+  for (let at = t0 + 4 * MIN; at < t0 + 8 * MIN; at += 15_000) {
+    late.claim('acc', 'laptop', false, at);
+    late.asked('acc', 'laptop', at);
+    assert.equal(late.until('acc'), t0 + 8 * MIN, `at ${(at - t0) / 1000} s`);
+  }
+  assert.equal(late.claim('acc', 'server', false, t0 + 8 * MIN).measure, true);
+
+  // Answering again, it keeps duty while it measures once more.
+  for (const answer of ['failure', 'delivery'] as const) {
+    const back = new Duty();
+    back.claim('acc', 'laptop', false, t0);
+    back.delivered('acc', 'laptop', t0, 132_000, t0);
+    back.asked('acc', 'laptop', t0 + MIN);
+    back.claim('acc', 'laptop', false, t0 + 90_000);
+    back.asked('acc', 'laptop', t0 + 90_000);
+    if (answer === 'failure') back.failed('acc', 'laptop', t0 + 100_000);
+    else back.delivered('acc', 'laptop', t0 + 100_000, 30_000, t0 + 100_000);
+    back.asked('acc', 'laptop', t0 + 2 * MIN);
+    assert.equal(back.until('acc'), t0 + 7 * MIN, answer);
+  }
+});
+
+test('a holder measuring what it was told to keeps a working device off for five minutes at most', () => {
+  const duty = new Duty();
+  duty.claim('acc', 'laptop', false, t0);
+  duty.delivered('acc', 'laptop', t0, 19 * MIN, t0);
+  duty.asked('acc', 'laptop', t0 + MIN);
+  // The laptop goes quiet halfway, its measurement fresh for a long while yet.
+  assert.equal(duty.claim('acc', 'server', true, t0 + 6 * MIN - 1).measure, false);
+  assert.equal(duty.claim('acc', 'server', true, t0 + 6 * MIN).measure, true);
+  assert.equal(duty.holder('acc'), 'server');
 });
 
 test('a device in use takes duty from an idle holder, never from a busy one', () => {

@@ -610,7 +610,7 @@ test('a request waiting for the retry of a lost command outlives the holder\'s l
   const queued = h.refresh(10 * MIN + 10_000).request!;
   assert.deepEqual([queued.status, queued.notBefore], ['queued', T + 17 * MIN]);
   for (let at = 11 * MIN; at < 17 * MIN; at += MIN) assert.equal(h.ask(at).measure, false);
-  assert.equal(h.refresh(16 * MIN).request?.status, 'queued', 'its lease ran out at 14 minutes; it asked on');
+  assert.equal(h.refresh(16 * MIN).request?.status, 'queued', 'its lease ran out at 8 and 13 minutes; asking, it took it again');
   assert.equal(h.ask(17 * MIN).measure, true);
   assert.equal(h.refresh(17 * MIN).request?.status, 'waiting');
 });
