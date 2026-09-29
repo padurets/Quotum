@@ -622,6 +622,9 @@ losing focus after it has been shown and focused does. A request to open it asks
 there: a second start can arrive while a closed window still holds its label, and that
 one does not count as open. The new window is created once it has gone, and the app's
 `hub.log` tells each request, attempt and outcome.
+Panel presentations carry the controller's request revision. Retiring an old window
+cannot close or blur a newer request; an existing live window adopted by a new request
+uses that revision too. Cancellation marks the presentation before queuing its close.
 
 **Linux rendering and lifetime.** The Rust controller uses a D-Bus StatusNotifierItem
 through `ksni`. A small GTK loading surface responds before Chromium starts; GTK
@@ -675,6 +678,7 @@ and tooltips.
 
 The compact view keeps each quota on one row: its name, a short reset countdown with
 the full date in its tooltip, the board's shared remaining meter and percentage.
+If there is no countdown to show, the compact row leaves that detail empty.
 The provider header carries its measurement indicator and the working-agent count;
 the total agent count is in that count's tooltip. Hidden windows and the owner's
 ordering are shared with the board. Large lists can scroll, but ordinary subscriptions
@@ -750,9 +754,12 @@ while the question is being prepared cannot leave an unseen consent request runn
 key, keeps the session cookie in memory and reads the desktop variant of its SSE stream
 (spec/dashboard-v1.md). The hub shares level, visibility and naming with the board.
 A persistent window ledger consumes each threshold once per confirmed cycle inside the
-measurement transaction; candidates leave only after commit. Queued candidates are
-checked against the current window semantics and ledger cycle before SSE emission;
-the native sink retains semantic-change boundaries across its own queue. Scheduled tracker news has
+measurement transaction; candidates and observation boundaries leave only after commit.
+Boundaries precede the coalesced card deltas, and new candidates follow them. Thus a
+temporary replacement or disappearance can revoke an already queued native intent
+even when the final card has its old metadata again. The boundary/candidate buffer is
+bounded; unaffected windows keep their events. Candidates are also checked against
+current window semantics and ledger cycle before SSE emission. Scheduled tracker news has
 its own watermark. Every connection starts from an empty notification baseline; old
 spooled observations cannot become live events through a new receipt time.
 

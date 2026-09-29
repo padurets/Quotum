@@ -30,6 +30,7 @@ impl Role {
 #[derive(Default)]
 pub struct PanelToggle {
     wanted: bool,
+    revision: u64,
     blurred: Option<(std::time::Instant, (i32, i32))>,
 }
 impl PanelToggle {
@@ -37,10 +38,12 @@ impl PanelToggle {
         self.wanted
     }
     pub fn show(&mut self) {
+        self.revision += 1;
         self.wanted = true;
         self.blurred = None;
     }
     pub fn close(&mut self) {
+        self.revision += 1;
         self.wanted = false;
         self.blurred = None;
     }
@@ -49,13 +52,37 @@ impl PanelToggle {
             self.close();
         }
     }
+    #[cfg(any(windows, test))]
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+    #[cfg(any(windows, test))]
+    pub fn requested(&self, revision: u64) -> bool {
+        self.wanted && self.revision == revision
+    }
+    #[cfg(any(windows, test))]
+    pub fn closed_at(&mut self, revision: u64) {
+        if self.revision == revision {
+            self.closed();
+        }
+    }
+    #[cfg(any(windows, test))]
+    pub fn blur_at(&mut self, revision: u64, now: std::time::Instant, point: Option<(i32, i32)>) -> bool {
+        if !self.requested(revision) {
+            return false;
+        }
+        self.blur(now, point);
+        true
+    }
     pub fn blur(&mut self, now: std::time::Instant, point: Option<(i32, i32)>) {
         if self.wanted {
+            self.revision += 1;
             self.wanted = false;
             self.blurred = point.map(|point| (now, point));
         }
     }
     pub fn toggle(&mut self, now: std::time::Instant, point: Option<(i32, i32)>) -> bool {
+        self.revision += 1;
         let same_press = self.blurred.take().zip(point).is_some_and(|((at, old), point)| {
             now.saturating_duration_since(at) < std::time::Duration::from_millis(500)
                 && (i64::from(old.0) - i64::from(point.0)).abs() <= 8
@@ -270,6 +297,29 @@ mod tests {
         intent.begin();
         assert!(intent.pending(), "a later open can try again");
         assert!(intent.finish());
+    }
+
+    #[test]
+    fn a_retired_panel_cannot_close_or_blur_a_newer_open_request() {
+        let mut panel = PanelToggle::default();
+        let now = std::time::Instant::now();
+        assert!(panel.toggle(now, None));
+        let old = panel.revision();
+        assert!(!panel.toggle(now, None));
+        assert!(panel.toggle(now, None));
+        let current = panel.revision();
+        panel.closed_at(old);
+        assert!(!panel.blur_at(old, now, None));
+        assert!(panel.requested(current));
+        panel.closed_at(current);
+        assert!(!panel.wanted());
+        panel.show();
+        let old = panel.revision();
+        panel.show();
+        panel.closed_at(old);
+        assert!(panel.wanted(), "an explicit menu opening also supersedes old completion");
+        assert!(panel.blur_at(panel.revision(), now, Some((100, 100))));
+        assert!(!panel.toggle(now, Some((100, 100))), "blur and tray release still pair");
     }
 
     #[test]

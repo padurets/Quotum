@@ -17,7 +17,7 @@ export type WindowLedger = {schemaVersion: 1; cycle: number; previous: WindowSam
 export type QuotaKind = 'low' | 'critical' | 'reset';
 export const sameWindow = (a: Pick<Win, 'kind' | 'label' | 'minutes'>, b: Pick<Win, 'kind' | 'label' | 'minutes'>) =>
   a.kind === b.kind && a.label === b.label && a.minutes === b.minutes;
-export function advanceWindow(previous: WindowLedger | null, sample: WindowSample, live: boolean): {ledger: WindowLedger; event: QuotaKind | null} {
+export function advanceWindow(previous: WindowLedger | null, sample: WindowSample, live: boolean): {ledger: WindowLedger; event: QuotaKind | null; boundary: boolean} {
   const same = previous && sameWindow(previous.previous, sample);
   const reset = same && sample.at > previous.previous.at && resetEvidence(previous.previous, sample);
   const continuous = same && sample.at > previous.previous.at && sample.at - previous.previous.at <= previous.previous.staleAfterMs;
@@ -35,7 +35,7 @@ export function advanceWindow(previous: WindowLedger | null, sample: WindowSampl
   }
   if (severity !== 'ok') ledger.consumedLow = true;
   if (severity === 'crit') ledger.consumedCritical = true;
-  return {ledger, event};
+  return {ledger, event, boundary: !(live && continuous) || !!reset};
 }
 
 export type QuotaCandidate = {
@@ -48,6 +48,9 @@ export type AnnouncementCandidate = {
   resetKind: 'regular' | 'banked' | null; credit: {name: string; url: string}; url: string;
 };
 export type Candidate = QuotaCandidate | AnnouncementCandidate;
+/** No candidate observed before this boundary may survive a delivery queue. */
+export type Invalidation = {sourceId: string; windowId: string; at: number};
+export type AttentionEvents = {candidates: Candidate[]; invalidations: Invalidation[]};
 export type AttentionState = {
   boardId: string; level: Level | null; quality: 'current' | 'partial' | 'unavailable';
   minimum: {sourceId: string; windowId: string; remaining: number} | null;

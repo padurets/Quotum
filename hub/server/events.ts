@@ -1,4 +1,4 @@
-import type {Candidate} from './domain/attention.js';
+import type {AttentionEvents, Candidate, Invalidation} from './domain/attention.js';
 import {randomBytes} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import path from 'node:path';
@@ -77,7 +77,7 @@ export type Reader = {
 };
 
 /** A reader the hub keeps; a `fresh` one is being given its snapshot and gets no events yet. */
-type Subscriber = Reader & {id: number; fresh: boolean; stopPing: () => void; seq: number; baselineAt: number; attentionKey: string; pending: Candidate[]; pendingBytes: number; rebaseline: boolean};
+type Subscriber = Reader & {id: number; fresh: boolean; stopPing: () => void; seq: number; baselineAt: number; attentionKey: string; pending: Candidate[]; invalidations: Map<string, Invalidation>; pendingBytes: number; rebaseline: boolean};
 
 /** A board someone looks at: what its readers last got of each part, and when those parts change by themselves. */
 type Watched = {
@@ -166,35 +166,64 @@ export class Events implements Touches {
   }
 
   /** Post-commit only. Each reader has its own observation boundary and bounded queue. */
-  candidates(candidates: Candidate[]) {
+  attention({candidates, invalidations}: AttentionEvents) {
     if (this.closed) return;
     const now = this.clock.now();
     for (const sub of this.subscribers.values()) {
       if (!sub.desktop || sub.fresh || sub.rebaseline) continue;
-      const visible = this.projection.visibleCandidates(sub.board, candidates, now).filter(c =>
-        c.kind === 'announcement' || (c.observedFrom >= sub.baselineAt && c.observedAt > c.observedFrom));
+      let changed = false;
+      const known = new Set(this.watched.get(sub.board)?.lineup);
+      for (const boundary of invalidations) {
+        if (!known.has(boundary.sourceId) && !sub.pending.some(c => c.kind !== 'announcement' && c.sourceId === boundary.sourceId)) continue;
+        const key = JSON.stringify([boundary.sourceId, boundary.windowId]);
+        const prior = sub.invalidations.get(key);
+        if (prior && prior.at >= boundary.at) continue;
+        sub.pending = sub.pending.filter(c => {
+          const obsolete = c.kind !== 'announcement' && c.sourceId === boundary.sourceId && c.windowId === boundary.windowId && c.observedAt < boundary.at;
+          if (obsolete) sub.pendingBytes -= Buffer.byteLength(JSON.stringify(c));
+          return !obsolete;
+        });
+        sub.invalidations.set(key, boundary);
+        sub.pendingBytes += Buffer.byteLength(JSON.stringify(boundary)) - (prior ? Buffer.byteLength(JSON.stringify(prior)) : 0);
+        changed = true;
+        if (this.attentionOverflow(sub)) break;
+      }
+      const visible = !sub.rebaseline && candidates.length ? this.projection.visibleCandidates(sub.board, candidates, now).filter(c =>
+        c.kind === 'announcement' || (c.observedFrom >= sub.baselineAt && c.observedAt > c.observedFrom &&
+          c.observedAt >= (sub.invalidations.get(JSON.stringify([c.sourceId, c.windowId]))?.at ?? -Infinity))) : [];
       sub.pendingBytes += visible.reduce((sum, c) => sum + Buffer.byteLength(JSON.stringify(c)), 0);
-      if (sub.pendingBytes > this.options.bufferBytes) {
-        sub.pending = [];
-        sub.pendingBytes = 0;
-        sub.rebaseline = true;
-      } else sub.pending.push(...visible);
-      if (visible.length) this.touchBoards([sub.board]);
+      if (!this.attentionOverflow(sub)) sub.pending.push(...visible);
+      if (changed || visible.length) this.touchBoards([sub.board]);
     }
   }
 
-  private attentionFrame(sub: Subscriber, baseline: boolean, now: number): Frame | null {
+  private attentionOverflow(sub: Subscriber): boolean {
+    if (sub.pendingBytes <= this.options.bufferBytes) return false;
+    sub.pending = [];
+    sub.invalidations.clear();
+    sub.pendingBytes = 0;
+    sub.rebaseline = true;
+    return true;
+  }
+
+  private attentionFrames(sub: Subscriber, baseline: boolean, now: number): {before: Frame[]; after: Frame[]} {
     const state = this.projection.attention(sub.board, now);
     const key = JSON.stringify(state);
     if (baseline) sub.baselineAt = now;
-    const notifications = baseline ? [] : this.projection.visibleCandidates(sub.board, sub.pending, now).filter(c =>
+    const notifications = baseline || !sub.pending.length ? [] : this.projection.visibleCandidates(sub.board, sub.pending, now).filter(c =>
       now - c.at <= 60_000 && (c.kind === 'announcement' || (c.observedFrom >= sub.baselineAt && c.observedAt > c.observedFrom)));
+    const invalidations = baseline ? [] : [...sub.invalidations.values()];
     sub.pending = [];
+    sub.invalidations.clear();
     sub.pendingBytes = 0;
     sub.rebaseline = false;
-    if (!baseline && key === sub.attentionKey && !notifications.length) return null;
+    if (!baseline && key === sub.attentionKey && !notifications.length && !invalidations.length) return {before: [], after: []};
     sub.attentionKey = key;
-    return frame('attention', {seq: ++sub.seq, now, baseline, state, notifications});
+    const packet = (notifications: Candidate[], invalidations: Invalidation[]) => frame('attention', {seq: ++sub.seq, now, baseline, state, notifications, invalidations});
+    // Revoke old intents before a coalesced card can conceal the boundary. New
+    // candidates follow the cards they refer to, so native visibility is current.
+    if (baseline || invalidations.length) return {before: [packet([], invalidations)], after: notifications.length ? [packet(notifications, [])] : []};
+    return {before: [], after: [packet(notifications, [])]};
   }
 
   // ---------- touches ----------
@@ -348,9 +377,10 @@ export class Events implements Touches {
         }
         const frames = [...(heads.get(watched.id) ?? []), ...own, ...(tails.get(watched.id) ?? []), ...news];
         if (sub.fresh) continue;
-        if (sub.desktop && (sources.has(watched.id) || whole.has(watched.id) || frames.length || sub.pending.length || sub.rebaseline)) {
-          const attention = this.attentionFrame(sub, sub.rebaseline, now);
-          if (attention) frames.push(attention);
+        if (sub.desktop && (sources.has(watched.id) || whole.has(watched.id) || frames.length || sub.pending.length || sub.invalidations.size || sub.rebaseline)) {
+          const attention = this.attentionFrames(sub, sub.rebaseline, now);
+          frames.unshift(...attention.before);
+          frames.push(...attention.after);
         }
         if (!frames.length) continue;
         sub.send(frames);
@@ -568,7 +598,7 @@ export class Events implements Touches {
       };
       this.watched.set(id, watched);
     }
-    const sub: Subscriber = {...reader, id: this.next++, fresh: true, stopPing: () => {}, seq: 0, baselineAt: 0, attentionKey: '', pending: [], pendingBytes: 0, rebaseline: false};
+    const sub: Subscriber = {...reader, id: this.next++, fresh: true, stopPing: () => {}, seq: 0, baselineAt: 0, attentionKey: '', pending: [], invalidations: new Map(), pendingBytes: 0, rebaseline: false};
     this.subscribers.set(sub.id, sub);
     watched.subscribers.add(sub);
     if (!this.stopHubRecheck) this.stopHubRecheck = this.every(this.options.recheckMs, () => this.touchHub());
@@ -608,7 +638,10 @@ export class Events implements Touches {
     if (sub.kind === 'stream') sub.stopPing = this.every(this.options.heartbeatMs, () => this.ping(sub));
     const hello = {epoch: this.epoch, now, client: this.client, heartbeatMs: this.options.heartbeatMs};
     const frames = [frame('hello', hello), frame('snapshot', snapshot)];
-    if (sub.desktop) frames.push(this.attentionFrame(sub, true, now)!);
+    if (sub.desktop) {
+      const attention = this.attentionFrames(sub, true, now);
+      frames.push(...attention.before, ...attention.after);
+    }
     return {sub, frames};
   }
 

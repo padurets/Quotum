@@ -155,6 +155,8 @@ cards, the same agents as the dashboard shows them, and of other boards only the
 their own. What is theirs alone, which sources their devices measure and their role on
 each board, goes to their streams only. Events carry no secrets, no email addresses and
 no session ids.
+Desktop observation barriers carry only source/window identifiers and corrected times
+from those sources; they add no client output, credentials or provider identity.
 
 While a board is read, the hub keeps in memory what its readers last got of each part,
 and a lease's events until it is asked; it writes nothing of them to disk. A board nobody
@@ -179,12 +181,22 @@ After `hello` and `snapshot` comes `attention`:
     minimum: {sourceId: string; windowId: string; remaining: number} | null;
   };
   notifications: Candidate[];
+  invalidations: {sourceId: string; windowId: string; at: number}[];
 }
 ```
 
 `seq` increases within this connection; `hello.epoch` identifies the hub start.
-The first attention frame is a baseline, with no notifications. Later frames follow
-the corresponding board changes. The minimum includes only visible windows of
+The first attention frame is a baseline, with no notifications or invalidations.
+Observation boundaries are sent in an attention frame before the corresponding
+board changes, with no notifications. A quota candidate observed before its window's
+invalidation `at` must be discarded, including one already in a native queue.
+These boundaries come from committed measurements: first observation, a gap or
+recovery, changed window semantics, a confirmed reset, and disappearance or return.
+They survive coalescing even when the final card looks like the earlier one.
+When new notifications also exist, a second attention frame follows the board
+changes, so their current names and visibility are already available. Both frames
+have their own increasing `seq`. Without boundaries, the attention frame follows
+the board changes as usual. The minimum includes only visible windows of
 visible cards. Levels match the board: above 30 is ok, 10 through 30 warn, below 10
 crit. Last known figures retain their level; missing, stale, failed or reset-past
 measurements make their quality partial. No visible figures means unavailable,
@@ -209,8 +221,8 @@ recovery after a failure are silent baselines. Names and links are data, never
 instructions to the native host.
 
 Candidates leave ingestion only after its transaction commits. They are not
-reconstructed from coalesced card frames. The pending candidate buffer is bounded
-by the stream's buffer limit; overflow discards pending events and starts a new
+reconstructed from coalesced card frames. Pending candidates and coalesced per-window
+invalidations share the stream's buffer limit; overflow discards both and starts a new
 attention baseline. Before emission, a quota candidate must still name the current
 window semantics and ledger cycle. Changing kind, label or duration invalidates
 pending candidates even if the old values return before the next flush. The desktop

@@ -319,6 +319,30 @@ try {
     if ([QuotumWindowProbe]::IsWindowVisible($panel)) { throw 'The panel did not close after dismissal, main-window activation or a repeated tray click' }
     if (-not [QuotumWindowProbe]::IsWindowVisible($window) -or ($before -join ',') -ne ([QuotumWindowProbe]::Bounds($window) -join ',')) { throw 'The panel changed the main window geometry' }
   }
+  # Completion of an old close must not overwrite a newer tray-open request.
+  if(-not [QuotumWindowProbe]::OpenPanel($process.Id)){throw 'Cannot open panel for queued-close check'}
+  $deadline=(Get-Date).AddSeconds(15)
+  do {$panel=[QuotumWindowProbe]::FindOther($process.Id,$window);if($panel -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 50}while((Get-Date) -lt $deadline)
+  if($panel -eq [IntPtr]::Zero){throw 'No panel for queued-close check'}
+  $paused=[QuotumWindowProbe]::PauseUi($panel,$process.Id)
+  try {
+    [void][QuotumWindowProbe]::PostMessage($panel,0x10,[IntPtr]::Zero,[IntPtr]::Zero)
+    if(-not [QuotumWindowProbe]::OpenPanel($process.Id)){throw 'Cannot toggle queued panel closed'}
+    Start-Sleep -Milliseconds 100
+    if(-not [QuotumWindowProbe]::OpenPanel($process.Id)){throw 'Cannot request panel reopen'}
+    Start-Sleep -Milliseconds 100
+  } finally { [QuotumWindowProbe]::ResumeUi($paused) }
+  $deadline=(Get-Date).AddSeconds(15)
+  Start-Sleep -Seconds 2
+  do {$panel=[QuotumWindowProbe]::FindOther($process.Id,$window);if($panel -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 50}while((Get-Date) -lt $deadline)
+  if($panel -eq [IntPtr]::Zero){throw 'Old CloseRequested lost the latest panel open'}
+  Start-Sleep -Seconds 1
+  if(-not [QuotumWindowProbe]::IsWindowVisible($panel)){throw 'The reopened panel disappeared after old callbacks'}
+  [QuotumWindowProbe]::Escape($panel,$process.Id)
+  $deadline=(Get-Date).AddSeconds(5)
+  while([QuotumWindowProbe]::IsWindowVisible($panel) -and (Get-Date) -lt $deadline){Start-Sleep -Milliseconds 50}
+  if([QuotumWindowProbe]::IsWindowVisible($panel)){throw 'Cannot close the current panel after queued reopen'}
+  $result.queuedPanelReopen=$true
   # A blocked WebView/UI thread must not stop the tray's native loading surface.
   # Only this test process's already-verified UI thread is paused, always resumed.
   [void][QuotumWindowProbe]::ShowWindowAsync($window,6)

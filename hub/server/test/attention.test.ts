@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {advanceWindow, level, resetEvidence, type Candidate, type WindowLedger, type WindowSample} from '../domain/attention.js';
+import {advanceWindow, level, resetEvidence, type Candidate, type Invalidation, type WindowLedger, type WindowSample} from '../domain/attention.js';
 import {Attention} from '../attention.js';
 import {Store} from '../store/store.js';
 import {Directory} from '../store/directory.js';
@@ -66,7 +66,8 @@ function setup(t: {after(fn: () => void): void}, desktop = true) {
   const attention = new Attention(store, T);
   ingest.attention = attention;
   const candidates: Candidate[] = [];
-  attention.onCandidates = list => { candidates.push(...list); events.candidates(list); };
+  const invalidations: Invalidation[] = [];
+  attention.onEvents = changes => { candidates.push(...changes.candidates); invalidations.push(...changes.invalidations); events.attention(changes); };
   const frames: Frame[] = [];
   const open = () => {
     const result = events.open({user: user.id, secret: 'fixture', board, kind: 'stream', desktop, send: list => frames.push(...list), end: () => {}});
@@ -74,15 +75,15 @@ function setup(t: {after(fn: () => void): void}, desktop = true) {
     frames.push(...result.frames);
     return result;
   };
-  const deliver = (values: [number, number, string?][], received = values.at(-1)![0]) => {
+  const deliver = (values: [number, number, string?, string?][], received = values.at(-1)![0]) => {
     now = received;
     return ingest.accept(credential, {
       version: 1, agent: 'quotum/0.4.0', machine: {id: 'fixture-machine-0123456789', name: 'Fixture', os: 'linux', arch: 'x86_64'}, sentAt: new Date(received).toISOString(), failures: [],
-      snapshots: values.map(([at, remaining, label]) => ({provider: 'codex', account: 'a1b2c3d4e5f6a1b2c3d4e5f6', plan: 'pro', observedAt: new Date(at).toISOString(), via: 'codex/app-server', client: 'fixture', staleAfterMs: 204_000, windows: [{id: 'week', kind: 'weekly', label, minutes: 10080, usedPercent: 100 - remaining, resetsAt: new Date(T + 600_000).toISOString()}]})),
+      snapshots: values.map(([at, remaining, label, windowId = 'week']) => ({provider: 'codex', account: 'a1b2c3d4e5f6a1b2c3d4e5f6', plan: 'pro', observedAt: new Date(at).toISOString(), via: 'codex/app-server', client: 'fixture', staleAfterMs: 204_000, windows: [{id: windowId, kind: 'weekly', label, minutes: 10080, usedPercent: 100 - remaining, resetsAt: new Date(T + 600_000).toISOString()}]})),
     }, received);
   };
   t.after(() => { events.close(); store.close(); });
-  return {store, directory, ingest, attention, projection, board, user, candidates, events, frames, open, deliver, time: (at: number) => { now = at; }};
+  return {store, directory, ingest, attention, projection, board, user, candidates, invalidations, events, frames, open, deliver, time: (at: number) => { now = at; }};
 }
 
 const notifications = (frames: Frame[]) => frames.filter(f => f.type === 'attention').flatMap(f => JSON.parse(f.data).notifications);
@@ -113,6 +114,50 @@ test('queued events cannot cross an identity change between committed batches', 
   h.deliver([[T + 2000, 29, 'Old pool']]);
   h.events.flush();
   assert.equal(notifications(h.frames).length, 1, 'a later crossing in the current cycle is still delivered');
+});
+
+test('observation barriers precede coalesced cards, including disappearance and return', t => {
+  for (const missing of [false, true]) for (const emitted of [false, true]) {
+    const h = setup(t);
+    h.deliver([[T, 35, 'Old pool']]);
+    h.open();
+    h.frames.length = 0;
+    h.deliver([[T + 1000, 29, 'Old pool']]);
+    if (emitted) {
+      h.events.flush();
+      assert.equal(notifications(h.frames).length, 1, 'this intent is already in the native queue');
+      h.frames.length = 0;
+    }
+    h.deliver([[T + 1010, 35, 'New pool', missing ? 'other' : 'week']]);
+    h.deliver([[T + 1020, 29, 'Old pool']]);
+    h.events.flush();
+    const first = JSON.parse(h.frames[0].data);
+    assert.equal(h.frames[0].type, 'attention');
+    assert.equal(first.baseline, false, 'unrelated windows keep their observation');
+    assert.ok(first.invalidations.some((b: Invalidation) => b.windowId === 'week' && b.at === T + 1020));
+    assert.ok(h.frames.findIndex(f => f.type === 'card') > 0, 'revoke before the card conceals the intermediate state');
+    assert.deepEqual(notifications(h.frames), []);
+    h.deliver([[T + 2000, 9, 'Old pool']]);
+    h.events.flush();
+    assert.deepEqual(notifications(h.frames).map(c => c.kind), ['critical'], 'new current-window events still arrive');
+  }
+});
+
+test('a reset barrier revokes earlier intents before cards and sends the new reset afterwards', t => {
+  const h = setup(t);
+  h.deliver([[T, 35]]);
+  h.open();
+  h.deliver([[T + 1000, 9]]);
+  h.events.flush();
+  h.frames.length = 0;
+  h.deliver([[T + 2000, 100]]);
+  h.events.flush();
+  assert.equal(h.frames[0].type, 'attention');
+  assert.deepEqual(JSON.parse(h.frames[0].data).notifications, []);
+  assert.equal(h.frames.at(-1)!.type, 'attention');
+  assert.deepEqual(notifications(h.frames).map(c => c.kind), ['reset']);
+  assert.ok(h.frames.findIndex(f => f.type === 'card') > 0);
+  assert.ok(JSON.parse(h.frames[0].data).seq < JSON.parse(h.frames.at(-1)!.data).seq);
 });
 
 test('a reset deadline updates desktop quality even when the card stays the same', t => {
@@ -151,6 +196,7 @@ test('rollback leaves neither consumed events nor live startup bookkeeping', t =
   assert.throws(() => h.deliver([[T, 35], [T + 1000, 29]]), /fixture rollback/);
   assert.equal(h.store.db.prepare('SELECT count(*) AS n FROM attention_windows').get()!.n, 0);
   assert.equal(h.candidates.length, 0);
+  assert.equal(h.invalidations.length, 0, 'rolled-back observation boundaries never escape');
   h.store.record = record;
   h.deliver([[T + 2000, 29]]);
   assert.equal(h.candidates.length, 0, 'first live remains a baseline');
@@ -233,7 +279,7 @@ test('restarting the service keeps consumed thresholds and prunes only orphan le
   const restarted = new Attention(h.store, T + 1500);
   h.ingest.attention = restarted;
   const events: Candidate[] = [];
-  restarted.onCandidates = c => events.push(...c);
+  restarted.onEvents = changes => events.push(...changes.candidates);
   h.deliver([[T + 2000, 31], [T + 3000, 29], [T + 4000, 9]]);
   assert.deepEqual(events.map(c => c.kind), ['critical']);
   const card = h.store.states(h.board)[0];
@@ -249,12 +295,27 @@ test('candidate overflow gives a new empty baseline, never replay', t => {
   h.open();
   const source = h.store.states(h.board)[0];
   const candidate: Candidate = {id: `${source.id}/week/0/critical`, kind: 'critical', at: T, observedFrom: T, observedAt: T + 1, sourceId: source.id, windowId: 'week', provider: 'codex', name: '', window: {kind: 'weekly', label: null, minutes: 10080}, remaining: 9, resetAt: null};
-  h.events.candidates(Array.from({length: 2000}, () => candidate));
+  h.events.attention({candidates: Array.from({length: 2000}, () => candidate), invalidations: []});
   h.events.flush();
   const attention = h.frames.filter(f => f.type === 'attention').map(f => JSON.parse(f.data));
   assert.equal(attention.length, 2);
   assert.ok(attention.every(f => f.baseline && !f.notifications.length));
   assert.ok(attention[1].seq > attention[0].seq);
+});
+
+test('observation boundary overflow uses the same bounded empty baseline', t => {
+  const h = setup(t);
+  h.deliver([[T, 35]]);
+  h.open();
+  h.frames.length = 0;
+  const source = h.store.states(h.board)[0];
+  h.events.attention({candidates: [], invalidations: Array.from({length: 10_000}, (_, i) => ({sourceId: source.id, windowId: `old-window-${i}`, at: T + 1}))});
+  h.events.flush();
+  const attention = h.frames.filter(f => f.type === 'attention').map(f => JSON.parse(f.data));
+  assert.equal(attention.length, 1);
+  assert.equal(attention[0].baseline, true);
+  assert.deepEqual(attention[0].notifications, []);
+  assert.deepEqual(attention[0].invalidations, []);
 });
 
 test('a window missing from the previous measurement returns silently, keeping its ledger', t => {

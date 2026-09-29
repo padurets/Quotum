@@ -242,7 +242,7 @@ export async function buildApp(hub: Hub) {
   if (hub.local) {
     const attention = new Attention(store, Date.now());
     hub.ingest.attention = attention;
-    attention.onCandidates = candidates => events.candidates(candidates);
+    attention.onEvents = changes => events.attention(changes);
     hub.resets.onAttention = (provider, status, ok, now) => attention.announcement(provider, status, ok, now);
   }
   // Open streams and held polls would keep the server from closing: they end first.

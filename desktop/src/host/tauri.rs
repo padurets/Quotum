@@ -23,6 +23,7 @@ pub struct Host {
     pub panel_ready: AtomicU64,
     pub panel_closing: AtomicBool,
     pub panel_toggle: Mutex<window::PanelToggle>,
+    pub panel_paint: Mutex<Option<Arc<crate::tauri_window::PanelPaint>>>,
     pub navigation: Mutex<std::collections::BTreeMap<window::Role, window::Navigation>>,
     /// Where the board in the window hears the app's state (`watch_state`).
     pub watching: Mutex<std::collections::BTreeMap<window::Role, (u64, tauri::ipc::Channel<serde_json::Value>)>>,
@@ -99,6 +100,7 @@ pub fn run(args: Args) {
                     panel_ready: AtomicU64::new(0),
                     panel_closing: AtomicBool::new(false),
                     panel_toggle: Mutex::default(),
+                    panel_paint: Mutex::default(),
                     navigation: Mutex::default(),
                     watching: Mutex::default(),
                 },

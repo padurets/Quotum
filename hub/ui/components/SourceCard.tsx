@@ -58,11 +58,12 @@ function PlanNote({w, measuredAt, weekly}: {w: Win; measuredAt: number | null; w
 export function ResetLine({w, short = false}: {w: Win; short?: boolean}) {
   const now = useClock(now => resetLineChangesAt(w, now));
   const reset = resetLine(w, now);
+  if (short && reset.key !== 'resetsIn') return null;
   const text = reset.key === 'resetsIn' ? t('limit.resetsIn', {time: duration(reset.inMs)}) : t(`limit.${reset.key}`);
   const date = w.resetAt ? stamp(w.resetAt) : '';
   return (
     <span data-time="reset" title={short ? [text, date].filter(Boolean).join('\n') : date} aria-label={short ? text : undefined}>
-      {short ? (reset.key === 'resetsIn' ? duration(reset.inMs) : '—') : text}
+      {short && reset.key === 'resetsIn' ? duration(reset.inMs) : text}
     </span>
   );
 }

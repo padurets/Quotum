@@ -58,6 +58,16 @@ struct Frame {
     baseline: bool,
     state: State,
     notifications: Vec<Candidate>,
+    #[serde(default)]
+    invalidations: Vec<Invalidation>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Invalidation {
+    pub source_id: String,
+    pub window_id: String,
+    pub at: i64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -403,6 +413,7 @@ fn stream(
                     if baseline.is_none() {
                         return Err("attention baseline missing");
                     }
+                    shell.attention.board.lock().unwrap_or_else(|e| e.into_inner()).invalidate(&frame.invalidations);
                     shell.attention.set(shell, Some(frame.state), true);
                     for candidate in frame.notifications {
                         if seen.len() >= 4096 {

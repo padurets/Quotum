@@ -1,4 +1,4 @@
-import {advanceWindow, batchCandidates, sameWindow, type Candidate, type QuotaCandidate, type WindowLedger, type WindowSample} from './domain/attention.js';
+import {advanceWindow, batchCandidates, sameWindow, type AttentionEvents, type Candidate, type Invalidation, type QuotaCandidate, type WindowLedger, type WindowSample} from './domain/attention.js';
 import type {Measurement, SourceState} from './domain/quota.js';
 import type {ResetProvider, ResetStatus} from './domain/resets.js';
 import type {Store} from './store/store.js';
@@ -8,22 +8,30 @@ import {trouble} from './touches.js';
 export class Attention {
   private live = new Set<string>();
   private healthy = new Set<ResetProvider>();
-  onCandidates: (candidates: Candidate[]) => void = () => {};
+  onEvents: (events: AttentionEvents) => void = () => {};
   constructor(private readonly store: Store, private readonly startedAt: number) {}
 
   begin() {
     const live = new Set(this.live);
     const candidates: QuotaCandidate[] = [];
+    const invalidations = new Map<string, Invalidation>();
+    const invalidate = (sourceId: string, windowId: string, at: number) => {
+      invalidations.set(JSON.stringify([sourceId, windowId]), {sourceId, windowId, at});
+    };
     return {
       record: (source: SourceState, measurement: Measurement, now: number) => {
         const postStart = measurement.observedAt >= this.startedAt;
         const fresh = postStart && now - measurement.observedAt <= 60_000;
         const observing = live.has(source.id) && fresh && source.error === null;
+        for (const old of source.windows) {
+          if (!measurement.windows.some(w => w.id === old.id)) invalidate(source.id, old.id, measurement.observedAt);
+        }
         for (const window of measurement.windows) {
           const row = this.store.db.prepare('SELECT payload FROM attention_windows WHERE source_id = ? AND window_id = ?').get(source.id, window.id) as {payload: string} | undefined;
           const previous = row ? readLedger(row.payload) : null;
           const sample = {...window, at: measurement.observedAt, staleAfterMs: measurement.staleAfterMs};
-          const {ledger, event} = advanceWindow(previous, sample, observing && previous !== null && previous.previous.at >= this.startedAt && source.windows.some(w => w.id === window.id));
+          const {ledger, event, boundary} = advanceWindow(previous, sample, observing && previous !== null && previous.previous.at >= this.startedAt && source.windows.some(w => w.id === window.id));
+          if (boundary) invalidate(source.id, window.id, sample.at);
           this.store.db.prepare('INSERT OR REPLACE INTO attention_windows VALUES (?, ?, ?, ?, ?)').run(source.id, window.id, ledger.cycle, sample.at, JSON.stringify(ledger));
           if (event && previous) candidates.push({
             id: `${source.id}/${window.id}/${ledger.cycle}/${event}`, kind: event, at: now,
@@ -37,13 +45,14 @@ export class Attention {
           const c = candidates[i];
           if (c.sourceId !== source.id) continue;
           const w = measurement.windows.find(w => w.id === c.windowId);
-          if (!w || !sameWindow(c.window, w)) candidates.splice(i, 1);
+          const boundary = invalidations.get(JSON.stringify([c.sourceId, c.windowId]));
+          if (!w || !sameWindow(c.window, w) || (boundary && c.observedAt < boundary.at)) candidates.splice(i, 1);
           else candidates[i] = {...c, remaining: w.remaining, resetAt: w.resetAt};
         }
       },
       committed: () => {
         this.live = live;
-        this.publish(batchCandidates(candidates));
+        this.publish(batchCandidates(candidates), [...invalidations.values()]);
       },
     };
   }
@@ -73,9 +82,9 @@ export class Attention {
     if (wasHealthy && valid && !full) this.publish([{id, kind: 'announcement', at: now, provider, scheduledFor: scheduled.scheduledFor, resetKind: scheduled.kind, credit: status!.credit, url: scheduled.url}]);
   }
 
-  private publish(candidates: Candidate[]) {
-    if (!candidates.length) return;
-    try { this.onCandidates(candidates); } catch (error) { trouble(error); }
+  private publish(candidates: Candidate[], invalidations: Invalidation[] = []) {
+    if (!candidates.length && !invalidations.length) return;
+    try { this.onEvents({candidates, invalidations}); } catch (error) { trouble(error); }
   }
 }
 

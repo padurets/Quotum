@@ -1,5 +1,5 @@
 //! The last check happens at the native sink, after its bounded queue.
-use super::{Candidate, Intent};
+use super::{Candidate, Intent, Invalidation};
 use crate::{native_text, shell::Shell};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -70,6 +70,15 @@ impl Board {
             }
         }
         self.cards.insert(id.into(), card);
+    }
+    pub fn invalidate(&mut self, boundaries: &[Invalidation]) {
+        for boundary in boundaries {
+            if let Some(at) =
+                self.baselines.get_mut(&boundary.source_id).and_then(|windows| windows.get_mut(&boundary.window_id))
+            {
+                *at = (*at).max(boundary.at);
+            }
+        }
     }
     fn hidden(&self, key: &str, id: &str) -> bool {
         self.view[key].as_array().is_some_and(|a| a.iter().any(|v| v == id))
@@ -250,6 +259,28 @@ pub fn attempt(shell: &Arc<Shell>, mut intent: Intent, call: impl FnOnce(String,
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn producer_barriers_revoke_emitted_intents_even_when_cards_coalesce() {
+        let card = |id: &str, at: i64| json!({"id":id,"provider":"codex","successAt":at,"windows":[{"id":"week","kind":"weekly","label":"Old pool","minutes":10080}]});
+        let mut board = Board::default();
+        board.snapshot(json!({"view":{"hidden":[],"windows":[],"names":{}},"sources":[card("one", 1),card("two", 1)]}));
+        let mut candidate: Candidate = serde_json::from_value(json!({"id":"event","kind":"low","at":10,"observedFrom":1,"observedAt":2,"sourceId":"one","windowId":"week","provider":"codex","name":"","window":{"kind":"weekly","label":"Old pool","minutes":10080},"remaining":29,"resetAt":null})).unwrap();
+        let mut unrelated = candidate.clone();
+        if let Candidate::Quota(q) = &mut unrelated {
+            q.source_id = "two".into();
+        }
+        assert!(board.resolve(&mut candidate));
+        board.invalidate(&[Invalidation { source_id: "one".into(), window_id: "week".into(), at: 4 }]);
+        assert!(!board.resolve(&mut candidate), "revoked before the new card arrives");
+        board.apply("card", card("one", 4));
+        assert!(!board.resolve(&mut candidate), "the coalesced card has the same metadata");
+        assert!(board.resolve(&mut unrelated), "other windows keep their queued events");
+        if let Candidate::Quota(q) = &mut candidate {
+            q.observed_at = 5;
+        }
+        assert!(board.resolve(&mut candidate));
+    }
+
     #[test]
     fn queued_candidates_do_not_survive_a_replaced_window() {
         let card = |label: &str, at: i64| json!({"id":"one","provider":"codex","successAt":at,"windows":[{"id":"week","kind":"weekly","label":label,"minutes":10080}]});
