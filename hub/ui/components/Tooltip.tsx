@@ -27,11 +27,19 @@ export function useBubble(active: boolean) {
     const element = tip.current;
     if (!active || !element) return;
     element.style.translate = '';
+    element.style.maxHeight = '';
+    element.style.overflow = '';
+    element.style.pointerEvents = '';
     const rect = element.getBoundingClientRect();
-    const {by} = placeOf(rect.top, rect.height, innerHeight, coverOf(rect.top));
+    const {by, room} = placeOf(rect.top, rect.height, innerHeight, coverOf(rect.top));
     const edge = document.documentElement.clientWidth - 8;
     const x = rect.left < 8 ? 8 - rect.left : rect.right > edge ? edge - rect.right : 0;
     element.style.translate = `${x}px ${-by}px`;
+    if (rect.height > room) {
+      element.style.maxHeight = `${room}px`;
+      element.style.overflow = 'auto';
+      element.style.pointerEvents = 'auto';
+    }
   };
   useLayoutEffect(place);
   useEffect(() => {

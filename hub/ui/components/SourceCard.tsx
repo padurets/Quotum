@@ -374,7 +374,10 @@ export function CardMark({source}: {source: Card}) {
   const bubble = useBubble(tip || hovered);
   useEffect(() => {
     if (!tip) return;
-    const hide = () => setTip(false);
+    const hide = (event?: Event) => {
+      if (event?.target instanceof Node && bubble.current?.contains(event.target)) return;
+      setTip(false);
+    };
     const timer = setTimeout(hide, 4000);
     document.addEventListener('pointerdown', hide);
     return () => {
