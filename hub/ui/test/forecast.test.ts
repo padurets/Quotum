@@ -174,11 +174,19 @@ test("the cell's tooltip says a part a line, each only where it applies, in plur
     const cold = outlookText(said(lasts({comfy: false})), week(60), lasts({basis: {hours: 7.9, cold: true, usualPerDay: 3, lastDay: null, burst: null}}), context(), null);
     assert.deepEqual(cold.title, ['По первым 7 ч', 'Чтобы хватило до сброса — до ~15% в сутки']);
     assert.equal(cold.text, 'хватит впритык');
+    const first = outlookText(said(lasts({comfy: false})), week(60), lasts({basis: {hours: 1.9, cold: true, usualPerDay: 3, lastDay: null, burst: null}}), context(), null);
+    assert.equal(first.title[0], 'По первому часу');
+    // Under two days to the reset, by the hour, as the countdown turns to hours then.
+    const allowed = (hours: number) => outlookText(said(lasts()), week(60), lasts({anchor: {at: reset - hours * HOUR, left: 60}}), context(), null).title.at(-1);
+    assert.equal(allowed(48), 'Чтобы хватило до сброса — до ~30% в сутки');
+    assert.equal(allowed(47.5), 'Чтобы хватило до сброса — до 1,3%/ч');
+    assert.equal(allowed(0.25), 'Чтобы хватило до сброса — до 240%/ч');
     setLocale('en');
     const en = outlookText(o, week(60), ahead, context({freeResets: 2, announced: measured + 2 * DAY}), null);
     assert.equal(en.text, 'runs out in ~30h');
     assert.equal(en.title[2], 'The last day: 5 times the usual');
-    assert.equal(outlookText(said(lasts()), week(60), lasts({basis: {hours: 1, cold: true, usualPerDay: 3, lastDay: null, burst: null}}), context(), null).title[0], 'By the first 1 hour');
+    assert.equal(outlookText(said(lasts()), week(60), lasts({basis: {hours: 1, cold: true, usualPerDay: 3, lastDay: null, burst: null}}), context(), null).title[0], 'By the first hour');
+    assert.equal(outlookText(said(lasts()), week(60), lasts({basis: {hours: 2, cold: true, usualPerDay: 3, lastDay: null, burst: null}}), context(), null).title[0], 'By the first 2 hours');
     assert.equal(outlookText(said(lasts()), week(60), lasts({basis: {hours: 200, cold: false, usualPerDay: 0, lastDay: null, burst: null}}), context(), null).title[0], 'Usually 0% a day');
   } finally {
     setLocale('en');

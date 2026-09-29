@@ -2,7 +2,7 @@ import type {ForecastBasis, SeriesForecast, Win} from './types';
 import type {Line} from './lines';
 import type {Resets} from './resets';
 import {PLAN_TOLERANCE, planAt, started, type WeeklyPlan} from './plan';
-import {countdown, countdownChangesAt, earliest, num, rateText, shareText, stamp} from './format';
+import {IN_HOURS_UNDER, countdown, countdownChangesAt, earliest, num, rateText, shareText, stamp} from './format';
 import {t} from '../i18n';
 
 const MINUTE = 60_000;
@@ -284,7 +284,7 @@ export function outlookText(said: Outlook, live: Win | undefined, ahead: SeriesF
     return {text, burst: false, title};
   }
   const basis = isBasis(ahead.basis) ? ahead.basis : null;
-  if (basis?.cold) title.push(t('forecast.cold', {count: Math.floor(basis.hours)}));
+  if (basis?.cold) title.push(basis.hours < 2 ? t('forecast.coldHour') : t('forecast.cold', {count: Math.floor(basis.hours)}));
   else if (basis) {
     title.push(t('forecast.usual', {value: perDay(basis.usualPerDay)}));
     const x = basis.lastDay;
@@ -297,7 +297,13 @@ export function outlookText(said: Outlook, live: Win | undefined, ahead: SeriesF
   const burst = basis?.burst ?? null;
   if (burst) title.push(t('forecast.burst', times(burst.times)), t('forecast.burstAt', {time: stamp(burst.zero)}));
   if (ahead.anchor && ahead.resetAt !== null && ahead.resetAt > ahead.anchor.at) {
-    title.push(t('forecast.allowed', {value: perDay(ahead.anchor.left / ((ahead.resetAt - ahead.anchor.at) / DAY))}));
+    // By the hour as the countdown turns to hours: a day's worth over part of one would read as more than there is.
+    const until = ahead.resetAt - ahead.anchor.at;
+    title.push(
+      until < IN_HOURS_UNDER
+        ? t('forecast.allowedHourly', {rate: rateText(ahead.anchor.left / (until / HOUR))})
+        : t('forecast.allowed', {value: perDay(ahead.anchor.left / (until / DAY))}),
+    );
   }
   if (planEnd) {
     const time = stamp(planEnd.at);

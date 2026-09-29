@@ -184,11 +184,12 @@ export const Forecast = memo(function Forecast({arrange}: {arrange: Arrange}) {
         at: now => {
           const said = outlook(live, measuredAt, now, ahead, context);
           const text = outlookText(said, live, ahead, context, planEndOf(live, measuredAt, now, chosen, ahead));
-          // A burst beside the words, never instead of them, and never louder than they are.
+          // A burst beside the words, never instead of them, and never louder than they are. It has
+          // no tooltip of its own: pointed at, it shows the cell's, which tells how fast.
           const content = text.burst ? (
             <>
               {text.text}
-              <span className="forecast-burst" role="img" aria-label={t('forecast.burstMark')} title={t('forecast.burstMark')}>
+              <span className="forecast-burst" role="img" aria-label={t('forecast.burstMark')}>
                 ↑
               </span>
             </>

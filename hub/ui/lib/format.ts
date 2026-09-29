@@ -67,11 +67,14 @@ export function durationUntilChangesAt(to: number, now: number, short = false): 
   return next === null ? null : to - (next + 0.5) * 60_000 + 1;
 }
 
+/** How soon is told in hours rather than days: two days are hours still, so a reset in 47 hours does not read as one day away (`countdown`). */
+export const IN_HOURS_UNDER = 48 * 3_600_000;
+
 /** `countdown(target - now)`. One minute, and past it, reads so to the end. */
 export function countdownChangesAt(target: number, now: number): number | null {
   const minutes = Math.floor((target - now) / 60_000);
   if (minutes <= 1) return null;
-  const unit = minutes < 60 ? 60_000 : minutes < 48 * 60 ? 3_600_000 : 86_400_000;
+  const unit = minutes < 60 ? 60_000 : minutes * 60_000 < IN_HOURS_UNDER ? 3_600_000 : 86_400_000;
   return target - Math.floor((target - now) / unit) * unit + 1;
 }
 
@@ -101,14 +104,14 @@ export const workAbout = (ms: number) => (ms > 0 && ms < 60_000 ? workHours(ms) 
 
 /**
  * How long until something, for a mark or a heading with little room: minutes within the
- * hour, hours for two days, days after that, always rounded down and never under a minute.
- * Two days are hours still, so a reset in 47 hours does not read as one day away.
+ * hour, hours for two days (`IN_HOURS_UNDER`), days after that, always rounded down and
+ * never under a minute.
  */
 export function countdown(ms: number) {
   const minutes = Math.max(1, Math.floor(ms / 60_000));
   if (minutes < 60) return t('time.minutes', {n: minutes});
   const hours = Math.floor(minutes / 60);
-  if (hours < 48) return t('time.hours', {n: hours});
+  if (hours * 3_600_000 < IN_HOURS_UNDER) return t('time.hours', {n: hours});
   return t('time.days', {n: Math.floor(hours / 24)});
 }
 
