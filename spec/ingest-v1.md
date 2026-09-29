@@ -203,7 +203,9 @@ on duty: don't measure this subscription before `until`, then ask again. The dev
 duty keeps it while it delivers; a device where someone is working takes over from a
 holder that has been idle for a while; a holder that stops delivering loses duty when
 its last measurement goes stale; asking again does not extend a holder's time, only
-delivering does. Errors are as for ingest (`400 invalid_request`, `401`, `403`). An agent
+delivering does, or being told to measure: a holder told `measure: true` keeps duty for
+at least five minutes after, until it delivers or reports a failure for it, since it asks
+nothing while it measures its providers one by one. Errors are as for ingest (`400 invalid_request`, `401`, `403`). An agent
 that cannot reach the hub, or gets any other answer, measures anyway: at worst two
 devices measure the same subscription for a while.
 
@@ -253,8 +255,8 @@ A reader may ask the hub for fresh limits from the subscription's card. The next
 permitted check-in of its current paced holder then asks for a measurement using the
 same fields above. This never bypasses the one-minute minimum, the device's
 `minIntervalMs`, a failure pause or the retry delay of an unanswered command; repeated
-clicks join one request, and a click within a minute of a command to the holder waits for
-that command instead of asking again. Raising the minimum after an earlier promise takes
+clicks join one request, and a click after a command to the holder, before the holder
+asks again, waits for that command instead of asking again. Raising the minimum after an earlier promise takes
 precedence over that promise, so the old measurement can become stale before the next is
 allowed, and the holder's duty can lapse before then: until it asks again, no refresh can
 be requested, and another device of the subscription may take duty and measure at once.

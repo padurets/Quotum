@@ -166,7 +166,10 @@ subscription:
   whether someone is using the client on this machine right now.
 - The first device to ask gets duty. It keeps it while it delivers: each measurement
   extends duty until the measurement goes stale. Only delivering extends it; a holder
-  that keeps asking but never delivers loses duty after five minutes.
+  that keeps asking but never delivers loses duty after five minutes. A holder told to
+  measure keeps duty for at least five minutes after, until it delivers or fails: it
+  asks nothing while it measures its providers one by one, and another device taking
+  over halfway would measure the same again.
 - The others are told to wait and when to ask again: in a minute if someone works on
   that machine, otherwise in up to ten minutes.
 - Duty moves to a device where someone works if the holder has been idle for ten
@@ -229,12 +232,13 @@ and only a success taken after a failure clears its pause.
 Refresh capability comes from that subscription's latest check-in, not the agent version:
 the live duty holder must follow the hub's pace and have asked within 120 seconds. A
 request never claims duty or extends its lease. A click joins a command to the holder
-only while it is under way, within a minute of it; later, the request waits for the
-command's retry. Queued requests end on silence or an expired lease; requests already
-dispatched keep waiting through both for up to five minutes, as providers are measured
-sequentially and a holder busy measuring neither asks nor delivers the others. Duty
-passing to another device, revocation, legacy check-in, an error or the deadline ends
-the request. A fresh accepted snapshot of the same subscription, from any device,
+while it is under way, until the holder asks again: it asks nothing while it measures.
+A holder that asks again without answering lost the command, and the request waits for
+its retry. A lapsed lease ends nothing while the same device holds duty: a holder that
+asks takes it again. Queued requests end on silence; requests already dispatched keep
+waiting through it for up to five minutes, as providers are measured sequentially and a
+holder busy measuring neither asks nor delivers the others. Duty passing to another
+device, revocation, legacy check-in, an error or the deadline ends the request. A fresh accepted snapshot of the same subscription, from any device,
 can satisfy it even if its percentages are unchanged. The protocol has no request id or
 startup acknowledgement; the card says it is waiting for data, not that a client started.
 Terminal outcomes show for a minute. Refresh is its own projection and event, so time
