@@ -34,12 +34,30 @@ export function sideOf(height: number, above: number, below: number, up: boolean
   return {up: stays ? up : !up, cap: Math.max(0, stays ? own : other)};
 }
 
+/** A bar that sticks at the top of the window: where it stands and how far down the window it sticks (its `top`), in CSS pixels. */
+export type Bar = {top: number; bottom: number; sticks: number};
+
 /**
- * How far down the window the bars that stick at its top cover what stands at `y` (CSS
- * pixels from the window's top): those that end above it, stuck or not. The analytics'
- * head covers nothing of the cards above it, nor of its own period's list.
+ * How far down the window the `bars` that stick at its top cover what stands at `y` (CSS
+ * pixels from the window's top): those that end above it. A chart's tooltip lies under them
+ * wherever they stand. A `panel` lies over them, so for one a bar counts only where it is
+ * stuck at the top: the analytics' head standing lower on the page is a heading like any other.
  */
-export function coverOf(y: number) {
-  const bars = [...document.querySelectorAll<HTMLElement>('.topbar, .analytics-head')].filter(bar => getComputedStyle(bar).position === 'sticky');
-  return Math.max(0, ...bars.map(bar => bar.getBoundingClientRect().bottom).filter(bottom => bottom <= y));
+export function coverAt(bars: Bar[], y: number, panel: boolean) {
+  return Math.max(0, ...bars.filter(bar => bar.bottom <= y && (!panel || bar.top <= bar.sticks + 0.5)).map(bar => bar.bottom));
+}
+
+/**
+ * The cover (`coverAt`) of the page's bars over what stands at `y`: a chart's tooltip, or the
+ * panel of a `button`. A dialog lies over them all, so a panel in one has none.
+ */
+export function coverOf(y: number, button?: Element) {
+  if (button?.closest('.overlay')) return 0;
+  const bars = [...document.querySelectorAll<HTMLElement>('.topbar, .analytics-head')].flatMap(bar => {
+    const style = getComputedStyle(bar);
+    if (style.position !== 'sticky') return [];
+    const {top, bottom} = bar.getBoundingClientRect();
+    return [{top, bottom, sticks: parseFloat(style.top) || 0}];
+  });
+  return coverAt(bars, y, !!button);
 }

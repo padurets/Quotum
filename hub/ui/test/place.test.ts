@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {placeOf, sideOf} from '../lib/place';
+import {coverAt, placeOf, sideOf} from '../lib/place';
 
 test('a chart\'s tooltip stands whole in the window where it can, never under the bars, and the same once found again', () => {
   // Unraised at 400, 350 tall, in a window 800 tall under bars ending at 60.
@@ -39,9 +39,26 @@ test('a panel that fits neither side opens where there is more room, cut to that
   assert.deepEqual(sideOf(472, 211, 395, true), {up: false, cap: 395}, 'the tray higher up: below');
   assert.deepEqual(sideOf(472, 211, 395, false), {up: false, cap: 395}, 'a menu, on its own side');
   assert.deepEqual(sideOf(472, 395, 211, false), {up: true, cap: 395}, 'a menu low in the window: above');
-  // A menu in the top bar has no room above it at all.
-  assert.deepEqual(sideOf(824, -57, 663, false), {up: false, cap: 663});
+  // A menu in the top bar has next to no room above it.
+  assert.deepEqual(sideOf(824, 3, 663, false), {up: false, cap: 663});
   // With as much room either way, it stays on its own side.
   assert.deepEqual(sideOf(500, 300, 300, true), {up: true, cap: 300});
   assert.deepEqual(sideOf(500, 300, 300, false), {up: false, cap: 300});
+});
+
+test('the bars cover what stands below where they end; a panel, only where they are stuck at the top', () => {
+  const topbar = {top: 0, bottom: 60, sticks: 0};
+  // The analytics' head sticks under the top bar, 60 down the window.
+  const stuck = {top: 60, bottom: 114, sticks: 60};
+  const inFlow = {top: 603, bottom: 657, sticks: 60};
+  const below = {top: 664, bottom: 718, sticks: 60};
+  // A widget of the analytics at the window's bottom, under the head where it stands on the page:
+  // a chart's tooltip lies under the head, a panel over it.
+  assert.equal(coverAt([topbar, inFlow], 690, false), 657, 'a tooltip');
+  assert.equal(coverAt([topbar, inFlow], 690, true), 60, 'a panel');
+  assert.equal(coverAt([topbar, stuck], 300, true), 114, 'the head stuck: it covers a panel too');
+  assert.equal(coverAt([topbar, stuck], 73, true), 60, 'a button in the head is not under it');
+  assert.equal(coverAt([topbar, below], 469, true), 60, 'a card above the analytics');
+  assert.equal(coverAt([topbar, {top: 40, bottom: 94, sticks: 60}], 300, true), 94, 'the head pushed up at the end of its section');
+  assert.equal(coverAt([topbar], 17, true), 0, 'a button in the top bar');
 });

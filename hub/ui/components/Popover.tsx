@@ -52,38 +52,59 @@ export function Popover({
     return () => removeEventListener('resize', place);
   }, [open]);
 
-  // A panel never scrolls the page nor lengthens it: it stays whole in the window, under the
-  // bars that stick at its top, on the side of its button that `sideOf` picks, cut to the
-  // room there and scrolling inside. Where it stands on either side is read, not assumed, as
-  // a text trigger is taller than an icon. It is measured again as its content changes and
-  // the window is resized, not as the page scrolls: it goes with its button.
-  const [side, setSide] = useState<{up: boolean; cap: number | null} | null>(null);
+  // A panel never scrolls the page nor lengthens it: it opens whole in the window, under the
+  // bars stuck at its top, on the side of its button that `sideOf` picks, cut to the room
+  // there and scrolling inside. Where it stands on either side is read, not assumed, as a text
+  // trigger is taller than an icon. It is measured again as its content changes, keeping to
+  // the side it is on while it fits there, and once the board has been laid out for a resized
+  // window; not as the page scrolls: it goes with its button. A list of it that scrolls on its
+  // own while the rest stays (`.popover-scroll`) has at least the room it asks for (`--least`),
+  // or the whole panel scrolls, the list with it (`is-cramped`).
+  const [side, setSide] = useState<{up: boolean; cap: number | null; cramped: boolean} | null>(null);
   useLayoutEffect(() => {
     const element = panel.current;
     const trigger = button.current;
     if (!open || !element || !trigger) return setSide(null);
+    let upwards = up;
     const fit = () => {
+      const list = element.querySelector<HTMLElement>('.popover-scroll');
+      // Measuring takes the cut off, which would lose how far its reader had scrolled.
+      const scrolled = [element.scrollTop, list?.scrollTop ?? 0];
       element.style.maxHeight = '';
-      element.classList.remove('is-capped', 'is-up');
+      element.classList.remove('is-capped', 'is-cramped', 'is-up');
       const below = element.getBoundingClientRect();
       element.classList.add('is-up');
       const above = element.getBoundingClientRect();
-      const cover = coverOf(trigger.getBoundingClientRect().top);
-      const next = sideOf(below.height, above.bottom - cover - 8, innerHeight - 8 - below.top, up);
+      const cover = coverOf(trigger.getBoundingClientRect().top, trigger);
+      const {up: next, cap} = sideOf(below.height, above.bottom - cover - 8, innerHeight - 8 - below.top, upwards);
+      const least = list ? parseFloat(getComputedStyle(list).getPropertyValue('--least')) || 0 : 0;
+      const cramped = cap !== null && !!list && cap - (below.height - list.getBoundingClientRect().height) < least;
+      upwards = next;
       // Set here as well as through state, so what is measured next is what shows.
-      element.classList.toggle('is-up', next.up);
-      element.classList.toggle('is-capped', next.cap !== null);
-      element.style.maxHeight = next.cap === null ? '' : `${next.cap}px`;
-      setSide(same => (same?.up === next.up && same.cap === next.cap ? same : next));
+      element.classList.toggle('is-up', next);
+      element.classList.toggle('is-capped', cap !== null);
+      element.classList.toggle('is-cramped', cramped);
+      element.style.maxHeight = cap === null ? '' : `${cap}px`;
+      element.scrollTop = scrolled[0];
+      if (list) list.scrollTop = scrolled[1];
+      setSide(same => (same?.up === next && same.cap === cap && same.cramped === cramped ? same : {up: next, cap, cramped}));
     };
     fit();
     // A refit may change the cap and wake the observer once more; then the panel stays as it is.
     const observer = new ResizeObserver(fit);
     observer.observe(element);
-    addEventListener('resize', fit);
+    // The board takes its new columns after the resize is told (they follow a media query):
+    // the panel is measured once it has, in the frame that shows it.
+    let frame = 0;
+    const resized = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(fit);
+    };
+    addEventListener('resize', resized);
     return () => {
       observer.disconnect();
-      removeEventListener('resize', fit);
+      cancelAnimationFrame(frame);
+      removeEventListener('resize', resized);
     };
   }, [open, up]);
 
@@ -131,7 +152,7 @@ export function Popover({
       </button>
       {open && (
         <div
-          className={`popover glass ${align === 'left' ? 'is-left' : ''} ${(side?.up ?? up) ? 'is-up' : ''} ${side?.cap != null ? 'is-capped' : ''}`}
+          className={`popover glass ${align === 'left' ? 'is-left' : ''} ${(side?.up ?? up) ? 'is-up' : ''} ${side?.cap != null ? 'is-capped' : ''} ${side?.cramped ? 'is-cramped' : ''}`}
           style={side?.cap != null ? {maxHeight: side.cap} : undefined}
           role="dialog"
           aria-label={label}

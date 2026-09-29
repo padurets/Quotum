@@ -100,7 +100,7 @@ export function Agents({sessions, roomy = true}: {sessions: LiveSession[]; roomy
       }
     >
       <div className="popover-title">{t('agents.title')}</div>
-      <div className="agents-list">
+      <div className="agents-list popover-scroll">
         {machines.map(machine => (
           <section key={machine.id} className="agents-machine">
             <h3 title={machine.name}>
