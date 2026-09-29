@@ -75,8 +75,9 @@ import {
  * for minutes from `start`, one resetting ten minutes in: a test of their own asks every
  * 15 seconds as their machine does, while the long one measures them on its rhythm and
  * leaves those codes out. The live demo measures every card at the hub's pace, so what
- * comes and goes in its first hours (a card going stale while its machine sleeps, where a
- * young series' week leads) is checked at that pace too, by tests of their own. How agents worked before `start` is written into the hub (as it
+ * comes and goes in its first hours (a card's dot going stale while its machine sleeps or
+ * grey between seldom measurements, where a young series' week leads) is checked at that
+ * pace too, by tests of their own. How agents worked before `start` is written into the hub (as it
  * would have credited it, from ten days back: the part before is unknown) and read at
  * `start` alone: the codes of the activity widget and of the table's work are at that
  * fixed point, over a period ending there or a range before it.
@@ -968,7 +969,8 @@ const all: DemoSet = {
       expect: [
         {title: 'CI runners (eco)'},
         {stale: false},
-        {fresh: 'grey', from: 6 * MIN, to: 14 * MIN},
+        // Grey from a minute later in the live demo, measured at the hub's pace, whenever in its first minute its loop starts.
+        {fresh: 'grey', from: 7 * MIN, to: 14 * MIN},
         {forecast: 'weekly', spent: 'unused'},
       ],
       look: ['Measured every quarter of an hour: its dot fades to grey and pulses again, never a warning', 'One free reset: a ticket "1" in the tray, and its panel gives no end date'],
