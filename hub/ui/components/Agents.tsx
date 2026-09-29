@@ -350,11 +350,10 @@ function AgentsDialog({
   const box = useRef<HTMLDivElement>(null);
   const layout = useAgentsLayout(box, shown);
   const working = rows.filter(row => row.session.working).length;
-  const some = rows.length > 0;
-  // A sort control goes with the form it was in, or with the last agent: the focus it had stays in the dialog.
+  // A control that goes (a sort with its column or its form, or with the last agent) leaves the focus in the dialog, after any render.
   useLayoutEffect(() => {
     if (document.activeElement === document.body) box.current?.closest<HTMLElement>('.dialog')?.focus();
-  }, [layout, empty, some]);
+  });
   return (
     <Modal title={t('agents.title')} wide onClose={onClose} restore={restore}>
       <div className="agents-dialog" ref={box}>
