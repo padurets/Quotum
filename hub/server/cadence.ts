@@ -100,7 +100,8 @@ export class Cadence {
     const request = this.requests.get(key);
     if (request && pending(request.view) && request.device === device && request.view.dispatchAt === null) {
       request.view.notBefore = this.notBefore(this.paces.get(key), minIntervalMs, request.view.requestedAt);
-      request.view.deadline = request.view.notBefore + REFRESH_WAIT_MS;
+      // A lowered minimum cannot move the wait into the past: it counts from when measuring may start.
+      request.view.deadline = Math.max(request.view.notBefore, now) + REFRESH_WAIT_MS;
     }
   }
 
@@ -124,8 +125,12 @@ export class Cadence {
     const changes: number[] = [];
     if (request && pending(request)) {
       const ends: {at: number; status: 'unavailable' | 'no_result'}[] = [{at: request.deadline, status: 'no_result'}];
-      if (duty.until !== null) ends.push({at: duty.until, status: 'unavailable'});
-      if (request.dispatchAt === null && silentAt !== null) ends.push({at: silentAt, status: 'unavailable'});
+      // Once told to measure, a holder measures its subscriptions one after another, neither
+      // asking nor delivering the others meanwhile: a lapsed lease or silence is not a loss then.
+      if (request.dispatchAt === null) {
+        if (duty.until !== null) ends.push({at: duty.until, status: 'unavailable'});
+        if (silentAt !== null) ends.push({at: silentAt, status: 'unavailable'});
+      }
       if (duty.holder !== stored!.device || !duty.live || !capability?.paced || pause !== null) ends.push({at: now, status: 'unavailable'});
       ends.sort((a, b) => a.at - b.at);
       const end = ends[0];
@@ -160,7 +165,8 @@ export class Cadence {
     const pace = this.paces.get(key);
     const device = duty.holder!;
     const capability = this.capabilities.get(key)!.get(device)!;
-    const dispatchAt = pace?.askedDevice === device && !pace.answered ? pace.askedAt : null;
+    // Only a command still under way can bring the data; one given up waits for its retry.
+    const dispatchAt = pace?.askedDevice === device && !pace.answered && pace.askedAt !== null && now - pace.askedAt <= MEASURING_MS ? pace.askedAt : null;
     const notBefore = this.notBefore(pace, capability.minIntervalMs, now);
     this.requests.set(key, {
       device,
@@ -206,9 +212,11 @@ export class Cadence {
     return [...keys];
   }
 
+  /** The earliest a device may be told to measure: past its floor after the last measurement or command, and past the retry of a command left unanswered. */
   private notBefore(pace: Pace | undefined, minimum: number | null, fallback: number): number {
     const times = [pace?.lastAt, pace?.askedAt].filter((at): at is number => at != null);
-    return times.length ? Math.max(fallback, Math.max(...times) + floorOf(minimum)) : fallback;
+    const at = times.length ? Math.max(fallback, Math.max(...times) + floorOf(minimum)) : fallback;
+    return pace?.askedAt != null && !pace.answered ? Math.max(at, retryAt(pace, floorOf(minimum))) : at;
   }
 
   private readonly paces = new Map<string, Pace>();
@@ -340,9 +348,7 @@ export class Cadence {
     let {interval, why} = this.interval(pace, now, signals, floor);
     let at: number;
     if (pace.askedAt !== null && !pace.answered) {
-      // Nothing came back for the last `measure: true`: ask again, later each time it stays unanswered.
-      // Never more often than the device agrees to, though.
-      at = pace.askedAt + Math.max(UNANSWERED_MS[Math.min(pace.unanswered, UNANSWERED_MS.length - 1)], floor);
+      at = retryAt(pace, floor);
     } else {
       at = (pace.lastAt ?? pace.askedAt!) + interval;
       if (pace.lastAt !== null) {
@@ -408,6 +414,12 @@ export class Cadence {
 }
 
 const pauseKey = (key: string, device: string) => `${key}\n${device}`;
+
+/**
+ * Nothing came back for the last `measure: true`: ask again, later each time it stays unanswered.
+ * Never more often than the device agrees to, though.
+ */
+const retryAt = (pace: Pace, floor: number) => pace.askedAt! + Math.max(UNANSWERED_MS[Math.min(pace.unanswered, UNANSWERED_MS.length - 1)], floor);
 
 /** The windows with little left and not reset yet: while there are any, the subscription is measured more often. */
 const lowWindows = (signals: Signals, now: number) =>

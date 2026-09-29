@@ -147,8 +147,11 @@ for (const manual of [false, true])
     for (const at of [75_000, 149_999]) assert.equal(h.ask(at).measure, false);
     assert.equal(h.ask(150_000).measure, true);
     if (manual) {
-      assert.equal(h.refresh(150_000).request?.status, 'unavailable', 'the old snapshot lease expires before the retry');
-      assert.equal(h.refresh(150_000).request?.deadline, T + 361_000, 'retry never extends request deadline');
+      const joined = h.refresh(150_000).request;
+      assert.equal(joined?.status, 'waiting', 'the old snapshot lease lapses before the retry, the holder is still measuring');
+      assert.equal(joined?.dispatchAt, T + MIN);
+      assert.equal(joined?.deadline, T + 361_000, 'retry never extends request deadline');
+      assert.equal(h.refresh(361_000).request?.status, 'no_result');
     }
   });
 
@@ -163,8 +166,12 @@ test('answer timestamp tolerance and success after a failure protect the shared 
       const at = c.view('s', 'd', T + 1, signals)?.next;
       if (!failure) assert.equal(at, delta === 30_000 ? T + MIN : T, 'accepted answer still respects command floor');
       if (failure) {
+        // Past the pause, an answered command waits out its interval, an unanswered one is retried.
+        assert.equal(c.answer('s', 'd', 'codex', T + 90_000, MIN, signals).measure, delta === 30_001, 'only a failure within the tolerance answers the command');
         c.delivered('s', 'd', [], T - delta - 1, 132_000, false, T + 2);
         assert.notEqual(c.pausedUntil('s', 'd', T + 2), null, 'old success does not clear the pause');
+        c.delivered('s', 'd', [], T - delta, 132_000, false, T + 2);
+        assert.notEqual(c.pausedUntil('s', 'd', T + 2), null, 'a success taken as the failure was does not clear the pause');
         c.delivered('s', 'd', [], T + 3, 132_000, false, T + 3);
         assert.equal(c.pausedUntil('s', 'd', T + 3), null);
       }
@@ -240,6 +247,8 @@ test('freshness boundaries, duplicates, other-device success and failures stay d
   const h = hub(t);
   h.ask(0);
   h.deliver(0);
+  // The other machine measures this subscription too: its failures are known to be about it.
+  h.deliver(1_000, {name: 'other'});
   h.request(40_000);
   h.deliver(41_000, {observed: 9_999});
   assert.equal(h.refresh(41_000).request?.status, 'queued');
@@ -257,7 +266,7 @@ test('freshness boundaries, duplicates, other-device success and failures stay d
   assert.equal(h.store.state(h.source()).error, null, 'fresh previous limits remain good');
 });
 
-test('revocation reaches requests with no sessions, and losing the lease ends waiting', t => {
+test('revocation reaches requests with no sessions, at a fixed time', t => {
   const h = hub(t);
   h.ask(0);
   h.deliver(0);
@@ -267,6 +276,40 @@ test('revocation reaches requests with no sessions, and losing the lease ends wa
   assert.equal(h.refresh(11_000).request?.status, 'unavailable');
   assert.equal(h.refresh(11_000).unavailable, 'no_device');
   assert.equal(h.refresh(11_000).request?.finishedAt, T + 11_000);
+  assert.equal(h.refresh(15_000).request?.finishedAt, T + 11_000, 'a later reading does not move the end');
+});
+
+test('forgetting a device ends its request when it happens, whatever else is known of it yet', () => {
+  const c = new Cadence();
+  const duty = {holder: 'd', until: T + 10 * MIN, live: true};
+  c.capability('s', 'd', true, MIN, T);
+  assert.equal(c.requestRefresh('s', duty, null, T + 1_000).status, 'accepted');
+  assert.deepEqual(c.forget(['d'], T + 2_000), ['s']);
+  const request = c.refresh('s', duty, T + 5_000).value.request;
+  assert.deepEqual([request?.status, request?.finishedAt], ['unavailable', T + 2_000]);
+});
+
+test('revoking a device with no sessions tells the boards at once', t => {
+  const h = hub(t);
+  let now = T;
+  const frames: Frame[] = [];
+  const events = new Events(h.parts, undefined, {now: () => now, after: () => () => {}});
+  h.ingest.setObserver(events);
+  t.after(() => events.close());
+  const session = newSecret('qt_s');
+  h.directory.createSession(session, h.user.id, T, 86_400_000);
+  h.ask(0);
+  h.deliver(0);
+  const opened = events.open({user: h.user.id, secret: session, board: h.board, kind: 'stream', send: got => frames.push(...got), end: () => {}});
+  assert.ok(opened && opened !== 'limit');
+  now = T + 10_000;
+  h.request(10_000);
+  events.flush();
+  now = T + 11_000;
+  h.directory.revokeDevice(h.user.id, h.device(), now);
+  h.ingest.forget([h.device()], now);
+  events.flush();
+  assert.equal(JSON.parse(frames.filter(f => f.type === 'refresh').at(-1)!.data).refresh.request.status, 'unavailable');
 });
 
 test('projection changesAt remains a future boundary through silence, deadline and terminal expiry', t => {
@@ -302,17 +345,25 @@ test('the board action, events and check-in share one request across viewers and
   h.directory.addMember(team.id, viewer.id, T);
   const session = newSecret('qt_s');
   h.directory.createSession(session, viewer.id, T, 86_400_000);
-  h.ask(0);
+  // Measured, but not yet by a device that follows the hub's pace.
   h.deliver(0);
   h.store.share(team.id, h.source(), h.user.id, T);
+  const elsewhere = h.directory.createBoard('Elsewhere', h.user.id, T);
+  h.directory.addMember(elsewhere.id, viewer.id, T);
   const opened = events.open({user: viewer.id, secret: session, board: team.id, kind: 'stream', send: got => frames.push(...got), end: () => {}});
   assert.ok(opened && opened !== 'limit');
   const action = (board = team.id, source = h.source(), cookie = `quotum_session=${session}`, origin?: string) =>
     app.inject({method: 'POST', url: `/api/boards/${board}/sources/${source}/refresh`, headers: {cookie, ...(origin ? {origin} : {})}});
-  now += 10_000;
+  now += 5_000;
+  const unavailable = await action();
+  assert.deepEqual([unavailable.statusCode, unavailable.json()], [409, {error: 'refresh_unavailable'}]);
+  h.ask(5_000);
+  now += 5_000;
   assert.equal((await action(team.id, h.source(), '')).statusCode, 401);
   assert.equal((await action(h.board)).statusCode, 404);
   assert.equal((await action(team.id, 'other')).statusCode, 404);
+  assert.equal((await action(elsewhere.id)).statusCode, 404, 'a board of the reader without this source');
+  assert.equal(h.refresh(10_000).request, null, 'refusals create no work');
   assert.equal((await action(team.id, h.source(), undefined, 'https://evil.example')).statusCode, 403);
   assert.equal((await action()).statusCode, 202);
   assert.equal((await action()).statusCode, 202);
@@ -348,6 +399,7 @@ test('handover ends a queued or waiting request instead of moving it to the next
     h.ingest.checkin(h.credential, {...h.agent('other'), paced: true, subscriptions: [{provider: 'codex', account: ACCOUNT, active: true}]}, T + at);
     assert.equal(h.refresh(at).request?.status, 'unavailable');
     assert.equal(h.refresh(at).request?.finishedAt, T + at);
+    assert.equal(h.refresh(at + 5_000).request?.finishedAt, T + at, 'the handover is kept as it happened');
     assert.equal(h.duty.holder(ACCOUNT), h.device('other'));
   }
 });
@@ -373,16 +425,18 @@ test('an old failure does not turn a fresh pending request into a failure', t =>
   assert.equal(h.refresh(11_000).request?.status, 'queued');
 });
 
-test('three provider responses sent sequentially keep the last request waiting for 150 seconds', t => {
+test('three provider responses sent sequentially keep the last request waiting for 150 seconds, past its lease', t => {
   const h = hub(t);
   const subscriptions = (['claude', 'codex', 'antigravity'] as const).map((provider, i) => ({provider, account: ['a', 'b', 'c'][i].repeat(24), active: false}));
+  // Little left, as when one refreshes before a long session: the agent promises the next
+  // measurement in two minutes, so each lease lasts 204 seconds from its measurement.
   const snapshots = subscriptions.map(({provider, account}) => ({
     provider,
     account,
     observedAt: iso(T),
     via: 'stand-in',
-    staleAfterMs: 3_600_000,
-    windows: [{id: 'weekly', kind: 'weekly', usedPercent: 50}],
+    staleAfterMs: 204_000,
+    windows: [{id: 'weekly', kind: 'weekly', usedPercent: 95}],
   }));
   h.ingest.accept(h.credential, {...h.agent('laptop'), sentAt: iso(T), snapshots, failures: []}, T);
   h.ingest.checkin(h.credential, {...h.agent('laptop'), paced: true, subscriptions}, T);
@@ -393,10 +447,87 @@ test('three provider responses sent sequentially keep the last request waiting f
   assert.ok(answer.subscriptions.every(s => s.measure));
   for (const [i, snapshot] of snapshots.entries()) {
     const at = T + MIN + (i + 1) * 50_000;
-    if (i === 2) assert.equal(h.ingest.refresh(source, T + MIN + 120_001).value.request?.status, 'waiting');
+    if (i === 2) {
+      assert.equal(h.ingest.refresh(source, T + MIN + 120_001).value.request?.status, 'waiting');
+      const lapsed = h.ingest.refresh(source, T + 204_001).value;
+      assert.equal(lapsed.unavailable, 'no_device', 'no new request while the lease has lapsed');
+      assert.equal(lapsed.request?.status, 'waiting', 'the holder is still measuring');
+    }
     h.ingest.accept(h.credential, {...h.agent('laptop'), sentAt: iso(at), snapshots: [{...snapshot, observedAt: iso(at)}], failures: []}, at);
   }
   assert.equal(h.ingest.refresh(source, T + MIN + 150_000).value.request?.status, 'updated');
+});
+
+test('a lapsed lease of the holder told to measure waits for the deadline, a lost result ends there', t => {
+  const h = hub(t);
+  h.ask(0);
+  h.deliver(0, {stale: 348_000});
+  h.request(10_000);
+  assert.equal(h.ask(MIN).measure, true);
+  assert.equal(h.refresh(348_001).request?.status, 'waiting');
+  assert.equal(h.refresh(6 * MIN - 1).request?.status, 'waiting');
+  assert.deepEqual([h.refresh(6 * MIN).request?.status, h.refresh(6 * MIN).request?.finishedAt], ['no_result', T + 6 * MIN]);
+});
+
+for (const [at, joins] of [[3 * MIN, true], [3 * MIN + 1, false]] as const)
+  test(`a request ${joins ? 'joins a command still under way' : 'after a command given up waits for its retry'}`, t => {
+    const h = hub(t);
+    h.ask(0);
+    h.deliver(0);
+    assert.equal(h.ask(2 * MIN).measure, true);
+    h.request(at);
+    const request = h.refresh(at).request!;
+    assert.equal(request.status, joins ? 'waiting' : 'queued');
+    assert.equal(request.dispatchAt, joins ? T + 2 * MIN : null);
+    assert.equal(request.notBefore, T + 210_000, 'the command is retried when its backoff allows, not sooner');
+    assert.equal(h.ask(209_999).measure, false, 'no second command before the retry');
+    assert.equal(h.ask(210_000).measure, true);
+    const retried = h.refresh(210_000).request!;
+    assert.equal(retried.status, 'waiting');
+    assert.equal(retried.dispatchAt, joins ? T + 2 * MIN : T + 210_000);
+    assert.equal(retried.deadline, joins ? T + at + 5 * MIN : T + 210_000 + 5 * MIN, 'the retry does not extend a joined wait');
+    // The answer to the command already under way counts for the request that joined it.
+    h.deliver(211_000, {observed: 130_000});
+    assert.equal(h.refresh(211_000).request?.status, joins ? 'updated' : 'waiting');
+  });
+
+test('a lowered device minimum lets a queued request go at once instead of ending it in the past', t => {
+  const h = hub(t);
+  h.ask(0, 10 * MIN);
+  h.deliver(0);
+  h.request(MIN);
+  for (const at of [2 * MIN, 4 * MIN, 6 * MIN]) assert.equal(h.ask(at, 10 * MIN).measure, false);
+  assert.deepEqual([h.refresh(7 * MIN).request?.status, h.refresh(7 * MIN).request?.deadline], ['queued', T + 15 * MIN]);
+  assert.equal(h.ask(435_000, MIN).measure, true);
+  const sent = h.refresh(435_000).request;
+  assert.equal(sent?.status, 'waiting');
+  assert.equal(sent?.dispatchAt, T + 435_000);
+});
+
+test('a pending request ends when its holder leaves the pace or waits out a failure', t => {
+  const legacy = hub(t);
+  legacy.ask(0);
+  legacy.deliver(0);
+  legacy.request(10_000);
+  legacy.ask(20_000, MIN, 'laptop', false);
+  assert.deepEqual([legacy.refresh(25_000).request?.status, legacy.refresh(25_000).request?.finishedAt], ['unavailable', T + 20_000]);
+  // A failure too old to answer the request still pauses its holder.
+  const paused = hub(t);
+  paused.ask(0);
+  paused.deliver(0);
+  paused.request(50_000);
+  paused.deliver(51_000, {failure: 'failed', observed: 10_000});
+  assert.deepEqual([paused.refresh(55_000).request?.status, paused.refresh(55_000).request?.finishedAt], ['unavailable', T + 51_000]);
+});
+
+test('a failure after the deadline keeps the timeout it came after', t => {
+  const h = hub(t);
+  h.ask(0);
+  h.deliver(0);
+  h.request(10_000);
+  h.ask(MIN);
+  h.deliver(6 * MIN + 1, {failure: 'failed', observed: 6 * MIN});
+  assert.deepEqual([h.refresh(6 * MIN + 1).request?.status, h.refresh(6 * MIN + 1).request?.finishedAt], ['no_result', T + 6 * MIN]);
 });
 
 test('an error pause is not advertised as a return time for a legacy device', t => {
