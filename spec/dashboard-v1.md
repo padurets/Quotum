@@ -127,22 +127,23 @@ shownZero, shownLeft, comfy, points, basis}`, worked out as of `asOf`:
   when the last six hours ran at least twice as fast as usual and would run out before
   the reset at that pace, else null. For `needData`, only `{hours}`; else null.
 
-The first time after the hub starts, it is worked out as of the latest sample (or goes on
-as the hub kept it, if that took the sample in). It is worked out again at the first
-moment of each hour after a sample the forecast has not taken in (a few minutes after the
-whole hour, up to ten, the same every hour for one subscription, but still as of the
-whole hour), and at once when a new sample contradicts it: a window with too little
-history, one whose reset time has just become known, back from zero, a new window begun,
-the used share dropping by 5 points or more, the moment it said passing with something
-left, or a sample after an hour or more without one (longer when the samples before were
-said to last longer). A sample come late for the moment it stands on, another device's,
-works the same `asOf` out again. A window whose card gives the answer at once (no reset
-time, a reset time passed, not begun, used up, or a model's window while its
-subscription's weekly window is used up) waits for the hour. The page decides what
-depends on its clock: the tone, the countdown, a moment passed with no sample since it;
-and what the card says at once: used up, waiting for a measurement, not begun. It shows
-"left" only with `comfy` and a `shownLeft` of 5 or more. A weekly window's forecast is up
-to about 3 KB, so a frame holds about eighty weekly windows.
+The first time after the hub starts, it is worked out on the latest sample, as of the
+last whole hour if the sample came before it (or goes on as the hub kept it, if that took
+the sample in). It is worked out again at the first moment of each hour after a sample
+the forecast has not taken in (a few minutes after the whole hour, up to ten, the same
+every hour for one subscription, but still as of the whole hour), and at once when a new
+sample contradicts it: a window with too little history, one whose reset time has just
+become known, back from zero, a new window begun, the used share dropping by 5 points or
+more, the moment it said passing with something left, or a sample after an hour or more
+without one (longer when the samples before were said to last longer). A sample come late
+for the moment it stands on, another device's, works the same `asOf` out again. A window
+whose card gives the answer at once (no reset time, a reset time passed, not begun, used
+up, or a model's window while its subscription's weekly window is used up) waits for the
+hour. The page decides what depends on its clock: the tone, the countdown, a moment
+passed with no sample since it; and what the card says at once: used up, waiting for a
+measurement, not begun. It shows "left" only with `comfy` and a `shownLeft` of 5 or more.
+A weekly window's forecast is up to about 3 KB, so a frame holds about eighty weekly
+windows.
 
 Each event carries its part whole; the page puts it in place of what it had. What changes
 at the same moment goes out together, in this order: `board`, `view`, the sources'

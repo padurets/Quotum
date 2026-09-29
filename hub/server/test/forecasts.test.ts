@@ -103,20 +103,38 @@ test('a series is worked out once an hour after a sample: reads and samples with
 
 test('a hub that measures nothing more after it starts works each series out once, on the latest sample, whatever the minute', () => {
   for (const minute of [0, 3, 9, 30, 55, 59]) {
-    // Measured before the board is read, as a stand set up before it opens.
-    const h = hub(hourShift);
-    const end = T0 + 2 * DAY + minute * MIN;
-    const times = every(T0 + 30_000, end, 2 * MIN);
-    for (const t of times) h.measure(t, steady(0.6)(t));
-    const first = h.read(end + 30_000);
-    assert.deepEqual([first.value.weekly.asOf, first.changesAt], [times.at(-1), null], `:${minute}`);
-    for (const later of [end + HOUR, end + 2 * HOUR + 11 * MIN, end + DAY]) h.read(later);
-    assert.deepEqual(
-      h.worked.map(w => w.why),
-      ['first'],
-      `:${minute}`,
-    );
+    for (const wait of [30_000, 70 * MIN]) {
+      // Measured before the board is read, as a stand set up before it opens.
+      const h = hub(hourShift);
+      const end = T0 + 2 * DAY + minute * MIN;
+      const times = every(T0 + 30_000, end, 2 * MIN);
+      for (const t of times) h.measure(t, steady(0.6)(t));
+      const at = end + wait;
+      // As of its hour, when the sample came before it: as a hub running all along would have it.
+      const hour = Math.floor((at - hourShift(h.source)) / HOUR) * HOUR;
+      const first = h.read(at);
+      const what = `:${minute}, read ${wait / MIN} min on`;
+      assert.deepEqual([first.value.weekly.asOf, first.value.weekly.anchor!.at, first.changesAt], [Math.max(hour, times.at(-1)!), times.at(-1), null], what);
+      for (const later of [at + HOUR, at + 2 * HOUR + 11 * MIN, at + DAY]) h.read(later);
+      assert.deepEqual(
+        h.worked.map(w => w.why),
+        ['first'],
+        what,
+      );
+    }
   }
+  // Then a sample in the hour it was worked out as of waits for the next hour.
+  const h = hub();
+  const end = T0 + 2 * DAY - 90_000;
+  for (const t of every(T0 + 30_000, end, 2 * MIN)) h.measure(t, steady(0.6)(t));
+  assert.equal(h.read(end + 20 * MIN).value.weekly.asOf, T0 + 2 * DAY);
+  h.measure(end + 22 * MIN, steady(0.6)(end + 22 * MIN));
+  h.read(end + 22 * MIN + 3000);
+  h.read(T0 + 3 * DAY);
+  assert.deepEqual(
+    h.worked.map(w => [w.why, w.asOf]),
+    [['first', T0 + 2 * DAY], ['hour', T0 + 3 * DAY]],
+  );
 });
 
 test('a series with too little history is worked out at every sample, and speaks at the first with an hour of it', () => {
