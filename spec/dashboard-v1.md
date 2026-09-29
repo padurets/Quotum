@@ -157,14 +157,19 @@ All times are epoch milliseconds on the hub. `dispatchAt` and `finishedAt` may b
 | `unavailable` | The request lost its executor or became impossible. |
 | `no_result` | No fresh data arrived before the deadline. This says nothing about whether the client started. |
 
-Before dispatch the deadline is five minutes after `notBefore`; after dispatch, five
-minutes after the command. Joining an outstanding command waits five minutes after the
-request, with no extension on retries. Silence over 120 seconds ends a queued request;
-a dispatched request keeps waiting until its deadline, since providers are measured
-sequentially. Its `unavailable` can therefore be `silent` while it is still `waiting`.
-Lease expiry, revocation, a changed holder, a return to the legacy protocol and an error
-pause still end it. Terminal results remain for one minute; an allowed new request can
-replace one immediately. The state is in memory and resets with the hub.
+A request joins a command to the holder that is still under way, one given within the
+last minute; after that the command counts as lost, and the request is queued for the
+command's retry, which it never brings forward. Before dispatch the deadline is five
+minutes after `notBefore` (never counted from a moment already past, when the device
+lowers its minimum); after dispatch, five minutes after the command. Joining a command
+waits five minutes after the request, with no extension on retries. Silence over 120
+seconds or an expired duty lease ends a queued request. A dispatched request keeps
+waiting until its deadline: providers are measured sequentially, and a holder busy
+measuring neither asks nor delivers the others, so its lease may lapse meanwhile. Its
+`unavailable` can therefore be `silent` or `no_device` while it is still `waiting`.
+Revocation, a changed holder, a return to the legacy protocol and an error pause end
+either. Terminal results remain for one minute; an allowed new request can replace one
+immediately. The state is in memory and resets with the hub.
 
 A success must be newer than the success at acceptance and no earlier than 30 seconds
 before the request (or the original command when joining one already outstanding), using

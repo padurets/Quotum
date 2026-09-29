@@ -143,7 +143,6 @@ Codex         api                  idle     started 25m ago · editor
   that the card is waiting for fresh numbers. Refresh respects
   the device’s interval and error pauses, and accepts one new request per minute per subscription. Every reader
   of a shared card can use it.
-
 - **Your data, shared when you choose.** Everything your machines measure is on your
   personal board. On a shared board a team sees the limits its members share with it:
   each person decides which of their subscriptions it shows. A team subscription

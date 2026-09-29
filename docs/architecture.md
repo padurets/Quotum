@@ -194,7 +194,9 @@ from what it sees of the subscription everywhere, which no single machine does:
   one does, as before. A `measure` nothing came back for (a lost answer) is asked again
   after 90 seconds, then less and less often.
 - The lease is as before: only a delivery extends it, and it lasts past the next
-  planned measurement, so a holder waiting for its pace keeps duty.
+  planned measurement, so a holder waiting for its pace keeps duty. A device that raises
+  its minimum interval past its lease is the exception: until it asks again it has no
+  duty, and another device of the subscription may take it and measure at once.
 
 **Refresh on demand.** Any reader of a subscription on a board can request fresh
 data through its existing card menu, above the action to hide the widget, in the web
@@ -205,9 +207,10 @@ one compact row, with its name, status icon and short outcome. Error details exp
 by clicking the row. Each outcome stays in this attempt's receipt after the hub retires
 its status, also while the tooltip is closed. An old outcome cannot stand in for a new
 request, and a reconnect with a missing outcome says it is unknown. Nothing moves the
-widgets. While its refresh is pending,
-clicking the button only opens or closes that information. An individual card cannot
-be requested again until its refresh finishes either. Already pending subscriptions
+widgets. While its refresh is pending, and once it has finished, clicking the button
+only opens or closes that information; a row at the top of the tooltip starts another
+attempt. An individual card cannot be requested again until its refresh finishes, nor
+while the page is still sending its request, from its menu or the header. Already pending subscriptions
 need no additional POST from the board action. The charts and tables receive new measurements through the usual
 events. Leaving the board stops requests that have not started.
 The accepted card action closes the menu; a circular loader replaces the logo's dot
@@ -220,15 +223,18 @@ shortens the ordinary wait to the earliest permitted measurement, respecting the
 one-minute floor, the device's minimum interval, failure pauses and unanswered-command
 backoff. A raised minimum takes precedence over an earlier staleness promise. The floor
 applies after the later of the last measurement and command for the current holder;
-an old delivery cannot acknowledge a newer command outside the 30-second clock tolerance,
+an old delivery or failure cannot acknowledge a newer command outside the 30-second clock tolerance,
 and only a success taken after a failure clears its pause.
 
 Refresh capability comes from that subscription's latest check-in, not the agent version:
 the live duty holder must follow the hub's pace and have asked within 120 seconds. A
-request never claims duty or extends its lease. Queued requests end on silence; requests
-already dispatched keep waiting through silence for up to five minutes, as providers
-are measured sequentially. Loss of duty, revocation, legacy check-in, an error or deadline
-ends the request. A fresh accepted snapshot of the same subscription, from any device,
+request never claims duty or extends its lease. A click joins a command to the holder
+only while it is under way, within a minute of it; later, the request waits for the
+command's retry. Queued requests end on silence or an expired lease; requests already
+dispatched keep waiting through both for up to five minutes, as providers are measured
+sequentially and a holder busy measuring neither asks nor delivers the others. Duty
+passing to another device, revocation, legacy check-in, an error or the deadline ends
+the request. A fresh accepted snapshot of the same subscription, from any device,
 can satisfy it even if its percentages are unchanged. The protocol has no request id or
 startup acknowledgement; the card says it is waiting for data, not that a client started.
 Terminal outcomes show for a minute. Refresh is its own projection and event, so time
