@@ -596,8 +596,9 @@ const all: DemoSet = {
       history: 45 * DAY,
       windows: [
         fiveHours(20 * MIN, 25, agentsWork(MAX_AGENTS, shifts(0))),
-        weekly({since: -1.5 * DAY, use: alongPlan(0)}),
-        weekly({id: 'weekly:fable', label: 'Fable', since: -1.5 * DAY, use: through([0, 0], [0.5, 6], [1.5, 12])}),
+        // Begun 34 hours ago: it runs out some 51 hours on, well past the two days a countdown says in hours.
+        weekly({since: -1.4 * DAY, use: alongPlan(0)}),
+        weekly({id: 'weekly:fable', label: 'Fable', since: -1.4 * DAY, use: through([0, 0], [0.5, 6], [1.5, 12])}),
       ],
       agents: MAX_AGENTS,
       on: {ana: {}, team: {hidden: true}, grid: {place: {x: 3, y: 0, w: 3}}},
@@ -1091,8 +1092,8 @@ const all: DemoSet = {
       expect: [
         {work: 'weekly', range: '24h', perHour: 0, left: 'untilReset', from: 0, to: 0},
         {work: 'weekly:ledger', range: '24h', perHour: 0, left: 58.7, from: 0, to: 0},
-        // By time, as slow as the last day: its few points last about to the reset, whatever the week spent at once when it began.
-        {forecast: 'weekly:ledger', outlook: 'pace'},
+        // By time, as slow as the last day: its few points last about to the reset, whatever the week spent at once when it began; a day and a half of history is past a first day.
+        {forecast: 'weekly:ledger', outlook: 'pace', cold: false},
         {work: 'weekly:pool', range: '24h', perHour: 0, left: 'untilReset', from: 0, to: 0},
         // Over the last hour but one, a tenth of a point: what is left would outlast the week, so it lasts to the reset.
         {work: 'weekly', range: {from: -2 * HOUR, to: -HOUR}, perHour: 0.1, left: 'outlasts', from: 0, to: 0},

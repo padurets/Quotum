@@ -15,8 +15,18 @@ import {cadence, forecastCodes, points, resetsOf} from './reads.js';
 /** The codes of a line of the table that say where a weekly window leads (`CardCheck`). */
 const CODES = ['outlook', 'tone', 'unit', 'burst', 'cold', 'why'];
 
-/** Other starts than the catalogue test's, at the same minute of the hour: other hours of the day and days of the week in UTC. */
-const STARTS = [Date.UTC(2026, 8, 21, 4, 7), Date.UTC(2026, 8, 24, 12, 7), Date.UTC(2026, 8, 26, 18, 7)];
+/**
+ * Other starts than the catalogue test's, at the same minute of the hour: other hours of the
+ * day in UTC, which is where the demo's days begin for the forecast (the demo goes by
+ * offsets from its start, so a day of the week alone changes nothing). Each with an hour of
+ * its own for the subscriptions' forecasts, which goes by a source's id, and some of the
+ * catalogue's ids by its random users': whole, as late as it gets, or the cards' own here.
+ */
+const STARTS: {at: number; shift?: (source: string) => number}[] = [
+  {at: Date.UTC(2026, 8, 21, 4, 7), shift: () => 0},
+  {at: Date.UTC(2026, 8, 24, 12, 7), shift: () => 599_000},
+  {at: Date.UTC(2026, 8, 26, 18, 7)},
+];
 
 /** When the catalogue test measures a card, as `Live` does, up to `until`: its history, then on its machines' cadence, each with the time to the next. */
 function times(set: DemoSet, card: Card, until: number): {t: number; next: number}[] {
@@ -38,9 +48,9 @@ function times(set: DemoSet, card: Card, until: number): {t: number; next: numbe
  * the hour kept. Here every card with such codes goes through the hub's own forecasts on
  * a store of its own, measured and read as the catalogue test does (at the same points,
  * so the forecasts' memory is the same), at three other starts: a code that holds only by
- * the hour of the day or the day of the week the test happened to start on fails here.
+ * the hour of the day the test happened to start on, or by its cards' hour of forecasts, fails here.
  */
-test("where the catalogue's weekly windows lead holds at other hours of the day and days of the week", {timeout: 240_000}, () => {
+test("where the catalogue's weekly windows lead holds at other hours of the day, whatever the hour of the forecasts", {timeout: 240_000}, () => {
   const set = SETS.find(s => s.id === 'all')!;
   const scene = SCENES.find(s => s.id === set.scene)!;
   const read = points(set);
@@ -53,11 +63,11 @@ test("where the catalogue's weekly windows lead holds at other hours of the day 
   const wrong: string[] = [];
   const dir = mkdtempSync(path.join(tmpdir(), 'quotum-demo-starts-'));
   try {
-    for (const start of STARTS) {
+    for (const {at: start, shift} of STARTS) {
       for (const {card, checks} of foreseen) {
         const until = Math.max(...checks.map(({span}) => span.to));
         const store = new Store(path.join(dir, `${start}-${card.id}.sqlite`), start - 60 * DAY);
-        const forecasts = new Forecasts(store);
+        const forecasts = new Forecasts(store, {shift});
         const machine = machineInfo(machineOf(set, card.machines[0]));
         const batch = (t: number, next: number) =>
           parseBatch({version: 1, agent: 'quotum-demo/1', machine, sentAt: new Date(start + t).toISOString(), snapshots: [snapshot(card, start, t, next)], failures: []}).snapshots[0];
