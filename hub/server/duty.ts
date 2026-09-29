@@ -21,7 +21,8 @@ const HANDOVER_IDLE_MS = 10 * 60_000;
 /**
  * `askedAt`: when the holder was last told to measure, until it answers.
  * `answering`: false once it asked again leaving a command unanswered; until it answers
- * one, being told to measure keeps it no duty. Asking again, it is no longer measuring.
+ * the last command, however late, being told to measure keeps it no duty. Asking again,
+ * it is no longer measuring.
  */
 type Holder = {device: string; until: number; activeAt: number; askedAt: number | null; answering: boolean};
 
