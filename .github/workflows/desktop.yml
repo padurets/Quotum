@@ -95,6 +95,10 @@ jobs:
         run: cargo clippy --all-targets --locked -- -D warnings
       - working-directory: desktop
         run: cargo test --locked
+      - name: Native loader callbacks (Linux)
+        if: runner.os == 'Linux'
+        working-directory: desktop
+        run: xvfb-run -a cargo test --locked native_signals_keep_their_presentation -- --ignored --test-threads=1
       - name: Chromium policy tests
         run: node --test desktop/electron/policy.test.cjs
       - name: Build (Linux)

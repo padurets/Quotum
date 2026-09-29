@@ -754,8 +754,11 @@ compact or none, and resolved anchor. Startup, second launches, tray actions and
 compact panel's buttons share that order. Workers carry an immutable ticket and the
 initial handshake reads the current head, so an older worker cannot reclaim focus.
 Cancellation is terminal for its revision; native callbacks also belong to one engine
-and presentation. Explicit *Limits* on the current panel keeps that presentation and
-its anchor.
+and presentation. Each GTK loader has its own native window and immutable ticket;
+its focus, Escape and close signals retain that ticket even when delivered late.
+Retiring it removes the timeout, stops the spinner and destroys the window; only
+parsed CSS and the last tray anchor are shared between presentations. Explicit
+*Limits* on the current panel keeps that presentation and its anchor.
 
 A bounded publisher sends the complete head before showing a new loader beside an
 existing engine. Its nonblocking fast path never waits for the browser; under socket

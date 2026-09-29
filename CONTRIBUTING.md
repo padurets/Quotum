@@ -58,6 +58,12 @@ The panel check also queues three activations while its own controller is briefl
 then verifies that the final open survives delayed focus events. It pauses its browser,
 queues a main-window reopen followed by a newer tray activation, and checks that the
 main window never takes focus from that newer loader or panel when the browser resumes.
+With an existing browser still paused, it also queues a loader close/reopen and checks
+that the retired loader's focus event cannot cancel the replacement. The native GTK
+callback regression runs separately under Xvfb:
+`xvfb-run -a cargo test --locked native_signals_keep_their_presentation -- --ignored --test-threads=1`
+in `desktop/`. It uses real GTK signals and checks that retired windows are released;
+ordinary `cargo test` skips this display-dependent test. CI runs both.
 A successful
 controller exit alone does not prove that browser children closed successfully.
 The intentional child-crash supervisor regression requires `QUOTUM_TEST_FAULT=1`;

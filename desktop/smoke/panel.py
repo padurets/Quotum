@@ -77,6 +77,27 @@ def check_panel(bus, item, child, root, env):
                     found.append(attributes)
         return found
 
+    def focused_inside(window):
+        focus, revert = C.c_ulong(), C.c_int()
+        x.XGetInputFocus(display, C.byref(focus), C.byref(revert))
+        current = focus.value
+        # GTK can focus a child proxy instead of its top-level loader window.
+        # Follow only this bounded native ancestry, never just "not main".
+        for _ in range(32):
+            if current == window:
+                return True
+            if current <= 1:
+                return False
+            parent, screen, count = C.c_ulong(), C.c_ulong(), C.c_uint()
+            children = C.POINTER(C.c_ulong)()
+            valid = x.XQueryTree(display, current, C.byref(screen), C.byref(parent), C.byref(children), C.byref(count))
+            if children:
+                x.XFree(children)
+            if not valid or parent.value == current:
+                return False
+            current = parent.value
+        return False
+
     def wait(predicate):
         until = time.monotonic() + 10
         while time.monotonic() < until:
@@ -147,11 +168,7 @@ def check_panel(bus, item, child, root, env):
             subprocess.run([child.args[0]], env=env, timeout=5, check=True)
             activate()
             loader = wait(lambda: visible(child.pid))
-            focus, revert = C.c_ulong(), C.c_int()
-            def loader_focused():
-                x.XGetInputFocus(display, C.byref(focus), C.byref(revert))
-                return focus.value == loader[0].id
-            wait(loader_focused)
+            wait(lambda: focused_inside(loader[0].id))
             # Initial main focus belongs before this boundary. The loader owns
             # focus now, and only an excursion after resume is a regression.
             event = (C.c_long * 24)()
@@ -171,8 +188,32 @@ def check_panel(bus, item, child, root, env):
             assert not ((event[0] & 0xffffffff) == 9 and event[4] == board.id), 'obsolete main briefly took focus from the newer loader'
         activate()
         wait(lambda: not any(w.override for w in visible(pid)))
+        # Keep an existing browser stopped while the native loader is closed and
+        # reopened by two queued tray callbacks. Its old FocusOut must belong to
+        # the retired GTK window, even when the new show waits for publication.
+        os.kill(pid, signal.SIGSTOP)
+        try:
+            activate()
+            old_loader = wait(lambda: visible(child.pid))[0]
+            wait(lambda: focused_inside(old_loader.id))
+            os.kill(child.pid, signal.SIGSTOP)
+            try:
+                for _ in range(2):
+                    bus.call(item, '/StatusNotifierItem', 'org.kde.StatusNotifierItem', 'Activate', GLib.Variant('(ii)', (600, 440)), None, Gio.DBusCallFlags.NONE, 3000, None, None, None)
+                    bus.flush_sync(None)
+                    time.sleep(.1)
+            finally:
+                os.kill(child.pid, signal.SIGCONT)
+            replacement = wait(lambda: next((w for w in visible(child.pid) if w.id != old_loader.id), None))
+            wait(lambda: focused_inside(replacement.id))
+        finally:
+            os.kill(pid, signal.SIGCONT)
+        popup = wait(lambda: next((w for w in visible(pid) if w.override), None))
+        wait(lambda: focused_inside(popup.id))
+        activate()
+        wait(lambda: not any(w.override for w in visible(pid)))
         assert not errors, f'unexpected X11 errors: {errors}'
-        return {'loadingWithoutBrowser': True, 'popupHandoff': True, 'cancelledBeforePaint': True, 'queuedFinalOpen': True, 'newerPanelKeepsFocus': True}
+        return {'loadingWithoutBrowser': True, 'popupHandoff': True, 'cancelledBeforePaint': True, 'queuedFinalOpen': True, 'newerPanelKeepsFocus': True, 'retiredLoaderCannotCancelReopen': True}
     finally:
         x.XCloseDisplay(display)
         x.XSetErrorHandler(previous_handler)
