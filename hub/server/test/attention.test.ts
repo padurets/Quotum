@@ -100,6 +100,21 @@ test('a batch drops candidates when a later sample changes the window identity',
   assert.equal(h.candidates.length, 1, 'the new identity starts its own observation');
 });
 
+test('queued events cannot cross an identity change between committed batches', t => {
+  const h = setup(t);
+  h.deliver([[T, 35, 'Old pool']]);
+  h.open();
+  h.deliver([[T + 1000, 29, 'Old pool']]);
+  h.deliver([[T + 1010, 35, 'New pool']]);
+  h.deliver([[T + 1020, 35, 'Old pool']]);
+  h.events.flush();
+  assert.equal(h.store.states(h.board)[0].windows[0].label, 'Old pool');
+  assert.deepEqual(notifications(h.frames), [], 'returning the label cannot revive an earlier cycle');
+  h.deliver([[T + 2000, 29, 'Old pool']]);
+  h.events.flush();
+  assert.equal(notifications(h.frames).length, 1, 'a later crossing in the current cycle is still delivered');
+});
+
 test('a reset deadline updates desktop quality even when the card stays the same', t => {
   const h = setup(t);
   h.deliver([[T, 80]]);
@@ -233,7 +248,7 @@ test('candidate overflow gives a new empty baseline, never replay', t => {
   h.deliver([[T, 35]]);
   h.open();
   const source = h.store.states(h.board)[0];
-  const candidate: Candidate = {id: 'fixture', kind: 'critical', at: T, observedFrom: T, observedAt: T + 1, sourceId: source.id, windowId: 'week', provider: 'codex', name: '', window: {kind: 'weekly', label: null, minutes: 10080}, remaining: 9, resetAt: null};
+  const candidate: Candidate = {id: `${source.id}/week/0/critical`, kind: 'critical', at: T, observedFrom: T, observedAt: T + 1, sourceId: source.id, windowId: 'week', provider: 'codex', name: '', window: {kind: 'weekly', label: null, minutes: 10080}, remaining: 9, resetAt: null};
   h.events.candidates(Array.from({length: 2000}, () => candidate));
   h.events.flush();
   const attention = h.frames.filter(f => f.type === 'attention').map(f => JSON.parse(f.data));

@@ -21,6 +21,7 @@ use std::os::unix::{
 };
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -36,6 +37,7 @@ pub struct Host {
     stopped: Condvar,
     tray: Mutex<Option<ksni::blocking::Handle<Tray>>>,
     panel_height: Mutex<f64>,
+    panel_request: Arc<AtomicU64>,
 }
 struct Gui {
     writer: Mutex<UnixStream>,
@@ -117,6 +119,7 @@ fn start(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         stopped: Condvar::new(),
         tray: Mutex::new(None),
         panel_height: Mutex::new(180.0),
+        panel_request: Arc::default(),
     };
     let _ = window::HUB_LOG.set(dirs.hub_log().display().to_string());
     let shell = Arc::new(Shell::new(dirs, node, resources.join("hub"), args.smoke.map(smoke::Smoke::new), lock, host));
@@ -228,6 +231,9 @@ fn open_at(shell: &Arc<Shell>, role: window::Role, anchor: Option<(i32, i32)>, t
         if shell.exiting() {
             return;
         }
+        if request.is_some_and(|id| shell.host.panel_request.load(Ordering::SeqCst) != id) {
+            return;
+        }
         let gui = shell.host.gui.lock().unwrap_or_else(|e| e.into_inner()).clone();
         if let Some(gui) = gui {
             let message = if let Some(request) = request {
@@ -308,6 +314,11 @@ fn launch(shell: &Arc<Shell>, role: window::Role, anchor: Option<(i32, i32)>, re
         windows: Mutex::default(),
     });
     *shell.host.gui.lock().unwrap_or_else(|e| e.into_inner()) = Some(gui.clone());
+    // A cancellation may have arrived while spawn was waiting for exec and no Gui
+    // existed. Once published, all later cancellations can reach this channel.
+    if let Some(request) = request.filter(|id| shell.host.panel_request.load(Ordering::SeqCst) != *id) {
+        let _ = gui.send(&json!({"type":"panel_intent", "request":request, "open":false}));
+    }
     shell.hub_log.line(&format!("app: Chromium starts (pid {})", gui.pid));
     let logging = shell.clone();
     let stderr = process.stderr.take().expect("piped stderr");
@@ -396,7 +407,8 @@ fn read_messages(shell: &Arc<Shell>, gui: &Arc<Gui>, socket: UnixStream) {
         match message {
             Message::Ready => {
                 let height = *shell.host.panel_height.lock().unwrap_or_else(|e| e.into_inner());
-                let _ = gui.send(&json!({"type":"init", "role": gui.initial, "anchor": gui.anchor, "nativePanel":shell.host.native_panel, "panelRequest":gui.request, "panelHeight": height, "popupRadius":crate::native_text::popup_radius(), "inspect": shell.host.inspector.is_some(), "profile": shell.dirs.webview.clone().unwrap_or_else(|| shell.dirs.data.join("chromium")), "geometry": shell.dirs.data.join("window.json")}));
+                let cancelled = gui.request.is_some_and(|id| shell.host.panel_request.load(Ordering::SeqCst) != id);
+                let _ = gui.send(&json!({"type":"init", "role": gui.initial, "anchor": gui.anchor, "nativePanel":shell.host.native_panel, "panelRequest":gui.request, "panelCancelled":cancelled, "panelHeight": height, "popupRadius":crate::native_text::popup_radius(), "inspect": shell.host.inspector.is_some(), "profile": shell.dirs.webview.clone().unwrap_or_else(|| shell.dirs.data.join("chromium")), "geometry": shell.dirs.data.join("window.json")}));
                 send_state(shell, gui, false);
             }
             Message::Surface { role, instance, open } => {

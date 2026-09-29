@@ -211,7 +211,11 @@ instructions to the native host.
 Candidates leave ingestion only after its transaction commits. They are not
 reconstructed from coalesced card frames. The pending candidate buffer is bounded
 by the stream's buffer limit; overflow discards pending events and starts a new
-attention baseline. Disconnected readers retain no notification queue. There is
+attention baseline. Before emission, a quota candidate must still name the current
+window semantics and ledger cycle. Changing kind, label or duration invalidates
+pending candidates even if the old values return before the next flush. The desktop
+also checks window semantics and its observation boundary after native queueing.
+Disconnected readers retain no notification queue. There is
 no replay through `Last-Event-ID`, after restart, or across a baseline. A crash
 between consumption and native delivery may lose a notification; successful
 native submission does not guarantee the operating system displayed it.

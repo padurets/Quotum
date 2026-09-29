@@ -640,7 +640,9 @@ hands off to the browser only after its first paint. The loader is a native popu
 with skip-taskbar hints; the browser is an unmanaged popup. While the browser is
 visible, the native owner stays transparent and accepts no pointer input, preserving
 keyboard focus across XWayland. Both close together. Neither is a taskbar entry. Request
-numbers prevent a cancelled or superseded load from appearing later. The loader
+numbers prevent a cancelled or superseded load from appearing later. The controller
+retains the active request before a GUI exists, checks it before launch and supplies
+its cancellation during the initial handshake; closing never depends on first paint. The loader
 and ready panel both dismiss on an outside click or Escape. Without X11 the app
 keeps the compositor-managed browser path. A direct tray activation toggles it; the blur and activation
 of the same pointer gesture cannot close and immediately reopen it. The menu's
@@ -748,7 +750,9 @@ while the question is being prepared cannot leave an unseen consent request runn
 key, keeps the session cookie in memory and reads the desktop variant of its SSE stream
 (spec/dashboard-v1.md). The hub shares level, visibility and naming with the board.
 A persistent window ledger consumes each threshold once per confirmed cycle inside the
-measurement transaction; candidates leave only after commit. Scheduled tracker news has
+measurement transaction; candidates leave only after commit. Queued candidates are
+checked against the current window semantics and ledger cycle before SSE emission;
+the native sink retains semantic-change boundaries across its own queue. Scheduled tracker news has
 its own watermark. Every connection starts from an empty notification baseline; old
 spooled observations cannot become live events through a new receipt time.
 
@@ -762,8 +766,12 @@ crashes and system suppression may lose an event, and nothing replays it.
 Linux keeps one ksni handle and uses session D-Bus notifications independently of its
 tray watcher. The notification connection's authentication and each method call have
 a one-second timeout, so an unresponsive bus does not hold shutdown indefinitely.
+Its action listener is an owned cancellable task on the same runtime; stopping it
+does not wait for the notification daemon to close its end of the connection.
 Windows owns one Shell_NotifyIcon control window, used for its status,
-menu and silent notifications in both installer and portable builds. Explorer restart
+menu and silent notifications in both installer and portable builds. Its queue keeps
+at most 64 notification intents; the latest status and panel controls are coalesced
+separately and processed first, so notification overflow cannot discard them. Explorer restart
 registers only the current icon. Native text is generated from the same EN/RU catalogs
 as the page; settings and language are saved atomically in `app.json` and published to
 both windows in the common numbered AppState.

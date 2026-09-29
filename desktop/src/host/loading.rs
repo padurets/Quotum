@@ -7,7 +7,10 @@ use crate::{
 use gtk::{gdk, glib, prelude::*};
 use std::{
     cell::{Cell, RefCell},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -25,6 +28,7 @@ struct Panel {
     label: gtk::Label,
     intent: PanelToggle,
     request: u64,
+    requested: Arc<AtomicU64>,
     phase: Phase,
     handle: u64,
     timeout: Option<glib::SourceId>,
@@ -134,6 +138,7 @@ pub fn install(shell: &Arc<Shell>) {
             label,
             intent: PanelToggle::default(),
             request: 0,
+            requested: shell.host.panel_request.clone(),
             phase: Phase::Closed,
             handle: 0,
             timeout: None,
@@ -194,6 +199,7 @@ impl Panel {
         }
     }
     fn hide(&mut self) {
+        self.requested.store(0, Ordering::SeqCst);
         if let Some(timeout) = self.timeout.take() {
             timeout.remove();
         }
@@ -214,6 +220,7 @@ impl Panel {
     }
     fn show(&mut self, shell: &Arc<Shell>, anchor: Option<(i32, i32)>) {
         self.request += 1;
+        self.requested.store(self.request, Ordering::SeqCst);
         self.retried = false;
         let request = self.request;
         self.phase = Phase::Loading;

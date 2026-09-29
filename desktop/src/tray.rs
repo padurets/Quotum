@@ -1,4 +1,6 @@
 //! One Shell icon owns Windows activation, menus and notification delivery, including portable builds.
+pub use crate::tray_queue::Command;
+use crate::tray_queue::Commands;
 use crate::{
     attention::Status,
     shell::{self, Shell},
@@ -6,9 +8,8 @@ use crate::{
 };
 use std::cell::{Cell, RefCell};
 use std::sync::{
-    Arc, Weak,
+    Arc, Mutex, Weak,
     atomic::{AtomicIsize, Ordering},
-    mpsc::{self, Receiver, SyncSender},
 };
 use windows_sys::Win32::{
     Foundation::*,
@@ -23,15 +24,9 @@ const ID: u32 = 1;
 const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
 
 pub struct Handle {
-    queue: SyncSender<Command>,
+    queue: Arc<Mutex<Commands>>,
     hwnd: Arc<AtomicIsize>,
     worker: Option<std::thread::JoinHandle<()>>,
-}
-pub enum Command {
-    Status(Status),
-    Notify(Box<crate::attention::Intent>),
-    Loading(bool),
-    PanelReady(u64),
 }
 impl Handle {
     pub fn stop(mut self) {
@@ -54,7 +49,8 @@ impl Handle {
     }
 
     pub fn send(&self, command: Command) {
-        if self.queue.try_send(command).is_ok() {
+        let wake = self.queue.lock().unwrap_or_else(|e| e.into_inner()).push(command);
+        if wake {
             let hwnd = self.hwnd.load(Ordering::SeqCst) as HWND;
             if !hwnd.is_null() {
                 unsafe {
@@ -93,7 +89,7 @@ fn copy_wide<const N: usize>(to: &mut [u16; N], text: &str) {
 }
 struct Context {
     shell: Weak<Shell>,
-    queue: Receiver<Command>,
+    queue: Arc<Mutex<Commands>>,
     icon: Cell<HICON>,
     status: RefCell<Status>,
     restart: u32,
@@ -101,7 +97,8 @@ struct Context {
 }
 
 pub fn create(_: &tauri::AppHandle, shell: &Arc<Shell>) {
-    let (send, receive) = mpsc::sync_channel(64);
+    let queue = Arc::new(Mutex::new(Commands::default()));
+    let receive = queue.clone();
     let hwnd = Arc::new(AtomicIsize::new(0));
     let control = hwnd.clone();
     let weak = Arc::downgrade(shell);
@@ -169,7 +166,7 @@ pub fn create(_: &tauri::AppHandle, shell: &Arc<Shell>) {
         UnregisterClassW(name.as_ptr(), instance);
     });
     *shell.host.tray.lock().unwrap_or_else(|e| e.into_inner()) =
-        Some(Handle { queue: send, hwnd: control, worker: Some(worker) });
+        Some(Handle { queue, hwnd: control, worker: Some(worker) });
 }
 unsafe fn identity(hwnd: HWND) -> NOTIFYICONDATAW {
     let mut data: NOTIFYICONDATAW = unsafe { std::mem::zeroed() };
@@ -231,7 +228,9 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
     }
     match message {
         COMMAND => {
-            while let Ok(command) = context.queue.try_recv() {
+            loop {
+                let command = context.queue.lock().unwrap_or_else(|e| e.into_inner()).pop();
+                let Some(command) = command else { break };
                 match command {
                     Command::Loading(true) => context.loading.show(icon_rect(hwnd)),
                     Command::Loading(false) => context.loading.hide(),

@@ -1,10 +1,11 @@
 //! Freedesktop delivery and one cancellable action listener, independent of the tray.
 use super::{Intent, delivery};
 use crate::{native_text, shell::Shell, window};
+use futures_lite::StreamExt;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
 use std::time::Duration;
+use tokio::task::JoinHandle;
 use zbus::{
     blocking::{Connection, Proxy},
     zvariant::Value,
@@ -17,10 +18,10 @@ pub struct Client {
 }
 impl Drop for Client {
     fn drop(&mut self) {
-        let _ = self.connection.clone().close();
-        if let Some(thread) = self.actions.take() {
-            let _ = thread.join();
+        if let Some(actions) = self.actions.take() {
+            stop_actions(actions);
         }
+        let _ = self.connection.clone().close();
     }
 }
 impl Client {
@@ -32,12 +33,12 @@ impl Client {
             "/org/freedesktop/Notifications",
             "org.freedesktop.Notifications",
         )?;
-        let signals = proxy.receive_signal("ActionInvoked")?;
+        let mut signals = zbus::block_on(proxy.inner().receive_signal("ActionInvoked"))?;
         let ids = Arc::new(Mutex::new(VecDeque::new()));
         let accepted = ids.clone();
         let weak = Arc::downgrade(shell);
-        let actions = std::thread::spawn(move || {
-            for signal in signals {
+        let actions = zbus::block_on(async { tokio::runtime::Handle::current() }).spawn(async move {
+            while let Some(signal) = signals.next().await {
                 let Ok((id, action)) = signal.body().deserialize::<(u32, String)>() else {
                     continue;
                 };
@@ -57,6 +58,15 @@ impl Client {
         });
         Ok(Self { connection, ids, actions: Some(actions) })
     }
+}
+
+fn stop_actions(actions: JoinHandle<()>) {
+    // Closing a D-Bus connection can leave its read half waiting on the peer.
+    // The listener belongs to this client and stops even if that peer is frozen.
+    actions.abort();
+    zbus::block_on(async {
+        let _ = actions.await;
+    });
 }
 
 fn connect_bus(builder: zbus::connection::Builder<'_>) -> zbus::Result<Connection> {
@@ -131,6 +141,26 @@ pub fn send(shell: &Arc<Shell>, intent: Intent, client: &mut Option<Client>) {
 mod tests {
     use super::*;
     use std::{io::Read, os::unix::net::UnixListener, sync::mpsc, time::Instant};
+
+    #[test]
+    fn an_idle_action_listener_drops_without_a_peer_reply() {
+        struct Dropped(mpsc::Sender<()>);
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                let _ = self.0.send(());
+            }
+        }
+        let (drop, dropped) = mpsc::channel();
+        let (start, started) = mpsc::channel();
+        let actions = zbus::block_on(async { tokio::runtime::Handle::current() }).spawn(async move {
+            let _guard = Dropped(drop);
+            start.send(()).unwrap();
+            std::future::pending::<()>().await;
+        });
+        started.recv_timeout(Duration::from_secs(2)).unwrap();
+        stop_actions(actions);
+        dropped.recv_timeout(Duration::from_secs(2)).unwrap();
+    }
 
     #[test]
     fn a_silent_bus_cannot_hold_the_delivery_worker_during_authentication() {

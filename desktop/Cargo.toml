@@ -38,6 +38,7 @@ webview2-com = "0.38.2"
 zbus = { version = "=5.13.2", features = ["blocking-api", "tokio"] }
 # Bound the asynchronous D-Bus handshake without leaving a blocked worker behind.
 tokio = { version = "1.53.1", features = ["time"] }
+futures-lite = "2.6.1"
 ksni = { version = "0.3.6", features = ["blocking"] }
 signal-hook = "0.3.18"
 # A small loading surface can respond before the disposable browser starts.

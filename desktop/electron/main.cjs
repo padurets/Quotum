@@ -183,13 +183,14 @@ app.on('child-process-gone', (_, details) => {
     scheduleGraphics();
   }
 });
-app.on('window-all-closed', () => {
+function idle() {
   if (quitting) return;
   // A tray press can dismiss the panel before its activation reaches us. Keep
   // the gesture record alive for the matching release, without retaining a page.
   clearTimeout(idleExit);
   idleExit = setTimeout(() => { if (!surfaces.size) finish(); }, TRAY_GESTURE_MS);
-});
+}
+app.on('window-all-closed', idle);
 app.on('before-quit', () => { quitting = true; });
 process.on('SIGTERM', finish);
 process.on('SIGINT', finish);
@@ -217,10 +218,12 @@ Promise.all([initialized, app.whenReady()]).then(([config]) => {
   screen.on('display-metrics-changed', refit);
   screen.on('display-removed', refit);
   if (Number.isSafeInteger(config.panelRequest)) panelRequest = config.panelRequest;
-  openSurface(config.role ?? 'main', config.anchor, config.panelRequest);
+  panelCancelled = config.panelCancelled === true;
+  if (config.role !== 'compact' || !panelCancelled) openSurface(config.role ?? 'main', config.anchor, config.panelRequest);
   for (const message of requested.splice(0)) {
     if (message.type === 'panel_intent') presentPanel(message); else present(message);
   }
+  if (!surfaces.size) idle();
 });
 function pointer() {
   try { return screen.getCursorScreenPoint(); } catch { return undefined; }

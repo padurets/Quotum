@@ -8,7 +8,7 @@ const vm = require('node:vm');
 
 // Run the real main process handlers with a web view whose navigations commit
 // only when the test asks. No Electron, display, filesystem writes or clients.
-async function mainProcess({cursor = () => ({x: 790, y: 590}), displays = [{workArea: {x: 0, y: 0, width: 800, height: 600}}], backend = '', env = {}, startup = [], panelHeight, nativePanel = false, panelRequest, deferClose = false} = {}) {
+async function mainProcess({cursor = () => ({x: 790, y: 590}), displays = [{workArea: {x: 0, y: 0, width: 800, height: 600}}], backend = '', env = {}, startup = [], panelHeight, nativePanel = false, panelRequest, panelCancelled = false, role, deferClose = false} = {}) {
   let channel;
   let window;
   const windows = [];
@@ -90,7 +90,7 @@ async function mainProcess({cursor = () => ({x: 790, y: 590}), displays = [{work
   });
   vm.runInContext(readFileSync(`${__dirname}/main.cjs`, 'utf8'), context);
   const deliver = (...messages) => channel.emit('data', messages.map(message => JSON.stringify(message) + '\n').join(''));
-  deliver({type: 'init', profile: '/isolated/profile', geometry: '/isolated/window.json', panelHeight, nativePanel, panelRequest}, ...startup);
+  deliver({type: 'init', profile: '/isolated/profile', geometry: '/isolated/window.json', panelHeight, nativePanel, panelRequest, panelCancelled, role}, ...startup);
   await new Promise(setImmediate);
   return {
     navigations, deliver, sent, traffic, quits, windows, screenEvents,
@@ -402,6 +402,19 @@ test('cancellation is terminal even when it overtakes the opening worker', async
   main.windows[0].close();
   main.tick(60000);
   assert.deepEqual(main.quits, ['quit']);
+});
+
+test('a controller cancellation before the initial handshake creates no renderer', async () => {
+  const config = {nativePanel: true, role: 'compact', panelRequest: 1, panelCancelled: true};
+  const cancelled = await mainProcess(config);
+  cancelled.deliver({type: 'panel_intent', request: 1, open: true});
+  assert.equal(cancelled.windows.length, 0);
+  cancelled.tick(60000);
+  assert.deepEqual(cancelled.quits, ['quit']);
+  const reopened = await mainProcess({...config, startup: [{type: 'panel_intent', request: 2, open: true}]});
+  assert.equal(reopened.windows.length, 1, 'a later request still opens on this engine');
+  reopened.tick(1000);
+  assert.deepEqual(reopened.quits, []);
 });
 
 test('Escape dismisses a compact window before any page or React handler loads', async () => {

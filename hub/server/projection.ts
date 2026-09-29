@@ -1,4 +1,4 @@
-import {level, type AttentionState, type Candidate} from './domain/attention.js';
+import {level, sameWindow, type AttentionState, type Candidate} from './domain/attention.js';
 import {sourceHidden, isWindowHidden, titled} from './domain/presentation.js';
 import {config} from './config.js';
 import type {Ingest} from './ingest.js';
@@ -126,7 +126,12 @@ export class Projection {
     return candidates.flatMap((c): Candidate[] => {
       if (c.kind === 'announcement') return cards.some(s => s.provider === c.provider && s.windows.some(w => !isWindowHidden(view, s.id, w.id))) ? [c] : [];
       const source = cards.find(s => s.id === c.sourceId);
-      return source?.windows.some(w => w.id === c.windowId && !isWindowHidden(view, source.id, w.id)) ? [{...c, name: source.title}] : [];
+      const window = source?.windows.find(w => w.id === c.windowId && !isWindowHidden(view, source.id, w.id));
+      if (!source || !window || !sameWindow(c.window, window)) return [];
+      // Coalescing may hide an intermediate identity change from the card delta.
+      // The ledger also rejects a candidate when an old label comes back later.
+      const cycle = this.hub.store.attentionCycle(c.sourceId, c.windowId);
+      return c.id === `${c.sourceId}/${c.windowId}/${cycle}/${c.kind}` ? [{...c, name: source.title}] : [];
     });
   }
 

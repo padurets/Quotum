@@ -19,17 +19,19 @@ pub struct Board {
     cards: BTreeMap<String, Value>,
     lineup: Vec<String>,
     view: Value,
+    baselines: BTreeMap<String, BTreeMap<String, i64>>,
 }
 impl Board {
     pub fn snapshot(&mut self, snapshot: Value) {
         self.cards.clear();
         self.lineup.clear();
+        self.baselines.clear();
         self.view = snapshot["view"].clone();
         if let Some(cards) = snapshot["sources"].as_array() {
             for card in cards {
                 if let Some(id) = card["id"].as_str() {
                     self.lineup.push(id.into());
-                    self.cards.insert(id.into(), card.clone());
+                    self.card(card.clone());
                 }
             }
         }
@@ -43,14 +45,31 @@ impl Board {
                     .map(|v| v.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
                     .unwrap_or_default();
                 self.cards.retain(|id, _| self.lineup.contains(id));
+                self.baselines.retain(|id, _| self.lineup.contains(id));
             }
             "card" => {
-                if let Some(id) = value["id"].as_str() {
-                    self.cards.insert(id.into(), value);
-                }
+                self.card(value);
             }
             _ => {}
         }
+    }
+    fn card(&mut self, card: Value) {
+        let Some(id) = card["id"].as_str() else { return };
+        let old = self.cards.get(id);
+        let baselines = self.baselines.entry(id.into()).or_default();
+        let windows = card["windows"].as_array().map(Vec::as_slice).unwrap_or_default();
+        baselines.retain(|id, _| windows.iter().any(|w| w["id"] == *id));
+        for window in windows {
+            let Some(id) = window["id"].as_str() else { continue };
+            let previous =
+                old.and_then(|c| c["windows"].as_array()).and_then(|windows| windows.iter().find(|w| w["id"] == id));
+            if previous.is_none_or(|p| ["kind", "label", "minutes"].iter().any(|key| p[key] != window[key])) {
+                // Keep the boundary even if the old label is restored before a
+                // queued notification reaches the native sink.
+                baselines.insert(id.into(), card["successAt"].as_i64().unwrap_or(i64::MAX));
+            }
+        }
+        self.cards.insert(id.into(), card);
     }
     fn hidden(&self, key: &str, id: &str) -> bool {
         self.view[key].as_array().is_some_and(|a| a.iter().any(|v| v == id))
@@ -73,16 +92,24 @@ impl Board {
                 if !self.visible(&q.source_id, Some(&q.window_id)) {
                     return false;
                 }
+                let Some(card) = self.cards.get(&q.source_id) else { return false };
+                let current =
+                    card["windows"].as_array().and_then(|windows| windows.iter().find(|w| w["id"] == q.window_id));
+                let baseline = self.baselines.get(&q.source_id).and_then(|b| b.get(&q.window_id));
+                if card["provider"] != q.provider
+                    || baseline.is_none_or(|at| q.observed_at < *at)
+                    || current.is_none_or(|w| {
+                        w["kind"].as_str() != Some(q.window.kind.as_str())
+                            || w["label"].as_str() != q.window.label.as_deref()
+                            || w["minutes"].as_i64() != q.window.minutes
+                    })
+                {
+                    return false;
+                }
                 if let Some(name) = self.view["names"][&q.source_id].as_str() {
                     q.name = name.into();
                 } else {
-                    let Some(card) = self.cards.get(&q.source_id) else {
-                        return false;
-                    };
                     let provider = card["provider"].as_str().unwrap_or("");
-                    if provider != q.provider {
-                        return false;
-                    }
                     let number = self
                         .lineup
                         .iter()
@@ -224,9 +251,29 @@ mod tests {
     use super::*;
     use serde_json::json;
     #[test]
+    fn queued_candidates_do_not_survive_a_replaced_window() {
+        let card = |label: &str, at: i64| json!({"id":"one","provider":"codex","successAt":at,"windows":[{"id":"week","kind":"weekly","label":label,"minutes":10080}]});
+        let mut board = Board::default();
+        board.snapshot(json!({"view":{"hidden":[],"windows":[],"names":{}},"sources":[card("Old pool", 1)]}));
+        let mut candidate: Candidate = serde_json::from_value(json!({"id":"event","kind":"low","at":10,"observedFrom":1,"observedAt":2,"sourceId":"one","windowId":"week","provider":"codex","name":"","window":{"kind":"weekly","label":"Old pool","minutes":10080},"remaining":29,"resetAt":null})).unwrap();
+        assert!(board.resolve(&mut candidate));
+        board.apply("card", card("New pool", 3));
+        assert!(!board.resolve(&mut candidate));
+        board.apply("card", card("Old pool", 4));
+        assert!(!board.resolve(&mut candidate), "restoring the label cannot revive the queued event");
+        if let Candidate::Quota(q) = &mut candidate {
+            q.observed_at = 5;
+        }
+        assert!(board.resolve(&mut candidate), "new observations of the current window still notify");
+        board.apply("card", json!({"id":"one","provider":"codex","successAt":6,"windows":[]}));
+        board.apply("card", card("Old pool", 7));
+        assert!(!board.resolve(&mut candidate), "a removed window starts a fresh observation boundary");
+    }
+
+    #[test]
     fn queued_candidates_follow_latest_names_and_visibility() {
         let mut board = Board::default();
-        board.snapshot(json!({"view":{"hidden":[],"windows":[],"names":{}},"sources":[{"id":"one","provider":"codex","windows":[{"id":"week"}]},{"id":"two","provider":"codex","windows":[{"id":"week"}]}]}));
+        board.snapshot(json!({"view":{"hidden":[],"windows":[],"names":{}},"sources":[{"id":"one","provider":"codex","successAt":1,"windows":[{"id":"week","kind":"weekly","label":null,"minutes":10080}]},{"id":"two","provider":"codex","successAt":1,"windows":[{"id":"week","kind":"weekly","label":null,"minutes":10080}]}]}));
         let mut candidate: Candidate = serde_json::from_value(json!({"id":"event","kind":"low","at":10,"observedFrom":1,"observedAt":2,"sourceId":"two","windowId":"week","provider":"codex","name":"old name","window":{"kind":"weekly","label":null,"minutes":10080},"remaining":29,"resetAt":null})).unwrap();
         assert!(board.resolve(&mut candidate));
         assert!(matches!(&candidate, Candidate::Quota(q) if q.name == "Codex 2"));

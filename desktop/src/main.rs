@@ -26,6 +26,8 @@ mod tauri_ipc;
 mod tauri_window;
 #[cfg(not(target_os = "linux"))]
 mod tray;
+#[cfg(any(windows, test))]
+mod tray_queue;
 mod window;
 #[cfg(not(target_os = "linux"))]
 #[path = "host/windows_loading.rs"]

@@ -2857,6 +2857,7 @@ name = "quotum-desktop"
 version = "0.4.0"
 dependencies = [
  "chrono",
+ "futures-lite",
  "gdkx11",
  "getrandom 0.4.3",
  "gtk",

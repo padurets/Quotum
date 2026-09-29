@@ -343,6 +343,11 @@ export class Store {
     return {...(JSON.parse(row.payload) as SourceState), id, provider};
   }
 
+  attentionCycle(source: string, window: string): number | null {
+    const row = this.db.prepare('SELECT cycle FROM attention_windows WHERE source_id = ? AND window_id = ?').get(source, window) as {cycle: number} | undefined;
+    return row?.cycle ?? null;
+  }
+
   /**
    * Stores a measurement: a sample per window, the new state of the source, and free
    * resets granted since the last one. A savepoint keeps it whole on its own and inside
