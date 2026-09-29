@@ -628,7 +628,10 @@ draws only a spinner and a localized label, never subscription data. No second w
 engine is linked. It waits for the desktop's tray watcher
 when starting early at login and registers again when that watcher restarts. Opening a window starts an Electron
 process; it holds at most the main board and a compact panel. On X11/XWayland the panel
-uses the tray's activation coordinates, or the pointer when its menu gives none. That
+uses the tray's activation coordinates. An X11 menu can use the pointer; on Wayland
+the menu reuses the last tray activation, since the XWayland pointer can still name
+another window. Before that first activation, it opens at the reserved panel edge
+of the primary monitor, or within that monitor if no edge is reserved. The resolved
 anchor determines its monitor and stays put while the content changes height; native
 Wayland leaves positioning to the compositor. Where X11 is available, GTK and Electron
 use that same backend. The controller shows the native loader immediately, then

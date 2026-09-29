@@ -29,6 +29,7 @@ struct Panel {
     handle: u64,
     timeout: Option<glib::SourceId>,
     anchor: Option<(i32, i32)>,
+    tray_anchor: Option<(i32, i32)>,
     retried: bool,
 }
 
@@ -129,6 +130,7 @@ pub fn install(shell: &Arc<Shell>) {
             handle: 0,
             timeout: None,
             anchor: None,
+            tray_anchor: None,
             retried: false,
         })
     });
@@ -145,6 +147,30 @@ fn dispatch(shell: Arc<Shell>, action: impl FnOnce(&mut Panel, &Arc<Shell>) + Se
 fn pointer() -> Option<(i32, i32)> {
     let (_, x, y) = gdk::Display::default()?.default_seat()?.pointer()?.position();
     Some((x, y))
+}
+fn menu_anchor(wayland: bool, last_tray: Option<(i32, i32)>, pointer: Option<(i32, i32)>) -> Option<(i32, i32)> {
+    // An XWayland pointer can still name the last X11 window after the person
+    // has moved to a Wayland tray menu on another monitor.
+    if wayland { last_tray } else { pointer.or(last_tray) }
+}
+fn fallback_anchor(bounds: gdk::Rectangle, area: gdk::Rectangle, width: i32, height: i32) -> (i32, i32) {
+    let top = area.y() - bounds.y();
+    let bottom = bounds.y() + bounds.height() - area.y() - area.height();
+    let left = area.x() - bounds.x();
+    let right = bounds.x() + bounds.width() - area.x() - area.width();
+    let end_x = area.x() + area.width() - 1;
+    let end_y = area.y() + area.height() - 1;
+    if top > 0 && top >= bottom.max(left).max(right) {
+        (end_x, area.y())
+    } else if left > 0 && left >= bottom.max(right) {
+        (area.x(), end_y)
+    } else if bottom > 0 || right > 0 {
+        (end_x, end_y)
+    } else {
+        // An auto-hidden panel reserves no edge. Keep the first menu opening
+        // within the primary monitor until an activation supplies its position.
+        (area.x() + (area.width() + width) / 2, area.y() + (area.height() + height) / 2)
+    }
 }
 impl Panel {
     fn conceal(&mut self) {
@@ -185,17 +211,23 @@ impl Panel {
         self.phase = Phase::Loading;
         self.label.set_text(native_text::text(shell.locale(), "desktop.loading"));
         self.spinner.start();
-        let anchor = anchor.filter(|&(x, y)| x != 0 || y != 0).or_else(pointer);
-        self.anchor = anchor;
+        let anchor = anchor.filter(|&(x, y)| x != 0 || y != 0);
+        let anchor =
+            anchor.or_else(|| menu_anchor(std::env::var_os("WAYLAND_DISPLAY").is_some(), self.tray_anchor, pointer()));
         let display = gdk::Display::default().expect("initialized GDK");
-        let monitor = anchor.and_then(|(x, y)| display.monitor_at_point(x, y)).or_else(|| display.primary_monitor());
+        let monitor = anchor
+            .and_then(|(x, y)| display.monitor_at_point(x, y))
+            .or_else(|| display.primary_monitor())
+            .or_else(|| display.monitor(0));
+        self.anchor = anchor;
         if let Some(monitor) = monitor {
             let area = monitor.workarea();
             let width = 400.min(area.width());
             let height = (*shell.host.panel_height.lock().unwrap_or_else(|e| e.into_inner()) as i32)
                 .clamp(100, 600)
                 .min(area.height() * 4 / 5);
-            let (x, y) = anchor.unwrap_or((area.x() + area.width(), area.y() + area.height()));
+            let (x, y) = anchor.unwrap_or_else(|| fallback_anchor(monitor.geometry(), area, width, height));
+            self.anchor = Some((x, y));
             self.window.set_size_request(width, height);
             self.window.resize(width, height);
             self.window.move_(
@@ -214,7 +246,7 @@ impl Panel {
         }
         self.window.show_all();
         self.window.present();
-        open_at(shell, Role::Compact, anchor, false, Some(request));
+        open_at(shell, Role::Compact, self.anchor, false, Some(request));
         let weak = Arc::downgrade(shell);
         self.timeout = Some(glib::timeout_add_local_once(Duration::from_secs(15), move || {
             PANEL.with(|state| {
@@ -232,6 +264,9 @@ pub fn activate(shell: &Arc<Shell>, anchor: Option<(i32, i32)>, toggle: bool) {
     dispatch(shell.clone(), move |panel, shell| {
         if shell.exiting() {
             return;
+        }
+        if let Some(anchor) = anchor.filter(|&(x, y)| x != 0 || y != 0) {
+            panel.tray_anchor = Some(anchor);
         }
         let was_open = panel.intent.wanted();
         if toggle {
@@ -251,7 +286,7 @@ pub fn activate(shell: &Arc<Shell>, anchor: Option<(i32, i32)>, toggle: bool) {
             if panel.phase == Phase::Loading {
                 panel.window.present();
             } else {
-                open_at(shell, Role::Compact, anchor, false, Some(panel.request));
+                open_at(shell, Role::Compact, anchor.or(panel.anchor), false, Some(panel.request));
             }
         } else {
             panel.show(shell, anchor);
@@ -367,4 +402,32 @@ pub fn engine_ended(shell: &Arc<Shell>, success: bool) {
             panel.label.set_text(native_text::text(shell.locale(), "desktop.windowFailed"));
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_wayland_menu_does_not_follow_an_old_x11_pointer_to_another_monitor() {
+        let tray = Some((4200, 190));
+        let pointer = Some((250, 330));
+        assert_eq!(menu_anchor(true, tray, pointer), tray);
+        assert_eq!(menu_anchor(true, None, pointer), None);
+        assert_eq!(menu_anchor(false, tray, pointer), pointer);
+    }
+
+    #[test]
+    fn the_first_menu_uses_the_reserved_edge_of_the_primary_monitor() {
+        let bounds = gdk::Rectangle::new(1200, 171, 3440, 1440);
+        let top = gdk::Rectangle::new(1200, 207, 3440, 1404);
+        assert_eq!(fallback_anchor(bounds, top, 400, 368), (4639, 207));
+        let bottom = gdk::Rectangle::new(1200, 171, 3440, 1404);
+        assert_eq!(fallback_anchor(bounds, bottom, 400, 368), (4639, 1574));
+        let left = gdk::Rectangle::new(1236, 171, 3404, 1440);
+        assert_eq!(fallback_anchor(bounds, left, 400, 368), (1236, 1610));
+        let right = gdk::Rectangle::new(1200, 171, 3404, 1440);
+        assert_eq!(fallback_anchor(bounds, right, 400, 368), (4603, 1610));
+        assert_eq!(fallback_anchor(bounds, bounds, 400, 368), (3120, 1075));
+    }
 }

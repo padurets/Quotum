@@ -172,6 +172,10 @@ checks the native handoff and cancellation with its own suspended browser on a
 private bus, with providers disabled. Check a click outside followed by a new tray
 click too, so the blur from the same press cannot reopen it or consume a different
 gesture.
+On Wayland, also open *Limits* from the tray menu before any direct tray click,
+after using an X11 window on another monitor. It must use the primary monitor's
+reserved panel edge; after a direct tray activation, the menu must keep that tray
+position even when the last X11 pointer was on another monitor.
 Check long names, hidden windows, empty data, both languages, small displays and DPI
 changes. Panel height is clamped to its monitor and never saved as the main window's
 geometry. Its commands must fail from the main window, subframes, foreign origins and
