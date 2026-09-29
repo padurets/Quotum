@@ -111,8 +111,8 @@ test('a hub that measures nothing more after it starts works each series out onc
       for (const t of times) h.measure(t, steady(0.6)(t));
       const at = end + wait;
       // As of the last whole hour when the sample came before it, even before the hour of its
-      // subscription comes: as a hub running all along has it from then on. A sample in the
-      // hour stays as of itself, as after a sample that contradicts a forecast.
+      // subscription comes. A sample in the hour stays as of itself, as after a sample that
+      // contradicts a forecast.
       const hour = Math.floor(at / HOUR) * HOUR;
       const first = h.read(at);
       const what = `:${minute}, read ${wait / MIN} min on`;

@@ -139,9 +139,9 @@ export class Forecasts {
     if (!entry) {
       // The first since the hub started: from where it was, if that took in the latest
       // sample, else on the latest sample, as of the last whole hour when it came before it
-      // (whole, not this source's: nothing spreads a first working out, and a hub running
-      // all along has it so from this source's hour). Never as of an hour before it: that
-      // would be worked out again at the next, with no sample new to a board that stands still.
+      // (whole, not this source's: nothing spreads a first working out). Never as of an hour
+      // before it: that would be worked out again at the next, with no sample new to a board
+      // that stands still.
       const kept = this.read(key);
       const asOf = kept && kept.asOf >= successAt ? kept.asOf : Math.max(whole, successAt);
       entry = this.work(key, source, window, asOf, kept ? (kept.asOf === asOf ? kept.memoryIn : kept.memoryOut) : null, successAt, reads, 'first');
