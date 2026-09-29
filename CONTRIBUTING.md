@@ -18,11 +18,11 @@ measures this machine once.
 **The desktop app** (`desktop/`) shares a Rust controller between Electron on Linux
 and Tauri/WebView2 on Windows. `node desktop/prepare.mjs` builds the hub, downloads
 checksum-pinned runtimes, and writes icons and license notices. Run it before the
-checks above. Linux needs `libssl-dev` and `libgtk-3-dev` for the Rust build, `unzip` for preparation,
+checks above. The desktop build requires Rust 1.90 or newer. Linux needs `libssl-dev` and `libgtk-3-dev` for the Rust build, `unzip` for preparation,
 and Chromium's runtime libraries (`libnss3 libgtk-3-0 libgbm1 libasound2` on Debian).
 `cargo run` in `desktop/` starts a prepared debug build. `node desktop/package-linux.mjs`
 builds deb, rpm and AppImage; its packaging tools are `dpkg-deb`, `rpmbuild` and
-`mksquashfs`. On Windows, `npx @tauri-apps/cli@2.11.5 build --target x86_64-pc-windows-msvc`
+`mksquashfs`. On Windows, `npx @tauri-apps/cli@2.12.0 build --target x86_64-pc-windows-msvc`
 makes setup.exe; then `node desktop/package-windows.mjs` packages that build as a portable ZIP.
 CI runs both the installed app and the extracted ZIP, including a path with spaces.
 The release workflow calls the same Desktop workflow and publishes its packages only
@@ -43,6 +43,9 @@ every manual run; a manual run of the Desktop workflow takes `ui-runs`, how many
 the UI smoke runs on the installed app and on the portable one each.
 The queued-close check runs with the main window open and with only the compact
 panel: a delayed close must neither lose the latest open nor crash the last WebView.
+The handoff check also pauses the app UI just after accepting a main-window request,
+then opens the tray panel. That newer panel must keep focus; an obsolete main creation
+must leave no hidden WebView after it is cancelled.
 
 Run `node --test desktop/electron/policy.test.cjs` for the Linux bridge/navigation
 policy. CI runs the installed packages with `--smoke`: the hub starts, a stand-in client

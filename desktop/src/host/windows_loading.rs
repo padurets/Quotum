@@ -167,10 +167,10 @@ impl Panel {
         }
     }
     fn dismiss(&self, blur: bool) {
-        self.hide();
         if let Some(shell) = self.shell.upgrade() {
             crate::tauri_window::dismiss_panel(&shell, blur);
         }
+        self.hide();
     }
     unsafe fn paint(&self, hwnd: HWND) {
         unsafe {

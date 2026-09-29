@@ -58,7 +58,11 @@ impl PanelToggle {
     }
     #[cfg(any(windows, test))]
     pub fn requested(&self, revision: u64) -> bool {
-        self.wanted && self.revision == revision
+        self.foreground_requested(Role::Compact, revision)
+    }
+    #[cfg(any(windows, test))]
+    pub fn foreground_requested(&self, role: Role, revision: u64) -> bool {
+        self.revision == revision && self.wanted == (role == Role::Compact)
     }
     #[cfg(any(windows, test))]
     pub fn closed_at(&mut self, revision: u64) {
@@ -320,6 +324,27 @@ mod tests {
         assert!(panel.wanted(), "an explicit menu opening also supersedes old completion");
         assert!(panel.blur_at(panel.revision(), now, Some((100, 100))));
         assert!(!panel.toggle(now, Some((100, 100))), "blur and tray release still pair");
+    }
+
+    #[test]
+    fn a_delayed_main_request_cannot_take_foreground_after_a_newer_tray_press() {
+        let mut toggle = PanelToggle::default();
+        toggle.close();
+        let main = toggle.revision();
+        assert!(toggle.foreground_requested(Role::Main, main));
+
+        assert!(toggle.toggle(std::time::Instant::now(), None));
+        let panel = toggle.revision();
+        assert!(!toggle.foreground_requested(Role::Main, main));
+        assert!(toggle.foreground_requested(Role::Compact, panel));
+
+        assert!(!toggle.toggle(std::time::Instant::now(), None));
+        assert!(!toggle.foreground_requested(Role::Main, main), "closing the panel must not revive old main work");
+        toggle.close();
+        let latest = toggle.revision();
+        toggle.closed_at(panel);
+        assert!(toggle.foreground_requested(Role::Main, latest));
+        assert!(!toggle.foreground_requested(Role::Compact, panel));
     }
 
     #[test]

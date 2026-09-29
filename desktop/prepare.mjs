@@ -123,7 +123,7 @@ writeFileSync(
 // 4. Icons, from the favicon (square, 32×32).
 const icons = path.join(here, 'icons');
 if (!existsSync(path.join(icons, 'icon.png'))) {
-  execFileSync('npx', ['--yes', '@tauri-apps/cli@2.11.5', 'icon', path.join(hub, 'public/favicon.svg'), '-o', icons], {
+  execFileSync('npx', ['--yes', '@tauri-apps/cli@2.12.0', 'icon', path.join(hub, 'public/favicon.svg'), '-o', icons], {
     cwd: here,
     stdio: 'inherit',
     shell: process.platform === 'win32',

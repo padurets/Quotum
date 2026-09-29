@@ -103,7 +103,7 @@ jobs:
       - name: Build (Windows)
         if: runner.os == 'Windows'
         working-directory: desktop
-        run: npx --yes @tauri-apps/cli@2.11.5 build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} -- --locked
+        run: npx --yes @tauri-apps/cli@2.12.0 build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} -- --locked
       - name: Portable ZIP (Windows)
         if: runner.os == 'Windows'
         run: node desktop/package-windows.mjs

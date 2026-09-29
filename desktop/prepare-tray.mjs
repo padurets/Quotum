@@ -20,7 +20,7 @@ export function prepareTray(here, hub) {
       const svg = path.join(work, `${name}.svg`);
       writeFileSync(svg, vector.replaceAll('#b3b9ff', color).replace('</svg>', `${badge}</svg>`));
       const icons = path.join(work, name);
-      execFileSync('npx', ['--yes', '@tauri-apps/cli@2.11.5', 'icon', svg, '-o', icons], {cwd: here, stdio: 'pipe', shell: process.platform === 'win32'});
+      execFileSync('npx', ['--yes', '@tauri-apps/cli@2.12.0', 'icon', svg, '-o', icons], {cwd: here, stdio: 'pipe', shell: process.platform === 'win32'});
       copyFileSync(path.join(icons, '32x32.png'), path.join(out, `${name}.png`));
       copyFileSync(path.join(icons, 'icon.ico'), path.join(out, `${name}.ico`));
     }

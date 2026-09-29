@@ -121,6 +121,31 @@ public static class QuotumWindowProbe {
     try { if(ResumeThread(thread)==uint.MaxValue) throw new Exception("Cannot resume the test UI thread"); }
     finally {CloseHandle(thread);}
   }
+  [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr window,uint message,IntPtr w,IntPtr l);
+  [DllImport("user32.dll")] static extern bool AllowSetForegroundWindow(uint process);
+  [StructLayout(LayoutKind.Sequential)] struct CopyData { public UIntPtr Kind; public uint Size; public IntPtr Data; }
+  public static IntPtr MainRequestThenPause(int process,string exe) {
+    IntPtr target=IntPtr.Zero;
+    EnumWindows((window,data)=>{
+      uint owner;GetWindowThreadProcessId(window,out owner);
+      var name=new StringBuilder(256);GetClassName(window,name,name.Capacity);
+      if(owner!=(uint)process || name.ToString()!="com.padurets.quotum-sic")return true;
+      target=window;return false;
+    },IntPtr.Zero);
+    if(target==IntPtr.Zero || !Responsive(target))throw new Exception("No responsive owned single-instance window");
+    // The pinned single-instance plugin's normal second-launch message. Wait for
+    // its callback before pausing, so the main worker already owns an old request.
+    byte[] bytes=Encoding.UTF8.GetBytes(Environment.CurrentDirectory+"|"+exe+"\0");
+    IntPtr dataBuffer=Marshal.AllocHGlobal(bytes.Length),message=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(CopyData)));
+    try {
+      Marshal.Copy(bytes,0,dataBuffer,bytes.Length);
+      Marshal.StructureToPtr(new CopyData{Kind=new UIntPtr(1542),Size=(uint)bytes.Length,Data=dataBuffer},message,false);
+      AllowSetForegroundWindow((uint)process);
+      if(SendMessage(target,0x4a,IntPtr.Zero,message)!=new IntPtr(1))throw new Exception("Second-launch message rejected");
+      return PauseUi(target,process);
+    } finally {Marshal.FreeHGlobal(message);Marshal.FreeHGlobal(dataBuffer);}
+  }
+  public static bool Foreground(IntPtr window) { return GetForegroundWindow()==window; }
   public static bool OpenPanel(int process) {
     IntPtr tray=IntPtr.Zero;
     EnumWindows((window,data) => {
@@ -228,6 +253,39 @@ function Test-QueuedPanelReopen([IntPtr]$Except) {
   $deadline=(Get-Date).AddSeconds(5)
   while([QuotumWindowProbe]::IsWindowVisible($panel) -and (Get-Date) -lt $deadline){Start-Sleep -Milliseconds 50}
   if([QuotumWindowProbe]::IsWindowVisible($panel)){throw 'Cannot close the current panel after queued reopen'}
+}
+
+function Test-MainPanelHandoff([IntPtr]$Main) {
+  if(-not [QuotumWindowProbe]::OpenPanel($process.Id)){throw 'Cannot open panel before main handoff'}
+  $deadline=(Get-Date).AddSeconds(15)
+  do {$old=[QuotumWindowProbe]::FindOther($process.Id,$Main);if($old -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 50}while((Get-Date) -lt $deadline)
+  if($old -eq [IntPtr]::Zero){throw 'No initial panel before main handoff'}
+  $paused=[QuotumWindowProbe]::MainRequestThenPause($process.Id,$appPath)
+  try {
+    if(-not [QuotumWindowProbe]::OpenPanel($process.Id)){throw 'Cannot supersede the pending main request'}
+    $deadline=(Get-Date).AddSeconds(3)
+    do {$loader=[QuotumWindowProbe]::Loading($process.Id);if($loader -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 10}while((Get-Date) -lt $deadline)
+    if($loader -eq [IntPtr]::Zero -or -not [QuotumWindowProbe]::Responsive($loader)){throw 'New loader waited for the old main request'}
+  } finally {[QuotumWindowProbe]::ResumeUi($paused)}
+  Start-Sleep -Seconds 2
+  $deadline=(Get-Date).AddSeconds(15)
+  do {$panel=[QuotumWindowProbe]::FindOther($process.Id,$Main);if($panel -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 50}while((Get-Date) -lt $deadline)
+  if($process.HasExited){throw "Old main request crashed the controller: $($process.ExitCode)"}
+  if($panel -eq [IntPtr]::Zero -or -not [QuotumWindowProbe]::Rounded($panel) -or -not [QuotumWindowProbe]::Responsive($panel)){throw 'Old main request lost the new panel'}
+  Start-Sleep -Seconds 1
+  if(-not [QuotumWindowProbe]::Foreground($panel) -or [QuotumWindowProbe]::Loading($process.Id) -ne [IntPtr]::Zero){throw 'Old main request took foreground from the new panel'}
+  [QuotumWindowProbe]::Escape($panel,$process.Id)
+  $deadline=(Get-Date).AddSeconds(5)
+  while([QuotumWindowProbe]::IsWindowVisible($panel) -and (Get-Date) -lt $deadline){Start-Sleep -Milliseconds 50}
+  if([QuotumWindowProbe]::IsWindowVisible($panel)){throw 'Cannot close panel after main handoff'}
+  if($Main -eq [IntPtr]::Zero){
+    $deadline=(Get-Date).AddSeconds(10)
+    do {
+      $browsersLeft=@(Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'"|Where-Object {$_.ParentProcessId -eq $process.Id})
+      if(-not $browsersLeft.Count){break};Start-Sleep -Milliseconds 100
+    }while((Get-Date) -lt $deadline)
+    if($browsersLeft.Count -or [QuotumWindowProbe]::Find($process.Id) -ne [IntPtr]::Zero){throw 'Cancelled main creation retained a window or WebView'}
+  }
 }
 
 try {
@@ -349,13 +407,16 @@ try {
     if (-not [QuotumWindowProbe]::IsWindowVisible($window) -or ($before -join ',') -ne ([QuotumWindowProbe]::Bounds($window) -join ',')) { throw 'The panel changed the main window geometry' }
   }
   Test-QueuedPanelReopen $window
+  Test-MainPanelHandoff $window
   [void][QuotumWindowProbe]::PostMessage($window,0x10,[IntPtr]::Zero,[IntPtr]::Zero)
   $deadline=(Get-Date).AddSeconds(5)
   while([QuotumWindowProbe]::IsWindowVisible($window) -and (Get-Date) -lt $deadline){Start-Sleep -Milliseconds 50}
   if($process.HasExited -or [QuotumWindowProbe]::IsWindowVisible($window)){throw 'Could not close main before the last-WebView check'}
   Test-QueuedPanelReopen ([IntPtr]::Zero)
+  Test-MainPanelHandoff ([IntPtr]::Zero)
   $result.queuedPanelReopen=$true
   $result.queuedPanelReopenWithoutMain=$true
+  $result.mainPanelHandoff=$true
   $second=Start-Process -FilePath $appPath -PassThru
   $null=$second.Handle
   if(-not $second.WaitForExit(10000) -or $second.ExitCode -ne 0){throw 'Could not reopen main after the last-WebView check'}

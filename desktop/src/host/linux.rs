@@ -673,7 +673,9 @@ pub fn reenter_role(shell: &Arc<Shell>, role: window::Role) {
 }
 fn panel_message(shell: &Arc<Shell>, instance: u64, action: &str, height: Option<f64>) {
     if let Some(gui) = shell.host.gui.lock().unwrap_or_else(|e| e.into_inner()).clone() {
-        if gui.windows.lock().unwrap_or_else(|e| e.into_inner()).get(&window::Role::Compact) == Some(&instance) {
+        let current =
+            gui.windows.lock().unwrap_or_else(|e| e.into_inner()).get(&window::Role::Compact) == Some(&instance);
+        if current {
             let _ = gui.send(&json!({"type":"panel", "instance":instance, "action":action, "height":height, "generation":shell.generation()}));
         }
     }

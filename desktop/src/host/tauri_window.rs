@@ -20,32 +20,37 @@ pub fn is_open(shell: &Shell) -> bool {
 /// Shows the window: creates it if there is none, on a thread of its own. `from` names who
 /// asked, for the log.
 pub fn open(shell: &Arc<Shell>, from: &'static str) {
-    shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).close();
+    let request = {
+        let mut toggle = shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner());
+        toggle.close();
+        toggle.revision()
+    };
     crate::tray::loading(shell, false);
     close_unwanted_panel(shell);
-    open_role(shell, from, Role::Main);
+    open_role(shell, from, Role::Main, request);
 }
 pub fn open_panel(shell: &Arc<Shell>) {
-    {
+    let request = {
         let mut toggle = shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner());
         toggle.show();
         shell.host.panel_ready.store(0, Ordering::SeqCst);
-    }
+        toggle.revision()
+    };
     crate::tray::loading(shell, true);
-    open_role(shell, "the tray", Role::Compact);
+    open_role(shell, "the tray", Role::Compact, request);
 }
 pub fn toggle_panel(shell: &Arc<Shell>, point: Option<(i32, i32)>) {
-    let show = {
+    let (show, request) = {
         let mut toggle = shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner());
         let show = toggle.toggle(Instant::now(), point);
         if show {
             shell.host.panel_ready.store(0, Ordering::SeqCst);
         }
-        show
+        (show, toggle.revision())
     };
     if show {
         crate::tray::loading(shell, true);
-        open_role(shell, "the tray", Role::Compact);
+        open_role(shell, "the tray", Role::Compact, request);
     } else {
         crate::tray::loading(shell, false);
         close_unwanted_panel(shell);
@@ -81,10 +86,10 @@ fn retire_panel(shell: &Arc<Shell>, paint: Arc<PanelPaint>) {
     let _ = shell.host.app.run_on_main_thread(move || {
         // This retires a particular presentation, even if a newer open arrived
         // while its UI thread was busy. It must never close that newer window.
-        if current_paint(&queued, &paint) {
-            if let Some(panel) = queued.host.app.get_webview_window("compact") {
-                let _ = panel.close();
-            }
+        if current_paint(&queued, &paint)
+            && let Some(panel) = queued.host.app.get_webview_window("compact")
+        {
+            let _ = panel.close();
         }
     });
 }
@@ -134,18 +139,31 @@ fn reveal_panel(shell: &Arc<Shell>, window: &tauri::WebviewWindow, gate: &Arc<Pa
                 showing.hub_log.line(&format!("app: the panel could not be shown: {error}"));
                 return;
             }
+            // Showing can dispatch native messages before it returns. A new tray
+            // request can retire this presentation even while its HWND is visible.
+            if paint.cancelled.load(Ordering::SeqCst)
+                || !current_paint(&showing, &paint)
+                || !foreground_requested(&showing, Role::Compact, paint.request)
+            {
+                return;
+            }
             let _ = ready.set_focus();
             crate::tray::present_panel(&showing, handle);
         });
     }
 }
 
-fn open_role(shell: &Arc<Shell>, from: &'static str, role: Role) {
+fn foreground_requested(shell: &Shell, role: Role, request: u64) -> bool {
+    !shell.exiting()
+        && shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).foreground_requested(role, request)
+}
+
+fn open_role(shell: &Arc<Shell>, from: &'static str, role: Role, request: u64) {
     let intent = opening(shell);
     let shell = shell.clone();
     thread::spawn(move || {
         let _intent = intent;
-        open_now(&shell, from, role);
+        open_now(&shell, from, role, request);
     });
 }
 
@@ -160,7 +178,7 @@ fn ms(start: Instant) -> u128 {
     start.elapsed().as_millis()
 }
 
-fn open_now(shell: &Arc<Shell>, from: &'static str, role: Role) {
+fn open_now(shell: &Arc<Shell>, from: &'static str, role: Role, request: u64) {
     let label = role.label();
     let start = Instant::now();
     if shell.exiting() {
@@ -168,7 +186,7 @@ fn open_now(shell: &Arc<Shell>, from: &'static str, role: Role) {
     }
     shell.hub_log.line(&format!("app: {from} asks for the window"));
     let _creating = shell.window_lock.lock().unwrap_or_else(|e| e.into_inner());
-    if role == Role::Compact && !shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).wanted() {
+    if !foreground_requested(shell, role, request) {
         return;
     }
     let app = &shell.host.app;
@@ -179,8 +197,7 @@ fn open_now(shell: &Arc<Shell>, from: &'static str, role: Role) {
         let mut present = alive(shell, window.clone(), start + WAIT_LIMIT);
         if role == Role::Compact && present == Some(true) {
             let paint = shell.host.panel_paint.lock().unwrap_or_else(|e| e.into_inner()).clone();
-            let revision = shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).revision();
-            if paint.as_ref().is_none_or(|p| p.request != revision || p.cancelled.load(Ordering::SeqCst)) {
+            if paint.as_ref().is_none_or(|p| p.request != request || p.cancelled.load(Ordering::SeqCst)) {
                 // A native HWND keeps its request for life. Reusing it for a new
                 // request would relabel old queued close/focus events as current.
                 if let Some(paint) = paint {
@@ -196,9 +213,7 @@ fn open_now(shell: &Arc<Shell>, from: &'static str, role: Role) {
             Some(true) => {
                 // The UI smoke (desktop/smoke/windows-ui.ps1) reads this line.
                 shell.hub_log.line(&format!("app: found the window {label} at {} ms", ms(start)));
-                let _ = window.unminimize();
-                if role == Role::Compact && !shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).wanted()
-                {
+                if !foreground_requested(shell, role, request) {
                     return;
                 }
                 if role == Role::Compact {
@@ -209,8 +224,22 @@ fn open_now(shell: &Arc<Shell>, from: &'static str, role: Role) {
                     }
                     reveal_panel(shell, &window, &paint);
                 } else {
-                    let _ = window.show();
-                    let _ = window.set_focus();
+                    let showing = shell.clone();
+                    let _ = shell.host.app.run_on_main_thread(move || {
+                        // A later tray press may already own the foreground. Check
+                        // here, not when this worker first found the main window.
+                        if !foreground_requested(&showing, role, request) {
+                            return;
+                        }
+                        let _ = window.unminimize();
+                        if !foreground_requested(&showing, role, request) {
+                            return;
+                        }
+                        let _ = window.show();
+                        if foreground_requested(&showing, role, request) {
+                            let _ = window.set_focus();
+                        }
+                    });
                 }
                 drop(_creating);
                 follow(shell);
@@ -247,12 +276,12 @@ fn open_now(shell: &Arc<Shell>, from: &'static str, role: Role) {
     }
     // A window that went may still hold its label for a moment.
     for attempt in 1..=20 {
-        if role == Role::Compact && !shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).wanted() {
+        if !foreground_requested(shell, role, request) {
             return;
         }
         shell.hub_log.line(&format!("app: attempt {attempt} to create the window {label} at {} ms", ms(start)));
         let (state, generation) = shell.hub();
-        match build(shell, &state, generation, start, role) {
+        match build(shell, &state, generation, start, role, request) {
             Ok(_) => {
                 drop(_creating);
                 if shell.generation() != generation {
@@ -278,8 +307,10 @@ fn alive(shell: &Shell, window: tauri::WebviewWindow, deadline: Instant) -> Opti
         .host
         .app
         .run_on_main_thread(move || {
-            let closing = window.label() == "compact"
-                && window.app_handle().state::<Arc<Shell>>().host.panel_closing.load(Ordering::SeqCst);
+            let shell = window.app_handle().state::<Arc<Shell>>();
+            let closing =
+                if window.label() == "compact" { &shell.host.panel_closing } else { &shell.host.main_closing };
+            let closing = closing.load(Ordering::SeqCst);
             let _ = answer.send(!closing && window.is_visible().is_ok());
         })
         .ok()?;
@@ -292,6 +323,7 @@ fn build(
     generation: u64,
     start: Instant,
     role: Role,
+    request: u64,
 ) -> tauri::Result<tauri::WebviewWindow> {
     let label = role.label();
     let compact = role == Role::Compact;
@@ -299,15 +331,14 @@ fn build(
     let app = &shell.host.app;
     let navigating = shell.clone();
     let loading = shell.clone();
-    let paint = Arc::new(PanelPaint {
-        request: shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).revision(),
-        ..PanelPaint::default()
-    });
+    let paint = Arc::new(PanelPaint { request, ..PanelPaint::default() });
     let loaded_paint = paint.clone();
     if compact {
         *shell.host.panel_paint.lock().unwrap_or_else(|e| e.into_inner()) = Some(paint.clone());
         shell.host.panel_ready.store(0, Ordering::SeqCst);
         shell.host.panel_closing.store(false, Ordering::SeqCst);
+    } else {
+        shell.host.main_closing.store(false, Ordering::SeqCst);
     }
     let url = if compact { panel_target(state) } else { target(state) };
     {
@@ -323,7 +354,7 @@ fn build(
     let mut builder = WebviewWindowBuilder::new(app, label, url)
         .title("Quotum")
         .visible(false)
-        .focused(!compact)
+        .focused(false)
         .decorations(!compact)
         // Match the board's --bg while the web view has not painted a newly exposed area yet.
         .background_color(tauri::utils::config::Color(0x0b, 0x0b, 0x0e, 255))
@@ -449,11 +480,6 @@ fn build(
             }
             if matches!(event, tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed) {
                 closing_paint.cancelled.store(true, Ordering::SeqCst);
-                if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
-                    // Move focus away while the WebView2 controller still exists.
-                    // A queued activation must not focus it during destruction.
-                    let _ = closing.hide();
-                }
                 if matches!(event, tauri::WindowEvent::CloseRequested { .. })
                     && current_paint(&resizing, &closing_paint)
                 {
@@ -466,6 +492,11 @@ fn build(
                         .unwrap_or_else(|e| e.into_inner())
                         .closed_at(closing_paint.request);
                 }
+                if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                    // Publish the closed intent before the HWND becomes hidden.
+                    // Focus must leave while the WebView2 controller still exists.
+                    let _ = closing.hide();
+                }
                 if matches!(event, tauri::WindowEvent::Destroyed) {
                     let mut current = resizing.host.panel_paint.lock().unwrap_or_else(|e| e.into_inner());
                     if current.as_ref().is_some_and(|p| Arc::ptr_eq(p, &closing_paint)) {
@@ -476,10 +507,10 @@ fn build(
                     crate::tray::loading(&resizing, false);
                 }
             }
-            if matches!(event, tauri::WindowEvent::Resized(_)) {
-                if let Ok(hwnd) = closing.hwnd() {
-                    crate::windows_loading::round(hwnd.0);
-                }
+            if matches!(event, tauri::WindowEvent::Resized(_))
+                && let Ok(hwnd) = closing.hwnd()
+            {
+                crate::windows_loading::round(hwnd.0);
             }
             if matches!(event, tauri::WindowEvent::ScaleFactorChanged { .. } | tauri::WindowEvent::Moved(_)) {
                 let height = *resizing.host.panel_height.lock().unwrap_or_else(|e| e.into_inner());
@@ -507,13 +538,8 @@ fn build(
         if shell.exiting() {
             return;
         }
-        if compact
-            && (paint.cancelled.load(Ordering::SeqCst)
-                || !shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).requested(paint.request))
-        {
-            paint.cancelled.store(true, Ordering::SeqCst);
-            shell.host.panel_closing.store(true, Ordering::SeqCst);
-            let _ = ready.destroy();
+        if paint.cancelled.load(Ordering::SeqCst) || !foreground_requested(&shell, role, request) {
+            discard_created(&shell, &ready, role, &paint);
             return;
         }
         if !compact && shell.smoke.is_none() {
@@ -537,13 +563,26 @@ fn build(
             reveal_panel(&shell, &ready, &paint);
             return;
         }
-        if let Err(error) = ready.show() {
+        if !foreground_requested(&shell, role, request) {
+            discard_created(&shell, &ready, role, &paint);
+        } else if let Err(error) = ready.show() {
             shell.hub_log.line(&format!("app: the window could not be shown: {error}"));
-        } else if compact {
+        } else if foreground_requested(&shell, role, request) {
             let _ = ready.set_focus();
+        } else {
+            discard_created(&shell, &ready, role, &paint);
         }
     })?;
     Ok(window)
+}
+
+fn discard_created(shell: &Shell, window: &tauri::WebviewWindow, role: Role, paint: &PanelPaint) {
+    paint.cancelled.store(true, Ordering::SeqCst);
+    let closing = if role == Role::Compact { &shell.host.panel_closing } else { &shell.host.main_closing };
+    closing.store(true, Ordering::SeqCst);
+    // An opening worker must wait for this label to go, even though its hidden
+    // HWND is still alive until the queued destruction runs.
+    let _ = window.destroy();
 }
 
 fn initial_panel_height(shell: &Shell, height: f64) -> f64 {
@@ -647,7 +686,8 @@ pub fn reenter_role(shell: &Arc<Shell>, role: Role) {
     } else if role == Role::Compact {
         open_panel(shell);
     } else {
-        open_role(shell, "reenter", role);
+        let request = shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).revision();
+        open_role(shell, "reenter", role, request);
     }
 }
 fn current_panel(shell: &Shell, instance: u64) -> Option<tauri::WebviewWindow> {
@@ -668,9 +708,16 @@ pub fn open_main_from_panel(shell: &Arc<Shell>, instance: u64) {
         else {
             return;
         };
-        let request = paint.request;
-        shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner()).closed_at(request);
-        open_now(&shell, "the compact panel", Role::Main);
+        let _intent = opening(&shell);
+        let request = {
+            let mut toggle = shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner());
+            if paint.cancelled.load(Ordering::SeqCst) || !toggle.requested(paint.request) {
+                return;
+            }
+            toggle.closed_at(paint.request);
+            toggle.revision()
+        };
+        open_now(&shell, "the compact panel", Role::Main, request);
         retire_panel(&shell, paint);
     });
 }

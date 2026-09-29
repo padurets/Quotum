@@ -689,6 +689,11 @@ A newer request retires that window before creating its own. Cancellation marks 
 presentation before queuing its close, and stale loader commands cannot cover a ready panel.
 The panel is hidden before its WebView2 controller is destroyed, so focus leaves while
 that controller can still handle native messages.
+Main-window requests also keep the revision accepted before their worker starts. The
+event loop checks that revision before restoring, showing or focusing a window: a late
+main request cannot take focus from a newer tray loader. Creation starts hidden and
+unfocused; cancelled main creations are destroyed, and a later request waits for their
+label to be released before creating another window.
 
 **Linux rendering and lifetime.** The Rust controller uses a D-Bus StatusNotifierItem
 through `ksni`. A small GTK loading surface responds before Chromium starts; GTK
