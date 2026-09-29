@@ -36,6 +36,11 @@ export function RefreshAll({board, ids}: {board: string; ids: string[]}) {
   useEffect(() => {
     if (connected) setOffline(false);
   }, [connected]);
+  // The button goes with the last card shown, its popup closed: it does not open by itself when a card comes back.
+  const shown = ids.length > 0;
+  useEffect(() => {
+    if (!shown) setOpen(false);
+  }, [shown]);
   const send = async () => {
     const state = page.get();
     if (busy.current || pending) return;
