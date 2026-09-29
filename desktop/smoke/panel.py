@@ -115,8 +115,23 @@ def check_panel(bus, item, child, root):
                 activate()
                 wait(lambda: not visible(pid))
                 wait(lambda: engine() is None)
+        # Queue three real tray callbacks while only our controller is paused.
+        # Blur from the first hide must not cancel the final open request.
+        os.kill(child.pid, signal.SIGSTOP)
+        try:
+            for _ in range(3):
+                bus.call(item, '/StatusNotifierItem', 'org.kde.StatusNotifierItem', 'Activate', GLib.Variant('(ii)', (600, 440)), None, Gio.DBusCallFlags.NONE, 3000, None, None, None)
+                bus.flush_sync(None)
+                time.sleep(.1)
+        finally:
+            os.kill(child.pid, signal.SIGCONT)
+        pid = wait(engine)
+        wait(lambda: visible(pid))
+        activate()
+        wait(lambda: not visible(pid))
+        wait(lambda: engine() is None)
         assert not errors, f'unexpected X11 errors: {errors}'
-        return {'loadingWithoutBrowser': True, 'popupHandoff': True, 'cancelledBeforePaint': True}
+        return {'loadingWithoutBrowser': True, 'popupHandoff': True, 'cancelledBeforePaint': True, 'queuedFinalOpen': True}
     finally:
         x.XCloseDisplay(display)
         x.XSetErrorHandler(previous_handler)

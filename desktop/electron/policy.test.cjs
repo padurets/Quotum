@@ -23,6 +23,7 @@ async function mainProcess({cursor = () => ({x: 790, y: 590}), displays = [{work
   const closing = [];
   const later = (run, delay) => { const timer = {run, at: now + delay, active: true, unref() {}}; timers.push(timer); return timer; };
   const cancel = timer => { if (timer) timer.active = false; };
+  const screenEvents = new EventEmitter();
   const app = Object.assign(new EventEmitter(), {
     setName() {}, setDesktopName() {}, enableSandbox() {}, setPath() {},
     whenReady: () => Promise.resolve(), quit() { quits.push('quit'); },
@@ -70,11 +71,11 @@ async function mainProcess({cursor = () => ({x: 790, y: 590}), displays = [{work
         app, BrowserWindow, ipcMain: {handle(_, handler) { invoke = handler; }, on() {}},
         protocol: {registerSchemesAsPrivileged() {}, handle() {}},
         session: {defaultSession: {setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, on() {}}},
-        screen: {
+        screen: Object.assign(screenEvents, {
           getPrimaryDisplay: () => displays[0],
           getAllDisplays: () => displays, getDisplayMatching: () => displays[0], getCursorScreenPoint: cursor,
           getDisplayNearestPoint: ({x, y}) => displays.find(({workArea: a}) => x >= a.x && x < a.x + a.width && y >= a.y && y < a.y + a.height) ?? displays[0],
-        },
+        }),
       };
       if (name === 'node:net') return {Socket: class extends EventEmitter {
         constructor() { super(); channel = this; }
@@ -92,7 +93,7 @@ async function mainProcess({cursor = () => ({x: 790, y: 590}), displays = [{work
   deliver({type: 'init', profile: '/isolated/profile', geometry: '/isolated/window.json', panelHeight, nativePanel, panelRequest}, ...startup);
   await new Promise(setImmediate);
   return {
-    navigations, deliver, sent, traffic, quits, windows,
+    navigations, deliver, sent, traffic, quits, windows, screenEvents,
     invoke: (...args) => invoke(...args),
     commit(url) { window.url = url; window.webContents.emit('did-finish-load'); },
     crash() { gone = true; },
@@ -392,6 +393,39 @@ test('cancelled native requests cannot reappear after paint or a delayed reveal'
   current.emit('ready-to-show');
   main.deliver({type: 'panel_reveal', request: 2, instance: 3});
   assert.equal(current.visible, true, 'an older cancellation cannot close the newer request');
+});
+
+test('cancellation is terminal even when it overtakes the opening worker', async () => {
+  const main = await mainProcess({nativePanel: true});
+  main.deliver({type: 'panel_intent', request: 1, open: false}, {type: 'panel_intent', request: 1, open: true});
+  assert.equal(main.windows.length, 1, 'no cancelled renderer is created');
+  main.windows[0].close();
+  main.tick(60000);
+  assert.deepEqual(main.quits, ['quit']);
+});
+
+test('Escape dismisses a compact window before any page or React handler loads', async () => {
+  const main = await mainProcess({backend: 'wayland'});
+  main.deliver({type: 'focus', role: 'compact'});
+  const panel = main.windows[1];
+  let prevented = false;
+  panel.webContents.emit('before-input-event', {preventDefault() { prevented = true; }}, {type: 'keyDown', key: 'Escape'});
+  assert.equal(prevented, true);
+  assert.equal(panel.destroyed, true);
+  assert.equal(main.windows[0].destroyed, false);
+});
+
+test('an open panel follows display work-area changes without new content', async () => {
+  const displays = [{workArea: {x: 0, y: 0, width: 1920, height: 1080}}];
+  const main = await mainProcess({displays, panelHeight: 1000, cursor: () => ({x: 1890, y: 1050})});
+  main.deliver({type: 'focus', role: 'compact'});
+  const panel = main.windows[1];
+  displays[0].workArea = {x: 0, y: 0, width: 1280, height: 720};
+  main.screenEvents.emit('display-metrics-changed');
+  assert.deepEqual(panel.getBounds(), {x: 880, y: 144, width: 400, height: 576});
+  displays[0].workArea = {x: 200, y: 20, width: 800, height: 600};
+  main.screenEvents.emit('display-removed');
+  assert.deepEqual(panel.getBounds(), {x: 600, y: 140, width: 400, height: 480});
 });
 
 

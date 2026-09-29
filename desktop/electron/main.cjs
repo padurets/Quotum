@@ -26,6 +26,7 @@ let quitting = false;
 let idleExit;
 let panelBlur;
 let panelRequest = -1;
+let panelCancelled = false;
 const TRAY_GESTURE_MS = 500;
 let buffer = '';
 let nextId = 0;
@@ -212,6 +213,9 @@ Promise.all([initialized, app.whenReady()]).then(([config]) => {
   session.defaultSession.setPermissionCheckHandler(() => false);
   session.defaultSession.on('will-download', event => event.preventDefault());
   engineConfig = config;
+  const refit = () => { const panel = surfaces.get('compact'); if (panel && !panel.dismissed) resizePanel(panel); };
+  screen.on('display-metrics-changed', refit);
+  screen.on('display-removed', refit);
   if (Number.isSafeInteger(config.panelRequest)) panelRequest = config.panelRequest;
   openSurface(config.role ?? 'main', config.anchor, config.panelRequest);
   for (const message of requested.splice(0)) {
@@ -222,6 +226,7 @@ function pointer() {
   try { return screen.getCursorScreenPoint(); } catch { return undefined; }
 }
 function reportClose(entry, blur = false) {
+  if (entry.request === panelRequest) panelCancelled = true;
   if (Number.isSafeInteger(entry.request) && !entry.closeReported) { entry.closeReported = true; send({type: 'panel_closed', request: entry.request, blur}); }
 }
 function dismiss(entry, blur = false) {
@@ -232,10 +237,11 @@ function dismiss(entry, blur = false) {
   entry.window.close();
 }
 function presentPanel(message) {
-  if (message.request < panelRequest) return;
+  if (message.request < panelRequest || (message.request === panelRequest && panelCancelled && message.open)) return;
+  if (message.request > panelRequest) panelCancelled = false;
   panelRequest = message.request;
   if (message.open) openSurface('compact', message.anchor, message.request);
-  else { const entry = surfaces.get('compact'); if (entry) dismiss(entry); }
+  else { panelCancelled = true; const entry = surfaces.get('compact'); if (entry) dismiss(entry); }
 }
 function present(message) {
   if (message.role !== 'compact' || !message.toggle) return openSurface(message.role, message.anchor);
@@ -364,6 +370,9 @@ function openSurface(role, anchor, request) {
     scheduleGraphics();
   });
   const contents = window.webContents;
+  if (compact) contents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown' && input.key === 'Escape') { event.preventDefault(); dismiss(entry); }
+  });
   contents.on('will-frame-navigate', event => {
     const action = policy.navigation(event.url, target, event.isMainFrame);
     if (action === 'allow') return;

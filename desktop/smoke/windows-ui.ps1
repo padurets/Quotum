@@ -48,6 +48,17 @@ public static class QuotumWindowProbe {
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr window, uint message, IntPtr w, IntPtr l);
   [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr window, int command);
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr window);
+  [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr window);
+  [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
+  public static void Escape(IntPtr window, int process) {
+    uint owner; GetWindowThreadProcessId(window,out owner);
+    if(owner!=(uint)process) throw new Exception("Not the test app window");
+    SetForegroundWindow(window);
+    if(GetForegroundWindow()!=window) throw new Exception("Test panel does not own keyboard focus");
+    keybd_event(27,0,0,UIntPtr.Zero);
+    keybd_event(27,0,2,UIntPtr.Zero);
+  }
   [DllImport("user32.dll")] static extern IntPtr SendMessageTimeout(IntPtr window, uint message, IntPtr w, IntPtr l, uint flags, uint timeout, out IntPtr result);
   [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr window, out Rect rect);
   [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr window, uint flags);
@@ -301,7 +312,7 @@ try {
       $null = $second.Handle
       if (-not $second.WaitForExit(10000) -or $second.ExitCode -ne 0) { throw 'Could not activate the main window beside the panel' }
     } elseif ($cycle -eq 1) {
-      if (-not [QuotumWindowProbe]::PostMessage($panel, 0x10, [IntPtr]::Zero, [IntPtr]::Zero)) { throw 'Could not close the panel' }
+      [QuotumWindowProbe]::Escape($panel, $process.Id)
     } elseif (-not [QuotumWindowProbe]::OpenPanel($process.Id)) { throw 'Could not toggle the panel through the tray' }
     $deadline = (Get-Date).AddSeconds(5)
     while ([QuotumWindowProbe]::IsWindowVisible($panel) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 50 }

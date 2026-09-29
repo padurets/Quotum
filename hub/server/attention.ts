@@ -1,4 +1,4 @@
-import {advanceWindow, batchCandidates, type Candidate, type QuotaCandidate, type WindowLedger, type WindowSample} from './domain/attention.js';
+import {advanceWindow, batchCandidates, sameWindow, type Candidate, type QuotaCandidate, type WindowLedger, type WindowSample} from './domain/attention.js';
 import type {Measurement, SourceState} from './domain/quota.js';
 import type {ResetProvider, ResetStatus} from './domain/resets.js';
 import type {Store} from './store/store.js';
@@ -33,11 +33,12 @@ export class Attention {
         }
         if (postStart) live.add(source.id);
         // A batch speaks about its last value, even when the last step was only a correction.
-        for (let i = 0; i < candidates.length; i++) {
+        for (let i = candidates.length - 1; i >= 0; i--) {
           const c = candidates[i];
           if (c.sourceId !== source.id) continue;
           const w = measurement.windows.find(w => w.id === c.windowId);
-          if (w) candidates[i] = {...c, remaining: w.remaining, resetAt: w.resetAt};
+          if (!w || !sameWindow(c.window, w)) candidates.splice(i, 1);
+          else candidates[i] = {...c, remaining: w.remaining, resetAt: w.resetAt};
         }
       },
       committed: () => {

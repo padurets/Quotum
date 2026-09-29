@@ -15,8 +15,10 @@ export function resetEvidence(a: WindowSample, b: WindowSample): boolean {
 
 export type WindowLedger = {schemaVersion: 1; cycle: number; previous: WindowSample; consumedLow: boolean; consumedCritical: boolean};
 export type QuotaKind = 'low' | 'critical' | 'reset';
+export const sameWindow = (a: Pick<Win, 'kind' | 'label' | 'minutes'>, b: Pick<Win, 'kind' | 'label' | 'minutes'>) =>
+  a.kind === b.kind && a.label === b.label && a.minutes === b.minutes;
 export function advanceWindow(previous: WindowLedger | null, sample: WindowSample, live: boolean): {ledger: WindowLedger; event: QuotaKind | null} {
-  const same = previous && previous.previous.kind === sample.kind && previous.previous.label === sample.label && previous.previous.minutes === sample.minutes;
+  const same = previous && sameWindow(previous.previous, sample);
   const reset = same && sample.at > previous.previous.at && resetEvidence(previous.previous, sample);
   const continuous = same && sample.at > previous.previous.at && sample.at - previous.previous.at <= previous.previous.staleAfterMs;
   const ledger: WindowLedger = {

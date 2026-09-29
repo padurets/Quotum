@@ -15,6 +15,7 @@ import {FreeResets} from './ResetMarks';
 import {Tray} from './Tray';
 import {EyeOffIcon, HideRow, Popover, SlidersIcon, SwitchRow, TakeOffIcon} from './Popover';
 import {ErrorLine} from './Kit';
+import {useBubble} from './Tooltip';
 
 /** Where the plan expects the limit to be now: a mark on its meter, in whole percent, moved when that changes. */
 function PlanMark({w, measuredAt, weekly}: {w: Win; measuredAt: number | null; weekly: WeeklyPlan | null}) {
@@ -351,6 +352,8 @@ export function CardMark({source}: {source: Card}) {
   // The dot's tooltip is one bubble everywhere: under the pointer on a desktop (style.css),
   // and for a while after a tap on a touch screen, which has nothing to hover.
   const [tip, setTip] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const bubble = useBubble(tip || hovered);
   useEffect(() => {
     if (!tip) return;
     const hide = () => setTip(false);
@@ -367,11 +370,13 @@ export function CardMark({source}: {source: Card}) {
       data-time="mark"
       aria-label={lines.join('\n')}
       role="img"
+      onPointerEnter={event => event.pointerType !== 'touch' && setHovered(true)}
+      onPointerLeave={() => setHovered(false)}
       onPointerUp={event => event.pointerType === 'touch' && setTip(true)}
     >
       <img className="provider-logo" src={LOGOS[source.provider]} alt="" />
       {dot.warn ? <i className="dot dot-warn" /> : <i className={`dot dot-fresh ${dot.pulsing ? 'is-pulsing' : ''}`} style={{'--fresh': dot.fresh} as CSSProperties} />}
-      <span className="dot-tip glass" aria-hidden="true">
+      <span className="dot-tip glass" ref={bubble} aria-hidden="true">
         {lines.map(line => (
           <span key={line}>{line}</span>
         ))}

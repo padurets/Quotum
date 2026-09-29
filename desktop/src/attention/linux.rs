@@ -25,8 +25,7 @@ impl Drop for Client {
 }
 impl Client {
     fn connect(shell: &Arc<Shell>) -> zbus::Result<Self> {
-        let connection =
-            zbus::blocking::connection::Builder::session()?.method_timeout(Duration::from_secs(1)).build()?;
+        let connection = connect_bus(zbus::connection::Builder::session()?)?;
         let proxy = Proxy::new(
             &connection,
             "org.freedesktop.Notifications",
@@ -58,6 +57,18 @@ impl Client {
         });
         Ok(Self { connection, ids, actions: Some(actions) })
     }
+}
+
+fn connect_bus(builder: zbus::connection::Builder<'_>) -> zbus::Result<Connection> {
+    // method_timeout starts after authentication. Dropping the losing build future
+    // closes its socket too, so a stalled session bus cannot hold the Quit join.
+    // Use the pinned zbus blocking API's runtime; another runtime would add idle threads.
+    zbus::block_on(async {
+        tokio::time::timeout(Duration::from_secs(1), builder.method_timeout(Duration::from_secs(1)).build())
+            .await
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "notification bus handshake timed out"))?
+            .map(Connection::from)
+    })
 }
 
 pub fn send(shell: &Arc<Shell>, intent: Intent, client: &mut Option<Client>) {
@@ -113,5 +124,34 @@ pub fn send(shell: &Arc<Shell>, intent: Intent, client: &mut Option<Client>) {
     });
     if failed {
         client.take();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{io::Read, os::unix::net::UnixListener, sync::mpsc, time::Instant};
+
+    #[test]
+    fn a_silent_bus_cannot_hold_the_delivery_worker_during_authentication() {
+        let path = std::env::temp_dir().join(format!("quotum-notify-test-{}.sock", std::process::id()));
+        let listener = UnixListener::bind(&path).unwrap();
+        let (finish, finished) = mpsc::channel();
+        let peer = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            let mut auth = [0; 128];
+            assert!(socket.read(&mut auth).unwrap() > 0);
+            let _ = finished.recv_timeout(Duration::from_secs(3));
+        });
+        let start = Instant::now();
+        let result =
+            connect_bus(zbus::connection::Builder::address(format!("unix:path={}", path.display()).as_str()).unwrap());
+        let elapsed = start.elapsed();
+        let _ = finish.send(());
+        peer.join().unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert!(result.is_err());
+        assert!(elapsed < Duration::from_secs(2), "authentication took {elapsed:?}");
     }
 }

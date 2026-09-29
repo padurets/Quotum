@@ -31,9 +31,13 @@ libc = "0.2.189"
 
 [target."cfg(windows)".dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Security", "Win32_Storage_FileSystem", "Win32_System_WindowsProgramming", "Win32_System_LibraryLoader", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi"] }
+# Native Escape handling also covers pages before their JavaScript has loaded.
+webview2-com = "0.38.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-zbus = { version = "5.13.2", features = ["blocking-api"] }
+zbus = { version = "=5.13.2", features = ["blocking-api", "tokio"] }
+# Bound the asynchronous D-Bus handshake without leaving a blocked worker behind.
+tokio = { version = "1.53.1", features = ["time"] }
 ksni = { version = "0.3.6", features = ["blocking"] }
 signal-hook = "0.3.18"
 # A small loading surface can respond before the disposable browser starts.

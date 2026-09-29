@@ -84,11 +84,28 @@ function change(command: string, args?: Record<string, unknown>): Promise<AppSta
   return accepted;
 }
 
+let pendingHeight: number | undefined;
+let reportingHeight: Promise<void> | undefined;
+/** One native resize at a time; only the latest unreported layout matters. */
+function reportPanelHeight(heightCssPx: number): Promise<void> {
+  pendingHeight = heightCssPx;
+  return reportingHeight ??= (async () => {
+    try {
+      while (pendingHeight !== undefined) {
+        const height = pendingHeight;
+        pendingHeight = undefined;
+        try { await ask<void>('report_panel_height', {heightCssPx: height}); }
+        catch (error) { if (pendingHeight === undefined) throw error; }
+      }
+    } finally { reportingHeight = undefined; }
+  })();
+}
+
 export const app = {
   saveDesktopSettings: (patch: {notifications?: Partial<NonNullable<AppState['notifications']>>; locale?: Locale}) => change('save_desktop_settings', {patch}),
   openMain: () => ask<void>('open_main'),
   closePanel: () => ask<void>('close_panel'),
-  reportPanelHeight: (heightCssPx: number) => ask<void>('report_panel_height', {heightCssPx}),
+  reportPanelHeight,
   state: () => ask<AppState>('app_state'),
   saveSettings: (patch: Patch) => change('save_settings', {patch}),
   takeOver: () => change('take_over'),
@@ -224,7 +241,7 @@ export function settingsSections(local: boolean, bridged: boolean): ('measuring'
 export async function chooseLocale(locale: Locale) {
   if (!inApp()) { setLocale(locale); return; }
   const state = await app.saveDesktopSettings({locale});
-  if (state.effectiveLocale) setLocale(state.effectiveLocale);
+  if (state.effectiveLocale) setLocale(state.effectiveLocale, false);
 }
 let localeSeq = -1;
 let migratedLocale = false;
@@ -237,5 +254,7 @@ export function appLocale(state: AppState) {
     try { saved = localStorage.getItem('quotum.locale'); } catch { /* no browser storage */ }
     if (saved === 'en' || saved === 'ru') { void app.saveDesktopSettings({locale: saved}).then(appLocale).catch(() => {}); return; }
   }
-  if (state.effectiveLocale) setLocale(state.effectiveLocale);
+  // Native state owns this choice. Preserve the legacy browser value until the
+  // main window can migrate it; a compact window cannot save desktop settings.
+  if (state.effectiveLocale) setLocale(state.effectiveLocale, false);
 }

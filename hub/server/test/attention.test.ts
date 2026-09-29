@@ -74,11 +74,11 @@ function setup(t: {after(fn: () => void): void}, desktop = true) {
     frames.push(...result.frames);
     return result;
   };
-  const deliver = (values: [number, number][], received = values.at(-1)![0]) => {
+  const deliver = (values: [number, number, string?][], received = values.at(-1)![0]) => {
     now = received;
     return ingest.accept(credential, {
       version: 1, agent: 'quotum/0.4.0', machine: {id: 'fixture-machine-0123456789', name: 'Fixture', os: 'linux', arch: 'x86_64'}, sentAt: new Date(received).toISOString(), failures: [],
-      snapshots: values.map(([at, remaining]) => ({provider: 'codex', account: 'a1b2c3d4e5f6a1b2c3d4e5f6', plan: 'pro', observedAt: new Date(at).toISOString(), via: 'codex/app-server', client: 'fixture', staleAfterMs: 204_000, windows: [{id: 'week', kind: 'weekly', minutes: 10080, usedPercent: 100 - remaining, resetsAt: new Date(T + 600_000).toISOString()}]})),
+      snapshots: values.map(([at, remaining, label]) => ({provider: 'codex', account: 'a1b2c3d4e5f6a1b2c3d4e5f6', plan: 'pro', observedAt: new Date(at).toISOString(), via: 'codex/app-server', client: 'fixture', staleAfterMs: 204_000, windows: [{id: 'week', kind: 'weekly', label, minutes: 10080, usedPercent: 100 - remaining, resetsAt: new Date(T + 600_000).toISOString()}]})),
     }, received);
   };
   t.after(() => { events.close(); store.close(); });
@@ -86,6 +86,34 @@ function setup(t: {after(fn: () => void): void}, desktop = true) {
 }
 
 const notifications = (frames: Frame[]) => frames.filter(f => f.type === 'attention').flatMap(f => JSON.parse(f.data).notifications);
+
+test('a batch drops candidates when a later sample changes the window identity', t => {
+  const h = setup(t);
+  h.deliver([[T, 35, 'Old pool']]);
+  h.open();
+  h.deliver([[T + 1000, 29, 'Old pool'], [T + 2000, 35, 'New pool']]);
+  h.events.flush();
+  assert.equal(h.store.states(h.board)[0].windows[0].label, 'New pool');
+  assert.deepEqual(h.candidates, []);
+  assert.deepEqual(notifications(h.frames), []);
+  h.deliver([[T + 3000, 29, 'New pool']]);
+  assert.equal(h.candidates.length, 1, 'the new identity starts its own observation');
+});
+
+test('a reset deadline updates desktop quality even when the card stays the same', t => {
+  const h = setup(t);
+  h.deliver([[T, 80]]);
+  const source = h.store.states(h.board)[0];
+  h.store.record(source.id, {observedAt: T, plan: 'pro', staleAfterMs: 204_000, resets: null, windows: [{...sample(80), resetAt: T + 1000}]});
+  h.open();
+  h.frames.length = 0;
+  h.time(T + 1001);
+  h.events.touchSources([source.id]);
+  h.events.flush();
+  assert.deepEqual(h.frames.map(f => f.type), ['attention']);
+  assert.equal(JSON.parse(h.frames[0].data).state.quality, 'partial');
+  assert.deepEqual(notifications(h.frames), []);
+});
 
 test('accepted batch publishes the strongest transition after commit; duplicates consume nothing', t => {
   const h = setup(t);

@@ -62,9 +62,7 @@ export function Compact({live}: {live: ReturnType<typeof startLive>}) {
       });
     });
     observer.observe(element);
-    const key = (event: KeyboardEvent) => { if (event.key === 'Escape') void app.closePanel(); };
-    document.addEventListener('keydown', key);
-    return () => { observer.disconnect(); cancelAnimationFrame(frame); document.removeEventListener('keydown', key); };
+    return () => { observer.disconnect(); cancelAnimationFrame(frame); };
   }, []);
   const ids = view ? ordered(view.layout, lineup.map(cardId)).map(w => w.id).filter(id => !isHidden(view, id)).map(id => id.slice(7)) : [];
   return <div className={`compact glass${inApp() ? " is-native" : ""}`} ref={root}>

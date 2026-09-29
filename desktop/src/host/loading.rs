@@ -93,9 +93,17 @@ pub fn install(shell: &Arc<Shell>) {
     });
     let weak = Arc::downgrade(shell);
     window.connect_focus_out_event(move |_, _| {
-        if let Some(shell) = weak.upgrade() {
-            dispatch(shell, |panel, shell| {
-                if panel.phase == Phase::Loading {
+        // Hiding/presenting can emit focus changes synchronously. Those belong to
+        // our transition; a queued blur must not cancel a subsequent tray request.
+        let request = PANEL.with(|state| {
+            state
+                .try_borrow()
+                .ok()
+                .and_then(|panel| panel.as_ref().filter(|p| p.phase == Phase::Loading).map(|p| p.request))
+        });
+        if let (Some(shell), Some(request)) = (weak.upgrade(), request) {
+            dispatch(shell, move |panel, shell| {
+                if panel.request == request && panel.phase == Phase::Loading && !panel.window.has_toplevel_focus() {
                     panel.dismiss(shell, true);
                 }
             });

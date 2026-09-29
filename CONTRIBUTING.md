@@ -31,7 +31,7 @@ after these checks pass; ordinary CI runs also keep the versioned release packag
 window-state plugin: a visible, responsive window, restored bounds inside the monitor's
 work area, close/reopen through a second launch, and a second launch while the window is
 minimized, which restores that very window. It disables every provider. Each
-run also opens and closes the tray panel three times, including a repeated tray
+run also opens and closes the tray panel three times, including Escape and a repeated tray
 activation, checking that it stays visible and fits its monitor without changing the main window's geometry. Each
 run also pauses only its own app UI thread and checks that the native loader stays
 responsive, rounded and cancellable before WebView2 finishes. The thread is always
@@ -49,6 +49,8 @@ need `xvfb`, `xauth` and Python 3; `desktop/smoke/monitor.py` adopts surviving
 children and audits their exits, alongside Electron's live child-failure reports.
 This uses no ptrace and keeps Chromium's sandbox intact. The installed-package checks also start the controller before a stand-in tray watcher
 (`desktop/smoke/tray.sh`, Python 3 with PyGObject) to cover early start at login.
+The panel check also queues three activations while its own controller is briefly paused,
+then verifies that the final open survives delayed focus events.
 A successful
 controller exit alone does not prove that browser children closed successfully.
 The intentional child-crash supervisor regression requires `QUOTUM_TEST_FAULT=1`;

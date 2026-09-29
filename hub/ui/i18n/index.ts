@@ -54,12 +54,12 @@ function apply() {
 }
 apply();
 
-export function setLocale(next: Locale) {
+export function setLocale(next: Locale, persist = true) {
   if (next === locale) return;
   locale = next;
   apply();
   try {
-    localStorage.setItem(STORAGE_KEY, next);
+    if (persist) localStorage.setItem(STORAGE_KEY, next);
   } catch {
     /* private mode: the choice lasts until the tab closes */
   }

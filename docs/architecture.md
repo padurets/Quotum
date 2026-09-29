@@ -611,6 +611,7 @@ blur handling remain responsive even while that loop is busy. The panel replaces
 it only after placement and page loading have both completed. Both surfaces disable
 DWM transitions so their handoff does not animate as a second window opening. A second click
 cancels either phase. No web view is retained just to warm the next opening.
+The host handles Escape before page scripts, including on startup/error pages.
 Windows are created on worker threads; restoring, fitting and showing them is queued
 on the event loop after the window-state plugin's initialization. This keeps its state
 locks on the same thread as native window events. Closing a window destroys it with its
@@ -678,6 +679,9 @@ ordering are shared with the board. Large lists can scroll, but ordinary subscri
 do not reserve a separate footer or a second line for every reset. The panel grows
 with its content up to 80% of its monitor's work area, with no fixed pixel ceiling;
 only content beyond that height scrolls. The native loader uses the same screen limit.
+Native height reports are serialized, keeping only the latest pending layout. An open
+Linux panel refits when displays or their work areas change. Measurement tooltips shift
+inside the viewport without changing the card's height.
 
 The engine version and archive checksum are pinned in `desktop/prepare-electron.mjs`;
 updating Chromium means rebuilding the Linux packages. `desktop/package-linux.mjs`
@@ -756,7 +760,9 @@ status reading continues. This promises at most one native attempt, not an OS di
 crashes and system suppression may lose an event, and nothing replays it.
 
 Linux keeps one ksni handle and uses session D-Bus notifications independently of its
-tray watcher. Windows owns one Shell_NotifyIcon control window, used for its status,
+tray watcher. The notification connection's authentication and each method call have
+a one-second timeout, so an unresponsive bus does not hold shutdown indefinitely.
+Windows owns one Shell_NotifyIcon control window, used for its status,
 menu and silent notifications in both installer and portable builds. Explorer restart
 registers only the current icon. Native text is generated from the same EN/RU catalogs
 as the page; settings and language are saved atomically in `app.json` and published to

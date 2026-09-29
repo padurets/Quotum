@@ -348,7 +348,7 @@ export class Events implements Touches {
         }
         const frames = [...(heads.get(watched.id) ?? []), ...own, ...(tails.get(watched.id) ?? []), ...news];
         if (sub.fresh) continue;
-        if (sub.desktop && (frames.length || sub.pending.length || sub.rebaseline)) {
+        if (sub.desktop && (sources.has(watched.id) || whole.has(watched.id) || frames.length || sub.pending.length || sub.rebaseline)) {
           const attention = this.attentionFrame(sub, sub.rebaseline, now);
           if (attention) frames.push(attention);
         }

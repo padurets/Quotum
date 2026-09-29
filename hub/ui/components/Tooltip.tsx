@@ -20,6 +20,32 @@ export function coverOf() {
   return Math.max(0, ...bars.map(bar => bar.getBoundingClientRect().bottom));
 }
 
+/** Keep a small anchored tooltip inside the viewport without growing its card. */
+export function useBubble(active: boolean) {
+  const tip = useRef<HTMLSpanElement>(null);
+  const place = () => {
+    const element = tip.current;
+    if (!active || !element) return;
+    element.style.translate = '';
+    const rect = element.getBoundingClientRect();
+    const {by} = placeOf(rect.top, rect.height, innerHeight, coverOf());
+    const edge = document.documentElement.clientWidth - 8;
+    const x = rect.left < 8 ? 8 - rect.left : rect.right > edge ? edge - rect.right : 0;
+    element.style.translate = `${x}px ${-by}px`;
+  };
+  useLayoutEffect(place);
+  useEffect(() => {
+    if (!active) return;
+    addEventListener('resize', place);
+    addEventListener('scroll', place, {passive: true, capture: true});
+    return () => {
+      removeEventListener('resize', place);
+      removeEventListener('scroll', place, true);
+    };
+  }, [active]);
+  return tip;
+}
+
 /**
  * Where a chart's tooltip stands, for a chart `width` wide (in its own units, which are
  * CSS pixels here) with the pointer `at` across it. Beside the pointer: right of it, or

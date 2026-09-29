@@ -298,6 +298,30 @@ fn build(
     }
     let window = builder.build()?;
     if compact {
+        let hwnd = window.hwnd()?.0 as usize;
+        window.with_webview(move |view| unsafe {
+            use webview2_com::{AcceleratorKeyPressedEventHandler, Microsoft::Web::WebView2::Win32::*};
+            use windows_sys::Win32::UI::{
+                Input::KeyboardAndMouse::VK_ESCAPE,
+                WindowsAndMessaging::{PostMessageW, WM_CLOSE},
+            };
+            let handler = AcceleratorKeyPressedEventHandler::create(Box::new(move |_, args| {
+                let Some(args) = args else { return Ok(()) };
+                let mut key = 0;
+                let mut kind = COREWEBVIEW2_KEY_EVENT_KIND::default();
+                args.VirtualKey(&mut key)?;
+                args.KeyEventKind(&mut kind)?;
+                if key == u32::from(VK_ESCAPE) && kind == COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN {
+                    args.SetHandled(true)?;
+                    // Defer destruction until WebView2 has returned from its callback.
+                    PostMessageW(hwnd as _, WM_CLOSE, 0, 0);
+                }
+                Ok(())
+            }));
+            if let Err(error) = view.controller().add_AcceleratorKeyPressed(&handler, &mut 0) {
+                log::warn!("cannot register panel Escape handler: {error}");
+            }
+        })?;
         let closing = window.clone();
         let resizing = shell.clone();
         let focused = AtomicBool::new(false);
