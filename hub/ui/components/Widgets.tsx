@@ -60,8 +60,10 @@ type Gesture = {
   /** How many rows the widget took when it began, and the height it asks for since: none keeps the one it had. */
   rows: number;
   intent: number | undefined;
-  /** Where it began down the grid, which the page may scroll meanwhile: until it `moved`, where it is now. */
+  /** Where it began down the grid, which scrolling the gesture did not do carries along (`aim`). */
   top: number;
+  /** How far the page was scrolled when the gesture last looked, with what the gesture scrolled it by itself since. */
+  scroll: number;
   /** By the left edge: where the right one stays, and how wide the widget is drawn meanwhile (CSS pixels). */
   edge: {right: number; px: number} | null;
   start: Point;
@@ -69,13 +71,15 @@ type Gesture = {
   grab: Point;
   offset: Point;
   active: boolean;
-  /** Whether the pointer has gone further than a click's jitter, or the wheel turned under a bottom edge held: until then the page scrolling under it is no pull. */
+  /** Whether the pointer has gone further than a click's jitter: a drag begins then. */
   moved: boolean;
   cell: Point;
   frame: number;
   stop: () => void;
 };
 const DRAG_AFTER = 4;
+/** How far toward an edge of the window the pointer goes before the page scrolls under it: half a row, past a hand's or a finger's drift. */
+const PULL = 24;
 const EDGE = 72;
 const SLIDE = {duration: 200, easing: 'cubic-bezier(.2, .7, .2, 1)'};
 const still = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -203,15 +207,17 @@ export function Widgets({
     setPreview({id: current.id, kind: current.kind, items: current.items, intent: current.intent});
   };
   /**
-   * The height the pointer asks for now, as `heightIntent` takes it: rows moved down the
-   * grid since it began, whatever the page scrolled meanwhile, against what the widget needs
-   * at its width and content now. Whether that changed what the gesture asks for.
+   * The height the pointer asks for now, as `heightIntent` takes it: rows the pointer moved,
+   * with the page the gesture scrolled under it, against what the widget needs at its width
+   * and content now. Whether that changed what the gesture asks for.
    */
   const aim = (current: Gesture, measured?: Record<string, number>) => {
     const {min, baseline} = latest.current.bounds(current.id, measured);
+    // Scrolling the gesture did not do is no pull: a wheel, a key, a glide from before the press, the browser keeping its place
+    // as the preview grows or the page's end comes up. Where the pull began goes with the grid.
+    current.top += scrollY - current.scroll;
+    current.scroll = scrollY;
     const at = current.pointer.y - grid.current!.getBoundingClientRect().top;
-    // A page still gliding from before the press is no pull: until the pointer or the wheel moves, where it began goes with the grid.
-    if (!current.moved) current.top = at;
     const intent = heightIntent(current.rows, baseline, current.rows + Math.round((at - current.top) / ROW), min);
     if (intent === current.intent) return false;
     current.intent = intent;
@@ -252,8 +258,13 @@ export function Widgets({
     if (!current?.active || (current.kind !== 'drag' && !tall(current.kind))) return;
     const y = current.pointer.y;
     const top = cover() + EDGE;
-    const scroll = y < top && y < current.start.y - DRAG_AFTER ? y - top : y > innerHeight - EDGE && y > current.start.y + DRAG_AFTER ? y - innerHeight + EDGE : 0;
-    if (scroll) window.scrollBy(0, scroll / 4);
+    const scroll = y < top && y < current.start.y - PULL ? y - top : y > innerHeight - EDGE && y > current.start.y + PULL ? y - innerHeight + EDGE : 0;
+    if (scroll) {
+      const from = scrollY;
+      window.scrollBy(0, scroll / 4);
+      // What the gesture scrolls the page by is a pull: the edge goes on with the pointer held at the window's.
+      current.scroll += scrollY - from;
+    }
     if (current.kind === 'drag') {
       retarget();
       follow();
@@ -375,10 +386,6 @@ export function Widgets({
         finish(false);
       }
     };
-    // The wheel turned under a bottom edge held still scrolls the page on purpose: that is a pull.
-    const wheel = () => {
-      if (gesture.current) gesture.current.moved = true;
-    };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
     window.addEventListener('pointercancel', cancel);
@@ -392,6 +399,7 @@ export function Widgets({
       rows: item.h,
       intent: undefined,
       top: pointer.y - grid.current!.getBoundingClientRect().top,
+      scroll: scrollY,
       edge: leftward(kind) ? {right: rect.right, px: rect.width} : null,
       start: pointer,
       pointer,
@@ -406,18 +414,14 @@ export function Widgets({
         window.removeEventListener('pointerup', up);
         window.removeEventListener('pointercancel', cancel);
         window.removeEventListener('keydown', escape);
-        window.removeEventListener('wheel', wheel);
       },
     };
     gesture.current = current;
     if (kind !== 'drag') {
       document.body.classList.add('is-resizing', `is-resizing-${kind}`);
       setPreview({id, kind, items: origin});
-      // Each frame follows the page as it scrolls under the pointer, by the wheel too: a click stays a click, however the page glides.
-      if (tall(kind)) {
-        window.addEventListener('wheel', wheel, {passive: true});
-        current.frame = requestAnimationFrame(frame);
-      }
+      // Each frame follows the pointer and the page as it scrolls (`aim`): a click stays a click, however the page glides meanwhile.
+      if (tall(kind)) current.frame = requestAnimationFrame(frame);
     }
   };
   const press = (id: string) => (event: ReactPointerEvent<HTMLDivElement>) => {
