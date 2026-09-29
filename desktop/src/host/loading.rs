@@ -1,17 +1,15 @@
 //! A native response to the tray, independent of Chromium startup and page painting.
-use super::{Gui, Shell, open_at};
-use crate::{
-    native_text,
-    window::{PanelToggle, Role},
+use super::{
+    Gui, Shell, accept, cancel, current,
+    foreground::{Head, Target},
+    head, open_at,
 };
+use crate::{native_text, window::Role};
 use gtk::{gdk, glib, prelude::*};
 use std::{
     cell::{Cell, RefCell},
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::{Duration, Instant},
+    sync::Arc,
+    time::Duration,
 };
 
 thread_local! { static PANEL: RefCell<Option<Panel>> = const { RefCell::new(None) }; }
@@ -26,9 +24,7 @@ struct Panel {
     window: gtk::Window,
     spinner: gtk::Spinner,
     label: gtk::Label,
-    intent: PanelToggle,
     request: u64,
-    requested: Arc<AtomicU64>,
     phase: Phase,
     handle: u64,
     timeout: Option<glib::SourceId>,
@@ -136,9 +132,7 @@ pub fn install(shell: &Arc<Shell>) {
             window,
             spinner,
             label,
-            intent: PanelToggle::default(),
             request: 0,
-            requested: shell.host.panel_request.clone(),
             phase: Phase::Closed,
             handle: 0,
             timeout: None,
@@ -186,6 +180,17 @@ fn fallback_anchor(bounds: gdk::Rectangle, area: gdk::Rectangle, width: i32, hei
     }
 }
 impl Panel {
+    fn present(&self) {
+        if let Some(native) = self.window.window() {
+            native.set_opacity(1.0);
+            use glib::translate::ToGlibPtr;
+            unsafe {
+                gdk::ffi::gdk_window_input_shape_combine_region(native.to_glib_none().0, std::ptr::null_mut(), 0, 0);
+            }
+        }
+        self.window.show_all();
+        self.window.present();
+    }
     fn conceal(&mut self) {
         if let Some(timeout) = self.timeout.take() {
             timeout.remove();
@@ -199,7 +204,6 @@ impl Panel {
         }
     }
     fn hide(&mut self) {
-        self.requested.store(0, Ordering::SeqCst);
         if let Some(timeout) = self.timeout.take() {
             timeout.remove();
         }
@@ -208,21 +212,14 @@ impl Panel {
         self.window.hide();
     }
     fn dismiss(&mut self, shell: &Shell, blur: bool) {
-        if blur {
-            self.intent.blur(Instant::now(), pointer());
-        } else {
-            self.intent.close();
-        }
+        cancel(shell, self.request, blur, pointer());
         self.hide();
-        if let Some(gui) = shell.host.gui.lock().unwrap_or_else(|e| e.into_inner()).clone() {
-            let _ = gui.send(&serde_json::json!({"type":"panel_intent", "request":self.request, "open":false}));
-        }
     }
-    fn show(&mut self, shell: &Arc<Shell>, anchor: Option<(i32, i32)>) {
-        self.request += 1;
-        self.requested.store(self.request, Ordering::SeqCst);
+    fn show(&mut self, shell: &Arc<Shell>, anchor: Option<(i32, i32)>, toggle: bool) {
+        if let Some(timeout) = self.timeout.take() {
+            timeout.remove();
+        }
         self.retried = false;
-        let request = self.request;
         self.phase = Phase::Loading;
         self.label.set_text(native_text::text(shell.locale(), "desktop.loading"));
         self.spinner.start();
@@ -250,18 +247,20 @@ impl Panel {
                 (y - height).clamp(area.y(), area.y() + area.height() - height),
             );
         }
-        shell.hub_log.line(&format!("app: loading panel {request}"));
-        if let Some(native) = self.window.window() {
-            native.set_opacity(1.0);
-            use glib::translate::ToGlibPtr;
-            // NULL restores the full input region (the generated binding is non-null).
-            unsafe {
-                gdk::ffi::gdk_window_input_shape_combine_region(native.to_glib_none().0, std::ptr::null_mut(), 0, 0);
-            }
+        let ticket = accept(shell, Role::Compact, self.anchor, toggle, pointer());
+        self.request = ticket.revision;
+        let request = ticket.revision;
+        if ticket.target != Target::Compact {
+            self.hide();
+            return;
         }
-        self.window.show_all();
-        self.window.present();
-        open_at(shell, Role::Compact, self.anchor, false, Some(request));
+        shell.hub_log.line(&format!("app: loading panel {request}"));
+        // With no engine there is no older browser focus queued. Otherwise the
+        // publisher schedules this transition only after the complete head is sent.
+        if shell.host.gui.lock().unwrap_or_else(|e| e.into_inner()).is_none() {
+            self.present();
+        }
+        open_at(shell, ticket);
         let weak = Arc::downgrade(shell);
         self.timeout = Some(glib::timeout_add_local_once(Duration::from_secs(15), move || {
             PANEL.with(|state| {
@@ -276,51 +275,75 @@ impl Panel {
     }
 }
 pub fn activate(shell: &Arc<Shell>, anchor: Option<(i32, i32)>, toggle: bool) {
+    let opening = crate::window::opening(shell);
     dispatch(shell.clone(), move |panel, shell| {
+        let _opening = opening;
         if shell.exiting() {
             return;
         }
         if let Some(anchor) = anchor.filter(|&(x, y)| x != 0 || y != 0) {
             panel.tray_anchor = Some(anchor);
         }
-        let was_open = panel.intent.wanted();
-        if toggle {
-            if !panel.intent.toggle(Instant::now(), pointer()) {
-                // Preserve blur pairing until its matching tray release has arrived.
-                panel.hide();
-                if let Some(gui) = shell.host.gui.lock().unwrap_or_else(|e| e.into_inner()).clone() {
-                    let _ =
-                        gui.send(&serde_json::json!({"type":"panel_intent", "request":panel.request, "open":false}));
-                }
-                return;
-            }
+        if !toggle && head(shell).target == Target::Compact && panel.phase != Phase::Closed {
+            // Explicit Limits is idempotent for the current presentation. Its
+            // native callbacks keep the same revision and resolved tray anchor.
+            open_at(shell, head(shell));
         } else {
-            panel.intent.show();
-        }
-        if was_open && panel.phase != Phase::Closed {
-            if panel.phase == Phase::Loading {
-                panel.window.present();
-            } else {
-                open_at(shell, Role::Compact, anchor.or(panel.anchor), false, Some(panel.request));
-            }
-        } else {
-            panel.show(shell, anchor);
+            panel.show(shell, anchor, toggle);
         }
     });
 }
 pub fn dismiss(shell: &Arc<Shell>) {
-    dispatch(shell.clone(), |panel, shell| panel.dismiss(shell, false));
+    dismiss_at(shell, head(shell).revision);
 }
-pub fn main(shell: &Arc<Shell>) {
-    dispatch(shell.clone(), |panel, shell| {
-        panel.dismiss(shell, false);
-        open_at(shell, Role::Main, None, false, None);
+pub fn dismiss_at(shell: &Arc<Shell>, request: u64) {
+    dispatch(shell.clone(), move |panel, shell| {
+        if panel.request == request {
+            panel.dismiss(shell, false);
+        }
     });
 }
+pub fn main(shell: &Arc<Shell>) {
+    let opening = crate::window::opening(shell);
+    dispatch(shell.clone(), move |panel, shell| {
+        let _opening = opening;
+        let ticket = accept(shell, Role::Main, None, false, None);
+        panel.hide();
+        open_at(shell, ticket);
+    });
+}
+pub fn main_from_panel(shell: &Arc<Shell>, instance: u64, ticket: Head) {
+    let opening = crate::window::opening(shell);
+    dispatch(shell.clone(), move |panel, shell| {
+        let _opening = opening;
+        if let Some(ticket) = super::accept_main_from_panel(shell, instance, ticket) {
+            panel.hide();
+            open_at(shell, ticket);
+        }
+    });
+}
+pub fn published(shell: &Arc<Shell>, pid: u32, ticket: Head) {
+    if !shell.host.native_panel || ticket.target != Target::Compact {
+        return;
+    }
+    dispatch(shell.clone(), move |panel, shell| {
+        let engine = shell.host.gui.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|g| g.pid == pid);
+        if engine && current(shell, ticket) && panel.request == ticket.revision && panel.phase == Phase::Loading {
+            panel.present();
+        }
+    });
+}
+
 pub fn ready(shell: &Arc<Shell>, gui: Arc<Gui>, request: u64, instance: u64, handle: u64) {
     dispatch(shell.clone(), move |panel, shell| {
-        if shell.exiting() || request != panel.request || !panel.intent.wanted() {
-            let _ = gui.send(&serde_json::json!({"type":"panel_intent", "request":request, "open":false}));
+        let engine =
+            shell.host.gui.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|g| Arc::ptr_eq(g, &gui));
+        if shell.exiting()
+            || !engine
+            || request != panel.request
+            || head(shell).target != Target::Compact
+            || head(shell).revision != request
+        {
             return;
         }
         shell.hub_log.line(&format!("app: panel {request} painted (window {handle})"));
@@ -329,30 +352,45 @@ pub fn ready(shell: &Arc<Shell>, gui: Arc<Gui>, request: u64, instance: u64, han
         }
         panel.handle = handle;
         panel.phase = Phase::Handoff;
-        let _ = gui.send(&serde_json::json!({"type":"panel_reveal", "request":request, "instance":instance}));
+        gui.publisher.defer(serde_json::json!({"type":"panel_reveal", "request":request, "instance":instance}));
     });
 }
-pub fn visible(shell: &Arc<Shell>, request: u64) {
-    dispatch(shell.clone(), move |panel, _| {
-        if panel.request == request && panel.intent.wanted() {
+pub fn visible(shell: &Arc<Shell>, gui: Arc<Gui>, request: u64) {
+    dispatch(shell.clone(), move |panel, shell| {
+        if !shell.exiting()
+            && shell.host.gui.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|g| Arc::ptr_eq(g, &gui))
+            && panel.request == request
+            && head(shell).revision == request
+            && head(shell).target == Target::Compact
+        {
             panel.conceal();
             panel.phase = Phase::Browser;
             native_window(panel.handle, true);
         }
     });
 }
-pub fn closed(shell: &Arc<Shell>, request: u64, blur: bool) {
-    dispatch(shell.clone(), move |panel, _| {
-        if panel.request == request {
-            if blur {
-                panel.intent.blur(Instant::now(), pointer());
-            } else {
-                panel.intent.closed();
-            }
+pub fn closed(shell: &Arc<Shell>, gui: Arc<Gui>, request: u64, blur: bool, point: Option<(i32, i32)>) {
+    if !shell.host.native_panel {
+        if !shell.exiting()
+            && shell.host.gui.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|g| Arc::ptr_eq(g, &gui))
+        {
+            cancel(shell, request, blur, point);
+        }
+        return;
+    }
+    dispatch(shell.clone(), move |panel, shell| {
+        if !shell.exiting()
+            && shell.host.gui.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|g| Arc::ptr_eq(g, &gui))
+            && panel.request == request
+            && head(shell).revision == request
+            && head(shell).target == Target::Compact
+        {
+            cancel(shell, request, blur, pointer());
             panel.hide();
         }
     });
 }
+
 pub fn failed(shell: &Arc<Shell>, request: u64) {
     dispatch(shell.clone(), move |panel, shell| {
         if panel.request == request && matches!(panel.phase, Phase::Loading | Phase::Handoff) {
@@ -404,13 +442,18 @@ pub fn engine_ended(shell: &Arc<Shell>, success: bool) {
         if shell.host.gui.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
             return;
         }
-        if success && panel.phase == Phase::Loading && panel.intent.wanted() && !panel.retried {
+        if success
+            && panel.phase == Phase::Loading
+            && head(shell).target == Target::Compact
+            && head(shell).revision == panel.request
+            && !panel.retried
+        {
             // A click can reach the old process just as its idle exit starts.
             // Keep the loader and deliver that request once to a fresh browser.
             panel.retried = true;
-            open_at(shell, Role::Compact, panel.anchor, false, Some(panel.request));
+            open_at(shell, head(shell));
         } else if panel.phase == Phase::Browser {
-            panel.intent.close();
+            cancel(shell, panel.request, false, None);
             panel.hide();
         } else if matches!(panel.phase, Phase::Loading | Phase::Handoff) {
             panel.spinner.stop();

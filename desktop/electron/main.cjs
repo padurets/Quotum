@@ -18,15 +18,14 @@ const send = message => { if (!channel.destroyed) channel.write(`${JSON.stringif
 const surfaces = new Map();
 let engineConfig;
 let nextInstance = 0;
-const requested = [];
-let focusRole = null;
+let foreground = {revision: -1, target: 'none', anchor: null};
+let appliedRevision = -1;
+let reveal;
+let reconciliation;
 let target = 'quotum://localhost/index.html';
 let generation = -1;
 let quitting = false;
 let idleExit;
-let panelBlur;
-let panelRequest = -1;
-let panelCancelled = false;
 const TRAY_GESTURE_MS = 500;
 let buffer = '';
 let nextId = 0;
@@ -36,15 +35,54 @@ const pending = new Map();
 function finish() { quitting = true; clearTimeout(idleExit); app.quit(); }
 channel.on('error', finish);
 channel.on('end', finish);
-channel.on('data', chunk => {
-  buffer += chunk;
-  if (Buffer.byteLength(buffer) > 65536) return finish();
-  let end;
-  while ((end = buffer.indexOf('\n')) >= 0) {
-    const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
-    try { receive(JSON.parse(line)); } catch { finish(); return; }
+// Read all currently available frames before acting on foreground intent. A
+// partial last frame delays reconciliation, even when an earlier one was complete.
+function drain() {
+  let chunk;
+  while ((chunk = channel.read()) !== null) {
+    buffer += chunk;
+    let end;
+    while ((end = buffer.indexOf('\n')) >= 0) {
+      if (Buffer.byteLength(buffer.slice(0, end)) > 65536) return finish();
+      const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
+      try { receive(JSON.parse(line)); } catch { finish(); return; }
+    }
+    if (Buffer.byteLength(buffer) > 65536) return finish();
   }
-});
+}
+function scheduleReconcile() {
+  if (reconciliation || quitting) return;
+  reconciliation = setImmediate(() => {
+    reconciliation = undefined;
+    drain();
+    if (!buffer && !quitting) reconcile();
+  });
+}
+channel.on('readable', () => { drain(); scheduleReconcile(); });
+function acceptForeground(head) {
+  if (!head || !Number.isSafeInteger(head.revision) || head.revision < 0 || !['main', 'compact', 'none'].includes(head.target)) return finish();
+  if (head.revision < foreground.revision || (head.revision === foreground.revision && foreground.target === 'none')) return;
+  foreground = head;
+}
+function current(entry) {
+  return !quitting && !entry.dismissed && !entry.window.isDestroyed() && surfaces.get(entry.role) === entry && foreground.target === entry.role && foreground.revision === entry.request;
+}
+function reconcile() {
+  if (!engineConfig) return;
+  const head = foreground;
+  const panel = surfaces.get('compact');
+  const main = surfaces.get('main');
+  if (panel && head.target !== 'compact') dismiss(panel);
+  // A main window that has already appeared remains usable behind the popup.
+  // Cancel a superseded creation before it can acquire a native focus target.
+  if (main && head.target !== 'main' && !main.revealed) dismiss(main);
+  if (head.target !== 'none') openSurface(head.target, head.anchor, head.revision);
+  else if (!surfaces.size) idle();
+  appliedRevision = head.revision;
+  const showing = reveal; reveal = undefined;
+  const entry = surfaces.get('compact');
+  if (showing && entry && current(entry) && entry.instance === showing.instance && entry.request === showing.request && entry.painted) entry.reveal();
+}
 function receive(message) {
   switch (message.type) {
     case 'init':
@@ -52,6 +90,7 @@ function receive(message) {
         if (!path.isAbsolute(message.profile) || !path.isAbsolute(message.geometry)) return finish();
         fs.mkdirSync(message.profile, {recursive: true, mode: 0o700});
         app.setPath('userData', message.profile);
+        acceptForeground(message.foreground);
         initialize(message); initialize = null;
       }
       break;
@@ -68,26 +107,15 @@ function receive(message) {
       }
       break;
     }
-    case 'panel_intent':
-      if (!Number.isSafeInteger(message.request) || message.request < 0 || typeof message.open !== 'boolean') return finish();
-      if (!engineConfig) requested.push(message);
-      else presentPanel(message);
+    case 'foreground':
+      acceptForeground(message.head);
       break;
-    case 'panel_reveal': {
-      const entry = surfaces.get('compact');
-      if (entry && !entry.dismissed && entry.instance === message.instance && entry.request === message.request && entry.painted) entry.reveal();
-      break;
-    }
-    case 'focus':
-      if (!['main', 'compact'].includes(message.role)) return finish();
-      if (!engineConfig) requested.push(message);
-      else present(message);
+    case 'panel_reveal':
+      reveal = message;
       break;
     case 'panel': {
       const entry = surfaces.get('compact');
       if (!entry || entry.instance !== message.instance || message.generation !== generation) break;
-      if (message.action === 'close') dismiss(entry);
-      if (message.action === 'main') { openSurface('main'); dismiss(entry); }
       if (message.action === 'height' && Number.isFinite(message.height) && message.height > 0 && message.height <= 100000) { engineConfig.panelHeight = entry.height = message.height; resizePanel(entry); }
       break;
     }
@@ -140,11 +168,11 @@ function navigate(entry) {
 
 ipcMain.handle('quotum:invoke', (event, command, args) => {
   const entry = [...surfaces.values()].find(e => event.sender === e.window.webContents);
-  if (!entry || entry.dismissed || event.senderFrame !== entry.window.webContents.mainFrame || !policy.mayInvoke(event.senderFrame.url, target, command, entry.role)) throw new Error('not the board of the running hub');
+  if (!entry || entry.dismissed || (entry.role === 'compact' && !current(entry)) || event.senderFrame !== entry.window.webContents.mainFrame || !policy.mayInvoke(event.senderFrame.url, target, command, entry.role)) throw new Error('not the board of the running hub');
   if (pending.size >= 16) throw new Error('too many pending app commands');
   const request = {command};
   if (['save_settings', 'save_desktop_settings', 'set_autostart', 'report_panel_height'].includes(command)) request.args = args;
-  const message = {type: 'request', id: ++nextId, origin: event.senderFrame.url, role: entry.role, instance: entry.instance, generation, request};
+  const message = {type: 'request', id: ++nextId, origin: event.senderFrame.url, role: entry.role, instance: entry.instance, revision: entry.request, generation, request};
   if (Buffer.byteLength(JSON.stringify(message)) > 60000) throw new Error('app command too large');
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => { pending.delete(message.id); reject(new Error('app command timed out')); }, 60000);
@@ -217,45 +245,24 @@ Promise.all([initialized, app.whenReady()]).then(([config]) => {
   const refit = () => { const panel = surfaces.get('compact'); if (panel && !panel.dismissed) resizePanel(panel); };
   screen.on('display-metrics-changed', refit);
   screen.on('display-removed', refit);
-  if (Number.isSafeInteger(config.panelRequest)) panelRequest = config.panelRequest;
-  panelCancelled = config.panelCancelled === true;
-  if (config.role !== 'compact' || !panelCancelled) openSurface(config.role ?? 'main', config.anchor, config.panelRequest);
-  for (const message of requested.splice(0)) {
-    if (message.type === 'panel_intent') presentPanel(message); else present(message);
-  }
-  if (!surfaces.size) idle();
+  scheduleReconcile();
 });
 function pointer() {
   try { return screen.getCursorScreenPoint(); } catch { return undefined; }
 }
 function reportClose(entry, blur = false) {
-  if (entry.request === panelRequest) panelCancelled = true;
-  if (Number.isSafeInteger(entry.request) && !entry.closeReported) { entry.closeReported = true; send({type: 'panel_closed', request: entry.request, blur}); }
+  if (current(entry)) foreground = {...foreground, target: 'none'};
+  if (entry.role === 'compact' && !entry.closeReported) {
+    entry.closeReported = true;
+    const point = pointer();
+    send({type: 'panel_closed', request: entry.request, blur, point: point ? [point.x, point.y] : null});
+  }
 }
 function dismiss(entry, blur = false) {
-  entry.reopen = undefined;
   if (entry.dismissed || entry.window.isDestroyed()) return;
-  entry.dismissed = true;
   reportClose(entry, blur);
+  entry.dismissed = true;
   entry.window.close();
-}
-function presentPanel(message) {
-  if (message.request < panelRequest || (message.request === panelRequest && panelCancelled && message.open)) return;
-  if (message.request > panelRequest) panelCancelled = false;
-  panelRequest = message.request;
-  if (message.open) openSurface('compact', message.anchor, message.request);
-  else { panelCancelled = true; const entry = surfaces.get('compact'); if (entry) dismiss(entry); }
-}
-function present(message) {
-  if (message.role !== 'compact' || !message.toggle) return openSurface(message.role, message.anchor);
-  const panel = surfaces.get('compact');
-  if (panel && !panel.window.isDestroyed() && (!panel.dismissed || panel.reopen)) { panelBlur = undefined; dismiss(panel); return; }
-  const recent = panelBlur;
-  panelBlur = undefined;
-  const point = pointer();
-  if (recent && performance.now() - recent.at < TRAY_GESTURE_MS &&
-      (!point || !recent.point || (Math.abs(point.x - recent.point.x) <= 8 && Math.abs(point.y - recent.point.y) <= 8))) return;
-  openSurface('compact', message.anchor);
 }
 function resizePanel(entry) {
   if (entry.window.isDestroyed()) return;
@@ -298,18 +305,25 @@ function panelAnchor(anchor) {
 }
 function openSurface(role, anchor, request) {
   clearTimeout(idleExit);
-  panelBlur = undefined;
-  focusRole = role;
   if (role === 'main') { const panel = surfaces.get('compact'); if (panel && !panel.window.isDestroyed()) dismiss(panel); }
   const point = role === 'compact' ? panelAnchor(anchor) : undefined;
   const existing = surfaces.get(role);
-  if (existing?.dismissed && !existing.window.isDestroyed()) { existing.reopen = {role, anchor, request}; return; }
+  if (existing?.dismissed && !existing.window.isDestroyed()) return;
+  if (role === 'compact' && existing && !existing.window.isDestroyed() && existing.request !== request) { dismiss(existing); return; }
   if (existing && !existing.window.isDestroyed()) {
-    if (Number.isSafeInteger(request)) existing.request = request;
-    if (existing.window.isMinimized()) existing.window.restore();
-    if (role === 'compact') { existing.anchor = point; resizePanel(existing); }
-    if (existing.request !== undefined) { if (existing.painted) existing.ready(); }
-    else { existing.window.show(); existing.window.focus(); }
+    const changed = existing.request !== request || appliedRevision !== request;
+    existing.request = request;
+    if (changed) send({type: 'surface', role, instance: existing.instance, revision: request, open: true});
+    if (role === 'compact' && changed) { existing.anchor = point; resizePanel(existing); }
+    if (!existing.painted) return;
+    if (role === 'compact' && engineConfig.nativePanel) {
+      if (changed || !existing.readyReported) existing.ready();
+    } else if (changed || !existing.revealed) {
+      if (existing.window.isMinimized()) existing.window.restore();
+      existing.window.show(); existing.window.focus(); existing.revealed = true;
+      if (existing.loaded && role === 'main') send({type: 'loaded', url: existing.window.webContents.getURL()});
+      scheduleGraphics();
+    }
     return;
   }
   const config = engineConfig;
@@ -318,7 +332,6 @@ function openSurface(role, anchor, request) {
   const panelHeight = Number.isFinite(config.panelHeight) ? Math.max(100, config.panelHeight) : 180;
   const initialHeight = area ? Math.max(100, Math.min(panelHeight, Math.floor(area.height * 0.8))) : 800;
   let loaded = false;
-  let revealed = false;
   let geometry = {};
   try {
     if (compact) throw new Error('panel geometry is temporary');
@@ -338,39 +351,35 @@ function openSurface(role, anchor, request) {
       devTools: config.inspect === true, spellcheck: false, navigateOnDragDrop: false,
     },
   });
-  const entry = {window, role, instance: ++nextInstance, height: compact ? panelHeight : 180, anchor: point, dismissed: false, request: compact && config.nativePanel && Number.isSafeInteger(request) ? request : undefined};
+  const entry = {window, role, instance: ++nextInstance, height: compact ? panelHeight : 180, anchor: point, dismissed: false, request, revealed: false};
   surfaces.set(role, entry);
-  send({type: 'surface', role, instance: entry.instance, open: true});
+  send({type: 'surface', role, instance: entry.instance, revision: entry.request, open: true});
   window.setMenu(null);
   if (compact) {
     window.on('focus', () => { entry.focused = true; });
     window.on('blur', () => {
-      if (revealed && !quitting && !entry.dismissed && (entry.request === undefined || entry.focused)) {
-        panelBlur = {at: performance.now(), point: pointer()};
+      if (entry.revealed && current(entry) && (!config.nativePanel || entry.focused)) {
         dismiss(entry, true);
       }
     });
     window.on('move', () => resizePanel(entry));
   }
   entry.reveal = () => {
-    if (quitting || entry.dismissed || window.isDestroyed()) return;
-    revealed = true; window.show(); window.focus();
+    if (!current(entry)) return;
+    entry.revealed = true; window.show(); window.focus();
     send({type: 'panel_visible', request: entry.request});
     scheduleGraphics();
   };
   entry.ready = () => {
+    if (!current(entry)) return;
+    entry.readyReported = true;
     const handle = window.getNativeWindowHandle();
     send({type: 'panel_ready', request: entry.request, instance: entry.instance, handle: handle.readUInt32LE(0)});
   };
   window.once('ready-to-show', () => {
-    if (quitting || entry.dismissed || window.isDestroyed()) return;
-    if (compact) resizePanel(entry);
+    if (quitting || entry.dismissed || window.isDestroyed() || surfaces.get(role) !== entry) return;
     entry.painted = true;
-    if (entry.request !== undefined) { entry.ready(); return; }
-    if (!revealed) { if (focusRole === role) window.show(); else window.showInactive(); }
-    revealed = true;
-    if (loaded && !compact) send({type: 'loaded', url: window.webContents.getURL()});
-    scheduleGraphics();
+    scheduleReconcile();
   });
   const contents = window.webContents;
   if (compact) contents.on('before-input-event', (event, input) => {
@@ -389,12 +398,12 @@ function openSurface(role, anchor, request) {
   contents.on('did-finish-load', () => {
     if (entry.dismissed || window.isDestroyed()) return;
     if (!quitting && !belongs(contents.getURL(), target)) { navigate(entry); return; }
-    loaded = true;
-    if (revealed && !compact) send({type: 'loaded', url: contents.getURL()});
+    loaded = true; entry.loaded = true;
+    if (entry.revealed && !compact) send({type: 'loaded', url: contents.getURL()});
   });
   window.on('close', () => {
-    entry.dismissed = true;
     reportClose(entry);
+    entry.dismissed = true;
     if (loaded && !compact) {
       try { fs.writeFileSync(`${config.geometry}.new`, JSON.stringify(window.getNormalBounds())); fs.renameSync(`${config.geometry}.new`, config.geometry); } catch {}
     }
@@ -402,12 +411,12 @@ function openSurface(role, anchor, request) {
   window.on('closed', () => {
     const current = surfaces.get(role) === entry;
     if (current) surfaces.delete(role);
-    send({type: 'surface', role, instance: entry.instance, open: false});
+    send({type: 'surface', role, instance: entry.instance, revision: entry.request, open: false});
     for (const [id, waiter] of pending) if (waiter.entry === entry) { clearTimeout(waiter.timer); pending.delete(id); waiter.reject(new Error('window closed')); }
-    if (current && entry.reopen && !quitting) openSurface(entry.reopen.role, entry.reopen.anchor, entry.reopen.request);
+    if (current && !quitting) scheduleReconcile();
   });
   navigate(entry);
   // The tray responds before Chromium has loaded the page. Once revealed, an
   // outside click must still dismiss it while the renderer is starting.
-  if (compact) { resizePanel(entry); if (entry.request === undefined) { revealed = true; window.show(); } }
+  if (compact) { resizePanel(entry); if (!config.nativePanel && current(entry)) { entry.revealed = true; window.show(); } }
 }

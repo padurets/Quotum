@@ -711,11 +711,32 @@ use that same backend. The controller shows the native loader immediately, then
 hands off to the browser only after its first paint. The loader is a native popup
 with skip-taskbar hints; the browser is an unmanaged popup. While the browser is
 visible, the native owner stays transparent and accepts no pointer input, preserving
-keyboard focus across XWayland. Both close together. Neither is a taskbar entry. Request
-numbers prevent a cancelled or superseded load from appearing later. The controller
-retains the active request before a GUI exists, checks it before launch and supplies
-its cancellation during the initial handshake; closing never depends on first paint. The loader
-and ready panel both dismiss on an outside click or Escape. Without X11 the app
+keyboard focus across XWayland. Both close together. Neither is a taskbar entry. The
+controller accepts every foreground request into one current head: its revision, main,
+compact or none, and resolved anchor. Startup, second launches, tray actions and the
+compact panel's buttons share that order. Workers carry an immutable ticket and the
+initial handshake reads the current head, so an older worker cannot reclaim focus.
+Cancellation is terminal for its revision; native callbacks also belong to one engine
+and presentation. Explicit *Limits* on the current panel keeps that presentation and
+its anchor.
+
+A bounded publisher sends the complete head before showing a new loader beside an
+existing engine. Its nonblocking fast path never waits for the browser; under socket
+backpressure one pending head replaces older unsent heads, after tray toggles have
+been reduced. A partially written frame completes before another message can start.
+The loader's show waits for that publication only when the channel is blocked; GTK
+continues to accept cancellation and Escape immediately. With no engine, the loader
+appears immediately and the handshake supplies the latest head. Other host messages
+use a bounded queue, so the private IPC reader keeps draining requests while replies
+wait. Quitting shuts down the private socket without waiting for its writer.
+
+Electron drains available complete socket frames before reconciling the latest head;
+a partial final frame delays that reconciliation. Deferred paint, reveal and closed
+callbacks cannot replay an obsolete foreground request. A new compact revision gets
+a new native presentation, while a current main request reuses and restores its normal
+Electron window. A superseded main that has never appeared is retired. Closing never
+depends on first paint. The loader and ready panel both dismiss on an outside click or
+Escape. Without X11 the app
 keeps the compositor-managed browser path. A direct tray activation toggles it; the blur and activation
 of the same pointer gesture cannot close and immediately reopen it. The menu's
 *Limits* command explicitly opens it. Closing both destroys their renderers and ends

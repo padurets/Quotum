@@ -106,7 +106,7 @@ with tempfile.TemporaryDirectory(prefix='quotum-late-tray-') as directory:
                 result.update(title=props['Title'], status=props['Status'])
                 if os.environ.get('QUOTUM_TEST_PANEL') == '1':
                     from panel import check_panel
-                    result['panel'] = check_panel(bus, registered[0], child, root)
+                    result['panel'] = check_panel(bus, registered[0], child, root, env)
         finally:
             child.terminate()
             try:

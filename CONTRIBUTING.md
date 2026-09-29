@@ -55,7 +55,9 @@ children and audits their exits, alongside Electron's live child-failure reports
 This uses no ptrace and keeps Chromium's sandbox intact. The installed-package checks also start the controller before a stand-in tray watcher
 (`desktop/smoke/tray.sh`, Python 3 with PyGObject) to cover early start at login.
 The panel check also queues three activations while its own controller is briefly paused,
-then verifies that the final open survives delayed focus events.
+then verifies that the final open survives delayed focus events. It pauses its browser,
+queues a main-window reopen followed by a newer tray activation, and checks that the
+main window never takes focus from that newer loader or panel when the browser resumes.
 A successful
 controller exit alone does not prove that browser children closed successfully.
 The intentional child-crash supervisor regression requires `QUOTUM_TEST_FAULT=1`;

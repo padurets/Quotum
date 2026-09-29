@@ -4,10 +4,11 @@ import os
 from pathlib import Path
 import re
 import signal
+import subprocess
 import time
 
 
-def check_panel(bus, item, child, root):
+def check_panel(bus, item, child, root, env):
     from gi.repository import Gio, GLib
     x = C.CDLL('libX11.so.6')
     x.XOpenDisplay.argtypes = [C.c_char_p]
@@ -20,6 +21,10 @@ def check_panel(bus, item, child, root):
     x.XGetWindowProperty.argtypes = [C.c_void_p, C.c_ulong, C.c_ulong, C.c_long, C.c_long, C.c_int, C.c_ulong, C.POINTER(C.c_ulong), C.POINTER(C.c_int), C.POINTER(C.c_ulong), C.POINTER(C.c_ulong), C.POINTER(C.c_void_p)]
     x.XFree.argtypes = [C.c_void_p]
     x.XGetWindowAttributes.argtypes = [C.c_void_p, C.c_ulong, C.c_void_p]
+    x.XSelectInput.argtypes = [C.c_void_p, C.c_ulong, C.c_long]
+    x.XPending.argtypes = [C.c_void_p]
+    x.XNextEvent.argtypes = [C.c_void_p, C.c_void_p]
+    x.XGetInputFocus.argtypes = [C.c_void_p, C.POINTER(C.c_ulong), C.POINTER(C.c_int)]
     x.XCloseDisplay.argtypes = [C.c_void_p]
 
     class Attributes(C.Structure):
@@ -68,6 +73,7 @@ def check_panel(bus, item, child, root):
                 attributes = Attributes()
                 if x.XGetWindowAttributes(display, window, C.byref(attributes)) and attributes.map_state == 2:
                     attributes.skip_taskbar = x.XInternAtom(display, b'_NET_WM_STATE_SKIP_TASKBAR', 0) in property_values(window, b'_NET_WM_STATE')
+                    attributes.id = window
                     found.append(attributes)
         return found
 
@@ -130,8 +136,43 @@ def check_panel(bus, item, child, root):
         activate()
         wait(lambda: not visible(pid))
         wait(lambda: engine() is None)
+        # Reopening main was accepted first, but its browser is paused. A newer
+        # tray request must remain foreground when both queued heads are drained.
+        subprocess.run([child.args[0]], env=env, timeout=5, check=True)
+        pid = wait(engine)
+        board = wait(lambda: next((w for w in visible(pid) if not w.override), None))
+        x.XSelectInput(display, board.id, 1 << 21)  # FocusChangeMask
+        os.kill(pid, signal.SIGSTOP)
+        try:
+            subprocess.run([child.args[0]], env=env, timeout=5, check=True)
+            activate()
+            loader = wait(lambda: visible(child.pid))
+            focus, revert = C.c_ulong(), C.c_int()
+            def loader_focused():
+                x.XGetInputFocus(display, C.byref(focus), C.byref(revert))
+                return focus.value == loader[0].id
+            wait(loader_focused)
+            # Initial main focus belongs before this boundary. The loader owns
+            # focus now, and only an excursion after resume is a regression.
+            event = (C.c_long * 24)()
+            while x.XPending(display):
+                x.XNextEvent(display, C.byref(event))
+        finally:
+            os.kill(pid, signal.SIGCONT)
+        popup = wait(lambda: next((w for w in visible(pid) if w.override), None))
+        focus, revert = C.c_ulong(), C.c_int()
+        def panel_focused():
+            x.XGetInputFocus(display, C.byref(focus), C.byref(revert))
+            return focus.value == popup.id
+        wait(panel_focused)
+        event = (C.c_long * 24)()
+        while x.XPending(display):
+            x.XNextEvent(display, C.byref(event))
+            assert not ((event[0] & 0xffffffff) == 9 and event[4] == board.id), 'obsolete main briefly took focus from the newer loader'
+        activate()
+        wait(lambda: not any(w.override for w in visible(pid)))
         assert not errors, f'unexpected X11 errors: {errors}'
-        return {'loadingWithoutBrowser': True, 'popupHandoff': True, 'cancelledBeforePaint': True, 'queuedFinalOpen': True}
+        return {'loadingWithoutBrowser': True, 'popupHandoff': True, 'cancelledBeforePaint': True, 'queuedFinalOpen': True, 'newerPanelKeepsFocus': True}
     finally:
         x.XCloseDisplay(display)
         x.XSetErrorHandler(previous_handler)

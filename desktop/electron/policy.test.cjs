@@ -8,7 +8,7 @@ const vm = require('node:vm');
 
 // Run the real main process handlers with a web view whose navigations commit
 // only when the test asks. No Electron, display, filesystem writes or clients.
-async function mainProcess({cursor = () => ({x: 790, y: 590}), displays = [{workArea: {x: 0, y: 0, width: 800, height: 600}}], backend = '', env = {}, startup = [], panelHeight, nativePanel = false, panelRequest, panelCancelled = false, role, deferClose = false} = {}) {
+async function mainProcess({cursor = () => ({x: 790, y: 590}), displays = [{workArea: {x: 0, y: 0, width: 800, height: 600}}], backend = '', env = {}, startup = [], panelHeight, nativePanel = false, panelRequest, panelCancelled = false, role, deferClose = false, initialHead, paintMain = true} = {}) {
   let channel;
   let window;
   const windows = [];
@@ -20,12 +20,17 @@ async function mainProcess({cursor = () => ({x: 790, y: 590}), displays = [{work
   let gone = false;
   let now = 0;
   const timers = [];
+  const immediates = [];
+  const flush = () => { let count = 0; while (immediates.length) { assert.ok(count++ < 100, 'reconciliation settles'); immediates.shift()(); } };
+  let revision = panelRequest ?? 0;
+  let producer = {revision, target: panelCancelled ? 'none' : role ?? 'main'};
   const closing = [];
   const later = (run, delay) => { const timer = {run, at: now + delay, active: true, unref() {}}; timers.push(timer); return timer; };
   const cancel = timer => { if (timer) timer.active = false; };
   const screenEvents = new EventEmitter();
   const app = Object.assign(new EventEmitter(), {
     setName() {}, setDesktopName() {}, enableSandbox() {}, setPath() {},
+    getGPUFeatureStatus: () => ({}),
     whenReady: () => Promise.resolve(), quit() { quits.push('quit'); },
     commandLine: {getSwitchValue: () => backend},
   });
@@ -45,14 +50,16 @@ async function mainProcess({cursor = () => ({x: 790, y: 590}), displays = [{work
         send: (name, ...args) => sent.push(JSON.stringify([name, ...args])),
       });
     }
+    emit(name, ...args) { const result = super.emit(name, ...args); if (name === 'ready-to-show') flush(); return result; }
     setMenu() {}
     setShape(rects) { this.shape = rects; }
     getNativeWindowHandle() { const handle = Buffer.alloc(8); handle.writeUInt32LE(windows.indexOf(this) + 100); return handle; }
     isDestroyed() { return this.destroyed; }
-    isMinimized() { return false; }
+    isMinimized() { return this.minimized === true; }
+    restore() { this.minimized = false; this.restores = (this.restores ?? 0) + 1; }
     show() { this.visible = true; this.shows = (this.shows ?? 0) + 1; }
     showInactive() { this.show(); }
-    focus() {}
+    focus() { this.focuses = (this.focuses ?? 0) + 1; }
     close() {
       if (this.destroyed || this.closing) return;
       this.closing = true; this.emit('close'); this.emit('blur');
@@ -78,27 +85,42 @@ async function mainProcess({cursor = () => ({x: 790, y: 590}), displays = [{work
         }),
       };
       if (name === 'node:net') return {Socket: class extends EventEmitter {
-        constructor() { super(); channel = this; }
+        constructor() { super(); channel = this; this.chunks = []; }
         setEncoding() {}
+        read() { return this.chunks.shift() ?? null; }
         write(data) { traffic.push(JSON.parse(data)); }
       }};
       if (name === 'node:fs') return {mkdirSync() {}, readFileSync() { throw new Error('no saved geometry'); }};
       if (name === 'node:perf_hooks') return {performance: {now: () => now}};
       return require(name);
     },
-    process: {argv: [], env, on() {}}, __dirname, URL, Buffer, setTimeout: later, clearTimeout: cancel,
+    process: {argv: [], env, versions: {}, on() {}}, __dirname, URL, Buffer, setTimeout: later, clearTimeout: cancel, setImmediate: run => { immediates.push(run); return run; },
   });
   vm.runInContext(readFileSync(`${__dirname}/main.cjs`, 'utf8'), context);
-  const deliver = (...messages) => channel.emit('data', messages.map(message => JSON.stringify(message) + '\n').join(''));
-  deliver({type: 'init', profile: '/isolated/profile', geometry: '/isolated/window.json', panelHeight, nativePanel, panelRequest, panelCancelled, role}, ...startup);
+  // Tests specify complete foreground snapshots. Revision omission is just
+  // shorthand for a new controller request, never a GUI-generated revision.
+  const encode = message => {
+    if (message.type === 'foreground') {
+      const head = {...message.head, revision: message.head.revision ?? ++revision};
+      revision = Math.max(revision, head.revision);
+      producer = head;
+      return {...message, head};
+    }
+    return message;
+  };
+  const raw = (chunk, settle = true) => { channel.chunks.push(chunk); channel.emit('readable'); if (settle) flush(); };
+  const deliver = (...messages) => raw(messages.map(message => JSON.stringify(encode(message)) + '\n').join(''));
+  deliver({type: 'init', profile: '/isolated/profile', geometry: '/isolated/window.json', panelHeight, nativePanel, foreground: initialHead ?? producer}, ...startup);
   await new Promise(setImmediate);
+  flush();
+  if (paintMain) for (const board of windows.filter(w => w.options.frame)) board.emit('ready-to-show');
   return {
-    navigations, deliver, sent, traffic, quits, windows, screenEvents,
+    navigations, deliver, raw, flush, sent, traffic, quits, windows, screenEvents,
     invoke: (...args) => invoke(...args),
     commit(url) { window.url = url; window.webContents.emit('did-finish-load'); },
     crash() { gone = true; },
     tick(ms) { now += ms; for (const timer of timers) if (timer.active && timer.at <= now) { timer.active = false; timer.run(); } },
-    finishClosing() { for (const finish of closing.splice(0)) finish(); },
+    finishClosing() { for (const finish of closing.splice(0)) finish(); flush(); },
   };
 }
 
@@ -188,7 +210,7 @@ test('compact capabilities never include settings, takeover or arbitrary geometr
 test('two surfaces keep separate geometry and reject commands from subframes or a closed instance', async () => {
   const main = await mainProcess();
   main.deliver({type: 'state', generation: 1, url: hub});
-  main.deliver({type: 'focus', role: 'compact'});
+  main.deliver({type: 'foreground', head: {target: 'compact'}});
   assert.equal(main.windows.length, 2);
   const [board, panel] = main.windows;
   assert.equal(panel.options.width, 400);
@@ -208,7 +230,7 @@ test('two surfaces keep separate geometry and reject commands from subframes or 
   assert.equal(panel.destroyed, false);
   panel.close();
   assert.throws(() => main.invoke({sender: panel.webContents, senderFrame: panel.webContents.mainFrame}, 'app_state'), /not the board/);
-  main.deliver({type: 'focus', role: 'compact'});
+  main.deliver({type: 'foreground', head: {target: 'compact'}});
   const reopened = main.windows.at(-1);
   main.deliver({type: 'panel', instance: 2, generation: 1, action: 'close'});
   assert.equal(reopened.destroyed, false);
@@ -219,7 +241,7 @@ test('two surfaces keep separate geometry and reject commands from subframes or 
 test('activation coordinates keep the compact surface inside its work area', async () => {
   const main = await mainProcess();
   main.deliver({type: 'state', generation: 1, url: hub});
-  main.deliver({type: 'focus', role: 'compact', anchor: [790, 590]});
+  main.deliver({type: 'foreground', head: {target: 'compact', anchor: [790, 590]}});
   const panel = main.windows.at(-1);
   panel.emit('ready-to-show');
   assert.deepEqual(panel.position, [390, 410]);
@@ -234,7 +256,7 @@ test('a tray menu uses its monitor on XWayland and keeps that anchor through con
     cursor: () => point, backend: 'x11', env: {WAYLAND_DISPLAY: 'wayland-0'},
     displays: [{workArea: {x: 0, y: 0, width: 800, height: 600}}, {workArea: {x: 800, y: 0, width: 1200, height: 1000}}],
   });
-  main.deliver({type: 'state', generation: 1, url: hub}, {type: 'focus', role: 'compact'});
+  main.deliver({type: 'state', generation: 1, url: hub}, {type: 'foreground', head: {target: 'compact'}});
   const panel = main.windows.at(-1);
   panel.emit('ready-to-show');
   assert.deepEqual(panel.position, [1400, 720]);
@@ -242,71 +264,33 @@ test('a tray menu uses its monitor on XWayland and keeps that anchor through con
   main.deliver({type: 'panel', instance: 2, generation: 1, action: 'height', height: 1000});
   assert.deepEqual(panel.size, [400, 800], 'height comes from the activation monitor');
   assert.deepEqual(panel.position, [1400, 100], 'moving the pointer does not move an open panel');
-  main.deliver({type: 'focus', role: 'compact'});
-  assert.deepEqual(panel.size, [400, 480]);
-  assert.deepEqual(panel.position, [0, 0], 'a new menu activation uses its current monitor');
+  main.deliver({type: 'foreground', head: {target: 'compact'}});
+  const relocated = main.windows.at(-1);
+  assert.deepEqual(relocated.size, [400, 480]);
+  assert.equal(relocated.getBounds().x, 0);
+  assert.equal(relocated.getBounds().y, 0, 'a new presentation uses its activation monitor');
 });
 
 test('native Wayland never asks for unsupported global pointer coordinates', async () => {
   const main = await mainProcess({backend: 'wayland', cursor() { throw new Error('unsupported global pointer'); }});
-  main.deliver({type: 'state', generation: 1, url: hub}, {type: 'focus', role: 'compact', anchor: [790, 590]});
+  main.deliver({type: 'state', generation: 1, url: hub}, {type: 'foreground', head: {target: 'compact', anchor: [790, 590]}});
   const panel = main.windows.at(-1);
   panel.emit('ready-to-show');
   assert.equal(panel.position, undefined);
   assert.deepEqual(panel.size, [400, 180]);
 });
 
-test('the tray toggles a visible or loading panel and consumes the preceding blur of the same click', async () => {
-  let point = {x: 790, y: 590};
-  const main = await mainProcess({cursor: () => point});
-  main.deliver({type: 'state', generation: 1, url: hub});
-  const toggle = () => main.deliver({type: 'focus', role: 'compact', toggle: true});
-  toggle();
-  const first = main.windows.at(-1);
-  assert.equal(first.visible, true, 'the native panel appears before the page is ready');
-  toggle();
-  assert.equal(first.destroyed, true, 'a second click also cancels a loading panel');
-  first.emit('ready-to-show');
-  assert.equal(first.shows, 1, 'a late ready event cannot reveal it again');
-  toggle();
-  const second = main.windows.at(-1);
-  second.emit('blur');
-  main.tick(80);
-  toggle();
-  assert.equal(main.windows.at(-1), second, 'the tray click that caused the blur must not reopen the panel');
-  toggle();
-  const third = main.windows.at(-1);
-  assert.equal(third.destroyed, false, 'the next distinct activation can open it');
-  point = {x: 50, y: 50};
-  third.emit('blur');
-  point = {x: 790, y: 590};
-  main.tick(30);
-  toggle();
-  assert.notEqual(main.windows.at(-1), third, 'an outside click followed by a tray click is a new request');
-});
 
-test('queued tray activations retain their order and the engine exits after the gesture ends', async () => {
-  const main = await mainProcess({startup: [
-    {type: 'focus', role: 'compact', toggle: true},
-    {type: 'focus', role: 'compact', toggle: true},
-  ]});
-  assert.equal(main.windows.filter(w => !w.destroyed).length, 1, 'two activations during startup leave only the main window');
-  main.windows[0].close();
-  main.tick(499);
-  assert.deepEqual(main.quits, []);
-  main.tick(1);
-  assert.deepEqual(main.quits, ['quit'], 'no permanent renderer or engine cache');
-});
 
 test('only the panel height is reused when its renderer is recreated', async () => {
   const main = await mainProcess({panelHeight: 900});
-  main.deliver({type: 'state', generation: 1, url: hub}, {type: 'focus', role: 'compact'});
+  main.deliver({type: 'state', generation: 1, url: hub}, {type: 'foreground', head: {target: 'compact'}});
   const panel = main.windows.at(-1);
   assert.deepEqual(panel.size, [400, 480], 'cached height is still clamped to this monitor');
   assert.equal(panel.options.height, 480, 'even the hidden window starts inside the monitor limit');
   main.deliver({type: 'panel', instance: 2, generation: 1, action: 'height', height: 250});
-  main.deliver({type: 'panel', instance: 2, generation: 1, action: 'close'});
-  main.deliver({type: 'focus', role: 'compact'});
+  main.deliver({type: 'foreground', head: {target: 'none'}});
+  main.deliver({type: 'foreground', head: {target: 'compact'}});
   assert.deepEqual(main.windows.at(-1).size, [400, 250]);
   assert.deepEqual(main.windows[0].size, [1280, 800]);
 });
@@ -317,7 +301,7 @@ test('a tall monitor lets the compact panel grow beyond 600 pixels and shrink wi
     cursor: () => ({x: 4400, y: 220}),
     displays: [{workArea: {x: 1200, y: 207, width: 3440, height: 1404}}],
   });
-  main.deliver({type: 'state', generation: 1, url: hub}, {type: 'focus', role: 'compact'});
+  main.deliver({type: 'state', generation: 1, url: hub}, {type: 'foreground', head: {target: 'compact'}});
   const panel = main.windows.at(-1);
   assert.equal(panel.options.height, 784, 'the cached large panel has no fixed pixel ceiling');
   assert.deepEqual(panel.size, [400, 784]);
@@ -328,27 +312,10 @@ test('a tall monitor lets the compact panel grow beyond 600 pixels and shrink wi
   assert.deepEqual(panel.position, [4000, 207], 'the top tray anchor stays put');
 });
 
-test('rapid toggles retain their final intent while the previous renderer is closing', async () => {
-  for (const count of [2, 3, 4]) {
-    const main = await mainProcess({deferClose: true, startup: Array.from({length: count}, () => ({type: 'focus', role: 'compact', toggle: true}))});
-    main.finishClosing();
-    const panels = main.windows.filter(w => w.options.frame === false && !w.destroyed);
-    assert.equal(panels.length, count % 2, `${count} queued activations`);
-  }
-  const main = await mainProcess({deferClose: true});
-  main.deliver({type: 'state', generation: 1, url: hub}, {type: 'focus', role: 'compact', toggle: true});
-  const panel = main.windows.at(-1);
-  panel.url = 'http://127.0.0.1:23456/compact';
-  main.deliver({type: 'focus', role: 'compact', toggle: true});
-  assert.throws(() => main.invoke({sender: panel.webContents, senderFrame: panel.webContents.mainFrame}, 'open_main'), /not the board/);
-  main.deliver({type: 'focus', role: 'compact', toggle: true}, {type: 'focus', role: 'main'});
-  main.finishClosing();
-  assert.equal(main.windows.filter(w => !w.destroyed).length, 1, 'opening the board cancels a pending panel reopen');
-});
 
 test('closing a loading panel is not a navigation failure, but a live page failing still is', async () => {
   const main = await mainProcess();
-  main.deliver({type: 'state', generation: 1, url: hub}, {type: 'focus', role: 'compact'});
+  main.deliver({type: 'state', generation: 1, url: hub}, {type: 'foreground', head: {target: 'compact'}});
   const panel = main.windows.at(-1);
   panel.close();
   panel.failNavigation('ERR_FAILED');
@@ -362,7 +329,7 @@ test('closing a loading panel is not a navigation failure, but a live page faili
 
 test('a native loader hands off only to a painted panel of its current request', async () => {
   const main = await mainProcess({nativePanel: true});
-  main.deliver({type: 'panel_intent', request: 1, open: true, anchor: [790, 590]});
+  main.deliver({type: 'foreground', head: {revision: 1, target: 'compact', anchor: [790, 590]}});
   const panel = main.windows[1];
   assert.equal(panel.visible, undefined);
   main.deliver({type: 'panel_reveal', request: 1, instance: 2});
@@ -376,20 +343,21 @@ test('a native loader hands off only to a painted panel of its current request',
   panel.emit('focus');
   panel.emit('blur');
   assert.equal(panel.destroyed, true);
-  assert.deepEqual(main.traffic.filter(m => m.type === 'panel_closed'), [{type: 'panel_closed', request: 1, blur: true}]);
+  assert.deepEqual(main.traffic.filter(m => m.type === 'panel_closed'), [{type: 'panel_closed', request: 1, blur: true, point: [790, 590]}]);
 });
 
 test('cancelled native requests cannot reappear after paint or a delayed reveal', async () => {
   const main = await mainProcess({nativePanel: true, deferClose: true});
-  main.deliver({type: 'panel_intent', request: 1, open: true}, {type: 'panel_intent', request: 1, open: false});
+  main.deliver({type: 'foreground', head: {revision: 1, target: 'compact'}});
+  main.deliver({type: 'foreground', head: {revision: 1, target: 'none'}});
   const old = main.windows[1];
-  main.deliver({type: 'panel_intent', request: 2, open: true});
+  main.deliver({type: 'foreground', head: {revision: 2, target: 'compact'}});
   old.emit('ready-to-show');
   main.deliver({type: 'panel_reveal', request: 1, instance: 2});
   assert.equal(old.visible, undefined);
   main.finishClosing();
   const current = main.windows[2];
-  main.deliver({type: 'panel_intent', request: 1, open: false});
+  main.deliver({type: 'foreground', head: {revision: 1, target: 'none'}});
   current.emit('ready-to-show');
   main.deliver({type: 'panel_reveal', request: 2, instance: 3});
   assert.equal(current.visible, true, 'an older cancellation cannot close the newer request');
@@ -397,7 +365,7 @@ test('cancelled native requests cannot reappear after paint or a delayed reveal'
 
 test('cancellation is terminal even when it overtakes the opening worker', async () => {
   const main = await mainProcess({nativePanel: true});
-  main.deliver({type: 'panel_intent', request: 1, open: false}, {type: 'panel_intent', request: 1, open: true});
+  main.deliver({type: 'foreground', head: {revision: 1, target: 'none'}}, {type: 'foreground', head: {revision: 1, target: 'compact'}});
   assert.equal(main.windows.length, 1, 'no cancelled renderer is created');
   main.windows[0].close();
   main.tick(60000);
@@ -407,11 +375,11 @@ test('cancellation is terminal even when it overtakes the opening worker', async
 test('a controller cancellation before the initial handshake creates no renderer', async () => {
   const config = {nativePanel: true, role: 'compact', panelRequest: 1, panelCancelled: true};
   const cancelled = await mainProcess(config);
-  cancelled.deliver({type: 'panel_intent', request: 1, open: true});
+  cancelled.deliver({type: 'foreground', head: {revision: 1, target: 'compact'}});
   assert.equal(cancelled.windows.length, 0);
   cancelled.tick(60000);
   assert.deepEqual(cancelled.quits, ['quit']);
-  const reopened = await mainProcess({...config, startup: [{type: 'panel_intent', request: 2, open: true}]});
+  const reopened = await mainProcess({...config, startup: [{type: 'foreground', head: {revision: 2, target: 'compact'}}]});
   assert.equal(reopened.windows.length, 1, 'a later request still opens on this engine');
   reopened.tick(1000);
   assert.deepEqual(reopened.quits, []);
@@ -419,7 +387,7 @@ test('a controller cancellation before the initial handshake creates no renderer
 
 test('Escape dismisses a compact window before any page or React handler loads', async () => {
   const main = await mainProcess({backend: 'wayland'});
-  main.deliver({type: 'focus', role: 'compact'});
+  main.deliver({type: 'foreground', head: {target: 'compact'}});
   const panel = main.windows[1];
   let prevented = false;
   panel.webContents.emit('before-input-event', {preventDefault() { prevented = true; }}, {type: 'keyDown', key: 'Escape'});
@@ -431,7 +399,7 @@ test('Escape dismisses a compact window before any page or React handler loads',
 test('an open panel follows display work-area changes without new content', async () => {
   const displays = [{workArea: {x: 0, y: 0, width: 1920, height: 1080}}];
   const main = await mainProcess({displays, panelHeight: 1000, cursor: () => ({x: 1890, y: 1050})});
-  main.deliver({type: 'focus', role: 'compact'});
+  main.deliver({type: 'foreground', head: {target: 'compact'}});
   const panel = main.windows[1];
   displays[0].workArea = {x: 0, y: 0, width: 1280, height: 720};
   main.screenEvents.emit('display-metrics-changed');
@@ -444,7 +412,7 @@ test('an open panel follows display work-area changes without new content', asyn
 
 test('the compact surface rounds drawing and pointer input without cropping its centre', async () => {
   const main = await mainProcess();
-  main.deliver({type: 'focus', role: 'compact'});
+  main.deliver({type: 'foreground', head: {target: 'compact'}});
   const panel = main.windows[1];
   const contains = (x,y) => panel.shape.some(r => x >= r.x && x < r.x+r.width && y >= r.y && y < r.y+r.height);
   assert.equal(panel.options.transparent, true);
@@ -454,4 +422,147 @@ test('the compact surface rounds drawing and pointer input without cropping its 
   main.deliver({type: 'panel', instance: 2, generation: -1, action: 'height', height: 300});
   assert.equal(contains(panel.size[0]/2,299), true);
   assert.equal(main.windows[0].shape, undefined);
+});
+
+for (const initial of ['present', 'absent', 'minimized']) test(`queued older main never overtakes the latest compact (${initial})`, async () => {
+  const main = await mainProcess({nativePanel: true, initialHead: {revision: 0, target: initial === 'absent' ? 'none' : 'main'}});
+  const board = main.windows[0];
+  if (initial === 'minimized') board.minimized = true;
+  const before = board && {shows: board.shows, focuses: board.focuses, restores: board.restores};
+  main.deliver(
+    {type: 'foreground', head: {revision: 1, target: 'main'}},
+    {type: 'foreground', head: {revision: 2, target: 'compact', anchor: [790, 590]}},
+  );
+  assert.equal(main.windows.filter(w => w.options.frame).length, initial === 'absent' ? 0 : 1);
+  if (board) assert.deepEqual({shows: board.shows, focuses: board.focuses, restores: board.restores}, before, 'no obsolete native main operations');
+  const panel = main.windows.at(-1);
+  panel.emit('ready-to-show');
+  const ready = main.traffic.findLast(m => m.type === 'panel_ready');
+  main.deliver({type: 'panel_reveal', request: 2, instance: ready.instance});
+  assert.equal(panel.visible, true);
+  assert.equal(panel.destroyed, false);
+  assert.deepEqual(main.traffic.filter(m => m.type === 'panel_closed'), []);
+});
+
+test('a late old worker ticket cannot explicitly close the current panel', async () => {
+  const main = await mainProcess({nativePanel: true, deferClose: true});
+  main.deliver({type: 'foreground', head: {revision: 2, target: 'compact'}});
+  const panel = main.windows.at(-1);
+  main.deliver({type: 'foreground', head: {revision: 1, target: 'main'}});
+  assert.equal(panel.closing, undefined);
+  assert.deepEqual(main.traffic.filter(m => m.type === 'panel_closed'), []);
+  panel.emit('ready-to-show');
+  main.deliver({type: 'panel_reveal', request: 2, instance: 2});
+  assert.equal(panel.visible, true);
+});
+
+test('chunk boundaries and a partial later frame never apply the preceding main head', async () => {
+  const main = await mainProcess({nativePanel: true});
+  const board = main.windows[0];
+  const before = board.focuses;
+  const old = JSON.stringify({type: 'foreground', head: {revision: 1, target: 'main'}}) + '\n';
+  const next = JSON.stringify({type: 'foreground', head: {revision: 2, target: 'compact'}}) + '\n';
+  main.raw(old + next.slice(0, 15));
+  assert.equal(board.focuses, before);
+  main.raw(next.slice(15, -2));
+  assert.equal(board.focuses, before);
+  main.raw(next.slice(-2));
+  assert.equal(board.focuses, before);
+  assert.equal(main.windows.at(-1).options.frame, false);
+  main.deliver({type: 'foreground', head: {revision: 3, target: 'main'}});
+  assert.equal(board.focuses, before + 1, 'a current main request still works');
+});
+
+test('separate readable events in the same turn drain before native presentation', async () => {
+  const main = await mainProcess();
+  const before = main.windows[0].focuses;
+  main.raw(JSON.stringify({type: 'foreground', head: {revision: 1, target: 'main'}}) + '\n', false);
+  main.raw(JSON.stringify({type: 'foreground', head: {revision: 2, target: 'compact'}}) + '\n', false);
+  main.flush();
+  assert.equal(main.windows[0].focuses, before);
+});
+
+test('startup uses only the latest complete foreground snapshot', async () => {
+  const main = await mainProcess({nativePanel: true, startup: [
+    {type: 'foreground', head: {revision: 1, target: 'main'}},
+    {type: 'foreground', head: {revision: 2, target: 'compact'}},
+  ]});
+  assert.equal(main.windows.length, 1);
+  assert.equal(main.windows[0].options.frame, false);
+});
+
+test('a superseded hidden main is retired and late paint cannot reveal it', async () => {
+  const main = await mainProcess({nativePanel: true, paintMain: false, deferClose: true});
+  const board = main.windows[0];
+  main.deliver({type: 'foreground', head: {revision: 1, target: 'compact'}});
+  assert.equal(board.closing, true);
+  board.emit('ready-to-show');
+  assert.equal(board.visible, undefined);
+  main.finishClosing();
+  assert.equal(board.destroyed, true);
+});
+
+test('current main restores the same minimized window and focuses it once', async () => {
+  const main = await mainProcess();
+  const board = main.windows[0];
+  const before = board.focuses;
+  board.minimized = true;
+  main.deliver({type: 'foreground', head: {target: 'main'}});
+  assert.equal(main.windows.length, 1);
+  assert.equal(board.restores, 1);
+  assert.equal(board.focuses, before + 1);
+});
+
+test('deferred native close cannot replay an obsolete reopen or ready callback', async () => {
+  const main = await mainProcess({nativePanel: true, deferClose: true});
+  main.deliver({type: 'foreground', head: {revision: 1, target: 'compact'}});
+  const old = main.windows.at(-1);
+  main.deliver({type: 'foreground', head: {revision: 1, target: 'none'}});
+  main.deliver({type: 'foreground', head: {revision: 2, target: 'compact'}});
+  main.deliver({type: 'foreground', head: {revision: 3, target: 'main'}});
+  old.emit('ready-to-show');
+  main.deliver({type: 'panel_reveal', request: 1, instance: 2});
+  main.finishClosing();
+  assert.equal(main.windows.filter(w => !w.destroyed).length, 1);
+  assert.equal(main.windows[0].options.frame, true);
+});
+
+test('renderer commands carry their presentation revision and queued stale actions are rejected', async () => {
+  const main = await mainProcess({nativePanel: true});
+  main.deliver({type: 'state', generation: 1, url: hub}, {type: 'foreground', head: {revision: 1, target: 'compact'}});
+  const panel = main.windows.at(-1);
+  panel.url = hub;
+  const event = {sender: panel.webContents, senderFrame: panel.webContents.mainFrame};
+  const pending = main.invoke(event, 'open_main').catch(() => {});
+  assert.equal(main.traffic.findLast(m => m.type === 'request').revision, 1);
+  main.raw(JSON.stringify({type: 'foreground', head: {revision: 2, target: 'compact'}}) + '\n', false);
+  assert.throws(() => main.invoke(event, 'open_main'), /not the board/);
+  main.flush();
+  // This is the controller's older direct-action ticket, delivered behind the tray.
+  main.deliver({type: 'foreground', head: {revision: 1, target: 'main'}});
+  assert.equal(main.windows.at(-1).destroyed, false);
+  main.tick(60000);
+  await pending;
+});
+
+test('a coalesced new compact head retires the old presentation without relabelling its callbacks', async () => {
+  const main = await mainProcess({nativePanel: true, deferClose: true});
+  main.deliver({type: 'foreground', head: {revision: 1, target: 'compact'}});
+  const old = main.windows.at(-1);
+  old.emit('ready-to-show');
+  main.deliver({type: 'panel_reveal', request: 1, instance: 2});
+  old.emit('focus');
+  // The controller reduced cancel r1 + reopen r2 before the socket became writable.
+  main.deliver({type: 'foreground', head: {revision: 2, target: 'compact'}});
+  assert.equal(old.closing, true);
+  old.emit('blur');
+  old.emit('ready-to-show');
+  main.finishClosing();
+  const current = main.windows.at(-1);
+  assert.notEqual(current, old);
+  current.emit('ready-to-show');
+  main.deliver({type: 'panel_reveal', request: 1, instance: 2}, {type: 'panel_reveal', request: 2, instance: 3});
+  assert.equal(current.visible, true);
+  assert.equal(current.destroyed, false);
+  assert.deepEqual(main.traffic.filter(m => m.type === 'panel_closed').map(m => m.request), [1]);
 });
