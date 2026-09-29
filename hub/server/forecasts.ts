@@ -44,7 +44,8 @@ export function hourShift(source: string): number {
 }
 const up = (at: number | null) => (at === null ? null : Math.ceil(at));
 
-function told(f: SeriesForecast): WindowForecast {
+/** A model's forecast as the hub tells it (`WindowForecast`). */
+export function told(f: SeriesForecast): WindowForecast {
   const anchor = f.anchor;
   const basis = f.basis && 'burst' in f.basis && f.basis.burst ? {...f.basis, burst: {...f.basis.burst, zero: Math.ceil(f.basis.burst.zero)}} : f.basis;
   return {

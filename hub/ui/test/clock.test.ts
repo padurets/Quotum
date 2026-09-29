@@ -7,8 +7,8 @@ import {resetLabel, resetLabelChangesAt, type ResetStatus} from '../lib/resets';
 import {DEFAULT_PLAN, planAt, planChangesAt, planNote} from '../lib/plan';
 import {since, sinceChangesAt} from '../lib/agents';
 import {frameChangesAt, step, stepChangesAt} from '../lib/periods';
-import {outlook, outlookChangesAt, planCell} from '../lib/forecast';
-import type {Win} from '../lib/types';
+import {cellChangesAt, outlook, outlookText, planCell, planEndOf, type Context} from '../lib/forecast';
+import type {SeriesForecast, Win} from '../lib/types';
 
 const S = 1000;
 const MIN = 60_000;
@@ -300,25 +300,55 @@ test('the arrows of the analytics say when they turn on or off; the frame moves 
   assert.equal(frameChangesAt({from: T0 - DAY, to: T0 + HOUR}, 5 * MIN, T0), T0 + 5 * MIN, 'one reaching past now does not');
 });
 
-test('where the pace leads says when it reads otherwise: its countdown, its tone, its zero, the reset', () => {
+test('the forecast cell says when it reads otherwise: its countdown, its tone, its moment, the end of the plan it tells of, the reset', () => {
   const start = T0 - 72 * HOUR;
-  const week = (remaining: number, change: Partial<Win> = {}): Win => ({id: 'w', kind: 'weekly', label: null, used: 100 - remaining, remaining, resetAt: start + 7 * DAY, minutes: 10080, ...change});
-  const shown = (live: Win, measuredAt: number, plan: typeof DEFAULT_PLAN | null) => (now: number) => {
-    const ahead = outlook(live, measuredAt, now, plan);
-    return [ahead.key, ahead.tone, ahead.key === 'runsOut' ? countdown(ahead.inMs) : null];
+  const reset = start + 7 * DAY;
+  const week = (remaining: number, change: Partial<Win> = {}): Win => ({id: 'w', kind: 'weekly', label: null, used: 100 - remaining, remaining, resetAt: reset, minutes: 10080, ...change});
+  /** The hub's forecast at T0 of a week at `left`, reaching `F` at the reset in a straight line. */
+  const ahead = (left: number, F: number, change: Partial<SeriesForecast> = {}): SeriesForecast => {
+    const zero = F < 0 ? T0 + Math.ceil(((reset - T0) * left) / (left - F)) : null;
+    return {
+      state: F <= -5 ? 'runsOut' : 'lasts',
+      asOf: T0,
+      resetAt: reset,
+      anchor: {at: T0, left},
+      F,
+      zero,
+      shownZero: F <= -5 ? zero : null,
+      shownLeft: F <= -5 ? null : Math.round(F / 5) * 5,
+      comfy: F >= 25,
+      points: [
+        [0, left],
+        [(reset - T0) / MIN, F],
+      ],
+      basis: {hours: 72, cold: false, usualPerDay: 12, lastDay: 1.4, burst: null},
+      ...change,
+    };
   };
-  const cases: [string, Win, typeof DEFAULT_PLAN | null][] = [
-    ['runs out, no plan', week(38), null],
+  const plain: Context = {windows: [], freeResets: 0, announced: null};
+  const shown = (live: Win, forecast: SeriesForecast | null, context: Context, plan: number[] | null) => (now: number) => {
+    const said = outlook(live, T0, now, forecast, context);
+    const text = outlookText(said, live, forecast, context, planEndOf(live, T0, now, plan, forecast));
+    return [said.key, said.tone, text.text, text.burst, text.title, 'left' in said ? said.left : null];
+  };
+  // A plan the owner chose that ends two days before the reset.
+  const early = [20, 20, 20, 20, 20, 0, 0];
+  const cases: [string, Win, SeriesForecast | null, Context, number[] | null][] = [
+    ['runs out', week(38), ahead(38, -60), plain, null],
     // Runs out in 59 hours of the 96 left: said louder once under half of what is left.
-    ['runs out later, no plan', week(45), null],
-    ['runs out along the plan', week(20), DEFAULT_PLAN],
-    ['left at the end of the plan', week(38), DEFAULT_PLAN],
-    ['a five-hour window', {id: 's', kind: 'session', label: null, used: 70, remaining: 30, resetAt: T0 + 2 * HOUR, minutes: 300}, null],
-    ['used up', week(0), null],
-    ['of no known length', week(50, {minutes: null}), null],
+    ['runs out later', week(45), ahead(45, -28), plain, null],
+    ['runs out, never louder with free resets', week(45), ahead(45, -28), {...plain, freeResets: 1}, null],
+    ['runs out in a first day', week(45), ahead(45, -28, {basis: {hours: 12, cold: true, usualPerDay: 12, lastDay: null, burst: null}}), plain, null],
+    ['runs out, with a burst and the plan', week(38), ahead(38, -60, {basis: {hours: 72, cold: false, usualPerDay: 12, lastDay: 2, burst: {times: 3, zero: T0 + 20 * HOUR}}}), plain, early],
+    ['left, with a plan ending before the reset', week(60), ahead(60, 40), plain, early],
+    ['just enough', week(40), ahead(40, 2), plain, null],
+    ['too little history', week(99), ahead(99, 50, {state: 'needData', basis: {hours: 0.5}}), plain, null],
+    ['a five-hour window', {id: 's', kind: 'session', label: null, used: 70, remaining: 30, resetAt: T0 + 2 * HOUR, minutes: 300}, null, plain, null],
+    ['used up', week(0), null, plain, null],
+    ['of no known length', week(50, {minutes: null}), null, plain, null],
   ];
-  for (const [what, live, plan] of cases) {
+  for (const [what, live, forecast, context, plan] of cases) {
     const moments = [...Array.from({length: 300}, (_, i) => T0 + i * 1_987_654), ...Array.from({length: 300}, (_, i) => T0 + i * 13_331)];
-    changesAtItsMoment(what, shown(live, T0, plan), now => outlookChangesAt(live, T0, now, plan), moments, false);
+    changesAtItsMoment(what, shown(live, forecast, context, plan), now => cellChangesAt(live, T0, now, forecast, context, plan), moments);
   }
 });

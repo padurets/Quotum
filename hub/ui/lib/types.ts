@@ -170,5 +170,38 @@ export type SourceEvent =
   | {sourceId: string; at: number; kind: 'early_reset'; windows: string[]}
   | {sourceId: string; at: number; kind: 'resets_granted'; count: number};
 
+/** The last six hours ran `times` as fast as usual; at that pace the window runs out at `zero`. */
+export type Burst = {times: number; zero: number};
+
+/**
+ * What a weekly window's forecast goes by: hours of history, under a day of them (`cold`),
+ * what the subscription usually spends a day, the last day against that (null for a
+ * straight line) and a burst of the last hours.
+ */
+export type ForecastBasis = {hours: number; cold: boolean; usualPerDay: number; lastDay: number | null; burst: Burst | null};
+
+/**
+ * Where the recent pace of a weekly window leads, as the hub works it out (spec/dashboard-v1.md:
+ * `forecast`), as of `asOf`, about the window resetting at `resetAt`. Its line is
+ * [minutes from the anchor, left]; `lib/forecast.ts` reads it.
+ */
+export type SeriesForecast = {
+  state: 'none' | 'needData' | 'usedUp' | 'awaiting' | 'runsOut' | 'lasts';
+  failed?: true;
+  asOf: number;
+  resetAt: number | null;
+  anchor: {at: number; left: number} | null;
+  F: number | null;
+  zero: number | null;
+  shownZero: number | null;
+  shownLeft: number | null;
+  comfy: boolean;
+  points: [number, number][] | null;
+  basis: ForecastBasis | {hours: number} | null;
+};
+
+/** A source's forecasts, by the id of each of its weekly windows. */
+export type SourceForecast = Record<string, SeriesForecast>;
+
 /** Hidden windows and chart series are keyed by source + window, never by provider. */
 export const windowKey = (sourceId: string, windowId: string) => `${sourceId}/${windowId}`;

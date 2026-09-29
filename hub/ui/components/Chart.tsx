@@ -307,7 +307,8 @@ export function Chart({
   const beyond = [
     ...markers.filter(m => m.strong && !m.past && m.at > to).map(m => ({key: m.key, label: m.label, at: m.at, time: stamp(m.at), color: undefined, runsOut: false})),
     ...forecasts.flatMap(f => {
-      if (f.at === null || f.at <= to) return [];
+      // The line's zero past the edge, said at the moment the table says.
+      if (f.zero === null || f.at === null || f.zero <= to) return [];
       // Spaces drawn as one: a name typed with two in a row reads, and measures, as SVG draws it.
       const name = f.name.replace(/\s+/g, ' ');
       return [{key: `forecast-${f.key}`, label: name, at: f.at, time: t('forecast.runsOutAt', {time: stamp(f.at)}), color: f.color, runsOut: true}];

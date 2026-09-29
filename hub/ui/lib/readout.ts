@@ -5,11 +5,12 @@ import {PLAN_TOLERANCE} from './plan';
 export type PlanLine = {key: string; lines: string[]; color: string; runs: [number, number][][]};
 
 /**
- * Where a window's pace leads, drawn from its last value in its line's colour and dash;
- * `key` and `name` are its line's. `at` is where it runs out when the table says it does:
- * past the right edge, the chart says so there.
+ * Where a window leads, drawn from its last value in its line's colour and dash; `key` and
+ * `name` are its line's. When the table says it runs out, `zero` is where the line reaches
+ * zero (past the right edge, the chart says so there, and stretches to it within reach)
+ * and `at` the moment the table says, which the words there tell.
  */
-export type ForecastLine = {key: string; name: string; color: string; dash: string; points: [number, number][]; at: number | null};
+export type ForecastLine = {key: string; name: string; color: string; dash: string; points: [number, number][]; zero: number | null; at: number | null};
 
 /** Value of a piecewise-linear run at time `at`, or undefined outside it. */
 export function valueAt(runs: [number, number][][], at: number) {

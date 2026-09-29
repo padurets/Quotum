@@ -91,6 +91,13 @@ export const weeklyPlanOf = (view: View, sourceId: string): WeeklyPlan => {
 export const planOf = (view: View, sourceId: string): WeeklyPlan | null =>
   view.unplanned.includes(sourceId) ? null : weeklyPlanOf(view, sourceId);
 
+/**
+ * The plan the board's owner chose for a source, while it is on: none when the source goes
+ * by the default plan, which `withPlan` does not keep, not even when chosen as it is.
+ */
+export const chosenPlanOf = (view: View, sourceId: string): WeeklyPlan | null =>
+  !view.unplanned.includes(sourceId) && isValidPlan(view.plans[sourceId]) ? view.plans[sourceId] : null;
+
 /** Switching a source's plan off keeps the plan itself, so switching it on brings it back. */
 export const withPlanned = (view: View, sourceId: string, planned: boolean): View => ({
   ...view,

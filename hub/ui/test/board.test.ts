@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {INITIAL, metaOf, reduce, titlesOf, type HubEvent, type PageEvent, type PageState, type Snapshot} from '../lib/board';
 import {createStore, selector, shallowEqual} from '../lib/store';
-import type {Card} from '../lib/types';
+import type {Card, SeriesForecast} from '../lib/types';
 
 const card = (id: string, used = 50, extra: Partial<Card> = {}): Card => ({
   id,
@@ -20,6 +20,19 @@ const card = (id: string, used = 50, extra: Partial<Card> = {}): Card => ({
 
 const VIEW = {layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
 const session = {device: {id: 'd', name: 'laptop'}, origin: 'terminal' as const, project: 'quotum', folder: null, startedAt: 1, lastWorkedAt: null, working: true};
+const ahead = (F: number): SeriesForecast => ({
+  state: 'lasts',
+  asOf: 3600_000,
+  resetAt: 7 * 86_400_000,
+  anchor: {at: 3000_000, left: 60},
+  F,
+  zero: null,
+  shownZero: null,
+  shownLeft: Math.round(F / 5) * 5,
+  comfy: true,
+  points: [[0, 60], [100, F]],
+  basis: {hours: 72, cold: false, usualPerDay: 10, lastDay: 1, burst: null},
+});
 
 function snapshot(change: Partial<Snapshot> = {}): Snapshot {
   return {
@@ -29,6 +42,7 @@ function snapshot(change: Partial<Snapshot> = {}): Snapshot {
     sources: [card('s1'), card('s2')],
     sessions: {s1: [session], s2: []},
     cadence: {s1: {next: 5000, why: 'idle'}, s2: null},
+    forecast: {s1: {weekly: ahead(20)}, s2: {}},
     mine: ['s1', 's2'],
     boards: [{id: 'b1', name: '', personal: true, role: 'owner'}],
     resets: {
@@ -52,6 +66,8 @@ const slices = (s: PageState) => ({
   sessions1: s.board!.sessions.s1,
   sessions2: s.board!.sessions.s2,
   cadence1: s.board!.cadence.s1,
+  forecast1: s.board!.forecast.s1,
+  forecast2: s.board!.forecast.s2,
   mine: s.board!.mine,
   boards: s.boards,
   resets: s.resets!.resets,
@@ -87,6 +103,8 @@ test('each event changes its own slice and leaves the others as they were', () =
   assert.equal(reduce(s, hub({type: 'card', data: card('s1')})), s, 'a card the same as before changes nothing');
   same(s, reduce(s, hub({type: 'sessions', data: {id: 's2', sessions: [session]}})), ['sessions2']);
   same(s, reduce(s, hub({type: 'cadence', data: {id: 's1', cadence: null}})), ['cadence1']);
+  same(s, reduce(s, hub({type: 'forecast', data: {id: 's2', forecast: {weekly: ahead(30)}}})), ['forecast2']);
+  assert.equal(reduce(s, hub({type: 'forecast', data: {id: 's1', forecast: {weekly: ahead(20)}}})), s, 'a forecast the same as before changes nothing');
   same(s, reduce(s, hub({type: 'view', data: {view: {...VIEW, order: ['history']}}})), ['view']);
   same(s, reduce(s, hub({type: 'board', data: {board: {id: 'b1', name: 'Mine', personal: true}}})), ['meta']);
   same(s, reduce(s, hub({type: 'mine', data: {sources: ['s1']}})), ['mine']);
@@ -100,12 +118,16 @@ test('each event changes its own slice and leaves the others as they were', () =
 test('a lineup without a source drops what was kept of it; one new to the board comes with its card first', () => {
   const s = run(hub({type: 'snapshot', data: snapshot()}));
   const without = reduce(s, hub({type: 'lineup', data: {sources: ['s1']}}));
-  assert.deepEqual([Object.keys(without.board!.cards), Object.keys(without.board!.sessions), Object.keys(without.board!.cadence)], [['s1'], ['s1'], ['s1']]);
+  assert.deepEqual(
+    [Object.keys(without.board!.cards), Object.keys(without.board!.sessions), Object.keys(without.board!.cadence), Object.keys(without.board!.forecast)],
+    [['s1'], ['s1'], ['s1'], ['s1']],
+  );
   assert.equal(without.board!.cards.s1, s.board!.cards.s1);
   const back = [
     hub({type: 'card', data: card('s3')}),
     hub({type: 'sessions', data: {id: 's3', sessions: []}}),
     hub({type: 'cadence', data: {id: 's3', cadence: null}}),
+    hub({type: 'forecast', data: {id: 's3', forecast: {}}}),
     hub({type: 'lineup', data: {sources: ['s1', 's3']}}),
   ].reduce(reduce, without);
   assert.deepEqual(back.board!.lineup, ['s1', 's3']);

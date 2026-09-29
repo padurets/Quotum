@@ -1,62 +1,33 @@
 import {Fragment, memo, useLayoutEffect, useMemo, useRef, useState, type ReactNode} from 'react';
-import {countdown, num, rateText, stamp} from '../lib/format';
+import {num, rateText} from '../lib/format';
 import {level} from '../lib/quota';
 import {
   FORECAST_WIDTHS,
   LIVE_COLUMNS,
   RANGE_COLUMNS,
+  announcedOf,
+  cellChangesAt,
   forecastLayout,
   outlook,
-  outlookChangesAt,
+  outlookText,
   planCell,
+  planEndOf,
   spentOf,
+  type Context,
   type ForecastColumn,
-  type Outlook,
-  type Pace,
   type Spent,
 } from '../lib/forecast';
 import {planChangesAt} from '../lib/plan';
 import {lineWork, workLeftChangesAt, workText, type WorkColumn} from '../lib/work';
-import {FORECAST, columnShown, planOf, withColumn, withHidden, type Arrange} from '../lib/view';
+import {FORECAST, chosenPlanOf, columnShown, planOf, withColumn, withHidden, type Arrange} from '../lib/view';
 import {linesOf, type Line} from '../lib/lines';
 import {usePrefs} from '../lib/prefs';
 import {ofTimeRange} from '../lib/timeRange';
-import {useNamed} from '../lib/board';
+import {useForecastsOf, useLineup, useNamed, useResetNews} from '../lib/board';
 import {hubNow, useClock} from '../lib/clock';
 import {useHistory} from '../lib/history';
 import {t, useLocale, type Key} from '../i18n';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
-
-/** How fast the window goes, as the tooltip of its forecast says it. */
-const paceText = (pace: Pace) =>
-  pace.by === 'plan' ? t('forecast.planPace', {k: num(pace.k, 2)}) : t('forecast.rate', {rate: rateText(pace.rate)});
-
-/** The last column's text and tooltip, a part a line; its colour is the outlook's tone. */
-function outlookCell(ahead: Outlook): {text: string; title: string} {
-  switch (ahead.key) {
-    case 'none':
-      return {text: '—', title: ''};
-    case 'idle':
-    case 'needData':
-    case 'awaiting':
-      return {text: '—', title: t(`forecast.${ahead.key}`)};
-    case 'pastZero':
-      return {text: '—', title: [t('forecast.pastZero', {time: stamp(ahead.at)}), t('forecast.awaiting')].join('\n')};
-    case 'usedUp':
-      return {text: t('forecast.usedUp'), title: ''};
-  }
-  const title = paceText(ahead.pace);
-  switch (ahead.key) {
-    case 'runsOut':
-      return {text: t('forecast.runsOut', {time: countdown(ahead.inMs)}), title: [title, t('forecast.runsOutAt', {time: stamp(ahead.at)})].join('\n')};
-    case 'onPacePlan':
-    case 'onPaceReset':
-      return {text: t(`forecast.${ahead.key}`), title};
-    case 'leftPlan':
-    case 'leftReset':
-      return {text: t(`forecast.${ahead.key}`, {value: num(ahead.left)}), title};
-  }
-}
 
 const spentText = (spent: Spent) => (spent.key === 'points' ? t('table.points', {value: num(spent.value, 1)}) : spent.key === 'unused' ? t('table.unused') : '—');
 
@@ -116,6 +87,9 @@ const shown = (key: string, cell: Cell | TimedCell, render: (cell: Cell, time?: 
 export const Forecast = memo(function Forecast({arrange}: {arrange: Arrange}) {
   const {history, loading} = useHistory();
   const sources = useNamed(arrange.view.names);
+  const lineup = useLineup();
+  const forecasts = useForecastsOf(lineup);
+  const news = useResetNews();
   const {view} = arrange;
   const {kind} = usePrefs();
   const selected = ofTimeRange(history);
@@ -171,6 +145,11 @@ export const Forecast = memo(function Forecast({arrange}: {arrange: Arrange}) {
       } as Record<ForecastColumn, Cell>;
     }
     const weekly = planOf(view, line.sourceId);
+    // A weekly window as the hub foresees it; a five-hour one the table foresees itself.
+    const ahead = live?.kind === 'weekly' ? (forecasts[lineup.indexOf(line.sourceId)]?.[line.windowId] ?? null) : null;
+    const context: Context = {windows: source?.windows ?? [], freeResets: source?.resets?.available ?? 0, announced: announcedOf(news, line.provider, measuredAt)};
+    // The plan's line in the tooltip is for a plan the owner chose: the default plan is none.
+    const chosen = chosenPlanOf(view, line.sourceId);
     return {
       ...workCells,
       now: {content: `${num(line.current)}%`, className: `v-${level(line.current)}`},
@@ -201,11 +180,22 @@ export const Forecast = memo(function Forecast({arrange}: {arrange: Arrange}) {
       spent: {content: spentText(spentOf(line))},
       forecast: {
         time: 'forecast',
-        changesAt: now => outlookChangesAt(live, measuredAt, now, weekly),
+        changesAt: now => cellChangesAt(live, measuredAt, now, ahead, context, chosen),
         at: now => {
-          const said = outlook(live, measuredAt, now, weekly);
-          const ahead = outlookCell(said);
-          return {content: ahead.text, title: ahead.title || undefined, className: said.tone};
+          const said = outlook(live, measuredAt, now, ahead, context);
+          const text = outlookText(said, live, ahead, context, planEndOf(live, measuredAt, now, chosen, ahead));
+          // A burst beside the words, never instead of them, and never louder than they are.
+          const content = text.burst ? (
+            <>
+              {text.text}
+              <span className="forecast-burst" role="img" aria-label={t('forecast.burstMark')} title={t('forecast.burstMark')}>
+                ↑
+              </span>
+            </>
+          ) : (
+            text.text
+          );
+          return {content, title: text.title.join('\n') || undefined, className: said.tone};
         },
       },
     } as Record<ForecastColumn, Cell | TimedCell>;

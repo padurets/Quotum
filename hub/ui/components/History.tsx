@@ -2,7 +2,7 @@ import {memo, useMemo} from 'react';
 import {earliest, num} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
 import {planAt, started, weeklyPlanLine} from '../lib/plan';
-import {forecastLine, outlook} from '../lib/forecast';
+import {announcedOf, clip, forecastLine, type Context} from '../lib/forecast';
 import {PROVIDERS} from '../lib/providers';
 import {HORIZONS, setMuted, setPrefs, usePrefs} from '../lib/prefs';
 import {goTo, setTimeRange, useTimeRange} from '../lib/timeRange';
@@ -11,7 +11,7 @@ import {HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
 import {chartEvents, chartResets, linesOf} from '../lib/lines';
 import {Chart, type Marker} from './Chart';
 import type {ForecastLine, PlanLine} from '../lib/readout';
-import {useNamed, usePastResets, useResetsFor} from '../lib/board';
+import {useForecastsOf, useLineup, useNamed, usePastResets, useResetNews, useResetsFor} from '../lib/board';
 import {hubNow, useClock} from '../lib/clock';
 import {useHistory, useHistoryBegins} from '../lib/history';
 import {t, useLocale} from '../i18n';
@@ -70,6 +70,9 @@ function HistorySettings({arrange, planAvailable, forecastAvailable, horizonNote
 export const History = memo(function History({arrange}: {arrange: Arrange}) {
   const {history, loading} = useHistory();
   const sources = useNamed(arrange.view.names);
+  const lineup = useLineup();
+  const hubForecasts = useForecastsOf(lineup);
+  const news = useResetNews();
   const prefs = usePrefs();
   const {view} = arrange;
   // Series names and markers are text: they are rebuilt when the language changes.
@@ -94,18 +97,20 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
   // The spending plan applies to weekly windows, when a line on the chart has a plan.
   const planAvailable = prefs.kind === 'weekly' && visible.some(line => planOf(view, line.sourceId) !== null);
   const planShown = planAvailable && prefs.showPlan;
-  // Where each window's pace leads, for the lines that have a forecast to draw.
+  // Where each window leads, for the lines that have a forecast to draw: a weekly window as
+  // the hub foresees it, the line as it stands; a five-hour one by its own pace.
   const ahead = useMemo(
     () =>
       visible.flatMap(line => {
         const source = sources.find(s => s.id === line.sourceId);
         const live = source?.windows.find(w => w.id === line.windowId);
         const measuredAt = source?.successAt ?? null;
-        const weekly = planOf(view, line.sourceId);
-        const said = outlook(live, measuredAt, now, weekly);
-        return 'pace' in said ? [{line, live, measuredAt, weekly, runsOut: said.key === 'runsOut' ? said.at : null}] : [];
+        const forecast = live?.kind === 'weekly' ? (hubForecasts[lineup.indexOf(line.sourceId)]?.[line.windowId] ?? null) : null;
+        const context: Context = {windows: source?.windows ?? [], freeResets: source?.resets?.available ?? 0, announced: announcedOf(news, line.provider, measuredAt)};
+        const drawn = forecastLine(live, measuredAt, now, forecast, context, -Infinity, Infinity);
+        return drawn ? [{line, drawn}] : [];
       }),
-    [visible, sources, now, view],
+    [visible, sources, now, hubForecasts, lineup, news],
   );
   // A range in the past has no forecast, so nothing to switch.
   const forecastAvailable = frame.live && ahead.length > 0;
@@ -116,7 +121,8 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
   // forecast says a window runs out within reach: it may take up to ~40% of the width,
   // anything further out is pointed at from the edge instead. A chosen horizon is kept as is.
   const reach = measured + (measured - from) * 0.75;
-  const lastRunOut = forecastShown ? Math.max(0, ...ahead.map(a => (a.runsOut !== null && a.runsOut <= reach ? a.runsOut : 0))) : 0;
+  // Where a line reaches zero: the moment the table says may differ a little (it moves only past a dead band).
+  const lastRunOut = forecastShown ? Math.max(0, ...ahead.map(a => (a.drawn.zero !== null && a.drawn.zero <= reach ? a.drawn.zero : 0))) : 0;
   const to = !(planShown || forecastShown) || !frame.live
     ? measured
     : prefs.horizon === 'auto'
@@ -199,14 +205,14 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
     () =>
       !forecastShown
         ? []
-        : ahead.flatMap(({line, live, measuredAt, weekly}) => {
-            const drawn = forecastLine(live, measuredAt, now, weekly, from, to);
-            return drawn?.points.length ? [{key: line.key, name: line.name, color: line.color, dash: line.dash, points: drawn.points, at: drawn.at}] : [];
+        : ahead.flatMap(({line, drawn}) => {
+            const points = clip(drawn.points, from, to);
+            return points.length ? [{key: line.key, name: line.name, color: line.color, dash: line.dash, points, zero: drawn.zero, at: drawn.at}] : [];
           }),
-    [ahead, forecastShown, now, from, to],
+    [ahead, forecastShown, from, to],
   );
   // What the chart points at past its right edge (Chart.tsx): an announced reset, where a window runs out.
-  const pointed = [...markers.filter(m => m.strong && !m.past && m.at > to).map(m => m.at), ...forecasts.flatMap(f => (f.at !== null && f.at > to ? [f.at] : []))];
+  const pointed = [...markers.filter(m => m.strong && !m.past && m.at > to).map(m => m.at), ...forecasts.flatMap(f => (f.zero !== null && f.zero > to ? [f.zero] : []))];
 
   return (
     <section className={`panel history ${loading ? 'is-loading' : ''}`} data-time="chart" aria-label={t('history.label')} aria-busy={loading}>
