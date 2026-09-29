@@ -13,7 +13,7 @@ import {
 } from 'react';
 import {t} from '../i18n';
 import {Popover, SwitchRow} from './Popover';
-import {SizingContext, type Size} from './sizing';
+import {SizingContext, type Report, type Size} from './sizing';
 import {isOffByDefault} from '../lib/view';
 import {
   cellOf,
@@ -101,8 +101,8 @@ function useColumns() {
  * A widget's part of the board's sizing, made of its own numbers only: a neighbour's height
  * renders nothing of it, neither the widget nor this (the same content, the same numbers).
  */
-const Sized = memo(function Sized({id, manual, allocated, report, children}: {id: string; manual: boolean; allocated: number; report: (id: string, size: Size | null) => void; children: ReactNode}) {
-  const bound = useCallback((size: Size | null) => report(id, size), [id, report]);
+const Sized = memo(function Sized({id, manual, allocated, report, children}: {id: string; manual: boolean; allocated: number; report: (id: string, size: Report | null) => void; children: ReactNode}) {
+  const bound = useCallback((size: Report | null) => report(id, size), [id, report]);
   const value = useMemo(() => ({manual, allocated, report: bound}), [manual, allocated, bound]);
   return <SizingContext.Provider value={value}>{children}</SizingContext.Provider>;
 });
@@ -137,8 +137,8 @@ export function Widgets({
   /** Whether each of the last two presses on a handle saved a size or was given up: a double click after two that did neither fits the content. */
   const presses = useRef<boolean[]>([]);
   const [heights, setHeights] = useState<Record<string, number>>({});
-  // What the charts and the list of agents tell they need: a chosen height fills them, so what they show is not it.
-  const [sizes, setSizes] = useState<Record<string, Size>>({});
+  // What the charts and the list of agents tell they need, and show: a chosen height fills them, so what they show is not what they need.
+  const [sizes, setSizes] = useState<Record<string, Report>>({});
   const [preview, setPreview] = useState<{id: string; kind: Kind; items: Item[]; intent?: number} | null>(null);
   const [said, say] = useState<string[]>([]);
   const hint = useId();
@@ -161,10 +161,10 @@ export function Widgets({
   const latest = useRef({spots, onPlaces, bounds, sizeOf, saved});
   latest.current = {spots, onPlaces, bounds, sizeOf, saved};
   const report = useCallback(
-    (id: string, size: Size | null) =>
+    (id: string, size: Report | null) =>
       setSizes(old => {
         const was = old[id];
-        if (size ? was?.min === size.min && was.natural === size.natural : !was) return old;
+        if (size ? was?.min === size.min && was.natural === size.natural && was.shown === size.shown : !was) return old;
         const {[id]: _, ...rest} = old;
         return size ? {...rest, [id]: size} : rest;
       }),
@@ -536,7 +536,9 @@ export function Widgets({
       {reading(spots).map(spot => {
         const widget = byId.get(spot.id)!;
         const allocated = spot.h * ROW - GAP;
-        const fill = heights[spot.id] === undefined ? 0 : Math.max(0, allocated - heights[spot.id]);
+        // Under what the widget shows: a chart or the list of agents tells it as it lays itself out, before that paints.
+        const shown = sizes[spot.id]?.shown ?? heights[spot.id];
+        const fill = shown === undefined ? 0 : Math.max(0, allocated - shown);
         const manual = intended(spot.id) !== undefined;
         return (
           <div

@@ -418,7 +418,7 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
     const items = [...(live.current?.children ?? [])] as HTMLElement[];
     const layer = [...(unseen.current?.children ?? [])] as HTMLElement[];
     if (!measured || !items.length || !layer.length) {
-      sizing.report({min: pixels(outer), natural: pixels(outer)});
+      sizing.report({min: pixels(outer), natural: pixels(outer), shown: pixels(outer)});
       return setFit(null);
     }
     const tops = (list: HTMLElement[]) => list.map(item => item.getBoundingClientRect().top);
@@ -439,7 +439,7 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
       heights = items.map((item, i) => (i + 1 < items.length ? at[i + 1] : item.getBoundingClientRect().bottom + border) - at[i]);
     }
     const result = agentsFit({shell, rows: heights, footer, border, budget: manual ? sizing.allocated : Infinity});
-    sizing.report({min: pixels(result.min), natural: pixels(result.natural)});
+    sizing.report({min: pixels(result.min), natural: pixels(result.natural), shown: pixels(outer)});
     if (manual) setFit(was => (was === result.shown ? was : result.shown));
   };
   // After every render, before paint: what it shows and what it needs follow the rows at once.

@@ -531,9 +531,11 @@ heads, totals and legends whole. The list of agents can be shorter than its rows
 shows the most whole rows that fit, in its own order, and a last row saying how many
 more, which opens them all in a dialog; to know how many fit, it lays all its rows out
 unseen beside it, their running times standing still. Such a widget tells the grid
-through a context of its own (`ui/components/sizing.ts`) the least it can show and what
-it needs whole, and reads how tall it is to be; only these read it, so a neighbour's
-height renders none of them. Widgets float up within their columns without stretching
+through a context of its own (`ui/components/sizing.ts`) the least it can show, what it
+needs whole and, as it lays itself out anew, how tall it shows, so the grid fills the
+rest of its rows before that paints; it reads how tall it is to be, and only these read
+it, so a neighbour's height renders none of them.
+Widgets float up within their columns without stretching
 their neighbours. Saved `y` gives the reading order; each viewer's measured content and
 the chosen heights determine the actual rows. Dragging by the head places a widget by
 its top-left corner against the original layout: it goes after widgets whose top is

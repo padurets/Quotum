@@ -2,15 +2,18 @@ import {createContext, useCallback, useContext, useLayoutEffect, useRef, useStat
 
 /** What a widget needs, in CSS pixels: at least (`min`), and to show all of itself (`natural`). */
 export type Size = {min: number; natural: number};
+/** What a widget tells the board: what it needs, and how tall it shows now (`shown`), under which the board fills its rows. */
+export type Report = Size & {shown: number};
 
 /**
  * How tall the board makes a widget: whether its owner chose a height (`manual`), and
  * the CSS pixels that gives it (`allocated`, 0 while it follows its content). A widget
  * that fills a chosen height with more of itself rather than with empty room (the charts,
- * the list of agents) reads it at its root and tells the board what it needs (`report`);
+ * the list of agents) reads it at its root and tells the board what it needs and shows
+ * (`report`) as it lays itself out anew, so the board fills the rest before that paints;
  * the rest of the board neither reads it nor renders for it.
  */
-export type Sizing = {manual: boolean; allocated: number; report: (size: Size | null) => void};
+export type Sizing = {manual: boolean; allocated: number; report: (report: Report | null) => void};
 export const SizingContext = createContext<Sizing | null>(null);
 export const useSizing = () => useContext(SizingContext);
 
@@ -38,10 +41,11 @@ export function usePlot(panel: RefObject<HTMLElement | null>) {
     if (!sizing || !root || !chart) return;
     const own = chart.querySelector(':scope > svg') ? base.current : parseFloat(getComputedStyle(chart).minHeight) || 0;
     if (own === null) return;
+    const shown = root.getBoundingClientRect().height - fillOf(root);
     // What is not the plot does not depend on how tall the plot is: the head, totals and legend wrap only with the width.
-    const chrome = root.getBoundingClientRect().height - fillOf(root) - chart.getBoundingClientRect().height;
+    const chrome = shown - chart.getBoundingClientRect().height;
     const min = pixels(chrome + own);
-    sizing.report({min, natural: min});
+    sizing.report({min, natural: min, shown: pixels(shown)});
     const next = sizing.manual ? pixels(Math.max(own, sizing.allocated - chrome)) : undefined;
     setPlot(was => (was === next ? was : next));
   };
