@@ -8,7 +8,7 @@ import {idleProblems, measuredProblems, percentile} from './budget.js';
 import {attachedChrome, findChrome, launchChrome, openTab, type Browser, type Cdp} from './cdp.js';
 import {probeScript, type Reading} from './probe.js';
 import {delta, round, scriptPerSecond, tally, type Metrics} from './report.js';
-import {stillProblems, warmUntil, type StillCard} from './still.js';
+import {stillFrom, stillProblems, warmUntil, type StillCard} from './still.js';
 import {hear, type Heard} from './stream.js';
 
 /**
@@ -148,7 +148,9 @@ async function main() {
       await sleep(250);
     }
     const opened = Date.now();
-    const warm = warmUntil(await overview(), opened);
+    // Past the hour when the hub may work out forecasts again, if the window would hold it.
+    const cards = await overview();
+    const warm = stillFrom(cards, warmUntil(cards, opened), seconds * 1000);
     say(`the board is open; it settles for ${Math.round((warm - Date.now()) / 1000)} s`);
     await sleep(warm - Date.now());
 

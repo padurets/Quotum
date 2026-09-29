@@ -1,7 +1,10 @@
+import {hourShift} from '../server/forecasts.js';
 import {FADE_FOR, PULSE_FOR} from '../ui/lib/quota.js';
 
-/** What the benchmark reads of a card in `/api/overview` to tell whether the board stands still. */
-export type StillCard = {id: string; successAt: number | null; staleAfterMs: number | null; windows: {resetAt: number | null}[]};
+const HOUR = 3_600_000;
+
+/** What the benchmark reads of a card in `/api/overview` to tell whether the board stands still: its forecasts too, by window. */
+export type StillCard = {id: string; successAt: number | null; staleAfterMs: number | null; windows: {resetAt: number | null}[]; forecast?: Record<string, {asOf: number}>};
 
 /** After the page opens, it settles for at least this long before anything is counted. */
 export const SETTLE_MS = 30_000;
@@ -15,9 +18,33 @@ export function warmUntil(cards: StillCard[], opened: number): number {
 }
 
 /**
+ * When the hub works a card's forecasts out again by itself: at the card's own hour after
+ * a measurement they have not taken in (server/forecasts.ts), or never.
+ */
+export function foreseenAt(card: StillCard): number | null {
+  const behind = Object.values(card.forecast ?? {})
+    .map(f => f.asOf)
+    .filter(asOf => card.successAt !== null && card.successAt > asOf);
+  return behind.length ? Math.floor(Math.min(...behind) / HOUR) * HOUR + HOUR + hourShift(card.id) : null;
+}
+
+/**
+ * Where a window of `length` may begin, at `from` or later, with no card's forecasts
+ * worked out again in it: past each such moment by `SETTLE_MS`. A still hub works them out
+ * once more at most, up to ten minutes past the hour.
+ */
+export function stillFrom(cards: StillCard[], from: number, length: number): number {
+  let begin = from;
+  const moments = cards.map(foreseenAt).filter((at): at is number => at !== null);
+  for (const at of moments.sort((a, b) => a - b)) if (at >= begin && at <= begin + length) begin = at + SETTLE_MS;
+  return begin;
+}
+
+/**
  * What would change on the board by itself during `[from, to]`, when it should change
- * only with the clock: a card going stale, a dot still fading, a limit resetting. The
- * benchmark stops on any of these: its numbers would not be of a still board.
+ * only with the clock: a card going stale, a dot still fading, a limit resetting, its
+ * forecasts worked out again. The benchmark stops on any of these: its numbers would not
+ * be of a still board.
  */
 export function stillProblems(cards: StillCard[], from: number, to: number): string[] {
   const within = (at: number) => at >= from && at <= to;
@@ -28,6 +55,8 @@ export function stillProblems(cards: StillCard[], from: number, to: number): str
     // The dot changes from the measurement until it has faded out: any of that within the window.
     if (card.successAt <= to && card.successAt + PULSE_FOR + FADE_FOR >= from) found.push(`${card.id}'s dot still fades`);
     if (card.windows.some(w => w.resetAt !== null && within(w.resetAt))) found.push(`${card.id} has a limit that resets`);
+    const foreseen = foreseenAt(card);
+    if (foreseen !== null && within(foreseen)) found.push(`${card.id} has its forecasts worked out again`);
   }
   return found;
 }

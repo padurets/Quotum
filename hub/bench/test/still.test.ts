@@ -1,7 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {FADE_FOR, PULSE_FOR} from '../../ui/lib/quota.js';
-import {DOT_STILL_AFTER, SETTLE_MS, stillProblems, warmUntil} from '../still.js';
+import {hourShift} from '../../server/forecasts.js';
+import {DOT_STILL_AFTER, foreseenAt, SETTLE_MS, stillFrom, stillProblems, warmUntil} from '../still.js';
 import {scriptPerSecond, tally} from '../report.js';
 
 const MIN = 60_000;
@@ -28,6 +29,28 @@ test('a stand that would change by itself during the window is told, card by car
   assert.deepEqual(stillProblems([{...still, id: 'fading', successAt: from - 4 * MIN}], from, to), ["fading's dot still fades"]);
   assert.deepEqual(stillProblems([{...still, id: 'pulsing', successAt: from - MIN}], from, to), ["pulsing's dot still fades"], 'fading all through the window');
   assert.deepEqual(stillProblems([{...still, id: 'reset', windows: [{resetAt: to}]}], from, to), ['reset has a limit that resets']);
+});
+
+test("the window goes past each card's own hour when the hub works its forecasts out again", () => {
+  const from = 10 * HOUR + 3 * MIN;
+  const card = (id: string, successAt: number, asOf: number[]) => ({id, successAt, staleAfterMs: 3 * HOUR, windows: [], forecast: Object.fromEntries(asOf.map((at, i) => [`w${i}`, {asOf: at}]))});
+  // Measured after the hour its forecasts are of: worked out again at its next hour, some minutes past it.
+  const late = card('codex:late', 10 * HOUR + MIN, [10 * HOUR]);
+  const lateAt = 11 * HOUR + hourShift('codex:late');
+  assert.equal(foreseenAt(late), lateAt);
+  assert.equal(foreseenAt(card('codex:taken', 10 * HOUR - MIN, [10 * HOUR])), null, 'its forecasts took in its last measurement');
+  assert.equal(foreseenAt({...late, forecast: undefined}), null, 'no weekly window');
+  assert.equal(foreseenAt(card('codex:two', 10 * HOUR + MIN, [10 * HOUR, 9 * HOUR])), 10 * HOUR + hourShift('codex:two'), 'the earlier of its windows');
+
+  assert.deepEqual(stillProblems([late], lateAt - MIN, lateAt + MIN), ['codex:late has its forecasts worked out again']);
+  assert.deepEqual(stillProblems([late], lateAt + MIN, lateAt + 3 * MIN), []);
+  assert.equal(stillFrom([late], from, 2 * MIN), from, 'the window ends before it');
+  assert.equal(stillFrom([late], lateAt - MIN, 2 * MIN), lateAt + SETTLE_MS);
+  // One past the other: the window moves past both.
+  const other = card('claude:other', 10 * HOUR + MIN, [10 * HOUR]);
+  const [first, second] = [lateAt, 11 * HOUR + hourShift('claude:other')].sort((a, b) => a - b);
+  assert.ok(second - first < 5 * MIN, 'the two are close enough to move the window twice');
+  assert.equal(stillFrom([late, other], first - MIN, 5 * MIN), second + SETTLE_MS);
 });
 
 test('the report adds up work outside what shows time by region, and the busiest label', () => {
