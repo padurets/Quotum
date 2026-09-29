@@ -792,7 +792,7 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .compact-card .provider-mark .dot { width: 5px; height: 5px; border-width: 1.5px; }
 .compact-card h2 { flex: 1; min-width: 0; font-size: 13px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .compact-agents { flex-shrink: 0; font-size: 11px; color: var(--text-3); }
-.compact-limit { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(36px, 1fr) 4ch 7.5ch; gap: 8px; align-items: center; }
+.compact-limit { display: grid; grid-template-columns: minmax(0, 1.5fr) 7.5ch minmax(36px, 1fr) 4ch; gap: 8px; align-items: center; }
 .compact-limit .meter { height: 6px; }
 .compact-limit > strong { text-align: right; font-size: 13px; font-weight: 560; font-variant-numeric: tabular-nums; }
 .compact-window-name { min-width: 0; font-size: 12px; line-height: 1.4; }

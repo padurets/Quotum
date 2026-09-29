@@ -30,9 +30,9 @@ const Row = memo(function Row({id}: {id: string}) {
       <div className="compact-window-name">
         <span title={windowName(w).replaceAll(' · ', '\n')}>{windowName(w).split(' · ').map((part, i) => <span key={i}>{part}</span>)}</span>
       </div>
+      <small className="compact-reset"><ResetLine w={w} short /></small>
       <LimitMeter w={w} />
       <strong className={`v-${level(w.remaining)}`}>{num(w.remaining)}%</strong>
-      <small className="compact-reset"><ResetLine w={w} short /></small>
     </div>)}
   </section>;
 });

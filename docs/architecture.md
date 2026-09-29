@@ -667,8 +667,8 @@ the popup radius prepared from the shared style tokens. The header has matching
 icon buttons for opening the board and closing the panel, with localized labels
 and tooltips.
 
-The compact view keeps each quota on one row: its name, the board's shared remaining
-meter, percentage and a short reset countdown with the full date in its tooltip.
+The compact view keeps each quota on one row: its name, a short reset countdown with
+the full date in its tooltip, the board's shared remaining meter and percentage.
 The provider header carries its measurement indicator and the working-agent count;
 the total agent count is in that count's tooltip. Hidden windows and the owner's
 ordering are shared with the board. Large lists can scroll, but ordinary subscriptions
