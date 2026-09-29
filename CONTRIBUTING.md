@@ -87,8 +87,8 @@ and start the demo again.
 
 A new state of the board gets an entry in the catalogue, with the codes it shows in
 `expect` (the file's header explains them): `npm test` then checks it holds, and it is
-on the board for the next person. One a live hub never holds for long is named in the
-header instead, with the tests that hold it. `npm run demo -- --still` keeps the board still:
+on the board for the next person. One a working hub never holds for long (a failure's)
+is named in the header instead, with the tests that hold it. `npm run demo -- --still` keeps the board still:
 nothing is measured after the start, and no card goes stale for three hours.
 
 For README screenshots, use `npm run demo -- showcase --still`. Capture the cards and

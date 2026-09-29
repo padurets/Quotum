@@ -74,15 +74,17 @@ const shown = (key: string, cell: Cell | TimedCell, render: (cell: Cell, time?: 
  * The windows of one kind, from what is left to where it leads: what is left and what the
  * plan expects; what the period spent, how long agents worked on each window's
  * subscription meanwhile, what an hour of their work spent and how much of the spending
- * fell into their work; then two forecasts, by the time on the clock (where each window's
- * own pace since it started leads, whatever the period) and by work (how many hours agents
- * can go on at what an hour of their work spent). Its period and window type are the
- * analytics', as the chart's. Over a time range selected on the chart, which is in the
- * past, it shows that range instead: what was left at its start and its end, what it spent
- * in all and per hour, and its agents' work. The board's owner chooses the columns; where
- * they do not fit the widget, each window is a row of a list. It reads the history on
- * screen and the board's cards, not their agents or pace; what in it changes with time
- * (the plan, where the pace leads, the hours of work left) are parts of their own.
+ * fell into their work; then two forecasts, by the time on the clock (a weekly window's as
+ * the hub foresees it from how its subscription spends, a five-hour window's at its own
+ * pace since it started; neither by the period) and by work (how many hours agents can go
+ * on at what an hour of their work spent). Its period and window type are the analytics',
+ * as the chart's. Over a time range selected on the chart, which is in the past, it shows
+ * that range instead: what was left at its start and its end, what it spent in all and per
+ * hour, and its agents' work. The board's owner chooses the columns; where they do not fit
+ * the widget, each window is a row of a list. It reads the history on screen, the board's
+ * cards, the hub's forecasts and its news of resets, not the cards' agents or pace; what in
+ * it changes with time (the plan, where the forecast leads, the hours of work left) are
+ * parts of their own.
  */
 export const Forecast = memo(function Forecast({arrange}: {arrange: Arrange}) {
   const {history, loading} = useHistory();

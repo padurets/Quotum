@@ -30,7 +30,7 @@ import {
 
 /**
  * The catalogue of the demo board: every state the dashboard knows today, one entry each,
- * but two that never last on a live hub (see the end).
+ * but two that never last on a working hub (see the end).
  *
  * An entry is one object: a card (a subscription with its windows over time, the machines
  * that measure it, its agents and failures, and how it looks on each board), a scene of
@@ -79,15 +79,15 @@ import {
  * `start` alone: the codes of the activity widget and of the table's work are at that
  * fixed point, over a period ending there or a range before it.
  *
- * Two states of a weekly window's forecast never last on a live hub, and have no entry:
+ * Two states of a weekly window's forecast never last on a working hub, and have no entry:
  * `renewing`, the moment between a measurement and the hub's forecast of it (the hub works
  * a series out again as it reads it), and `unavailable`, a forecast that failed on the
  * hub. «a weekly window says what the card tells at once, then what the hub foresees»
  * (ui/test/forecast.test.ts) and «a series that fails is none and failed, alone, until the
  * next hour, and keeps nothing» (server/test/forecasts.test.ts) hold them.
  *
- * A new state gets an entry here with at least one code; the test picks it up. One a live
- * hub never holds for long is named above instead, with the tests that hold it.
+ * A new state gets an entry here with at least one code; the test picks it up. One a
+ * working hub never holds for long is named above instead, with the tests that hold it.
  */
 
 const WEEK_PLAN_FLAT = [15, 15, 15, 15, 15, 15, 10];
@@ -664,7 +664,7 @@ const all: DemoSet = {
       history: 14 * DAY,
       windows: [
         fiveHours(0, 7, agentsWork(IOS_AGENTS, ALWAYS), 'Gemini Pro'),
-        // A tenth faster than the default plan every day: it runs out on the fifth day, past half of the time left to the plan's end.
+        // A third of the week the first day, most of it by the second: at the pace of the last day it runs out in a day and a half, well within half the time to the reset.
         weekly({id: 'gemini:weekly', label: 'Gemini', since: -2 * DAY, use: through([0, 0], [1, 33], [2, 60.5], [3, 77])}),
       ],
       agents: IOS_AGENTS,

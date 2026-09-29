@@ -96,8 +96,8 @@ is open.
 - **Look at a change on the demo board** (`npm run build && npm run demo` in `hub/`),
   in both languages, not only through tests. A state the board did not show before gets
   an entry in `hub/demo/catalogue.ts` with the codes it shows; `npm test` checks them.
-  One a live hub never holds for long is named in the catalogue's header instead, with
-  the tests that hold it.
+  One a working hub never holds for long (a failure's) is named in the catalogue's header
+  instead, with the tests that hold it.
 - **Build from the shared pieces.** A menu, dropdown or any panel that opens from a
   button is a `Popover` (`hub/ui/components/Popover.tsx`); a dialog or side panel is a
   `Modal` (`hub/ui/components/Kit.tsx`). They are glass: the `glass` class and its

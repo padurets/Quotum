@@ -108,8 +108,8 @@ Codex         api                  idle     started 25m ago · editor
   six days after the reset and nothing on the seventh. Each subscription can have its
   own plan: a day at 0 is a day you don't spend, and it can be any day of the week.
 - **A chart of the weekly or the 5-hour windows** over the last hour up to the last 30
-  days. Ahead of now it draws the plan, where each window is going (a weekly one flat
-  over the hours its subscription usually spends nothing) and the next resets, as far
+  days. Ahead of now it draws the plan, where each window is going (a weekly one nearly
+  flat over the hours its subscription usually spends nothing) and the next resets, as far
   as you choose; behind, it marks when limits came back early and
   when free resets were granted. Drag across it to zoom into a burst of work (on a
   phone, hold a finger on it first); ‹ and ›, or a swipe sideways, move it back and
@@ -470,7 +470,7 @@ hub/server/store      SQLite: layout, measurements, people and devices
 hub/server/routes     HTTP routes for people and for agents
 hub/server/*.ts       ingest, duty, device pairing, sessions, the reset trackers
 hub/ui                the dashboard (React), translations in hub/ui/i18n
-hub/demo              the demo board: a catalogue of every lasting state, kept alive
+hub/demo              the demo board: a catalogue of every lasting state but failures, kept alive
 ```
 
 `npm test` and `npm run typecheck` in `hub/`, `cargo test` and `cargo clippy` in
