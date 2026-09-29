@@ -71,6 +71,7 @@ async function mainProcess({cursor = () => ({x: 790, y: 590}), displays = [{work
         protocol: {registerSchemesAsPrivileged() {}, handle() {}},
         session: {defaultSession: {setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, on() {}}},
         screen: {
+          getPrimaryDisplay: () => displays[0],
           getAllDisplays: () => displays, getDisplayMatching: () => displays[0], getCursorScreenPoint: cursor,
           getDisplayNearestPoint: ({x, y}) => displays.find(({workArea: a}) => x >= a.x && x < a.x + a.width && y >= a.y && y < a.y + a.height) ?? displays[0],
         },
@@ -238,8 +239,8 @@ test('a tray menu uses its monitor on XWayland and keeps that anchor through con
   assert.deepEqual(panel.position, [1400, 720]);
   point = {x: 400, y: 200};
   main.deliver({type: 'panel', instance: 2, generation: 1, action: 'height', height: 1000});
-  assert.deepEqual(panel.size, [400, 600], 'height comes from the activation monitor');
-  assert.deepEqual(panel.position, [1400, 300], 'moving the pointer does not move an open panel');
+  assert.deepEqual(panel.size, [400, 800], 'height comes from the activation monitor');
+  assert.deepEqual(panel.position, [1400, 100], 'moving the pointer does not move an open panel');
   main.deliver({type: 'focus', role: 'compact'});
   assert.deepEqual(panel.size, [400, 480]);
   assert.deepEqual(panel.position, [0, 0], 'a new menu activation uses its current monitor');
@@ -301,11 +302,29 @@ test('only the panel height is reused when its renderer is recreated', async () 
   main.deliver({type: 'state', generation: 1, url: hub}, {type: 'focus', role: 'compact'});
   const panel = main.windows.at(-1);
   assert.deepEqual(panel.size, [400, 480], 'cached height is still clamped to this monitor');
+  assert.equal(panel.options.height, 480, 'even the hidden window starts inside the monitor limit');
   main.deliver({type: 'panel', instance: 2, generation: 1, action: 'height', height: 250});
   main.deliver({type: 'panel', instance: 2, generation: 1, action: 'close'});
   main.deliver({type: 'focus', role: 'compact'});
   assert.deepEqual(main.windows.at(-1).size, [400, 250]);
   assert.deepEqual(main.windows[0].size, [1280, 800]);
+});
+
+test('a tall monitor lets the compact panel grow beyond 600 pixels and shrink with its content', async () => {
+  const main = await mainProcess({
+    panelHeight: 784,
+    cursor: () => ({x: 4400, y: 220}),
+    displays: [{workArea: {x: 1200, y: 207, width: 3440, height: 1404}}],
+  });
+  main.deliver({type: 'state', generation: 1, url: hub}, {type: 'focus', role: 'compact'});
+  const panel = main.windows.at(-1);
+  assert.equal(panel.options.height, 784, 'the cached large panel has no fixed pixel ceiling');
+  assert.deepEqual(panel.size, [400, 784]);
+  main.deliver({type: 'panel', instance: 2, generation: 1, action: 'height', height: 264});
+  assert.deepEqual(panel.size, [400, 264], 'less content shrinks the window');
+  main.deliver({type: 'panel', instance: 2, generation: 1, action: 'height', height: 2000});
+  assert.deepEqual(panel.size, [400, 1123], 'a large list is bounded by the work area');
+  assert.deepEqual(panel.position, [4000, 207], 'the top tray anchor stays put');
 });
 
 test('rapid toggles retain their final intent while the previous renderer is closing', async () => {

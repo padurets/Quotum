@@ -675,7 +675,9 @@ the full date in its tooltip, the board's shared remaining meter and percentage.
 The provider header carries its measurement indicator and the working-agent count;
 the total agent count is in that count's tooltip. Hidden windows and the owner's
 ordering are shared with the board. Large lists can scroll, but ordinary subscriptions
-do not reserve a separate footer or a second line for every reset.
+do not reserve a separate footer or a second line for every reset. The panel grows
+with its content up to 80% of its monitor's work area, with no fixed pixel ceiling;
+only content beyond that height scrolls. The native loader uses the same screen limit.
 
 The engine version and archive checksum are pinned in `desktop/prepare-electron.mjs`;
 updating Chromium means rebuilding the Linux packages. `desktop/package-linux.mjs`

@@ -250,7 +250,10 @@ fn build(
         .decorations(!compact)
         // Match the board's --bg while the web view has not painted a newly exposed area yet.
         .background_color(tauri::utils::config::Color(0x0b, 0x0b, 0x0e, 255))
-        .inner_size(if compact { 400.0 } else { 1280.0 }, if compact { height.min(600.0) } else { height })
+        .inner_size(
+            if compact { 400.0 } else { 1280.0 },
+            if compact { initial_panel_height(shell, height) } else { height },
+        )
         .min_inner_size(if compact { 160.0 } else { 480.0 }, if compact { 100.0 } else { 400.0 })
         .always_on_top(compact)
         .skip_taskbar(compact)
@@ -398,6 +401,16 @@ fn build(
     Ok(window)
 }
 
+fn initial_panel_height(shell: &Shell, height: f64) -> f64 {
+    let rect = shell.host.tray.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|tray| tray.rect());
+    let monitor = rect
+        .and_then(|rect| shell.host.app.monitor_from_point(f64::from(rect.left), f64::from(rect.top)).ok().flatten())
+        .or_else(|| shell.host.app.primary_monitor().ok().flatten());
+    monitor.map_or(180.0, |monitor| {
+        height.min(f64::from(monitor.work_area().size.height) / monitor.scale_factor() * 0.8).max(100.0)
+    })
+}
+
 fn fit_on_screen(window: &tauri::WebviewWindow) -> tauri::Result<()> {
     if window.is_maximized()? || window.is_fullscreen()? {
         return Ok(());
@@ -529,7 +542,7 @@ pub fn panel_height(shell: &Arc<Shell>, instance: u64, height: f64) {
         let scale = monitor.scale_factor();
         let area = monitor.work_area();
         let width = 400.0_f64.min(f64::from(area.size.width) / scale);
-        let height = height.min(600.0).min(f64::from(area.size.height) / scale * 0.8).max(100.0);
+        let height = height.min(f64::from(area.size.height) / scale * 0.8).max(100.0);
         let requested = tauri::LogicalSize::new(width, height).to_physical::<u32>(scale);
         if window.inner_size().is_ok_and(|size| size != requested) {
             let _ = window.set_size(tauri::LogicalSize::new(width, height));

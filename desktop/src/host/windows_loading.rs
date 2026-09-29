@@ -92,7 +92,7 @@ impl Panel {
             let area = info.rcWork;
             let width = (400.0 * scale).round() as i32;
             let width = width.min(area.right - area.left);
-            let height = (*shell.host.panel_height.lock().unwrap_or_else(|e| e.into_inner())).clamp(100.0, 600.0);
+            let height = (*shell.host.panel_height.lock().unwrap_or_else(|e| e.into_inner())).max(100.0);
             let height = ((height * scale).round() as i32).min((area.bottom - area.top) * 4 / 5);
             let mut frame = RECT { left: 0, top: 0, right: width, bottom: height };
             AdjustWindowRectExForDpi(

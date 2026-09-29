@@ -224,7 +224,7 @@ impl Panel {
             let area = monitor.workarea();
             let width = 400.min(area.width());
             let height = (*shell.host.panel_height.lock().unwrap_or_else(|e| e.into_inner()) as i32)
-                .clamp(100, 600)
+                .max(100)
                 .min(area.height() * 4 / 5);
             let (x, y) = anchor.unwrap_or_else(|| fallback_anchor(monitor.geometry(), area, width, height));
             self.anchor = Some((x, y));

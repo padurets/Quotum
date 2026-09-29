@@ -252,7 +252,7 @@ function resizePanel(entry) {
   if (entry.window.isDestroyed()) return;
   const area = (entry.anchor ? screen.getDisplayNearestPoint(entry.anchor) : screen.getDisplayMatching(entry.window.getBounds())).workArea;
   const width = Math.min(400, area.width);
-  const height = Math.max(100, Math.min(Math.ceil(entry.height), 600, Math.floor(area.height * 0.8)));
+  const height = Math.max(100, Math.min(Math.ceil(entry.height), Math.floor(area.height * 0.8)));
   const [currentWidth, currentHeight] = entry.window.getContentSize();
   if (currentWidth !== width || currentHeight !== height) entry.window.setContentSize(width, height);
   const radius = Math.min(Math.round(engineConfig.popupRadius ?? 12), Math.floor(width / 2), Math.floor(height / 2));
@@ -305,7 +305,9 @@ function openSurface(role, anchor, request) {
   }
   const config = engineConfig;
   const compact = role === 'compact';
-  const panelHeight = Number.isFinite(config.panelHeight) ? Math.max(100, Math.min(config.panelHeight, 600)) : 180;
+  const area = compact ? (point ? screen.getDisplayNearestPoint(point) : screen.getPrimaryDisplay()).workArea : undefined;
+  const panelHeight = Number.isFinite(config.panelHeight) ? Math.max(100, config.panelHeight) : 180;
+  const initialHeight = area ? Math.max(100, Math.min(panelHeight, Math.floor(area.height * 0.8))) : 800;
   let loaded = false;
   let revealed = false;
   let geometry = {};
@@ -316,7 +318,7 @@ function openSurface(role, anchor, request) {
     if ([x, y, width, height].every(Number.isInteger) && width >= 480 && height >= 400 && width <= 16384 && height <= 16384 && screen.getAllDisplays().some(({workArea: a}) => x < a.x + a.width && x + width > a.x && y < a.y + a.height && y + 40 > a.y)) geometry = {x, y, width, height};
   } catch {}
   const window = new BrowserWindow({
-    title: 'Quotum', width: compact ? 400 : 1280, height: compact ? panelHeight : 800, ...geometry, minWidth: compact ? 160 : 480, minHeight: compact ? 100 : 400,
+    title: 'Quotum', width: compact ? 400 : 1280, height: initialHeight, ...geometry, minWidth: compact ? 160 : 480, minHeight: compact ? 100 : 400,
     frame: !compact, hasShadow: !compact,
     alwaysOnTop: compact, skipTaskbar: compact, resizable: !compact,
     transparent: compact, backgroundColor: compact ? '#00000000' : '#0b0b0e', show: false, autoHideMenuBar: true,
