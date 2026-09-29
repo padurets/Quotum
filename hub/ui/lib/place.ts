@@ -25,31 +25,66 @@ export function placeOf(top: number, height: number, windowHeight: number, cover
  * below for the rest) when it fits there whole, else on the other when it fits there whole,
  * else on the side with more room, cut to it: it scrolls inside, never the page. A panel
  * the window has room for, but not on its side, is cut to that side, never to the window.
+ * One already open on a side (`stands`, `up` being that side) keeps to it, cut to its room,
+ * until the other would give it at least twice as much: it does not move from under its
+ * reader's pointer for a few more rows.
  */
-export function sideOf(height: number, above: number, below: number, up: boolean) {
+export function sideOf(height: number, above: number, below: number, up: boolean, stands = false) {
   const [own, other] = up ? [above, below] : [below, above];
   if (height <= own) return {up, cap: null};
-  if (height <= other) return {up: !up, cap: null};
-  const stays = own >= other;
-  return {up: stays ? up : !up, cap: Math.max(0, stays ? own : other)};
+  const stays = stands ? own * 2 >= Math.min(height, other) : height > other && own >= other;
+  if (stays) return {up, cap: Math.max(0, own)};
+  return {up: !up, cap: height <= other ? null : Math.max(0, other)};
 }
 
-/** A bar that sticks at the top of the window: where it stands and how far down the window it sticks (its `top`), in CSS pixels. */
-export type Bar = {top: number; bottom: number; sticks: number};
+/**
+ * The room a panel has in the window above its button (`at`) and below it, set off from it by
+ * `gap` either way: under what covers the window's top (`cover`) and above its bottom, 8 short
+ * of each.
+ */
+export function roomOf(at: {top: number; bottom: number}, gap: number, cover: number, windowHeight: number) {
+  return {above: at.top - gap - cover - 8, below: windowHeight - 8 - (at.bottom + gap)};
+}
+
+/**
+ * Whether a panel cut to `cap` leaves its list, which scrolls on its own while the rest of the
+ * panel (`rest` tall: its title, its legend) stays, less than the `least` room the list asks
+ * for. Then the whole panel scrolls, the list with it.
+ */
+export function crampedOf(cap: number | null, rest: number, least: number) {
+  return cap !== null && cap - rest < least;
+}
+
+/**
+ * How far a panel standing from `left` to `right` moves sideways to keep 8 inside the `width`
+ * it has, the page's or its dialog's; one wider than that keeps its left edge in.
+ */
+export function shiftOf(left: number, right: number, width: number) {
+  return left < 8 ? 8 - left : right > width - 8 ? width - 8 - right : 0;
+}
+
+/**
+ * A bar that sticks at the top of the window: where it stands and how far down the window it
+ * sticks (its `top`), in CSS pixels, and whether it holds the button of the panel measured.
+ */
+export type Bar = {top: number; bottom: number; sticks: number; holds?: boolean};
 
 /**
  * How far down the window the `bars` that stick at its top cover what stands at `y` (CSS
- * pixels from the window's top): those that end above it. A chart's tooltip lies under them
- * wherever they stand. A `panel` lies over them, so for one a bar counts only where it is
- * stuck at the top: the analytics' head standing lower on the page is a heading like any other.
+ * pixels from the window's top). A chart's tooltip lies under them wherever they stand, so for
+ * one those that end above it count. A `panel` lies over them, so for one, `y` being the bottom
+ * of its button, a bar counts only where it is stuck at the top and begins above that: the
+ * analytics' head standing lower on the page is a heading like any other, and the bar that holds
+ * the button covers none of it. A button gone under the bars is covered to their end.
  */
 export function coverAt(bars: Bar[], y: number, panel: boolean) {
-  return Math.max(0, ...bars.filter(bar => bar.bottom <= y && (!panel || bar.top <= bar.sticks + 0.5)).map(bar => bar.bottom));
+  const over = (bar: Bar) => (panel ? !bar.holds && bar.top < y && bar.top <= bar.sticks + 0.5 : bar.bottom <= y);
+  return Math.max(0, ...bars.filter(over).map(bar => bar.bottom));
 }
 
 /**
  * The cover (`coverAt`) of the page's bars over what stands at `y`: a chart's tooltip, or the
- * panel of a `button`. A dialog lies over them all, so a panel in one has none.
+ * panel of a `button` whose bottom is at `y`. A dialog lies over them all, so a panel in one has none.
  */
 export function coverOf(y: number, button?: Element) {
   if (button?.closest('.overlay')) return 0;
@@ -57,7 +92,7 @@ export function coverOf(y: number, button?: Element) {
     const style = getComputedStyle(bar);
     if (style.position !== 'sticky') return [];
     const {top, bottom} = bar.getBoundingClientRect();
-    return [{top, bottom, sticks: parseFloat(style.top) || 0}];
+    return [{top, bottom, sticks: parseFloat(style.top) || 0, holds: !!button && bar.contains(button)}];
   });
   return coverAt(bars, y, !!button);
 }
