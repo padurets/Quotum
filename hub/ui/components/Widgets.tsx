@@ -23,6 +23,7 @@ import {
   heightIntent,
   landed,
   leftWidths,
+  MAX_ROWS,
   narrowed,
   nearest,
   ordered,
@@ -135,8 +136,8 @@ export function Widgets({
   /** Whether each of the last two presses on a handle saved a size or was given up: a double click after two that did neither fits the content. */
   const presses = useRef<boolean[]>([]);
   const [heights, setHeights] = useState<Record<string, number>>({});
-  // The room a widget's rows give it where the screen draws them shorter than they add up to (at 110 % or 133 %, a tall widget's by pixels).
-  const [rooms, setRooms] = useState<Record<string, {rows: number; px: number}>>({});
+  // How much shorter than it adds up to the screen draws a row (CSS pixels): at 110 % or 133 % a little, which a tall widget's rows sum to pixels.
+  const [short, setShort] = useState(0);
   // What the charts and the list of agents tell they need: a chosen height fills them, so what they show is not it.
   const [sizes, setSizes] = useState<Record<string, Size>>({});
   const [preview, setPreview] = useState<{id: string; kind: Kind; items: Item[]; intent?: number} | null>(null);
@@ -186,7 +187,7 @@ export function Widgets({
   const measure = (release = false) => {
     const next: Record<string, number> = {};
     const reported = latest.current.sizes;
-    const room: Record<string, {rows: number; px: number}> = {};
+    let tallest = {rows: 0, px: 0};
     const spans = new Map(latest.current.spots.map(spot => [spot.id, spot.h]));
     for (const [id, body] of bodies.current) {
       const root = body.querySelector<HTMLElement>(':scope > .card, :scope > .panel');
@@ -196,13 +197,15 @@ export function Widgets({
       next[id] = Math.round((root.getBoundingClientRect().height - fill) * 64) / 64;
       const rows = spans.get(id);
       const px = pixels(place.getBoundingClientRect().height);
-      if (rows !== undefined && !same(rows * ROW - GAP, px)) room[id] = {rows, px};
+      if (rows !== undefined && rows > tallest.rows) tallest = {rows, px};
     }
     setHeights(old => {
       const kept = Object.fromEntries(Object.entries(next).map(([id, h]) => [id, same(old[id], h) || (release && reported[id] && old[id] !== undefined) ? old[id] : h]));
       return Object.keys(kept).length === Object.keys(old).length && Object.entries(kept).every(([id, h]) => old[id] === h) ? old : kept;
     });
-    setRooms(old => (JSON.stringify(old) === JSON.stringify(room) ? old : room));
+    // The same for every row, so the tallest widget tells it best; a change of it that no widget would show within a pixel of the screen is none.
+    const row = tallest.rows ? Math.max(0, (tallest.rows * ROW - GAP - tallest.px) / tallest.rows) : 0;
+    setShort(old => (same(old * MAX_ROWS, row * MAX_ROWS) ? old : row));
     return next;
   };
   // Before paint on the first render; later one observer measures content, never the row's stretched box.
@@ -547,7 +550,7 @@ export function Widgets({
     <div className={`widgets ${movable ? 'is-movable' : ''}`} ref={grid} style={{'--columns': columns} as CSSProperties}>
       {reading(spots).map(spot => {
         const widget = byId.get(spot.id)!;
-        const allocated = rooms[spot.id]?.rows === spot.h ? rooms[spot.id].px : spot.h * ROW - GAP;
+        const allocated = spot.h * (ROW - short) - GAP;
         const fill = heights[spot.id] === undefined ? 0 : Math.max(0, allocated - heights[spot.id]);
         const manual = intended(spot.id) !== undefined;
         return (
