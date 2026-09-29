@@ -112,18 +112,36 @@ test('a holder that asks again without answering keeps duty no longer than the d
   }
   assert.equal(late.claim('acc', 'server', false, t0 + 8 * MIN).measure, true);
 
-  // Answering again, it keeps duty while it measures once more.
-  for (const answer of ['failure', 'delivery'] as const) {
+  // Retried after asking with nothing to show, it measures the retry without asking: that keeps
+  // it no duty either, from a device waiting nor from one where someone works.
+  const retried = (device: string, active: boolean, at: number) => {
+    const duty = new Duty();
+    duty.claim('acc', 'laptop', false, t0);
+    duty.delivered('acc', 'laptop', t0, 204_000, t0);
+    duty.asked('acc', 'laptop', t0 + MIN);
+    duty.claim('acc', 'laptop', false, t0 + 75_000);
+    duty.claim('acc', 'laptop', false, t0 + 150_000);
+    duty.asked('acc', 'laptop', t0 + 150_000);
+    assert.equal(duty.until('acc'), t0 + 204_000);
+    return duty.claim('acc', device, active, at).measure;
+  };
+  assert.equal(retried('server', false, t0 + 204_000), true);
+  assert.equal(retried('server', true, t0 + 160_000), true, 'an idle holder measuring a retry is not measuring what it was told to');
+
+  // Answering again, even the command it asked past, it keeps duty while it measures once more.
+  for (const [answer, at] of [['failure', 100_000], ['delivery', 100_000], ['late failure', 150_000], ['late delivery', 150_000]] as const) {
     const back = new Duty();
     back.claim('acc', 'laptop', false, t0);
     back.delivered('acc', 'laptop', t0, 132_000, t0);
     back.asked('acc', 'laptop', t0 + MIN);
     back.claim('acc', 'laptop', false, t0 + 90_000);
-    back.asked('acc', 'laptop', t0 + 90_000);
-    if (answer === 'failure') back.failed('acc', 'laptop', t0 + 100_000);
-    else back.delivered('acc', 'laptop', t0 + 100_000, 30_000, t0 + 100_000);
-    back.asked('acc', 'laptop', t0 + 2 * MIN);
-    assert.equal(back.until('acc'), t0 + 7 * MIN, answer);
+    // Told again at once, or asking on while its answer to the first command is under way.
+    if (!answer.startsWith('late')) back.asked('acc', 'laptop', t0 + 90_000);
+    if (answer.endsWith('failure')) back.failed('acc', 'laptop', t0 + at);
+    else back.delivered('acc', 'laptop', t0 + at, 30_000, t0 + at);
+    back.asked('acc', 'laptop', t0 + 3 * MIN);
+    assert.equal(back.until('acc'), t0 + 8 * MIN, answer);
+    assert.equal(back.claim('acc', 'server', true, t0 + 4 * MIN).measure, false, `${answer}: no one takes over halfway`);
   }
 });
 

@@ -19,9 +19,9 @@ const WAIT_IDLE_MS = 10 * 60_000;
 const HANDOVER_IDLE_MS = 10 * 60_000;
 
 /**
- * `askedAt`: when the holder was told to measure, until it answers or asks again.
+ * `askedAt`: when the holder was last told to measure, until it answers.
  * `answering`: false once it asked again leaving a command unanswered; until it answers
- * one, being told to measure keeps it no duty.
+ * one, being told to measure keeps it no duty. Asking again, it is no longer measuring.
  */
 type Holder = {device: string; until: number; activeAt: number; askedAt: number | null; answering: boolean};
 
@@ -53,12 +53,15 @@ export class Duty {
       // keeps it on duty no longer than the devices waiting were told: past its measurement
       // going stale, until the five minutes end, as it might otherwise take a new lease
       // before they come back.
-      const answering = !mine || (holder!.answering && holder!.askedAt === null);
+      // A command on record is one it left unanswered, asking: it answers no longer, until an
+      // answer to it comes, however late.
+      const answering = !mine || holder!.askedAt === null;
+      const askedAt = mine ? holder!.askedAt : null;
       this.holders.set(
         subscription,
         mine && leaseOf(holder!) > now
-          ? {...holder!, until: holder!.until > now ? holder!.until : leaseOf(holder!), activeAt, askedAt: null, answering}
-          : {device, until: now + FIRST_LEASE_MS, activeAt, askedAt: null, answering},
+          ? {...holder!, until: holder!.until > now ? holder!.until : leaseOf(holder!), activeAt, askedAt, answering}
+          : {device, until: now + FIRST_LEASE_MS, activeAt, askedAt, answering},
       );
       return {measure: true, until: now};
     }
