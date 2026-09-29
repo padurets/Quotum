@@ -348,7 +348,9 @@ test('the forecast cell says when it reads otherwise: its countdown, its tone, i
     ['of no known length', week(50, {minutes: null}), null, plain, null],
   ];
   for (const [what, live, forecast, context, plan] of cases) {
-    const moments = [...Array.from({length: 300}, (_, i) => T0 + i * 1_987_654), ...Array.from({length: 300}, (_, i) => T0 + i * 13_331)];
+    // Up to the moment it runs out, when the countdown has stopped reading otherwise.
+    const said = outlook(live, T0, T0, forecast, context);
+    const moments = [...Array.from({length: 300}, (_, i) => T0 + i * 1_987_654), ...Array.from({length: 300}, (_, i) => T0 + i * 13_331), ...(said.key === 'runsOut' ? before(said.at) : [])];
     changesAtItsMoment(what, shown(live, forecast, context, plan), now => cellChangesAt(live, T0, now, forecast, context, plan), moments);
   }
 });

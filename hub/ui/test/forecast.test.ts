@@ -105,6 +105,7 @@ test('"left" only as the hub says it is comfortably so, and never "~0%"', () => 
   // F well above what counts as left, yet the hub holds "just enough": the board follows it.
   assert.equal(said(lasts({F: 60, shownLeft: 60, comfy: false})).key, 'pace');
   assert.equal(said(lasts({F: 3, shownLeft: 0, comfy: true})).key, 'pace', 'a dead band may hold the share at 0');
+  assert.deepEqual(said(lasts({F: 6, shownLeft: 5, comfy: true})), {key: 'left', left: 5, tone: ''}, 'from 5');
 });
 
 test('red when it runs out within half the time to the reset, yellow at most in a first day, with free resets or before an announced reset', () => {
@@ -171,6 +172,11 @@ test("the cell's tooltip says a part a line, each only where it applies, in plur
     assert.equal(day(0.05)[1], 'Последние сутки — почти без трат');
     assert.equal(day(0.5)[1], 'Последние сутки — в 2 раза меньше обычного');
     assert.equal(day(1.52)[1], 'Последние сутки — в 1,5 раза больше обычного');
+    assert.equal(day(0.92).length, 2, 'as usual down to 0.9');
+    assert.equal(day(0.88)[1], 'Последние сутки — в 1,1 раза меньше обычного');
+    // A reset for everyone announced after the window's own says nothing of it.
+    const after = outlookText(said(lasts()), week(60), lasts(), context({announced: reset + HOUR}), null).title;
+    assert.ok(!after.some(line => line.startsWith('Сброс для всех')), after.join(' | '));
     const cold = outlookText(said(lasts({comfy: false})), week(60), lasts({basis: {hours: 7.9, cold: true, usualPerDay: 3, lastDay: null, burst: null}}), context(), null);
     assert.deepEqual(cold.title, ['По первым 7 ч', 'Чтобы хватило до сброса — до ~15% в сутки']);
     assert.equal(cold.text, 'хватит впритык');
