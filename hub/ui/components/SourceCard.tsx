@@ -61,7 +61,7 @@ export function ResetLine({w, short = false}: {w: Win; short?: boolean}) {
   const date = w.resetAt ? stamp(w.resetAt) : '';
   return (
     <span data-time="reset" title={short ? [text, date].filter(Boolean).join('\n') : date} aria-label={short ? text : undefined}>
-      {short ? <><span aria-hidden="true">↻ </span>{reset.key === 'resetsIn' ? duration(reset.inMs) : '—'}</> : text}
+      {short ? (reset.key === 'resetsIn' ? duration(reset.inMs) : '—') : text}
     </span>
   );
 }
