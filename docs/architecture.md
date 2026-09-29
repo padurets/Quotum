@@ -165,11 +165,12 @@ subscription:
 - Before measuring, a device checks in (`POST /v1/checkin`) with the subscription and
   whether someone is using the client on this machine right now.
 - The first device to ask gets duty. It keeps it while it delivers: each measurement
-  extends duty until the measurement goes stale. Only delivering extends it; a holder
-  that keeps asking but never delivers loses duty after five minutes. A holder told to
-  measure keeps duty for at least five minutes after, until it delivers or fails: it
-  asks nothing while it measures its providers one by one, and another device taking
-  over halfway would measure the same again.
+  extends duty until the measurement goes stale. Asking does not extend it; a holder
+  that keeps asking but never delivers loses duty after five minutes.
+- A holder told to measure keeps duty while it measures: until it delivers, fails or
+  asks again, for at most five minutes. It asks nothing meanwhile, measuring its
+  providers one by one, and another device taking over halfway, even one where someone
+  works, would measure the same again.
 - The others are told to wait and when to ask again: in a minute if someone works on
   that machine, otherwise in up to ten minutes.
 - Duty moves to a device where someone works if the holder has been idle for ten
@@ -196,7 +197,7 @@ from what it sees of the subscription everywhere, which no single machine does:
   minutes for a signed-out client), and a device doing so does not take duty; a healthy
   one does, as before. A `measure` nothing came back for (a lost answer) is asked again
   after 90 seconds, then less and less often.
-- The lease is as before: only a delivery extends it, and it lasts past the next
+- The lease is as before otherwise: a delivery extends it, and it lasts past the next
   planned measurement, so a holder waiting for its pace keeps duty. A device that raises
   its minimum interval past its lease is the exception: until it asks again it has no
   duty, and another device of the subscription may take it and measure at once.
@@ -230,11 +231,11 @@ an old delivery or failure cannot acknowledge a newer command outside the 30-sec
 and only a success taken after a failure clears its pause.
 
 Refresh capability comes from that subscription's latest check-in, not the agent version:
-the live duty holder must follow the hub's pace and have asked within 120 seconds. A
-request never claims duty or extends its lease. A click joins a command to the holder
-while it is under way, until the holder asks again: it asks nothing while it measures.
-A holder that asks again without answering lost the command, and the request waits for
-its retry. A lapsed lease ends nothing while the same device holds duty: a holder that
+the live duty holder must follow the hub's pace and have asked within 120 seconds, or be
+measuring what it was told to. A request never claims duty or extends its lease. A
+click joins a command to the holder while it is under way: until the holder asks again,
+for at most five minutes, as long as duty stays with it for that. A holder that asks
+again without answering lost the command, and the request waits for its retry. A lapsed lease ends nothing while the same device holds duty: a holder that
 asks takes it again. Queued requests end on silence; requests already dispatched keep
 waiting through it for up to five minutes, as providers are measured sequentially and a
 holder busy measuring neither asks nor delivers the others. Duty passing to another

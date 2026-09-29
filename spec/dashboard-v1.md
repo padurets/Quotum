@@ -158,7 +158,8 @@ All times are epoch milliseconds on the hub. `dispatchAt` and `finishedAt` may b
 | `no_result` | No fresh data arrived before the deadline. This says nothing about whether the client started. |
 
 A request joins a command to the holder that is still under way: one the holder has
-not asked past, since it asks nothing while it measures. A holder that asks again
+not asked past, since it asks nothing while it measures, for at most five minutes after
+the command; meanwhile the holder is not `silent`. A holder that asks again
 without answering lost the command, and the request is queued for the command's retry,
 which it never brings forward. Before dispatch the deadline is five minutes after
 `notBefore` (never counted from a moment already past, when the device lowers its
@@ -166,8 +167,8 @@ minimum); after dispatch, five minutes after the command. Joining a command wait
 minutes after the request, with no extension on retries. Silence over 120 seconds ends a
 queued request. A dispatched request keeps waiting until its deadline: providers are
 measured sequentially, and a holder busy measuring neither asks nor delivers the others.
-Its `unavailable` can therefore be `silent`, or `no_device` once the lease of a joined
-command lapses, while it is still `waiting`. A lapsed lease ends neither while the same
+Its `unavailable` can therefore be `silent` or `no_device` once the five minutes after
+the command are over, while a joined request is still `waiting`. A lapsed lease ends neither while the same
 device holds duty. Revocation, a changed holder, a return to the legacy protocol and an
 error pause end either. Terminal results remain for one minute; an allowed new request can replace one
 immediately. The state is in memory and resets with the hub.
