@@ -97,12 +97,13 @@ function useColumns() {
 }
 
 /**
- * A widget's part of the board's sizing, made of its own numbers only: a neighbour's height
- * renders nothing of it, neither the widget nor this (the same content, the same numbers).
+ * A widget's part of the board's sizing, made of its own numbers and the board's columns
+ * only: a neighbour's height renders nothing of it, neither the widget nor this (the same
+ * content, the same numbers).
  */
-const Sized = memo(function Sized({id, manual, allocated, columns, report, children}: {id: string; manual: boolean; allocated: number; columns: number; report: (id: string, size: Report | null) => void; children: ReactNode}) {
+const Sized = memo(function Sized({id, manual, allocated, width, report, children}: {id: string; manual: boolean; allocated: number; width: string; report: (id: string, size: Report | null) => void; children: ReactNode}) {
   const bound = useCallback((size: Report | null) => report(id, size), [id, report]);
-  const value = useMemo(() => ({manual, allocated, columns, report: bound}), [manual, allocated, columns, bound]);
+  const value = useMemo(() => ({manual, allocated, width, report: bound}), [manual, allocated, width, bound]);
   return <SizingContext.Provider value={value}>{children}</SizingContext.Provider>;
 });
 
@@ -140,6 +141,8 @@ export function Widgets({
   const [short, setShort] = useState(0);
   // What the charts and the list of agents tell they need: a chosen height fills them, so what they show is not it.
   const [sizes, setSizes] = useState<Record<string, Size>>({});
+  // How many gestures on each widget's side have ended: its width followed the pointer until then, and it takes the grid's.
+  const [released, setReleased] = useState<Record<string, number>>({});
   const [preview, setPreview] = useState<{id: string; kind: Kind; items: Item[]; intent?: number} | null>(null);
   const [said, say] = useState<string[]>([]);
   const hint = useId();
@@ -328,6 +331,7 @@ export function Widgets({
         body.animate([{transform: `translate(${current.offset.x}px, ${current.offset.y}px)`}, {transform: 'none'}], SLIDE);
     }
     if (body) body.style.width = '';
+    if (wide(current.kind)) setReleased(old => ({...old, [current.id]: (old[current.id] ?? 0) + 1}));
     presses.current = [...presses.current, wrote || !drop].slice(-2);
     setPreview(null);
   };
@@ -587,7 +591,7 @@ export function Widgets({
                   </svg>
                 </button>
               )}
-              <Sized id={spot.id} manual={manual} allocated={manual ? allocated : 0} columns={columns} report={report}>
+              <Sized id={spot.id} manual={manual} allocated={manual ? allocated : 0} width={`${columns} ${spot.w} ${released[spot.id] ?? 0}`} report={report}>
                 {widget.content}
               </Sized>
               {movable && (
