@@ -15,9 +15,9 @@ export function placeOf(top: number, height: number, windowHeight: number, cover
 }
 
 /** How far down the window the bars that stick at its top cover the page, in CSS pixels. */
-export function coverOf() {
+export function coverOf(above = Infinity) {
   const bars = [...document.querySelectorAll<HTMLElement>('.topbar, .analytics-head')].filter(bar => getComputedStyle(bar).position === 'sticky');
-  return Math.max(0, ...bars.map(bar => bar.getBoundingClientRect().bottom));
+  return Math.max(0, ...bars.map(bar => bar.getBoundingClientRect()).filter(rect => rect.top <= above).map(rect => rect.bottom));
 }
 
 /** Keep a small anchored tooltip inside the viewport without growing its card. */
@@ -28,7 +28,7 @@ export function useBubble(active: boolean) {
     if (!active || !element) return;
     element.style.translate = '';
     const rect = element.getBoundingClientRect();
-    const {by} = placeOf(rect.top, rect.height, innerHeight, coverOf());
+    const {by} = placeOf(rect.top, rect.height, innerHeight, coverOf(rect.top));
     const edge = document.documentElement.clientWidth - 8;
     const x = rect.left < 8 ? 8 - rect.left : rect.right > edge ? edge - rect.right : 0;
     element.style.translate = `${x}px ${-by}px`;
