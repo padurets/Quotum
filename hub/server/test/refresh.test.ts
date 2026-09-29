@@ -49,13 +49,14 @@ function hub(t: TestContext) {
       },
       T + at,
     ).subscriptions[0];
-  const deliver = (at: number, options: {observed?: number; name?: string; failure?: string; used?: number; stale?: number} = {}) => {
-    const observedAt = iso(T + (options.observed ?? at));
+  const deliver = (at: number, options: {observed?: number; name?: string; failure?: string; used?: number; stale?: number; skew?: number} = {}) => {
+    const behind = options.skew ?? 0;
+    const observedAt = iso(T + (options.observed ?? at) - behind);
     return ingest.accept(
       credential,
       {
         ...agent(options.name ?? 'laptop'),
-        sentAt: iso(T + at),
+        sentAt: iso(T + at - behind),
         snapshots: options.failure
           ? []
           : [
@@ -127,9 +128,9 @@ test('queued refresh follows changed device minima in both directions, and the n
   h.deliver(0, {stale: 132_000});
   h.request(10_000);
   assert.equal(h.ask(15_000, 5 * MIN).measure, false);
-  assert.equal(h.refresh(15_000).request?.notBefore, T + 5 * MIN);
+  assert.deepEqual([h.refresh(15_000).request?.notBefore, h.refresh(15_000).request?.deadline], [T + 5 * MIN, T + 10 * MIN]);
   assert.equal(h.ask(30_000, 2 * MIN).measure, false);
-  assert.equal(h.refresh(30_000).request?.notBefore, T + 2 * MIN);
+  assert.deepEqual([h.refresh(30_000).request?.notBefore, h.refresh(30_000).request?.deadline], [T + 2 * MIN, T + 7 * MIN]);
   assert.equal(h.ask(2 * MIN - 1, 2 * MIN).measure, false);
   assert.equal(h.ask(2 * MIN, 2 * MIN).measure, true);
   h.deliver(2 * MIN);
@@ -289,6 +290,34 @@ test('forgetting a device ends its request when it happens, whatever else is kno
   assert.deepEqual([request?.status, request?.finishedAt], ['unavailable', T + 2_000]);
 });
 
+for (const legacy of [false, true])
+  test(`revoking ${legacy ? 'a legacy holder that only delivers' : 'a holder that only asks'} tells the boards at once`, t => {
+    const h = hub(t);
+    let now = T;
+    const frames: Frame[] = [];
+    const events = new Events(h.parts, undefined, {now: () => now, after: () => () => {}});
+    h.ingest.setObserver(events);
+    t.after(() => events.close());
+    const session = newSecret('qt_s');
+    h.directory.createSession(session, h.user.id, T, 86_400_000);
+    h.deliver(0, {stale: MIN});
+    // The laptop measures without the hub's pace; the desk takes the lapsed duty by asking alone.
+    if (!legacy) h.ask(61_000, MIN, 'desk');
+    const holder = h.device(legacy ? 'laptop' : 'desk');
+    assert.equal(h.duty.holder(ACCOUNT), holder);
+    const opened = events.open({user: h.user.id, secret: session, board: h.board, kind: 'stream', send: got => frames.push(...got), end: () => {}});
+    assert.ok(opened && opened !== 'limit');
+    now = T + 62_000;
+    events.flush();
+    const before = frames.length;
+    h.directory.revokeDevice(h.user.id, holder, now);
+    h.ingest.forget([holder], now);
+    events.flush();
+    const sent = frames.slice(before).filter(f => f.type === 'refresh');
+    assert.equal(sent.length, 1);
+    assert.equal(JSON.parse(sent[0].data).refresh.unavailable, 'no_device');
+  });
+
 test('revoking a device with no sessions tells the boards at once', t => {
   const h = hub(t);
   let now = T;
@@ -425,7 +454,7 @@ test('an old failure does not turn a fresh pending request into a failure', t =>
   assert.equal(h.refresh(11_000).request?.status, 'queued');
 });
 
-test('three provider responses sent sequentially keep the last request waiting for 150 seconds, past its lease', t => {
+test('three provider responses sent sequentially keep the last request waiting for 150 seconds, past its measurement\'s lease', t => {
   const h = hub(t);
   const subscriptions = (['claude', 'codex', 'antigravity'] as const).map((provider, i) => ({provider, account: ['a', 'b', 'c'][i].repeat(24), active: false}));
   // Little left, as when one refreshes before a long session: the agent promises the next
@@ -449,9 +478,9 @@ test('three provider responses sent sequentially keep the last request waiting f
     const at = T + MIN + (i + 1) * 50_000;
     if (i === 2) {
       assert.equal(h.ingest.refresh(source, T + MIN + 120_001).value.request?.status, 'waiting');
-      const lapsed = h.ingest.refresh(source, T + 204_001).value;
-      assert.equal(lapsed.unavailable, 'no_device', 'no new request while the lease has lapsed');
-      assert.equal(lapsed.request?.status, 'waiting', 'the holder is still measuring');
+      // Its last measurement went stale at 204 s; told to measure, the laptop keeps duty meanwhile.
+      assert.ok(h.duty.until('c'.repeat(24))! > T + 204_001);
+      assert.equal(h.ingest.refresh(source, T + 204_001).value.request?.status, 'waiting');
     }
     h.ingest.accept(h.credential, {...h.agent('laptop'), sentAt: iso(at), snapshots: [{...snapshot, observedAt: iso(at)}], failures: []}, at);
   }
@@ -461,20 +490,26 @@ test('three provider responses sent sequentially keep the last request waiting f
 test('a lapsed lease of the holder told to measure waits for the deadline, a lost result ends there', t => {
   const h = hub(t);
   h.ask(0);
-  h.deliver(0, {stale: 348_000});
-  h.request(10_000);
+  h.deliver(0, {stale: 132_000});
   assert.equal(h.ask(MIN).measure, true);
-  assert.equal(h.refresh(348_001).request?.status, 'waiting');
-  assert.equal(h.refresh(6 * MIN - 1).request?.status, 'waiting');
-  assert.deepEqual([h.refresh(6 * MIN).request?.status, h.refresh(6 * MIN).request?.finishedAt], ['no_result', T + 6 * MIN]);
+  // Joined two minutes in, the wait ends seven minutes in; the command kept duty for five.
+  h.request(2 * MIN);
+  const joined = h.refresh(2 * MIN).request!;
+  assert.deepEqual([joined.status, joined.dispatchAt, joined.deadline], ['waiting', T + MIN, T + 7 * MIN]);
+  assert.equal(h.refresh(6 * MIN + 1).unavailable, 'no_device', 'the lease has lapsed');
+  assert.equal(h.refresh(7 * MIN - 1).request?.status, 'waiting');
+  assert.deepEqual([h.refresh(7 * MIN).request?.status, h.refresh(7 * MIN).request?.finishedAt], ['no_result', T + 7 * MIN]);
 });
 
-for (const [at, joins] of [[3 * MIN, true], [3 * MIN + 1, false]] as const)
-  test(`a request ${joins ? 'joins a command still under way' : 'after a command given up waits for its retry'}`, t => {
+for (const joins of [true, false])
+  test(`a request ${joins ? 'joins a command its holder has not asked past' : 'after a command its holder asked past waits for its retry'}`, t => {
     const h = hub(t);
     h.ask(0);
     h.deliver(0);
     assert.equal(h.ask(2 * MIN).measure, true);
+    // Asking again with nothing delivered: the command was lost.
+    if (!joins) assert.equal(h.ask(135_000).measure, false);
+    const at = 3 * MIN;
     h.request(at);
     const request = h.refresh(at).request!;
     assert.equal(request.status, joins ? 'waiting' : 'queued');
@@ -490,6 +525,83 @@ for (const [at, joins] of [[3 * MIN, true], [3 * MIN + 1, false]] as const)
     h.deliver(211_000, {observed: 130_000});
     assert.equal(h.refresh(211_000).request?.status, joins ? 'updated' : 'waiting');
   });
+
+test('a request joins a command for as long as its holder measures, however many providers come first', t => {
+  const h = hub(t);
+  const subscriptions = (['claude', 'codex', 'antigravity'] as const).map((provider, i) => ({provider, account: ['a', 'b', 'c'][i].repeat(24), active: false}));
+  const snapshot = (i: number, at: number) => ({...subscriptions[i], observedAt: iso(at), via: 'stand-in', staleAfterMs: 204_000, windows: [{id: 'weekly', kind: 'weekly', usedPercent: 95}]});
+  const deliver = (i: number, at: number) => h.ingest.accept(h.credential, {...h.agent('laptop'), sentAt: iso(at), snapshots: [snapshot(i, at)], failures: []}, at);
+  h.ingest.accept(h.credential, {...h.agent('laptop'), sentAt: iso(T), snapshots: [0, 1, 2].map(i => snapshot(i, T)), failures: []}, T);
+  h.ingest.checkin(h.credential, {...h.agent('laptop'), paced: true, subscriptions}, T);
+  // The hub's own pace asks for all three at once; the agent measures them one by one.
+  assert.ok(h.ingest.checkin(h.credential, {...h.agent('laptop'), paced: true, subscriptions}, T + MIN).subscriptions.every(s => s.measure));
+  deliver(0, T + 110_000);
+  const source = h.store.findSource('antigravity', 'c'.repeat(24))!;
+  assert.equal(h.ingest.requestRefresh(source, T + 125_000).status, 'accepted');
+  const joined = h.ingest.refresh(source, T + 125_000).value.request;
+  assert.deepEqual([joined?.status, joined?.dispatchAt], ['waiting', T + MIN], 'a minute later its command is still under way');
+  deliver(1, T + 160_000);
+  deliver(2, T + 210_000);
+  assert.equal(h.ingest.refresh(source, T + 210_000).value.request?.status, 'updated');
+});
+
+test('another machine of the subscription does not take duty while the holder measures what it was told to', t => {
+  const h = hub(t);
+  h.ask(0);
+  h.deliver(0, {used: 95, stale: 204_000});
+  // The desk is told to come back when the laptop's measurement goes stale.
+  assert.deepEqual([h.ask(1_000, MIN, 'desk').measure, h.ask(1_000, MIN, 'desk').askInMs], [false, 203_000]);
+  h.request(10_000);
+  assert.equal(h.ask(MIN).measure, true);
+  const desk = h.ask(204_000, MIN, 'desk');
+  assert.deepEqual([desk.measure, desk.onDuty], [false, false], 'no second measurement of the same subscription');
+  assert.equal(h.duty.holder(ACCOUNT), h.device());
+  h.deliver(210_000, {used: 95, stale: 204_000});
+  assert.equal(h.refresh(210_000).request?.status, 'updated');
+});
+
+test('a request waiting for the retry of a lost command outlives the holder\'s lease while it keeps asking', t => {
+  const h = hub(t);
+  h.ask(0);
+  h.deliver(0, {stale: 132_000});
+  // Commands at 1, 3, 5 and 9 minutes go unanswered; the next retry comes 8 minutes after the last.
+  for (let at = MIN; at <= 10 * MIN; at += MIN) h.ask(at);
+  h.request(10 * MIN + 10_000);
+  const queued = h.refresh(10 * MIN + 10_000).request!;
+  assert.deepEqual([queued.status, queued.notBefore], ['queued', T + 17 * MIN]);
+  for (let at = 11 * MIN; at < 17 * MIN; at += MIN) assert.equal(h.ask(at).measure, false);
+  assert.equal(h.refresh(16 * MIN).request?.status, 'queued', 'its lease ran out at 14 minutes; it asked on');
+  assert.equal(h.ask(17 * MIN).measure, true);
+  assert.equal(h.refresh(17 * MIN).request?.status, 'waiting');
+});
+
+test('duty handed over by a delivery or a legacy check-in ends the request at that moment', t => {
+  for (const legacy of [false, true]) {
+    const h = hub(t);
+    h.ask(0, 10 * MIN);
+    h.deliver(0, {stale: MIN});
+    h.ask(40_000, 10 * MIN);
+    h.request(50_000);
+    // The laptop's measurement went stale at a minute; another machine takes duty, with data too old to answer the request.
+    if (legacy) h.ask(61_000, MIN, 'other', false);
+    else h.deliver(61_000, {name: 'other', observed: 5_000});
+    assert.equal(h.duty.holder(ACCOUNT), h.device('other'));
+    const request = h.refresh(66_000).request;
+    assert.deepEqual([request?.status, request?.finishedAt], ['unavailable', T + 61_000]);
+  }
+});
+
+test('a device whose clock runs behind answers the request in the hub\'s time', t => {
+  for (const failure of [undefined, 'failed']) {
+    const h = hub(t);
+    h.ask(0);
+    h.deliver(0);
+    h.request(10_000);
+    h.ask(MIN);
+    h.deliver(MIN + 5_000, {skew: 10 * MIN, failure});
+    assert.equal(h.refresh(MIN + 5_000).request?.status, failure ? 'failed' : 'updated');
+  }
+});
 
 test('a lowered device minimum lets a queued request go at once instead of ending it in the past', t => {
   const h = hub(t);

@@ -102,6 +102,8 @@ export class Ingest {
         this.store.record(source, {...toMeasurement(snapshot), observedAt});
         result.accepted++;
         this.duty.delivered(account, device.id, observedAt, snapshot.staleAfterMs, now);
+        // A delivery can hand duty to its device: the request of the one before ends now, not when next read.
+        this.cadence.settleRefresh(account, this.refreshDuty(account), now);
         this.cadence.delivered(account, device.id, snapshot.windows, observedAt, snapshot.staleAfterMs, this.signals(source, account, now).inUse, now);
       }
 
@@ -112,7 +114,10 @@ export class Ingest {
         const key = this.cadence.measuredBy(device.id, failure.provider) ?? (source && this.store.account(source));
         if (key) {
           this.cadence.settleRefresh(key, this.refreshDuty(key), now);
-          if (this.cadence.failed(key, device.id, failure.error, at)) this.cadence.refreshResult(key, device.id, at, false, now);
+          if (this.cadence.failed(key, device.id, failure.error, at)) {
+            this.duty.failed(key, device.id, at);
+            this.cadence.refreshResult(key, device.id, at, false, now);
+          }
           this.cadence.settleRefresh(key, this.refreshDuty(key), now);
         }
         const paused = key && this.store.findSource(failure.provider, key);
@@ -168,6 +173,7 @@ export class Ingest {
         }
         const source = this.store.findSource(s.provider, key);
         const answer = this.cadence.answer(key, device.id, s.provider, now, s.minIntervalMs, this.signals(source, key, now));
+        if (answer.measure) this.duty.asked(key, device.id, now);
         return {provider: s.provider, ...answer, until: iso(now + answer.askInMs)};
       }),
     };

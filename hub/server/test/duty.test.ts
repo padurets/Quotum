@@ -36,6 +36,29 @@ test('duty sticks while the holder delivers, and passes on when it goes quiet', 
   assert.equal(duty.claim('acc', 'laptop', false, lease + MIN).measure, false, 'the old holder now waits');
 });
 
+test('a holder told to measure keeps duty while it does, until it answers', () => {
+  for (const answer of ['delivery', 'failure', 'old delivery'] as const) {
+    const duty = new Duty();
+    duty.claim('acc', 'laptop', false, t0);
+    duty.delivered('acc', 'laptop', t0, 132_000, t0);
+    duty.asked('acc', 'laptop', t0 + MIN);
+    assert.equal(duty.until('acc'), t0 + 6 * MIN, 'five minutes after the command, past its measurement going stale');
+    assert.equal(duty.claim('acc', 'server', false, t0 + 3 * MIN).measure, false, 'no one takes over halfway');
+    const at = t0 + 3 * MIN;
+    if (answer === 'delivery') duty.delivered('acc', 'laptop', at, 132_000, at);
+    else if (answer === 'failure') duty.failed('acc', 'laptop', at);
+    // A measurement taken before the command, sent late, does not answer it.
+    else duty.delivered('acc', 'laptop', t0 + 20_000, 132_000, at);
+    const kept = answer === 'old delivery' ? t0 + 6 * MIN : answer === 'delivery' ? at + 132_000 : t0 + 132_000;
+    assert.equal(duty.until('acc'), kept);
+  }
+  // Only the holder is told: another device asking does not move the lease.
+  const duty = new Duty();
+  duty.claim('acc', 'laptop', false, t0);
+  duty.asked('acc', 'server', t0 + MIN);
+  assert.equal(duty.until('acc'), t0 + 5 * MIN);
+});
+
 test('a device in use takes duty from an idle holder, never from a busy one', () => {
   const duty = new Duty();
   duty.claim('acc', 'server', true, t0);

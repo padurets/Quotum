@@ -125,12 +125,10 @@ export class Cadence {
     const changes: number[] = [];
     if (request && pending(request)) {
       const ends: {at: number; status: 'unavailable' | 'no_result'}[] = [{at: request.deadline, status: 'no_result'}];
-      // Once told to measure, a holder measures its subscriptions one after another, neither
-      // asking nor delivering the others meanwhile: a lapsed lease or silence is not a loss then.
-      if (request.dispatchAt === null) {
-        if (duty.until !== null) ends.push({at: duty.until, status: 'unavailable'});
-        if (silentAt !== null) ends.push({at: silentAt, status: 'unavailable'});
-      }
+      // A holder that asks keeps duty or takes it again, whatever its lease: only its silence
+      // tells it is gone. Once told to measure, it measures its subscriptions one after
+      // another, asking nothing meanwhile: its silence is not a loss then either.
+      if (request.dispatchAt === null && silentAt !== null) ends.push({at: silentAt, status: 'unavailable'});
       if (duty.holder !== stored!.device || !duty.live || !capability?.paced || pause !== null) ends.push({at: now, status: 'unavailable'});
       ends.sort((a, b) => a.at - b.at);
       const end = ends[0];
@@ -165,8 +163,9 @@ export class Cadence {
     const pace = this.paces.get(key);
     const device = duty.holder!;
     const capability = this.capabilities.get(key)!.get(device)!;
-    // Only a command still under way can bring the data; one given up waits for its retry.
-    const dispatchAt = pace?.askedDevice === device && !pace.answered && pace.askedAt !== null && now - pace.askedAt <= MEASURING_MS ? pace.askedAt : null;
+    // A command is under way until its holder asks again: it asks nothing while it measures.
+    // Asking with no answer given means the command was lost, and the request waits for its retry.
+    const dispatchAt = pace?.askedDevice === device && !pace.answered && pace.askedAt !== null && capability.at <= pace.askedAt ? pace.askedAt : null;
     const notBefore = this.notBefore(pace, capability.minIntervalMs, now);
     this.requests.set(key, {
       device,
