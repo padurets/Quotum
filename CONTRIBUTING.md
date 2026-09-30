@@ -129,7 +129,9 @@ renders and changes nothing but what shows time (and that no more than it reads
 otherwise), and spends a fifth of the script it did before it was driven by events;
 then twenty measurements of one card all show on it, 19 of them within a second,
 rendering no other card nor the header (what shows time there, only as its clock would).
-It prints what it measured as JSON and exits 1 over budget. It needs Chrome:
+After the readings, it also checks that consecutive frequency saves with the native
+arrow keys keep focus in the card's menu. It prints the readings as JSON and exits 1
+over budget or on a failed keyboard check. It needs Chrome:
 `QUOTUM_CHROME`, `google-chrome` or `chromium` on `PATH`, or `--cdp http://host:port` to
 one already running. CI runs it on every push; run it yourself when you change the
 dashboard and have Chrome.

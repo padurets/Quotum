@@ -271,7 +271,7 @@ function Frequency({source, board}: {source: Card; board: string}) {
           <Segmented
             label={t('frequency.title')}
             radioName={`frequency-${source.id}`}
-            disabled={!connected || pending}
+            disabled={!connected}
             busy={pending}
             value={selected}
             onChange={key => void save(MEASURE_INTERVAL[key])}
