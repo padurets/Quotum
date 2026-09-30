@@ -130,9 +130,14 @@ const SHAPES = {
   day: {day: 'numeric', month: 'long'},
 } satisfies Record<string, Intl.DateTimeFormatOptions>;
 const dates = new Map<string, Intl.DateTimeFormat>();
-/** Half a year apart: the system's offsets at both tell its time zone for a fraction of what naming it costs. */
-const JANUARY = Date.UTC(2026, 0, 15);
-const JULY = Date.UTC(2026, 6, 15);
+/** The system's time zone as last named: naming it costs as much as making a formatter, so it is named again a second later at the soonest. */
+let zone = {name: '', at: -Infinity};
+
+function timeZone() {
+  const now = Date.now();
+  if (now - zone.at >= 1000 || now < zone.at) zone = {name: new Intl.DateTimeFormat().resolvedOptions().timeZone, at: now};
+  return zone.name;
+}
 
 /**
  * The formatter of a shape of time, kept for each language, time zone and shape: making
@@ -142,7 +147,7 @@ const JULY = Date.UTC(2026, 6, 15);
  */
 function formatter(shape: keyof typeof SHAPES) {
   const locale = formatLocale();
-  const key = `${locale}/${new Date(JANUARY).getTimezoneOffset()}/${new Date(JULY).getTimezoneOffset()}/${shape}`;
+  const key = `${locale}/${timeZone()}/${shape}`;
   let kept = dates.get(key);
   if (!kept) dates.set(key, (kept = new Intl.DateTimeFormat(locale, SHAPES[shape])));
   return kept;
