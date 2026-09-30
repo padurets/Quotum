@@ -295,10 +295,11 @@ window (whether it ran out, the moment and the share it said, whether it said "l
 and when), no names and nothing of people, as long as samples.
 
 In local mode, so that the app tells of a limit once in each cycle of a window, a restart
-included, the hub keeps on disk for each window its last sample (what is left and used,
-the reset time, its kind, label and length, when it was measured), which of its
-thresholds it has told, and its cycle, until the source is removed; and for each provider
-the links of the scheduled resets it has told of, up to 64. Nothing of people.
+included, the hub keeps on disk for each window its cycle, which of its thresholds it has
+reached in it, and its last sample (what is left and used, the reset time, its kind, label
+and length, when it was measured), with no end: the hub forgets no source it has measured.
+For each provider it keeps when the latest scheduled reset it has learned of was
+announced, and the links announced then, up to 64. Nothing of people.
 
 ## Desktop attention stream
 
