@@ -170,10 +170,7 @@ export class Ingest {
       subscriptions: request.subscriptions.map(s => {
         const key = subscriptionKey(s, device.userId);
         const source = this.store.findSource(s.provider, key);
-        if (source && this.store.measureInterval(source) !== null) {
-          const state = this.store.state(source);
-          if (state.successAt !== null && state.staleAfterMs !== null) this.cadence.restore(key, state.successAt, state.staleAfterMs, state.windows, now);
-        }
+        this.restoreFixed(source, key, now);
         this.cadence.settleRefresh(key, this.refreshDuty(key), now);
         this.cadence.capability(key, device.id, request.paced, s.minIntervalMs, now);
         this.protect(source, key, now);
@@ -246,14 +243,23 @@ export class Ingest {
 
   /** Frequency writes update duty synchronously before any reader or competing check-in can see them. */
   frequencyChanged(source: string, now: number) {
-    this.protect(source, this.store.account(source)!, now);
+    const key = this.store.account(source)!;
+    this.restoreFixed(source, key, now);
+    this.protect(source, key, now);
     tell(this.observer, o => o.touchSources([source]));
   }
 
   private protect(source: string | null, key: string, now: number) {
     const holder = this.duty.holder(key);
     if (holder === null) return;
-    this.duty.schedule(key, this.directory.deviceLive(holder) ? this.cadence.waitingLease(key, holder, now, this.signals(source, key, now)) : null);
+    const plan = this.directory.deviceLive(holder) ? this.cadence.waitingLease(key, holder, now, this.signals(source, key, now)) : null;
+    this.duty.schedule(key, plan == null ? plan : plan.until, plan?.extend);
+  }
+
+  private restoreFixed(source: string | null, key: string, now: number) {
+    if (source === null || this.store.measureInterval(source) === null) return;
+    const state = this.store.state(source);
+    if (state.successAt !== null && state.staleAfterMs !== null) this.cadence.restore(key, state.successAt, state.staleAfterMs, state.windows, now);
   }
 
   /** What the hub knows of a subscription now: its windows, and whether it is in use on any machine. */

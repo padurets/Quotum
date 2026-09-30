@@ -206,9 +206,9 @@ its last measurement and bounded waiting protection expire, however often it ask
 pace (below) that is told `measure: true` also keeps duty while it measures, since it
 asks nothing while it measures its providers one by one: until it delivers, reports a
 failure for it or asks again, for at most five minutes; meanwhile no other device takes
-duty, not even one where someone is working. A waiting device is told to come back, at
-the latest, when the holder's last measurement goes stale or, once that has passed
-while it measures, when the five minutes end. A holder that asks again without
+duty, not even one where someone is working. A waiting device is told to come back by
+the expiry of both the holder's last measurement and its bounded waiting protection,
+or, once those have passed while it measures, when the five minutes end. A holder that asks again without
 answering keeps duty no longer than that, and until it answers the last command,
 however late, being told `measure: true` keeps it none. Errors are as for ingest
 (`400 invalid_request`, `401`, `403`). An agent that cannot reach the hub, or gets any
@@ -270,6 +270,9 @@ that plan plus one minute for check-in, independently of the snapshot's freshnes
 plan is anchored to successful data, never to the latest question or an unanswered retry.
 Issuing a command removes that waiting protection; the existing execution protection
 then applies. An unanswered holder cannot renew an expired lease by asking first.
+Expired data that do not answer its outstanding command grant no new arrival-time
+lease either; still-representative data keep their own snapshot lease. A changed plan
+may shorten a silent holder's existing waiting protection, but cannot extend it.
 
 The subscription's hub setting is Auto (the policy above) or a fixed interval of 1, 2,
 5 or 15 minutes. A fixed ordinary plan follows the last accepted successful measurement,

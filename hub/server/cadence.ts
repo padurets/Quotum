@@ -255,21 +255,21 @@ export class Cadence {
 
   /** Fixed schedules survive restart through the accepted data, without simulating a delivery. */
   restore(key: string, at: number, staleAfterMs: number, windows: Win[], now: number) {
-    if (this.paces.has(key)) return;
     const pace = this.pace(key, now);
+    if (pace.lastAt !== null) return;
     pace.lastAt = at;
     pace.promiseAt = at + Math.ceil(Math.max(MIN_INTERVAL_MS, (staleAfterMs - 60_000) / 1.2));
     pace.signature = signatureOf(windows.map(w => ({id: w.id, usedPercent: w.used})));
   }
 
   /** A waiting plan protects duty until a fixed due time, never from the time of a read or retry. */
-  waitingLease(key: string, holder: string, now: number, signals: Signals): number | null | undefined {
+  waitingLease(key: string, holder: string, now: number, signals: Signals): {until: number; extend: boolean} | null | undefined {
     const pace = this.paces.get(key);
     const capability = this.capabilities.get(key)?.get(holder);
     if (!capability?.paced || this.pausedUntil(key, holder, now) !== null ||
         (pace?.askedDevice === holder && pace.askedAt !== null && !pace.answered)) return null;
-    if (!pace || pace.lastAt === null || pace.plannerDevice !== holder || now - capability.heardAt > SILENT_AFTER_MS) return undefined;
-    return this.ordinary(pace, now, signals, floorOf(capability.minIntervalMs)).at + MIN_INTERVAL_MS;
+    if (!pace || pace.lastAt === null || pace.plannerDevice !== holder) return undefined;
+    return {until: this.ordinary(pace, now, signals, floorOf(capability.minIntervalMs)).at + MIN_INTERVAL_MS, extend: now - capability.heardAt <= SILENT_AFTER_MS};
   }
 
   /** A measurement of subscription `key` was accepted; `busy` is whether it is in use as it arrives. */
@@ -397,14 +397,15 @@ export class Cadence {
   /** When `device` should measure next. */
   private plan(pace: Pace, key: string, device: string, now: number, signals: Signals, floor: number): {at: number; why: Why | 'first'; interval: number} {
     const ordinary = this.ordinary(pace, now, signals, floor);
-    let at = pace.askedAt !== null && !pace.answered ? retryAt(pace, floor) : ordinary.at;
+    const unanswered = pace.askedAt !== null && !pace.answered;
+    let at = unanswered ? retryAt(pace, floor) : ordinary.at;
     const request = this.requests.get(key);
     if (request && pending(request.view) && request.device === device && request.view.dispatchAt === null && request.view.deadline > now)
       at = Math.min(at, request.view.notBefore);
     at = Math.max(at, this.notBefore(pace, floor, -Infinity));
     const paused = this.pausedUntil(key, device, now);
     if (paused !== null) at = Math.max(at, paused);
-    return {...ordinary, at};
+    return {...ordinary, at, why: unanswered ? this.interval(pace, now, signals, floor).why : ordinary.why};
   }
 
   /** The ordinary due time, without refresh, failure pauses or unanswered-command retries. */

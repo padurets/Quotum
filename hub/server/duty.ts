@@ -84,10 +84,11 @@ export class Duty {
     if (holder?.device === device) this.holders.set(subscription, {...holder, askedAt: now, scheduledUntil: null});
   }
 
-  /** A healthy paced holder waits for this anchored plan; undefined preserves an earlier bounded grant. */
-  schedule(subscription: string, until: number | null | undefined) {
+  /** A silent holder may lose waiting protection when its plan shortens, but cannot receive more. */
+  schedule(subscription: string, until: number | null | undefined, extend = true) {
     const holder = this.holders.get(subscription);
-    if (holder && until !== undefined) holder.scheduledUntil = until;
+    if (!holder || until === undefined) return;
+    holder.scheduledUntil = extend || until === null ? until : holder.scheduledUntil == null ? null : Math.min(holder.scheduledUntil, until);
   }
 
   /** The holder failed to measure: done measuring, it keeps duty only as long as its last measurement. */
@@ -105,7 +106,10 @@ export class Duty {
     // An older measurement, sent late, does not answer what the holder is measuring now.
     const late = mine && !answers(holder, observedAt);
     const [askedAt, answering] = late ? [holder.askedAt, holder.answering] : [null, true];
-    this.holders.set(subscription, {device, until: Math.max(observedAt + staleAfterMs, now + 30_000), activeAt, askedAt, answering});
+    // Expired backlog that leaves a command unanswered is no new sign of a working measurer.
+    const staleAt = observedAt + staleAfterMs;
+    const until = late && holder.askedAt !== null && staleAt <= now ? Math.max(holder.until, staleAt) : Math.max(staleAt, now + 30_000);
+    this.holders.set(subscription, {device, until, activeAt, askedAt, answering});
   }
 
   holder(subscription: string): string | null {

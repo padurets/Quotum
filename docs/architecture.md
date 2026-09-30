@@ -218,7 +218,9 @@ from what it sees of the subscription everywhere, which no single machine does:
   Ingest installs it in Duty on a delivery, holder check-in or actual frequency change,
   and before a competing claim. Reads cannot extend it. Pauses and unanswered commands
   get no waiting protection; retrying cannot renew an expired lease. A silent holder
-  cannot receive a later protection just from a setting write.
+  cannot receive a later protection just from a setting write, but a shorter plan cuts
+  its existing protection. Expired backlog that leaves a command unanswered gives no
+  new arrival-time lease; representative snapshots still keep their own lease.
 
 **Measuring frequency.** `sources.measure_interval_ms` stores one nullable preference
 per subscription: Auto or 1, 2, 5 or 15 minutes. It is outside the board's View and the

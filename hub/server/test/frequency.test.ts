@@ -278,3 +278,80 @@ test('Auto cold start preserves its ordinary first promise even with stored low 
   const command = restarted.checkin(h.credential, {...h.agent('laptop'), paced: true, subscriptions: [{provider: 'codex', account: ACCOUNT, active: true}]}, T + MIN).subscriptions[0];
   assert.deepEqual([command.measure, command.nextInMs], [true, 4 * MIN]);
 });
+
+test('expired backlog cannot renew an unanswered holder, while representative data and a current answer can', t => {
+  for (const kind of ['expired', 'representative', 'current'] as const) {
+    const h = hub(t);
+    h.ask(0);
+    h.deliver(0);
+    h.frequency(900_000);
+    h.ask(15 * MIN);
+    h.ask(15 * MIN + 15_000);
+    h.ask(21 * MIN);
+    const before = h.duty.until(ACCOUNT);
+    assert.equal(before, T + 20 * MIN);
+    const result = h.deliver(21 * MIN, {observed: kind === 'current' ? 21 * MIN : MIN, stale: kind === 'representative' ? 24 * MIN : 132_000});
+    assert.equal(result.accepted, 1, 'backlog is still accepted into state and history');
+    assert.equal(h.store.state(h.source()).successAt, T + (kind === 'current' ? 21 * MIN : MIN));
+    if (kind === 'expired') {
+      assert.equal(h.duty.until(ACCOUNT), before, 'expired non-answer grants no new thirty-second lease');
+      assert.equal(h.ingest.refresh(h.source(), T + 21 * MIN).value.unavailable, 'no_device');
+      assert.equal(h.ask(21 * MIN + 1, MIN, 'desk').onDuty, true);
+    } else {
+      assert.ok(h.duty.until(ACCOUNT)! > T + 21 * MIN);
+      assert.equal(h.ask(21 * MIN + 1, MIN, 'desk').onDuty, false);
+    }
+  }
+});
+
+test('a fixed preference after Auto cold start hydrates stored success without replacing the in-flight command', t => {
+  for (const handover of [false, true]) {
+    const h = hub(t);
+    h.deliver(0);
+    const restarted = new Ingest(h.store, h.directory, new Duty(), new Cadence());
+    const ask = (at: number, name = 'laptop', active = false) => restarted.checkin(h.credential, {...h.agent(name), paced: true, subscriptions: [{provider: 'codex', account: ACCOUNT, active}]}, T + at).subscriptions[0];
+    assert.equal(ask(2 * MIN).measure, true);
+    h.store.setMeasureInterval(h.source(), 900_000);
+    restarted.frequencyChanged(h.source(), T + 2 * MIN + 15_000);
+    assert.equal(ask(2 * MIN + 15_000).measure, false, 'the boot command is still outstanding');
+    restarted.accept(h.credential, {...h.agent('laptop'), sentAt: iso(2 * MIN + 30_000), snapshots: [], failures: [{provider: 'codex', observedAt: iso(2 * MIN + 30_000), error: 'timeout'}]}, T + 2 * MIN + 30_000);
+    if (handover) {
+      const result = ask(8 * MIN, 'desk', true);
+      assert.deepEqual([result.onDuty, result.measure], [true, false]);
+      assert.deepEqual(restarted.nextMeasurement(h.source(), ACCOUNT, T + 8 * MIN).value, {next: T + 15 * MIN, why: 'fixed'});
+    } else {
+      for (let at = 2 * MIN + 45_000; at < 15 * MIN; at += 15_000) ask(at);
+      assert.equal(ask(15 * MIN).measure, true, 'due from stored success, not the boot command');
+    }
+    assert.equal(h.store.state(h.source()).successAt, T, 'hydration does not record a delivery');
+  }
+});
+
+test('a silent holder loses longer waiting protection when frequency shortens, but cannot receive a longer grant', t => {
+  for (const next of [MIN, null] as const) {
+    const h = hub(t);
+    h.ask(0);
+    h.deliver(0);
+    h.frequency(900_000);
+    assert.equal(h.duty.until(ACCOUNT), T + 16 * MIN);
+    h.frequency(next, 3 * MIN);
+    assert.equal(h.duty.until(ACCOUNT), T + 348_000, 'only the unchanged snapshot lease remains');
+    assert.equal(h.ask(6 * MIN, MIN, 'desk').onDuty, true);
+  }
+  const h = hub(t);
+  h.ask(0);
+  h.deliver(0);
+  h.frequency(MIN);
+  const before = h.duty.until(ACCOUNT);
+  h.frequency(900_000, 3 * MIN);
+  assert.equal(h.duty.until(ACCOUNT), before, 'a setting write is not a heartbeat');
+});
+
+test('an unanswered Auto retry keeps its interval reason, rather than claiming it follows a reset long ago', () => {
+  const cadence = new Cadence();
+  const signals = {inUse: false, windows: [{id: 'weekly', kind: 'weekly' as const, label: null, used: 50, remaining: 50, resetAt: T + MIN, minutes: null}]};
+  cadence.answer(ACCOUNT, 'laptop', 'codex', T, MIN, signals);
+  cadence.delivered(ACCOUNT, 'laptop', [{id: 'weekly', usedPercent: 50}], T, 3_600_000, false, T);
+  for (let at = 15_000; at <= 16 * MIN + 15_000; at += 15_000) cadence.answer(ACCOUNT, 'laptop', 'codex', T + at, MIN, signals);
+  assert.deepEqual(cadence.view(ACCOUNT, 'laptop', T + 16 * MIN + 15_000, signals), {next: T + 17 * MIN, why: 'idle'});
+});
