@@ -21,8 +21,8 @@ use windows_sys::Win32::{
         },
         Credentials::{CREDENTIALW, CredEnumerateW, CredFree},
         DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetTokenInformation, INHERIT_ONLY_ACE, IsWellKnownSid,
-        OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
-        TokenUser, WinBuiltinAdministratorsSid, WinLocalSystemSid,
+        LookupAccountNameW, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, TOKEN_QUERY,
+        TOKEN_USER, TokenUser, WinBuiltinAdministratorsSid, WinLocalSystemSid,
     },
     Storage::FileSystem::{
         CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
@@ -163,6 +163,48 @@ fn trusted(sid: PSID, user: &User) -> bool {
                 || IsWellKnownSid(sid, WinLocalSystemSid) != 0
         }
 }
+fn trusted_ancestor(sid: PSID, user: &User) -> bool {
+    if sid.is_null() {
+        return false;
+    }
+    if trusted(sid, user) {
+        return true;
+    }
+    // Windows owns parts of the system drive as this privileged servicing account.
+    // It may own an ancestor, but never broadens access to our private namespace.
+    let account: Vec<u16> = "NT SERVICE\\TrustedInstaller\0".encode_utf16().collect();
+    let mut sid_size = 0;
+    let mut domain_size = 0;
+    let mut kind = 0;
+    unsafe {
+        LookupAccountNameW(
+            null(),
+            account.as_ptr(),
+            null_mut(),
+            &mut sid_size,
+            null_mut(),
+            &mut domain_size,
+            &mut kind,
+        );
+    }
+    if sid_size == 0 || sid_size > 1024 || domain_size > 1024 {
+        return false;
+    }
+    let mut buffer = vec![0usize; (sid_size as usize).div_ceil(std::mem::size_of::<usize>())];
+    let mut domain = vec![0u16; domain_size as usize];
+    unsafe {
+        LookupAccountNameW(
+            null(),
+            account.as_ptr(),
+            buffer.as_mut_ptr().cast(),
+            &mut sid_size,
+            domain.as_mut_ptr(),
+            &mut domain_size,
+            &mut kind,
+        ) != 0
+            && EqualSid(sid, buffer.as_mut_ptr().cast()) != 0
+    }
+}
 fn check_handle(file: &File, private: bool) -> Result<(), ErrorCode> {
     if file.metadata().map_err(|_| ErrorCode::UnsafePath)?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
         return Err(ErrorCode::UnsafePath);
@@ -187,7 +229,8 @@ fn check_handle(file: &File, private: bool) -> Result<(), ErrorCode> {
         return Err(ErrorCode::UnsafePath);
     }
     let _descriptor = Descriptor(sd);
-    if acl.is_null() || !trusted(owner, &user) {
+    let allowed_principal = |sid| if private { trusted(sid, &user) } else { trusted_ancestor(sid, &user) };
+    if acl.is_null() || !allowed_principal(owner) {
         return Err(ErrorCode::UnsafePath);
     }
     // Ancestors may allow creating a new child, but never replacing a protected one.
@@ -209,7 +252,7 @@ fn check_handle(file: &File, private: bool) -> Result<(), ErrorCode> {
             return Err(ErrorCode::UnsafePath);
         }
         let sid = (&allowed.SidStart as *const u32).cast_mut().cast();
-        if allowed.Mask & forbidden != 0 && !trusted(sid, &user) {
+        if allowed.Mask & forbidden != 0 && !allowed_principal(sid) {
             return Err(ErrorCode::UnsafePath);
         }
     }
@@ -293,7 +336,20 @@ mod tests {
     fn native_files_have_private_acl_reject_public_reads_and_junctions() {
         let parent = std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap());
         let root = parent.join(format!("quotum-key-test-{}-{}", std::process::id(), getrandom::u64().unwrap()));
-        private_directory(&root).unwrap();
+        private_directory(&root).unwrap_or_else(|code| {
+            // This runs before the test has generated or read any key.
+            for ancestor in root.parent().unwrap().ancestors() {
+                let _ = Command::new("powershell")
+                    .args([
+                        "-NoProfile",
+                        "-Command",
+                        "Get-Acl -LiteralPath $env:QUOTUM_TEST_PATH_DIAGNOSTIC | Format-List Path,Owner,AccessToString",
+                    ])
+                    .env("QUOTUM_TEST_PATH_DIAGNOSTIC", ancestor)
+                    .status();
+            }
+            panic!("private test directory refused: {code:?}");
+        });
         let app = root.join("app");
         private_directory(&app).unwrap();
         let files = Files::new(&app).unwrap();

@@ -123,7 +123,9 @@ the same Local credential must be readable before the app starts. Run it with
 
 For the noninteractive case, use Task Scheduler under the same test user with
 *Run whether user is logged on or not*, and run the helper with `-VerifyOnly`, then
-`-Hidden`. Keep the task's result and safe report. When that logon can access the
+`-Hidden`. Pass `-Work` with the exact profile path from `key-report.json`; do not
+depend on that logon's default environment selecting the same app-data path. Keep
+the task's result and safe report. When that logon can access the
 user's credential store, expect the same target. If it cannot, expect waiting and
 preserved data, with no replacement key or implicit reset. Hidden startup in an
 interactive session is a separate case, not proof of a noninteractive logon. Remove

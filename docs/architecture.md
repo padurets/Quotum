@@ -975,7 +975,9 @@ namespace; it never enumerates all of a person's credentials. A private-file fal
 lives in the sibling namespace, outside the hub's data. Directories and files are
 checked for ownership, permissions and symlinks or reparse points through native
 handles. Linux directories are 0700 and files 0600; Windows permits only the current
-user, SYSTEM and Administrators. A writable default collection is required before
+user, SYSTEM and Administrators in the private namespace. Its system-drive ancestors
+may also be owned by Windows' privileged TrustedInstaller service. A writable default
+collection is required before
 creating a Linux store key. A locked collection or an incomplete search means waiting.
 
 The namespace's `marker.json` records current, staged next and previous key references,
