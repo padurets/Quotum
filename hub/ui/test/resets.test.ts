@@ -132,6 +132,8 @@ test('an exact time names its month in a word, with no dots, commas or seconds',
       setLocale('en');
       assert.equal(stamp(at), '26 September 21:24');
     });
+    // The browser's own variant of the language, whichever was read before.
+    preferring(['en-US'], () => assert.equal(stamp(at), 'September 26 09:24 PM'));
   } finally {
     setLocale('en');
   }

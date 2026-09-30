@@ -124,13 +124,33 @@ export function ago(time: number | null, now: number) {
   return t('time.daysAgo', {n: Math.floor(seconds / 86_400)});
 }
 
-export const clock = (time: number) => new Date(time).toLocaleTimeString(formatLocale(), {hour: '2-digit', minute: '2-digit'});
+const SHAPES = {
+  clock: {hour: '2-digit', minute: '2-digit'},
+  shortDay: {day: 'numeric', month: 'short'},
+  day: {day: 'numeric', month: 'long'},
+} satisfies Record<string, Intl.DateTimeFormatOptions>;
+const dates = new Map<string, Intl.DateTimeFormat>();
+
+/**
+ * A time in one of its shapes, as `toLocaleDateString` gives it, with a formatter kept for
+ * each language and shape: making one costs as much as twenty uses, and an idle board
+ * says when a great many times.
+ */
+function dated(shape: keyof typeof SHAPES, time: number) {
+  const locale = formatLocale();
+  const key = `${locale}/${shape}`;
+  let formatter = dates.get(key);
+  if (!formatter) dates.set(key, (formatter = new Intl.DateTimeFormat(locale, SHAPES[shape])));
+  return formatter.format(time);
+}
+
+export const clock = (time: number) => dated('clock', time);
 
 /** "22 Sept": the scale along a chart's axis, which has little room; saying when is `stamp`. */
-export const shortDay = (time: number) => new Date(time).toLocaleDateString(formatLocale(), {day: 'numeric', month: 'short'});
+export const shortDay = (time: number) => dated('shortDay', time);
 
 /** "26 September": the day, its month in a word. */
-export const day = (time: number) => new Date(time).toLocaleDateString(formatLocale(), {day: 'numeric', month: 'long'});
+export const day = (time: number) => dated('day', time);
 
 /**
  * "26 September 14:00": the one way the board says when, with no dots or commas between
