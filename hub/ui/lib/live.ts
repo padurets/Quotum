@@ -456,6 +456,7 @@ export class Live {
 
   /** What `hello` says: the hub's clock, its heartbeat, and whether this page is of the build it serves. */
   private greeted(hello: Hello) {
+    this.env.dispatch({type: 'hub', event: {type: 'hello', data: {epoch: hello.epoch}}});
     this.heartbeatMs = hello.heartbeatMs;
     this.env.heard(hello.now);
     if (!hello.client || !this.env.script || hello.client === this.env.script) return;

@@ -1,3 +1,6 @@
+import {cellsOf} from '../domain/cells.js';
+import {decodeCells} from '../domain/history.js';
+import {readHistory} from './historyRead.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtempSync} from 'node:fs';
@@ -9,7 +12,7 @@ import {Duty} from '../duty.js';
 import {Cadence} from '../cadence.js';
 import {Ingest, IngestError, type Credential} from '../ingest.js';
 import {Invalid, parseBatch, parseSessions} from '../domain/ingest.js';
-import {edge, onGrid, series, type Sample} from '../domain/quota.js';
+import {edge, type Sample} from '../domain/quota.js';
 import {newSecret} from '../domain/auth.js';
 
 const start = Date.parse('2026-09-22T12:00:00Z');
@@ -143,8 +146,8 @@ test('one account measured by several devices is one source', () => {
   const {store, ingest, board, token} = setup();
   ingest.accept(token, batch([snapshot(start, 5)], [], 'machine-one-0123456789'), start);
   ingest.accept(token, batch([snapshot(start + 120_000, 6)], [], 'machine-two-0123456789'), start + 120_000);
-  const [series] = store.history(board, start - 1, 60_000).series;
-  assert.deepEqual([store.states(board).length, series.samples, series.consumed], [1, 2, 1]);
+  const [series] = readHistory(store, board, start - 1, 60_000).series;
+  assert.deepEqual([store.states(board).length, series.points.length, series.consumed], [1, 2, 1]);
 });
 
 test('a subscription the client does not name is its person\'s, not the machine\'s', () => {
@@ -278,21 +281,22 @@ test('an agent-declared staleness keeps sparse measurements continuous', () => {
   // Eco mode: 15 minutes between measurements, announced by the agent.
   const eco = [sample(start, 10, 1_080_000), sample(start + 900_000, 12, 1_080_000)];
   assert.deepEqual(edge(eco[0], eco[1]), {valid: true, delta: 2, reason: 'continuous'});
-  assert.equal(series(eco).consumed, 2);
-  assert.deepEqual(onGrid(series(eco).points, 300_000).map(p => p.segment), [0, 0]);
+  const read = (samples: Sample[]) => {const chunk = cellsOf([{source: 's', window: 'w', samples}], [], {}, 300_000, start, start + 1_200_000, {work: 0, sources: {s: 0}})[0]; return decodeCells(chunk.series[0], chunk.from, 300_000, 0);};
+  assert.equal(read(eco).reduce((sum, cell) => sum + cell.spent, 0), 2);
+  assert.deepEqual(read(eco).map(c => c.gap), [false, false]);
   // Measured every two minutes: a quarter of an hour without a sample is a gap.
   const busy = [sample(start, 10, 204_000), sample(start + 900_000, 12, 204_000)];
   assert.equal(edge(busy[0], busy[1]).reason, 'gap');
-  assert.deepEqual(onGrid(series(busy).points, 300_000).map(p => p.segment), [0, 1]);
+  assert.deepEqual(read(busy).map(c => c.gap), [false, true]);
 });
 
 test('stored agent samples carry their staleness into history', () => {
   const {store, ingest, board, token} = setup();
   ingest.accept(token, batch([snapshot(start, 10, {staleAfterMs: 1_080_000})]), start);
   ingest.accept(token, batch([snapshot(start + 900_000, 12, {staleAfterMs: 1_080_000})]), start + 900_000);
-  const [history] = store.history(board, start - 1, 300_000).series;
+  const [history] = readHistory(store, board, start - 1, 300_000).series;
   assert.equal(history.consumed, 2);
-  assert.deepEqual(history.points.map(p => p[2]), [0, 0]);
+  assert.deepEqual(history.points.map(p => p[2]), [1, 1]);
 });
 
 

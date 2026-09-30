@@ -87,26 +87,7 @@ export type View = {
   shownColumns: Record<string, string[]>;
 };
 
-export type HistorySeries = {
-  sourceId: string;
-  provider: string;
-  windowId: string;
-  kind: Kind;
-  label: string | null;
-  minutes: number | null;
-  consumed: number;
-  coveredMs: number;
-  samples: number;
-  /** What was left at the first and the last measurement of the period. */
-  remainingAtStart: number | null;
-  remainingAtEnd: number | null;
-  /** How long its last value holds without a newer one before a gap begins. */
-  staleAfterMs: number;
-  /** [cell start, remaining percent, line segment] */
-  points: [number, number, number][];
-  /** How agents worked on its subscription meanwhile (null for a hidden card). */
-  work: SeriesWork | null;
-};
+export type {HistorySeries, History, SourceEvent} from '../../server/domain/history';
 
 /**
  * How agents worked on a window's subscription over a period, and what the window spent
@@ -144,30 +125,6 @@ export type Activity = {
   cells: [number, number, number, number][];
   by: Record<ActivityDimension, ActivityGroup[]>;
 };
-
-export type History = {
-  /** Set by the client: which board the history was read for. */
-  board?: string;
-  /** A period ending now ('1h' … '30d', lib/periods.ts), or `from-to` of a span selected on the chart. */
-  range: string;
-  now: number;
-  since: number;
-  /** Where the period ends: now for a range, the end of a span. */
-  to: number;
-  /** Width of the shared time grid every series is placed on. */
-  cellMs: number;
-  historyStart: number;
-  series: HistorySeries[];
-  events: SourceEvent[];
-  activity: Activity;
-  /** A newer answer is ready in this long: the board has newer data than a costly one, or work up to the end of a range is still to be credited. */
-  refreshInMs: number | null;
-};
-
-/** What happened to a source besides its values: limits back before their reset, or free resets granted. */
-export type SourceEvent =
-  | {sourceId: string; at: number; kind: 'early_reset'; windows: string[]}
-  | {sourceId: string; at: number; kind: 'resets_granted'; count: number};
 
 /** The last six hours ran `times` as fast as usual; at that pace the window runs out at `zero`. */
 export type Burst = {times: number; zero: number};

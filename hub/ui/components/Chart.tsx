@@ -528,7 +528,7 @@ export function Chart({
               );
             })}
             {lines.map((line, i) => (
-              <path key={line.key} d={paths[i].line} className="series" stroke={line.color} strokeDasharray={line.dash || undefined} />
+              <path key={line.key} d={paths[i].line} data-series={`${line.sourceId} ${line.windowId}`} data-last={line.points.filter(p => p[0] <= now).at(-1)?.slice(0, 2).join(':')} className="series" stroke={line.color} strokeDasharray={line.dash || undefined} />
             ))}
             {/* Announcements are read over the lines, each on its own backing. */}
             {announced.map(marker => {

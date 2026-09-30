@@ -375,34 +375,33 @@ them), kept for 90 days.
   Resets, corrections by the provider and gaps (a sample arriving later than the
   previous one promised) are excluded. An idle rolling window whose reset time drifts
   forward is not a reset.
-- **The chart** puts every series on one time grid and shows the lowest value seen in
-  each cell, so hovering reads every series at once and a short hiccup doesn't break a
-  line. It shows a period ending now, from an hour to 30 days (`config.history.ranges`),
-  or a time range in the past, dragged across it or stepped back to, from 15 minutes to
-  a month. Either gets the finest cell that keeps it within about 360 cells: a minute up
-  to 6 hours, 5 minutes for a day, 30 minutes for a week, 2 hours for a month (5% over is
-  allowed, so a day over a month keeps the month's grid), so a period moved back keeps
-  its grid. A range's edges go out to whole cells, so the chart and the table may cover
-  up to a cell beyond it, and ranges that differ by less than a cell share one answer. Where
-  measurements come less often than cells, hovering reads the last value before. Putting a month together takes a busy board a good part of a second, so
-  such an answer is reused for a quarter of its cell after the data changed, and says
-  when a newer one will be ready for the page to ask again. With agents' work read too,
-  most answers longer than a day are such, and measurements on the chart may lag up to a
-  quarter of a cell. An answer is reused only while the board shows the same sources and
-  the same people's work under the same names (`Store.workKey`: its sources, whose work
-  it shows from when, and the names people gave the projects and machines that worked on
-  them), so a card hidden, someone joining or leaving, a project or machine renamed is
-  never served from it, while a name given to a project or machine that never worked on
-  the board's subscriptions leaves it be. Work is credited from each machine's list, but an answer is read again when the
-  board's data changes: the work shown is as fresh as the latest measurement, every two
-  minutes while agents work. A machine's last list is credited with its next one or, the
-  machine gone quiet, five minutes on (`KEEP_MS`: when any machine reports or history is
-  read), so a range that ended sooner than that says when to ask again, is not kept on the
-  page, and is read anew then. The range is in the past, so the table reads it from its edges: what
-  was left at its first and last measurement, what it spent and how fast. The chart
-  begins where the history does, the same for every board: when the database was made,
-  or at the oldest sample it keeps when that is older (an agent's spool delivered to a new
-  hub brings its days along); a sample dated before the retention period moves nothing.
+- **The chart** puts every series on one time grid and shows the lowest remaining value
+  in each cell. The finest grid keeping a frame within about 360 cells is shared by hub
+  and page (`server/domain/history.ts`): a minute up to 6 hours, 5 minutes for a day,
+  30 minutes for a week, 2 hours for a month, with 5% over allowed. Periods from an hour
+  to 30 days belong to the page (`ui/lib/periods.ts`); a selected range is 15 minutes to
+  31 days. Both use whole cells, with a half-open right edge. Proven spending steps belong
+  to the cell of their later measurement; the value held at the first measured cell's
+  start and the last measurement give the table's edges. Cell totals are rounded to four
+  decimal places and added for a frame. Resets inside a cell void only their step.
+  The page keeps history as tiles of 60 cells aligned to the epoch, reading only missing
+  or changed cells through `GET /api/history`. The hub reads at most eight tiles at once,
+  in one pass through each measured window, including its preceding sample. Each cell
+  carries the point, its edges and break, spending and work, and per-session activity;
+  compact indexes and omitted defaults keep the answers small. Every window with samples
+  is included; the page selects current windows and gets their metadata from cards.
+  The chart, table and activity are composed on the page from the same cells. A whole
+  tile ending before now is cached on the hub, within 32 MiB. Every measurement and
+  credited work invalidates tiles it can affect, including an empty tile of that source;
+  a changed `Store.workKey` (lineup, work selection, project or machine names) recounts it.
+  Tiles near retention's edge are never cached. The page keeps packed buffers within an
+  estimated 15 MiB, protecting the frame on screen. Session references are opaque and
+  change with the hub's run, so answers cannot mix runs. A machine's list credits work
+  with its next list or after five minutes of silence (`KEEP_MS`, up to 200 seconds of
+  work); each credit tells history its actual start. The chart begins where the history
+  does, the same for every board: the database's creation or an older retained sample
+  delivered from an agent's spool. The dashboard protocol specifies the cells and privacy
+  in [Reading history](../spec/dashboard-v1.md#reading-history).
 - **The plan** is per source and belongs to the board's view: whole percents per day of the
   weekly window (30/25/15/15/10/5/0 by default). A day at 0 has no spending planned,
   wherever it is; the plan ends with its last non-zero day. Other windows are planned
@@ -627,17 +626,19 @@ time as the hub's messages tell it. The chart and agent activity move on a cell 
 history's grid at a time; a label past the chart's right edge counts down on its own, and
 a forecast's line goes at the moment the table says it runs out, or at the reset; in the
 table, the plan, where the pace leads and the active hours left each read otherwise at
-their own moment. History is read again when the hub tells of measurements
-the chart has not shown, at most every ten seconds for a period ending now, or that whose
-agents' work the board shows, or under which names, changed (`Store.workKey`: a card
-hidden, someone joining or leaving, a project or a machine renamed), when it is all read
-again at once, as for a source added. Work agents did between measurements shows with the
-next of them; a range that ended within the last five minutes, whose work is still being
-credited, says when to read it again (`refreshInMs`). Nothing that shows data or time
-keeps a timer of its own (a tooltip or a gesture may wait a moment;
-`hub/ui/test/timers.test.ts` lists where), and
-`npm run bench` checks that an idle board asks the hub nothing and renders nothing but
-what shows time. Nothing on the page is fixed and the widgets are not frosted, so a
+their own moment. History is read when the hub tells of measurements or credited agent
+work. The page makes cells from `since` stale and reads only those its frame needs,
+without a rate limit or a timer. Reconnect, a new lineup, or a change of whose work the
+board shows or its names (`Store.workKey`) makes all tiles stale. The last frame stays
+undimmed while its tail loads. A frame of another period stays dimmed until its cells
+are complete. Time alone never rebuilds or reads history; cells past the hub's cut are
+known empty until new data arrives. Nothing that shows data or time keeps a timer of its
+own (a tooltip or a gesture may wait a moment; `hub/ui/test/timers.test.ts` lists where).
+`npm run bench` checks a board without measurements or working agents asks nothing and
+renders only what shows time. It also checks measurements reach the card and chart
+within a second, small reads per measurement, and one small read for a machine report
+crediting work, rendering only that card, agents and analytics.
+Nothing on the page is fixed and the widgets are not frosted, so a
 scroll paints only what comes into view, even in a WebKitGTK window that draws without
 the GPU.
 A card's dot by the logo tells how its measurements go: its colour, and in its tooltip
@@ -713,13 +714,11 @@ address (`?from=&to=`), so a reload keeps it, Back undoes it and a link to it ca
 analytics by half their length, one step a gesture: back, to a range in the past held in
 the address like a dragged one, no further than the history kept; forward, up to now,
 where the chosen period comes back. The chart moves to the new period at once, drawing
-the answer it has until the next one comes; a run of quick steps asks the hub only for
-where it stops, and the latest few ranges read whole are kept on the page for each board,
-so stepping back and forth over them asks nothing. They are kept for the board's sources
-as they were: a source added to the board has a range read again, and so has every range
-when the hub tells that whose agents' work the board shows, or under which names,
-changed. Measurements an agent delivers late, into a range already kept, have it read
-again when the hub tells of them.
+the answer it has until the next frame is assembled. A run of quick steps reads its
+first and last missing parts. Tiles are kept across frames on the same grid, so a return
+or switching 12h and 24h asks nothing once both have been seen. A new lineup or work
+selection makes them stale; a late measurement or credited work makes only cells from
+its actual time stale, and the page reads them when a frame needs them.
 
 Both agent lists put working sessions first, then the ones that worked most recently,
 then the newest. The card's panel keeps machine groups, ordered by each one's most

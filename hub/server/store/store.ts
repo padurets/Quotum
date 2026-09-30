@@ -1,44 +1,19 @@
-import {earlyReset} from '../domain/attention.js';
 import {createHash} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import {config} from '../config.js';
 import {providers, sourceId, type Provider, type Source} from '../domain/sources.js';
-import {onGrid, series, type Kind, type Measurement, type Sample, type SourceState} from '../domain/quota.js';
+import type {Measurement, SourceState} from '../domain/quota.js';
+import {cellsOf, workFrom, type CellSamples} from '../domain/cells.js';
+import {tileOf, type Chunk, type HistoryMeta} from '../domain/history.js';
 import type {PlanChange, SeriesSample} from '../domain/forecast.js';
 import type {Origin} from '../domain/ingest.js';
-import {activity, barOf, seriesWork, subscriptionWork, type Activity, type SeriesWork, type Stretch} from '../domain/work.js';
+import type {Stretch} from '../domain/work.js';
 import {members, projectGroups, type ProjectGroup} from '../domain/projects.js';
 import {tell, type Touches} from '../touches.js';
 import {migrate} from './schema.js';
 
 /** A session credited with work (server/sessions.ts): its names as reported, '' for none. */
 export type WorkKey = {source: string; origin: Origin; startedAt: number; project: string; folder: string; ordinal: number};
-
-export type HistorySeries = {
-  sourceId: string;
-  provider: Provider;
-  windowId: string;
-  kind: Kind;
-  label: string | null;
-  minutes: number | null;
-  consumed: number;
-  coveredMs: number;
-  samples: number;
-  remainingAtStart: number | null;
-  remainingAtEnd: number | null;
-  /** How long its last value holds without a newer one before a gap begins. */
-  staleAfterMs: number;
-  points: (readonly [number, number, number])[];
-  /** How agents worked on its subscription meanwhile; null when the board does not show whose work it is (a hidden card). */
-  work: SeriesWork | null;
-};
-
-/**
- * How agents worked over a period, as the board shows it (see `Store.shown`): `since`,
- * since when that is known on the board; `known`, the part of the period that is (null
- * when none of it is).
- */
-export type HistoryActivity = Activity & {since: number; known: {from: number; to: number} | null};
 
 /**
  * Whose work a board shows on each of its subscriptions but those of hidden cards: the
@@ -55,16 +30,6 @@ export type DeviceFailure = {device: string; provider: Provider; error: string; 
 export type Announcement = {at: number; url: string; text: string};
 
 /**
- * Something that happened to a source, for the chart: its limits came back before their
- * reset time (a free reset used, or one granted to everyone), or free resets were granted.
- */
-export type SourceEvent =
-  | {sourceId: string; at: number; kind: 'early_reset'; windows: string[]}
-  | {sourceId: string; at: number; kind: 'resets_granted'; count: number};
-
-/** Early resets of a source's windows closer than this are one event. */
-const SAME_EVENT_MS = 15 * 60_000;
-/**
  * The names a board's history is keyed by (`Store.workKey`), for its people (a JSON list,
  * given twice) and its subscriptions (likewise): each project a person named that worked
  * on one of them, and each machine that did. It is read with every answer of history and
@@ -78,19 +43,6 @@ export const WORK_NAMES =
   ' AND EXISTS (SELECT 1 FROM devices d JOIN agent_sessions s ON s.device_id = d.id WHERE d.user_id = n.user_id AND s.project = n.reported AND s.source_id IN (SELECT value FROM json_each(?)))' +
   ' UNION ALL SELECT json_array(d.id, COALESCE(d.label, d.name)) FROM devices d WHERE d.user_id IN (SELECT value FROM json_each(?))' +
   ' AND EXISTS (SELECT 1 FROM agent_sessions s WHERE s.device_id = d.id AND s.source_id IN (SELECT value FROM json_each(?))) ORDER BY 1)';
-
-type SampleRow = {
-  source_id: string;
-  provider: Provider;
-  window_id: string;
-  at: number;
-  kind: Kind;
-  label: string | null;
-  used: number;
-  reset_at: number | null;
-  minutes: number | null;
-  stale_after_ms: number;
-};
 
 /** A source as a board shows it: with the people who measure it and whether they shared it here. */
 export type BoardSource = Source & {holders: string[]; sharedBy: string | null};
@@ -106,8 +58,6 @@ export class Store {
   readonly db: DatabaseSync;
   /** When this database was made. */
   private readonly created: number;
-  private readonly revisions = new Map<string, number>();
-  private readonly started = Date.now();
   private observer: Touches | null = null;
 
   constructor(file: string, now = Date.now()) {
@@ -132,16 +82,6 @@ export class Store {
   /** Tells `observer` what every change touches (events of open dashboards). */
   setObserver(observer: Touches) {
     this.observer = observer;
-  }
-
-  /** Changes whenever something a board shows changes; its history is cached by it. */
-  revision(board: string): number {
-    return this.revisions.get(board) ?? this.started;
-  }
-
-  /** Something on these boards changed. */
-  changed(...boards: string[]) {
-    for (const board of boards) this.revisions.set(board, this.revision(board) + 1);
   }
 
   /** The boards a source shows on: the personal boards of its holders and the boards it is shared with. */
@@ -219,7 +159,7 @@ export class Store {
     const people = JSON.stringify([...new Set([...shown.values()].flatMap(s => s.holders.map(h => h.user)))].sort());
     const sources = JSON.stringify([...shown.keys()]);
     const names = this.db.prepare(WORK_NAMES).get(people, sources, people, sources) as {names: string};
-    const key = JSON.stringify([this.sources(board).map(s => s.id), [...shown].map(([id, s]) => [id, s.since, s.holders]), names.names]);
+    const key = JSON.stringify([this.agentWorkSince(), this.sources(board).map(s => s.id), [...shown].map(([id, s]) => [id, s.since, s.holders]), names.names]);
     return createHash('sha256').update(key).digest('base64url').slice(0, 16);
   }
 
@@ -251,8 +191,6 @@ export class Store {
   /** A person's device measures a source: it is theirs to see and share from now on. */
   hold(source: string, userId: string, now: number) {
     if (this.db.prepare('INSERT OR IGNORE INTO holders VALUES (?, ?, ?)').run(source, userId, now).changes) {
-      const personal = this.db.prepare('SELECT id FROM boards WHERE created_by = ? AND personal = 1').get(userId) as {id: string} | undefined;
-      if (personal) this.changed(personal.id);
       // It comes to their personal board, and its owners change where it is shared.
       tell(this.observer, o => {
         o.touchBoards(this.boardsOf(source));
@@ -281,8 +219,6 @@ export class Store {
         o.touchBoards(shown);
         o.touchUser(userId);
       });
-      const personal = this.db.prepare('SELECT id FROM boards WHERE created_by = ? AND personal = 1').get(userId) as {id: string} | undefined;
-      if (personal) this.changed(personal.id);
       const shared = this.db.prepare('SELECT board_id FROM shares WHERE source_id = ?').all(source) as {board_id: string}[];
       for (const {board_id: board} of shared) this.unshareOrphans(board);
     }
@@ -292,7 +228,6 @@ export class Store {
 
   share(board: string, source: string, userId: string, now: number) {
     if (this.db.prepare('INSERT OR IGNORE INTO shares VALUES (?, ?, ?, ?)').run(board, source, userId, now).changes) {
-      this.changed(board);
       tell(this.observer, o => o.touchBoards([board]));
     }
   }
@@ -300,7 +235,6 @@ export class Store {
   unshare(board: string, source: string): boolean {
     const removed = this.db.prepare('DELETE FROM shares WHERE board_id = ? AND source_id = ?').run(board, source).changes > 0;
     if (removed) {
-      this.changed(board);
       tell(this.observer, o => o.touchBoards([board]));
     }
     return removed;
@@ -315,7 +249,6 @@ export class Store {
       )
       .run(board, board).changes;
     if (removed) {
-      this.changed(board);
       tell(this.observer, o => o.touchBoards([board]));
     }
   }
@@ -323,7 +256,6 @@ export class Store {
   /** Forgets what a deleted board showed; the sources stay with their people (Directory.deleteBoard does the rest). */
   removeBoard(board: string) {
     this.db.prepare('DELETE FROM shares WHERE board_id = ?').run(board);
-    this.revisions.delete(board);
   }
 
   // ---------- measurements ----------
@@ -395,7 +327,6 @@ export class Store {
       this.db.exec('RELEASE record');
       throw error;
     }
-    this.changed(...this.boardsOf(id));
     tell(this.observer, o => o.touchSources([id]));
     tell(this.observer, o => o.history(id, measurement.observedAt));
   }
@@ -403,7 +334,6 @@ export class Store {
   /** Records a failed attempt; the last good values stay on screen. */
   fail(id: string, error: string) {
     this.db.prepare('INSERT OR REPLACE INTO state VALUES (?, ?)').run(id, JSON.stringify({...this.state(id), error}));
-    this.changed(...this.boardsOf(id));
     tell(this.observer, o => o.touchSources([id]));
   }
 
@@ -440,130 +370,47 @@ export class Store {
     return rows.map(r => ({device: r.device_id, provider: r.provider, error: r.error, detail: r.detail, at: r.at}));
   }
 
-  /**
-   * Every source/window series from `from` to `to` on a shared grid, ready for the chart
-   * and the table, what happened meanwhile, and how the agents the board shows (`shown`)
-   * worked, up to `now` at the latest. A period up to now has no `to`: a sample an agent
-   * whose clock is a little fast dated a few seconds ahead is on the chart all the same.
-   */
-  history(
-    board: string,
-    from: number,
-    cellMs: number,
-    {to = Number.MAX_SAFE_INTEGER, now = Date.now(), shown = this.shown(board, [])}: {to?: number; now?: number; shown?: Shown} = {},
-  ): {series: HistorySeries[]; events: SourceEvent[]; activity: HistoryActivity} {
-    const ids = JSON.stringify(this.sources(board).map(s => s.id));
-    const states = this.states(board);
-    // One window at a time: the primary key (source, window, time) finds just the period,
-    // already in order. A window its source no longer reports is not shown, so not read.
-    const read = this.db.prepare('SELECT at, used, reset_at, stale_after_ms FROM samples WHERE source_id = ? AND window_id = ? AND at BETWEEN ? AND ? ORDER BY at');
-    const groups = new Map<string, Sample[]>();
-    for (const state of states) {
-      for (const window of state.windows) {
-        // Only what changes from sample to sample; what a window is comes from its state.
-        const rows = read.all(state.id, window.id, from, to) as Pick<SampleRow, 'at' | 'used' | 'reset_at' | 'stale_after_ms'>[];
-        if (!rows.length) continue;
-        const {id, kind, label, minutes} = window;
-        groups.set(
-          `${state.id} ${id}`,
-          rows.map(row => ({
-            sourceId: state.id,
-            provider: state.provider,
-            id,
-            kind,
-            label,
-            at: row.at,
-            used: row.used,
-            remaining: 100 - row.used,
-            resetAt: row.reset_at,
-            minutes,
-            staleAfterMs: row.stale_after_ms,
-          })),
-        );
-      }
-    }
-
-    // Series follow the cards: sources in board order, windows in the order the source reports them.
-    const rank = (sample: Sample) => {
-      const source = states.findIndex(s => s.id === sample.sourceId);
-      const window = states[source]?.windows.findIndex(w => w.id === sample.id) ?? -1;
-      return (source < 0 ? states.length : source) * 100 + (window < 0 ? 99 : window);
-    };
-
-    const work = this.work(from, Math.min(to, now), cellMs, shown);
-    const lines = [...groups.values()]
-      .sort((a, b) => rank(a[0]) - rank(b[0]))
-      .map(samples => {
-        const last = samples.at(-1)!;
-        const {points, ...summary} = series(samples);
-        const source = shown.get(last.sourceId);
-        const {worked, agentMs} = work.bySource.get(last.sourceId) ?? {worked: [], agentMs: 0};
-        return {
-          sourceId: last.sourceId,
-          provider: last.provider,
-          windowId: last.id,
-          kind: last.kind,
-          label: last.label,
-          minutes: last.minutes,
-          staleAfterMs: last.staleAfterMs,
-          ...summary,
-          points: onGrid(points, cellMs).map(p => [p.at, Math.round(p.remaining * 100) / 100, p.segment] as const),
-          // Spending before the subscription came to the board is not set against work the board does not show.
-          work: source ? seriesWork(samples, worked, agentMs, {from: Math.max(work.from, source.since), to: work.to}) : null,
-        };
-      });
-    return {
-      series: lines,
-      events: [...earlyResets([...groups.values()]), ...this.grants(ids, from, to)].sort((a, b) => a.at - b.at),
-      activity: work.activity,
-    };
+  /** The board's known work thresholds, independent of the tiles read. */
+  historyKnown(shown: Shown): HistoryMeta['known'] {
+    return {work: this.agentWorkSince(), sources: Object.fromEntries([...shown].map(([id, value]) => [id, value.since]))};
   }
 
-  /**
-   * How the agents a board shows worked from `from` to `to`: the activity, in bars of up
-   * to an hour gathered from the chart's cells `cellMs` long, and when each subscription
-   * had any of them working. What is known begins with the hub keeping it
-   * (`agentWorkSince`) and, on a shared board, the first subscription coming to it.
-   */
-  private work(from: number, to: number, cellMs: number, shown: Shown) {
-    const since = Math.max(this.agentWorkSince(), ...(shown.size ? [Math.min(...[...shown.values()].map(s => s.since))] : []));
-    const known = {from: Math.max(from, since), to};
-    const holders = new Map([...shown].map(([id, s]) => [id, new Map(s.holders.map(h => [h.user, h.from]))]));
-    // Only the work of the people the board shows each subscription for, from when it shows it.
+  /** Complete cells of every measured window, read once through a run of missing tiles. */
+  cells(board: string, cellMs: number, from: number, to: number, {now = Date.now(), shown = this.shown(board, [])}: {now?: number; shown?: Shown} = {}): Chunk<number>[] {
+    const sources = this.sources(board);
+    // Skip through window names on the primary key; testing time inside the recursive
+    // step would scan the source's whole retained history for every missing name.
+    const windows = this.db.prepare(
+      'WITH RECURSIVE windows(w) AS (SELECT min(window_id) FROM samples WHERE source_id = ?' +
+      ' UNION ALL SELECT (SELECT min(window_id) FROM samples WHERE source_id = ? AND window_id > w) FROM windows WHERE w IS NOT NULL)' +
+      ' SELECT w FROM windows WHERE w IS NOT NULL AND EXISTS (SELECT 1 FROM samples WHERE source_id = ? AND window_id = w AND at >= ? AND at < ?)',
+    );
+    const read = this.db.prepare(
+      'SELECT at, used, reset_at, stale_after_ms FROM samples WHERE source_id = ? AND window_id = ? AND at < ? AND at >= ' +
+      '(SELECT coalesce(max(at), ?) FROM samples WHERE source_id = ? AND window_id = ? AND at < ?) ORDER BY at',
+    );
+    read.setReturnArrays(true);
+    const groups: CellSamples[] = [];
+    for (const {id} of sources) for (const {w} of windows.all(id, id, id, from, to) as {w: string}[]) {
+      const rows = read.all(id, w, to, from, id, w, from) as unknown as [number, number, number | null, number][];
+      groups.push({source: id, window: w, samples: rows.map(([at, used, resetAt, staleAfterMs]) => ({at, used, resetAt, staleAfterMs}))});
+    }
+    const known = this.historyKnown(shown);
+    const readFrom = workFrom(groups, from);
+    const holders = new Map([...shown].map(([source, value]) => [source, new Map(value.holders.map(h => [h.user, Math.max(h.from, value.since, known.work)]))]));
     const stretches: Stretch[] = [];
-    for (const s of known.to > known.from && shown.size ? this.agentWork(known.from, known.to, [...shown.keys()]) : []) {
+    for (const s of shown.size ? this.agentWork(readFrom, Math.min(to, now), [...shown.keys()]) : []) {
       const after = holders.get(s.source)?.get(s.user);
       if (after === undefined || s.to <= after) continue;
       stretches.push(s.from < after ? {...s, from: after} : s);
     }
-    const bySource = new Map<string, Stretch[]>();
-    for (const s of stretches) {
-      if (!bySource.has(s.source)) bySource.set(s.source, []);
-      bySource.get(s.source)!.push(s);
-    }
-    const devices = [...new Set(stretches.map(s => s.device))];
-    const names = new Map(
-      (
-        this.db.prepare('SELECT id, COALESCE(label, name) AS name FROM devices WHERE id IN (SELECT value FROM json_each(?))').all(JSON.stringify(devices)) as {
-          id: string;
-          name: string;
-        }[]
-      ).map(d => [d.id, d.name]),
-    );
-    const barMs = barOf(cellMs, to - from);
-    const none = {barMs, activeMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}};
-    return {
-      ...known,
-      bySource: new Map([...bySource].map(([id, list]) => [id, subscriptionWork(list, {from: Math.max(known.from, shown.get(id)!.since), to: known.to})])),
-      activity: known.to > known.from ? {since, known, ...activity(stretches, known, barMs, names)} : {since, known: null, ...none},
-    };
-  }
-
-  private grants(ids: string, from: number, to: number): SourceEvent[] {
-    const rows = this.db
-      .prepare("SELECT source_id, at, detail FROM events WHERE source_id IN (SELECT value FROM json_each(?)) AND kind = 'resets_granted' AND at BETWEEN ? AND ?")
-      .all(ids, from, to) as {source_id: string; at: number; detail: string}[];
-    return rows.map(r => ({sourceId: r.source_id, at: r.at, kind: 'resets_granted', count: Number(r.detail)}));
+    const devices = Object.fromEntries((this.db.prepare('SELECT id, COALESCE(label, name) AS name FROM devices WHERE id IN (SELECT value FROM json_each(?))')
+      .all(JSON.stringify([...new Set(stretches.map(s => s.device))])) as {id: string; name: string}[]).map(d => [d.id, d.name]));
+    const chunks = cellsOf(groups, stretches, devices, cellMs, from, to, known);
+    const grants = this.db.prepare("SELECT source_id, at, detail FROM events WHERE source_id IN (SELECT value FROM json_each(?)) AND kind = 'resets_granted' AND at >= ? AND at < ?")
+      .all(JSON.stringify(sources.map(s => s.id)), from, to) as {source_id: string; at: number; detail: string}[];
+    for (const event of grants) chunks[tileOf(event.at, cellMs) - tileOf(from, cellMs)].grants.push([event.source_id, event.at, Number(event.detail)]);
+    return chunks;
   }
 
   private lastPlan(source: string): string | null {
@@ -795,28 +642,4 @@ export class Store {
   close() {
     this.db.close();
   }
-}
-
-/**
- * Windows whose used share dropped well before their reset time: the limits came back
- * early. Resets of one source close together are one event naming every window.
- */
-function earlyResets(groups: Sample[][]): SourceEvent[] {
-  const found: {sourceId: string; at: number; window: string}[] = [];
-  for (const samples of groups) {
-    for (let i = 1; i < samples.length; i++) {
-      const [a, b] = [samples[i - 1], samples[i]];
-      if (earlyReset(a, b)) found.push({sourceId: b.sourceId, at: b.at, window: b.id});
-    }
-  }
-  const events: (SourceEvent & {kind: 'early_reset'})[] = [];
-  for (const reset of found.sort((a, b) => a.at - b.at)) {
-    const same = events.find(e => e.sourceId === reset.sourceId && reset.at - e.at <= SAME_EVENT_MS);
-    if (same) {
-      if (!same.windows.includes(reset.window)) same.windows.push(reset.window);
-    } else events.push({sourceId: reset.sourceId, at: reset.at, kind: 'early_reset', windows: [reset.window]});
-  }
-  // Named the same way whatever order the windows were read in.
-  for (const event of events) event.windows.sort();
-  return events;
 }

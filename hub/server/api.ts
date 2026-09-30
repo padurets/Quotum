@@ -5,10 +5,11 @@ import Fastify, {type FastifyReply, type FastifyRequest} from 'fastify';
 import staticFiles from '@fastify/static';
 import {config, serviceName, version} from './config.js';
 import type {Ingest} from './ingest.js';
-import {KEEP_MS} from './sessions.js';
+import {HistoryTiles} from './history.js';
+import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, READ_CELLS, cellStart, tileOf, tileStart} from './domain/history.js';
 import type {Pairing} from './pairing.js';
 import type {ResetFeed} from './resets.js';
-import type {HistoryActivity, HistorySeries, Shown, SourceEvent, Store} from './store/store.js';
+import type {Store} from './store/store.js';
 import type {Board, Directory, User} from './store/directory.js';
 import {CSP, currentUser, sameSite} from './session.js';
 import type {Setup} from './setup.js';
@@ -63,31 +64,6 @@ function clientError(error: NodeJS.ErrnoException, socket: Socket & {_httpMessag
 }
 
 /**
- * The cell a period of `span` is drawn on: the finest that keeps it within `maxCells`, a
- * little over the count rather than a three times coarser grid for a day over a month.
- */
-function cellOf(span: number) {
-  const {cells, maxCells} = config.history;
-  return cells.find(cell => span / cell <= maxCells * 1.05) ?? cells.at(-1)!;
-}
-
-/**
- * A period from `from` to `to` (milliseconds) within the kept history, from 15 minutes to
- * a month long, with the cell it is drawn on; null when it is not one. Its end is at most
- * now; its edges go out to whole cells, so periods that differ by less than a cell are
- * one answer (and one entry of the cache).
- */
-function selected(from: string | undefined, to: string | undefined, now: number): {since: number; to: number; cellMs: number} | null {
-  if (!from || !to || !/^\d{1,15}$/.test(from) || !/^\d{1,15}$/.test(to)) return null;
-  const start = Number(from);
-  const end = Math.min(Number(to), now);
-  const span = end - start;
-  if (span < config.history.minSpanMs || span > config.history.maxSpanMs || start < now - config.retention.sampleDays * 86_400_000) return null;
-  const cellMs = cellOf(span);
-  return {since: Math.floor(start / cellMs) * cellMs, to: Math.min(Math.ceil(end / cellMs) * cellMs, now), cellMs};
-}
-
-/**
  * The HTTP surface. People sign in and read their boards under `/api`; agents talk to
  * `/v1` (device codes, check-ins, ingest). Everything else is the single-page client.
  * The desktop app's hub (`local`) has one person who never signs in: the window enters
@@ -108,45 +84,10 @@ export async function buildApp(hub: Hub) {
   });
   const hosts = new Set<string>(config.http.hosts);
   const anyHost = hosts.has('*');
-  type Answer = {series: HistorySeries[]; events: SourceEvent[]; activity: HistoryActivity};
-  type Kept = {cell: number; revision: number; work: string; at: number; costly: boolean; value: Answer};
-  /**
-   * An answer is reused while the grid stays on the same cell, the board shows the same
-   * sources and agents under the same names (`Store.workKey`) and their data has not
-   * changed. A costly one (a month of a busy board takes a good part of a second) is also
-   * reused for a quarter of a cell after new data came: a month is drawn in 2-hour cells,
-   * where half an hour of news does not show. Such an answer says when a newer one will be
-   * ready (`refreshInMs`), so the page asks again then. Work up to a range's end is credited
-   * from the lists machines send after it, up to `KEEP_MS` later (server/sessions.ts),
-   * without a new revision: until then (`settles`) an answer says when to ask again, and one
-   * read before then is not reused after. The ranges ending now are kept per board; of the
-   * periods selected on charts, the latest few.
-   */
-  const fixedHistory = new Map<string, Kept>();
-  const selectedHistory = new Map<string, Kept>();
-  const SELECTED_KEPT = 32;
-  const reused = (cache: Map<string, Kept>, slot: string, board: string, cellMs: number, end: number, read: (shown: Shown) => Answer, settles = 0) => {
-    const now = Date.now();
-    const cell = Math.floor(end / cellMs);
-    const revision = store.revision(board);
-    const shown = store.shown(board, directory.view(board).hidden);
-    const work = store.workKey(board, shown);
-    // A newer answer is ready this much later, if at all: the earlier of the two.
-    const refresh = (ms: number | null) => (now < settles ? Math.ceil(Math.min(ms ?? Infinity, settles - now)) : ms);
-    const hit = cache.get(slot);
-    if (hit && hit.cell === cell && hit.work === work && (hit.at >= settles || now < settles)) {
-      if (hit.revision === revision) return {...hit.value, refreshInMs: refresh(null)};
-      const left = hit.at + cellMs / 4 - now;
-      if (hit.costly && left > 0) return {...hit.value, refreshInMs: refresh(Math.ceil(left))};
-    }
-    const value = read(shown);
-    const costly = Date.now() - now >= config.history.costlyMs;
-    // Map order is insertion order: the entry read last goes to the end, the oldest is dropped.
-    cache.delete(slot);
-    cache.set(slot, {cell, revision, work, at: now, costly, value});
-    if (cache === selectedHistory && cache.size > SELECTED_KEPT) cache.delete(cache.keys().next().value!);
-    return {...value, refreshInMs: refresh(null)};
-  };
+  const history = new HistoryTiles(store);
+  const events = hub.events ?? new Events(hub);
+  events.onHistory = (source, since) => history.touch(source, since);
+  events.attach();
 
   app.addHook('onRequest', async (request, reply) => {
     // The health check answers any host: a container asks it at 127.0.0.1 whatever the hub's own address.
@@ -210,37 +151,27 @@ export async function buildApp(hub: Hub) {
     return snapshot;
   });
 
-  app.get<{Querystring: {range?: string; from?: string; to?: string; board?: string}}>('/api/history', (request, reply) => {
+  app.get<{Querystring: {cell?: string; from?: string; to?: string; board?: string}}>('/api/history', (request, reply) => {
     const access = guards.board(request, reply, request.query.board);
     if (!access) return reply;
     const now = Date.now();
-    // A machine gone quiet has its last list credited five minutes on, here as well as when
-    // another machine reports: a range that ended that long ago has all of its work.
+    // Credit quiet machines before deciding whether their tiles can be reused.
     hub.ingest.live.sweep(now);
-    const {from, to} = request.query;
-    if (from !== undefined || to !== undefined) {
-      // A period selected on the chart, as long as a month at most.
-      const span = selected(from, to, now);
-      if (!span) return reply.code(400).send({error: 'invalid_request'});
-      const board = access.board.id;
-      // A period up to now keeps its entry as now moves on; `reused` tells when it is stale.
-      const slot = `${board}:${span.since}:${span.to === now ? 'now' : span.to}`;
-      const answer = reused(selectedHistory, slot, board, span.cellMs, span.to, shown => store.history(board, span.since, span.cellMs, {to: span.to, now, shown}), span.to + KEEP_MS);
-      // Named as asked, so the page knows its answer even when the end was cut to now.
-      return {range: `${from}-${to}`, now, since: span.since, to: span.to, cellMs: span.cellMs, historyStart: store.historyStart(now), ...answer};
-    }
-    const range = request.query.range ?? '24h';
-    const durationMs = Object.hasOwn(config.history.ranges, range) ? config.history.ranges[range] : null;
-    if (!durationMs) return reply.code(400).send({error: 'invalid_request'});
-
+    const number = (value: string | undefined) => value && /^\d{1,15}$/.test(value) ? Number(value) : NaN;
+    const cell = number(request.query.cell);
+    const from = number(request.query.from);
+    const askedTo = number(request.query.to);
+    if (!READ_CELLS.includes(cell) || !Number.isFinite(from) || !Number.isFinite(askedTo) || from % cell || (askedTo <= now && askedTo % cell)) return reply.code(400).send({error: 'invalid_request'});
+    const to = Math.min(Math.ceil(askedTo / cell) * cell, cellStart(now + CLOCK_TOLERANCE_MS, cell) + cell);
+    const oldest = tileStart(tileOf(now - config.retention.sampleDays * 86_400_000, cell), cell);
+    if (to <= from || to % cell || from < oldest || tileOf(to - 1, cell) - tileOf(from, cell) + 1 > MAX_READ_TILES) return reply.code(400).send({error: 'invalid_request'});
     const board = access.board.id;
-    const cellMs = cellOf(durationMs);
-    const answer = reused(fixedHistory, `${board}:${range}`, board, cellMs, now, shown => store.history(board, now - durationMs, cellMs, {now, shown}));
-    return {range, now, since: now - durationMs, to: now, cellMs, historyStart: store.historyStart(now), ...answer};
+    const shown = store.shown(board, directory.view(board).hidden);
+    const chunks = history.read(board, cell, from, to, now, shown);
+    const meta = JSON.stringify({now, run: events.epoch, historyStart: store.historyStart(now), known: store.historyKnown(shown)});
+    return reply.type('application/json').send(`${meta.slice(0, -1)},"chunks":[${chunks.join(',')}]}`);
   });
 
-  const events = hub.events ?? new Events(hub);
-  events.attach();
   if (hub.local) {
     const attention = new Attention(store, Date.now());
     hub.ingest.attention = attention;

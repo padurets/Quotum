@@ -1,282 +1,301 @@
 import {useSyncExternalStore} from 'react';
+import {CLOCK_TOLERANCE_MS, cellStart, compose, targetOf, tileEnd, tileOf, tileStart, type HistoryAnswer, type HistoryMeta, type Target} from '../../server/domain/history';
 import {page, useHistoryStart, type PageEvent, type PageState} from './board';
+import {hubNow} from './clock';
+import {HistoryTile} from './historyTiles';
 import {ApiError, call} from './http';
+import {periodOf} from './periods';
 import {onPrefs, prefs} from './prefs';
 import type {Store} from './store';
 import {dropTimeRange, onTimeRange, timeRange, timeRangeKey, type TimeRange} from './timeRange';
 import type {History} from './types';
 
-/**
- * The history the chart and the table show, read when the board's data changes rather
- * than on a clock: the board's first snapshot reads it, a `history` event (measurements
- * the chart has not shown) reads the period ending now again, at most every
- * `LIVE_MIN_MS`. A time range in the past stays as read, unless late measurements fall
- * into it. A run of quick changes of the period (steps back through time) reads only
- * where it stops; the latest few ranges read whole are kept on the page, for the board's
- * sources as they are. While another answer loads, the one on screen stays (`loading`).
- *
- * It is a service of its own: it hears the page's events, the chosen period and the
- * selected range, and components read what it has (`useHistory`).
- */
-
-/** The period ending now is read again no more often than this, however much news comes. */
-export const LIVE_MIN_MS = 10_000;
-/** Changes of the period this close together are a run of steps: only the last is read, once they stop. */
 const SETTLE_MS = 300;
-/** How many answers of past ranges the page keeps per board, so stepping back and forth over them asks the hub nothing. */
-const KEPT_RANGES = 8;
-/** A read that failed is tried again after this. */
 const RETRY_MS = 15_000;
-
-/**
- * Whether an answer is all there is of a range: nothing newer is on its way
- * (`refreshInMs`), and its end was not cut to the hub's now, so later data cannot change it.
- */
-export const complete = (history: History, selected: TimeRange) => history.refreshInMs === null && history.to === Math.ceil(selected.to / history.cellMs) * history.cellMs;
+const STORED_BYTES = 15 * 1024 * 1024;
 
 export type HistoryEnv = {
-  read(board: string, query: string): Promise<History>;
+  read(board: string, cell: number, from: number, to: number): Promise<HistoryAnswer>;
   now(): number;
   setTimeout(run: () => void, ms: number): unknown;
   clearTimeout(timer: unknown): void;
   dropTimeRange(): void;
+  schedule?(run: () => void): void;
 };
-
-type Target = {board: string; sources: string; selected: TimeRange | null; key: string; query: string};
 export type Shown = {history: History | null; loading: boolean};
+type Flight = {seq: number; epoch: number; cell: number; from: number; to: number; touched: number};
 
-export class HistoryLoader {
+/** History belongs to the open board. Cells are read only when missing or touched. */
+export class HistoryStore {
   private board: string | null = null;
-  /** The board's sources, as its snapshot told them; null until it came. */
-  private sources: string | null = null;
+  private ready = false;
+  private run: string | null = null;
+  private epoch = 0;
+  private seq = 0;
+  private metaSeq = 0;
+  private lineupKey = '';
+  private windowsKey = '';
+  private windows = new Set<string>();
   private period = '24h';
   private selected: TimeRange | null = null;
   private shown: History | null = null;
-  private readonly kept = new Map<string, History>();
-  /** The read whose answer goes on screen, and whether news came meanwhile. */
-  private reading: {slot: string; again: boolean} | null = null;
-  /** Every read under way, with the earliest time of the news that came meanwhile (a snapshot: all of it) that its answer may miss. */
-  private readonly underway = new Set<{since: number}>();
-  private lastRead: {slot: string; at: number} | null = null;
-  /**
-   * The read begun in the task under way, with its flight: news told in the same message as
-   * what began it (a new lineup comes with all of the history as news) reached the hub
-   * before it, so its answer holds that news.
-   */
-  private begun: {reading: {slot: string; again: boolean}; flight: {since: number}} | null = null;
-  private changedAt = 0;
-  private readonly timers = new Map<'settle' | 'later' | 'retry', unknown>();
+  private meta: HistoryMeta | null = null;
+  private cutTo: number | null = null;
+  private readonly grids = new Map<number, Map<number, HistoryTile>>();
+  private readonly flights = new Set<Flight>();
+  private readonly timers = new Map<'settle' | 'retry', unknown>();
+  private changedAt = -Infinity;
+  private scheduled = false;
+  private needsCompose = false;
   private readonly listeners = new Set<() => void>();
   private state: Shown = {history: null, loading: false};
 
-  constructor(private readonly env: HistoryEnv) {}
+  constructor(private readonly env: HistoryEnv, private readonly budget = STORED_BYTES) {}
 
-  // ---------- what it hears ----------
-
-  /** The page left the board (signed out, the board gone): nothing is read until another opens. */
-  close() {
-    this.board = null;
-    this.sources = null;
-    this.cancel();
-    this.publish();
-  }
-
-  /** Another board is open: nothing of it is read until its snapshot comes. */
   open(board: string) {
     if (board === this.board) return;
+    this.close();
     this.board = board;
-    this.sources = null;
-    this.cancel();
+  }
+
+  close() {
+    this.epoch++;
+    this.board = null;
+    this.ready = false;
+    this.run = null;
+    this.shown = this.meta = null;
+    this.metaSeq = 0;
+    this.cutTo = null;
+    this.grids.clear();
+    this.flights.clear();
+    this.clear('settle');
+    this.clear('retry');
+    this.changedAt = -Infinity;
     this.publish();
   }
 
-  /** The board as it is (every connection): whatever came meanwhile is not in the ranges kept, and the period ending now is read again. */
-  snapshot(lineup: string[]) {
-    this.forget(-Infinity);
-    const sources = keyOf(lineup);
-    const moved = sources !== this.sources;
-    this.sources = sources;
-    this.want(moved && this.lastRead !== null ? 'change' : 'news');
+  hello(run: string) {
+    if (run === this.run) return;
+    this.run = run;
+    this.invalidate();
+    this.ready = false;
   }
 
-  /** The board's sources changed: a range kept for the ones it had is not this one. */
+  snapshot(lineup: string[], windows: Iterable<string> = this.windows) {
+    this.lineupKey = keyOf(lineup);
+    this.setWindows(windows);
+    this.invalidate();
+    this.ready = true;
+    this.schedule();
+  }
+
   lineup(lineup: string[]) {
-    if (this.sources === null || keyOf(lineup) === this.sources) return;
-    this.sources = keyOf(lineup);
-    this.want('change');
+    if (keyOf(lineup) === this.lineupKey) return;
+    this.lineupKey = keyOf(lineup);
+    this.invalidate();
+    this.schedule();
   }
 
-  /**
-   * Measurements at `since` or later reached the hub: what was read of that time is read
-   * again. All of it (`since` 0) is whose work the board shows, or under which names,
-   * changing: like a new lineup, that is read at once.
-   */
+  setWindows(windows: Iterable<string>) {
+    const next = new Set(windows);
+    const key = keyOf([...next]);
+    if (key === this.windowsKey) return;
+    this.windowsKey = key;
+    this.windows = next;
+    this.needsCompose = true;
+    this.schedule();
+  }
+
   news(since: number) {
-    const begun = this.begun && this.reading === this.begun.reading ? this.begun : null;
-    this.forget(since, begun?.flight);
-    if (!begun) this.want(since === 0 ? 'change' : 'news');
+    this.cutTo = null;
+    if (since === 0) this.invalidate();
+    else {
+      for (const [cell, tiles] of this.grids) for (const tile of tiles.values()) {
+        if (tile.to > since) tile.validTo = Math.min(tile.validTo, Math.max(tile.from, cellStart(since, cell)));
+      }
+      for (const flight of this.flights) if (flight.epoch === this.epoch && flight.to > since) flight.touched = Math.min(flight.touched, since);
+    }
+    this.schedule();
   }
 
-  /** The chosen period or the selected range changed. */
   choose(period: string, selected: TimeRange | null) {
-    if (period === this.period && (selected === this.selected || (selected && this.selected && timeRangeKey(selected) === timeRangeKey(this.selected)))) return;
+    const key = selected ? timeRangeKey(selected) : period;
+    if (key === (this.selected ? timeRangeKey(this.selected) : this.period)) return;
     this.period = period;
     this.selected = selected;
-    this.want('change');
+    this.needsCompose = true;
+    const now = this.env.now();
+    const quick = now - this.changedAt < SETTLE_MS;
+    this.changedAt = now;
+    this.clear('settle');
+    if (quick) this.timers.set('settle', this.env.setTimeout(() => {this.clear('settle'); this.schedule();}, SETTLE_MS));
+    this.schedule();
+    this.publish();
   }
-
-  // ---------- what it shows ----------
 
   get = () => this.state;
+  subscribe = (listener: () => void) => {this.listeners.add(listener); return () => void this.listeners.delete(listener);};
+  get estimatedBytes() {return [...this.grids.values()].reduce((sum, tiles) => sum + [...tiles.values()].reduce((sum, tile) => sum + tile.bytes, 0), 0);}
 
-  subscribe = (listener: () => void) => {
-    this.listeners.add(listener);
-    return () => void this.listeners.delete(listener);
-  };
+  private invalidate() {
+    this.epoch++;
+    this.cutTo = null;
+    this.clear('retry');
+    for (const tiles of this.grids.values()) for (const tile of tiles.values()) tile.validTo = tile.readTo = tile.from;
+    this.needsCompose = true;
+  }
+
+  private target(): Target {
+    const length = this.selected ? this.selected.to - this.selected.from : periodOf(this.period).ms;
+    const key = this.selected ? timeRangeKey(this.selected) : this.period;
+    return targetOf(length, Math.max(this.env.now(), this.meta?.now ?? 0), key, this.selected);
+  }
 
   private publish() {
-    const target = this.target();
-    const history = this.shown && this.shown.board === this.board ? this.shown : null;
-    const state = {history, loading: !!history && !!target && history.range !== target.key};
-    if (state.history === this.state.history && state.loading === this.state.loading) return;
-    this.state = state;
-    for (const listener of [...this.listeners]) listener();
+    const history = this.shown;
+    const loading = !!history && history.range !== this.target().key;
+    if (history === this.state.history && loading === this.state.loading) return;
+    this.state = {history, loading};
+    for (const listener of this.listeners) listener();
   }
 
-  // ---------- reading ----------
-
-  private target(): Target | null {
-    if (!this.board || this.sources === null) return null;
-    const {selected} = this;
-    const key = selected ? timeRangeKey(selected) : this.period;
-    return {board: this.board, sources: this.sources, selected, key, query: selected ? `from=${selected.from}&to=${selected.to}` : `range=${key}`};
+  private tiles(cell: number) {
+    if (!this.grids.has(cell)) this.grids.set(cell, new Map());
+    return this.grids.get(cell)!;
   }
 
-  private slotOf = (target: Target) => `${target.board} ${target.sources} ${target.key}`;
+  private tile(at: number, cell: number) {
+    const tiles = this.tiles(cell);
+    const n = tileOf(at, cell);
+    if (!tiles.has(n)) tiles.set(n, new HistoryTile(tileStart(n, cell), cell));
+    return tiles.get(n)!;
+  }
 
-  /** What is wanted now, because it changed (read at once, but for a run of quick steps) or because news came (the period ending now: at most every LIVE_MIN_MS). */
-  private want(why: 'change' | 'news') {
-    const target = this.target();
-    if (!target) return this.publish();
-    const slot = this.slotOf(target);
-    const kept = target.selected ? this.kept.get(slot) : undefined;
-    if (kept) {
-      this.cancel();
-      this.shown = kept;
-      return this.publish();
+  private full(target: Target) {
+    for (let k = target.k0; k <= target.k1; k++) {
+      const at = k * target.cell;
+      if (this.cutTo !== null && at >= this.cutTo) continue;
+      if (at >= (this.grids.get(target.cell)?.get(tileOf(at, target.cell))?.readTo ?? -Infinity)) return false;
     }
-    if (why === 'change') {
-      // Whatever is read of the range left is no longer the one on screen.
-      this.reading = null;
-      this.clear('later');
-      const now = this.env.now();
-      const quick = now - this.changedAt < SETTLE_MS;
-      this.changedAt = now;
-      this.clear('settle');
-      if (quick) this.timers.set('settle', this.env.setTimeout(() => this.read(), SETTLE_MS));
-      else this.read();
-      return this.publish();
-    }
-    if (this.reading?.slot === slot) {
-      this.reading.again = true;
-      return;
-    }
-    const wait = this.lastRead?.slot === slot ? this.lastRead.at + LIVE_MIN_MS - this.env.now() : 0;
-    if (wait <= 0) return this.read();
-    if (!this.timers.has('later')) this.timers.set('later', this.env.setTimeout(() => this.read(), wait));
+    return true;
   }
 
-  private read() {
-    for (const name of ['settle', 'later', 'retry'] as const) this.clear(name);
+  private bad(target: Target): number[] {
+    const bad: number[] = [];
+    for (let k = target.k0; k <= target.k1; k++) {
+      const at = k * target.cell;
+      if (this.cutTo !== null && at >= this.cutTo) continue;
+      if (at < (this.grids.get(target.cell)?.get(tileOf(at, target.cell))?.validTo ?? -Infinity)) continue;
+      if ([...this.flights].some(f => f.epoch === this.epoch && f.cell === target.cell && f.from <= at && f.to > at && f.touched > at)) continue;
+      bad.push(at);
+    }
+    return bad;
+  }
+
+  private schedule() {
+    if (this.scheduled) return;
+    this.scheduled = true;
+    (this.env.schedule ?? queueMicrotask)(() => {this.scheduled = false; this.pump();});
+  }
+
+  private pump() {
+    if (!this.board || !this.ready || !this.run) return;
     const target = this.target();
-    if (!target) return;
-    const slot = this.slotOf(target);
-    const reading = {slot, again: false};
-    const flight = {since: Infinity};
-    this.reading = reading;
-    this.underway.add(flight);
-    this.lastRead = {slot, at: this.env.now()};
-    const begun = (this.begun = {reading, flight});
-    queueMicrotask(() => {
-      if (this.begun === begun) this.begun = null;
-    });
-    this.env.read(target.board, target.query).then(
-      answer => {
-        this.underway.delete(flight);
-        const data = {...answer, board: target.board};
-        // One stepped past on the way is kept all the same: it may be stepped back to. Not
-        // one that news of its time came for on its way: it is read again when wanted.
-        const touched = flight.since <= data.to;
-        if (target.selected && !touched && complete(data, target.selected)) this.keep(slot, target.board, data);
-        if (this.reading !== reading) return;
-        this.reading = null;
-        this.shown = data;
-        this.publish();
-        // A costly history is put together again a while after new data came: read then.
-        if (data.refreshInMs !== null) this.timers.set('later', this.env.setTimeout(() => this.read(), data.refreshInMs + 1_000));
-        // News came meanwhile: read again, unless the answer is kept (the news was of a later time).
-        else if (reading.again) this.want('news');
-      },
-      error => {
-        this.underway.delete(flight);
-        if (this.reading !== reading) return;
-        this.reading = null;
-        // A selected range the hub will not read (say, a link older than the history it keeps)
-        // cannot succeed later: the chosen period comes back instead.
-        if (target.selected && error instanceof ApiError && error.status === 400) return this.env.dropTimeRange();
-        this.timers.set('retry', this.env.setTimeout(() => this.read(), RETRY_MS));
-      },
-    );
+    if (target.k1 < target.k0) return this.env.dropTimeRange();
+    if (this.needsCompose && this.meta && this.full(target)) {
+      const chunks = [...(this.grids.get(target.cell)?.values() ?? [])].filter(t => t.to > target.k0 * target.cell && t.from <= target.k1 * target.cell).sort((a, b) => a.from - b.from).map(tile => {tile.shownAt = this.env.now(); return tile.chunk(this.meta!.known);});
+      this.shown = {...compose(chunks, this.meta, target, this.windows), board: this.board};
+      this.needsCompose = false;
+      this.publish();
+    }
+    if (this.timers.has('settle') || this.timers.has('retry')) return;
+    const bad = this.bad(target);
+    if (!bad.length) return;
+    const from = this.tile(bad[0], target.cell).validTo;
+    const to = Math.min(tileEnd(tileOf(bad.at(-1)!, target.cell), target.cell), cellStart(this.env.now(), target.cell) + 2 * target.cell);
+    const flight: Flight = {seq: ++this.seq, epoch: this.epoch, cell: target.cell, from, to, touched: Infinity};
+    this.flights.add(flight);
+    this.env.read(this.board, target.cell, from, to).then(answer => this.merge(flight, answer), error => this.failed(flight, error));
   }
 
-  private keep(slot: string, board: string, data: History) {
-    // Map order is insertion order: the one read last goes to the end, the board's oldest is dropped.
-    this.kept.delete(slot);
-    this.kept.set(slot, data);
-    const ofBoard = [...this.kept.keys()].filter(key => key.startsWith(`${board} `));
-    if (ofBoard.length > KEPT_RANGES) this.kept.delete(ofBoard[0]);
+  private merge(flight: Flight, answer: HistoryAnswer) {
+    this.flights.delete(flight);
+    if (flight.epoch !== this.epoch || answer.run !== this.run) return;
+    for (const chunk of answer.chunks) {
+      const tile = this.tile(chunk.from, flight.cell);
+      if (tile.writeSeq > flight.seq) continue;
+      tile.merge(chunk, answer.known);
+      tile.writeSeq = flight.seq;
+      if (chunk.from <= tile.validTo) tile.validTo = Math.max(tile.validTo, Math.min(chunk.to, cellStart(flight.touched, flight.cell)));
+      if (chunk.from <= tile.readTo) tile.readTo = Math.max(tile.readTo, chunk.to);
+    }
+    if (flight.seq > this.metaSeq) {
+      this.metaSeq = flight.seq;
+      this.meta = {now: answer.now, historyStart: answer.historyStart, known: answer.known};
+      const to = answer.chunks.at(-1)?.to;
+      if (to !== undefined && to > answer.now + CLOCK_TOLERANCE_MS) this.cutTo = to;
+    }
+    this.needsCompose = true;
+    this.evict();
+    this.schedule();
   }
 
-  /** News of measurements at `since` or later: the ranges kept of the open board that hold that time go, and answers on their way are told, but one asked for after the news reached the hub. */
-  private forget(since: number, after?: {since: number}) {
-    for (const [slot, answer] of this.kept) if (answer.board === this.board && since <= answer.to) this.kept.delete(slot);
-    for (const flight of this.underway) if (flight !== after) flight.since = Math.min(flight.since, since);
+  private failed(flight: Flight, error: unknown) {
+    this.flights.delete(flight);
+    if (flight.epoch !== this.epoch) return;
+    const target = this.target();
+    if (error instanceof ApiError && error.status === 400 && this.selected && target.cell === flight.cell && flight.from <= target.k0 * target.cell && flight.to > target.k1 * target.cell) return this.env.dropTimeRange();
+    this.clear('retry');
+    this.timers.set('retry', this.env.setTimeout(() => {this.clear('retry'); this.schedule();}, RETRY_MS));
   }
 
-  private cancel() {
-    this.reading = null;
-    for (const name of ['settle', 'later', 'retry'] as const) this.clear(name);
+  private evict() {
+    const target = this.target();
+    const candidates: {cell: number; n: number; tile: HistoryTile}[] = [];
+    for (const [cell, tiles] of this.grids) for (const [n, tile] of tiles) {
+      if (cell === target.cell && tile.to > target.k0 * cell && tile.from <= target.k1 * cell) continue;
+      candidates.push({cell, n, tile});
+    }
+    let bytes = this.estimatedBytes;
+    for (const {cell, n, tile} of candidates.sort((a, b) => a.tile.shownAt - b.tile.shownAt)) {
+      if (bytes <= this.budget) break;
+      this.grids.get(cell)!.delete(n);
+      bytes -= tile.bytes;
+    }
   }
 
-  private clear(name: 'settle' | 'later' | 'retry') {
+  private clear(name: 'settle' | 'retry') {
     if (!this.timers.has(name)) return;
     this.env.clearTimeout(this.timers.get(name));
     this.timers.delete(name);
   }
 }
 
-const keyOf = (lineup: string[]) => [...lineup].sort().join(',');
-
-export const loader = new HistoryLoader({
-  read: (board, query) => call<History>('GET', `/api/history?board=${encodeURIComponent(board)}&${query}`),
-  now: () => Date.now(),
+const keyOf = (lineup: string[]) => [...lineup].sort().join('\n');
+export const loader = new HistoryStore({
+  read: (board, cell, from, to) => call<HistoryAnswer>('GET', `/api/history?board=${encodeURIComponent(board)}&cell=${cell}&from=${from}&to=${to}`),
+  now: hubNow,
   setTimeout: (run, ms) => setTimeout(run, ms),
   clearTimeout: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
   dropTimeRange,
 });
 
-/** What the loader hears of the page's events: its board opened or left, the board's snapshot, lineup and news of measurements. */
-export function follow(loader: HistoryLoader, store: Store<PageState, PageEvent>) {
+/** Connection, board and window changes drive history; widgets only read it. */
+export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>) {
   return store.listen((event, state) => {
     if (event.type === 'board-open') loader.open(event.id);
     else if (event.type === 'board-close') loader.close();
-    else if (event.type === 'hub' && event.event.type === 'snapshot') loader.snapshot(state.board?.lineup ?? []);
-    else if (event.type === 'hub' && event.event.type === 'lineup') loader.lineup(state.board?.lineup ?? []);
-    else if (event.type === 'hub' && event.event.type === 'history') loader.news(event.event.data.since);
+    else if (event.type === 'hub') {
+      const hub = event.event;
+      if (hub.type === 'hello') loader.hello(hub.data.epoch);
+      else if (hub.type === 'snapshot') loader.snapshot(state.board?.lineup ?? [], windowsOf(state));
+      else if (hub.type === 'lineup') {loader.lineup(state.board?.lineup ?? []); loader.setWindows(windowsOf(state));}
+      else if (hub.type === 'card') loader.setWindows(windowsOf(state));
+      else if (hub.type === 'history') loader.news(hub.data.since);
+    }
   });
 }
-
-// The page's events, its period and its selection drive the loader; nothing on screen does.
+const windowsOf = (state: PageState) => Object.values(state.board?.cards ?? {}).flatMap(card => card.windows.map(window => `${card.id} ${window.id}`));
 follow(loader, page);
 if (typeof window !== 'undefined') {
   const chosen = () => loader.choose(prefs().range, timeRange());
@@ -284,15 +303,8 @@ if (typeof window !== 'undefined') {
   onTimeRange(chosen);
   chosen();
 }
-
-/** The history on screen, and whether another is loading in its place. */
-export function useHistory(): Shown {
-  return useSyncExternalStore(loader.subscribe, loader.get, loader.get);
-}
-
+export function useHistory(): Shown {return useSyncExternalStore(loader.subscribe, loader.get, loader.get);}
 const answeredStart = () => loader.get().history?.historyStart ?? null;
-
-/** Where the board's history begins: as the answer on screen says, else as the board's snapshot did (spec: `historyStart`). */
 export function useHistoryBegins(): number {
   const answered = useSyncExternalStore(loader.subscribe, answeredStart, answeredStart);
   const snapshot = useHistoryStart();

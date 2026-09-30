@@ -6,7 +6,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {firstSignup, haltRequests, healthy} from './client.js';
 import {SCENES, SETS} from './catalogue.js';
-import {earliest, liveStep, MIN, people, SECOND, type DemoSet} from './model.js';
+import {accountOf, cards, earliest, liveStep, MIN, people, SECOND, type DemoSet} from './model.js';
 import {Store} from '../server/store/store.js';
 import {emailOf, Live, PASSWORD, seedWork, setUp, type Stand} from './setup.js';
 import {Trackers} from './trackers.js';
@@ -14,8 +14,8 @@ import {Trackers} from './trackers.js';
 /**
  * `npm run demo -- [set] [--resets <scene>] [--still]`: a hub on throwaway data, filled with
  * the catalogue (demo/catalogue.ts) through its public requests and kept alive: machines
- * measure, agents start, work and stop, one machine sleeps; with `--still`, nothing changes
- * but the time (see `Demo`). The reset trackers are stood in for, so nothing goes to the
+ * measure, agents start, work and stop, one machine sleeps; with `--still`, measurements stop
+ * while running agents still work (see `Demo`). The reset trackers are stood in for, so nothing goes to the
  * network. Ctrl+C stops it and leaves nothing behind.
  *
  * It runs the built hub (`npm run build` first), as `npm start` does, with the
@@ -103,7 +103,8 @@ class Output {
  * agents start, work and stop, one machine sleeps. `still` keeps it still instead: nothing
  * is measured after the history, no machine checks in, every machine awake at the start
  * tells the same list of running agents again, and the last measurements hold for hours
- * (setup.ts), so the board changes only with the clock (the benchmark's idle page).
+ * (setup.ts). Agents still work, so credited activity advances; the benchmark's
+ * `idleAgents` additionally keeps their lists without working.
  * `onExit` hears of the hub stopping by itself: 0 for a clean exit (Ctrl+C reached it
  * first), else 1, its output already printed.
  */
@@ -115,6 +116,22 @@ export class Demo {
   private trackers: Trackers | undefined;
   private timer: NodeJS.Timeout | undefined;
   stopping = false;
+  private benchWork = false;
+  private readonly reports = new Set<(machine: string, at: number) => void>();
+
+  /** The benchmark's extra session stays in the list; only its work changes, not layout. */
+  work(enabled: boolean) {
+    if (!this.options.idleAgents) throw new Error('work control needs an idle-agent stand');
+    this.benchWork = enabled;
+  }
+
+  nextReport(machine: string): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {this.reports.delete(heard); reject(new Error(`no report from ${machine}`));}, 2 * TICK + 10_000);
+      const heard = (id: string, at: number) => {if (id === machine) {clearTimeout(timer); this.reports.delete(heard); resolve(at);}};
+      this.reports.add(heard);
+    });
+  }
 
   constructor(
     private readonly options: {set: DemoSet; scene: string; still: boolean; idleAgents?: boolean; address: ReturnType<typeof addressOf>; onExit: (code: number) => void},
@@ -163,7 +180,15 @@ export class Demo {
     }
     await selfCheck(stand, this.trackers);
 
-    const live = new Live(stand, card => liveStep(card), true, (_machine, sessions) => this.options.idleAgents ? sessions.map(s => ({...s, working: false, lastWorkedAt: s.lastWorkedAt ?? new Date(this.start).toISOString()})) : sessions);
+    const live = new Live(stand, card => liveStep(card), true, (machine, sessions) => {
+      if (!this.options.idleAgents) return sessions;
+      const idle = sessions.map(s => ({...s, working: false, lastWorkedAt: s.lastWorkedAt ?? new Date(this.start).toISOString()}));
+      if (machine.id === 'laptop') {
+        const card = cards(set).find(c => c.id === 'antigravity')!;
+        idle.push({provider: card.provider, ...accountOf(card), origin: 'terminal', project: 'Benchmark', folder: undefined, startedAt: new Date(this.start).toISOString(), working: this.benchWork, lastWorkedAt: new Date(this.start).toISOString()});
+      }
+      return idle;
+    }, (machine, at) => {for (const heard of this.reports) heard(machine.id, at);});
     const tick = async () => {
       const t = Date.now() - this.start;
       try {
@@ -300,7 +325,7 @@ function greet(stand: Stand, address: ReturnType<typeof addressOf>, pid: number,
       '',
       `  set    ${stand.set.id}: ${stand.set.about}`,
       `  resets ${scene}`,
-      ...(still ? ['  still  nothing is measured: only the time moves'] : []),
+      ...(still ? ['  still  nothing is measured; running agents still work'] : []),
       '',
       `  Sign in as (password ${PASSWORD}):`,
       ...people(stand.set).map(p => `    ${emailOf(p.id).padEnd(20)} ${p.name}`),

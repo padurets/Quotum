@@ -30,14 +30,14 @@ export function targetOf(length: number, now: number, key: string, selected?: {f
 }
 
 export type CellExtra = {f?: number; l?: number; o?: number | null; g?: 1; h?: number; w?: [number, number, number]};
-export type SeriesCell = [number, number, number, number, CellExtra?];
+export type SeriesCell = [index: number, low: number, spent: number, covered: number, extra?: CellExtra];
 export type SeriesCells = {source: string; window: string; hold: number; open: number | null; cells: SeriesCell[]};
 export type SessionCell = number | [number, number];
-export type GroupCell = ['s' | 'p' | 'd', string, number];
+export type GroupCell = [dimension: 's' | 'p' | 'd', key: string, activeMs: number];
 export type ActivityCells<Ref = string> = {
-  sessions: [Ref, string, string | null, string][];
+  sessions: [ref: Ref, source: string, project: string | null, device: string][];
   devices: Record<string, string>;
-  cells: [number, number, SessionCell[], GroupCell[]][];
+  cells: [index: number, active: number, sessions: SessionCell[], groups: GroupCell[]][];
 };
 export type Chunk<Ref = string> = {
   from: number;
@@ -53,13 +53,26 @@ export type SourceEvent =
   | {sourceId: string; at: number; kind: 'early_reset'; windows: string[]}
   | {sourceId: string; at: number; kind: 'resets_granted'; count: number};
 export type HistorySeries = {
-  sourceId: string; windowId: string; consumed: number; coveredMs: number;
-  remainingAtStart: number | null; remainingAtEnd: number | null; staleAfterMs: number;
-  points: [number, number, number][]; work: SeriesWork | null;
+  sourceId: string;
+  windowId: string;
+  consumed: number;
+  coveredMs: number;
+  remainingAtStart: number | null;
+  remainingAtEnd: number | null;
+  staleAfterMs: number;
+  points: [cellStart: number, remaining: number, segment: number][];
+  work: SeriesWork | null;
 };
 export type History = {
-  board?: string; range: string; live: boolean; since: number; to: number; cellMs: number; historyStart: number;
-  series: HistorySeries[]; events: SourceEvent[];
+  board?: string;
+  range: string;
+  live: boolean;
+  since: number;
+  to: number;
+  cellMs: number;
+  historyStart: number;
+  series: HistorySeries[];
+  events: SourceEvent[];
   activity: Activity & {since: number; known: {from: number; to: number} | null};
 };
 
@@ -72,7 +85,10 @@ const roundOpen = (value: number | null) => value === null ? null : round4(value
 
 /** Defaults compare at the precision the reader sees, including its rounded low. */
 export function encodeCells(source: string, window: string, from: number, cell: number, since: number, cells: DecodedCell[]): SeriesCells {
-  const hold = cells[0].hold;
+  const holds = new Map<number, number>();
+  for (const v of cells) holds.set(v.hold, (holds.get(v.hold) ?? 0) + 1);
+  // The most common hold keeps cadence changes from repeating an override in every cell.
+  const hold = [...holds].sort((a, b) => b[1] - a[1])[0][0];
   const open = roundOpen(cells[0].open);
   let previous = open;
   const encoded = cells.map((v): SeriesCell => {

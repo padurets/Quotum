@@ -1,3 +1,4 @@
+import {cellOf, cellStart} from '../server/domain/history.js';
 import {createServer} from 'node:net';
 import {realpathSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
@@ -5,7 +6,7 @@ import {SETS} from '../demo/catalogue.js';
 import {addressOf, Demo, prepare, Stop} from '../demo/index.js';
 import {cards, MIN, people, snapshot} from '../demo/model.js';
 import type {Snapshot} from '../server/projection.js';
-import {idleProblems, measuredProblems, percentile} from './budget.js';
+import {HISTORY_BYTES_PER_MEASUREMENT, LATENCY_P95_MS, idleProblems, measuredProblems, percentile, renderProblems} from './budget.js';
 import {attachedChrome, findChrome, launchChrome, openTab, type Browser, type Cdp} from './cdp.js';
 import {probeScript, type Reading} from './probe.js';
 import {delta, round, scriptPerSecond, tally, type Metrics} from './report.js';
@@ -15,7 +16,7 @@ import {hear, type Heard} from './stream.js';
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
  * measured in a real browser on the built hub and page (`npm run build` first). A hub of
- * the demo's catalogue stands still (demo `--still`); Ana's personal board is opened in
+ * the demo's catalogue stands still, its agents not working; Ana's personal board is opened in
  * headless Chrome (QUOTUM_CHROME, else the first Chrome on PATH, or one already running,
  * with `--cdp`), and the page is watched while nothing but the clock changes: what it
  * asks the hub and the hub tells the board, what React renders and the DOM changes, and
@@ -75,7 +76,9 @@ export class Requests {
   count = 0;
   bytes = 0;
   readonly byPath: Record<string, number> = {};
-  private readonly ids = new Set<string>();
+  readonly bytesByPath: Record<string, number> = {};
+  private readonly ids = new Map<string, string>();
+  get historyPending() {return [...this.ids.values()].filter(path => path === '/api/history').length;}
 
   constructor(cdp: Cdp) {
     cdp.on<{requestId: string; type?: string; request: {url: string}}>('Network.requestWillBeSent', event => {
@@ -83,10 +86,11 @@ export class Requests {
       const url = new URL(event.request.url);
       this.count++;
       this.byPath[url.pathname] = (this.byPath[url.pathname] ?? 0) + 1;
-      this.ids.add(event.requestId);
+      this.ids.set(event.requestId, url.pathname);
     });
     cdp.on<{requestId: string; encodedDataLength: number}>('Network.loadingFinished', event => {
-      if (this.ids.delete(event.requestId)) this.bytes += event.encodedDataLength;
+      const path = this.ids.get(event.requestId);
+      if (path) {this.ids.delete(event.requestId); this.bytes += event.encodedDataLength; this.bytesByPath[path] = (this.bytesByPath[path] ?? 0) + event.encodedDataLength;}
     });
   }
 }
@@ -169,13 +173,17 @@ async function main() {
     requests.counting = false;
     const events = heard.counts();
     const reading = await cdp.evaluate<Reading>('__quotumBench.read()');
-    const {cellMs} = await ana.get<{cellMs: number}>(`/api/history?board=${encodeURIComponent(board)}&range=24h`);
+    const cellMs = cellOf(86_400_000);
     const scriptMsPerSecond = round(scriptPerSecond(before, after, reading.instrumentMs, seconds));
     const idle = {from, to, cellMs, requests, events, renders: reading.renders, mutations: reading.mutations, scriptMsPerSecond};
 
     const measured = await measure(stand, cdp);
+    const worked = await work(demo, stand, cdp);
     const problems = [
       ...idleProblems(idle),
+      ...worked.problems,
+      ...(percentile(measured.chartLatencies, .95) <= LATENCY_P95_MS ? [] : ['a measurement missed the chart latency budget']),
+      ...(measured.historyBytes <= HISTORY_BYTES_PER_MEASUREMENT ? [] : [`history read ${measured.historyBytes} bytes per measurement, above budget`]),
       ...measuredProblems({
         card: measured.source,
         latencies: measured.latencies,
@@ -205,9 +213,12 @@ async function main() {
         lost: measured.latencies.filter(latency => !Number.isFinite(latency)).length,
         medianMs: Math.round(percentile(measured.latencies, 0.5)),
         p95Ms: Math.round(percentile(measured.latencies, 0.95)),
+        chartP95Ms: Math.round(percentile(measured.chartLatencies, 0.95)),
+        historyBytesPerMeasurement: measured.historyBytes,
         renders: tally(measured.reading.renders).outsideBy,
         mutations: tally(measured.reading.mutations).outsideBy,
       },
+      work: worked.reports,
       problems,
     };
     console.log(JSON.stringify(result, null, 2));
@@ -234,21 +245,62 @@ async function measure(stand: Awaited<ReturnType<Demo['run']>>, cdp: Cdp) {
   await cdp.evaluate('__quotumBench.reset()');
   const from = Date.now();
   const latencies: number[] = [];
+  const chartLatencies: number[] = [];
+  const requests = new Requests(cdp); requests.counting = true;
+  const overview = await stand.people.get(people(stand.set)[0].id)!.get<Snapshot>('/api/overview');
+  const initial = overview.sources.find(s => s.id === source)!.windows.find(w => w.id === 'gemini:weekly')!.used;
   for (let i = 0; i < MEASUREMENTS; i++) {
     await cdp.evaluate('__quotumBench.forgetCards()');
     const taken = snapshot(card, stand.start, Date.now() - stand.start, 5 * MIN);
-    const windows = taken.windows.map((w, j) => (j === 0 ? {...w, usedPercent: 10 + i} : w));
+    const used = initial + (i + 1) * .1;
+    const windows = taken.windows.map(w => w.id === 'gemini:weekly' ? {...w, usedPercent: used} : w);
+    const last = `${cellStart(Date.parse(taken.observedAt), cellOf(86_400_000))}:${Math.round((100 - used) * 100) / 100}`;
     const sent = Date.now();
     await agent.ingest([{...taken, windows}], [], sent);
     let changed: number | null = null;
-    while (changed === null && Date.now() < sent + SHOWN_WITHIN) {
+    let chart: number | null = null;
+    while ((changed === null || chart === null) && Date.now() < sent + SHOWN_WITHIN) {
       changed = await cdp.evaluate<number | null>(`__quotumBench.cardChanged(${JSON.stringify(source)})`);
-      if (changed === null) await sleep(20);
+      chart = await cdp.evaluate<number | null>(`__quotumBench.seriesChanged(${JSON.stringify(source + ' gemini:weekly')}, ${JSON.stringify(last)})`);
+      if (changed === null || chart === null) await sleep(20);
     }
     latencies.push(changed === null ? Infinity : changed - sent);
+    chartLatencies.push(chart === null ? Infinity : chart - sent);
     await sleep(sent + MEASURE_EVERY - Date.now());
   }
-  return {source, latencies, reading: await cdp.evaluate<Reading>('__quotumBench.read()'), from, to: Date.now()};
+  await drain(requests); requests.counting = false;
+  return {source, latencies, chartLatencies, historyBytes: (requests.bytesByPath['/api/history'] ?? 0) / MEASUREMENTS, reading: await cdp.evaluate<Reading>('__quotumBench.read()'), from, to: Date.now()};
+}
+
+async function drain(requests: Requests) {
+  const until = Date.now() + SHOWN_WITHIN;
+  while (requests.historyPending && Date.now() < until) await sleep(20);
+  if (requests.historyPending) throw new Stop('history reads did not finish');
+}
+
+/** Every credited tick is observed separately; the stand remains the sole list writer. */
+async function work(demo: Demo, stand: Awaited<ReturnType<Demo['run']>>, cdp: Cdp) {
+  const source = stand.sources.get(MEASURED)!;
+  const reports: {at: number; reads: number; bytes: number}[] = [];
+  const problems: string[] = [];
+  demo.work(true);
+  await demo.nextReport('laptop'); // First list starts the work; the next credits it.
+  await sleep(1000);
+  for (let i = 0; i < 3; i++) {
+    await cdp.evaluate('__quotumBench.reset()');
+    const requests = new Requests(cdp); requests.counting = true;
+    const from = Date.now();
+    if (i === 2) demo.work(false); // This report credits the last working list.
+    const at = await demo.nextReport('laptop');
+    await sleep(1000); await drain(requests); requests.counting = false;
+    const reading = await cdp.evaluate<Reading>('__quotumBench.read()');
+    const reads = requests.byPath['/api/history'] ?? 0;
+    const bytes = requests.bytesByPath['/api/history'] ?? 0;
+    reports.push({at, reads, bytes});
+    if (reads !== 1 || bytes > HISTORY_BYTES_PER_MEASUREMENT) problems.push(`work report read history ${reads} times, ${bytes} bytes`);
+    problems.push(...renderProblems({card: source, renders: reading.renders, mutations: reading.mutations, from, to: Date.now()}));
+  }
+  return {reports, problems};
 }
 
 /** Run as the command, not imported. */

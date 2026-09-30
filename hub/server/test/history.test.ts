@@ -1,9 +1,10 @@
+import {activity} from './activityReference.js';
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {cellOf, compose, decodeCells, encodeCells, targetOf, tileOf, type Chunk, type DecodedCell} from '../domain/history.js';
 import {cellsOf, workFrom, type CellSamples} from '../domain/cells.js';
 import {edge} from '../domain/quota.js';
-import {activity, barOf, overlap, union, type Stretch} from '../domain/work.js';
+import {barOf, overlap, union, type Stretch} from '../domain/work.js';
 
 const M = 60_000;
 const meta = {now: 120 * M, historyStart: 0, known: {work: 0, sources: {s: 0}}};
@@ -129,7 +130,7 @@ test('random measurements and parallel work compose as the direct definitions, a
       const before = samples.filter(s => s.at < a).at(-1);
       const rows = [...(before ? [before] : []), ...samples.filter(s => s.at >= a && s.at < b)];
       const built = cellsOf([{source: 's', window: 'w', samples: rows}], work, names, M, a, b, known);
-      chunks.push(...built.map(c => ({...c, activity: {...c.activity, sessions: c.activity.sessions.map(([id, ...rest]) => [String(id), ...rest])}})));
+      chunks.push(...built.map((c): Chunk => ({...c, activity: {...c.activity, sessions: c.activity.sessions.map(([id, ...rest]) => [String(id), ...rest])}})));
       a = b;
     }
     const target = targetOf(to - from, to, 'past', {from, to});

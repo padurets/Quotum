@@ -608,7 +608,7 @@ export const workSince = (set: DemoSet) => Math.max(WORK_SINCE, earliest(set));
 const iso = (start: number, t: number) => new Date(start + t).toISOString();
 
 /** How the snapshot names the account, as its client would. */
-function accountOf(card: Card): {account?: string; accountName?: string} {
+export function accountOf(card: Card): {account?: string; accountName?: string} {
   const account = card.account === undefined ? (card.provider === 'antigravity' ? null : 'pseudonym') : card.account;
   if (account === 'pseudonym') return {account: pseudonym(card.id)};
   return account ? {accountName: account.name} : {};

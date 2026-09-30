@@ -12,6 +12,8 @@ export const IDLE_SCRIPT_MS_PER_SECOND = 0.3;
 
 /** A measurement shows on its card within this, for 95 of 100. */
 export const LATENCY_P95_MS = 1000;
+/** Ana's day measured up to 3.1 KB per update (rounded up); 1.5 times that is below a tenth of its former 364 KB. */
+export const HISTORY_BYTES_PER_MEASUREMENT = 4650;
 
 /** How often the hub tells a stream it is there (spec/dashboard-v1.md, `hello.heartbeatMs`). */
 const HEARTBEAT_MS = 25_000;
@@ -98,6 +100,13 @@ export function measuredProblems({card, latencies, renders, mutations, from, to}
   const own = `card:${card}`;
   const seen = renders.filter(part => part.region === own && !part.time).reduce((sum, part) => Math.max(sum, part.count), 0);
   if (seen < latencies.length - lost) found.push(`the card rendered ${seen} times for ${latencies.length - lost} measurements shown: React's work is not seen`);
+  return [...found, ...renderProblems({card, renders, mutations, from, to})];
+}
+
+/** Reports and measurements may render only their card, the agents and analytics. */
+export function renderProblems({card, renders, mutations, from, to}: Omit<Measured, 'latencies'>): string[] {
+  const found: string[] = [];
+  const own = `card:${card}`;
   const beyond = renders.filter(part => !part.time && ![own, 'agents', 'analytics'].includes(part.region));
   if (beyond.length) found.push(`measurements of ${card} rendered ${beyond.map(part => `${part.region} ${part.node} ×${part.count}`).join(', ')}`);
   const changed = mutations.filter(part => !part.time && ((part.region.startsWith('card:') && part.region !== own) || part.region === 'header'));

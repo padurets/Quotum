@@ -1,9 +1,15 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {IDLE_SCRIPT_MS_PER_SECOND, idleProblems, LATENCY_P95_MS, measuredProblems, percentile, type Idle, type Measured} from '../budget.js';
+import {IDLE_SCRIPT_MS_PER_SECOND, idleProblems, LATENCY_P95_MS, measuredProblems, percentile, renderProblems, type Idle, type Measured} from '../budget.js';
 import type {Counted} from '../probe.js';
 
 const MIN = 60_000;
+
+test('work reports use the render budget independently of measurement latency', () => {
+  const report = {card: 's1', renders: [part('card:s1', null, 1), part('agents', null, 1), part('analytics', null, 1)], mutations: [], from: 0, to: MIN};
+  assert.deepEqual(renderProblems(report), []);
+  assert.match(renderProblems({...report, renders: [...report.renders, part('header', null, 1)]}).join('\n'), /rendered/);
+});
 const part = (region: string, kind: string | null, count: number): Counted => ({
   node: kind ? `span[data-time=${kind}]#1` : 'div#2',
   time: kind !== null,

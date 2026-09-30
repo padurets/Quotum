@@ -1,3 +1,5 @@
+import {compose, targetOf, tileOf, tileStart, type HistoryAnswer} from '../../server/domain/history.js';
+import {periodOf} from '../../ui/lib/periods.js';
 import {test, type TestContext} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtempSync, readFileSync, rmSync} from 'node:fs';
@@ -164,8 +166,15 @@ class Reading {
     const key = `${board} ${JSON.stringify(range)}`;
     if (!this.histories.has(key)) {
       const id = this.stand.boards.get(board)!;
-      const period = typeof range === 'string' ? `range=${range}` : `from=${this.stand.start + range.from}&to=${this.stand.start + range.to}`;
-      this.histories.set(key, this.reader(board).get<History>(`/api/history?${period}&board=${encodeURIComponent(id)}`));
+      const selected = typeof range === 'string' ? null : {from: this.stand.start + range.from, to: this.stand.start + range.to};
+      const length = typeof range === 'string' ? periodOf(range).ms : range.to - range.from;
+      const target = targetOf(length, this.now, typeof range === 'string' ? range : `${selected!.from}-${selected!.to}`, selected);
+      const from = tileStart(tileOf(target.k0 * target.cell, target.cell), target.cell);
+      const to = (target.k1 + 1) * target.cell;
+      this.histories.set(key, Promise.all([
+        this.reader(board).get<HistoryAnswer>(`/api/history?cell=${target.cell}&from=${from}&to=${to}&board=${encodeURIComponent(id)}`),
+        this.overview(board),
+      ]).then(([answer, overview]) => compose(answer.chunks, answer, target, new Set(overview.sources.flatMap(s => s.windows.map(w => `${s.id} ${w.id}`))))));
     }
     return this.histories.get(key)!;
   }

@@ -314,6 +314,7 @@ export class Live {
     private readonly rhythm: Rhythm,
     private readonly paced = false,
     private readonly reportSessions = (_machine: Machine, sessions: ReturnType<typeof sessionsAt>) => sessions,
+    private readonly reported = (_machine: Machine, _at: number) => {},
   ) {}
 
   /** Measurement times of a card by a machine in (from, to]: minutes on its cadence. */
@@ -408,5 +409,6 @@ export class Live {
     const sessions = this.reportSessions(machine, sessionsAt(this.stand.set, machine, this.stand.start, t));
     const {accepted} = await this.stand.agents.get(machine.id)!.sessions(sessions, now);
     if (accepted !== sessions.length) throw new Error(`machine ${machine.id}: the hub filed ${accepted} of its ${sessions.length} running agents`);
+    this.reported(machine, now);
   }
 }

@@ -120,6 +120,8 @@ export function clientScript(root = config.clientRoot): string | null {
 }
 
 export class Events implements Touches {
+  /** The history cache hears every touch, also when no board is watched. */
+  onHistory: ((source: string, since: number) => void) | null = null;
   /** When this start of the hub began, base 36: a page tells a restart by it. */
   readonly epoch: string;
   readonly client: string | null;
@@ -256,6 +258,11 @@ export class Events implements Touches {
   }
 
   history(source: string, since: number) {
+    try {
+      this.onHistory?.(source, since);
+    } catch (error) {
+      trouble(error);
+    }
     for (const watched of this.watched.values()) {
       if (!watched.lineup.includes(source)) continue;
       let pending = this.histories.get(watched.id);

@@ -1,0 +1,79 @@
+import {createHmac, randomBytes} from 'node:crypto';
+import {config} from './config.js';
+import {tileEnd, tileOf, tileStart, type Chunk} from './domain/history.js';
+import type {Shown, Store} from './store/store.js';
+
+type Kept = {workKey: string; sources: Set<string>; cell: number; tile: number; json: string; bytes: number};
+
+/** JSON permits shorter exact integer spellings (300000 is 3e5); names stay untouched. */
+function compactJSON(value: unknown): string {
+  return JSON.stringify(value).replace(/"(?:[^"\\]|\\.)*"|(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)/g, (token, number: string | undefined) => {
+    if (!number || !/^-?\d+0{3,}$/.test(number)) return token;
+    const end = number.match(/0+$/)![0].length;
+    const shorter = `${number.slice(0, -end)}e${end}`;
+    return shorter.length < number.length ? shorter : token;
+  });
+}
+
+/** Only whole, closed tiles are shared; touches invalidate them even without readers. */
+export class HistoryTiles {
+  private readonly key = randomBytes(32);
+  private readonly kept = new Map<string, Kept>();
+  private bytes = 0;
+
+  constructor(private readonly store: Store, private readonly budget = 32 * 1024 * 1024) {}
+
+  ref(board: string, session: number) {
+    return createHmac('sha256', this.key).update(`${board}:${session}`).digest('base64url').slice(0, 8);
+  }
+
+  touch(source: string, since: number) {
+    for (const [key, tile] of this.kept) if (tile.sources.has(source) && tileEnd(tile.tile, tile.cell) > since) this.drop(key);
+  }
+
+  private drop(key: string) {
+    const tile = this.kept.get(key);
+    if (tile) this.bytes -= tile.bytes;
+    this.kept.delete(key);
+  }
+
+  /** JSON is stored as sent, so hits do not allocate or serialize all the cells again. */
+  read(board: string, cell: number, from: number, to: number, now: number, shown: Shown): string[] {
+    const sources = new Set(this.store.sources(board).map(s => s.id));
+    const oldest = now - (config.retention.sampleDays - 1) * 86_400_000;
+    const parts: {from: number; to: number; tile: number; key: string; eligible: boolean; json?: string}[] = [];
+    for (let at = from; at < to;) {
+      const tile = tileOf(at, cell);
+      const end = Math.min(to, tileEnd(tile, cell));
+      parts.push({from: at, to: end, tile, key: `${board} ${cell} ${tile}`, eligible: at === tileStart(tile, cell) && end === tileEnd(tile, cell) && end <= now && at >= oldest});
+      at = end;
+    }
+    const workKey = parts.some(p => p.eligible) ? this.store.workKey(board, shown) : '';
+    for (const part of parts) {
+      const hit = part.eligible ? this.kept.get(part.key) : undefined;
+      if (hit?.workKey !== workKey) continue;
+      part.json = hit.json;
+      this.kept.delete(part.key);
+      this.kept.set(part.key, hit);
+    }
+    for (let i = 0; i < parts.length;) {
+      if (parts[i].json !== undefined) {i++; continue;}
+      const start = i;
+      while (i < parts.length && parts[i].json === undefined) i++;
+      const chunks = this.store.cells(board, cell, parts[start].from, parts[i - 1].to, {now, shown});
+      chunks.forEach((raw, offset) => {
+        const part = parts[start + offset];
+        const chunk: Chunk = {...raw, activity: {...raw.activity, sessions: raw.activity.sessions.map(([id, ...rest]) => [this.ref(board, id), ...rest])}};
+        const json = (part.json = compactJSON(chunk));
+        if (part.eligible) {
+          this.drop(part.key);
+          const bytes = Buffer.byteLength(json);
+          this.kept.set(part.key, {workKey, sources, cell, tile: part.tile, json, bytes});
+          this.bytes += bytes;
+          while (this.bytes > this.budget && this.kept.size) this.drop(this.kept.keys().next().value!);
+        }
+      });
+    }
+    return parts.map(p => p.json!);
+  }
+}

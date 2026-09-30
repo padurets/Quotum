@@ -1,7 +1,9 @@
+import {cellsOf} from '../domain/cells.js';
+import {compose, type Chunk} from '../domain/history.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import type {Sample} from '../domain/quota.js';
-import {activity, barOf, overlap, seriesWork, subscriptionWork, union, workTime, type Activity, type Stretch} from '../domain/work.js';
+import {barOf, overlap, union, workTime, type Activity, type Stretch} from '../domain/work.js';
 
 const at = (time: string) => Date.parse(`2026-09-22T${time}:00Z`);
 const MIN = 60_000;
@@ -55,6 +57,26 @@ function assertStacks(result: Activity) {
       assert.equal(sum, agentMs, `${dimension} at ${new Date(cell).toISOString()}`);
     }
   }
+}
+
+/** Exercises the new wire cells and frame composition in the work scenarios. */
+function activity(stretches: Stretch[], known: {from: number; to: number}, cell: number, names: Map<string, string>): Activity {
+  const from = Math.floor(known.from / cell) * cell;
+  const to = Math.ceil(known.to / cell) * cell;
+  const thresholds = {work: known.from, sources: Object.fromEntries(stretches.map(s => [s.source, known.from]))};
+  const within = stretches.map(s => ({...s, from: Math.max(s.from, known.from), to: Math.min(s.to, known.to)})).filter(s => s.to > s.from);
+  const chunks: Chunk[] = cellsOf([], within, Object.fromEntries(names), cell, from, to, thresholds).map(c => ({...c, activity: {...c.activity, sessions: c.activity.sessions.map(([id, ...rest]) => [String(id), ...rest])}}));
+  const {since: _since, known: _known, ...result} = compose(chunks, {now: known.to, historyStart: 0, known: thresholds}, {cell, k0: from / cell, k1: to / cell - 1, length: to - from, live: false, key: '', now: known.to}, new Set()).activity;
+  return result;
+}
+
+function windowWork(samples: Sample[], stretches: Stretch[], known: {from: number; to: number}) {
+  const from = Math.floor(samples[0].at / MIN) * MIN;
+  const to = Math.ceil(known.to / MIN) * MIN;
+  const thresholds = {work: known.from, sources: {'codex:1': 0}};
+  const within = stretches.map(s => ({...s, from: Math.max(s.from, known.from), to: Math.min(s.to, known.to)})).filter(s => s.to > s.from);
+  const chunks: Chunk[] = cellsOf([{source: 'codex:1', window: 'weekly', samples}], within, {}, MIN, from, to, thresholds).map(c => ({...c, activity: {...c.activity, sessions: c.activity.sessions.map(([id, ...rest]) => [String(id), ...rest])}}));
+  return compose(chunks, {now: known.to, historyStart: 0, known: thresholds}, {cell: MIN, k0: from / MIN, k1: to / MIN - 1, length: to - from, live: false, key: '', now: known.to}, new Set(['codex:1 weekly'])).series[0].work!;
 }
 
 test('the time any agent worked counts each moment once', () => {
@@ -243,7 +265,7 @@ test('no work: empty cells and groups', () => {
 });
 
 test("a window's pace basis: only steps edge proves, from the known part on, and the work within them", () => {
-  const worked = union([stretch(at('10:05'), at('10:15')), stretch(at('11:00'), at('11:30'))]);
+  const worked = [stretch(at('10:05'), at('10:15')), stretch(at('10:05'), at('10:15')), stretch(at('11:00'), at('11:30'))];
   // Each step, up to the sample it is written by.
   const samples = [
     sample('09:50', 10),
@@ -255,7 +277,7 @@ test("a window's pace basis: only steps edge proves, from the known part on, and
     sample('11:20', 21), // work within: counted, during work
     sample('11:25', 22, {resetAt: at('23:00') + 3 * 86_400_000}), // a reset: not counted
   ];
-  const result = seriesWork(samples, worked, 50 * MIN, {from: at('10:00'), to: at('12:00')});
+  const result = windowWork(samples, worked, {from: at('10:00'), to: at('12:00')});
   assert.equal(result.from, at('10:00'));
   assert.equal(result.ms, 40 * MIN);
   assert.equal(result.agentMs, 50 * MIN, 'the subscription agent time passes through unchanged');
@@ -266,7 +288,7 @@ test("a window's pace basis: only steps edge proves, from the known part on, and
 
 test('nothing of the period known: no hours, and since when it is', () => {
   const since = at('12:00');
-  assert.deepEqual(seriesWork([sample('10:00', 10), sample('10:10', 12)], [], 0, {from: since, to: at('11:00')}), {
+  assert.deepEqual(windowWork([sample('10:00', 10), sample('10:10', 12)], [], {from: since, to: at('11:00')}), {
     from: since,
     ms: null,
     agentMs: 0,
@@ -274,7 +296,6 @@ test('nothing of the period known: no hours, and since when it is', () => {
     coveredMs: 0,
     duringWork: 0,
   });
-  assert.equal(seriesWork([], [], 0, {from: since, to: at('13:00')}).ms, 0, 'known, with no work');
 });
 
 for (const [name, specifications, expected] of [
@@ -320,13 +341,6 @@ for (const [name, specifications, expected] of [
     assertStacks(result);
   });
 }
-
-test('subscription work clips each agent to the known period, with activity counted once', () => {
-  const stretches = [stretch(at('09:00'), at('10:30')), stretch(at('10:15'), at('12:00'))];
-  assert.deepEqual(subscriptionWork(stretches, {from: at('10:00'), to: at('11:00')}), {worked: [[at('10:00'), at('11:00')]], agentMs: 75 * MIN});
-  assert.deepEqual(subscriptionWork(stretches, {from: at('11:00'), to: at('10:00')}), {worked: [], agentMs: 0});
-  assert.deepEqual(subscriptionWork([], {from: at('10:00'), to: at('11:00')}), {worked: [], agentMs: 0});
-});
 
 test('groups rank by agent-hours, then active time, then name and key', () => {
   const result = activity(

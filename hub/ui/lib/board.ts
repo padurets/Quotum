@@ -35,8 +35,9 @@ export type Snapshot = {
   resets: HubResets;
 };
 
-/** What the hub tells, as the page applies it; `hello`, `ping` and `bye` are the connection's own (live.ts). */
+/** What the hub tells, as the page applies it; `hello` also tells history the hub's run; `ping` and `bye` are the connection's own (live.ts). */
 export type HubEvent =
+  | {type: 'hello'; data: {epoch: string}}
   | {type: 'snapshot'; data: Snapshot}
   | {type: 'board'; data: {board: BoardMeta}}
   | {type: 'view'; data: {view: View}}
@@ -197,6 +198,7 @@ function hub(state: PageState, event: HubEvent): PageState {
     }
     case 'resets':
       return {...state, resets: withResets(state.resets, event.data)};
+    case 'hello':
     case 'history':
       // Nothing to keep: the history loader hears of it (lib/history.ts).
       return state;

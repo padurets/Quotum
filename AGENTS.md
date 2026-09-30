@@ -44,11 +44,13 @@ macOS and Windows, and builds the app on Windows and Linux and runs each build
 one system, say so.
 
 `npm run bench` in `hub/` (after `npm run build`) measures the board in headless Chrome
-against its budget (`hub/bench/budget.ts`): an idle board asks the hub nothing and
-renders nothing but what shows time, and every measurement shows on its card, 95 of
-100 within a second, rendering no other card nor the header. Run it when you change
-the dashboard and have Chrome (`QUOTUM_CHROME`, one on `PATH`, or `--cdp` to one
-already running); CI runs it on every push and fails over budget.
+against its budget (`hub/bench/budget.ts`). An idle board has neither measurements nor
+working agents: it asks the hub nothing and renders only what shows time. Every
+measurement reaches its card and chart, 95 of 100 within a second, reading only new
+history cells and rendering no other card nor the header. A machine report crediting
+work makes at most one small history read and renders only its card, agents and
+analytics. Run it when you change the dashboard and have Chrome (`QUOTUM_CHROME`, one
+on `PATH`, or `--cdp` to one already running); CI fails over budget.
 
 `npm start` in `hub/` serves the built dashboard on `127.0.0.1:8080` (a new hub prints
 the setup code of the first account to its log). `npm run demo` in `hub/` serves it on

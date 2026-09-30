@@ -1,3 +1,4 @@
+import {cellOf, compose, targetOf, tileOf, tileStart, type HistoryAnswer} from '../domain/history.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {existsSync, mkdtempSync} from 'node:fs';
@@ -19,6 +20,8 @@ import {Setup} from '../setup.js';
 import {legacyLayout, MAX_ROWS, ordered, placesOf, settle, widened, withPlaces} from '../../ui/lib/grid.js';
 import {MAX_ROWS as HUB_MAX_ROWS} from '../domain/view.js';
 
+const PERIODS = Object.entries({'1h': 1, '3h': 3, '6h': 6, '12h': 12, '24h': 24, '3d': 72, '7d': 168, '14d': 336, '30d': 720}).map(([id, hours]) => ({id, ms: hours * 3_600_000}));
+const periodOf = (id: string) => PERIODS.find(p => p.id === id)!;
 const iso = (ms: number) => new Date(ms).toISOString();
 const ORIGIN = 'http://localhost';
 const SETUP = 'BCDF-GHJK';
@@ -599,61 +602,50 @@ test('a request is given 30 seconds to arrive, and one that takes longer is answ
   assert.deepEqual([midway.written, midway.destroyed], ['', true], 'an answer on its way is cut short, not spliced with another');
 });
 
-test('history reads a period selected on the chart, up to a month, on a grid fine enough for it', async () => {
+test('history validates cell edges, supported grids, retention, tile count and access, then cuts the open end', async () => {
   const {call, person} = await hub();
-  await person('alice');
+  const board = await person('alice');
   const now = Date.now();
-  const read = (query: string) => call('GET', `/api/history?${query}`, {as: 'alice'});
-  const minute = 60_000;
-  const hour = await read(`from=${now - 3_600_000}&to=${now - 1_800_000}`);
-  assert.deepEqual(
-    [hour.status, hour.body.since, hour.body.to, hour.body.cellMs],
-    [200, Math.floor((now - 3_600_000) / minute) * minute, Math.ceil((now - 1_800_000) / minute) * minute, minute],
-    'out to whole cells',
-  );
-  const nearly = await read(`from=${now - 3_600_000 + 1}&to=${now - 1_800_000 - 1}`);
-  assert.deepEqual([nearly.body.since, nearly.body.to], [hour.body.since, hour.body.to], 'less than a cell apart: one answer');
-  const week = await read(`from=${now - 7 * 86_400_000}&to=${now}`);
-  assert.equal(week.body.cellMs, 30 * 60_000, 'as dense as the ranges ending now');
-  const month = await read(`from=${now - 31 * 86_400_000 + 3_600_000}&to=${now}`);
-  assert.equal(month.body.cellMs, 2 * 3_600_000, 'a day over a month keeps the grid of a month');
-  const ahead = await read(`from=${now - 3_600_000}&to=${now + 86_400_000}`);
-  assert.ok(ahead.body.to <= Date.now(), 'it ends now at the latest');
-  const fixed = await read('range=24h');
-  assert.equal(fixed.body.to, fixed.body.now, 'a period of the list ends now');
-  for (const query of [`from=${now - 600_000}&to=${now}`, `from=${now - 40 * 86_400_000}&to=${now}`, `from=${now - 100 * 86_400_000}&to=${now - 90 * 86_400_000}`, `from=${now - 3_600_000}`, 'from=abc&to=def']) {
-    assert.equal((await read(query)).status, 400, query);
-  }
+  const cell = 60_000;
+  const from = Math.floor((now - 3_600_000) / cell) * cell;
+  const read = (query: string, as = 'alice') => call('GET', `/api/history?board=${board}&${query}`, {as});
+  const valid = `cell=${cell}&from=${from}&to=${Math.floor(now / cell) * cell + cell * 2}`;
+  assert.equal((await read(valid, 'anonymous')).status, 401);
+  const team = (await call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
+  const invite = (await call('POST', `/api/boards/${team}/invites`, {as: 'alice'})).body.url.split('/invite/')[1];
+  await person('bob', invite);
+  assert.equal((await read(valid, 'bob')).status, 404);
+  const first = await read(valid);
+  assert.equal(first.status, 200);
+  const answer = first.body as HistoryAnswer;
+  assert.ok(answer.run);
+  assert.equal(answer.chunks[0].from, from);
+  assert.equal(answer.chunks.at(-1)!.to, Math.floor((answer.now + 30_000) / cell) * cell + cell);
+  assert.equal((await read(`cell=${cell}&from=${from}&to=${now + 1000}`)).status, 200, 'a future end is cut to whole cells');
+  for (const query of [
+    `cell=3600000&from=${from}&to=${from + cell}`, `cell=21600000&from=${from}&to=${from + cell}`, `cell=43200000&from=${from}&to=${from + cell}`,
+    `cell=${cell}&from=${from + 1}&to=${from + cell}`, `cell=${cell}&from=${from}&to=${from}`, `cell=${cell}&from=${from}&to=${from + 1}`,
+    `cell=${cell}&from=${from - 9 * 3_600_000}&to=${from}`, `cell=${cell}&from=${from - 100 * 86_400_000}&to=${from - 99 * 86_400_000}`,
+    `cell=${cell}&from=abc&to=${now}`, `cell=+60000&from=${from}&to=${now}`, `range=24h`,
+  ]) assert.equal((await read(query)).status, 400, query);
 });
 
-test('a costly history is reused a while after new data, says when a newer one is ready, and never outlives a change of sources', async () => {
-  const {call, person} = await hub();
-  await person('alice');
-  const team = (await call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
-  const token = (await call('POST', '/api/tokens', {as: 'alice', body: {}})).body.secret;
-  const ingest = (at: number) =>
-    call('POST', '/v1/ingest', {body: {...batch('alices-laptop-0123456789'), snapshots: [snapshot(at)]}, headers: {authorization: `Bearer ${token}`}});
-  await ingest(Date.now() - 60_000);
-  const [source] = (await call('GET', '/api/overview', {as: 'alice'})).body.sources;
-  await call('POST', `/api/boards/${team}/shares`, {as: 'alice', body: {source: source.id}});
-  const read = async () => (await call('GET', `/api/history?board=${team}&range=30d`, {as: 'alice'})).body;
-  // Every answer costly, however small the board (the settings are read-only only to the type checker).
-  const history = config.history as {costlyMs: number};
-  const costly = history.costlyMs;
-  history.costlyMs = 0;
-  try {
-    const first = await read();
-    assert.equal(first.refreshInMs, null);
-    await ingest(Date.now() - 1_000);
-    const kept = await read();
-    assert.ok(kept.refreshInMs > 0, 'reused, and it says when a newer one is ready');
-    assert.equal(kept.series[0].samples, first.series[0].samples);
-    await call('DELETE', `/api/boards/${team}/shares/${source.id}`, {as: 'alice'});
-    assert.deepEqual((await read()).series, [], 'a source taken off the board is gone at once');
-  } finally {
-    history.costlyMs = costly;
-  }
-});
+/** A frame reader, like the page: the hub supplies cells and the cards supply windows. */
+async function readFrame(call: Awaited<ReturnType<typeof hub>>['call'], query: string, as = 'alice') {
+  const params = new URLSearchParams(query);
+  const board = params.get('board');
+  const overview = await call('GET', `/api/overview${board ? `?board=${board}` : ''}`, {as});
+  const selected = params.has('from') ? {from: Number(params.get('from')), to: Number(params.get('to'))} : null;
+  const period = periodOf(params.get('range') ?? '24h');
+  const target = targetOf(selected ? selected.to - selected.from : period.ms, Date.now(), selected ? `${selected.from}-${selected.to}` : period.id, selected);
+  const from = tileStart(tileOf(target.k0 * target.cell, target.cell), target.cell);
+  const to = (target.k1 + 1) * target.cell;
+  const result = await call('GET', `/api/history?board=${overview.body.board.id}&cell=${target.cell}&from=${from}&to=${to}`, {as});
+  if (result.status !== 200) return result;
+  const answer = result.body as HistoryAnswer;
+  const windows = new Set<string>(overview.body.sources.flatMap((s: {id: string; windows: {id: string}[]}) => s.windows.map(w => `${s.id} ${w.id}`)));
+  return {...result, body: compose(answer.chunks, answer, target, windows)};
+}
 
 /**
  * A shared board with one subscription measured by Alice, Bob and Carol, and agent work
@@ -703,22 +695,15 @@ async function worked() {
   return {call, store, team, alices, bobs, source, later, invite, now, hour, ago, device: device('alice'), workKey};
 }
 
-test('a range ending minutes ago says when to ask again, and is read anew once the work up to its end is credited', async t => {
+test('a recently ended frame gets late credited work at once', async () => {
   const {call, store, team, source, device} = await worked();
   const minute = 60_000;
-  const to = Date.now() - minute;
-  const read = async () => (await call('GET', `/api/history?board=${team}&from=${to - 15 * minute}&to=${to}`, {as: 'alice'})).body;
+  const to = Math.floor((Date.now() - minute) / minute) * minute;
+  const read = () => readFrame(call, `board=${team}&from=${to - 15 * minute}&to=${to}`).then(r => r.body);
   const first = await read();
-  assert.ok(first.refreshInMs > 3 * minute && first.refreshInMs <= KEEP_MS, 'not all of its work is credited yet');
-  // The machine's last list, credited with its next one, minutes later.
   store.creditWork(device, to - 2 * minute, to, [{source, origin: 'terminal', startedAt: to - 2 * minute, project: 'quotum', folder: '', ordinal: 0}]);
-  assert.deepEqual((await read()).activity, first.activity, 'meanwhile the answer read is reused');
-  // Its end is where the grid ends it, a cell's end.
-  t.mock.timers.enable({apis: ['Date'], now: first.to + KEEP_MS});
-  const settled = await read();
-  assert.equal(settled.refreshInMs, null);
-  assert.equal(settled.activity.activeMs - first.activity.activeMs, 2 * minute, 'read anew, with the work credited since');
-  assert.equal((await call('GET', `/api/history?board=${team}&from=${to - 30 * minute}&to=${to - 15 * minute}`, {as: 'alice'})).body.refreshInMs, null, 'a range ended long enough ago');
+  const credited = await read();
+  assert.equal(credited.activity.activeMs - first.activity.activeMs, 2 * minute);
 });
 
 test('a machine gone quiet has its last list credited by the time a range ending after it is read in full', async t => {
@@ -741,8 +726,7 @@ test('a machine gone quiet has its last list credited by the time a range ending
   await report(end - 4 * minute);
   await report(end - 2 * minute);
   t.mock.timers.setTime(end + KEEP_MS);
-  const answer = (await call('GET', `/api/history?board=${board}&from=${end - 15 * minute}&to=${end}`, {as: 'alice'})).body;
-  assert.equal(answer.refreshInMs, null, 'all there is of the range');
+  const answer = (await readFrame(call, `board=${board}&from=${end - 15 * minute}&to=${end}`, 'alice')).body;
   assert.equal(answer.activity.activeMs, 4 * minute, 'the last list counts too, up to the end of the range');
 });
 
@@ -772,11 +756,11 @@ function assertWork(history: any) {
 
 test('a shared board shows the work of its members on its subscriptions, from their joining and its sharing on; a personal board all of one\'s own', async () => {
   const {call, team, bobs, source, later, ago, hour} = await worked();
-  const history = (await call('GET', `/api/history?board=${team}&range=24h`, {as: 'bob'})).body;
+  const history = (await readFrame(call, `board=${team}&range=24h`, 'bob')).body;
   assert.deepEqual(hoursBy(history, 'project'), {quotum: 2, billing: 1}, "neither Alice's work before the sharing nor Bob's before he joined, nor hers on a subscription before it came");
   assert.deepEqual([history.activity.activeMs / hour, history.activity.agentMs / hour], [2.5, 3], "Bob's and Carol's half hour together counts once in the work");
   assert.deepEqual([history.activity.agents, history.activity.barMs], [3, hour], 'three agents, drawn in hours over a day');
-  assert.deepEqual(history.activity.known, {from: ago(5), to: history.now}, 'known from the sharing on, up to now');
+  assert.deepEqual(history.activity.known, {from: ago(5), to: history.to}, 'known from the sharing on, up to now');
   assert.equal(history.activity.since, ago(5));
   const line = (id: string) => history.series.find((l: any) => l.sourceId === id).work;
   assert.deepEqual([line(source).from, line(source).ms / hour, line(source).agentMs / hour], [ago(5), 2.5, 3]);
@@ -785,20 +769,15 @@ test('a shared board shows the work of its members on its subscriptions, from th
   assert.deepEqual([line(later).from, line(later).ms, line(later).agentMs], [ago(3), 0, 0], 'known from its own sharing on: none of the spending before is set against the hours');
   assertWork(history);
 
-  const own = (await call('GET', `/api/history?board=${bobs}&range=24h`, {as: 'bob'})).body;
+  const own = (await readFrame(call, `board=${bobs}&range=24h`, 'bob')).body;
   assert.deepEqual(hoursBy(own, 'project'), {billing: 2}, 'all of his own, and nobody else’s');
   assert.equal(own.activity.since, ago(24));
   assertWork(own);
 });
 
-test('the work a board shows follows its cards, members and names at once, a costly answer as well', async () => {
-  const history = config.history as {costlyMs: number};
-  const costly = history.costlyMs;
-  for (const costlyMs of [costly, 0]) {
-    history.costlyMs = costlyMs;
-    try {
+test('the work a board shows follows its cards, members and names at once', async () => {
       const {call, team, source, device, invite, workKey: key} = await worked();
-      const read = async () => (await call('GET', `/api/history?board=${team}&range=24h`, {as: 'alice'})).body;
+      const read = async () => (await readFrame(call, `board=${team}&range=24h`, 'alice')).body;
       const first = await read();
       const before = key();
       assert.equal(key(), before, 'the same while nothing changes');
@@ -806,7 +785,7 @@ test('the work a board shows follows its cards, members and names at once, a cos
       // A hidden card: its work is not on the board, and comes back once it is shown again.
       await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {...EMPTY, hidden: [`source:${source}`]}});
       const hidden = await read();
-      assert.deepEqual([hidden.activity.activeMs, hidden.activity.by.source, hidden.series[0].work], [0, [], null], `hidden, costlyMs ${costlyMs}`);
+      assert.deepEqual([hidden.activity.activeMs, hidden.activity.by.source, hidden.series.find((s: {sourceId: string}) => s.sourceId === source).work], [0, [], null], 'hidden');
       assert.notEqual(key(), before);
       await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: EMPTY});
       assert.deepEqual(hoursBy(await read(), 'project'), hoursBy(first, 'project'), 'shown again');
@@ -826,10 +805,6 @@ test('the work a board shows follows its cards, members and names at once, a cos
       const back = await read();
       assert.deepEqual(hoursBy(back, 'project'), {quotum: 1, billing: 1});
       assertWork(back);
-    } finally {
-      history.costlyMs = costly;
-    }
-  }
 });
 
 test('project names containing separators cannot alias other names in the history cache', async () => {
@@ -839,7 +814,7 @@ test('project names containing separators cannot alias other names in the histor
     const response = await call('POST', '/api/projects', {as: 'alice', body: {groups: [group], name}});
     assert.equal(response.status, 200);
   };
-  const read = async () => (await call('GET', `/api/history?board=${team}&range=24h`, {as: 'alice'})).body;
+  const read = async () => (await readFrame(call, `board=${team}&range=24h`, 'alice')).body;
   // One name must not encode a second project's entry in the key.
   const joined = `A\u001f${user}\u001esecret\u001eB`;
   await rename('quotum', joined);
@@ -869,7 +844,7 @@ test('a board’s history is read under a key of what the board shows, which nam
 
 test('the work of a period is of its known part: a range reads its own, and one before the hub kept work reads none', async () => {
   const {call, store, team, ago, hour} = await worked();
-  const range = (from: number, to: number) => call('GET', `/api/history?board=${team}&from=${from}&to=${to}`, {as: 'alice'}).then(r => r.body);
+  const range = (from: number, to: number) => readFrame(call, `board=${team}&from=${from}&to=${to}`, 'alice').then(r => r.body);
   const middle = await range(ago(3.5), ago(2.5));
   assert.equal(middle.activity.activeMs, ago(3) - middle.since, "Alice's work within it, out to whole cells; Bob's is before he joined");
   assert.equal(Math.round(middle.activity.activeMs / hour * 10) / 10, 0.5);
@@ -957,22 +932,13 @@ test('agents report the coding agents running on their machines; the cards of th
   assert.equal((await call('POST', '/v1/sessions', {body: {version: 1}})).status, 401);
 });
 
-test('every period ending now is drawn on the finest cell that keeps it within about 360 cells, as a range as long moved back is', async () => {
-  const {call, person} = await hub();
-  await person('alice');
-  const minute = 60_000;
-  const cells: Record<string, number> = {'1h': 1, '3h': 1, '6h': 1, '12h': 5, '24h': 5, '3d': 15, '7d': 30, '14d': 60, '30d': 120};
-  assert.deepEqual(Object.keys(cells), Object.keys(config.history.ranges), 'every period the hub offers');
-  for (const [range, cell] of Object.entries(cells)) {
-    const live = await call('GET', `/api/history?range=${range}`, {as: 'alice'});
-    const durationMs = config.history.ranges[range];
-    assert.deepEqual([live.status, live.body.cellMs, live.body.to - live.body.since], [200, cell * minute, durationMs], range);
-    assert.ok(durationMs / live.body.cellMs <= 378, range);
+test('every period uses the finest shared grid, and moving it back keeps that grid', () => {
+  const minutes = [1, 1, 1, 5, 5, 15, 30, 60, 120];
+  assert.deepEqual(PERIODS.map(p => cellOf(p.ms) / 60_000), minutes);
+  for (const period of PERIODS) {
     const now = Date.now();
-    const moved = await call('GET', `/api/history?from=${now - durationMs * 1.5}&to=${now - durationMs / 2}`, {as: 'alice'});
-    assert.equal(moved.body.cellMs, live.body.cellMs, `${range} moved back`);
+    assert.equal(targetOf(period.ms, now, 'past', {from: now - period.ms * 1.5, to: now - period.ms / 2}).cell, cellOf(period.ms));
   }
-  for (const range of ['2h', '1y', 'toString']) assert.equal((await call('GET', `/api/history?range=${range}`, {as: 'alice'})).status, 400, range);
 });
 
 test('past resets for everyone are listed over the history kept, not only the last month', async () => {
