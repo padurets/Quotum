@@ -1,7 +1,7 @@
 import {existsSync, readFileSync} from 'node:fs';
 import {createServer} from 'node:net';
 import path from 'node:path';
-import {atomic, git, locked, ownedMembers, readJson, saveJson} from './system.mjs';
+import {atomic, git, hasRuntimeReservation, locked, readJson, saveJson} from './system.mjs';
 
 const defaults = {DEV_PORT_START: '8080', DEV_MODE: 'demo', DEV_SET: 'all', DEV_STILL: 'false', DEV_RESETS: '',
   SLOT_CPUS: '4', DEV_ACCESS: 'none', PUBLIC_DOMAIN: '', CODER_WORKSPACE_ID: '', CODER_WORKSPACE_AGENT_NAME: '',
@@ -99,6 +99,19 @@ export function validateState(ctx, state) {
 }
 export async function allocate(ctx, c, access, retryFrom) {
   return locked(path.join(ctx.shared, 'allocation.lock'), async () => {
+    if (c.DEV_ACCESS === 'coder' && !access) throw new Error('External access policy cannot be verified; no port was claimed or stand changed.');
+    const file = parseEnv(envText(ctx.root));
+    const leaseFile = path.join(ctx.local, 'lease.json');
+    const lease = readJson(leaseFile);
+    if (lease && lease.version !== 1) throw new Error('Unsupported port lease.');
+    const persist = (port, initial) => {
+      const current = parseEnv(envText(ctx.root));
+      const inherited = Object.fromEntries(Object.entries(c).filter(([key, value]) => key in defaults && value !== undefined && !Object.hasOwn(current, key)));
+      // The intent must exist before .env becomes the authoritative reservation.
+      saveJson(leaseFile, {version: 1, port, initial});
+      if (current.QUOTUM_PORT !== String(port)) inherited.QUOTUM_PORT = String(port);
+      if (Object.keys(inherited).length) updateEnv(ctx.root, inherited);
+    };
     const reserved = new Map();
     for (const root of treeRoots(ctx)) {
       const p = parseEnv(envText(root)).QUOTUM_PORT;
@@ -114,20 +127,20 @@ export async function allocate(ctx, c, access, retryFrom) {
     if (existsSync(dir)) for (const file of readdirSync(dir).filter(f => f.endsWith('.json'))) {
       const s = readJson(path.join(dir, file));
       if (!s || s.version !== 1) throw new Error('Unsupported managed registry state.');
-      if (s.root !== ctx.root && ownedMembers(s).length) reserved.set(s.port, [...(reserved.get(s.port) ?? []), s.root]);
+      if (s.root !== ctx.root && hasRuntimeReservation(s)) reserved.set(s.port, [...(reserved.get(s.port) ?? []), s.root]);
     }
     const port = c.QUOTUM_PORT && retryFrom === undefined ? number(c.QUOTUM_PORT, 'QUOTUM_PORT') : undefined;
     if (port) {
+      if (file.QUOTUM_PORT && file.QUOTUM_PORT !== String(port)) throw new Error('Port configuration changed during preparation; retry with current settings.');
       if (reserved.get(port)?.some(root => root !== ctx.root)) throw new Error(`Port ${port} is reserved by another tree.`);
       if (access && !(await access.eligible(port))) throw new Error(`Port ${port} has an unknown or different external access policy.`);
+      persist(port, lease?.port === port && lease.initial === true && file.QUOTUM_PORT === String(port));
       return port;
     }
     const rows = access ? await access.snapshot() : null;
     for (let candidate = retryFrom ?? number(c.DEV_PORT_START, 'DEV_PORT_START'); candidate <= 65535; candidate++) {
       if (reserved.has(candidate) || !(await portFree(candidate)) || (access && !(await access.eligible(candidate, rows)))) continue;
-      const inherited = Object.fromEntries(Object.entries(c).filter(([key, value]) => key in defaults && value !== undefined && !Object.hasOwn(parseEnv(envText(ctx.root)), key)));
-      updateEnv(ctx.root, {...inherited, QUOTUM_PORT: String(candidate)});
-      saveJson(path.join(ctx.local, 'lease.json'), {version: 1, port: candidate, initial: true});
+      persist(candidate, true);
       return candidate;
     }
     throw new Error('No eligible TCP port remains at or above DEV_PORT_START.');

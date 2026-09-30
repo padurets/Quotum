@@ -5,7 +5,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {externalUrl} from './access.mjs';
 import {configKeys, portFree, validateState} from './config.mjs';
-import {cleanEnv, git, hash, listenerOwned, locked, ownedMembers, processOf, readJson, sameProcess, saveJson, sleep} from './system.mjs';
+import {cleanEnv, git, hash, listenerOwned, locked, ownedMembers, processOf, readJson, sameProcess, saveJson, sleep, waitOwnedMembers} from './system.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export function isolatedEnv(env = process.env) {
@@ -24,9 +24,14 @@ export function fileHash(dir) {
   walk(dir);
   return hash(items.join('\n'));
 }
+function sourceFiles(ctx) {
+  return [...new Set(git(ctx.root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', 'hub', 'tooling/dev').split('\0').filter(Boolean))].sort();
+}
+function sourceHash(root, files) {
+  return hash([process.version, ...files.map(file => `${file}\0${existsSync(path.join(root, file)) ? hash(readFileSync(path.join(root, file))) : 'deleted'}`)].join('\n'));
+}
 export function sourceBuild(ctx) {
-  const files = git(ctx.root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', 'hub', 'tooling/dev').split('\0').filter(Boolean).sort();
-  return hash([process.version, ...files.map(file => `${file}\0${existsSync(path.join(ctx.root, file)) ? hash(readFileSync(path.join(ctx.root, file))) : 'deleted'}`)].join('\n'));
+  return sourceHash(ctx.root, sourceFiles(ctx));
 }
 export function desired(c, port) {
   return {...Object.fromEntries(configKeys.filter(key => c[key] !== undefined).map(key => [key, c[key]])), QUOTUM_PORT: String(port)};
@@ -41,7 +46,8 @@ export async function run(command, args, cwd, env = isolatedEnv()) {
 export async function build(ctx) {
   return locked(path.join(ctx.shared, 'heavy.lock'), async () => {
     const hub = path.join(ctx.root, 'hub');
-    const inputs = sourceBuild(ctx);
+    const files = sourceFiles(ctx);
+    const inputs = sourceHash(ctx.root, files);
     const prior = readJson(path.join(ctx.local, 'build.json'));
     const deps = hash(`${process.version}|${readFileSync(path.join(hub, 'package-lock.json'))}`);
     if (prior?.deps !== deps || !existsSync(path.join(hub, 'node_modules/tsx/dist/loader.mjs'))) await run('npm', ['ci'], hub);
@@ -51,17 +57,34 @@ export async function build(ctx) {
     }
     if (sourceBuild(ctx) !== inputs) throw new Error('Source changed during the build; run make dev again.');
     const output = fileHash(path.join(hub, 'dist'));
-    const snapshot = path.join(ctx.local, 'builds', `${inputs}-${output}`, 'hub');
+    const snapshot = path.join(ctx.local, 'builds', `${inputs}-${output}`);
+    const snapshotHub = path.join(snapshot, 'hub');
     if (!existsSync(snapshot)) {
       const tmp = `${snapshot}.${randomUUID()}.tmp`;
       mkdirSync(tmp, {recursive: true, mode: 0o700});
-      cpSync(path.join(hub, 'dist'), path.join(tmp, 'dist'), {recursive: true});
-      cpSync(path.join(hub, 'package.json'), path.join(tmp, 'package.json'));
-      symlinkSync(path.join(hub, 'node_modules'), path.join(tmp, 'node_modules'));
-      renameSync(tmp, snapshot);
+      try {
+        // The demo imports source modules too. Freeze those and the supervisor,
+        // not just the built server, before accepting this build's identity.
+        for (const file of files) {
+          const original = path.join(ctx.root, file);
+          if (!existsSync(original)) continue;
+          const dest = path.join(tmp, file);
+          mkdirSync(path.dirname(dest), {recursive: true, mode: 0o700});
+          cpSync(original, dest, {dereference: true});
+        }
+        mkdirSync(path.join(tmp, 'hub'), {recursive: true, mode: 0o700});
+        cpSync(path.join(hub, 'dist'), path.join(tmp, 'hub/dist'), {recursive: true});
+        cpSync(path.join(hub, 'package.json'), path.join(tmp, 'hub/package.json'));
+        symlinkSync(path.join(hub, 'node_modules'), path.join(tmp, 'hub/node_modules'));
+        if (sourceHash(tmp, files) !== inputs || sourceBuild(ctx) !== inputs) throw new Error('Source changed while freezing the build; run make dev again.');
+        saveJson(path.join(tmp, 'source.json'), {version: 1, files, inputs});
+        renameSync(tmp, snapshot);
+      } finally { rmSync(tmp, {recursive: true, force: true}); }
     }
-    if (fileHash(path.join(snapshot, 'dist')) !== output) throw new Error('Managed build snapshot is inconsistent; inspect .quotum-dev/builds.');
-    const result = {inputs, deps, output, hub: snapshot, commit: git(ctx.root, 'rev-parse', 'HEAD')};
+    const manifest = readJson(path.join(snapshot, 'source.json'));
+    if (manifest?.version !== 1 || sourceHash(snapshot, manifest.files) !== inputs || fileHash(path.join(snapshotHub, 'dist')) !== output) throw new Error('Managed build snapshot is inconsistent; inspect .quotum-dev/builds.');
+    const controller = path.join(snapshot, 'tooling/dev/serve.mjs');
+    const result = {inputs, deps, output, root: snapshot, hub: snapshotHub, ...(existsSync(controller) ? {controller} : {}), commit: git(ctx.root, 'rev-parse', 'HEAD')};
     saveJson(path.join(ctx.local, 'build.json'), result);
     return result;
   });
@@ -74,35 +97,51 @@ export async function healthy(state) {
     return res.ok && sameProcess(state.hub);
   } catch { return false; }
 }
-export function removeData(ctx, state, final = false) {
-  if (!state?.data) return;
+function dataDirectory(ctx, state) {
+  if (!state?.data) return null;
   const expected = path.join(ctx.local, state.mode === 'hub' ? 'hub-data' : `demo-${state.instance}`);
   if (state.data !== expected) throw new Error('Unrecognized data path; cleanup blocked.');
-  if (!existsSync(expected)) return;
+  if (!existsSync(expected)) return null;
   const marker = readJson(path.join(expected, 'owner.json'));
   if (lstatSync(expected).isSymbolicLink() || marker?.root !== ctx.root || marker?.kind !== state.mode) throw new Error('Unverified data directory; cleanup blocked.');
   if (state.mode === 'demo' && marker.instance !== state.instance) throw new Error('Mismatched data owner; cleanup blocked.');
-  if (state.mode === 'demo' || final) rmSync(expected, {recursive: true});
+  return expected;
+}
+export function removeData(ctx, state, final = false) {
+  const dir = dataDirectory(ctx, state);
+  if (dir && (state.mode === 'demo' || final)) rmSync(dir, {recursive: true});
 }
 export async function stop(ctx, final = false) {
   const state = readJson(ctx.record);
   validateState(ctx, state);
   if (!state) return;
-  let members = ownedMembers(state);
+  // Older managed supervisors may still remove their supplied directory themselves.
+  // Refuse an unowned path before asking any supervisor to stop, then check again.
+  dataDirectory(ctx, state);
+  let until = Date.now() + 8000;
+  let members = await waitOwnedMembers(state, until);
   if (members.length) {
     console.log(`Stopping owned instance ${state.instance}.`);
     // SIGTERM the supervisor first, so Demo stops its own requests before the hub.
     if (sameProcess(state.supervisor)) process.kill(state.supervisor.pid, 'SIGTERM');
     else process.kill(-state.supervisor.pid, 'SIGTERM');
-    let until = Date.now() + 8000;
-    while (Date.now() < until && ownedMembers(state).length) await sleep(100);
-    members = ownedMembers(state);
+    until = Date.now() + 8000;
+    while (Date.now() < until) {
+      members = await waitOwnedMembers(state, until);
+      if (!members.length) break;
+      await sleep(100);
+    }
+    members = await waitOwnedMembers(state, until);
     if (members.length) {
       process.kill(-state.supervisor.pid, 'SIGKILL');
       until = Date.now() + 3000;
-      while (Date.now() < until && ownedMembers(state).length) await sleep(50);
+      while (Date.now() < until) {
+        members = await waitOwnedMembers(state, until);
+        if (!members.length) break;
+        await sleep(50);
+      }
     }
-    if (ownedMembers(state).length) throw new Error('Owned process group did not stop; reservation retained.');
+    if ((await waitOwnedMembers(state, until)).length) throw new Error('Owned process group did not stop; reservation retained.');
   }
   removeData(ctx, state, final);
   if (final) rmSync(ctx.record);
@@ -130,7 +169,7 @@ export async function start(ctx, c, port, built) {
   for (const key of ['QUOTUM_PUBLIC_URL', 'QUOTUM_TRUST_PROXY', 'QUOTUM_FRAME_ANCESTORS']) if (c[key]) env[key] = c[key];
   if (url) { env.QUOTUM_PUBLIC_URL = url; env.QUOTUM_TRUST_PROXY = 'true'; }
   const fd = openSync(log, 'a', 0o600);
-  const child = spawn(process.execPath, [path.join(here, 'serve.mjs'), ctx.root, ctx.record, instance], {cwd: ctx.root, env, detached: true, stdio: ['ignore', fd, fd, 'ipc']});
+  const child = spawn(process.execPath, [built.controller ?? path.join(here, 'serve.mjs'), ctx.root, ctx.record, instance], {cwd: ctx.root, env, detached: true, stdio: ['ignore', fd, fd, 'ipc']});
   closeSync(fd);
   try {
     await new Promise((resolve, reject) => {

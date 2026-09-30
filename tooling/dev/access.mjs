@@ -22,7 +22,9 @@ export class Pool {
   }
   async observe(port) {
     const row = this.row(port, await this.snapshot());
-    if (!row) return {status: 'absent'};
+    if (!row) return this.ledger().ports[port]?.phase === 'intent'
+      ? {status: 'unconfirmed', observed: 'absent', evidence: 'Earlier publication outcome is unknown; no matching row is observed and no second POST is sent.'}
+      : {status: 'absent'};
     if (!this.matching(row) || !this.ledger().ports[port]) return {status: 'conflict'};
     return {status: 'public', evidence: this.ledger().ports[port].phase === 'acknowledged' ? 'acknowledged pool entry' : 'observed after an unconfirmed request'};
   }
@@ -38,6 +40,7 @@ export class Pool {
         return {status: 'public', evidence};
       }
       if (data.ports[port]?.phase === 'intent') return {status: 'unconfirmed', evidence: 'Earlier request outcome is unknown; no second POST was sent.'};
+      const prior = data.ports[port];
       data.ports[port] = {phase: 'intent', requestedAt: new Date().toISOString()};
       saveJson(this.file, data);
       try {
@@ -46,7 +49,13 @@ export class Pool {
         data.ports[port] = {phase: 'acknowledged', acknowledgedAt: new Date().toISOString()};
         saveJson(this.file, data);
         return {status: 'public', evidence: 'new publication acknowledged'};
-      } catch {
+      } catch (error) {
+        if (error.code === 'PUBLICATION_REJECTED') {
+          if (prior) data.ports[port] = prior;
+          else delete data.ports[port];
+          saveJson(this.file, data);
+          return {status: 'rejected', detail: `Coder API rejected publication (HTTP ${error.status}); retry after correcting access.`};
+        }
         return {status: 'unconfirmed', evidence: 'Publication request failed or its response was lost; local stand remains ready.'};
       }
     });
@@ -86,7 +95,12 @@ export async function coderPool(c, env = process.env) {
         ...(body ? {body: JSON.stringify(body)} : {}),
       });
     } catch { throw new Error('Coder API unavailable; local lifecycle remains independent.'); }
-    if (!response.ok) throw new Error(`Coder API returned HTTP ${response.status}.`);
+    if (!response.ok) throw Object.assign(new Error(`Coder API returned HTTP ${response.status}.`), {
+      // Validation/auth denials cannot have published the requested row. Transport
+      // failures and server errors retain the uncertain intent instead.
+      code: method === 'POST' && [400, 401, 403, 404, 422].includes(response.status) ? 'PUBLICATION_REJECTED' : 'API_ERROR',
+      status: response.status,
+    });
     try { return await response.json(); } catch { throw new Error('Invalid Coder API response.'); }
   };
   const workspace = await api('');

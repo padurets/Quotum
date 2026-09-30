@@ -187,7 +187,7 @@ export class Demo {
     return stand;
   }
 
-  /** Stops the hub and the stand-in trackers, and leaves nothing behind; once. */
+  /** Stops once; only a directory this Demo created belongs to it. */
   async stop() {
     if (this.stopping) return;
     this.stopping = true;
@@ -203,7 +203,7 @@ export class Demo {
       clearTimeout(late);
     }
     await this.trackers?.close();
-    rmSync(this.dir, {recursive: true, force: true, maxRetries: 5});
+    if (this.options.dataDir === undefined) rmSync(this.dir, {recursive: true, force: true, maxRetries: 5});
   }
 
   /**

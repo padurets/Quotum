@@ -106,6 +106,8 @@ access policies are excluded. Removed trees release their numbers after their ow
 processes exit. The first probe/bind race retries ascending numbers up to eight times;
 an established port conflict fails with a diagnostic. To change an established port,
 stop the stand, edit `QUOTUM_PORT` in `.env`, then run `make prepare` and `make dev`.
+An explicit environment port is saved too. Initial claims keep a recoverable intent
+before updating `.env`; existing configuration symlinks are preserved and rejected.
 
 Settings are in [.env.example](.env.example). `DEV_SET=showcase DEV_STILL=true make dev`
 uses the still showcase; `DEV_SET=activity` uses the activity set. `DEV_RESETS` selects
@@ -116,6 +118,9 @@ Changing mode restarts the owned stand. Demo data goes away on stop; hub data st
 are private local files, outside source control. Info labels demo fixture defaults and
 never shows them for an ordinary, stopped or unverified hub; it never dumps real
 credentials. A failed build leaves an earlier live stand available.
+Successful builds freeze the server, demo source and supervisor together. Later source
+edits enter a new build, and managed data is removed only by the controller after its
+ownership check. A directory supplied to the standalone demo remains caller-owned.
 
 The optional `DEV_ACCESS=coder` profile requires `PUBLIC_DOMAIN` and the workspace/agent
 metadata in the example (the agent environment may supply them). It verifies that
@@ -125,6 +130,10 @@ port as HTTP/public. A known matching entry is reused without a POST. Unknown/di
 policies are preserved. A lost response keeps an unconfirmed intent; later matching
 observations permit read-only reuse, without granting ownership for destructive changes.
 `make info` observes access again and reports failures separately from local readiness.
+Configured access requires an available policy authority before claiming a port or
+starting a changed stand; an existing runtime is kept on failure. A definite auth or
+validation rejection can be retried after correction. An uncertain request stays
+unconfirmed even when a later GET sees no row, and info keeps that distinction.
 `make down` and removal perform no provider mutation and work during authentication or
 API failures. Pool records may remain public after stop; provider tickets follow the
 provider's semantics. A reused public port may be reachable during bootstrap. Concrete

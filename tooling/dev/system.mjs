@@ -1,6 +1,6 @@
 import {execFileSync, spawn} from 'node:child_process';
 import {createHash, randomUUID} from 'node:crypto';
-import {existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, writeFileSync} from 'node:fs';
+import {existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 
 export const hash = value => createHash('sha256').update(value).digest('hex');
@@ -29,10 +29,11 @@ export function readJson(file) {
 }
 export function atomic(file, text) {
   mkdirSync(path.dirname(file), {recursive: true, mode: 0o700});
-  if (existsSync(file) && !lstatSync(file).isFile()) throw new Error(`Expected a regular file: ${file}`);
+  const entry = lstatSync(file, {throwIfNoEntry: false});
+  if (entry && !entry.isFile()) throw new Error(`Expected a regular file: ${file}`);
   const tmp = `${file}.${randomUUID()}.tmp`;
   try {
-    writeFileSync(tmp, text, {mode: existsSync(file) ? statSync(file).mode & 0o777 : 0o600, flag: 'wx'});
+    writeFileSync(tmp, text, {mode: entry ? entry.mode & 0o777 : 0o600, flag: 'wx'});
     renameSync(tmp, file);
   } finally { rmSync(tmp, {force: true}); }
 }
@@ -86,11 +87,37 @@ export function ownedMembers(state) {
     catch (error) {
       // A process may exit between stat and environ (including EACCES during exit).
       if (!sameProcess(member)) continue;
-      throw new Error('Cannot verify a surviving process in the recorded group; cleanup blocked.');
+      throw Object.assign(new Error('Cannot verify a surviving process in the recorded group; cleanup blocked.'), {code: 'OWNERSHIP_UNAVAILABLE'});
     }
     if (!env.includes(`DEV_INSTANCE_ID=${state.instance}`)) throw new Error('Unverified process in the recorded group; cleanup blocked.');
   }
   return members.filter(sameProcess);
+}
+
+/** Reading reservations never grants signal permission or blocks unrelated trees. */
+export function hasRuntimeReservation(state) {
+  if (!state?.supervisor) return false;
+  const leader = processOf(state.supervisor.pid);
+  if (leader && !sameProcess(state.supervisor)) return false;
+  const members = groupMembers(state.supervisor.pid);
+  if (!members.some(member => member.boot === state.supervisor.boot && BigInt(member.start) >= BigInt(state.supervisor.start))) return false;
+  try { return ownedMembers(state).length > 0; }
+  catch {
+    // Inconclusive live ownership keeps this number reserved, without preventing
+    // allocation of other numbers. stop() still refuses unverified signals.
+    return true;
+  }
+}
+
+/** Exiting processes can stop exposing environ before stat reports their exit. */
+export async function waitOwnedMembers(state, until) {
+  for (;;) {
+    try { return ownedMembers(state); }
+    catch (error) {
+      if (error.code !== 'OWNERSHIP_UNAVAILABLE' || Date.now() >= until) throw error;
+      await sleep(50);
+    }
+  }
 }
 
 export function listenerOwned(pid, port) {

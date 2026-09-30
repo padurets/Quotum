@@ -32,11 +32,12 @@ async function stop(code) {
 for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, () => void stop(0));
 try {
   if (state.mode === 'demo') {
+    const sourceHub = state.build.hub ?? path.join(root, 'hub');
     // tsx's ESM registration API handles the existing demo's TypeScript entrypoint.
-    const {register: registerTsx} = await import(pathToFileURL(path.join(root, 'hub/node_modules/tsx/dist/esm/api/index.mjs')).href);
+    const {register: registerTsx} = await import(pathToFileURL(path.join(sourceHub, 'node_modules/tsx/dist/esm/api/index.mjs')).href);
     registerTsx();
-    const {Demo, addressOf, parseArgs, prepare} = await import(pathToFileURL(path.join(root, 'hub/demo/index.ts')).href);
-    const {accessOf} = await import(pathToFileURL(path.join(root, 'hub/demo/access.ts')).href);
+    const {Demo, addressOf, parseArgs, prepare} = await import(pathToFileURL(path.join(sourceHub, 'demo/index.ts')).href);
+    const {accessOf} = await import(pathToFileURL(path.join(sourceHub, 'demo/access.ts')).href);
     const args = [state.config.DEV_SET, ...(state.config.DEV_STILL === 'true' ? ['--still'] : []), ...(state.config.DEV_RESETS ? ['--resets', state.config.DEV_RESETS] : [])];
     const options = parseArgs(args);
     const address = addressOf(process.env);

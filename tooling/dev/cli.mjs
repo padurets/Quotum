@@ -24,7 +24,10 @@ export async function info(ctx) {
   let access = {status: 'local'};
   if (ready && c.DEV_ACCESS === 'coder') {
     const {pool, problem} = await accessFor(c);
-    try { access = pool ? await pool.observe(Number(port)) : {status: 'unavailable', detail: problem}; }
+    try {
+      access = pool ? await pool.observe(Number(port)) : {status: 'unavailable', detail: problem};
+      if (access.status === 'absent' && state.access?.status === 'rejected') access = {...state.access, observed: 'absent'};
+    }
     catch (error) { access = {status: 'unavailable', detail: error.message}; }
   } else if (state) access = state.access;
   let quota = null, memory = null;
@@ -105,7 +108,7 @@ export async function command(action, root, json = false) {
         try { state = await start(ctx, c, port, built); break; }
         catch (error) {
           const lease = readJson(path.join(ctx.local, 'lease.json'));
-          if (error.code !== 'PORT_BUSY' || !lease?.initial || attempt >= 7) throw error;
+          if (error.code !== 'PORT_BUSY' || !lease?.initial || lease.port !== port || attempt >= 7) throw error;
           console.log(`Initial port ${port} was taken after probing; trying the next eligible number.`);
           port = await allocate(ctx, c, pool, port + 1);
         }
