@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useState} from 'react';
+import {useCallback, useEffect, useRef, useState} from 'react';
 import {t} from '../i18n';
 import {page, useBoards} from './board';
 import {call, UNAUTHORIZED} from './http';
@@ -6,7 +6,11 @@ import {call, UNAUTHORIZED} from './http';
 export type User = {id: string; email: string; name: string};
 export type Board = {id: string; name: string; personal: boolean; role: 'owner' | 'member'};
 /** `local`: the desktop app's hub, one person who never signs in (see lib/app.ts). */
-export type Session = {user: User | null; boards: Board[]; signup: {first: boolean; open: boolean}; local: boolean};
+export type Session = {
+  user: User | null; boards: Board[]; signup: {first: boolean; open: boolean}; local: boolean;
+  trustedKeys?: {available: boolean; reason: 'secret_key_missing' | 'secret_key_mismatch' | null};
+  secretKey?: {outcome: 'created' | 'ok' | 'rotated' | 'mismatch' | 'missing'; storageAtStart: 'keystore' | 'file' | 'waiting' | 'missing' | null; wasFileAtStart: boolean};
+};
 
 /** Personal boards have no name of their own: each reader sees theirs in their language. */
 export const boardTitle = (board: {name: string}) => board.name || t('boards.personalName');
@@ -24,18 +28,22 @@ export const rereadSession = () => window.dispatchEvent(new Event(REREAD));
 export function useSession() {
   const [session, setSession] = useState<Session | null>(null);
   const [failed, setFailed] = useState(false);
+  const generation = useRef(0);
 
   const accept = useCallback((next: Session) => {
+    generation.current++;
     page.dispatch({type: 'session-boards', boards: next.boards});
     setSession(next);
+    setFailed(false);
   }, []);
 
   const refresh = useCallback(async () => {
+    const request = ++generation.current;
     try {
-      accept(await call<Session>('GET', '/api/session'));
-      setFailed(false);
+      const next = await call<Session>('GET', '/api/session');
+      if (request === generation.current) accept(next);
     } catch {
-      setFailed(true);
+      if (request === generation.current) setFailed(true);
     }
   }, [accept]);
 
@@ -45,6 +53,7 @@ export function useSession() {
     window.addEventListener(UNAUTHORIZED, again);
     window.addEventListener(REREAD, again);
     return () => {
+      generation.current++;
       window.removeEventListener(UNAUTHORIZED, again);
       window.removeEventListener(REREAD, again);
     };

@@ -283,7 +283,7 @@ const stopEvent = (lines: string[]) => lines.map(line => (line.startsWith('{') ?
 test('the local hub says where it listens and stops when its stdin closes', async t => {
   const hub = await startHub();
   t.after(() => hub.child.kill('SIGKILL'));
-  assert.deepEqual(JSON.parse(hub.lines.find(line => line.includes('"start"'))!), {event: 'start', users: 1, port: hub.port, local: true});
+  assert.deepEqual(JSON.parse(hub.lines.find(line => line.includes('"start"'))!), {event: 'start', users: 1, port: hub.port, local: true, secretKey: {outcome: 'missing', stored: null, current: null, credentials: 0, unreadable: 0}});
   hub.child.stdin!.end();
   assert.equal(await within(hub.exited, 3000), 0);
   assert.deepEqual(stopEvent(hub.lines), {event: 'stop', reason: 'stdin'});

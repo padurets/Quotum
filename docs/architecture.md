@@ -487,6 +487,46 @@ them), kept for 90 days.
   latest one), and listed for as long as samples are kept, so the chart marks every
   one of its period, however far back it is moved.
 
+## Trusted connector keys
+
+The hub has a write-only credential service, separate from password and machine-token
+hashes. No production provider uses it yet. Connector adapters are registered in code;
+tests inject their own adapter. Each credential belongs to its person and can be
+created, replaced, listed or removed only by that person's session. Mutations require
+an explicit same-site Origin before parsing, accept only a connector's strict printable
+ASCII key format, and are limited to ten attempts a minute per person and address.
+Replies contain only the safe record details, including a last-four hint; neither the
+key nor encrypted bytes go to the dashboard's events or shared boards.
+
+`QUOTUM_SECRET_KEY` supplies 32 random bytes as canonical unpadded base64url (43
+characters); `QUOTUM_SECRET_KEY_FILE` instead reads those characters, optionally
+followed by one LF or CRLF, from a regular file whose real path is outside the data
+directory. The two inputs are exclusive. HKDF-SHA256 derives separate encryption and
+check keys. AES-256-GCM binds each credential to its id, owner and provider, using a
+fresh 12-byte nonce per write. SQLite keeps only ciphertext and its tag, nonce and key
+generation. A full key check value in `meta` identifies the database's KEK; its first
+eight bytes are the diagnostic fingerprint. The KEK is never written to SQLite or its
+data directory. Input variables are removed after capture, and Node reports exclude
+the environment.
+
+Startup reports `created`, `ok`, `rotated`, `mismatch` or `missing`, with safe
+fingerprints and record counts. Missing or mismatched keys preserve every credential
+and leave ordinary agent measurements available. `QUOTUM_SECRET_KEY_PREVIOUS` (or
+its `_FILE` form) permits rotation in one transaction. Unreadable records retain their
+ciphertext and old generation. SQLite uses secure deletion and full synchronization;
+each successful start verifies a TRUNCATE checkpoint before its report, so a committed
+rotation with a busy WAL cannot authorize deletion of the previous key.
+
+The server's one-shot `reset-secret-key --from <fingerprint|none> --to <fingerprint>`
+command uses the same decision engine and checks both fingerprints inside the
+transaction. It never listens or leaves a reset instruction behind. Restoring an old
+backup requires a new explicit reset action. See [deployment](../deploy/README.md).
+Connectors send credentials only to their own fixed HTTPS hosts and operations, with
+an explicit TLS agent, no redirects or environment proxies, a ten-second total deadline
+and a one-MiB response cap. Errors cross the boundary as codes, never raw messages,
+paths, supplier replies or causes. See [SECURITY.md](../SECURITY.md) for the protection
+and its limits.
+
 ## People, boards, devices
 
 - **Users** sign in to the hub with an email and a password. The first person on a hub

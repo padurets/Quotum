@@ -45,6 +45,7 @@ const live = startLive({
   dispatch: page.dispatch,
   unauthorized: () => window.dispatchEvent(new Event(UNAUTHORIZED)),
   gone: rereadSession,
+  epochChanged: rereadSession,
   script: entryScript(),
   hubNow,
   heard: (now, at) => {

@@ -132,7 +132,8 @@ const APPIMAGE_VARIABLES: &[&str] = &[
 ];
 const APPIMAGE_PREFIXES: &[&str] = &["GST_PLUGIN_", "GTK_", "GDK_", "GIO_"];
 
-/// The environment of a client: this process's, with its PATH (see [`client_path`]), and
+/// The environment of a client: this process's without QUOTUM_* settings and keys,
+/// with its PATH (see [`client_path`]), and
 /// without what an AppImage the agent runs in set for itself, inside it (`$APPDIR`) or
 /// not. Names are one variable whatever their case on Windows (`Path` and `PATH`).
 pub fn client_env(
@@ -148,6 +149,11 @@ pub fn client_env(
     };
     let mut env: Vec<(OsString, OsString)> = Vec::new();
     for (name, value) in inherited {
+        // The hub's trusted keys and the agent's settings never reach a provider client.
+        let text = name.to_string_lossy();
+        if (windows && text.to_ascii_uppercase().starts_with("QUOTUM_")) || (!windows && text.starts_with("QUOTUM_")) {
+            continue;
+        }
         // The first of a name wins, as a lookup of it would.
         if !env.iter().any(|(n, _)| name.to_str().is_some_and(|text| is(n, text))) {
             env.push((name, value));
@@ -512,7 +518,6 @@ mod tests {
         pairs.iter().map(|(n, v)| (OsString::from(n), OsString::from(v))).collect()
     }
 
-    #[cfg(unix)]
     fn get<'a>(env: &'a [(OsString, OsString)], name: &str) -> Option<&'a OsStr> {
         env.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_os_str())
     }
@@ -646,6 +651,31 @@ mod tests {
         assert_eq!(paths.len(), 1);
         let dirs: Vec<PathBuf> = env::split_paths(&paths[0].1).collect();
         assert_eq!(dirs[..2], [PathBuf::from("C:\\tools"), PathBuf::from("C:\\Windows\\system32")]);
+    }
+
+    #[test]
+    fn provider_clients_inherit_no_quotum_variables() {
+        for windows in [false, true] {
+            for program in ["claude", "codex", "agy"] {
+                let inherited = os(&[
+                    ("QUOTUM_SECRET_KEY", "synthetic-canary"),
+                    ("QUOTUM_SECRET_KEY_PREVIOUS", "synthetic-canary"),
+                    ("QUOTUM_CONFIG", "private-config"),
+                    ("QUOTUM_UNKNOWN", "private"),
+                    ("quotum_secret_key", "mixed-case"),
+                    ("QUOTUM", "ordinary"),
+                    ("LANG", "en_US.UTF-8"),
+                ]);
+                let env = client_env(Path::new(program), inherited, windows, Path::new("/nonexistent"));
+                assert!(get(&env, "QUOTUM_SECRET_KEY").is_none());
+                assert!(get(&env, "QUOTUM_SECRET_KEY_PREVIOUS").is_none());
+                assert!(get(&env, "QUOTUM_CONFIG").is_none());
+                assert!(get(&env, "QUOTUM_UNKNOWN").is_none());
+                assert_eq!(get(&env, "quotum_secret_key").is_none(), windows);
+                assert_eq!(get(&env, "QUOTUM").unwrap(), "ordinary");
+                assert_eq!(get(&env, "LANG").unwrap(), "en_US.UTF-8");
+            }
+        }
     }
 
     #[test]

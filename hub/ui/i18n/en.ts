@@ -113,6 +113,7 @@ export const en = {
   'kind.title.weekly': 'Weekly',
 
   'error.waiting': 'Waiting for the first measurement',
+  'error.unmeasured': 'Waiting for a measurement',
   'error.not_logged_in': 'The CLI is not logged in',
   'error.unsupported': 'The CLI does not report limits',
   'error.timeout': 'The CLI did not answer in time',

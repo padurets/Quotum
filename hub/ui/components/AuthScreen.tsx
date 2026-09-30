@@ -1,6 +1,6 @@
 import {useState, type FormEvent} from 'react';
 import {call} from '../lib/http';
-import type {Board, Session, User} from '../lib/session';
+import type {Session} from '../lib/session';
 import {Brand, ErrorLine, Field, LanguageSelect, Segmented} from './Kit';
 import {t} from '../i18n';
 
@@ -37,8 +37,8 @@ export function AuthScreen({
     setError(null);
     try {
       const body = mode === 'signup' ? {email, name, password, invite: invite?.secret, setupCode} : {email, password, invite: invite?.secret};
-      const result = await call<{user: User; boards: Board[]; joined: string | null}>('POST', `/api/auth/${mode}`, body);
-      onSignedIn({...session, user: result.user, boards: result.boards}, result.joined);
+      const {joined, ...result} = await call<Session & {joined: string | null}>('POST', `/api/auth/${mode}`, body);
+      onSignedIn(result, joined);
     } catch (failure) {
       setError(failure);
     } finally {

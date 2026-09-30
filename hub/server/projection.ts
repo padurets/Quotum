@@ -58,6 +58,12 @@ export const earliest = (...moments: (number | null)[]): number | null => {
 
 const DAY = 86_400_000;
 
+/** Credential failures are private even to other members of a source's shared board. */
+export function publicSourceState(state: SourceState): SourceState {
+  const error = state.error?.startsWith('secret_key_') || state.error?.startsWith('credential_') ? 'unmeasured' : state.error;
+  return {id: state.id, provider: state.provider, plan: state.plan, successAt: state.successAt, error, windows: state.windows, staleAfterMs: state.staleAfterMs, resets: state.resets};
+}
+
 export class Projection {
   constructor(private readonly hub: {store: Store; directory: Directory; ingest: Ingest; resets: ResetFeed}) {}
 
@@ -90,7 +96,7 @@ export class Projection {
   /** One source of a board: its card, the agents running on it on the machines of its people there, and its pace. */
   sourcePart(source: BoardSource, members: Map<string, string>, now: number): Timed<SourcePart> {
     const {store, ingest} = this.hub;
-    const state = store.state(source.id);
+    const state = publicSourceState(store.state(source.id));
     const stale = state.successAt === null || state.staleAfterMs === null || now - state.successAt > state.staleAfterMs;
     const card: Card = {...state, owners: source.holders.flatMap(id => members.get(id) ?? []).sort(), stale};
     const people = source.holders.filter(id => members.has(id));

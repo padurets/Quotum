@@ -69,6 +69,7 @@ function harness(options: {visible?: boolean; skew?: number; script?: string | n
   const asked: Asked[] = [];
   const events: PageEvent[] = [];
   const said: string[] = [];
+  const epochs: number[] = [];
   let visible = options.visible ?? true;
   const heard: number[] = [];
   const storage = options.storage ?? new Map<string, string>();
@@ -127,6 +128,7 @@ function harness(options: {visible?: boolean; skew?: number; script?: string | n
     dispatch: event => void events.push(event),
     unauthorized: () => void said.push('unauthorized'),
     gone: () => void said.push('gone'),
+    epochChanged: () => void epochs.push(timers.t),
     script: options.script === undefined ? '/assets/index-a.js' : options.script,
     reload: () => void said.push('reload'),
     storage: () => {
@@ -171,6 +173,7 @@ function harness(options: {visible?: boolean; skew?: number; script?: string | n
     asked,
     events,
     said,
+    epochs,
     heard,
     storage,
     last,
@@ -213,6 +216,30 @@ test('text/event-stream is read line by line however it is cut: CR LF, LF and CR
   read(decoder.decode(bytes.slice(0, 18), {stream: true}));
   read(decoder.decode(bytes.slice(18), {stream: true}));
   assert.deepEqual(names, ['Анна']);
+});
+
+test('first confirmed hello and a changed hub epoch reread session once, including same-build restarts', async () => {
+  for (const poll of [false, true]) {
+    const h = harness();
+    if (poll) await h.gopoll(); else await h.golive();
+    assert.equal(h.epochs.length, 1, 'first hello rebaselines an earlier session response');
+    if (poll) {
+      await h.last().json(200, {lease: 'L', now: h.timers.t, events: []});
+      assert.equal(h.epochs.length, 1, 'ordinary polls do not reread session');
+      await h.last().json(200, {lease: 'L', now: h.timers.t, events: [{type: 'hello', data: {epoch: 'e1', now: h.timers.t, client: null, heartbeatMs: HEARTBEAT}}]});
+      assert.equal(h.epochs.length, 1);
+      await h.last().json(200, {lease: 'L', now: h.timers.t, events: [{type: 'hello', data: {epoch: 'e2', now: h.timers.t, client: null, heartbeatMs: HEARTBEAT}}]});
+    } else {
+      // Reopening a connection keeps the last confirmed epoch across attempts.
+      h.live.open('b1'); await flush();
+      await h.last().stream().write(frame('hello', {epoch: 'e1', now: h.timers.t, client: '/assets/index-a.js', heartbeatMs: HEARTBEAT}));
+      assert.equal(h.epochs.length, 1);
+      h.live.open('b1'); await flush();
+      await h.last().stream().write(frame('hello', {epoch: 'e2', now: h.timers.t, client: '/assets/index-a.js', heartbeatMs: HEARTBEAT}));
+    }
+    assert.equal(h.epochs.length, 2, 'changed epoch rereads even when the served build did not change');
+    h.live.close();
+  }
 });
 
 test('row 1, 3, 4: a board opens a stream with the header, and hello with snapshot brings it live', async () => {

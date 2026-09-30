@@ -119,13 +119,22 @@ export const STEPS = [
     DELETE FROM attention_windows WHERE source_id = OLD.id;
   END;
   `,
+  // 6 — trusted connector credentials, encrypted before they reach SQLite.
+  `
+  CREATE TABLE credentials (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, provider TEXT NOT NULL, source_id TEXT,
+    cipher BLOB NOT NULL, nonce BLOB NOT NULL, key_version INTEGER NOT NULL,
+    hint TEXT, abilities TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER,
+    last_used_at INTEGER, last_error TEXT, unreadable INTEGER NOT NULL DEFAULT 0);
+  CREATE INDEX credentials_by_owner ON credentials (user_id, provider);
+  `,
 ];
 
 export const SCHEMA_VERSION = STEPS.length;
 
 /** Brings a database to the current layout; refuses one written by a newer version. */
 export function migrate(db: DatabaseSync, now: number) {
-  db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
+  db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000; PRAGMA secure_delete = ON; PRAGMA synchronous = FULL;');
   const current = Number((db.prepare('PRAGMA user_version').get() as {user_version: number}).user_version);
   if (current > SCHEMA_VERSION) throw new Error(`the database has layout ${current}; this version of the hub knows up to ${SCHEMA_VERSION}`);
   // Hubs before 0.2 were never released, and their layout was numbered 1 as well.

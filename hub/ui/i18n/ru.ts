@@ -108,6 +108,7 @@ export const ru = {
   'kind.title.weekly': 'Неделя',
 
   'error.waiting': 'Ждём первое измерение',
+  'error.unmeasured': 'Ждём измерение',
   'error.not_logged_in': 'CLI не авторизован',
   'error.unsupported': 'CLI не сообщает лимиты',
   'error.timeout': 'CLI не ответил вовремя',
