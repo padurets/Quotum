@@ -155,9 +155,21 @@ export function Popover({
         return !!effect.target?.contains(trigger) && effect.getKeyframes().some(frame => 'transform' in frame || 'translate' in frame);
       });
     const holding = '.widget.is-lifted, .widget.is-resizing';
+    // A widget held: the board marks the page for as long as one is, read at once where looking
+    // for the widget would go through the whole page at each frame of the gesture.
+    const held = () => document.body.matches('.is-dragging, .is-resizing');
+    // Whether something slid around the button a frame ago: slid into place while another widget
+    // is still held, it tells no observer, and nothing settles before that is let go.
+    let slid = false;
     const page = settler(
       () => (seen() ? place() : close()),
-      () => !!document.querySelector(holding) || sliding(),
+      () => {
+        const holds = held();
+        const slides = sliding();
+        if (slid && !slides && holds && !trigger.closest(holding)) follow();
+        slid = slides;
+        return holds || slides;
+      },
     );
     const moved = () => {
       bars = barsOf();
@@ -189,11 +201,20 @@ export function Popover({
     if (grid) shifts.observe(grid, {childList: true});
     // Any scroll but the panel's own. While the page is laid out, likely one of its own: the panel
     // hides if its button is out of sight, and is placed as the page settles, not at each scroll.
+    // While a widget is held, nothing is decided before it is let go: the panel hides then too, and
+    // is placed again as its button comes back into sight, as it would wait hidden till then.
     const scrolled = (event: Event) => {
       if (event.target instanceof Node && element.contains(event.target)) return;
-      if (seen()) return;
+      const holds = held();
+      if (seen()) {
+        if (holds && !size.height) place();
+        return;
+      }
       if (page.moving()) hide();
-      else close();
+      else if (holds) {
+        hide();
+        page.stir();
+      } else close();
     };
     addEventListener('resize', moved);
     addEventListener('scroll', scrolled, {capture: true, passive: true});
