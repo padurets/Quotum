@@ -27,6 +27,7 @@ test('the page is still once a frame goes by with nothing laid out anew', () => 
   assert.equal(page.moving(), true);
   next();
   assert.equal(done, 0, 'the frame it stirred in');
+  assert.equal(page.moving(), true, 'waiting for a still one');
   next();
   assert.equal(done, 1, 'a still one');
   assert.equal(page.moving(), false);
@@ -61,6 +62,7 @@ test('something still sliding keeps it waiting until it is done', () => {
   page.stir();
   for (let frame = 0; frame < 4; frame++) next();
   assert.equal(done, 0);
+  assert.equal(page.moving(), true, 'still moving while something slides');
   next();
   assert.equal(done, 1);
 });

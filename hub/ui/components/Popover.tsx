@@ -114,6 +114,7 @@ export function Popover({
     const hide = () => {
       unfocus();
       element.style.display = 'none';
+      size = {width: 0, height: 0};
     };
     const follow = () => (seen() ? place() : hide());
     // Opened out of sight, from the keyboard (its focus under the bars, or left on it as its panel
@@ -139,19 +140,26 @@ export function Popover({
     // As the page is laid out anew the panel follows its button, and is settled once the page is
     // still (`settler`): a frame goes by with nothing laid out anew, and nothing around the button
     // sliding to a new place (a widget moved, or dropped from a finger: the button is measured
-    // where it slides from). Decided at each step the page takes, it would be decided wrong: the
-    // board passes through layouts that take the button out of sight and bring it back, and
-    // scrolls the page as it does (keeping what is focused, or what is in sight, in its place), as
-    // the reader would. Only what comes to an end is waited for.
+    // where it slides from), an animation that moves it; nor the button's widget held by the
+    // reader, dragged or resized, which the panel goes along with, placed once it is let go and has
+    // slid into place. Decided at each step the page takes, it would be decided wrong: the board
+    // passes through layouts that take the button out of sight and bring it back, and scrolls the
+    // page as it does (keeping what is focused, or what is in sight, in its place), as the reader
+    // would. Only what comes to an end is waited for.
     const sliding = () =>
       document.getAnimations().some(animation => {
-        const effect = animation.effect as KeyframeEffect | null;
-        return animation.playState === 'running' && effect?.getTiming().iterations !== Infinity && !!effect?.target?.contains(trigger);
+        const effect = animation.effect;
+        if (!(effect instanceof KeyframeEffect) || animation.playState !== 'running' || effect.getTiming().iterations === Infinity) return false;
+        return !!effect.target?.contains(trigger) && effect.getKeyframes().some(frame => 'transform' in frame || 'translate' in frame);
       });
-    const page = settler(() => (seen() ? place() : close()), sliding);
+    const held = () => !!trigger.closest('.widget.is-lifted, .widget.is-resizing');
+    const page = settler(
+      () => (seen() ? place() : close()),
+      () => held() || sliding(),
+    );
     const moved = () => {
       bars = barsOf();
-      follow();
+      if (!held()) follow();
       page.stir();
     };
     // What is watched: the panel, as its content changes; the page's content (the body, at least as
