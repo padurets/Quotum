@@ -240,15 +240,23 @@ body.is-resizing-bottom-right, body.is-resizing-bottom-right * { cursor: nwse-re
 .icon-button svg { fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; }
 .badge { position: absolute; top: -3px; right: -3px; min-width: 13px; height: 13px; padding: 0 3px; border-radius: 7px; background: #262a3d; color: var(--text-2); font-size: 9px; font-style: normal; line-height: 13px; text-align: center; }
 .popover {
-  position: absolute; top: 32px; right: 0; z-index: 20; min-width: 250px; padding: 8px; max-width: min(360px, calc(100vw - 32px));
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 20; min-width: 250px; padding: 8px; max-width: min(360px, calc(100vw - 32px));
   border-radius: 12px;
 }
 .popover.is-up { top: auto; bottom: calc(100% + 6px); }
-/* No room for all of it (Popover measures): it scrolls, or its list does while the rest stays. */
-.popover.is-capped { overflow-y: auto; }
-.popover.is-capped:has(.agents-list) { display: flex; flex-direction: column; overflow: hidden; }
-.popover.is-capped:has(.agents-list) > * { flex-shrink: 0; }
-.popover.is-capped .agents-list { flex-shrink: 1; min-height: 0; }
+/*
+ * No room for all of it on either side (Popover measures): it scrolls, or its list does
+ * (`.popover-scroll`) while the rest stays, as long as the list has the room it asks for
+ * (`--least`); with less (`is-cramped`), the whole of it scrolls, the list with it, rather
+ * than lose the rest. Scrolling on past the end of what scrolls never scrolls the page; over
+ * what stays, the page scrolls as it does under any panel. The list holds its rows' names for
+ * screen readers, which would otherwise stand out below it and give the panel more to scroll.
+ */
+.popover.is-capped { overflow-y: auto; overscroll-behavior: contain; }
+.popover.is-capped:not(.is-cramped):has(.popover-scroll) { display: flex; flex-direction: column; }
+.popover.is-capped:not(.is-cramped):has(.popover-scroll) > * { flex-shrink: 0; }
+.popover.is-capped:not(.is-cramped) .popover-scroll { position: relative; flex-shrink: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.popover.is-cramped .popover-scroll { overflow: visible; }
 /*
  * What is behind shows through, blurred, under a faint sheen at the top edge. Popover,
  * Modal and the tooltips of our own (the chart's, a card's dot's) wear it; a new floating
@@ -455,7 +463,8 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 /* A heading wraps where the row is narrow (a phone); its value stays whole. */
 .forecast-compact-details > span { min-width: 0; overflow-wrap: anywhere; }
 .forecast-compact-details > span > span { color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.agents-list { box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; width: min(340px, calc(100vw - 48px)); max-width: 100%; overflow: hidden auto; padding: 0 0 4px; }
+/* Cut short, it keeps a machine's heading and two rows, each with its folder under the project. */
+.agents-list { box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; width: min(340px, calc(100vw - 48px)); max-width: 100%; overflow: hidden auto; padding: 0 0 4px; --least: 116px; }
 .agents-machine h3 { display: flex; align-items: baseline; gap: 8px; margin: 0 8px 4px; font-size: 12.5px; font-weight: 560; color: var(--text); }
 .agents-machine h3 span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agents-machine h3 small { margin-left: auto; font-weight: 450; color: var(--text-3); white-space: nowrap; }
