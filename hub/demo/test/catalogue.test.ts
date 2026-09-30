@@ -284,6 +284,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
   const values: Record<string, unknown> = {
     error: source.error,
     stale: source.stale,
+    measureIntervalMs: source.measureIntervalMs,
     title: source.title,
     fresh: dot.warn ? 'warn' : dot.pulsing ? 'pulse' : dot.fresh === 0 ? 'grey' : `fading, ${dot.fresh}`,
     agents: source.sessions.length,
@@ -612,7 +613,7 @@ test('cards measured at the hub’s pace say when the next measurement comes and
     'every code of the pace is checked',
   );
   const shown = checks as {cadence: string; why: string}[];
-  for (const why of ['low', 'inUse', 'changed', 'idle', 'reset']) assert.ok(shown.some(c => c.why === why), `a card says ${why}`);
+  for (const why of ['low', 'inUse', 'changed', 'idle', 'reset', 'fixed']) assert.ok(shown.some(c => c.why === why), `a card says ${why}`);
   for (const when of ['nextIn', 'nextSoon']) assert.ok(shown.some(c => c.cadence === when), `a card says ${when}`);
 });
 
@@ -623,7 +624,7 @@ for (const first of [0, 59 * SECOND])
     // What a card's dot says over a span of its own (stale while its machine sleeps, grey
     // between the measurements of a card measured seldom): the live demo measures these cards
     // when the hub says, not on the rhythm the twelve hours above follow.
-    const dot = (check: object) => ('stale' in check || 'fresh' in check) && 'to' in check;
+    const dot = (check: object) => ('stale' in check || 'fresh' in check) && 'to' in check && !paceCode(check);
     const timed = cards(all).filter(card => card.expect.some(dot));
     assert.ok(timed.some(card => card.expect.some(check => 'stale' in check && check.stale && dot(check))), 'the catalogue has a card going stale for a while');
     assert.ok(timed.some(card => card.expect.some(check => 'fresh' in check && dot(check))), 'and one going grey for a while');

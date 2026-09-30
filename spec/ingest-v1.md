@@ -202,13 +202,13 @@ number from 60 000 to 86 400 000), when its person set one. A hub answers
 on duty: don't measure this subscription before `until`, then ask again. The device on
 duty keeps it while it delivers; a device where someone is working takes over from a
 holder that has been idle for a while; a holder that stops delivering loses duty when
-its last measurement goes stale, however often it asks. A holder following the hub's
+its last measurement and bounded waiting protection expire, however often it asks. A holder following the hub's
 pace (below) that is told `measure: true` also keeps duty while it measures, since it
 asks nothing while it measures its providers one by one: until it delivers, reports a
 failure for it or asks again, for at most five minutes; meanwhile no other device takes
-duty, not even one where someone is working. A waiting device is told to come back, at
-the latest, when the holder's last measurement goes stale or, once that has passed
-while it measures, when the five minutes end. A holder that asks again without
+duty, not even one where someone is working. A waiting device is told to come back by
+the expiry of both the holder's last measurement and its bounded waiting protection,
+or, once those have passed while it measures, when the five minutes end. A holder that asks again without
 answering keeps duty no longer than that, and until it answers the last command,
 however late, being told `measure: true` keeps it none. Errors are as for ingest
 (`400 invalid_request`, `401`, `403`). An agent that cannot reach the hub, or gets any
@@ -263,13 +263,32 @@ same fields above. This never bypasses the one-minute minimum, the device's
 `minIntervalMs`, a failure pause or the retry delay of an unanswered command; repeated
 clicks join one request, and a click while the holder measures what it was told to
 (before it asks again, for at most five minutes) waits for that command instead of
-asking again; meanwhile its silence does not make refresh unavailable. Raising the
-minimum after an earlier promise takes precedence over that promise, so the old
-measurement can become stale before the next is allowed, and the holder's duty can lapse
-before then: until it asks again, no refresh can be requested, and another device of the
-subscription may take duty and measure at once. Both ordinary and requested measurements
-respect the minimum after the later of the last measurement and the last command to this
-holder. A new holder keeps the usual first-measurement policy.
+asking again; meanwhile its silence does not make refresh unavailable. Both ordinary
+and requested measurements respect the minimum after the later of the last accepted measurement and the last command
+to this holder. A healthy paced holder waiting for an ordinary plan keeps duty through
+that plan plus one minute for check-in, independently of the snapshot's freshness. The
+plan is anchored to successful data, never to the latest question or an unanswered retry.
+Issuing a command removes that waiting protection; the existing execution protection
+then applies. An unanswered holder cannot renew an expired lease by asking first.
+Expired data that do not answer its outstanding command grant no new arrival-time
+lease either; still-representative data keep their own snapshot lease. A changed plan
+may shorten a silent holder's existing waiting protection, but cannot extend it.
+
+The subscription's hub setting is Auto (the policy above) or a fixed interval of 1, 2,
+5 or 15 minutes. A fixed ordinary plan follows the last accepted successful measurement,
+including after a hub restart or ordinary handover. With no successful data, measure at
+once. Work, changed percentages, low limits and resets do not accelerate a fixed plan;
+the device minimum, failure pauses and unanswered-command retries still apply.
+Before the first success, a failed command starts no fixed interval; retry after the
+existing failure pause and device minimum.
+`nextInMs` promises that effective fixed interval. Refresh may accelerate it within the
+same minimum; the accepted fresh result starts the next ordinary interval.
+
+A changed setting immediately replans an unissued measurement. A command already sent
+finishes once. Choosing a longer interval may leave existing data stale: the stored
+freshness and history are never extended. Auto retains its immediate first measurement
+on ordinary handover and restart. Legacy check-ins, measurements taken without a command
+and an agent's fallback while the hub is unavailable retain their behaviour.
 
 An accepted delivery or a reported failure acknowledges the holder's outstanding command
 only if its corrected time is at least the command's time minus the 30-second clock
@@ -412,3 +431,5 @@ subscription you measure that is shown there, whoever brought it, as precisely a
 credits it (not rounded to the minute), with how many of them worked, by project and by
 machine, from the later of when you joined the board and when the subscription came to
 it; you see all of it on your own board.
+
+The measuring-frequency preference is kept on the hub. It adds no information to agent traffic.

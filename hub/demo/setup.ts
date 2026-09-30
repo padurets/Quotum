@@ -92,6 +92,10 @@ export async function setUp(base: string, set: DemoSet, start: number, setupCode
   for (const card of cards(set)) {
     stand.sources.set(card.id, sourceOf(card, stand.people.get(homeOf(set, card))!.id));
     await seed(stand, card, now, still);
+    if (card.measureIntervalMs != null) {
+      const person = stand.people.get(homeOf(set, card))!;
+      await person.post(`/api/boards/${stand.boards.get(homeOf(set, card))!}/sources/${stand.sources.get(card.id)!}/frequency`, {intervalMs: card.measureIntervalMs});
+    }
     // The other machines join: their first measurement (the hub has it already) makes
     // their people hold it, so their agents show on it from the first list.
     const last = historyTimes(set, card).at(-1)!;
@@ -370,7 +374,8 @@ export class Live {
         const batch = live.slice(offset, offset + 16);
         const asks = batch.map(card => {
           const {provider, account, accountName} = snapshot(card, start, t, MIN) as {provider: string; account?: string; accountName?: string};
-          return {provider, account, accountName, active: false, ...(card.refresh?.minimum ? {minIntervalMs: card.refresh.minimum} : {})};
+          const minimum = card.minimum ?? card.refresh?.minimum;
+          return {provider, account, accountName, active: false, ...(minimum ? {minIntervalMs: minimum} : {})};
         });
         const {subscriptions} = await agent.checkin(asks, !batch.some(card => card.refresh?.legacy));
         for (const card of batch) this.checked.add(card.id);

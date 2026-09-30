@@ -77,10 +77,10 @@ export type Paced = Pick<Card, 'stale' | 'error' | 'successAt'> & {cadence: Pace
 
 /**
  * When the next measurement comes and why, for the dot's tooltip: while the hub sets the
- * pace, and the dot is not telling of trouble.
+ * pace. Stale numbers can still have a real future plan.
  */
 export function cadenceOf(source: Paced, now: number): Cadence | null {
-  if (!source.cadence || dotOf(source, now).warn) return null;
+  if (!source.cadence || problemOf(source)) return null;
   const {next, why} = source.cadence;
   return {when: next - now <= SOON ? 'nextSoon' : 'nextIn', next, why};
 }
