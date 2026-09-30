@@ -6,7 +6,7 @@ import {providers, sourceId, type Provider, type Source} from '../domain/sources
 import {onGrid, series, type Kind, type Measurement, type Sample, type SourceState} from '../domain/quota.js';
 import type {PlanChange, SeriesSample} from '../domain/forecast.js';
 import type {Origin} from '../domain/ingest.js';
-import {activity, barOf, seriesWork, union, type Activity, type SeriesWork, type Stretch} from '../domain/work.js';
+import {activity, barOf, seriesWork, subscriptionWork, type Activity, type SeriesWork, type Stretch} from '../domain/work.js';
 import {members, projectGroups, type ProjectGroup} from '../domain/projects.js';
 import {tell, type Touches} from '../touches.js';
 import {migrate} from './schema.js';
@@ -499,6 +499,7 @@ export class Store {
         const last = samples.at(-1)!;
         const {points, ...summary} = series(samples);
         const source = shown.get(last.sourceId);
+        const {worked, agentMs} = work.bySource.get(last.sourceId) ?? {worked: [], agentMs: 0};
         return {
           sourceId: last.sourceId,
           provider: last.provider,
@@ -510,7 +511,7 @@ export class Store {
           ...summary,
           points: onGrid(points, cellMs).map(p => [p.at, Math.round(p.remaining * 100) / 100, p.segment] as const),
           // Spending before the subscription came to the board is not set against work the board does not show.
-          work: source ? seriesWork(samples, work.worked.get(last.sourceId) ?? [], {from: Math.max(work.from, source.since), to: work.to}) : null,
+          work: source ? seriesWork(samples, worked, agentMs, {from: Math.max(work.from, source.since), to: work.to}) : null,
         };
       });
     return {
@@ -552,10 +553,10 @@ export class Store {
       ).map(d => [d.id, d.name]),
     );
     const barMs = barOf(cellMs, to - from);
-    const none = {barMs, workMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}};
+    const none = {barMs, activeMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}};
     return {
       ...known,
-      worked: new Map([...bySource].map(([id, list]) => [id, union(list)])),
+      bySource: new Map([...bySource].map(([id, list]) => [id, subscriptionWork(list, {from: Math.max(known.from, shown.get(id)!.since), to: known.to})])),
       activity: known.to > known.from ? {since, known, ...activity(stretches, known, barMs, names)} : {since, known: null, ...none},
     };
   }
