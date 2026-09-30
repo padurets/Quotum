@@ -233,7 +233,9 @@ export class HistoryStore {
       this.metaSeq = flight.seq;
       this.meta = {now: answer.now, historyStart: answer.historyStart, known: answer.known};
       const to = answer.chunks.at(-1)?.to;
-      if (to !== undefined && to > answer.now + CLOCK_TOLERANCE_MS) this.cutTo = to;
+      // A later read on a coarser grid does not revoke the earlier empty suffix;
+      // only history news or a new epoch can put data there.
+      if (to !== undefined && to > answer.now + CLOCK_TOLERANCE_MS) this.cutTo = Math.min(this.cutTo ?? to, to);
     }
     this.needsCompose = true;
     this.evict();

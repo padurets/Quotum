@@ -242,3 +242,20 @@ test('window sets cannot alias a window whose id contains the set separator', as
   assert.equal(h.store.get().history?.series.length, 2);
   assert.equal(h.reads.length, 1);
 });
+
+test('a coarser grid cannot forget the empty suffix of a previously seen finer grid', async () => {
+  const h = harness();
+  await h.start();
+  await h.reads[0].answer();
+  h.store.choose('7d', null);
+  await flush();
+  await h.reads[1].answer();
+  await h.advance(5 * M);
+  h.store.choose('24h', null);
+  await flush();
+  assert.equal(h.store.get().history?.range, '24h');
+  assert.equal(h.reads.length, 2, 'no data arrived beyond the finer grid cut');
+  h.store.news(h.now());
+  await flush();
+  assert.equal(h.reads.length, 3, 'news alone revokes the empty suffix');
+});
