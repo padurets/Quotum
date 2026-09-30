@@ -241,17 +241,17 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
       const tenth = (ms: number) => Math.round(ms / 360_000) / 10;
       const cardOf = (source: string) => [...stand.sources].find(([, id]) => id === source)?.[0] ?? source;
       const named = (by: 'source' | 'project' | 'device') =>
-        Object.fromEntries(activity.by[by].map(g => [by === 'source' ? cardOf(g.key) : String(g.name), tenth(g.ms)]));
+        Object.fromEntries(activity.by[by].map(g => [by === 'source' ? cardOf(g.key) : String(g.name), tenth(g.agentMs)]));
       if ('activity' in check) {
         const {activity: by} = check as {activity: 'source' | 'project' | 'device'};
         return {activity: by, range, groups: named(by)};
       }
       if ('activityOf' in check) {
         const {activityOf: name, by} = check as {activityOf: string; by: 'project' | 'device'};
-        return {activityOf: name, by, range, hours: named(by)[name] ?? null};
+        return {activityOf: name, by, range, hours: named(by)[name] ?? null, ...('active' in check ? {active: tenth(activity.by[by].find(g => g.name === name)!.activeMs)} : {})};
       }
       if ('activityTotals' in check) {
-        return {activityTotals: {work: tenth(activity.workMs), agents: activity.agents, agentTime: tenth(activity.agentMs)}, range};
+        return {activityTotals: {agentHours: tenth(activity.agentMs), active: tenth(activity.activeMs), agents: activity.agents}, range};
       }
       return {activityKnownFrom: activity.known ? activity.known.from - stand.start : null, range};
     }
@@ -339,7 +339,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
     const tenth = (value: number) => Math.round(value * 10) / 10;
     const hours = (cell: (typeof cells)['work']) => ('value' in cell ? tenth(cell.value / 3_600_000) : 'untilReset' in cell ? 'untilReset' : 'usedUp' in cell ? 'usedUp' : 'outlasts' in cell ? 'outlasts' : undefined);
     // A column off on the board shows nothing to check.
-    const on = <T,>(column: 'work' | 'perwork' | 'workleft' | 'during', value: T) => (columnShown(overview.view, FORECAST, column) ? value : 'hidden');
+    const on = <T,>(column: 'work' | 'agenthours' | 'perwork' | 'workleft' | 'during', value: T) => (columnShown(overview.view, FORECAST, column) ? value : 'hidden');
     const {since, share} = workNotes(line.work, history.since);
     // A dash as its tooltip tells it: a reason about the whole period, since when work is known.
     const why = (cell: (typeof cells)['work']) => ('none' in cell ? (cell.none === 'unknown' ? 'unknown' : dashOf(cell.none, since).text) : undefined);
@@ -347,6 +347,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
       work: id,
       range: card.range,
       hours: on('work', hours(cells.work)),
+      agentHours: on('agenthours', hours(cells.agenthours)),
       perHour: on('perwork', 'value' in cells.perwork ? tenth(cells.perwork.value) : undefined),
       left: on('workleft', hours(cells.workleft)),
       during: on('during', 'value' in cells.during ? Math.round(cells.during.value) : undefined),

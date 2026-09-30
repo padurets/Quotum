@@ -65,21 +65,27 @@ export function overlap(worked: [number, number][], from: number, to: number): n
   return covered;
 }
 
+/** A subscription's active spans and agent time, cut to its known part of the period. */
+export function subscriptionWork(stretches: readonly Span[], known: Span): {worked: [number, number][]; agentMs: number} {
+  const within = stretches.map(s => ({from: Math.max(s.from, known.from), to: Math.min(s.to, known.to)})).filter(s => s.to > s.from);
+  return {worked: union(within), agentMs: within.reduce((sum, s) => sum + s.to - s.from, 0)};
+}
+
 /**
  * How agents worked on a window's subscription over a period, and what the window spent
  * meanwhile, all within the part of the period that is known (`from`): `ms`, how long any
  * of them worked (null when nothing of the period is known); `consumed`, what the window
  * spent over the steps between samples that `edge` proves and that begin in the known
- * part; `coveredMs`, how long they worked during those steps, which the pace per hour of
- * work is taken over (spending in a gap between samples is not counted, so neither is the
- * work there); `duringWork`, what those of the steps that agents worked in spent: a step
+ * part; `agentMs`, the time of each agent added up; `coveredMs`, how long they worked
+ * during those steps, which the pace per active hour is taken over (spending in a gap
+ * between samples is not counted, so neither is the activity there); `duringWork`, what those of the steps that agents worked in spent: a step
  * that work touches counts whole, so it is an upper bound.
  */
-export type SeriesWork = {from: number; ms: number | null; consumed: number; coveredMs: number; duringWork: number};
+export type SeriesWork = {from: number; ms: number | null; agentMs: number; consumed: number; coveredMs: number; duringWork: number};
 
-/** A window's `SeriesWork` from its samples, the union of its subscription's stretches (`union`) and the known part of the period. */
-export function seriesWork(samples: Sample[], worked: [number, number][], known: Span): SeriesWork {
-  if (known.to <= known.from) return {from: known.from, ms: null, consumed: 0, coveredMs: 0, duringWork: 0};
+/** A window's work from its samples, the subscription's active spans and agent time, and the known period. */
+export function seriesWork(samples: Sample[], worked: [number, number][], agentMs: number, known: Span): SeriesWork {
+  if (known.to <= known.from) return {from: known.from, ms: null, agentMs: 0, consumed: 0, coveredMs: 0, duringWork: 0};
   let consumed = 0;
   let coveredMs = 0;
   let duringWork = 0;
@@ -94,28 +100,25 @@ export function seriesWork(samples: Sample[], worked: [number, number][], known:
     coveredMs += covered;
     if (covered > 0) duringWork += step.delta;
   }
-  return {from: known.from, ms: overlap(worked, known.from, known.to), consumed, coveredMs, duringWork};
+  return {from: known.from, ms: overlap(worked, known.from, known.to), agentMs, consumed, coveredMs, duringWork};
 }
 
 export type Dimension = 'source' | 'project' | 'device';
 
 /**
- * A subscription, project or machine agents worked on: how long any of its agents worked
- * (`ms`, overlaps counted once) and its part of each cell's work (only cells it has a part
- * in). `key` is the subscription's or the machine's id, or the project's name as JSON:
- * `null` for none, which no name can be. `name` is the project's or the machine's, null
- * for a subscription (the dashboard names it) and for work outside any project.
+ * A subscription, project or machine: its agent time (each agent counts), active time
+ * (overlaps counted once), distinct agents and agent time in each bar it worked in.
+ * `key` is a subscription or machine id, or a project name as JSON (`null` for none).
+ * `name` is null for subscriptions (the dashboard names them) and outside any project.
  */
-export type ActivityGroup = {key: string; name: string | null; ms: number; cells: [number, number][]};
+export type ActivityGroup = {key: string; name: string | null; agentMs: number; activeMs: number; agents: number; cells: [number, number][]};
 
 /**
- * How agents worked over a period, bar by bar (`barMs` long): how long any of them worked
- * (`workMs`), how long all of them together did (`agentMs`, two at once counting twice)
- * and how many different agents worked (`agents`), in all and in each bar with work
- * (`cells`: its start, work, agent time, agents), and split by subscription, project and
- * machine.
+ * Agents' work bar by bar: active time, agent time and distinct agents in all and in
+ * each bar with work (`cells`: start, active time, agent time, agents), split by
+ * subscription, project and machine. Group parts add up to each bar's agent time.
  */
-export type Activity = {barMs: number; workMs: number; agentMs: number; agents: number; cells: [number, number, number, number][]; by: Record<Dimension, ActivityGroup[]>};
+export type Activity = {barMs: number; activeMs: number; agentMs: number; agents: number; cells: [number, number, number, number][]; by: Record<Dimension, ActivityGroup[]>};
 
 /**
  * How long each bar of a period `spanMs` long drawn on cells `cellMs` long is: the
@@ -136,11 +139,8 @@ export function barOf(cellMs: number, spanMs: number): number {
 const DIMENSIONS: Dimension[] = ['source', 'project', 'device'];
 
 /**
- * Agents' work over the known part of a period in bars `cellMs` long (`barOf`), each
- * starting at a whole multiple of its length as the chart's cells do. Each moment is split evenly among the agents working then,
- * so the parts of a cell add up to its work, whichever way it is split; each group also
- * keeps how long its own agents worked, which is more than its parts when other agents
- * worked alongside. Machines are named by `deviceNames`.
+ * Agent-hours over the known period, in aligned bars: every stretch counts separately.
+ * Active time is the union; machines are named by `deviceNames`.
  */
 export function activity(stretches: Stretch[], known: Span, cellMs: number, deviceNames: Map<string, string>): Activity {
   const within = stretches
@@ -171,42 +171,8 @@ export function activity(stretches: Stretch[], known: Span, cellMs: number, devi
     groups[dimension] = {keys: [...index.keys()], of, parts: new Float64Array(index.size * cellCount)};
   }
 
-  // Where the number of agents working changes (`times`), how many work from there on
-  // (`counts`), and how much of the time up to there one agent has, each moment split
-  // evenly among those working then (`shares`). An end comes before a start at the same
-  // moment: stretches that only touch never overlap.
-  const starts = Float64Array.from(within, s => s.from);
-  const ends = Float64Array.from(within, s => s.to).sort();
-  const times: number[] = [];
-  const counts: number[] = [];
-  const shares: number[] = [];
-  let working = 0;
-  let share = 0;
-  for (let s = 0, e = 0; s < starts.length || e < ends.length; ) {
-    const time = s < starts.length && starts[s] < ends[e] ? starts[s] : ends[e];
-    if (working) share += (time - times.at(-1)!) / working;
-    while (e < ends.length && ends[e] === time) (working--, e++);
-    while (s < starts.length && starts[s] === time) (working++, s++);
-    times.push(time);
-    counts.push(working);
-    shares.push(share);
-  }
-  /** How much of the time up to `time` one agent working all along has. */
-  const shareAt = (time: number) => {
-    let low = 0;
-    let high = times.length - 1;
-    while (low < high) {
-      const middle = (low + high + 1) >> 1;
-      if (times[middle] <= time) low = middle;
-      else high = middle - 1;
-    }
-    return shares[low] + (counts[low] ? (time - times[low]) / counts[low] : 0);
-  };
-
-  // A stretch's part of a cell is what one agent has of the time it worked there. An agent
-  // counts once in a cell however many of its stretches lie there: its stretches never
-  // overlap, so in time order they reach its cells in order, and the last one it counted
-  // is enough to tell.
+  // Each agent counts once in a bar however many of its stretches lie there: its
+  // stretches never overlap, so in time order they reach its bars in order.
   const agentTime = new Float64Array(cellCount);
   const agents = new Uint32Array(cellCount);
   const counted = new Map<number, number>();
@@ -214,10 +180,9 @@ export function activity(stretches: Stretch[], known: Span, cellMs: number, devi
     for (let cell = cellOf(s.from); cell <= cellOf(s.to - 1); cell++) {
       const from = Math.max(s.from, cellStart(cell));
       const to = Math.min(s.to, cellStart(cell + 1));
-      const part = shareAt(to) - shareAt(from);
       agentTime[cell] += to - from;
       if ((counted.get(s.session) ?? -1) < cell) (counted.set(s.session, cell), agents[cell]++);
-      for (const dimension of DIMENSIONS) groups[dimension].parts[groups[dimension].of[i] * cellCount + cell] += part;
+      for (const dimension of DIMENSIONS) groups[dimension].parts[groups[dimension].of[i] * cellCount + cell] += to - from;
     }
   });
   const worked = union(within);
@@ -237,7 +202,7 @@ export function activity(stretches: Stretch[], known: Span, cellMs: number, devi
     const partsOf = (g: number) => {
       const shown: [number, number][] = [];
       for (let cell = 0; cell < cellCount; cell++) {
-        const part = Math.round(parts[g * cellCount + cell]);
+        const part = parts[g * cellCount + cell];
         if (part > 0) shown.push([cellStart(cell), part]);
       }
       return shown;
@@ -249,14 +214,16 @@ export function activity(stretches: Stretch[], known: Span, cellMs: number, devi
         g,
         key,
         name: dimension === 'source' ? null : dimension === 'project' ? members[g][0].project : (deviceNames.get(key) ?? null),
-        ms: workTime(members[g]),
+        agentMs: members[g].reduce((sum, s) => sum + s.to - s.from, 0),
+        activeMs: workTime(members[g]),
+        agents: new Set(members[g].map(s => s.session)).size,
       }))
-      .sort((a, b) => b.ms - a.ms || compare(a.name ?? '', b.name ?? '') || compare(a.key, b.key))
-      .map(({g, key, name, ms}): ActivityGroup => ({key, name, ms, cells: partsOf(g)}));
+      .sort((a, b) => b.agentMs - a.agentMs || b.activeMs - a.activeMs || compare(a.name ?? '', b.name ?? '') || compare(a.key, b.key))
+      .map(({g, ...group}): ActivityGroup => ({...group, cells: partsOf(g)}));
   }
   return {
     barMs: cellMs,
-    workMs: worked.reduce((sum, [from, to]) => sum + to - from, 0),
+    activeMs: worked.reduce((sum, [from, to]) => sum + to - from, 0),
     agentMs: within.reduce((sum, s) => sum + s.to - s.from, 0),
     agents: counted.size,
     cells,

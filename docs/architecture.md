@@ -314,31 +314,37 @@ when and its project and folder names as reported, as long as samples. A session
 never credited twice for the same time: after the hub's clock goes back, it is credited
 again from where its time already ends, so a clock that ran ahead costs its sessions at
 most as much time as it ran ahead, and the time counted before is never rewritten. Sums are worked
-out when read (`domain/work.ts`): agent time adds the stretches up, two agents counting
-twice; the time any of them worked is their union, overlaps counted once for whichever
-machines, people or projects are asked about. The corrections people make to project
+out when read (`domain/work.ts`): agent-hours add each stretch up, two agents counting
+twice; active time is their union, overlaps counted once for whichever machines,
+people or projects are asked about. The corrections people make to project
 names apply when read, so they reach all the time kept. The database says since when
 this is kept (`agentWorkSince`): before it, how agents worked is not known.
 
-The analytics show it over their period. The table tells, for each window, how long
-agents worked on its subscription, what the window spent per hour of their work, what
-share of its spending came while they worked, and, beside the forecast by time, a
-forecast by work: how many hours of work what is left lasts at that spending (or that it
-lasts to the reset). A widget draws hours of work in bars of an hour (the period's cells
-where those are longer; shorter bars where a range holds fewer than twenty hours), so a
-bar's height is the time agents worked in it, stacked by subscription, project or
-machine, with the work time, how many different agents worked and their time together
-in all; a bar's tooltip tells its work time and agents first, while none of its work is
-in a group switched off in the legend, then its parts. Every subscription, project and machine of the period
-is a group of its own, however small; projects and machines take seven colours by their
-hours, and those past them share a neutral one. Each moment is split evenly among
-the agents working then, so a stack is as tall as the time any of them worked; a
-group's own hours are the union of its agents' time, more than its part of the stacks
-where others worked alongside, so a subscription's hours are the table's. What is known
-of a period begins with `agentWorkSince`, and on a shared board no earlier than the
+The analytics show it over their period. The table tells, for each window, its
+subscription's active time, what the window spent per active hour, what share of its
+spending came while agents were active, and, beside the forecast by time, a forecast by
+work: how many active hours what is left lasts at that spending (or that it lasts to
+the reset). An optional Agent-hours column adds each agent's time separately.
+Agent-hours and the spending share while active are off by default; enabling either can turn the
+full-width table into a list, where every value keeps its heading.
+A widget stacks agent-hours by subscription, project or machine in bars of an hour
+(the period's cells where those are longer; shorter bars where a range holds fewer
+than twenty hours). Four agents over an hour make a bar 4h tall. The legend's groups
+add up to the total in every split; projects and machines take seven colours by their
+agent-hours, and those past them share a neutral one. Each group is its own however
+small. Above the stacks are agent-hours, active time, distinct agents and the average
+at once (agent-hours divided by active time). Active time is not drawn: it is in the
+totals and tooltips. A bar's tooltip gives these totals first, then its group parts;
+a legend entry's glass bubble gives the group's agent-hours, active time, average at
+once and distinct agents. Hover or keyboard focus opens it, Escape dismisses it; a
+tap also switches the group and keeps the bubble for four seconds. Switching groups
+off recomputes stacks, scale and the shown agent-hours; active time, agents and at
+once still cover all the board's agents. A subscription's agent-hours equal its
+windows' Agent-hours column, and its active time equals their Active time column.
+What is known of a period begins with `agentWorkSince`, and on a shared board no earlier than the
 subscription came to it: the part before is said to be unknown, not drawn as idle. The
-pace and the share during work are taken over the work within the steps between samples
-whose spending counts, so a gap counts neither, and need half an hour of it. Work that
+pace and the share while active are taken over the activity within the steps between
+samples whose spending counts, so a gap counts neither, and need half an hour of it. Work that
 would outlast the reset, or a whole window where no reset time comes first (a range),
 lasts to the reset, however slow the pace (too slow a pace names no hours for it); short
 of either, what is left runs out before it, and its hours are named at any pace. Only
@@ -352,8 +358,8 @@ members who hold each subscription it shows, but those of hidden cards: on a sha
 board from the later of their joining it and the subscription coming to it, on a
 personal board all of it. Work the board does not show (off the board, from before) is
 not in its hours while the window's spending is, and so is spending outside tracked
-agents (claude.ai, a phone, machines without Quotum, cloud tasks): the share during
-work says how far to trust the pace.
+agents (claude.ai, a phone, machines without Quotum, cloud tasks): the share while
+active says how far to trust the pace.
 
 ## Storage and the rules
 
@@ -620,7 +626,7 @@ clock keeps one timer for the whole page, none on a hidden tab, and counts in th
 time as the hub's messages tell it. The chart and agent activity move on a cell of the
 history's grid at a time; a label past the chart's right edge counts down on its own, and
 a forecast's line goes at the moment the table says it runs out, or at the reset; in the
-table, the plan, where the pace leads and the hours of work left each read otherwise at
+table, the plan, where the pace leads and the active hours left each read otherwise at
 their own moment. History is read again when the hub tells of measurements
 the chart has not shown, at most every ten seconds for a period ending now, or that whose
 agents' work the board shows, or under which names, changed (`Store.workKey`: a card
@@ -723,8 +729,8 @@ own width, it becomes a compact list with a sort menu. State is off by default: 
 mark already tells it. Explicit column choices belong to the board, sorting to the viewer.
 The table of limits does the same: its owner chooses its columns, and where they do not
 fit it lists each window with what is left, then its other values, each with its heading.
-The share of spending during work is off by default: beside the rest it does not fit a
-widget as wide as the board.
+Agent-hours and the share of spending while active are off by default: adding either can
+turn a table as wide as the board into a list.
 
 Text is translated through typed catalogs in `hub/ui/i18n`: English is the source,
 every other language must translate all its keys (checked by the type checker and by

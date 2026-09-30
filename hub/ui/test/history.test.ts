@@ -9,7 +9,7 @@ import {ApiError} from '../lib/http';
 const S = 1000;
 const MIN = 60_000;
 const NOW = Date.parse('2026-09-26T12:00:00Z');
-const NO_WORK: History['activity'] = {since: 0, known: null, barMs: 60_000, workMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}};
+const NO_WORK: History['activity'] = {since: 0, known: null, barMs: 60_000, activeMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}};
 
 /** A loader whose reads the test answers, on a clock the test moves. */
 function harness() {

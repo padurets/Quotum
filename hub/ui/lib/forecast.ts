@@ -382,24 +382,25 @@ export function planCell(live: Win | undefined, measuredAt: number | null, now: 
  * hours of agent work. What they spent, and the columns about agent work, are the same in
  * both, so turning one off turns it off in both.
  */
-export const LIVE_COLUMNS = ['now', 'plan', 'spent', 'work', 'perwork', 'during', 'forecast', 'workleft'] as const;
-export const RANGE_COLUMNS = ['start', 'end', 'spent', 'pace', 'work', 'perwork', 'during', 'workleft'] as const;
+export const LIVE_COLUMNS = ['now', 'plan', 'spent', 'work', 'agenthours', 'perwork', 'during', 'forecast', 'workleft'] as const;
+export const RANGE_COLUMNS = ['start', 'end', 'spent', 'pace', 'work', 'agenthours', 'perwork', 'during', 'workleft'] as const;
 export type ForecastColumn = (typeof LIVE_COLUMNS)[number] | (typeof RANGE_COLUMNS)[number];
 
 /**
  * Room for the widest heading or value in either language, measured on the demo board,
  * and the least room a window's name gets (`limit`), which wraps beyond it. On a widget as
- * wide as the board every column on by default fits; with the share during work as well,
- * they do not, which is why that column is off until the owner turns it on.
+ * wide as the board every column on by default fits; with agent-hours or the share while active as well,
+ * they may not, which is why those columns are off until the owner turns them on.
  */
 export const FORECAST_WIDTHS: Record<ForecastColumn | 'limit', number> = {
   limit: 180,
   now: 72,
   plan: 74,
   spent: 142,
-  work: 114,
+  work: 145,
+  agenthours: 106,
   perwork: 166,
-  during: 134,
+  during: 165,
   forecast: 220,
   workleft: 146,
   start: 82,

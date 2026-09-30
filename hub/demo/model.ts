@@ -343,6 +343,7 @@ export type CardCheck = Span & {board?: string} & (
         work: string;
         range: Period;
         hours?: number;
+        agentHours?: number | 'hidden';
         perHour?: number;
         left?: number | 'untilReset' | 'outlasts' | 'usedUp';
         during?: number | 'hidden';
@@ -382,9 +383,9 @@ export type BoardCheck = Span &
      */
     | {activity: 'source' | 'project' | 'device'; range: Period; groups: Record<string, number>}
     /** One group of the activity widget and its own hours, whatever the others (null: not among the groups). */
-    | {activityOf: string; by: 'project' | 'device'; range: Period; hours: number | null}
+    | {activityOf: string; by: 'project' | 'device'; range: Period; hours: number | null; active?: number}
     /** The activity widget's totals over `range`: hours of work, how many different agents worked, and their hours together. */
-    | {activityTotals: {work: number; agents: number; agentTime: number}; range: Period}
+    | {activityTotals: {agentHours: number; active: number; agents: number}; range: Period}
     /** Since when, from `start`, the activity widget knows how agents worked over `range`. */
     | {activityKnownFrom: number; range: Period}
     /** What the activity widget says instead of its stacks over `range` (`ui/lib/activity.ts` `activityEmpty`), or null for stacks. */

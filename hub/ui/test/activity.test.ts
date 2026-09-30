@@ -1,13 +1,13 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {activityEmpty, activityScale, groupColors, mutedKey, OTHER_COLOR} from '../lib/activity';
+import {activityEmpty, activityScale, atOnce, shownActivity, groupColors, mutedKey, OTHER_COLOR} from '../lib/activity';
 import {CATEGORY_COLORS, PROVIDERS} from '../lib/providers';
 import type {ActivityGroup, View} from '../lib/types';
 
 const view: View = {layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
 const HOUR = 3_600_000;
-const group = (key: string, change: Partial<ActivityGroup> = {}): ActivityGroup => ({key, name: key, ms: HOUR, cells: [], ...change});
+const group = (key: string, change: Partial<ActivityGroup> = {}): ActivityGroup => ({key, name: key, agentMs: HOUR, activeMs: HOUR, agents: 1, cells: [], ...change});
 
 // Colour science for the checks below: sRGB to CIELAB (D65), CIEDE2000, WCAG contrast.
 const channels = (hex: string) => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255).map(c => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
@@ -73,31 +73,77 @@ test('projects and machines take colours no status and no provider has, told apa
 
 test('a subscription has its card colour; projects and machines take theirs by rank, and those past the palette a neutral', () => {
   const sources = Array.from({length: 9}, (_, i) => group(`codex:${i}`));
-  assert.ok(groupColors(sources, 'source', view, () => 'codex').every(color => color === PROVIDERS.codex.color), 'every subscription its card colour, however many');
-  assert.deepEqual(groupColors(sources.slice(0, 2), 'source', {...view, colors: {'codex:1': '#43aca1'}}, () => 'codex'), [PROVIDERS.codex.color, '#43aca1']);
+  assert.ok(
+    groupColors(sources, 'source', view, () => 'codex').every(color => color === PROVIDERS.codex.color),
+    'every subscription its card colour, however many',
+  );
+  assert.deepEqual(
+    groupColors(sources.slice(0, 2), 'source', {...view, colors: {'codex:1': '#43aca1'}}, () => 'codex'),
+    [PROVIDERS.codex.color, '#43aca1'],
+  );
   const projects = Array.from({length: CATEGORY_COLORS.length + 2}, (_, i) => group(`"p${i}"`));
   assert.deepEqual(groupColors(projects, 'project', view, () => ''), [...CATEGORY_COLORS, OTHER_COLOR, OTHER_COLOR]);
 });
 
-test('the scale is time worked, up to the tallest stack and never more than a bar, marked at round times', () => {
+test('the scale shows agent-hours beyond a bar, with at most three round marks above zero', () => {
   const MINUTE = 60_000;
-  assert.deepEqual(activityScale(50 * MINUTE, HOUR), {max: HOUR, ticks: [0, 30 * MINUTE, HOUR]});
-  assert.deepEqual(activityScale(20 * MINUTE, HOUR), {max: 20 * MINUTE, ticks: [0, 10 * MINUTE, 20 * MINUTE]});
-  assert.deepEqual(activityScale(1.7 * HOUR, 2 * HOUR), {max: 2 * HOUR, ticks: [0, HOUR, 2 * HOUR]});
-  assert.equal(activityScale(11 * HOUR, 12 * HOUR).max, 12 * HOUR, 'never more than a bar');
-  assert.deepEqual(activityScale(4.5 * MINUTE, 5 * MINUTE), {max: 5 * MINUTE, ticks: [0, 5 * MINUTE]}, 'a five-minute bar marked at its top');
-  assert.deepEqual(activityScale(1.9 * HOUR, 2 * HOUR), {max: 2 * HOUR, ticks: [0, HOUR, 2 * HOUR]});
+  assert.deepEqual(activityScale(50 * MINUTE), {max: HOUR, ticks: [0, 30 * MINUTE, HOUR]});
+  assert.deepEqual(activityScale(20 * MINUTE), {max: 20 * MINUTE, ticks: [0, 10 * MINUTE, 20 * MINUTE]});
+  assert.deepEqual(activityScale(1.7 * HOUR), {max: 2 * HOUR, ticks: [0, HOUR, 2 * HOUR]});
+  assert.deepEqual(activityScale(4.5 * MINUTE), {max: 6 * MINUTE, ticks: [0, 2 * MINUTE, 4 * MINUTE, 6 * MINUTE]});
+  assert.deepEqual(activityScale(4 * HOUR), {max: 4 * HOUR, ticks: [0, 2 * HOUR, 4 * HOUR]});
+  assert.deepEqual(activityScale(20 * HOUR), {max: 24 * HOUR, ticks: [0, 12 * HOUR, 24 * HOUR]});
+  for (const hours of [48, 120, 240, 480, 1440, 10000]) {
+    const scale = activityScale(hours * HOUR);
+    assert.ok(scale.max >= hours * HOUR && scale.ticks.length <= 4);
+    assert.equal(scale.ticks.at(-1), scale.max);
+  }
+});
+
+test('switching groups off recomputes only shown agent time, including each bar', () => {
+  const p = group('P', {agentMs: 3 * HOUR, cells: [[0, 3 * HOUR]]});
+  const q = group('Q', {agentMs: HOUR, cells: [[0, HOUR]]});
+  assert.deepEqual(shownActivity([p, q]), {agentMs: 4 * HOUR, cells: new Map([[0, 4 * HOUR]])});
+  assert.deepEqual(shownActivity([p]), {agentMs: 3 * HOUR, cells: new Map([[0, 3 * HOUR]])});
+  assert.deepEqual(shownActivity([]), {agentMs: 0, cells: new Map()});
+});
+
+test('at once reads the mean during active time, in each language', async () => {
+  const {setLocale} = await import('../i18n');
+  for (const [locale, fraction] of [
+    ['en', '2.5'],
+    ['ru', '2,5'],
+  ] as const) {
+    setLocale(locale);
+    assert.equal(atOnce(4 * HOUR, HOUR), '4');
+    assert.equal(atOnce(5 * HOUR, 2 * HOUR), fraction);
+    assert.equal(atOnce(0, 0), '0');
+  }
+  setLocale('en');
 });
 
 test('the widget says why it has no stacks, and never calls a period idle before work was known', () => {
   const since = Date.parse('2026-09-01T00:00:00Z');
-  const activity = (change: object) => ({since, known: {from: since, to: since + 30 * 24 * HOUR}, barMs: HOUR, workMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}, ...change});
+  const activity = (change: object) => ({
+    since,
+    known: {from: since, to: since + 30 * 24 * HOUR},
+    barMs: HOUR,
+    activeMs: 0,
+    agentMs: 0,
+    agents: 0,
+    cells: [],
+    by: {source: [], project: [], device: []},
+    ...change,
+  });
   assert.deepEqual(activityEmpty(null, 1), {key: 'loading'});
   assert.deepEqual(activityEmpty({since, activity: activity({})}, 0), {key: 'noSources'});
   assert.deepEqual(activityEmpty({since, activity: activity({known: null, since: since + HOUR})}, 1), {key: 'knownFrom', at: since + HOUR});
   assert.deepEqual(activityEmpty({since, activity: activity({})}, 1), {key: 'none'});
-  assert.deepEqual(activityEmpty({since, activity: activity({known: {from: since + 20 * 24 * HOUR, to: since + 30 * 24 * HOUR}})}, 1), {key: 'noneSince', at: since + 20 * 24 * HOUR});
-  assert.equal(activityEmpty({since, activity: activity({workMs: HOUR})}, 1), null);
+  assert.deepEqual(activityEmpty({since, activity: activity({known: {from: since + 20 * 24 * HOUR, to: since + 30 * 24 * HOUR}})}, 1), {
+    key: 'noneSince',
+    at: since + 20 * 24 * HOUR,
+  });
+  assert.equal(activityEmpty({since, activity: activity({activeMs: HOUR})}, 1), null);
 });
 
 test('a group switched off is kept apart for each way of splitting', () => {

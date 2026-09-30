@@ -84,7 +84,7 @@ test('‹ stops where history starts, or the hub stops keeping it, and is off th
 test('only an answer that is all there is of a range is kept on the page', () => {
   const cellMs = 5 * minute;
   const range = {from: now - 2 * day - 3 * minute, to: now - day - 3 * minute};
-  const answer = {range: '', now, since: 0, to: Math.ceil(range.to / cellMs) * cellMs, cellMs, historyStart: 0, series: [], events: [], refreshInMs: null, activity: {since: 0, known: null, barMs: 60_000, workMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}}} as History;
+  const answer = {range: '', now, since: 0, to: Math.ceil(range.to / cellMs) * cellMs, cellMs, historyStart: 0, series: [], events: [], refreshInMs: null, activity: {since: 0, known: null, barMs: 60_000, activeMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}}} as History;
   assert.equal(complete(answer, range), true);
   assert.equal(complete({...answer, to: now - day - 4 * minute}, range), false, 'cut to the hub’s now');
   assert.equal(complete({...answer, refreshInMs: 60_000}, range), false, 'a newer one is on its way: a range whose work is still credited too');
