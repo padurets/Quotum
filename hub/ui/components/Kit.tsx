@@ -1,6 +1,7 @@
+import {chooseLocale} from '../lib/app';
 import {useLayoutEffect, useId, useRef, useState, type InputHTMLAttributes, type ReactNode} from 'react';
 import {createPortal} from 'react-dom';
-import {LOCALES, setLocale, t, useLocale, type Locale} from '../i18n';
+import {LOCALES, t, useLocale, type Locale} from '../i18n';
 import {messageOf} from '../lib/http';
 
 export const SERVICE = 'Quotum';
@@ -220,19 +221,21 @@ export function Brand({href}: {href?: string}) {
   );
 }
 
-/** The dashboard's languages; the choice is kept in this browser. */
+/** The language lives in app settings on desktop, otherwise in this browser. */
 export function LanguageSelect() {
   const locale = useLocale();
+  const [failed, setFailed] = useState(false);
   return (
     <label className="language">
       <span className="sr-only">{t('common.language')}</span>
-      <select value={locale} onChange={event => setLocale(event.target.value as Locale)}>
+      <select value={locale} onChange={event => { setFailed(false); void chooseLocale(event.target.value as Locale).catch(() => setFailed(true)); }}>
         {(Object.keys(LOCALES) as Locale[]).map(code => (
           <option key={code} value={code} lang={code}>
             {LOCALES[code].name}
           </option>
         ))}
       </select>
+      {failed && <small className="form-error" role="alert">{t('measure.saveFailed')}</small>}
     </label>
   );
 }

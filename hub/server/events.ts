@@ -1,3 +1,4 @@
+import type {AttentionEvents, Candidate, Invalidation} from './domain/attention.js';
 import {randomBytes} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import path from 'node:path';
@@ -66,6 +67,7 @@ export type Reader = {
   secret: string;
   board: string;
   kind: 'stream' | 'lease';
+  desktop?: boolean;
   /** Hands events over. */
   send(frames: Frame[]): void;
   /** How much of what was handed over has not gone out yet: a reader too far behind is let go. */
@@ -75,7 +77,7 @@ export type Reader = {
 };
 
 /** A reader the hub keeps; a `fresh` one is being given its snapshot and gets no events yet. */
-type Subscriber = Reader & {id: number; fresh: boolean; stopPing: () => void};
+type Subscriber = Reader & {id: number; fresh: boolean; stopPing: () => void; seq: number; baselineAt: number; attentionKey: string; pending: Candidate[]; invalidations: Map<string, Invalidation>; pendingBytes: number; rebaseline: boolean};
 
 /** A board someone looks at: what its readers last got of each part, and when those parts change by themselves. */
 type Watched = {
@@ -161,6 +163,67 @@ export class Events implements Touches {
     this.parts.directory.setObserver(this);
     this.parts.ingest.setObserver(this);
     this.parts.resets.onChange = () => this.touchHub();
+  }
+
+  /** Post-commit only. Each reader has its own observation boundary and bounded queue. */
+  attention({candidates, invalidations}: AttentionEvents) {
+    if (this.closed) return;
+    const now = this.clock.now();
+    for (const sub of this.subscribers.values()) {
+      if (!sub.desktop || sub.fresh || sub.rebaseline) continue;
+      let changed = false;
+      const known = new Set(this.watched.get(sub.board)?.lineup);
+      for (const boundary of invalidations) {
+        if (!known.has(boundary.sourceId) && !sub.pending.some(c => c.kind !== 'announcement' && c.sourceId === boundary.sourceId)) continue;
+        const key = JSON.stringify([boundary.sourceId, boundary.windowId]);
+        const prior = sub.invalidations.get(key);
+        if (prior && prior.at >= boundary.at) continue;
+        sub.pending = sub.pending.filter(c => {
+          const obsolete = c.kind !== 'announcement' && c.sourceId === boundary.sourceId && c.windowId === boundary.windowId && c.observedAt < boundary.at;
+          if (obsolete) sub.pendingBytes -= Buffer.byteLength(JSON.stringify(c));
+          return !obsolete;
+        });
+        sub.invalidations.set(key, boundary);
+        sub.pendingBytes += Buffer.byteLength(JSON.stringify(boundary)) - (prior ? Buffer.byteLength(JSON.stringify(prior)) : 0);
+        changed = true;
+        if (this.attentionOverflow(sub)) break;
+      }
+      const visible = !sub.rebaseline && candidates.length ? this.projection.visibleCandidates(sub.board, candidates, now).filter(c =>
+        c.kind === 'announcement' || (c.observedFrom >= sub.baselineAt && c.observedAt > c.observedFrom &&
+          c.observedAt >= (sub.invalidations.get(JSON.stringify([c.sourceId, c.windowId]))?.at ?? -Infinity))) : [];
+      sub.pendingBytes += visible.reduce((sum, c) => sum + Buffer.byteLength(JSON.stringify(c)), 0);
+      if (!this.attentionOverflow(sub)) sub.pending.push(...visible);
+      if (changed || visible.length) this.touchBoards([sub.board]);
+    }
+  }
+
+  private attentionOverflow(sub: Subscriber): boolean {
+    if (sub.pendingBytes <= this.options.bufferBytes) return false;
+    sub.pending = [];
+    sub.invalidations.clear();
+    sub.pendingBytes = 0;
+    sub.rebaseline = true;
+    return true;
+  }
+
+  private attentionFrames(sub: Subscriber, baseline: boolean, now: number): {before: Frame[]; after: Frame[]} {
+    const state = this.projection.attention(sub.board, now);
+    const key = JSON.stringify(state);
+    if (baseline) sub.baselineAt = now;
+    const notifications = baseline || !sub.pending.length ? [] : this.projection.visibleCandidates(sub.board, sub.pending, now).filter(c =>
+      now - c.at <= 60_000 && (c.kind === 'announcement' || (c.observedFrom >= sub.baselineAt && c.observedAt > c.observedFrom)));
+    const invalidations = baseline ? [] : [...sub.invalidations.values()];
+    sub.pending = [];
+    sub.invalidations.clear();
+    sub.pendingBytes = 0;
+    sub.rebaseline = false;
+    if (!baseline && key === sub.attentionKey && !notifications.length && !invalidations.length) return {before: [], after: []};
+    sub.attentionKey = key;
+    const packet = (notifications: Candidate[], invalidations: Invalidation[]) => frame('attention', {seq: ++sub.seq, now, baseline, state, notifications, invalidations});
+    // Revoke old intents before a coalesced card can conceal the boundary. New
+    // candidates follow the cards they refer to, so native visibility is current.
+    if (baseline || invalidations.length) return {before: [packet([], invalidations)], after: notifications.length ? [packet(notifications, [])] : []};
+    return {before: [], after: [packet(notifications, [])]};
   }
 
   // ---------- touches ----------
@@ -313,7 +376,13 @@ export class Events implements Touches {
           }
         }
         const frames = [...(heads.get(watched.id) ?? []), ...own, ...(tails.get(watched.id) ?? []), ...news];
-        if (!frames.length || sub.fresh) continue;
+        if (sub.fresh) continue;
+        if (sub.desktop && (sources.has(watched.id) || whole.has(watched.id) || frames.length || sub.pending.length || sub.invalidations.size || sub.rebaseline)) {
+          const attention = this.attentionFrames(sub, sub.rebaseline, now);
+          frames.unshift(...attention.before);
+          frames.push(...attention.after);
+        }
+        if (!frames.length) continue;
         sub.send(frames);
         if ((sub.backlog?.() ?? 0) > this.options.bufferBytes) this.end(sub, 'limit');
       }
@@ -531,7 +600,7 @@ export class Events implements Touches {
       };
       this.watched.set(id, watched);
     }
-    const sub: Subscriber = {...reader, id: this.next++, fresh: true, stopPing: () => {}};
+    const sub: Subscriber = {...reader, id: this.next++, fresh: true, stopPing: () => {}, seq: 0, baselineAt: 0, attentionKey: '', pending: [], invalidations: new Map(), pendingBytes: 0, rebaseline: false};
     this.subscribers.set(sub.id, sub);
     watched.subscribers.add(sub);
     if (!this.stopHubRecheck) this.stopHubRecheck = this.every(this.options.recheckMs, () => this.touchHub());
@@ -571,7 +640,12 @@ export class Events implements Touches {
     sub.fresh = false;
     if (sub.kind === 'stream') sub.stopPing = this.every(this.options.heartbeatMs, () => this.ping(sub));
     const hello = {epoch: this.epoch, now, client: this.client, heartbeatMs: this.options.heartbeatMs};
-    return {sub, frames: [frame('hello', hello), frame('snapshot', snapshot)]};
+    const frames = [frame('hello', hello), frame('snapshot', snapshot)];
+    if (sub.desktop) {
+      const attention = this.attentionFrames(sub, true, now);
+      frames.push(...attention.before, ...attention.after);
+    }
+    return {sub, frames};
   }
 
   /** Whether a new reader fits: the oldest to let go for it where it hits a limit, or 'refuse'. */

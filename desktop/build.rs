@@ -19,11 +19,15 @@ fn main() {
         let manifest = tauri_build::AppManifest::new().commands(&[
             "app_state",
             "save_settings",
+            "save_desktop_settings",
             "take_over",
             "set_autostart",
             "reenter",
             "quit",
             "watch_state",
+            "open_main",
+            "close_panel",
+            "report_panel_height",
         ]);
         tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest)).expect("tauri-build");
     }

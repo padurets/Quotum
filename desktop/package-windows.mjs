@@ -16,7 +16,7 @@ rmSync(stage, {recursive: true, force: true});
 mkdirSync(stage, {recursive: true});
 copyFileSync(path.join(output, 'quotum-desktop.exe'), path.join(stage, 'quotum-desktop.exe'));
 copyFileSync(path.join(here, `binaries/quotum-node-${target}.exe`), path.join(stage, 'quotum-node.exe'));
-for (const name of ['hub', 'licenses']) cpSync(path.join(here, 'resources', name), path.join(stage, name), {recursive: true});
+for (const name of ['hub', 'licenses', 'tray']) cpSync(path.join(here, 'resources', name), path.join(stage, name), {recursive: true});
 rmSync(archive, {force: true});
 execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
   'Compress-Archive -LiteralPath $env:QUOTUM_PORTABLE_STAGE -DestinationPath $env:QUOTUM_PORTABLE_ZIP -CompressionLevel Optimal'], {

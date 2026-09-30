@@ -1,7 +1,9 @@
 //! The machine controller is independent of the window engine.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod agent;
+mod attention;
 mod autostart;
+mod desktop_settings;
 mod files;
 #[cfg(target_os = "linux")]
 #[path = "host/linux.rs"]
@@ -11,6 +13,7 @@ mod host;
 mod host;
 mod hub;
 mod ipc;
+mod native_text;
 mod notifier;
 mod settings;
 mod shell;
@@ -23,7 +26,12 @@ mod tauri_ipc;
 mod tauri_window;
 #[cfg(not(target_os = "linux"))]
 mod tray;
+#[cfg(any(windows, test))]
+mod tray_queue;
 mod window;
+#[cfg(not(target_os = "linux"))]
+#[path = "host/windows_loading.rs"]
+mod windows_loading;
 use std::ffi::OsString;
 
 /// What the app was started with. Looked for anywhere among the arguments: the command of
@@ -44,6 +52,7 @@ impl Args {
                 Some("--hidden") => parsed.hidden = true,
                 Some("--software-rendering") => parsed.software_rendering = true,
                 Some("--smoke") => parsed.smoke = Some(smoke::Mode::Normal),
+                Some("--smoke=notifications") => parsed.smoke = Some(smoke::Mode::Notifications),
                 Some("--smoke=crash") => parsed.smoke = Some(smoke::Mode::Crash),
                 _ => {}
             }
@@ -68,7 +77,11 @@ fn main() {
             std::env::set_var(name, without_proxy_for_loopback(std::env::var(name).ok()));
         }
     }
-    host::run(Args::parse(std::env::args_os()));
+    let args = Args::parse(std::env::args_os());
+    if args.smoke == Some(smoke::Mode::Notifications) {
+        smoke::prepare_notifications();
+    }
+    host::run(args);
 }
 
 #[cfg(test)]

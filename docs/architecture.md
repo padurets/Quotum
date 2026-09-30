@@ -711,35 +711,123 @@ files together and requires the system WebView2 runtime; the installer can insta
 that runtime. Both variants use the same Windows profile directories, instance lock
 and start-at-login settings. Moving a portable folder requires updating its autostart
 entry by turning start at login off and on again.
+On a Windows tray activation, the tray thread shows a small Win32 loading surface
+before WebView2 creation can occupy the app event loop. Its spinner, Escape and
+blur handling remain responsive even while that loop is busy. The panel replaces
+it only after placement and page loading have both completed. Tauri shows and focuses
+the browser on its own event loop; the tray thread only dismisses the loader when
+that current browser takes over. Both surfaces disable
+DWM transitions so their handoff does not animate as a second window opening. A second click
+cancels either phase. No web view is retained just to warm the next opening.
+The host handles Escape before page scripts, including on startup/error pages.
 Windows are created on worker threads; restoring, fitting and showing them is queued
 on the event loop after the window-state plugin's initialization. This keeps its state
-locks on the same thread as native window events. Closing the window destroys it with its
-web view. A request to open it asks the event loop whether the window it finds is still
+locks on the same thread as native window events. Closing a window destroys it with its
+web view. The compact panel has no native window frame, has its own label and never
+persists main-window geometry. Only its last content height stays in the controller,
+so the next panel can start at that height, clamped to its current monitor. Its initial hidden focus changes do not dismiss it;
+losing focus after it has been shown and focused does. A request to open it asks the event loop whether the window it finds is still
 there: a second start can arrive while a closed window still holds its label, and that
 one does not count as open. The new window is created once it has gone, and the app's
 `hub.log` tells each request, attempt and outcome.
+Panel presentations carry the controller's request revision. Retiring an old window
+cannot close or blur a newer request; each native window keeps its request for life.
+A newer request retires that window before creating its own. Cancellation marks the
+presentation before queuing its close, and stale loader commands cannot cover a ready panel.
+The panel is hidden before its WebView2 controller is destroyed, so focus leaves while
+that controller can still handle native messages.
+Main-window requests also keep the revision accepted before their worker starts. The
+event loop checks that revision before restoring, showing or focusing a window: a late
+main request cannot take focus from a newer tray loader. Creation starts hidden and
+unfocused; cancelled main creations are destroyed, and a later request waits for their
+label to be released before creating another window.
 
 **Linux rendering and lifetime.** The Rust controller uses a D-Bus StatusNotifierItem
-through `ksni`; it does not link GTK or WebKit. It waits for the desktop's tray watcher
-when starting early at login and registers again when that watcher restarts. Opening the window starts an Electron
-process; closing it ends that process and its renderers. The Rust agent and Node hub
+through `ksni`. A small GTK loading surface responds before Chromium starts; GTK
+draws only a spinner and a localized label, never subscription data. No second web
+engine is linked. It waits for the desktop's tray watcher
+when starting early at login and registers again when that watcher restarts. Opening a window starts an Electron
+process; it holds at most the main board and a compact panel. On X11/XWayland the panel
+uses the tray's activation coordinates. An X11 menu can use the pointer; on Wayland
+the menu reuses the last tray activation, since the XWayland pointer can still name
+another window. Before that first activation, it opens at the reserved panel edge
+of the primary monitor, or within that monitor if no edge is reserved. The resolved
+anchor determines its monitor and stays put while the content changes height; native
+Wayland leaves positioning to the compositor. Where X11 is available, GTK and Electron
+use that same backend. The controller shows the native loader immediately, then
+hands off to the browser only after its first paint. The loader is a native popup
+with skip-taskbar hints; the browser is an unmanaged popup. While the browser is
+visible, the native owner stays transparent and accepts no pointer input, preserving
+keyboard focus across XWayland. Both close together. Neither is a taskbar entry. The
+controller accepts every foreground request into one current head: its revision, main,
+compact or none, and resolved anchor. Startup, second launches, tray actions and the
+compact panel's buttons share that order. Workers carry an immutable ticket and the
+initial handshake reads the current head, so an older worker cannot reclaim focus.
+Cancellation is terminal for its revision; native callbacks also belong to one engine
+and presentation. Each GTK loader has its own native window and immutable ticket;
+its focus, Escape and close signals retain that ticket even when delivered late.
+Retiring it removes the timeout, stops the spinner and destroys the window; only
+parsed CSS and the last tray anchor are shared between presentations. Explicit
+*Limits* on the current panel keeps that presentation and its anchor.
+
+A bounded publisher sends the complete head before showing a new loader beside an
+existing engine. Its nonblocking fast path never waits for the browser; under socket
+backpressure one pending head replaces older unsent heads, after tray toggles have
+been reduced. A partially written frame completes before another message can start.
+The loader's show waits for that publication only when the channel is blocked; GTK
+continues to accept cancellation and Escape immediately. With no engine, the loader
+appears immediately and the handshake supplies the latest head. Other host messages
+use a bounded queue, so the private IPC reader keeps draining requests while replies
+wait. Quitting shuts down the private socket without waiting for its writer.
+
+Electron drains available complete socket frames before reconciling the latest head;
+a partial final frame delays that reconciliation. Deferred paint, reveal and closed
+callbacks cannot replay an obsolete foreground request. A new compact revision gets
+a new native presentation, while a current main request reuses and restores its normal
+Electron window. A superseded main that has never appeared is retired. Closing never
+depends on first paint. The loader and ready panel both dismiss on an outside click or
+Escape. Without X11 the app
+keeps the compositor-managed browser path. A direct tray activation toggles it; the blur and activation
+of the same pointer gesture cannot close and immediately reopen it. The menu's
+*Limits* command explicitly opens it. Closing both destroys their renderers and ends
+the process after a half-second gesture window; no browser or hidden page stays
+resident afterwards. The Rust agent and Node hub
 continue. A socket pair inherited as fd 3 carries typed messages, not a TCP listener or
 command-line secrets. EOF tells Electron to quit if the controller dies. A second start
 sends only an Open signal through a per-user Unix socket; the receiver checks peer UID.
 
 Electron starts with renderer sandboxing, context isolation and no Node integration in
-the page. A preload exposes only the six app commands and a way to hear the app's state.
+the page. A preload exposes only the app commands allowed for its window role and a way to hear the app's state.
 The main process checks the sender is the current main frame and its origin is the
 current hub; Rust repeats the origin check before dispatch. The app's state goes to the
 window over the same channel and on only to the main frame of the current hub. Startup/error pages at `quotum://localhost` can only
 quit. Navigation, new windows, downloads and permission requests are restricted. No
 inherited Node/Electron debugging switches reach the window process.
 
-On NVIDIA with an available X11 display the launcher selects X11/XWayland before
-Chromium initializes Ozone. Other systems use Chromium's default display selection.
+With an available X11 display the native loading surface selects X11/XWayland before
+Chromium initializes Ozone; the NVIDIA launcher does so even if the loader could not
+initialize. Other systems use Chromium's default display selection.
 `--software-rendering` disables hardware acceleration for that launch. No driver,
 kernel or desktop settings are changed. Both the native window and the page use the
 same background colour while newly exposed areas are painted during a resize.
+
+Both loading and ready panels have a rounded native drawing/input boundary, using
+the popup radius prepared from the shared style tokens. The header has matching
+icon buttons for opening the board and closing the panel, with localized labels
+and tooltips.
+
+The compact view keeps each quota on one row: its name, a short reset countdown with
+the full date in its tooltip, the board's shared remaining meter and percentage.
+If there is no countdown to show, the compact row leaves that detail empty.
+The provider header carries its measurement indicator and the working-agent count;
+the total agent count is in that count's tooltip. Hidden windows and the owner's
+ordering are shared with the board. Large lists can scroll, but ordinary subscriptions
+do not reserve a separate footer or a second line for every reset. The panel grows
+with its content up to 80% of its monitor's work area, with no fixed pixel ceiling;
+only content beyond that height scrolls. The native loader uses the same screen limit.
+Native height reports are serialized, keeping only the latest pending layout. An open
+Linux panel refits when displays or their work areas change. Measurement tooltips shift
+inside the viewport without changing the card's height.
 
 The engine version and archive checksum are pinned in `desktop/prepare-electron.mjs`;
 updating Chromium means rebuilding the Linux packages. `desktop/package-linux.mjs`
@@ -767,9 +855,11 @@ and are kept nowhere else: no file, no log. Node gets only a short list of varia
 the app's environment (`PATH`, the home and temporary folders, the language, and
 `QUOTUM_RESETS`), nothing `NODE_*`. The hub still checks Host and Origin as on a server,
 and the agent reaches it with no proxy in between. The window's bridge to the app is
-open only to pages of the hub's current origin and to six commands: its state, saving
-settings, taking over, start at login, entering again and quitting; on Windows a seventh,
-`watch_state`, gives the board a channel to hear the app's state on. The window goes
+open only to pages of the hub's current origin and to the commands in `ipc.rs`. The main window can read state, save measuring and app
+settings, take over, change start at login, reenter and quit. The compact panel can read
+state, reenter, open the main window, close itself and report its content height. The
+host clamps that height; no command accepts a window id, position or arbitrary URL.
+On Windows `watch_state` registers a channel for each trusted window instance. The window goes
 nowhere else; links open in the system's browser. The app's folder is this user's only.
 
 **Files.** The app's folder is `%LOCALAPPDATA%\com.padurets.quotum` on Windows and
@@ -799,6 +889,39 @@ including a transition whose page has not loaded yet. A stopped agent worker kee
 spool until delivery ends; a replacement waits for that handover.
 The last window's close is resolved after any startup or takeover operation, so closing
 while the question is being prepared cannot leave an unseen consent request running.
+
+**Background attention.** One cancellable Rust reader enters the local hub using its
+key, keeps the session cookie in memory and reads the desktop variant of its SSE stream
+(spec/dashboard-v1.md). The hub shares level, visibility and naming with the board.
+A persistent window ledger consumes each threshold once per confirmed cycle inside the
+measurement transaction; candidates and observation boundaries leave only after commit.
+Boundaries precede the coalesced card deltas, and new candidates follow them. Thus a
+temporary replacement or disappearance can revoke an already queued native intent
+even when the final card has its old metadata again. The boundary/candidate buffer is
+bounded; unaffected windows keep their events. Candidates are also checked against
+current window semantics and ledger cycle before SSE emission. Scheduled tracker news has
+its own watermark. Every connection starts from an empty notification baseline; old
+spooled observations cannot become live events through a new receipt time.
+
+The reader uses paired suspend-aware and awake clocks plus a reader-progress barrier.
+Sleep, a pause or a hub generation change invalidates pending native intents. The sink
+checks the generation, observation epoch, visibility, current names, settings and age
+again after its bounded queue. A failed clock detector suppresses notifications while
+status reading continues. This promises at most one native attempt, not an OS display:
+crashes and system suppression may lose an event, and nothing replays it.
+
+Linux keeps one ksni handle and uses session D-Bus notifications independently of its
+tray watcher. The notification connection's authentication and each method call have
+a one-second timeout, so an unresponsive bus does not hold shutdown indefinitely.
+Its action listener is an owned cancellable task on the same runtime; stopping it
+does not wait for the notification daemon to close its end of the connection.
+Windows owns one Shell_NotifyIcon control window, used for its status,
+menu and silent notifications in both installer and portable builds. Its queue keeps
+at most 64 notification intents; the latest status and panel controls are coalesced
+separately and processed first, so notification overflow cannot discard them. Explorer restart
+registers only the current icon. Native text is generated from the same EN/RU catalogs
+as the page; settings and language are saved atomically in `app.json` and published to
+both windows in the common numbered AppState.
 
 **Taking over from `quotum`.** One agent measures a machine: whoever holds `run.lock` in
 the state folder, and `run.info` next to it names its process, version and hub. When a

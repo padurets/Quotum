@@ -3,10 +3,8 @@ import {known, t} from '../i18n';
 import {PROVIDERS} from './providers';
 import {duration, durationUntilChangesAt} from './format';
 
-export type Level = 'ok' | 'warn' | 'crit';
-
-/** Canonical traffic light on the remaining share of a quota. */
-export const level = (remaining: number): Level => (remaining < 10 ? 'crit' : remaining <= 30 ? 'warn' : 'ok');
+export {level, type Level} from '../../server/domain/attention';
+export {titled} from '../../server/domain/presentation';
 
 /** A kind inside a longer name: "Gemini · weekly". */
 const kindText = (kind: Exclude<Kind, 'other'>) => t(kind === 'session' ? 'kind.session' : 'kind.weekly');
@@ -33,26 +31,6 @@ export function resetLineChangesAt(w: {resetAt: number | null}, now: number): nu
 
 export const sourceLabel = (source: {provider: string; title?: string}) =>
   source.title ?? PROVIDERS[source.provider]?.name ?? source.provider;
-
-/**
- * Names every source of a board: the provider, plus whose it is when the board is
- * several people's, plus a number when that still leaves two alike (two accounts of one
- * person). The board's owner can give any card a name of its own instead.
- */
-export function titled<T extends {id: string; provider: string; owners?: string[]}>(sources: T[], names: Record<string, string> = {}): (T & {title: string})[] {
-  const people = new Set(sources.flatMap(s => s.owners ?? []));
-  const automatic = sources.map(source => {
-    const name = PROVIDERS[source.provider]?.name ?? source.provider;
-    const owners = source.owners ?? [];
-    return people.size > 1 && owners.length ? `${name} · ${owners.join(', ')}` : name;
-  });
-  const seen = new Map<string, number>();
-  return sources.map((source, i) => {
-    const count = (seen.get(automatic[i]) ?? 0) + 1;
-    seen.set(automatic[i], count);
-    return {...source, title: names[source.id] ?? (count > 1 ? `${automatic[i]} ${count}` : automatic[i])};
-  });
-}
 
 /**
  * A series' name in the analytics: the source, and the scope of the window when it has one
