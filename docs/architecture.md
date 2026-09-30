@@ -182,7 +182,7 @@ subscription:
   meanwhile, measuring its providers one by one, and another device taking over halfway,
   even one where someone works, would measure the same again.
 - The others are told to wait and when to ask again: when the holder's measurement goes
-  stale or, once that has passed while it measures, when its five minutes end; sooner,
+  stale or its waiting plan ends, or while it measures, when its five minutes end; sooner,
   in a minute if someone works on that machine, otherwise in up to ten minutes.
 - A holder that asks again without answering what it was told keeps duty no longer than
   the others were told to wait, and until it answers the last command, however late,
@@ -191,7 +191,7 @@ subscription:
 - Duty moves to a device where someone works if the holder has been idle for ten
   minutes, so the numbers come from where the subscription is actually being used.
 - A holder that goes quiet (asleep, switched off) loses duty when its last measurement
-  goes stale, and the next device to ask takes over.
+  goes stale and its bounded plan protection ends; the next device to ask takes over.
 
 Duty decides who measures; the hub's **pace** (`hub/server/cadence.ts`) decides when,
 from what it sees of the subscription everywhere, which no single machine does:
@@ -212,10 +212,31 @@ from what it sees of the subscription everywhere, which no single machine does:
   minutes for a signed-out client), and a device doing so does not take duty; a healthy
   one does, as before. A `measure` nothing came back for (a lost answer) is asked again
   after 90 seconds, then less and less often.
-- The lease is as before otherwise: a delivery extends it, and it lasts past the next
-  planned measurement, so a holder waiting for its pace keeps duty. A device that raises
-  its minimum interval past its lease is the exception: until it asks again it has no
-  duty, and another device of the subscription may take it and measure at once.
+- A healthy paced holder waiting for its ordinary plan keeps duty through its due time
+  plus one minute for check-in, independently of snapshot freshness. Cadence calculates
+  this from the last successful data and the current interval and device minimum;
+  Ingest installs it in Duty on a delivery, holder check-in or actual frequency change,
+  and before a competing claim. Reads cannot extend it. Pauses and unanswered commands
+  get no waiting protection; retrying cannot renew an expired lease. A silent holder
+  cannot receive a later protection just from a setting write, but a shorter plan cuts
+  its existing protection. Expired backlog that leaves a command unanswered gives no
+  new arrival-time lease; representative snapshots still keep their own lease.
+
+**Measuring frequency.** `sources.measure_interval_ms` stores one nullable preference
+per subscription: Auto or 1, 2, 5 or 15 minutes. It is outside the board's View and the
+snapshot payload. Every reader sees it; every current holder may change it through the
+board API, independently of owning that board. An equal write is a no-op; otherwise
+Ingest replans duty synchronously and touches every board showing that source.
+
+A fixed ordinary plan follows the last accepted successful measurement, across restart
+and handover, without activity, low-limit, change or reset acceleration. The device's
+minimum can make it slower; failure pauses, unanswered retries and refresh remain.
+Until the first success, a failed command starts no fixed interval: the next attempt
+waits only for the existing failure pause and device minimum.
+A fresh manual measurement starts the ordinary interval anew. Frequency changes affect
+unissued plans immediately and leave issued commands alone. A longer interval may leave
+old data stale; neither stored freshness nor history changes. The card explains its
+real next measurement even then.
 
 **Refresh on demand.** Any reader of a subscription on a board can request fresh data
 through its existing card menu, above the action to hide the widget, in the web
@@ -255,7 +276,9 @@ request never claims duty or extends its lease. A click joins a command to the h
 while it is under way: until the holder asks again, for at most five minutes, as long as
 duty stays with it for that. A holder that asks again without answering lost the
 command, and the request waits for its retry. A lapsed lease ends nothing while the same
-device holds duty: a holder that asks takes it again. Queued requests end on silence;
+device holds duty: an already dispatched request retains its bounded deadline,
+but an unanswered holder cannot renew duty or accept another refresh after expiry.
+Queued requests end on silence;
 requests already dispatched keep waiting through it for up to five minutes, as providers
 are measured sequentially and a holder busy measuring neither asks nor delivers the
 others. Duty passing to another device, revocation, legacy check-in, an error or the
@@ -266,7 +289,9 @@ client started. Terminal outcomes show for a minute. Refresh is its own projecti
 event, so time boundaries and reconnect work without polling or rendering other cards.
 
 Duty and the pace are kept in memory; after a restart of the hub the first devices to
-check in take duty again and measure at once. An agent that cannot ask keeps asking
+check in take duty again. Auto measures at once; fixed schedules restore their due
+time from stored successful data, measuring at once only without data or when due.
+An agent that cannot ask keeps asking
 every 15 seconds while it waits for a measurement the hub promised, and measures on its
 own schedule (eco mode) once the hub has been silent for four minutes and that
 measurement is due. An agent's log says when another device measures; waiting for the
@@ -314,31 +339,37 @@ when and its project and folder names as reported, as long as samples. A session
 never credited twice for the same time: after the hub's clock goes back, it is credited
 again from where its time already ends, so a clock that ran ahead costs its sessions at
 most as much time as it ran ahead, and the time counted before is never rewritten. Sums are worked
-out when read (`domain/work.ts`): agent time adds the stretches up, two agents counting
-twice; the time any of them worked is their union, overlaps counted once for whichever
-machines, people or projects are asked about. The corrections people make to project
+out when read (`domain/work.ts`): agent-hours add each stretch up, two agents counting
+twice; active time is their union, overlaps counted once for whichever machines,
+people or projects are asked about. The corrections people make to project
 names apply when read, so they reach all the time kept. The database says since when
 this is kept (`agentWorkSince`): before it, how agents worked is not known.
 
-The analytics show it over their period. The table tells, for each window, how long
-agents worked on its subscription, what the window spent per hour of their work, what
-share of its spending came while they worked, and, beside the forecast by time, a
-forecast by work: how many hours of work what is left lasts at that spending (or that it
-lasts to the reset). A widget draws hours of work in bars of an hour (the period's cells
-where those are longer; shorter bars where a range holds fewer than twenty hours), so a
-bar's height is the time agents worked in it, stacked by subscription, project or
-machine, with the work time, how many different agents worked and their time together
-in all; a bar's tooltip tells its work time and agents first, while none of its work is
-in a group switched off in the legend, then its parts. Every subscription, project and machine of the period
-is a group of its own, however small; projects and machines take seven colours by their
-hours, and those past them share a neutral one. Each moment is split evenly among
-the agents working then, so a stack is as tall as the time any of them worked; a
-group's own hours are the union of its agents' time, more than its part of the stacks
-where others worked alongside, so a subscription's hours are the table's. What is known
-of a period begins with `agentWorkSince`, and on a shared board no earlier than the
+The analytics show it over their period. The table tells, for each window, its
+subscription's active time, what the window spent per active hour, what share of its
+spending came while agents were active, and, beside the forecast by time, a forecast by
+work: how many active hours what is left lasts at that spending (or that it lasts to
+the reset). An optional Agent-hours column adds each agent's time separately.
+Agent-hours and the spending share while active are off by default; enabling either can turn the
+full-width table into a list, where every value keeps its heading.
+A widget stacks agent-hours by subscription, project or machine in bars of an hour
+(the period's cells where those are longer; shorter bars where a range holds fewer
+than twenty hours). Four agents over an hour make a bar 4h tall. The legend's groups
+add up to the total in every split; projects and machines take seven colours by their
+agent-hours, and those past them share a neutral one. Each group is its own however
+small. Above the stacks are agent-hours, active time, distinct agents and the average
+at once (agent-hours divided by active time). Active time is not drawn: it is in the
+totals and tooltips. A bar's tooltip gives these totals first, then its group parts;
+a legend entry's glass bubble gives the group's agent-hours, active time, average at
+once and distinct agents. Hover or keyboard focus opens it, Escape dismisses it; a
+tap also switches the group and keeps the bubble for four seconds. Switching groups
+off recomputes stacks, scale and the shown agent-hours; active time, agents and at
+once still cover all the board's agents. A subscription's agent-hours equal its
+windows' Agent-hours column, and its active time equals their Active time column.
+What is known of a period begins with `agentWorkSince`, and on a shared board no earlier than the
 subscription came to it: the part before is said to be unknown, not drawn as idle. The
-pace and the share during work are taken over the work within the steps between samples
-whose spending counts, so a gap counts neither, and need half an hour of it. Work that
+pace and the share while active are taken over the activity within the steps between
+samples whose spending counts, so a gap counts neither, and need half an hour of it. Work that
 would outlast the reset, or a whole window where no reset time comes first (a range),
 lasts to the reset, however slow the pace (too slow a pace names no hours for it); short
 of either, what is left runs out before it, and its hours are named at any pace. Only
@@ -352,8 +383,8 @@ members who hold each subscription it shows, but those of hidden cards: on a sha
 board from the later of their joining it and the subscription coming to it, on a
 personal board all of it. Work the board does not show (off the board, from before) is
 not in its hours while the window's spending is, and so is spending outside tracked
-agents (claude.ai, a phone, machines without Quotum, cloud tasks): the share during
-work says how far to trust the pace.
+agents (claude.ai, a phone, machines without Quotum, cloud tasks): the share while
+active says how far to trust the pace.
 
 ## Storage and the rules
 
@@ -660,7 +691,7 @@ clock keeps one timer for the whole page, none on a hidden tab, and counts in th
 time as the hub's messages tell it. The chart and agent activity move on a cell of the
 history's grid at a time; a label past the chart's right edge counts down on its own, and
 a forecast's line goes at the moment the table says it runs out, or at the reset; in the
-table, the plan, where the pace leads and the hours of work left each read otherwise at
+table, the plan, where the pace leads and the active hours left each read otherwise at
 their own moment. History is read again when the hub tells of measurements
 the chart has not shown, at most every ten seconds for a period ending now, or that whose
 agents' work the board shows, or under which names, changed (`Store.workKey`: a card
@@ -763,8 +794,8 @@ own width, it becomes a compact list with a sort menu. State is off by default: 
 mark already tells it. Explicit column choices belong to the board, sorting to the viewer.
 The table of limits does the same: its owner chooses its columns, and where they do not
 fit it lists each window with what is left, then its other values, each with its heading.
-The share of spending during work is off by default: beside the rest it does not fit a
-widget as wide as the board.
+Agent-hours and the share of spending while active are off by default: adding either can
+turn a table as wide as the board into a list.
 
 Text is translated through typed catalogs in `hub/ui/i18n`: English is the source,
 every other language must translate all its keys (checked by the type checker and by

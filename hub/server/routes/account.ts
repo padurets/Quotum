@@ -15,6 +15,7 @@ import type {Board, User} from '../store/directory.js';
 import {parseView} from '../domain/view.js';
 import {longerThan} from '../domain/ingest.js';
 import {PROJECT_NAME_CHARS} from '../domain/projects.js';
+import {validFrequency} from '../domain/frequency.js';
 import {currentUser, Limiter, publicOrigin, sessionSecret, setSession} from '../session.js';
 
 type Body = Record<string, unknown>;
@@ -75,6 +76,17 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
   });
 
   app.get('/api/session', request => sessionAnswer(currentUser(request, directory)));
+
+  app.post<{Params: {board: string; source: string}}>('/api/boards/:board/sources/:source/frequency', (request, reply) => {
+    const {board, source} = request.params;
+    const access = guards.board(request, reply, board);
+    if (!access) return;
+    if (!store.sources(board).some(s => s.id === source)) return notFound(reply);
+    if (!store.holds(access.user.id, source)) return reply.code(403).send({error: 'frequency_forbidden'});
+    if (!validFrequency(request.body)) return reply.code(400).send({error: 'invalid_request'});
+    if (store.setMeasureInterval(source, request.body.intervalMs)) hub.ingest.frequencyChanged(source, Date.now());
+    return {ok: true};
+  });
 
   // The desktop app's hub has one person who never signs in, one board and nobody to
   // share it with: signing up and in, boards of several people, their invites and what is

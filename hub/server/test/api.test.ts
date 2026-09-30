@@ -723,7 +723,7 @@ test('a range ending minutes ago says when to ask again, and is read anew once t
   t.mock.timers.enable({apis: ['Date'], now: first.to + KEEP_MS});
   const settled = await read();
   assert.equal(settled.refreshInMs, null);
-  assert.equal(settled.activity.workMs - first.activity.workMs, 2 * minute, 'read anew, with the work credited since');
+  assert.equal(settled.activity.activeMs - first.activity.activeMs, 2 * minute, 'read anew, with the work credited since');
   assert.equal((await call('GET', `/api/history?board=${team}&from=${to - 30 * minute}&to=${to - 15 * minute}`, {as: 'alice'})).body.refreshInMs, null, 'a range ended long enough ago');
 });
 
@@ -749,28 +749,29 @@ test('a machine gone quiet has its last list credited by the time a range ending
   t.mock.timers.setTime(end + KEEP_MS);
   const answer = (await call('GET', `/api/history?board=${board}&from=${end - 15 * minute}&to=${end}`, {as: 'alice'})).body;
   assert.equal(answer.refreshInMs, null, 'all there is of the range');
-  assert.equal(answer.activity.workMs, 4 * minute, 'the last list counts too, up to the end of the range');
+  assert.equal(answer.activity.activeMs, 4 * minute, 'the last list counts too, up to the end of the range');
 });
 
 /** Hours of each group of a dimension, one decimal. */
 const hoursBy = (history: any, dimension: string) =>
-  Object.fromEntries(history.activity.by[dimension].map((g: any) => [g.name ?? g.key, Math.round(g.ms / 360_000) / 10]));
+  Object.fromEntries(history.activity.by[dimension].map((g: any) => [g.name ?? g.key, Math.round(g.agentMs / 360_000) / 10]));
 
 /**
  * What always holds of work in a history: the windows of a subscription share its hours,
  * which are its group's in the activity (no group where they are none), and the parts of
- * a cell add up to its work. A subscription with no measurement in a range has no window
+ * a cell add up exactly to its agent time. A subscription with no measurement in a range has no window
  * there, though its agents' work is in the activity.
  */
 function assertWork(history: any) {
   for (const line of history.series) {
     if (!line.work || line.work.ms === null) continue;
-    assert.equal(history.activity.by.source.find((g: any) => g.key === line.sourceId)?.ms ?? 0, line.work.ms, `${line.sourceId} ${line.windowId}`);
+    assert.equal(history.activity.by.source.find((g: any) => g.key === line.sourceId)?.activeMs ?? 0, line.work.ms, `${line.sourceId} ${line.windowId}`);
+    assert.equal(history.activity.by.source.find((g: any) => g.key === line.sourceId)?.agentMs ?? 0, line.work.agentMs);
   }
   for (const dimension of ['source', 'project', 'device']) {
-    for (const [cell, work] of history.activity.cells) {
+    for (const [cell, , agentMs] of history.activity.cells) {
       const parts = history.activity.by[dimension].flatMap((g: any) => g.cells.filter(([at]: number[]) => at === cell).map(([, ms]: number[]) => ms));
-      assert.ok(Math.abs(parts.reduce((a: number, b: number) => a + b, 0) - work) <= parts.length, `${dimension} ${cell}`);
+      assert.equal(parts.reduce((a: number, b: number) => a + b, 0), agentMs, `${dimension} ${cell}`);
     }
   }
 }
@@ -779,13 +780,15 @@ test('a shared board shows the work of its members on its subscriptions, from th
   const {call, team, bobs, source, later, ago, hour} = await worked();
   const history = (await call('GET', `/api/history?board=${team}&range=24h`, {as: 'bob'})).body;
   assert.deepEqual(hoursBy(history, 'project'), {quotum: 2, billing: 1}, "neither Alice's work before the sharing nor Bob's before he joined, nor hers on a subscription before it came");
-  assert.deepEqual([history.activity.workMs / hour, history.activity.agentMs / hour], [2.5, 3], "Bob's and Carol's half hour together counts once in the work");
+  assert.deepEqual([history.activity.activeMs / hour, history.activity.agentMs / hour], [2.5, 3], "Bob's and Carol's half hour together counts once in the work");
   assert.deepEqual([history.activity.agents, history.activity.barMs], [3, hour], 'three agents, drawn in hours over a day');
   assert.deepEqual(history.activity.known, {from: ago(5), to: history.now}, 'known from the sharing on, up to now');
   assert.equal(history.activity.since, ago(5));
   const line = (id: string) => history.series.find((l: any) => l.sourceId === id).work;
-  assert.deepEqual([line(source).from, line(source).ms / hour], [ago(5), 2.5]);
-  assert.deepEqual([line(later).from, line(later).ms], [ago(3), 0], 'known from its own sharing on: none of the spending before is set against the hours');
+  assert.deepEqual([line(source).from, line(source).ms / hour, line(source).agentMs / hour], [ago(5), 2.5, 3]);
+  const group = history.activity.by.source.find((g: any) => g.key === source);
+  assert.deepEqual([group.agentMs / hour, group.activeMs / hour, group.agents], [3, 2.5, 3]);
+  assert.deepEqual([line(later).from, line(later).ms, line(later).agentMs], [ago(3), 0, 0], 'known from its own sharing on: none of the spending before is set against the hours');
   assertWork(history);
 
   const own = (await call('GET', `/api/history?board=${bobs}&range=24h`, {as: 'bob'})).body;
@@ -809,7 +812,7 @@ test('the work a board shows follows its cards, members and names at once, a cos
       // A hidden card: its work is not on the board, and comes back once it is shown again.
       await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {...EMPTY, hidden: [`source:${source}`]}});
       const hidden = await read();
-      assert.deepEqual([hidden.activity.workMs, hidden.activity.by.source, hidden.series[0].work], [0, [], null], `hidden, costlyMs ${costlyMs}`);
+      assert.deepEqual([hidden.activity.activeMs, hidden.activity.by.source, hidden.series[0].work], [0, [], null], `hidden, costlyMs ${costlyMs}`);
       assert.notEqual(key(), before);
       await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: EMPTY});
       assert.deepEqual(hoursBy(await read(), 'project'), hoursBy(first, 'project'), 'shown again');
@@ -874,8 +877,8 @@ test('the work of a period is of its known part: a range reads its own, and one 
   const {call, store, team, ago, hour} = await worked();
   const range = (from: number, to: number) => call('GET', `/api/history?board=${team}&from=${from}&to=${to}`, {as: 'alice'}).then(r => r.body);
   const middle = await range(ago(3.5), ago(2.5));
-  assert.equal(middle.activity.workMs, ago(3) - middle.since, "Alice's work within it, out to whole cells; Bob's is before he joined");
-  assert.equal(Math.round(middle.activity.workMs / hour * 10) / 10, 0.5);
+  assert.equal(middle.activity.activeMs, ago(3) - middle.since, "Alice's work within it, out to whole cells; Bob's is before he joined");
+  assert.equal(Math.round(middle.activity.activeMs / hour * 10) / 10, 0.5);
   assertWork(middle);
   const before = await range(ago(12), ago(8));
   assert.equal(before.activity.known, null, 'before the subscription came to the board, nothing of it is known');

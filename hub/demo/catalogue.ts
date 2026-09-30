@@ -1,3 +1,4 @@
+import {MEASURE_INTERVAL} from '../server/domain/frequency.js';
 import {
   agentsWork,
   ALWAYS,
@@ -83,6 +84,9 @@ export {KEY_STORAGE} from './key-storage.js';
  * would have credited it, from ten days back: the part before is unknown) and read at
  * `start` alone: the codes of the activity widget and of the table's work are at that
  * fixed point, over a period ending there or a range before it.
+ *
+ * In-flight frequency changes and fixed handover are held by server/test/frequency.test.ts;
+ * permission loss and late replies are checked on the live menu.
  *
  * Two states of a weekly window's forecast never last on a working hub, and have no entry:
  * `renewing`, the moment between a measurement and the hub's forecast of it (the hub works
@@ -490,6 +494,7 @@ const all: DemoSet = {
         'The merge menu with many selected, at the bottom of the dialog: its glass is whole',
         'My machines → Projects shows no agent time',
         'Agent activity by project: seven projects in colour, the rest grey, each its own row in the legend and the tooltip, switched off and on alone',
+        'The long project name wraps inside its activity legend bubble, including on a phone; opening it never widens the page',
       ],
     },
     {
@@ -504,18 +509,21 @@ const all: DemoSet = {
       // The week before `start`, at a fixed point: the agents of the example are gone by then.
       expect: [
         {state: 'widgets'},
-        {activity: 'project', range: '7d', groups: {atlas: 16, harbor: 13}, from: 0, to: 0},
-        {activity: 'device', range: '7d', groups: {'dan-laptop': 16, Desk: 13}, from: 0, to: 0},
-        {activity: 'source', range: '7d', groups: {'claude-week': 16, 'ben-codex': 5}, from: 0, to: 0},
-        {activityTotals: {work: 21, agents: 5, agentTime: 44}, range: '7d', from: 0, to: 0},
+        {activity: 'project', range: '7d', groups: {atlas: 28, harbor: 16}, from: 0, to: 0},
+        {activity: 'device', range: '7d', groups: {'dan-laptop': 28, Desk: 16}, from: 0, to: 0},
+        {activity: 'source', range: '7d', groups: {'claude-week': 39, 'ben-codex': 5}, from: 0, to: 0},
+        {activityTotals: {agentHours: 44, active: 21, agents: 5}, range: '7d', from: 0, to: 0},
+        {activityOf: 'atlas', by: 'project', range: '7d', hours: 28, active: 16, from: 0, to: 0},
         {activityKnownFrom: -10 * DAY, range: '30d', from: 0, to: 0},
       ],
       look: [
         'Agent activity over 7 days by project: atlas and harbor on days −5 and −4, harbor again on day −3',
-        'Its bars are hours and its scale is time worked, up to an hour; over 30 days the bars are two hours',
-        'The legend\'s hours add up to more than the hours of work: agents worked at once',
+        'Its hour bars stack agent-hours and can stand above an hour; over 30 days the bars are two hours',
+        'The legend adds up to 44 agent-hours; atlas has 28 agent-hours and 16 active hours',
+        'The atlas legend bubble shows 28 agent-hours, 16 active hours, 1.8 at once and two agents: hover, Tab or tap; Escape dismisses it even when focus is elsewhere, a tap also switches the group',
+        'Switch harbor off: stacks and scale shrink, 28h shown appears in the totals and Shown in the bar tooltip; active time, agents and at once keep their values',
         'Over 30 days the first twenty are hatched: not known before',
-        'The table, for the weekly window: work time, spent per work hour, the forecast by work and, turned on, the share of spending during work',
+        'The table, for the weekly window: active time, spent per active hour, the forecast by work and, turned on, the share of spending while active',
       ],
     },
     {
@@ -534,7 +542,7 @@ const all: DemoSet = {
         // The work of its members on what it shows, Ben's only since he joined; none of the hidden
         // Claude Max, and none of Dan's on Ben's Codex, Dan not being on Team.
         {activity: 'device', range: '24h', groups: {laptop: 0.6, 'ben-mac': 0.6}, from: 0, to: 0},
-        {activity: 'source', range: '7d', groups: {'team-claude': 0.9}, from: 0, to: 0},
+        {activity: 'source', range: '7d', groups: {'team-claude': 1.2}, from: 0, to: 0},
       ],
       look: [
         'Cards are named with their owners',
@@ -549,9 +557,9 @@ const all: DemoSet = {
       owner: 'ana',
       members: ['dan'],
       forecastWidth: 2,
-      tableColumns: ['during'],
+      tableColumns: ['during', 'agenthours'],
       expect: [{state: 'widgets'}, {tableLayout: 'list'}],
-      look: ['The table, a third of the board wide, is a list: each window its name and what is left, then the rest with their headings; nothing scrolls sideways'],
+      look: ['The Agent-hours column is enabled and every window shows it with its heading in the list', 'The table, a third of the board wide, is a list: each window its name and what is left, then the rest with their headings; nothing scrolls sideways'],
     },
     {
       kind: 'board',
@@ -1059,7 +1067,7 @@ const all: DemoSet = {
         {work: 'weekly', board: 'dan', range: '7d', hours: 5, paceWhy: 'short', leftWhy: 'short', from: 0, to: 0},
         {work: 'weekly', board: 'team', range: '7d', none: 'none', from: 0, to: 0},
         {work: 'weekly', board: 'team', range: '30d', none: 'noneSince', since: -10 * DAY, from: 0, to: 0},
-        // Nor a share of the spending during work, on With Dan, where it is on; over a day, when none worked, none at all.
+        // Nor a share of the spending while active, on With Dan, where it is on; over a day, when none worked, none at all.
         {work: 'weekly', board: 'with-dan', range: '7d', duringWhy: 'short', from: 0, to: 0},
         {work: 'weekly', board: 'with-dan', range: '24h', duringWhy: 'none', from: 0, to: 0},
         {title: 'Codex'},
@@ -1095,8 +1103,8 @@ const all: DemoSet = {
       // The share during work is off on Dan's board, on With Dan.
       expect: [
         {title: 'Claude'},
-        {work: 'weekly', range: '7d', hours: 16, perHour: 4.1, left: 10.1, during: 'hidden', from: 0, to: 0},
-        {board: 'with-dan', work: 'weekly', range: '7d', during: 89, from: 0, to: 0},
+        {work: 'weekly', range: '7d', hours: 16, agentHours: 'hidden', perHour: 4.1, left: 10.1, during: 'hidden', from: 0, to: 0},
+        {board: 'with-dan', work: 'weekly', range: '7d', agentHours: 39, during: 89, from: 0, to: 0},
         {work: 'weekly', range: '30d', since: -10 * DAY, from: 0, to: 0},
       ],
     },
@@ -1130,11 +1138,11 @@ const all: DemoSet = {
         {work: 'weekly:pool', range: {from: -DAY, to: -HOUR}, perHour: 0, leftWhy: 'slow', from: 0, to: 0},
       ],
       look: [
-        'In the table, spent per work hour is "≈ 0%/h" and the forecast by work "lasts to the reset", its tooltip naming no hours',
-        'Its Ledger window, nearly used up at the same pace: the forecast by work some sixty hours of work, its tooltip telling the pace as under 0.05% an hour',
+        'In the table, spent per active hour is "≈ 0%/h" and the forecast by work "lasts to the reset", its tooltip naming no hours',
+        'Its Ledger window, nearly used up at the same pace: the forecast by work some sixty active hours, its tooltip telling the pace as under 0.05% an hour',
         'Beside them, its forecast by time says "just enough": it goes by how the subscription spent over the last day, not by the 96 points its week spent at once when it began',
         'Over a range of the day before the last hour: the forecast by work "lasts to the reset", its tooltip that it lasts longer than the window, naming no hours',
-        'Over it, its Pool window, of no known length: the forecast by work a dash, its tooltip that what is left lasts over a week of work, at under 0.05% an hour',
+        'Over it, its Pool window, of no known length: the forecast by work a dash, its tooltip that what is left lasts over a week of activity, at under 0.05% an hour',
       ],
     },
     {
@@ -1148,7 +1156,7 @@ const all: DemoSet = {
       windows: [weekly({since: -2 * DAY, use: elapsed => 10 + (3 * busyIn(EVENINGS, -2 * DAY, -2 * DAY + elapsed)) / HOUR})],
       agents: [{machine: 'laptop', origin: 'terminal', project: 'ledger', since: -DAY, works: MORNINGS}],
       expect: [{work: 'weekly', range: '24h', lowShare: 0, from: 0, to: 0}],
-      look: ['In the table, the tooltips of spent per work hour and the forecast by work say nothing was spent while agents worked'],
+      look: ['In the table, the tooltips of spent per active hour and the forecast by work say nothing was spent while agents worked'],
     },
 
     // Where a weekly window leads, one case each: the hub's forecast from how its subscription spends.
@@ -1297,6 +1305,31 @@ const all: DemoSet = {
         {forecast: 'weekly:fable', outlook: 'needData', why: 'weeklyAtZero'},
         {forecast: 'weekly:opus', outlook: 'needData', why: 'atZero'},
       ],
+    },
+    ...([MEASURE_INTERVAL.one, MEASURE_INTERVAL.two, MEASURE_INTERVAL.five, MEASURE_INTERVAL.fifteen]).map(interval => {
+      const minutes = interval / MIN;
+      return {
+        kind: 'card' as const, id: `frequency-${minutes}`, provider: 'codex' as const, plan: 'pro',
+        machines: [`frequency-${minutes}`], history: DAY, paced: true,
+        measureIntervalMs: interval,
+        windows: [weekly({since: -3 * DAY, use: () => minutes === 15 ? 95 : 40})],
+        agents: minutes === 15 ? [{machine: 'frequency-15', origin: 'terminal' as const, project: 'Fixed pace', since: -HOUR, works: ALWAYS}] : [],
+        on: {ana: {name: `Every ${minutes} minutes`}},
+        expect: [
+          {measureIntervalMs: interval},
+          {from: 15 * SECOND, to: 15 * SECOND, cadence: 'nextIn' as const, why: 'fixed' as const},
+          ...(minutes === 15 ? [{from: 3 * MIN, to: 8 * MIN, cadence: 'nextIn' as const, why: 'fixed' as const, stale: true}] : []),
+        ],
+        look: ['Frequency is shared across boards; low limits and working agents do not speed up the fixed 15-minute plan. Stale data still explain the next measurement. Check the compact Auto / 1 / 2 / 5 / 15 segments, native radio keys, aligned menu headings and the Auto explanation in both languages'],
+      };
+    }),
+    {
+      kind: 'card', id: 'frequency-floor', provider: 'codex', plan: 'pro',
+      machines: ['frequency-floor'], history: DAY, paced: true, measureIntervalMs: MEASURE_INTERVAL.one, minimum: 5 * MIN,
+      windows: [weekly({since: -3 * DAY, use: () => 40})],
+      on: {ana: {name: 'Every minute, device minimum 5'}},
+      expect: [{measureIntervalMs: MEASURE_INTERVAL.one}, {from: 2 * MIN, to: 3 * MIN, cadence: 'nextIn', why: 'fixed'}],
+      look: ['The menu keeps the one-minute selection while the tooltip gives the real five-minute device plan'],
     },
     // Real requests through the board API, with stand-in devices and controlled answers. Times
     // count from the machines' first asking, 15 seconds apart from then on in the demo's own

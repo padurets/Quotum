@@ -1,4 +1,6 @@
 export type {Refresh, RefreshRequest} from '../../server/domain/refresh';
+export {MEASURE_INTERVAL, type MeasureIntervalMs} from '../../server/domain/frequency';
+import type {MeasureIntervalMs} from '../../server/domain/frequency';
 /** A window's length as the agent classifies it. */
 export type Kind = 'session' | 'weekly' | 'other';
 
@@ -36,13 +38,14 @@ export type Card = {
   resets: FreeResets | null;
   owners: string[];
   staleAfterMs: number | null;
+  measureIntervalMs: MeasureIntervalMs;
 };
 
 /** When a source is measured next and why, while the hub sets the pace of the device measuring it; `next` may have passed. */
 export type Pace = {next: number; why: CadenceWhy} | null;
 
 /** Why the next measurement comes when it does: little left, in use, numbers that just changed or stay the same, a reset. */
-export type CadenceWhy = 'low' | 'inUse' | 'changed' | 'idle' | 'reset';
+export type CadenceWhy = 'low' | 'inUse' | 'changed' | 'idle' | 'reset' | 'fixed';
 
 /** A coding agent running on a machine, spending the subscription of its card. */
 export type LiveSession = {
@@ -111,36 +114,34 @@ export type HistorySeries = {
 /**
  * How agents worked on a window's subscription over a period, and what the window spent
  * meanwhile, all from `from` on, since when that is known: `ms`, how long any of them
- * worked (null when nothing of the period is known); `consumed`, what the window spent
- * over the steps between measurements the hub can prove; `coveredMs`, how long agents
+ * worked (null when nothing of the period is known); `agentMs`, each agent counted;
+ * `consumed`, what the window spent over the steps between measurements the hub can prove; `coveredMs`, how long agents
  * worked during those steps; `duringWork`, what those of the steps agents worked in spent
  * (an upper bound: a step work touches counts whole).
  */
-export type SeriesWork = {from: number; ms: number | null; consumed: number; coveredMs: number; duringWork: number};
+export type SeriesWork = {from: number; ms: number | null; agentMs: number; consumed: number; coveredMs: number; duringWork: number};
 
 export type ActivityDimension = 'source' | 'project' | 'device';
 
 /**
- * A subscription, project or machine agents worked on: how long its own agents worked
- * (`ms`, overlaps counted once) and its part of each bar's work ([bar start, ms], only
- * bars it has a part in); `name` is null for a subscription (named from the board) and
- * for no project. Every one the period has is a group of its own, the longest first.
+ * A group's agent time (each agent counts), active time (overlaps counted once), distinct
+ * agents and agent time by bar ([start, agentMs]). Projects and machines are named here;
+ * subscriptions are named from the board. Groups are ordered by agent-hours.
  */
-export type ActivityGroup = {key: string; name: string | null; ms: number; cells: [number, number][]};
+export type ActivityGroup = {key: string; name: string | null; agentMs: number; activeMs: number; agents: number; cells: [number, number][]};
 
 /**
  * How the agents the board shows worked over the period: since when that is known on the
  * board, the part of the period that is (null when none), how long any of them worked, all
  * of them together, and how many different agents did, in all and bar by bar (`barMs`
- * long: [bar start, work, agent time, agents], only bars with work), and split by
- * subscription, project and machine. Each moment is split evenly among the agents working
- * then, so a bar's parts add up to its work.
+ * long: [bar start, active time, agent time, agents], only bars with work), and split by
+ * subscription, project and machine. A bar's parts add up to its agent time.
  */
 export type Activity = {
   since: number;
   known: {from: number; to: number} | null;
   barMs: number;
-  workMs: number;
+  activeMs: number;
   agentMs: number;
   agents: number;
   cells: [number, number, number, number][];

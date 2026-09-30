@@ -131,7 +131,7 @@ test('a reset for everyone counts from its announced time until a measurement se
   assert.equal(announcedOf(null, 'codex', measured), null);
 });
 
-test('too little history says why: too few hours, its limit at zero, or its subscription\'s weekly limit at zero', () => {
+test("too little history says why: too few hours, its limit at zero, or its subscription's weekly limit at zero", () => {
   const needs = (window: Win, windows: Win[]) => said(lasts({state: 'needData', basis: {hours: 0}}), measured, window, context({windows}));
   const fable = (used: number) => week(100 - used, {id: 'weekly:fable', label: 'Fable'});
   const weekly = (used: number, change: Partial<Win> = {}) => week(100 - used, change);
@@ -344,8 +344,21 @@ test('the table stays a table while its chosen columns fit the widget, and becom
   const shown = (columns: readonly ForecastColumn[]) => columns.filter(column => columnShown(view, FORECAST, column));
   assert.equal(forecastLayout(shown(LIVE_COLUMNS), 1182), 'table', 'every column on by default, on a widget as wide as the board');
   // As measured on the board, with the padding of the cells at the table's edges.
-  assert.equal(forecastLayout(shown(LIVE_COLUMNS), 1138), 'table');
-  assert.equal(forecastLayout(shown(LIVE_COLUMNS), 1137), 'list');
+  assert.equal(forecastLayout(shown(LIVE_COLUMNS), 1169), 'table');
+  assert.equal(forecastLayout(shown(LIVE_COLUMNS), 1168), 'list');
   assert.equal(forecastLayout(shown(RANGE_COLUMNS), 1182), 'table');
-  assert.deepEqual(LIVE_COLUMNS.filter(column => !shown(LIVE_COLUMNS).includes(column)), ['during'], 'the share during work does not fit beside them');
+  for (const columns of [LIVE_COLUMNS, RANGE_COLUMNS])
+    assert.equal(
+      forecastLayout(
+        columns.filter(c => c === 'agenthours' || columnShown(view, FORECAST, c)),
+        1182,
+      ),
+      'list',
+      'agent-hours added to the defaults exceed the full width',
+    );
+  assert.deepEqual(
+    LIVE_COLUMNS.filter(column => !shown(LIVE_COLUMNS).includes(column)),
+    ['agenthours', 'during'],
+    'agent-hours and the share while active does not fit beside them',
+  );
 });

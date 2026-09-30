@@ -7,7 +7,7 @@ const view: View = {layout: {columns: 6, places: {}}, names: {}, hidden: [], sho
 const series = (windowId: string, kind: 'weekly' | 'session' = 'weekly'): HistorySeries => ({
   sourceId: 'codex:1', provider: 'codex', windowId, kind, label: null, minutes: 10080, consumed: 0, coveredMs: 0, samples: 1, remainingAtStart: 50, remainingAtEnd: 50, staleAfterMs: 300_000, points: [[0, 50, 0]], work: null,
 });
-const history = {range: '24h', now: 0, since: 0, to: 0, cellMs: 60_000, historyStart: 0, events: [], refreshInMs: null, series: [series('weekly'), series('spark'), series('session', 'session')], activity: {since: 0, known: null, barMs: 60_000, workMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}}} as History;
+const history = {range: '24h', now: 0, since: 0, to: 0, cellMs: 60_000, historyStart: 0, events: [], refreshInMs: null, series: [series('weekly'), series('spark'), series('session', 'session')], activity: {since: 0, known: null, barMs: 60_000, activeMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}}} as History;
 const weekly: Win = {id: 'weekly', kind: 'weekly', label: null, used: 40, remaining: 60, resetAt: null, minutes: 10080};
 const sources = [{id: 'codex:1', provider: 'codex', windows: [weekly]}];
 

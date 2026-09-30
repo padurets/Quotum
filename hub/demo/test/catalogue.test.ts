@@ -241,17 +241,17 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
       const tenth = (ms: number) => Math.round(ms / 360_000) / 10;
       const cardOf = (source: string) => [...stand.sources].find(([, id]) => id === source)?.[0] ?? source;
       const named = (by: 'source' | 'project' | 'device') =>
-        Object.fromEntries(activity.by[by].map(g => [by === 'source' ? cardOf(g.key) : String(g.name), tenth(g.ms)]));
+        Object.fromEntries(activity.by[by].map(g => [by === 'source' ? cardOf(g.key) : String(g.name), tenth(g.agentMs)]));
       if ('activity' in check) {
         const {activity: by} = check as {activity: 'source' | 'project' | 'device'};
         return {activity: by, range, groups: named(by)};
       }
       if ('activityOf' in check) {
         const {activityOf: name, by} = check as {activityOf: string; by: 'project' | 'device'};
-        return {activityOf: name, by, range, hours: named(by)[name] ?? null};
+        return {activityOf: name, by, range, hours: named(by)[name] ?? null, ...('active' in check ? {active: tenth(activity.by[by].find(g => g.name === name)!.activeMs)} : {})};
       }
       if ('activityTotals' in check) {
-        return {activityTotals: {work: tenth(activity.workMs), agents: activity.agents, agentTime: tenth(activity.agentMs)}, range};
+        return {activityTotals: {agentHours: tenth(activity.agentMs), active: tenth(activity.activeMs), agents: activity.agents}, range};
       }
       return {activityKnownFrom: activity.known ? activity.known.from - stand.start : null, range};
     }
@@ -284,6 +284,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
   const values: Record<string, unknown> = {
     error: source.error,
     stale: source.stale,
+    measureIntervalMs: source.measureIntervalMs,
     title: source.title,
     fresh: dot.warn ? 'warn' : dot.pulsing ? 'pulse' : dot.fresh === 0 ? 'grey' : `fading, ${dot.fresh}`,
     agents: source.sessions.length,
@@ -339,7 +340,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
     const tenth = (value: number) => Math.round(value * 10) / 10;
     const hours = (cell: (typeof cells)['work']) => ('value' in cell ? tenth(cell.value / 3_600_000) : 'untilReset' in cell ? 'untilReset' : 'usedUp' in cell ? 'usedUp' : 'outlasts' in cell ? 'outlasts' : undefined);
     // A column off on the board shows nothing to check.
-    const on = <T,>(column: 'work' | 'perwork' | 'workleft' | 'during', value: T) => (columnShown(overview.view, FORECAST, column) ? value : 'hidden');
+    const on = <T,>(column: 'work' | 'agenthours' | 'perwork' | 'workleft' | 'during', value: T) => (columnShown(overview.view, FORECAST, column) ? value : 'hidden');
     const {since, share} = workNotes(line.work, history.since);
     // A dash as its tooltip tells it: a reason about the whole period, since when work is known.
     const why = (cell: (typeof cells)['work']) => ('none' in cell ? (cell.none === 'unknown' ? 'unknown' : dashOf(cell.none, since).text) : undefined);
@@ -347,6 +348,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
       work: id,
       range: card.range,
       hours: on('work', hours(cells.work)),
+      agentHours: on('agenthours', hours(cells.agenthours)),
       perHour: on('perwork', 'value' in cells.perwork ? tenth(cells.perwork.value) : undefined),
       left: on('workleft', hours(cells.workleft)),
       during: on('during', 'value' in cells.during ? Math.round(cells.during.value) : undefined),
@@ -611,7 +613,7 @@ test('cards measured at the hub’s pace say when the next measurement comes and
     'every code of the pace is checked',
   );
   const shown = checks as {cadence: string; why: string}[];
-  for (const why of ['low', 'inUse', 'changed', 'idle', 'reset']) assert.ok(shown.some(c => c.why === why), `a card says ${why}`);
+  for (const why of ['low', 'inUse', 'changed', 'idle', 'reset', 'fixed']) assert.ok(shown.some(c => c.why === why), `a card says ${why}`);
   for (const when of ['nextIn', 'nextSoon']) assert.ok(shown.some(c => c.cadence === when), `a card says ${when}`);
 });
 
@@ -622,7 +624,7 @@ for (const first of [0, 59 * SECOND])
     // What a card's dot says over a span of its own (stale while its machine sleeps, grey
     // between the measurements of a card measured seldom): the live demo measures these cards
     // when the hub says, not on the rhythm the twelve hours above follow.
-    const dot = (check: object) => ('stale' in check || 'fresh' in check) && 'to' in check;
+    const dot = (check: object) => ('stale' in check || 'fresh' in check) && 'to' in check && !paceCode(check);
     const timed = cards(all).filter(card => card.expect.some(dot));
     assert.ok(timed.some(card => card.expect.some(check => 'stale' in check && check.stale && dot(check))), 'the catalogue has a card going stale for a while');
     assert.ok(timed.some(card => card.expect.some(check => 'fresh' in check && dot(check))), 'and one going grey for a while');

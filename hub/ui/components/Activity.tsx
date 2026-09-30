@@ -1,8 +1,8 @@
-import {memo, useLayoutEffect, useMemo, useRef, useState} from 'react';
+import {memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState} from 'react';
 import type {Activity as ActivityData, ActivityDimension, ActivityGroup} from '../lib/types';
 import {clock, num, shortDay, stamp, workHours} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
-import {activityEmpty, activityScale, groupColors, mutedKey} from '../lib/activity';
+import {activityEmpty, activityScale, atOnce, groupColors, mutedKey, shownActivity} from '../lib/activity';
 import {ACTIVITY_BY, setMuted, setPrefs, usePrefs} from '../lib/prefs';
 import {goTo, setTimeRange, useTimeRange, type TimeRange} from '../lib/timeRange';
 import {cellLabel, frameChangesAt, frameOf, measuredTo, niceTicks, step} from '../lib/periods';
@@ -13,7 +13,7 @@ import {useHistory, useHistoryBegins} from '../lib/history';
 import {t, useLocale, type Key} from '../i18n';
 import {Segmented} from './Kit';
 import {HideRow, Popover, SlidersIcon} from './Popover';
-import {Tooltip, useTip} from './Tooltip';
+import {Tooltip, useBubble, useTip} from './Tooltip';
 import {useTimeAxis} from './timeAxis';
 import {usePlot} from './sizing';
 
@@ -43,20 +43,119 @@ function ActivitySettings({arrange}: {arrange: Arrange}) {
   );
 }
 
+/** The same quantities for a bar and a legend group; totals always cover every agent. */
+function Metrics({agentMs, activeMs, agents, shownMs}: {agentMs: number; activeMs: number; agents: number; shownMs?: number}) {
+  const rows = [
+    [t('activity.agentHours'), workHours(agentMs)],
+    ...(shownMs !== undefined && shownMs < agentMs ? [[t('activity.shownRow'), workHours(shownMs)]] : []),
+    [t('activity.active'), workHours(activeMs)],
+    [t('activity.agents'), num(agents)],
+    [t('activity.atOnce'), atOnce(agentMs, activeMs)],
+  ];
+  return (
+    <span className="tooltip-grid" style={{gridTemplateColumns: 'minmax(0, 1fr) auto'}}>
+      {rows.map(([name, value]) => (
+        <span className="tooltip-row" key={name}>
+          <span className="tooltip-name">{name}</span>
+          <strong>{value}</strong>
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/** Hover and touch state belong to one legend entry, leaving the stacks untouched. */
+function LegendItem({group, name, color, muted, onToggle}: {group: ActivityGroup; name: string; color: string; muted: boolean; onToggle: () => void}) {
+  const id = useId();
+  const button = useRef<HTMLButtonElement>(null);
+  const wrap = useRef<HTMLDivElement>(null);
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const [pinned, setPinned] = useState(0);
+  const [dismissed, setDismissed] = useState(false);
+  const active = !dismissed && (hovered || focused || pinned > 0);
+  const tip = useBubble(active, button);
+  useEffect(() => {
+    if (!active) return;
+    // A bubble opened by the pointer must dismiss even while another control has focus.
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setDismissed(true);
+        setPinned(0);
+      }
+    };
+    addEventListener('keydown', escape);
+    return () => removeEventListener('keydown', escape);
+  }, [active]);
+  useEffect(() => {
+    if (!pinned) return;
+    const timer = setTimeout(() => setPinned(0), 4000);
+    const outside = (event: PointerEvent) => {
+      if (!wrap.current?.contains(event.target as Node)) setPinned(0);
+    };
+    addEventListener('pointerdown', outside);
+    return () => {
+      clearTimeout(timer);
+      removeEventListener('pointerdown', outside);
+    };
+  }, [pinned]);
+  return (
+    <div
+      ref={wrap}
+      className="activity-legend-item"
+      onPointerEnter={event => {
+        if (event.pointerType !== 'touch') {
+          setHovered(true);
+          setDismissed(false);
+        }
+      }}
+      onPointerLeave={event => {
+        if (event.pointerType !== 'touch') setHovered(false);
+      }}
+    >
+      <button
+        ref={button}
+        type="button"
+        className="legend-item"
+        aria-describedby={id}
+        aria-pressed={!muted}
+        onClick={onToggle}
+        onFocus={event => {
+          setFocused(event.currentTarget.matches(':focus-visible'));
+          setDismissed(false);
+        }}
+        onBlur={() => setFocused(false)}
+        onPointerUp={event => {
+          if (event.pointerType === 'touch') {
+            setPinned(value => value + 1);
+            setDismissed(false);
+          }
+        }}
+      >
+        <i className="activity-swatch" style={{background: color}} />
+        <span>{name}</span>
+        <b>{workHours(group.agentMs)}</b>
+      </button>
+      <span
+        ref={tip}
+        id={id}
+        role="tooltip"
+        className={`activity-legend-tip glass ${active ? 'is-open' : ''}`}
+        onPointerDown={event => event.stopPropagation()}
+        onClick={event => event.stopPropagation()}
+      >
+        <span className="tooltip-time">{name}</span>
+        <Metrics agentMs={group.agentMs} activeMs={group.activeMs} agents={group.agents} />
+      </span>
+    </div>
+  );
+}
+
 /**
- * How agents worked over the analytics' period, on its time axis: in each bar (an hour,
- * or the period's cell where that is longer), a stack of the time agents worked there,
- * split by subscription, project or machine (the reader's choice, in its settings). Each
- * moment is split among the agents working then, so a stack is as tall as the bar's work;
- * each group in the legend has how long its own agents worked, which is more than its
- * parts where others worked alongside, and is switched off and on there as a line of the
- * chart is. Over it, the period's work time, how many different agents worked and their
- * time together. It follows the period, a range dragged on it or on the chart and moving
- * through time, as the chart and the table do, and shows only what the board shows. The
- * part of the period before the hub knew how agents worked is marked as such rather than
- * drawn empty. It reads the history on screen, as the chart does, and of the board's cards
- * only their names, so a measurement does not render it; it moves with time as the chart
- * does, a cell of the history's grid at a time.
+ * Agent-hours on the analytics' time axis, stacked by subscription, project or machine.
+ * The legend adds up to the total; active time and distinct agents are told separately.
+ * It follows the history's frame and reads only card titles, so measurements do not
+ * render it. The unknown part of the period is hatched rather than drawn as idle.
  */
 export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const {history, loading} = useHistory();
@@ -85,6 +184,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
     return {groups, colors, names, muted, shown};
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activity, by, arrange.view, titles, prefs.muted, locale]);
+  const shownMs = shownActivity(shown.map(({group}) => group)).agentMs;
   const shownSources = lineup.filter(id => titles[id] && !isHidden(arrange.view, cardId(id)));
   // Known from later than the period the hub answered begins (not the page's frame, whose clock may be a minute behind).
   const since = history && activity?.known && activity.known.from > history.since ? activity.known.from : null;
@@ -104,16 +204,20 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
         <h2>{t('activity.title')}</h2>
         <ActivitySettings arrange={arrange} />
       </div>
-      {activity?.known && activity.workMs > 0 && (
+      {activity?.known && activity.activeMs > 0 && (
         <div className="activity-totals">
-          <span title={t('activity.workHint')}>
-            {t('activity.work')} <b>{workHours(activity.workMs)}</b>
+          <span title={t('activity.agentHoursHint')}>
+            {t('activity.agentHours')} <b>{workHours(activity.agentMs)}</b>
+            {shownMs < activity.agentMs && <span className="activity-since activity-shown">{t('activity.shown', {time: workHours(shownMs)})}</span>}
+          </span>
+          <span title={t('activity.activeHint')}>
+            {t('activity.active')} <b>{workHours(activity.activeMs)}</b>
           </span>
           <span title={t('activity.agentsHint')}>
             {t('activity.agents')} <b>{num(activity.agents)}</b>
           </span>
-          <span title={t('activity.agentTimeHint')}>
-            {t('activity.agentTime')} <b>{workHours(activity.agentMs)}</b>
+          <span title={t('activity.atOnceHint')}>
+            {t('activity.atOnce')} <b>{atOnce(activity.agentMs, activity.activeMs)}</b>
           </span>
           {since !== null && <span className="activity-since">{t('activity.since', {time: stamp(since)})}</span>}
         </div>
@@ -138,11 +242,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
           />
           <div className="legend">
             {groups.map((group, i) => (
-              <button key={group.key} type="button" className="legend-item" title={t('activity.legendHint')} aria-pressed={!muted[i]} onClick={() => setMuted(mutedKey(by, group.key), !muted[i])}>
-                <i className="activity-swatch" style={{background: colors[i]}} />
-                <span>{names[i]}</span>
-                <b>{workHours(group.ms)}</b>
-              </button>
+              <LegendItem key={group.key} group={group} name={names[i]} color={colors[i]} muted={muted[i]} onToggle={() => setMuted(mutedKey(by, group.key), !muted[i])} />
             ))}
           </div>
         </>
@@ -187,7 +287,7 @@ function Stacks({
   onBase: (height: number) => void;
 }) {
   const barMs = activity.barMs;
-  // Room for the scale's longest label ("30 мин") within the widget.
+  // Room for the scale's longest label ("480h" or "30 мин") within the widget.
   const left = 48;
   const right = 12;
   const {box, svg, width, scale, hover, drag, x, clip, handlers} = useTimeAxis({from, to, end: to, cellMs: barMs, left, right, onSelect, onStep});
@@ -201,12 +301,8 @@ function Stacks({
   const {ticks, daily} = niceTicks(from, to, narrow ? 4 : 7);
 
   // How tall each bar's stack is, of the groups shown: the scale reaches the tallest.
-  const heights = useMemo(() => {
-    const sums = new Map<number, number>();
-    for (const {group} of groups) for (const [start, ms] of group.cells) sums.set(start, (sums.get(start) ?? 0) + ms);
-    return sums;
-  }, [groups]);
-  const vertical = activityScale(Math.max(0, ...heights.values()), barMs);
+  const heights = useMemo(() => shownActivity(groups.map(({group}) => group)).cells, [groups]);
+  const vertical = activityScale(Math.max(0, ...heights.values()));
   const y = (value: number) => top + (1 - value / vertical.max) * (height - top - bottom);
 
   // One path a group, stacked in the order of the groups. Bars wide enough to read as such
@@ -246,10 +342,9 @@ function Stacks({
 
   const bar = hover === null ? null : activity.cells.find(([start]) => start === hover);
   // What the hovered bar draws: over one whose groups are all switched off, nothing tells of it, as over an empty one.
-  const parts = hover === null ? [] : groups.flatMap(({group, color, name}) => group.cells.filter(([start]) => start === hover).map(([, ms]) => ({key: group.key, color, name, ms})));
-  // The bar's totals are of all its work, which its parts add up to: while some of it is in a
-  // group switched off, which cannot be taken out of them (agents worked across groups), they are not told.
-  const whole = !!bar && Math.abs(parts.reduce((sum, part) => sum + part.ms, 0) - bar[1]) < 1000;
+  const parts =
+    hover === null ? [] : groups.flatMap(({group, color, name}) => group.cells.filter(([start]) => start === hover).map(([, ms]) => ({key: group.key, color, name, ms})));
+  const shownMs = parts.reduce((sum, part) => sum + part.ms, 0);
   const hoverX = hover === null ? 0 : x(Math.max(from, Math.min(to, hover + barMs / 2)));
   const {tip, style: tipStyle} = useTip(svg, {width, at: hoverX, narrow, rises: true, bottom: height * scale});
   // The label of the part not known shows only where it fits within its hatching, measured
@@ -317,28 +412,17 @@ function Stacks({
           </g>
         </g>
         {drag && <rect x={Math.min(drag.start, drag.end)} width={Math.abs(drag.end - drag.start)} y={top} height={height - top - bottom} className="selection" />}
-        {hover !== null && bar && parts.length > 0 && <rect x={x(hover)} width={Math.max(1, x(hover + barMs) - x(hover))} y={top} height={height - top - bottom} className="hover-band" />}
+        {hover !== null && bar && parts.length > 0 && (
+          <rect x={x(hover)} width={Math.max(1, x(hover + barMs) - x(hover))} y={top} height={height - top - bottom} className="hover-band" />
+        )}
       </svg>
       {!groups.length && <div className="chart-empty">{t('activity.allOff')}</div>}
       {hover !== null && bar && parts.length > 0 && !drag && (
         <Tooltip tip={tip} className={narrow ? 'is-below' : ''} style={tipStyle}>
           <div className="tooltip-time">{cellLabel(hover, barMs)}</div>
           {/* The totals come first: a tooltip cut to the window loses the last of its parts, not them. */}
-          {whole && (
-            <>
-              <div className="tooltip-grid" style={{gridTemplateColumns: 'minmax(0, 1fr) auto'}}>
-                <div className="tooltip-row">
-                  <span className="tooltip-name">{t('activity.work')}</span>
-                  <strong>{workHours(bar[1])}</strong>
-                </div>
-                <div className="tooltip-row">
-                  <span className="tooltip-name">{t('activity.agents')}</span>
-                  <strong>{num(bar[3])}</strong>
-                </div>
-              </div>
-              <div className="tooltip-sep" />
-            </>
-          )}
+          <Metrics agentMs={bar[2]} activeMs={bar[1]} agents={bar[3]} shownMs={shownMs} />
+          <div className="tooltip-sep" />
           <div className="tooltip-grid" style={{gridTemplateColumns: '14px minmax(0, 1fr) auto'}}>
             {parts.map(part => (
               <div className="tooltip-row" key={part.key}>

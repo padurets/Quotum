@@ -9,14 +9,14 @@ const MIN = 60_000;
 const HOUR = 60 * MIN;
 const DAY = 24 * HOUR;
 const from = Date.parse('2026-09-19T10:00:00Z');
-const work = (change: Partial<SeriesWork> = {}): SeriesWork => ({from, ms: 21 * HOUR, consumed: 62, coveredMs: 21 * HOUR, duringWork: 55.8, ...change});
+const work = (change: Partial<SeriesWork> = {}): SeriesWork => ({from, ms: 21 * HOUR, agentMs: 42 * HOUR, consumed: 62, coveredMs: 21 * HOUR, duringWork: 55.8, ...change});
 const value = (cell: WorkCell) => ('value' in cell ? Math.round(cell.value * 100) / 100 : cell);
 
 test("the issue's example: 62% over 21 hours of work is about 3% an hour, and the 38% left last about 13 hours of work", () => {
   const cells = workCells(work(), 38, 5 * DAY);
   assert.equal(value(cells.work), 21 * HOUR);
   assert.equal(value(cells.perwork), 2.95);
-  assert.equal(Math.round(('value' in cells.workleft ? cells.workleft.value : 0) / HOUR * 10) / 10, 12.9);
+  assert.equal(Math.round((('value' in cells.workleft ? cells.workleft.value : 0) / HOUR) * 10) / 10, 12.9);
   assert.equal(value(cells.during), 90);
 });
 
@@ -30,8 +30,8 @@ test('the pace is taken over the work measured without gaps, not over all of it'
 test('each dash says why', () => {
   const none = (cell: WorkCell) => ('none' in cell ? cell.none : null);
   const unknown = workCells(work({ms: null}), 38, null);
-  assert.deepEqual(Object.values(unknown).map(none), ['unknown', 'unknown', 'unknown', 'unknown']);
-  assert.deepEqual(Object.values(workCells(work({ms: 0, coveredMs: 0, duringWork: 0}), 38, null)).map(value), [{none: 'none'}, {none: 'none'}, {none: 'none'}, {none: 'none'}], 'none worked: no share of theirs either');
+  assert.deepEqual(Object.values(unknown).map(none), ['unknown', 'unknown', 'unknown', 'unknown', 'unknown']);
+  assert.deepEqual(Object.values(workCells(work({ms: 0, coveredMs: 0, duringWork: 0}), 38, null)).map(value), [{none: 'none'}, {none: 'none'}, {none: 'none'}, {none: 'none'}, {none: 'none'}], 'none worked: no share of theirs either');
   const short = workCells(work({coveredMs: 29 * MIN}), 38, null);
   assert.deepEqual([none(short.perwork), none(short.workleft), none(short.during)], ['short', 'short', 'short']);
   const inGaps = workCells(work({coveredMs: 0, duringWork: 0}), 38, null);
@@ -200,4 +200,14 @@ test('a cell says what it foresees and its tooltip why, a part a line', () => {
   assert.deepEqual(dash('nospend', from - DAY), {content: '—', title: t('work.noSpendSince', {time: stamp(from)})});
   assert.deepEqual(dash('awaiting', from - DAY), {content: '—', title: t('forecast.awaiting')}, 'waiting for a measurement, not about the work known');
   assert.deepEqual(dash('unknown'), {content: '—', title: t('work.unknown', {time: stamp(from)})});
+});
+
+test('agent-hours count each agent, with only the known-from note, whatever the pace basis', () => {
+  const data = work({coveredMs: HOUR, duringWork: 1});
+  const cells = workCells(data, 38, null);
+  assert.equal(value(cells.agenthours), 42 * HOUR);
+  assert.deepEqual(workText('agenthours', cells.agenthours, data, from - HOUR, null, 62), {content: workHours(42 * HOUR), title: t('work.since', {time: stamp(from)})});
+  assert.deepEqual(workText('agenthours', cells.agenthours, data, from, null, 62), {content: workHours(42 * HOUR), title: undefined});
+  assert.deepEqual(workCells(work({ms: null}), 38, null).agenthours, {none: 'unknown'});
+  assert.deepEqual(workCells(work({ms: 0, agentMs: 0}), 38, null).agenthours, {none: 'none'});
 });

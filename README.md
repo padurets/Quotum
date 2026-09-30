@@ -114,21 +114,22 @@ Codex         api                  idle     started 25m ago · editor
   were granted. Drag across it to zoom into a burst of work (on a phone, hold a finger
   on it first); ‹ and ›, or a swipe sideways, move it back and forth through time by
   half its length.
-- **A table with two forecasts:** what the period spent, how long your agents worked on
-  each subscription and what an hour of their work costs; turned on, how much of the
-  spending came while they worked (what went elsewhere, claude.ai or a phone, makes an
-  hour of work look dearer). Then where it leads. By time: whether each window runs out
+- **A table with two forecasts:** what the period spent, each subscription's active time
+  and what an active hour costs; turned on, agent-hours (each agent counted separately)
+  and how much of the spending came while they worked (what went elsewhere, claude.ai or a phone, makes an
+  active hour look dearer). Then where it leads. By time: whether each window runs out
   before its reset and around when, or roughly how much will be left, the same whatever
   period you look at. A weekly window goes by how the subscription spends: at the hours
   and on the days it usually does, through its resets, at the level of its last day; an
   arrow marks the last hours going faster than usual. A 5-hour window goes at its pace
-  since it started. By work: roughly how many hours of agent work are left. Over a range
+  since it started. By work: roughly how many active hours are left. Over a range
   dragged on the chart it shows what that range cost: what was left at its start and
   end, what it spent in all and per hour, and what the agents worked.
-- **Agent activity:** hours of agent work over the same period, in bars of up to an hour
-  (two hours over a month), stacked by subscription, project or machine, with the work
-  time, how many agents worked and their time together. It zooms and moves through time
-  as the chart does.
+- **Agent activity:** agent-hours over the same period, stacked by subscription, project
+  or machine in bars of up to an hour (two hours over a month). Four agents over an hour
+  make 4 agent-hours: the legend adds up to the total. Active time (at least one agent
+  working), how many agents worked and the average at once are in the totals and
+  tooltips. It zooms and moves through time as the chart does.
 - **Reset announcements** from the community trackers [Codex Resets](https://codex-resets.com)
   and [Claude Resets](https://claude-resets.com), with a link to the source. You
   can turn them off.
@@ -146,6 +147,11 @@ Codex         api                  idle     started 25m ago · editor
   hides the ones they don't need (the data keeps coming) and sets the plans; everyone on
   the board sees it arranged the same way. Once it's set, a lock keeps the widgets from
   moving under a passing pointer.
+- **Choose measuring frequency.** In a subscription card's menu, choose **Auto** or
+  every **1, 2, 5 or 15 minutes**. The choice is shared across every board showing that
+  subscription and survives a hub restart. Anyone whose devices measure it may change
+  it; a board's owner alone cannot. A device's own interval remains its minimum and
+  can make measurements less frequent. Refresh and error pauses still apply.
 - **Fresh limits on demand.** Choose **Refresh data** in a card's menu, or **Refresh all
   data** in the header for every visible card on the board. A circular loader by the
   logo shows that the card is waiting for fresh numbers. Refresh respects the device's
@@ -413,7 +419,7 @@ Everything is optional. On Linux the file is `~/.config/quotum/config.toml`;
 
 ```toml
 # interval = 120        # seconds, 60 to 86400: with a hub, the most often a client is measured
-                        # (left out, the hub measures as often as needed); without one, how often
+                        # (left out, follows the subscription’s hub frequency); without one, how often
 eco = true              # without a hub (or while it does not answer): measure less often while nothing changes
 sessions = true         # tell the hub which coding agents run here, working or idle
 projects = true         # with the names of their projects and folders

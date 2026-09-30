@@ -7,6 +7,7 @@ import type {WindowForecast} from './forecasts.js';
 import type {ResetFeed, TrackerHealth} from './resets.js';
 import type {BoardSession} from './sessions.js';
 import type {Why} from './cadence.js';
+import type {MeasureIntervalMs} from './domain/frequency.js';
 import type {SourceState} from './domain/quota.js';
 import type {ResetProvider, ResetStatus} from './domain/resets.js';
 import type {View} from './domain/view.js';
@@ -28,7 +29,7 @@ import type {Announcement, BoardSource, Store} from './store/store.js';
 export type Timed<T> = {value: T; changesAt: number | null};
 
 /** A source as a card shows it: its state, whose it is on this board, and whether its numbers are too old. */
-export type Card = SourceState & {owners: string[]; stale: boolean};
+export type Card = SourceState & {owners: string[]; stale: boolean; measureIntervalMs: MeasureIntervalMs};
 
 /** When a source is measured next and why, while its holder follows the hub's pace. */
 export type Cadence = {next: number; why: Why} | null;
@@ -98,7 +99,7 @@ export class Projection {
     const {store, ingest} = this.hub;
     const state = publicSourceState(store.state(source.id));
     const stale = state.successAt === null || state.staleAfterMs === null || now - state.successAt > state.staleAfterMs;
-    const card: Card = {...state, owners: source.holders.flatMap(id => members.get(id) ?? []).sort(), stale};
+    const card: Card = {...state, owners: source.holders.flatMap(id => members.get(id) ?? []).sort(), stale, measureIntervalMs: store.measureInterval(source.id)};
     const people = source.holders.filter(id => members.has(id));
     const refresh = ingest.refresh(source.id, now);
     const cadence = ingest.nextMeasurement(source.id, source.account, now);

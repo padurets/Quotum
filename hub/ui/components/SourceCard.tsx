@@ -1,6 +1,6 @@
 import {memo, useEffect, useRef, useState, type CSSProperties, type ReactNode} from 'react';
 import type {Card, Win} from '../lib/types';
-import {windowKey} from '../lib/types';
+import {MEASURE_INTERVAL, windowKey, type MeasureIntervalMs} from '../lib/types';
 import {countdown, countdownChangesAt, duration, earliest, num, stamp} from '../lib/format';
 import {cadenceChangesAt, cadenceOf, dotChangesAt, dotOf, errorText, level, problemOf, resetLine, resetLineChangesAt, windowName} from '../lib/quota';
 import {t, useLocale} from '../i18n';
@@ -9,14 +9,14 @@ import {LOGOS} from './logos';
 import {cardId, colorOf, isWindowHidden, planOf, weeklyPlanOf, withColor, withHidden, withName, withPlan, withPlanned, withWindowHidden, type Arrange} from '../lib/view';
 import {CARD_COLORS, MIDDLE_STEP, PROVIDERS} from '../lib/providers';
 import {call} from '../lib/http';
-import {useCadence, useCard, useMine, useRefresh, useResetsFor, useSessions, useTitle} from '../lib/board';
+import {useCadence, useCard, useConnection, useMine, useRefresh, useResetsFor, useSessions, useTitle} from '../lib/board';
 import {useClock} from '../lib/clock';
 import {FreeResets} from './ResetMarks';
 import {Tray} from './Tray';
 import {EyeOffIcon, HideRow, Popover, SlidersIcon, SwitchRow, TakeOffIcon} from './Popover';
 import {RefreshAction} from './RefreshAction';
 import {refreshChangesAt, refreshPending, refreshText} from '../lib/refresh';
-import {ErrorLine} from './Kit';
+import {ErrorLine, Segmented} from './Kit';
 import {useBubble} from './Tooltip';
 
 /** Where the plan expects the limit to be now: a mark on its meter, in whole percent, moved when that changes. */
@@ -233,12 +233,65 @@ function CardColor({source, arrange}: {source: Card; arrange: Arrange}) {
   );
 }
 
-/**
- * A card's menu: any reader can request fresh limits. The board's owner names the card,
- * gives it a colour, picks its limits, sets the weekly plan or switches it off, hides it;
- * on a shared board the owner, or whoever's devices measure it, also takes it off the
- * board: it goes when the board tells so.
- */
+/** The selected value comes only from events, including while a save is awaiting its HTTP reply. */
+function Frequency({source, board}: {source: Card; board: string}) {
+  useLocale();
+  const mine = useMine(source.id);
+  const connection = useConnection();
+  const connected = connection.status === 'live' || connection.status === 'polling';
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const sending = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  const save = async (intervalMs: MeasureIntervalMs) => {
+    if (!mine || !connected || sending.current || intervalMs === source.measureIntervalMs) return;
+    sending.current = true;
+    setPending(true);
+    setError(null);
+    try {
+      await call('POST', `/api/boards/${encodeURIComponent(board)}/sources/${encodeURIComponent(source.id)}/frequency`, {intervalMs});
+    } catch (failure) {
+      if (mounted.current) setError(failure);
+    } finally {
+      sending.current = false;
+      if (mounted.current) setPending(false);
+    }
+  };
+  const options = Object.entries(MEASURE_INTERVAL) as [keyof typeof MEASURE_INTERVAL, MeasureIntervalMs][];
+  const selected = options.find(([, value]) => value === source.measureIntervalMs)![0];
+  return (
+    <>
+      <div className="popover-title popover-section">{t('frequency.title')}</div>
+      {mine ? (
+        <div className="popover-pad">
+          <Segmented
+            label={t('frequency.title')}
+            radioName={`frequency-${source.id}`}
+            disabled={!connected}
+            busy={pending}
+            value={selected}
+            onChange={key => void save(MEASURE_INTERVAL[key])}
+            options={options.map(([key, value]) => [key, value === null ? t('frequency.auto') : num(value / 60_000), t(`frequency.${key}`)])}
+          />
+        </div>
+      ) : <div className="popover-note">{t(`frequency.${selected}`)}</div>}
+      <div className="popover-note">{t('frequency.hint')}</div>
+      <details className="popover-note">
+        <summary className="link-button">{t('frequency.aboutAuto')}</summary>
+        <p>{t('frequency.autoActivity')}</p>
+        <p>{t('frequency.autoLimits')}</p>
+        <p>{t('frequency.autoMinimum')}</p>
+      </details>
+      <ErrorLine error={error} />
+    </>
+  );
+}
+
+/** A card's menu: holders choose frequency, readers refresh, and the board's owner arranges its view. */
 function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Card; title: string; arrange: Arrange; boardId: string; takeOff: boolean}) {
   const [error, setError] = useState<unknown>(null);
   const [open, setOpen] = useState(false);
@@ -257,13 +310,14 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
   };
 
   return (
-    <Popover label={t('source.menu', {source: title})} icon={<SlidersIcon />} open={open} onOpenChange={setOpen}>
+    <Popover label={t('source.menu', {source: title})} icon={<SlidersIcon />} open={open} onOpenChange={setOpen} width={288}>
       {owner && (
         <>
           <div className="popover-title popover-section">{t('source.name')}</div>
           <CardName source={source} arrange={arrange} />
         </>
       )}
+      <Frequency key={`${boardId}:${source.id}`} source={source} board={boardId} />
       {owner && source.windows.length > 1 && (
         <>
           <div className="popover-title popover-section">{t('source.show')}</div>

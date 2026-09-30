@@ -5,6 +5,7 @@ import {subscriptionKey} from '../server/domain/ingest.js';
 import type {Cadence, Level, ResetLine} from '../ui/lib/quota.js';
 import type {Refresh, RefreshRequest} from '../server/domain/refresh.js';
 import type {CadenceWhy} from '../ui/lib/types.js';
+import type {MeasureIntervalMs} from '../server/domain/frequency.js';
 import type {NeedData, Outlook, Spent} from '../ui/lib/forecast.js';
 import type {ResetLabel} from '../ui/lib/resets.js';
 import {DEFAULT_PLAN, weeklyPlanRemaining, type WeeklyPlan} from '../ui/lib/plan.js';
@@ -323,7 +324,8 @@ export type CardCheck = Span & {board?: string} & (
     /** Something the chart marks on the card's source within the last 24 hours. */
     | {event: 'early_reset' | 'resets_granted'}
     /** What the dot's tooltip says of the next measurement, while the card is measured at the hub's pace, and why. */
-    | {cadence: Cadence['when'] | null; why?: CadenceWhy}
+    | {cadence: Cadence['when'] | null; why?: CadenceWhy; stale?: boolean}
+    | {measureIntervalMs: MeasureIntervalMs}
     | {refresh: RefreshRequest['status']; unavailable?: Refresh['unavailable']}
     | {unavailable: Refresh['unavailable']}
     /** How many whole days back ‹ takes the chart from 30 days, step by step, on the card's board: where the history starts. */
@@ -343,6 +345,7 @@ export type CardCheck = Span & {board?: string} & (
         work: string;
         range: Period;
         hours?: number;
+        agentHours?: number | 'hidden';
         perHour?: number;
         left?: number | 'untilReset' | 'outlasts' | 'usedUp';
         during?: number | 'hidden';
@@ -382,9 +385,9 @@ export type BoardCheck = Span &
      */
     | {activity: 'source' | 'project' | 'device'; range: Period; groups: Record<string, number>}
     /** One group of the activity widget and its own hours, whatever the others (null: not among the groups). */
-    | {activityOf: string; by: 'project' | 'device'; range: Period; hours: number | null}
+    | {activityOf: string; by: 'project' | 'device'; range: Period; hours: number | null; active?: number}
     /** The activity widget's totals over `range`: hours of work, how many different agents worked, and their hours together. */
-    | {activityTotals: {work: number; agents: number; agentTime: number}; range: Period}
+    | {activityTotals: {agentHours: number; active: number; agents: number}; range: Period}
     /** Since when, from `start`, the activity widget knows how agents worked over `range`. */
     | {activityKnownFrom: number; range: Period}
     /** What the activity widget says instead of its stacks over `range` (`ui/lib/activity.ts` `activityEmpty`), or null for stacks. */
@@ -426,6 +429,9 @@ export type Card = {
    * These scenes use one machine so other devices do not move the asserted schedule.
    */
   paced?: boolean;
+  /** The hub's shared subscription setting and the machine's own minimum. */
+  measureIntervalMs?: MeasureIntervalMs;
+  minimum?: number;
   /**
    * A public refresh request and a controllable stand-in response for the demo. Its `at`
    * and the card's codes count from the machines' first asking, not from the demo's time.

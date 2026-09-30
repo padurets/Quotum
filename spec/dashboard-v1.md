@@ -45,6 +45,29 @@ A stream is answered `200` with `Content-Type: text/event-stream; charset=utf-8`
 `Cache-Control: no-store`, `X-Accel-Buffering: no` and `Connection: close`, besides the
 security headers of every answer.
 
+## Measuring frequency
+
+`POST /api/boards/:board/sources/:source/frequency` accepts exactly
+`{"intervalMs": null | 60000 | 120000 | 300000 | 900000}`: Auto, 1, 2, 5 or 15 minutes.
+The value belongs to the subscription across the hub and survives restart. Every reader
+sees it, but only a current holder (whose devices measure the subscription) may change
+it. Board ownership alone grants no right; any of several holders may write, with the
+last accepted write winning. The route is available in the desktop's local hub too.
+
+The usual Host, Origin and session checks apply. A missing session is `401`; an
+inaccessible board is `404 board_not_found`; a source absent from that board is
+`404 not_found`; a reader who no longer holds it gets `403 frequency_forbidden`.
+Missing or extra fields, arrays and values of another type or outside this set are
+`400 invalid_request`. Successful writes return `200 {"ok":true}`. Repeating the same
+value does not replan or publish anything. The HTTP reply carries no state: snapshot,
+card and cadence events are authoritative, so a late reply cannot revert a newer choice.
+
+A card includes `measureIntervalMs` with the values above, separately from its data
+freshness and the board's view. The `cadence.why` set also includes `fixed`; its `next`
+is the effective permitted time, respecting the device minimum. Stale data can still
+have a next measurement and reason. A frequency write reaches all boards that show the
+source through the existing events, without polling or changing the agent protocol.
+
 ## Frames
 
 Each event is `event: <type>`, `data: <JSON>` and an empty line. There is no `id:`: the
@@ -101,10 +124,10 @@ role}`, as it is theirs alone. `resets` is what `GET /api/resets` answers. `hist
 is when the board's history begins as of the snapshot; `GET /api/history` tells it later.
 
 A card is `{id, provider, plan, successAt, error, stale, windows, resets, owners,
-staleAfterMs}`: the source's last measurement (`successAt`, its `windows` and free
-`resets`), the last error, the people on the board whose devices measure it, and how long
-its numbers hold. `stale` is the hub's to say, and it says so: a card sent when its
-numbers get too old.
+staleAfterMs, measureIntervalMs}`: the source's last measurement (`successAt`, its
+`windows` and free `resets`), the last error, the people on the board whose devices measure it, and how long
+its numbers hold, and its shared measuring preference. `stale` is the hub's to say, and
+it says so: a card sent when its numbers get too old.
 
 A source's `forecast` is by the id of each of its weekly windows (the page foresees a
 five-hour window itself, by what it spent since it began): where the recent pace of that

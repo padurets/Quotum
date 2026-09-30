@@ -171,12 +171,28 @@ export function ErrorLine({error}: {error: unknown}) {
   ) : null;
 }
 
-/** A row of mutually exclusive choices; `value` is the key of the chosen one. */
-export function Segmented<K extends string>({options, value, onChange, label}: {options: [K, string][]; value: K; onChange: (key: K) => void; label: string}) {
+/**
+ * A row of choices; `radioName` keeps native arrow keys, with a spoken name for short labels.
+ * The highlight follows `value`: a native radio checks itself before a server-backed choice arrives.
+ */
+export function Segmented<K extends string>({options, value, onChange, label, radioName, disabled, busy}: {options: [K, string, string?][]; value: K; onChange: (key: K) => void; label: string; radioName?: string; disabled?: boolean; busy?: boolean}) {
   return (
-    <div className="segmented" role="group" aria-label={label}>
-      {options.map(([key, text]) => (
-        <button key={key} type="button" aria-pressed={key === value} onClick={() => onChange(key)}>
+    <div
+      className="segmented"
+      role={radioName ? 'radiogroup' : 'group'}
+      aria-label={label}
+      aria-busy={busy}
+      aria-disabled={busy || disabled || undefined}
+      onClickCapture={busy ? event => event.preventDefault() : undefined}
+      onKeyDown={busy ? event => { if (event.key.startsWith('Arrow') || event.key === ' ') event.preventDefault(); } : undefined}
+    >
+      {options.map(([key, text, spoken]) => radioName ? (
+        <label className="segmented-radio" key={key}>
+          <input className="sr-only" type="radio" name={radioName} aria-label={spoken ?? text} disabled={disabled} checked={key === value} onChange={() => { if (!busy) onChange(key); }} />
+          <span className={key === value ? 'is-on' : undefined}>{text}</span>
+        </label>
+      ) : (
+        <button key={key} type="button" aria-label={spoken} aria-pressed={key === value} disabled={disabled} onClick={() => { if (!busy) onChange(key); }}>
           {text}
         </button>
       ))}

@@ -7,10 +7,11 @@
  * measures only when told.
  *
  * Pure: the caller passes the time and the signals. Kept in memory next to duty: after a
- * restart the first holder to ask measures at once.
+ * restart Auto measures at once; a fixed plan is restored from the stored successful data.
  */
 
 import type {Win} from './domain/quota.js';
+import type {MeasureIntervalMs} from './domain/frequency.js';
 import {CLOCK_TOLERANCE_MS} from './domain/ingest.js';
 import {REFRESH_KEEP_MS, REFRESH_WAIT_MS, type Refresh, type RefreshRequest} from './domain/refresh.js';
 
@@ -34,10 +35,10 @@ const UNANSWERED_MS = [90_000, 2 * 60_000, 4 * 60_000, 8 * 60_000, 15 * 60_000];
 const MEASURING_MS = 60_000;
 
 /** Why the next measurement comes when it does, as the board says it. */
-export type Why = 'low' | 'inUse' | 'changed' | 'idle' | 'reset';
+export type Why = 'low' | 'inUse' | 'changed' | 'idle' | 'reset' | 'fixed';
 
 /** What the hub knows of a subscription right now. */
-export type Signals = {windows: Win[]; inUse: boolean};
+export type Signals = {windows: Win[]; inUse: boolean; measureIntervalMs?: MeasureIntervalMs};
 
 /** The answer to a paced holder: measure now, or ask again in `askInMs`; `nextInMs` promises the next measurement after this one. */
 export type Answer = {measure: boolean; onDuty: boolean; askInMs: number; nextInMs?: number};
@@ -62,6 +63,8 @@ type Pace = {
   /** The least interval of the asked device, and when it last asked. */
   minIntervalMs: number | null;
   askAt: number | null;
+  /** The holder whose waiting plan is shown, even before its first command. */
+  plannerDevice: string | null;
 };
 
 /** Failures in a row of one device's measurements of a subscription. */
@@ -129,8 +132,8 @@ export class Cadence {
     const changes: number[] = [];
     if (request && pending(request)) {
       const ends: {at: number; status: 'unavailable' | 'no_result'}[] = [{at: request.deadline, status: 'no_result'}];
-      // A holder that asks keeps duty or takes it again, whatever its lease: only its silence
-      // tells it is gone. Once told to measure, it measures its subscriptions one after
+      // An already dispatched request retains its bounded deadline if its lease lapses.
+      // Once told to measure, it measures its subscriptions one after
       // another, asking nothing meanwhile: its silence is not a loss then either.
       if (request.dispatchAt === null && silentAt !== null) ends.push({at: silentAt, status: 'unavailable'});
       if (duty.holder !== stored!.device || !duty.live || !capability?.paced || pause !== null) ends.push({at: now, status: 'unavailable'});
@@ -250,6 +253,25 @@ export class Cadence {
   /** The subscription each device was last told to measure, by device and provider: whose its failures are. */
   private readonly measured = new Map<string, string>();
 
+  /** Fixed schedules survive restart through the accepted data, without simulating a delivery. */
+  restore(key: string, at: number, staleAfterMs: number, windows: Win[], now: number) {
+    const pace = this.pace(key, now);
+    if (pace.lastAt !== null) return;
+    pace.lastAt = at;
+    pace.promiseAt = at + Math.ceil(Math.max(MIN_INTERVAL_MS, (staleAfterMs - 60_000) / 1.2));
+    pace.signature = signatureOf(windows.map(w => ({id: w.id, usedPercent: w.used})));
+  }
+
+  /** A waiting plan protects duty until a fixed due time, never from the time of a read or retry. */
+  waitingLease(key: string, holder: string, now: number, signals: Signals): {until: number; extend: boolean} | null | undefined {
+    const pace = this.paces.get(key);
+    const capability = this.capabilities.get(key)?.get(holder);
+    if (!capability?.paced || this.pausedUntil(key, holder, now) !== null ||
+        (pace?.askedDevice === holder && pace.askedAt !== null && !pace.answered)) return null;
+    if (!pace || pace.lastAt === null || pace.plannerDevice !== holder) return undefined;
+    return {until: this.ordinary(pace, now, signals, floorOf(capability.minIntervalMs)).at + MIN_INTERVAL_MS, extend: now - capability.heardAt <= SILENT_AFTER_MS};
+  }
+
   /** A measurement of subscription `key` was accepted; `busy` is whether it is in use as it arrives. */
   delivered(key: string, device: string, windows: {id: string; usedPercent: number}[], observedAt: number, staleAfterMs: number, busy: boolean, now: number) {
     const pace = this.pace(key, now);
@@ -301,20 +323,25 @@ export class Cadence {
     // In use as it asks: the pace counts its quiet from now. Only asks and measurements move it, so `view` stays a reading.
     if (signals.inUse) pace.busyAt = now;
     const floor = floorOf(minIntervalMs);
-    if (pace.askedDevice !== null && pace.askedDevice !== device) {
-      // A new holder measures at once, as a device taking duty always has; the old one's questions and failures are its own.
+    const changedHolder = (pace.plannerDevice !== null && pace.plannerDevice !== device) || (pace.askedDevice !== null && pace.askedDevice !== device);
+    pace.plannerDevice = device;
+    pace.minIntervalMs = minIntervalMs;
+    pace.askAt = now;
+    if (changedHolder) {
+      // Commands and retries belong to the old holder. Fixed plans retain the shared successful baseline.
       pace.askedAt = null;
       pace.answered = false;
       pace.unanswered = 0;
+      if (signals.measureIntervalMs != null) pace.askedDevice = null;
       const paused = this.pausedUntil(key, device, now);
       if (paused !== null) return {measure: false, onDuty: true, askInMs: askIn(paused - now)};
-      const {interval} = pace.lastAt === null ? {interval: BASE_INTERVAL_MS} : this.interval(pace, now, signals, floor);
-      return this.ask(pace, key, device, provider, now, minIntervalMs, interval);
+      if (signals.measureIntervalMs == null) {
+        const {interval} = pace.lastAt === null ? {interval: BASE_INTERVAL_MS} : this.interval(pace, now, signals, floor);
+        return this.ask(pace, key, device, provider, now, minIntervalMs, interval, false);
+      }
     }
-    pace.minIntervalMs = minIntervalMs;
-    pace.askAt = now;
     const plan = this.plan(pace, key, device, now, signals, floor);
-    if (plan.at <= now) return this.ask(pace, key, device, provider, now, minIntervalMs, plan.interval);
+    if (plan.at <= now) return this.ask(pace, key, device, provider, now, minIntervalMs, plan.interval, signals.measureIntervalMs != null);
     return {measure: false, onDuty: true, askInMs: askIn(plan.at - now)};
   }
 
@@ -338,19 +365,19 @@ export class Cadence {
 
   private viewed(key: string, holder: string | null, now: number, signals: Signals): {value: {next: number; why: Why} | null; changesAt: number | null} {
     const pace = this.paces.get(key);
-    if (!pace || holder === null || pace.askedDevice !== holder || pace.lastAt === null || pace.askAt === null) return {value: null, changesAt: null};
+    if (!pace || holder === null || pace.plannerDevice !== holder || pace.lastAt === null || pace.askAt === null) return {value: null, changesAt: null};
     if (now - pace.askAt > SILENT_AFTER_MS) return {value: null, changesAt: null};
     const paused = this.pausedUntil(key, holder, now);
     if (paused !== null) return {value: null, changesAt: paused};
     const plan = this.plan(pace, key, holder, now, signals, floorOf(pace.minIntervalMs));
     // Told to measure and not heard from yet: the measurement is under way, the next one is that.
     const measuring = pace.askedAt !== null && !pace.answered && now - pace.askedAt <= MEASURING_MS;
-    const changes = [pace.askAt + SILENT_AFTER_MS + 1, ...(measuring ? [pace.askedAt! + MEASURING_MS + 1] : []), ...intervalChanges(pace, now, signals)];
+    const changes = [pace.askAt + SILENT_AFTER_MS + 1, ...(measuring ? [pace.askedAt! + MEASURING_MS + 1] : []), ...(signals.measureIntervalMs == null ? intervalChanges(pace, now, signals) : [])];
     return {value: {next: measuring ? pace.askedAt! : plan.at, why: plan.why as Why}, changesAt: Math.min(...changes)};
   }
 
-  /** Tells a holder to measure now, promising the next measurement within twice the interval (it never slows down faster than that). */
-  private ask(pace: Pace, key: string, device: string, provider: string, now: number, minIntervalMs: number | null, interval: number): Answer {
+  /** Promises the fixed interval, or at most twice Auto's interval as its idle pace stretches. */
+  private ask(pace: Pace, key: string, device: string, provider: string, now: number, minIntervalMs: number | null, interval: number, fixed: boolean): Answer {
     const floor = floorOf(minIntervalMs);
     pace.unanswered = pace.askedAt !== null && !pace.answered ? pace.unanswered + 1 : 0;
     pace.askedDevice = device;
@@ -363,42 +390,42 @@ export class Cadence {
     if (request && pending(request.view) && request.device === device && request.view.dispatchAt === null)
       request.view = {...request.view, dispatchAt: now, deadline: now + REFRESH_WAIT_MS, status: 'waiting'};
     // The floor is at most the longest gap: the promise never outlives the measurement.
-    const nextInMs = Math.max(Math.min(IDLE_CAP_MS, 2 * interval), floor);
+    const nextInMs = fixed ? interval : Math.max(Math.min(IDLE_CAP_MS, 2 * interval), floor);
     return {measure: true, onDuty: true, askInMs: ASK_EVERY_MS, nextInMs: Math.round(nextInMs)};
   }
 
   /** When `device` should measure next. */
   private plan(pace: Pace, key: string, device: string, now: number, signals: Signals, floor: number): {at: number; why: Why | 'first'; interval: number} {
-    if (pace.lastAt === null && pace.askedAt === null) return {at: now, why: 'first', interval: BASE_INTERVAL_MS};
-    let {interval, why} = this.interval(pace, now, signals, floor);
-    let at: number;
-    if (pace.askedAt !== null && !pace.answered) {
-      at = retryAt(pace, floor);
-    } else {
-      at = (pace.lastAt ?? pace.askedAt!) + interval;
-      if (pace.lastAt !== null) {
-        const lastAt = pace.lastAt;
-        const reset = Math.min(...signals.windows.flatMap(w => (w.resetAt !== null && w.resetAt > lastAt ? [w.resetAt] : [])));
-        const afterReset = Math.max(reset + RESET_GRACE_MS, lastAt + floor);
-        if (afterReset < at) {
-          at = afterReset;
-          why = 'reset';
-        }
-        // A measurement taken without asking, or promised sooner when the pace was quicker, is not left to go stale.
-        if (pace.promiseAt !== null && pace.promiseAt < at) at = pace.promiseAt;
-      }
-    }
+    const ordinary = this.ordinary(pace, now, signals, floor);
+    const unanswered = pace.askedAt !== null && !pace.answered;
+    let at = unanswered ? retryAt(pace, floor) : ordinary.at;
     const request = this.requests.get(key);
     if (request && pending(request.view) && request.device === device && request.view.dispatchAt === null && request.view.deadline > now)
       at = Math.min(at, request.view.notBefore);
     at = Math.max(at, this.notBefore(pace, floor, -Infinity));
     const paused = this.pausedUntil(key, device, now);
     if (paused !== null) at = Math.max(at, paused);
-    return {at, why, interval};
+    return {...ordinary, at, why: unanswered ? this.interval(pace, now, signals, floor).why : ordinary.why};
+  }
+
+  /** The ordinary due time, without refresh, failure pauses or unanswered-command retries. */
+  private ordinary(pace: Pace, now: number, signals: Signals, floor: number): {at: number; why: Why | 'first'; interval: number} {
+    let {interval, why} = this.interval(pace, now, signals, floor);
+    if (pace.lastAt === null && (pace.askedAt === null || signals.measureIntervalMs != null)) return {at: now, why: 'first', interval: signals.measureIntervalMs == null ? BASE_INTERVAL_MS : interval};
+    let at = (pace.lastAt ?? pace.askedAt!) + interval;
+    if (pace.lastAt !== null && signals.measureIntervalMs == null) {
+      const reset = Math.min(...signals.windows.flatMap(w => (w.resetAt !== null && w.resetAt > pace.lastAt! ? [w.resetAt] : [])));
+      const afterReset = Math.max(reset + RESET_GRACE_MS, pace.lastAt + floor);
+      if (afterReset < at) [at, why] = [afterReset, 'reset'];
+      if (pace.promiseAt !== null) at = Math.min(at, pace.promiseAt);
+    }
+    const baseline = Math.max(pace.lastAt ?? -Infinity, pace.askedAt ?? -Infinity);
+    return {at: Math.max(at, baseline + floor), why, interval};
   }
 
   /** The interval the signals call for, never below the device's own least one. */
   private interval(pace: Pace, now: number, signals: Signals, floor: number): {interval: number; why: Why} {
+    if (signals.measureIntervalMs != null) return {interval: Math.max(signals.measureIntervalMs, floor), why: 'fixed'};
     const low = lowWindows(signals, now).length > 0;
     let interval: number;
     let why: Why;
@@ -431,6 +458,7 @@ export class Cadence {
         unanswered: 0,
         minIntervalMs: null,
         askAt: null,
+        plannerDevice: null,
       };
       this.paces.set(key, pace);
     }

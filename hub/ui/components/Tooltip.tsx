@@ -1,8 +1,8 @@
 import {useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject} from 'react';
-import {coverOf, placeOf} from '../lib/place';
+import {coverOf, placeOf, roomOf, shiftOf, sideOf} from '../lib/place';
 
-/** Keep a small anchored tooltip inside the viewport without growing its card. */
-export function useBubble(active: boolean) {
+/** Keep a bubble inside the viewport; with an anchor, stay wholly on one side of its button. */
+export function useBubble(active: boolean, anchor?: RefObject<HTMLElement | null>) {
   const tip = useRef<HTMLSpanElement>(null);
   const place = () => {
     const element = tip.current;
@@ -11,6 +11,23 @@ export function useBubble(active: boolean) {
     element.style.maxHeight = '';
     element.style.overflow = '';
     element.style.pointerEvents = '';
+    if (anchor?.current) {
+      element.style.top = '';
+      element.style.bottom = '';
+      const button = anchor.current.getBoundingClientRect();
+      const {above, below} = roomOf(button, 6, coverOf(button.bottom, anchor.current), innerHeight);
+      const {up, cap} = sideOf(element.getBoundingClientRect().height, above, below, true);
+      element.dataset.side = up ? 'up' : 'down';
+      element.style.top = up ? 'auto' : 'calc(100% + 6px)';
+      element.style.bottom = up ? 'calc(100% + 6px)' : 'auto';
+      if (cap !== null) {
+        element.style.maxHeight = `${cap}px`;
+        element.style.overflow = 'auto';
+      }
+      const rect = element.getBoundingClientRect();
+      element.style.translate = `${shiftOf(rect.left, rect.right, document.documentElement.clientWidth)}px 0`;
+      return;
+    }
     const rect = element.getBoundingClientRect();
     // Covered as a panel's button is (`coverOf`): by the bars stuck at the top that begin above
     // its bottom, even where it stands wholly under them.

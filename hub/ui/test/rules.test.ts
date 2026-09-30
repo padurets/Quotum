@@ -99,9 +99,9 @@ test('the dot tells when the next measurement comes and why, while the hub sets 
   assert.equal(cadenceOf(source(now + 15_000), now)?.when, 'nextSoon');
   assert.equal(cadenceOf(source(now - MIN), now)?.when, 'nextSoon', 'a time passed: any moment');
   assert.equal(cadenceOf(source(now, {cadence: null}), now), null, 'the hub does not set the pace');
-  assert.equal(cadenceOf(source(now, {stale: true}), now), null);
+  assert.equal(cadenceOf(source(now, {stale: true}), now)?.when, 'nextSoon', 'stale data can still have a real next measurement');
   assert.equal(cadenceOf(source(now, {error: 'timeout'}), now), null);
-  for (const why of ['low', 'inUse', 'changed', 'idle', 'reset'] as const) {
+  for (const why of ['low', 'inUse', 'changed', 'idle', 'reset', 'fixed'] as const) {
     assert.equal(cadenceOf(source(now + MIN, {cadence: {next: now + MIN, why}}), now)?.why, why);
   }
 });

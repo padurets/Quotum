@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import type {Sample} from '../domain/quota.js';
-import {activity, barOf, overlap, seriesWork, union, workTime, type Activity, type Stretch} from '../domain/work.js';
+import {activity, barOf, overlap, seriesWork, subscriptionWork, union, workTime, type Activity, type Stretch} from '../domain/work.js';
 
 const at = (time: string) => Date.parse(`2026-09-22T${time}:00Z`);
 const MIN = 60_000;
@@ -42,13 +42,17 @@ const sample = (time: string, used: number, change: Partial<Sample> = {}): Sampl
 const parts = (result: Activity, dimension: keyof Activity['by'], key: string) =>
   Object.fromEntries(result.by[dimension].find(g => g.key === key)!.cells.map(([cell, ms]) => [new Date(cell).toISOString().slice(11, 16), ms / MIN]));
 
-/** The invariant of the stack: the parts of every cell add up to its work, each part within a millisecond. */
+/** The invariant of the stack: the parts of every cell add up exactly to its agent time. */
 function assertStacks(result: Activity) {
   for (const dimension of ['source', 'project', 'device'] as const) {
-    for (const [cell, work] of result.cells) {
+    assert.equal(
+      result.by[dimension].reduce((sum, g) => sum + g.agentMs, 0),
+      result.agentMs,
+    );
+    for (const [cell, , agentMs] of result.cells) {
       const groups = result.by[dimension].flatMap(g => g.cells.filter(([c]) => c === cell));
       const sum = groups.reduce((total, [, ms]) => total + ms, 0);
-      assert.ok(Math.abs(sum - work) <= groups.length, `${dimension} at ${new Date(cell).toISOString()}: ${sum} of ${work}`);
+      assert.equal(sum, agentMs, `${dimension} at ${new Date(cell).toISOString()}`);
     }
   }
 }
@@ -74,12 +78,12 @@ test('the overlap of a span with the union reads only what lies within the span'
   assert.equal(overlap([], 0, 1000), 0);
 });
 
-test('two agents half an hour together: work once, agent time twice, and the moment split between them', () => {
+test('two agents half an hour together: activity counts once and agent time twice', () => {
   const stretches = [stretch(at('10:00'), at('11:00')), stretch(at('10:30'), at('11:30'), {project: 'billing', device: 'server'})];
   const result = activity(stretches, {from: at('09:00'), to: at('12:00')}, HOUR, new Map());
-  assert.equal(result.workMs, 1.5 * HOUR);
+  assert.equal(result.activeMs, 1.5 * HOUR);
   assert.equal(result.agentMs, 2 * HOUR);
-  assert.equal(Math.round((result.agentMs / result.workMs) * 100) / 100, 1.33, 'at once, on average');
+  assert.equal(Math.round((result.agentMs / result.activeMs) * 100) / 100, 1.33, 'at once, on average');
   assert.equal(result.agents, 2);
   assert.deepEqual(
     result.cells.map(([cell, work, agentTime, agents]) => [new Date(cell).toISOString().slice(11, 16), work / MIN, agentTime / MIN, agents]),
@@ -88,13 +92,13 @@ test('two agents half an hour together: work once, agent time twice, and the mom
       ['11:00', 30, 30, 1],
     ],
   );
-  // In the hour they overlap, each has half of the half hour they worked together.
-  assert.deepEqual(parts(result, 'project', '"quotum"'), {'10:00': 45});
-  assert.deepEqual(parts(result, 'project', '"billing"'), {'10:00': 15, '11:00': 30});
-  assert.deepEqual(parts(result, 'source', 'codex:1'), {'10:00': 60, '11:00': 30});
-  // Each group's own hours: how long its agents worked, overlaps with others' not split.
+  // Each agent's time counts whole, including their overlap.
+  assert.deepEqual(parts(result, 'project', '"quotum"'), {'10:00': 60});
+  assert.deepEqual(parts(result, 'project', '"billing"'), {'10:00': 30, '11:00': 30});
+  assert.deepEqual(parts(result, 'source', 'codex:1'), {'10:00': 90, '11:00': 30});
+  // The legend shows the same agent time as the stack parts.
   assert.deepEqual(
-    result.by.project.map(g => [g.name, g.ms / MIN]),
+    result.by.project.map(g => [g.name, g.agentMs / MIN]),
     [
       ['billing', 60],
       ['quotum', 60],
@@ -107,8 +111,8 @@ test('stretches as the store reads them, agent by agent, stack as they do in tim
   // The second agent's work began first and runs across the first's.
   const stretches = [stretch(at('10:00'), at('10:30'), {session: 1, project: 'a'}), stretch(at('09:00'), at('11:00'), {session: 2, project: 'b'})];
   const result = activity(stretches, {from: at('09:00'), to: at('12:00')}, HOUR, new Map());
-  assert.deepEqual(parts(result, 'project', '"b"'), {'09:00': 60, '10:00': 45});
-  assert.deepEqual(parts(result, 'project', '"a"'), {'10:00': 15});
+  assert.deepEqual(parts(result, 'project', '"b"'), {'09:00': 60, '10:00': 60});
+  assert.deepEqual(parts(result, 'project', '"a"'), {'10:00': 30});
   assertStacks(result);
 });
 
@@ -137,7 +141,7 @@ test('a period is drawn in bars of up to an hour, as long as there are enough of
 
 test('stretches are cut at the edges of cells and of the known part of the period', () => {
   const result = activity([stretch(at('08:40'), at('10:20'))], {from: at('09:00'), to: at('10:10')}, 30 * MIN, new Map());
-  assert.equal(result.workMs, 70 * MIN);
+  assert.equal(result.activeMs, 70 * MIN);
   assert.deepEqual(
     result.cells.map(([cell, work]) => [new Date(cell).toISOString().slice(11, 16), work / MIN]),
     [
@@ -167,13 +171,23 @@ test('every project and machine is a group of its own, however many, the longest
   stretches[8] = stretch(stretches[7].from, stretches[7].from + HOUR, {project: 'p8', device: 'm8'});
   const result = activity(stretches, {from: at('00:00'), to: at('00:00') + 100 * HOUR}, 2 * HOUR, new Map());
   assert.deepEqual(
-    result.by.project.map(g => [g.name, g.ms / HOUR]),
-    [['p0', 9], ['p1', 8], ['p2', 7], ['p3', 6], ['p4', 5], ['p5', 4], ['p6', 3], ['p7', 2], ['p8', 1]],
+    result.by.project.map(g => [g.name, g.agentMs / HOUR]),
+    [
+      ['p0', 9],
+      ['p1', 8],
+      ['p2', 7],
+      ['p3', 6],
+      ['p4', 5],
+      ['p5', 4],
+      ['p6', 3],
+      ['p7', 2],
+      ['p8', 1],
+    ],
   );
   assert.equal(result.by.device.length, 9);
-  // In its cell the two had half an hour together: each has half of it, and one of them another half hour alone.
-  assert.deepEqual(parts(result, 'project', '"p7"'), {'22:00': 90});
-  assert.deepEqual(parts(result, 'project', '"p8"'), {'22:00': 30});
+  // Parallel work adds whole hours to the bar.
+  assert.deepEqual(parts(result, 'project', '"p7"'), {'22:00': 120});
+  assert.deepEqual(parts(result, 'project', '"p8"'), {'22:00': 60});
   assertStacks(result);
 });
 
@@ -202,7 +216,7 @@ test('work outside any project is a group of its own, and one project name of tw
   ]);
   const result = activity(stretches, {from: at('10:00'), to: at('11:00')}, HOUR, names);
   assert.deepEqual(
-    result.by.project.map(g => [g.key, g.name, g.ms / MIN]),
+    result.by.project.map(g => [g.key, g.name, g.agentMs / MIN]),
     [
       ['null', null, 30],
       ['"null"', 'null', 20],
@@ -210,9 +224,9 @@ test('work outside any project is a group of its own, and one project name of tw
     ],
   );
   assert.deepEqual(
-    result.by.device.map(g => [g.name, g.ms / MIN]),
+    result.by.device.map(g => [g.name, g.agentMs / MIN]),
     [
-      ['Ann laptop', 30],
+      ['Ann laptop', 60],
       ['Ben mac', 10],
     ],
   );
@@ -225,7 +239,7 @@ test('work outside any project is a group of its own, and one project name of tw
 
 test('no work: empty cells and groups', () => {
   const result = activity([], {from: at('10:00'), to: at('11:00')}, MIN, new Map());
-  assert.deepEqual(result, {barMs: MIN, workMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}});
+  assert.deepEqual(result, {barMs: MIN, activeMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}});
 });
 
 test("a window's pace basis: only steps edge proves, from the known part on, and the work within them", () => {
@@ -241,9 +255,10 @@ test("a window's pace basis: only steps edge proves, from the known part on, and
     sample('11:20', 21), // work within: counted, during work
     sample('11:25', 22, {resetAt: at('23:00') + 3 * 86_400_000}), // a reset: not counted
   ];
-  const result = seriesWork(samples, worked, {from: at('10:00'), to: at('12:00')});
+  const result = seriesWork(samples, worked, 50 * MIN, {from: at('10:00'), to: at('12:00')});
   assert.equal(result.from, at('10:00'));
   assert.equal(result.ms, 40 * MIN);
+  assert.equal(result.agentMs, 50 * MIN, 'the subscription agent time passes through unchanged');
   assert.equal(result.consumed, 2 + 1 + 1 + 2);
   assert.equal(result.coveredMs, (5 + 5 + 10) * MIN, 'the work in the gap and the reset is not a basis');
   assert.equal(result.duringWork, 2 + 1 + 2);
@@ -251,12 +266,85 @@ test("a window's pace basis: only steps edge proves, from the known part on, and
 
 test('nothing of the period known: no hours, and since when it is', () => {
   const since = at('12:00');
-  assert.deepEqual(seriesWork([sample('10:00', 10), sample('10:10', 12)], [], {from: since, to: at('11:00')}), {
+  assert.deepEqual(seriesWork([sample('10:00', 10), sample('10:10', 12)], [], 0, {from: since, to: at('11:00')}), {
     from: since,
     ms: null,
+    agentMs: 0,
     consumed: 0,
     coveredMs: 0,
     duringWork: 0,
   });
-  assert.equal(seriesWork([], [], {from: since, to: at('13:00')}).ms, 0, 'known, with no work');
+  assert.equal(seriesWork([], [], 0, {from: since, to: at('13:00')}).ms, 0, 'known, with no work');
+});
+
+for (const [name, specifications, expected] of [
+  ['one agent', [['10:00', '11:00', 'P']], [60, 60, 1]],
+  ['three in one project', Array.from({length: 3}, () => ['10:00', '10:10', 'P']), [10, 30, 3]],
+  [
+    'overlapping projects',
+    [
+      ['10:00', '10:30', 'P'],
+      ['10:00', '10:30', 'P'],
+      ['10:15', '10:45', 'Q'],
+    ],
+    [45, 90, 3],
+  ],
+  [
+    'three in P and one in Q',
+    [
+      ['10:00', '11:00', 'P'],
+      ['10:00', '11:00', 'P'],
+      ['10:00', '11:00', 'P'],
+      ['10:00', '11:00', 'Q'],
+    ],
+    [60, 240, 4],
+  ],
+] as const) {
+  test(`agent-hours add up in every split: ${name}`, () => {
+    const result = activity(
+      specifications.map(([from, to, project], i) => stretch(at(from), at(to), {project, source: `codex:${i % 2}`, device: `machine-${i % 2}`})),
+      {from: at('10:00'), to: at('11:00')},
+      HOUR,
+      new Map(),
+    );
+    assert.deepEqual([result.activeMs / MIN, result.agentMs / MIN, result.agents], expected);
+    assert.equal(result.agentMs / result.activeMs, expected[1] / expected[0]);
+    const parallel = name === 'three in P and one in Q';
+    const p = result.by.project.find(g => g.name === 'P')!;
+    const q = result.by.project.find(g => g.name === 'Q');
+    assert.deepEqual(
+      [p.agentMs / MIN, p.activeMs / MIN, p.agents],
+      parallel ? [180, 60, 3] : name === 'overlapping projects' ? [60, 30, 2] : [expected[1], expected[0], expected[2]],
+    );
+    if (q) assert.deepEqual([q.agentMs / MIN, q.activeMs / MIN, q.agents], parallel ? [60, 60, 1] : [30, 30, 1]);
+    assertStacks(result);
+  });
+}
+
+test('subscription work clips each agent to the known period, with activity counted once', () => {
+  const stretches = [stretch(at('09:00'), at('10:30')), stretch(at('10:15'), at('12:00'))];
+  assert.deepEqual(subscriptionWork(stretches, {from: at('10:00'), to: at('11:00')}), {worked: [[at('10:00'), at('11:00')]], agentMs: 75 * MIN});
+  assert.deepEqual(subscriptionWork(stretches, {from: at('11:00'), to: at('10:00')}), {worked: [], agentMs: 0});
+  assert.deepEqual(subscriptionWork([], {from: at('10:00'), to: at('11:00')}), {worked: [], agentMs: 0});
+});
+
+test('groups rank by agent-hours, then active time, then name and key', () => {
+  const result = activity(
+    [
+      ...Array.from({length: 3}, () => stretch(at('10:00'), at('10:10'), {project: 'P'})),
+      stretch(at('10:00'), at('10:20'), {project: 'Q'}),
+      stretch(at('10:00'), at('10:30'), {project: 'R'}),
+    ],
+    {from: at('10:00'), to: at('11:00')},
+    HOUR,
+    new Map(),
+  );
+  assert.deepEqual(
+    result.by.project.map(g => [g.name, g.agentMs / MIN, g.activeMs / MIN, g.agents]),
+    [
+      ['R', 30, 30, 1],
+      ['P', 30, 10, 3],
+      ['Q', 20, 20, 1],
+    ],
+  );
 });

@@ -71,6 +71,10 @@ test('the colour grid is five hues in five steps, each a colour the hub takes', 
 test("the table's columns are on until the owner turns one off, but the share during work, and off in a range and a period alike", () => {
   assert.ok(['now', 'spent', 'work', 'perwork', 'workleft'].every(column => columnShown(EMPTY, FORECAST, column)), 'a view saved before them');
   assert.equal(columnShown(EMPTY, FORECAST, 'during'), false);
+  assert.equal(columnShown(EMPTY, FORECAST, 'agenthours'), false);
+  const agentHours = withColumn(EMPTY, FORECAST, 'agenthours', true);
+  assert.equal(columnShown(agentHours, FORECAST, 'agenthours'), true);
+  assert.equal(columnShown(withColumn(agentHours, FORECAST, 'agenthours', false), FORECAST, 'agenthours'), false);
   const off = withColumn(EMPTY, FORECAST, 'work', false);
   assert.deepEqual(off.columns, {forecast: ['work']});
   assert.deepEqual([columnShown(off, FORECAST, 'work'), columnShown(off, FORECAST, 'spent')], [false, true]);

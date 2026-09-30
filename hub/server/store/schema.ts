@@ -119,7 +119,12 @@ export const STEPS = [
     DELETE FROM attention_windows WHERE source_id = OLD.id;
   END;
   `,
-  // 6 — trusted connector credentials, encrypted before they reach SQLite.
+  // 6 — one measuring preference per subscription, shared by all its boards.
+  `
+  ALTER TABLE sources ADD COLUMN measure_interval_ms INTEGER DEFAULT NULL
+    CHECK (measure_interval_ms IS NULL OR measure_interval_ms IN (60000, 120000, 300000, 900000));
+  `,
+  // 7 — trusted connector credentials, encrypted before they reach SQLite.
   `
   CREATE TABLE credentials (
     id TEXT PRIMARY KEY, user_id TEXT NOT NULL, provider TEXT NOT NULL, source_id TEXT,
