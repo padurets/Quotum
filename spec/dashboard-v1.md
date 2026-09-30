@@ -294,6 +294,12 @@ sources. To go on after a restart, the hub keeps on disk the last verdict of eac
 window (whether it ran out, the moment and the share it said, whether it said "left",
 and when), no names and nothing of people, as long as samples.
 
+In local mode, so that the app tells of a limit once in each cycle of a window, a restart
+included, the hub keeps on disk for each window its last sample (what is left and used,
+the reset time, its kind, label and length, when it was measured), which of its
+thresholds it has told, and its cycle, until the source is removed; and for each provider
+the links of the scheduled resets it has told of, up to 64. Nothing of people.
+
 ## Desktop attention stream
 
 In local mode a session may request `GET /api/events?desktop=1`, with the same
