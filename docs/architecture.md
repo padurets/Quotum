@@ -1018,6 +1018,9 @@ lost marker cannot reuse them. The marker is a hint: the hub's stored fingerprin
 selects a readable matching key. A replaced marker's former target and other found
 keys are never turned into previous keys or automatically deleted. An empty database
 reuses the highest-numbered valid found key. Incomplete discovery never creates one.
+Recovery to another key or an empty database removes stale rotation cleanup records
+from the marker while keeping their keys. A later `ok` after `created` on a replacement
+database cannot revive permission to delete those old keys.
 
 One worker serializes native store work away from the UI and the app's async runtime.
 A soft 60-second deadline publishes waiting while leaving that operation able to

@@ -676,6 +676,16 @@ impl Manager {
                     previous: Vec::new(),
                     was_file,
                 });
+                if marker.current != reference {
+                    marker.previous.clear();
+                    marker.next = None;
+                }
+                if report.credentials == 0 {
+                    // An empty replacement proves no rotation. Detach its old cleanup authority
+                    // before a new `created` report can become `ok` on a later start.
+                    marker.previous.retain(|old| old.reason == Reason::Reset);
+                    marker.next = None;
+                }
                 marker.current = reference.clone();
                 marker.was_file |= was_file;
                 self.files.save(&marker)?;
@@ -1335,6 +1345,52 @@ mod tests {
         until(&mut manager, &control, |m| m.marker.as_ref().is_some_and(|m| m.next.is_some()));
         assert_eq!(manager.marker.as_ref().unwrap().next, Some(reference(21, Kind::Keystore)));
         assert!(files.data.lock().unwrap().reserved.contains(&reference(20, Kind::Keystore).name));
+    }
+    #[test]
+    fn an_empty_replacement_never_cleans_old_rotation_keys_on_a_later_ok_start() {
+        let files = Arc::new(FakeFiles::default());
+        let store = Arc::new(Mutex::new(StoreData::default()));
+        let old = reference(1, Kind::File);
+        let current = reference(2, Kind::Keystore);
+        let fp = key(1).fingerprint().to_owned();
+        store.lock().unwrap().keys.insert(current.name.clone(), key(1).encoded().into_bytes());
+        {
+            let mut disk = files.data.lock().unwrap();
+            disk.keys.insert(old.name.clone(), key(0).encoded().into_bytes());
+            disk.marker = Some(Marker {
+                version: 1,
+                current: current.clone(),
+                next: Some(current.clone()),
+                was_file: true,
+                previous: vec![Previous {
+                    r#ref: old.clone(),
+                    reason: Reason::Rotation,
+                    from: key(0).fingerprint().into(),
+                    to: fp.clone(),
+                }],
+            });
+        }
+        let control = Control::default();
+        let mut first = manager(files.clone(), Some(store.clone()));
+        started(&mut first, None, Outcome::Missing, 0, 0);
+        until(&mut first, &control, |m| m.current.is_some());
+        assert_eq!(first.current, Some(current.clone()));
+        assert!(first.marker.as_ref().unwrap().previous.is_empty());
+        assert!(first.marker.as_ref().unwrap().next.is_none());
+        started(&mut first, Some(&fp), Outcome::Created, 0, 0);
+        first.tick(&control);
+        drop(first);
+        let mut later = manager(files.clone(), Some(store));
+        started(&mut later, Some(&fp), Outcome::Missing, 0, 0);
+        until(&mut later, &control, |m| m.current.is_some());
+        started(&mut later, Some(&fp), Outcome::Ok, 0, 0);
+        for _ in 0..20 {
+            later.tick(&control);
+            std::thread::yield_now();
+        }
+        assert_eq!(later.current, Some(current));
+        assert!(files.data.lock().unwrap().keys.contains_key(&old.name));
+        assert!(control.state().retained_file);
     }
     #[test]
     fn a_file_copy_of_current_store_key_is_file_exposure_and_rotates_to_a_fresh_key() {
