@@ -1,3 +1,6 @@
+import {level, sameWindow, type AttentionState, type Candidate} from './domain/attention.js';
+import {sourceHidden, isWindowHidden, titled} from './domain/presentation.js';
+import type {Refresh} from './domain/refresh.js';
 import {config} from './config.js';
 import type {Ingest} from './ingest.js';
 import type {ResetFeed, TrackerHealth} from './resets.js';
@@ -30,7 +33,7 @@ export type Card = SourceState & {owners: string[]; stale: boolean};
 export type Cadence = {next: number; why: Why} | null;
 
 export type BoardPart = {board: {id: string; name: string; personal: boolean}; view: View; lineup: string[]};
-export type SourcePart = {card: Card; sessions: BoardSession[]; cadence: Cadence};
+export type SourcePart = {card: Card; sessions: BoardSession[]; cadence: Cadence; refresh: Refresh};
 export type ReaderPart = {mine: string[]; boards: Board[]};
 export type HubPart = {resets: Partial<Record<ResetProvider, ResetStatus>>; trackers: TrackerHealth[]; past: Record<string, Announcement[]>};
 
@@ -40,6 +43,7 @@ export type Snapshot = Omit<BoardPart, 'lineup'> & {
   sources: Card[];
   sessions: Record<string, BoardSession[]>;
   cadence: Record<string, Cadence>;
+  refresh: Record<string, Refresh>;
 } & ReaderPart & {resets: HubPart};
 
 /** The first of several moments, null when there is none. */
@@ -86,11 +90,52 @@ export class Projection {
     const stale = state.successAt === null || state.staleAfterMs === null || now - state.successAt > state.staleAfterMs;
     const card: Card = {...state, owners: source.holders.flatMap(id => members.get(id) ?? []).sort(), stale};
     const people = source.holders.filter(id => members.has(id));
+    const refresh = ingest.refresh(source.id, now);
     const cadence = ingest.nextMeasurement(source.id, source.account, now);
     return {
-      value: {card, sessions: ingest.live.of(source.id, people, now), cadence: cadence.value},
-      changesAt: earliest(stale ? null : state.successAt! + state.staleAfterMs! + 1, ingest.live.ofChangesAt(source.id, people, now), cadence.changesAt),
+      value: {card, sessions: ingest.live.of(source.id, people, now), cadence: cadence.value, refresh: refresh.value},
+      changesAt: earliest(...state.windows.map(w => w.resetAt !== null && w.resetAt > now ? w.resetAt : null), stale ? null : state.successAt! + state.staleAfterMs! + 1, ingest.live.ofChangesAt(source.id, people, now), cadence.changesAt, refresh.changesAt),
     };
+  }
+
+  /** The same visible figures as the cards, with data quality independent of their level. */
+  attention(board: string, now: number): AttentionState {
+    const view = this.hub.directory.view(board);
+    const cards = this.attentionCards(board, now).filter(c => !sourceHidden(view, c.id));
+    let minimum: AttentionState['minimum'] = null;
+    let partial = false;
+    for (const card of cards) {
+      const windows = card.windows.filter(w => !isWindowHidden(view, card.id, w.id));
+      // A waiting source has no windows yet; it still makes a known minimum partial.
+      if (!card.windows.length || windows.length) partial ||= card.stale || !!card.error || card.successAt === null;
+      for (const w of windows) {
+        if (!Number.isFinite(w.remaining)) { partial = true; continue; }
+        if (!minimum || w.remaining < minimum.remaining) minimum = {sourceId: card.id, windowId: w.id, remaining: w.remaining};
+        if (w.resetAt !== null && w.resetAt <= now) partial = true;
+      }
+    }
+    return {boardId: board, level: minimum ? level(minimum.remaining) : null, quality: minimum ? partial ? 'partial' : 'current' : 'unavailable', minimum};
+  }
+
+  private attentionCards(board: string, now: number) {
+    const members = this.members(board);
+    return this.lineup(board).map(s => this.sourcePart(s, members, now).value.card);
+  }
+
+  /** Visibility and names are resolved again at delivery, after any intervening edit. */
+  visibleCandidates(board: string, candidates: Candidate[], now: number): Candidate[] {
+    const view = this.hub.directory.view(board);
+    const cards = titled(this.attentionCards(board, now), view.names).filter(c => !sourceHidden(view, c.id));
+    return candidates.flatMap((c): Candidate[] => {
+      if (c.kind === 'announcement') return cards.some(s => s.provider === c.provider && s.windows.some(w => !isWindowHidden(view, s.id, w.id))) ? [c] : [];
+      const source = cards.find(s => s.id === c.sourceId);
+      const window = source?.windows.find(w => w.id === c.windowId && !isWindowHidden(view, source.id, w.id));
+      if (!source || !window || !sameWindow(c.window, window)) return [];
+      // Coalescing may hide an intermediate identity change from the card delta.
+      // The ledger also rejects a candidate when an old label comes back later.
+      const cycle = this.hub.store.attentionCycle(c.sourceId, c.windowId);
+      return c.id === `${c.sourceId}/${c.windowId}/${cycle}/${c.kind}` ? [{...c, name: source.title}] : [];
+    });
   }
 
   /** What is the reader's own on a board: which of its sources their devices measure. */
@@ -126,6 +171,7 @@ export class Projection {
       sources: sources.map(s => s.card),
       sessions: Object.fromEntries(lineup.map((s, i) => [s.id, sources[i].sessions])),
       cadence: Object.fromEntries(lineup.map((s, i) => [s.id, sources[i].cadence])),
+      refresh: Object.fromEntries(lineup.map((s, i) => [s.id, sources[i].refresh])),
       mine: this.mine(user, lineup),
       boards: this.boards(user),
       resets: this.hubPart(now).value,

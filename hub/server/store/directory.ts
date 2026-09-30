@@ -369,6 +369,11 @@ export class Directory {
     return this.deviceById(id)!;
   }
 
+  /** Whether the device can still deliver, including revocation of its machine token. */
+  deviceLive(id: string): boolean {
+    return !!this.db.prepare('SELECT id FROM devices WHERE id = ? AND revoked_at IS NULL').get(id);
+  }
+
   deviceById(id: string): Device | null {
     const row = this.db.prepare('SELECT * FROM devices WHERE id = ?').get(id);
     return row ? device(row) : null;

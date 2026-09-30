@@ -202,10 +202,18 @@ number from 60 000 to 86 400 000), when its person set one. A hub answers
 on duty: don't measure this subscription before `until`, then ask again. The device on
 duty keeps it while it delivers; a device where someone is working takes over from a
 holder that has been idle for a while; a holder that stops delivering loses duty when
-its last measurement goes stale; asking again does not extend a holder's time, only
-delivering does. Errors are as for ingest (`400 invalid_request`, `401`, `403`). An agent
-that cannot reach the hub, or gets any other answer, measures anyway: at worst two
-devices measure the same subscription for a while.
+its last measurement goes stale, however often it asks. A holder following the hub's
+pace (below) that is told `measure: true` also keeps duty while it measures, since it
+asks nothing while it measures its providers one by one: until it delivers, reports a
+failure for it or asks again, for at most five minutes; meanwhile no other device takes
+duty, not even one where someone is working. A waiting device is told to come back, at
+the latest, when the holder's last measurement goes stale or, once that has passed
+while it measures, when the five minutes end. A holder that asks again without
+answering keeps duty no longer than that, and until it answers the last command,
+however late, being told `measure: true` keeps it none. Errors are as for ingest
+(`400 invalid_request`, `401`, `403`). An agent that cannot reach the hub, or gets any
+other answer, measures anyway: at worst two devices measure the same subscription for a
+while.
 
 ### Following the hub's pace
 
@@ -248,6 +256,30 @@ keeps asking: the hub waits them out, longer each time in a row (15 minutes for
 `not_logged_in` and `unsupported`), and while it does, the device does not take duty;
 a healthy device takes it as before. Such a device on duty, or with no other device on
 duty, is answered `onDuty: true` until its pause is over.
+
+A reader may ask the hub for fresh limits from the subscription's card. The next
+permitted check-in of its current paced holder then asks for a measurement using the
+same fields above. This never bypasses the one-minute minimum, the device's
+`minIntervalMs`, a failure pause or the retry delay of an unanswered command; repeated
+clicks join one request, and a click while the holder measures what it was told to
+(before it asks again, for at most five minutes) waits for that command instead of
+asking again; meanwhile its silence does not make refresh unavailable. Raising the
+minimum after an earlier promise takes precedence over that promise, so the old
+measurement can become stale before the next is allowed, and the holder's duty can lapse
+before then: until it asks again, no refresh can be requested, and another device of the
+subscription may take duty and measure at once. Both ordinary and requested measurements
+respect the minimum after the later of the last measurement and the last command to this
+holder. A new holder keeps the usual first-measurement policy.
+
+An accepted delivery or a reported failure acknowledges the holder's outstanding command
+only if its corrected time is at least the command's time minus the 30-second clock
+tolerance. Older data can still update the usual card, but cannot acknowledge a newer
+command or clear a later failure pause. A success clears a pause only if taken after
+that failure.
+
+A refresh asks for fresh data, not an acknowledgement of process startup. The agent
+measures providers sequentially, so neither a check-in within 15 seconds nor a result
+within a minute is guaranteed. No fields or identifiers are added to agent traffic.
 
 A paced device that gets no answer keeps asking every 15 seconds, and measures on its own
 once the hub has been silent for 4 minutes and the promised time has passed. An answer
@@ -338,6 +370,14 @@ The OAuth 2.0 device authorization flow (RFC 8628) with JSON bodies:
 What never leaves the machine: provider tokens, cookies, account ids and emails,
 prompts, file contents, file paths.
 
+To distinguish running sessions from known Codex maintenance and transport processes,
+the reference agent on Linux reads only a bounded invocation prefix of its user's
+Codex processes from process metadata: at most 2048 bytes to skip the executable name,
+then exact comparisons of the leading role, stopping at the first mismatch or a
+recognised role. It reads no following argument values or process environments and
+retains, logs and sends no command line. Unknown or unreadable roles remain eligible
+to be sessions; macOS and Windows currently do not read invocation roles.
+
 What is sent: the pseudonym of each account, the plan name, percentages and reset times
 of the windows, free resets and when each expires, the client's version, the machine's random id, its name
 (the host name unless configured) and operating system, subscription names if
@@ -354,6 +394,10 @@ its folder when that differs (unless that is turned off too). The members of a b
 are on where a subscription you measure is shown, whoever brought it, see these, as they
 see its limits, with each project under the name its person gave it, and with them the
 name of the machine each agent runs on.
+
+A dashboard refresh sends only the board and source ids to the hub. Its shared state
+contains times and outcomes, without the requester or the device's identity. No new
+information leaves the agent.
 
 What the hub keeps of running agents: when each worked, with the machine, subscription,
 where it ran, since when and its project and folder names, as long as samples (90 days);

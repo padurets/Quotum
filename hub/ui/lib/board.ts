@@ -5,7 +5,7 @@ import {titled} from './quota';
 import type {PastResets, Resets, TrackerHealth} from './resets';
 import type {Board} from './session';
 import {createStore, sameJson, shallowEqual, useSelect} from './store';
-import type {Card, LiveSession, Pace, View} from './types';
+import type {Card, LiveSession, Pace, Refresh, View} from './types';
 
 /**
  * The page's state, and the one way it changes: events. What the hub pushes
@@ -28,6 +28,7 @@ export type Snapshot = {
   sources: Card[];
   sessions: Record<string, LiveSession[]>;
   cadence: Record<string, Pace>;
+  refresh: Record<string, Refresh>;
   mine: string[];
   boards: Board[];
   resets: HubResets;
@@ -42,6 +43,7 @@ export type HubEvent =
   | {type: 'card'; data: Card}
   | {type: 'sessions'; data: {id: string; sessions: LiveSession[]}}
   | {type: 'cadence'; data: {id: string; cadence: Pace}}
+  | {type: 'refresh'; data: {id: string; refresh: Refresh}}
   | {type: 'mine'; data: {sources: string[]}}
   | {type: 'boards'; data: {boards: Board[]}}
   | {type: 'history'; data: {sources: string[]; since: number}}
@@ -58,6 +60,7 @@ export type BoardState = {
   cards: Record<string, Card>;
   sessions: Record<string, LiveSession[]>;
   cadence: Record<string, Pace>;
+  refresh: Record<string, Refresh>;
   mine: string[];
 };
 
@@ -126,6 +129,7 @@ function snapshot(state: PageState, data: Snapshot): PageState {
     cards: keepEach(old?.cards, Object.fromEntries(data.sources.map(card => [card.id, card]))),
     sessions: keepEach(old?.sessions, data.sessions),
     cadence: keepEach(old?.cadence, data.cadence),
+    refresh: keepEach(old?.refresh, data.refresh),
     mine: keep(old?.mine, data.mine),
   };
   return {
@@ -143,7 +147,7 @@ function patch(state: PageState, change: (board: BoardState) => BoardState): Pag
   return board === state.board ? state : {...state, board};
 }
 
-function set<K extends 'cards' | 'sessions' | 'cadence'>(board: BoardState, key: K, id: string, value: BoardState[K][string]): BoardState {
+function set<K extends 'cards' | 'sessions' | 'cadence' | 'refresh'>(board: BoardState, key: K, id: string, value: BoardState[K][string]): BoardState {
   const old = board[key][id];
   const next = keep(old, value);
   return next === old ? board : {...board, [key]: {...board[key], [id]: next}};
@@ -160,7 +164,7 @@ function hub(state: PageState, event: HubEvent): PageState {
     case 'lineup':
       return patch(state, board => {
         const lineup = keep(board.lineup, event.data.sources);
-        const next = {...board, lineup, cards: only(board.cards, lineup), sessions: only(board.sessions, lineup), cadence: only(board.cadence, lineup)};
+        const next = {...board, lineup, cards: only(board.cards, lineup), sessions: only(board.sessions, lineup), cadence: only(board.cadence, lineup), refresh: only(board.refresh, lineup)};
         return shallowEqual(next, board) ? board : next;
       });
     case 'card':
@@ -169,6 +173,8 @@ function hub(state: PageState, event: HubEvent): PageState {
       return patch(state, board => set(board, 'sessions', event.data.id, event.data.sessions));
     case 'cadence':
       return patch(state, board => set(board, 'cadence', event.data.id, event.data.cadence));
+    case 'refresh':
+      return patch(state, board => set(board, 'refresh', event.data.id, event.data.refresh));
     case 'mine':
       return patch(state, board => (sameJson(board.mine, event.data.sources) ? board : {...board, mine: event.data.sources}));
     case 'boards': {
@@ -225,6 +231,12 @@ export const useBoardMeta = (board: string) => usePage(s => metaOf(s, board));
 export const useRole = () => usePage(s => s.boards?.find(b => b.id === s.board?.id)?.role ?? null);
 export const useServerView = () => usePage(s => s.board?.view ?? null);
 export const useHistoryStart = () => usePage(s => s.board?.historyStart ?? null);
+/** Membership only: changing a figure never re-renders the compact list itself. */
+export const useVisibleLimits = () => usePage(s => {
+  const b = s.board;
+  if (!b) return NONE;
+  return b.lineup.filter(id => !b.view.hidden.includes(`source:${id}`) && (!b.cards[id]?.windows.length || b.cards[id].windows.some(w => !b.view.windows.includes(`${id}/${w.id}`))));
+}, shallowEqual);
 export const useLineup = () => usePage(s => s.board?.lineup ?? NONE);
 export const useCard = (id: string) => usePage(s => s.board?.cards[id]);
 /** The cards of these sources, in their order; the same list while each card is. */
@@ -232,6 +244,7 @@ export const useCards = (ids: string[]) => usePage(s => ids.flatMap(id => s.boar
 export const useSessions = (id: string) => usePage(s => s.board?.sessions[id] ?? NONE);
 /** The agents of several sources at once, for a list of them all: not a hook per source. */
 export const useSessionsOf = (ids: string[]) => usePage(s => ids.map(id => s.board?.sessions[id] ?? NONE), shallowEqual);
+export const useRefresh = (id: string) => usePage(s => s.board?.refresh[id] ?? null);
 export const useCadence = (id: string) => usePage(s => s.board?.cadence[id] ?? null);
 /** Whether the reader's devices measure this source: theirs to take off a shared board. */
 export const useMine = (id: string) => usePage(s => !!s.board?.mine.includes(id));

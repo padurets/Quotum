@@ -24,6 +24,7 @@
   --glass-blur: blur(22px) saturate(170%);
   --glass-edge: #ffffff1a;
   --glass-shadow: inset 0 1px 0 #ffffff1c, 0 24px 48px -16px #000000d9;
+  --popup-radius: 12px;
   --sans: 'Geist Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   --mono: 'Geist Mono Variable', ui-monospace, 'SF Mono', Menlo, monospace;
   font-family: var(--sans);
@@ -80,6 +81,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .time-slot { display: contents; }
 .mono { font-family: var(--mono); font-size: .92em; color: var(--text-2); }
 .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--hair-2); border-top-color: var(--accent); border-radius: 50%; animation: spin .9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .dot-ok { background: var(--ok); box-shadow: 0 0 8px #75d8ad99; }
 .dot-warn { background: var(--warn); box-shadow: 0 0 8px #f6c56e99; }
 
@@ -103,7 +106,9 @@ main { max-width: 1240px; margin: 0 auto; padding: 28px 28px 56px; display: flex
 .widgets > .card.is-loading { grid-column: span 2; grid-row: span 5; }
 .widget-body { position: relative; display: flex; flex-direction: column; min-width: 0; }
 .widget-body > .panel::after { content: ''; display: block; height: var(--fill, 0px); }
-.widgets.is-movable .widget-body > .card > .card-head, .widgets.is-movable .widget-body > .panel > .panel-head { cursor: grab; touch-action: none; }
+/* A head carries its widget: the pointer's way to where it lifts selects none of its words, which the next press would drag instead. The menus it opens keep theirs. */
+.widgets.is-movable .widget-body > .card > .card-head, .widgets.is-movable .widget-body > .panel > .panel-head { cursor: grab; touch-action: none; user-select: none; }
+.widgets.is-movable :is(.card-head, .panel-head) .popover { user-select: text; }
 /* While dragged, the widget's place stays outlined: that is where it lands. */
 .widget.is-lifted { z-index: 30; }
 .widget.is-lifted::before { content: ''; position: absolute; inset: 0; border: 1.5px dashed #bbc0fe59; border-radius: 14px; background: #bbc0fe08; }
@@ -119,19 +124,47 @@ main { max-width: 1240px; margin: 0 auto; padding: 28px 28px 56px; display: flex
 .drag-handle:hover, .widget.is-lifted .drag-handle { color: var(--text-2); background: #ffffff0a; }
 @media (hover: none) { .drag-handle { opacity: .7; } }
 body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select: none; }
-/* The right edge a board's owner widens or narrows a widget by, a column at a time. */
+/*
+ * The edges a board's owner resizes a widget by, left, right and bottom, are not drawn:
+ * each is a strip along its whole edge, in the gap beside it (two neighbours' strips meet
+ * halfway across), with the cursor of its axis. Under the pointer the widget's own border
+ * on that side lights up a little; in focus, in the accent. Only the bottom corners, which
+ * change both, show a mark on hover.
+ */
 .resize-handle {
-  position: absolute; top: 50%; right: -9px; z-index: 2; transform: translateY(-50%);
-  width: 10px; height: 44px; padding: 0; border: 0; border-radius: 6px; background: none;
-  cursor: ew-resize; touch-action: none; opacity: 0; transition: opacity .15s;
+  position: absolute; z-index: 2; padding: 0; border: 0; border-radius: 0; background: none;
+  touch-action: none; outline: none;
 }
-.resize-handle::after { content: ''; position: absolute; inset: 6px 3px; border-radius: 2px; background: var(--text-4); }
-.widget:hover .resize-handle, .resize-handle:focus-visible, .widget.is-resizing .resize-handle { opacity: 1; }
-.resize-handle:hover::after, .widget.is-resizing .resize-handle::after { background: var(--accent); }
-.widget.is-resizing { z-index: 30; }
+.resize-handle.is-left, .resize-handle.is-right { top: 0; bottom: 0; width: 8px; cursor: ew-resize; }
+.resize-handle.is-left { left: -8px; }
+.resize-handle.is-right { right: -8px; }
+.resize-handle.is-bottom { left: 0; right: 0; bottom: -8px; height: 8px; cursor: ns-resize; }
+.widget-body > :is(.card, .panel) { --edge-lit: #ffffff38; }
+.widget-body:has(> .is-left:hover) > :is(.card, .panel) { border-left-color: var(--edge-lit); }
+.widget-body:has(> .is-right:hover) > :is(.card, .panel) { border-right-color: var(--edge-lit); }
+.widget-body:has(> .is-bottom:hover) > :is(.card, .panel) { border-bottom-color: var(--edge-lit); }
+.widget-body:has(> .is-right:focus-visible) > :is(.card, .panel) { border-right-color: var(--accent); }
+.widget-body:has(> .is-bottom:focus-visible) > :is(.card, .panel) { border-bottom-color: var(--accent); }
+.resize-handle.is-bottom-left, .resize-handle.is-bottom-right { z-index: 3; bottom: -8px; width: 12px; height: 12px; }
+.resize-handle.is-bottom-left { left: -8px; cursor: nesw-resize; }
+.resize-handle.is-bottom-right { right: -8px; cursor: nwse-resize; }
+.resize-handle.is-bottom-left::after, .resize-handle.is-bottom-right::after {
+  content: ''; position: absolute; top: 1px; width: 7px; height: 7px; border: solid var(--text-4); opacity: 0; transition: opacity .15s;
+}
+.resize-handle.is-bottom-left::after { left: 4px; border-width: 0 0 2px 2px; border-radius: 0 0 0 4px; }
+.resize-handle.is-bottom-right::after { right: 4px; border-width: 0 2px 2px 0; border-radius: 0 0 4px 0; }
+.widget:hover > .widget-body > .resize-handle::after, .widget.is-resizing .resize-handle::after { opacity: 1; }
+@media (hover: none) { .resize-handle:is(.is-bottom-left, .is-bottom-right)::after { opacity: .7; } }
+.resize-handle:hover::after, body.is-resizing-bottom-left .widget.is-resizing .is-bottom-left::after, body.is-resizing-bottom-right .widget.is-resizing .is-bottom-right::after { border-color: var(--text-2); }
+/* Over its neighbours' edges and corners, under the sticky heads it may be drawn past while the page scrolls. */
+.widget.is-resizing { z-index: 4; }
 .widget.is-resizing::before { content: ''; position: absolute; inset: 0; border: 1.5px dashed #bbc0fe59; border-radius: 14px; background: #bbc0fe08; }
 .widget.is-resizing > .widget-body > .card, .widget.is-resizing > .widget-body > .panel { background: var(--surface); border-color: #bbc0fe59; box-shadow: inset 0 1px 0 #ffffff0a, 0 30px 60px -20px #000; }
-body.is-resizing, body.is-resizing * { cursor: ew-resize !important; user-select: none; }
+body.is-resizing, body.is-resizing * { user-select: none; }
+body.is-resizing-left, body.is-resizing-left *, body.is-resizing-right, body.is-resizing-right * { cursor: ew-resize !important; }
+body.is-resizing-bottom, body.is-resizing-bottom * { cursor: ns-resize !important; }
+body.is-resizing-bottom-left, body.is-resizing-bottom-left * { cursor: nesw-resize !important; }
+body.is-resizing-bottom-right, body.is-resizing-bottom-right * { cursor: nwse-resize !important; }
 
 /* ---------- surfaces ---------- */
 /* Dense enough that the dot grid does not show through: widgets are not frosted (see body::after). No wide soft shadow either: it is costly to paint and all but lost on the dark page. */
@@ -159,6 +192,7 @@ body.is-resizing, body.is-resizing * { cursor: ew-resize !important; user-select
 .plan { font-size: 10px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); border: 1px solid var(--hair-2); padding: 1px 7px; border-radius: 5px; white-space: nowrap; }
 .provider-mark { position: relative; flex-shrink: 0; display: grid; }
 .provider-mark .dot { position: absolute; right: -2px; bottom: -2px; width: 8px; height: 8px; border: 2px solid var(--surface); box-sizing: content-box; }
+.provider-mark .spinner { position: absolute; right: -2px; bottom: -2px; width: 12px; height: 12px; background: color-mix(in srgb, var(--surface) 70%, var(--text-4)); }
 /*
  * How fresh the numbers are, in the card's colour (the colour of its lines): full when
  * just measured, fading to grey; never a warning.
@@ -252,6 +286,8 @@ body.is-resizing, body.is-resizing * { cursor: ew-resize !important; user-select
 .popover-row.is-danger { color: var(--crit); }
 .popover-row.is-danger:hover { background: #f1787014; color: var(--crit); }
 .popover-row b { font-weight: 450; font-variant-numeric: tabular-nums; color: var(--text-3); }
+.refresh-list { width: 328px; max-width: calc(100vw - 50px); }
+.refresh-list .spinner, .refresh-list b { flex-shrink: 0; }
 .popover-row[aria-checked=false] span, .popover-row[aria-checked=false] b { opacity: .45; }
 .popover-row.is-lock span, .popover-row.is-lock[aria-checked=false] span { opacity: 1; display: flex; align-items: center; gap: 8px; }
 .popover-row.is-lock svg { flex: none; fill: none; stroke: currentColor; stroke-width: 1.4; }
@@ -383,11 +419,12 @@ td.muted, small.muted { color: var(--text-3); }
 .agents-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 4px 0; padding: 8px 4px 2px; border-top: 1px solid var(--hair); font-size: 11.5px; color: var(--text-3); }
 .agents-legend span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 /* The table of every running agent: a mark as on the cards starts each row. */
-.agents-panel td .agent { margin-right: 12px; vertical-align: -1px; }
-.agents-panel table { table-layout: fixed; }
-.agents-panel td { overflow: hidden; text-overflow: ellipsis; }
-.agents-panel th button { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; padding: 0; background: none; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; text-align: left; }
-.agents-panel th button:hover, .agents-panel th[aria-sort] { color: var(--text-2); }
+.agents-rows td .agent { margin-right: 12px; vertical-align: -1px; }
+.agents-rows table { table-layout: fixed; }
+/* A cell holds what it says for screen readers: a long project cut short does not push it past the table, which would scroll. */
+.agents-rows td { position: relative; overflow: hidden; text-overflow: ellipsis; }
+.agents-rows th button { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; padding: 0; background: none; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; text-align: left; }
+.agents-rows th button:hover, .agents-rows th[aria-sort] { color: var(--text-2); }
 .agents-sort-arrow { width: 10px; flex-shrink: 0; }
 .agents-controls { display: flex; gap: 6px; margin-left: auto; }
 .agents-panel .panel-head { gap: 8px; }
@@ -396,6 +433,21 @@ td.muted, small.muted { color: var(--text-3); }
 .agents-compact > li:last-child, .forecast-compact > li:last-child { border-bottom: 0; }
 .agents-compact > li:hover, .forecast-compact > li:hover { background: #ffffff04; }
 .agents-compact > li.is-working { color: var(--text); }
+/* The last row of a list made shorter than its agents: how many more, opening them all. */
+.agents-more-button { display: block; width: 100%; border: 0; background: none; font: inherit; font-size: 12.5px; color: var(--text-3); text-align: left; outline-offset: -2px; }
+.agents-more-button:hover { color: var(--text); }
+.agents-compact > li.agents-more { padding: 0; }
+.agents-compact > li.agents-more > .agents-more-button { padding: 11px var(--panel-pad); }
+tr.agents-more > td { padding: 0; }
+tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
+/* The rows a shorter list measures, laid out unseen: as wide as it is, taking no room. Positioned, so what its rows name for screen readers is cut with them rather than lengthening the page. */
+.agents-measure { position: relative; height: 0; overflow: hidden; visibility: hidden; }
+/* All the agents in a dialog: its list's rows light up inset, as a menu's do. */
+.agents-dialog-head { display: flex; align-items: center; gap: 8px; min-height: 26px; }
+.agents-dialog .agents-compact { margin: 8px -8px 0; }
+.agents-dialog .agents-compact > li { padding: 10px 8px; border-bottom: 0; border-radius: 8px; }
+.agents-dialog .agents-compact > li:hover { background: #ffffff08; }
+.agents-dialog .table-wrap { margin-top: 8px; }
 .agents-compact-main { display: flex; align-items: center; gap: 10px; min-width: 0; font-size: 12.5px; }
 .agents-compact-main > .agent, .agents-compact-main > .agents-origin, .agents-compact-main > .agents-age { flex-shrink: 0; }
 .agents-compact-main > .agents-project { flex: 1; }
@@ -423,9 +475,9 @@ td.muted, small.muted { color: var(--text-3); }
 /* Positioned, so the state named for screen readers after a long project is cut with it rather than widening the page. */
 .agents-project { position: relative; min-width: 0; overflow: hidden; }
 .agents-project > span, .agents-project small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.agents-project small, .agents-panel td .agents-folder { color: var(--text-4); font-size: 11.5px; }
+.agents-project small, .agents-rows td .agents-folder { color: var(--text-4); font-size: 11.5px; }
 /* Under the project, past the agent's mark. */
-.agents-panel td .agents-folder { display: block; padding-left: 17px; overflow: hidden; text-overflow: ellipsis; }
+.agents-rows td .agents-folder { display: block; padding-left: 17px; overflow: hidden; text-overflow: ellipsis; }
 .agents-origin { display: inline-grid; place-items: center; color: var(--text-3); }
 .agents-origin svg { display: block; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
 .agents-age { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text-3); }
@@ -469,7 +521,7 @@ td.muted, small.muted { color: var(--text-3); }
 .panel .chart > svg, .panel .table-wrap { transition: opacity .2s; }
 .panel.is-loading .chart > svg, .panel.is-loading .table-wrap { opacity: .5; }
 .panel-loading, .panel-empty { margin: 18px 0 0; min-height: 96px; display: grid; place-items: center; color: var(--text-3); font-size: 13px; }
-.chart > svg { display: block; width: 100%; height: auto; touch-action: pan-y; overflow: visible; }
+.chart > svg { display: block; width: 100%; touch-action: pan-y; overflow: visible; }
 .chart-loading, .chart-empty { min-height: 220px; display: grid; place-items: center; color: var(--text-3); font-size: 13px; }
 .chart-empty { position: absolute; inset: 0; min-height: 0; pointer-events: none; }
 /* Agent activity: its totals a quieter line under the title, each a whole, its value as the legend's. */
@@ -640,12 +692,13 @@ code { font-family: var(--mono); font-size: .92em; color: var(--text-2); }
 .device-facts dd { margin: 0; color: var(--text); }
 
 /* ---------- dialogs ---------- */
-.overlay { position: fixed; inset: 0; z-index: 50; display: grid; place-items: start center; padding: 72px 16px 24px; background: #05050899; backdrop-filter: blur(4px); overflow-y: auto; overscroll-behavior: contain; }
+/* As wide as the screen allows whatever it shows, its scrollbar or none: what goes in a dialog can choose its form by the dialog's width. */
+.overlay { position: fixed; inset: 0; z-index: 50; display: grid; grid-template-columns: minmax(0, 1fr); place-items: start center; padding: 72px 16px 24px; background: #05050899; backdrop-filter: blur(4px); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .dialog.glass { box-shadow: inset 0 1px 0 #ffffff1c, 0 30px 70px -34px #0000009e; }
 .dialog { width: 100%; max-width: 520px; display: flex; flex-direction: column; gap: 16px; padding: 22px 24px 24px; border-radius: 16px; outline: none; }
 .dialog.is-wide { max-width: 760px; }
 /* A panel on the right edge, for the person's own settings. */
-.overlay.is-side { display: flex; justify-content: flex-end; padding: 0; overflow: hidden; }
+.overlay.is-side { display: flex; justify-content: flex-end; padding: 0; overflow: hidden; scrollbar-gutter: auto; }
 .dialog.is-side { max-width: 400px; height: 100dvh; gap: 20px; padding: 20px 24px 28px; border-width: 0 0 0 1px; border-radius: 0; overflow-y: auto; overscroll-behavior: contain; animation: slide-in .22s cubic-bezier(.2, .7, .2, 1); }
 @keyframes slide-in { from { transform: translateX(28px); opacity: 0; } }
 .drawer-section { display: flex; flex-direction: column; gap: 12px; padding-top: 18px; border-top: 1px solid var(--hair); }
@@ -780,9 +833,35 @@ tr:hover .device-name .icon-button, .device-name .icon-button:focus-visible { op
   .controls { width: 100%; flex-direction: column; align-items: stretch; }
   .controls .segmented { flex: 1; }
   .controls .segmented button { flex: 1; padding: 6px; }
+  /* A dialog's tabs share its width rather than running past it. */
+  .dialog > .segmented { align-self: stretch; }
+  .dialog > .segmented button { flex: 1; padding: 5px 6px; }
   /* The list takes what room the arrows leave; a long time range wraps in it. */
   .period .picker { flex: 1; min-width: 0; }
   .period .text-button { flex: 1; justify-content: center; height: auto; min-height: 28px; padding: 4px 10px; white-space: normal; text-align: center; }
   td:first-child { white-space: normal; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+html:has(.compact) { scrollbar-gutter: auto; }
+html:has(.compact.is-native) { background: transparent; }
+body:has(.compact)::before, body:has(.compact)::after { display: none; }
+.compact { padding: 10px; min-width: 0; border-radius: var(--popup-radius); background-color: var(--surface); }
+.compact > header { display: flex; align-items: center; gap: 8px; padding: 2px 2px 8px; }
+.compact h1 { font-size: 15px; margin: 0; flex: 1; }
+.compact-card { padding: 10px; margin: 0 0 8px; gap: 6px; }
+.compact-card:last-child { margin-bottom: 0; }
+.compact-card .card-head { gap: 8px; margin-bottom: 2px; }
+.compact-card .provider-logo { width: 24px; height: 24px; padding: 4px; border-radius: 7px; }
+.compact-card .provider-mark .dot { width: 5px; height: 5px; border-width: 1.5px; }
+.compact-card h2 { flex: 1; min-width: 0; font-size: 13px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.compact-agents { flex-shrink: 0; font-size: 11px; color: var(--text-3); }
+.compact-limit { display: grid; grid-template-columns: minmax(0, 1.5fr) 7.5ch minmax(36px, 1fr) 4ch; gap: 8px; align-items: center; }
+.compact-limit .meter { height: 6px; }
+.compact-limit > strong { text-align: right; font-size: 13px; font-weight: 560; font-variant-numeric: tabular-nums; }
+.compact-window-name { min-width: 0; font-size: 12px; line-height: 1.4; }
+.compact-window-name > span { display: flex; flex-direction: column; min-width: 0; }
+.compact-window-name > span > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.compact-window-name > span > span + span { font-size: 11px; color: var(--text-3); }
+.compact-reset { font-size: 11px; color: var(--text-3); white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
+.compact-quality { color: var(--text-3); font-size: 12px; margin: 4px 0; }

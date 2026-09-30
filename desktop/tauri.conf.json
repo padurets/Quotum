@@ -25,7 +25,8 @@
     "externalBin": ["binaries/quotum-node"],
     "resources": {
       "resources/hub/": "hub/",
-      "resources/licenses/": "licenses/"
+      "resources/licenses/": "licenses/",
+      "resources/tray/": "tray/"
     },
     "licenseFile": "../LICENSE",
     "windows": {

@@ -134,10 +134,20 @@ Codex         api                  idle     started 25m ago · editor
   the cards show what is left now, the analytics under them share one set of filters.
   The owner places them on a six-column grid by dragging their heads, and resizes them
   to a third, a half, two thirds or the whole width. Each fills only the rows its content
-  needs, so cards stack beside a tall list. The owner names the cards,
+  needs, so cards stack beside a tall list, unless the owner drags its bottom edge (or
+  a bottom corner) to make it taller, or the list of agents shorter: the charts grow
+  with it, a card never gets shorter than its content, and a shorter list ends with how
+  many more agents run, which opens them all. Either side edge changes the width. A
+  double click on the bottom edge or a bottom corner, or Enter or Space on the bottom
+  edge, gives a widget back the height of its content. The owner names the cards,
   hides the ones they don't need (the data keeps coming) and sets the plans; everyone on
   the board sees it arranged the same way. Once it's set, a lock keeps the widgets from
   moving under a passing pointer.
+- **Fresh limits on demand.** Choose **Refresh data** in a card's menu, or **Refresh all
+  data** in the header for every visible card on the board. A circular loader by the
+  logo shows that the card is waiting for fresh numbers. Refresh respects the device's
+  interval and error pauses, and accepts one new request per minute per subscription.
+  Every reader of a shared card can use it.
 - **Your data, shared when you choose.** Everything your machines measure is on your
   personal board. On a shared board a team sees the limits its members share with it:
   each person decides which of their subscriptions it shows. A team subscription
@@ -343,13 +353,27 @@ an AppImage's start-at-login entry also needs to point to the intended file.
 
 The app opens its board, and the first numbers come within a minute. The gear opens its
 settings: which providers are measured and how often, running agents, start at login,
-the version and *Quit*. These are `quotum`'s own settings ([Configuration](#agent)): the
-command and the app share them.
+the version and *Quit*. Measuring settings are shared with `quotum` ([Configuration](#agent));
+notification preferences and language belong to the app.
 
-- **Closing the window** leaves it measuring; the tray icon or starting the app again
-  opens the window. *Quit* is in the settings and in the tray's menu. GNOME shows tray
+- **Closing the window** leaves it measuring. *Open Quotum* in the tray menu or starting
+  the app again opens the full window. *Quit* is in the settings and in the tray's menu. GNOME shows tray
   icons only with an extension (AppIndicator); without one, start the app again to open
   its window.
+- **Limits in the tray.** The icon follows the tightest visible limit: green above 30%,
+  amber from 10% through 30%, red below 10%. A separate mark means some figures are
+  stale or unavailable; no figures never means a full quota. Click the icon on Windows,
+  or choose *Limits* from its menu on Linux, for a compact panel of the same limits,
+  reset times and working agents as the board. It closes on Escape or losing focus.
+- **Notifications** announce low and critical quota, a reset confirmed by a measurement,
+  and newly announced scheduled resets from community trackers. Each kind has its own
+  switch, on by default. Hidden cards and windows are excluded. Thresholds are notified
+  once per confirmed cycle; jumping straight to critical gives only that alert. Starting,
+  waking or reconnecting establishes a fresh baseline, without replaying missed events.
+  Gaps and ambiguous provider corrections may hide a reset; the timer alone is not
+  evidence. System notification settings and Do Not Disturb can suppress delivery.
+  The app requests no sound. Windows portable builds use the same native delivery as
+  installed builds. Missing Linux tray or notification services do not stop measurements.
 - **Start at login** turns on by itself the first time the app measures and starts it
   without the window. Turn it off in the settings, and do that before uninstalling. The
   entry names the AppImage or Windows portable EXE by its path: keep it where it is

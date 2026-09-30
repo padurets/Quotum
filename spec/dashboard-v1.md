@@ -62,13 +62,14 @@ change as it was.
 | `event` | `data` | When |
 |---|---|---|
 | `hello` | `{epoch, now, client, heartbeatMs}` | First. `epoch`: when this start of the hub began, base 36. `now`: the hub's clock. `client`: the path of the page's entry script the hub serves (`/assets/index-<hash>.js`), null without a build. `heartbeatMs`: 25000. |
-| `snapshot` | `{board, view, historyStart, sources, sessions, cadence, mine, boards, resets}` | Second: the board for this reader. |
+| `snapshot` | `{board, view, historyStart, sources, sessions, cadence, refresh, mine, boards, resets}` | Second: the board for this reader. |
 | `board` | `{board: {id, name, personal}}` | The board was renamed. |
 | `view` | `{view}` | The board's view was saved. |
 | `lineup` | `{sources: string[]}` | The board's sources, in order, changed. |
 | `card` | a card | A source's state changed. |
 | `sessions` | `{id, sessions}` | The agents running on a source, on the machines of its people on this board, changed. |
 | `cadence` | `{id, cadence}` | When a source is measured next, or why, changed. |
+| `refresh` | `{id, refresh}` | A source's refresh availability, request or cooldown changed. |
 | `mine` | `{sources: string[]}` | Which sources of the board the reader's devices measure changed. |
 | `boards` | `{boards}` | The reader's boards changed: made, deleted, renamed, joined, left. |
 | `history` | `{sources: string[], since}` | These sources have measurements taken at `since` or later that the chart has not shown; with `since` 0, all of the board's history reads otherwise: whose agents' work it shows, or under which names, changed (a card hidden or shown, someone joining or leaving, a project or a machine renamed). |
@@ -76,21 +77,28 @@ change as it was.
 | `ping` | `{now}` | Every `heartbeatMs`, with the hub's clock. |
 | `bye` | `{reason}` | Last: the hub lets the reader go (see below). |
 
-The board's `view` includes `layout: {columns: 6, places: {<widget id>: {x, y, w}}}`.
-`x` is a column starting at zero, `y` a row starting at zero used for reading order;
-heights are measured by the page. Widths are 2, 3, 4 or 6 columns and starts are 0, 2,
-3 or 4, with `x + w <= 6`. Stored views from before the grid can still contain `order`
+The board's `view` includes `layout: {columns: 6, places: {<widget id>: {x, y, w, h?}}}`.
+`x` is a column starting at zero, `y` a row starting at zero used for reading order.
+Widths are 2, 3, 4 or 6 columns and starts are 0, 2, 3 or 4, with `x + w <= 6`. `h`, when
+present, is the height in rows the owner chose for the widget, a whole number from 1 to
+200 (`MAX_ROWS`); without it the widget is as tall as its content. The page measures the
+content: a widget never takes fewer rows than the least its content can show (all of a card
+or the table, a chart as tall as it draws by itself, the first agent of the list and how
+many more), so `h` is what the owner asked for, not what shows, and the hub does not check
+it against the content. A place has exactly `x`, `y`, `w` and, optionally, `h`; anything
+else is refused. Stored views from before the grid can still contain `order`
 and `sizes`, with an empty layout: the page translates them, including hidden or absent
 widgets. Saving a view requires `layout`; the hub drops the old fields. A save is
 limited to 64 KiB (65,536 UTF-8 bytes), so it fits the page's keepalive request when
 leaving before the debounced save. There is no separate count limit on places; each
 place is validated.
 
-In a `snapshot`, `sources` are the cards of the board's sources in its order; `sessions`
-and `cadence` are by source id, for those sources only. `board` is `{id, name,
-personal}`; the reader's role is in `boards`, each `{id, name, personal, role}`, as it is
-theirs alone. `resets` is what `GET /api/resets` answers. `historyStart` is when the
-board's history begins as of the snapshot; `GET /api/history` tells it later.
+In a `snapshot`, `sources` are the cards of the board's sources in its order;
+`sessions`, `cadence` and `refresh` are by source id, for those sources only. `board` is
+`{id, name, personal}`; the reader's role is in `boards`, each
+`{id, name, personal, role}`, as it is theirs alone. `resets` is what `GET /api/resets`
+answers. `historyStart` is when the board's history begins as of the snapshot;
+`GET /api/history` tells it later.
 
 A card is `{id, provider, plan, successAt, error, stale, windows, resets, owners,
 staleAfterMs}`: the source's last measurement (`successAt`, its `windows` and free
@@ -98,13 +106,14 @@ staleAfterMs}`: the source's last measurement (`successAt`, its `windows` and fr
 its numbers hold. `stale` is the hub's to say, and it says so: a card sent when its
 numbers get too old.
 
-Each event carries its part whole; the page puts it in place of what it had. What changes
-at the same moment goes out together, in this order: `board`, `view`, the sources'
-`card`, `sessions` and `cadence` (sources new to the board before `lineup`), `lineup`,
-`mine`, `boards`, `history`, `resets`. A part goes out only when it differs from what the
-reader last got; a change reaches the page within a tenth of a second. What changes with
-time alone (a card going stale, a machine's list of agents no longer shown, a holder
-falling silent, a past reset leaving the history) goes out when it does.
+Each event carries its part whole; the page puts it in place of what it had. What
+changes at the same moment goes out together, in this order: `board`, `view`, the
+sources' `card`, `sessions`, `cadence` and `refresh` (sources new to the board before
+`lineup`), `lineup`, `mine`, `boards`, `history`, `resets`. A part goes out only when it
+differs from what the reader last got; a change reaches the page within a tenth of a
+second. What changes with time alone (a card going stale, a machine's list of agents no
+longer shown, a holder falling silent, a past reset leaving the history) goes out when
+it does.
 
 `bye` tells why the reader is let go, and the connection ends:
 
@@ -114,6 +123,79 @@ falling silent, a past reset leaving the history) goes out when it does.
 | `gone` | The board was deleted, or the reader is no longer on it. | Opens another board. |
 | `restart` | The hub stops, or could not work out the board. | Connects again in a few seconds. |
 | `limit` | A newer reader took its place, or it fell 256 KiB behind. | Connects again, not sooner than in 30 seconds. |
+
+## Requesting fresh limits
+
+```
+POST /api/boards/<board>/sources/<source>/refresh
+```
+
+No body is needed. Any signed-in reader of that source on that board may ask, including
+members who do not own the subscription and the desktop app's local reader. The usual
+Host, Origin and session checks apply before the board and source are checked.
+
+| Status | Body | Meaning |
+|---|---|---|
+| 202 | `{ok:true}` | Accepted, or joined the same unfinished request. |
+| 429 | `{error:"refresh_too_soon"}` | A new request was accepted less than a minute ago; `Retry-After` is seconds rounded up. |
+| 409 | `{error:"refresh_unavailable"}` | No device can fulfil a new request now. |
+| 401 | `{error:"unauthorized"}` | No session. |
+| 404 | `{error:"board_not_found"}` or `{error:"not_found"}` | No access to the board, or the source is not on it. |
+
+One request and one cooldown belong to the subscription across the hub. A retry after a
+lost HTTP answer joins the unfinished request without extending it. The POST does not
+wait for a measurement and carries no state: only snapshots and events replace state,
+so a late POST response cannot undo a result already received.
+
+`refresh` is `{unavailable, availableAt, retryAt, request}`. `unavailable` is null, or
+`no_device`, `unsupported`, `silent`, `paused`; `availableAt` is the end of the error
+pause when `unavailable` is `paused`, otherwise null. `retryAt` is the end of a
+still-active one-minute cooldown, otherwise null. These describe the ability to create a
+new request. `silent` is 120 seconds without a word from the holder: a check-in with the
+subscription, or, within five minutes after it, a delivery of any measurement or failure
+by that device.
+
+`request` is null or
+`{requestedAt, notBefore, dispatchAt, deadline, status, finishedAt}`. All times are
+epoch milliseconds on the hub. `dispatchAt` and `finishedAt` may be null. `notBefore` is
+the earliest permitted measurement time, not proof of a client starting.
+
+| Status | Meaning |
+|---|---|
+| `queued` | Waiting for the device's permitted interval and check-in. |
+| `waiting` | A measurement has been asked for; waiting for fresh data. |
+| `updated` | A newer accepted measurement met the freshness boundary, even with unchanged percentages. |
+| `failed` | A relevant new failure came from the bound device. Previous limits may still be representative. |
+| `unavailable` | The request lost its executor or became impossible. |
+| `no_result` | No fresh data arrived before the deadline. This says nothing about whether the client started. |
+
+A request joins a command to the holder that is still under way: one the holder has not
+asked past, since it asks nothing while it measures, for at most five minutes after the
+command; meanwhile the holder is not `silent`. A holder that asks again without
+answering lost the command, and the request is queued for the command's retry, which it
+never brings forward. Before dispatch the deadline is five minutes after `notBefore`
+(never counted from a moment already past, when the device lowers its minimum); after
+dispatch, five minutes after the command. Joining a command waits five minutes after the
+request, with no extension on retries. Silence over 120 seconds ends a queued request. A
+dispatched request keeps waiting until its deadline: providers are measured
+sequentially, and a holder busy measuring neither asks nor delivers the others. Its
+`unavailable` can therefore be `silent` or `no_device` once the five minutes after the
+command are over, while a joined request is still `waiting`. A lapsed lease ends neither
+while the same device holds duty. Revocation, a changed holder, a return to the legacy
+protocol and an error pause end either. Terminal results remain for one minute; an
+allowed new request can replace one immediately. The state is in memory and resets with
+the hub.
+
+A success must be newer than the success at acceptance and no earlier than 30 seconds
+before the request (or the original command when joining one already outstanding), using
+ingest's corrected clock. It may arrive from another device of the same subscription.
+There is no request id in ingest and no assertion that this click caused that particular
+measurement. After a terminal outcome, late data update the usual card only.
+
+Snapshots, SSE and long polls expose the same state to every reader of the subscription.
+Time boundaries emit events without page polling. No requester identity, device id or
+device name is exposed by refresh state, and no state is returned before board access
+is checked.
 
 ## The board at once
 
@@ -155,7 +237,79 @@ cards, the same agents as the dashboard shows them, and of other boards only the
 their own. What is theirs alone, which sources their devices measure and their role on
 each board, goes to their streams only. Events carry no secrets, no email addresses and
 no session ids.
+Desktop observation barriers carry only source/window identifiers and corrected times
+from those sources; they add no client output, credentials or provider identity.
 
 While a board is read, the hub keeps in memory what its readers last got of each part,
 and a lease's events until it is asked; it writes nothing of them to disk. A board nobody
 reads costs nothing.
+
+## Desktop attention stream
+
+In local mode a session may request `GET /api/events?desktop=1`, with the same
+`Quotum-Stream: 1`, session, origin and resource limits as the board. This mode is
+stream-only: combining it with `mode=poll`, or requesting it outside local mode,
+returns `400 invalid_request`. A machine token does not grant access.
+
+After `hello` and `snapshot` comes `attention`:
+
+```ts
+{
+  seq: number; now: number; baseline: boolean;
+  state: {
+    boardId: string;
+    level: 'ok' | 'warn' | 'crit' | null;
+    quality: 'current' | 'partial' | 'unavailable';
+    minimum: {sourceId: string; windowId: string; remaining: number} | null;
+  };
+  notifications: Candidate[];
+  invalidations: {sourceId: string; windowId: string; at: number}[];
+}
+```
+
+`seq` increases within this connection; `hello.epoch` identifies the hub start.
+The first attention frame is a baseline, with no notifications or invalidations.
+Observation boundaries are sent in an attention frame before the corresponding
+board changes, with no notifications. A quota candidate observed before its window's
+invalidation `at` must be discarded, including one already in a native queue.
+These boundaries come from committed measurements: first observation, a gap or
+recovery, changed window semantics, a confirmed reset, and disappearance or return.
+They survive coalescing even when the final card looks like the earlier one.
+When new notifications also exist, a second attention frame follows the board
+changes, so their current names and visibility are already available. Both frames
+have their own increasing `seq`. Without boundaries, the attention frame follows
+the board changes as usual. The minimum includes only visible windows of
+visible cards. Levels match the board: above 30 is ok, 10 through 30 warn, below 10
+crit. Last known figures retain their level; missing, stale, failed or reset-past
+measurements make their quality partial. No visible figures means unavailable,
+never a fictitious full quota.
+
+A quota candidate has `id`, `kind` (`low`, `critical`, `reset`), `at`,
+`observedFrom`, `observedAt`, `sourceId`, `windowId`, `provider`, `name`,
+`window: {kind, label, minutes}`, `remaining` and nullable `resetAt`.
+`at` is the hub's receipt time; the observation times are the corrected sample
+clocks, unchanged by batch delivery. Both observations must belong to the reader's
+current baseline (`observedFrom >= baseline.now`, `observedAt > observedFrom`).
+Thresholds are consumed once per confirmed window cycle, even while hidden or
+notifications are disabled. A reset needs measurement evidence; a timer alone is
+never a reset. One delivery gives at most one current notification per window,
+keeping the most severe threshold, or the reset with the resulting remainder.
+
+An announcement candidate has `id`, `kind: 'announcement'`, `at`, `provider`,
+nullable `scheduledFor`, nullable `resetKind` (`regular` or `banked`), `credit:
+{name, url}` and `url`. It describes a newly learned scheduled tracker event,
+not proof that a subscription reset. The first successful tracker answer and
+recovery after a failure are silent baselines. Names and links are data, never
+instructions to the native host.
+
+Candidates leave ingestion only after its transaction commits. They are not
+reconstructed from coalesced card frames. Pending candidates and coalesced per-window
+invalidations share the stream's buffer limit; overflow discards both and starts a new
+attention baseline. Before emission, a quota candidate must still name the current
+window semantics and ledger cycle. Changing kind, label or duration invalidates
+pending candidates even if the old values return before the next flush. The desktop
+also checks window semantics and its observation boundary after native queueing.
+Disconnected readers retain no notification queue. There is
+no replay through `Last-Event-ID`, after restart, or across a baseline. A crash
+between consumption and native delivery may lose a notification; successful
+native submission does not guarantee the operating system displayed it.

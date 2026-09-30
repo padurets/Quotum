@@ -383,6 +383,7 @@ const DAN_ON_BEN: Agent[] = [{machine: 'dan-desk', origin: 'terminal', project: 
 const all: DemoSet = {
   id: 'all',
   about: 'every state the dashboard knows',
+  // /compact uses these same levels, empty/error states, long names and agent counts.
   scene: 'announced',
   entries: [
     // People and boards. Ana is the first person: her personal board holds almost everything.
@@ -391,6 +392,10 @@ const all: DemoSet = {
       id: 'ana',
       name: 'Ana',
       agents: true,
+      // Heights she chose, which the benchmark renders too: the list after all her cards however many, 32 rows tall, so most of its
+      // agents show with their running times and a few are left to the dialog; the analytics taller than drawn by themselves.
+      agentsPlace: {x: 0, y: 99, w: 6, h: 32},
+      places: {activity: {x: 0, y: 0, w: 6, h: 12}, history: {x: 0, y: 1, w: 6, h: 16}, forecast: {x: 0, y: 2, w: 6, h: 30}},
       projects: {'docs-site': 'docs'},
       // Each group has a working agent that works within the first twenty minutes.
       expect: [
@@ -417,6 +422,9 @@ const all: DemoSet = {
       ],
       look: [
         'The table of agents lists many rows, by activity',
+        'The list of agents is 32 rows tall: the first agents that fit whole, then "N more agents", which opens them all in a dialog, in the same order and columns, sorted there as in the widget',
+        'Agent activity and the chart are taller than they draw themselves: the room goes to the plot, the totals, heads and legends stay whole',
+        'The table is 30 rows tall: room under it on a wide screen; on a narrow one, where it is a list, it is as tall as its rows',
         'The chart\'s tooltip has a row for every line in the legend\'s order, with what is left, the plan and the gap in columns up to now, and after it the plan and where each forecast leads; on a phone it stays whole on the screen',
         'The chart\'s settings switch the plan and the forecast on and off, under "On the chart"',
         'My machines → Projects: quotum once, on the laptop, though three agents work in three folders (the tray and the table show quotum three times, with hub and quotum.feat-18-desktop-app under two of them)',
@@ -429,8 +437,11 @@ const all: DemoSet = {
         'Agent activity by project: seven projects in colour, the rest grey, each its own row in the legend and the tooltip, switched off and on alone',
       ],
     },
-    {kind: 'person', id: 'ben', name: 'Ben', agents: true, expect: [{state: 'widgets'}, {rows: 1}]},
-    {kind: 'person', id: 'cleo', name: 'Cleo', expect: [{state: 'onboarding'}], look: ['Cleo has no machines: her board asks her to connect one']},
+    {
+      kind: 'person', id: 'ben', name: 'Ben', agents: true, agentsPlace: {x: 0, y: 99, w: 6, h: 2}, expect: [{state: 'widgets'}, {rows: 1}],
+      look: ['His one agent shows whole in a list chosen two rows tall'],
+    },
+    {kind: 'person', id: 'cleo', name: 'Cleo', expect: [{state: 'onboarding'}], look: ['Cleo has no machines: her board asks her to connect one', 'Her /compact page says there are no visible limits, with Open Quotum still reachable']},
     {
       kind: 'person',
       id: 'dan',
@@ -461,6 +472,7 @@ const all: DemoSet = {
       // Ben joined an hour before `start`, when his agent had worked on Team's Claude for two hours.
       joined: {ben: -HOUR},
       agents: true,
+      agentsPlace: {x: 0, y: 99, w: 6, h: 5},
       expect: [
         {state: 'widgets'},
         {rows: 3},
@@ -471,7 +483,7 @@ const all: DemoSet = {
       ],
       look: [
         'Cards are named with their owners',
-        'Ben sees Team as a member: no arranging, no invites',
+        'Ben sees Team as a member: no arranging, no invites; the list of agents, chosen five rows tall, shows the first of its three and how many more, and he opens them all too',
         'Agent activity by machine: the laptop and ben-mac, nothing of Dan; Ben\'s from an hour before the start',
       ],
     },
@@ -493,13 +505,19 @@ const all: DemoSet = {
       owner: 'ana',
       members: [],
       agents: true,
+      agentsPlace: {x: 0, y: 99, w: 6, h: 2},
       // No agent on it: over a month, only from when work was known.
+      look: ['The empty list of agents, chosen two rows tall, says so whole'],
       expect: [{rows: 'none'}, {activityEmpty: 'none', range: '24h', from: 0, to: 0}, {activityEmpty: 'noneSince', range: '30d', from: 0, to: 0}],
     },
     {
       kind: 'board', id: 'grid', name: 'Grid', owner: 'ana', members: [], agents: true,
-      agentsPlace: {x: 0, y: 0, w: 3}, expect: [{state: 'widgets'}],
-      look: ['The agents stand on the left half; Claude, Codex and Antigravity stack on the right at their own heights, their trays at the bottom of their rows'],
+      agentsPlace: {x: 0, y: 0, w: 3, h: 16}, expect: [{state: 'widgets'}],
+      look: [
+        'The agents stand on the left half, 16 rows tall: the first that fit whole, then "N more agents"; Claude, Codex and Antigravity stack on the right, their trays at the bottom of their rows',
+        'Claude is as tall as its content; Codex is taller, with room over its tray; Antigravity was made 8 rows tall but shows its five windows whole',
+        'Hiding three of Antigravity\'s windows brings it to its 8 rows, showing them again makes it as tall as they are',
+      ],
     },
     {kind: 'board', id: 'night', name: 'Night shift', owner: 'ana', members: [], agents: true, expect: [{rows: 'noneShown'}, {activityEmpty: 'noSources', range: '24h', from: 0, to: 0}]},
     {kind: 'board', id: 'empty', name: 'Empty board', owner: 'ana', members: ['cleo'], expect: [{state: 'onboarding'}]},
@@ -582,7 +600,7 @@ const all: DemoSet = {
         rolling({id: 'flash:window-1440', kind: 'other', label: 'Flash', minutes: 1440, offset: -8 * HOUR, use: elapsed => (1.5 * elapsed) / HOUR}),
         fixed({id: 'credits', label: 'Credits', used: 40}),
       ],
-      on: {ana: {plan: 'off'}, grid: {plan: 'off', place: {x: 3, y: 2, w: 3}}},
+      on: {ana: {plan: 'off'}, grid: {plan: 'off', place: {x: 3, y: 2, w: 3, h: 8}}},
       expect: [
         {title: 'Antigravity'},
         {window: 'gemini:session', name: 'Gemini Pro · 5 hours'},
@@ -614,12 +632,14 @@ const all: DemoSet = {
         {work: 'gemini:weekly', range: '24h', paceWhy: 'short', leftWhy: 'short', from: 0, to: 0},
         {title: 'Antigravity 2'},
         {stale: false, to: 3 * MIN},
-        {stale: true, from: 4 * MIN, to: 13 * MIN},
+        // Stale while it sleeps, as the live demo, measured at the hub's pace, shows it too,
+        // whenever in its first minute its loop starts.
+        {stale: true, from: 8 * MIN, to: 13 * MIN},
         {stale: false, from: 15 * MIN, to: 46 * MIN},
         {agents: 2, drawn: true, to: 6 * MIN},
         {agents: 0, drawn: true, from: 7 * MIN, to: 14 * MIN},
         {agents: 2, drawn: true, from: 15 * MIN, to: 46 * MIN},
-        {stale: true, from: 49 * MIN, to: 58 * MIN},
+        {stale: true, from: 53 * MIN, to: 58 * MIN},
         {agents: 0, drawn: true, from: 52 * MIN, to: 59 * MIN},
         // Asleep or not, the forecast stays.
         {forecast: 'gemini:weekly', outlook: 'runsOut', tone: 'v-warn'},
@@ -659,7 +679,7 @@ const all: DemoSet = {
                   ],
                 },
       agents: PRO_AGENTS,
-      on: {grid: {place: {x: 3, y: 1, w: 3}}, ana: {}, night: {hidden: true}},
+      on: {grid: {place: {x: 3, y: 1, w: 3, h: 9}}, ana: {}, night: {hidden: true}},
       expect: [
         {work: 'session', range: '24h', left: 'untilReset', from: 0, to: 0},
         {title: 'Codex'},
@@ -1045,6 +1065,24 @@ const all: DemoSet = {
       look: ['In the table, the tooltips of spent per work hour and the forecast by work say nothing was spent while agents worked'],
     },
 
+    // Real requests through the board API, with stand-in devices and controlled answers. Times
+    // count from the machines' first asking, 15 seconds apart from then on in the demo's own
+    // steps: a step happens up to 15 seconds after the time it is due.
+    ...[
+      {id: 'refresh-updated', refresh: {at: 15 * SECOND}, expect: [{refresh: 'queued', from: 30 * SECOND, to: 55 * SECOND}, {refresh: 'updated', from: 75 * SECOND, to: 115 * SECOND}]},
+      {id: 'refresh-queued', refresh: {at: 15 * SECOND, minimum: 5 * MIN}, expect: [{refresh: 'queued', from: 30 * SECOND, to: 4 * MIN}]},
+      {id: 'refresh-waiting', refresh: {at: 15 * SECOND, delay: 150 * SECOND}, expect: [{refresh: 'waiting', from: 75 * SECOND, to: 3 * MIN}]},
+      {id: 'refresh-failed', refresh: {at: 15 * SECOND, response: 'failed' as const}, expect: [{refresh: 'failed', unavailable: 'paused', from: 75 * SECOND, to: 115 * SECOND}]},
+      {id: 'refresh-no-result', refresh: {at: 15 * SECOND, response: 'lost' as const}, expect: [{refresh: 'no_result', from: 6 * MIN + 15 * SECOND, to: 6 * MIN + 45 * SECOND}]},
+      {id: 'refresh-legacy', refresh: {at: 0, legacy: true}, expect: [{unavailable: 'unsupported', from: 0, to: 4 * MIN}]},
+      {id: 'refresh-silent', refresh: {at: 0, silent: true}, expect: [{unavailable: 'silent', from: 135 * SECOND, to: 4 * MIN}]},
+    ].map(({id, refresh, expect}) => ({
+      kind: 'card' as const, id, provider: 'codex' as const, plan: 'pro', machines: [id], history: DAY, paced: true,
+      refresh, windows: [weekly({since: -3 * DAY, use: () => 35})],
+      on: {ana: {name: id.replaceAll('-', ' ')}}, expect: expect as import('./model.js').CardCheck[],
+      look: ['Refresh is an action in the existing card menu; acceptance closes it, with request state in the logo dot. Check keyboard, touch, viewers, narrow cards and both languages'],
+    })),
+
     // Measured at the hub's pace, one reason each, all by one machine asking every 15 seconds.
     {
       kind: 'card',
@@ -1271,7 +1309,10 @@ const activity: DemoSet = {
   scene: 'quiet',
   entries: [
     {kind: 'person', id: 'ana', name: 'Ana', agents: true, expect: [{rows: 12}, {firstMachines: ['workstation', 'workstation', 'laptop', 'laptop'], from: 2 * MIN, to: 10 * MIN}], look: ['At full width, sortable headers; two agents on workstation rise to the top after a minute']},
-    {kind: 'board', id: 'compact', name: 'Compact agents', owner: 'ana', members: [], agents: true, agentsWidth: 2, expect: [{rows: 12}], look: ['At a third of the grid the widget is a compact list, with a sort menu']},
+    {
+      kind: 'board', id: 'compact', name: 'Compact agents', owner: 'ana', members: [], agents: true, agentsPlace: {x: 3, y: 1, w: 2, h: 8}, expect: [{rows: 12}],
+      look: ['At a third of the grid the widget is a compact list, with a sort menu, eight rows tall: the first agents and "N more agents"; the dialog shows them all as a table'],
+    },
     {
       kind: 'card', id: 'activity', provider: 'codex', plan: 'pro', machines: ['workstation', 'laptop', 'server'], history: DAY,
       windows: [weekly({since: -2 * DAY, use: steady(0, 10)})], agents: SORT_AGENTS,

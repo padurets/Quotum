@@ -243,6 +243,31 @@ test('a stream starts with hello and the board as the reader sees it, the same a
   assert.deepEqual(await s.types(300), [], 'nothing changed: nothing more');
 });
 
+test('a height the owner chose reaches every reader: in the view event of one already reading, in the snapshot of one who comes later', async t => {
+  const h = await hub();
+  t.after(() => (letGo(), h.app.close()));
+  await h.person('alice');
+  const team = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
+  await h.person('bob', await h.invite('alice', team));
+  const bob = await reading(h, 'bob', team);
+  t.after(bob.close);
+  const layout = {columns: 6, places: {history: {x: 0, y: 0, w: 6, h: 12}, agents: {x: 0, y: 12, w: 3}}};
+  const saved = await h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {layout}});
+  assert.deepEqual(saved.body.layout, layout);
+  const told = (await bob.within()).filter(e => e.type === 'view');
+  assert.deepEqual(told.map(e => e.data.view.layout), [layout]);
+  const later = await reading(h, 'bob', team);
+  t.after(later.close);
+  assert.deepEqual(later.snapshot.view.layout, layout);
+  assert.deepEqual((await h.call('GET', `/api/overview?board=${team}`, {as: 'bob'})).body.view.layout, layout);
+  // Given back to its content: the key goes, for everyone.
+  const auto = {columns: 6, places: {history: {x: 0, y: 0, w: 6}, agents: {x: 0, y: 12, w: 3}}};
+  await h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {layout: auto}});
+  const again = (await bob.within()).filter(e => e.type === 'view');
+  assert.deepEqual(again.map(e => e.data.view.layout), [auto]);
+  assert.ok(!('h' in again[0].data.view.layout.places.history));
+});
+
 test('a change goes out once, only as the part it changed, in one event however many touches it took', async t => {
   const h = await hub();
   t.after(() => (letGo(), h.app.close()));
@@ -291,13 +316,13 @@ test("the board's own events and each reader's own go apart: its owner and a mem
   // Whose agents' work the board shows changed with it: all of its history reads otherwise.
   assert.deepEqual(
     ofAlice.map(e => e.type),
-    ['card', 'sessions', 'cadence', 'lineup', 'mine', 'history'],
+    ['card', 'sessions', 'cadence', 'refresh', 'lineup', 'mine', 'history'],
   );
   assert.deepEqual(ofAlice.at(-2)!.data, {sources: [source]});
   assert.deepEqual(ofAlice.at(-1)!.data, {sources: [source], since: 0});
   assert.deepEqual(
     ofBob.map(e => e.type),
-    ['card', 'sessions', 'cadence', 'lineup', 'history'],
+    ['card', 'sessions', 'cadence', 'refresh', 'lineup', 'history'],
     "not Bob's: no mine for him",
   );
   for (const event of ofBob) assert.ok(!JSON.stringify(event.data).includes('"role"'), 'no role in what the board tells everyone');
@@ -321,7 +346,7 @@ test('a source taken off and back comes back whole, before the lineup; a reader 
   assert.deepEqual([later.snapshot.sources, later.snapshot.sessions, later.snapshot.cadence], [[], {}, {}]);
 
   await h.call('POST', `/api/boards/${team}/shares`, {as: 'alice', body: {source}});
-  assert.deepEqual(await s.types(), ['card', 'sessions', 'cadence', 'lineup', 'mine', 'history'], 'with no measurement in between, its work shown again');
+  assert.deepEqual(await s.types(), ['card', 'sessions', 'cadence', 'refresh', 'lineup', 'mine', 'history'], 'with no measurement in between, its work shown again');
 });
 
 test('a reader coming while changes wait to go out has them in the snapshot and hears of them no more', async t => {
@@ -383,8 +408,10 @@ test('what changes with time alone goes out when it does, with nothing told to t
 
   // The card goes stale two minutes on.
   h.clock.advance(2 * MIN + S);
-  const stale = await s.next();
-  assert.deepEqual([stale.type, stale.data.stale], ['card', true]);
+  const elapsed = await s.within(300);
+  const stale = elapsed.find(e => e.type === 'card')!;
+  assert.equal(stale.data.stale, true);
+  assert.equal(elapsed.find(e => e.type === 'refresh')?.data.refresh.unavailable, 'no_device');
 
   // A machine's list of agents stops showing five minutes after it was told.
   h.ingest.sessions(
@@ -922,8 +949,8 @@ test('every change a reader sees is told: what each request touches reaches the 
     [
       'a check-in at the pace',
       () => h.call('POST', '/v1/checkin', {token: secret, body: {...agent, paced: true, subscriptions: [{provider: 'codex', account: ACCOUNT, active: false}]}}),
-      ['cadence'],
-      ['cadence'],
+      ['cadence', 'refresh'],
+      ['cadence', 'refresh'],
       [],
     ],
     [
@@ -936,6 +963,8 @@ test('every change a reader sees is told: what each request touches reaches the 
     ['a project renamed', () => h.call('POST', '/api/projects', {as: 'alice', body: {groups: ['quotum'], name: 'Quotum'}}), ['sessions'], ['sessions'], []],
     ['a project given its name back', () => h.call('POST', '/api/projects/restore', {as: 'alice', body: {reported: ['quotum']}}), ['sessions'], ['sessions'], []],
     ['a view saved', () => h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {layout: {columns: 6, places: {history: {x: 0, y: 0, w: 6}}}}}), [], ['view'], []],
+    ['a height chosen', () => h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {layout: {columns: 6, places: {history: {x: 0, y: 0, w: 6, h: 9}}}}}), [], ['view'], []],
+    ['the height given back to the content', () => h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {layout: {columns: 6, places: {history: {x: 0, y: 0, w: 6}}}}}), [], ['view'], []],
     ['a board renamed', () => h.call('POST', `/api/boards/${team}`, {as: 'alice', body: {name: 'Crew'}}), ['boards'], ['board', 'boards'], ['boards']],
     ['a board made', () => h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Solo'}}), ['boards'], ['boards'], []],
     ['a name changed', () => h.call('POST', '/api/account', {as: 'alice', body: {name: 'Alicia'}}), ['card'], ['card'], []],
@@ -1031,11 +1060,11 @@ test('what each change of data touches reaches the boards it shows on: people jo
       'a subscription measured for the first time',
       () => h.measure(desk, Date.now() - MIN, {account: 'c0c0c0c0c0c0c0c0c0c0c0c0', device: 'box'}),
       // Sent whole as it comes; the page reads its history for the new lineup, all of it.
-      ['card', 'sessions', 'cadence', 'lineup', 'mine', 'history'],
+      ['card', 'sessions', 'cadence', 'refresh', 'lineup', 'mine', 'history'],
       [],
       [],
     ],
-    ['the machine that told of agents is disconnected', () => h.call('DELETE', `/api/devices/${laptop}`, {as: 'alice'}), ['sessions'], [], []],
+    ['the machine that told of agents is disconnected', () => h.call('DELETE', `/api/devices/${laptop}`, {as: 'alice'}), ['sessions', 'refresh'], [], []],
     ['a machine tells of its agents', () => agents('desk', [session]), ['sessions'], [], []],
     ['and then of none', () => agents('desk', []), ['sessions'], [], []],
     ['the trackers asked', () => h.resets.round(), ['resets'], ['resets'], ['resets']],
@@ -1046,4 +1075,46 @@ test('what each change of data touches reaches the boards it shows on: people jo
     const [a, b, c] = await Promise.all([own.types(), shared.types(), carols.types()]);
     assert.deepEqual({own: a, shared: b, carols: c}, {own: onOwn, shared: onShared, carols: onCarols}, what);
   }
+});
+
+test('refresh deadlines and terminal expiry reach both boards without polling', async t => {
+  const h = await timed(t);
+  const start = h.clock.now();
+  h.ingest.checkin(h.credential, {...h.agent, paced: true, subscriptions: [{provider: 'codex', account: ACCOUNT, active: false}]}, start);
+  h.deliver(start, 60 * MIN);
+  const source = h.store.sources(h.board)[0].id;
+  const team = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Refresh team'}})).body.id;
+  await h.call('POST', `/api/boards/${team}/shares`, {as: 'alice', body: {source}});
+  const own = await reading(h, 'alice');
+  const shared = await reading(h, 'alice', team);
+  t.after(() => {own.close(); shared.close();});
+  const states = async () => {
+    const lists = await Promise.all([own.within(200), shared.within(200)]);
+    const refreshes = lists.map(list => list.filter(e => e.type === 'refresh').map(e => e.data.refresh));
+    assert.deepEqual(refreshes[0], refreshes[1], 'both boards hear the same state');
+    return refreshes[0].at(-1);
+  };
+  h.clock.advance(10 * S);
+  h.ingest.requestRefresh(source, h.clock.now());
+  h.clock.advance(200);
+  assert.equal((await states()).request.status, 'queued');
+  h.clock.advance(start + MIN - h.clock.now());
+  h.ingest.checkin(h.credential, {...h.agent, paced: true, subscriptions: [{provider: 'codex', account: ACCOUNT, active: false}]}, h.clock.now());
+  h.clock.advance(200);
+  assert.equal((await states()).request.status, 'waiting');
+  h.clock.advance(start + 70 * S + 200 - h.clock.now());
+  assert.equal((await states()).retryAt, null);
+  h.clock.advance(start + 181 * S + 200 - h.clock.now());
+  // Silent for two minutes, but measuring what it was told to: nothing to tell.
+  const quiet = await Promise.all([own.within(200), shared.within(200)]);
+  assert.deepEqual(quiet.map(list => list.filter(e => e.type === 'refresh')), [[], []]);
+  const reconnected = await reading(h, 'alice');
+  const measuring = reconnected.snapshot.refresh[source];
+  assert.deepEqual([measuring.unavailable, measuring.request.status], [null, 'waiting']);
+  reconnected.close();
+  h.clock.advance(start + 6 * MIN + 200 - h.clock.now());
+  const ended = await states();
+  assert.deepEqual([ended.request.status, ended.unavailable], ['no_result', 'silent']);
+  h.clock.advance(start + 7 * MIN + 200 - h.clock.now());
+  assert.equal((await states()).request, null);
 });

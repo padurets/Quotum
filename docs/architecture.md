@@ -101,9 +101,19 @@ what it started (tools, builds, tests) spend more of a CPU core than the client 
 when idle (6% for Claude Code, which redraws its screen even then; 3–4% for the others),
 and for a minute after, so a pause of the model is not idleness. Only this user's
 processes count (on Windows, those of this logon session), and the clients the agent
-starts to measure do not. Nothing else of the client is read, its settings are not
-changed, and no program is started for it. A look is one pass over the process list for
-names and parents, then the times of the clients' own processes: about 20 µs per process
+starts to measure do not. On Linux, a bounded invocation prefix of this user's Codex
+processes also distinguishes `app-server daemon pid-update-loop` (maintenance) and
+`app-server proxy` (transport forwarding), which are not sessions. The reader skips at
+most 2048 bytes of the executable name, then compares only the leading role, byte by
+byte, stopping at the first mismatch or the end of a recognised role. It never reads
+ahead into argument values, retains no command line, and checks the process's identity
+again after the read. Unknown or unreadable roles remain eligible; processes that exited
+or whose identity changed during the read are left for the next look. A service ancestor
+does not hide a real client it started. Persistent app servers remain eligible, including
+detached servers that may serve remote work; idle alone does not make a service. macOS
+and Windows currently have no invocation-role reader. No client settings or session files
+are read or changed, and no program is started for it. A look is one pass over the process
+list for names and parents, then the times of the clients' own processes: about 20 µs per process
 on Linux. Not seen: a client that runs as `node` (an npm install on macOS and Windows),
 and on Windows the folder, which the system does not tell of another process. macOS names
 a process after the file a link leads to, so there a client is also told by its path.
@@ -165,10 +175,19 @@ subscription:
 - Before measuring, a device checks in (`POST /v1/checkin`) with the subscription and
   whether someone is using the client on this machine right now.
 - The first device to ask gets duty. It keeps it while it delivers: each measurement
-  extends duty until the measurement goes stale. Only delivering extends it; a holder
+  extends duty until the measurement goes stale. Asking does not extend it; a holder
   that keeps asking but never delivers loses duty after five minutes.
-- The others are told to wait and when to ask again: in a minute if someone works on
-  that machine, otherwise in up to ten minutes.
+- A holder following the pace that is told to measure keeps duty while it measures:
+  until it delivers, fails or asks again, for at most five minutes. It asks nothing
+  meanwhile, measuring its providers one by one, and another device taking over halfway,
+  even one where someone works, would measure the same again.
+- The others are told to wait and when to ask again: when the holder's measurement goes
+  stale or, once that has passed while it measures, when its five minutes end; sooner,
+  in a minute if someone works on that machine, otherwise in up to ten minutes.
+- A holder that asks again without answering what it was told keeps duty no longer than
+  the others were told to wait, and until it answers the last command, however late,
+  telling it to measure again keeps it no duty: one that keeps asking but never delivers
+  loses duty as any other.
 - Duty moves to a device where someone works if the holder has been idle for ten
   minutes, so the numbers come from where the subscription is actually being used.
 - A holder that goes quiet (asleep, switched off) loses duty when its last measurement
@@ -193,8 +212,58 @@ from what it sees of the subscription everywhere, which no single machine does:
   minutes for a signed-out client), and a device doing so does not take duty; a healthy
   one does, as before. A `measure` nothing came back for (a lost answer) is asked again
   after 90 seconds, then less and less often.
-- The lease is as before: only a delivery extends it, and it lasts past the next
-  planned measurement, so a holder waiting for its pace keeps duty.
+- The lease is as before otherwise: a delivery extends it, and it lasts past the next
+  planned measurement, so a holder waiting for its pace keeps duty. A device that raises
+  its minimum interval past its lease is the exception: until it asks again it has no
+  duty, and another device of the subscription may take it and measure at once.
+
+**Refresh on demand.** Any reader of a subscription on a board can request fresh data
+through its existing card menu, above the action to hide the widget, in the web
+dashboard and the desktop app. The header also refreshes all non-hidden cards on the
+current board through those same requests, up to four at a time. A refused request does
+not stop the rest; a tooltip at the header button lists every requested card in one
+compact row, with its name, status icon and short outcome. Error details expand by
+clicking the row. Each outcome stays in this attempt's receipt after the hub retires its
+status, also while the tooltip is closed. An old outcome cannot stand in for a new
+request, and a reconnect with a missing outcome says it is unknown. Nothing moves the
+widgets. While its refresh is pending, and once it has finished, clicking the button
+only opens or closes that information; a row at the top of the tooltip starts another
+attempt. An individual card cannot be requested again until its refresh finishes, nor
+while the page is still sending its request, from its menu or the header. Already
+pending subscriptions need no additional POST from the board action. The charts and
+tables receive new measurements through the usual events. Leaving the board stops
+requests that have not started. The accepted card action closes the menu; a circular
+loader replaces the logo's dot while the request is queued or waiting, then its ordinary
+status and tooltip show the outcome without adding a control or a line to the card.
+Outside an active request the menu action remains clickable: the hub rechecks
+availability, and a refused request explains the reason and next step in the menu.
+Nothing is sent while the page is disconnected. One request per subscription is accepted
+each minute across the hub; another click joins a pending request. Cadence shortens the
+ordinary wait to the earliest permitted measurement, respecting the one-minute floor,
+the device's minimum interval, failure pauses and unanswered-command backoff. A raised
+minimum takes precedence over an earlier staleness promise. The floor applies after the
+later of the last measurement and command for the current holder; an old delivery or
+failure cannot acknowledge a newer command outside the 30-second clock tolerance, and
+only a success taken after a failure clears its pause.
+
+Refresh capability comes from that subscription's latest check-in, not the agent
+version: the live duty holder must follow the hub's pace and have been heard from within
+120 seconds, or be measuring what it was told to. It is heard from when it asks, and
+when it delivers a measurement or a failure of any subscription within five minutes of
+asking: while it measures its providers one by one, the ones done are not silent. A
+request never claims duty or extends its lease. A click joins a command to the holder
+while it is under way: until the holder asks again, for at most five minutes, as long as
+duty stays with it for that. A holder that asks again without answering lost the
+command, and the request waits for its retry. A lapsed lease ends nothing while the same
+device holds duty: a holder that asks takes it again. Queued requests end on silence;
+requests already dispatched keep waiting through it for up to five minutes, as providers
+are measured sequentially and a holder busy measuring neither asks nor delivers the
+others. Duty passing to another device, revocation, legacy check-in, an error or the
+deadline ends the request. A fresh accepted snapshot of the same subscription, from any
+device, can satisfy it even if its percentages are unchanged. The protocol has no
+request id or startup acknowledgement; the card says it is waiting for data, not that a
+client started. Terminal outcomes show for a minute. Refresh is its own projection and
+event, so time boundaries and reconnect work without polling or rendering other cards.
 
 Duty and the pace are kept in memory; after a restart of the hub the first devices to
 check in take duty again and measure at once. An agent that cannot ask keeps asking
@@ -409,7 +478,8 @@ them), kept for 90 days.
   its view, never the measurements.
 - **The view** of a board is how it is arranged: the order of its widgets (a card per
   source, the list of running agents, the chart, the table and agent activity), their places on a
-  six-column grid (`x`, `y`, `w`; heights are measured, never stored), names and colours
+  six-column grid (`x`, `y`, `w`, and `h` where the owner chose a height; what the content
+  needs is measured, never stored), names and colours
   given to cards, the hidden widgets (and those
   off by default, the list of agents, turned on), the columns hidden in a widget's table,
   the agents' and the limits' (and those off by default turned on), the windows hidden inside cards and the spending
@@ -521,14 +591,50 @@ them the analytics, agent activity, the chart and the table, which show one peri
 chosen in the analytics' own head, the chart and the table one window type of it. Each
 area is arranged on its own grid. A row is 48 px (a 32 px track and a 16 px gap).
 Each widget fills the fewest whole rows that contain its content, with any spare room
-above a card's tray or at the bottom of a panel. Widgets float up within their columns
-without stretching their neighbours. Saved `y` gives the reading order; each viewer's
-measured heights determine the actual rows. Dragging by the head places a widget by
+above a card's tray or at the bottom of a panel, unless the owner chose a height for it
+(`h`, in rows). A chosen height is a request, not what shows: a card or the table never
+gets shorter than its content, and grows past the chosen rows while its content needs
+more, back to them when it needs less, without the view changing. Both charts give a
+chosen height to their plot, never drawing it lower than they do by themselves, their
+heads, totals and legends whole. The list of agents can be shorter than its rows: it
+shows the most whole rows that fit, in its own order, and a last row saying how many
+more, which opens them all in a dialog; to know how many fit, it lays all its rows out
+unseen beside it, their running times standing still. Such a widget tells the grid
+through a context of its own (`ui/components/sizing.ts`) the least it can show, what it
+needs whole and, as it lays itself out anew, how tall it shows, so the grid fills the
+rest of its rows before that paints; it reads how tall it is to be and when the grid gives
+it another width (the grid's columns, its own, a gesture on its side ending), to draw
+itself at that width in the same frame, and only these read it, so a neighbour's height
+renders none of them.
+Widgets float up within their columns without stretching
+their neighbours. Saved `y` gives the reading order; each viewer's measured content and
+the chosen heights determine the actual rows. Dragging by the head places a widget by
 its top-left corner against the original layout: it goes after widgets whose top is
 above that row, taking an occupied slot unless its neighbour can rise into the place
 it left. Neighbours move down, never sideways. Widths snap to a third, a half, two
-thirds or the whole grid. At 1000 px and below the page uses two columns, at 680 and
-below one, in reading order; arranging is available only on the wide grid.
+thirds or the whole grid, by the left or the right edge, the other one staying; widened
+by its left edge a widget keeps its row unless a widget above reaches into the columns it
+takes, and what it covers there goes after it, as the right edge sends its neighbour
+down. Heights snap to whole rows, by the bottom edge; both
+by either bottom corner. The top has no edge: a widget floats up to what is above it, so
+its top has no place of its own to pull, and it is moved by its head. The edges are not
+drawn: each is a strip along its whole length in the gap beside it, with the cursor of
+its axis; under the pointer the widget's own border on that side lights up a little, in
+focus it takes the accent. Only the bottom corners have marks. The right and
+bottom edges take the arrow keys too. A height is saved only where a gesture or a key
+changes what shows, the way it pulled (`heightIntent` in `ui/lib/grid.ts`): pushed below
+the least its content can show, a widget stops there; one already there, a click, or a
+corner moved only sideways keeps the height it had, chosen or its content's. Only the
+pointer's way down the window pulls, with the page the gesture scrolls under it: near an
+edge of the window the page scrolls once the pointer is taken half a row toward it, or
+to the edge itself from a press nearer to it than that, never by a click's jitter nor by
+a corner or a widget's head moved along the edge (`edgeScroll`), and nothing else that
+moves the page or the grid (the wheel, a key, what is above growing, the browser keeping
+its place) changes the height. A double click on the bottom edge
+or a bottom corner, or Enter or Space on the bottom edge, gives a widget back the height
+of its content. At 1000 px and below the page uses two columns, at 680 and below one, in
+reading order, with the heights chosen where the least their content can show fits them;
+arranging is available only on the wide grid.
 The page translates views saved before the grid, retaining hidden and absent widgets;
 the next save writes only the new layout. The hub requires that layout when saving,
 so an old page cannot overwrite it. Its view route allows 64 KiB per request, so a full
@@ -605,35 +711,123 @@ files together and requires the system WebView2 runtime; the installer can insta
 that runtime. Both variants use the same Windows profile directories, instance lock
 and start-at-login settings. Moving a portable folder requires updating its autostart
 entry by turning start at login off and on again.
+On a Windows tray activation, the tray thread shows a small Win32 loading surface
+before WebView2 creation can occupy the app event loop. Its spinner, Escape and
+blur handling remain responsive even while that loop is busy. The panel replaces
+it only after placement and page loading have both completed. Tauri shows and focuses
+the browser on its own event loop; the tray thread only dismisses the loader when
+that current browser takes over. Both surfaces disable
+DWM transitions so their handoff does not animate as a second window opening. A second click
+cancels either phase. No web view is retained just to warm the next opening.
+The host handles Escape before page scripts, including on startup/error pages.
 Windows are created on worker threads; restoring, fitting and showing them is queued
 on the event loop after the window-state plugin's initialization. This keeps its state
-locks on the same thread as native window events. Closing the window destroys it with its
-web view. A request to open it asks the event loop whether the window it finds is still
+locks on the same thread as native window events. Closing a window destroys it with its
+web view. The compact panel has no native window frame, has its own label and never
+persists main-window geometry. Only its last content height stays in the controller,
+so the next panel can start at that height, clamped to its current monitor. Its initial hidden focus changes do not dismiss it;
+losing focus after it has been shown and focused does. A request to open it asks the event loop whether the window it finds is still
 there: a second start can arrive while a closed window still holds its label, and that
 one does not count as open. The new window is created once it has gone, and the app's
 `hub.log` tells each request, attempt and outcome.
+Panel presentations carry the controller's request revision. Retiring an old window
+cannot close or blur a newer request; each native window keeps its request for life.
+A newer request retires that window before creating its own. Cancellation marks the
+presentation before queuing its close, and stale loader commands cannot cover a ready panel.
+The panel is hidden before its WebView2 controller is destroyed, so focus leaves while
+that controller can still handle native messages.
+Main-window requests also keep the revision accepted before their worker starts. The
+event loop checks that revision before restoring, showing or focusing a window: a late
+main request cannot take focus from a newer tray loader. Creation starts hidden and
+unfocused; cancelled main creations are destroyed, and a later request waits for their
+label to be released before creating another window.
 
 **Linux rendering and lifetime.** The Rust controller uses a D-Bus StatusNotifierItem
-through `ksni`; it does not link GTK or WebKit. It waits for the desktop's tray watcher
-when starting early at login and registers again when that watcher restarts. Opening the window starts an Electron
-process; closing it ends that process and its renderers. The Rust agent and Node hub
+through `ksni`. A small GTK loading surface responds before Chromium starts; GTK
+draws only a spinner and a localized label, never subscription data. No second web
+engine is linked. It waits for the desktop's tray watcher
+when starting early at login and registers again when that watcher restarts. Opening a window starts an Electron
+process; it holds at most the main board and a compact panel. On X11/XWayland the panel
+uses the tray's activation coordinates. An X11 menu can use the pointer; on Wayland
+the menu reuses the last tray activation, since the XWayland pointer can still name
+another window. Before that first activation, it opens at the reserved panel edge
+of the primary monitor, or within that monitor if no edge is reserved. The resolved
+anchor determines its monitor and stays put while the content changes height; native
+Wayland leaves positioning to the compositor. Where X11 is available, GTK and Electron
+use that same backend. The controller shows the native loader immediately, then
+hands off to the browser only after its first paint. The loader is a native popup
+with skip-taskbar hints; the browser is an unmanaged popup. While the browser is
+visible, the native owner stays transparent and accepts no pointer input, preserving
+keyboard focus across XWayland. Both close together. Neither is a taskbar entry. The
+controller accepts every foreground request into one current head: its revision, main,
+compact or none, and resolved anchor. Startup, second launches, tray actions and the
+compact panel's buttons share that order. Workers carry an immutable ticket and the
+initial handshake reads the current head, so an older worker cannot reclaim focus.
+Cancellation is terminal for its revision; native callbacks also belong to one engine
+and presentation. Each GTK loader has its own native window and immutable ticket;
+its focus, Escape and close signals retain that ticket even when delivered late.
+Retiring it removes the timeout, stops the spinner and destroys the window; only
+parsed CSS and the last tray anchor are shared between presentations. Explicit
+*Limits* on the current panel keeps that presentation and its anchor.
+
+A bounded publisher sends the complete head before showing a new loader beside an
+existing engine. Its nonblocking fast path never waits for the browser; under socket
+backpressure one pending head replaces older unsent heads, after tray toggles have
+been reduced. A partially written frame completes before another message can start.
+The loader's show waits for that publication only when the channel is blocked; GTK
+continues to accept cancellation and Escape immediately. With no engine, the loader
+appears immediately and the handshake supplies the latest head. Other host messages
+use a bounded queue, so the private IPC reader keeps draining requests while replies
+wait. Quitting shuts down the private socket without waiting for its writer.
+
+Electron drains available complete socket frames before reconciling the latest head;
+a partial final frame delays that reconciliation. Deferred paint, reveal and closed
+callbacks cannot replay an obsolete foreground request. A new compact revision gets
+a new native presentation, while a current main request reuses and restores its normal
+Electron window. A superseded main that has never appeared is retired. Closing never
+depends on first paint. The loader and ready panel both dismiss on an outside click or
+Escape. Without X11 the app
+keeps the compositor-managed browser path. A direct tray activation toggles it; the blur and activation
+of the same pointer gesture cannot close and immediately reopen it. The menu's
+*Limits* command explicitly opens it. Closing both destroys their renderers and ends
+the process after a half-second gesture window; no browser or hidden page stays
+resident afterwards. The Rust agent and Node hub
 continue. A socket pair inherited as fd 3 carries typed messages, not a TCP listener or
 command-line secrets. EOF tells Electron to quit if the controller dies. A second start
 sends only an Open signal through a per-user Unix socket; the receiver checks peer UID.
 
 Electron starts with renderer sandboxing, context isolation and no Node integration in
-the page. A preload exposes only the six app commands and a way to hear the app's state.
+the page. A preload exposes only the app commands allowed for its window role and a way to hear the app's state.
 The main process checks the sender is the current main frame and its origin is the
 current hub; Rust repeats the origin check before dispatch. The app's state goes to the
 window over the same channel and on only to the main frame of the current hub. Startup/error pages at `quotum://localhost` can only
 quit. Navigation, new windows, downloads and permission requests are restricted. No
 inherited Node/Electron debugging switches reach the window process.
 
-On NVIDIA with an available X11 display the launcher selects X11/XWayland before
-Chromium initializes Ozone. Other systems use Chromium's default display selection.
+With an available X11 display the native loading surface selects X11/XWayland before
+Chromium initializes Ozone; the NVIDIA launcher does so even if the loader could not
+initialize. Other systems use Chromium's default display selection.
 `--software-rendering` disables hardware acceleration for that launch. No driver,
 kernel or desktop settings are changed. Both the native window and the page use the
 same background colour while newly exposed areas are painted during a resize.
+
+Both loading and ready panels have a rounded native drawing/input boundary, using
+the popup radius prepared from the shared style tokens. The header has matching
+icon buttons for opening the board and closing the panel, with localized labels
+and tooltips.
+
+The compact view keeps each quota on one row: its name, a short reset countdown with
+the full date in its tooltip, the board's shared remaining meter and percentage.
+If there is no countdown to show, the compact row leaves that detail empty.
+The provider header carries its measurement indicator and the working-agent count;
+the total agent count is in that count's tooltip. Hidden windows and the owner's
+ordering are shared with the board. Large lists can scroll, but ordinary subscriptions
+do not reserve a separate footer or a second line for every reset. The panel grows
+with its content up to 80% of its monitor's work area, with no fixed pixel ceiling;
+only content beyond that height scrolls. The native loader uses the same screen limit.
+Native height reports are serialized, keeping only the latest pending layout. An open
+Linux panel refits when displays or their work areas change. Measurement tooltips shift
+inside the viewport without changing the card's height.
 
 The engine version and archive checksum are pinned in `desktop/prepare-electron.mjs`;
 updating Chromium means rebuilding the Linux packages. `desktop/package-linux.mjs`
@@ -661,9 +855,11 @@ and are kept nowhere else: no file, no log. Node gets only a short list of varia
 the app's environment (`PATH`, the home and temporary folders, the language, and
 `QUOTUM_RESETS`), nothing `NODE_*`. The hub still checks Host and Origin as on a server,
 and the agent reaches it with no proxy in between. The window's bridge to the app is
-open only to pages of the hub's current origin and to six commands: its state, saving
-settings, taking over, start at login, entering again and quitting; on Windows a seventh,
-`watch_state`, gives the board a channel to hear the app's state on. The window goes
+open only to pages of the hub's current origin and to the commands in `ipc.rs`. The main window can read state, save measuring and app
+settings, take over, change start at login, reenter and quit. The compact panel can read
+state, reenter, open the main window, close itself and report its content height. The
+host clamps that height; no command accepts a window id, position or arbitrary URL.
+On Windows `watch_state` registers a channel for each trusted window instance. The window goes
 nowhere else; links open in the system's browser. The app's folder is this user's only.
 
 **Files.** The app's folder is `%LOCALAPPDATA%\com.padurets.quotum` on Windows and
@@ -693,6 +889,39 @@ including a transition whose page has not loaded yet. A stopped agent worker kee
 spool until delivery ends; a replacement waits for that handover.
 The last window's close is resolved after any startup or takeover operation, so closing
 while the question is being prepared cannot leave an unseen consent request running.
+
+**Background attention.** One cancellable Rust reader enters the local hub using its
+key, keeps the session cookie in memory and reads the desktop variant of its SSE stream
+(spec/dashboard-v1.md). The hub shares level, visibility and naming with the board.
+A persistent window ledger consumes each threshold once per confirmed cycle inside the
+measurement transaction; candidates and observation boundaries leave only after commit.
+Boundaries precede the coalesced card deltas, and new candidates follow them. Thus a
+temporary replacement or disappearance can revoke an already queued native intent
+even when the final card has its old metadata again. The boundary/candidate buffer is
+bounded; unaffected windows keep their events. Candidates are also checked against
+current window semantics and ledger cycle before SSE emission. Scheduled tracker news has
+its own watermark. Every connection starts from an empty notification baseline; old
+spooled observations cannot become live events through a new receipt time.
+
+The reader uses paired suspend-aware and awake clocks plus a reader-progress barrier.
+Sleep, a pause or a hub generation change invalidates pending native intents. The sink
+checks the generation, observation epoch, visibility, current names, settings and age
+again after its bounded queue. A failed clock detector suppresses notifications while
+status reading continues. This promises at most one native attempt, not an OS display:
+crashes and system suppression may lose an event, and nothing replays it.
+
+Linux keeps one ksni handle and uses session D-Bus notifications independently of its
+tray watcher. The notification connection's authentication and each method call have
+a one-second timeout, so an unresponsive bus does not hold shutdown indefinitely.
+Its action listener is an owned cancellable task on the same runtime; stopping it
+does not wait for the notification daemon to close its end of the connection.
+Windows owns one Shell_NotifyIcon control window, used for its status,
+menu and silent notifications in both installer and portable builds. Its queue keeps
+at most 64 notification intents; the latest status and panel controls are coalesced
+separately and processed first, so notification overflow cannot discard them. Explorer restart
+registers only the current icon. Native text is generated from the same EN/RU catalogs
+as the page; settings and language are saved atomically in `app.json` and published to
+both windows in the common numbered AppState.
 
 **Taking over from `quotum`.** One agent measures a machine: whoever holds `run.lock` in
 the state folder, and `run.info` next to it names its process, version and hub. When a

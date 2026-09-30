@@ -318,3 +318,41 @@ test('a local hub on a taken port says so and exits', async t => {
   assert.equal(await within(hub.exited, 5000), 1);
   assert.ok(hub.lines.includes('{"event":"error","code":"port_in_use"}'), hub.lines.join(' | '));
 });
+
+test('desktop events require a local session, same origin and streaming mode', async () => {
+  const db = database();
+  const local = await db.start();
+  const {cookie} = await local.enter();
+  assert.ok(cookie);
+  const headers = {cookie, 'quotum-stream': '1'};
+  assert.equal((await local.call('GET', '/api/events?desktop=1', {headers: {'quotum-stream': '1'}})).status, 401);
+  assert.equal((await local.call('GET', '/api/events?desktop=1', {headers: {...headers, origin: 'https://foreign.invalid'}})).status, 403);
+  assert.equal((await local.call('GET', '/api/events?desktop=1&mode=poll', {headers})).status, 400);
+  assert.equal((await local.call('GET', '/api/events?desktop=2', {headers})).status, 400);
+  await local.app.close();
+  const server = await db.start({local: false});
+  assert.equal((await server.call('GET', '/api/events?desktop=1', {headers})).status, 400);
+  await server.app.close();
+  db.store.close();
+});
+
+test('the app window can request fresh limits through the same board action', async t => {
+  const db = database();
+  const {app, call, enter} = await db.start();
+  t.after(async () => {await app.close(); db.store.close();});
+  const {cookie} = await enter();
+  const headers = {cookie: cookie!};
+  const agent = batch('codex', {account: 'a1b2c3d4e5f6a1b2c3d4e5f6'});
+  const authorization = `Bearer ${TOKEN}`;
+  assert.equal((await call('POST', '/v1/ingest', {body: agent, headers: {authorization}})).status, 200);
+  assert.equal((await call('POST', '/v1/checkin', {body: {
+    version: 1, agent: agent.agent, machine: agent.machine, paced: true,
+    subscriptions: [{provider: 'codex', account: 'a1b2c3d4e5f6a1b2c3d4e5f6', active: false}],
+  }, headers: {authorization}})).status, 200);
+  const overview = (await call('GET', '/api/overview', {headers})).body;
+  const url = `/api/boards/${overview.board.id}/sources/${overview.sources[0].id}/refresh`;
+  assert.equal((await call('POST', url)).status, 401);
+  assert.equal((await call('POST', url, {headers})).status, 202);
+  const after = (await call('GET', '/api/overview', {headers})).body;
+  assert.equal(after.refresh[overview.sources[0].id].request.status, 'queued');
+});

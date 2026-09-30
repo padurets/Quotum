@@ -1,4 +1,4 @@
-import {memo, useEffect, useRef, useState, type CSSProperties} from 'react';
+import {memo, useEffect, useRef, useState, type CSSProperties, type ReactNode} from 'react';
 import type {Card, Win} from '../lib/types';
 import {windowKey} from '../lib/types';
 import {countdown, countdownChangesAt, duration, earliest, num, stamp} from '../lib/format';
@@ -9,12 +9,15 @@ import {LOGOS} from './logos';
 import {cardId, colorOf, isWindowHidden, planOf, weeklyPlanOf, withColor, withHidden, withName, withPlan, withPlanned, withWindowHidden, type Arrange} from '../lib/view';
 import {CARD_COLORS, MIDDLE_STEP, PROVIDERS} from '../lib/providers';
 import {call} from '../lib/http';
-import {useCadence, useCard, useMine, useResetsFor, useSessions, useTitle} from '../lib/board';
+import {useCadence, useCard, useMine, useRefresh, useResetsFor, useSessions, useTitle} from '../lib/board';
 import {useClock} from '../lib/clock';
 import {FreeResets} from './ResetMarks';
 import {Tray} from './Tray';
 import {EyeOffIcon, HideRow, Popover, SlidersIcon, SwitchRow, TakeOffIcon} from './Popover';
+import {RefreshAction} from './RefreshAction';
+import {refreshChangesAt, refreshPending, refreshText} from '../lib/refresh';
 import {ErrorLine} from './Kit';
+import {useBubble} from './Tooltip';
 
 /** Where the plan expects the limit to be now: a mark on its meter, in whole percent, moved when that changes. */
 function PlanMark({w, measuredAt, weekly}: {w: Win; measuredAt: number | null; weekly: WeeklyPlan | null}) {
@@ -54,13 +57,26 @@ function PlanNote({w, measuredAt, weekly}: {w: Win; measuredAt: number | null; w
 }
 
 /** When the limit resets: in how long, that the time has passed, or that it is not known. */
-function ResetLine({w}: {w: Win}) {
+export function ResetLine({w, short = false}: {w: Win; short?: boolean}) {
   const now = useClock(now => resetLineChangesAt(w, now));
   const reset = resetLine(w, now);
+  if (short && reset.key !== 'resetsIn') return null;
+  const text = reset.key === 'resetsIn' ? t('limit.resetsIn', {time: duration(reset.inMs)}) : t(`limit.${reset.key}`);
+  const date = w.resetAt ? stamp(w.resetAt) : '';
   return (
-    <span data-time="reset" title={w.resetAt ? stamp(w.resetAt) : ''}>
-      {reset.key === 'resetsIn' ? t('limit.resetsIn', {time: duration(reset.inMs)}) : t(`limit.${reset.key}`)}
+    <span data-time="reset" title={short ? [text, date].filter(Boolean).join('\n') : date} aria-label={short ? text : undefined}>
+      {short && reset.key === 'resetsIn' ? duration(reset.inMs) : text}
     </span>
+  );
+}
+
+/** The same remaining-quota meter in a card and in the tray's compact rows. */
+export function LimitMeter({w, children}: {w: Win; children?: ReactNode}) {
+  return (
+    <div className="meter" role="progressbar" aria-label={windowName(w).replaceAll(' · ', '\n')} aria-valuenow={Math.round(w.remaining)} aria-valuemin={0} aria-valuemax={100}>
+      <span className="meter-track"><i className={`fill fill-${level(w.remaining)}`} style={{width: `${Math.max(w.remaining, 1)}%`}} /></span>
+      {children}
+    </div>
   );
 }
 
@@ -75,12 +91,9 @@ function Limit({w, measuredAt, weekly}: {w: Win; measuredAt: number | null; week
           <small>%</small>
         </span>
       </div>
-      <div className="meter" role="progressbar" aria-label={windowName(w)} aria-valuenow={Math.round(w.remaining)} aria-valuemin={0} aria-valuemax={100}>
-        <span className="meter-track">
-          <i className={`fill fill-${state}`} style={{width: `${Math.max(w.remaining, 1)}%`}} />
-        </span>
+      <LimitMeter w={w}>
         <PlanMark w={w} measuredAt={measuredAt} weekly={weekly} />
-      </div>
+      </LimitMeter>
       <div className="limit-bottom">
         <ResetLine w={w} />
         <PlanNote w={w} measuredAt={measuredAt} weekly={weekly} />
@@ -221,12 +234,14 @@ function CardColor({source, arrange}: {source: Card; arrange: Arrange}) {
 }
 
 /**
- * A card's menu. The board's owner names the card, gives it a colour, picks its limits,
- * sets the weekly plan or switches it off, hides it; on a shared board the owner, or whoever's devices measure it, also
- * takes it off the board: it goes when the board tells so.
+ * A card's menu: any reader can request fresh limits. The board's owner names the card,
+ * gives it a colour, picks its limits, sets the weekly plan or switches it off, hides it;
+ * on a shared board the owner, or whoever's devices measure it, also takes it off the
+ * board: it goes when the board tells so.
  */
 function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Card; title: string; arrange: Arrange; boardId: string; takeOff: boolean}) {
   const [error, setError] = useState<unknown>(null);
+  const [open, setOpen] = useState(false);
   const hidden = new Set(arrange.view.windows);
   const hasWeekly = source.windows.some(w => w.kind === 'weekly');
   const planned = planOf(arrange.view, source.id) !== null;
@@ -242,10 +257,10 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
   };
 
   return (
-    <Popover label={t('source.settings', {source: title})} icon={<SlidersIcon />}>
+    <Popover label={t('source.menu', {source: title})} icon={<SlidersIcon />} open={open} onOpenChange={setOpen}>
       {owner && (
         <>
-          <div className="popover-title">{t('source.name')}</div>
+          <div className="popover-title popover-section">{t('source.name')}</div>
           <CardName source={source} arrange={arrange} />
         </>
       )}
@@ -281,7 +296,10 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
           )}
         </div>
       )}
-      {owner && <HideRow onHide={() => arrange.update(view => withHidden(view, cardId(source.id), true))}>{t('widget.hide')}</HideRow>}
+      <div className={owner ? 'popover-section' : undefined}>
+        <RefreshAction id={source.id} board={boardId} onAccepted={() => setOpen(false)} />
+        {owner && <HideRow section={false} onHide={() => arrange.update(view => withHidden(view, cardId(source.id), true))}>{t('widget.hide')}</HideRow>}
+      </div>
       {takeOff && (
         <div className={owner ? '' : 'popover-section'}>
           <button type="button" className="popover-row is-danger" onClick={unshare}>
@@ -320,12 +338,21 @@ function AllHidden({source, arrange}: {source: Card; arrange: Arrange}) {
  * when they were measured and when the next measurement comes and why. It is what of a
  * card changes with time: it renders at those moments, the card does not.
  */
-function CardMark({source}: {source: Card}) {
+export function CardMark({source}: {source: Card}) {
   const pace = useCadence(source.id);
+  const refresh = useRefresh(source.id);
+  const pending = refreshPending(refresh);
+  const outcome = refresh?.request?.status;
+  const failed = outcome === 'failed' || outcome === 'unavailable' || outcome === 'no_result';
   const paced = {...source, cadence: pace};
   const now = useClock(now => {
     const cadence = cadenceOf(paced, now);
-    return earliest(dotChangesAt(source, now), cadenceChangesAt(paced, now), cadence?.when === 'nextIn' ? countdownChangesAt(cadence.next, now) : null);
+    return earliest(
+      dotChangesAt(source, now),
+      cadenceChangesAt(paced, now),
+      cadence?.when === 'nextIn' ? countdownChangesAt(cadence.next, now) : null,
+      refresh?.request ? refreshChangesAt(refresh, now) : null,
+    );
   });
   const problem = problemOf(source);
   const dot = dotOf(source, now);
@@ -335,16 +362,22 @@ function CardMark({source}: {source: Card}) {
   // Then when the next measurement comes (how soon, and the time) and why, each a line of its own.
   const cadence = cadenceOf(paced, now);
   const lines = [
+    ...(refresh?.request ? refreshText(refresh, now).split('\n') : []),
     status,
-    ...(cadence ? (cadence.when === 'nextSoon' ? [t('source.nextSoon')] : [t('source.nextIn', {time: countdown(cadence.next - now)}), stamp(cadence.next)]) : []),
-    ...(cadence ? [t(`source.why.${cadence.why}`)] : []),
+    ...(!pending && cadence ? (cadence.when === 'nextSoon' ? [t('source.nextSoon')] : [t('source.nextIn', {time: countdown(cadence.next - now)}), stamp(cadence.next)]) : []),
+    ...(!pending && cadence ? [t(`source.why.${cadence.why}`)] : []),
   ];
   // The dot's tooltip is one bubble everywhere: under the pointer on a desktop (style.css),
   // and for a while after a tap on a touch screen, which has nothing to hover.
   const [tip, setTip] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const bubble = useBubble(tip || hovered);
   useEffect(() => {
     if (!tip) return;
-    const hide = () => setTip(false);
+    const hide = (event?: Event) => {
+      if (event?.target instanceof Node && bubble.current?.contains(event.target)) return;
+      setTip(false);
+    };
     const timer = setTimeout(hide, 4000);
     document.addEventListener('pointerdown', hide);
     return () => {
@@ -354,17 +387,26 @@ function CardMark({source}: {source: Card}) {
   }, [tip]);
   return (
     <span
-      className={`provider-mark ${dot.warn ? 'is-warn' : ''} ${tip ? 'is-tipped' : ''}`}
+      className={`provider-mark ${dot.warn || failed ? 'is-warn' : ''} ${tip ? 'is-tipped' : ''}`}
       data-time="mark"
+      data-refresh={outcome ?? 'idle'}
       aria-label={lines.join('\n')}
       role="img"
+      onPointerEnter={event => event.pointerType !== 'touch' && setHovered(true)}
+      onPointerLeave={() => setHovered(false)}
       onPointerUp={event => event.pointerType === 'touch' && setTip(true)}
     >
       <img className="provider-logo" src={LOGOS[source.provider]} alt="" />
-      {dot.warn ? <i className="dot dot-warn" /> : <i className={`dot dot-fresh ${dot.pulsing ? 'is-pulsing' : ''}`} style={{'--fresh': dot.fresh} as CSSProperties} />}
-      <span className="dot-tip glass" aria-hidden="true">
-        {lines.map(line => (
-          <span key={line}>{line}</span>
+      {pending ? (
+        <i className="spinner" aria-hidden="true" />
+      ) : dot.warn || failed ? (
+        <i className="dot dot-warn" />
+      ) : (
+        <i className={`dot dot-fresh ${dot.pulsing ? 'is-pulsing' : ''}`} style={{'--fresh': dot.fresh} as CSSProperties} />
+      )}
+      <span className="dot-tip glass" ref={bubble} aria-hidden="true">
+        {lines.map((line, index) => (
+          <span key={index}>{line}</span>
         ))}
       </span>
     </span>
@@ -400,7 +442,7 @@ export const SourceCard = memo(function SourceCard({id, arrange, boardId, person
           <h2>{title}</h2>
           {source.plan && <span className="plan">{source.plan.replace(/^Claude\s+/i, '')}</span>}
         </div>
-        {(arrange.owner || takeOff) && <SourceSettings source={source} title={title} arrange={arrange} boardId={boardId} takeOff={takeOff} />}
+        <SourceSettings key={boardId} source={source} title={title} arrange={arrange} boardId={boardId} takeOff={takeOff} />
       </div>
 
       <div className="limits">

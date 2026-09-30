@@ -3,6 +3,7 @@ import {createHash} from 'node:crypto';
 import {sourceId, type Provider} from '../server/domain/sources.js';
 import {subscriptionKey} from '../server/domain/ingest.js';
 import type {Cadence, Level, ResetLine} from '../ui/lib/quota.js';
+import type {Refresh, RefreshRequest} from '../server/domain/refresh.js';
 import type {CadenceWhy} from '../ui/lib/types.js';
 import type {Outlook, Spent} from '../ui/lib/forecast.js';
 import type {ResetLabel} from '../ui/lib/resets.js';
@@ -233,6 +234,8 @@ export type CardCheck = Span & {board?: string} & (
     | {event: 'early_reset' | 'resets_granted'}
     /** What the dot's tooltip says of the next measurement, while the card is measured at the hub's pace, and why. */
     | {cadence: Cadence['when'] | null; why?: CadenceWhy}
+    | {refresh: RefreshRequest['status']; unavailable?: Refresh['unavailable']}
+    | {unavailable: Refresh['unavailable']}
     /** How many whole days back ‹ takes the chart from 30 days, step by step, on the card's board: where the history starts. */
     | {reachesBack: number}
     /**
@@ -329,10 +332,15 @@ export type Card = {
   /** Measured every quarter of an hour, as an agent does a subscription nobody uses (eco mode). */
   eco?: boolean;
   /**
-   * Measured live at the hub's pace, its one machine asking every 15 seconds (spec:
-   * Following the hub's pace); its dot then says when the next measurement comes.
+   * Has pace-specific expectations, checked on the live loop's 15-second ticks.
+   * These scenes use one machine so other devices do not move the asserted schedule.
    */
   paced?: boolean;
+  /**
+   * A public refresh request and a controllable stand-in response for the demo. Its `at`
+   * and the card's codes count from the machines' first asking, not from the demo's time.
+   */
+  refresh?: {at: number; minimum?: number; delay?: number; response?: 'lost' | 'failed'; legacy?: boolean; silent?: boolean};
   windows: WindowAt[];
   /** Free resets at `t`: how many, and how many expire when (left out when not given). */
   resets?: (t: number) => {available: number; expiring?: {count: number; expiresAt: number | null}[]};
@@ -369,6 +377,9 @@ export type Machine = {
   look?: string[];
 };
 
+/** Where a board's owner put agent activity, the chart and the table, with the heights they chose, where not as they come. */
+export type AnalyticsPlaces = Partial<Record<'activity' | 'history' | 'forecast', Place>>;
+
 /**
  * Someone on the hub; their codes are read on their personal board, where `agents` turns the
  * table of running agents on, and in «My machines». `projects` are the names they give the
@@ -379,9 +390,9 @@ export type Person = {
   id: string;
   name: string;
   agents?: boolean;
-  agentsWidth?: number;
   agentsPlace?: Place;
   forecastWidth?: number;
+  places?: AnalyticsPlaces;
   projects?: Record<string, string>;
   expect: (BoardCheck | ProjectCheck)[];
   look?: string[];
@@ -395,9 +406,9 @@ export type Board = {
   members: string[];
   /** The table of running agents is turned on. */
   agents?: boolean;
-  agentsWidth?: number;
   agentsPlace?: Place;
   forecastWidth?: number;
+  places?: AnalyticsPlaces;
   /** When members joined it, from `start`, where later than it was made: work before is not the board's. */
   joined?: Record<string, number>;
   /** Columns of the table, off by default, that the board turns on. */

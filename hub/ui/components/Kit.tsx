@@ -1,6 +1,7 @@
+import {chooseLocale} from '../lib/app';
 import {useLayoutEffect, useId, useRef, useState, type InputHTMLAttributes, type ReactNode} from 'react';
 import {createPortal} from 'react-dom';
-import {LOCALES, setLocale, t, useLocale, type Locale} from '../i18n';
+import {LOCALES, t, useLocale, type Locale} from '../i18n';
 import {messageOf} from '../lib/http';
 
 export const SERVICE = 'Quotum';
@@ -16,13 +17,30 @@ let pageFocus: HTMLElement | null = null;
  * A dialog over the page, centred or as a panel on its side; closes on Escape and on a
  * click outside. Without `onClose` it cannot be closed at all (a question that needs an
  * answer). It is placed in <body>, so a header with a backdrop filter or a moved widget
- * it was opened from cannot box it in.
+ * it was opened from cannot box it in. Closed, it gives the focus back to what had it, or,
+ * where that is gone from the page meanwhile, to what `restore` finds.
  */
-export function Modal({title, onClose, children, wide, side}: {title: string; onClose?: () => void; children: ReactNode; wide?: boolean; side?: boolean}) {
+export function Modal({
+  title,
+  onClose,
+  children,
+  wide,
+  side,
+  restore,
+}: {
+  title: string;
+  onClose?: () => void;
+  children: ReactNode;
+  wide?: boolean;
+  side?: boolean;
+  restore?: () => HTMLElement | null;
+}) {
   const panel = useRef<HTMLDivElement>(null);
-  // The latest handler, so the effect below runs once: focus moves in when the dialog opens and back when it closes.
+  // The latest handlers, so the effect below runs once: focus moves in when the dialog opens and back when it closes.
   const close = useRef(onClose);
   close.current = onClose;
+  const back = useRef(restore);
+  back.current = restore;
   // Taken while rendering: a field of the dialog with autoFocus would be it by the effect.
   const [previous] = useState(() => document.activeElement as HTMLElement | null);
   useLayoutEffect(() => {
@@ -80,8 +98,10 @@ export function Modal({title, onClose, children, wide, side}: {title: string; on
         return;
       }
       page.style.overflow = pageOverflow;
+      // Out of reach until the page is no longer inert.
       if (root) root.inert = pageInert;
       if (pageFocus?.isConnected) pageFocus.focus();
+      else back.current?.()?.focus();
       pageFocus = null;
     };
   }, []);
@@ -201,19 +221,21 @@ export function Brand({href}: {href?: string}) {
   );
 }
 
-/** The dashboard's languages; the choice is kept in this browser. */
+/** The language lives in app settings on desktop, otherwise in this browser. */
 export function LanguageSelect() {
   const locale = useLocale();
+  const [failed, setFailed] = useState(false);
   return (
     <label className="language">
       <span className="sr-only">{t('common.language')}</span>
-      <select value={locale} onChange={event => setLocale(event.target.value as Locale)}>
+      <select value={locale} onChange={event => { setFailed(false); void chooseLocale(event.target.value as Locale).catch(() => setFailed(true)); }}>
         {(Object.keys(LOCALES) as Locale[]).map(code => (
           <option key={code} value={code} lang={code}>
             {LOCALES[code].name}
           </option>
         ))}
       </select>
+      {failed && <small className="form-error" role="alert">{t('measure.saveFailed')}</small>}
     </label>
   );
 }

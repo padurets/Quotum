@@ -24,6 +24,8 @@ import {chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, rea
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {prepareText} from './prepare-text.mjs';
+import {prepareTray} from './prepare-tray.mjs';
 import {prepareElectron} from './prepare-electron.mjs';
 import {thirdPartyLicenses} from '../npm/licenses.mjs';
 
@@ -121,12 +123,15 @@ writeFileSync(
 // 4. Icons, from the favicon (square, 32×32).
 const icons = path.join(here, 'icons');
 if (!existsSync(path.join(icons, 'icon.png'))) {
-  execFileSync('npx', ['--yes', '@tauri-apps/cli@2.11.5', 'icon', path.join(hub, 'public/favicon.svg'), '-o', icons], {
+  execFileSync('npx', ['--yes', '@tauri-apps/cli@2.12.0', 'icon', path.join(hub, 'public/favicon.svg'), '-o', icons], {
     cwd: here,
     stdio: 'inherit',
     shell: process.platform === 'win32',
   });
 }
+
+prepareTray(here, hub);
+await prepareText(here, hub);
 
 if (!windows) {
   await prepareElectron(path.join(here, 'resources'));

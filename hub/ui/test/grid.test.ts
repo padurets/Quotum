@@ -2,21 +2,32 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {
   cellOf,
+  edgeScroll,
+  heightIntent,
+  pastClick,
   landed,
+  leftWidths,
   legacyLayout,
+  MAX_ROWS,
   narrowed,
   ordered,
   placesOf,
   reading,
+  rowsFor,
   rowsOf,
   samePlaces,
   settle,
   starts,
   stepped,
   widened,
+  widenedLeft,
   widths,
+  withArranged,
+  withHeights,
   withPlaces,
   type Item,
+  type Layout,
+  type Place,
   type Spot,
 } from '../lib/grid';
 const item = (id: string, x = 0, w = 3, h = 7): Item => ({id, x, w, h});
@@ -120,6 +131,134 @@ test('new widgets follow natural neighbours and hidden places survive changes', 
   const next = withPlaces({layout, order: [], sizes: {}}, {agents: {x: 0, y: 12, w: 6}});
   assert.deepEqual(next.layout.places['source:c'], layout.places['source:c']);
   assert.ok(!('order' in next) && !('sizes' in next));
+});
+
+test('a chosen height is kept apart from what content needs: the widget takes the larger, the layout keeps the choice', () => {
+  // Pixels whose rows are 7 and 10.
+  const px = {7: 300, 10: 450};
+  const size = (rows: 7 | 10) => ({min: px[rows], natural: px[rows]});
+  assert.deepEqual([7, 10, 7].map(rows => rowsFor(size(rows as 7 | 10), 8)), [8, 10, 8]);
+  assert.deepEqual([7, 10, 7].map(rows => rowsFor(size(rows as 7 | 10), undefined)), [7, 10, 7]);
+  // A list can show fewer rows than all of it: its least is below what it needs whole.
+  assert.equal(rowsFor({min: 150, natural: 2424}, undefined), 51);
+  assert.equal(rowsFor({min: 150, natural: 2424}, 8), 8);
+  // Before its content is measured a chosen height is taken as it is, never a guess.
+  assert.equal(rowsFor(undefined, 8), 8);
+  assert.equal(rowsFor(undefined, 2), 2);
+  assert.equal(rowsFor(undefined, undefined), rowsOf(224));
+  const layout = {columns: 6, places: {a: {x: 0, y: 0, w: 3, h: 9}, b: {x: 3, y: 0, w: 3}}};
+  const items = ordered(layout, ['a', 'b']);
+  assert.ok(items.every(item => !('h' in item)), 'the chosen height never becomes the measured one');
+  assert.deepEqual(placesOf(settle(items.map(item => ({...item, h: 12})), 6)), {a: {x: 0, y: 0, w: 3}, b: {x: 3, y: 0, w: 3}});
+});
+
+test('the height asked for is saved only when it changes what shows, in the direction pulled', () => {
+  for (const [what, [start, baseline, requested, min], expected] of [
+    ['a card at its least, pulled up', [7, 7, 6, 7], undefined],
+    ['a chosen 8 below its least of 10, pulled to 9', [10, 10, 9, 10], undefined],
+    ['the same, pulled to 11', [10, 10, 11, 10], 11],
+    ['a list of 51 rows that can show 4, pulled to 8', [51, 51, 8, 4], 8],
+    ['the same list pulled past its least: it stops there', [51, 51, 2, 4], 4],
+    ['a chosen 12 whose content needs 5, pulled to 2', [12, 12, 2, 5], 5],
+    ['the corner moved only sideways, its least now 12', [10, 10, 10, 12], undefined],
+    ['the corner narrowed a chart whose legend wraps, pulled up a row', [8, 9, 7, 9], undefined],
+    ['a card grown from 6 to 7 meanwhile, pulled up', [6, 7, 5, 7], undefined],
+    ['a card needing more than the most', [210, 210, 209, 210], undefined],
+    ['a list of 250 rows, pulled down', [250, 250, 251, 4], undefined],
+    ['two agents that need all their rows, one row up', [3, 3, 2, 3], undefined],
+    ['pulled past the most', [10, 10, 250, 4], MAX_ROWS],
+    ['at the most, one row down', [MAX_ROWS, MAX_ROWS, MAX_ROWS + 1, 4], undefined],
+    ['before its least is known', [8, 8, 9, 1], 9],
+    ['snapping on release wraps a card taller, pulled down a row', [6, 8, 7, 8], undefined],
+    ['the corner widened a widget that now needs 6, pulled up to 7', [8, 6, 7, 6], undefined],
+    ['not moved', [8, 8, 8, 1], undefined],
+  ] as const)
+    assert.equal(heightIntent(start, baseline, requested, min), expected, what);
+  assert.equal(MAX_ROWS, 200);
+});
+
+test('the page scrolls under a pointer taken toward an edge of the window, never under a click or a drift', () => {
+  // A window 900 px high under bars that end at 64: the bands are 64–136 and 828–900.
+  const at = (y: number, from: number, {moved = true, sideways = false, pixel = 1} = {}) => edgeScroll({y, from, top: 64, bottom: 900, moved, sideways, pixel});
+  for (const [what, scroll, expected] of [
+    ['a click\'s jitter at the bottom', at(899, 895, {moved: false}), 0],
+    ['pulled down into the band', at(880, 500), 52],
+    ['above the band', at(820, 500), 0],
+    ['pressed in the band, a drift short of half a row', at(870, 850), 0],
+    ['the same, half a row on', at(875, 850), 47],
+    ['pressed 20 px from the bottom, a drift of 16', at(896, 880), 0],
+    ['the same, a pixel short of the edge\'s last two', at(897, 880), 0],
+    ['the same, taken to the edge', at(898.5, 880), 70.5],
+    ['the bottom edge pressed on the last pixel, moved along it', at(899, 899), 71],
+    ['a corner pressed on the last pixel, moved along it', at(899, 899, {sideways: true}), 0],
+    ['a corner pressed 2 px from the bottom, down to the last pixel', at(899, 898, {sideways: true}), 71],
+    ['a corner pressed 3 px from the bottom, down to the last pixel', at(899, 897, {sideways: true}), 71],
+    ['a corner pressed 20 px from the bottom, a drift sideways and down', at(890, 880, {sideways: true}), 0],
+    // Zoomed out to a half or a quarter, the screen's last pixel begins 2 or 4 px above the window's bottom.
+    ['at a half, pressed 10 px from the bottom, taken to the last pixel of the screen', at(898, 890, {pixel: 2}), 70],
+    ['at a quarter, pressed 20 px from the bottom, taken to the last pixel of the screen', at(896, 880, {pixel: 4}), 68],
+    ['the same without the zoom, 2 px short of the edge', at(896, 880), 0],
+    ['at a third, the screen\'s last pixel, whose size comes a hair under 3', at(897, 880, {pixel: 1 / Math.fround(1 / 3)}), 69],
+    ['pulled up under the bars', at(100, 400), -36],
+    ['pressed under the bars, a drift up', at(120, 130), 0],
+    ['the same, a pixel short of half a row', at(107, 130), 0],
+    ['the same, exactly half a row on', at(106, 130), -30],
+    ['the same, further on', at(100, 130), -36],
+    ['in the band at the top, going down', at(120, 100), 0],
+    ['pressed just under the bars, a drift up over them: half a row counts from the window\'s top', at(66, 80), 0],
+    ['in the middle of the window', at(500, 400, {sideways: true}), 0],
+  ] as const)
+    assert.equal(scroll, expected, what);
+});
+
+test('a click\'s jitter is four of the screen\'s pixels, however far the page is zoomed out', () => {
+  assert.equal(pastClick(4, 0), false);
+  assert.equal(pastClick(4.1, 0), true);
+  assert.equal(pastClick(3, 3), true, 'a pixel on the screen is a CSS pixel at 100 %');
+  assert.equal(pastClick(3, 3, 3), false, 'at a third, a CSS pixel is a third of one on the screen');
+  assert.equal(pastClick(9, 9, 3), true);
+  assert.equal(pastClick(3, 0, 0.5), false, 'on a dense screen or zoomed in, never fewer than four CSS pixels');
+  assert.equal(pastClick(4.1, 0, 0.5), true);
+});
+
+test('saving places carries every chosen height over; only the height named changes, and null takes it away', () => {
+  const saved: Record<string, Place> = {a: {x: 0, y: 0, w: 3, h: 8}, b: {x: 3, y: 0, w: 3}, hidden: {x: 0, y: 30, w: 6, h: 5}};
+  const moved = {a: {x: 3, y: 0, w: 3}, b: {x: 0, y: 0, w: 3}};
+  assert.deepEqual(withHeights(saved, moved), {a: {x: 3, y: 0, w: 3, h: 8}, b: {x: 0, y: 0, w: 3}});
+  assert.deepEqual(withHeights(saved, moved, {id: 'b', rows: 4}), {a: {x: 3, y: 0, w: 3, h: 8}, b: {x: 0, y: 0, w: 3, h: 4}});
+  const reset = withHeights(saved, moved, {id: 'a', rows: null});
+  assert.deepEqual(reset, {a: {x: 3, y: 0, w: 3}, b: {x: 0, y: 0, w: 3}});
+  assert.ok(!('h' in reset.a), 'no key, not undefined or null');
+  // As the page applies it: every change works on the latest view, saved or not yet.
+  const apply = withArranged<{layout: Layout}>;
+  let view: {layout: Layout} = {layout: {columns: 6, places: saved}};
+  view = apply(view, {a: {x: 0, y: 0, w: 3}, b: {x: 3, y: 0, w: 3}}, {id: 'b', rows: 12});
+  view = apply(view, moved);
+  assert.deepEqual(view.layout.places, {a: {x: 3, y: 0, w: 3, h: 8}, b: {x: 0, y: 0, w: 3, h: 12}, hidden: {x: 0, y: 30, w: 6, h: 5}}, 'a step then a move before saving keeps both, and the hidden place');
+  view = apply(view, moved, {id: 'b', rows: null});
+  assert.deepEqual(view.layout.places.b, {x: 0, y: 0, w: 3});
+  view = apply(view, moved, {id: 'a', rows: 9});
+  view = apply(view, moved, {id: 'a', rows: null});
+  assert.ok(!('h' in view.layout.places.a), 'a step and a reset before saving leave no height');
+});
+
+test('the left edge keeps the right one in place and the widget in its row; what it covers goes after it', () => {
+  assert.deepEqual([6, 4, 3, 2].map(right => leftWidths(6, right)), [[2, 3, 4, 6], [2, 4], [3], [2]]);
+  // P and Q side by side, R and S under them: Q taken leftwards to two thirds.
+  const wider = widenedLeft(board, 'Q', 4, 6);
+  assert.deepEqual(coords(wider), {Q: [2, 0], P: [0, 7], S: [3, 7], R: [0, 14]});
+  assert.equal(at(wider, 'Q').w, 4);
+  assert.deepEqual(coords(widenedLeft(board, 'Q', 6, 6)), {Q: [0, 0], P: [0, 7], S: [3, 7], R: [0, 14]});
+  // Narrower from the left: the right edge stays, nothing moves but it.
+  const narrow = widenedLeft(board, 'Q', 2, 6);
+  assert.deepEqual([at(narrow, 'Q').x, at(narrow, 'Q').w], [4, 2]);
+  assert.deepEqual(coords(narrow), {P: [0, 0], Q: [4, 0], R: [0, 7], S: [3, 7]});
+  // A widget above is not passed: over its columns the widget goes under it.
+  const tall = settle([item('A', 0, 3, 12), item('B', 3, 3, 4), item('C', 3, 3, 4)], 6);
+  assert.deepEqual(coords(widenedLeft(tall, 'C', 4, 6)), {A: [0, 0], B: [3, 0], C: [2, 12]});
+  const copy = structuredClone(board);
+  widenedLeft(board, 'P', 3, 6);
+  assert.deepEqual(board, copy, 'the origin stays as it was');
 });
 
 test('narrow screens keep sides and reading order; the middle third takes the shorter stack', () => {

@@ -216,10 +216,15 @@ const EdgeLabel = memo(function EdgeLabel({
   );
 });
 
+/** How tall the chart draws its plot by itself, in its units: lower on a narrow chart. */
+export const plotHeight = (width: number) => (width < 560 ? 220 : 300);
+
 /**
  * Remaining quota over time for every selected window. All series share one time
  * grid, so hovering anywhere snaps to a cell and reads every series for it — no
- * pixel hunting. Lines break only where a whole cell is empty.
+ * pixel hunting. Lines break only where a whole cell is empty. In a widget its owner
+ * made taller, the plot is as tall as `plot` (CSS pixels), never lower than by itself;
+ * it tells how tall that is (`onBase`, CSS pixels).
  */
 export function Chart({
   lines,
@@ -233,6 +238,8 @@ export function Chart({
   empty,
   onSelect,
   onStep,
+  plot,
+  onBase,
 }: {
   lines: Line[];
   plans?: PlanLine[];
@@ -249,12 +256,16 @@ export function Chart({
   onSelect?: (range: TimeRange) => void;
   /** A swipe sideways on a touchpad, or Shift with the wheel: back (-1) or forward (1) through time. */
   onStep?: (direction: -1 | 1) => void;
+  plot?: number;
+  onBase?: (height: number) => void;
 }) {
   const left = 40;
   const right = 12;
   const {box, svg, width, scale, hover, drag, x, timeAt, clip, handlers} = useTimeAxis({from, to, end: now, cellMs, left, right, onSelect, onStep});
 
-  const height = width < 560 ? 220 : 300;
+  const base = plotHeight(width);
+  const height = plot === undefined ? base : Math.max(base, plot / scale);
+  useLayoutEffect(() => onBase?.(base * scale), [base, scale, onBase]);
   const top = 12;
   const bottom = 28;
   /** A cell is drawn at its middle (the last, partial one at "now"). */
@@ -410,6 +421,10 @@ export function Chart({
       <svg
         ref={svg}
         viewBox={`0 0 ${width} ${height}`}
+        // A width the board does not give it (a gesture's, the window's) is heard only after it shows, and the board measures what shows:
+        // until then the chart keeps the height it is drawn at, and what is drawn stretches to the box, neither side leaving the box's.
+        style={{height: `${height * scale}px`}}
+        preserveAspectRatio="none"
         role="img"
         aria-label={t('chart.label')}
         className={onSelect ? 'is-selectable' : undefined}

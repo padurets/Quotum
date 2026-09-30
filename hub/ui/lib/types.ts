@@ -1,3 +1,4 @@
+export type {Refresh, RefreshRequest} from '../../server/domain/refresh';
 /** A window's length as the agent classifies it. */
 export type Kind = 'session' | 'weekly' | 'other';
 
@@ -171,4 +172,4 @@ export type SourceEvent =
   | {sourceId: string; at: number; kind: 'resets_granted'; count: number};
 
 /** Hidden windows and chart series are keyed by source + window, never by provider. */
-export const windowKey = (sourceId: string, windowId: string) => `${sourceId}/${windowId}`;
+export {windowKey} from '../../server/domain/presentation';

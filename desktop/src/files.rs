@@ -81,6 +81,8 @@ pub struct AppJson {
     pub autostart_defaulted: bool,
     /// The person agreed that the app takes the machine over from `quotum`.
     pub take_over_confirmed: bool,
+    pub notifications: crate::desktop_settings::Notifications,
+    pub locale: Option<crate::desktop_settings::Locale>,
 }
 
 impl AppJson {
@@ -202,7 +204,8 @@ mod tests {
         let dir = temp("app-json");
         let file = dir.join("app.json");
         assert_eq!(AppJson::load(&file), AppJson::default());
-        let saved = AppJson { port: Some(23456), autostart_defaulted: true, take_over_confirmed: false };
+        let saved =
+            AppJson { port: Some(23456), autostart_defaulted: true, take_over_confirmed: false, ..Default::default() };
         saved.save(&file).unwrap();
         assert_eq!(AppJson::load(&file), saved);
         let text = fs::read_to_string(&file).unwrap();
