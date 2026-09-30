@@ -150,8 +150,7 @@ pub fn client_env(
     let mut env: Vec<(OsString, OsString)> = Vec::new();
     for (name, value) in inherited {
         // The hub's trusted keys and the agent's settings never reach a provider client.
-        let text = name.to_string_lossy();
-        if (windows && text.to_ascii_uppercase().starts_with("QUOTUM_")) || (!windows && text.starts_with("QUOTUM_")) {
+        if quotum_variable(&name, windows) {
             continue;
         }
         // The first of a name wins, as a lookup of it would.
@@ -186,6 +185,11 @@ pub fn client_env(
         (_, None) => {}
     }
     env
+}
+
+fn quotum_variable(name: &OsStr, windows: bool) -> bool {
+    let text = name.to_string_lossy();
+    if windows { text.to_ascii_uppercase().starts_with("QUOTUM_") } else { text.starts_with("QUOTUM_") }
 }
 
 fn is_executable(path: &Path) -> bool {
@@ -234,7 +238,9 @@ impl Client {
             .envs(client_env(program, env::vars_os(), cfg!(windows), &home()))
             .env("NO_COLOR", "1");
         for (key, value) in env {
-            command.env(key, value);
+            if !quotum_variable(OsStr::new(key), cfg!(windows)) {
+                command.env(key, value);
+            }
         }
         lower_priority(&mut command);
 
@@ -676,6 +682,12 @@ mod tests {
                 assert_eq!(get(&env, "LANG").unwrap(), "en_US.UTF-8");
             }
         }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn a_real_stand_in_cannot_receive_quotum_overrides() {
+        let mut client = Client::spawn(Path::new("/bin/sh"), &["-c", r#"if [ -z "${QUOTUM_SECRET_KEY+x}" ] && [ -z "${QUOTUM_CONFIG+x}" ]; then echo '{"absent":true}'; else echo '{"absent":false}'; fi"#], &[("QUOTUM_SECRET_KEY", "synthetic-canary"), ("QUOTUM_CONFIG", "synthetic-config")], &env::temp_dir(), Duration::from_secs(2), &Stop::new()).unwrap();
+        assert_eq!(client.wait_for(|v| v.get("absent").is_some()).unwrap()["absent"], true);
     }
 
     #[test]

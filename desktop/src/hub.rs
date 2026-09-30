@@ -83,6 +83,7 @@ pub enum Event {
     Start {
         port: u16,
         local: bool,
+        secret_key: crate::keys::Report,
     },
     /// It stopped listening (its stdin closed, or a signal): this start of it is over.
     Stop {
@@ -97,10 +98,17 @@ pub enum Event {
 pub fn parse_event(line: &str) -> Option<Event> {
     let value: Value = serde_json::from_str(line.trim()).ok()?;
     match value.get("event")?.as_str()? {
-        "start" => Some(Event::Start {
-            port: value.get("port")?.as_u64().and_then(|p| u16::try_from(p).ok())?,
-            local: value.get("local").and_then(Value::as_bool).unwrap_or(false),
-        }),
+        "start" => {
+            let secret_key: crate::keys::Report = serde_json::from_value(value.get("secretKey")?.clone()).ok()?;
+            if !secret_key.valid() {
+                return None;
+            }
+            Some(Event::Start {
+                port: value.get("port")?.as_u64().and_then(|p| u16::try_from(p).ok())?,
+                local: value.get("local").and_then(Value::as_bool).unwrap_or(false),
+                secret_key,
+            })
+        }
         "stop" => Some(Event::Stop { reason: value.get("reason").and_then(Value::as_str).unwrap_or("").into() }),
         "error" => Some(Event::Error { code: value.get("code").and_then(Value::as_str).unwrap_or("").into() }),
         _ => None,
@@ -350,8 +358,20 @@ mod tests {
     #[test]
     fn events_are_whole_json_lines_with_an_event() {
         assert_eq!(
-            parse_event(r#"{"event":"start","users":1,"port":23456,"local":true}"#),
-            Some(Event::Start { port: 23456, local: true })
+            parse_event(
+                r#"{"event":"start","users":1,"port":23456,"local":true,"secretKey":{"outcome":"missing","stored":null,"current":null,"credentials":0,"unreadable":0}}"#
+            ),
+            Some(Event::Start {
+                port: 23456,
+                local: true,
+                secret_key: crate::keys::Report {
+                    outcome: crate::keys::Outcome::Missing,
+                    stored: None,
+                    current: None,
+                    credentials: 0,
+                    unreadable: 0
+                }
+            })
         );
         assert_eq!(parse_event(r#"{"event":"stop","reason":"stdin"}"#), Some(Event::Stop { reason: "stdin".into() }));
         assert_eq!(parse_event(r#"{"event":"stop","reason":"signal"}"#), Some(Event::Stop { reason: "signal".into() }));

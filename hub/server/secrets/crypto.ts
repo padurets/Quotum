@@ -1,10 +1,23 @@
 import {createCipheriv, createDecipheriv, createHmac, createSecretKey, hkdfSync, randomBytes, timingSafeEqual, type KeyObject} from 'node:crypto';
 import {inspect} from 'node:util';
 
-/** Only these codes may cross the boundary around keys. Never attach a raw cause. */
+export const SECRET_CODE = Object.freeze({
+  INVALID: 'secret_key_invalid', CONFIGURATION_INVALID: 'secret_key_configuration_invalid', FILE_IN_DATA: 'secret_key_file_in_data', FILE_UNAVAILABLE: 'secret_key_file_unavailable',
+  METADATA_INVALID: 'secret_key_metadata_invalid', RESET_INVALID: 'secret_key_reset_invalid', RESET_CONFLICT: 'secret_key_reset_conflict', START_FAILED: 'secret_key_start_failed', CHECKPOINT_PENDING: 'secret_key_checkpoint_pending', MISSING: 'secret_key_missing', MISMATCH: 'secret_key_mismatch',
+  CREDENTIAL_INVALID: 'credential_invalid', CREDENTIAL_NOT_FOUND: 'credential_not_found', CREDENTIAL_PROVIDER_UNKNOWN: 'credential_provider_unknown', CREDENTIAL_FAILED: 'credential_failed', CREDENTIAL_UNREADABLE: 'credential_unreadable', CREDENTIAL_CLEANUP_PENDING: 'credential_cleanup_pending',
+  DESTINATION_INVALID: 'connector_destination_invalid', CANCELLED: 'connector_cancelled', REDIRECT: 'connector_redirect', STATUS: 'connector_status', RESPONSE_TOO_LARGE: 'connector_response_too_large', INVALID_RESPONSE: 'connector_invalid_response', CONNECTOR_FAILED: 'connector_failed', TIMEOUT: 'connector_timeout',
+} as const);
+export type SecretCode = (typeof SECRET_CODE)[keyof typeof SECRET_CODE];
+const codes = new Set<unknown>(Object.values(SECRET_CODE));
+export const secretCode = (value: unknown): SecretCode | null => codes.has(value) ? value as SecretCode : null;
+
+/** Only fixed codes may cross the boundary around keys. Never attach a raw cause. */
 export class SecretError extends Error {
-  constructor(readonly code: string) {
-    super(code);
+  readonly code: SecretCode;
+  constructor(code: SecretCode) {
+    const safe = secretCode(code) ?? SECRET_CODE.CREDENTIAL_FAILED;
+    super(safe);
+    this.code = safe;
     this.name = 'SecretError';
   }
 }

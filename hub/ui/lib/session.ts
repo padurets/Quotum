@@ -1,7 +1,8 @@
-import {useCallback, useEffect, useRef, useState} from 'react';
+import {useCallback, useEffect, useMemo, useState} from 'react';
 import {t} from '../i18n';
 import {page, useBoards} from './board';
 import {call, UNAUTHORIZED} from './http';
+import {SessionReader} from './sessionReader';
 
 export type User = {id: string; email: string; name: string};
 export type Board = {id: string; name: string; personal: boolean; role: 'owner' | 'member'};
@@ -28,24 +29,12 @@ export const rereadSession = () => window.dispatchEvent(new Event(REREAD));
 export function useSession() {
   const [session, setSession] = useState<Session | null>(null);
   const [failed, setFailed] = useState(false);
-  const generation = useRef(0);
-
-  const accept = useCallback((next: Session) => {
-    generation.current++;
+  const reader = useMemo(() => new SessionReader(() => call<Session>('GET', '/api/session'), next => {
     page.dispatch({type: 'session-boards', boards: next.boards});
     setSession(next);
-    setFailed(false);
-  }, []);
-
-  const refresh = useCallback(async () => {
-    const request = ++generation.current;
-    try {
-      const next = await call<Session>('GET', '/api/session');
-      if (request === generation.current) accept(next);
-    } catch {
-      if (request === generation.current) setFailed(true);
-    }
-  }, [accept]);
+  }, setFailed), []);
+  const accept = useCallback((next: Session) => reader.accept(next), [reader]);
+  const refresh = useCallback(() => reader.refresh(), [reader]);
 
   useEffect(() => {
     void refresh();
@@ -53,21 +42,22 @@ export function useSession() {
     window.addEventListener(UNAUTHORIZED, again);
     window.addEventListener(REREAD, again);
     return () => {
-      generation.current++;
+      reader.invalidate();
       window.removeEventListener(UNAUTHORIZED, again);
       window.removeEventListener(REREAD, again);
     };
-  }, [refresh]);
+  }, [refresh, reader]);
 
   useEffect(() => {
     if (!failed) return;
     let delay = 2000;
+    let active = true;
     let timer: ReturnType<typeof setTimeout>;
     const retry = () => {
       timer = setTimeout(async () => {
         await refresh();
         delay = Math.min(30_000, delay * 2);
-        retry();
+        if (active) retry();
       }, delay);
     };
     retry();
@@ -75,6 +65,7 @@ export function useSession() {
     window.addEventListener('online', now);
     document.addEventListener('visibilitychange', now);
     return () => {
+      active = false;
       clearTimeout(timer);
       window.removeEventListener('online', now);
       document.removeEventListener('visibilitychange', now);

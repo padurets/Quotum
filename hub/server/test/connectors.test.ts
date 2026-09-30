@@ -31,8 +31,10 @@ test('connector uses only fixed HTTPS operations, validates TLS, refuses redirec
   const destination = {host: '127.0.0.1', port: (server.address() as AddressInfo).port, operations: Object.fromEntries(['balance', 'redirect', 'large', 'bad', 'slow', 'status'].map(name => [name, {path: '/' + name}]))};
   const transport = new ConnectorTransport(destination, {ca: TLS_CERT, timeoutMs: 200, maxBytes: 1024});
   t.after(() => transport.close());
+  destination.operations.balance.path = '//elsewhere.example';
+  destination.host = 'elsewhere.example';
   assert.deepEqual(await transport.send('balance', CANARY), {balance: 12, untrusted: 'ignored by mapper'});
-  const untrusted = new ConnectorTransport(destination); t.after(() => untrusted.close());
+  const untrusted = new ConnectorTransport({...destination, host: '127.0.0.1', operations: {balance: {path: '/balance'}}}); t.after(() => untrusted.close());
   await assert.rejects(untrusted.send('balance', CANARY), fails('connector_failed'));
   await assert.rejects(transport.send('redirect', CANARY), fails('connector_redirect'));
   assert.equal(redirected, 0);

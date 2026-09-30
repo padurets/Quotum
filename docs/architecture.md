@@ -948,7 +948,8 @@ the app's environment (`PATH`, the home and temporary folders, the language, and
 `QUOTUM_RESETS`), nothing `NODE_*`. The hub still checks Host and Origin as on a server,
 and the agent reaches it with no proxy in between. The window's bridge to the app is
 open only to pages of the hub's current origin and to the commands in `ipc.rs`. The main window can read state, save measuring and app
-settings, take over, change start at login, reenter and quit. The compact panel can read
+settings, take over, change start at login, reset saved trusted credentials with no
+arguments, reenter and quit. The compact panel can read
 state, reenter, open the main window, close itself and report its content height. The
 host clamps that height; no command accepts a window id, position or arbitrary URL.
 On Windows `watch_state` registers a channel for each trusted window instance. The window goes
@@ -964,6 +965,45 @@ and `agent.log`, each moved aside at 1 MiB).
 data too on Linux and in the smoke run (`--smoke`); elsewhere on Windows WebView2 keeps its profile in
 `%LOCALAPPDATA%\com.padurets.quotum\EBWebView`. Measurements that wait for the hub go to
 `app-spool.jsonl` in `quotum`'s state folder.
+
+**Trusted keys in the app.** A separate sibling folder, `com.padurets.quotum-keys`,
+contains one namespace per canonical app-data path. SHA-256 of that path's native
+bytes (UTF-16LE on Windows) names the namespace. Its positive, increasing key names
+are `hub-secret-key@<hash>#<number>`. The system store is Windows Credential Manager
+with Local persistence, or Linux Secret Service. Discovery is limited to this
+namespace; it never enumerates all of a person's credentials. A private-file fallback
+lives in the sibling namespace, outside the hub's data. Directories and files are
+checked for ownership, permissions and symlinks or reparse points through native
+handles. Linux directories are 0700 and files 0600; Windows permits only the current
+user, SYSTEM and Administrators. A writable default collection is required before
+creating a Linux store key. A locked collection or an incomplete search means waiting.
+
+The namespace's `marker.json` records current, staged next and previous key references,
+their transition reason and fingerprints, and whether a file was used. It contains no
+key. Empty `.reserved` files book names before a store operation, so a late write or a
+lost marker cannot reuse them. The marker is a hint: the hub's stored fingerprint
+selects a readable matching key. A replaced marker's former target and other found
+keys are never turned into previous keys or automatically deleted. An empty database
+reuses the highest-numbered valid found key. Incomplete discovery never creates one.
+
+One worker serializes native store work away from the UI and the app's async runtime.
+A soft 60-second deadline publishes waiting while leaving that operation able to
+finish; no second prompt runs alongside it. Retry backoff is bounded. Planned hub
+restarts have their own bounded budget, apart from crash recovery. Each Node spawn
+gets only its chosen generation's KEK and transition in its own environment. The app
+does not put them in its process environment, state DTO, settings or bridge. The first
+hub start report validates fingerprints and safe counts before authorizing progress.
+Session storage details are a startup snapshot; settings read the live numbered app
+state, including changes that require no hub restart.
+
+A file-to-store migration writes and reads back a fresh store key, stages it, and
+activates it on the next outer app start with the matching previous key. Cleanup needs
+an `ok` or `rotated` report matching the recorded transition, completed WAL truncation
+and zero unreadable records. `created` after replacing the database does not authorize
+rotation cleanup. An explicit reset has its own fingerprint-bound transition and
+consumes its one-shot input on one spawn. A late result from an older operation cannot
+change that transition. Unrelated found files are retained and shown in settings;
+`wasFile` persists because old backups remain sensitive.
 
 **Its life.** A second start of the app opens the window of the first. Closing the
 window destroys it and its web view; the app keeps measuring, and the tray icon (*Open

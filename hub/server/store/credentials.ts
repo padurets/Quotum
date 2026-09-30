@@ -1,5 +1,6 @@
 import type {DatabaseSync} from 'node:sqlite';
 import type {RecordIdentity, Sealed} from '../secrets/index.js';
+import {secretCode, type SecretCode} from '../secrets/crypto.js';
 
 export const CREDENTIAL_ABILITIES = ['balance', 'usage', 'manage_keys'] as const;
 export type CredentialAbility = (typeof CREDENTIAL_ABILITIES)[number];
@@ -19,7 +20,7 @@ export function credentialAnswer(row: CredentialRow): Credential {
     const parsed: unknown = JSON.parse(row.abilities);
     if (Array.isArray(parsed)) abilities = CREDENTIAL_ABILITIES.filter(ability => parsed.includes(ability));
   } catch { /* A damaged metadata field grants no abilities. */ }
-  return {id: row.id, provider: row.provider, sourceId: row.source_id, hint: row.hint, abilities, createdAt: row.created_at, expiresAt: row.expires_at, lastUsedAt: row.last_used_at, lastError: row.last_error && /^(credential|connector)_[a-z_]+$/.test(row.last_error) ? row.last_error : null, unreadable: !!row.unreadable};
+  return {id: row.id, provider: row.provider, sourceId: row.source_id, hint: row.hint, abilities, createdAt: row.created_at, expiresAt: row.expires_at, lastUsedAt: row.last_used_at, lastError: secretCode(row.last_error), unreadable: !!row.unreadable};
 }
 
 /** Only ciphertext reaches this repository. Ownership is in every mutation predicate. */
@@ -40,7 +41,10 @@ export class CredentialStore {
   remove(owner: string, id: string): void {
     this.db.prepare('DELETE FROM credentials WHERE user_id = ? AND id = ?').run(owner, id);
   }
-  error(owner: string, id: string, code: string, unreadable = false): void {
-    this.db.prepare('UPDATE credentials SET last_error = ?, unreadable = ? WHERE user_id = ? AND id = ?').run(code, unreadable ? 1 : 0, owner, id);
+  used(owner: string, id: string, record: Sealed, abilities: readonly CredentialAbility[], expiresAt: number | null): void {
+    this.db.prepare('UPDATE credentials SET abilities = ?, expires_at = ?, last_used_at = ?, last_error = NULL, unreadable = 0 WHERE user_id = ? AND id = ? AND nonce = ? AND cipher = ?').run(JSON.stringify(abilities), expiresAt, Date.now(), owner, id, record.nonce, record.cipher);
+  }
+  error(owner: string, id: string, code: SecretCode, unreadable: boolean, record: Sealed): void {
+    this.db.prepare('UPDATE credentials SET last_error = ?, unreadable = ? WHERE user_id = ? AND id = ? AND nonce = ? AND cipher = ?').run(code, unreadable ? 1 : 0, owner, id, record.nonce, record.cipher);
   }
 }

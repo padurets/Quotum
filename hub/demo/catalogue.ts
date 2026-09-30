@@ -27,6 +27,8 @@ import {
   type Wave,
   type Work,
 } from './model.js';
+/** Durable app settings, in `npm run demo:keys`; checking and reset busy are transient and tested. */
+export {KEY_STORAGE} from './key-storage.js';
 
 /**
  * The catalogue of the demo board: every state the dashboard knows today, one entry each,

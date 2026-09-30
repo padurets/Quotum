@@ -53,6 +53,7 @@ pub struct Shell {
     /// Sends the app's state to the board when it changes (see notifier.rs).
     pub notifier: Notifier,
     pub attention: crate::attention::Attention,
+    pub secret_keys: crate::keys::Control,
     wakes: Wake,
     exiting: AtomicBool,
     proc: Mutex<Option<Arc<Proc>>>,
@@ -100,6 +101,7 @@ impl Shell {
             window_intent: window::OpenIntent::default(),
             notifier: Notifier::default(),
             attention: crate::attention::Attention::default(),
+            secret_keys: crate::keys::Control::default(),
             wakes: Wake::new(),
             exiting: AtomicBool::new(false),
             proc: Mutex::new(None),
@@ -250,6 +252,8 @@ pub fn random_u32() -> u32 {
 /// How one start of the hub ended.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Ending {
+    /// A key decision requested this restart, with its own bounded recovery budget.
+    SecretKey,
     /// It stopped listening or exited by itself.
     Ended,
     /// Its port is taken (or not allowed to it).
@@ -261,6 +265,7 @@ pub enum Ending {
 /// What comes after a start of the hub ended.
 #[derive(Debug, PartialEq)]
 pub enum Next {
+    Planned,
     /// At once, on a new port: once per start.
     NewPort,
     /// After a pause, with a new key and token.
@@ -275,6 +280,7 @@ pub fn next(ending: Ending, port_retried: bool, exiting: bool, restarts: &mut Re
     match ending {
         _ if exiting => Next::Stop,
         Ending::Quit => Next::Stop,
+        Ending::SecretKey => Next::Planned,
         Ending::PortInUse if !port_retried => Next::NewPort,
         _ if restarts.allow(now) => Next::Again,
         _ => Next::Down,
@@ -288,8 +294,16 @@ pub fn run_hub(shell: Arc<Shell>) {
     shell.attention.start(&shell);
     let mut restarts = Restarts::default();
     let mut port_retried = false;
+    let mut keys = match crate::keys::Manager::new(&shell.dirs.data) {
+        Ok(manager) => Some(manager),
+        Err(error) => {
+            shell.hub_log.line(&format!("app: {}", error.code()));
+            shell.secret_keys.unavailable();
+            None
+        }
+    };
     loop {
-        let ending = attempt(&shell);
+        let ending = attempt(&shell, &mut keys);
         // Shutdown owns the current child. Do not steal it and wait on an open stdin.
         if shell.exiting() {
             return;
@@ -307,6 +321,9 @@ pub fn run_hub(shell: Arc<Shell>) {
             }
         }
         match next(ending, port_retried, shell.exiting(), &mut restarts, Instant::now()) {
+            Next::Planned => {
+                port_retried = false;
+            }
             Next::Stop => return,
             Next::NewPort => {
                 port_retried = true;
@@ -326,13 +343,14 @@ pub fn run_hub(shell: Arc<Shell>) {
     }
 }
 
-fn attempt(shell: &Arc<Shell>) -> Ending {
+fn attempt(shell: &Arc<Shell>, keys: &mut Option<crate::keys::Manager>) -> Ending {
     let port = shell.port();
     let secrets = Secrets::new();
     let (script, cwd) = hub::script(&shell.hub_dir);
     let data = shell.dirs.hub_data();
     let port_text = port.to_string();
     let data_text = data.to_string_lossy().into_owned();
+    let mut key_environment = keys.as_mut().map(|keys| keys.environment()).unwrap_or_default();
     let mut own = vec![
         ("QUOTUM_DATA_DIR", data_text.as_str()),
         ("QUOTUM_PORT", port_text.as_str()),
@@ -341,8 +359,14 @@ fn attempt(shell: &Arc<Shell>) -> Ending {
         ("QUOTUM_LOCAL_TOKEN", secrets.token.as_str()),
         ("NODE_ENV", "production"),
     ];
+    own.extend(key_environment.iter().map(|(name, value)| (name.as_str(), value.as_str())));
     own.retain(|(_, value)| !value.is_empty());
     let env = hub::environment(std::env::vars_os(), cfg!(windows), &own);
+    for (_, value) in &mut key_environment {
+        unsafe {
+            value.as_bytes_mut().fill(0);
+        }
+    }
     let (signals, received) = mpsc::channel();
     let proc = match Proc::start(&shell.node, &script, &cwd, env, shell.hub_log.clone(), signals) {
         Ok(proc) => proc,
@@ -365,11 +389,22 @@ fn attempt(shell: &Arc<Shell>) -> Ending {
             return Ending::Ended;
         }
         match received.recv_timeout(Duration::from_millis(200)) {
-            Ok(Signal::Event(Event::Start { port, .. })) if !ready => {
+            Ok(Signal::Event(Event::Start { port: reported_port, local: true, secret_key }))
+                if !ready && reported_port == port =>
+            {
+                if keys.as_mut().is_some_and(|keys| !keys.report(secret_key)) {
+                    continue;
+                }
                 ready = true;
                 shell.set_hub(HubState::Ready(Ready { port, key: secrets.key.clone(), token: secrets.token.clone() }));
             }
             Ok(Signal::Event(Event::Error { code })) if code == "port_in_use" && !ready => return Ending::PortInUse,
+            Ok(Signal::Event(Event::Error { code })) if code.starts_with("secret_key_") && !ready => {
+                if keys.as_mut().is_some_and(|keys| keys.startup_failure()) {
+                    return Ending::SecretKey;
+                }
+                return Ending::Ended;
+            }
             Ok(Signal::Event(Event::Stop { reason })) => {
                 shell.hub_log.line(&format!("app: the hub stopped ({reason})"));
                 return Ending::Ended;
@@ -381,6 +416,21 @@ fn attempt(shell: &Arc<Shell>) -> Ending {
             }
             Ok(Signal::Event(_)) | Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return Ending::Ended,
+        }
+        if ready && let Some(keys) = keys {
+            let previous = shell.secret_keys.state();
+            let restart = keys.tick(&shell.secret_keys);
+            if previous != shell.secret_keys.state() {
+                shell.wake();
+            }
+            if restart {
+                return Ending::SecretKey;
+            }
+            if let Some(code) = keys.code()
+                && previous != shell.secret_keys.state()
+            {
+                shell.hub_log.line(&format!("app: {code}"));
+            }
         }
     }
 }

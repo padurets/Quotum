@@ -151,3 +151,20 @@ test('raw SQL failures are code-only and preserve the previous credential', asyn
   assert.deepEqual(h.store.db.prepare('SELECT cipher FROM credentials').get()?.cipher, before);
   h.clean(result.body);
 });
+
+test('an old probe cannot change the status of a replaced credential', async t => {
+  const h = await harness(); t.after(async () => { await h.app.close(); h.store.close(); });
+  const owner = h.users.get('alice')!;
+  const id = h.credentials.create(owner, 'test', CANARY).id;
+  let finish!: (value: unknown) => void;
+  const original = fixture.transport.send;
+  fixture.transport.send = () => new Promise(resolve => { finish = resolve; });
+  t.after(() => { fixture.transport.send = original; });
+  const old = h.credentials.probe(owner, id, 'balance');
+  h.credentials.replace(owner, id, CANARY + '_replacement');
+  finish({}); await old;
+  const current = h.credentials.list(owner)[0];
+  assert.equal(current.lastUsedAt, null);
+  assert.equal(current.lastError, null);
+  assert.equal(current.unreadable, false);
+});

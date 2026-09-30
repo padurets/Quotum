@@ -226,6 +226,7 @@ pub fn fail(why: &str) -> ! {
 }
 
 /// Explicit manual QA, in a new profile with every provider disabled. Never ordinary CI.
+#[allow(clippy::disallowed_methods, reason = "Explicit isolated QA paths, before any worker; never a key.")]
 pub fn prepare_notifications() {
     let dir = std::env::temp_dir().join(format!(
         "quotum-notifications-{}-{}",

@@ -1,5 +1,5 @@
 import type {DatabaseSync} from 'node:sqlite';
-import {SecretError, type RecordIdentity, type Sealed, type SecretKey} from './crypto.js';
+import {SecretError, type RecordIdentity, type Sealed, type SecretKey, type SecretCode} from './crypto.js';
 import type {ResetIntent, SecretInputs} from './inputs.js';
 
 export type SecretKeyOutcome = 'created' | 'ok' | 'rotated' | 'mismatch' | 'missing';
@@ -7,7 +7,7 @@ export type SecretKeyReport = {outcome: SecretKeyOutcome; stored: string | null;
 type EncryptedRow = RecordIdentity & Sealed & {key_version: number; unreadable: number};
 
 /** A busy checkpoint never authorizes destruction of the key that opened the old WAL. */
-export function checkpoint(db: DatabaseSync, code = 'secret_key_checkpoint_pending'): void {
+export function checkpoint(db: DatabaseSync, code: SecretCode = 'secret_key_checkpoint_pending'): void {
   const row = db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get() as {busy: number; log: number; checkpointed: number};
   if (row.busy !== 0 || row.log > 0 || row.checkpointed > 0) throw new SecretError(code);
 }

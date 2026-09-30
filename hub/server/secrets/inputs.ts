@@ -38,9 +38,9 @@ export function readInputs(env: Record<string, string | undefined>, dataDir: str
     }
     const state = local ? env.QUOTUM_SECRET_KEY_STATE : undefined;
     if (state !== undefined && !['keystore', 'keystore_was_file', 'file', 'waiting', 'missing'].includes(state)) throw new SecretError('secret_key_configuration_invalid');
-    return {current, previous, reset, storageAtStart: state === 'keystore_was_file' ? 'keystore' : (state as StorageAtStart | undefined) ?? null, wasFileAtStart: state === 'keystore_was_file'};
+    return {current, previous, reset, storageAtStart: state === 'keystore_was_file' ? 'keystore' : (state as StorageAtStart | undefined) ?? null, wasFileAtStart: state === 'keystore_was_file' || state === 'file'};
   } finally {
-    for (const name of Object.keys(env)) if (name.startsWith('QUOTUM_SECRET_KEY')) delete env[name];
+    for (const name of Object.keys(env)) if ((process.platform === 'win32' ? name.toUpperCase() : name).startsWith('QUOTUM_SECRET_KEY')) delete env[name];
     // Node 24 supports this; the pinned Node type declarations predate it.
     (process.report as typeof process.report & {excludeEnv: boolean}).excludeEnv = true;
   }

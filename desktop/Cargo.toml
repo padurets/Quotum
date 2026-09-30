@@ -25,17 +25,24 @@ url = "2.5.8"
 toml_edit = "0.25.15"
 # Tauri reports a window its event loop could not create only through `log`.
 log = "0.4.34"
+# Trusted hub keys have one byte format and fingerprint on both platforms.
+keyring-core = "=1.0.0"
+hkdf = "=0.13.0"
+hmac = "=0.13.0"
+sha2 = "=0.11.0"
 
 [target."cfg(unix)".dependencies]
 libc = "0.2.189"
 
 [target."cfg(windows)".dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Security", "Win32_Storage_FileSystem", "Win32_System_WindowsProgramming", "Win32_System_LibraryLoader", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Security", "Win32_Security_Credentials", "Win32_Security_Authorization", "Win32_System_Threading", "Win32_Storage_FileSystem", "Win32_System_WindowsProgramming", "Win32_System_LibraryLoader", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi"] }
+windows-native-keyring-store = { version = "=1.1.0", default-features = false }
 # Native Escape handling also covers pages before their JavaScript has loaded.
 webview2-com = "0.39.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = { version = "=5.13.2", features = ["blocking-api", "tokio"] }
+zbus-secret-service-keyring-store = { version = "=1.0.1", default-features = false, features = ["rt-tokio-crypto-rust"] }
 # Bound the asynchronous D-Bus handshake without leaving a blocked worker behind.
 tokio = { version = "1.53.1", features = ["time"] }
 futures-lite = "2.6.1"

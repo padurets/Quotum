@@ -74,7 +74,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libssl-dev libnss3 libgtk-3-dev libgbm1 libasound2 xvfb xauth strace dbus-daemon python3-gi unzip rpm squashfs-tools
+          sudo apt-get install -y libssl-dev libnss3 libgtk-3-dev libgbm1 libasound2 xvfb xauth strace dbus-daemon gnome-keyring python3-gi unzip rpm squashfs-tools
       - name: Smoke supervisor tests
         if: runner.os == 'Linux'
         env:
@@ -95,6 +95,23 @@ jobs:
         run: cargo clippy --all-targets --locked -- -D warnings
       - working-directory: desktop
         run: cargo test --locked
+      - name: Isolated system key store (Linux)
+        if: runner.os == 'Linux'
+        working-directory: desktop
+        env:
+          QUOTUM_KEYRING_SMOKE: '1'
+          XDG_DATA_HOME: ${{ runner.temp }}/quotum-keyring-data
+        run: |
+          mkdir -p "$HOME/.cache/quotum-key-tests"
+          chmod 700 "$HOME/.cache/quotum-key-tests"
+          export QUOTUM_TEST_PRIVATE_DIR="$HOME/.cache/quotum-key-tests"
+          dbus-run-session -- sh -c 'printf quotum-test-password | gnome-keyring-daemon --unlock > /dev/null && cargo test --locked native_store_is_local_scoped_byte_safe_and_recovers_without_pointer -- --ignored --test-threads=1 && cargo test --locked native_controller_recovers_pointer_stages_rotation_and_preserves_foreign_keys -- --ignored --test-threads=1'
+      - name: Isolated system key store (Windows)
+        if: runner.os == 'Windows'
+        working-directory: desktop
+        env:
+          QUOTUM_KEYRING_SMOKE: '1'
+        run: cargo test --locked native_store_is_local_scoped_byte_safe_and_recovers_without_pointer -- --ignored --test-threads=1
       - name: Native loader callbacks (Linux)
         if: runner.os == 'Linux'
         working-directory: desktop

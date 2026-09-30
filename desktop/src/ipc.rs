@@ -12,7 +12,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use url::Url;
 #[cfg(not(target_os = "linux"))]
-pub const COMMANDS: [&str; 8] = [
+pub const COMMANDS: [&str; 9] = [
     "app_state",
     "save_settings",
     "take_over",
@@ -21,12 +21,14 @@ pub const COMMANDS: [&str; 8] = [
     "quit",
     "watch_state",
     "save_desktop_settings",
+    "reset_secret_key",
 ];
 
 #[derive(Deserialize)]
 #[serde(tag = "command", content = "args", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
     AppState,
+    ResetSecretKey,
     OpenMain,
     ClosePanel,
     ReportPanelHeight {
@@ -53,6 +55,7 @@ pub enum Request {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppState {
+    pub secret_key: crate::keys::PublicState,
     pub agent: agent::State,
     pub providers: Vec<agent::Provided>,
     pub sessions: bool,
@@ -72,6 +75,7 @@ fn state_of(shell: &Arc<Shell>) -> AppState {
     let (agent, providers, sessions) = agent::snapshot(shell);
     let (notifications, locale) = shell.desktop_settings();
     AppState {
+        secret_key: shell.secret_keys.state(),
         agent,
         providers,
         sessions,
@@ -160,6 +164,10 @@ pub fn execute(
             }
         }
         Request::SaveDesktopSettings { patch } => shell.save_desktop_settings(&patch)?,
+        Request::ResetSecretKey => {
+            shell.secret_keys.request_reset().map_err(str::to_owned)?;
+            shell.wake();
+        }
         Request::SaveSettings { patch } => agent::save_settings(shell, &patch)?,
         Request::TakeOver => agent::take_over(shell)?,
         Request::SetAutostart { on } => autostart::set(shell, on)?,
@@ -182,6 +190,8 @@ mod tests {
     #[test]
     fn requests_are_typed_and_unknown_commands_are_rejected() {
         assert!(serde_json::from_str::<Request>(r#"{"command":"app_state"}"#).is_ok());
+        assert!(serde_json::from_str::<Request>(r#"{"command":"reset_secret_key"}"#).is_ok());
+        assert!(serde_json::from_str::<Request>(r#"{"command":"reset_secret_key","args":{"key":"canary"}}"#).is_err());
         assert!(serde_json::from_str::<Request>(r#"{"command":"set_autostart","args":{"on":true}}"#).is_ok());
         assert!(serde_json::from_str::<Request>(r#"{"command":"set_autostart","args":{"on":"yes"}}"#).is_err());
         assert!(serde_json::from_str::<Request>(r#"{"command":"open_file","args":{"path":"/tmp/a"}}"#).is_err());

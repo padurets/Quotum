@@ -26,6 +26,17 @@ yet.
 
 On a server, configure `QUOTUM_SECRET_KEY` or `QUOTUM_SECRET_KEY_FILE`; without it,
 ordinary subscriptions still work, but connecting with a trusted key is unavailable.
+The app chooses its system password store when it can use one, and a private file
+outside its data directory only when the store is known to be unavailable on first
+use. A locked, denied or inconclusive store leaves it waiting; it does not prove that
+a key was lost.
+
+| KEK storage | Protection and limits |
+|---|---|
+| Server environment or separate secret file | Keep the KEK out of database and volume backups. The hub operator can decrypt the credentials. |
+| Windows Credential Manager or Linux Secret Service | Protection is the same as for other passwords in that store. It depends on the store's protection, often the login password; Quotum does not know that password. |
+| Private file | File permissions protect against other ordinary OS users. A home or profile backup containing this file and the database can reveal the saved credentials. |
+
 A copy of the database, WAL or data volume cannot reveal the credentials without the
 separate KEK. Back up the KEK separately: losing it makes its credentials unreadable.
 The operator of a shared hub can decrypt its credentials. Encryption does not protect
@@ -43,6 +54,14 @@ previous KEK. An explicit one-shot reset discards saved credentials and is bound
 the old and new key fingerprints; restoring a backup does not repeat that reset.
 Authenticated decryption failure marks a record unreadable. Recovery from damaged
 ciphertext is not guaranteed.
+
+When a usable system store appears, the app stages a fresh KEK and rotates the
+credentials on the next app start. It removes the old file only after the hub confirms
+the matching rotation and WAL cleanup, with no unreadable records. Found keys outside
+that recorded transition are kept, including leftover files. Moving to the system
+store protects new data; old home backups can still reveal previously saved access.
+Replace or revoke those keys at their provider to invalidate that access. A retained
+old KEK may also be needed to restore its matching database backup.
 
 Secure deletion and verified WAL truncation remove the hub's old live ciphertext;
 they do not erase SSD remnants, snapshots or backups, and do not revoke a provider's

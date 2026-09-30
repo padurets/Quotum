@@ -102,6 +102,18 @@ pub fn take_over(webview: Webview, shell: State<'_, Arc<Shell>>) -> Result<Value
     execute(webview, shell, Request::TakeOver)
 }
 #[tauri::command(async)]
+pub fn reset_secret_key(
+    webview: Webview,
+    shell: State<'_, Arc<Shell>>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<Value, String> {
+    match request.body() {
+        tauri::ipc::InvokeBody::Json(Value::Object(fields)) if fields.is_empty() => {}
+        _ => return Err("secret_key_reset_invalid".into()),
+    }
+    execute(webview, shell, Request::ResetSecretKey)
+}
+#[tauri::command(async)]
 pub fn set_autostart(webview: Webview, shell: State<'_, Arc<Shell>>, on: bool) -> Result<Value, String> {
     execute(webview, shell, Request::SetAutostart { on })
 }

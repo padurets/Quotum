@@ -15,7 +15,9 @@ export async function credentialRoutes(app: FastifyInstance, credentials: Creden
     if (!user) return reply;
     if (request.method === 'GET') return;
     const origin = request.headers.origin;
-    if (!origin || !sameSite(origin, request)) return reply.code(403).send({error: 'forbidden_origin'});
+    let valid = false;
+    try { const parsed = new URL(origin ?? ''); valid = ['http:', 'https:'].includes(parsed.protocol) && parsed.origin === origin && !parsed.username && !parsed.password; } catch { /* Invalid Origin. */ }
+    if (!valid || !sameSite(origin!, request)) return reply.code(403).send({error: 'forbidden_origin'});
     const keys = [`user:${user.id}`, `ip:${request.ip}`];
     if (keys.some(key => attempts.blocked(key))) return reply.header('Retry-After', '60').code(429).send({error: 'too_many_attempts'});
     for (const key of keys) attempts.record(key);
@@ -36,18 +38,20 @@ export async function credentialRoutes(app: FastifyInstance, credentials: Creden
     const user = guards.user(request, reply);
     if (!user) return reply;
     const input = body(request.body, ['provider', 'secret']);
-    if (typeof input.provider !== 'string' || !/^[a-z][a-z0-9_-]{0,63}$/.test(input.provider)) throw new SecretError('credential_invalid');
+    if (typeof input.provider !== 'string' || !/^[a-z][a-z0-9_-]{0,63}$/.test(input.provider) || typeof input.secret !== 'string') throw new SecretError('credential_invalid');
     return reply.code(201).send(credentials.create(user.id, input.provider, input.secret));
   });
   app.post<{Params: {id: string}}>('/api/credentials/:id', {bodyLimit: 32 * 1024}, (request, reply) => {
     const user = guards.user(request, reply);
     if (!user) return reply;
     const input = body(request.body, ['secret']);
+    if (typeof input.secret !== 'string') throw new SecretError('credential_invalid');
     return credentials.replace(user.id, id(request.params.id), input.secret);
   });
-  app.delete<{Params: {id: string}}>('/api/credentials/:id', (request, reply) => {
+  app.delete<{Params: {id: string}}>('/api/credentials/:id', {bodyLimit: 32 * 1024}, (request, reply) => {
     const user = guards.user(request, reply);
     if (!user) return reply;
+    if (request.body !== undefined) throw new SecretError('credential_invalid');
     credentials.remove(user.id, id(request.params.id));
     return reply.code(204).send();
   });

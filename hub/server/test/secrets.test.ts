@@ -6,6 +6,7 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {SecretError, SecretKey, readInputs, startSecrets, type SecretInputs} from '../secrets/index.js';
+import {secretCode, type SecretCode} from '../secrets/crypto.js';
 import {Store} from '../store/store.js';
 
 const key = (byte = 0) => SecretKey.parse(Buffer.from(Buffer.alloc(32, byte).toString('base64url')));
@@ -20,6 +21,14 @@ function insert(db: DatabaseSync, k = key(), id = identity.id) {
 }
 const rows = (db: DatabaseSync) => db.prepare('SELECT * FROM credentials ORDER BY id').all();
 const fail = (code: string) => (error: unknown) => error instanceof SecretError && error.code === code && error.message === code && !('cause' in error);
+
+test('runtime error codes cannot turn arbitrary supplier or database text into a private DTO', () => {
+  const error = new SecretError(canary.toString() as SecretCode);
+  assert.equal(error.code, 'credential_failed');
+  assert.equal(error.message, 'credential_failed');
+  assert.equal(secretCode(canary.toString()), null);
+  assert.equal(inspect(error).includes(canary.toString()), false);
+});
 
 test('the shared HKDF/KCV/AAD vector opens, with no key serialization', () => {
   const k = key();
