@@ -421,6 +421,7 @@ export const en = {
   'chart.resetForAll': 'reset for everyone · {source}',
   'chart.ahead': '{label}: in {time} →',
   'chart.runsOut': '{label}: runs out in ~{time} →',
+  'chart.more': 'and {count} more →',
   'chart.empty': 'Nothing to show: turn lines on in the legend',
 
   'reset.credit': 'Data from {name}',

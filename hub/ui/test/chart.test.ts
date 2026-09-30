@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {edgeRows, fitting, graphemes, shortName} from '../components/Chart';
+import {edgeFit, edgeRows, fitting, graphemes, shortName} from '../components/Chart';
 import {slideOf} from '../components/timeAxis';
 import {placeOf} from '../components/Tooltip';
 import {cellLabel} from '../lib/periods';
@@ -102,4 +102,12 @@ test('with labels past the right edge, an announcement inside the chart takes a 
   assert.equal(new Set(up.values()).size, up.size, 'no two labels share a row');
   assert.deepEqual([...edgeRows(['announced'], ['forecast-a', 'forecast-b'], 30, true)], [['announced', 30], ['forecast-a', 52], ['forecast-b', 74]], 'down from the top');
   assert.equal(edgeRows(['announced'], [], 264, false).size, 0, 'no stack without labels past the edge: the announcement stands where it would alone');
+});
+
+test('past the right edge, as many labels as the plot has rows for, in their order; the rest said together on the last', () => {
+  const past = ['soonest', 'next', 'later', 'latest'];
+  assert.deepEqual(edgeFit(1, past, 5), {shown: past, more: []}, 'all fit with the announcement');
+  assert.deepEqual(edgeFit(1, past, 4), {shown: ['soonest', 'next'], more: ['later', 'latest']}, 'a row for the rest');
+  assert.deepEqual(edgeFit(0, past, 4), {shown: past, more: []}, 'no announcement, a row more');
+  assert.deepEqual(edgeFit(2, past, 2), {shown: [], more: past}, 'no row left but the last');
 });

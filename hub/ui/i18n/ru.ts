@@ -416,6 +416,7 @@ export const ru = {
   'chart.resetForAll': 'сброс для всех · {source}',
   'chart.ahead': '{label}: через {time} →',
   'chart.runsOut': '{label}: закончится через ~{time} →',
+  'chart.more': 'и ещё {count} →',
   'chart.empty': 'Нечего показать: включите линии в легенде',
 
   'reset.credit': 'Данные: {name}',

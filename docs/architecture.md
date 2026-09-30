@@ -476,8 +476,9 @@ them), kept for 90 days.
   hour, moved to start there. With the plan or the forecast shown the chart keeps some
   future on its right; on `auto` it stretches to the last moment a window runs out within
   about 40% of its width, and a window that runs out further leaves the future as it is
-  and is pointed at from the right edge. A range in the past, dragged or moved to, has no
-  forecast.
+  and is pointed at from the right edge, the soonest first, as many as the plot has rows
+  for; those with no room are said together on the last row, each with its time in its
+  tooltip. A range in the past, dragged or moved to, has no forecast.
 - **Events** mark the chart behind now. An early reset is derived from the samples: a
   window's used share drops by more than 5 points before its reset time (resets of one
   source within 15 minutes are one event). Free resets granted are recorded when a
