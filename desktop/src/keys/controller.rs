@@ -163,6 +163,13 @@ fn scan(
         }
         match store.names() {
             Ok(names) => {
+                // Some services report a cancelled unlock as an empty search result.
+                // Do not follow it with a second prompt for the marker's target.
+                if names.is_empty() && store.writable().is_err() {
+                    store_search_failed = true;
+                    scan.complete = false;
+                    scan.code = Some(ErrorCode::NoAccess);
+                }
                 scan.names.extend(names.clone());
                 refs.extend(names.into_iter().map(|name| KeyRef { kind: Kind::Keystore, name }));
             }
@@ -1076,6 +1083,35 @@ mod tests {
         released: Mutex<Receiver<()>>,
     }
     struct FakeStore(Arc<Mutex<StoreData>>);
+    #[test]
+    fn a_cancelled_empty_store_search_does_not_prompt_again_for_the_marker() {
+        struct Cancelled(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+        impl StorePort for Cancelled {
+            fn writable(&self) -> Result<(), ErrorCode> {
+                Err(ErrorCode::NoAccess)
+            }
+            fn names(&self) -> Result<Vec<String>, ErrorCode> {
+                Ok(vec![])
+            }
+            fn read(&self, _: &str) -> Result<Kek, ErrorCode> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Err(ErrorCode::NoAccess)
+            }
+            fn create(&self, _: &str, _: &Kek) -> Result<(), ErrorCode> {
+                panic!("must not create")
+            }
+            fn remove(&self, _: &KeyRef) -> Result<(), ErrorCode> {
+                panic!("must not remove")
+            }
+        }
+        let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut store: Option<Box<dyn StorePort>> = Some(Box::new(Cancelled(reads.clone())));
+        let mut factory: StoreFactory = Box::new(|_| panic!("store already exists"));
+        let result = scan(&FakeFiles::default(), &mut store, &mut factory, vec![reference(1, Kind::Keystore)]);
+        assert!(!result.complete);
+        assert!(result.candidates.is_empty());
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
+    }
     impl StorePort for FakeStore {
         fn read(&self, name: &str) -> Result<Kek, ErrorCode> {
             let store = self.0.lock().unwrap();
