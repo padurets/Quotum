@@ -48,6 +48,9 @@ export function config(root, env = process.env) {
   for (const key of ['CODER_WORKSPACE_AGENT_NAME', 'CODER_WORKSPACE_NAME', 'CODER_WORKSPACE_OWNER_NAME']) {
     if (c[key] && !/^[a-z0-9][a-z0-9-]*$/i.test(c[key])) throw new Error(`Invalid ${key}.`);
   }
+  if (c.DEV_ACCESS === 'coder') for (const key of ['PUBLIC_DOMAIN', 'CODER_WORKSPACE_ID', 'CODER_WORKSPACE_AGENT_NAME', 'CODER_WORKSPACE_NAME', 'CODER_WORKSPACE_OWNER_NAME']) {
+    if (!c[key]) throw new Error(`Coder access needs ${key}.`);
+  }
   if (c.QUOTUM_PUBLIC_URL) {
     let url;
     try { url = new URL(c.QUOTUM_PUBLIC_URL); } catch { throw new Error('Invalid QUOTUM_PUBLIC_URL.'); }

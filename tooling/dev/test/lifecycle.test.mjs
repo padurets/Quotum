@@ -103,6 +103,8 @@ test('dotenv keeps unknown settings and literal shell text; malformed input is n
   assert.throws(() => parseEnv('A=1\nA=2'), /Duplicate/);
   assert.throws(() => parseEnv('not an assignment'), /Invalid/);
   assert.throws(() => config(ctx.root, {SLOT_CPUS: 'not a number'}), /SLOT_CPUS/);
+  writeFileSync(path.join(ctx.root, '.env'), 'DEV_ACCESS=coder\n');
+  assert.throws(() => config(ctx.root, {}), /Coder access needs PUBLIC_DOMAIN/);
 });
 
 test('atomic dotenv refuses symlinks and preserves the target', t => {

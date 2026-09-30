@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import {cpSync, existsSync, mkdirSync, readFileSync, realpathSync, readdirSync, rmSync} from 'node:fs';
+import {cpSync, existsSync, mkdirSync, readFileSync, realpathSync, readdirSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {coderPool, externalUrl} from './access.mjs';

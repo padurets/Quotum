@@ -15,7 +15,7 @@ const env = isolatedEnv();
 const docker = async (desktop, script) => {
   const image = (desktop ? process.env.DEV_DESKTOP_IMAGE : process.env.DEV_RUST_IMAGE) || (desktop ? 'quotum-dev-desktop' : 'quotum-rust');
   try { execFileSync('docker', ['image', 'inspect', image], {stdio: 'ignore'}); }
-  catch { await run('docker', ['build', '-t', image, '-f', `tooling/dev/${desktop ? 'Desktop' : 'Rust'}.Dockerfile`, '.'], root, env); }
+  catch { await run('docker', ['build', '-t', image, '-f', path.join(root, 'tooling/dev', `${desktop ? 'Desktop' : 'Rust'}.Dockerfile`), path.join(root, 'tooling/dev')], root, env); }
   let newVolume = false;
   try { execFileSync('docker', ['volume', 'inspect', 'quotum-cargo'], {stdio: 'ignore'}); }
   catch { await run('docker', ['volume', 'create', 'quotum-cargo'], root, env); newVolume = true; }
