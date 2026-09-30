@@ -29,10 +29,8 @@ import {
   type Machine,
 } from './model.js';
 
-/** Everyone signs in with this password: the demo is thrown away when it stops. */
-export const PASSWORD = 'quotum-demo';
-
-export const emailOf = (person: string) => `${person}@demo.quotum`;
+import {emailOf, PASSWORD} from './access.js';
+export {emailOf, PASSWORD} from './access.js';
 
 /** A set brought up on a hub: who is who there, by the catalogue's names. */
 export type Stand = {

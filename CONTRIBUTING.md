@@ -86,6 +86,102 @@ answers and stand-in programs, so they cost nothing and don't depend on your acc
 
 ## The demo board
 
+### Worktree development stands
+
+On Linux with Node 24, Make, Git and `flock`, a checkout has an isolated managed stand:
+
+```sh
+make dev       # prepare, install dependencies, build current code and start the all demo
+make info      # actual instance, build, addresses, fixture login and resource budget
+make logs      # last 200 lines of this stand's log
+make dev       # reuse unchanged code; rebuild and restart after source/configuration changes
+make down      # stop only this stand; keep its port reservation
+```
+
+The root `.env` is local and ignored. `make prepare` writes missing development
+defaults and the lowest available port at or above `DEV_PORT_START` (8080 by default).
+It preserves existing user settings and never evaluates shell expressions. Existing
+worktrees reserve their saved ports even while stopped; listeners and unknown external
+access policies are excluded. Removed trees release their numbers after their owned
+processes exit. The first probe/bind race retries ascending numbers up to eight times;
+an established port conflict fails with a diagnostic. To change an established port,
+stop the stand, edit `QUOTUM_PORT` in `.env`, then run `make prepare` and `make dev`.
+
+Settings are in [.env.example](.env.example). `DEV_SET=showcase DEV_STILL=true make dev`
+uses the still showcase; `DEV_SET=activity` uses the activity set. `DEV_RESETS` selects
+a scene from `hub/demo/catalogue.ts`. `DEV_MODE=hub make dev` starts an ordinary hub on
+isolated persistent data with reset trackers disabled. No mode starts coding clients.
+Changing mode restarts the owned stand. Demo data goes away on stop; hub data stays in
+`.quotum-dev/hub-data` until the tree is removed. Managed state, build stamps and logs
+are private local files, outside source control. Info labels demo fixture defaults and
+never shows them for an ordinary, stopped or unverified hub; it never dumps real
+credentials. A failed build leaves an earlier live stand available.
+
+The optional `DEV_ACCESS=coder` profile requires `PUBLIC_DOMAIN` and the workspace/agent
+metadata in the example (the agent environment may supply them). It verifies that
+metadata through the existing Coder CLI login. Tokens are read only at runtime, never
+copied into `.env` or journals. After local readiness it publishes only the selected
+port as HTTP/public. A known matching entry is reused without a POST. Unknown/different
+policies are preserved. A lost response keeps an unconfirmed intent; later matching
+observations permit read-only reuse, without granting ownership for destructive changes.
+`make info` observes access again and reports failures separately from local readiness.
+`make down` and removal perform no provider mutation and work during authentication or
+API failures. Pool records may remain public after stop; provider tickets follow the
+provider's semantics. A reused public port may be reachable during bootstrap. Concrete
+domains, workspace values and credentials belong only in local configuration.
+
+Use the configured remote browser for visual checks. This workflow installs no browser.
+The existing benchmark still needs Chrome or its supported CDP connection; a missing
+browser is not a passed benchmark.
+
+#### Worktrunk integration
+
+`make install-dev` installs a versioned shared hook runner in Git's common directory.
+Configure blocking **user** hooks for this repository, using the printed absolute path:
+
+```toml
+[projects."github.com/owner/repository"]
+worktree-path = "{{ repo_path }}/../{{ repo }}.{{ branch | sanitize }}"
+pre-start = "node /absolute/common/quotum-dev/hook.mjs hook-prepare {{ worktree_path }}"
+pre-remove = "node /absolute/common/quotum-dev/hook.mjs pre-remove {{ worktree_path }}"
+```
+
+Put optional non-secret defaults in that private hook environment, such as
+`DEV_PORT_START`, `DEV_ACCESS`, `PUBLIC_DOMAIN` and `SLOT_CPUS`. Do not copy a primary
+checkout's `.env` into every tree. Update the shared runner with `make install-dev` after
+updating the tooling. The runner remains available when a branch lacks its local
+scripts: it cleans recorded managed state, or reports an unsupported state version.
+An unmanaged old branch gets a diagnostic, without adopting its legacy processes.
+
+With Worktrunk's interactive shell integration:
+
+```sh
+wt switch --create feat/NN-task-name
+make dev
+# After the task has been integrated and the tree is clean:
+wt remove
+```
+
+For independent agent tool calls, use `wt switch --create ... --format=json`, retain
+the returned **actual path**, and pass that as the next tool command's working directory.
+A child shell's `cd` does not change a later tool call. Alternatively,
+`wt switch --create feat/NN-task-name --execute 'make dev'` runs in the destination.
+Bare removal in the current tree is sufficient; `--foreground` is optional. The shared
+pre-remove hook independently checks the target's Git status, including hidden untracked
+files and regardless of `status.showUntrackedFiles` or inherited Git relocation settings,
+**before** stopping its runtime. Direct `make down` works with dirty source. Neither
+path touches another stand or shared caches. The hooks do not authorize Git integration:
+tasks still merge through their GitHub pull requests.
+
+`make dev-test` checks allocator concurrency, process ownership, cleanup and publication
+recovery with stand-ins. CI runs it on Linux. `make check-hub`, `make check-agent` and
+`make check-desktop` run the component gates above, with Rust and desktop preparation in
+shared Docker images/caches. Heavy operations serialize per repository, with
+`SLOT_CPUS=4` by default; that is a build budget, not a cgroup limit. Image overrides
+are `DEV_RUST_IMAGE` and `DEV_DESKTOP_IMAGE`. Checks and `make bench` do not load `.env`
+and strip preview address/data/access/local-mode variables. The benchmark accepts
+`QUOTUM_CHROME` or `BENCH_CDP` explicitly and retains its existing CI gate and budget.
+
 A change to the dashboard is looked at on the demo board, with every state it can meet
 that lasts on a working hub:
 
