@@ -7,11 +7,7 @@ import {stamp} from '../lib/format';
 // clocks change on other days, so a time in spring reads otherwise in each.
 const spring = Date.UTC(2026, 3, 10, 21, 30);
 
-/**
- * Every test here says times in the zones it moves to, never in the machine's: the formatters
- * a test makes are kept, and one made in the machine's zone would be found by a test that
- * expects to make its own there (a machine in Athens).
- */
+/** Every test here says times in the zones it moves to, whichever the machine is in. */
 function travelling(t: TestContext, check: (moveTo: (zone: string) => void) => void) {
   const zone = process.env.TZ;
   t.mock.timers.enable({apis: ['Date'], now: Date.UTC(2026, 8, 30)});
@@ -58,17 +54,22 @@ test('a time is said in the time zone the system is in: at once where the clocks
 });
 
 test('a time said in another language in a zone not named yet is said there, and kept apart from the zone before', t => {
+  // Other tests of the process say times in the machine's zone, in either language, and the
+  // formatters they make are kept: this starts in one they say none in, Athens or Helsinki,
+  // whose clocks read the same on both days.
+  const home = new Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const from = home === 'Europe/Athens' ? 'Europe/Helsinki' : 'Europe/Athens';
   travelling(t, moveTo => {
-    moveTo('Europe/Athens');
+    moveTo(from);
     assert.equal(stamp(spring), '11 April 00:30');
     moveTo('Africa/Cairo');
     setLocale('ru');
     assert.equal(stamp(spring), '10 апреля 23:30', 'made in Cairo');
     setLocale('en');
     assert.equal(stamp(spring), '10 April 23:30', 'the zone it was made in named anew');
-    moveTo('Europe/Athens');
+    moveTo(from);
     t.mock.timers.tick(1000);
     setLocale('ru');
-    assert.equal(stamp(spring), '11 апреля 00:30', 'back in Athens: not the one made in Cairo');
+    assert.equal(stamp(spring), '11 апреля 00:30', 'back: not the one made in Cairo');
   });
 });

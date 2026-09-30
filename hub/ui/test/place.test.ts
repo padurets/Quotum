@@ -20,6 +20,7 @@ test('a chart\'s tooltip stands whole in the window where it can, never under th
 test('the tooltip of a label past a chart\'s edge stands over it, else under it, else over it as far as keeps it whole in the window', () => {
   // A label ending over it at 222 and beginning under it at 251, in a window 440 tall under bars ending at 60: 154 above.
   assert.deepEqual(edgeOf(222, 251, 154, 440, 60), {below: false, by: 0, cut: null}, 'over it, just as tall as the room');
+  assert.deepEqual(edgeOf(222, 251, 155, 440, 60), {below: true, by: 0, cut: null}, 'a pixel taller: under it');
   assert.deepEqual(edgeOf(222, 251, 181, 440, 60), {below: true, by: 0, cut: null}, 'under it, just as tall as the room there');
   assert.deepEqual(edgeOf(222, 251, 230, 440, 60), {below: true, by: 49, cut: null}, 'fitting neither: whole in the window, over the label');
   assert.deepEqual(edgeOf(222, 251, 400, 440, 60), {below: true, by: 183, cut: 364}, 'taller than the window: 8 under the bars, cut 8 above its bottom');
