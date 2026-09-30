@@ -534,7 +534,7 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 /* Parts of a stack stand apart by a hair of the surface, so two of one colour do not run together. */
 /* Legend bubbles stay beside their own button, with the gap inside its hover area. */
 .activity-legend-item { position: relative; min-width: 0; }
-.activity-legend-tip { position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 4; display: none; width: max-content; max-width: min(320px, calc(100vw - 16px)); box-sizing: border-box; padding: 8px 10px; border-radius: 9px; font-size: 12.5px; color: var(--text); }
+.activity-legend-tip { position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 4; display: none; width: max-content; max-width: min(320px, calc(100vw - 16px)); box-sizing: border-box; padding: 8px 10px; border-radius: 9px; font-size: 12.5px; color: var(--text); overflow-wrap: anywhere; }
 .activity-legend-tip.is-open { display: block; }
 .activity-legend-item:has(.activity-legend-tip.is-open)::before { content: ''; position: absolute; left: 0; right: 0; height: 6px; bottom: 100%; }
 .activity-legend-item:has(.activity-legend-tip.is-open[data-side=down])::before { bottom: auto; top: 100%; }

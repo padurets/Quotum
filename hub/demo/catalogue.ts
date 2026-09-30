@@ -488,6 +488,7 @@ const all: DemoSet = {
         'The merge menu with many selected, at the bottom of the dialog: its glass is whole',
         'My machines → Projects shows no agent time',
         'Agent activity by project: seven projects in colour, the rest grey, each its own row in the legend and the tooltip, switched off and on alone',
+        'The long project name wraps inside its activity legend bubble, including on a phone; opening it never widens the page',
       ],
     },
     {
