@@ -109,5 +109,5 @@ test('past the right edge, as many labels as the plot has rows for, in their ord
   assert.deepEqual(edgeFit(1, past, 5), {shown: past, more: []}, 'all fit with the announcement');
   assert.deepEqual(edgeFit(1, past, 4), {shown: ['soonest', 'next'], more: ['later', 'latest']}, 'a row for the rest');
   assert.deepEqual(edgeFit(0, past, 4), {shown: past, more: []}, 'no announcement, a row more');
-  assert.deepEqual(edgeFit(2, past, 2), {shown: [], more: past}, 'no row left but the last');
+  assert.deepEqual(edgeFit(2, past, 2), {shown: [], more: past}, 'announcements in every row: the rest said together after them');
 });
