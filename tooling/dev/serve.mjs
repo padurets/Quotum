@@ -2,6 +2,7 @@ import {spawn} from 'node:child_process';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {listenerOwned, processOf, readJson, saveJson, sleep} from './system.mjs';
+import {assertConfig} from './config.mjs';
 
 const [root, record, instance] = process.argv.slice(2);
 let state = readJson(record);
@@ -75,8 +76,9 @@ try {
     if (!ready) throw new Error('Hub did not get ready.');
   }
   if (!listenerOwned(state.hub.pid, state.port)) throw new Error('Ready hub does not own the selected listener.');
-  write({status: 'ready'});
+  assertConfig(root, state.preparedConfig, state.port);
   saveJson(path.join(root, '.quotum-dev', 'lease.json'), {version: 1, port: state.port, initial: false});
+  write({status: 'ready'});
   tell({event: 'ready'});
   console.log(`Managed ${state.mode} ready; instance ${instance}, build ${state.build.inputs}.`);
 } catch (error) {

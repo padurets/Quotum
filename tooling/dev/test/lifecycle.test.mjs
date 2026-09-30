@@ -128,6 +128,19 @@ test('a dangling dotenv symlink is preserved and never materialized implicitly',
   assert.equal(existsSync(missing), false);
 });
 
+test('a fully populated dotenv symlink is rejected even when preparation needs no rewrite', async t => {
+  const {ctx, base} = fixture(t);
+  const target = path.join(base, 'settings');
+  const values = {...config(ctx.root, {}), QUOTUM_PORT: String(await freeBase())};
+  writeFileSync(target, Object.entries(values).filter(([, value]) => value !== undefined).map(([key, value]) => `${key}=${value}\n`).join(''));
+  symlinkSync(target, path.join(ctx.root, '.env'));
+  const original = readFileSync(target, 'utf8');
+  await assert.rejects(subprocess(ctx.root, 'prepare'), /regular file/);
+  assert.equal(readJson(path.join(ctx.local, 'lease.json')), null);
+  assert.equal(lstatSync(path.join(ctx.root, '.env')).isSymbolicLink(), true);
+  assert.equal(readFileSync(target, 'utf8'), original);
+});
+
 test('an env-supplied stable port is persisted, and a stale initial marker cannot change it', async t => {
   const {ctx} = fixture(t);
   standIn(ctx);
@@ -182,6 +195,26 @@ test('a port added after the config snapshot is retained before any new claim', 
   assert.equal(readJson(path.join(ctx.local, 'lease.json')), null);
 });
 
+test('removing a saved port after the snapshot is respected rather than silently restored', async t => {
+  const {ctx} = fixture(t);
+  const file = path.join(ctx.root, '.env');
+  writeFileSync(file, `QUOTUM_PORT=${await freeBase()}\n`);
+  const c = config(ctx.root, {});
+  writeFileSync(file, 'USER_SETTING=keep\n');
+  await assert.rejects(allocate(ctx, c, null), /configuration changed/);
+  assert.equal(readFileSync(file, 'utf8'), 'USER_SETTING=keep\n');
+  assert.equal(readJson(path.join(ctx.local, 'lease.json')), null);
+});
+
+test('managed settings changed during access eligibility cannot be saved from stale intent', async t => {
+  const {ctx} = fixture(t);
+  const c = config(ctx.root, {DEV_PORT_START: String(await freeBase())});
+  const access = {snapshot: async () => [], eligible: async () => { updateEnv(ctx.root, {DEV_SET: 'activity'}); return true; }};
+  await assert.rejects(allocate(ctx, c, access), /configuration changed/);
+  assert.equal(config(ctx.root, {}).DEV_SET, 'activity');
+  assert.equal(readJson(path.join(ctx.local, 'lease.json')), null);
+});
+
 test('a manual port edit during build is not overwritten by initial bind recovery', async t => {
   const {ctx} = fixture(t);
   const base = await freeBase();
@@ -214,12 +247,12 @@ test('ascending allocator retains stopped leases, excludes listeners, and reuses
   const b = path.join(base, 'B');
   git(ctx.root, 'worktree', 'add', '-b', 'a', a);
   git(ctx.root, 'worktree', 'add', '-b', 'b', b);
-  const c = {...config(ctx.root, {}), DEV_PORT_START: String(first)};
-  assert.equal(await allocate(context(a), c, null), first + 1);
-  assert.equal(await allocate(context(b), c, null), first + 2);
-  assert.equal(await allocate(context(a), {...c, QUOTUM_PORT: String(first + 1), DEV_PORT_START: '50000'}, null), first + 1);
+  const c = root => config(root, {DEV_PORT_START: String(first)});
+  assert.equal(await allocate(context(a), c(a), null), first + 1);
+  assert.equal(await allocate(context(b), c(b), null), first + 2);
+  assert.equal(await allocate(context(a), config(a, {DEV_PORT_START: '50000'}), null), first + 1);
   git(ctx.root, 'worktree', 'remove', a);
-  assert.equal(await allocate(ctx, c, null), first + 1);
+  assert.equal(await allocate(ctx, c(ctx.root), null), first + 1);
 });
 
 test('concurrent tree preparation and two preparations of one tree do not collide', async t => {
@@ -285,7 +318,7 @@ test('two simultaneous dev starts create one instance, and unchanged dev reuses 
   standIn(ctx);
   const c = {...config(ctx.root, {}), DEV_MODE: 'hub', DEV_PORT_START: String(await freeBase())};
   updateEnv(ctx.root, Object.fromEntries(Object.entries(c).filter(([, value]) => value !== undefined)));
-  await allocate(ctx, c, null);
+  await allocate(ctx, config(ctx.root, {}), null);
   // A prepared, dependency-free stand-in build keeps this test offline.
   preparedBuild(ctx);
   await Promise.all([subprocess(ctx.root, 'dev'), subprocess(ctx.root, 'dev')]);
@@ -302,7 +335,7 @@ test('a stolen initial probe retries ascending, but an established busy port sta
   standIn(ctx);
   const c = {...config(ctx.root, {}), DEV_MODE: 'hub', DEV_PORT_START: String(await freeBase())};
   updateEnv(ctx.root, Object.fromEntries(Object.entries(c).filter(([, value]) => value !== undefined)));
-  const first = await allocate(ctx, c, null);
+  const first = await allocate(ctx, config(ctx.root, {}), null);
   preparedBuild(ctx);
   const stolen = await listener(first);
   t.after(stolen.close);
@@ -347,6 +380,30 @@ const wait=setInterval(()=>{
   assert.equal(readJson(path.join(ctx.local, 'lease.json')).initial, true);
 });
 
+test('a configuration edit while the hub is seeding prevents ready and preserves the original lease', async t => {
+  const {ctx} = fixture(t);
+  standIn(ctx);
+  const c = config(ctx.root, {DEV_MODE: 'hub', DEV_PORT_START: String(await freeBase())});
+  const port = await allocate(ctx, c, null);
+  writeFileSync(path.join(ctx.root, 'hub/dist/server/index.js'), `import {createServer} from 'node:http';
+import {existsSync,writeFileSync} from 'node:fs';
+writeFileSync(process.env.QUOTUM_DATA_DIR+'/before-bind','waiting');
+const timer=setInterval(()=>{if(existsSync(process.env.QUOTUM_DATA_DIR+'/allow-bind')){clearInterval(timer);createServer((req,res)=>res.end('ok')).listen(Number(process.env.QUOTUM_PORT),'127.0.0.1');}},10);
+`);
+  const outcome = assert.rejects(start(ctx, c, port, {inputs: 'config-race', output: 'fixture'}), /could not start/);
+  const data = path.join(ctx.local, 'hub-data');
+  for (let i = 0; i < 1000 && !existsSync(path.join(data, 'before-bind')); i++) await sleep(10);
+  assert.equal(existsSync(path.join(data, 'before-bind')), true);
+  updateEnv(ctx.root, {QUOTUM_PORT: String(port + 1)});
+  writeFileSync(path.join(data, 'allow-bind'), 'continue');
+  await outcome;
+  assert.equal(readJson(ctx.record).status, 'stopped');
+  assert.equal(config(ctx.root, {}).QUOTUM_PORT, String(port + 1));
+  assert.deepEqual(readJson(path.join(ctx.local, 'lease.json')), {version: 1, port, initial: true});
+  assert.equal(await portFree(port), true);
+  assert.match(readFileSync(path.join(ctx.local, 'stand.log'), 'utf8'), /configuration changed/);
+});
+
 test('a successful build freezes served files; a later failed build leaves the ready stand usable', async t => {
   const {ctx, base} = fixture(t);
   standIn(ctx);
@@ -375,6 +432,39 @@ if(process.argv[3]==='build' && fs.existsSync('fail-build')) process.exit(1);
     assert.equal(readFileSync(path.join(built.hub, 'dist/server/index.js'), 'utf8'), original);
     assert.equal(await healthy(state), true);
   } finally { process.env.PATH = priorPath; }
+});
+
+for (const previous of [false, true]) test(`a port edit during a successful build preserves current intent${previous ? ' and the earlier live stand' : ''}`, async t => {
+  const {ctx, base} = fixture(t);
+  standIn(ctx);
+  const port = await freeBase();
+  const c = config(ctx.root, {DEV_MODE: 'hub', DEV_PORT_START: String(port)});
+  await allocate(ctx, c, null);
+  const old = previous ? await start(ctx, c, port, {inputs: 'previous', output: 'fixture'}) : null;
+  writeFileSync(path.join(ctx.root, 'hub/package-lock.json'), '{}');
+  const gate = path.join(base, 'build-entered');
+  const release = path.join(base, 'build-release');
+  const bin = path.join(base, 'bin');
+  mkdirSync(bin);
+  writeFileSync(path.join(bin, 'npm'), `#!/usr/bin/env node
+const fs=require('node:fs');
+if(process.argv[2]==='ci'){fs.mkdirSync('node_modules/tsx/dist',{recursive:true});fs.writeFileSync('node_modules/tsx/dist/loader.mjs','');}
+if(process.argv[3]==='build'){fs.writeFileSync(${JSON.stringify(gate)},'waiting');const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)})){clearInterval(timer);}},10);}
+`);
+  chmodSync(path.join(bin, 'npm'), 0o755);
+  const outcome = assert.rejects(subprocess(ctx.root, 'dev', {PATH: `${bin}:${process.env.PATH}`}), /configuration changed/);
+  for (let i = 0; i < 1000 && !existsSync(gate); i++) await sleep(10);
+  try {
+    assert.equal(existsSync(gate), true);
+    updateEnv(ctx.root, {QUOTUM_PORT: String(port + 1)});
+  } finally { writeFileSync(release, 'continue'); }
+  await outcome;
+  assert.equal(config(ctx.root, {}).QUOTUM_PORT, String(port + 1));
+  assert.equal(readJson(path.join(ctx.local, 'lease.json')).port, port);
+  if (old) {
+    assert.equal(readJson(ctx.record).instance, old.instance);
+    assert.equal(await healthy(old), true);
+  } else assert.equal(readJson(ctx.record), null);
 });
 
 test('demo source and supervisor are frozen before a post-build source edit', async t => {
@@ -635,11 +725,10 @@ test('repeated worktree churn reuses the lowest published number instead of grow
   const {ctx, base} = fixture(t);
   const f = poolFixture(t);
   const first = await freeBase();
-  const c = {...config(ctx.root, {}), DEV_PORT_START: String(first)};
   for (let i = 0; i < 4; i++) {
     const tree = path.join(base, `cycle-${i}`);
     git(ctx.root, 'worktree', 'add', '-b', `cycle-${i}`, tree);
-    const port = await allocate(context(tree), c, f.pool);
+    const port = await allocate(context(tree), config(tree, {DEV_PORT_START: String(first)}), f.pool);
     assert.equal(port, first);
     assert.equal((await f.pool.publish(port)).status, 'public');
     git(ctx.root, 'worktree', 'remove', tree);

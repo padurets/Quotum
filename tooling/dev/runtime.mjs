@@ -4,7 +4,7 @@ import {existsSync, mkdirSync, openSync, closeSync, cpSync, readFileSync, readdi
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {externalUrl} from './access.mjs';
-import {configKeys, portFree, validateState} from './config.mjs';
+import {assertConfig, configKeys, portFree, savedConfig, validateState} from './config.mjs';
 import {cleanEnv, git, hash, listenerOwned, locked, ownedMembers, processOf, readJson, sameProcess, saveJson, sleep, waitOwnedMembers} from './system.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -160,6 +160,7 @@ export async function stop(ctx, final = false) {
 
 export async function start(ctx, c, port, built) {
   if (!(await portFree(port))) throw Object.assign(new Error(`Port ${port} has a foreign listener; no process was adopted or killed.`), {code: 'PORT_BUSY'});
+  assertConfig(ctx.root, savedConfig(c), port);
   const instance = randomUUID();
   const mode = c.DEV_MODE;
   const data = path.join(ctx.local, mode === 'hub' ? 'hub-data' : `demo-${instance}`);
@@ -170,7 +171,7 @@ export async function start(ctx, c, port, built) {
   const log = path.join(ctx.local, 'stand.log');
   if (existsSync(log) && !lstatSync(log).isFile()) throw new Error('Unrecognized stand log; refusing to overwrite it.');
   const url = externalUrl(c, port);
-  const state = {version: 1, root: ctx.root, instance, port, mode, config: desired(c, port), build: built,
+  const state = {version: 1, root: ctx.root, instance, port, mode, config: desired(c, port), preparedConfig: savedConfig(c), build: built,
     data, log, status: 'starting', startedAt: new Date().toISOString(), access: {status: c.DEV_ACCESS === 'none' ? 'local' : 'not published yet'}};
   saveJson(ctx.record, state);
   const env = {...isolatedEnv(), DEV_INSTANCE_ID: instance, QUOTUM_PORT: String(port), QUOTUM_BIND: '127.0.0.1',
@@ -196,8 +197,7 @@ export async function start(ctx, c, port, built) {
       });
     });
     if (!(await healthy(readJson(ctx.record)))) throw new Error('Readiness identity/listener check failed.');
-    const lease = readJson(path.join(ctx.local, 'lease.json'));
-    saveJson(path.join(ctx.local, 'lease.json'), {...lease, version: 1, port, initial: false});
+    assertConfig(ctx.root, savedConfig(c), port);
   } catch (error) {
     // The supervisor writes its identity before opening a listener, even if our caller dies.
     await sleep(100);

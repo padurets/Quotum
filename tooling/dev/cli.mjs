@@ -3,7 +3,7 @@ import {cpSync, existsSync, mkdirSync, readFileSync, realpathSync, readdirSync} 
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {coderPool, externalUrl} from './access.mjs';
-import {allocate, config, envText, parseEnv, validateState} from './config.mjs';
+import {allocate, assertConfig, config, envText, parseEnv, savedConfig, validateState} from './config.mjs';
 import {build, desired, fileHash, healthy, sourceBuild, start, stop} from './runtime.mjs';
 import {atomic, context, git, hash, locked, ownedMembers, readJson, saveJson} from './system.mjs';
 
@@ -98,11 +98,13 @@ export async function command(action, root, json = false) {
     const inputs = sourceBuild(ctx);
     const priorBuild = readJson(path.join(ctx.local, 'build.json'));
     const reusable = state && state.build.inputs === inputs && priorBuild?.inputs === inputs && state.build.output === fileHash(path.join(state.build.hub ?? path.join(ctx.root, 'hub'), 'dist')) && JSON.stringify(state.config) === JSON.stringify(desired(c, port)) && await healthy(state);
+    assertConfig(ctx.root, savedConfig(c), port);
     if (reusable) console.log(`Reusing ready instance ${state.instance}.`);
     else {
       if (state && ownedMembers(state).length) console.log('Source, configuration or readiness changed; rebuilding/restarting the owned stand.');
       // Build first: a failed build leaves the previous live stand available.
       const built = await build(ctx);
+      assertConfig(ctx.root, savedConfig(c), port);
       await stop(ctx);
       for (let attempt = 0; ; attempt++) {
         try { state = await start(ctx, c, port, built); break; }
@@ -114,6 +116,7 @@ export async function command(action, root, json = false) {
         }
       }
     }
+    assertConfig(ctx.root, savedConfig(c), port);
     let access = {status: 'local'};
     if (c.DEV_ACCESS === 'coder') {
       try { access = pool ? await pool.publish(port) : {status: 'unavailable', detail: problem}; }

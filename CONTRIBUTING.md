@@ -108,6 +108,9 @@ an established port conflict fails with a diagnostic. To change an established p
 stop the stand, edit `QUOTUM_PORT` in `.env`, then run `make prepare` and `make dev`.
 An explicit environment port is saved too. Initial claims keep a recoverable intent
 before updating `.env`; existing configuration symlinks are preserved and rejected.
+Concurrent changes to managed `.env` settings stop preparation or startup with a
+diagnostic; retry the command with the current file. A change during the build leaves
+the previous live stand available.
 
 Settings are in [.env.example](.env.example). `DEV_SET=showcase DEV_STILL=true make dev`
 uses the still showcase; `DEV_SET=activity` uses the activity set. `DEV_RESETS` selects

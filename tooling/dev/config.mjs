@@ -1,4 +1,4 @@
-import {existsSync, readFileSync} from 'node:fs';
+import {existsSync, lstatSync, readFileSync} from 'node:fs';
 import {createServer} from 'node:net';
 import path from 'node:path';
 import {atomic, git, hasRuntimeReservation, locked, readJson, saveJson} from './system.mjs';
@@ -8,6 +8,8 @@ const defaults = {DEV_PORT_START: '8080', DEV_MODE: 'demo', DEV_SET: 'all', DEV_
   CODER_WORKSPACE_NAME: '', CODER_WORKSPACE_OWNER_NAME: ''};
 const addressKeys = ['QUOTUM_PUBLIC_URL', 'QUOTUM_ALLOWED_HOSTS', 'QUOTUM_TRUST_PROXY', 'QUOTUM_FRAME_ANCESTORS'];
 export const configKeys = [...Object.keys(defaults), ...addressKeys, 'QUOTUM_PORT'];
+const snapshot = Symbol('saved development configuration');
+const managed = file => Object.fromEntries(configKeys.filter(key => file[key] !== undefined).map(key => [key, file[key]]));
 
 /** A small dotenv grammar: no interpolation, commands, or shell evaluation. */
 export function parseEnv(text) {
@@ -27,7 +29,22 @@ export function parseEnv(text) {
   }
   return values;
 }
-export const envText = root => existsSync(path.join(root, '.env')) ? readFileSync(path.join(root, '.env'), 'utf8') : '';
+export function envText(root) {
+  const file = path.join(root, '.env');
+  const entry = lstatSync(file, {throwIfNoEntry: false});
+  if (entry && !entry.isFile()) throw new Error(`Expected a regular file: ${file}`);
+  return entry ? readFileSync(file, 'utf8') : '';
+}
+export const savedConfig = c => c[snapshot];
+export function assertConfig(root, expected, port) {
+  const file = parseEnv(envText(root));
+  if (expected?.root !== root || JSON.stringify(managed(file)) !== JSON.stringify(expected.values)) throw new Error('Development configuration changed during preparation; retry with current settings.');
+  if (port !== undefined) {
+    const lease = readJson(path.join(root, '.quotum-dev/lease.json'));
+    if (file.QUOTUM_PORT !== String(port) || lease?.version !== 1 || lease.port !== port) throw new Error('Port configuration changed during preparation; retry with current settings.');
+  }
+  return file;
+}
 export function number(value, name, max = 65535) {
   if (!/^\d+$/.test(value ?? '') || Number(value) < 1 || Number(value) > max) throw new Error(`Invalid ${name}; expected an integer from 1 to ${max}.`);
   return Number(value);
@@ -57,6 +74,8 @@ export function config(root, env = process.env) {
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('QUOTUM_PUBLIC_URL must be an HTTP(S) origin without credentials.');
   }
   if (c.QUOTUM_ALLOWED_HOSTS?.split(',').some(host => host.trim() === '*')) throw new Error('Development stands require exact allowed hosts.');
+  // Keep saved intent separate from environment overrides; object spreads retain it.
+  c[snapshot] = {root, values: managed(file)};
   return c;
 }
 export function updateEnv(root, changes, expected) {
@@ -101,24 +120,23 @@ export function validateState(ctx, state) {
 export async function allocate(ctx, c, access, retryFrom) {
   return locked(path.join(ctx.shared, 'allocation.lock'), async () => {
     if (c.DEV_ACCESS === 'coder' && !access) throw new Error('External access policy cannot be verified; no port was claimed or stand changed.');
-    const file = parseEnv(envText(ctx.root));
+    const file = assertConfig(ctx.root, savedConfig(c));
     const leaseFile = path.join(ctx.local, 'lease.json');
     const lease = readJson(leaseFile);
     if (lease && lease.version !== 1) throw new Error('Unsupported port lease.');
     if (retryFrom !== undefined) {
       if (!lease?.initial || lease.port !== retryFrom - 1 || file.QUOTUM_PORT !== String(lease.port)) throw new Error('Port configuration changed during initial recovery; retry with current settings.');
-    } else if (file.QUOTUM_PORT !== undefined && file.QUOTUM_PORT !== c.QUOTUM_PORT) {
-      throw new Error('Port configuration changed during preparation; retry with current settings.');
     }
     const persist = (port, initial) => {
       const currentText = envText(ctx.root);
-      const current = parseEnv(currentText);
-      if (current.QUOTUM_PORT !== file.QUOTUM_PORT) throw new Error('Port configuration changed during preparation; retry with current settings.');
+      const current = assertConfig(ctx.root, savedConfig(c));
       const inherited = Object.fromEntries(Object.entries(c).filter(([key, value]) => key in defaults && value !== undefined && !Object.hasOwn(current, key)));
       // The intent must exist before .env becomes the authoritative reservation.
       saveJson(leaseFile, {version: 1, port, initial});
       if (current.QUOTUM_PORT !== String(port)) inherited.QUOTUM_PORT = String(port);
       if (Object.keys(inherited).length) updateEnv(ctx.root, inherited, currentText);
+      c[snapshot] = {root: ctx.root, values: managed({...current, ...inherited})};
+      assertConfig(ctx.root, savedConfig(c), port);
     };
     const reserved = new Map();
     for (const root of treeRoots(ctx)) {
