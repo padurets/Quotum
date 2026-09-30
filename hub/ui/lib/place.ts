@@ -19,6 +19,20 @@ export function placeOf(top: number, height: number, windowHeight: number, cover
 }
 
 /**
+ * Where the tooltip of a label past a chart's edge stands, from where it would end over the
+ * label (`top`) or begin under it (`bottom`) and its own `height`: over the label where it fits
+ * whole under what covers the top of the page (`cover`), else under it as `placeOf` says, rising
+ * over the label as far as it must to stay whole in the window (`by`), and cut to the window
+ * (`cut`, null for as tall as it is) where it is taller. It shows only while its label is pointed
+ * at, so nothing in it can be scrolled to: it fits or is cut.
+ */
+export function edgeOf(top: number, bottom: number, height: number, windowHeight: number, cover: number) {
+  if (height <= top - cover - 8) return {below: false, by: 0, cut: null};
+  const {by, room} = placeOf(bottom, height, windowHeight, cover);
+  return {below: true, by, cut: height > room ? room : null};
+}
+
+/**
  * Which side of its button a panel opens on, and how tall it may be (`cap`, null for as
  * tall as its content), from its own `height` and the room it has `above` and `below` the
  * button in the window. On its own side (above for one that opens `up`, from a card's tray;

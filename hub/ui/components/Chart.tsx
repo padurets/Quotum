@@ -6,7 +6,7 @@ import {useClock} from '../lib/clock';
 import {gapText, gapTone, readout as readCell, runOutPast, valueAt, type ForecastLine, type PlanLine} from '../lib/readout';
 import type {TimeRange} from '../lib/timeRange';
 import {cellLabel, niceTicks} from '../lib/periods';
-import {coverOf} from '../lib/place';
+import {coverOf, edgeOf} from '../lib/place';
 import {Tooltip, useTip} from './Tooltip';
 import {useTimeAxis} from './timeAxis';
 
@@ -411,16 +411,23 @@ export function Chart({
   const narrow = width < 560;
   const {tip, style: tipStyle} = useTip(svg, {width, at: hoverX, narrow, rises: !edgeKey, bottom: height * scale});
   // A marker's time stands over its label, or under it where the bars that stick at the top
-  // would cover it: found from where the label is, never from where the time was drawn, after
-  // every render and as the page scrolls under a pointer that stays.
+  // would cover it, and a long list of them over the label where neither leaves it whole in the
+  // window (`edgeOf`): found from where the label is and how tall the tooltip is uncut, never
+  // from where and as it was drawn, after every render and as the page scrolls under a pointer
+  // that stays.
   const edgeRow = edgeKey ? stackRows.get(edgeKey)! : 0;
-  const [edgeBelow, setEdgeBelow] = useState(false);
+  const [edgePlace, setEdgePlace] = useState<ReturnType<typeof edgeOf>>({below: false, by: 0, cut: null});
   const placeEdge = useRef(() => {});
   placeEdge.current = () => {
-    if (!edgeKey || !tip.current || !svg.current) return;
+    const element = tip.current;
+    if (!edgeKey || !element || !svg.current) return;
+    const cut = element.style.maxHeight;
+    element.style.maxHeight = '';
+    const tall = element.offsetHeight;
+    element.style.maxHeight = cut;
     const chart = svg.current.getBoundingClientRect();
-    const below = chart.top + (edgeRow - 18) * scale - tip.current.offsetHeight < coverOf(chart.bottom) + 8;
-    setEdgeBelow(same => (same === below ? same : below));
+    const found = edgeOf(chart.top + (edgeRow - 18) * scale, chart.top + (edgeRow + 11) * scale, tall, innerHeight, coverOf(chart.bottom));
+    setEdgePlace(same => (same.below === found.below && same.by === found.by && same.cut === found.cut ? same : found));
   };
   useLayoutEffect(() => placeEdge.current());
   const edgeShown = !!edgeKey;
@@ -585,7 +592,7 @@ export function Chart({
       </svg>
 
       {edgeKey ? (
-        <Tooltip tip={tip} className="is-edge" style={edgeBelow ? {right: 0, top: `${(edgeRow + 11) * scale}px`} : {right: 0, bottom: `calc(100% - ${(edgeRow - 18) * scale}px)`}}>
+        <Tooltip tip={tip} className="is-edge" style={edgePlace.below ? {right: 0, top: `${(edgeRow + 11) * scale - edgePlace.by}px`, maxHeight: edgePlace.cut ?? undefined} : {right: 0, bottom: `calc(100% - ${(edgeRow - 18) * scale}px)`}}>
           {edgeMarkers.map(marker => (
             <Fragment key={marker.key}>
               <div className={`tooltip-marker ${marker.color ? '' : 'is-strong'}`} style={marker.color ? {color: marker.color} : undefined}>

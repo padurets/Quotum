@@ -107,9 +107,10 @@ runs only while its stdin is open.
   widens it: a panel opens whole in the window, under the bars stuck at its top, on the
   side of its button where it fits, or where there is more room, cut to that room and
   scrolling inside (`sideOf` in `hub/ui/lib/place.ts`); a chart's tooltip keeps to the
-  window too (`placeOf`). A chart along the analytics' time reads and moves through
-  `useTimeAxis` (`hub/ui/components/timeAxis.ts`), keeps its own options in its settings,
-  and has its legend under it, each entry switched off and on by a click.
+  window too (`placeOf`, and `edgeOf` for its labels past the edge). A chart along the
+  analytics' time reads and moves through `useTimeAxis` (`hub/ui/components/timeAxis.ts`),
+  keeps its own options in its settings, and has its legend under it, each entry switched
+  off and on by a click.
 - Scrollbars have one style, set once at the top of `hub/ui/style.css`; nothing styles its own.
 - Widgets on the board are a `.card` (a source) or a `.panel` (the list of agents, agent activity, the chart, the table).
 - **Keep the board cheap to render.** Nothing on the page is `position: fixed` or has a
