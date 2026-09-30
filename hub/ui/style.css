@@ -532,6 +532,14 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 .activity-since { font-size: 11px; color: var(--text-2); border: 1px solid var(--hair-2); padding: 0 6px; border-radius: 5px; }
 .activity .chart-loading { min-height: 200px; }
 /* Parts of a stack stand apart by a hair of the surface, so two of one colour do not run together. */
+/* Legend bubbles stay beside their own button, with the gap inside its hover area. */
+.activity-legend-item { position: relative; min-width: 0; }
+.activity-legend-tip { position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 4; display: none; width: max-content; max-width: min(320px, calc(100vw - 16px)); box-sizing: border-box; padding: 8px 10px; border-radius: 9px; font-size: 12.5px; color: var(--text); }
+.activity-legend-tip.is-open { display: block; }
+.activity-legend-item:has(.activity-legend-tip.is-open)::before { content: ''; position: absolute; left: 0; right: 0; height: 6px; bottom: 100%; }
+.activity-legend-item:has(.activity-legend-tip.is-open[data-side=down])::before { bottom: auto; top: 100%; }
+.activity-shown { display: inline-block; margin-left: 8px; }
+
 .activity-stack { stroke: var(--surface); stroke-width: .75; }
 .activity-hatch { stroke: var(--hair-2); stroke-width: 1.5; }
 .activity-unknown-label { fill: var(--text-3); font-size: 11.5px; }

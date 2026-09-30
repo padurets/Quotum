@@ -24,7 +24,7 @@ const LOW_SHARE = 50;
 const BASIS_SHARE = 0.9;
 
 /** The table's columns about agent work, the same in a period up to now and in a range. */
-export const WORK_COLUMNS = ['work', 'perwork', 'workleft', 'during'] as const;
+export const WORK_COLUMNS = ['work', 'agenthours', 'perwork', 'workleft', 'during'] as const;
 export type WorkColumn = (typeof WORK_COLUMNS)[number];
 
 /**
@@ -74,16 +74,16 @@ export function dashOf(reason: Exclude<WorkReason, 'unknown'>, since: number | n
 export function workCells(work: SeriesWork, remaining: number, resetInMs: number | null, windowMs: number | null = null): Record<WorkColumn, WorkCell> {
   if (work.ms === null) {
     const unknown = {none: 'unknown'} as const;
-    return {work: unknown, perwork: unknown, workleft: unknown, during: unknown};
+    return {work: unknown, agenthours: unknown, perwork: unknown, workleft: unknown, during: unknown};
   }
   // Nothing left is what the forecast says, however the work went.
   const usedUp = remaining <= 0 ? ({usedUp: true} as const) : null;
   const none = {none: 'none'} as const;
-  if (!work.ms) return {work: none, perwork: none, workleft: usedUp ?? none, during: none};
+  if (!work.ms) return {work: none, agenthours: none, perwork: none, workleft: usedUp ?? none, during: none};
   const during: WorkCell = work.consumed > 0 ? {value: (work.duringWork / work.consumed) * 100} : {none: 'nospend'};
   // With work mostly in gaps between measurements, whose spending is not known, the share would say 0 of work that was there.
   const short = {none: 'short'} as const;
-  if (work.coveredMs < WORK_PACE_FROM) return {work: {value: work.ms}, perwork: short, workleft: usedUp ?? short, during: short};
+  if (work.coveredMs < WORK_PACE_FROM) return {work: {value: work.ms}, agenthours: {value: work.agentMs}, perwork: short, workleft: usedUp ?? short, during: short};
   const pace = work.consumed / (work.coveredMs / HOUR);
   const leftMs = (remaining / pace) * HOUR;
   // Short of a reset, a whole window or a week where neither bounds it, however slow the pace, that is worth its number.
@@ -98,7 +98,7 @@ export function workCells(work: SeriesWork, remaining: number, resetInMs: number
           : pace < MIN_RATE && resetInMs === null && windowMs === null && leftMs >= UNBOUNDED_MS
             ? {none: 'slow'}
             : {value: leftMs});
-  return {work: {value: work.ms}, perwork: {value: pace}, workleft, during};
+  return {work: {value: work.ms}, agenthours: {value: work.agentMs}, perwork: {value: pace}, workleft, during};
 }
 
 /**
@@ -183,7 +183,7 @@ export function workText(column: WorkColumn, cell: WorkCell, work: SeriesWork, p
   const lines = [
     // Beside hours it foresees, "≈ 0" would read as lasting for ever: the tooltip says how small it is.
     ...(column === 'workleft' && perWork !== null ? [slow ? t('work.basisUnder', {value: num(MIN_RATE, 2)}) : t('work.basis', {value: rateText(perWork)})] : []),
-    ...(column !== 'work' && notes.basis !== null ? [t('work.basisMeasured', {time: workHours(notes.basis)})] : []),
+    ...(column !== 'work' && column !== 'agenthours' && notes.basis !== null ? [t('work.basisMeasured', {time: workHours(notes.basis)})] : []),
     ...(paced && notes.share !== null ? [notes.share === 0 ? t('work.noShare') : t('work.lowShare', {value: shareText(notes.share)})] : []),
     ...(column === 'during' ? [t('work.upperBound')] : []),
     ...known(notes.since),
@@ -199,7 +199,7 @@ export function workText(column: WorkColumn, cell: WorkCell, work: SeriesWork, p
     return {content: t('work.untilReset'), title: [slow ? t('work.outlastsSlow', {window: length}) : t('work.outlastsHint', {time: workAbout(cell.outlasts), window: length}), ...lines].join('\n')};
   }
   const content =
-    column === 'work'
+    column === 'work' || column === 'agenthours'
       ? workHours(cell.value)
       : column === 'perwork'
         ? t('table.perHour', {value: rateText(cell.value)})

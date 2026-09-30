@@ -42,6 +42,7 @@ const HEADINGS: Record<ForecastColumn, {title: Key; range?: Key; hint?: Key}> = 
   end: {title: 'table.atEnd'},
   spent: {title: 'table.spent', range: 'table.spentInRange'},
   pace: {title: 'table.pace', hint: 'table.paceHint'},
+  agenthours: {title: 'table.agentHours', hint: 'table.agentHoursHint'},
   work: {title: 'table.work', hint: 'table.workHint'},
   perwork: {title: 'table.perWork', hint: 'table.perWorkHint'},
   during: {title: 'table.during', hint: 'table.duringHint'},
@@ -133,6 +134,7 @@ export const Forecast = memo(function Forecast({arrange}: {arrange: Arrange}) {
     };
     const workCells: Record<WorkColumn, Cell | TimedCell> = {
       work: workCell('work', 0),
+      agenthours: workCell('agenthours', 0),
       perwork: workCell('perwork', 0),
       during: workCell('during', 0),
       workleft: range ? workCell('workleft', 0) : {time: 'workleft', changesAt: now => workLeftChangesAt(line, resetAt, now), at: now => workCell('workleft', now)},
