@@ -616,6 +616,8 @@ th:last-child, td:last-child { padding-right: var(--table-edge, 12px); }
 td:first-child { color: var(--text); }
 /* A window's name wraps rather than widening the table past its widget: the columns beside it keep their room. Its lines start after its colour, as in the list. */
 .panel.forecast td:first-child { white-space: normal; overflow-wrap: anywhere; }
+/* A burst beside a forecast's words: quiet, whatever their tone. */
+.forecast-burst { margin-left: 5px; color: var(--text-3); }
 .forecast-name { display: flex; align-items: baseline; }
 .forecast-name > .swatch { flex-shrink: 0; }
 .forecast-name > :last-child { min-width: 0; }

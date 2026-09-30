@@ -404,6 +404,7 @@ const SNAPSHOT: Snapshot = {
   sessions: {},
   cadence: {},
   refresh: {},
+  forecast: {},
   mine: [],
   boards: [],
   resets: {resets: {}, trackers: [], past: {}},

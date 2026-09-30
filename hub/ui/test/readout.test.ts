@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {gapText, gapTone, readout, type ForecastLine, type PlanLine} from '../lib/readout';
+import {chartMoments, gapText, gapTone, lastRunOut, readout, runOutPast, type ForecastLine, type PlanLine} from '../lib/readout';
 import type {Line} from '../lib/lines';
 
 const minute = 60_000;
@@ -58,7 +58,7 @@ test('a gap reads with its sign, and one ahead of the plan by 3 or more is marke
 
 test('ahead of now a line reads where its pace leads, beside its plan, until it runs out', () => {
   const lines = [line('weekly', [[now - 5 * minute, 40, 0]]), line('other', [[now - 5 * minute, 70, 0]])];
-  const forecast: ForecastLine = {key: 'weekly', name: 'Weekly', color: '', dash: '', points: [[now, 40], [now + 40 * minute, 0]], at: now + 40 * minute};
+  const forecast: ForecastLine = {key: 'weekly', name: 'Weekly', color: '', dash: '', points: [[now, 40], [now + 40 * minute, 0]], zero: now + 40 * minute, at: now + 40 * minute};
   const ahead = now + 10 * minute;
   const {rows, columns} = readout(lines, [plan(['weekly'], 50)].map(p => ({...p, runs: [[[now - 60 * minute, 50], [now + 60 * minute, 50]]]})), ahead, cellMs, now, now + 60 * minute, [forecast]);
   assert.deepEqual(columns, {left: false, plan: true, gap: false, forecast: true});
@@ -73,7 +73,7 @@ test('ahead of now a line reads where its pace leads, beside its plan, until it 
 
 test('columns stay put up to now, and ahead of it are the values the cell reads', () => {
   const lines = [line('weekly', [[now - 5 * minute, 40, 0]])];
-  const forecast: ForecastLine = {key: 'weekly', name: 'Weekly', color: '', dash: '', points: [[now, 40], [now + 40 * minute, 0]], at: now + 40 * minute};
+  const forecast: ForecastLine = {key: 'weekly', name: 'Weekly', color: '', dash: '', points: [[now, 40], [now + 40 * minute, 0]], zero: now + 40 * minute, at: now + 40 * minute};
   const planned = [{...plan(['weekly'], 50), runs: [[[now - 60 * minute, 50], [now + 20 * minute, 50]]] as PlanLine['runs']}];
   const at = (cell: number, plans: PlanLine[], forecasts: ForecastLine[]) => readout(lines, plans, cell, cellMs, now, now + 60 * minute, forecasts).columns;
   assert.deepEqual(at(cell, planned, [forecast]), {left: true, plan: true, gap: true, forecast: false}, 'before now');
@@ -82,4 +82,33 @@ test('columns stay put up to now, and ahead of it are the values the cell reads'
   assert.deepEqual(at(now + 30 * minute, planned, [forecast]), {left: false, plan: false, gap: false, forecast: true}, 'past the plan’s end');
   assert.deepEqual(at(now + 45 * minute, planned, [forecast]), {left: false, plan: false, gap: false, forecast: false}, 'past the plan and where it runs out');
   assert.deepEqual(at(now + 10 * minute, [], []), {left: false, plan: false, gap: false, forecast: false}, 'nothing drawn ahead');
+});
+
+test('the chart stretches to where a line reaches zero, and points past its edge at the moment the table says', () => {
+  const hour = 60 * minute;
+  const f = (key: string, zero: number | null, at: number | null): ForecastLine => ({key, name: key, color: 'c', dash: '', points: [], zero, at});
+  // Its zero and the moment the table says differ: that moves only past a dead band.
+  const soon = f('soon', now + 5 * hour, now + 9 * hour);
+  const later = f('later', now + 20 * hour, now + 3 * hour);
+  const held = f('held', null, null);
+  assert.equal(lastRunOut([soon, later, held], now + 10 * hour), now + 5 * hour, 'to the zero within reach');
+  assert.equal(lastRunOut([later, held], now + 10 * hour), 0, 'none within reach');
+  assert.deepEqual(runOutPast([soon, later, held], now + 8 * hour), [{key: 'later', name: 'later', color: 'c', at: now + 3 * hour}]);
+});
+
+test('the chart reads otherwise when a strong marker past its edge comes due, and when a forecast is drawn no more', () => {
+  const hour = 60 * minute;
+  // Past the edge at 8 hours, only a strong marker still ahead; within the chart, none.
+  const markers = [
+    {at: now + 10 * hour, strong: true},
+    {at: now + 11 * hour},
+    {at: now + 12 * hour, strong: true, past: true},
+    {at: now + 2 * hour, strong: true},
+  ];
+  // Every line it may draw, shown or not, within the chart or past it.
+  const drawn = [{until: now + 4 * hour}, {until: now + 30 * hour}];
+  assert.deepEqual(
+    chartMoments(markers, drawn, now + 8 * hour).sort((a, b) => a - b),
+    [now + 4 * hour, now + 10 * hour, now + 30 * hour],
+  );
 });

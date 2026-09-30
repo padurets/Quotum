@@ -5,7 +5,7 @@ import {titled} from './quota';
 import type {PastResets, Resets, TrackerHealth} from './resets';
 import type {Board} from './session';
 import {createStore, sameJson, shallowEqual, useSelect} from './store';
-import type {Card, LiveSession, Pace, Refresh, View} from './types';
+import type {Card, LiveSession, Pace, Refresh, SourceForecast, View} from './types';
 
 /**
  * The page's state, and the one way it changes: events. What the hub pushes
@@ -29,6 +29,7 @@ export type Snapshot = {
   sessions: Record<string, LiveSession[]>;
   cadence: Record<string, Pace>;
   refresh: Record<string, Refresh>;
+  forecast: Record<string, SourceForecast>;
   mine: string[];
   boards: Board[];
   resets: HubResets;
@@ -44,6 +45,7 @@ export type HubEvent =
   | {type: 'sessions'; data: {id: string; sessions: LiveSession[]}}
   | {type: 'cadence'; data: {id: string; cadence: Pace}}
   | {type: 'refresh'; data: {id: string; refresh: Refresh}}
+  | {type: 'forecast'; data: {id: string; forecast: SourceForecast}}
   | {type: 'mine'; data: {sources: string[]}}
   | {type: 'boards'; data: {boards: Board[]}}
   | {type: 'history'; data: {sources: string[]; since: number}}
@@ -61,6 +63,7 @@ export type BoardState = {
   sessions: Record<string, LiveSession[]>;
   cadence: Record<string, Pace>;
   refresh: Record<string, Refresh>;
+  forecast: Record<string, SourceForecast>;
   mine: string[];
 };
 
@@ -130,6 +133,7 @@ function snapshot(state: PageState, data: Snapshot): PageState {
     sessions: keepEach(old?.sessions, data.sessions),
     cadence: keepEach(old?.cadence, data.cadence),
     refresh: keepEach(old?.refresh, data.refresh),
+    forecast: keepEach(old?.forecast, data.forecast),
     mine: keep(old?.mine, data.mine),
   };
   return {
@@ -147,7 +151,7 @@ function patch(state: PageState, change: (board: BoardState) => BoardState): Pag
   return board === state.board ? state : {...state, board};
 }
 
-function set<K extends 'cards' | 'sessions' | 'cadence' | 'refresh'>(board: BoardState, key: K, id: string, value: BoardState[K][string]): BoardState {
+function set<K extends 'cards' | 'sessions' | 'cadence' | 'refresh' | 'forecast'>(board: BoardState, key: K, id: string, value: BoardState[K][string]): BoardState {
   const old = board[key][id];
   const next = keep(old, value);
   return next === old ? board : {...board, [key]: {...board[key], [id]: next}};
@@ -164,7 +168,15 @@ function hub(state: PageState, event: HubEvent): PageState {
     case 'lineup':
       return patch(state, board => {
         const lineup = keep(board.lineup, event.data.sources);
-        const next = {...board, lineup, cards: only(board.cards, lineup), sessions: only(board.sessions, lineup), cadence: only(board.cadence, lineup), refresh: only(board.refresh, lineup)};
+        const next = {
+          ...board,
+          lineup,
+          cards: only(board.cards, lineup),
+          sessions: only(board.sessions, lineup),
+          cadence: only(board.cadence, lineup),
+          refresh: only(board.refresh, lineup),
+          forecast: only(board.forecast, lineup),
+        };
         return shallowEqual(next, board) ? board : next;
       });
     case 'card':
@@ -175,6 +187,8 @@ function hub(state: PageState, event: HubEvent): PageState {
       return patch(state, board => set(board, 'cadence', event.data.id, event.data.cadence));
     case 'refresh':
       return patch(state, board => set(board, 'refresh', event.data.id, event.data.refresh));
+    case 'forecast':
+      return patch(state, board => set(board, 'forecast', event.data.id, event.data.forecast));
     case 'mine':
       return patch(state, board => (sameJson(board.mine, event.data.sources) ? board : {...board, mine: event.data.sources}));
     case 'boards': {
@@ -220,6 +234,7 @@ export const page = createStore(reduce, INITIAL);
 
 const NONE: never[] = [];
 const NO_PAST: PastResets = {};
+const NO_FORECAST: SourceForecast = {};
 
 const usePage = <T>(select: (state: PageState) => T, equal?: (a: T, b: T) => boolean) => useSelect(page, select, equal);
 
@@ -246,6 +261,8 @@ export const useSessions = (id: string) => usePage(s => s.board?.sessions[id] ??
 export const useSessionsOf = (ids: string[]) => usePage(s => ids.map(id => s.board?.sessions[id] ?? NONE), shallowEqual);
 export const useRefresh = (id: string) => usePage(s => s.board?.refresh[id] ?? null);
 export const useCadence = (id: string) => usePage(s => s.board?.cadence[id] ?? null);
+/** The hub's forecasts of several sources' weekly windows at once, for the table and the chart: not a hook per source. */
+export const useForecastsOf = (ids: string[]) => usePage(s => ids.map(id => s.board?.forecast[id] ?? NO_FORECAST), shallowEqual);
 /** Whether the reader's devices measure this source: theirs to take off a shared board. */
 export const useMine = (id: string) => usePage(s => !!s.board?.mine.includes(id));
 export const useBoards = () => usePage(s => s.boards);
@@ -300,6 +317,12 @@ export function useResetsFor(provider: string) {
   const status = usePage(s => (provider === 'claude' || provider === 'codex' ? s.resets?.resets[provider] : undefined));
   return shown ? status : undefined;
 }
+
+/**
+ * The trackers' news as the hub tells it, whatever this browser shows of it: a reset for
+ * everyone announced caps a forecast's tone the same on every board (`announcedOf`).
+ */
+export const useResetNews = () => usePage(s => s.resets?.resets ?? null);
 
 /** Resets for everyone over the history kept, for the chart, while this browser shows them. */
 export function usePastResets(): PastResets {

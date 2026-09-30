@@ -402,33 +402,83 @@ them), kept for 90 days.
   wherever it is; the plan ends with its last non-zero day. Other windows are planned
   linearly to their reset. The board's owner can switch a source's plan off: then none
   of its windows is planned on that board. The chart draws the plan of the current week
-  only.
-- **The forecast by time** says where a window's own pace leads, the same over any period
-  (the forecast by work is told with agents' work, under *Delivery*). It
-  counts from the window's last measurement: what was spent since the window started
-  (its reset less its length) over the calendar time since then, idle hours too. A
-  weekly window whose plan has planned 10 points by then goes the way the plan does,
-  as many times as fast as it has gone so far, and holds level past the plan's end;
-  other windows, and a week before its plan has planned 10 points, go straight on.
-  A week with a plan is judged against the end of the plan while it runs, other windows
-  against their reset: within 5 points either way of spending it all then it is on
-  pace, 5 or more over it runs out, otherwise some is left. A window says nothing until
-  it has run half an hour or a twentieth of its length, whichever is longer (8.4 hours
-  of a week), nor an idle rolling window; one due to have run out already says when and
-  waits for a new measurement, as does one whose reset went by unmeasured, used up or
-  not. Numbers gone stale keep their forecast: the moment it runs out is a
-  moment, as true for an old measurement until it comes. The forecast assumes that after
-  an early reset a provider reports a new reset time, so the window starts over; one
-  that kept the old reset time would read as spending slower until then. A plan with days at 0
-  first counts spending on those days against its later shape, and so jumps at 10
-  points without any new spending; before 10 points, a week goes straight on past the
-  end of its own plan, and one spending just as a plan heavy on its first day does may
-  read as running out until then. On the chart each window with a forecast gets a thinner, fainter
-  line in its colour and dash, from its last value to zero or its reset. With the plan
-  or the forecast shown the chart keeps some future on its right; on `auto` it stretches
-  to the last moment a window runs out within about 40% of its width, and a window that
-  runs out further leaves the future as it is and is pointed at from the right edge. A range in the past,
-  dragged or moved to, has no forecast.
+  only. A plan the owner chose for a weekly window that ends before its reset adds a line
+  to the forecast's tooltip: what the forecast has left when the plan ends. The default
+  plan chosen explicitly is not kept as chosen, and adds none.
+- **The forecast by time** says where a window leads, the same over any period (the
+  forecast by work is told with agents' work, under *Delivery*). A weekly window's is the
+  hub's (`hub/server/domain/forecast.ts`), one for the whole hub, and goes by how its
+  subscription spends. It follows the window as a series through its resets over the last
+  23 days of samples: what was spent between two samples is spread over the ten-minute
+  cells between them, time without samples or with a rolling window not yet begun is time
+  spent idle (but from the last sample before a reset to the start of the new window, when
+  longer than a cell, it is unknown and does not count), and a cell at zero (99.5% used or
+  more, or a model's window while its subscription's weekly window is at zero and resets
+  no sooner) counts as neither; an hour counts with three counted cells. How the
+  subscription usually spends is a shape over the hours of the day in UTC, from up to 168
+  counted hours of the last three weeks, and, with 14 days of them or more, a factor for
+  each day of the week; its level is that of the last 24 counted hours. From the sample it
+  stands on to the window's reset the line goes down as that shape does, fast in the hours
+  it usually spends and nearly flat in the others. It runs out once the line reaches zero
+  and ends 5 or more points under it, and keeps saying so while it ends no more than 2
+  over; the moment it shows moves only by more than an hour or a fifth of the time to it,
+  whichever is more. Otherwise it lasts: "~X% left" when it ends with 5 points a day to
+  the reset or more (at least 5), "just enough" otherwise, each held until the forecast
+  passes that mark by a day's worth of points, so steady spending in whole percents does
+  not flicker between the two; X is a multiple of 5, held until the forecast moves from it
+  by 5 points or 2.5 a day to the reset, whichever is more. The board makes it red when it
+  runs out within half the time to the reset, and yellow at most with free resets, or with
+  a reset for everyone announced before it and not measured yet. The last 6 hours going
+  twice as fast as usual or more (at least 3 counted, against the shape without them and
+  never under its mean hour), so that it would run out before the reset at that pace, put
+  a muted arrow up by the words, and how many times and when it would run out in the
+  tooltip; the verdict stays.
+
+  A series says nothing until it has an hour of history. Under a day it goes by the hours
+  it has, leaning on the window's own mean (once the window ran half an hour when the
+  series saw it begin, else a twentieth of its length), never says what will be left and
+  is yellow at most, and its line is that pace as it is: it may end high above zero while
+  the table says just enough. While the whole life of a series lies within the 23 days it
+  reads, time idle before the first window it saw not yet begun or beginning is not
+  history, if nothing was spent before it: for a rolling window (Codex after a reset) that
+  beginning is its first use. A window on a schedule (Claude: a new one begins at the
+  reset) and one already begun when Quotum first measured it keep the idle time before its
+  first spending as history, so steady spending after a long idle start may read "~X%
+  left" for some hours before it says it runs out. A change of plan starts the history
+  anew once the new plan has held an hour (the hub records a subscription's plan when a
+  measurement first reports it and whenever it changes); Claude Max 5x and 20x report the
+  same plan (`max`), so a change between them does not.
+
+  After it starts, the hub works a series out first on its latest sample, as of the last
+  whole hour if the sample came before it (or goes on from what it kept, if that took the
+  sample in), so a board measured no more is told nothing more. It works it out again at
+  its subscription's hour after a sample the forecast has not taken in (the hour whole,
+  worked out up to ten minutes after it, by the subscription's id, so a hub's forecasts
+  are not all worked out at once), and at once when a sample contradicts it: a series
+  coming back from zero or reaching its first hour, a new window begun, the used share
+  falling by 5 points or more, the moment it showed come with some left, an hour or more
+  with no sample (or longer, as long as the samples were said to last). A sample come late
+  for the moment a forecast stands on, from another device, works that moment out again.
+  What the verdict keeps from one to the next goes into the database after each round of
+  events and each read of the overview, so a restarted hub goes on where it was; a series
+  that fails is left without a forecast until the next hour, the others stand.
+
+  A five-hour window's is the board's: what was spent since it started over the time since
+  then, idle time too, goes on to its reset; within 5 points either way of spending it all
+  then it is on pace, 5 or more over it runs out, otherwise some is left. It says nothing
+  until it has run half an hour, or a twentieth of its length when that is longer, nor
+  while it is a rolling window not begun. A window due to have run out already says when
+  and waits for a new measurement, as does one whose reset went by unmeasured, used up or
+  not. Numbers gone stale keep their forecast: the moment it runs out is a moment, as true
+  for an old measurement until it comes. On the chart each window with a forecast gets a
+  thinner, fainter line in its colour and dash, from its last value to zero or its reset:
+  a weekly window's in the shape of the hub's line, which stands on the sample of its
+  hour, moved to start there. With the plan or the forecast shown the chart keeps some
+  future on its right; on `auto` it stretches to the last moment a window runs out within
+  about 40% of its width, and a window that runs out further leaves the future as it is
+  and is pointed at from the right edge, the soonest first, as many as the plot has rows
+  for; those with no room are said together on the last row, each with its time in its
+  tooltip. A range in the past, dragged or moved to, has no forecast.
 - **Events** mark the chart behind now. An early reset is derived from the samples: a
   window's used share drops by more than 5 points before its reset time (resets of one
   source within 15 minutes are one event). Free resets granted are recorded when a
@@ -506,7 +556,8 @@ person); a moment later the hub puts the touched parts of every board being read
 together again (`hub/server/projection.ts`) and sends each reader only what differs from
 what it last got (`hub/server/events.ts`). What changes with time alone (a card going
 stale, a machine's agents no longer shown, a holder falling silent, a past reset leaving
-the history) it tells when that comes: it keeps the moment each board being read next
+the history, a subscription's forecasts worked out again at its hour) it tells when that
+comes: it keeps the moment each board being read next
 changes by itself. A board nobody reads costs nothing, and one the hub cannot work out
 (its data spoilt) fails alone: its readers start over, and a new one is answered an
 error. Every connection starts with the board as it is, so a dropped connection, a
@@ -561,15 +612,16 @@ is `online`, the tab shown, `pageshow`, `focus`, or a timer of its own more than
 
 In the page, the events go through one reducer into a store (`hub/ui/lib/board.ts`); each
 widget reads its own part of it and renders only when that part changes (a card, its
-agents, its pace, the list of agents, the chart), and a part the same as before stays
+agents, its pace, its forecasts, the list of agents, the chart), and a part the same as before stays
 the same object. What shows time (how long ago, how soon, the freshness dot, the plan's
 mark, that the hub cannot be reached) is a small part of its own that tells the page's
 one clock (`hub/ui/lib/clock.ts`) when it reads otherwise, and renders only then: the
 clock keeps one timer for the whole page, none on a hidden tab, and counts in the hub's
 time as the hub's messages tell it. The chart and agent activity move on a cell of the
-history's grid at a time, and a label past the chart's right edge counts down on its own;
-in the table, the plan, where the pace leads and the hours of work left each read
-otherwise at their own moment. History is read again when the hub tells of measurements
+history's grid at a time; a label past the chart's right edge counts down on its own, and
+a forecast's line goes at the moment the table says it runs out, or at the reset; in the
+table, the plan, where the pace leads and the hours of work left each read otherwise at
+their own moment. History is read again when the hub tells of measurements
 the chart has not shown, at most every ten seconds for a period ending now, or that whose
 agents' work the board shows, or under which names, changed (`Store.workKey`: a card
 hidden, someone joining or leaving, a project or a machine renamed), when it is all read

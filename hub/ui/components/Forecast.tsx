@@ -1,62 +1,33 @@
 import {Fragment, memo, useLayoutEffect, useMemo, useRef, useState, type ReactNode} from 'react';
-import {countdown, num, rateText, stamp} from '../lib/format';
+import {num, rateText} from '../lib/format';
 import {level} from '../lib/quota';
 import {
   FORECAST_WIDTHS,
   LIVE_COLUMNS,
   RANGE_COLUMNS,
+  announcedOf,
+  cellChangesAt,
   forecastLayout,
   outlook,
-  outlookChangesAt,
+  outlookText,
   planCell,
+  planEndOf,
   spentOf,
+  type Context,
   type ForecastColumn,
-  type Outlook,
-  type Pace,
   type Spent,
 } from '../lib/forecast';
 import {planChangesAt} from '../lib/plan';
 import {lineWork, workLeftChangesAt, workText, type WorkColumn} from '../lib/work';
-import {FORECAST, columnShown, planOf, withColumn, withHidden, type Arrange} from '../lib/view';
+import {FORECAST, chosenPlanOf, columnShown, planOf, withColumn, withHidden, type Arrange} from '../lib/view';
 import {linesOf, type Line} from '../lib/lines';
 import {usePrefs} from '../lib/prefs';
 import {ofTimeRange} from '../lib/timeRange';
-import {useNamed} from '../lib/board';
+import {useForecastsOf, useLineup, useNamed, useResetNews} from '../lib/board';
 import {hubNow, useClock} from '../lib/clock';
 import {useHistory} from '../lib/history';
 import {t, useLocale, type Key} from '../i18n';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
-
-/** How fast the window goes, as the tooltip of its forecast says it. */
-const paceText = (pace: Pace) =>
-  pace.by === 'plan' ? t('forecast.planPace', {k: num(pace.k, 2)}) : t('forecast.rate', {rate: rateText(pace.rate)});
-
-/** The last column's text and tooltip, a part a line; its colour is the outlook's tone. */
-function outlookCell(ahead: Outlook): {text: string; title: string} {
-  switch (ahead.key) {
-    case 'none':
-      return {text: '—', title: ''};
-    case 'idle':
-    case 'needData':
-    case 'awaiting':
-      return {text: '—', title: t(`forecast.${ahead.key}`)};
-    case 'pastZero':
-      return {text: '—', title: [t('forecast.pastZero', {time: stamp(ahead.at)}), t('forecast.awaiting')].join('\n')};
-    case 'usedUp':
-      return {text: t('forecast.usedUp'), title: ''};
-  }
-  const title = paceText(ahead.pace);
-  switch (ahead.key) {
-    case 'runsOut':
-      return {text: t('forecast.runsOut', {time: countdown(ahead.inMs)}), title: [title, t('forecast.runsOutAt', {time: stamp(ahead.at)})].join('\n')};
-    case 'onPacePlan':
-    case 'onPaceReset':
-      return {text: t(`forecast.${ahead.key}`), title};
-    case 'leftPlan':
-    case 'leftReset':
-      return {text: t(`forecast.${ahead.key}`, {value: num(ahead.left)}), title};
-  }
-}
 
 const spentText = (spent: Spent) => (spent.key === 'points' ? t('table.points', {value: num(spent.value, 1)}) : spent.key === 'unused' ? t('table.unused') : '—');
 
@@ -103,19 +74,24 @@ const shown = (key: string, cell: Cell | TimedCell, render: (cell: Cell, time?: 
  * The windows of one kind, from what is left to where it leads: what is left and what the
  * plan expects; what the period spent, how long agents worked on each window's
  * subscription meanwhile, what an hour of their work spent and how much of the spending
- * fell into their work; then two forecasts, by the time on the clock (where each window's
- * own pace since it started leads, whatever the period) and by work (how many hours agents
- * can go on at what an hour of their work spent). Its period and window type are the
- * analytics', as the chart's. Over a time range selected on the chart, which is in the
- * past, it shows that range instead: what was left at its start and its end, what it spent
- * in all and per hour, and its agents' work. The board's owner chooses the columns; where
- * they do not fit the widget, each window is a row of a list. It reads the history on
- * screen and the board's cards, not their agents or pace; what in it changes with time
- * (the plan, where the pace leads, the hours of work left) are parts of their own.
+ * fell into their work; then two forecasts, by the time on the clock (a weekly window's as
+ * the hub foresees it from how its subscription spends, a five-hour window's at its own
+ * pace since it started; neither by the period) and by work (how many hours agents can go
+ * on at what an hour of their work spent). Its period and window type are the analytics',
+ * as the chart's. Over a time range selected on the chart, which is in the past, it shows
+ * that range instead: what was left at its start and its end, what it spent in all and per
+ * hour, and its agents' work. The board's owner chooses the columns; where they do not fit
+ * the widget, each window is a row of a list. It reads the history on screen, the board's
+ * cards, the hub's forecasts and its news of resets, not the cards' agents or pace; what in
+ * it changes with time (the plan, where the forecast leads, the hours of work left) are
+ * parts of their own.
  */
 export const Forecast = memo(function Forecast({arrange}: {arrange: Arrange}) {
   const {history, loading} = useHistory();
   const sources = useNamed(arrange.view.names);
+  const lineup = useLineup();
+  const forecasts = useForecastsOf(lineup);
+  const news = useResetNews();
   const {view} = arrange;
   const {kind} = usePrefs();
   const selected = ofTimeRange(history);
@@ -171,6 +147,11 @@ export const Forecast = memo(function Forecast({arrange}: {arrange: Arrange}) {
       } as Record<ForecastColumn, Cell>;
     }
     const weekly = planOf(view, line.sourceId);
+    // A weekly window as the hub foresees it; a five-hour one the table foresees itself.
+    const ahead = live?.kind === 'weekly' ? (forecasts[lineup.indexOf(line.sourceId)]?.[line.windowId] ?? null) : null;
+    const context: Context = {windows: source?.windows ?? [], freeResets: source?.resets?.available ?? 0, announced: announcedOf(news, line.provider, measuredAt)};
+    // The plan's line in the tooltip is for a plan the owner chose: the default plan is none.
+    const chosen = chosenPlanOf(view, line.sourceId);
     return {
       ...workCells,
       now: {content: `${num(line.current)}%`, className: `v-${level(line.current)}`},
@@ -201,11 +182,23 @@ export const Forecast = memo(function Forecast({arrange}: {arrange: Arrange}) {
       spent: {content: spentText(spentOf(line))},
       forecast: {
         time: 'forecast',
-        changesAt: now => outlookChangesAt(live, measuredAt, now, weekly),
+        changesAt: now => cellChangesAt(live, measuredAt, now, ahead, context, chosen),
         at: now => {
-          const said = outlook(live, measuredAt, now, weekly);
-          const ahead = outlookCell(said);
-          return {content: ahead.text, title: ahead.title || undefined, className: said.tone};
+          const said = outlook(live, measuredAt, now, ahead, context);
+          const text = outlookText(said, live, ahead, context, planEndOf(live, measuredAt, now, chosen, ahead));
+          // A burst beside the words, never instead of them, and never louder than they are. It has
+          // no tooltip of its own: pointed at, it shows the cell's, which tells how fast.
+          const content = text.burst ? (
+            <>
+              {text.text}
+              <span className="forecast-burst" role="img" aria-label={t('forecast.burstMark')}>
+                ↑
+              </span>
+            </>
+          ) : (
+            text.text
+          );
+          return {content, title: text.title.join('\n') || undefined, className: said.tone};
         },
       },
     } as Record<ForecastColumn, Cell | TimedCell>;

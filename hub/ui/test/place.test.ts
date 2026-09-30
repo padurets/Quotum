@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {coverAt, crampedOf, placeOf, roomOf, shiftOf, sideOf} from '../lib/place';
+import {coverAt, crampedOf, edgeOf, placeOf, roomOf, shiftOf, sideOf} from '../lib/place';
 
 test('a chart\'s tooltip stands whole in the window where it can, never under the bars, and the same once found again', () => {
   // Unraised at 400, 350 tall, in a window 800 tall under bars ending at 60.
@@ -15,6 +15,17 @@ test('a chart\'s tooltip stands whole in the window where it can, never under th
   // Measured from where it was drawn, raised, it would find less and sink back, then rise
   // again: that is why where it stands unraised is read from the chart.
   assert.notDeepEqual(placeOf(500 - 58, 350, 800, 60), placeOf(500, 350, 800, 60));
+});
+
+test('the tooltip of a label past a chart\'s edge stands over it, else under it, else over it as far as keeps it whole in the window', () => {
+  // A label ending over it at 222 and beginning under it at 251, in a window 440 tall under bars ending at 60: 154 above.
+  assert.deepEqual(edgeOf(222, 251, 154, 440, 60), {below: false, by: 0, cut: null}, 'over it, just as tall as the room');
+  assert.deepEqual(edgeOf(222, 251, 155, 440, 60), {below: true, by: 0, cut: null}, 'a pixel taller: under it');
+  assert.deepEqual(edgeOf(222, 251, 181, 440, 60), {below: true, by: 0, cut: null}, 'under it, just as tall as the room there');
+  assert.deepEqual(edgeOf(222, 251, 230, 440, 60), {below: true, by: 49, cut: null}, 'fitting neither: whole in the window, over the label');
+  assert.deepEqual(edgeOf(222, 251, 400, 440, 60), {below: true, by: 183, cut: 364}, 'taller than the window: 8 under the bars, cut 8 above its bottom');
+  // Its chart scrolled under the bars: it comes down to 8 under them.
+  assert.deepEqual(edgeOf(20, 49, 200, 440, 60), {below: true, by: -19, cut: null});
 });
 
 test('a panel opens on its own side of its button when it fits there whole', () => {

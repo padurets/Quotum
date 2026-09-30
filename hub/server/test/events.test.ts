@@ -9,6 +9,7 @@ import {Cadence} from '../cadence.js';
 import {config} from '../config.js';
 import {Duty} from '../duty.js';
 import {Events, type Clock, type EventsOptions, type Frame, type Reader} from '../events.js';
+import {hourShift} from '../forecasts.js';
 import {Ingest, type Credential} from '../ingest.js';
 import {Pairing} from '../pairing.js';
 import {Projection} from '../projection.js';
@@ -321,13 +322,13 @@ test("the board's own events and each reader's own go apart: its owner and a mem
   // Whose agents' work the board shows changed with it: all of its history reads otherwise.
   assert.deepEqual(
     ofAlice.map(e => e.type),
-    ['card', 'sessions', 'cadence', 'refresh', 'lineup', 'mine', 'history'],
+    ['card', 'sessions', 'cadence', 'refresh', 'forecast', 'lineup', 'mine', 'history'],
   );
   assert.deepEqual(ofAlice.at(-2)!.data, {sources: [source]});
   assert.deepEqual(ofAlice.at(-1)!.data, {sources: [source], since: 0});
   assert.deepEqual(
     ofBob.map(e => e.type),
-    ['card', 'sessions', 'cadence', 'refresh', 'lineup', 'history'],
+    ['card', 'sessions', 'cadence', 'refresh', 'forecast', 'lineup', 'history'],
     "not Bob's: no mine for him",
   );
   for (const event of ofBob) assert.ok(!JSON.stringify(event.data).includes('"role"'), 'no role in what the board tells everyone');
@@ -351,7 +352,7 @@ test('a source taken off and back comes back whole, before the lineup; a reader 
   assert.deepEqual([later.snapshot.sources, later.snapshot.sessions, later.snapshot.cadence], [[], {}, {}]);
 
   await h.call('POST', `/api/boards/${team}/shares`, {as: 'alice', body: {source}});
-  assert.deepEqual(await s.types(), ['card', 'sessions', 'cadence', 'refresh', 'lineup', 'mine', 'history'], 'with no measurement in between, its work shown again');
+  assert.deepEqual(await s.types(), ['card', 'sessions', 'cadence', 'refresh', 'forecast', 'lineup', 'mine', 'history'], 'with no measurement in between, its work shown again');
 });
 
 test('a reader coming while changes wait to go out has them in the snapshot and hears of them no more', async t => {
@@ -454,6 +455,85 @@ test('what changes with time alone goes out when it does, with nothing told to t
   assert.equal((await s.next()).data.past.codex.length, 1);
   h.clock.advance(11 * S);
   assert.deepEqual((await s.next()).data.past, {});
+});
+
+test("a weekly window's forecast goes out after the source's cadence, the same on every board and in /api/overview, and again on the hour after a sample", async t => {
+  const h = await timed(t);
+  const HOUR = 60 * MIN;
+  const start = h.clock.now() - 3 * 86_400_000;
+  const deliver = (at: number) =>
+    h.ingest.accept(
+      h.credential,
+      {
+        ...h.agent,
+        sentAt: iso(h.clock.now()),
+        snapshots: [
+          {
+            provider: 'codex',
+            account: ACCOUNT,
+            plan: 'pro',
+            observedAt: iso(at),
+            via: 'codex/app-server',
+            staleAfterMs: 20 * MIN,
+            windows: [{id: 'weekly', kind: 'weekly', minutes: 10080, usedPercent: Math.round((0.5 * (at - start)) / HOUR), resetsAt: iso(start + 7 * 86_400_000)}],
+          },
+        ],
+        failures: [],
+      },
+      h.clock.now(),
+    );
+  let last = start + HOUR;
+  for (; last + 10 * MIN < h.clock.now() - MIN; last += 10 * MIN) deliver(last);
+  deliver(last);
+  const source = h.store.sources(h.board)[0].id;
+  const team = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
+  await h.call('POST', `/api/boards/${team}/shares`, {as: 'alice', body: {source}});
+  // Just past the hour this subscription's forecasts are worked out on, with a sample after it.
+  const shift = hourShift(source);
+  const hour = Math.floor((h.clock.now() - shift) / HOUR) * HOUR + HOUR;
+  // Measured every ten minutes up to then, whatever minute the test starts at: no gap for the hub to work out at once.
+  for (last += 10 * MIN; last < hour + shift; last += 10 * MIN) {
+    h.clock.advance(last + S - h.clock.now());
+    deliver(last);
+  }
+  h.clock.advance(hour + shift + 30 * S - h.clock.now());
+  const latest = h.clock.now() - 10 * S;
+  deliver(latest);
+
+  let read = 0;
+  const samples = h.store.seriesSamples.bind(h.store);
+  h.store.seriesSamples = (...args) => (read++, samples(...args));
+  const own = await reading(h, 'alice');
+  t.after(own.close);
+  const shared = await reading(h, 'alice', team);
+  t.after(shared.close);
+  const forecast = own.snapshot.forecast[source];
+  assert.deepEqual(Object.keys(forecast), ['weekly']);
+  // The first since the hub started, on the latest sample.
+  assert.equal(forecast.weekly.asOf, latest);
+  assert.equal(forecast.weekly.state, 'lasts');
+  assert.deepEqual(shared.snapshot.forecast[source], forecast);
+  assert.equal(JSON.parse(h.store.kept(`forecast:${source}:weekly`)!).asOf, latest, 'kept for a restart');
+  const overview = (await h.call('GET', `/api/overview?board=${team}`, {as: 'alice'})).body;
+  assert.deepEqual(overview.forecast[source], forecast);
+  assert.equal(read, 1, 'worked out once for both boards and the overview');
+
+  // A sample in the same hour: the card changes, the forecast does not.
+  h.clock.advance(MIN);
+  deliver(h.clock.now() - S);
+  h.clock.advance(200);
+  assert.ok(!(await own.types()).includes('forecast'));
+  assert.equal(read, 1);
+
+  // The next hour, with nothing told: the forecast after the sample, the same on both boards.
+  h.clock.advance(hour + HOUR + shift - h.clock.now() + S);
+  const next = (await own.within()).filter(e => e.type === 'forecast');
+  assert.equal(next.length, 1);
+  assert.deepEqual(next[0].data.id, source);
+  assert.equal(next[0].data.forecast.weekly.asOf, hour + HOUR);
+  const other = (await shared.within()).find(e => e.type === 'forecast');
+  assert.deepEqual(other?.data, next[0].data);
+  assert.equal(read, 2);
 });
 
 test('every watched board is worked out in full now and then: a change no touch told of arrives all the same', async t => {
@@ -1065,7 +1145,7 @@ test('what each change of data touches reaches the boards it shows on: people jo
       'a subscription measured for the first time',
       () => h.measure(desk, Date.now() - MIN, {account: 'c0c0c0c0c0c0c0c0c0c0c0c0', device: 'box'}),
       // Sent whole as it comes; the page reads its history for the new lineup, all of it.
-      ['card', 'sessions', 'cadence', 'refresh', 'lineup', 'mine', 'history'],
+      ['card', 'sessions', 'cadence', 'refresh', 'forecast', 'lineup', 'mine', 'history'],
       [],
       [],
     ],

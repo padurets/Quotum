@@ -205,7 +205,9 @@ export async function buildApp(hub: Hub) {
   app.get<{Querystring: {board?: string}}>('/api/overview', (request, reply) => {
     const access = guards.board(request, reply, request.query.board);
     if (!access) return reply;
-    return projection.snapshot(access.user.id, access.board.id, Date.now());
+    const snapshot = projection.snapshot(access.user.id, access.board.id, Date.now());
+    hub.ingest.forecasts.save();
+    return snapshot;
   });
 
   app.get<{Querystring: {range?: string; from?: string; to?: string; board?: string}}>('/api/history', (request, reply) => {

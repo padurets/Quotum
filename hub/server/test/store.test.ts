@@ -152,6 +152,74 @@ test('old samples are pruned after the retention period', () => {
   store.close();
 });
 
+test("a subscription's plan is kept from each moment it was reported otherwise, and never in the chart's events", () => {
+  const store = fresh();
+  const id = seen(store, 'claude', 'account-a');
+  const at = (hours: number) => start + hours * 3_600_000;
+  for (const [hours, plan] of [[0, 'pro'], [1, 'pro'], [2, ''], [3, 'max'], [4, 'max'], [5, 'pro']] as const) store.record(id, measurement({observedAt: at(hours), plan}));
+  // The first plan is kept too: it is where the history begins; no plan reported is no change.
+  assert.deepEqual(store.planChanges(id, at(10)), [
+    {at: at(0), plan: 'pro'},
+    {at: at(3), plan: 'max'},
+    {at: at(5), plan: 'pro'},
+  ]);
+  assert.deepEqual(store.planChanges(id, at(4)), [
+    {at: at(0), plan: 'pro'},
+    {at: at(3), plan: 'max'},
+  ]);
+  assert.deepEqual(store.history(BOARD, 0, 60_000).events, []);
+  store.close();
+});
+
+test('pruning keeps the plan a subscription has, and forgets what the forecasts kept of long ago', () => {
+  const store = fresh();
+  const id = seen(store, 'claude', 'account-a');
+  const other = seen(store, 'codex', 'account-b');
+  const day = 86_400_000;
+  store.record(id, measurement({plan: 'pro'}));
+  store.record(id, measurement({observedAt: start + day, plan: 'max'}));
+  store.record(other, measurement({plan: 'plus'}));
+  store.record(other, measurement({observedAt: start + day, plan: 'pro'}));
+  store.record(other, measurement({observedAt: start + 95 * day, plan: 'max'}));
+  store.keep([
+    ['forecast:old', JSON.stringify({asOf: start, memoryIn: null, memoryOut: null})],
+    ['forecast:new', JSON.stringify({asOf: start + 95 * day, memoryIn: null, memoryOut: null})],
+    ['forecast:broken', '{'],
+  ]);
+  store.prune(start + 100 * day);
+  assert.deepEqual(store.planChanges(id, start + 100 * day), [{at: start + day, plan: 'max'}], 'the one in effect stays however old');
+  // The last one before the cutoff tells a later one is a change.
+  assert.deepEqual(
+    store.planChanges(other, start + 100 * day),
+    [
+      {at: start + day, plan: 'pro'},
+      {at: start + 95 * day, plan: 'max'},
+    ],
+    'one older than that is gone',
+  );
+  assert.equal(store.kept('forecast:old'), null);
+  assert.equal(store.kept('forecast:broken'), null);
+  assert.ok(store.kept('forecast:new'));
+  assert.ok(store.kept('historyStart'), 'the rest of meta stays');
+  store.close();
+});
+
+test("a series' samples are read from a moment, with the last one before it", () => {
+  const store = fresh();
+  const id = seen(store, 'codex', 'account-a');
+  for (const minutes of [0, 10, 20, 30]) store.record(id, measurement({observedAt: start + minutes * 60_000, windows: [win({used: minutes})]}));
+  assert.deepEqual(
+    store.seriesSamples(id, 'weekly', start + 15 * 60_000, start + 25 * 60_000).map(s => s.used),
+    [10, 20],
+  );
+  assert.deepEqual(
+    store.seriesSamples(id, 'weekly', start - 60_000, start + 60 * 60_000).map(s => s.used),
+    [0, 10, 20, 30],
+  );
+  assert.deepEqual(store.seriesSamples(id, 'weekly', start, start)[0], {at: start, used: 0, resetAt: start + 86_400_000, minutes: 10080});
+  store.close();
+});
+
 test('resets the trackers report are kept, once each, until the retention period ends', () => {
   const store = fresh();
   const grant = {at: start, url: 'https://example.com/1', text: 'A banked reset for everyone'};

@@ -52,15 +52,15 @@ already running); CI runs it on every push and fails over budget.
 
 `npm start` in `hub/` serves the built dashboard on `127.0.0.1:8080` (a new hub prints
 the setup code of the first account to its log). `npm run demo` in `hub/` serves it on
-throwaway data with every state the board knows, needing no network or account; see
-*The demo board* in [CONTRIBUTING.md](CONTRIBUTING.md). `cargo run -p quotum` in `agent/`
-measures this machine once through the clients installed on it; that makes no model
-requests, but it does start the real clients. `cargo run` in `desktop/` starts the app
-with its hub and agent, which measures with this machine's `quotum` settings and state
-as the installed app would (`QUOTUM_CONFIG`, `QUOTUM_STATE_DIR` and
-`QUOTUM_APP_DATA_DIR` point it elsewhere); a debug build never turns on start at login.
-A hub in local mode (`QUOTUM_LOCAL_KEY`, `QUOTUM_LOCAL_TOKEN`) runs only while its stdin
-is open.
+throwaway data with every state the board knows that lasts on a working hub, needing no
+network or account; see *The demo board* in [CONTRIBUTING.md](CONTRIBUTING.md).
+`cargo run -p quotum` in `agent/` measures this machine once through the clients
+installed on it; that makes no model requests, but it does start the real clients.
+`cargo run` in `desktop/` starts the app with its hub and agent, which measures with
+this machine's `quotum` settings and state as the installed app would (`QUOTUM_CONFIG`,
+`QUOTUM_STATE_DIR` and `QUOTUM_APP_DATA_DIR` point it elsewhere); a debug build never
+turns on start at login. A hub in local mode (`QUOTUM_LOCAL_KEY`, `QUOTUM_LOCAL_TOKEN`)
+runs only while its stdin is open.
 
 ## Rules
 
@@ -93,9 +93,11 @@ is open.
 
 ## Dashboard UI
 
-- **Look at a change on the demo board** (`npm run build && npm run demo` in `hub/`),
-  in both languages, not only through tests. A state the board did not show before gets
-  an entry in `hub/demo/catalogue.ts` with the codes it shows; `npm test` checks them.
+- **Look at a change on the demo board** (`npm run build && npm run demo` in `hub/`), in
+  both languages, not only through tests. A state the board did not show before gets an
+  entry in `hub/demo/catalogue.ts` with the codes it shows; `npm test` checks them. One
+  a working hub never holds for long is named in the catalogue's header instead, with
+  the tests that hold it.
 - **Build from the shared pieces.** A menu, dropdown or any panel that opens from a
   button is a `Popover` (`hub/ui/components/Popover.tsx`); a dialog or side panel is a
   `Modal` (`hub/ui/components/Kit.tsx`). They are glass: the `glass` class and its
@@ -105,9 +107,10 @@ is open.
   widens it: a panel opens whole in the window, under the bars stuck at its top, on the
   side of its button where it fits, or where there is more room, cut to that room and
   scrolling inside (`sideOf` in `hub/ui/lib/place.ts`); a chart's tooltip keeps to the
-  window too (`placeOf`). A chart along the analytics' time reads and moves through
-  `useTimeAxis` (`hub/ui/components/timeAxis.ts`), keeps its own options in its settings,
-  and has its legend under it, each entry switched off and on by a click.
+  window too (`placeOf`, and `edgeOf` for its labels past the edge). A chart along the
+  analytics' time reads and moves through `useTimeAxis` (`hub/ui/components/timeAxis.ts`),
+  keeps its own options in its settings, and has its legend under it, each entry switched
+  off and on by a click.
 - Scrollbars have one style, set once at the top of `hub/ui/style.css`; nothing styles its own.
 - Widgets on the board are a `.card` (a source) or a `.panel` (the list of agents, agent activity, the chart, the table).
 - **Keep the board cheap to render.** Nothing on the page is `position: fixed` or has a

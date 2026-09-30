@@ -1,12 +1,12 @@
-import {memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties} from 'react';
+import {Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties} from 'react';
 import {clock, countdown, countdownChangesAt, num, shortDay, stamp} from '../lib/format';
 import {t, useLocale} from '../i18n';
 import type {Line} from '../lib/lines';
 import {useClock} from '../lib/clock';
-import {gapText, gapTone, readout as readCell, valueAt, type ForecastLine, type PlanLine} from '../lib/readout';
+import {gapText, gapTone, readout as readCell, runOutPast, valueAt, type ForecastLine, type PlanLine} from '../lib/readout';
 import type {TimeRange} from '../lib/timeRange';
 import {cellLabel, niceTicks} from '../lib/periods';
-import {coverOf} from '../lib/place';
+import {coverOf, edgeOf} from '../lib/place';
 import {Tooltip, useTip} from './Tooltip';
 import {useTimeAxis} from './timeAxis';
 
@@ -77,6 +77,20 @@ export function fitting(widths: number[], rest: number, ellipsis: number, room: 
 export function edgeRows(inside: string[], past: string[], from: number, down: boolean): Map<string, number> {
   const keys = past.length ? [...inside, ...past] : [];
   return new Map(keys.map((key, row) => [key, from + row * (down ? LABEL_STEP : -LABEL_STEP)]));
+}
+
+/** The key of the label that says how many more there are past the right edge than it has rows for. */
+export const MORE = 'more';
+
+/**
+ * The labels past the right edge that the plot has `rows` for, with the announcements inside
+ * the chart (`inside`) taking one each first: all of `past`, or as many as fit but one, in
+ * their order, and the rest (`more`) said together on the last row.
+ */
+export function edgeFit<T>(inside: number, past: T[], rows: number): {shown: T[]; more: T[]} {
+  if (inside + past.length <= rows) return {shown: past, more: []};
+  const room = Math.max(0, rows - inside - 1);
+  return {shown: past.slice(0, room), more: past.slice(room)};
 }
 
 /**
@@ -314,25 +328,28 @@ export function Chart({
     document.fonts?.addEventListener('loadingdone', loaded);
     return () => document.fonts?.removeEventListener('loadingdone', loaded);
   }, []);
-  // Past the right edge: an announcement, then where windows run out, each said there
-  // (`EdgeLabel`), how soon by the page's clock as the table says it.
+  // Past the right edge: an announcement, then where windows run out, the soonest first, each
+  // said there (`EdgeLabel`), how soon by the page's clock as the table says it.
   const beyond = [
     ...markers.filter(m => m.strong && !m.past && m.at > to).map(m => ({key: m.key, label: m.label, at: m.at, time: stamp(m.at), color: undefined, runsOut: false})),
-    ...forecasts.flatMap(f => {
-      if (f.at === null || f.at <= to) return [];
-      // Spaces drawn as one: a name typed with two in a row reads, and measures, as SVG draws it.
-      const name = f.name.replace(/\s+/g, ' ');
-      return [{key: `forecast-${f.key}`, label: name, at: f.at, time: t('forecast.runsOutAt', {time: stamp(f.at)}), color: f.color, runsOut: true}];
-    }),
+    // Spaces drawn as one: a name typed with two in a row reads, and measures, as SVG draws it.
+    ...runOutPast(forecasts, to)
+      .sort((a, b) => a.at - b.at)
+      .map(f => ({key: `forecast-${f.key}`, label: f.name.replace(/\s+/g, ' '), at: f.at, time: t('forecast.runsOutAt', {time: stamp(f.at)}), color: f.color, runsOut: true})),
   ];
-  /** A label past the right edge pointed at or tapped: the tooltip tells its time instead of the cell's values. */
+  // With the announcements inside the chart, as many as the plot has rows for, from the first
+  // row by one edge of the plot to the last by the other; the rest are said together.
+  const announced = markers.filter(m => m.strong && !m.past && m.at <= to);
+  const {shown: past, more} = edgeFit(announced.length, beyond, Math.floor((height - top - bottom - 26) / LABEL_STEP) + 1);
+  /** A label past the right edge pointed at or tapped: the tooltip tells its time instead of the cell's values, or theirs. */
   const [edge, setEdge] = useState<{key: string; tapped: boolean} | null>(null);
-  const edgeMarker = edge && beyond.find(m => m.key === edge.key);
+  const edgeMarkers = !edge ? [] : edge.key === MORE ? more : past.filter(m => m.key === edge.key);
+  const edgeKey = edgeMarkers.length ? edge!.key : null;
   // A label taken away under the pointer (a step to a range, which has no future) says nothing
   // of it: what it told is forgotten, so the tooltip reads the cells again.
   useEffect(() => {
-    if (edge && !edgeMarker) setEdge(null);
-  }, [edge, edgeMarker]);
+    if (edge && !edgeKey) setEdge(null);
+  }, [edge, edgeKey]);
   useEffect(() => {
     if (!edge?.tapped) return;
     const hide = () => setEdge(null);
@@ -361,8 +378,7 @@ export function Chart({
   };
   // With labels past the right edge, an announcement inside the chart takes the first
   // place in their stack: a row of its own, so none lies over it, however wide they are.
-  const announced = markers.filter(m => m.strong && !m.past && m.at <= to);
-  const stacked = beyond.length ? announced.length + beyond.length : 0;
+  const stacked = beyond.length ? announced.length + past.length + (more.length ? 1 : 0) : 0;
   // The stack stands at the top or the bottom of the plot, where it hides less of what
   // runs under it by the edge: the lines measured, planned and foreseen.
   const stackTop = (() => {
@@ -385,7 +401,7 @@ export function Chart({
   // Stacked from the first one away from the edge of the plot it stands by.
   const stackRows = edgeRows(
     announced.map(m => m.key),
-    beyond.map(label => label.key),
+    [...past.map(label => label.key), ...(more.length ? [MORE] : [])],
     stackTop ? top + 18 : height - bottom - 8,
     stackTop,
   );
@@ -393,21 +409,28 @@ export function Chart({
   const hoverX = hover === null ? 0 : hover > now ? x(Math.min(to, hover + cellMs / 2)) : bx(hover);
   // On a narrow chart it spans the chart's width under the plot; a marker's time stands over its label and does not rise.
   const narrow = width < 560;
-  const {tip, style: tipStyle} = useTip(svg, {width, at: hoverX, narrow, rises: !edgeMarker, bottom: height * scale});
+  const {tip, style: tipStyle} = useTip(svg, {width, at: hoverX, narrow, rises: !edgeKey, bottom: height * scale});
   // A marker's time stands over its label, or under it where the bars that stick at the top
-  // would cover it: found from where the label is, never from where the time was drawn, after
-  // every render and as the page scrolls under a pointer that stays.
-  const edgeRow = edgeMarker ? stackRows.get(edgeMarker.key)! : 0;
-  const [edgeBelow, setEdgeBelow] = useState(false);
+  // would cover it, and a long list of them over the label where neither leaves it whole in the
+  // window (`edgeOf`): found from where the label is and how tall the tooltip is uncut, never
+  // from where and as it was drawn, after every render and as the page scrolls under a pointer
+  // that stays.
+  const edgeRow = edgeKey ? stackRows.get(edgeKey)! : 0;
+  const [edgePlace, setEdgePlace] = useState<ReturnType<typeof edgeOf>>({below: false, by: 0, cut: null});
   const placeEdge = useRef(() => {});
   placeEdge.current = () => {
-    if (!edgeMarker || !tip.current || !svg.current) return;
+    const element = tip.current;
+    if (!edgeKey || !element || !svg.current) return;
+    const cut = element.style.maxHeight;
+    element.style.maxHeight = '';
+    const tall = element.offsetHeight;
+    element.style.maxHeight = cut;
     const chart = svg.current.getBoundingClientRect();
-    const below = chart.top + (edgeRow - 18) * scale - tip.current.offsetHeight < coverOf(chart.bottom) + 8;
-    setEdgeBelow(same => (same === below ? same : below));
+    const found = edgeOf(chart.top + (edgeRow - 18) * scale, chart.top + (edgeRow + 11) * scale, tall, innerHeight, coverOf(chart.bottom));
+    setEdgePlace(same => (same.below === found.below && same.by === found.by && same.cut === found.cut ? same : found));
   };
   useLayoutEffect(() => placeEdge.current());
-  const edgeShown = !!edgeMarker;
+  const edgeShown = !!edgeKey;
   useEffect(() => {
     if (!edgeShown) return;
     const scrolled = () => placeEdge.current();
@@ -519,7 +542,7 @@ export function Chart({
               );
             })}
             {/* Beyond the visible future: at the right edge, with the distance, one under another. */}
-            {beyond.map(label => (
+            {past.map(label => (
               <EdgeLabel
                 key={label.key}
                 id={label.key}
@@ -534,6 +557,17 @@ export function Chart({
                 onEdge={setEdge}
               />
             ))}
+            {more.length > 0 && (
+              <MarkerLabel
+                x={width - right}
+                y={stackRows.get(MORE)!}
+                end
+                fonts={fonts}
+                onTip={(shown, tapped) => setEdge(shown ? {key: MORE, tapped} : null)}
+              >
+                {t('chart.more', {count: more.length})}
+              </MarkerLabel>
+            )}
             {hover === null &&
               lines.map((line, i) =>
                 paths[i].last ? (
@@ -557,12 +591,16 @@ export function Chart({
         )}
       </svg>
 
-      {edgeMarker ? (
-        <Tooltip tip={tip} className="is-edge" style={edgeBelow ? {right: 0, top: `${(edgeRow + 11) * scale}px`} : {right: 0, bottom: `calc(100% - ${(edgeRow - 18) * scale}px)`}}>
-          <div className={`tooltip-marker ${edgeMarker.color ? '' : 'is-strong'}`} style={edgeMarker.color ? {color: edgeMarker.color} : undefined}>
-            {edgeMarker.label}
-          </div>
-          <div className="tooltip-time">{edgeMarker.time}</div>
+      {edgeKey ? (
+        <Tooltip tip={tip} className="is-edge" style={edgePlace.below ? {right: 0, top: `${(edgeRow + 11) * scale - edgePlace.by}px`, maxHeight: edgePlace.cut ?? undefined} : {right: 0, bottom: `calc(100% - ${(edgeRow - 18) * scale}px)`}}>
+          {edgeMarkers.map(marker => (
+            <Fragment key={marker.key}>
+              <div className={`tooltip-marker ${marker.color ? '' : 'is-strong'}`} style={marker.color ? {color: marker.color} : undefined}>
+                {marker.label}
+              </div>
+              <div className="tooltip-time">{marker.time}</div>
+            </Fragment>
+          ))}
         </Tooltip>
       ) : (
         hover !== null &&

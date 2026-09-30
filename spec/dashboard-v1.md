@@ -62,7 +62,7 @@ change as it was.
 | `event` | `data` | When |
 |---|---|---|
 | `hello` | `{epoch, now, client, heartbeatMs}` | First. `epoch`: when this start of the hub began, base 36. `now`: the hub's clock. `client`: the path of the page's entry script the hub serves (`/assets/index-<hash>.js`), null without a build. `heartbeatMs`: 25000. |
-| `snapshot` | `{board, view, historyStart, sources, sessions, cadence, refresh, mine, boards, resets}` | Second: the board for this reader. |
+| `snapshot` | `{board, view, historyStart, sources, sessions, cadence, refresh, forecast, mine, boards, resets}` | Second: the board for this reader. |
 | `board` | `{board: {id, name, personal}}` | The board was renamed. |
 | `view` | `{view}` | The board's view was saved. |
 | `lineup` | `{sources: string[]}` | The board's sources, in order, changed. |
@@ -70,6 +70,7 @@ change as it was.
 | `sessions` | `{id, sessions}` | The agents running on a source, on the machines of its people on this board, changed. |
 | `cadence` | `{id, cadence}` | When a source is measured next, or why, changed. |
 | `refresh` | `{id, refresh}` | A source's refresh availability, request or cooldown changed. |
+| `forecast` | `{id, forecast}` | Where the recent pace of the source's weekly windows leads, as the hub works it out, changed. |
 | `mine` | `{sources: string[]}` | Which sources of the board the reader's devices measure changed. |
 | `boards` | `{boards}` | The reader's boards changed: made, deleted, renamed, joined, left. |
 | `history` | `{sources: string[], since}` | These sources have measurements taken at `since` or later that the chart has not shown; with `since` 0, all of the board's history reads otherwise: whose agents' work it shows, or under which names, changed (a card hidden or shown, someone joining or leaving, a project or a machine renamed). |
@@ -93,12 +94,11 @@ limited to 64 KiB (65,536 UTF-8 bytes), so it fits the page's keepalive request 
 leaving before the debounced save. There is no separate count limit on places; each
 place is validated.
 
-In a `snapshot`, `sources` are the cards of the board's sources in its order;
-`sessions`, `cadence` and `refresh` are by source id, for those sources only. `board` is
-`{id, name, personal}`; the reader's role is in `boards`, each
-`{id, name, personal, role}`, as it is theirs alone. `resets` is what `GET /api/resets`
-answers. `historyStart` is when the board's history begins as of the snapshot;
-`GET /api/history` tells it later.
+In a `snapshot`, `sources` are the cards of the board's sources in its order; `sessions`,
+`cadence`, `refresh` and `forecast` are by source id, for those sources only. `board` is
+`{id, name, personal}`; the reader's role is in `boards`, each `{id, name, personal,
+role}`, as it is theirs alone. `resets` is what `GET /api/resets` answers. `historyStart`
+is when the board's history begins as of the snapshot; `GET /api/history` tells it later.
 
 A card is `{id, provider, plan, successAt, error, stale, windows, resets, owners,
 staleAfterMs}`: the source's last measurement (`successAt`, its `windows` and free
@@ -106,14 +106,59 @@ staleAfterMs}`: the source's last measurement (`successAt`, its `windows` and fr
 its numbers hold. `stale` is the hub's to say, and it says so: a card sent when its
 numbers get too old.
 
-Each event carries its part whole; the page puts it in place of what it had. What
-changes at the same moment goes out together, in this order: `board`, `view`, the
-sources' `card`, `sessions`, `cadence` and `refresh` (sources new to the board before
+A source's `forecast` is by the id of each of its weekly windows (the page foresees a
+five-hour window itself, by what it spent since it began): where the recent pace of that
+window leads, the same subscription's window followed through its resets of any kind, as
+the hub works it out once for every board. It is `{state, asOf, resetAt, anchor, F, zero,
+shownZero, shownLeft, comfy, points, basis}`, worked out as of `asOf`:
+
+- `state`: `runsOut` (it runs out before the reset), `lasts` (it does not), `needData`
+  (under an hour of history to go by), `usedUp`, `awaiting` (the reset has passed with no
+  sample since), `none` (no reset time known). A window whose working out failed is
+  `none` with `failed: true`.
+- `resetAt`: the reset of the window it is about. `anchor`: `{at, left}`, the sample it
+  stands on; null for `none`.
+- `F`: what is left at the reset, below zero when it runs out before. `zero`: when the
+  line crosses zero, null when it does not. `shownZero`: the moment it says it runs out
+  (moved only when `zero` moves by more than an hour or a fifth of the time to it,
+  whichever is more).
+  `shownLeft`: the share it says is left at the reset, a multiple of 5, for `lasts`.
+  `comfy`: for `lasts`, whether that is "left" rather than "just enough" (held a day's
+  worth of points either way). Moments are whole milliseconds.
+- `points`: the line from the anchor to the reset, `[minutes from the anchor, left]`, not
+  cut at zero; null with no line.
+- `basis`: `{hours, cold, usualPerDay, lastDay, burst}`: how many hours of history it
+  goes by; `cold` under a day of them; what the subscription usually spends a day; the
+  last day against that (null while it goes by a straight line); `burst`, `{times, zero}`
+  when the last six hours ran at least twice as fast as usual and would run out before
+  the reset at that pace, else null. For `needData`, only `{hours}`; else null.
+
+The first time after the hub starts, it is worked out on the latest sample, as of the
+last whole hour if the sample came before it (or goes on as the hub kept it, if that took
+the sample in). It is worked out again at the first moment of each hour after a sample
+the forecast has not taken in (a few minutes after the whole hour, up to ten, the same
+every hour for one subscription, but still as of the whole hour), and at once when a new
+sample contradicts it: a window with too little history, one whose reset time has just
+become known, back from zero, a new window begun, the used share dropping by 5 points or
+more, the moment it said passing with something left, or a sample after an hour or more
+without one (longer when the samples before were said to last longer). A sample come late
+for the moment it stands on, another device's, works the same `asOf` out again. A window
+whose card gives the answer at once (no reset time, a reset time passed, not begun, used
+up, or a model's window while its subscription's weekly window is used up) waits for the
+hour. The page decides what depends on its clock: the tone, the countdown, a moment
+passed with no sample since it; and what the card says at once: used up, waiting for a
+measurement, not begun. It shows "left" only with `comfy` and a `shownLeft` of 5 or more.
+A weekly window's forecast is up to about 3 KB, so a frame holds about eighty weekly
+windows.
+
+Each event carries its part whole; the page puts it in place of what it had. What changes
+at the same moment goes out together, in this order: `board`, `view`, the sources'
+`card`, `sessions`, `cadence`, `refresh` and `forecast` (sources new to the board before
 `lineup`), `lineup`, `mine`, `boards`, `history`, `resets`. A part goes out only when it
 differs from what the reader last got; a change reaches the page within a tenth of a
 second. What changes with time alone (a card going stale, a machine's list of agents no
-longer shown, a holder falling silent, a past reset leaving the history) goes out when
-it does.
+longer shown, a holder falling silent, a forecast worked out again after the hour, a past
+reset leaving the history) goes out when it does.
 
 `bye` tells why the reader is let go, and the connection ends:
 
@@ -243,6 +288,18 @@ from those sources; they add no client output, credentials or provider identity.
 While a board is read, the hub keeps in memory what its readers last got of each part,
 and a lease's events until it is asked; it writes nothing of them to disk. A board nobody
 reads costs nothing.
+
+A forecast comes from the same samples the chart shows, and only for the board's
+sources. To go on after a restart, the hub keeps on disk the last verdict of each weekly
+window (whether it ran out, the moment and the share it said, whether it said "left",
+and when), no names and nothing of people, as long as samples.
+
+In local mode, so that the app tells of a limit once in each cycle of a window, a restart
+included, the hub keeps on disk for each window its cycle, which of its thresholds it has
+reached in it, and its last sample (what is left and used, the reset time, its kind, label
+and length, when it was measured), with no end: the hub forgets no source it has measured.
+For each provider it keeps when the latest scheduled reset it has learned of was
+announced, and the links announced then, up to 64. Nothing of people.
 
 ## Desktop attention stream
 

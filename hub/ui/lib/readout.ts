@@ -5,11 +5,37 @@ import {PLAN_TOLERANCE} from './plan';
 export type PlanLine = {key: string; lines: string[]; color: string; runs: [number, number][][]};
 
 /**
- * Where a window's pace leads, drawn from its last value in its line's colour and dash;
- * `key` and `name` are its line's. `at` is where it runs out when the table says it does:
- * past the right edge, the chart says so there.
+ * Where a window leads, drawn from its last value in its line's colour and dash; `key` and
+ * `name` are its line's. When the table says it runs out, `zero` is where the line reaches
+ * zero (past the right edge, the chart says so there, and stretches to it within reach)
+ * and `at` the moment the table says, which the words there tell.
  */
-export type ForecastLine = {key: string; name: string; color: string; dash: string; points: [number, number][]; at: number | null};
+export type ForecastLine = {key: string; name: string; color: string; dash: string; points: [number, number][]; zero: number | null; at: number | null};
+
+/**
+ * Where the chart stretches to on `auto` for its forecasts: the last zero of a line within
+ * `reach`, or 0 for none. The line's zero, not the moment the table says, which moves only
+ * past a dead band: the chart shows where the line goes.
+ */
+export const lastRunOut = (forecasts: Pick<ForecastLine, 'zero'>[], reach: number): number => Math.max(0, ...forecasts.map(f => (f.zero !== null && f.zero <= reach ? f.zero : 0)));
+
+/**
+ * The forecasts pointed at from the right edge `to`: those whose line reaches zero past it,
+ * each said at the moment the table says (`at`).
+ */
+export const runOutPast = (forecasts: ForecastLine[], to: number): {key: string; name: string; color: string; at: number}[] =>
+  forecasts.flatMap(f => (f.zero === null || f.at === null || f.zero <= to ? [] : [{key: f.key, name: f.name, color: f.color, at: f.at}]));
+
+/**
+ * When the chart reads otherwise with nothing new but the time, besides its next cell: a
+ * strong marker past its right edge `to` comes due, and a forecast is drawn no more
+ * (`until`), wherever it is: past the edge, that is the moment the table says it runs out,
+ * which its label there tells.
+ */
+export const chartMoments = (markers: {at: number; strong?: boolean; past?: boolean}[], drawn: {until: number}[], to: number): number[] => [
+  ...markers.filter(m => m.strong && !m.past && m.at > to).map(m => m.at),
+  ...drawn.map(d => d.until),
+];
 
 /** Value of a piecewise-linear run at time `at`, or undefined outside it. */
 export function valueAt(runs: [number, number][][], at: number) {

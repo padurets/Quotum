@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {AGENTS, FORECAST, colorOf, columnShown, isHidden, planOf, withColumn, weeklyPlanOf, withColor, withHidden, withPlan, withPlanned, withWindowHidden} from '../lib/view';
+import {AGENTS, FORECAST, chosenPlanOf, colorOf, columnShown, isHidden, planOf, withColumn, weeklyPlanOf, withColor, withHidden, withPlan, withPlanned, withWindowHidden} from '../lib/view';
 import {CARD_COLORS, PROVIDERS} from '../lib/providers';
 import {DEFAULT_PLAN} from '../lib/plan';
 import type {View} from '../lib/types';
@@ -19,6 +19,15 @@ test('a table column hidden is kept per widget; showing every column again store
   assert.deepEqual(view.columns, {agents: ['machine', 'origin']});
   assert.deepEqual([columnShown(view, AGENTS, 'machine'), columnShown(view, AGENTS, 'state')], [false, false]);
   assert.deepEqual(withColumn(withColumn(view, AGENTS, 'machine', true), AGENTS, 'origin', true).columns, {});
+});
+
+test("the plan its owner chose for a source, for the forecast's line of it: none by default, not the default chosen as it is, nor one switched off", () => {
+  const planned = withPlan(EMPTY, 'a', [40, 0, 30, 0, 30, 0, 0]);
+  assert.deepEqual(chosenPlanOf(planned, 'a'), [40, 0, 30, 0, 30, 0, 0]);
+  assert.equal(chosenPlanOf(planned, 'b'), null, 'the default plan');
+  assert.equal(chosenPlanOf(withPlan(EMPTY, 'a', [...DEFAULT_PLAN]), 'a'), null, 'the default chosen as it is, which is not kept');
+  assert.equal(chosenPlanOf(withPlanned(planned, 'a', false), 'a'), null, 'switched off');
+  assert.equal(chosenPlanOf({...EMPTY, plans: {a: [50, 60, 0, 0, 0, 0, 0]}}, 'a'), null, 'a broken plan');
 });
 
 test('hidden windows and plans belong to the view; the default plan is not stored', () => {

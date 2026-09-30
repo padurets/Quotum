@@ -3,6 +3,7 @@ import {sourceHidden, isWindowHidden, titled} from './domain/presentation.js';
 import type {Refresh} from './domain/refresh.js';
 import {config} from './config.js';
 import type {Ingest} from './ingest.js';
+import type {WindowForecast} from './forecasts.js';
 import type {ResetFeed, TrackerHealth} from './resets.js';
 import type {BoardSession} from './sessions.js';
 import type {Why} from './cadence.js';
@@ -34,6 +35,8 @@ export type Cadence = {next: number; why: Why} | null;
 
 export type BoardPart = {board: {id: string; name: string; personal: boolean}; view: View; lineup: string[]};
 export type SourcePart = {card: Card; sessions: BoardSession[]; cadence: Cadence; refresh: Refresh};
+/** Where the recent pace of a source's weekly windows leads, by window id (server/forecasts.ts). */
+export type ForecastPart = Record<string, WindowForecast>;
 export type ReaderPart = {mine: string[]; boards: Board[]};
 export type HubPart = {resets: Partial<Record<ResetProvider, ResetStatus>>; trackers: TrackerHealth[]; past: Record<string, Announcement[]>};
 
@@ -44,6 +47,7 @@ export type Snapshot = Omit<BoardPart, 'lineup'> & {
   sessions: Record<string, BoardSession[]>;
   cadence: Record<string, Cadence>;
   refresh: Record<string, Refresh>;
+  forecast: Record<string, ForecastPart>;
 } & ReaderPart & {resets: HubPart};
 
 /** The first of several moments, null when there is none. */
@@ -96,6 +100,14 @@ export class Projection {
       value: {card, sessions: ingest.live.of(source.id, people, now), cadence: cadence.value, refresh: refresh.value},
       changesAt: earliest(...state.windows.map(w => w.resetAt !== null && w.resetAt > now ? w.resetAt : null), stale ? null : state.successAt! + state.staleAfterMs! + 1, ingest.live.ofChangesAt(source.id, people, now), cadence.changesAt, refresh.changesAt),
     };
+  }
+
+  /**
+   * Where the recent pace of a source's weekly windows leads, the same on every board. Apart
+   * from `sourcePart`: what reads a card for every frame does not work out forecasts.
+   */
+  forecastPart(source: string, now: number): Timed<ForecastPart> {
+    return this.hub.ingest.forecasts.of(source, now);
   }
 
   /** The same visible figures as the cards, with data quality independent of their level. */
@@ -172,6 +184,7 @@ export class Projection {
       sessions: Object.fromEntries(lineup.map((s, i) => [s.id, sources[i].sessions])),
       cadence: Object.fromEntries(lineup.map((s, i) => [s.id, sources[i].cadence])),
       refresh: Object.fromEntries(lineup.map((s, i) => [s.id, sources[i].refresh])),
+      forecast: Object.fromEntries(lineup.map(s => [s.id, this.forecastPart(s.id, now).value])),
       mine: this.mine(user, lineup),
       boards: this.boards(user),
       resets: this.hubPart(now).value,

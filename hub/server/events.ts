@@ -83,7 +83,7 @@ type Subscriber = Reader & {id: number; fresh: boolean; stopPing: () => void; se
 type Watched = {
   id: string;
   subscribers: Set<Subscriber>;
-  /** The last part sent, as JSON, with its value (a snapshot is made of them): `board`, `view`, `lineup`, `card:<id>`, `sessions:<id>`, `cadence:<id>`, `refresh:<id>`. */
+  /** The last part sent, as JSON, with its value (a snapshot is made of them): `board`, `view`, `lineup`, `card:<id>`, `sessions:<id>`, `cadence:<id>`, `refresh:<id>`, `forecast:<id>`. */
   base: Map<string, {json: string; value: unknown}>;
   lineup: string[];
   /** When each source's parts change by themselves. */
@@ -387,6 +387,8 @@ export class Events implements Touches {
         if ((sub.backlog?.() ?? 0) > this.options.bufferBytes) this.end(sub, 'limit');
       }
     }
+    // What the forecasts worked out is kept together, once a round.
+    this.parts.ingest.forecasts.save();
     return failed;
   }
 
@@ -435,7 +437,7 @@ export class Events implements Touches {
       // Sources that left take what was sent of them along: one that comes back is sent whole.
       for (const id of watched.lineup) {
         if (part.lineup.includes(id)) continue;
-        for (const key of [`card:${id}`, `sessions:${id}`, `cadence:${id}`, `refresh:${id}`]) base.delete(key);
+        for (const key of [`card:${id}`, `sessions:${id}`, `cadence:${id}`, `refresh:${id}`, `forecast:${id}`]) base.delete(key);
         watched.changes.delete(id);
       }
       ids = part.lineup;
@@ -458,8 +460,12 @@ export class Events implements Touches {
         if (cadence !== null) frames.push({type: 'cadence', data: `{"id":${id},"cadence":${cadence}}`});
         const refresh = this.changed(base, `refresh:${source.id}`, value.refresh);
         if (refresh !== null) frames.push({type: 'refresh', data: `{"id":${id},"refresh":${refresh}}`});
-        if (changesAt === null) watched.changes.delete(source.id);
-        else watched.changes.set(source.id, changesAt);
+        const ahead = projection.forecastPart(source.id, now);
+        const forecast = this.changed(base, `forecast:${source.id}`, ahead.value);
+        if (forecast !== null) frames.push({type: 'forecast', data: `{"id":${id},"forecast":${forecast}}`});
+        const at = earliest(changesAt, ahead.changesAt);
+        if (at === null) watched.changes.delete(source.id);
+        else watched.changes.set(source.id, at);
       }
     }
     if (ids) {
@@ -628,6 +634,7 @@ export class Events implements Touches {
         sessions: Object.fromEntries(watched.lineup.map(id => [id, value(`sessions:${id}`)])),
         cadence: Object.fromEntries(watched.lineup.map(id => [id, value(`cadence:${id}`)])),
         refresh: Object.fromEntries(watched.lineup.map(id => [id, value(`refresh:${id}`)])),
+        forecast: Object.fromEntries(watched.lineup.map(id => [id, value(`forecast:${id}`)])),
         mine: JSON.parse(this.mines.get(`${reader.user}\n${reader.board}`) ?? '[]'),
         boards: this.boardLists.get(reader.user)?.value ?? [],
         resets: this.hub?.value,

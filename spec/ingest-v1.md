@@ -395,6 +395,10 @@ are on where a subscription you measure is shown, whoever brought it, see these,
 see its limits, with each project under the name its person gave it, and with them the
 name of the machine each agent runs on.
 
+What the hub keeps of plans: the plan name each subscription was reported with, from
+each moment it changed, as long as samples (90 days), and the one in effect for as long as
+it holds: a forecast's history begins anew after a change.
+
 A dashboard refresh sends only the board and source ids to the hub. Its shared state
 contains times and outcomes, without the requester or the device's identity. No new
 information leaves the agent.

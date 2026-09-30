@@ -108,20 +108,23 @@ Codex         api                  idle     started 25m ago · editor
   six days after the reset and nothing on the seventh. Each subscription can have its
   own plan: a day at 0 is a day you don't spend, and it can be any day of the week.
 - **A chart of the weekly or the 5-hour windows** over the last hour up to the last 30
-  days. Ahead of now it draws the plan, where each window is going at its pace and the
-  next resets, as far as you choose; behind, it marks when limits came back early and
-  when free resets were granted. Drag across it to zoom into a burst of work (on a
-  phone, hold a finger on it first); ‹ and ›, or a swipe sideways, move it back and
-  forth through time by half its length.
+  days. Ahead of now it draws the plan, where each window is going (a weekly one nearly
+  flat over the hours its subscription usually spends nothing) and the next resets, as
+  far as you choose; behind, it marks when limits came back early and when free resets
+  were granted. Drag across it to zoom into a burst of work (on a phone, hold a finger
+  on it first); ‹ and ›, or a swipe sideways, move it back and forth through time by
+  half its length.
 - **A table with two forecasts:** what the period spent, how long your agents worked on
   each subscription and what an hour of their work costs; turned on, how much of the
   spending came while they worked (what went elsewhere, claude.ai or a phone, makes an
-  hour of work look dearer). Then where it leads. By time: at each window's pace since it
-  started, whether it runs out before its reset (or before your plan ends, following the
-  plan's shape) and when, or roughly how much will be left, the same whatever period you
-  look at. By work: roughly how many hours of agent work are left. Over a range dragged
-  on the chart it shows what that range cost: what was left at its start and end, what
-  it spent in all and per hour, and what the agents worked.
+  hour of work look dearer). Then where it leads. By time: whether each window runs out
+  before its reset and around when, or roughly how much will be left, the same whatever
+  period you look at. A weekly window goes by how the subscription spends: at the hours
+  and on the days it usually does, through its resets, at the level of its last day; an
+  arrow marks the last hours going faster than usual. A 5-hour window goes at its pace
+  since it started. By work: roughly how many hours of agent work are left. Over a range
+  dragged on the chart it shows what that range cost: what was left at its start and
+  end, what it spent in all and per hour, and what the agents worked.
 - **Agent activity:** hours of agent work over the same period, in bars of up to an hour
   (two hours over a month), stacked by subscription, project or machine, with the work
   time, how many agents worked and their time together. It zooms and moves through time
@@ -472,8 +475,9 @@ over plain HTTP/1.1, about five.
 - [CONTRIBUTING.md](CONTRIBUTING.md): checking a change and what to keep in mind;
   [SECURITY.md](SECURITY.md): reporting a vulnerability privately.
 - `npm run demo` in `hub/` (after `npm run build`): a live board on throwaway data with
-  every state the dashboard knows, no network or account needed; Ctrl+C stops it and
-  leaves nothing behind. `npm run demo -- showcase` is the board of the images above.
+  every state the dashboard knows that lasts on a working hub, no network or account
+  needed; Ctrl+C stops it and leaves nothing behind. `npm run demo -- showcase` is the
+  board of the images above.
 
 Project layout:
 
@@ -491,7 +495,7 @@ hub/server/store      SQLite: layout, measurements, people and devices
 hub/server/routes     HTTP routes for people and for agents
 hub/server/*.ts       ingest, duty, device pairing, sessions, the reset trackers
 hub/ui                the dashboard (React), translations in hub/ui/i18n
-hub/demo              the demo board: a catalogue of every state, kept alive
+hub/demo              the demo board: a catalogue of every state a working hub holds, kept alive
 ```
 
 `npm test` and `npm run typecheck` in `hub/`, `cargo test` and `cargo clippy` in

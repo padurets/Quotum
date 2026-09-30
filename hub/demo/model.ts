@@ -5,7 +5,7 @@ import {subscriptionKey} from '../server/domain/ingest.js';
 import type {Cadence, Level, ResetLine} from '../ui/lib/quota.js';
 import type {Refresh, RefreshRequest} from '../server/domain/refresh.js';
 import type {CadenceWhy} from '../ui/lib/types.js';
-import type {Outlook, Spent} from '../ui/lib/forecast.js';
+import type {NeedData, Outlook, Spent} from '../ui/lib/forecast.js';
 import type {ResetLabel} from '../ui/lib/resets.js';
 import {DEFAULT_PLAN, weeklyPlanRemaining, type WeeklyPlan} from '../ui/lib/plan.js';
 
@@ -22,8 +22,13 @@ export const HOUR = 60 * MIN;
 export const DAY = 24 * HOUR;
 export const WEEK = 7 * DAY;
 
-/** How long an expectation holds by default: every state the catalogue claims lasts this long from `start`. */
+/**
+ * How long an expectation holds by default: every state the catalogue claims lasts this
+ * long from `start`, but where a weekly window leads (`FORESEEN`): the hub works that out
+ * again every hour from what was spent, so a claim of it holds an hour.
+ */
 export const HOLDS = 12 * HOUR;
+export const FORESEEN = HOUR;
 
 // ---------- windows ----------
 
@@ -79,6 +84,60 @@ export function weekly(options: {
     return {id, kind: 'weekly', minutes: 7 * 24 * 60, label, used: share(used), resetsAt: cycle.reset};
   };
 }
+
+/** How fast a subscription spends at `t`, in points an hour: its rhythm, by the hours of the day and the days of the week from `start`. */
+export type Rate = (t: number) => number;
+
+/** A rhythm keeps its pace for ten minutes at a time, from `start`: what a window used is the sum of its steps. */
+const STEP = 10 * MIN;
+
+/**
+ * What a rhythm spends from `from` to `to`. The sums of its steps are kept as they are
+ * found, from `start` both ways, so weeks of samples read them rather than add them up again.
+ */
+export function spending(rate: Rate): (from: number, to: number) => number {
+  // Spent from `start` to the beginning of the `k`th step after it, and from that of the `k`th before it to `start`.
+  const after = [0];
+  const before = [0];
+  const upTo = (step: number) => {
+    if (step >= 0) {
+      for (let k = after.length; k <= step; k++) after[k] = after[k - 1] + (rate((k - 1) * STEP) * STEP) / HOUR;
+      return after[step];
+    }
+    for (let k = before.length; k <= -step; k++) before[k] = before[k - 1] + (rate(-k * STEP) * STEP) / HOUR;
+    return -before[-step];
+  };
+  const at = (t: number) => {
+    const step = Math.floor(t / STEP);
+    return upTo(step) + (rate(step * STEP) * (t - step * STEP)) / HOUR;
+  };
+  return (from, to) => at(to) - at(from);
+}
+
+/**
+ * A weekly window spent at `rate` in every cycle, before `start` and after it: a week
+ * begun at `since` (before `start`), the one before cut short at `since` when `early` gives
+ * when it was due, as `weekly` has them.
+ */
+export function rhythmic(options: {id?: string; label?: string; since: number; early?: number; rate: Rate}): WindowAt {
+  const {id = 'weekly', label = null, since, early, rate} = options;
+  const spent = spending(rate);
+  return t => {
+    const cycle = cycleOf(t, since, early);
+    return {id, kind: 'weekly', minutes: 7 * 24 * 60, label, used: share(spent(cycle.begin, t)), resetsAt: cycle.reset};
+  };
+}
+
+/**
+ * A rolling window nobody has used from `from` until `to`, as its client reports it after a
+ * reset: nothing used, and its reset its length from each measurement; `window` before and after.
+ */
+export const unbegun =
+  (window: WindowAt, from: number, to: number): WindowAt =>
+  t => {
+    const w = window(t);
+    return t >= from && t < to ? {...w, used: 0, resetsAt: t + (w.minutes ?? 0) * MIN} : w;
+  };
 
 /** The share of a week the plan expects spent `elapsed` into it, moved by `offset` points (ahead of the plan when positive). */
 export const alongPlan =
@@ -207,8 +266,23 @@ export type Agent = {machine: string; origin: Origin; project: string | null; fo
 /** How a card looks on one board: its name, colour, width, whether it or some of its windows are hidden, its plan. */
 export type CardView = {name?: string; color?: string; width?: number; place?: Place; hidden?: boolean; windows?: string[]; plan?: WeeklyPlan | 'off'};
 
-/** A time within which an expectation holds, from `start`: [from, to], by default the first twelve hours. */
+/** A time within which an expectation holds, from `start`: [from, to], by default as `spanOf` says. */
 export type Span = {from?: number; to?: number};
+
+/** The codes of a table's line that say where a weekly window leads: they hold `FORESEEN` by default. */
+const FORESEEN_CODES = ['outlook', 'tone', 'unit', 'burst', 'cold', 'why'];
+
+/**
+ * When a code holds, from `start`: its own span, else the first twelve hours, but the first
+ * hour for where a weekly window leads.
+ */
+export function spanOf(entry: Entry, check: Span): {from: number; to: number} {
+  const from = check.from ?? 0;
+  if (check.to !== undefined) return {from, to: check.to};
+  const window = entry.kind === 'card' && 'forecast' in check ? entry.windows.map(w => w(0)).find(w => w.id === check.forecast) : undefined;
+  const foreseen = window?.kind === 'weekly' && FORESEEN_CODES.some(code => code in check);
+  return {from, to: foreseen ? Math.max(from, FORESEEN) : HOLDS};
+}
 
 /** A period of the analytics: one up to now ('24h', …), or a time range selected on the chart, from `start`. */
 export type Period = string | {from: number; to: number};
@@ -228,8 +302,24 @@ export type CardCheck = Span & {board?: string} & (
     /** How many agents the tray counts, and whether it draws a mark for each. */
     | {agents: number; drawn: boolean}
     | {window: string; level?: Level; note?: 'ahead' | 'behind' | null; hint?: 'weekly' | 'reset'; name?: string; reset?: ResetLine['key']; hidden?: boolean; started?: boolean}
-    /** A line of the table: what it spent over the last 24 hours, where the window's own pace leads (`tone` for `runsOut`), and how far from the plan, when notable. */
-    | {forecast: string; outlook?: Outlook['key']; tone?: 'v-warn' | 'v-crit'; spent?: Spent['key']; plan?: 'ahead' | 'behind' | 'even' | 'none'}
+    /**
+     * A line of the table: what it spent over the last 24 hours, where the window leads
+     * (`tone` for `runsOut`, and how soon in which unit of the countdown), whether a burst
+     * marks it, whether its forecast goes by under a day of history (`cold`), why there is
+     * none yet (`why` for `needData`), and how far from the plan, when notable. Of a weekly
+     * window, where it leads holds an hour by default (`FORESEEN`).
+     */
+    | {
+        forecast: string;
+        outlook?: Outlook['key'];
+        tone?: 'v-warn' | 'v-crit';
+        unit?: 'm' | 'h' | 'd';
+        burst?: boolean;
+        cold?: boolean;
+        why?: NeedData;
+        spent?: Spent['key'];
+        plan?: 'ahead' | 'behind' | 'even' | 'none';
+      }
     /** Something the chart marks on the card's source within the last 24 hours. */
     | {event: 'early_reset' | 'resets_granted'}
     /** What the dot's tooltip says of the next measurement, while the card is measured at the hub's pace, and why. */
@@ -365,6 +455,8 @@ export type Machine = {
   os?: 'linux' | 'macos' | 'windows';
   /** Asleep at night in the history, then from the second minute for twelve, and so on. */
   sleeps?: boolean;
+  /** Asleep eight hours every night, before `start` and after it, the last night ending this long before it. */
+  wakes?: number;
   /** It stopped then and never comes back. */
   gone?: number;
   /** Connected with a one-time code rather than its person's machine token. */
@@ -473,6 +565,7 @@ const SLEEP = {first: 2 * MIN, asleep: 12 * MIN, cycle: 45 * MIN};
 
 export function awake(machine: Machine, t: number): boolean {
   if (machine.gone !== undefined && t > machine.gone) return false;
+  if (machine.wakes !== undefined) return !asleepAt(machine.wakes, t);
   if (!machine.sleeps) return true;
   if (t < 0) {
     // Nights end 6 hours before `start`, the same time every day.
@@ -481,6 +574,9 @@ export function awake(machine: Machine, t: number): boolean {
   }
   return t < SLEEP.first || mod(t - SLEEP.first, SLEEP.cycle) >= SLEEP.asleep;
 }
+
+/** Whether a machine that sleeps eight hours a night, the last night ending `wakes` before `start`, is asleep at `t`. */
+export const asleepAt = (wakes: number, t: number) => mod(t + wakes, DAY) >= DAY - 8 * HOUR;
 
 /** Whether a card is measured at `t` by its machines at all. */
 export const delivered = (card: Card, t: number) => card.until === undefined || t <= card.until;

@@ -16,7 +16,7 @@ import {Store} from '../../server/store/store.js';
 import type {ResetEvent, ResetProvider} from '../../server/domain/resets.js';
 import {setLocale} from '../../ui/i18n/index.js';
 import {agentRows, byActivity, drawn, folderOf, machinesOf} from '../../ui/lib/agents.js';
-import {LIVE_COLUMNS, forecastLayout, outlook, planCell, spentOf} from '../../ui/lib/forecast.js';
+import {LIVE_COLUMNS, announcedOf, forecastLayout, planCell, spentOf} from '../../ui/lib/forecast.js';
 import {dashOf, lineWork, workNotes} from '../../ui/lib/work.js';
 import {activityEmpty} from '../../ui/lib/activity.js';
 import {chartEvents, chartResets, linesOf} from '../../ui/lib/lines.js';
@@ -25,7 +25,7 @@ import {planNote, started} from '../../ui/lib/plan.js';
 import {shown as gathered, type Projects} from '../../ui/lib/projects.js';
 import {cadenceOf, dotOf, level, resetLine, titled, windowName} from '../../ui/lib/quota.js';
 import {resetLabel, type Resets, type TrackerHealth} from '../../ui/lib/resets.js';
-import {ANALYTICS_KINDS, type History, type LiveSession, type Pace, type View} from '../../ui/lib/types.js';
+import {ANALYTICS_KINDS, type History, type LiveSession, type Pace, type SourceForecast, type View} from '../../ui/lib/types.js';
 import type {Snapshot} from '../../ui/lib/board.js';
 import {ACTIVITY, AGENTS, boardState, cardId, columnShown, FORECAST, HISTORY, isHidden, isWindowHidden, planOf} from '../../ui/lib/view.js';
 import {SCENES, SETS} from '../catalogue.js';
@@ -45,18 +45,19 @@ import {
   SECOND,
   sessionsAt,
   snapshot,
+  spanOf,
   staleAfter,
   type Agent,
   type Card,
   type CardCheck,
   type DemoSet,
   type Entry,
-  type Machine,
   type Period,
   type Span,
 } from '../model.js';
 import {Live, seedWork, setUp, type Stand} from '../setup.js';
 import {Trackers} from '../trackers.js';
+import {cadence, forecastCodes, points} from './reads.js';
 
 setLocale('en');
 const SETUP = 'BCDF-GHJK';
@@ -66,13 +67,21 @@ const setOf = (id: string) => SETS.find(set => set.id === id)!;
 /** What the trackers of a scene told, as `/api/resets` answers: the status per provider, their health and the resets kept. */
 type Told = {resets: Resets; trackers: TrackerHealth[]; past: Partial<Record<ResetProvider, ResetEvent[]>>};
 
+/**
+ * How long a hub waits for a scene's trackers: a moment where they are to time out, so the
+ * test does not wait for them as long as a hub would; elsewhere long enough that a machine
+ * under load, stalling the test a moment, does not make a tracker that answers time out.
+ */
+const timeoutOf = (scene: string) =>
+  SCENES.find(s => s.id === scene)!.expect.some(check => 'health' in check && check.health === 'timeout') ? 300 : 5_000;
+
 /** A hub in this process on a free port, its trackers read from the stand-in's `scene`. */
 async function hubFor(trackers: Trackers, scene: string, start: number) {
   const dir = mkdtempSync(path.join(tmpdir(), 'quotum-demo-test-'));
   const store = new Store(path.join(dir, 'db.sqlite'), start);
   const directory = new Directory(store.db);
   const urls = trackers.urls(scene);
-  const resets = new ResetFeed((provider, reset) => store.announce(provider, reset), () => {}, {enabled: true, codexApi: urls.codex, claudeApi: urls.claude, timeoutMs: 300});
+  const resets = new ResetFeed((provider, reset) => store.announce(provider, reset), () => {}, {enabled: true, codexApi: urls.codex, claudeApi: urls.claude, timeoutMs: timeoutOf(scene)});
   const app = await buildApp({store, directory, resets, ingest: new Ingest(store, directory, new Duty(), new Cadence()), pairing: new Pairing(directory), setup: new Setup(true, SETUP), local: null});
   await app.listen({host: '127.0.0.1', port: 0});
   const base = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
@@ -92,25 +101,13 @@ async function hubFor(trackers: Trackers, scene: string, start: number) {
   };
 }
 
-/** How often the test measures: a minute at first and on the sleeping machine, then up to five (eco: its quarter of an hour). */
-const cadence = (card: Card, machine: Machine, t: number) => (card.eco ? 15 * MIN : machine.sleeps || t < 30 * MIN ? MIN : 5 * MIN);
-
-const within = (span: Span, t: number) => t >= (span.from ?? 0) && t <= (span.to ?? HOLDS);
-
-/** Where the test looks: every hour, and where every code's span begins, is halfway and ends. */
-function points(set: DemoSet): number[] {
-  const found = Array.from({length: HOLDS / 3_600_000 + 1}, (_, hour) => hour * 3_600_000);
-  for (const entry of [...set.entries, ...SCENES]) {
-    for (const check of entry.expect as Span[]) {
-      const [from, to] = [check.from ?? 0, check.to ?? HOLDS];
-      found.push(from, (from + to) / 2, to);
-    }
-  }
-  return [...new Set(found)].sort((a, b) => a - b);
-}
+const within = (entry: Entry, check: Span, t: number) => {
+  const {from, to} = spanOf(entry, check);
+  return t >= from && t <= to;
+};
 
 /** A board as the page puts it together from its snapshot: each card named from the whole board, with its agents and its pace. */
-type Overview = {view: View; historyStart: number; sources: (Snapshot['sources'][number] & {title: string; sessions: LiveSession[]; cadence: Pace; refresh: Snapshot['refresh'][string]})[]};
+type Overview = {view: View; historyStart: number; sources: (Snapshot['sources'][number] & {title: string; sessions: LiveSession[]; cadence: Pace; refresh: Snapshot['refresh'][string]; forecast: SourceForecast})[]};
 
 /** What the hub shows at one moment, read once per board as the page would. */
 class Reading {
@@ -138,7 +135,13 @@ class Reading {
         this.reader(board)
           .get<Snapshot>(`/api/overview?board=${encodeURIComponent(id)}`)
           .then(data => {
-            const sources = titled(data.sources, data.view.names).map(card => ({...card, sessions: data.sessions[card.id] ?? [], cadence: data.cadence[card.id] ?? null, refresh: data.refresh[card.id]}));
+            const sources = titled(data.sources, data.view.names).map(card => ({
+              ...card,
+              sessions: data.sessions[card.id] ?? [],
+              cadence: data.cadence[card.id] ?? null,
+              refresh: data.refresh[card.id],
+              forecast: data.forecast[card.id] ?? {},
+            }));
             const overview: Overview = {view: data.view, historyStart: data.historyStart, sources};
             const ordered = (sessions: LiveSession[]) => {
               for (let i = 1; i < sessions.length; i++) assert.ok(byActivity(sessions[i - 1], sessions[i]) <= 0, `${board}: activity order`);
@@ -315,13 +318,13 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
     if (!ANALYTICS_KINDS.includes(live.kind)) return `window ${id} is of the kind ${live.kind}: the table shows only weekly and five-hour windows`;
     const line = linesOf(await reading.history(board), overview.sources, overview.view, live.kind).find(l => l.sourceId === source.id && l.windowId === id);
     if (!line) return `no line of ${id} in the table`;
-    // As the table's cells put it (components/Forecast.tsx).
-    const ahead = outlook(live, source.successAt, now, weekly);
+    // As the table's cells put it (components/Forecast.tsx), with the news the set's hub tells of resets for everyone.
+    const forecast = live.kind === 'weekly' ? (source.forecast[live.id] ?? null) : null;
+    const context = {windows: source.windows, freeResets: source.resets?.available ?? 0, announced: announcedOf(reading.scenes.get(set.scene)?.resets, source.provider, source.successAt)};
     const plan = planCell(live, source.successAt, now, weekly);
     Object.assign(values, {
       forecast: id,
-      outlook: ahead.key,
-      tone: ahead.tone,
+      ...forecastCodes(live, source.successAt, now, forecast, context),
       spent: spentOf(line).key,
       plan: !plan ? 'none' : !plan.notable ? 'even' : plan.delta >= 0 ? 'behind' : 'ahead',
     });
@@ -387,7 +390,7 @@ async function checkAll(stand: Stand, entries: Entry[], reading: Reading, t: num
   const wrong: string[] = [];
   for (const entry of entries) {
     for (const [i, check] of (entry.expect as Span[]).entries()) {
-      if (t !== null && !within(check, t)) continue;
+      if (t !== null && !within(entry, check, t)) continue;
       if (paceCode(check) !== (codes === 'pace')) continue;
       checked.add(`${entry.kind} ${entry.id} #${i}`);
       const values = await shown(stand, entry, check, reading);
@@ -511,9 +514,10 @@ test('the demo is the same whenever it starts: everything is timed from the star
   for (const set of SETS) assert.equal(everything(set, start + 1.37 * 86_400_000), everything(set, start), set.id);
 });
 
-test('every entry of the whole catalogue shows what it claims for twelve hours', {timeout: 180_000}, async t => {
+test('every entry of the whole catalogue shows what it claims over its span', {timeout: 180_000}, async t => {
   const set = setOf('all');
-  const start = Math.floor(Date.now() / MIN) * MIN;
+  // A few minutes past the hour, as the hub works out forecasts from whole hours: the same minute every run.
+  const start = Math.floor(Date.now() / HOUR) * HOUR + 7 * MIN;
   const {stand, trackers, hub} = await bringUp(t, set, start);
   const live = new Live(stand, cadence);
   const hubs = new Map([[set.scene, hub], ...(await sceneHubs(t, trackers, set.scene, start - MIN))]);
@@ -613,19 +617,22 @@ test('cards measured at the hub’s pace say when the next measurement comes and
 
 // The live demo's loop starts when the demo is up, up to a minute past the minute its time counts from.
 for (const first of [0, 59 * SECOND])
-  test(`a card whose machine sleeps goes stale in the live demo too, where the hub sets the pace, its first tick ${first / SECOND} s in`, {timeout: 120_000}, async t => {
+  test(`a card's dot goes stale or grey for a while in the live demo too, where the hub sets the pace, its first tick ${first / SECOND} s in`, {timeout: 120_000}, async t => {
     const all = setOf('all');
-    // Staleness that comes and goes with a machine's sleep: the live demo measures these
-    // cards when the hub says, not on the rhythm the twelve hours above follow.
-    const sleepy = cards(all).filter(card => card.expect.some(check => 'stale' in check && check.stale && 'to' in check));
-    assert.ok(sleepy.length, 'the catalogue has a card going stale for a while');
+    // What a card's dot says over a span of its own (stale while its machine sleeps, grey
+    // between the measurements of a card measured seldom): the live demo measures these cards
+    // when the hub says, not on the rhythm the twelve hours above follow.
+    const dot = (check: object) => ('stale' in check || 'fresh' in check) && 'to' in check;
+    const timed = cards(all).filter(card => card.expect.some(dot));
+    assert.ok(timed.some(card => card.expect.some(check => 'stale' in check && check.stale && dot(check))), 'the catalogue has a card going stale for a while');
+    assert.ok(timed.some(card => card.expect.some(check => 'fresh' in check && dot(check))), 'and one going grey for a while');
     const set: DemoSet = {
       ...all,
       entries: all.entries
-        .filter(e => e.kind !== 'card' || sleepy.includes(e))
+        .filter(e => e.kind !== 'card' || timed.includes(e))
         .map(e => (e.kind === 'person' ? {...e, expect: e.expect.filter(check => !('project' in check))} : e)),
     };
-    const checks = sleepy.map(card => ({...card, expect: card.expect.filter(check => 'stale' in check)}));
+    const checks = timed.map(card => ({...card, expect: card.expect.filter(dot)}));
     const points = [...new Set(checks.flatMap(card => (card.expect as Span[]).flatMap(check => [check.from ?? 0, ((check.from ?? 0) + (check.to ?? HOLDS)) / 2, check.to ?? HOLDS])))].sort((a, b) => a - b);
     const start = Math.floor(Date.now() / MIN) * MIN;
     const {stand, hub} = await bringUp(t, set, start);
@@ -633,6 +640,44 @@ for (const first of [0, 59 * SECOND])
     const checked = new Set<string>();
     const wrong: string[] = [];
     // Then on the next multiple of 15 seconds, as the live demo's loop does.
+    let at = first;
+    for (const point of points) {
+      for (; at <= point; at = (Math.floor(at / TICK) + 1) * TICK) {
+        t.mock.timers.setTime(start + at);
+        await live.report(at, start + at);
+        await live.pace(at, start + at);
+        await live.measure(at, start + at);
+      }
+      t.mock.timers.setTime(start + point);
+      const reading = new Reading(stand, start + point, new Map([[set.scene, await hub.told()]]));
+      wrong.push(...(await checkAll(stand, checks, reading, point, checked)));
+    }
+    assert.deepEqual(wrong, [], `start ${new Date(start).toISOString()}`);
+    assert.equal(checked.size, checks.reduce((count, card) => count + card.expect.length, 0), 'every such code is checked');
+  });
+
+// The live demo's loop starts when the demo is up, up to a minute past the minute its time counts from.
+for (const first of [0, 59 * SECOND])
+  test(`where a young series' week leads reads the same in the live demo, where the hub sets the pace, its first tick ${first / SECOND} s in`, {timeout: 180_000}, async t => {
+    const all = setOf('all');
+    // A weekly window's forecast that lives by design over a span of its own: a series young
+    // at `start`, which the hub measures when it says, and less often while it is unused.
+    const young = (card: Card) => card.expect.filter(check => 'forecast' in check && 'to' in check && card.windows.some(w => w(0).id === check.forecast && w(0).kind === 'weekly'));
+    const scenes = cards(all).filter(card => young(card).length);
+    assert.ok(scenes.length >= 2, 'the catalogue has young series');
+    const set: DemoSet = {
+      ...all,
+      entries: all.entries
+        .filter(e => e.kind !== 'card' || scenes.includes(e))
+        .map(e => (e.kind === 'person' ? {...e, expect: e.expect.filter(check => !('project' in check))} : e)),
+    };
+    const checks = scenes.map(card => ({...card, expect: young(card)}));
+    const points = [...new Set(checks.flatMap(card => (card.expect as Span[]).flatMap(check => [check.from ?? 0, ((check.from ?? 0) + (check.to ?? HOLDS)) / 2, check.to ?? HOLDS])))].sort((a, b) => a - b);
+    const start = Math.floor(Date.now() / MIN) * MIN;
+    const {stand, hub} = await bringUp(t, set, start);
+    const live = new Live(stand, cadence, true);
+    const checked = new Set<string>();
+    const wrong: string[] = [];
     let at = first;
     for (const point of points) {
       for (; at <= point; at = (Math.floor(at / TICK) + 1) * TICK) {
