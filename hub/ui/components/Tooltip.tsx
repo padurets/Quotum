@@ -1,24 +1,5 @@
 import {useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject} from 'react';
-
-/**
- * Where a chart's tooltip stands to stay whole in the window, from where it stands unraised
- * (`top`) and its own `height`: how far it rises (`by`) and how tall it may be (`room`). It
- * rises as far as its bottom would pass the window's, less a margin, never above what covers
- * the top of the page (`cover`, the bars that stick there), and comes down under them when
- * its chart has scrolled beneath; one taller than the room left below where it stands is cut
- * to it. A tooltip that passed the bottom of the last widget would lengthen the page, so a
- * pointer near the page's end would scroll it, lose the cell, and the tooltip would come and go.
- */
-export function placeOf(top: number, height: number, windowHeight: number, cover: number) {
-  const by = Math.min(Math.max(0, top + height - (windowHeight - 8)), top - cover - 8);
-  return {by, room: Math.max(0, windowHeight - 8 - (top - by))};
-}
-
-/** How far down the window the bars that stick at its top cover the page, in CSS pixels. */
-export function coverOf(above = Infinity) {
-  const bars = [...document.querySelectorAll<HTMLElement>('.topbar, .analytics-head')].filter(bar => getComputedStyle(bar).position === 'sticky');
-  return Math.max(0, ...bars.map(bar => bar.getBoundingClientRect()).filter(rect => rect.top <= above).map(rect => rect.bottom));
-}
+import {coverOf, placeOf} from '../lib/place';
 
 /** Keep a small anchored tooltip inside the viewport without growing its card. */
 export function useBubble(active: boolean) {
@@ -31,7 +12,9 @@ export function useBubble(active: boolean) {
     element.style.overflow = '';
     element.style.pointerEvents = '';
     const rect = element.getBoundingClientRect();
-    const {by, room} = placeOf(rect.top, rect.height, innerHeight, coverOf(rect.top));
+    // Covered as a panel's button is (`coverOf`): by the bars stuck at the top that begin above
+    // its bottom, even where it stands wholly under them.
+    const {by, room} = placeOf(rect.top, rect.height, innerHeight, coverOf(rect.bottom, element));
     const edge = document.documentElement.clientWidth - 8;
     const x = rect.left < 8 ? 8 - rect.left : rect.right > edge ? edge - rect.right : 0;
     element.style.translate = `${x}px ${-by}px`;
@@ -96,7 +79,7 @@ export function useTip(svg: RefObject<SVGSVGElement | null>, {width, at, narrow,
       top = element.getBoundingClientRect().top;
       element.style.top = raised;
     }
-    const {by, room} = placeOf(top, height, innerHeight, coverOf());
+    const {by, room} = placeOf(top, height, innerHeight, coverOf(chart.bottom));
     const from = narrow ? bottom : top - chart.top;
     setLift(same => (same.by === by && same.from === from && same.room === room ? same : {by, from, room}));
   };

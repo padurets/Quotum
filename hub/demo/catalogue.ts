@@ -643,6 +643,7 @@ const all: DemoSet = {
         'Its weekly forecast line goes down from the dotted plan to zero in two days; the Fable line stays above the plan to the reset',
         'On 30 days the chart is full; ‹ goes back twice, the second time to where history starts, and is off there',
         'Ten marks in the tray, in two groups (two machines); the panel names working, waiting and open-window agents',
+        'At 1280×720 with the page at its top, the agents\' panel opens above the tray, cut to the room above it with only its list scrolling, and the page neither scrolls nor grows',
         'The long project name ends in an ellipsis; the agent without a project says so',
       ],
     },

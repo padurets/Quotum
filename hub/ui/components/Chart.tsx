@@ -6,7 +6,8 @@ import {useClock} from '../lib/clock';
 import {gapText, gapTone, readout as readCell, runOutPast, valueAt, type ForecastLine, type PlanLine} from '../lib/readout';
 import type {TimeRange} from '../lib/timeRange';
 import {cellLabel, niceTicks} from '../lib/periods';
-import {coverOf, Tooltip, useTip} from './Tooltip';
+import {coverOf} from '../lib/place';
+import {Tooltip, useTip} from './Tooltip';
 import {useTimeAxis} from './timeAxis';
 
 /**
@@ -417,7 +418,8 @@ export function Chart({
   const placeEdge = useRef(() => {});
   placeEdge.current = () => {
     if (!edgeKey || !tip.current || !svg.current) return;
-    const below = svg.current.getBoundingClientRect().top + (edgeRow - 18) * scale - tip.current.offsetHeight < coverOf() + 8;
+    const chart = svg.current.getBoundingClientRect();
+    const below = chart.top + (edgeRow - 18) * scale - tip.current.offsetHeight < coverOf(chart.bottom) + 8;
     setEdgeBelow(same => (same === below ? same : below));
   };
   useLayoutEffect(() => placeEdge.current());
