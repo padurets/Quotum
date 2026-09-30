@@ -111,6 +111,15 @@ export function removeData(ctx, state, final = false) {
   const dir = dataDirectory(ctx, state);
   if (dir && (state.mode === 'demo' || final)) rmSync(dir, {recursive: true});
 }
+function signal(target, kind) {
+  try { process.kill(target, kind); return true; }
+  catch (error) {
+    // A verified target can exit before the syscall. The caller rechecks the group
+    // before any further signal or cleanup; other failures still block it.
+    if (error.code === 'ESRCH') return false;
+    throw error;
+  }
+}
 export async function stop(ctx, final = false) {
   const state = readJson(ctx.record);
   validateState(ctx, state);
@@ -123,8 +132,9 @@ export async function stop(ctx, final = false) {
   if (members.length) {
     console.log(`Stopping owned instance ${state.instance}.`);
     // SIGTERM the supervisor first, so Demo stops its own requests before the hub.
-    if (sameProcess(state.supervisor)) process.kill(state.supervisor.pid, 'SIGTERM');
-    else process.kill(-state.supervisor.pid, 'SIGTERM');
+    if (sameProcess(state.supervisor)) {
+      if (!signal(state.supervisor.pid, 'SIGTERM') && (await waitOwnedMembers(state, until)).length) signal(-state.supervisor.pid, 'SIGTERM');
+    } else signal(-state.supervisor.pid, 'SIGTERM');
     until = Date.now() + 8000;
     while (Date.now() < until) {
       members = await waitOwnedMembers(state, until);
@@ -133,7 +143,7 @@ export async function stop(ctx, final = false) {
     }
     members = await waitOwnedMembers(state, until);
     if (members.length) {
-      process.kill(-state.supervisor.pid, 'SIGKILL');
+      signal(-state.supervisor.pid, 'SIGKILL');
       until = Date.now() + 3000;
       while (Date.now() < until) {
         members = await waitOwnedMembers(state, until);

@@ -172,6 +172,27 @@ await allocate(context(root),config(root,{DEV_MODE:'hub',DEV_PORT_START:process.
   assert.equal(config(ctx.root, {}).QUOTUM_PORT, String(port + 1));
 });
 
+test('a port added after the config snapshot is retained before any new claim', async t => {
+  const {ctx} = fixture(t);
+  const base = await freeBase();
+  const stale = config(ctx.root, {DEV_PORT_START: String(base)});
+  updateEnv(ctx.root, {QUOTUM_PORT: String(base + 2)});
+  await assert.rejects(allocate(ctx, stale, null), /configuration changed/);
+  assert.equal(config(ctx.root, {}).QUOTUM_PORT, String(base + 2));
+  assert.equal(readJson(path.join(ctx.local, 'lease.json')), null);
+});
+
+test('a manual port edit during build is not overwritten by initial bind recovery', async t => {
+  const {ctx} = fixture(t);
+  const base = await freeBase();
+  const c = config(ctx.root, {DEV_PORT_START: String(base)});
+  assert.equal(await allocate(ctx, c, null), base);
+  updateEnv(ctx.root, {QUOTUM_PORT: String(base + 2)});
+  await assert.rejects(allocate(ctx, c, null, base + 1), /configuration changed/);
+  assert.equal(config(ctx.root, {}).QUOTUM_PORT, String(base + 2));
+  assert.deepEqual(readJson(path.join(ctx.local, 'lease.json')), {version: 1, port: base, initial: true});
+});
+
 test('another tree\'s stale recycled-PID journal cannot block allocation or authorize signals', async t => {
   const {ctx, base} = fixture(t);
   const stale = {version: 1, root: path.join(base, 'gone'), instance: '00000000-0000-4000-8000-000000000000',
@@ -416,6 +437,57 @@ test('transient environ unreadability is retried without weakening ownership ver
     assert.equal(readJson(ctx.record).status, 'stopped');
     assert.equal(await portFree(state.port), true);
   } finally { fs.readFileSync = original; syncBuiltinESMExports(); }
+});
+
+test('a captured own leader exiting before a second observation completes cleanup', async t => {
+  const {ctx, state} = await hubStand(t);
+  const originalRead = fs.readFileSync;
+  let exited = false;
+  fs.readFileSync = (file, ...args) => {
+    const value = originalRead(file, ...args);
+    if (String(file) === `/proc/${state.supervisor.pid}/stat` && !exited) {
+      exited = true;
+      process.kill(-state.supervisor.pid, 'SIGKILL');
+      const until = Date.now() + 1000;
+      while (Date.now() < until) {
+        try {
+          const stat = originalRead(file, 'utf8');
+          if (stat.slice(stat.lastIndexOf(')') + 2).startsWith('Z ')) break;
+        } catch (error) { if (error.code === 'ENOENT') break; throw error; }
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1);
+      }
+    }
+    return value;
+  };
+  syncBuiltinESMExports();
+  try {
+    await stop(ctx, true);
+    assert.equal(exited, true);
+    assert.equal(readJson(ctx.record), null);
+    assert.equal(existsSync(state.data), false);
+    assert.equal(await portFree(state.port), true);
+  } finally { fs.readFileSync = originalRead; syncBuiltinESMExports(); }
+});
+
+test('ESRCH between verified ownership and signal is rechecked as an exit', async t => {
+  const {ctx, state} = await hubStand(t);
+  const originalKill = process.kill;
+  let raced = false;
+  process.kill = (target, kind) => {
+    if (target === state.supervisor.pid && kind === 'SIGTERM' && !raced) {
+      raced = true;
+      originalKill(-state.supervisor.pid, 'SIGKILL');
+      throw Object.assign(new Error('verified target exited'), {code: 'ESRCH'});
+    }
+    return originalKill(target, kind);
+  };
+  try {
+    await stop(ctx, true);
+    assert.equal(raced, true);
+    assert.equal(readJson(ctx.record), null);
+    assert.equal(existsSync(state.data), false);
+    assert.equal(await portFree(state.port), true);
+  } finally { process.kill = originalKill; }
 });
 
 test('PID reuse or an unknown state version cannot authorize a signal', async t => {

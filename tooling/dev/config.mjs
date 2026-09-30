@@ -59,8 +59,9 @@ export function config(root, env = process.env) {
   if (c.QUOTUM_ALLOWED_HOSTS?.split(',').some(host => host.trim() === '*')) throw new Error('Development stands require exact allowed hosts.');
   return c;
 }
-export function updateEnv(root, changes) {
+export function updateEnv(root, changes, expected) {
   let text = envText(root);
+  if (expected !== undefined && text !== expected) throw new Error('Configuration changed during preparation; retry with current settings.');
   const old = parseEnv(text);
   const additions = [];
   for (const [key, value] of Object.entries(changes)) {
@@ -104,13 +105,20 @@ export async function allocate(ctx, c, access, retryFrom) {
     const leaseFile = path.join(ctx.local, 'lease.json');
     const lease = readJson(leaseFile);
     if (lease && lease.version !== 1) throw new Error('Unsupported port lease.');
+    if (retryFrom !== undefined) {
+      if (!lease?.initial || lease.port !== retryFrom - 1 || file.QUOTUM_PORT !== String(lease.port)) throw new Error('Port configuration changed during initial recovery; retry with current settings.');
+    } else if (file.QUOTUM_PORT !== undefined && file.QUOTUM_PORT !== c.QUOTUM_PORT) {
+      throw new Error('Port configuration changed during preparation; retry with current settings.');
+    }
     const persist = (port, initial) => {
-      const current = parseEnv(envText(ctx.root));
+      const currentText = envText(ctx.root);
+      const current = parseEnv(currentText);
+      if (current.QUOTUM_PORT !== file.QUOTUM_PORT) throw new Error('Port configuration changed during preparation; retry with current settings.');
       const inherited = Object.fromEntries(Object.entries(c).filter(([key, value]) => key in defaults && value !== undefined && !Object.hasOwn(current, key)));
       // The intent must exist before .env becomes the authoritative reservation.
       saveJson(leaseFile, {version: 1, port, initial});
       if (current.QUOTUM_PORT !== String(port)) inherited.QUOTUM_PORT = String(port);
-      if (Object.keys(inherited).length) updateEnv(ctx.root, inherited);
+      if (Object.keys(inherited).length) updateEnv(ctx.root, inherited, currentText);
     };
     const reserved = new Map();
     for (const root of treeRoots(ctx)) {

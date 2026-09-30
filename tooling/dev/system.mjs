@@ -67,7 +67,10 @@ export function processOf(pid) {
 }
 export function sameProcess(identity) {
   if (!identity) return false;
-  return JSON.stringify(processOf(identity.pid)) === JSON.stringify(identity);
+  return sameIdentity(processOf(identity.pid), identity);
+}
+function sameIdentity(observed, recorded) {
+  return !!observed && !!recorded && ['pid', 'group', 'session', 'start', 'boot'].every(key => observed[key] === recorded[key]);
 }
 export function groupMembers(group) {
   return readdirSync('/proc').filter(id => /^\d+$/.test(id)).map(processOf).filter(p => p?.group === group && p.session === group);
@@ -75,13 +78,13 @@ export function groupMembers(group) {
 export function ownedMembers(state) {
   if (!state?.supervisor) return [];
   const leader = processOf(state.supervisor.pid);
-  if (leader && !sameProcess(state.supervisor)) throw new Error('Recorded PID now belongs to another process; refusing to signal it.');
+  if (leader && !sameIdentity(leader, state.supervisor)) throw new Error('Recorded PID now belongs to another process; refusing to signal it.');
   const members = groupMembers(state.supervisor.pid);
   // A live group cannot be reused; if its leader vanished, every member must have
   // inherited our instance marker. This also recovers a crash before readiness.
   for (const member of members) {
     if (member.boot !== state.supervisor.boot || BigInt(member.start) < BigInt(state.supervisor.start)) throw new Error('Foreign process group.');
-    if (JSON.stringify(member) === JSON.stringify(state.supervisor) || JSON.stringify(member) === JSON.stringify(state.hub)) continue;
+    if (sameIdentity(member, state.supervisor) || sameIdentity(member, state.hub)) continue;
     let env;
     try { env = readFileSync(`/proc/${member.pid}/environ`, 'utf8').split('\0'); }
     catch (error) {
@@ -98,7 +101,7 @@ export function ownedMembers(state) {
 export function hasRuntimeReservation(state) {
   if (!state?.supervisor) return false;
   const leader = processOf(state.supervisor.pid);
-  if (leader && !sameProcess(state.supervisor)) return false;
+  if (leader && !sameIdentity(leader, state.supervisor)) return false;
   const members = groupMembers(state.supervisor.pid);
   if (!members.some(member => member.boot === state.supervisor.boot && BigInt(member.start) >= BigInt(state.supervisor.start))) return false;
   try { return ownedMembers(state).length > 0; }
