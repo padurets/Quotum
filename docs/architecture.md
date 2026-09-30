@@ -101,9 +101,19 @@ what it started (tools, builds, tests) spend more of a CPU core than the client 
 when idle (6% for Claude Code, which redraws its screen even then; 3–4% for the others),
 and for a minute after, so a pause of the model is not idleness. Only this user's
 processes count (on Windows, those of this logon session), and the clients the agent
-starts to measure do not. Nothing else of the client is read, its settings are not
-changed, and no program is started for it. A look is one pass over the process list for
-names and parents, then the times of the clients' own processes: about 20 µs per process
+starts to measure do not. On Linux, a bounded invocation prefix of this user's Codex
+processes also distinguishes `app-server daemon pid-update-loop` (maintenance) and
+`app-server proxy` (transport forwarding), which are not sessions. The reader skips at
+most 2048 bytes of the executable name, then compares only the leading role, byte by
+byte, stopping at the first mismatch or the end of a recognised role. It never reads
+ahead into argument values, retains no command line, and checks the process's identity
+again after the read. Unknown or unreadable roles remain eligible; processes that exited
+or whose identity changed during the read are left for the next look. A service ancestor
+does not hide a real client it started. Persistent app servers remain eligible, including
+detached servers that may serve remote work; idle alone does not make a service. macOS
+and Windows currently have no invocation-role reader. No client settings or session files
+are read or changed, and no program is started for it. A look is one pass over the process
+list for names and parents, then the times of the clients' own processes: about 20 µs per process
 on Linux. Not seen: a client that runs as `node` (an npm install on macOS and Windows),
 and on Windows the folder, which the system does not tell of another process. macOS names
 a process after the file a link leads to, so there a client is also told by its path.
