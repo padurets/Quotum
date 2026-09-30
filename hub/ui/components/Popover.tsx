@@ -202,12 +202,13 @@ export function Popover({
     // Any scroll but the panel's own. While the page is laid out, likely one of its own: the panel
     // hides if its button is out of sight, and is placed as the page settles, not at each scroll.
     // While a widget is held, nothing is decided before it is let go: the panel hides then too, and
-    // is placed again as its button comes back into sight, as it would wait hidden till then.
+    // is placed again as its button comes back into sight, as it would wait hidden till then; not
+    // with its own widget held, which it goes along with.
     const scrolled = (event: Event) => {
       if (event.target instanceof Node && element.contains(event.target)) return;
       const holds = held();
       if (seen()) {
-        if (holds && !size.height) place();
+        if (holds && !size.height && !trigger.closest(holding)) place();
         return;
       }
       if (page.moving()) hide();
