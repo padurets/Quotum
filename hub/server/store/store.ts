@@ -396,10 +396,8 @@ export class Store {
       throw error;
     }
     this.changed(...this.boardsOf(id));
-    tell(this.observer, o => {
-      o.touchSources([id]);
-      o.history(id, measurement.observedAt);
-    });
+    tell(this.observer, o => o.touchSources([id]));
+    tell(this.observer, o => o.history(id, measurement.observedAt));
   }
 
   /** Records a failed attempt; the last good values stay on screen. */
@@ -661,6 +659,7 @@ export class Store {
     const latest = this.db.prepare('SELECT to_at AS at FROM agent_work WHERE session_id = ? ORDER BY from_at DESC LIMIT 1');
     const extend = this.db.prepare('UPDATE agent_work SET to_at = ? WHERE session_id = ? AND to_at = ?');
     const begin = this.db.prepare('INSERT INTO agent_work VALUES (?, ?, ?) ON CONFLICT (session_id, from_at) DO UPDATE SET to_at = max(to_at, excluded.to_at)');
+    const credited = new Map<string, number>();
     this.db.exec('SAVEPOINT credit');
     try {
       for (const {source, origin, startedAt, project, folder, ordinal} of keys) {
@@ -669,6 +668,7 @@ export class Store {
         const start = Math.max(from, (latest.get(id) as {at: number} | undefined)?.at ?? from);
         if (until <= start) continue;
         if (!extend.run(until, id, start).changes) begin.run(id, start, until);
+        credited.set(source, Math.min(credited.get(source) ?? start, start));
       }
       this.db.exec('RELEASE credit');
     } catch (error) {
@@ -676,6 +676,7 @@ export class Store {
       this.db.exec('RELEASE credit');
       throw error;
     }
+    for (const [source, start] of credited) tell(this.observer, o => o.history(source, start));
   }
 
   /** Every stretch agents worked within [from, to), of the given subscriptions or all, projects named as their people corrected them. */

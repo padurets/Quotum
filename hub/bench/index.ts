@@ -119,7 +119,7 @@ async function main() {
     process.exit(code);
   };
   const set = SETS[0];
-  const demo = new Demo({set, scene: set.scene, still: true, address, onExit: () => void finish(1)});
+  const demo = new Demo({set, scene: set.scene, still: true, idleAgents: true, address, onExit: () => void finish(1)});
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(signal, () => void finish(1));
 
   try {
@@ -152,6 +152,7 @@ async function main() {
     const warm = warmUntil(await overview(), opened);
     say(`the board is open; it settles for ${Math.round((warm - Date.now()) / 1000)} s`);
     await sleep(warm - Date.now());
+    if (heard.counts().history) throw new Stop('The stand credited agent work during warmup; its agents must be idle.');
 
     const from = Date.now();
     const to = from + seconds * 1000;

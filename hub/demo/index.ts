@@ -117,7 +117,7 @@ export class Demo {
   stopping = false;
 
   constructor(
-    private readonly options: {set: DemoSet; scene: string; still: boolean; address: ReturnType<typeof addressOf>; onExit: (code: number) => void},
+    private readonly options: {set: DemoSet; scene: string; still: boolean; idleAgents?: boolean; address: ReturnType<typeof addressOf>; onExit: (code: number) => void},
   ) {}
 
   get pid() {
@@ -163,7 +163,7 @@ export class Demo {
     }
     await selfCheck(stand, this.trackers);
 
-    const live = new Live(stand, card => liveStep(card), true);
+    const live = new Live(stand, card => liveStep(card), true, (_machine, sessions) => this.options.idleAgents ? sessions.map(s => ({...s, working: false, lastWorkedAt: s.lastWorkedAt ?? new Date(this.start).toISOString()})) : sessions);
     const tick = async () => {
       const t = Date.now() - this.start;
       try {

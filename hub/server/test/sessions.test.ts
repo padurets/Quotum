@@ -6,6 +6,7 @@ import {agentTime, workTime, type Stretch} from '../domain/work.js';
 import {CREDIT_MS, KEEP_MS, Sessions, type LiveSession} from '../sessions.js';
 import {Directory} from '../store/directory.js';
 import {Store} from '../store/store.js';
+import type {Touches} from '../touches.js';
 
 const start = 1_800_000_000_000;
 const minute = 60_000;
@@ -41,6 +42,29 @@ const session = (device: string, {source = 'codex:1', working = true, project = 
 const seconds = (stretches: Stretch[]) => stretches.map(s => [s.project, s.folder, (s.from - start) / second, (s.to - start) / second]);
 const all = (store: Store) => store.agentWork(0, Number.MAX_SAFE_INTEGER);
 const count = (store: Store, table: string) => (store.db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as {n: number}).n;
+
+test('reports and quiet-machine sweeps tell history of exactly the credited work, without readers', () => {
+  const {store, live, ann, laptop} = setup();
+  const news: [string, number][] = [];
+  const nothing = () => {};
+  const observer: Touches = {touchSources: nothing, touchBoards: nothing, touchUser: nothing, touchHub: nothing, history: (source, since) => news.push([source, since]), dropSessions: nothing, dropMember: nothing, dropBoard: nothing};
+  store.setObserver(observer);
+  const working = session(laptop);
+  live.report(laptop, ann, [working], start);
+  assert.deepEqual(news, []);
+  live.report(laptop, ann, [working], start + 15_000);
+  assert.deepEqual(news, [['codex:1', start]]);
+  news.length = 0;
+  live.sweep(start + 60 * minute);
+  assert.deepEqual(news, [['codex:1', start + 15_000]], 'late credit starts at the old report, not at the sweep');
+  news.length = 0;
+  store.creditWork(laptop, start, start + 10_000, [{source: 'codex:1', origin: 'terminal', startedAt: working.sentStartedAt, project: '', folder: '', ordinal: 0}]);
+  assert.deepEqual(news, [], 'already credited time tells nothing');
+  live.report(laptop, ann, [session(laptop, {working: false})], start + 60 * minute);
+  live.report(laptop, ann, [], start + 61 * minute);
+  assert.deepEqual(news, [], 'an idle session credits no work');
+  store.close();
+});
 
 test('each session keeps when it worked; agent time adds up by any group, and the time any worked counts overlaps once', () => {
   const {store, live, ann, bob, laptop, server} = setup();
