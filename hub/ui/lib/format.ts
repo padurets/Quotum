@@ -130,26 +130,38 @@ const SHAPES = {
   day: {day: 'numeric', month: 'long'},
 } satisfies Record<string, Intl.DateTimeFormatOptions>;
 const dates = new Map<string, Intl.DateTimeFormat>();
-/** The system's time zone as last named: naming it costs as much as making a formatter, so it is named again a second later at the soonest. */
-let zone = {name: '', at: -Infinity};
+
+/**
+ * The system's time zone as last named, how far from UTC its clocks were then, and when.
+ * Naming it costs as much as making a formatter, telling how far next to nothing: so it is
+ * named again at once when the clocks read otherwise (the system moved, or its clocks
+ * changed), and otherwise a second later at the soonest, or once the clock has gone back.
+ */
+let zone = {name: '', offset: NaN, at: -Infinity};
+
+const named = (name: string, now: number) => (zone = {name, offset: new Date(now).getTimezoneOffset(), at: now});
 
 function timeZone() {
   const now = Date.now();
-  if (now - zone.at >= 1000 || now < zone.at) zone = {name: new Intl.DateTimeFormat().resolvedOptions().timeZone, at: now};
+  if (new Date(now).getTimezoneOffset() !== zone.offset || now - zone.at >= 1000 || now < zone.at) named(new Intl.DateTimeFormat().resolvedOptions().timeZone, now);
   return zone.name;
 }
 
 /**
  * The formatter of a shape of time, kept for each language, time zone and shape: making
- * one costs as much as twenty uses, and an idle board says when a great many times. A
+ * one costs as much as dozens of uses, and an idle board says when a great many times. A
  * formatter keeps the time zone it was made in, so the system moving to another (a laptop
- * on a journey, the page left open) makes new ones.
+ * on a journey, the page left open) makes new ones. A new one is kept under the zone it
+ * was made in, which names the zone anew: the system may have moved to one whose clocks
+ * read the same since the zone was last named.
  */
 function formatter(shape: keyof typeof SHAPES) {
   const locale = formatLocale();
-  const key = `${locale}/${timeZone()}/${shape}`;
-  let kept = dates.get(key);
-  if (!kept) dates.set(key, (kept = new Intl.DateTimeFormat(locale, SHAPES[shape])));
+  let kept = dates.get(`${locale}/${timeZone()}/${shape}`);
+  if (!kept) {
+    kept = new Intl.DateTimeFormat(locale, SHAPES[shape]);
+    dates.set(`${locale}/${named(kept.resolvedOptions().timeZone, Date.now()).name}/${shape}`, kept);
+  }
   return kept;
 }
 

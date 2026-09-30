@@ -1,4 +1,4 @@
-import {test} from 'node:test';
+import {test, type TestContext} from 'node:test';
 import assert from 'node:assert/strict';
 import {setLocale} from '../i18n';
 import {stamp} from '../lib/format';
@@ -12,29 +12,57 @@ test('timestamps use day, month and a 24-hour local clock, including midnight', 
   setLocale('en');
 });
 
-test('a time is said in the time zone the system is in, named again a second later at the soonest', t => {
+// Athens and Cairo are as far from UTC today (30 September 2026) and in winter, but their
+// clocks change on other days, so a time in spring reads otherwise in each.
+const spring = Date.UTC(2026, 3, 10, 21, 30);
+
+function travelling(t: TestContext, check: (moveTo: (zone: string) => void) => void) {
   const zone = process.env.TZ;
   t.mock.timers.enable({apis: ['Date'], now: Date.UTC(2026, 8, 30)});
-  const at = Date.UTC(2026, 8, 25, 20, 30);
-  const spring = Date.UTC(2026, 3, 10, 21, 30);
-  const moveTo = (name: string) => {
-    process.env.TZ = name;
-    t.mock.timers.tick(1000);
-  };
   try {
     setLocale('en');
+    check(name => (process.env.TZ = name));
+  } finally {
+    setLocale('en');
+    if (zone === undefined) delete process.env.TZ;
+    else process.env.TZ = zone;
+  }
+}
+
+test('a time is said in the time zone the system is in: at once where the clocks read otherwise, a second later at the soonest where they read the same', t => {
+  const at = Date.UTC(2026, 8, 25, 20, 30);
+  travelling(t, moveTo => {
     moveTo('America/New_York');
     assert.equal(stamp(at), '25 September 16:30');
     // Moved while the page was open: said anew in the zone it is in.
     moveTo('Asia/Tokyo');
     assert.equal(stamp(at), '26 September 05:30');
-    // As far from UTC as the other in winter and in summer, its clocks changed on other days.
     moveTo('Europe/Athens');
     assert.equal(stamp(spring), '11 April 00:30');
     moveTo('Africa/Cairo');
+    assert.equal(stamp(spring), '11 April 00:30', 'the clocks read the same now: the zone is not named again yet');
+    t.mock.timers.tick(999);
+    assert.equal(stamp(spring), '11 April 00:30', 'nor within the second');
+    t.mock.timers.tick(1);
     assert.equal(stamp(spring), '10 April 23:30');
-  } finally {
-    if (zone === undefined) delete process.env.TZ;
-    else process.env.TZ = zone;
-  }
+    moveTo('Europe/Athens');
+    t.mock.timers.setTime(Date.UTC(2026, 8, 29, 23));
+    assert.equal(stamp(spring), '11 April 00:30', 'the clock set back: named again at once');
+  });
+});
+
+test('a time said in another language in a zone not named yet is said there, and kept apart from the zone before', t => {
+  travelling(t, moveTo => {
+    moveTo('Europe/Athens');
+    assert.equal(stamp(spring), '11 April 00:30');
+    moveTo('Africa/Cairo');
+    setLocale('ru');
+    assert.equal(stamp(spring), '10 апреля 23:30', 'made in Cairo');
+    setLocale('en');
+    assert.equal(stamp(spring), '10 April 23:30', 'the zone it was made in named anew');
+    moveTo('Europe/Athens');
+    t.mock.timers.tick(1000);
+    setLocale('ru');
+    assert.equal(stamp(spring), '11 апреля 00:30', 'back in Athens: not the one made in Cairo');
+  });
 });
