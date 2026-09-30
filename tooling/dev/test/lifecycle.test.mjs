@@ -215,6 +215,34 @@ test('a stolen initial probe retries ascending, but an established busy port sta
   assert.equal(await portFree(saved), false);
 });
 
+test('a bind race after the final probe keeps the foreign listener and reports PORT_BUSY', async t => {
+  const {ctx} = fixture(t);
+  standIn(ctx);
+  const c = {...config(ctx.root, {}), DEV_MODE: 'hub', DEV_PORT_START: String(await freeBase())};
+  const port = await allocate(ctx, c, null);
+  writeFileSync(path.join(ctx.root, 'hub/dist/server/index.js'), `import {createServer} from 'node:http';
+import {existsSync,writeFileSync} from 'node:fs';
+writeFileSync(process.env.QUOTUM_DATA_DIR+'/before-bind','ready');
+const wait=setInterval(()=>{
+ if(!existsSync(process.env.QUOTUM_DATA_DIR+'/allow-bind')) return;
+ clearInterval(wait);
+ const server=createServer();
+ server.on('error',()=>{console.log(JSON.stringify({event:'error',code:'port_in_use'}));process.exit(1)});
+ server.listen(Number(process.env.QUOTUM_PORT),'127.0.0.1');
+},10);
+`);
+  const starting = start(ctx, c, port, {inputs: 'bind-race', output: 'fixture'});
+  const outcome = assert.rejects(starting, error => error.code === 'PORT_BUSY');
+  for (let i = 0; i < 1000 && !existsSync(path.join(ctx.local, 'hub-data/before-bind')); i++) await sleep(10);
+  assert.equal(existsSync(path.join(ctx.local, 'hub-data/before-bind')), true);
+  const foreign = await listener(port);
+  t.after(foreign.close);
+  writeFileSync(path.join(ctx.local, 'hub-data/allow-bind'), 'bind');
+  await outcome;
+  assert.equal(await portFree(port), false);
+  assert.equal(readJson(path.join(ctx.local, 'lease.json')).initial, true);
+});
+
 test('a successful build freezes served files; a later failed build leaves the ready stand usable', async t => {
   const {ctx, base} = fixture(t);
   standIn(ctx);

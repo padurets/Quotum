@@ -136,7 +136,11 @@ export async function start(ctx, c, port, built) {
     await new Promise((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error(`Readiness timed out; inspect ${log}.`)), 60000);
       child.once('error', error => { clearTimeout(timeout); reject(error); });
-      child.once('exit', () => { clearTimeout(timeout); reject(new Error(`Stand exited before readiness; inspect ${log}.`)); });
+      child.once('exit', () => {
+        clearTimeout(timeout);
+        const journal = readJson(ctx.record);
+        reject(Object.assign(new Error(`Stand exited before readiness; inspect ${log}.`), {code: journal?.instance === instance ? journal.failureCode : undefined}));
+      });
       child.on('message', message => {
         if (message.event === 'ready') { clearTimeout(timeout); resolve(); }
         if (message.event === 'failed') { clearTimeout(timeout); reject(Object.assign(new Error(`Stand could not start; inspect ${log}.`), {code: message.code})); }

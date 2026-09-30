@@ -41,14 +41,26 @@ try {
     const options = parseArgs(args);
     const address = addressOf(process.env);
     await prepare(address, state.build.hub);
-    demo = new Demo({...options, address, dataDir: state.data, hubRoot: state.build.hub, onExit: code => void stop(code)});
+    demo = new Demo({...options, address, dataDir: state.data, hubRoot: state.build.hub, onExit: (code, cause) => {
+      if (cause) { write({failureCode: 'PORT_BUSY'}); tell({event: 'failed', code: 'PORT_BUSY'}); }
+      void stop(code);
+    }});
     const stand = await demo.run();
     if (stopping) process.exit(0);
     if (demo.dir !== state.data) throw new Error('This demo does not support managed data; cleanup blocked.');
     write({hub: processOf(demo.pid), demo: {set: stand.set.id, scene: options.scene, still: options.still, ...accessOf(stand.set)}});
   } else {
-    hub = spawn(process.execPath, ['dist/server/index.js'], {cwd: state.build.hub ?? path.join(root, 'hub'), env: {...process.env, QUOTUM_DATA_DIR: state.data}, stdio: ['ignore', 'inherit', 'inherit']});
-    hub.on('exit', code => { if (!stopping) void stop(code ?? 1); });
+    hub = spawn(process.execPath, ['dist/server/index.js'], {cwd: state.build.hub ?? path.join(root, 'hub'), env: {...process.env, QUOTUM_DATA_DIR: state.data}, stdio: ['ignore', 'pipe', 'pipe']});
+    let output = '';
+    hub.stdout.on('data', chunk => { output = (output + chunk).slice(-16000); process.stdout.write(chunk); });
+    hub.stderr.on('data', chunk => { output = (output + chunk).slice(-16000); process.stderr.write(chunk); });
+    hub.on('close', code => {
+      if (stopping) return;
+      const failureCode = output.includes('"code":"port_in_use"') ? 'PORT_BUSY' : 'START_FAILED';
+      write({failureCode});
+      tell({event: 'failed', code: failureCode});
+      void stop(code ?? 1);
+    });
     write({hub: processOf(hub.pid)});
     const until = Date.now() + 15000;
     let ready = false;
@@ -68,6 +80,8 @@ try {
   console.log(`Managed ${state.mode} ready; instance ${instance}, build ${state.build.inputs}.`);
 } catch (error) {
   console.error(error.message);
-  tell({event: 'failed', code: /taken|EADDRINUSE|port_in_use/.test(error.message) ? 'PORT_BUSY' : 'START_FAILED'});
+  const failureCode = /taken|EADDRINUSE|port_in_use/.test(error.message) ? 'PORT_BUSY' : 'START_FAILED';
+  write({failureCode});
+  tell({event: 'failed', code: failureCode});
   await stop(1);
 }

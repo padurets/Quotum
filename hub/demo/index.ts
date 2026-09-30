@@ -118,7 +118,7 @@ export class Demo {
   stopping = false;
 
   constructor(
-    private readonly options: {set: DemoSet; scene: string; still: boolean; address: ReturnType<typeof addressOf>; onExit: (code: number) => void; dataDir?: string; hubRoot?: string},
+    private readonly options: {set: DemoSet; scene: string; still: boolean; address: ReturnType<typeof addressOf>; onExit: (code: number, cause?: 'port_in_use') => void; dataDir?: string; hubRoot?: string},
   ) {
     this.dir = options.dataDir ?? mkdtempSync(path.join(os.tmpdir(), 'quotum-demo-'));
   }
@@ -146,12 +146,13 @@ export class Demo {
     const hub = (this.hub = spawn(process.execPath, ['dist/server/index.js'], {cwd: this.options.hubRoot ?? HUB, env, stdio: ['ignore', 'pipe', 'pipe']}));
     hub.stdout!.on('data', chunk => this.output.add(chunk));
     hub.stderr!.on('data', chunk => this.output.add(chunk));
-    hub.on('exit', (code, signal) => {
+    // close follows the output streams too: the hub's port-error line is complete.
+    hub.on('close', (code, signal) => {
       if (this.stopping) return;
       // Ctrl+C reaches the hub too, which may be done before the demo hears of it: a clean exit is a stop.
       if (code === 0) return this.options.onExit(0);
       console.error(`\nThe hub stopped by itself (${signal ? `killed by ${signal}` : `exit ${code}`}). Its output:\n${this.output}`);
-      this.options.onExit(1);
+      this.options.onExit(1, this.output.toString().includes('"code":"port_in_use"') ? 'port_in_use' : undefined);
     });
 
     await ready(hub, address.base, this.output);
