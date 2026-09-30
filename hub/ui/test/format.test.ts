@@ -3,19 +3,15 @@ import assert from 'node:assert/strict';
 import {setLocale} from '../i18n';
 import {stamp} from '../lib/format';
 
-test('timestamps use day, month and a 24-hour local clock, including midnight', () => {
-  const date = new Date(2026, 8, 26, 0, 5).getTime();
-  setLocale('en');
-  assert.equal(stamp(date), '26 September 00:05');
-  setLocale('ru');
-  assert.equal(stamp(date), '26 сентября 00:05');
-  setLocale('en');
-});
-
 // Athens and Cairo are as far from UTC today (30 September 2026) and in winter, but their
 // clocks change on other days, so a time in spring reads otherwise in each.
 const spring = Date.UTC(2026, 3, 10, 21, 30);
 
+/**
+ * Every test here says times in the zones it moves to, never in the machine's: the formatters
+ * a test makes are kept, and one made in the machine's zone would be found by a test that
+ * expects to make its own there (a machine in Athens).
+ */
 function travelling(t: TestContext, check: (moveTo: (zone: string) => void) => void) {
   const zone = process.env.TZ;
   t.mock.timers.enable({apis: ['Date'], now: Date.UTC(2026, 8, 30)});
@@ -28,6 +24,16 @@ function travelling(t: TestContext, check: (moveTo: (zone: string) => void) => v
     else process.env.TZ = zone;
   }
 }
+
+test('timestamps use day, month and a 24-hour local clock, including midnight', t => {
+  travelling(t, moveTo => {
+    moveTo('UTC');
+    const date = new Date(2026, 8, 26, 0, 5).getTime();
+    assert.equal(stamp(date), '26 September 00:05');
+    setLocale('ru');
+    assert.equal(stamp(date), '26 сентября 00:05');
+  });
+});
 
 test('a time is said in the time zone the system is in: at once where the clocks read otherwise, a second later at the soonest where they read the same', t => {
   const at = Date.UTC(2026, 8, 25, 20, 30);
