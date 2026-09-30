@@ -14,6 +14,7 @@ import {heardHub, hubNow, wakeDue} from './lib/clock';
 import {startLive} from './lib/live';
 import {UNAUTHORIZED} from './lib/http';
 import {t, useLocale} from './i18n';
+import {Compact} from './components/Compact';
 import {Header} from './components/Header';
 import {RefreshAll} from './components/RefreshAll';
 import {SERVICE} from './components/Kit';
@@ -31,7 +32,7 @@ import {InvitePage} from './components/InvitePage';
 import {MachinesDialog, type MachinesTab} from './components/Machines';
 import {BoardDialog, type BoardTab} from './components/BoardDialog';
 import {AgentBanner, LocalOnboarding, OpenInApp, QuitButton, TakeOver} from './components/Desktop';
-import {followApp, inApp, type AppState} from './lib/app';
+import {app, appLocale, followApp, inApp, type AppState} from './lib/app';
 
 /** The page's own entry script, as the hub's `index.html` names it: a page of another build is loaded anew. */
 function entryScript() {
@@ -54,7 +55,7 @@ const live = startLive({
 });
 
 /** The desktop app's state, as it sends it and as its commands answer: into the page's state, the newest kept. */
-const setAppState = (state: AppState) => page.dispatch({type: 'app', state});
+const setAppState = (state: AppState) => { appLocale(state); page.dispatch({type: 'app', state}); };
 if (inApp()) followApp(setAppState);
 
 const NO_BOARDS: Board[] = [];
@@ -283,7 +284,7 @@ function App() {
           <div className="splash-text">
             {t('app.reconnecting')}
             {/* The app's window can always be quit, even with its hub gone. */}
-            {inApp() && <QuitButton />}
+            {inApp() && (path === '/compact' ? <button className="button" onClick={() => void app.closePanel()}>{t('common.close')}</button> : <QuitButton />)}
           </div>
         )}
       </div>
@@ -292,9 +293,11 @@ function App() {
   const signedIn = (next: Session) => setSession(next);
 
   if (session.local) {
-    if (!session.user) return <OpenInApp />;
+    if (!session.user) return <OpenInApp compact={path === '/compact'} />;
+    if (path === '/compact') return <Compact live={live} />;
     return <Dashboard user={session.user} local refresh={refresh} onSignedOut={() => void refresh()} />;
   }
+  if (path === '/compact' && session.user) return <Compact live={live} />;
   if (path === '/device') return <DevicePage session={session} onSession={signedIn} />;
   const invite = path.match(/^\/invite\/([\w-]+)$/);
   if (invite) return <InvitePage secret={invite[1]} session={session} onSession={signedIn} onJoined={id => (rememberBoard(id), void refresh())} />;

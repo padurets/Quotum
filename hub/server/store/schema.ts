@@ -108,6 +108,17 @@ export const STEPS = [
   `
   CREATE INDEX agent_sessions_by_project ON agent_sessions (device_id, project, source_id);
   `,
+  // 5 — consumed desktop events, independent of notification delivery or UI lifetime.
+  `
+  CREATE TABLE attention_windows (
+    source_id TEXT NOT NULL, window_id TEXT NOT NULL, cycle INTEGER NOT NULL, last_at INTEGER NOT NULL, payload TEXT NOT NULL,
+    PRIMARY KEY (source_id, window_id)) WITHOUT ROWID;
+  CREATE TABLE attention_announcements (
+    provider TEXT PRIMARY KEY, last_announced_at INTEGER NOT NULL, payload TEXT NOT NULL);
+  CREATE TRIGGER attention_source_deleted AFTER DELETE ON sources BEGIN
+    DELETE FROM attention_windows WHERE source_id = OLD.id;
+  END;
+  `,
 ];
 
 export const SCHEMA_VERSION = STEPS.length;

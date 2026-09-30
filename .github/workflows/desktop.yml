@@ -74,7 +74,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libssl-dev libnss3 libgtk-3-0 libgbm1 libasound2 xvfb xauth strace dbus-daemon python3-gi unzip rpm squashfs-tools
+          sudo apt-get install -y libssl-dev libnss3 libgtk-3-dev libgbm1 libasound2 xvfb xauth strace dbus-daemon python3-gi unzip rpm squashfs-tools
       - name: Smoke supervisor tests
         if: runner.os == 'Linux'
         env:
@@ -95,6 +95,10 @@ jobs:
         run: cargo clippy --all-targets --locked -- -D warnings
       - working-directory: desktop
         run: cargo test --locked
+      - name: Native loader callbacks (Linux)
+        if: runner.os == 'Linux'
+        working-directory: desktop
+        run: xvfb-run -a cargo test --locked native_signals_keep_their_presentation -- --ignored --test-threads=1
       - name: Chromium policy tests
         run: node --test desktop/electron/policy.test.cjs
       - name: Build (Linux)
@@ -103,7 +107,7 @@ jobs:
       - name: Build (Windows)
         if: runner.os == 'Windows'
         working-directory: desktop
-        run: npx --yes @tauri-apps/cli@2.11.5 build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} -- --locked
+        run: npx --yes @tauri-apps/cli@2.12.0 build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} -- --locked
       - name: Portable ZIP (Windows)
         if: runner.os == 'Windows'
         run: node desktop/package-windows.mjs
@@ -128,6 +132,7 @@ jobs:
           sh desktop/smoke/linux.sh normal quotum-desktop --software-rendering
           sh desktop/smoke/linux.sh crash quotum-desktop
           sh desktop/smoke/tray.sh /usr/bin/quotum-desktop
+          QUOTUM_TEST_PANEL=1 xvfb-run -a sh desktop/smoke/tray.sh /usr/bin/quotum-desktop
       - name: Smoke (Fedora)
         if: runner.os == 'Linux'
         shell: bash

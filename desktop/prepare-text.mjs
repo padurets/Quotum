@@ -1,0 +1,23 @@
+/** A checked subset of the UI catalogs for native delivery; no second translation table. */
+import {mkdirSync, writeFileSync, readFileSync} from 'node:fs';
+import path from 'node:path';
+import {pathToFileURL} from 'node:url';
+export async function prepareText(here, hub) {
+  const result = {};
+  for (const language of ['en', 'ru']) {
+    const module = await import(pathToFileURL(path.join(hub, `ui/i18n/${language}.ts`)));
+    result[language] = Object.fromEntries(Object.entries(module[language]).filter(([key]) => (key.startsWith('desktop.') && !['desktop.total', 'desktop.working'].includes(key)) || key.startsWith('kind.') || key.startsWith('time.')));
+  }
+  const parameters = value => [...value.matchAll(/\{\w+\}/g)].map(m => m[0]).sort().join(',');
+  for (const [key, value] of Object.entries(result.en)) {
+    if (typeof value !== 'string' || typeof result.ru[key] !== 'string' || parameters(value) !== parameters(result.ru[key])) throw new Error(`invalid native translation: ${key}`);
+  }
+  mkdirSync(path.join(here, 'resources'), {recursive: true});
+  writeFileSync(path.join(here, 'resources/desktop-i18n.json'), JSON.stringify(result));
+  const style = readFileSync(path.join(hub, 'ui/style.css'), 'utf8');
+  const colour = name => { const value = style.match(new RegExp(`--${name}: (#[a-f0-9]+);`))?.[1]; if (!value) throw new Error(`missing colour ${name}`); return value; };
+  const radius = Number(style.match(/--popup-radius: (\d+)px;/)?.[1]);
+  if (!Number.isFinite(radius)) throw new Error('missing popup radius');
+  writeFileSync(path.join(here, 'resources/native-theme.json'), JSON.stringify({bg: colour('bg'), text: colour('text-2'), radius}));
+  writeFileSync(path.join(here, 'resources/loading.css'), `window { background-color: ${colour('bg')}; } label, spinner { color: ${colour('text-2')}; }`);
+}

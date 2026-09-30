@@ -1,3 +1,4 @@
+import {earlyReset} from '../domain/attention.js';
 import {createHash} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import {config} from '../config.js';
@@ -62,8 +63,6 @@ export type SourceEvent =
 
 /** Early resets of a source's windows closer than this are one event. */
 const SAME_EVENT_MS = 15 * 60_000;
-/** A drop of at least this many points before the window's reset time is a reset, not a correction. */
-const RESET_DROP = 5;
 /**
  * The names a board's history is keyed by (`Store.workKey`), for its people (a JSON list,
  * given twice) and its subscriptions (likewise): each project a person named that worked
@@ -342,6 +341,11 @@ export class Store {
     const row = this.db.prepare('SELECT payload FROM state WHERE source_id = ?').get(id) as {payload: string} | undefined;
     if (!row) return {id, provider, plan: '', successAt: null, error: 'waiting', windows: [], staleAfterMs: null, resets: null};
     return {...(JSON.parse(row.payload) as SourceState), id, provider};
+  }
+
+  attentionCycle(source: string, window: string): number | null {
+    const row = this.db.prepare('SELECT cycle FROM attention_windows WHERE source_id = ? AND window_id = ?').get(source, window) as {cycle: number} | undefined;
+    return row?.cycle ?? null;
   }
 
   /**
@@ -696,6 +700,7 @@ export class Store {
 
   /** Forgets samples, events, announcements and agents' work older than the retention period; corrected project names stay until undone. */
   prune(now: number) {
+    this.db.prepare('DELETE FROM attention_windows WHERE source_id NOT IN (SELECT id FROM sources)').run();
     const cutoff = now - config.retention.sampleDays * 86_400_000;
     this.db.prepare('DELETE FROM samples WHERE at < ?').run(cutoff);
     this.db.prepare('DELETE FROM agent_work WHERE to_at < ?').run(cutoff);
@@ -719,7 +724,7 @@ function earlyResets(groups: Sample[][]): SourceEvent[] {
   for (const samples of groups) {
     for (let i = 1; i < samples.length; i++) {
       const [a, b] = [samples[i - 1], samples[i]];
-      if (a.resetAt !== null && b.at < a.resetAt - 60_000 && b.used < a.used - RESET_DROP) found.push({sourceId: b.sourceId, at: b.at, window: b.id});
+      if (earlyReset(a, b)) found.push({sourceId: b.sourceId, at: b.at, window: b.id});
     }
   }
   const events: (SourceEvent & {kind: 'early_reset'})[] = [];

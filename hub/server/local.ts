@@ -58,7 +58,7 @@ const sameSecret = (given: string, expected: string) => timingSafeEqual(digest(g
  * the board, which then asks to open it from the app.
  */
 export function localRoutes(app: FastifyInstance, hub: Hub, key: string) {
-  app.get<{Querystring: {key?: unknown}}>('/local', (request, reply) => {
+  app.get<{Querystring: {key?: unknown; view?: unknown}}>('/local', (request, reply) => {
     const given = request.query.key;
     const user = hub.directory.soleUser();
     if (user && typeof given === 'string' && sameSecret(given, key)) {
@@ -66,6 +66,6 @@ export function localRoutes(app: FastifyInstance, hub: Hub, key: string) {
       hub.directory.createSession(secret, user.id, Date.now(), SESSION_TTL_MS);
       setSession(request, reply, secret, {persistent: false});
     }
-    return reply.redirect('/', 303);
+    return reply.redirect(request.query.view === 'compact' ? '/compact' : '/', 303);
   });
 }

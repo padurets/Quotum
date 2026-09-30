@@ -3,7 +3,7 @@ use crate::{
     ipc::{self, COMMANDS, Request},
     settings::Patch,
     shell::Shell,
-    window::LABEL,
+    window::{LABEL, Role},
 };
 use serde_json::Value;
 use std::sync::Arc;
@@ -26,12 +26,60 @@ pub fn hub_capability(port: u16) -> CapabilityBuilder {
 
 /// The app's own pages: they can only quit.
 pub fn own_capability() -> CapabilityBuilder {
-    CapabilityBuilder::new("own").window(LABEL).permission(allow("quit"))
+    CapabilityBuilder::new("own").window(LABEL).window("compact").permission(allow("quit"))
 }
 
 fn execute(webview: Webview, shell: State<'_, Arc<Shell>>, request: Request) -> Result<Value, String> {
     let url = webview.url().map_err(|e| e.to_string())?;
-    ipc::execute(&shell, &url, request)
+    let (role, instance) = caller(&webview, &shell)?;
+    ipc::execute(&shell, &url, role, instance, request)
+}
+fn caller(webview: &Webview, shell: &Shell) -> Result<(Role, u64), String> {
+    let role = match webview.label() {
+        "main" => Role::Main,
+        "compact" => Role::Compact,
+        _ => return Err("unknown window".into()),
+    };
+    let instance = webview.window().hwnd().map_err(|_| "closed window")?.0 as u64;
+    let current = shell.host.app.get_webview_window(role.label()).ok_or("closed window")?;
+    if current.hwnd().map_err(|_| "closed window")?.0 as u64 != instance {
+        return Err("stale window".into());
+    }
+    Ok((role, instance))
+}
+pub fn panel_capability(port: u16) -> CapabilityBuilder {
+    ["app_state", "watch_state", "reenter", "open_main", "close_panel", "report_panel_height"].iter().fold(
+        CapabilityBuilder::new(format!("compact-{port}"))
+            .local(false)
+            .window("compact")
+            .remote(format!("http://127.0.0.1:{port}/*")),
+        |capability, command| capability.permission(allow(command)),
+    )
+}
+#[tauri::command(async)]
+pub fn open_main(webview: Webview, shell: State<'_, Arc<Shell>>) -> Result<Value, String> {
+    execute(webview, shell, Request::OpenMain)
+}
+#[tauri::command(async)]
+pub fn close_panel(webview: Webview, shell: State<'_, Arc<Shell>>) -> Result<Value, String> {
+    execute(webview, shell, Request::ClosePanel)
+}
+#[tauri::command(async)]
+pub fn report_panel_height(
+    webview: Webview,
+    shell: State<'_, Arc<Shell>>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<Value, String> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields, rename_all = "camelCase")]
+    struct Height {
+        height_css_px: f64,
+    }
+    let tauri::ipc::InvokeBody::Json(value) = request.body() else {
+        return Err("invalid panel height".into());
+    };
+    let height: Height = serde_json::from_value(value.clone()).map_err(|_| "invalid panel height")?;
+    execute(webview, shell, Request::ReportPanelHeight { height_css_px: height.height_css_px })
 }
 #[tauri::command(async)]
 pub fn app_state(webview: Webview, shell: State<'_, Arc<Shell>>) -> Result<Value, String> {
@@ -40,6 +88,14 @@ pub fn app_state(webview: Webview, shell: State<'_, Arc<Shell>>) -> Result<Value
 #[tauri::command(async)]
 pub fn save_settings(webview: Webview, shell: State<'_, Arc<Shell>>, patch: Patch) -> Result<Value, String> {
     execute(webview, shell, Request::SaveSettings { patch })
+}
+#[tauri::command(async)]
+pub fn save_desktop_settings(
+    webview: Webview,
+    shell: State<'_, Arc<Shell>>,
+    patch: crate::desktop_settings::Patch,
+) -> Result<Value, String> {
+    execute(webview, shell, Request::SaveDesktopSettings { patch })
 }
 #[tauri::command(async)]
 pub fn take_over(webview: Webview, shell: State<'_, Arc<Shell>>) -> Result<Value, String> {
@@ -67,11 +123,14 @@ pub fn watch_state(webview: Webview, shell: State<'_, Arc<Shell>>, channel: Chan
     if !ipc::is_board(&shell, &url) {
         return Err("not the board of the running hub".into());
     }
+    let (role, instance) = caller(&webview, &shell)?;
     let mut sent = false;
     ipc::watch(&shell, |state| {
         let mut watching = shell.host.watching.lock().unwrap_or_else(|e| e.into_inner());
         sent = channel.send(state.clone()).is_ok();
-        *watching = sent.then(|| channel.clone());
+        if sent {
+            watching.insert(role, (instance, channel.clone()));
+        }
     });
     if !sent {
         return Err("the board's channel is closed".into());
@@ -85,11 +144,18 @@ pub fn watch_state(webview: Webview, shell: State<'_, Arc<Shell>>, channel: Chan
 /// The app's state, to the board watching it while the window shows the board of the
 /// running hub (checked as it goes); a board gone elsewhere hears nothing more.
 pub fn push_state(shell: &Shell, state: &Value) {
-    let mut watching = shell.host.watching.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(channel) = watching.as_ref() else { return };
-    let url = shell.host.app.get_webview_window(LABEL).and_then(|window| window.url().ok());
-    if !url.is_some_and(|url| ipc::is_board(shell, &url)) || channel.send(state.clone()).is_err() {
-        watching.take();
+    let subscribers = shell.host.watching.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    for (role, (instance, channel)) in subscribers {
+        let current = shell.host.app.get_webview_window(role.label());
+        let valid = current.is_some_and(|w| {
+            w.hwnd().is_ok_and(|h| h.0 as u64 == instance) && w.url().is_ok_and(|url| ipc::is_board(shell, &url))
+        });
+        if !valid || channel.send(state.clone()).is_err() {
+            let mut watching = shell.host.watching.lock().unwrap_or_else(|e| e.into_inner());
+            if watching.get(&role).is_some_and(|(old, _)| *old == instance) {
+                watching.remove(&role);
+            }
+        }
     }
 }
 #[cfg(test)]
@@ -112,7 +178,7 @@ mod tests {
         let urls = &hub.remote.as_ref().unwrap().urls;
         assert_eq!(urls, &["http://127.0.0.1:23456/*"]);
         assert_eq!(hub.windows, ["main"]);
-        assert_eq!(hub.permissions.len(), 7);
+        assert_eq!(hub.permissions.len(), 8);
         assert!(hub.permissions.iter().any(|p| p.identifier().get() == "allow-watch-state"));
         let own = built(own_capability());
         assert!(own.local && own.remote.is_none());

@@ -237,7 +237,79 @@ cards, the same agents as the dashboard shows them, and of other boards only the
 their own. What is theirs alone, which sources their devices measure and their role on
 each board, goes to their streams only. Events carry no secrets, no email addresses and
 no session ids.
+Desktop observation barriers carry only source/window identifiers and corrected times
+from those sources; they add no client output, credentials or provider identity.
 
 While a board is read, the hub keeps in memory what its readers last got of each part,
 and a lease's events until it is asked; it writes nothing of them to disk. A board nobody
 reads costs nothing.
+
+## Desktop attention stream
+
+In local mode a session may request `GET /api/events?desktop=1`, with the same
+`Quotum-Stream: 1`, session, origin and resource limits as the board. This mode is
+stream-only: combining it with `mode=poll`, or requesting it outside local mode,
+returns `400 invalid_request`. A machine token does not grant access.
+
+After `hello` and `snapshot` comes `attention`:
+
+```ts
+{
+  seq: number; now: number; baseline: boolean;
+  state: {
+    boardId: string;
+    level: 'ok' | 'warn' | 'crit' | null;
+    quality: 'current' | 'partial' | 'unavailable';
+    minimum: {sourceId: string; windowId: string; remaining: number} | null;
+  };
+  notifications: Candidate[];
+  invalidations: {sourceId: string; windowId: string; at: number}[];
+}
+```
+
+`seq` increases within this connection; `hello.epoch` identifies the hub start.
+The first attention frame is a baseline, with no notifications or invalidations.
+Observation boundaries are sent in an attention frame before the corresponding
+board changes, with no notifications. A quota candidate observed before its window's
+invalidation `at` must be discarded, including one already in a native queue.
+These boundaries come from committed measurements: first observation, a gap or
+recovery, changed window semantics, a confirmed reset, and disappearance or return.
+They survive coalescing even when the final card looks like the earlier one.
+When new notifications also exist, a second attention frame follows the board
+changes, so their current names and visibility are already available. Both frames
+have their own increasing `seq`. Without boundaries, the attention frame follows
+the board changes as usual. The minimum includes only visible windows of
+visible cards. Levels match the board: above 30 is ok, 10 through 30 warn, below 10
+crit. Last known figures retain their level; missing, stale, failed or reset-past
+measurements make their quality partial. No visible figures means unavailable,
+never a fictitious full quota.
+
+A quota candidate has `id`, `kind` (`low`, `critical`, `reset`), `at`,
+`observedFrom`, `observedAt`, `sourceId`, `windowId`, `provider`, `name`,
+`window: {kind, label, minutes}`, `remaining` and nullable `resetAt`.
+`at` is the hub's receipt time; the observation times are the corrected sample
+clocks, unchanged by batch delivery. Both observations must belong to the reader's
+current baseline (`observedFrom >= baseline.now`, `observedAt > observedFrom`).
+Thresholds are consumed once per confirmed window cycle, even while hidden or
+notifications are disabled. A reset needs measurement evidence; a timer alone is
+never a reset. One delivery gives at most one current notification per window,
+keeping the most severe threshold, or the reset with the resulting remainder.
+
+An announcement candidate has `id`, `kind: 'announcement'`, `at`, `provider`,
+nullable `scheduledFor`, nullable `resetKind` (`regular` or `banked`), `credit:
+{name, url}` and `url`. It describes a newly learned scheduled tracker event,
+not proof that a subscription reset. The first successful tracker answer and
+recovery after a failure are silent baselines. Names and links are data, never
+instructions to the native host.
+
+Candidates leave ingestion only after its transaction commits. They are not
+reconstructed from coalesced card frames. Pending candidates and coalesced per-window
+invalidations share the stream's buffer limit; overflow discards both and starts a new
+attention baseline. Before emission, a quota candidate must still name the current
+window semantics and ledger cycle. Changing kind, label or duration invalidates
+pending candidates even if the old values return before the next flush. The desktop
+also checks window semantics and its observation boundary after native queueing.
+Disconnected readers retain no notification queue. There is
+no replay through `Last-Event-ID`, after restart, or across a baseline. A crash
+between consumption and native delivery may lose a notification; successful
+native submission does not guarantee the operating system displayed it.

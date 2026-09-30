@@ -2,6 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {
   app,
+  appLocale,
   asksToTakeOver,
   failedTitle,
   followApp,
@@ -15,6 +16,51 @@ import {
   type AgentState,
   type AppState,
 } from '../lib/app';
+import {setLocale} from '../i18n';
+
+test('compact locale sync preserves the legacy choice for main-window migration', async t => {
+  let saved = 'ru';
+  const location = {pathname: '/compact'};
+  for (const [name, value] of Object.entries({location, localStorage: {getItem: () => saved, setItem: (_key: string, value: string) => { saved = value; }}})) {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, name);
+    Object.defineProperty(globalThis, name, {configurable: true, value});
+    t.after(() => previous ? Object.defineProperty(globalThis, name, previous) : Reflect.deleteProperty(globalThis, name));
+  }
+  setLocale('ru', false);
+  appLocale({seq: 1, locale: null, effectiveLocale: 'en'} as AppState);
+  assert.equal(saved, 'ru');
+  const requested: unknown[] = [];
+  inWindow(t, '__QUOTUM__', {invoke: async (_command: string, args: unknown) => {
+    requested.push(args);
+    return {seq: 2, locale: 'ru', effectiveLocale: 'ru'};
+  }});
+  location.pathname = '/';
+  appLocale({seq: 1, locale: null, effectiveLocale: 'en'} as AppState);
+  await flush();
+  assert.deepEqual(requested, [{patch: {locale: 'ru'}}]);
+});
+
+test('panel heights serialize and coalesce while close stays responsive', async t => {
+  const invoked: number[] = [];
+  const replies: (() => void)[] = [];
+  let closes = 0;
+  inWindow(t, '__TAURI__', {core: {invoke: (command: string, args: {heightCssPx: number}) => {
+    if (command === 'close_panel') { closes++; return Promise.resolve(); }
+    invoked.push(args.heightCssPx);
+    return new Promise<void>(resolve => replies.push(resolve));
+  }}});
+  const first = app.reportPanelHeight(180);
+  const intermediate = app.reportPanelHeight(300);
+  const last = app.reportPanelHeight(420);
+  assert.deepEqual(invoked, [180]);
+  await app.closePanel();
+  assert.equal(closes, 1);
+  replies[0]();
+  await flush();
+  assert.deepEqual(invoked, [180, 420]);
+  replies[1]();
+  await Promise.all([first, intermediate, last]);
+});
 
 test('mutations invoke and acknowledge in action order across all app controls', async t => {
   const events: string[] = [];

@@ -29,6 +29,7 @@ const LIMIT: Duration = Duration::from_secs(120);
 pub enum Mode {
     Normal,
     Crash,
+    Notifications,
 }
 
 /// Which of the checks passed so far.
@@ -36,6 +37,7 @@ pub enum Mode {
 struct Progress {
     ready: bool,
     measured: bool,
+    attention: bool,
     /// The board, entered as the window enters it, shows what the agent measured.
     board: bool,
     /// Times the window finished loading the board.
@@ -66,6 +68,9 @@ impl Smoke {
     /// Ends the app with exit 1 if the checks have not all passed in time. A thread of its
     /// own: it must not depend on an event loop that may be what hangs.
     pub fn watch(shell: &Arc<Shell>) {
+        if shell.smoke.as_ref().is_some_and(|s| s.mode == Mode::Notifications) {
+            return;
+        }
         let shell = shell.clone();
         thread::spawn(move || {
             thread::sleep(LIMIT);
@@ -78,6 +83,10 @@ impl Smoke {
     }
 
     pub fn hub_ready(&self, _shell: &Arc<Shell>, _ready: &Ready) {
+        if self.mode == Mode::Notifications {
+            notification_sequence(_shell, _ready);
+            return;
+        }
         self.progress().ready = true;
         eprintln!("smoke: the hub is ready");
         if self.mode == Mode::Crash {
@@ -112,6 +121,9 @@ impl Smoke {
     /// Called on the main thread when a page finished loading: the board of the running hub
     /// counts. The first time the window is closed and opened again, as the tray does.
     pub fn page_loaded(&self, shell: &Arc<Shell>, url: &Url) {
+        if self.mode == Mode::Notifications {
+            return;
+        }
         let (state, _) = shell.hub();
         // `/local?key=…` leads to `/` at once: only the board itself counts.
         let board = matches!(&state, HubState::Ready(ready) if url.as_str() == format!("{}/", ready.origin()));
@@ -158,13 +170,26 @@ impl Smoke {
         self.pass_if_done(shell);
     }
 
+    pub fn attention_seen(&self, shell: &Arc<Shell>, status: &crate::attention::Status) {
+        if self.mode == Mode::Notifications
+            || !status.connected
+            || status.state.as_ref().is_none_or(|s| s.minimum.is_none())
+        {
+            return;
+        }
+        if !std::mem::replace(&mut self.progress().attention, true) {
+            eprintln!("smoke: the background reader sees the measured limit");
+        }
+        self.pass_if_done(shell);
+    }
+
     fn pass_if_done(&self, shell: &Arc<Shell>) {
         {
             let mut progress = self.progress();
             // Linux's window has nothing to call to watch: the app sends, its preload listens.
             let watched = cfg!(target_os = "linux") || progress.watched;
             let window = !self.window || (progress.loaded >= 2 && progress.asked && watched);
-            if progress.done || !(progress.ready && progress.board && window) {
+            if progress.done || !(progress.ready && progress.board && progress.attention && window) {
                 return;
             }
             progress.done = true;
@@ -198,4 +223,60 @@ fn board_shows_a_source(ready: &Ready) -> Result<(), String> {
 pub fn fail(why: &str) -> ! {
     eprintln!("smoke: FAILED: {why}");
     std::process::exit(1);
+}
+
+/// Explicit manual QA, in a new profile with every provider disabled. Never ordinary CI.
+pub fn prepare_notifications() {
+    let dir = std::env::temp_dir().join(format!(
+        "quotum-notifications-{}-{}",
+        std::process::id(),
+        quotum_core::model::now_ms()
+    ));
+    std::fs::create_dir_all(&dir).expect("create notification QA directory");
+    let config = dir.join("config.toml");
+    std::fs::write(&config, "sessions = false\n[providers.claude]\nenabled = false\n[providers.codex]\nenabled = false\n[providers.antigravity]\nenabled = false\n").expect("write disabled QA providers");
+    // Before the host starts any threads; these paths never point at the person's data.
+    unsafe {
+        std::env::set_var("QUOTUM_CONFIG", config);
+        std::env::set_var("QUOTUM_STATE_DIR", dir.join("state"));
+        std::env::set_var("QUOTUM_APP_DATA_DIR", dir.join("app"));
+        std::env::set_var("QUOTUM_RESETS", "off");
+    }
+    eprintln!("notification QA: isolated data in {}", dir.display());
+}
+fn notification_sequence(shell: &Arc<Shell>, ready: &Ready) {
+    let shell = shell.clone();
+    let ready = ready.clone();
+    thread::spawn(move || {
+        let http = quotum_core::sink::http_to(&ready.origin());
+        for _ in 0..100 {
+            if shell.attention.status().connected {
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        let reset = quotum_core::model::now_ms() + 3_600_000;
+        for remaining in [35, 29, 9, 100] {
+            for _ in 0..50 {
+                if shell.exiting() {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+            let now = quotum_core::model::now_ms();
+            let stamp = quotum_core::model::ts::format(now);
+            let body = serde_json::json!({"version":1,"agent":format!("quotum/{}", env!("CARGO_PKG_VERSION")),"machine":{"id":"native-notification-fixture","name":"Notification QA","os":std::env::consts::OS,"arch":std::env::consts::ARCH},"sentAt":stamp,"snapshots":[{"provider":"antigravity","accountName":"Notification QA","observedAt":stamp,"via":"fixture","staleAfterMs":120000,"windows":[{"id":"session","kind":"session","minutes":300,"usedPercent":100-remaining,"resetsAt":quotum_core::model::ts::format(reset)}]}],"failures":[]});
+            if !http
+                .post(format!("{}/v1/ingest", ready.origin()))
+                .header("authorization", format!("Bearer {}", ready.token))
+                .send_json(body)
+                .is_ok_and(|response| response.status().is_success())
+            {
+                eprintln!("notification QA: fixture delivery failed");
+                return;
+            }
+            eprintln!("notification QA: {remaining}% remaining");
+        }
+        eprintln!("notification QA: sequence complete; inspect the panel, then Quit");
+    });
 }

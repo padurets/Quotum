@@ -1,7 +1,7 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {call} from './http';
 import {DEFAULT_PLAN, isValidPlan, type WeeklyPlan} from './plan';
-import {windowKey, type View} from './types';
+import {type View} from './types';
 import {FALLBACK_COLOR, PROVIDERS} from './providers';
 
 /** Widget ids: the chart, the table of every limit, how agents worked, the list of running agents, and a card per source. */
@@ -9,7 +9,8 @@ export const HISTORY = 'history';
 export const FORECAST = 'forecast';
 export const ACTIVITY = 'activity';
 export const AGENTS = 'agents';
-export const cardId = (sourceId: string) => `source:${sourceId}`;
+import {cardId, isWindowHidden} from '../../server/domain/presentation';
+export {cardId, isWindowHidden};
 
 /**
  * The analytics' widgets in the order a board has them until its owner moves them: how
@@ -64,7 +65,7 @@ export const withColumn = (view: View, widget: string, column: string, shown: bo
 };
 
 /** Whether a window is hidden from its card and the chart on this board. */
-export const isWindowHidden = (view: View, sourceId: string, windowId: string) => view.windows.includes(windowKey(sourceId, windowId));
+
 
 /**
  * What a board shows: a word on getting started while it has no subscription, its
