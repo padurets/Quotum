@@ -270,19 +270,23 @@ test('a height the owner chose reaches every reader: in the view event of one al
 });
 
 test('a change goes out once, only as the part it changed, in one event however many touches it took', async t => {
-  const h = await hub();
+  const clock = new ManualClock(Date.now());
+  const h = await hub({}, clock);
   t.after(() => (letGo(), h.app.close()));
   await h.person('alice');
   const secret = await h.token('alice');
-  await h.measure(secret, Date.now() - 3 * MIN);
+  await h.measure(secret, clock.now() - 3 * MIN);
   const s = await reading(h, 'alice');
   t.after(s.close);
   const sessions = s.snapshot.sessions;
 
-  // Three measurements in a row: one card, one history.
-  await h.measure(secret, Date.now() - 2 * MIN, {used: 51});
-  await h.measure(secret, Date.now() - MIN, {used: 52});
-  await h.measure(secret, Date.now() - 1000, {used: 53});
+  // Keep all three measurements in one window, however long their requests take.
+  await h.measure(secret, clock.now() - 2 * MIN, {used: 51});
+  await h.measure(secret, clock.now() - MIN, {used: 52});
+  await h.measure(secret, clock.now() - 1000, {used: 53});
+  clock.advance(config.events.smoothMs - 1);
+  assert.deepEqual(await s.types(), [], 'changes wait for the smoothing window');
+  clock.advance(1);
   const changed = await s.within();
   assert.deepEqual(
     changed.map(e => e.type),
@@ -290,10 +294,11 @@ test('a change goes out once, only as the part it changed, in one event however 
   );
   assert.equal(changed[0].data.windows[0].used, 53);
   assert.equal(changed[1].data.sources.length, 1);
-  assert.ok(changed[1].data.since <= Date.now() - 2 * MIN);
+  assert.ok(changed[1].data.since <= clock.now() - 2 * MIN);
 
   // The same numbers again change nothing a reader sees.
-  await h.measure(secret, Date.now() - 500, {used: 53});
+  await h.measure(secret, clock.now() - 500, {used: 53});
+  clock.advance(config.events.smoothMs);
   assert.deepEqual(await s.types(), ['card', 'history'], 'a newer measurement: when it was taken changed');
   assert.deepEqual(sessions, s.snapshot.sessions);
 });
