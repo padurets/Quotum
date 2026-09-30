@@ -16,7 +16,7 @@ import {Tray} from './Tray';
 import {EyeOffIcon, HideRow, Popover, SlidersIcon, SwitchRow, TakeOffIcon} from './Popover';
 import {RefreshAction} from './RefreshAction';
 import {refreshChangesAt, refreshPending, refreshText} from '../lib/refresh';
-import {ErrorLine} from './Kit';
+import {ErrorLine, Segmented} from './Kit';
 import {useBubble} from './Tooltip';
 
 /** Where the plan expects the limit to be now: a mark on its meter, in whole percent, moved when that changes. */
@@ -262,20 +262,32 @@ function Frequency({source, board}: {source: Card; board: string}) {
     }
   };
   const options = Object.entries(MEASURE_INTERVAL) as [keyof typeof MEASURE_INTERVAL, MeasureIntervalMs][];
+  const selected = options.find(([, value]) => value === source.measureIntervalMs)![0];
   return (
-    <div className="popover-section">
-      <fieldset className="frequency" disabled={!connected || pending} aria-busy={pending}>
-        <legend className="popover-title">{t('frequency.title')}</legend>
-        {mine ? options.map(([key, value]) => (
-          <label className="popover-row" key={key}>
-            <input type="radio" name={`frequency-${source.id}`} checked={source.measureIntervalMs === value} onChange={() => void save(value)} />
-            <span>{t(`frequency.${key}`)}</span>
-          </label>
-        )) : <div className="popover-note">{t(`frequency.${options.find(([, value]) => value === source.measureIntervalMs)![0]}`)}</div>}
-      </fieldset>
+    <>
+      <div className="popover-title popover-section">{t('frequency.title')}</div>
+      {mine ? (
+        <div className="popover-pad">
+          <Segmented
+            label={t('frequency.title')}
+            radioName={`frequency-${source.id}`}
+            disabled={!connected || pending}
+            busy={pending}
+            value={selected}
+            onChange={key => void save(MEASURE_INTERVAL[key])}
+            options={options.map(([key, value]) => [key, value === null ? t('frequency.auto') : num(value / 60_000), t(`frequency.${key}`)])}
+          />
+        </div>
+      ) : <div className="popover-note">{t(`frequency.${selected}`)}</div>}
       <div className="popover-note">{t('frequency.hint')}</div>
+      <details className="popover-note">
+        <summary className="link-button">{t('frequency.aboutAuto')}</summary>
+        <p>{t('frequency.autoActivity')}</p>
+        <p>{t('frequency.autoLimits')}</p>
+        <p>{t('frequency.autoMinimum')}</p>
+      </details>
       <ErrorLine error={error} />
-    </div>
+    </>
   );
 }
 
@@ -298,7 +310,7 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
   };
 
   return (
-    <Popover label={t('source.menu', {source: title})} icon={<SlidersIcon />} open={open} onOpenChange={setOpen}>
+    <Popover label={t('source.menu', {source: title})} icon={<SlidersIcon />} open={open} onOpenChange={setOpen} width={288}>
       {owner && (
         <>
           <div className="popover-title popover-section">{t('source.name')}</div>

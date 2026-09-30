@@ -14,6 +14,7 @@ export function Popover({
   align = 'right',
   triggerClass,
   up = false,
+  width,
 }: {
   label: string;
   icon?: ReactNode;
@@ -28,6 +29,8 @@ export function Popover({
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   align?: 'left' | 'right';
+  /** A content width, still capped to the viewport by the shared panel style. */
+  width?: number;
 }) {
   const [own, setOwn] = useState(false);
   const open = controlled ?? own;
@@ -274,7 +277,7 @@ export function Popover({
       {open && (
         <div
           className={`popover glass ${align === 'left' ? 'is-left' : ''} ${(side?.up ?? up) ? 'is-up' : ''} ${side?.cap != null ? 'is-capped' : ''} ${side?.cramped ? 'is-cramped' : ''}`}
-          style={side?.cap != null ? {maxHeight: side.cap} : undefined}
+          style={width !== undefined || side?.cap != null ? {...(width !== undefined ? {width} : {}), ...(side?.cap != null ? {maxHeight: side.cap} : {})} : undefined}
           role="dialog"
           aria-label={label}
           ref={panel}

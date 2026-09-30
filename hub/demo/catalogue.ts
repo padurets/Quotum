@@ -1314,7 +1314,7 @@ const all: DemoSet = {
           {from: 15 * SECOND, to: 15 * SECOND, cadence: 'nextIn' as const, why: 'fixed' as const},
           ...(minutes === 15 ? [{from: 3 * MIN, to: 8 * MIN, cadence: 'nextIn' as const, why: 'fixed' as const, stale: true}] : []),
         ],
-        look: ['Frequency is shared across boards; low limits and working agents do not speed up the fixed 15-minute plan. Stale data still explain the next measurement. Check native radio keys and both languages'],
+        look: ['Frequency is shared across boards; low limits and working agents do not speed up the fixed 15-minute plan. Stale data still explain the next measurement. Check the compact Auto / 1 / 2 / 5 / 15 segments, native radio keys, aligned menu headings and the Auto explanation in both languages'],
       };
     }),
     {

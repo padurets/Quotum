@@ -300,10 +300,6 @@ body.is-resizing-bottom-right, body.is-resizing-bottom-right * { cursor: nwse-re
 .popover-note a { color: var(--text-3); }
 .popover-section { margin-top: 8px; border-top: 1px solid var(--hair); padding-top: 12px; }
 .popover-section:first-child { margin-top: 0; border-top: 0; padding-top: 4px; }
-.frequency { border: 0; padding: 0; margin: 0; min-width: 0; }
-.frequency legend { padding: 0; }
-.frequency input { accent-color: var(--text); }
-.frequency:disabled .popover-row { opacity: .5; cursor: default; }
 .popover-pad { padding: 0 4px 4px; }
 .popover-pad .segmented button { flex: 1; }
 .color-hues { display: flex; align-items: center; gap: 10px; padding: 2px 4px 0; }
@@ -320,7 +316,7 @@ body.is-resizing-bottom-right, body.is-resizing-bottom-right * { cursor: nwse-re
 .plan-days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
 .plan-days label { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 10.5px; color: var(--text-4); }
 .plan-days input {
-  width: 100%; min-width: 0; padding: 5px 0; text-align: center; font: inherit; font-size: 13px; font-variant-numeric: tabular-nums;
+  width: 100%; min-width: 0; aspect-ratio: 1; padding: 0; text-align: center; font: inherit; font-size: 13px; font-variant-numeric: tabular-nums;
   color: var(--text); background: #ffffff08; border: 1px solid var(--hair); border-radius: 7px; -moz-appearance: textfield;
 }
 .plan-days input::-webkit-inner-spin-button, .plan-days input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
@@ -498,9 +494,14 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 /* At the right even when it takes a row of its own: the arrows at its end stay where they were. */
 .analytics-head .controls { margin-left: auto; justify-content: flex-end; }
 .segmented { display: flex; padding: 2px; gap: 2px; border: 1px solid var(--hair); border-radius: 9px; background: #ffffff04; }
-.segmented button { white-space: nowrap; border: 0; background: none; color: var(--text-3); padding: 5px 12px; border-radius: 7px; font-size: 12.5px; transition: color .15s, background .15s; }
-.segmented button:hover { color: var(--text-2); }
+.segmented button, .segmented-radio span { white-space: nowrap; border: 0; background: none; color: var(--text-3); padding: 5px 12px; border-radius: 7px; font-size: 12.5px; transition: color .15s, background .15s; }
+.segmented button:hover, .segmented-radio:hover span { color: var(--text-2); }
 .segmented button[aria-pressed=true], .segmented .is-on { background: #ffffff12; color: var(--text); box-shadow: inset 0 1px 0 #ffffff0d; }
+.segmented-radio { position: relative; flex: 1; cursor: pointer; }
+.segmented-radio span { display: block; text-align: center; }
+.segmented-radio input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: -2px; }
+.segmented-radio:has(input:disabled) { cursor: default; }
+.segmented:has(:disabled):not([aria-busy=true]) { opacity: .5; }
 /* The period: [the list] and a time range's × beside it, then ‹ ›. */
 .period { display: flex; align-items: center; gap: 2px; }
 .period .icon-button { width: 28px; height: 28px; }
@@ -678,7 +679,7 @@ select option { background: #141419; }
 .button.danger:hover:not(:disabled) { background: #f1787038; }
 .button:disabled { opacity: .5; cursor: default; }
 .button-row { display: flex; gap: 10px; justify-content: flex-end; }
-.link-button { border: 0; background: none; padding: 0; color: var(--text-3); font-size: 12.5px; }
+.link-button { cursor: pointer; border: 0; background: none; padding: 0; color: var(--text-3); font-size: 12.5px; }
 .link-button:hover { color: var(--text); }
 .link-button.danger:hover { color: var(--crit); }
 .form-error { margin: 0; color: var(--crit); font-size: 12.5px; }
