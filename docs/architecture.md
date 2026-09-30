@@ -231,6 +231,8 @@ Ingest replans duty synchronously and touches every board showing that source.
 A fixed ordinary plan follows the last accepted successful measurement, across restart
 and handover, without activity, low-limit, change or reset acceleration. The device's
 minimum can make it slower; failure pauses, unanswered retries and refresh remain.
+Until the first success, a failed command starts no fixed interval: the next attempt
+waits only for the existing failure pause and device minimum.
 A fresh manual measurement starts the ordinary interval anew. Frequency changes affect
 unissued plans immediately and leave issued commands alone. A longer interval may leave
 old data stale; neither stored freshness nor history changes. The card explains its

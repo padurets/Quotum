@@ -411,7 +411,7 @@ export class Cadence {
   /** The ordinary due time, without refresh, failure pauses or unanswered-command retries. */
   private ordinary(pace: Pace, now: number, signals: Signals, floor: number): {at: number; why: Why | 'first'; interval: number} {
     let {interval, why} = this.interval(pace, now, signals, floor);
-    if (pace.lastAt === null && pace.askedAt === null) return {at: now, why: 'first', interval: signals.measureIntervalMs == null ? BASE_INTERVAL_MS : interval};
+    if (pace.lastAt === null && (pace.askedAt === null || signals.measureIntervalMs != null)) return {at: now, why: 'first', interval: signals.measureIntervalMs == null ? BASE_INTERVAL_MS : interval};
     let at = (pace.lastAt ?? pace.askedAt!) + interval;
     if (pace.lastAt !== null && signals.measureIntervalMs == null) {
       const reset = Math.min(...signals.windows.flatMap(w => (w.resetAt !== null && w.resetAt > pace.lastAt! ? [w.resetAt] : [])));

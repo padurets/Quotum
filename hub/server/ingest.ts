@@ -114,7 +114,6 @@ export class Ingest {
         // A delivery can hand duty to its device: the request of the one before ends now, not when next read.
         this.cadence.settleRefresh(account, this.refreshDuty(account), now);
         this.cadence.delivered(account, device.id, snapshot.windows, observedAt, snapshot.staleAfterMs, this.signals(source, account, now).inUse, now);
-        this.protect(source, account, now);
       }
 
       for (const failure of batch.failures) {
@@ -148,6 +147,8 @@ export class Ingest {
       for (const key of held) this.cadence.settleRefresh(key, this.refreshDuty(key), now);
       this.cadence.heard(device.id, held, now);
       for (const source of held.flatMap(key => providers.flatMap(provider => this.store.findSource(provider, key) ?? []))) touched.add(source);
+      // Waiting protection uses the whole batch's accepted data and bounded evidence of contact.
+      for (const source of touched) this.protect(source, this.store.account(source)!, now);
       tell(this.observer, o => o.touchSources([...touched]));
       return result;
     });

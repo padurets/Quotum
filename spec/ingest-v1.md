@@ -279,6 +279,8 @@ The subscription's hub setting is Auto (the policy above) or a fixed interval of
 including after a hub restart or ordinary handover. With no successful data, measure at
 once. Work, changed percentages, low limits and resets do not accelerate a fixed plan;
 the device minimum, failure pauses and unanswered-command retries still apply.
+Before the first success, a failed command starts no fixed interval; retry after the
+existing failure pause and device minimum.
 `nextInMs` promises that effective fixed interval. Refresh may accelerate it within the
 same minimum; the accepted fresh result starts the next ordinary interval.
 

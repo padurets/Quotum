@@ -355,3 +355,62 @@ test('an unanswered Auto retry keeps its interval reason, rather than claiming i
   for (let at = 15_000; at <= 16 * MIN + 15_000; at += 15_000) cadence.answer(ACCOUNT, 'laptop', 'codex', T + at, MIN, signals);
   assert.deepEqual(cadence.view(ACCOUNT, 'laptop', T + 16 * MIN + 15_000, signals), {next: T + 17 * MIN, why: 'idle'});
 });
+
+test('a bounded delivery restores waiting protection after its fresh word, including a duplicate', t => {
+  for (const arrival of [3 * MIN, 3 * MIN + 1, 4 * MIN]) {
+    const h = hub(t);
+    h.ask(0);
+    h.deliver(0);
+    h.frequency(MIN);
+    const command = h.ask(MIN);
+    assert.equal(command.nextInMs, MIN);
+    h.frequency(900_000, MIN + 15_000);
+    h.deliver(arrival, {observed: MIN, stale: command.nextInMs! * 1.2 + MIN});
+    assert.equal(h.duty.until(ACCOUNT), T + 17 * MIN, 'install the new plan using the delivery heardAt');
+    assert.equal(h.ingest.refresh(h.source(), T + arrival + 30_000).value.unavailable, null);
+    assert.equal(h.store.state(h.source()).staleAfterMs, 132_000, 'waiting protection does not extend snapshot freshness');
+  }
+  for (const arrival of [4 * MIN + 50_000, 6 * MIN]) {
+    const h = hub(t);
+    h.ask(0);
+    h.deliver(0);
+    h.frequency(900_000, 3 * MIN);
+    assert.equal(h.duty.until(ACCOUNT), T + 348_000, 'the silent setting write grants no protection');
+    assert.equal(h.deliver(arrival, {observed: 0}).duplicates, 1);
+    assert.equal(h.duty.until(ACCOUNT), T + (arrival < 5 * MIN ? 16 * MIN : 348_000), 'only a word within the bounded delivery window restores protection');
+    assert.equal(h.store.state(h.source()).successAt, T, 'a duplicate remains a duplicate');
+  }
+  const h = hub(t);
+  h.ask(0);
+  h.deliver(0);
+  h.frequency(MIN);
+  h.ask(MIN);
+  h.frequency(900_000, MIN + 15_000);
+  h.deliver(3 * MIN + 1, {failure: 'timeout'});
+  assert.equal(h.ingest.refresh(h.source(), T + 3 * MIN + 1).value.unavailable, 'paused');
+  assert.equal(h.duty.until(ACCOUNT), T + 348_000, 'a fresh failure still grants no waiting protection');
+});
+
+test('a failed first fixed measurement retries after its pause and minimum without a successful baseline', t => {
+  for (const interval of [60_000, 120_000, 300_000, 900_000] as const) {
+    for (const floor of [MIN, 20 * MIN]) {
+      const h = hub(t);
+      const source = h.store.source('codex', ACCOUNT, T);
+      h.store.setMeasureInterval(source, interval);
+      assert.equal(h.ask(0, floor).measure, true);
+      h.deliver(5_000, {failure: 'timeout'});
+      const allowed = Math.max(125_000, floor);
+      assert.equal(h.ask(allowed - 1, floor).measure, false);
+      const retry = h.ask(allowed, floor);
+      assert.equal(retry.measure, true, 'a failed command is not a successful fixed baseline');
+      assert.equal(retry.nextInMs, Math.max(interval, floor));
+      assert.equal(h.store.state(source).successAt, null);
+    }
+    const h = hub(t);
+    const source = h.store.source('codex', ACCOUNT, T);
+    h.store.setMeasureInterval(source, interval);
+    h.ask(0);
+    assert.equal(h.ask(89_999).measure, false, 'an unanswered first command retains its retry delay');
+    assert.equal(h.ask(90_000).measure, true);
+  }
+});
