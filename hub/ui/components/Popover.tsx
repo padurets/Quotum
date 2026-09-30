@@ -60,8 +60,9 @@ export function Popover({
     let upwards: boolean | null = null;
     // The bars are found again as the page is laid out, not at every scroll.
     let bars = barsOf();
-    // The panel's size as it was placed: its observer telling of that is no news, as a panel cut
-    // anew as its button moves would be cut again and again; only its content changing it is.
+    // The panel's size as it was placed, or none while hidden: its observer telling of that is no
+    // news, as a panel cut anew as its button moves would be cut again and again, and a hidden one
+    // placed again at each scroll; only its content changing it is.
     let size = {width: 0, height: 0};
     const seen = () => {
       const at = picker.getBoundingClientRect();
@@ -138,35 +139,37 @@ export function Popover({
     }
     place();
     // As the page is laid out anew the panel follows its button, and is settled once the page is
-    // still (`settler`): a frame goes by with nothing laid out anew, and nothing around the button
+    // still (`settler`): a frame goes by with nothing laid out anew, nothing around the button
     // sliding to a new place (a widget moved, or dropped from a finger: the button is measured
-    // where it slides from), an animation that moves it; nor the button's widget held by the
-    // reader, dragged or resized, which the panel goes along with, placed once it is let go and has
-    // slid into place. Decided at each step the page takes, it would be decided wrong: the board
-    // passes through layouts that take the button out of sight and bring it back, and scrolls the
-    // page as it does (keeping what is focused, or what is in sight, in its place), as the reader
-    // would. Only what comes to an end is waited for.
+    // where it slides from), an animation that moves it, and no widget held by the reader, dragged
+    // or resized by a finger or the pointer. The panel goes along with its button's own widget
+    // held, and follows the button while another is, placed once all is let go and has slid into
+    // place. Decided at each step the page takes, it would be decided wrong: the board passes
+    // through layouts that take the button out of sight and bring it back, and scrolls the page as
+    // it does (keeping what is focused, or what is in sight, in its place), as the reader would.
+    // Only what comes to an end is waited for.
     const sliding = () =>
       document.getAnimations().some(animation => {
         const effect = animation.effect;
         if (!(effect instanceof KeyframeEffect) || animation.playState !== 'running' || effect.getTiming().iterations === Infinity) return false;
         return !!effect.target?.contains(trigger) && effect.getKeyframes().some(frame => 'transform' in frame || 'translate' in frame);
       });
-    const held = () => !!trigger.closest('.widget.is-lifted, .widget.is-resizing');
+    const holding = '.widget.is-lifted, .widget.is-resizing';
     const page = settler(
       () => (seen() ? place() : close()),
-      () => held() || sliding(),
+      () => !!document.querySelector(holding) || sliding(),
     );
     const moved = () => {
       bars = barsOf();
-      if (!held()) follow();
+      if (!trigger.closest(holding)) follow();
       page.stir();
     };
     // What is watched: the panel, as its content changes; the page's content (the body, at least as
     // tall as the window, would not tell on a short board); the widgets, each of which a new layout
     // may give another size; the dialog the button is in, whose content may move it; and the
     // widgets' places (the style that sets them) and their number, as they may trade places keeping
-    // their size, and the style of the button's own widget's body, which a finger drags and drops.
+    // their size, and the style of the button's own widget's body, which a finger drags and drops
+    // and a resize widens.
     const observer = new ResizeObserver(entries => {
       const placed = (entry: ResizeObserverEntry) => {
         const [box] = entry.borderBoxSize;
