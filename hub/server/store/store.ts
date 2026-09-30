@@ -3,6 +3,7 @@ import {createHash} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import {config} from '../config.js';
 import {providers, sourceId, type Provider, type Source} from '../domain/sources.js';
+import type {MeasureIntervalMs} from '../domain/frequency.js';
 import {onGrid, series, type Kind, type Measurement, type Sample, type SourceState} from '../domain/quota.js';
 import type {PlanChange, SeriesSample} from '../domain/forecast.js';
 import type {Origin} from '../domain/ingest.js';
@@ -244,8 +245,18 @@ export class Store {
     const row = this.db.prepare('SELECT id FROM sources WHERE provider = ? AND account = ?').get(provider, account) as {id: string} | undefined;
     if (row) return row.id;
     const id = sourceId(provider, account);
-    this.db.prepare('INSERT INTO sources VALUES (?, ?, ?, ?)').run(id, provider, account, now);
+    this.db.prepare('INSERT INTO sources (id, provider, account, created_at) VALUES (?, ?, ?, ?)').run(id, provider, account, now);
     return id;
+  }
+
+  measureInterval(id: string): MeasureIntervalMs {
+    const row = this.db.prepare('SELECT measure_interval_ms FROM sources WHERE id = ?').get(id) as {measure_interval_ms: MeasureIntervalMs} | undefined;
+    return row?.measure_interval_ms ?? null;
+  }
+
+  /** Equal writes leave the current plan and events alone. */
+  setMeasureInterval(id: string, intervalMs: MeasureIntervalMs): boolean {
+    return this.db.prepare('UPDATE sources SET measure_interval_ms = ? WHERE id = ? AND measure_interval_ms IS NOT ?').run(intervalMs, id, intervalMs).changes > 0;
   }
 
   /** A person's device measures a source: it is theirs to see and share from now on. */

@@ -704,19 +704,14 @@ test('another machine of the subscription does not take duty while the holder me
   assert.equal(h.refresh(210_000).request?.status, 'updated');
 });
 
-test('a request waiting for the retry of a lost command outlives the holder\'s lease while it keeps asking', t => {
+test('a holder asking past an unanswered command cannot renew duty or accept a new refresh', t => {
   const h = hub(t);
   h.ask(0);
   h.deliver(0, {stale: 132_000});
-  // Commands at 1, 3, 5 and 9 minutes go unanswered; the next retry comes 8 minutes after the last.
   for (let at = MIN; at <= 10 * MIN; at += MIN) h.ask(at);
-  h.request(10 * MIN + 10_000);
-  const queued = h.refresh(10 * MIN + 10_000).request!;
-  assert.deepEqual([queued.status, queued.notBefore], ['queued', T + 17 * MIN]);
-  for (let at = 11 * MIN; at < 17 * MIN; at += MIN) assert.equal(h.ask(at).measure, false);
-  assert.equal(h.refresh(16 * MIN).request?.status, 'queued', 'its lease ran out at 8 and 13 minutes; asking, it took it again');
-  assert.equal(h.ask(17 * MIN).measure, true);
-  assert.equal(h.refresh(17 * MIN).request?.status, 'waiting');
+  assert.equal(h.request(10 * MIN + 10_000).status, 'unavailable');
+  assert.equal(h.refresh(10 * MIN + 10_000).unavailable, 'no_device');
+  assert.equal(h.ask(10 * MIN + 10_001, MIN, 'healthy').measure, true);
 });
 
 test('duty handed over by a delivery or a legacy check-in ends the request at that moment', t => {
@@ -726,12 +721,13 @@ test('duty handed over by a delivery or a legacy check-in ends the request at th
     h.deliver(0, {stale: MIN});
     h.ask(40_000, 10 * MIN);
     h.request(50_000);
-    // The laptop's measurement went stale at a minute; another machine takes duty, with data too old to answer the request.
-    if (legacy) h.ask(61_000, MIN, 'other', false);
-    else h.deliver(61_000, {name: 'other', observed: 5_000});
+    // Lowering the floor shortens its anchored protection to two minutes.
+    h.ask(55_000, MIN);
+    if (legacy) h.ask(121_000, MIN, 'other', false);
+    else h.deliver(121_000, {name: 'other', observed: 5_000});
     assert.equal(h.duty.holder(ACCOUNT), h.device('other'));
-    const request = h.refresh(66_000).request;
-    assert.deepEqual([request?.status, request?.finishedAt], ['unavailable', T + 61_000]);
+    const request = h.refresh(126_000).request;
+    assert.deepEqual([request?.status, request?.finishedAt], ['unavailable', T + 121_000]);
   }
 });
 

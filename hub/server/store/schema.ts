@@ -119,6 +119,11 @@ export const STEPS = [
     DELETE FROM attention_windows WHERE source_id = OLD.id;
   END;
   `,
+  // 6 — one measuring preference per subscription, shared by all its boards.
+  `
+  ALTER TABLE sources ADD COLUMN measure_interval_ms INTEGER DEFAULT NULL
+    CHECK (measure_interval_ms IS NULL OR measure_interval_ms IN (60000, 120000, 300000, 900000));
+  `,
 ];
 
 export const SCHEMA_VERSION = STEPS.length;

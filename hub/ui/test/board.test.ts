@@ -15,6 +15,7 @@ const card = (id: string, used = 50, extra: Partial<Card> = {}): Card => ({
   resets: null,
   owners: ['Ana'],
   staleAfterMs: 420_000,
+  measureIntervalMs: null,
   ...extra,
 });
 
@@ -101,6 +102,9 @@ test('a snapshot is the board; the same snapshot again keeps every slice as it w
 test('each event changes its own slice and leaves the others as they were', () => {
   const s = run(hub({type: 'snapshot', data: snapshot()}));
   same(s, reduce(s, hub({type: 'card', data: card('s1', 70)})), ['s1']);
+  const frequency = reduce(s, hub({type: 'card', data: card('s1', 50, {measureIntervalMs: 900_000})}));
+  same(s, frequency, ['s1']);
+  assert.equal(frequency.board!.cards.s1.measureIntervalMs, 900_000);
   assert.equal(reduce(s, hub({type: 'card', data: card('s1')})), s, 'a card the same as before changes nothing');
   same(s, reduce(s, hub({type: 'sessions', data: {id: 's2', sessions: [session]}})), ['sessions2']);
   same(s, reduce(s, hub({type: 'cadence', data: {id: 's1', cadence: null}})), ['cadence1']);

@@ -300,6 +300,10 @@ body.is-resizing-bottom-right, body.is-resizing-bottom-right * { cursor: nwse-re
 .popover-note a { color: var(--text-3); }
 .popover-section { margin-top: 8px; border-top: 1px solid var(--hair); padding-top: 12px; }
 .popover-section:first-child { margin-top: 0; border-top: 0; padding-top: 4px; }
+.frequency { border: 0; padding: 0; margin: 0; min-width: 0; }
+.frequency legend { padding: 0; }
+.frequency input { accent-color: var(--text); }
+.frequency:disabled .popover-row { opacity: .5; cursor: default; }
 .popover-pad { padding: 0 4px 4px; }
 .popover-pad .segmented button { flex: 1; }
 .color-hues { display: flex; align-items: center; gap: 10px; padding: 2px 4px 0; }

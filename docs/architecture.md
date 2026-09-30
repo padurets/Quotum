@@ -182,7 +182,7 @@ subscription:
   meanwhile, measuring its providers one by one, and another device taking over halfway,
   even one where someone works, would measure the same again.
 - The others are told to wait and when to ask again: when the holder's measurement goes
-  stale or, once that has passed while it measures, when its five minutes end; sooner,
+  stale or its waiting plan ends, or while it measures, when its five minutes end; sooner,
   in a minute if someone works on that machine, otherwise in up to ten minutes.
 - A holder that asks again without answering what it was told keeps duty no longer than
   the others were told to wait, and until it answers the last command, however late,
@@ -191,7 +191,7 @@ subscription:
 - Duty moves to a device where someone works if the holder has been idle for ten
   minutes, so the numbers come from where the subscription is actually being used.
 - A holder that goes quiet (asleep, switched off) loses duty when its last measurement
-  goes stale, and the next device to ask takes over.
+  goes stale and its bounded plan protection ends; the next device to ask takes over.
 
 Duty decides who measures; the hub's **pace** (`hub/server/cadence.ts`) decides when,
 from what it sees of the subscription everywhere, which no single machine does:
@@ -212,10 +212,27 @@ from what it sees of the subscription everywhere, which no single machine does:
   minutes for a signed-out client), and a device doing so does not take duty; a healthy
   one does, as before. A `measure` nothing came back for (a lost answer) is asked again
   after 90 seconds, then less and less often.
-- The lease is as before otherwise: a delivery extends it, and it lasts past the next
-  planned measurement, so a holder waiting for its pace keeps duty. A device that raises
-  its minimum interval past its lease is the exception: until it asks again it has no
-  duty, and another device of the subscription may take it and measure at once.
+- A healthy paced holder waiting for its ordinary plan keeps duty through its due time
+  plus one minute for check-in, independently of snapshot freshness. Cadence calculates
+  this from the last successful data and the current interval and device minimum;
+  Ingest installs it in Duty on a delivery, holder check-in or actual frequency change,
+  and before a competing claim. Reads cannot extend it. Pauses and unanswered commands
+  get no waiting protection; retrying cannot renew an expired lease. A silent holder
+  cannot receive a later protection just from a setting write.
+
+**Measuring frequency.** `sources.measure_interval_ms` stores one nullable preference
+per subscription: Auto or 1, 2, 5 or 15 minutes. It is outside the board's View and the
+snapshot payload. Every reader sees it; every current holder may change it through the
+board API, independently of owning that board. An equal write is a no-op; otherwise
+Ingest replans duty synchronously and touches every board showing that source.
+
+A fixed ordinary plan follows the last accepted successful measurement, across restart
+and handover, without activity, low-limit, change or reset acceleration. The device's
+minimum can make it slower; failure pauses, unanswered retries and refresh remain.
+A fresh manual measurement starts the ordinary interval anew. Frequency changes affect
+unissued plans immediately and leave issued commands alone. A longer interval may leave
+old data stale; neither stored freshness nor history changes. The card explains its
+real next measurement even then.
 
 **Refresh on demand.** Any reader of a subscription on a board can request fresh data
 through its existing card menu, above the action to hide the widget, in the web
@@ -255,7 +272,9 @@ request never claims duty or extends its lease. A click joins a command to the h
 while it is under way: until the holder asks again, for at most five minutes, as long as
 duty stays with it for that. A holder that asks again without answering lost the
 command, and the request waits for its retry. A lapsed lease ends nothing while the same
-device holds duty: a holder that asks takes it again. Queued requests end on silence;
+device holds duty: an already dispatched request retains its bounded deadline,
+but an unanswered holder cannot renew duty or accept another refresh after expiry.
+Queued requests end on silence;
 requests already dispatched keep waiting through it for up to five minutes, as providers
 are measured sequentially and a holder busy measuring neither asks nor delivers the
 others. Duty passing to another device, revocation, legacy check-in, an error or the
@@ -266,7 +285,9 @@ client started. Terminal outcomes show for a minute. Refresh is its own projecti
 event, so time boundaries and reconnect work without polling or rendering other cards.
 
 Duty and the pace are kept in memory; after a restart of the hub the first devices to
-check in take duty again and measure at once. An agent that cannot ask keeps asking
+check in take duty again. Auto measures at once; fixed schedules restore their due
+time from stored successful data, measuring at once only without data or when due.
+An agent that cannot ask keeps asking
 every 15 seconds while it waits for a measurement the hub promised, and measures on its
 own schedule (eco mode) once the hub has been silent for four minutes and that
 measurement is due. An agent's log says when another device measures; waiting for the

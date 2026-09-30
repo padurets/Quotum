@@ -5,6 +5,7 @@ import {subscriptionKey} from '../server/domain/ingest.js';
 import type {Cadence, Level, ResetLine} from '../ui/lib/quota.js';
 import type {Refresh, RefreshRequest} from '../server/domain/refresh.js';
 import type {CadenceWhy} from '../ui/lib/types.js';
+import type {MeasureIntervalMs} from '../server/domain/frequency.js';
 import type {NeedData, Outlook, Spent} from '../ui/lib/forecast.js';
 import type {ResetLabel} from '../ui/lib/resets.js';
 import {DEFAULT_PLAN, weeklyPlanRemaining, type WeeklyPlan} from '../ui/lib/plan.js';
@@ -323,7 +324,8 @@ export type CardCheck = Span & {board?: string} & (
     /** Something the chart marks on the card's source within the last 24 hours. */
     | {event: 'early_reset' | 'resets_granted'}
     /** What the dot's tooltip says of the next measurement, while the card is measured at the hub's pace, and why. */
-    | {cadence: Cadence['when'] | null; why?: CadenceWhy}
+    | {cadence: Cadence['when'] | null; why?: CadenceWhy; stale?: boolean}
+    | {measureIntervalMs: MeasureIntervalMs}
     | {refresh: RefreshRequest['status']; unavailable?: Refresh['unavailable']}
     | {unavailable: Refresh['unavailable']}
     /** How many whole days back ‹ takes the chart from 30 days, step by step, on the card's board: where the history starts. */
@@ -426,6 +428,9 @@ export type Card = {
    * These scenes use one machine so other devices do not move the asserted schedule.
    */
   paced?: boolean;
+  /** The hub's shared subscription setting and the machine's own minimum. */
+  measureIntervalMs?: MeasureIntervalMs;
+  minimum?: number;
   /**
    * A public refresh request and a controllable stand-in response for the demo. Its `at`
    * and the card's codes count from the machines' first asking, not from the demo's time.

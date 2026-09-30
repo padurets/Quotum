@@ -24,14 +24,14 @@ const HANDOVER_IDLE_MS = 10 * 60_000;
  * the last command, however late, being told to measure keeps it no duty. Asking again,
  * it is no longer measuring.
  */
-type Holder = {device: string; until: number; activeAt: number; askedAt: number | null; answering: boolean};
+type Holder = {device: string; until: number; activeAt: number; askedAt: number | null; answering: boolean; scheduledUntil?: number | null};
 
 /**
  * How long a holder keeps duty: until its measurement goes stale, and while it measures one
  * it was told to. It asks nothing meanwhile, so its lease might otherwise run out halfway
  * through its providers and pass to a device that would measure the same again.
  */
-const leaseOf = (holder: Holder) => Math.max(holder.until, holder.askedAt !== null && holder.answering ? holder.askedAt + FIRST_LEASE_MS : 0);
+const leaseOf = (holder: Holder) => Math.max(holder.until, holder.scheduledUntil ?? 0, holder.askedAt !== null && holder.answering ? holder.askedAt + FIRST_LEASE_MS : 0);
 const measuring = (holder: Holder, now: number) => holder.askedAt !== null && holder.answering && holder.askedAt + FIRST_LEASE_MS > now;
 
 /** Whether something taken at `at` answers what the holder was told to measure (the pace's rule, spec). */
@@ -60,8 +60,8 @@ export class Duty {
       const askedAt = mine ? holder!.askedAt : null;
       this.holders.set(
         subscription,
-        mine && leaseOf(holder!) > now
-          ? {...holder!, until: holder!.until > now ? holder!.until : leaseOf(holder!), activeAt, askedAt, answering}
+        mine && (leaseOf(holder!) > now || askedAt !== null)
+          ? {...holder!, until: holder!.until > now ? holder!.until : Math.max(holder!.until, holder!.askedAt !== null && holder!.answering ? holder!.askedAt + FIRST_LEASE_MS : 0), activeAt, askedAt, answering}
           : {device, until: now + FIRST_LEASE_MS, activeAt, askedAt, answering},
       );
       return {measure: true, until: now};
@@ -73,20 +73,27 @@ export class Duty {
     }
     // Come back when its measurement goes stale, as if it were not measuring: it may ask
     // again first without answering. Only then, while it measures, when the five minutes end.
-    const lease = holder.until > now ? holder.until : leaseOf(holder);
+    const waiting = Math.max(holder.until, holder.scheduledUntil ?? 0);
+    const lease = waiting > now ? waiting : leaseOf(holder);
     return {measure: false, until: Math.min(lease, now + (active ? WAIT_ACTIVE_MS : WAIT_IDLE_MS))};
   }
 
   /** The holder was told to measure: it keeps duty while it does, as a new holder does until it delivers. */
   asked(subscription: string, device: string, now: number) {
     const holder = this.holders.get(subscription);
-    if (holder?.device === device) this.holders.set(subscription, {...holder, askedAt: now});
+    if (holder?.device === device) this.holders.set(subscription, {...holder, askedAt: now, scheduledUntil: null});
+  }
+
+  /** A healthy paced holder waits for this anchored plan; undefined preserves an earlier bounded grant. */
+  schedule(subscription: string, until: number | null | undefined) {
+    const holder = this.holders.get(subscription);
+    if (holder && until !== undefined) holder.scheduledUntil = until;
   }
 
   /** The holder failed to measure: done measuring, it keeps duty only as long as its last measurement. */
   failed(subscription: string, device: string, at: number) {
     const holder = this.holders.get(subscription);
-    if (holder?.device === device && answers(holder, at)) this.holders.set(subscription, {...holder, askedAt: null, answering: true});
+    if (holder?.device === device && answers(holder, at)) this.holders.set(subscription, {...holder, askedAt: null, answering: true, scheduledUntil: null});
   }
 
   /** A measurement arrived: its sender holds duty until the measurement goes stale. */

@@ -136,7 +136,7 @@ test('a holder that asks again without answering keeps duty no longer than the d
   retaken.claim('acc', 'laptop', false, t0 + 75_000);
   retaken.claim('acc', 'laptop', false, t0 + 150_000);
   retaken.asked('acc', 'laptop', t0 + 5 * MIN);
-  assert.equal(retaken.until('acc'), t0 + 450_000, 'a new lease on asking, as any holder takes');
+  assert.equal(retaken.until('acc'), t0 + 132_000, 'an unanswered holder cannot take a new lease by asking first');
   assert.equal(retaken.claim('acc', 'server', true, t0 + 310_000).measure, true);
   const old = new Duty();
   old.claim('acc', 'laptop', false, t0);

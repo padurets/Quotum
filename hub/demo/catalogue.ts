@@ -1,3 +1,4 @@
+import {MEASURE_INTERVAL} from '../server/domain/frequency.js';
 import {
   agentsWork,
   ALWAYS,
@@ -81,6 +82,9 @@ import {
  * would have credited it, from ten days back: the part before is unknown) and read at
  * `start` alone: the codes of the activity widget and of the table's work are at that
  * fixed point, over a period ending there or a range before it.
+ *
+ * In-flight frequency changes and fixed handover are held by server/test/frequency.test.ts;
+ * permission loss and late replies are checked on the live menu.
  *
  * Two states of a weekly window's forecast never last on a working hub, and have no entry:
  * `renewing`, the moment between a measurement and the hub's forecast of it (the hub works
@@ -1295,6 +1299,31 @@ const all: DemoSet = {
         {forecast: 'weekly:fable', outlook: 'needData', why: 'weeklyAtZero'},
         {forecast: 'weekly:opus', outlook: 'needData', why: 'atZero'},
       ],
+    },
+    ...([MEASURE_INTERVAL.one, MEASURE_INTERVAL.two, MEASURE_INTERVAL.five, MEASURE_INTERVAL.fifteen]).map(interval => {
+      const minutes = interval / MIN;
+      return {
+        kind: 'card' as const, id: `frequency-${minutes}`, provider: 'codex' as const, plan: 'pro',
+        machines: [`frequency-${minutes}`], history: DAY, paced: true,
+        measureIntervalMs: interval,
+        windows: [weekly({since: -3 * DAY, use: () => minutes === 15 ? 95 : 40})],
+        agents: minutes === 15 ? [{machine: 'frequency-15', origin: 'terminal' as const, project: 'Fixed pace', since: -HOUR, works: ALWAYS}] : [],
+        on: {ana: {name: `Every ${minutes} minutes`}},
+        expect: [
+          {measureIntervalMs: interval},
+          {from: 15 * SECOND, to: 15 * SECOND, cadence: 'nextIn' as const, why: 'fixed' as const},
+          ...(minutes === 15 ? [{from: 3 * MIN, to: 8 * MIN, cadence: 'nextIn' as const, why: 'fixed' as const, stale: true}] : []),
+        ],
+        look: ['Frequency is shared across boards; low limits and working agents do not speed up the fixed 15-minute plan. Stale data still explain the next measurement. Check native radio keys and both languages'],
+      };
+    }),
+    {
+      kind: 'card', id: 'frequency-floor', provider: 'codex', plan: 'pro',
+      machines: ['frequency-floor'], history: DAY, paced: true, measureIntervalMs: MEASURE_INTERVAL.one, minimum: 5 * MIN,
+      windows: [weekly({since: -3 * DAY, use: () => 40})],
+      on: {ana: {name: 'Every minute, device minimum 5'}},
+      expect: [{measureIntervalMs: MEASURE_INTERVAL.one}, {from: 2 * MIN, to: 3 * MIN, cadence: 'nextIn', why: 'fixed'}],
+      look: ['The menu keeps the one-minute selection while the tooltip gives the real five-minute device plan'],
     },
     // Real requests through the board API, with stand-in devices and controlled answers. Times
     // count from the machines' first asking, 15 seconds apart from then on in the demo's own

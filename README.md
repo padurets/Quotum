@@ -146,6 +146,11 @@ Codex         api                  idle     started 25m ago · editor
   hides the ones they don't need (the data keeps coming) and sets the plans; everyone on
   the board sees it arranged the same way. Once it's set, a lock keeps the widgets from
   moving under a passing pointer.
+- **Choose measuring frequency.** In a subscription card's menu, choose **Auto** or
+  every **1, 2, 5 or 15 minutes**. The choice is shared across every board showing that
+  subscription and survives a hub restart. Anyone whose devices measure it may change
+  it; a board's owner alone cannot. A device's own interval remains its minimum and
+  can make measurements less frequent. Refresh and error pauses still apply.
 - **Fresh limits on demand.** Choose **Refresh data** in a card's menu, or **Refresh all
   data** in the header for every visible card on the board. A circular loader by the
   logo shows that the card is waiting for fresh numbers. Refresh respects the device's
@@ -413,7 +418,7 @@ Everything is optional. On Linux the file is `~/.config/quotum/config.toml`;
 
 ```toml
 # interval = 120        # seconds, 60 to 86400: with a hub, the most often a client is measured
-                        # (left out, the hub measures as often as needed); without one, how often
+                        # (left out, follows the subscription’s hub frequency); without one, how often
 eco = true              # without a hub (or while it does not answer): measure less often while nothing changes
 sessions = true         # tell the hub which coding agents run here, working or idle
 projects = true         # with the names of their projects and folders

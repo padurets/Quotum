@@ -114,6 +114,7 @@ export class Ingest {
         // A delivery can hand duty to its device: the request of the one before ends now, not when next read.
         this.cadence.settleRefresh(account, this.refreshDuty(account), now);
         this.cadence.delivered(account, device.id, snapshot.windows, observedAt, snapshot.staleAfterMs, this.signals(source, account, now).inUse, now);
+        this.protect(source, account, now);
       }
 
       for (const failure of batch.failures) {
@@ -125,6 +126,7 @@ export class Ingest {
           this.cadence.settleRefresh(key, this.refreshDuty(key), now);
           if (this.cadence.failed(key, device.id, failure.error, at)) {
             this.duty.failed(key, device.id, at);
+            if (this.duty.holder(key) === device.id) this.duty.schedule(key, null);
             this.cadence.refreshResult(key, device.id, at, false, now);
           }
           this.cadence.settleRefresh(key, this.refreshDuty(key), now);
@@ -167,8 +169,14 @@ export class Ingest {
     return {
       subscriptions: request.subscriptions.map(s => {
         const key = subscriptionKey(s, device.userId);
+        const source = this.store.findSource(s.provider, key);
+        if (source && this.store.measureInterval(source) !== null) {
+          const state = this.store.state(source);
+          if (state.successAt !== null && state.staleAfterMs !== null) this.cadence.restore(key, state.successAt, state.staleAfterMs, state.windows, now);
+        }
         this.cadence.settleRefresh(key, this.refreshDuty(key), now);
         this.cadence.capability(key, device.id, request.paced, s.minIntervalMs, now);
+        this.protect(source, key, now);
         this.cadence.settleRefresh(key, this.refreshDuty(key), now);
         if (!request.paced) {
           const directive = this.duty.claim(key, device.id, s.active, now);
@@ -188,9 +196,9 @@ export class Ingest {
         if (!directive.measure) {
           return {provider: s.provider, measure: false, onDuty: false, askInMs: directive.until - now, until: iso(directive.until)};
         }
-        const source = this.store.findSource(s.provider, key);
         const answer = this.cadence.answer(key, device.id, s.provider, now, s.minIntervalMs, this.signals(source, key, now));
         if (answer.measure) this.duty.asked(key, device.id, now);
+        this.protect(source, key, now);
         return {provider: s.provider, ...answer, until: iso(now + answer.askInMs)};
       }),
     };
@@ -203,9 +211,12 @@ export class Ingest {
    */
   nextMeasurement(source: string, key: string, now: number): {value: {next: number; why: Why} | null; changesAt: number | null} {
     const holder = this.duty.holder(key);
+    const until = this.duty.until(key);
+    if (holder === null || until === null || until <= now || !this.directory.deviceLive(holder)) return {value: null, changesAt: null};
     const signals = this.signals(source, key, now);
     const value = this.cadence.view(key, holder, now, signals);
-    const own = this.cadence.viewChangesAt(key, holder, now, signals);
+    const boundary = this.cadence.viewChangesAt(key, holder, now, signals);
+    const own = value === null ? boundary : Math.min(boundary ?? Infinity, until);
     if (value === null || !signals.inUse) return {value, changesAt: own};
     const activeAt = this.duty.activeAt(key);
     const ends = [
@@ -233,11 +244,24 @@ export class Ingest {
     return result;
   }
 
+  /** Frequency writes update duty synchronously before any reader or competing check-in can see them. */
+  frequencyChanged(source: string, now: number) {
+    this.protect(source, this.store.account(source)!, now);
+    tell(this.observer, o => o.touchSources([source]));
+  }
+
+  private protect(source: string | null, key: string, now: number) {
+    const holder = this.duty.holder(key);
+    if (holder === null) return;
+    this.duty.schedule(key, this.directory.deviceLive(holder) ? this.cadence.waitingLease(key, holder, now, this.signals(source, key, now)) : null);
+  }
+
   /** What the hub knows of a subscription now: its windows, and whether it is in use on any machine. */
   private signals(source: string | null, key: string, now: number): Signals {
     const activeAt = this.duty.activeAt(key);
     return {
       windows: source ? this.store.state(source).windows : [],
+      measureIntervalMs: source ? this.store.measureInterval(source) : null,
       inUse: (source !== null && this.live.working(source, now)) || (activeAt !== null && now - activeAt <= ACTIVE_WITHIN_MS),
     };
   }

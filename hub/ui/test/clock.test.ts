@@ -222,6 +222,13 @@ test("a card's dot and its pace say when they look otherwise", () => {
     [...around(T0), ...before(source.cadence.next)],
   );
   assert.equal(dotChangesAt({...source, stale: true}, T0), null, 'trouble passes when the hub says');
+  const stale = {...source, stale: true, cadence: {...source.cadence, why: 'fixed' as const}};
+  changesAtItsMoment(
+    'stale fixed cadence',
+    now => cadenceOf(stale, now)?.when,
+    now => cadenceChangesAt(stale, now),
+    [...around(T0), ...before(stale.cadence.next)],
+  );
   const w = {resetAt: T0 + 2 * DAY + 13 * S};
   changesAtItsMoment(
     'reset line',
