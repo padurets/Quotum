@@ -271,7 +271,7 @@ export class HistoryStore {
   }
 }
 
-const keyOf = (lineup: string[]) => [...lineup].sort().join('\n');
+const keyOf = (lineup: string[]) => JSON.stringify([...lineup].sort());
 export const loader = new HistoryStore({
   read: (board, cell, from, to) => call<HistoryAnswer>('GET', `/api/history?board=${encodeURIComponent(board)}&cell=${cell}&from=${from}&to=${to}`),
   now: hubNow,

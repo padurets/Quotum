@@ -226,3 +226,19 @@ test('eviction is bounded and never drops the frame on screen; getting state doe
   h.store.setWindows(['s other']); await flush(); assert.equal(h.reads.length, 2);
   h.store.close(); assert.equal(h.store.estimatedBytes, 0); assert.equal(h.store.get().history, null);
 });
+
+test('window sets cannot alias a window whose id contains the set separator', async () => {
+  const h = harness();
+  const from = tileStart(tileOf(NOW - 2 * H, M), M);
+  h.store.choose('1h', {from, to: from + H});
+  await h.start();
+  h.store.setWindows(['s other\ns w']);
+  const chunk = empty(from, from + H);
+  chunk.series = ['other\ns w', 'other', 'w'].map(window => ({source: 's', window, hold: 300_000, open: null, cells: [[0, 80, 0, 0]]}));
+  await h.reads[0].answer({chunks: [chunk]});
+  assert.equal(h.store.get().history?.series.length, 1);
+  h.store.setWindows(['s other', 's w']);
+  await flush();
+  assert.equal(h.store.get().history?.series.length, 2);
+  assert.equal(h.reads.length, 1);
+});
