@@ -1,3 +1,4 @@
+import type {Attention} from './attention.js';
 import {secretKind} from './domain/auth.js';
 import {CLOCK_TOLERANCE_MS, Invalid, parseBatch, parseCheckin, parseSessions, subscriptionKey, toMeasurement, type AgentSender} from './domain/ingest.js';
 import {Forecasts} from './forecasts.js';
@@ -38,6 +39,7 @@ export class Ingest {
   /** Where the recent pace of each weekly window leads, one forecast per window for every board and /api/overview. */
   readonly forecasts: Forecasts;
   private observer: Touches | null = null;
+  attention: Attention | null = null;
 
   constructor(
     private readonly store: Store,
@@ -82,7 +84,8 @@ export class Ingest {
     const future = [...batch.snapshots, ...batch.failures].find(item => item.observedAt + skew > now + CLOCK_TOLERANCE_MS);
     if (future) throw new Invalid('observedAt');
 
-    return this.directory.transaction(() => {
+    const attention = this.attention?.begin();
+    const accepted = this.directory.transaction(() => {
       const device = this.device(credential, batch, now);
       const result: IngestResult = {accepted: 0, duplicates: 0, failures: 0, device: {id: device.id}};
       // Every source the batch is about: its pace and its holder's duty move even when nothing new is recorded.
@@ -103,7 +106,9 @@ export class Ingest {
         }
         this.cadence.settleRefresh(account, this.refreshDuty(account), now);
         this.cadence.refreshResult(account, device.id, observedAt, true, now);
-        this.store.record(source, {...toMeasurement(snapshot), observedAt});
+        const measurement = {...toMeasurement(snapshot), observedAt};
+        attention?.record(this.store.state(source), measurement, now);
+        this.store.record(source, measurement);
         result.accepted++;
         this.duty.delivered(account, device.id, observedAt, snapshot.staleAfterMs, now);
         // A delivery can hand duty to its device: the request of the one before ends now, not when next read.
@@ -144,6 +149,8 @@ export class Ingest {
       tell(this.observer, o => o.touchSources([...touched]));
       return result;
     });
+    attention?.committed();
+    return accepted;
   }
 
   /**

@@ -24,6 +24,7 @@
   --glass-blur: blur(22px) saturate(170%);
   --glass-edge: #ffffff1a;
   --glass-shadow: inset 0 1px 0 #ffffff1c, 0 24px 48px -16px #000000d9;
+  --popup-radius: 12px;
   --sans: 'Geist Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   --mono: 'Geist Mono Variable', ui-monospace, 'SF Mono', Menlo, monospace;
   font-family: var(--sans);
@@ -834,3 +835,26 @@ tr:hover .device-name .icon-button, .device-name .icon-button:focus-visible { op
   td:first-child { white-space: normal; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+html:has(.compact) { scrollbar-gutter: auto; }
+html:has(.compact.is-native) { background: transparent; }
+body:has(.compact)::before, body:has(.compact)::after { display: none; }
+.compact { padding: 10px; min-width: 0; border-radius: var(--popup-radius); background-color: var(--surface); }
+.compact > header { display: flex; align-items: center; gap: 8px; padding: 2px 2px 8px; }
+.compact h1 { font-size: 15px; margin: 0; flex: 1; }
+.compact-card { padding: 10px; margin: 0 0 8px; gap: 6px; }
+.compact-card:last-child { margin-bottom: 0; }
+.compact-card .card-head { gap: 8px; margin-bottom: 2px; }
+.compact-card .provider-logo { width: 24px; height: 24px; padding: 4px; border-radius: 7px; }
+.compact-card .provider-mark .dot { width: 5px; height: 5px; border-width: 1.5px; }
+.compact-card h2 { flex: 1; min-width: 0; font-size: 13px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.compact-agents { flex-shrink: 0; font-size: 11px; color: var(--text-3); }
+.compact-limit { display: grid; grid-template-columns: minmax(0, 1.5fr) 7.5ch minmax(36px, 1fr) 4ch; gap: 8px; align-items: center; }
+.compact-limit .meter { height: 6px; }
+.compact-limit > strong { text-align: right; font-size: 13px; font-weight: 560; font-variant-numeric: tabular-nums; }
+.compact-window-name { min-width: 0; font-size: 12px; line-height: 1.4; }
+.compact-window-name > span { display: flex; flex-direction: column; min-width: 0; }
+.compact-window-name > span > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.compact-window-name > span > span + span { font-size: 11px; color: var(--text-3); }
+.compact-reset { font-size: 11px; color: var(--text-3); white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
+.compact-quality { color: var(--text-3); font-size: 12px; margin: 4px 0; }

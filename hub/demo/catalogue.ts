@@ -435,6 +435,7 @@ const TRAVEL_WAKES = 10 * MIN;
 const all: DemoSet = {
   id: 'all',
   about: 'every state the dashboard knows that lasts on a working hub',
+  // /compact uses these same levels, empty/error states, long names and agent counts.
   scene: 'announced',
   entries: [
     // People and boards. Ana is the first person: her personal board holds almost everything.
@@ -492,7 +493,7 @@ const all: DemoSet = {
       kind: 'person', id: 'ben', name: 'Ben', agents: true, agentsPlace: {x: 0, y: 99, w: 6, h: 2}, expect: [{state: 'widgets'}, {rows: 1}],
       look: ['His one agent shows whole in a list chosen two rows tall'],
     },
-    {kind: 'person', id: 'cleo', name: 'Cleo', expect: [{state: 'onboarding'}], look: ['Cleo has no machines: her board asks her to connect one']},
+    {kind: 'person', id: 'cleo', name: 'Cleo', expect: [{state: 'onboarding'}], look: ['Cleo has no machines: her board asks her to connect one', 'Her /compact page says there are no visible limits, with Open Quotum still reachable']},
     {
       kind: 'person',
       id: 'dan',

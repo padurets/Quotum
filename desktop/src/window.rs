@@ -10,6 +10,101 @@ use url::Url;
 use crate::hub::HubState;
 use crate::{agent, shell::Shell};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    Main,
+    Compact,
+}
+#[cfg(not(target_os = "linux"))]
+impl Role {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Main => "main",
+            Self::Compact => "compact",
+        }
+    }
+}
+
+/// One tray press can blur the panel before its activation is delivered.
+#[derive(Default)]
+pub struct PanelToggle {
+    wanted: bool,
+    revision: u64,
+    blurred: Option<(std::time::Instant, (i32, i32))>,
+}
+impl PanelToggle {
+    pub fn wanted(&self) -> bool {
+        self.wanted
+    }
+    pub fn show(&mut self) {
+        self.revision += 1;
+        self.wanted = true;
+        self.blurred = None;
+    }
+    pub fn close(&mut self) {
+        self.revision += 1;
+        self.wanted = false;
+        self.blurred = None;
+    }
+    pub fn closed(&mut self) {
+        if self.wanted {
+            self.close();
+        }
+    }
+    #[cfg(any(windows, test))]
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+    #[cfg(any(windows, test))]
+    pub fn requested(&self, revision: u64) -> bool {
+        self.foreground_requested(Role::Compact, revision)
+    }
+    #[cfg(any(windows, test))]
+    pub fn foreground_requested(&self, role: Role, revision: u64) -> bool {
+        self.revision == revision && self.wanted == (role == Role::Compact)
+    }
+    #[cfg(any(windows, test))]
+    pub fn closed_at(&mut self, revision: u64) {
+        if self.revision == revision {
+            self.closed();
+        }
+    }
+    #[cfg(any(windows, test))]
+    pub fn blur_at(&mut self, revision: u64, now: std::time::Instant, point: Option<(i32, i32)>) -> bool {
+        if !self.requested(revision) {
+            return false;
+        }
+        self.blur(now, point);
+        true
+    }
+    pub fn blur(&mut self, now: std::time::Instant, point: Option<(i32, i32)>) {
+        if self.wanted {
+            self.revision += 1;
+            self.wanted = false;
+            self.blurred = point.map(|point| (now, point));
+        }
+    }
+    pub fn toggle(&mut self, now: std::time::Instant, point: Option<(i32, i32)>) -> bool {
+        self.revision += 1;
+        let same_press = self.blurred.take().zip(point).is_some_and(|((at, old), point)| {
+            now.saturating_duration_since(at) < std::time::Duration::from_millis(500)
+                && (i64::from(old.0) - i64::from(point.0)).abs() <= 8
+                && (i64::from(old.1) - i64::from(point.1)).abs() <= 8
+        });
+        self.wanted = !self.wanted && !same_press;
+        self.wanted
+    }
+}
+#[cfg(not(target_os = "linux"))]
+pub fn panel_target(state: &HubState) -> Url {
+    let mut url = target(state);
+    if matches!(state, HubState::Ready(_)) {
+        url.query_pairs_mut().append_pair("view", "compact");
+    }
+    url
+}
+
 /// An explicit request counts as foreground while its native window is being created.
 #[derive(Default)]
 pub struct OpenIntent(AtomicUsize);
@@ -140,7 +235,7 @@ pub fn guard(url: &Url, state: &HubState) -> bool {
     matches!(state, HubState::Ready(ready) if same_origin(url, &ready.origin()))
 }
 
-pub use crate::host::{close, follow, is_open, leave, open, reenter};
+pub use crate::host::{close, follow, is_open, leave, open};
 
 #[cfg(test)]
 mod tests {
@@ -206,6 +301,76 @@ mod tests {
         intent.begin();
         assert!(intent.pending(), "a later open can try again");
         assert!(intent.finish());
+    }
+
+    #[test]
+    fn a_retired_panel_cannot_close_or_blur_a_newer_open_request() {
+        let mut panel = PanelToggle::default();
+        let now = std::time::Instant::now();
+        assert!(panel.toggle(now, None));
+        let old = panel.revision();
+        assert!(!panel.toggle(now, None));
+        assert!(panel.toggle(now, None));
+        let current = panel.revision();
+        panel.closed_at(old);
+        assert!(!panel.blur_at(old, now, None));
+        assert!(panel.requested(current));
+        panel.closed_at(current);
+        assert!(!panel.wanted());
+        panel.show();
+        let old = panel.revision();
+        panel.show();
+        panel.closed_at(old);
+        assert!(panel.wanted(), "an explicit menu opening also supersedes old completion");
+        assert!(panel.blur_at(panel.revision(), now, Some((100, 100))));
+        assert!(!panel.toggle(now, Some((100, 100))), "blur and tray release still pair");
+    }
+
+    #[test]
+    fn a_delayed_main_request_cannot_take_foreground_after_a_newer_tray_press() {
+        let mut toggle = PanelToggle::default();
+        toggle.close();
+        let main = toggle.revision();
+        assert!(toggle.foreground_requested(Role::Main, main));
+
+        assert!(toggle.toggle(std::time::Instant::now(), None));
+        let panel = toggle.revision();
+        assert!(!toggle.foreground_requested(Role::Main, main));
+        assert!(toggle.foreground_requested(Role::Compact, panel));
+
+        assert!(!toggle.toggle(std::time::Instant::now(), None));
+        assert!(!toggle.foreground_requested(Role::Main, main), "closing the panel must not revive old main work");
+        toggle.close();
+        let latest = toggle.revision();
+        toggle.closed_at(panel);
+        assert!(toggle.foreground_requested(Role::Main, latest));
+        assert!(!toggle.foreground_requested(Role::Compact, panel));
+    }
+
+    #[test]
+    fn tray_toggle_pairs_blur_with_its_click_but_not_a_later_activation() {
+        use std::time::{Duration, Instant};
+        let mut panel = PanelToggle::default();
+        let now = Instant::now();
+        let point = Some((100, 200));
+        assert!(panel.toggle(now, point));
+        assert!(!panel.toggle(now, point), "another click cancels even a pending open");
+        panel.show();
+        panel.blur(now, point);
+        panel.closed();
+        assert!(!panel.wanted());
+        assert!(!panel.toggle(now + Duration::from_millis(80), point), "blur arrives before the tray release");
+        assert!(panel.toggle(now + Duration::from_millis(100), point), "the gesture is consumed only once");
+        panel.close();
+        assert!(panel.toggle(now, point), "explicit dismissal allows an immediate reopen");
+        panel.blur(now, Some((200, 200)));
+        assert!(panel.toggle(now, point), "a click elsewhere is not this tray activation");
+        panel.blur(now, point);
+        assert!(panel.toggle(now + Duration::from_millis(501), point));
+        panel.blur(now, point);
+        assert!(panel.toggle(now, None), "keyboard activation does not reuse a pointer gesture");
+        panel.closed();
+        assert!(!panel.wanted());
     }
 
     #[test]

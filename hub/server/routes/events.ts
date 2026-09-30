@@ -10,21 +10,23 @@ import {CSP, sameSite, sessionSecret} from '../session.js';
  * A stream or a poll is refused before anything starts: without a session, from a page
  * that is not the hub's, for a board that is not the reader's, or with no room left.
  */
-export function eventRoutes(app: FastifyInstance, directory: Directory, events: Events, guards: Guards) {
+export function eventRoutes(app: FastifyInstance, directory: Directory, events: Events, guards: Guards, local = false) {
   /** Only the hub's own page asks for events: it sets `Quotum-Stream`, which no frame, link or no-cors request can. */
   const ownPage = (request: FastifyRequest) => {
     const {origin, 'sec-fetch-site': site, 'quotum-stream': stream} = request.headers;
     return stream === '1' && (!origin || sameSite(origin, request)) && (!site || site === 'same-origin');
   };
 
-  app.get<{Querystring: {board?: string; mode?: string; lease?: string}}>('/api/events', {exposeHeadRoute: false}, async (request, reply) => {
+  app.get<{Querystring: {board?: string; mode?: string; lease?: string; desktop?: string}}>('/api/events', {exposeHeadRoute: false}, async (request, reply) => {
     const user = guards.user(request, reply);
     if (!user) return reply;
     if (!ownPage(request)) return reply.code(403).send({error: 'forbidden_origin'});
+    const desktop = request.query.desktop;
+    if (desktop !== undefined && (desktop !== '1' || !local || request.query.mode === 'poll')) return reply.code(400).send({error: 'invalid_request'});
     const boards = directory.boards(user.id);
     const board = request.query.board ? boards.find(b => b.id === request.query.board) : boards[0];
     if (!board) return reply.code(404).send({error: 'board_not_found'});
-    const reader = {user: user.id, secret: sessionSecret(request)!, board: board.id};
+    const reader = {user: user.id, secret: sessionSecret(request)!, board: board.id, desktop: desktop === '1'};
 
     if (request.query.mode === 'poll') {
       const answer = await events.poll(reader, request.query.lease);
@@ -38,7 +40,7 @@ export function eventRoutes(app: FastifyInstance, directory: Directory, events: 
 }
 
 /** Opens a stream: the reader and the snapshot come first, so a failure there is a plain error answer. */
-function stream(reply: FastifyReply, events: Events, reader: {user: string; secret: string; board: string}) {
+function stream(reply: FastifyReply, events: Events, reader: {user: string; secret: string; board: string; desktop?: boolean}) {
   const {raw} = reply;
   const drop = () => raw.socket?.destroy();
   const opened = events.open({

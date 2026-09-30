@@ -1,3 +1,5 @@
+import {providerNames} from '../../server/domain/presentation';
+
 /**
  * Identity colors are fixed per provider and deliberately avoid the status hues
  * (green / amber / red), so a series colour never reads as a warning.
@@ -5,9 +7,9 @@
  * Their logos are in components/logos.ts.
  */
 export const PROVIDERS: Record<string, {name: string; color: string}> = {
-  claude: {name: 'Claude', color: '#de7b5b'},
-  codex: {name: 'Codex', color: '#6897f0'},
-  antigravity: {name: 'Antigravity', color: '#d271b3'},
+  claude: {name: providerNames.claude, color: '#de7b5b'},
+  codex: {name: providerNames.codex, color: '#6897f0'},
+  antigravity: {name: providerNames.antigravity, color: '#d271b3'},
 };
 
 /** The colour of a series whose provider has none. */

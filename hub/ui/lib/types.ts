@@ -205,4 +205,4 @@ export type SeriesForecast = {
 export type SourceForecast = Record<string, SeriesForecast>;
 
 /** Hidden windows and chart series are keyed by source + window, never by provider. */
-export const windowKey = (sourceId: string, windowId: string) => `${sourceId}/${windowId}`;
+export {windowKey} from '../../server/domain/presentation';

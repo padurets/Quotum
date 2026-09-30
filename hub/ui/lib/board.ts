@@ -246,6 +246,12 @@ export const useBoardMeta = (board: string) => usePage(s => metaOf(s, board));
 export const useRole = () => usePage(s => s.boards?.find(b => b.id === s.board?.id)?.role ?? null);
 export const useServerView = () => usePage(s => s.board?.view ?? null);
 export const useHistoryStart = () => usePage(s => s.board?.historyStart ?? null);
+/** Membership only: changing a figure never re-renders the compact list itself. */
+export const useVisibleLimits = () => usePage(s => {
+  const b = s.board;
+  if (!b) return NONE;
+  return b.lineup.filter(id => !b.view.hidden.includes(`source:${id}`) && (!b.cards[id]?.windows.length || b.cards[id].windows.some(w => !b.view.windows.includes(`${id}/${w.id}`))));
+}, shallowEqual);
 export const useLineup = () => usePage(s => s.board?.lineup ?? NONE);
 export const useCard = (id: string) => usePage(s => s.board?.cards[id]);
 /** The cards of these sources, in their order; the same list while each card is. */

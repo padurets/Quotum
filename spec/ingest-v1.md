@@ -370,6 +370,14 @@ The OAuth 2.0 device authorization flow (RFC 8628) with JSON bodies:
 What never leaves the machine: provider tokens, cookies, account ids and emails,
 prompts, file contents, file paths.
 
+To distinguish running sessions from known Codex maintenance and transport processes,
+the reference agent on Linux reads only a bounded invocation prefix of its user's
+Codex processes from process metadata: at most 2048 bytes to skip the executable name,
+then exact comparisons of the leading role, stopping at the first mismatch or a
+recognised role. It reads no following argument values or process environments and
+retains, logs and sends no command line. Unknown or unreadable roles remain eligible
+to be sessions; macOS and Windows currently do not read invocation roles.
+
 What is sent: the pseudonym of each account, the plan name, percentages and reset times
 of the windows, free resets and when each expires, the client's version, the machine's random id, its name
 (the host name unless configured) and operating system, subscription names if

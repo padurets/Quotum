@@ -18,11 +18,11 @@ measures this machine once.
 **The desktop app** (`desktop/`) shares a Rust controller between Electron on Linux
 and Tauri/WebView2 on Windows. `node desktop/prepare.mjs` builds the hub, downloads
 checksum-pinned runtimes, and writes icons and license notices. Run it before the
-checks above. Linux needs `libssl-dev` for the Rust build, `unzip` for preparation,
+checks above. The desktop build requires Rust 1.90 or newer. Linux needs `libssl-dev` and `libgtk-3-dev` for the Rust build, `unzip` for preparation,
 and Chromium's runtime libraries (`libnss3 libgtk-3-0 libgbm1 libasound2` on Debian).
 `cargo run` in `desktop/` starts a prepared debug build. `node desktop/package-linux.mjs`
 builds deb, rpm and AppImage; its packaging tools are `dpkg-deb`, `rpmbuild` and
-`mksquashfs`. On Windows, `npx @tauri-apps/cli@2.11.5 build --target x86_64-pc-windows-msvc`
+`mksquashfs`. On Windows, `npx @tauri-apps/cli@2.12.0 build --target x86_64-pc-windows-msvc`
 makes setup.exe; then `node desktop/package-windows.mjs` packages that build as a portable ZIP.
 CI runs both the installed app and the extracted ZIP, including a path with spaces.
 The release workflow calls the same Desktop workflow and publishes its packages only
@@ -31,12 +31,21 @@ after these checks pass; ordinary CI runs also keep the versioned release packag
 window-state plugin: a visible, responsive window, restored bounds inside the monitor's
 work area, close/reopen through a second launch, and a second launch while the window is
 minimized, which restores that very window. It disables every provider. Each
-run starts from a fresh WebView2 profile, as the first start on a machine does: the one
+run also opens and closes the tray panel three times, including Escape and a repeated tray
+activation, checking that it stays visible and fits its monitor without changing the main window's geometry. Each
+run also pauses only its own app UI thread and checks that the native loader stays
+responsive, rounded and cancellable before WebView2 finishes. The thread is always
+resumed. Each run starts from a fresh WebView2 profile, as the first start on a machine does: the one
 in `%LOCALAPPDATA%\com.padurets.quotum\EBWebView` is set aside and put back afterwards.
 With `-Diagnostics <dir>` it keeps its report (the times of every close and reopen), the
 app's logs and the app's processes there. CI uploads them when the UI smoke fails and in
 every manual run; a manual run of the Desktop workflow takes `ui-runs`, how many times
 the UI smoke runs on the installed app and on the portable one each.
+The queued-close check runs with the main window open and with only the compact
+panel: a delayed close must neither lose the latest open nor crash the last WebView.
+The handoff check also pauses the app UI just after accepting a main-window request,
+then opens the tray panel. That newer panel must keep focus; an obsolete main creation
+must leave no hidden WebView after it is cancelled.
 
 Run `node --test desktop/electron/policy.test.cjs` for the Linux bridge/navigation
 policy. CI runs the installed packages with `--smoke`: the hub starts, a stand-in client
@@ -45,6 +54,16 @@ need `xvfb`, `xauth` and Python 3; `desktop/smoke/monitor.py` adopts surviving
 children and audits their exits, alongside Electron's live child-failure reports.
 This uses no ptrace and keeps Chromium's sandbox intact. The installed-package checks also start the controller before a stand-in tray watcher
 (`desktop/smoke/tray.sh`, Python 3 with PyGObject) to cover early start at login.
+The panel check also queues three activations while its own controller is briefly paused,
+then verifies that the final open survives delayed focus events. It pauses its browser,
+queues a main-window reopen followed by a newer tray activation, and checks that the
+main window never takes focus from that newer loader or panel when the browser resumes.
+With an existing browser still paused, it also queues a loader close/reopen and checks
+that the retired loader's focus event cannot cancel the replacement. The native GTK
+callback regression runs separately under Xvfb:
+`xvfb-run -a cargo test --locked native_signals_keep_their_presentation -- --ignored --test-threads=1`
+in `desktop/`. It uses real GTK signals and checks that retired windows are released;
+ordinary `cargo test` skips this display-dependent test. CI runs both.
 A successful
 controller exit alone does not prove that browser children closed successfully.
 The intentional child-crash supervisor regression requires `QUOTUM_TEST_FAULT=1`;
@@ -146,3 +165,51 @@ dashboard and have Chrome.
   provider's own command-line client, the way the existing three do.
 
 [docs/architecture.md](docs/architecture.md) explains how the parts fit together.
+
+### Tray, compact panel and notifications
+
+The desktop's background reader must work with both windows closed. Use isolated
+`QUOTUM_APP_DATA_DIR`, `QUOTUM_STATE_DIR` and `QUOTUM_CONFIG`, with providers disabled
+or stand-ins. Never send real system notifications from ordinary unit tests.
+
+For native acceptance on Windows, test both the installer and a portable ZIP in a
+path with spaces, including a clean profile without an earlier installation. On
+Linux test the packaged app with a tray watcher and notification daemon, then without
+each and after restarting them. Use synthetic measurements to cross 30% and 10%,
+confirm a reset, and supply a scheduled tracker fixture. Check the icon and actual
+notification display with both windows closed, each setting off/on, notification
+activation, and no replay after restart or sleep. OS suppression is distinct from a
+successful native API call. On Windows restarting Explorer must restore one icon.
+
+Open the compact panel, then the main window; close and reopen each in both orders.
+Repeat a tray click while the panel is visible and while it is loading: both dismiss
+it. On X11/XWayland, the native loading surface appears before Chromium starts;
+check Escape and outside clicks during loading too. Neither loading nor ready panel
+belongs in the taskbar. `QUOTUM_TEST_PANEL=1 xvfb-run -a sh desktop/smoke/tray.sh <app>`
+checks the native handoff and cancellation with its own suspended browser on a
+private bus, with providers disabled. Check a click outside followed by a new tray
+click too, so the blur from the same press cannot reopen it or consume a different
+gesture.
+On Wayland, also open *Limits* from the tray menu before any direct tray click,
+after using an X11 window on another monitor. It must use the primary monitor's
+reserved panel edge; after a direct tray activation, the menu must keep that tray
+position even when the last X11 pointer was on another monitor.
+Check long names, hidden windows, empty data, both languages, small displays and DPI
+changes. Panel height is clamped to its monitor and never saved as the main window's
+geometry. Its commands must fail from the main window, subframes, foreign origins and
+closed instances. `node --test desktop/electron/policy.test.cjs` exercises the Linux
+transport policy and two-window registry; native smoke remains necessary.
+
+The demo's `/compact` page uses the same fixtures and store as its dashboard. It is
+also available in a browser for visual inspection; native actions require the app's
+bridge. Check it in English and Russian after `npm run build && npm run demo`.
+
+For an isolated, explicit check of real native delivery, run the packaged executable
+with `--smoke=notifications`. It creates temporary app/config/state directories,
+disables every provider and tracker, then feeds synthetic 35%, 29%, 9% and 100%
+measurements five seconds apart. Expect no initial alert, then low, critical and a
+confirmed early reset. Close both windows before the sequence to check background
+operation. This mode intentionally submits real silent notifications; ordinary smoke
+and unit tests do not. It stays open for inspection until *Quit* and prints the
+isolated directory, which can be removed afterwards. Tracker announcement semantics
+are covered separately by fixtures, and real sleep/resume still needs native QA.

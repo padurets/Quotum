@@ -125,32 +125,34 @@ export function ago(time: number | null, now: number) {
 }
 
 const SHAPES = {
-  clock: {hour: '2-digit', minute: '2-digit'},
+  clock: {hour: '2-digit', minute: '2-digit', hourCycle: 'h23'},
   shortDay: {day: 'numeric', month: 'short'},
   day: {day: 'numeric', month: 'long'},
 } satisfies Record<string, Intl.DateTimeFormatOptions>;
 const dates = new Map<string, Intl.DateTimeFormat>();
 
 /**
- * A time in one of its shapes, as `toLocaleDateString` gives it, with a formatter kept for
- * each language and shape: making one costs as much as twenty uses, and an idle board
- * says when a great many times.
+ * The formatter of a shape of time, kept for each language and shape: making one costs as
+ * much as twenty uses, and an idle board says when a great many times.
  */
-function dated(shape: keyof typeof SHAPES, time: number) {
+function formatter(shape: keyof typeof SHAPES) {
   const locale = formatLocale();
   const key = `${locale}/${shape}`;
-  let formatter = dates.get(key);
-  if (!formatter) dates.set(key, (formatter = new Intl.DateTimeFormat(locale, SHAPES[shape])));
-  return formatter.format(time);
+  let kept = dates.get(key);
+  if (!kept) dates.set(key, (kept = new Intl.DateTimeFormat(locale, SHAPES[shape])));
+  return kept;
 }
 
-export const clock = (time: number) => dated('clock', time);
+export const clock = (time: number) => formatter('clock').format(time);
 
 /** "22 Sept": the scale along a chart's axis, which has little room; saying when is `stamp`. */
-export const shortDay = (time: number) => dated('shortDay', time);
+export const shortDay = (time: number) => formatter('shortDay').format(time);
 
 /** "26 September": the day, its month in a word. */
-export const day = (time: number) => dated('day', time);
+export const day = (time: number) => {
+  const parts = formatter('day').formatToParts(time);
+  return ['day', 'month'].map(type => parts.find(part => part.type === type)?.value ?? '').join(' ');
+};
 
 /**
  * "26 September 14:00": the one way the board says when, with no dots or commas between

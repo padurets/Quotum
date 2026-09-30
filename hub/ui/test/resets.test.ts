@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {freeResetExpiry, resetLabel, type ResetStatus} from '../lib/resets';
-import {countdown, stamp} from '../lib/format';
+import {countdown, shortDay, stamp} from '../lib/format';
 import {setLocale} from '../i18n';
 import {preferring} from './browser';
 
@@ -133,7 +133,8 @@ test('an exact time names its month in a word, with no dots, commas or seconds',
       assert.equal(stamp(at), '26 September 21:24');
     });
     // The browser's own variant of the language, whichever was read before.
-    preferring(['en-US'], () => assert.equal(stamp(at), 'September 26 09:24 PM'));
+    preferring(['en-GB'], () => assert.equal(shortDay(at), '26 Sept'));
+    preferring(['en-US'], () => assert.equal(shortDay(at), 'Sep 26'));
   } finally {
     setLocale('en');
   }
