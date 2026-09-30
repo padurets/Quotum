@@ -1,0 +1,223 @@
+import {barOf, type Activity, type ActivityGroup, type Dimension, type SeriesWork} from './work.js';
+
+/** The shared grid, from the finest cell that keeps a frame within its budget. */
+export const CELLS = [1, 5, 15, 30, 60, 120, 360, 720].map(minutes => minutes * 60_000);
+export const MAX_CELLS = 360;
+export const TILE_CELLS = 60;
+export const MAX_READ_TILES = 8;
+export const CLOCK_TOLERANCE_MS = 30_000;
+export const cellOf = (span: number) => CELLS.find(cell => span / cell <= MAX_CELLS * 1.05) ?? CELLS.at(-1)!;
+export const READ_CELLS = CELLS.filter(cell => cell <= cellOf(31 * 86_400_000));
+export const cellStart = (at: number, cell: number) => Math.floor(at / cell) * cell;
+export const tileOf = (at: number, cell: number) => Math.floor(at / (cell * TILE_CELLS));
+export const tileStart = (tile: number, cell: number) => tile * cell * TILE_CELLS;
+export const tileEnd = (tile: number, cell: number) => tileStart(tile + 1, cell);
+
+export type Target = {cell: number; k0: number; k1: number; length: number; live: boolean; key: string; now: number};
+
+/** Cell edges are independent of retention; the last cell also admits fast agent clocks. */
+export function targetOf(length: number, now: number, key: string, selected?: {from: number; to: number} | null): Target {
+  const cell = cellOf(length);
+  return {
+    cell,
+    k0: Math.floor((selected?.from ?? now - length) / cell),
+    k1: Math.min(selected ? Math.ceil(selected.to / cell) - 1 : Infinity, Math.floor((now + CLOCK_TOLERANCE_MS) / cell)),
+    length,
+    live: !selected,
+    key,
+    now,
+  };
+}
+
+export type CellExtra = {f?: number; l?: number; o?: number | null; g?: 1; h?: number; w?: [number, number, number]};
+export type SeriesCell = [number, number, number, number, CellExtra?];
+export type SeriesCells = {source: string; window: string; hold: number; open: number | null; cells: SeriesCell[]};
+export type SessionCell = number | [number, number];
+export type GroupCell = ['s' | 'p' | 'd', string, number];
+export type ActivityCells<Ref = string> = {
+  sessions: [Ref, string, string | null, string][];
+  devices: Record<string, string>;
+  cells: [number, number, SessionCell[], GroupCell[]][];
+};
+export type Chunk<Ref = string> = {
+  from: number;
+  to: number;
+  series: SeriesCells[];
+  activity: ActivityCells<Ref>;
+  resets: [string, string, number][];
+  grants: [string, number, number][];
+};
+export type HistoryMeta = {now: number; historyStart: number; known: {work: number; sources: Record<string, number>}};
+export type HistoryAnswer = HistoryMeta & {run: string; chunks: Chunk[]};
+export type SourceEvent =
+  | {sourceId: string; at: number; kind: 'early_reset'; windows: string[]}
+  | {sourceId: string; at: number; kind: 'resets_granted'; count: number};
+export type HistorySeries = {
+  sourceId: string; windowId: string; consumed: number; coveredMs: number;
+  remainingAtStart: number | null; remainingAtEnd: number | null; staleAfterMs: number;
+  points: [number, number, number][]; work: SeriesWork | null;
+};
+export type History = {
+  board?: string; range: string; live: boolean; since: number; to: number; cellMs: number; historyStart: number;
+  series: HistorySeries[]; events: SourceEvent[];
+  activity: Activity & {since: number; known: {from: number; to: number} | null};
+};
+
+export type DecodedCell = {
+  at: number; low: number; first: number; last: number; open: number | null; gap: boolean; hold: number;
+  spent: number; covered: number; work: [number, number, number];
+};
+export const round4 = (value: number) => Math.round(value * 10_000) / 10_000;
+const roundOpen = (value: number | null) => value === null ? null : round4(value);
+
+/** Defaults compare at the precision the reader sees, including its rounded low. */
+export function encodeCells(source: string, window: string, from: number, cell: number, since: number, cells: DecodedCell[]): SeriesCells {
+  const hold = cells[0].hold;
+  const open = roundOpen(cells[0].open);
+  let previous = open;
+  const encoded = cells.map((v): SeriesCell => {
+    const low = Math.round(v.low * 100) / 100;
+    const spent = round4(v.spent);
+    const extra: CellExtra = {};
+    const start = roundOpen(v.open);
+    if (start !== previous) extra.o = start;
+    if (start === null && round4(v.first) !== low) extra.f = round4(v.first);
+    if (round4(v.last) !== low) extra.l = round4(v.last);
+    if (v.gap) extra.g = 1;
+    if (v.hold !== hold) extra.h = v.hold;
+    const work: [number, number, number] = [round4(v.work[0]), v.work[1], round4(v.work[2])];
+    const base = v.at >= since ? spent : 0;
+    if (work[0] !== base || work[1] !== 0 || work[2] !== 0) extra.w = work;
+    previous = extra.l ?? low;
+    const row: SeriesCell = [(v.at - from) / cell, low, spent, v.covered];
+    if (Object.keys(extra).length) row.push(extra);
+    return row;
+  });
+  return {source, window, hold, open, cells: encoded};
+}
+
+export function decodeCells(series: SeriesCells, from: number, cell: number, since: number): DecodedCell[] {
+  let previous = series.open;
+  return series.cells.map(([i, low, spent, covered, extra = {}]) => {
+    const at = from + i * cell;
+    const open = 'o' in extra ? extra.o! : previous;
+    const last = extra.l ?? low;
+    previous = last;
+    return {at, low, spent, covered, open, first: extra.f ?? low, last, gap: !!extra.g, hold: extra.h ?? series.hold, work: extra.w ?? [at >= since ? spent : 0, 0, 0]};
+  });
+}
+
+const DIMENSIONS: Dimension[] = ['source', 'project', 'device'];
+const dimensionOf = {s: 'source', p: 'project', d: 'device'} as const;
+const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
+type Group = {key: string; name: string | null; activeMs: number; agentMs: number; refs: Set<string>; bars: Map<number, number>};
+
+/** A frame is an additive record of whole cells; only session identity needs a set. */
+export function compose(chunks: readonly Chunk[], meta: HistoryMeta, target: Target, windows: ReadonlySet<string>): History {
+  const {cell, k0, k1} = target;
+  const since = k0 * cell;
+  const to = Math.min((k1 + 1) * cell, Math.max(target.now, meta.now));
+  const inFrame = (at: number) => at >= since && at < (k1 + 1) * cell;
+  const S = (source: string) => Math.max(meta.known.work, meta.known.sources[source] ?? Infinity);
+  const ordered = [...chunks].sort((a, b) => a.from - b.from);
+  const barMs = barOf(cell, target.length);
+  const bars = new Map<number, {active: number; agent: number; refs: Set<string>}>();
+  const by: Record<Dimension, Map<string, Group>> = {source: new Map(), project: new Map(), device: new Map()};
+  const refs = new Set<string>();
+  let activeMs = 0;
+  let agentMs = 0;
+  for (const chunk of ordered) {
+    for (const [i, active, members, overrides] of chunk.activity.cells) {
+      const at = chunk.from + i * cell;
+      if (!inFrame(at)) continue;
+      const bar = cellStart(at, barMs);
+      if (!bars.has(bar)) bars.set(bar, {active: 0, agent: 0, refs: new Set()});
+      const total = bars.get(bar)!;
+      total.active += active;
+      activeMs += active;
+      const parts: Record<Dimension, Map<string, {ms: number; max: number; name: string | null; refs: string[]}>> = {source: new Map(), project: new Map(), device: new Map()};
+      for (const member of members) {
+        const [n, ms] = typeof member === 'number' ? [member, active] : member;
+        const [ref, source, project, device] = chunk.activity.sessions[n];
+        refs.add(ref);
+        total.refs.add(ref);
+        total.agent += ms;
+        agentMs += ms;
+        const keys = {source, project: JSON.stringify(project), device};
+        const names = {source: null, project, device: chunk.activity.devices[device] ?? null};
+        for (const dim of DIMENSIONS) {
+          const key = keys[dim];
+          const part = parts[dim].get(key) ?? {ms: 0, max: 0, name: names[dim], refs: []};
+          part.ms += ms;
+          part.max = Math.max(part.max, ms);
+          part.refs.push(ref);
+          parts[dim].set(key, part);
+        }
+      }
+      const values: Record<Dimension, Map<string, number>> = {source: new Map(), project: new Map(), device: new Map()};
+      for (const [dim, key, ms] of overrides) values[dimensionOf[dim]].set(key, ms);
+      for (const dim of DIMENSIONS) for (const [key, part] of parts[dim]) {
+        const group = by[dim].get(key) ?? {key, name: part.name, activeMs: 0, agentMs: 0, refs: new Set(), bars: new Map()};
+        group.name = part.name;
+        group.activeMs += values[dim].get(key) ?? part.max;
+        group.agentMs += part.ms;
+        for (const ref of part.refs) group.refs.add(ref);
+        group.bars.set(bar, (group.bars.get(bar) ?? 0) + part.ms);
+        by[dim].set(key, group);
+      }
+    }
+  }
+  const holes: [number, number][] = [];
+  let readTo = ordered[0]?.to ?? 0;
+  for (const chunk of ordered.slice(1)) {
+    if (chunk.from > readTo) holes.push([readTo, chunk.from]);
+    readTo = Math.max(readTo, chunk.to);
+  }
+  const series = new Map<string, {line: HistorySeries; last: number; segment: number}>();
+  for (const chunk of ordered) for (const values of chunk.series) {
+    const key = `${values.source} ${values.window}`;
+    if (!windows.has(key)) continue;
+    let row = series.get(key);
+    for (const v of decodeCells(values, chunk.from, cell, S(values.source))) {
+      if (!inFrame(v.at)) continue;
+      if (!row) {
+        const from = Math.max(since, S(values.source));
+        const work: SeriesWork | null = values.source in meta.known.sources ? {from, ms: from >= to ? null : by.source.get(values.source)?.activeMs ?? 0, agentMs: 0, consumed: 0, coveredMs: 0, duringWork: 0} : null;
+        if (work && from < to) work.agentMs = by.source.get(values.source)?.agentMs ?? 0;
+        row = {line: {sourceId: values.source, windowId: values.window, consumed: 0, coveredMs: 0, remainingAtStart: v.open ?? v.first, remainingAtEnd: null, staleAfterMs: v.hold, points: [], work}, last: v.at, segment: 1};
+        series.set(key, row);
+      } else if (v.gap || holes.some(([a, b]) => a > row!.last && b <= v.at)) row.segment++;
+      row.last = v.at;
+      const line = row.line;
+      line.points.push([v.at, v.low, row.segment]);
+      line.consumed += v.spent;
+      line.coveredMs += v.covered;
+      line.remainingAtEnd = v.last;
+      line.staleAfterMs = v.hold;
+      if (line.work && line.work.ms !== null) {
+        line.work.consumed += v.work[0];
+        line.work.coveredMs += v.work[1];
+        line.work.duringWork += v.work[2];
+      }
+    }
+  }
+  const resets: (SourceEvent & {kind: 'early_reset'})[] = [];
+  const found = ordered.flatMap(chunk => chunk.resets).filter(([source, window, at]) => windows.has(`${source} ${window}`) && inFrame(at)).sort((a, b) => a[2] - b[2]);
+  for (const [sourceId, window, at] of found) {
+    const same = resets.find(event => event.sourceId === sourceId && at - event.at <= 15 * 60_000);
+    if (same) { if (!same.windows.includes(window)) same.windows.push(window); }
+    else resets.push({sourceId, at, kind: 'early_reset', windows: [window]});
+  }
+  for (const event of resets) event.windows.sort();
+  const grants: SourceEvent[] = ordered.flatMap(chunk => chunk.grants).filter(([, at]) => inFrame(at)).map(([sourceId, at, count]) => ({sourceId, at, kind: 'resets_granted', count}));
+  const activitySince = Math.max(meta.known.work, ...(Object.keys(meta.known.sources).length ? [Math.min(...Object.values(meta.known.sources))] : []));
+  const knownFrom = Math.max(since, activitySince);
+  const groups = {} as Record<Dimension, ActivityGroup[]>;
+  for (const dim of DIMENSIONS) groups[dim] = [...by[dim].values()].sort((a, b) => b.agentMs - a.agentMs || b.activeMs - a.activeMs || compare(a.name ?? '', b.name ?? '') || compare(a.key, b.key)).map(g => ({key: g.key, name: g.name, activeMs: g.activeMs, agentMs: g.agentMs, agents: g.refs.size, cells: [...g.bars].sort((a, b) => a[0] - b[0])}));
+  return {
+    range: target.key, live: target.live, since, to, cellMs: cell, historyStart: meta.historyStart,
+    series: [...series.values()].map(row => row.line).sort((a, b) => compare(a.sourceId, b.sourceId) || compare(a.windowId, b.windowId)),
+    events: [...resets, ...grants].sort((a, b) => a.at - b.at),
+    activity: {since: activitySince, known: knownFrom < to ? {from: knownFrom, to} : null, barMs, activeMs, agentMs, agents: refs.size, cells: [...bars].sort((a, b) => a[0] - b[0]).map(([at, b]) => [at, b.active, b.agent, b.refs.size]), by: groups},
+  };
+}

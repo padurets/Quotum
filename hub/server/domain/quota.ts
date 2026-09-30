@@ -65,7 +65,7 @@ const RESET_TOLERANCE = 60_000;
  * Whether consumption between two consecutive samples of one window is provable.
  * Only positive movement inside one uninterrupted reset window counts.
  */
-export function edge(a: Sample, b: Sample): Edge {
+export function edge(a: Pick<Sample, 'at' | 'used' | 'resetAt' | 'staleAfterMs'>, b: Pick<Sample, 'at' | 'used' | 'resetAt' | 'staleAfterMs'>): Edge {
   const no = (reason: Edge['reason']): Edge => ({valid: false, delta: 0, reason});
   const elapsed = b.at - a.at;
   if (elapsed <= 0 || elapsed > a.staleAfterMs) return no('gap');
