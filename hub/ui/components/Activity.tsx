@@ -76,6 +76,18 @@ function LegendItem({group, name, color, muted, onToggle}: {group: ActivityGroup
   const active = !dismissed && (hovered || focused || pinned > 0);
   const tip = useBubble(active, button);
   useEffect(() => {
+    if (!active) return;
+    // A bubble opened by the pointer must dismiss even while another control has focus.
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setDismissed(true);
+        setPinned(0);
+      }
+    };
+    addEventListener('keydown', escape);
+    return () => removeEventListener('keydown', escape);
+  }, [active]);
+  useEffect(() => {
     if (!pinned) return;
     const timer = setTimeout(() => setPinned(0), 4000);
     const outside = (event: PointerEvent) => {
@@ -113,12 +125,6 @@ function LegendItem({group, name, color, muted, onToggle}: {group: ActivityGroup
           setDismissed(false);
         }}
         onBlur={() => setFocused(false)}
-        onKeyDown={event => {
-          if (event.key === 'Escape') {
-            setDismissed(true);
-            setPinned(0);
-          }
-        }}
         onPointerUp={event => {
           if (event.pointerType === 'touch') {
             setPinned(value => value + 1);
