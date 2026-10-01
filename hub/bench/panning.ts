@@ -90,7 +90,6 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
       await cdp.evaluate(`window.__quotumPan.undimmed&&=getComputedStyle(document.querySelector('.history .chart>svg')).opacity==='1'`);
       await cdp.evaluate('window.__quotumPan.feeding=true');
       sent.length = 0;
-      await cdp.evaluate(`window.__quotumPan.segment='return'`);
       for (let i = 1; i <= 60; i++) {sent.push(mouse('mouseMoved', geometry.x + i * 12, geometry.y, 8)); await pace(16);}
       await Promise.all(sent);
       await cdp.evaluate('window.__quotumPan.feeding=false');
@@ -99,6 +98,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
       await settled();
       // Native Shift deltaX returns to live, then Back/Forward restore complete gestures.
       sent.length = 0;
+      await cdp.evaluate(`window.__quotumPan.segment='return'`);
       await cdp.evaluate('window.__quotumPan.feeding=true');
       const returnPixels = await cdp.evaluate<number>(`(() => {
         const p=new URLSearchParams(location.search),from=Number(p.get('from')),to=Number(p.get('to'));
