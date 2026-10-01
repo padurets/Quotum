@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.app.json",
+  "include": ["demo/ui/**/*.tsx", "vite.demo.config.ts"],
+  "exclude": []
+}

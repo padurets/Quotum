@@ -74,7 +74,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libssl-dev libnss3 libgtk-3-dev libgbm1 libasound2 xvfb xauth strace dbus-daemon python3-gi unzip rpm squashfs-tools
+          sudo apt-get install -y libssl-dev libnss3 libgtk-3-dev libgbm1 libasound2 xvfb xauth strace dbus-daemon gnome-keyring python3-gi unzip rpm squashfs-tools
       - name: Smoke supervisor tests
         if: runner.os == 'Linux'
         env:
@@ -88,6 +88,11 @@ jobs:
           echo "QUOTUM_COMMIT=${COMMIT::7}" >> "$GITHUB_ENV"
           echo "VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' desktop/Cargo.toml | head -n 1)" >> "$GITHUB_ENV"
       - run: node desktop/prepare.mjs --target ${{ matrix.target }}
+      - name: Bundled hub startup diagnostics
+        working-directory: hub
+        env:
+          QUOTUM_TEST_HUB_ENTRY: ${{ github.workspace }}/hub/dist/app/server.mjs
+        run: node --import tsx --test server/test/startup.test.ts
       - if: runner.os == 'Linux'
         working-directory: desktop
         run: cargo fmt --check
@@ -95,12 +100,42 @@ jobs:
         run: cargo clippy --all-targets --locked -- -D warnings
       - working-directory: desktop
         run: cargo test --locked
+      - name: Isolated system key store (Linux)
+        if: runner.os == 'Linux'
+        working-directory: desktop
+        env:
+          QUOTUM_KEYRING_SMOKE: '1'
+          XDG_DATA_HOME: ${{ runner.temp }}/quotum-keyring-data
+        run: |
+          mkdir -p "$HOME/.cache/quotum-key-tests"
+          chmod 700 "$HOME/.cache/quotum-key-tests"
+          export QUOTUM_TEST_PRIVATE_DIR="$HOME/.cache/quotum-key-tests"
+          dbus-run-session -- sh -c 'printf quotum-test-password | gnome-keyring-daemon --unlock > /dev/null && cargo test --locked native_store_is_local_scoped_byte_safe_and_recovers_without_pointer -- --ignored --test-threads=1 && cargo test --locked native_controller_recovers_pointer_stages_rotation_and_preserves_foreign_keys -- --ignored --test-threads=1'
+      - name: Isolated system key store (Windows)
+        if: runner.os == 'Windows'
+        working-directory: desktop
+        env:
+          QUOTUM_KEYRING_SMOKE: '1'
+        run: |
+          cargo test --locked native_store_is_local_scoped_byte_safe_and_recovers_without_pointer -- --ignored --test-threads=1
+          cargo test --locked native_controller_recovers_pointer_stages_rotation_and_preserves_foreign_keys -- --ignored --test-threads=1
+      - name: Secret Service owner handoff (Linux)
+        if: runner.os == 'Linux'
+        working-directory: desktop
+        env:
+          QUOTUM_TEST_DBUS_BINDING: '1'
+        run: |
+          dbus-run-session -- cargo test --locked keys::store::linux::tests:: -- --ignored --test-threads=1
       - name: Native loader callbacks (Linux)
         if: runner.os == 'Linux'
         working-directory: desktop
         run: xvfb-run -a cargo test --locked native_signals_keep_their_presentation -- --ignored --test-threads=1
       - name: Chromium policy tests
         run: node --test desktop/electron/policy.test.cjs
+      - name: Isolated key helper (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./desktop/smoke/test-keys-windows.ps1
       - name: Build (Linux)
         if: runner.os == 'Linux'
         run: node desktop/package-linux.mjs

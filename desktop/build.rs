@@ -20,6 +20,7 @@ fn main() {
             "app_state",
             "save_settings",
             "save_desktop_settings",
+            "reset_secret_key",
             "take_over",
             "set_autostart",
             "reenter",

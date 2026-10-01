@@ -244,6 +244,45 @@ test('a stream starts with hello and the board as the reader sees it, the same a
   assert.deepEqual(await s.types(300), [], 'nothing changed: nothing more');
 });
 
+test('private credential failures and metadata never reach shared overview, SSE, poll or attention', async t => {
+  const h = await hub({pollMs: 400});
+  t.after(() => (letGo(), h.app.close()));
+  const personal = await h.person('alice');
+  const team = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
+  await h.person('bob', await h.invite('alice', team));
+  const token = await h.token('alice');
+  await h.measure(token, Date.now() - MIN);
+  const source = h.store.sources(personal)[0].id;
+  assert.equal((await h.call('POST', `/api/boards/${team}/shares`, {as: 'alice', body: {source}})).status, 200);
+  const canary = 'CANARY_PRIVATE_SOURCE_METADATA';
+  const fail = (code: string) => {
+    const state = {...h.store.state(source), hint: canary, abilities: [canary], credentialId: canary};
+    h.store.db.prepare('UPDATE state SET payload = ? WHERE source_id = ?').run(JSON.stringify(state), source);
+    h.store.fail(source, code);
+  };
+  const safe = (value: unknown) => {
+    const text = JSON.stringify(value);
+    for (const privateText of [canary, 'credential_unreadable', 'secret_key_mismatch', 'credentialId', 'hint', 'abilities']) assert.equal(text.includes(privateText), false, privateText);
+  };
+  fail('credential_unreadable');
+  const alice = await reading(h, 'alice', team), bob = await reading(h, 'bob', team);
+  t.after(alice.close); t.after(bob.close);
+  for (const stream of [alice, bob]) {
+    assert.equal(stream.snapshot.sources[0].error, 'unmeasured'); safe(stream.snapshot);
+  }
+  for (const as of ['alice', 'bob']) safe((await h.call('GET', `/api/overview?board=${team}`, {as})).body);
+  safe(new Projection(h).attention(team, Date.now()));
+  const poll = async (lease?: string) => (await h.call('GET', `/api/events?mode=poll&board=${team}${lease ? `&lease=${lease}` : ''}`, {as: 'bob', headers: STREAM})).body;
+  const initial = await poll(); safe(initial);
+  await h.measure(token, Date.now(), {used: 51});
+  fail('secret_key_mismatch');
+  const [owner, member, polled] = await Promise.all([alice.within(), bob.within(), poll(initial.lease)]);
+  for (const events of [owner, member, polled.events]) {
+    safe(events);
+    assert.equal(events.find((e: Event) => e.type === 'card')?.data.error, 'unmeasured');
+  }
+});
+
 test('a height the owner chose reaches every reader: in the view event of one already reading, in the snapshot of one who comes later', async t => {
   const h = await hub();
   t.after(() => (letGo(), h.app.close()));

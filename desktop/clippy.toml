@@ -1,0 +1,1 @@
+disallowed-methods = [{ path = "std::env::set_var", reason = "Trusted keys belong only in the hub child's own environment." }]

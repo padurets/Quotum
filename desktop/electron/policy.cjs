@@ -1,6 +1,6 @@
 'use strict';
 const OWN = 'quotum://localhost';
-const commands = new Set(['app_state', 'save_settings', 'save_desktop_settings', 'take_over', 'set_autostart', 'reenter', 'quit', 'open_main', 'close_panel', 'report_panel_height']);
+const commands = new Set(['app_state', 'save_settings', 'save_desktop_settings', 'reset_secret_key', 'take_over', 'set_autostart', 'reenter', 'quit', 'open_main', 'close_panel', 'report_panel_height']);
 function origin(value) {
   try {
     const url = new URL(value);

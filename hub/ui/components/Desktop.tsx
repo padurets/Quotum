@@ -294,6 +294,16 @@ export function Measuring({state, onState}: {state: AppState; onState: (state: A
 /** Start at login, which build this is, and quitting. */
 export function AppSection({state, onState}: {state: AppState; onState: (state: AppState) => void}) {
   const [error, setError] = useState<string | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const secret = state.secretKey;
+  const reset = async () => {
+    if (resetting || secret?.busy) return;
+    setResetting(true); setError(null);
+    try { onState(await app.resetSecretKey()); setConfirmReset(false); }
+    catch { setError(t('trustedKeys.resetFailed')); }
+    finally { setResetting(false); }
+  };
   const notifications = state.notifications;
   const notify = async (kind: keyof NonNullable<AppState['notifications']>, on: boolean) => {
     setError(null);
@@ -311,6 +321,13 @@ export function AppSection({state, onState}: {state: AppState; onState: (state: 
   return (
     <section className="drawer-section">
       <h3>{t('appSection.title')}</h3>
+      {secret && <>
+        <h4>{t('trustedKeys.title')}</h4>
+        <p className="drawer-note">{t(secret.outcome === 'mismatch' ? 'trustedKeys.mismatch' : `trustedKeys.${secret.state}`)}</p>
+        {secret.wasFile && secret.state === 'keystore' && <p className="drawer-note">{t('trustedKeys.wasFile')}</p>}
+        {secret.retainedFile && <p className="drawer-note">{t('trustedKeys.retainedFile')}</p>}
+        {secret.resetAvailable && <div className="drawer-actions"><button className="button danger" type="button" disabled={resetting || secret.busy} onClick={() => setConfirmReset(true)}>{t('trustedKeys.reset')}</button></div>}
+      </>}
       {notifications && <>
         <h4>{t('desktop.notifications')}</h4>
         {(['low', 'critical', 'reset', 'announcement'] as const).map(kind => <div className="drawer-switch" key={kind}>
@@ -334,6 +351,12 @@ export function AppSection({state, onState}: {state: AppState; onState: (state: 
         <span className="drawer-note">{t('appSection.version', {version: state.version, commit: state.commit})}</span>
         <QuitButton />
       </div>
+      {confirmReset && <Modal title={t('trustedKeys.reset')} onClose={resetting || secret?.busy ? undefined : () => setConfirmReset(false)}>
+        <p className="drawer-note">{t('trustedKeys.resetConfirm')}</p>
+        {secret?.state === 'waiting' && <p className="drawer-note">{t('trustedKeys.unlockFirst')}</p>}
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <div className="button-row is-wrap"><button className="button" type="button" disabled={resetting || secret?.busy} onClick={() => setConfirmReset(false)}>{t('common.cancel')}</button><button className="button danger" type="button" disabled={resetting || secret?.busy || !secret?.resetAvailable} onClick={() => void reset()}>{t('trustedKeys.reset')}</button></div>
+      </Modal>}
     </section>
   );
 }

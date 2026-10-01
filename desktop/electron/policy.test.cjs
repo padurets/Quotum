@@ -174,11 +174,25 @@ test("the app's state for a page whose renderer is gone is dropped, and the wind
   assert.equal(main.navigations.at(-1), 'quotum://localhost/index.html', 'what came after it is heard');
 });
 
-test('only the current hub origin has the six app commands', () => {
+test('only the current hub origin has the app commands', () => {
   assert.equal(mayInvoke('http://127.0.0.1:23456/', hub, 'app_state'), true);
   for (const origin of ['http://127.0.0.1:23457/', 'http://localhost:23456/', 'https://example.org/', 'http://user@127.0.0.1:23456/']) assert.equal(mayInvoke(origin, hub, 'app_state'), false);
   assert.equal(mayInvoke(hub, hub, 'read_file'), false);
   assert.equal(mayInvoke(hub, 'quotum://localhost/index.html', 'app_state'), false);
+});
+test('trusted-key reset belongs only to a live main frame and rejects caller arguments', async () => {
+  assert.equal(mayInvoke(hub, hub, 'reset_secret_key', 'main'), true);
+  for (const role of ['compact', 'loader', 'unknown']) assert.equal(mayInvoke(hub, hub, 'reset_secret_key', role), false);
+  for (const url of ['quotum://localhost/index.html', 'https://foreign.example/', 'http://localhost:23456/']) assert.equal(mayInvoke(url, hub, 'reset_secret_key'), false);
+  const main = await mainProcess(); main.deliver({type:'state', generation:1, url:hub});
+  const board = main.windows[0]; board.url = 'http://127.0.0.1:23456/';
+  const event = {sender:board.webContents, senderFrame:board.webContents.mainFrame};
+  assert.throws(() => main.invoke(event, 'reset_secret_key', {key:'synthetic'}), /secret_key_reset_invalid/);
+  assert.throws(() => main.invoke({...event, senderFrame:{}}, 'reset_secret_key'), /not the board/);
+  const pending = main.invoke(event, 'reset_secret_key').catch(() => {});
+  assert.deepEqual(main.traffic.at(-1).request, {command:'reset_secret_key'});
+  board.close(); assert.throws(() => main.invoke(event, 'reset_secret_key'), /not the board/);
+  main.deliver({type:'reply', id:main.traffic.at(-1).id, error:'closed'}); await pending;
 });
 test('the startup page can only quit', () => {
   assert.equal(mayInvoke('quotum://localhost/index.html', hub, 'quit'), true);

@@ -368,20 +368,26 @@ fn build(
         .resizable(!compact)
         .on_navigation(move |url| {
             let (state, _) = navigating.hub();
-            if allowed(url, &state) {
+            if allowed(url, &state) && !stale_hub_entry(url, &state) {
                 return true;
             }
-            if matches!(url.scheme(), "http" | "https") {
+            let private = private_hub_url(url, &navigating.state().capabilities);
+            if private {
+                navigate_current(&navigating, true, Some(role));
+            } else if matches!(url.scheme(), "http" | "https") {
                 let _ = tauri_plugin_opener::open_url(url.as_str(), None::<&str>);
             }
             false
         })
-        .on_new_window(|url, _| {
-            // Links that open a new window go to the browser; nothing else opens.
-            if matches!(url.scheme(), "http" | "https") {
-                let _ = tauri_plugin_opener::open_url(url.as_str(), None::<&str>);
+        .on_new_window({
+            let shell = shell.clone();
+            move |url, _| {
+                // Links that open a new window go to the browser; nothing else opens.
+                if matches!(url.scheme(), "http" | "https") && !private_hub_url(&url, &shell.state().capabilities) {
+                    let _ = tauri_plugin_opener::open_url(url.as_str(), None::<&str>);
+                }
+                NewWindowResponse::Deny
             }
-            NewWindowResponse::Deny
         })
         .on_page_load(move |view, payload| {
             if payload.event() == PageLoadEvent::Finished {

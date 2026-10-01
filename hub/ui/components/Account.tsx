@@ -193,6 +193,7 @@ const SignOutIcon = () => (
  */
 export function AccountPanel({
   user,
+  trustedKeys,
   onChanged,
   onSignedOut,
   onClose,
@@ -200,6 +201,7 @@ export function AccountPanel({
   onAppState,
 }: {
   user: User;
+  trustedKeys?: import('../lib/session').Session['trustedKeys'];
   onChanged: () => Promise<void>;
   onSignedOut: () => void;
   onClose: () => void;
@@ -230,6 +232,11 @@ export function AccountPanel({
           </div>
           <Profile user={user} onChanged={onChanged} />
           <Password />
+          <section className="drawer-section">
+            <h3>{t('trustedKeys.title')}</h3>
+            <p className="drawer-note">{t('trustedKeys.operator')}</p>
+            {trustedKeys && !trustedKeys.available && <p className="drawer-note">{t(trustedKeys.reason === 'secret_key_mismatch' ? 'trustedKeys.serverMismatch' : 'trustedKeys.serverMissing')}</p>}
+          </section>
         </>
       )}
       {sections.includes('measuring') && appState && <Measuring state={appState} onState={onAppState} />}

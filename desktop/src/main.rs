@@ -13,6 +13,7 @@ mod host;
 mod host;
 mod hub;
 mod ipc;
+mod keys;
 mod native_text;
 mod notifier;
 mod settings;
@@ -70,13 +71,18 @@ fn without_proxy_for_loopback(current: Option<String>) -> String {
     }
 }
 
-fn main() {
+#[allow(clippy::disallowed_methods, reason = "Early nonsecret loopback proxy setup, before any worker.")]
+fn install_loopback_proxy() {
     // Before any worker is started.
     unsafe {
         for name in ["no_proxy", "NO_PROXY"] {
             std::env::set_var(name, without_proxy_for_loopback(std::env::var(name).ok()));
         }
     }
+}
+
+fn main() {
+    install_loopback_proxy();
     let args = Args::parse(std::env::args_os());
     if args.smoke == Some(smoke::Mode::Notifications) {
         smoke::prepare_notifications();

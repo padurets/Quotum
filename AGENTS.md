@@ -89,6 +89,11 @@ and platform smoke checks still apply.
   credential files, never makes a model request and never calls provider APIs. A new
   provider is an adapter in `agent/crates/core/src/providers/` that asks the provider's
   own command-line client.
+- **Trusted hub keys are write-only.** Connector credentials pass through the hub's
+  secrets service, are encrypted before SQLite sees them, and never enter board
+  projections, errors or logs. Connectors use only their fixed HTTPS transport;
+  provider clients inherit no `QUOTUM_*` variables. Never log a raw crypto or keyring
+  error, whose contents may include secret bytes.
 - **The protocol is a spec.** A change to what the agent sends or the hub answers goes
   into `spec/ingest-v1.md` in the same commit, including its Privacy section; a change to
   the events the hub tells its dashboard, into `spec/dashboard-v1.md`.

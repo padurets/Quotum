@@ -525,6 +525,47 @@ them), kept for 90 days.
   latest one), and listed for as long as samples are kept, so the chart marks every
   one of its period, however far back it is moved.
 
+## Trusted connector keys
+
+The hub has a write-only credential service, separate from password and machine-token
+hashes. No production provider uses it yet. Connector adapters are registered in code;
+tests inject their own adapter. Each credential belongs to its person and can be
+created, replaced, listed or removed only by that person's session. Mutations require
+an explicit same-site Origin before parsing, accept only a connector's strict printable
+ASCII key format, and are limited to ten attempts a minute per person and address.
+Replies contain only the safe record details, including a last-four hint; neither the
+key nor encrypted bytes go to the dashboard's events or shared boards.
+
+`QUOTUM_SECRET_KEY` supplies 32 random bytes as canonical unpadded base64url (43
+characters); `QUOTUM_SECRET_KEY_FILE` instead reads those characters, optionally
+followed by one LF or CRLF, from a regular file whose real path is outside the data
+directory. The two inputs are exclusive. HKDF-SHA256 derives separate encryption and
+check keys. AES-256-GCM binds each credential to its id, owner and provider, using a
+fresh 12-byte nonce per write. SQLite keeps only ciphertext and its tag, nonce and key
+generation. A full key check value in `meta` identifies the database's KEK; its first
+eight bytes are the diagnostic fingerprint. The KEK is never written to SQLite or its
+data directory. Input variables are removed after capture. The entry point protects
+Node reports and sets a private file mode before loading configuration or other hub
+modules, so even early startup failures exclude the environment from diagnostics.
+
+Startup reports `created`, `ok`, `rotated`, `mismatch` or `missing`, with safe
+fingerprints and record counts. Missing or mismatched keys preserve every credential
+and leave ordinary agent measurements available. `QUOTUM_SECRET_KEY_PREVIOUS` (or
+its `_FILE` form) permits rotation in one transaction. Unreadable records retain their
+ciphertext and old generation. SQLite uses secure deletion and full synchronization;
+each successful start verifies a TRUNCATE checkpoint before its report, so a committed
+rotation with a busy WAL cannot authorize deletion of the previous key.
+
+The server's one-shot `reset-secret-key --from <fingerprint|none> --to <fingerprint>`
+command uses the same decision engine and checks both fingerprints inside the
+transaction. It never listens or leaves a reset instruction behind. Restoring an old
+backup requires a new explicit reset action. See [deployment](../deploy/README.md).
+Connectors send credentials only to their own fixed HTTPS hosts and operations, with
+an explicit TLS agent, no redirects or environment proxies, a ten-second total deadline
+and a one-MiB response cap. Errors cross the boundary as codes, never raw messages,
+paths, supplier replies or causes. See [SECURITY.md](../SECURITY.md) for the protection
+and its limits.
+
 ## People, boards, devices
 
 - **Users** sign in to the hub with an email and a password. The first person on a hub
@@ -974,7 +1015,8 @@ the app's environment (`PATH`, the home and temporary folders, the language, and
 `QUOTUM_RESETS`), nothing `NODE_*`. The hub still checks Host and Origin as on a server,
 and the agent reaches it with no proxy in between. The window's bridge to the app is
 open only to pages of the hub's current origin and to the commands in `ipc.rs`. The main window can read state, save measuring and app
-settings, take over, change start at login, reenter and quit. The compact panel can read
+settings, take over, change start at login, reset saved trusted credentials with no
+arguments, reenter and quit. The compact panel can read
 state, reenter, open the main window, close itself and report its content height. The
 host clamps that height; no command accepts a window id, position or arbitrary URL.
 On Windows `watch_state` registers a channel for each trusted window instance. The window goes
@@ -990,6 +1032,56 @@ and `agent.log`, each moved aside at 1 MiB).
 data too on Linux and in the smoke run (`--smoke`); elsewhere on Windows WebView2 keeps its profile in
 `%LOCALAPPDATA%\com.padurets.quotum\EBWebView`. Measurements that wait for the hub go to
 `app-spool.jsonl` in `quotum`'s state folder.
+
+**Trusted keys in the app.** A separate sibling folder, `com.padurets.quotum-keys`,
+contains one namespace per canonical app-data path. SHA-256 of that path's native
+bytes (UTF-16LE on Windows) names the namespace. Its positive, increasing key names
+are `hub-secret-key@<hash>#<number>`. The system store is Windows Credential Manager
+with Local persistence, or Linux Secret Service. Discovery is limited to this
+namespace; it never enumerates all of a person's credentials. A private-file fallback
+lives in the sibling namespace, outside the hub's data. Directories and files are
+checked for ownership, permissions and symlinks or reparse points through native
+handles. Linux directories are 0700 and files 0600; Windows permits key reads and
+mutation only to the current user, SYSTEM and Administrators in the private namespace.
+Deletion uses the same checked handle, which denies replacement until it closes.
+Its system-drive ancestors may also be owned by Windows' privileged TrustedInstaller
+service. A writable default
+collection is required before
+creating a Linux store key. A locked collection or an incomplete search means waiting.
+
+The namespace's `marker.json` records current, staged next and previous key references,
+their transition reason and fingerprints, and whether a file was used. It contains no
+key. Empty `.reserved` files book names before a store operation, so a late write or a
+lost marker cannot reuse them. The marker is a hint: the hub's stored fingerprint
+selects a readable matching key. A replaced marker's former target and other found
+keys are never turned into previous keys or automatically deleted. An empty database
+reuses the highest-numbered valid found key. Incomplete discovery never creates one.
+Recovery to another key or an empty database removes stale rotation cleanup records
+from the marker while keeping their keys. A later `ok` after `created` on a replacement
+database cannot revive permission to delete those old keys.
+
+One worker serializes native store work away from the UI and the app's async runtime.
+A Linux session and all its item, collection and prompt requests stay with the unique
+Secret Service owner that created them. Losing that owner cancels its pending operation;
+the worker reconnects after it finishes and the retry backoff, preserving the keys and
+marker. The pinned Secret Service client carries that destination through its proxies.
+A soft 60-second deadline publishes waiting while leaving that operation able to
+finish; no second prompt runs alongside it. Retry backoff is bounded. Planned hub
+restarts have their own bounded budget, apart from crash recovery. Each Node spawn
+gets only its chosen generation's KEK and transition in its own environment. The app
+does not put them in its process environment, state DTO, settings or bridge. The first
+hub start report validates fingerprints and safe counts before authorizing progress.
+Session storage details are a startup snapshot; settings read the live numbered app
+state, including changes that require no hub restart.
+
+A file-to-store migration writes and reads back a fresh store key, stages it, and
+activates it on the next outer app start with the matching previous key. Cleanup needs
+an `ok` or `rotated` report matching the recorded transition, completed WAL truncation
+and zero unreadable records. `created` after replacing the database does not authorize
+rotation cleanup. An explicit reset has its own fingerprint-bound transition and
+consumes its one-shot input on one spawn. A late result from an older operation cannot
+change that transition. Unrelated found files are retained and shown in settings;
+`wasFile` persists because old backups remain sensitive.
 
 **Its life.** A second start of the app opens the window of the first. Closing the
 window destroys it and its web view; the app keeps measuring, and the tray icon (*Open
