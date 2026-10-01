@@ -321,7 +321,10 @@ export class Store {
       this.db.exec('SAVEPOINT record');
       let since: number;
       try {
-        since = this.meters.record(id, previous, measurement).since;
+        // A sparse heartbeat reads before it writes. Reserve the writer first so a
+        // concurrent connection cannot invalidate that read snapshot in WAL mode.
+        this.db.prepare('UPDATE state SET payload=payload WHERE source_id=?').run(id);
+        since = this.meters.record(id, this.state(id), measurement).since;
         this.db.exec('RELEASE record');
       } catch (error) {
         this.db.exec('ROLLBACK TO record');

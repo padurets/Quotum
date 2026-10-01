@@ -4,6 +4,9 @@ import {addAmounts, amount, AMOUNT_MAX, decimal} from '../domain/amount.js';
 import {calendarSpending, plottedAmount, spending, type Reading} from '../domain/meters.js';
 import {Store} from '../store/store.js';
 import type {Meter, MeterMeasurement} from '../domain/meters.js';
+import {mkdtempSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
 
 test('decimal money is quantized once, including ties, exponent tokens and integers beyond Number precision', () => {
   for (const [token, expected] of [['37.104969129', 37104969n], ['0.1000005', 100001n], ['-0.1000005', -100001n], ['1.000005e-1', 100001n], ['9007199254.740993', 9007199254740993n], ['0e100', 0n], ['1e-100', 0n]] as const) assert.equal(decimal(token), expected, token);
@@ -94,4 +97,30 @@ test('pruning retains a predecessor beyond ninety days and rejects invalid neigh
   assert.equal(store.state(source).successAt,1);
   assert.equal(store.meters.readings(source,'credits',0,3).length,1);
   store.close();
+});
+
+test('a sparse heartbeat reserves the WAL writer before reading its span',()=>{
+  const dir=mkdtempSync(path.join(tmpdir(),'quotum-meter-wal-')),file=path.join(dir,'db.sqlite');
+  const store=new Store(file,1),peer=new Store(file,1);
+  peer.db.exec('PRAGMA busy_timeout=0');
+  const source=store.source('openrouter','1'.repeat(24),1);
+  store.record(source,measure(1,[meter('credits',1,'100'),meter('usage',1,'1')]));
+  const prepare=store.db.prepare.bind(store.db);let attempted=false,peerWrote=false;
+  store.db.prepare=(sql:string)=>{
+    const statement=prepare(sql);
+    if(sql.startsWith('SELECT from_at,to_at,stale_after_ms FROM meter_spans')) {
+      const get=statement.get.bind(statement);
+      statement.get=(...args)=>{
+        const result=get(...args);
+        if(!attempted){attempted=true;try{peer.db.prepare('INSERT INTO meta VALUES (?,?)').run('concurrent-write','peer');peerWrote=true;}catch{/* The first connection must already hold the writer. */}}
+        return result;
+      };
+    }
+    return statement;
+  };
+  try {
+    store.record(source,measure(60_001,[meter('credits',60_001,'100'),meter('usage',60_001,'1')]));
+    assert.equal(attempted,true);assert.equal(peerWrote,false);assert.equal(store.state(source).successAt,60_001);
+    assert.equal(store.meters.readings(source,'usage',0,100_000).length,1);
+  }finally{store.close();peer.close();rmSync(dir,{recursive:true});}
 });
