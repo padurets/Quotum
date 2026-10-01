@@ -90,6 +90,25 @@ test('one timer for the whole page, for the nearest moment a part shows somethin
   assert.equal(c.timers.length, 1, 'still one');
 });
 
+test('later labels and unchanged deadlines keep the timer; an earlier label and its removal retarget it', () => {
+  const c = pageClock();
+  const minute = c.part('minute', () => T0 + MIN);
+  const kept = c.timers[0].id;
+  c.part('hour', () => T0 + HOUR);
+  c.part('never', () => null);
+  c.jump(S);
+  c.clock.due(minute, T0 + MIN, c.now());
+  assert.equal(c.timers[0].id, kept, 'no cancel or allocation for the same deadline');
+  const soon = c.clock.watch();
+  const remove = c.clock.subscribe(soon, () => {});
+  c.clock.due(soon, T0 + 30 * S, c.now());
+  assert.equal(c.timers[0].at, T0 + 30 * S);
+  remove();
+  assert.equal(c.timers[0].at, T0 + MIN);
+  c.advance(MIN - S);
+  assert.deepEqual(c.woken, ['minute']);
+});
+
 test('a moment that is not after now is a mistake of its part: taken as a minute on, never a spin', () => {
   const c = pageClock();
   c.part('wrong', now => now);
