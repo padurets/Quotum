@@ -7,11 +7,16 @@ const groups = [{group: {key: 'p', name: 'P', cells: [[0, 2], [10, 3], [30, 1]] 
 test('narrow stacks join adjacent bars, preserve holes and follow muted lower groups', () => {
   const cache = new StackPaths();
   const both = cache.draw(groups, 0, .1, 10, 140, 10);
-  assert.equal(both[0], 'M0.0,92.0L1.0,92.0L1.0,82.0L2.0,82.0L2.0,112.0L1.0,112.0L1.0,112.0L0.0,112.0ZM3.0,102.0L4.0,102.0L4.0,112.0L3.0,112.0Z');
+  assert.equal(both[0], 'M0.0,92.0L1.0,92.0L1.0,82.0L2.0,82.0L2.0,112.0L0.0,112.0ZM3.0,102.0L4.0,102.0L4.0,112.0L3.0,112.0Z');
   assert.equal((both[1].match(/M/g) ?? []).length, 1);
   const muted = cache.draw([groups[1]], 0, .1, 10, 140, 10);
   assert.ok(muted[0].startsWith('M0.0,102.0L1.0,102.0'));
   assert.deepEqual(cache.draw(groups, 0, .1, 10, 140, 10), both);
+});
+
+test('a constant band keeps its exact outline with only four corners', () => {
+  const group = {key: 'p', name: null, cells: Array.from({length: 720}, (_, i): [number, number] => [i * 10, 2])};
+  assert.equal(new StackPaths().draw([{group}], 0, .1, 10, 140, 10)[0], 'M0.0,92.0L720.0,92.0L720.0,112.0L0.0,112.0Z');
 });
 
 test('wide bars keep their gaps when the plot scale and data change', () => {

@@ -1,6 +1,6 @@
 import type {PlotGroup} from './historyPlot';
 
-type Corners = {low: number; high: number; top: string; bottom: string};
+type Corners = {low: number; high: number; top: [string, string]; bottom: [string, string]; topY: string; bottomY: string};
 
 /** Formats only changed bars; its cache holds only the current bounded plot. */
 export class StackPaths {
@@ -22,9 +22,10 @@ export class StackPaths {
       const kept = new Set<number>();
       const runs: string[] = [];
       let tops: string[] = [], bottoms: string[] = [], previous: number | null = null;
+      let topY: string | null = null, bottomY: string | null = null;
       const finish = () => {
         if (tops.length) runs.push(`M${tops.join('L')}L${bottoms.reverse().join('L')}Z`);
-        tops = []; bottoms = [];
+        tops = []; bottoms = []; topY = bottomY = null;
       };
       for (const [at, ms] of group.cells) {
         kept.add(at);
@@ -34,11 +35,17 @@ export class StackPaths {
         if (!corners || corners.low !== low || corners.high !== high) {
           const x0 = fixed((at - origin) * perMs + gap), x1 = fixed((at + barMs - origin) * perMs - gap);
           const top = fixed(y(high)), bottom = fixed(y(low));
-          corners = {low, high, top: `${x0},${top}L${x1},${top}`, bottom: `${x1},${bottom}L${x0},${bottom}`};
+          corners = {low, high, top: [`${x0},${top}`, `${x1},${top}`], bottom: [`${x0},${bottom}`, `${x1},${bottom}`], topY: top, bottomY: bottom};
           cache.set(at, corners);
         }
         if (gap || previous !== at - barMs) finish();
-        tops.push(corners.top); bottoms.push(corners.bottom); previous = at;
+        // Equal adjacent heights have one straight boundary, with no extra vertices
+        // for the SVG parser. Steps and unread holes retain all their corners.
+        if (topY === corners.topY) tops[tops.length - 1] = corners.top[1];
+        else tops.push(...corners.top);
+        if (bottomY === corners.bottomY) bottoms[bottoms.length - 1] = corners.bottom[1];
+        else bottoms.push(...corners.bottom);
+        topY = corners.topY; bottomY = corners.bottomY; previous = at;
       }
       finish();
       for (const at of cache.keys()) if (!kept.has(at)) cache.delete(at);

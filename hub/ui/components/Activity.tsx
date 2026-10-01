@@ -365,8 +365,8 @@ function Stacks({
   // One path a group, stacked in the order of the groups. Bars wide enough to read as such
   // stand apart; narrower ones run together into a band, so a long period is not striped,
   // and only the band's edges part it from the groups above and below. They are drawn from
-  // the start of the answer (`origin`) and moved into place whole, clipped to the plot: as
-  // the clock moves the frame on by a cell, only where they stand changes.
+  // the start of the answer (`origin`), or the gesture's fixed basis, and moved whole,
+  // clipped to the plot: as the clock moves by a cell, only where they stand changes.
   const perMs = (width - left - right) / span;
   const pathOrigin = strip ? basis.from : origin;
   const stackPaths = useRef(new StackPaths());
@@ -426,12 +426,13 @@ function Stacks({
   // The label of the part not known shows only where it fits within its hatching, measured
   // as drawn (its length depends on the language and the font), never over the scale.
   const unknownLabel = useRef<SVGTextElement>(null);
-  const [labelFits, setLabelFits] = useState(false);
+  const [labelWidth, setLabelWidth] = useState<number | null>(null);
   const hatched = unknownTo === null ? 0 : Math.max(0, x(unknownTo) - x(hatchFrom));
+  const labelFits = labelWidth !== null && labelWidth + 24 <= hatched;
   useLayoutEffect(() => {
     const label = unknownLabel.current;
-    setLabelFits(!!label && label.getComputedTextLength() + 24 <= hatched);
-  }, [hatched, unknownTo, locale]);
+    setLabelWidth(label?.getComputedTextLength() ?? null);
+  }, [unknownTo, locale]);
 
   return (
     <div className="chart activity-chart" ref={box}>

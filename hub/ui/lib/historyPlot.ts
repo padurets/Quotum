@@ -63,18 +63,26 @@ function activityOf(chunk: Chunk, cell: number) {
   const rows = new Map<number, PlotBar>();
   for (const [i, active, members] of activity.cells) {
     const at = chunk.from + i * cell;
-    const parts: PlotBar['parts'] = {source: new Map(), project: new Map(), device: new Map()};
     const refs = new Set<string>();
     let agentMs = 0;
     for (const member of members) {
       const [index, ms] = typeof member === 'number' ? [member, active] : member;
-      const {ref, keys, names} = sessions[index];
-      refs.add(ref); agentMs += ms;
-      for (const by of ['source', 'project', 'device'] as const) {
-        const old = parts[by].get(keys[by]);
-        parts[by].set(keys[by], {ms: (old?.ms ?? 0) + ms, name: names[by]});
-      }
+      refs.add(sessions[index].ref); agentMs += ms;
     }
+    // The chart shows one dimension. Decode another only when it is actually read.
+    const decoded: Partial<PlotBar['parts']> = {};
+    const partsOf = (by: ActivityDimension) => {
+      if (decoded[by]) return decoded[by];
+      const parts = new Map<string, {ms: number; name: string | null}>();
+      for (const member of members) {
+        const [index, ms] = typeof member === 'number' ? [member, active] : member;
+        const {keys, names} = sessions[index];
+        const old = parts.get(keys[by]);
+        parts.set(keys[by], {ms: (old?.ms ?? 0) + ms, name: names[by]});
+      }
+      return decoded[by] = parts;
+    };
+    const parts = {get source() {return partsOf('source');}, get project() {return partsOf('project');}, get device() {return partsOf('device');}};
     rows.set(at, {at, activeMs: active, agentMs, refs, parts});
   }
   saved = {from: chunk.from, cell, rows};

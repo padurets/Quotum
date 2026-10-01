@@ -56,3 +56,16 @@ test('filling an unread bridge joins the new line without rewriting an earlier p
   assert.equal(before.series[0].points[12][2], 2, 'the original unread hole still breaks its line');
   assert.equal(after.series[0].points[24][2], 1, 'the newly covered bridge is continuous');
 });
+
+test('every activity dimension remains exact when first read from a retained plot cell', () => {
+  const target = targetOf(24 * H, NOW, 'strip', {from: 0, to: H});
+  const source = chunk(0, H);
+  const buffer = plotOf([source], meta, target, [[0, H]], new Set(['s w']), 1, 1, 1);
+  const expected = compose([source], meta, target, new Set(['s w'])).activity;
+  for (const by of ['project', 'source', 'device'] as const) {
+    const bar = plotBar(buffer, 0, target, by)!;
+    assert.deepEqual([...bar.groups].map(([key, value]) => [key, value.ms]), expected.by[by].map(group => [group.key, group.agentMs]));
+  }
+  const cell = buffer.activityCells.get(0)!;
+  assert.equal(cell.parts.project, cell.parts.project);
+});

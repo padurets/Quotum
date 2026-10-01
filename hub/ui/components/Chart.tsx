@@ -10,6 +10,7 @@ import {coverOf, edgeOf} from '../lib/place';
 import {Tooltip, useTip} from './Tooltip';
 import {useTimeAxis} from './timeAxis';
 import {covered, type PlotBuffer} from '../lib/historyPlot';
+import {plotPath} from '../lib/plotPath';
 
 /**
  * A moment on the time axis: ahead, a known window reset or an announced extra one;
@@ -304,16 +305,17 @@ export function Chart({
             let cached = blockPaths.current.get(block);
             if (!cached || cached.geometry !== geometry) {
               let segment = -1, previousX = -Infinity;
-              const pieces: string[] = [];
+              const runs: [number, number][][] = [];
               let end: [number, number] | null = null;
               for (const [at, remaining, group] of block.points) {
                 if (at > now) break;
                 const px = bx(at), py = y(remaining);
                 if (group === segment && px - previousX < .5) continue;
-                pieces.push(`${group === segment ? 'L' : 'M'}${px.toFixed(1)},${py.toFixed(1)}`);
+                if (group !== segment) runs.push([]);
+                runs.at(-1)!.push([px, py]);
                 segment = group; previousX = px; end = [px, py];
               }
-              cached = {geometry, line: pieces.join(''), last: end};
+              cached = {geometry, line: plotPath(runs), last: end};
               blockPaths.current.set(block, cached);
             }
             const bridge = join && cached.line && last ? `M${last[0].toFixed(1)},${last[1].toFixed(1)}L` + cached.line.slice(1) : cached.line;
@@ -338,9 +340,8 @@ export function Chart({
           runs.at(-1)!.push([px, py]);
           previousX = px;
         }
-        const fixed = (value: number) => value.toFixed(1);
         return {
-          line: runs.map(run => run.map(([px, py], i) => `${i ? 'L' : 'M'}${fixed(px)},${fixed(py)}`).join('')).join(''),
+          line: plotPath(runs),
           last: runs.at(-1)?.at(-1) ?? null,
           parts: null,
         };
