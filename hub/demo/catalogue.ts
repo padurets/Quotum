@@ -30,6 +30,7 @@ import {
 } from './model.js';
 /** Durable app settings, in `npm run demo:keys`; checking and reset busy are transient and tested. */
 export {KEY_STORAGE} from './key-storage.js';
+export {MONEY_SCENES} from './money.js';
 
 /**
  * The catalogue of the demo board: every state the dashboard knows today, one entry each,
@@ -1590,4 +1591,5 @@ const activity: DemoSet = {
   ],
 };
 
-export const SETS: DemoSet[] = [all, showcase, activity];
+const money:DemoSet={...showcase,id:'money',about:'OpenRouter balances, key caps, partial inventory and private access failures'};
+export const SETS: DemoSet[] = [all, showcase, activity,money];

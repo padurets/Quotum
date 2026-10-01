@@ -6,7 +6,7 @@ export type MeterSelection = {unit: Unit; ids: [source: string, meter: string][]
 export type MeterCellExtra = {first?: string; open?: string | null; segment?: number; semantics?: MeterSemantics; steps?: ExceptionalStep[]; topupInternal?: string; topupSteps?: ExceptionalStep[]};
 export type MeterCell = [index: number, value: string, spentInternal: string, spentExceptional: string, coveredMs: number, extra?: MeterCellExtra];
 export type MeterSeriesCells = {source: string; meter: string; kind: MeterKind; unit: Unit; semantics: MeterSemantics | null; cells: MeterCell[]};
-export type MeterHistory = {sourceId: string; meterId: string; kind: MeterKind; unit: Unit; semantics: MeterSemantics | null; start: string | null; end: string | null; spent: string; unlocated: ExceptionalStep[]; topup: string; topupUnlocated: ExceptionalStep[]; coveredMs: number; points: {at: number; value: string; segment: number; semantics: MeterSemantics | null; steps: ExceptionalStep[]}[]};
+export type MeterHistory = {sourceId: string; meterId: string; kind: MeterKind; unit: Unit; semantics: MeterSemantics | null; start: string | null; end: string | null; spent: string; unlocated: ExceptionalStep[]; topup: string; topupUnlocated: ExceptionalStep[]; coveredMs: number; points: {at: number; value: string; spent:string;segment: number; semantics: MeterSemantics | null; steps: ExceptionalStep[]}[]};
 export type MeterGroup = {source: string; meter: string; readings: Reading[]; spans: MeterSpan[]; paired?: {readings: Reading[]; spans: MeterSpan[]}};
 
 export function selectionOf(raw: unknown, unit: unknown): MeterSelection {
@@ -127,11 +127,12 @@ export function composeMeters(chunks: readonly {from:number;meterSeries?:MeterSe
     let segment=0,previous=-Infinity,lastLocal=-1;
     const points=ordered.map(([at,{row,semantics}])=>{
       const extra=row[5]??{};
+      const previousSpent=spent;
       spent+=BigInt(row[2]);topup+=BigInt(extra.topupInternal??'0');coveredMs+=row[4];
       classify(extra.steps??[],false);classify(extra.topupSteps??[],true);
       if(at!==previous+cell || (extra.segment??0)!==lastLocal)segment++;
       previous=at;lastLocal=extra.segment??0;
-      return {at,value:row[1],segment,semantics,steps:extra.steps??[]};
+      return {at,value:row[1],spent:(spent-previousSpent).toString(),segment,semantics,steps:extra.steps??[]};
     });
     const first=ordered[0][1].row,last=ordered.at(-1)![1];
     const start=first[5] && 'open' in first[5] ? first[5].open! : first[5]?.first??first[1];

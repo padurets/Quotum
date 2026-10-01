@@ -10,6 +10,7 @@ import {SwitchRow} from './Popover';
 import {AppSection, Measuring} from './Desktop';
 import {inApp, settingsSections, type AppState} from '../lib/app';
 import {useApp} from '../lib/board';
+import {Connections} from './Connections';
 
 type Status = {busy?: boolean; done?: boolean; error?: unknown};
 
@@ -241,6 +242,7 @@ export function AccountPanel({
       )}
       {sections.includes('measuring') && appState && <Measuring state={appState} onState={onAppState} />}
       {sections.includes('app') && appState && <AppSection state={appState} onState={onAppState} />}
+      <Connections key={user.id} userId={user.id} local={local} trustedKeys={trustedKeys}/>
       <Browser title={t(local ? 'settings.view' : 'account.browser')} />
     </Modal>
   );

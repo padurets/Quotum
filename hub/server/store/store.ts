@@ -431,7 +431,7 @@ export class Store {
     );
     read.setReturnArrays(true);
     const groups: CellSamples[] = [];
-    for (const {id} of sources) for (const {w} of windows.all(id, id, id, from, to) as {w: string}[]) {
+    for (const {id} of meters?[]:sources) for (const {w} of windows.all(id, id, id, from, to) as {w: string}[]) {
       const rows = read.all(id, w, to, from, id, w, from) as unknown as [number, number, number | null, number][];
       groups.push({source: id, window: w, samples: rows.map(([at, used, resetAt, staleAfterMs]) => ({at, used, resetAt, staleAfterMs}))});
     }

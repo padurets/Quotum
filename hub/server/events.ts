@@ -374,7 +374,7 @@ export class Events implements Touches {
         let own: Frame[] = [];
         let access:Frame[]=[];
         if(users.has(sub.user)||sources.has(watched.id)||whole.has(watched.id)) {
-          try {const key=sub.user+'\n'+watched.id;if(!accesses.has(key))accesses.set(key,this.refreshSourceAccess(sub.user,watched.id,lineups,now));access=accesses.get(key)!;}
+          try {const key=sub.user+'\n'+watched.id;if(!accesses.has(key))accesses.set(key,this.refreshSourceAccess(sub.user,watched.id,lineups,now,users.has(sub.user)));access=accesses.get(key)!;}
           catch(error){trouble(error);failed.users.add(sub.user);this.sourceAccess.delete(sub.user+'\n'+watched.id);}
         }
         if (users.has(sub.user)) {
@@ -503,10 +503,10 @@ export class Events implements Touches {
     this.mines.set(key, json);
     return [{type: 'mine', data: `{"sources":${json}}`}];
   }
-  private refreshSourceAccess(user:string,board:string,lineups:Map<string,BoardSource[]>,now:number):Frame[] {
+  private refreshSourceAccess(user:string,board:string,lineups:Map<string,BoardSource[]>,now:number,force=false):Frame[] {
     const lineup=lineups.get(board)??this.projection.lineup(board);
     const key=user+'\n'+board,json=JSON.stringify(this.projection.sourceAccess(user,lineup,now));
-    if(this.sourceAccess.get(key)===json)return [];
+    if(this.sourceAccess.get(key)===json&&(!force||json==='{}'))return [];
     this.sourceAccess.set(key,json);return [{type:'sourceAccess',data:json}];
   }
 

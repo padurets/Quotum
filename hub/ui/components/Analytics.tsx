@@ -1,5 +1,6 @@
 import {useRef, useState} from 'react';
 import type {Kind} from '../lib/types';
+import {useMoneyUnits} from '../lib/board';
 import {setPrefs, usePrefs} from '../lib/prefs';
 import {PERIODS, periodLabel, periodOf, step, stepChangesAt} from '../lib/periods';
 import {goTo, setTimeRange, timeRangeLabel, useTimeRange} from '../lib/timeRange';
@@ -10,7 +11,8 @@ import {Segmented} from './Kit';
 import {Popover} from './Popover';
 
 /** Weekly or 5-hour windows. */
-function KindSwitch({value, onChange}: {value: Kind; onChange: (kind: Kind) => void}) {
+function KindSwitch({value, onChange}: {value: string; onChange: (kind: string) => void}) {
+  const units=useMoneyUnits();
   return (
     <Segmented
       value={value}
@@ -18,6 +20,7 @@ function KindSwitch({value, onChange}: {value: Kind; onChange: (kind: Kind) => v
       options={[
         ['weekly', t('history.weekly')],
         ['session', t('history.session')],
+        ...units.map(unit=>[unit,unit] as [string,string]),
       ]}
       label={t('history.kind')}
     />
@@ -136,13 +139,13 @@ function PeriodSwitch({historyStart}: {historyStart: number}) {
  * the table both show. The cards above it are about now and show every window.
  */
 export function AnalyticsHead() {
-  const {kind} = usePrefs();
+  const prefs=usePrefs(),{kind}=prefs;
   const historyStart = useHistoryBegins();
   return (
     <div className="analytics-head">
       <h2>{t('analytics.title')}</h2>
       <div className="controls">
-        <KindSwitch value={kind} onChange={next => setPrefs({kind: next})} />
+        <KindSwitch value={prefs.money.unit??kind} onChange={next => next==='weekly'||next==='session'?setPrefs({kind:next as Kind,money:{...prefs.money,unit:null}}):setPrefs({money:{...prefs.money,unit:next}})} />
         <PeriodSwitch historyStart={historyStart} />
       </div>
     </div>

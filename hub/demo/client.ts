@@ -32,6 +32,7 @@ async function call<T>(base: string, method: Method, path: string, options: {bod
       connection: 'close',
       ...(options.body !== undefined ? {'content-type': 'application/json'} : {}),
       ...(options.cookie ? {cookie: options.cookie} : {}),
+      ...(options.cookie&&method!=='GET'?{origin:new URL(process.env.QUOTUM_PUBLIC_URL??base).origin}:{}),
       ...(options.token ? {authorization: `Bearer ${options.token}`} : {}),
     },
     body: options.body === undefined ? undefined : JSON.stringify(options.body),

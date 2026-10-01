@@ -1,6 +1,7 @@
 export type {Refresh, RefreshRequest} from '../../server/domain/refresh';
 export {MEASURE_INTERVAL, type MeasureIntervalMs} from '../../server/domain/frequency';
 import type {MeasureIntervalMs} from '../../server/domain/frequency';
+import type {Meter,KeyPart,CalendarSpend} from '../../server/domain/meters';
 /** A window's length as the agent classifies it. */
 export type Kind = 'session' | 'weekly' | 'other';
 
@@ -39,10 +40,15 @@ export type Card = {
   owners: string[];
   staleAfterMs: number | null;
   measureIntervalMs: MeasureIntervalMs;
+  meters?:Meter[];
+  keys?:KeyPart[];
+  keysCount?:number;
+  inventory?:{complete:boolean;observed:number;missing:number;error:string|null};
+  spending?:CalendarSpend;
 };
 
 /** When a source is measured next and why, while the hub sets the pace of the device measuring it; `next` may have passed. */
-export type Pace = {next: number; why: CadenceWhy} | null;
+export type Pace = {by?:'hub';next: number; why: CadenceWhy} | null;
 
 /** Why the next measurement comes when it does: little left, in use, numbers that just changed or stay the same, a reset. */
 export type CadenceWhy = 'low' | 'inUse' | 'changed' | 'idle' | 'reset' | 'fixed';

@@ -484,7 +484,9 @@ window protocol is unchanged. Each chunk may carry `meterSeries`, whose entries 
 scope, label}` as it actually held before the chunk, or null.
 
 A meter cell is `[index, value, spentInternal, spentExceptional, coveredMs, extra?]`.
-Value is the historical amount, or remaining for a cap. Extra may give `first`, `open`
+Value is the historical amount, or remaining for a cap. The composed money frame also
+keeps exact known spending per point, so the spending view draws only located spending.
+Extra may give `first`, `open`
 (including explicit null), `segment`, historical `semantics`, original exceptional
 `steps`, `topupInternal` and `topupSteps`. Amounts remain strings throughout packing.
 Known cell spending and original steps compose once over the effective whole-cell
@@ -619,3 +621,12 @@ Disconnected readers retain no notification queue. There is
 no replay through `Last-Event-ID`, after restart, or across a baseline. A crash
 between consumption and native delivery may lose a notification; successful
 native submission does not guarantee the operating system displayed it.
+
+The full current key inventory is read through
+`GET /api/boards/:board/sources/:source/keys?limit=50&after=<cursor>`.
+Board membership and visible source are required; a member may read measurements.
+The response is `{keys, meters, total, inventory, next}` with at most 50 keys. Total
+counts retained current keys and does not promise supplier completeness. A cursor is
+bound to source, ordering revision and this hub run. A changed ordering returns
+`409 keys_changed`; a forged or mismatched cursor returns `400 invalid_request`.
+No credential records enter this endpoint.

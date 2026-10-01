@@ -23,6 +23,7 @@ import {localRoutes} from './local.js';
 import {credentialRoutes} from './routes/credentials.js';
 import {Credentials, startSecrets, type SecretInputs} from './secrets/index.js';
 import type {HubSources} from './hubSources.js';
+import {sourceKeyRoutes} from './routes/sourceKeys.js';
 
 /**
  * `local`: the desktop app's hub, with the key its window enters with (see local.ts); null
@@ -202,6 +203,7 @@ export async function buildApp(hub: Hub) {
   app.addHook('preClose', async () => events.close());
   eventRoutes(app, directory, events, guards, !!hub.local);
   accountRoutes(app, hub, guards);
+  sourceKeyRoutes(app,hub,guards);
   await app.register(async scope => credentialRoutes(scope, hub.credentials!, guards));
   agentRoutes(app, hub);
   if (hub.local) localRoutes(app, hub, hub.local.key);
