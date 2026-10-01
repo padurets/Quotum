@@ -119,7 +119,8 @@ jobs:
         working-directory: desktop
         env:
           QUOTUM_TEST_DBUS_BINDING: '1'
-        run: dbus-run-session -- cargo test --locked keys::store::linux::tests:: -- --ignored --test-threads=1
+        run: |
+          dbus-run-session -- cargo test --locked keys::store::linux::tests:: -- --ignored --test-threads=1
       - name: Native loader callbacks (Linux)
         if: runner.os == 'Linux'
         working-directory: desktop
