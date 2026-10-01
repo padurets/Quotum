@@ -38,7 +38,7 @@ export function KeyMetrics({part,meters}:{part:KeyPart;meters:readonly Meter[]})
     <div className="money-key-values"><span title={money(usage?.amount,'USD',true)}>{t('money.usage')}: {money(usage?.amount)}</span><span title={[t('money.day'),money(part.periods.day),t('money.week'),money(part.periods.week)].join('\n')}>{t('money.month')}: {money(part.periods.month)}</span></div>
     {cap&&<div className={`money-cap${cap.stale?' is-stale':''}`} title={part.includeByok?t('money.byok'):undefined}>
       <span title={money(capLeft(cap),cap.unit,true)}>{money(capLeft(cap),cap.unit)} / {money(cap.limit,cap.unit)}</span>
-      {percent===null?<small>{t('money.exhausted')}</small>:<div className="meter"><i style={{width:`${100-percent}%`}}/></div>}
+      {percent===null?<small>{t('money.exhausted')}</small>:<div className="meter" role="progressbar" aria-label={keyName(part)} aria-valuemin={0} aria-valuemax={100} aria-valuenow={100-percent}><span className="meter-track"><i className={`fill fill-${100-percent<=10?'crit':100-percent<=30?'warn':'ok'}`} style={{width:`${100-percent}%`}}/></span></div>}
       <CapReset meter={cap}/>
     </div>}
   </div>;

@@ -57,7 +57,7 @@ export function MoneyHistory({arrange}:{arrange:Arrange}) {
     const series=entries.find(s=>moneyIdentity(s)===key),point=series&&pointAt(series,at);
     return <>{point?.semantics?.limit!==null&&point?.semantics?.limit!==undefined&&<div>{t('money.limitTotal')}: {money(point.semantics.limit,unit,true)}{point.semantics.resetAt!==null&&<div>{stamp(point.semantics.resetAt)}</div>}</div>}{point?.steps.map(step=><div key={step.from+':'+step.to}>{t('money.unlocated')}: {money(step.amount,unit,true)}<div>{stamp(step.from)} — {stamp(step.to)}</div></div>)}</>;
   }};
-  return <section className="panel history" data-widget={HISTORY} ref={panel}>
+  return <section className={`panel history${loading?' is-loading':''}`} data-widget={HISTORY} ref={panel}>
     <div className="panel-head"><h2>{t(prefs.money.view==='spending'?'money.spending':'money.balance')} ({unit})</h2><Popover label={t('history.settings')} icon={<SlidersIcon/>}>
       <div className="popover-pad"><Segmented value={prefs.money.view} onChange={view=>setPrefs({money:{...prefs.money,view}})} options={[["balance",t('money.balance')],["spending",t('money.spending')]]} label={t('money.value')}/></div>
       {sources.filter(s=>!arrange.view.hidden.includes('source:'+s.id)).map(source=>{const balance=source.meters?.find(m=>m.kind==='balance'&&m.unit===unit);if(!balance)return null;const chosen=logical.some(([s,m])=>s===source.id&&m===balance.id);return <label className="popover-row" key={source.id}><input type="checkbox" checked={chosen} disabled={!chosen&&logical.length>=32} onChange={()=>toggleBalance(source.id,balance.id)}/>{source.title??source.id}</label>;})}
@@ -66,8 +66,8 @@ export function MoneyHistory({arrange}:{arrange:Arrange}) {
     </Popover></div>
     <SelectionNotice/>
     {error&&<p className="form-error">{t('money.historyLimit')}</p>}
-    <div className={loading?'is-loading':''}><Chart lines={lines} axis={axis} stepped from={frame.from} now={measured} to={frame.to} cellMs={history?.cellMs??60_000} empty={!lines.length?t('money.unknown'):null} plot={plot} onBase={onBase} onSelect={setTimeRange} onStep={direction=>goTo(step(selected,prefs.range,direction,hubNow(),start))}/></div>
-    <div className="legend">{entries.map(s=>{const key=moneyIdentity(s),card=sources.find(c=>c.id===s.sourceId);return <button type="button" key={key} className={prefs.muted[key]?'is-muted':''} aria-pressed={!prefs.muted[key]} onClick={()=>setMuted(key,!prefs.muted[key])}><i style={{background:colorOf(arrange.view,s.sourceId,card?.provider??'')}}/>{nameOf(s,card?.title??s.sourceId)}</button>;})}</div>
+    <Chart lines={lines} axis={axis} stepped from={frame.from} now={measured} to={frame.to} cellMs={history?.cellMs??60_000} empty={!lines.length?t('money.unknown'):null} plot={plot} onBase={onBase} onSelect={setTimeRange} onStep={direction=>goTo(step(selected,prefs.range,direction,hubNow(),start))}/>
+    <div className="legend">{entries.map(s=>{const key=moneyIdentity(s),card=sources.find(c=>c.id===s.sourceId);return <button type="button" key={key} className="legend-item" aria-pressed={!prefs.muted[key]} onClick={()=>setMuted(key,!prefs.muted[key])}><svg width="18" height="6" aria-hidden="true"><line x1="1" x2="17" y1="3" y2="3" stroke={colorOf(arrange.view,s.sourceId,card?.provider??'')} strokeWidth="2.5" strokeDasharray={s.kind==='cap'?'7 5':undefined}/></svg><span>{nameOf(s,card?.title??s.sourceId)}</span><b>{money(s.end,s.unit)}</b></button>;})}</div>
   </section>;
 }
 export function MoneyTable({arrange}:{arrange:Arrange}) {
