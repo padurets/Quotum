@@ -389,7 +389,7 @@ export class HistoryStore {
     const first = this.tile(at, target.cell);
     const from = first.readTo === first.readFrom ? at : at < first.readFrom ? first.from : first.validTo;
     let last = at;
-    const maxTiles = this.interest ? PAN_READ_TILES : MAX_READ_TILES;
+    const maxTiles = this.plotPending ? PAN_READ_TILES : MAX_READ_TILES;
     for (const next of bad) {
       if (next <= at) continue;
       if (next > last + target.cell || tileOf(next, target.cell) - tileOf(from, target.cell) >= maxTiles || blocked(next)) break;

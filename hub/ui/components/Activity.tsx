@@ -224,7 +224,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
         : t(`activity.${said.key}`);
 
   return (
-    <section ref={panel} className={`panel activity ${loading ? 'is-loading' : ''}`} data-time="chart" aria-label={t('activity.title')} aria-busy={loading}>
+    <section ref={panel} className={`panel activity ${loading ? 'is-loading' : ''}`} data-time="chart" aria-label={t('activity.title')} aria-busy={loading} data-history-range={history?.range}>
       <div className="panel-head">
         <div><h2>{t('activity.title')}</h2>{history && <span className="answered-range">{t('history.answeredRange', {range: answeredRangeLabel(history)})}</span>}</div>
         <ActivitySettings arrange={arrange} />

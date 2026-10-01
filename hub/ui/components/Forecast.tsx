@@ -211,7 +211,7 @@ export const Forecast = memo(function Forecast({arrange}: {arrange: Arrange}) {
   const details = columns.filter(column => column !== lead);
 
   return (
-    <section ref={panel} className={`panel forecast ${loading ? 'is-loading' : ''}`} aria-label={t('forecast.title')} aria-busy={loading}>
+    <section ref={panel} className={`panel forecast ${loading ? 'is-loading' : ''}`} aria-label={t('forecast.title')} aria-busy={loading} data-history-range={history?.range}>
       <div className="panel-head">
         <div><h2>{t('forecast.title')}</h2>{history && <span className="answered-range">{t('history.answeredRange', {range: answeredRangeLabel(history)})}</span>}</div>
         {arrange.owner && (
