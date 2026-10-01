@@ -333,8 +333,7 @@ export function useTimeAxis({
       const start = dx + (moving === 'none' ? 0 : new DOMMatrix(moving).m41);
       layer.getAnimations().forEach(animation => animation.cancel());
       frame.setAttribute('clip-path', `url(#${CSS.escape(clip)})`);
-      const animation = layer.animate([{transform: `translateX(${start}px)`}, {transform: 'none'}], {duration: SLIDE_MS, easing: 'cubic-bezier(.2, .7, .3, 1)'});
-      animation.onfinish = () => frame.removeAttribute('clip-path');
+      layer.animate([{transform: `translateX(${start}px)`}, {transform: 'none'}], {duration: SLIDE_MS, easing: 'cubic-bezier(.2, .7, .3, 1)'});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [from, end, to]);

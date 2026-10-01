@@ -260,6 +260,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
             onBase={onBase}
             strip={strip}
             by={by}
+            allMuted={presentation.identities.length > 0 && presentation.shown.length === 0}
           />
           <div className="legend">
             {presentation.identities.map(identity => (
@@ -287,12 +288,13 @@ function Stacks({
   groups,
   from,
   to,
-  unknownTo,
+  unknownTo: originUnknownTo,
   onSelect,
   plot,
   onBase,
   strip,
   by,
+  allMuted,
 }: {
   activity: ActivityData;
   /** Where the answer begins: the bars are drawn from there, so their numbers stay small however old the hub. */
@@ -308,8 +310,11 @@ function Stacks({
   onBase: (height: number) => void;
   strip: PlotBuffer | null;
   by: ActivityDimension;
+  allMuted: boolean;
 }) {
   const barMs = strip?.barMs ?? activity.barMs;
+  const unknownTo = strip?.knownFrom ?? originUnknownTo;
+  const hatchFrom = strip?.from ?? from;
   // Room for the scale's longest label ("480h" or "30 мин") within the widget.
   const left = 48;
   const right = 12;
@@ -426,7 +431,7 @@ function Stacks({
   // as drawn (its length depends on the language and the font), never over the scale.
   const unknownLabel = useRef<SVGTextElement>(null);
   const [labelFits, setLabelFits] = useState(false);
-  const hatched = unknownTo === null ? 0 : x(unknownTo) - x(from);
+  const hatched = unknownTo === null ? 0 : Math.max(0, x(unknownTo) - x(hatchFrom));
   useLayoutEffect(() => {
     const label = unknownLabel.current;
     setLabelFits(!!label && label.getComputedTextLength() + 24 <= hatched);
@@ -466,10 +471,10 @@ function Stacks({
           <g className="slides">
             {unknownTo !== null && (
               <g className="activity-unknown">
-                <rect x={x(from)} width={x(unknownTo) - x(from)} y={top} height={height - top - bottom} fill={`url(#${CSS.escape(clip)}-hatch)`} />
+                <rect x={x(hatchFrom)} width={hatched} y={top} height={height - top - bottom} fill={`url(#${CSS.escape(clip)}-hatch)`} />
                 <text
                   ref={unknownLabel}
-                  x={(x(from) + x(unknownTo)) / 2}
+                  x={(x(hatchFrom) + x(unknownTo)) / 2}
                   y={top + (height - top - bottom) / 2}
                   textAnchor="middle"
                   className="activity-unknown-label"
@@ -494,7 +499,7 @@ function Stacks({
           <rect x={x(hover)} width={Math.max(1, x(hover + barMs) - x(hover))} y={top} height={height - top - bottom} className="hover-band" />
         )}
       </svg>
-      {!groups.length && <div className="chart-empty">{t('activity.allOff')}</div>}
+      {allMuted && <div className="chart-empty">{t('activity.allOff')}</div>}
       {hover !== null && bar && parts.length > 0 && !drag && (
         <Tooltip tip={tip} className={narrow ? 'is-below' : ''} style={tipStyle}>
           <div className="tooltip-time">{cellLabel(hover, barMs)}</div>

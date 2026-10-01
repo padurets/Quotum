@@ -1,7 +1,31 @@
-import {cellStart, type Chunk, type HistoryMeta, type SourceEvent, type Target} from '../../server/domain/history';
+import {cellStart, type Chunk, type HistoryMeta, type SourceEvent, type SeriesCells, type Target} from '../../server/domain/history';
 import {barOf} from '../../server/domain/work';
 import type {ActivityDimension} from './types';
-import type {PlotSeries} from './lines';
+import type {PlotBlock, PlotSeries} from './lines';
+
+// Weak keys release decoded rows with the store's bounded current/replacing strip.
+const decoded = new WeakMap<SeriesCells, {from: number; cell: number; full: PlotBlock; cuts: Map<string, PlotBlock>}>();
+function blockOf(values: SeriesCells, chunk: Chunk, cell: number, from: number, to: number): PlotBlock {
+  let saved = decoded.get(values);
+  if (!saved || saved.from !== chunk.from || saved.cell !== cell) {
+    let segment = 1;
+    const points = values.cells.map(([i, low, , , extra], index): [number, number, number, number] => {
+      if (index && extra?.g) segment++;
+      return [chunk.from + i * cell, low, segment, extra?.h ?? values.hold];
+    });
+    saved = {from: chunk.from, cell, full: {from: chunk.from, to: chunk.to, gap: !!values.cells[0]?.[4]?.g, points}, cuts: new Map()};
+    decoded.set(values, saved);
+  }
+  if (from <= chunk.from && to >= chunk.to) return saved.full;
+  const key = `${from}:${to}`;
+  let cut = saved.cuts.get(key);
+  if (!cut) {
+    cut = {...saved.full, from: Math.max(chunk.from, from), to: Math.min(chunk.to, to), points: saved.full.points.filter(([at]) => at >= from && at < to)};
+    saved.cuts.set(key, cut);
+    if (saved.cuts.size > 2) saved.cuts.delete(saved.cuts.keys().next().value!);
+  }
+  return cut;
+}
 
 export type Coverage = readonly (readonly [number, number])[];
 export type PlotGroup = {key: string; name: string | null; cells: [number, number][]};
@@ -38,17 +62,19 @@ export function plotOf(chunks: readonly Chunk[], meta: HistoryMeta, target: Targ
       const key = `${values.source} ${values.window}`;
       if (!windows.has(key)) continue;
       let row = series.get(key);
-      for (const [i, low, , , extra] of values.cells) {
-        const at = chunk.from + i * target.cell;
-        const hold = extra?.h ?? values.hold;
-        if (at < from || at >= to) continue;
-        if (!row) {
-          row = {line: {sourceId: values.source, windowId: values.window, points: [], staleAfterMs: hold}, last: at, segment: 1};
-          series.set(key, row);
-        } else if (extra?.g || !covered(coverage, row.last, at + target.cell)) row.segment++;
-        row.line.points.push([at, low, row.segment]);
+      const block = blockOf(values, chunk, target.cell, from, to);
+      const first = block.points[0];
+      if (!first) continue;
+      const join = !!row && !block.gap && covered(coverage, row.last, first[0] + target.cell);
+      if (!row) {row = {line: {sourceId: values.source, windowId: values.window, points: [], staleAfterMs: first[3], blocks: []}, last: first[0], segment: 1}; series.set(key, row);}
+      else if (!join) row.segment++;
+      row.line.blocks!.push({block, join});
+      const offset = row.segment - first[2];
+      for (const [at, low, segment, hold] of block.points) {
+        row.line.points.push([at, low, segment + offset]);
         row.line.staleAfterMs = hold;
         row.last = at;
+        row.segment = segment + offset;
       }
     }
     for (const [i, active, members] of chunk.activity.cells) {

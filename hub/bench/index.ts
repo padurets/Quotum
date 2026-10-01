@@ -229,7 +229,10 @@ async function main() {
         mutations: tally(measured.reading.mutations).outsideBy,
       },
       work: worked.reports,
-      panning: panned.reports,
+      panning: panned.reports.map(report => ({...report,
+        frames: {count: report.frames.length, p95Ms: round(percentile(report.frames, .95)), p99Ms: round(percentile(report.frames, .99))},
+        latency: {count: report.latency.length, p95Ms: round(percentile(report.latency, .95))},
+      })),
       problems,
     };
     console.log(JSON.stringify(result, null, 2));

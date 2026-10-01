@@ -7,7 +7,7 @@ import type {PlotGroup} from './historyPlot';
 export function lineRegistry(seed: readonly PlotLine[], previous: readonly PlotLine[], candidates: readonly PlotLine[]): PlotLine[] {
   const original = new Set(seed.map(line => line.key));
   const current = new Map(candidates.map(line => [line.key, line]));
-  const result = previous.filter(line => original.has(line.key) || current.has(line.key)).map(line => ({...(current.get(line.key) ?? {...line, points: []}), dash: line.dash}));
+  const result = previous.filter(line => original.has(line.key) || current.has(line.key)).map(line => ({...(current.get(line.key) ?? {...line, points: [], blocks: []}), dash: line.dash}));
   for (const line of candidates) {
     if (result.some(old => old.key === line.key)) continue;
     const used = new Set(result.filter(old => old.sourceId === line.sourceId).map(old => old.dash));

@@ -104,7 +104,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
         const p=window.__quotumPan;p.running=false;cancelAnimationFrame(p.raf);p.observer.disconnect();
         document.querySelector('.history .chart>svg').removeEventListener('wheel',p.input,true);document.querySelector('.history .chart>svg').removeEventListener('pointermove',p.input,true);
         window.fetch=p.originalFetch;history.pushState=p.originalPush;
-        return {...p,frames:p.frames,latency:p.latency,pending:undefined,flights:undefined,observer:undefined,input:undefined,originalFetch:undefined,originalPush:undefined};
+        return {frames:p.frames,latency:p.latency,inputs:p.inputs,updated:p.updated,pushesDuring:p.pushesDuring,pushesAfter:p.pushesAfter,forbiddenMutations:p.forbiddenMutations,undimmed:p.undimmed,coldReads:p.coldReads,peakFlights:p.peakFlights,maxTiles:p.maxTiles,duplicateReads:p.duplicateReads};
       })()`);
       report.period = period; report.series = geometry.series; report.charts = geometry.charts; report.rate = 4; report.expectedPushes = 3;
       reports.push(report);

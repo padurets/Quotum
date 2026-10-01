@@ -1,7 +1,7 @@
 import {Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties} from 'react';
 import {clock, countdown, countdownChangesAt, num, shortDay, stamp} from '../lib/format';
 import {t, useLocale} from '../i18n';
-import type {PlotLine as Line} from '../lib/lines';
+import type {PlotBlock, PlotLine as Line} from '../lib/lines';
 import {useClock} from '../lib/clock';
 import {gapText, gapTone, readout as readCell, runOutPast, valueAt, type ForecastLine, type PlanLine} from '../lib/readout';
 import type {TimeRange} from '../lib/timeRange';
@@ -291,9 +291,36 @@ export function Chart({
   const tickFrom = strip?.from ?? from, tickTo = strip?.to ?? to;
   const {ticks, daily} = niceTicks(tickFrom, tickTo, (width < 560 ? 4 : 7) * (tickTo - tickFrom) / (basis.to - basis.from));
 
+  const blockPaths = useRef(new Map<PlotBlock, {geometry: string; line: string; last: [number, number] | null}>());
   const paths = useMemo(
-    () =>
-      lines.map(line => {
+    () => {
+      const retained = new Set<PlotBlock>();
+      const geometry = `${basis.from}:${basis.to}:${now}:${width}:${height}:${cellMs}`;
+      const result = lines.map(line => {
+        if (strip && line.blocks) {
+          let last: [number, number] | null = null;
+          const parts = line.blocks.map(({block, join}) => {
+            retained.add(block);
+            let cached = blockPaths.current.get(block);
+            if (!cached || cached.geometry !== geometry) {
+              let segment = -1, previousX = -Infinity;
+              const pieces: string[] = [];
+              let end: [number, number] | null = null;
+              for (const [at, remaining, group] of block.points) {
+                if (at > now) break;
+                const px = bx(at), py = y(remaining);
+                if (group === segment && px - previousX < .5) continue;
+                pieces.push(`${group === segment ? 'L' : 'M'}${px.toFixed(1)},${py.toFixed(1)}`);
+                segment = group; previousX = px; end = [px, py];
+              }
+              cached = {geometry, line: pieces.join(''), last: end};
+              blockPaths.current.set(block, cached);
+            }
+            if (cached.last) last = cached.last;
+            return join && cached.line ? 'L' + cached.line.slice(1) : cached.line;
+          });
+          return {line: parts.join(''), last};
+        }
         const runs: [number, number][][] = [];
         let segment = -1;
         let previousX = -1;
@@ -315,7 +342,10 @@ export function Chart({
           line: runs.map(run => run.map(([px, py], i) => `${i ? 'L' : 'M'}${fixed(px)},${fixed(py)}`).join('')).join(''),
           last: runs.at(-1)?.at(-1) ?? null,
         };
-      }),
+      });
+      for (const block of blockPaths.current.keys()) if (!retained.has(block)) blockPaths.current.delete(block);
+      return result;
+    },
     [lines, from, to, now, width, height, cellMs, basis.from, basis.to, strip],
   );
 
