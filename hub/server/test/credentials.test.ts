@@ -19,7 +19,7 @@ import {newSecret} from '../domain/auth.js';
 const CANARY = 'CANARY_PRIVATE_CREDENTIAL_0123456789';
 const KEK = Buffer.alloc(32, 7).toString('base64url');
 const ORIGIN = 'http://localhost';
-const fixture: Connector = {id: 'test', secretFormat: value => value.length >= 16, abilities: ['balance'], transport: new ConnectorTransport({host: '127.0.0.1', port: 443, operations: {balance: {path: '/balance'}}}), map: () => ({abilities: ['balance'], expiresAt: null})};
+const fixture: Connector = {id: 'test', secretFormat: value => value.length >= 16, abilities: ['balance'], transport: new ConnectorTransport({host: '127.0.0.1', port: 443, operations: {balance: {path: '/balance'}}}), map: () => ({abilities: ['balance'], expiresAt: null}), identify: async () => ({account: '0'.repeat(24), abilities: ['balance'], expiresAt: Date.now()+3_600_000}), measure: async () => {throw new SecretError('connector_invalid_response');}};
 
 async function harness(options: {available?: boolean; report?: SecretKeyReport} = {}) {
   const file = path.join(mkdtempSync(path.join(tmpdir(), 'quotum-credentials-')), 'db.sqlite');
