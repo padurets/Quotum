@@ -66,6 +66,15 @@ runs only while its stdin is open.
 
 ## Rules
 
+For an isolated development stand on Linux, use `make dev`, `make info`, `make logs`
+and `make down` at the actual worktree root (see *Worktree development stands* in
+CONTRIBUTING.md). Creation prepares configuration only. Independent tool calls must
+pass the created worktree's returned path explicitly as their working directory.
+Use the configured remote browser for visuals; do not provision a second browser.
+`make dev-test` checks the lifecycle tooling. Component check wrappers strip preview
+configuration, serialize heavy runs and use Docker for Rust; canonical CI performance
+and platform smoke checks still apply.
+
 - **Tests never start a real client.** They use recorded answers and stand-in programs.
   Keep it that way: no test may depend on an account, the network or an installed
   Claude Code, Codex or Antigravity.
