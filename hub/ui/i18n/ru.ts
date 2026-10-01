@@ -662,6 +662,7 @@ export const ru = {
   "money.unknown": "Нет начального измерения для этого периода",
   "money.unlocated": "Наблюдённый расход с неизвестным временем",
   "money.knownFrom": "Известно с {time}",
+  "money.asOf": "По данным на {time}",
   "money.keys": "Все ключи ({count})",
   "money.key": "Ключ",
   "money.usage": "Расход ключа",

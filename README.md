@@ -316,7 +316,8 @@ operations. A server hub needs its separate encryption key configured, and its o
 can decrypt saved access. See [SECURITY.md](SECURITY.md) for the protection and limits.
 
 The card shows the credit balance, observed spending for the UTC day, week (starting
-Monday) and month, and a preview of five keys. **All keys** pages through the full list
+Monday) and month through the last measurement, whose time appears in the amount's
+tooltip, and a preview of five keys. **All keys** pages through the full list
 and lets you explicitly select key usage or caps for analytics. Choose **USD** in the
 shared analytics controls for the money chart and table. Account balances are selected
 by default; at most 32 logical series are drawn, with visible overflow. The chart uses

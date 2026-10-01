@@ -667,6 +667,7 @@ export const en = {
   "money.unknown": "No baseline for this period",
   "money.unlocated": "Observed spending with unknown timing",
   "money.knownFrom": "Known since {time}",
+  "money.asOf": "Data as of {time}",
   "money.keys": "All keys ({count})",
   "money.key": "Key",
   "money.usage": "Usage",

@@ -13,8 +13,9 @@ import {ApiError,call} from '../lib/http';
 import {Modal,ErrorLine} from './Kit';
 import {Popover} from './Popover';
 
-function Summary({value}:{value:SpendSummary|undefined}) {
+function Summary({value,asOf}:{value:SpendSummary|undefined;asOf:number|null}) {
   const detail=value?[
+    asOf===null?'':t('money.asOf',{time:stamp(asOf)}),
     value.amount===null?t('money.unknown'):'',
     !value.complete?t('money.partial'):'',
     value.knownFrom===null?'':t('money.knownFrom',{time:stamp(value.knownFrom)}),
@@ -77,7 +78,7 @@ export function MoneyCard({source,board,compact=false}:{source:Card;board:string
   return <div className="money-body">
     <div className="money-balance" title={money(balance?.amount,balance?.unit,true)}><span>{t('money.balance')}</span><strong data-money={balance?.amount}>{money(balance?.amount,balance?.unit)}</strong></div>
     {!compact&&<>
-      <div className="money-summaries">{(['day','week','month'] as const).map(period=><div key={period}><small>{t(`money.${period}`)}</small><Summary value={source.spending?.[period]}/></div>)}</div>
+      <div className="money-summaries">{(['day','week','month'] as const).map(period=><div key={period}><small>{t(`money.${period}`)}</small><Summary value={source.spending?.[period]} asOf={source.successAt}/></div>)}</div>
       <div className="money-preview">{source.keys?.map(part=><KeyMetrics key={part.id} part={part} meters={source.meters??[]}/>)}</div>
       {!!source.keysCount&&<button className="link-button" type="button" onClick={()=>setAll(true)}>{t('money.keys',{count:source.keysCount})}</button>}
       {source.inventory&&!source.inventory.complete&&<small className="drawer-note">{t('money.inventoryPartial')}</small>}
