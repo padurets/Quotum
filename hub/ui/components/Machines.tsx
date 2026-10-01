@@ -9,6 +9,8 @@ import {CopyField, ErrorLine, Field, Modal, Segmented} from './Kit';
 import {Popover} from './Popover';
 import {rich, t} from '../i18n';
 import {Ago} from './Time';
+import {ConnectedAccounts,ConnectSource} from './Connections';
+import type {Session} from '../lib/session';
 
 export type MachinesTab = 'devices' | 'projects' | 'connect';
 
@@ -362,7 +364,7 @@ function Projects() {
   );
 }
 
-function Connect() {
+function ConnectDevice() {
   const [tokens, setTokens] = useState<Token[]>([]);
   const [name, setName] = useState('');
   const [created, setCreated] = useState<{secret: string; name: string} | null>(null);
@@ -451,34 +453,40 @@ function Connect() {
 }
 
 /**
- * The reader's own machines, wherever their data is shown, the projects their agents
- * worked on, and the ways to connect more. The desktop app's board connects no other
- * machine: only the machines and the projects.
+ * The reader's devices and connected accounts, their projects, and one place to connect
+ * more. The desktop app connects provider accounts while its own agent measures its device.
  */
 export function MachinesDialog({
   tab,
   onTab,
   onClose,
   local,
+  userId,
+  trustedKeys,
 }: {
   tab: MachinesTab;
   onTab: (tab: MachinesTab) => void;
   onClose: () => void;
   local: boolean;
+  userId: string;
+  trustedKeys: Session['trustedKeys'];
 }) {
+  const [kind,setKind]=useState<'device'|'openrouter'>(local?'openrouter':'device');
   const tabs: [MachinesTab, string][] = [
-    ['devices', t('admin.devices')],
+    ['devices', t('connections.connected')],
     ['projects', t('admin.projects')],
-    ...(local ? [] : [['connect', t('admin.connect')] as [MachinesTab, string]]),
+    ['connect', t('admin.connect')],
   ];
-  const shownTab = local && tab === 'connect' ? 'devices' : tab;
   return (
     <Modal title={t('machines.title')} onClose={onClose} wide>
-      <Segmented label={t('admin.sections')} options={tabs} value={shownTab} onChange={onTab} />
+      <Segmented label={t('admin.sections')} options={tabs} value={tab} onChange={onTab} />
       <div className="dialog-body">
-        {shownTab === 'devices' && <Devices local={local} />}
-        {shownTab === 'projects' && <Projects />}
-        {shownTab === 'connect' && <Connect />}
+        {tab === 'devices' && <><section className="connect-way"><h3>{t('admin.devices')}</h3><Devices local={local} /></section><ConnectedAccounts userId={userId} local={local} trustedKeys={trustedKeys}/></>}
+        {tab === 'projects' && <Projects />}
+        {tab === 'connect' && <>
+          {!local&&<Segmented label={t('connections.type')} value={kind} onChange={setKind} options={[["device",t('connections.device')],["openrouter","OpenRouter"]]}/>}
+          {!local&&kind==='device'?<ConnectDevice/>:<ConnectSource userId={userId} local={local} trustedKeys={trustedKeys} onClose={onClose}/>}
+        </>}
       </div>
     </Modal>
   );

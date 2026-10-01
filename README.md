@@ -307,7 +307,7 @@ licences) and as a bare binary (`quotum-cli-<platform>`, what the installers and
 
 ## Connecting OpenRouter
 
-Open your account panel or the desktop app settings and choose **Connect a source**.
+Open **My connections**, choose **Connect**, then **OpenRouter**.
 Create a dedicated OpenRouter management key in
 [OpenRouter key settings](https://openrouter.ai/settings/keys), give it an expiry and
 paste it into the password field. A key without expiry needs an explicit confirmation.
@@ -317,8 +317,9 @@ can decrypt saved access. See [SECURITY.md](SECURITY.md) for the protection and 
 
 The card shows the credit balance, observed spending for the UTC day, week (starting
 Monday) and month through the last measurement, whose time appears in the amount's
-tooltip, and a preview of five keys. **All keys** pages through the full list
-and lets you explicitly select key usage or caps for analytics. Choose **USD** in the
+tooltip, and a preview of five keys. The card's settings switch each key's display.
+**All keys** pages through the full measurement table. The chart's own settings select
+key usage and remaining limits for analytics. Choose **USD** in the
 shared analytics controls for the money chart and table. Account balances are selected
 by default; at most 32 logical series are drawn, with visible overflow. The chart uses
 one unit per axis and keeps the same time range and gestures as subscription history.

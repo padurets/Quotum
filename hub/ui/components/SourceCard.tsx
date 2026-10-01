@@ -10,7 +10,8 @@ import {MoneyCard,AccessMark} from './MoneyCard';
 import {cardId, colorOf, isWindowHidden, planOf, weeklyPlanOf, withColor, withHidden, withName, withPlan, withPlanned, withWindowHidden, type Arrange} from '../lib/view';
 import {CARD_COLORS, MIDDLE_STEP, PROVIDERS} from '../lib/providers';
 import {call} from '../lib/http';
-import {useCadence, useCard, useConnection, useMine, useRefresh, useResetsFor, useSessions, useTitle} from '../lib/board';
+import {useCadence, useCard, useConnection, useMine, useRefresh, useResetsFor, useSessions, useSourceAccess, useTitle} from '../lib/board';
+import {keyName, money, capLeft} from '../lib/money';
 import {useClock} from '../lib/clock';
 import {FreeResets} from './ResetMarks';
 import {Tray} from './Tray';
@@ -332,6 +333,17 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
           })}
         </>
       )}
+      {owner && !!source.keys?.length && (
+        <>
+          <div className="popover-title popover-section">{t('source.show')}</div>
+          {source.keys.map(part => {
+            const key = windowKey(source.id, `key:${part.id}`);
+            const cap = source.meters?.find(m => m.id === `key:${part.id}:cap`);
+            const usage = source.meters?.find(m => m.id === `key:${part.id}:usage`);
+            return <SwitchRow key={part.id} on={!hidden.has(key)} onChange={on => arrange.update(view => withWindowHidden(view, key, !on))} value={money(cap ? capLeft(cap) : usage?.amount)}>{keyName(part)}</SwitchRow>;
+          })}
+        </>
+      )}
       {owner && (
         <>
           <div className="popover-title popover-section">{t('source.color')}</div>
@@ -472,7 +484,8 @@ export function CardMark({source}: {source: Card}) {
 function CardTray({source}: {source: Card}) {
   const sessions = useSessions(source.id);
   const resets = useResetsFor(source.provider);
-  return <Tray resets={resets} current={source.meters?<AccessMark id={source.id}/>:!!source.resets?.available&&<FreeResets resets={source.resets}/>} sessions={sessions} />;
+  const access = useSourceAccess(source.id);
+  return <Tray resets={resets} news={access && <AccessMark id={source.id}/>} current={!!source.resets?.available&&<FreeResets resets={source.resets}/>} sessions={sessions} />;
 }
 
 /**
@@ -501,7 +514,7 @@ export const SourceCard = memo(function SourceCard({id, arrange, boardId, person
       </div>
 
       <div className="limits">
-        {source.meters&&<MoneyCard source={source} board={boardId}/>}
+        {source.meters&&<MoneyCard source={source} board={boardId} view={arrange.view}/>}
         {visible.map(w => (
           <Limit key={w.id} w={w} measuredAt={source.successAt} weekly={weekly} />
         ))}

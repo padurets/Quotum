@@ -449,6 +449,11 @@ its person; over the hub's, of its person if they have one, else it is refused w
 
 ## Exact meters and hub connections
 
+Card key previews use the existing view's `windows` visibility list with
+`<source id>/key:<opaque key id>` entries. The card's switches also apply to compact.
+The full key table remains readable, and chart series are chosen in that chart's own
+settings; key-table paging never changes the chart selection.
+
 A hub-measured card may also carry `meters`, `keys` (a preview of at most five),
 `keysCount`, `inventory` and `spending`. A meter is `{id, kind, unit, amount, limit,
 resetAt, minutes, scope, label, at, staleAfterMs, stale}`. Kind is `counter`, `balance`

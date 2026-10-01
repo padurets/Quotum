@@ -151,9 +151,12 @@ and platform smoke checks still apply.
   same until then; nothing that shows data or time keeps a timer of its own, only a
   tooltip or a gesture may wait a moment (`hub/ui/test/timers.test.ts` lists where), and
   what shows time is marked `data-time`, as `npm run bench` counts it.
-- A card tells how its measurements go in the logo's dot and its news in marks in its
-  tray, with the details in a tooltip or a panel, never in a line of its own; neither
+- A card tells how its measurements go in the logo's dot and its news in marks on the
+  left of its tray, with the details in a tooltip or a panel, never in a line of its own; neither
   changes a card's height.
+- Devices and provider accounts connect through My connections. Account settings hold
+  profile and app settings. A widget's display switches live in its own settings;
+  measurement tables do not change chart selections.
 - **Times.** Say when as `stamp` in `hub/ui/lib/format.ts` does: "26 September 14:00",
   never "today" or "tomorrow", never seconds; under a heading that already gives the day,
   the time alone. Where how soon or how long ago matters more, and room is short (a mark,

@@ -1,15 +1,13 @@
 import {useEffect,useState} from 'react';
-import type {Card} from '../lib/types';
+import type {Card,View} from '../lib/types';
 import type {KeyPart,Meter,SpendSummary} from '../../server/domain/meters';
-import {useSourceAccess,useNamed,useServerView} from '../lib/board';
+import {useSourceAccess} from '../lib/board';
 import {money,keyName,capLeft,capPercent} from '../lib/money';
-import {moneySelection} from '../lib/moneySelection';
-import {setPrefs,usePrefs} from '../lib/prefs';
-import {MAX_METERS} from '../../server/domain/meterHistory';
+import {isWindowHidden} from '../lib/view';
 import {stamp,countdown,countdownChangesAt,earliest} from '../lib/format';
 import {useClock} from '../lib/clock';
 import {t} from '../i18n';
-import {ApiError,call} from '../lib/http';
+import {ApiError,call,messageOf} from '../lib/http';
 import {Modal,ErrorLine} from './Kit';
 import {Popover} from './Popover';
 
@@ -44,54 +42,56 @@ export function KeyMetrics({part,meters}:{part:KeyPart;meters:readonly Meter[]})
     </div>}
   </div>;
 }
-type KeyPage={keys:KeyPart[];meters:Meter[];total:number;inventory:Card['inventory'];next:string|null};
+export type KeyPage={keys:KeyPart[];meters:Meter[];total:number;inventory:Card['inventory'];next:string|null};
 function AllKeys({source,board,onClose}:{source:Card;board:string;onClose:()=>void}) {
   const [page,setPage]=useState<KeyPage|null>(null),[after,setAfter]=useState<string|undefined>(),[back,setBack]=useState<(string|undefined)[]>([]),[error,setError]=useState<unknown>(null),[changed,setChanged]=useState(false);
-  const prefs=usePrefs(),sources=useNamed(),view=useServerView();
-  const selected=moneySelection(sources,view?.hidden??[],{...prefs.money,unit:'USD'}).selection!.ids;
   useEffect(()=>{
     let live=true;
     call<KeyPage>('GET',`/api/boards/${encodeURIComponent(board)}/sources/${encodeURIComponent(source.id)}/keys?limit=50${after?'&after='+encodeURIComponent(after):''}`)
       .then(reply=>{if(live){setPage(reply);setError(null);}},failure=>{if(!live)return;if(failure instanceof ApiError&&failure.code==='keys_changed'){setChanged(true);setBack([]);setAfter(undefined);}else setError(failure);});
     return()=>{live=false;};
   },[board,source.id,after]);
-  const toggle=(meter:string)=>{
-    const has=selected.some(([id,m])=>id===source.id&&m===meter);
-    const ids=has?selected.filter(([id,m])=>id!==source.id||m!==meter):[...selected,[source.id,meter] as [string,string]];
-    if(ids.length>MAX_METERS)return;
-    setPrefs({money:{...prefs.money,unit:'USD',removed:0,selected:{...prefs.money.selected,USD:ids}}});
-  };
   return <Modal title={t('money.keys',{count:source.keysCount??0})} onClose={onClose} wide>
     {changed&&<p className="drawer-note">{t('money.changed')}</p>}
     <ErrorLine error={error}/>
     <p className="drawer-note">{page?.inventory?.complete?t('money.inventory',{count:page.inventory.observed}):t('money.inventoryPartial')}</p>
-    <div className="money-key-list">{page?.keys.map(part=><div className="popover-row" key={part.id}><KeyMetrics part={part} meters={page.meters}/><div className="money-selectors">{page.meters.filter(m=>m.id.includes(part.id)).map(meter=>{
-      const chosen=selected.some(([id,m])=>id===source.id&&m===meter.id);
-      return <label key={meter.id}><input type="checkbox" checked={chosen} disabled={!chosen&&selected.length>=MAX_METERS} onChange={()=>toggle(meter.id)}/>{t(meter.kind==='cap'?'money.cap':'money.usage')}</label>;
-    })}</div></div>)}</div>
-    <p className="drawer-note">{t('money.select')}: {selected.length} / {MAX_METERS}</p>
+    <div className="table-wrap"><table className="admin-table"><thead><tr><th>{t('money.key')}</th><th>{t('money.usage')}</th><th>{t('money.month')}</th><th>{t('money.cap')}</th><th>{t('money.reset')}</th></tr></thead><tbody>{page?.keys.map(part=>{
+      const usage=page.meters.find(m=>m.id===`key:${part.id}:usage`),cap=page.meters.find(m=>m.id===`key:${part.id}:cap`);
+      return <tr key={part.id} className={part.presence==='missing'||usage?.stale?'is-stale':undefined}>
+        <td><b>{keyName(part)}</b><KeyStatus part={part}/>{part.includeByok&&<small>{t('money.byok')}</small>}</td>
+        <td title={money(usage?.amount,'USD',true)}>{money(usage?.amount)}</td>
+        <td title={money(part.periods.month,'USD',true)}>{money(part.periods.month)}</td>
+        <td title={cap?`${money(capLeft(cap),cap.unit,true)} / ${money(cap.limit,cap.unit,true)}`:undefined}>{cap?`${money(capLeft(cap),cap.unit)} / ${money(cap.limit,cap.unit)}`:'—'}</td>
+        <td>{cap&&<CapReset meter={cap}/>}</td>
+      </tr>;
+    })}</tbody></table></div>
     <div className="button-row"><button className="button" disabled={!back.length} onClick={()=>{setAfter(back.at(-1));setBack(back.slice(0,-1));}}>{t('history.back')}</button><button className="button" disabled={!page?.next} onClick={()=>{setBack([...back,after]);setAfter(page!.next!);}}>{t('money.next')}</button></div>
   </Modal>;
 }
-export function MoneyCard({source,board,compact=false}:{source:Card;board:string;compact?:boolean}) {
+export function MoneyCard({source,board,view,compact=false}:{source:Card;board:string;view?:View;compact?:boolean}) {
   const [all,setAll]=useState(false),balance=source.meters?.find(m=>m.id==='balance');
   return <div className="money-body">
     <div className="money-balance" title={money(balance?.amount,balance?.unit,true)}><span>{t('money.balance')}</span><strong data-money={balance?.amount}>{money(balance?.amount,balance?.unit)}</strong></div>
     {!compact&&<>
       <div className="money-summaries">{(['day','week','month'] as const).map(period=><div key={period}><small>{t(`money.${period}`)}</small><Summary value={source.spending?.[period]} asOf={source.successAt}/></div>)}</div>
-      <div className="money-preview">{source.keys?.map(part=><KeyMetrics key={part.id} part={part} meters={source.meters??[]}/>)}</div>
+      <div className="money-preview">{source.keys?.filter(part=>!view||!isWindowHidden(view,source.id,`key:${part.id}`)).map(part=><KeyMetrics key={part.id} part={part} meters={source.meters??[]}/>)}</div>
       {!!source.keysCount&&<button className="link-button" type="button" onClick={()=>setAll(true)}>{t('money.keys',{count:source.keysCount})}</button>}
       {source.inventory&&!source.inventory.complete&&<small className="drawer-note">{t('money.inventoryPartial')}</small>}
     </>}
-    {compact&&source.keys?.filter(k=>source.meters?.some(m=>m.id===`key:${k.id}:cap`)).slice(0,2).map(part=><KeyMetrics key={part.id} part={part} meters={source.meters??[]}/>)}
+    {compact&&source.keys?.filter(k=>(!view||!isWindowHidden(view,source.id,`key:${k.id}`))&&source.meters?.some(m=>m.id===`key:${k.id}:cap`)).slice(0,2).map(part=><KeyMetrics key={part.id} part={part} meters={source.meters??[]}/>)}
     {all&&<AllKeys source={source} board={board} onClose={()=>setAll(false)}/>}
   </div>;
 }
 export function AccessMark({id}:{id:string}) {
   const access=useSourceAccess(id);
-  const now=useClock(now=>access?.expiresAt==null?null:earliest(access.expiresAt>now?access.expiresAt:null,access.expiresAt-7*86_400_000>now?access.expiresAt-7*86_400_000:null));
+  const now=useClock(now=>access?.expiresAt==null?null:earliest(access.expiresAt>now?access.expiresAt:null,access.expiresAt-7*86_400_000>now?access.expiresAt-7*86_400_000:null,access.expiresAt>now&&access.expiresAt-now<=7*86_400_000?countdownChangesAt(access.expiresAt,now):null));
   if(!access)return null;
   const text=access.error?new ApiError(400,access.error):null;
   const expiry=access.expiresAt===null?t('sources.noExpiry'):access.expiresAt<=now?t('money.expired'):t('money.expirySoon',{time:stamp(access.expiresAt)});
-  return <span data-time="access-expiry"><Popover label={expiry} trigger={<span className={access.error||access.expiresAt!==null&&access.expiresAt-now<=7*86_400_000?'v-warn':'dim'}>⌑</span>}><div className="popover-pad"><p>{expiry}</p><ErrorLine error={text}/></div></Popover></span>;
+  const warn=!!access.error||access.expiresAt===null||access.expiresAt-now<=7*86_400_000;
+  const lead=text?messageOf(text):expiry;
+  return <span data-time="access-expiry"><Popover label={lead} up align="left" triggerClass={`tray-pill access-mark${warn?' is-warn':''}`} trigger={<>
+    <svg className="tray-icon" viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><circle cx="8" cy="8" r="4"/><path d="m11 11 9 9m-5-5 3-3m-1 5 3-3"/></svg>
+    {access.expiresAt!==null&&access.expiresAt>now&&access.expiresAt-now<=7*86_400_000&&<span>{countdown(access.expiresAt-now)}</span>}
+  </>}><div className="tray-panel"><div className="tray-panel-head"><p className="tray-panel-lead">{lead}</p>{text&&<p className="tray-panel-when">{expiry}</p>}</div></div></Popover></span>;
 }

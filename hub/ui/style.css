@@ -285,6 +285,7 @@ body.is-resizing-bottom-right, body.is-resizing-bottom-right * { cursor: nwse-re
 .popover-row span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .popover-row.is-danger { color: var(--crit); }
 .popover-row.is-danger:hover { background: #f1787014; color: var(--crit); }
+.popover-row:disabled { opacity: .45; cursor: default; }
 .popover-row b { font-weight: 450; font-variant-numeric: tabular-nums; color: var(--text-3); }
 .refresh-list { width: 328px; max-width: calc(100vw - 50px); }
 .refresh-list .spinner, .refresh-list b { flex-shrink: 0; }
@@ -378,6 +379,7 @@ td.muted, small.muted { color: var(--text-3); }
 .tray-pill svg { flex-shrink: 0; opacity: .8; }
 .tray-pill b { font-weight: 560; color: var(--text); }
 .tray-pill .tray-icon { stroke-width: 2.2; }
+.text-button.access-mark.is-warn { color: var(--warn); }
 /* The glow is on the icon itself, never on the button: a filter there would spoil the glass of its panel. */
 .text-button.reset-mark.is-accent { color: var(--reset); border-color: color-mix(in oklab, var(--reset) 28%, transparent); background: color-mix(in oklab, var(--reset) 7%, transparent); font-weight: 560; }
 .text-button.reset-mark.is-accent:hover, .text-button.reset-mark.is-accent[aria-expanded=true] { border-color: color-mix(in oklab, var(--reset) 45%, transparent); background: color-mix(in oklab, var(--reset) 13%, transparent); }
