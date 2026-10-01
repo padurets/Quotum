@@ -547,7 +547,7 @@ export const Chart = memo(function Chart({
               />
             ))}
             {markers.map(marker => {
-              if (marker.at > to) return null;
+              if (marker.at > (marker.past ? strip?.to ?? to : to)) return null;
               const mx = x(marker.at);
               if (marker.past) {
                 return (

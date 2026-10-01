@@ -9,6 +9,7 @@ export type PanFrame = TimeRange & {
   token: number;
   origin: TimeRange | null;
   originEnd: number;
+  now: number;
   length: number;
   direction: -1 | 0 | 1;
   source: symbol;
@@ -98,7 +99,7 @@ export class Pan {
     const oldest = Math.ceil(Math.max(start.historyStart, start.now - KEPT_MS + 3_600_000) / 60_000) * 60_000;
     // Short history still allows the live frame; it does not invent a past full frame.
     this.minEnd = Math.min(end, oldest + start.length);
-    this.draft = {token: ++this.serial, source: start.source, input: start.input, origin: start.selected, originEnd: end, length: start.length, from: end - start.length, to: end, direction: 0, lookAhead: Math.max(0, ...geometries.map(g => g.future))};
+    this.draft = {token: ++this.serial, source: start.source, input: start.input, origin: start.selected, originEnd: end, now, length: start.length, from: end - start.length, to: end, direction: 0, lookAhead: Math.max(0, ...geometries.map(g => g.future))};
     this.state = this.draft;
     this.notify();
     this.phase();

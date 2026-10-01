@@ -134,6 +134,8 @@ export function useTimeAxis({
       finished.current = null;
       foldTicket.current++;
       captured.current = {token: frame.token, ...visualGeometry()};
+      element.dataset.panOrigin = String(frame.originEnd);
+      element.dataset.panScale = String((captured.current.to - captured.current.from) / (width - left - right));
       panLayers.current = [...element.querySelectorAll<SVGGElement>('.slides')];
       for (const layer of panLayers.current) {
         layer.getAnimations().forEach(animation => animation.cancel());
@@ -152,6 +154,8 @@ export function useTimeAxis({
       element.classList.toggle('is-grabbing', frame.source === source.current && frame.input === 'pointer');
     } else {
       delete element.dataset.panEnd;
+      delete element.dataset.panOrigin;
+      delete element.dataset.panScale;
       element.classList.remove('is-grabbing');
       element.classList.remove('is-panning');
       captured.current = null;

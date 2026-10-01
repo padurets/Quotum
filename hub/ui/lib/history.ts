@@ -9,7 +9,7 @@ import {onPrefs, prefs} from './prefs';
 import type {Store} from './store';
 import {dropTimeRange, onTimeRange, timeRange, timeRangeKey, type TimeRange} from './timeRange';
 import type {History} from './types';
-import {pan} from './pan';
+import {pan, type Pan} from './pan';
 import {plotOf, type Coverage, type PlotBuffer} from './historyPlot';
 
 const SETTLE_MS = 300;
@@ -65,7 +65,7 @@ export class HistoryStore {
   private version = 0;
   private plotVersion = -1;
   private plotIdentity = '';
-  private aheadFailed = false;
+  private aheadStopped = false;
   private readonly plotListeners = new Set<() => void>();
   private readonly plotChunks = new Map<string, {seq: number; from: number; to: number; chunk: Chunk}>();
 
@@ -135,7 +135,7 @@ export class HistoryStore {
   news(since: number) {
     this.newsSeq++;
     this.cutTo = null;
-    this.aheadFailed = false;
+    this.aheadStopped = false;
     if (since === 0) this.invalidate();
     else {
       for (const [cell, tiles] of this.grids) for (const tile of tiles.values()) {
@@ -174,7 +174,7 @@ export class HistoryStore {
     const next = this.plotTarget();
     const cell = next.cell;
     if (!previous || previous.token !== interest.token || previous.direction !== interest.direction || Math.floor(previous.from / cell) !== next.k0 || Math.ceil(previous.to / cell) - 1 !== next.k1) {
-      this.aheadFailed = false;
+      this.aheadStopped = false;
       this.clear('settle');
       this.clear('retry');
       this.evict();
@@ -205,7 +205,7 @@ export class HistoryStore {
     this.clear('retry');
     this.abortFlights();
     this.version++;
-    this.aheadFailed = false;
+    this.aheadStopped = false;
     this.strip = null;
     this.plotChunks.clear();
     this.setPlot(null);
@@ -361,21 +361,36 @@ export class HistoryStore {
     this.setPlot(plotOf(chunks, this.meta, strip, coverage, this.windows, this.interest?.token ?? this.plot?.token ?? 0, this.epoch, this.version));
   }
 
-  private pumpPan() {
-    const visible = this.plotTarget();
+  private aheadTarget(visible: Target): Target {
     const direction = this.interest!.direction;
     const ahead = {...visible,
       k0: direction < 0 ? visible.k0 - Math.ceil(visible.length / visible.cell) : visible.k1 + 1,
       k1: direction < 0 ? visible.k0 - 1 : visible.k1 + Math.ceil(visible.length / visible.cell)};
     ahead.k0 = Math.max(ahead.k0, Math.floor(Math.max(this.meta?.historyStart ?? 0, this.env.now() - 90 * 86_400_000 + 3_600_000) / ahead.cell));
     ahead.k1 = Math.min(ahead.k1, Math.floor((Math.max(this.env.now(), this.meta?.now ?? 0) + CLOCK_TOLERANCE_MS) / ahead.cell));
+    return ahead;
+  }
+
+  private pumpPan() {
+    const visible = this.plotTarget();
+    const direction = this.interest!.direction;
+    const ahead = this.aheadTarget(visible);
     const overlaps = (f: Flight, t: Target) => f.cell === t.cell && f.to > t.k0 * t.cell && f.from <= t.k1 * t.cell;
-    for (const flight of [...this.flights]) {
-      if (flight.epoch !== this.epoch || (!overlaps(flight, visible) && (!direction || !overlaps(flight, ahead)))) this.abort(flight);
-      else flight.role = overlaps(flight, visible) ? 'visible' : 'ahead';
+    const flights = [...this.flights].sort((a, b) => {
+      const span = (f: Flight) => f.cell === visible.cell ? Math.max(0, Math.min(f.to, (visible.k1 + 1) * visible.cell) - Math.max(f.from, visible.k0 * visible.cell)) : 0;
+      return span(b) - span(a) || b.seq - a.seq;
+    });
+    const kept: Flight[] = [];
+    for (const flight of flights) {
+      const role = overlaps(flight, visible) ? 'visible' : 'ahead';
+      const sameTile = (f: Flight) => f.cell === flight.cell && tileOf(f.from, f.cell) <= tileOf(flight.to - 1, flight.cell) && tileOf(flight.from, flight.cell) <= tileOf(f.to - 1, f.cell);
+      // Ordinary navigation can have more pending reads. Entering pan gives those
+      // reads the same slots and tile ownership as reads started by the gesture.
+      if (flight.epoch !== this.epoch || (!overlaps(flight, visible) && (!direction || !overlaps(flight, ahead))) || kept.some(f => f.role === role || sameTile(f))) this.abort(flight);
+      else {flight.role = role; kept.push(flight);}
     }
     this.readMissing(visible, 'visible');
-    if (direction && !this.aheadFailed && this.estimatedBytes < this.budget) this.readMissing(ahead, 'ahead');
+    if (direction && !this.aheadStopped && this.estimatedBytes < this.budget) this.readMissing(ahead, 'ahead');
   }
 
   private readMissing(target: Target, role: Flight['role']) {
@@ -446,7 +461,7 @@ export class HistoryStore {
     }
     this.needsCompose = true;
     this.version++;
-    if (!this.bad(this.target()).length) this.clear('retry');
+    if (!this.bad(this.interest ? this.plotTarget() : this.target()).length) this.clear('retry');
     this.evict();
     this.schedule();
   }
@@ -458,7 +473,7 @@ export class HistoryStore {
       const visible = this.plotTarget();
       const needed = flight.role === 'visible' && flight.cell === visible.cell && this.bad(visible).some(at => at >= flight.from && at < flight.to);
       if (needed) this.timers.set('retry', this.env.setTimeout(() => {this.clear('retry'); this.schedule();}, RETRY_MS));
-      else this.aheadFailed = true;
+      else this.aheadStopped = true;
       this.schedule();
       return;
     }
@@ -474,6 +489,7 @@ export class HistoryStore {
 
   private evict() {
     const target = this.interest ? this.plotTarget() : this.target();
+    const ahead = this.interest?.direction ? this.aheadTarget(target) : null;
     const candidates: {cell: number; n: number; tile: HistoryTile}[] = [];
     for (const [cell, tiles] of this.grids) for (const [n, tile] of tiles) {
       if (cell === target.cell && tile.to > target.k0 * cell && tile.from <= target.k1 * cell) continue;
@@ -484,6 +500,9 @@ export class HistoryStore {
       if (bytes <= this.budget) break;
       this.grids.get(cell)!.delete(n);
       bytes -= tile.bytes;
+      // This interest cannot retain its speculative coverage. Another response
+      // must not restart it; movement or news can try a new interest instead.
+      if (ahead && cell === ahead.cell && tile.readTo > tile.readFrom && tile.readTo > ahead.k0 * cell && tile.readFrom <= ahead.k1 * cell) this.aheadStopped = true;
     }
   }
 
@@ -520,22 +539,28 @@ export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>)
 }
 const windowsOf = (state: PageState) => Object.values(state.board?.cards ?? {}).flatMap(card => card.windows.map(window => `${card.id} ${window.id}`));
 follow(loader, page);
-if (typeof window !== 'undefined') {
+
+/** The plot follows the gesture; only its completion chooses exact quantities. */
+export function followPan(loader: HistoryStore, gesture: Pick<Pan, 'get' | 'subscribe'>, selectedRange: () => TimeRange | null) {
   let origin: TimeRange | null = null;
   let token: number | null = null;
-  pan.subscribe(() => {
-    const frame = pan.get();
+  return gesture.subscribe(() => {
+    const frame = gesture.get();
     if (frame) {
       token = frame.token;
       origin = frame.origin;
-      loader.pan({token: frame.token, length: frame.length, from: frame.from, to: Math.min(frame.originEnd, frame.to + frame.lookAhead), direction: frame.direction});
+      loader.pan({token: frame.token, length: frame.length, from: frame.from, to: Math.min(frame.now, frame.to + frame.lookAhead), direction: frame.direction});
     } else if (token !== null) {
-      const selected = timeRange();
+      const selected = selectedRange();
       const committed = origin === null ? selected !== null : selected === null || selected.from !== origin.from || selected.to !== origin.to;
       token = null;
       loader.endPan(committed);
     }
   });
+}
+
+if (typeof window !== 'undefined') {
+  followPan(loader, pan, timeRange);
   const chosen = () => loader.choose(prefs().range, timeRange());
   onPrefs(chosen);
   onTimeRange(chosen);

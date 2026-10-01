@@ -40,7 +40,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
       await cdp.evaluate(`(() => {
         const root=document.querySelector('.history .chart>svg');
         const charts=[root,document.querySelector('.activity .chart>svg')],size=svg=>svg.getAttribute('viewBox')+':'+svg.style.height,sizes=charts.map(size);
-        const probe=window.__quotumPan={frames:[],latency:[],inputs:0,updated:0,pending:[],last:0,pushesDuring:0,pushesAfter:0,forbiddenMutations:0,undimmed:getComputedStyle(root).opacity==='1',sizeStable:true,coldReads:0,peakFlights:0,maxTiles:0,duplicateReads:0,flights:new Map(),running:true,feeding:false,segment:'wheel',samples:[]};
+        const probe=window.__quotumPan={frames:[],latency:[],inputs:0,updated:0,chartUpdates:[0,0],synchronized:true,pending:[],last:0,pushesDuring:0,pushesAfter:0,forbiddenMutations:0,undimmed:getComputedStyle(root).opacity==='1',sizeStable:true,coldReads:0,peakFlights:0,maxTiles:0,duplicateReads:0,flights:new Map(),running:true,feeding:false,segment:'wheel',samples:[]};
         const originalPush=history.pushState.bind(history);probe.originalPush=originalPush;
         history.pushState=(...args)=>{if(probe.feeding)probe.pushesDuring++;else probe.pushesAfter++;originalPush(...args);};
         const input=e=>{if(e.type==='wheel'&&(!e.cancelable||(!e.deltaX&&!e.shiftKey)))return;if(e.type==='pointermove'&&!e.buttons)return;probe.inputs++;const at=e.timeStamp>1e12?e.timeStamp-performance.timeOrigin:e.timeStamp;probe.pending.push(Math.min(performance.now(),at));};
@@ -57,18 +57,22 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
           if(!probe.running||!probe.feeding)return;
           for(const record of records){const element=record.target.nodeType===1?record.target:record.target.parentElement,clock=element?.closest('[data-time]'),timeOnly=clock&&clock.getAttribute('data-time')!=='chart';if(element?.closest('.card,.topbar,.agents-panel,.forecast,.activity-totals')&&!timeOnly)probe.forbiddenMutations++;}
         });probe.observer.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true});
-        let previous='0:1',phase='idle';
+        let previous=['0:1','0:1'],phase='idle';
         const tick=()=>{
           if(!probe.running)return;
-          const now=performance.now(),layer=root.querySelector('.slides'),active=!!root.dataset.panEnd,folding=!active&&layer.getAnimations().some(a=>a.playState==='running');
+          const now=performance.now(),layers=charts.map(svg=>svg.querySelector('.slides')),active=!!root.dataset.panEnd,folding=!active&&layers[0].getAnimations().some(a=>a.playState==='running');
           probe.sizeStable&&=charts.every((svg,i)=>svg.isConnected&&size(svg)===sizes[i]);
-          const transform=active?layer.style.transform:folding?getComputedStyle(layer).transform:'none',matrix=new DOMMatrix(transform&&transform!=='none'?transform:undefined),current=matrix.e+':'+matrix.a;
+          const matrices=layers.map((layer,i)=>{const transform=active?layer.style.transform:folding&&i===0?getComputedStyle(layer).transform:'none';return new DOMMatrix(transform&&transform!=='none'?transform:undefined);}),current=matrices.map(matrix=>matrix.e+':'+matrix.a);
           const nextPhase=active?'pan':folding?'fold':'idle';
           // The wheel's intentional 200 ms rest is stationary, before the fold begins.
           if(nextPhase!==phase){probe.last=0;previous=current;phase=nextPhase;}
-          if((active||folding)&&current!==previous){probe.updated++;if(probe.last){const ms=now-probe.last;probe.frames.push(ms);probe.samples.push({ms,segment:folding?'fold':probe.segment,pending:probe.pending.length,requests:probe.flights.size});}probe.last=now;probe.latency.push(...probe.pending.splice(0).map(at=>now-at));}
+          const moved=current.map((value,i)=>value!==previous[i]);
+          if(active){probe.synchronized&&=charts.every((svg,i)=>svg.dataset.panEnd===root.dataset.panEnd&&Math.abs(Number(svg.dataset.panEnd)-Number(svg.dataset.panOrigin)+matrices[i].e*Number(svg.dataset.panScale))<.01);moved.forEach((changed,i)=>{if(changed)probe.chartUpdates[i]++;});}
+          // Each input reaches both plots. Activity has no future, so only the
+          // remaining-share chart must move during the final future fold.
+          if(active&&moved.every(Boolean)||folding&&moved[0]){probe.updated++;if(probe.last){const ms=now-probe.last;probe.frames.push(ms);probe.samples.push({ms,segment:folding?'fold':probe.segment,pending:probe.pending.length,requests:probe.flights.size});}probe.last=now;probe.latency.push(...probe.pending.splice(0).map(at=>now-at));}
           if(!active&&!folding)probe.last=0;
-          previous=current;probe.undimmed&&=!root.closest('.is-loading')&&(!root.style.opacity||root.style.opacity==='1');probe.raf=requestAnimationFrame(tick);
+          previous=current;probe.undimmed&&=charts.every(svg=>!svg.closest('.is-loading')&&(!svg.style.opacity||svg.style.opacity==='1'));probe.raf=requestAnimationFrame(tick);
         };probe.raf=requestAnimationFrame(tick);
       })()`);
       await cdp.send('Emulation.setCPUThrottlingRate', {rate: 4});
@@ -116,7 +120,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
         document.querySelector('.history .chart>svg').removeEventListener('wheel',p.input,true);document.querySelector('.history .chart>svg').removeEventListener('pointermove',p.input,true);
         window.fetch=p.originalFetch;history.pushState=p.originalPush;
         const segments={};for(const segment of ['wheel','drag','return','fold']){const values=p.samples.filter(s=>s.segment===segment).map(s=>s.ms).sort((a,b)=>a-b);segments[segment]={count:values.length,p95:values[Math.ceil(values.length*.95)-1]??0,max:values.at(-1)??0};}
-        return {frames:p.frames,latency:p.latency,inputs:p.inputs,updated:p.updated,pushesDuring:p.pushesDuring,pushesAfter:p.pushesAfter,forbiddenMutations:p.forbiddenMutations,undimmed:p.undimmed,sizeStable:p.sizeStable,coldReads:p.coldReads,peakFlights:p.peakFlights,maxTiles:p.maxTiles,duplicateReads:p.duplicateReads,segments,outliers:p.samples.filter(s=>s.ms>50)};
+        return {frames:p.frames,latency:p.latency,inputs:p.inputs,updated:p.updated,chartUpdates:p.chartUpdates,synchronized:p.synchronized,pushesDuring:p.pushesDuring,pushesAfter:p.pushesAfter,forbiddenMutations:p.forbiddenMutations,undimmed:p.undimmed,sizeStable:p.sizeStable,coldReads:p.coldReads,peakFlights:p.peakFlights,maxTiles:p.maxTiles,duplicateReads:p.duplicateReads,segments,outliers:p.samples.filter(s=>s.ms>50)};
       })()`);
       report.period = period; report.series = geometry.series; report.charts = geometry.charts; report.rate = 4; report.expectedPushes = 3;
       reports.push(report);
@@ -141,6 +145,26 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
       if (!(await cdp.evaluate<boolean>(`new URLSearchParams(location.search).has('from')`))) throw new Error('Back did not restore the whole previous gesture');
       await cdp.evaluate(`history.forward()`); await wait(300);
       if (!(await cdp.evaluate<boolean>(`!new URLSearchParams(location.search).has('from')`))) throw new Error('Forward did not restore live');
+      // A wheel does not blur a keyboard-focused legend. Its bubble must stay
+      // hidden through ordinary panning, a latched drag and their final fold.
+      const legendVisible = () => cdp.evaluate<boolean>(`[...document.querySelectorAll('.activity-legend-tip.is-open')].some(tip=>getComputedStyle(tip).display!=='none')`);
+      await key(true, 'Tab', 9); await key(false, 'Tab', 9);
+      await cdp.evaluate(`document.querySelector('.activity .legend-item').focus()`); await wait(40);
+      if (!(await legendVisible())) throw new Error('focused activity legend did not open its readout');
+      await wheel(-12); await wait(40);
+      if (await legendVisible()) throw new Error('horizontal wheel left a focused legend readout visible');
+      await wait(190);
+      if (await legendVisible()) throw new Error('a wheel fold left a focused legend readout visible');
+      await wait(260);
+      await cdp.evaluate(`history.back()`); await settled();
+      await key(true, 'Shift', 16); await mouse('mousePressed', geometry.x, geometry.y, 8);
+      await mouse('mouseMoved', geometry.x + 24, geometry.y, 8); await wait(40);
+      await key(false, 'Shift', 16);
+      if (await legendVisible()) throw new Error('releasing Shift reopened a readout during a latched drag');
+      await mouse('mouseReleased', geometry.x + 24, geometry.y); await wait(30);
+      if (await legendVisible()) throw new Error('a drag fold reopened a focused legend readout');
+      await wait(260);
+      await cdp.evaluate(`history.back()`); await settled();
     }
     return {reports, problems: reports.flatMap(panningProblems)};
   } finally {

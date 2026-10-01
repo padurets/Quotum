@@ -820,6 +820,8 @@ visible and one speculative request, eight tiles each. Writes to the same tile a
 serialized, obsolete requests are aborted and speculative errors cannot drop the
 selection. The existing 15 MiB tile estimate protects the visible frame. On release,
 speculation stops and exact totals switch only after the final frame is complete.
+If a speculative response is evicted to fit that budget, its interest stops reading
+ahead until movement or history news changes what is needed.
 
 For ordinary discrete navigation the chart moves to the new period at once, drawing
 the answer it has until the next frame is assembled. A run of quick steps reads its

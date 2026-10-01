@@ -1,6 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {HistoryStore} from '../lib/history';
+import {followPan, HistoryStore} from '../lib/history';
+import {Pan} from '../lib/pan';
+import {covered} from '../lib/historyPlot';
 import {ApiError} from '../lib/http';
 import {CLOCK_TOLERANCE_MS, cellStart, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer} from '../../server/domain/history';
 
@@ -46,6 +48,98 @@ function harness(budget?: number) {
   const start = async () => {store.open('b'); store.hello('run'); store.snapshot(['s'], ['s w']); await flush();};
   return {store, reads, advance, start, now: () => now, dropped: () => dropped, timers, correctClock: (ms: number) => {now += ms;}};
 }
+
+test('entering pan normalizes pending navigation to two roles and serialized tile writes', async () => {
+  const h = harness(); await h.start(); await h.reads[0].answer();
+  for (const hours of [12, 13, 14]) {
+    h.store.choose('24h', {from: h.now() - (24 + hours) * H, to: h.now() - hours * H});
+    await flush(); await h.advance(400);
+  }
+  const inherited = pending(h);
+  assert.equal(inherited.length, 3, 'ordinary navigation has three delayed targets');
+  const range = {from: h.now() - 38 * H, to: h.now() - 14 * H};
+  h.store.pan({token: 1, length: 24 * H, ...range, direction: -1}); await flush();
+  const flights = pending(h);
+  assert.ok(flights.length <= 2);
+  assert.ok(inherited.some(r => r.signal?.aborted));
+  const [a, b] = flights;
+  if (b) assert.ok(tileOf(a.to - 1, a.cell) < tileOf(b.from, b.cell) || tileOf(b.to - 1, b.cell) < tileOf(a.from, a.cell));
+  for (const r of inherited) if (r.signal?.aborted) await r.answer();
+  h.store.choose('24h', range); h.store.endPan(true); await flush();
+  for (let i = 0; i < 20 && pending(h).length; i++) for (const r of [...pending(h)]) await r.answer();
+  assert.equal(h.store.get().history?.range, `${range.from}-${range.to}`);
+  h.store.close();
+});
+
+test('a successful speculative response preserves the failed visible target retry', async () => {
+  const h = harness(); await h.start(); await h.reads[0].answer();
+  h.store.pan({token: 1, length: 24 * H, from: NOW - 36 * H, to: NOW - 12 * H, direction: -1}); await flush();
+  const [visible, ahead] = pending(h);
+  await visible.fail(new Error('offline'));
+  assert.equal(h.timers.size, 1);
+  await ahead.answer();
+  assert.equal(h.timers.size, 1, 'an unrelated cached committed answer cannot clear this retry');
+  assert.ok(pending(h).every(r => r.from !== visible.from));
+  await h.advance(14_999);
+  assert.ok(pending(h).every(r => r.from !== visible.from));
+  await h.advance(1);
+  assert.ok(pending(h).some(r => r.from === visible.from), 'the foreground resumes at its timeout');
+  h.store.close();
+});
+
+test('memory pressure stops speculative reads without new input and retains visible coverage', async () => {
+  for (const budget of [90_000, 100_000, 120_000]) {
+    const h = harness(budget); await h.start();
+    const answer = async (r: typeof h.reads[number]) => {
+      const chunks: Chunk[] = [];
+      const end = Math.min(r.to, cellStart(h.now() + CLOCK_TOLERANCE_MS, r.cell) + r.cell);
+      for (let from = r.from; from < end;) {
+        const to = Math.min(end, tileEnd(tileOf(from, r.cell), r.cell));
+        const chunk = empty(from, to);
+        const count = (to - from) / r.cell;
+        chunk.series = [{source: 's', window: 'w', hold: 2 * r.cell, open: 80, cells: Array.from({length: count}, (_, i) => [i, 80 - i % 20, .25, r.cell, {o: 80, h: r.cell, w: [.25, .4 * r.cell, .125]}])}];
+        chunk.activity = {sessions: [['r1', 's', 'P', 'd'], ['r2', 's', 'P', 'd']], devices: {d: 'Device'}, cells: Array.from({length: count}, (_, i) => [i, .4 * r.cell, [[0, .3 * r.cell], [1, .3 * r.cell]], [['s', 's', .4 * r.cell], ['p', JSON.stringify('P'), .4 * r.cell], ['d', 'd', .4 * r.cell]]])};
+        chunks.push(chunk); from = to;
+      }
+      await r.answer({chunks});
+    };
+    await answer(h.reads[0]);
+    const range = {from: NOW - 36 * H, to: NOW - 12 * H};
+    h.store.pan({token: 1, length: 24 * H, ...range, direction: -1}); await flush();
+    for (let i = 0; i < 30 && pending(h).length; i++) for (const r of [...pending(h)]) await answer(r);
+    assert.equal(pending(h).length, 0, `speculation settles at budget ${budget}`);
+    assert.ok(h.store.estimatedBytes <= budget);
+    const plot = h.store.getPlot()!;
+    assert.ok(covered(plot.coverage, cellStart(range.from, plot.cell), Math.ceil(range.to / plot.cell) * plot.cell));
+    const count = h.reads.length;
+    await h.advance(60_000);
+    assert.equal(h.reads.length, count, 'holding the frame makes no further reads');
+    h.store.news(range.from); await flush();
+    assert.ok(h.reads.length > count, 'new relevant data can resume the foreground');
+    h.store.close();
+  }
+});
+
+test('the production gesture subscription reads the forward edge of a selected past range', async () => {
+  const h = harness();
+  let selected = {from: NOW - 72 * H, to: NOW - 48 * H};
+  h.store.choose('24h', selected); await h.start(); await h.reads[0].answer();
+  const frames: (() => void)[] = [];
+  const gesture = new Pan({now: h.now, commit: range => {selected = range!; h.store.choose('24h', range);}, requestFrame: run => {frames.push(run); return run;}, cancelFrame: () => {}, setTimeout: () => null, clearTimeout: () => {}});
+  const source = Symbol('chart');
+  gesture.register(source, () => ({end: selected.to, future: 0}));
+  const unsubscribe = followPan(h.store, gesture, () => selected);
+  const token = gesture.begin({source, input: 'pointer', selected, length: 24 * H, now: NOW, historyStart: 0, span: 24 * H, width: 1000})!;
+  gesture.move(token, 1500); frames.shift()!(); await flush();
+  for (let i = 0; i < 20 && pending(h).length; i++) for (const r of [...pending(h)]) await r.answer();
+  const draft = gesture.get()!, plot = h.store.getPlot()!;
+  assert.equal(draft.to, NOW - 12 * H);
+  assert.ok(plot.to >= draft.to);
+  assert.ok(covered(plot.coverage, cellStart(draft.from, plot.cell), Math.ceil(draft.to / plot.cell) * plot.cell));
+  gesture.finish(token); await flush();
+  assert.equal(h.store.get().history?.range, `${draft.from}-${draft.to}`);
+  unsubscribe(); h.store.close();
+});
 
 test('pan publishes partial coverage without changing totals, with at most two disjoint tile flights', async () => {
   const h = harness(); await h.start(); await h.reads[0].answer();

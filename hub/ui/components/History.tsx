@@ -192,7 +192,7 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
       });
     }
     // Resets for everyone the trackers reported, on the providers the chart shows.
-    for (const {provider, reset, line} of chartResets(past, visible, from, measured)) {
+    for (const {provider, reset, line} of chartResets(past, visible, strip?.from ?? from, strip?.to ?? measured)) {
       list.push({
         key: `announced-${provider}-${reset.at}`,
         at: reset.at,
@@ -226,11 +226,11 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
         key,
         lines: [line.key],
         color: line.color,
-        runs: weeklyPlanLine(live.resetAt, from, to, plan),
+        runs: weeklyPlanLine(live.resetAt, strip?.from ?? from, Math.max(to, strip?.to ?? to), plan),
       });
     }
     return [...seen.values()];
-  }, [visible, futureSources, from, to, now, planShown, futureView, locale]);
+  }, [visible, futureSources, from, to, now, planShown, futureView, strip, locale]);
 
   const forecasts: ForecastLine[] = useMemo(
     () =>
@@ -260,7 +260,7 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
           forecasts={forecasts}
           markers={markers}
           from={from}
-          now={measured}
+          now={strip ? now : measured}
           to={to}
           cellMs={strip?.cell ?? history.cellMs}
           strip={strip}
