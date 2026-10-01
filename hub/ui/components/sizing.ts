@@ -61,7 +61,11 @@ export function usePlot(panel: RefObject<HTMLElement | null>) {
     const next = sizing.manual ? pixels(Math.max(own, sizing.allocated - chrome)) : undefined;
     setPlot(was => (same(was, next) ? was : next));
   };
-  useLayoutEffect(() => measure.current());
+  // Plot data can replace thousands of SVG segments without changing the panel's
+  // size. Reading its rect after every such render forces their layout during input.
+  // Allocation changes are measured here; content changes arrive before paint through
+  // the observer below, and a new plot base is measured by onBase.
+  useLayoutEffect(() => measure.current(), [sizing?.manual, sizing?.allocated, sizing?.width]);
   useLayoutEffect(() => {
     const observer = new ResizeObserver(() => measure.current());
     if (panel.current) observer.observe(panel.current);
