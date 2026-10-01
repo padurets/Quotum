@@ -114,6 +114,12 @@ jobs:
         run: |
           cargo test --locked native_store_is_local_scoped_byte_safe_and_recovers_without_pointer -- --ignored --test-threads=1
           cargo test --locked native_controller_recovers_pointer_stages_rotation_and_preserves_foreign_keys -- --ignored --test-threads=1
+      - name: Secret Service owner handoff (Linux)
+        if: runner.os == 'Linux'
+        working-directory: desktop
+        env:
+          QUOTUM_TEST_DBUS_BINDING: '1'
+        run: dbus-run-session -- cargo test --locked keys::store::linux::tests:: -- --ignored --test-threads=1
       - name: Native loader callbacks (Linux)
         if: runner.os == 'Linux'
         working-directory: desktop
