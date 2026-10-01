@@ -71,9 +71,8 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
       const sent: Promise<unknown>[] = [];
       await cdp.evaluate('window.__quotumPan.feeding=true');
       // The browser generates native wheel input without a CDP IPC per delta.
-      const scroll = (distance: number) => cdp.send('Input.synthesizeScrollGesture', {x: geometry.x, y: geometry.y, xDistance: distance, yDistance: 0, speed: 720, gestureSourceType: 'mouse', preventFling: true});
-      await scroll(geometry.width * 1.25);
-      await scroll(-geometry.width * 1.25 / 3);
+      const scroll = (distance: number, reverse = 0) => cdp.send('Input.synthesizeScrollGesture', {x: geometry.x, y: geometry.y, xDistance: distance, xOverscroll: reverse, yDistance: 0, speed: 720, gestureSourceType: 'mouse', preventFling: true});
+      await scroll(geometry.width * 1.25, geometry.width * 1.25 / 3);
       await cdp.evaluate('window.__quotumPan.feeding=false');
       await wait(240);
       await cdp.send('Network.emulateNetworkConditions', {offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1});
