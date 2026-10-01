@@ -87,7 +87,8 @@ export function useTimeAxis({
   const startPan = (input: 'wheel' | 'pointer'): PanStart => {
     const selected = timeRange();
     const now = Math.max(hubNow(), end);
-    return {source: source.current, input, selected, length: selected ? selected.to - selected.from : periodOf(prefs().range).ms, now, historyStart, span: to - from, width: (width - left - right) * scale};
+    const visual = visualGeometry();
+    return {source: source.current, input, selected, length: selected ? selected.to - selected.from : periodOf(prefs().range).ms, now, historyStart, span: visual.to - visual.from, width: (width - left - right) * scale};
   };
   const wheelPan = useRef<(event: WheelEvent) => boolean>(() => false);
   wheelPan.current = event => {
@@ -109,6 +110,16 @@ export function useTimeAxis({
   }, []);
 
   const paintPan = useRef(() => {});
+  const visualGeometry = () => {
+    const layer = svg.current?.querySelector<SVGGElement>('.slides');
+    const moving = layer ? getComputedStyle(layer).transform : 'none';
+    if (moving === 'none' || !layer?.getAnimations().length) return {from, to, end};
+    const matrix = new DOMMatrix(moving);
+    const ratio = matrix.a || 1;
+    const span = (to - from) / ratio;
+    const start = from + (left * (1 - ratio) - matrix.e) / (width - left - right) * span;
+    return {from: start, to: start + span, end};
+  };
   const geometry = useRef({end, future: to - end});
   geometry.current = {end, future: to - end};
   useLayoutEffect(() => pan.register(source.current, () => geometry.current), []);
@@ -117,7 +128,7 @@ export function useTimeAxis({
     if (!element) return;
     const frame = pan.get();
     if (frame && captured.current?.token !== frame.token) {
-      captured.current = {token: frame.token, from, to, end};
+      captured.current = {token: frame.token, ...visualGeometry()};
       for (const layer of element.querySelectorAll<SVGGElement>('.slides')) layer.getAnimations().forEach(animation => animation.cancel());
       setFolding(false);
     }

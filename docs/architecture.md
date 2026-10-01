@@ -749,10 +749,32 @@ Both charts, the remaining shares and agent activity, read and move along time a
 (`ui/components/timeAxis.ts`), each with its legend under it. A time range selected on
 either becomes the analytics' period; it lives in the page's
 address (`?from=&to=`), so a reload keeps it, Back undoes it and a link to it can be shared on the board.
-‹ and › beside the period, a swipe sideways on a touchpad or Shift with the wheel over a chart move the
-analytics by half their length, one step a gesture: back, to a range in the past held in
-the address like a dragged one, no further than the history kept; forward, up to now,
-where the chosen period comes back. The chart moves to the new period at once, drawing
+‹ and › beside the period move the analytics by half their length: back, to a range in
+the past held in the address like a dragged one; forward, up to now, where the chosen
+period comes back. A horizontal touchpad swipe, Shift with the wheel, or Shift with a
+mouse or pen drag moves both charts continuously. A page-local transaction captures
+each chart's scale in CSS pixels and applies the same time delta on animation frames;
+plain dragging still selects a range and touch retains its hold-to-select gesture.
+The future moves with the strip during the gesture, then folds away over 160 ms on
+release in the past, or unfolds on returning to live. Reduced motion skips this final
+transition. Release within eight source pixels of now restores the chosen live preset.
+One changed gesture creates one address entry; cancellation or returning to the exact
+origin creates none. The wheel ends after a 200 ms pause and has no added inertia.
+
+While panning, the history store keeps the previous complete answer for the table,
+activity totals and legend numbers. A separate bounded plot buffer decodes the same
+tiles without computing frame totals. Known parts stay undimmed, lines break across
+unread cells, and an activity stack appears only when every contributing whole cell is
+read. Two edge bars are recomputed when the draft crosses a cell; moving within a cell
+only translates the prepared SVG strip. A temporary shared registry keeps plot and
+legend colors and dashes consistent, adding new groups with a pending total. Visible
+missing cells take priority over one adjacent frame of read-ahead, with at most one
+visible and one speculative request, eight tiles each. Writes to the same tile are
+serialized, obsolete requests are aborted and speculative errors cannot drop the
+selection. The existing 15 MiB tile estimate protects the visible frame. On release,
+speculation stops and exact totals switch only after the final frame is complete.
+
+For ordinary discrete navigation the chart moves to the new period at once, drawing
 the answer it has until the next frame is assembled. A run of quick steps reads its
 first and last missing parts. Tiles are kept across frames on the same grid, so a return
 or switching 12h and 24h asks nothing once both have been seen. A new lineup or work

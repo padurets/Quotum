@@ -13,6 +13,8 @@ import {delta, round, scriptPerSecond, tally, type Metrics} from './report.js';
 import {overviewCards, stillProblems, warmUntil} from './still.js';
 import {hear, type Heard} from './stream.js';
 import {frequencyKeys} from './controls.js';
+import {panning} from './panning.js';
+import {panningSet} from './fixture.js';
 
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
@@ -123,7 +125,7 @@ async function main() {
     await demo.stop();
     process.exit(code);
   };
-  const set = SETS[0];
+  const set = panningSet(SETS[0]);
   const demo = new Demo({set, scene: set.scene, still: true, idleAgents: true, address, onExit: () => void finish(1)});
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(signal, () => void finish(1));
 
@@ -197,6 +199,9 @@ async function main() {
     // The readings above are frozen: keyboard checks do not enter the performance budget.
     say('checking consecutive frequency saves with native arrow keys');
     await frequencyKeys(cdp);
+    say('checking native continuous wheel and Shift-drag at 24h and 30d, CPU ×4');
+    const panned = await panning(cdp);
+    problems.push(...panned.problems);
     const result = {
       set: set.id,
       idle: {
@@ -224,6 +229,7 @@ async function main() {
         mutations: tally(measured.reading.mutations).outsideBy,
       },
       work: worked.reports,
+      panning: panned.reports,
       problems,
     };
     console.log(JSON.stringify(result, null, 2));

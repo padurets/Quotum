@@ -329,9 +329,15 @@ cacheable. The page tracks each tile's read interval, so its omitted head stays 
 Entering that head fills the tile once for subsequent frames. A `history` event makes
 cells from `since` stale and reads only what the frame needs. Reconnect, a changed lineup or `since: 0` makes all
 tiles stale. Answers of another `run` are discarded. The shown frame stays undimmed
-while its own cells refresh; a different frame keeps the previous one dimmed until
-all of its cells have been read. Cells beyond the hub's cut remain known empty until
-news arrives. Time alone never reads history.
+while its own cells refresh; an ordinary change of period keeps the previous one dimmed
+until all of its cells have been read. Continuous panning has a separate partial plot:
+read cells stay visible, unread intervals are empty, and an activity bar is drawn only
+when all its contributing whole cells have been read. The previous complete answer
+continues to supply the table and totals until the final range is complete. Panning
+prioritizes visible missing cells and reads at most one adjacent frame in its direction,
+with at most two requests and eight tiles per request; speculative reading ends with
+the gesture. Cells beyond the hub's cut remain known empty until news arrives. Time
+alone never reads history.
 
 ## Requesting fresh limits
 

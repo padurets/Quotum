@@ -549,6 +549,12 @@ export function Chart({
                 </MarkerLabel>
               );
             })}
+            {hover === null && lines.map((line, i) => paths[i].last ? (
+              <g key={`${line.key}-end`} className="line-end">
+                <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={7} fill={line.color} opacity={0.18} />
+                <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={3} fill={line.color} />
+              </g>
+            ) : null)}
           </g>
         </g>
         <g>
@@ -579,15 +585,6 @@ export function Chart({
                 {t('chart.more', {count: more.length})}
               </MarkerLabel>
             )}
-            {hover === null &&
-              lines.map((line, i) =>
-                paths[i].last ? (
-                  <g key={`${line.key}-end`} className="line-end">
-                    <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={7} fill={line.color} opacity={0.18} />
-                    <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={3} fill={line.color} />
-                  </g>
-                ) : null,
-              )}
         </g>
         {drag && (
           <rect x={Math.min(drag.start, drag.end)} width={Math.abs(drag.end - drag.start)} y={top} height={height - top - bottom} className="selection" />

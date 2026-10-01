@@ -15,6 +15,15 @@ CI runs the same on every push, the agent on Linux, macOS and Windows. `npm star
 `hub/` serves the built dashboard on `127.0.0.1:8080`; `cargo run -p quotum` in `agent/`
 measures this machine once.
 
+After building the hub, `npm run bench -- --ci` in `hub/` checks dashboard costs in
+Chrome (`QUOTUM_CHROME`, one on `PATH`, or `--cdp http://host:port`). It includes native
+wheel and Shift-drag on both charts at 24h and 30d, with at least twelve real series and
+CPU throttled fourfold. The scenario covers delayed history, strip rebuilding, reversal
+and returning to live. Moving-frame intervals must stay within 34 ms at p95 and 50 ms
+at p99; input to an actually updated chart frame must stay within 34 ms at p95. Empty
+callbacks and missing samples fail. The previous idle, measurement, work and native
+frequency-focus checks retain their budgets. No browser means the check was not run.
+
 **The desktop app** (`desktop/`) shares a Rust controller between Electron on Linux
 and Tauri/WebView2 on Windows. `node desktop/prepare.mjs` builds the hub, downloads
 checksum-pinned runtimes, and writes icons and license notices. Run it before the
