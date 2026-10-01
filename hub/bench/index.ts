@@ -12,6 +12,7 @@ import {probeScript, type Reading} from './probe.js';
 import {delta, round, scriptPerSecond, tally, type Metrics} from './report.js';
 import {overviewCards, stillProblems, warmUntil} from './still.js';
 import {hear, type Heard} from './stream.js';
+import {frequencyKeys} from './controls.js';
 
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
@@ -193,6 +194,9 @@ async function main() {
         to: measured.to,
       }),
     ];
+    // The readings above are frozen: keyboard checks do not enter the performance budget.
+    say('checking consecutive frequency saves with native arrow keys');
+    await frequencyKeys(cdp);
     const result = {
       set: set.id,
       idle: {

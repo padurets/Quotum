@@ -50,7 +50,9 @@ measurement reaches its card and chart, 95 of 100 within a second, reading only 
 history cells and rendering no other card nor the header. A machine report crediting
 work makes at most one small history read and renders only its card, agents and
 analytics. Run it when you change the dashboard and have Chrome (`QUOTUM_CHROME`, one
-on `PATH`, or `--cdp` to one already running); CI fails over budget.
+on `PATH`, or `--cdp` to one already running); CI fails over budget. After the readings,
+it also checks consecutive measuring-frequency saves with native arrow keys and fails
+if saving loses focus.
 
 `npm start` in `hub/` serves the built dashboard on `127.0.0.1:8080` (a new hub prints
 the setup code of the first account to its log). `npm run demo` in `hub/` serves it on
@@ -65,6 +67,15 @@ turns on start at login. A hub in local mode (`QUOTUM_LOCAL_KEY`, `QUOTUM_LOCAL_
 runs only while its stdin is open.
 
 ## Rules
+
+For an isolated development stand on Linux, use `make dev`, `make info`, `make logs`
+and `make down` at the actual worktree root (see *Worktree development stands* in
+CONTRIBUTING.md). Creation prepares configuration only. Independent tool calls must
+pass the created worktree's returned path explicitly as their working directory.
+Use the configured remote browser for visuals; do not provision a second browser.
+`make dev-test` checks the lifecycle tooling. Component check wrappers strip preview
+configuration, serialize heavy runs and use Docker for Rust; canonical CI performance
+and platform smoke checks still apply.
 
 - **Tests never start a real client.** They use recorded answers and stand-in programs.
   Keep it that way: no test may depend on an account, the network or an installed
