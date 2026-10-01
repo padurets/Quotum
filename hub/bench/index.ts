@@ -4,6 +4,7 @@ import {realpathSync,writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {MONEY_KEY} from '../demo/money.js';
 import type {Credential} from '../server/store/credentials.js';
+import type {Meter} from '../server/domain/meters.js';
 import {fileURLToPath} from 'node:url';
 import {SETS} from '../demo/catalogue.js';
 import {addressOf, Demo, prepare, Stop} from '../demo/index.js';
@@ -15,7 +16,7 @@ import {probeScript, type Reading} from './probe.js';
 import {delta, round, scriptPerSecond, tally, type Metrics} from './report.js';
 import {overviewCards, stillProblems, warmUntil} from './still.js';
 import {hear, type Heard} from './stream.js';
-import {frequencyKeys} from './controls.js';
+import {frequencyKeys, moneyView} from './controls.js';
 
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
@@ -319,6 +320,16 @@ async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:C
   if(second.keys.length!==7)problems.push('money key pagination lost the final page');
   const state=await owner.get<Snapshot>('/api/overview?board='+owner.personalBoard);
   if(state.sources.find(s=>s.id===source)?.inventory?.complete!==false)problems.push('partial money inventory was reported complete');
+  const capped=await owner.post<Credential>('/api/credentials',{provider:'openrouter',secret:MONEY_KEY(5),allowNoExpiry:true});
+  const cappedSource=capped.sourceId!;
+  let cap:Meter|undefined;
+  const cappedBy=Date.now()+SHOWN_WITHIN;
+  while(!cap) {
+    const cappedState=await owner.get<Snapshot>('/api/overview?board='+owner.personalBoard);
+    cap=cappedState.sources.find(s=>s.id===cappedSource)?.meters?.find(m=>m.kind==='cap'&&m.limit==='0');
+    if(!cap){if(Date.now()>cappedBy)throw new Stop('zero-cap money fixture did not appear');await sleep(20);}
+  }
+  await moneyView(cdp,source,cappedSource,cap.id);
   return {count:latencies.length,p95Ms:Math.round(percentile(latencies,.95)),chartP95Ms:Math.round(percentile(chartLatencies,.95)),historyBytesPerMeasurement:bytes,problems};
 }
 

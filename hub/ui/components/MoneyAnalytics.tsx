@@ -46,7 +46,7 @@ export function MoneyHistory({arrange}:{arrange:Arrange}) {
   const lines=useMemo(()=>visible.map((s):Line=>{
     const card=sources.find(c=>c.id===s.sourceId),key=moneyIdentity(s),scaled=(value:string)=>Number(BigInt(value)-origin)/1_000_000;
     return {sourceId:s.sourceId,windowId:s.meterId,key,name:nameOf(s,card?.title??s.sourceId),provider:card?.provider??'',kind:'other',label:s.semantics?.label??null,minutes:null,color:colorOf(arrange.view,s.sourceId,card?.provider??''),dash:s.kind==='cap'?'7 5':'',current:scaled(s.end??'0'),consumed:0,coveredMs:s.coveredMs,remainingAtStart:s.start===null?null:scaled(s.start),remainingAtEnd:s.end===null?null:scaled(s.end),staleAfterMs:86_400_000,points:s.points.map(p=>[p.at,scaled(p.value),p.segment]),work:null};
-  }),[history,prefs.muted,prefs.money.unit,sources,arrange.view,locale,origin]);
+  }),[history,prefs.muted,prefs.money.unit,prefs.money.view,sources,arrange.view,locale,origin]);
   const unit=prefs.money.unit??'USD',minY=-Number(pad)/1_000_000,maxY=Number(span+pad)/1_000_000;
   const logical=moneySelection(sources,arrange.view.hidden,prefs.money).selection?.ids??[];
   const toggleBalance=(source:string,meter:string)=>{
