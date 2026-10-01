@@ -25,6 +25,7 @@ transport.send=async(operation,secret,query={})=>{
   if(operation==='key') {
     const count=(identified.get(index)??0)+1;identified.set(index,count);
     if(index===2&&count>1)throw new SecretError('credential_revoked');
+    if(index===3&&count>1)throw new SecretError('credential_expired');
     return {data:{is_management_key:true,expires_at:index===7?null:expiry,organization_id:null,creator_user_id:'demo-money-'+index}};
   }
   if(operation==='credits')return decodeOpenRouter(JSON.stringify({data:{total_credits:control?.credits??(index===5?10:70),total_usage:control?.usage??(index===5?15:33)}}));
