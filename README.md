@@ -113,7 +113,8 @@ Codex         api                  idle     started 25m ago · editor
   far as you choose; behind, it marks when limits came back early and when free resets
   were granted. Drag across it to zoom into a burst of work (on a phone, hold a finger
   on it first); ‹ and ›, or a swipe sideways, move it back and forth through time by
-  half its length.
+  half its length. The open page keeps the history it has read and fetches only missing
+  or changed parts as measurements and agent work arrive.
 - **A table with two forecasts:** what the period spent, each subscription's active time
   and what an active hour costs; turned on, agent-hours (each agent counted separately)
   and how much of the spending came while they worked (what went elsewhere, claude.ai or a phone, makes an
@@ -202,7 +203,7 @@ day, not a script thrown together over a weekend. In practice that meant:
   consumption. The agent says when its next measurement is due, so a sparse series isn't
   mistaken for a gap.
 - **Few moving parts.** The agent has nine direct dependencies. The hub is Fastify and
-  the SQLite built into Node, and the UI is plain React with about 140 KB of gzipped
+  the SQLite built into Node, and the UI is plain React with about 163 KB of gzipped
   JavaScript. There is no telemetry; the only requests the hub makes on its own are to
   the two reset trackers (or the mirror you name), every ten minutes, and
   `QUOTUM_RESETS=off` turns them off.
@@ -309,10 +310,14 @@ Before replacing the hub, stop it and back up its data directory (the Docker vol
 database automatically. A rollback needs the old image and the backup from before the
 upgrade: an older hub refuses a newer database layout.
 
-When upgrading from 0.3 to 0.4, subscription measurements, boards and settings remain.
-The old totals of agent work are replaced by per-session history: work time and
+When upgrading from a hub older than 0.4, subscription measurements, boards and settings
+remain. The old totals of agent work are replaced by per-session history: work time and
 forecasts based on it become available from the upgrade onward. The earlier limit
 history remains on the chart.
+
+Upgrading from 0.4 preserves subscription measurements, agent-work history, boards and
+settings. Board layouts saved before the widget grid are converted when opened. Reload
+open dashboard tabs after upgrading so the page and hub use the same history contract.
 
 On each machine, run `quotum update`, then restart the background agent with
 `quotum stop` and `quotum start` (or restart its service). With npm, use the latest
@@ -521,11 +526,11 @@ Add the hashes of any new database layout steps to `RELEASED` in
 Refresh the README screenshots in both languages from the demo board, check the upgrade
 instructions and prepare the release notes outside the repository.
 
-For example, to prepare 0.4.0 on that branch:
+For example, to prepare 0.5.0 on that branch:
 
 ```sh
-(cd hub && npm version 0.4.0 --no-git-tag-version)
-# agent/Cargo.toml and desktop/Cargo.toml: version = "0.4.0"
+(cd hub && npm version 0.5.0 --no-git-tag-version)
+# agent/Cargo.toml and desktop/Cargo.toml: version = "0.5.0"
 (cd agent && cargo metadata --format-version 1 >/dev/null)
 (cd desktop && cargo metadata --format-version 1 >/dev/null)
 ```
@@ -539,8 +544,8 @@ commit to tag. Only after the maintainer approves that specific release:
 git fetch origin
 git switch main
 git pull --ff-only origin main
-git tag -a v0.4.0 -F /path/to/release-notes.md --cleanup=verbatim
-git push origin v0.4.0
+git tag -a v0.5.0 -F /path/to/release-notes.md --cleanup=verbatim
+git push origin v0.5.0
 ```
 
 [release.yml](.github/workflows/release.yml) refuses a tag that is not annotated or
