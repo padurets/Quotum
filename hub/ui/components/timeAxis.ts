@@ -147,6 +147,7 @@ export function useTimeAxis({
     if (frame) {
       lastPan.current = frame;
       element.dataset.panEnd = String(frame.to);
+      element.classList.add('is-panning');
       element.classList.toggle('is-grabbing', frame.source === source.current && frame.input === 'pointer');
     } else {
       const last = lastPan.current;
@@ -160,6 +161,7 @@ export function useTimeAxis({
       }
       delete element.dataset.panEnd;
       element.classList.remove('is-grabbing');
+      element.classList.remove('is-panning');
       captured.current = null;
       lastPan.current = null;
       panPointer.current = null;
@@ -175,6 +177,7 @@ export function useTimeAxis({
   useEffect(() => {
     if (panning) {cancelHold(); setDrag(null); setHover(null);}
   }, [panning]);
+  useLayoutEffect(() => {svg.current?.classList.toggle('is-panning', panning !== null || folding);}, [panning, folding]);
   useEffect(() => {
     const key = (event: KeyboardEvent) => svg.current?.classList.toggle('is-grabbable', event.shiftKey);
     const blur = () => svg.current?.classList.remove('is-grabbable');

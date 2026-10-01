@@ -50,11 +50,13 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
           if(!probe.running||!probe.feeding)return;
           for(const record of records){const element=record.target.nodeType===1?record.target:record.target.parentElement;if(element?.closest('.card,.topbar,.agents-panel,.forecast,.activity-totals')&&!element.closest('[data-time]'))probe.forbiddenMutations++;}
         });probe.observer.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true});
-        let previous='';
+        let previous='0:1';
         const tick=()=>{
           if(!probe.running)return;
-          const now=performance.now(),current=root.dataset.panEnd??'';
-          if(current&&current!==previous){probe.updated++;if(probe.last&&now-probe.last<200)probe.frames.push(now-probe.last);probe.last=now;probe.latency.push(...probe.pending.splice(0).map(at=>now-at));}
+          const now=performance.now(),layer=root.querySelector('.slides'),active=!!root.dataset.panEnd,folding=!active&&layer.getAnimations().some(a=>a.playState==='running');
+          const transform=active?layer.style.transform:folding?getComputedStyle(layer).transform:'none',matrix=new DOMMatrix(transform&&transform!=='none'?transform:undefined),current=matrix.e+':'+matrix.a;
+          if((active||folding)&&current!==previous){probe.updated++;if(probe.last)probe.frames.push(now-probe.last);probe.last=now;probe.latency.push(...probe.pending.splice(0).map(at=>now-at));}
+          if(!active&&!folding)probe.last=0;
           previous=current;probe.undimmed&&=getComputedStyle(root).opacity==='1';probe.raf=requestAnimationFrame(tick);
         };probe.raf=requestAnimationFrame(tick);
       })()`);
