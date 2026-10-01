@@ -179,7 +179,8 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const clockNow = useClock(now => frameChangesAt(selected, history?.cellMs ?? 60_000, now));
   const panning = usePanning();
   const captured = useRef<{token: number; now: number} | null>(null);
-  if (panning !== null && captured.current?.token !== panning) captured.current = {token: panning, now: Math.max(clockNow, pan.get()?.originEnd ?? clockNow)};
+  if (panning === null) captured.current = null;
+  else if (captured.current?.token !== panning) captured.current = {token: panning, now: Math.max(clockNow, pan.get()?.originEnd ?? clockNow)};
   const now = panning !== null ? captured.current!.now : clockNow;
   const historyStart = useHistoryBegins();
   const frame = frameOf(selected, prefs, now, historyStart);

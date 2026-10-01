@@ -29,7 +29,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
       const geometry = await cdp.evaluate<{x: number; y: number; width: number; series: number; charts: number}>(`(() => {
         const svg=document.querySelector('.history .chart>svg'), r=svg.getBoundingClientRect();
         const charts=[...document.querySelectorAll('.chart>svg')].filter(e=>{const b=e.getBoundingClientRect();return b.top>=0&&b.bottom<=innerHeight;}).length;
-        return {x:r.left+r.width*.5,y:r.top+80,width:r.width*.8,series:svg.querySelectorAll('.series[d]:not([d=""])').length,charts};
+        return {x:r.left+r.width*.5,y:r.top+80,width:r.width*(svg.viewBox.baseVal.width-52)/svg.viewBox.baseVal.width,series:svg.querySelectorAll('.series[d]:not([d=""])').length,charts};
       })()`);
       await cdp.evaluate(`(() => {
         const root=document.querySelector('.history .chart>svg');
@@ -48,7 +48,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
         };
         probe.observer=new MutationObserver(records=>{
           if(!probe.running||!probe.feeding)return;
-          for(const record of records){const element=record.target.nodeType===1?record.target:record.target.parentElement;if(element?.closest('.card,.topbar,.agents-panel,.forecast,.activity-totals')&&!element.closest('[data-time]'))probe.forbiddenMutations++;}
+          for(const record of records){const element=record.target.nodeType===1?record.target:record.target.parentElement,clock=element?.closest('[data-time]'),timeOnly=clock&&clock.getAttribute('data-time')!=='chart';if(element?.closest('.card,.topbar,.agents-panel,.forecast,.activity-totals')&&!timeOnly)probe.forbiddenMutations++;}
         });probe.observer.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true});
         let previous='0:1',phase='idle';
         const tick=()=>{
@@ -67,13 +67,13 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
       // A delayed cold edge is part of the moving interval, including arrivals/rebuilds.
       await cdp.send('Network.emulateNetworkConditions', {offline: false, latency: 400, downloadThroughput: -1, uploadThroughput: -1});
       interception = true;
-      const events = Math.ceil(geometry.width * 1.25 / 12);
       const wheel = (dx: number, shift = false) => cdp.send('Input.dispatchMouseEvent', {type: 'mouseWheel', x: geometry.x, y: geometry.y, deltaX: dx, deltaY: 0, modifiers: shift ? 8 : 0});
       const sent: Promise<unknown>[] = [];
       await cdp.evaluate('window.__quotumPan.feeding=true');
-      for (let i = 0; i < events; i++) {sent.push(wheel(-12)); await pace(16);}
-      for (let i = 0; i < Math.ceil(events / 3); i++) {sent.push(wheel(12)); await pace(16);}
-      await Promise.all(sent);
+      // The browser generates native wheel input at frame cadence, without a CDP IPC per delta.
+      const scroll = (distance: number) => cdp.send('Input.synthesizeScrollGesture', {x: geometry.x, y: geometry.y, xDistance: distance, yDistance: 0, speed: 720, gestureSourceType: 'mouse', preventFling: true});
+      await scroll(geometry.width * 1.25);
+      await scroll(-geometry.width * 1.25 / 3);
       await cdp.evaluate('window.__quotumPan.feeding=false');
       await wait(240);
       await cdp.send('Network.emulateNetworkConditions', {offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1});
@@ -98,9 +98,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
         const svg=document.querySelector('.history .chart>svg'),width=svg.getBoundingClientRect().width,box=svg.viewBox.baseVal.width;
         return (Date.now()-to)/(to-from)*(width*(box-52)/box);
       })()`);
-      const distance = Math.ceil(Math.max(0, returnPixels - 4) / 12);
-      for (let i = 0; i < distance; i++) {sent.push(wheel(Math.min(12, Math.max(.01, returnPixels - 4 - i * 12)), true)); await pace(16);}
-      await Promise.all(sent);
+      await scroll(-Math.max(0, returnPixels - 4));
       await cdp.evaluate('window.__quotumPan.feeding=false');
       await wait(240); await settled();
       const report = await cdp.evaluate<PanReading>(`(() => {
@@ -114,6 +112,8 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
       await cdp.send('Emulation.setCPUThrottlingRate', {rate: 1});
       const live = await cdp.evaluate<boolean>(`!new URLSearchParams(location.search).has('from')`);
       if (!live) throw new Error(`${period} pan did not return to live`);
+      // Native Shift deltaX at the live bound is owned but remains a no-op.
+      await wheel(12, true); await wait(240);
       await cdp.evaluate(`history.back()`); await wait(300);
       if (!(await cdp.evaluate<boolean>(`new URLSearchParams(location.search).has('from')`))) throw new Error('Back did not restore the whole previous gesture');
       await cdp.evaluate(`history.forward()`); await wait(300);

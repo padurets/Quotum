@@ -164,7 +164,9 @@ export function useTimeAxis({
       element.classList.remove('is-panning');
       captured.current = null;
       lastPan.current = null;
+      const held = panPointer.current;
       panPointer.current = null;
+      if (held && element.hasPointerCapture(held.id)) element.releasePointerCapture(held.id);
       wheelBounds.current = null;
       panLayers.current = [];
     }
@@ -292,12 +294,14 @@ export function useTimeAxis({
     },
     onPointerDown,
     onPointerUp,
-    onPointerCancel: () => {
+    onPointerCancel: (event: PointerEvent<SVGSVGElement>) => {
       cancelHold();
       setDrag(null);
-      if (panPointer.current) pan.cancel(panPointer.current.token);
+      if (panPointer.current?.id === event.pointerId) pan.cancel(panPointer.current.token);
     },
-    onLostPointerCapture: () => {if (panPointer.current) pan.cancel(panPointer.current.token);},
+    onLostPointerCapture: (event: PointerEvent<SVGSVGElement>) => {
+      if (panPointer.current?.id === event.pointerId && !event.currentTarget.hasPointerCapture(event.pointerId)) pan.cancel(panPointer.current.token);
+    },
     // A held finger starts a range, not the page's menu.
     onContextMenu: (event: {preventDefault: () => void}) => (holding.current || drag) && event.preventDefault(),
   };

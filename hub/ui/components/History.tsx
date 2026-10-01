@@ -96,8 +96,9 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
   const codex = useResetsFor('codex');
   const past = usePastResets();
   const panning = usePanning();
-  const captured = useRef<{token: number; now: number; sources: typeof sources; forecasts: typeof hubForecasts; lineup: typeof lineup; news: typeof news; codex: typeof codex; view: typeof view} | null>(null);
-  if (panning !== null && captured.current?.token !== panning) captured.current = {token: panning, now: Math.max(clockNow, pan.get()?.originEnd ?? clockNow), sources, forecasts: hubForecasts, lineup, news, codex, view};
+  const captured = useRef<{token: number; now: number; lookAhead: number; sources: typeof sources; forecasts: typeof hubForecasts; lineup: typeof lineup; news: typeof news; codex: typeof codex; view: typeof view} | null>(null);
+  if (panning === null) captured.current = null;
+  else if (captured.current?.token !== panning) captured.current = {token: panning, now: Math.max(clockNow, pan.get()?.originEnd ?? clockNow), lookAhead: pan.get()?.lookAhead ?? 0, sources, forecasts: hubForecasts, lineup, news, codex, view};
   const context = panning !== null ? captured.current : null;
   const now = context?.now ?? clockNow;
   const futureSources = context?.sources ?? sources;
@@ -152,7 +153,7 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
   // anything further out is pointed at from the edge instead. A chosen horizon is kept as is.
   const reach = measured + (measured - from) * 0.75;
   const runOut = forecastShown ? lastRunOut(ahead.map(a => a.drawn), reach) : 0;
-  const to = !(planShown || forecastShown) || !frame.live
+  const projectedTo = !(planShown || forecastShown) || !frame.live
     ? measured
     : prefs.horizon === 'auto'
       ? Math.max(
@@ -160,6 +161,7 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
           runOut,
         )
       : measured + future;
+  const to = context ? measured + context.lookAhead : projectedTo;
 
   const markers: Marker[] = useMemo(() => {
     const list: Marker[] = [];

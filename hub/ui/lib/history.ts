@@ -318,7 +318,7 @@ export class HistoryStore {
 
   private plotTarget(): Target {
     const interest = this.interest;
-    return interest ? targetOf(interest.length, this.env.now(), 'plot', interest) : this.target();
+    return interest ? targetOf(interest.length, Math.max(this.env.now(), this.meta?.now ?? 0), 'plot', interest) : this.target();
   }
 
   private publishPlot() {
@@ -366,7 +366,7 @@ export class HistoryStore {
       k0: direction < 0 ? visible.k0 - Math.ceil(visible.length / visible.cell) : visible.k1 + 1,
       k1: direction < 0 ? visible.k0 - 1 : visible.k1 + Math.ceil(visible.length / visible.cell)};
     ahead.k0 = Math.max(ahead.k0, Math.floor(Math.max(this.meta?.historyStart ?? 0, this.env.now() - 90 * 86_400_000 + 3_600_000) / ahead.cell));
-    ahead.k1 = Math.min(ahead.k1, Math.floor((this.env.now() + CLOCK_TOLERANCE_MS) / ahead.cell));
+    ahead.k1 = Math.min(ahead.k1, Math.floor((Math.max(this.env.now(), this.meta?.now ?? 0) + CLOCK_TOLERANCE_MS) / ahead.cell));
     const overlaps = (f: Flight, t: Target) => f.cell === t.cell && f.to > t.k0 * t.cell && f.from <= t.k1 * t.cell;
     for (const flight of [...this.flights]) {
       if (flight.epoch !== this.epoch || (!overlaps(flight, visible) && (!direction || !overlaps(flight, ahead)))) this.abort(flight);
@@ -392,7 +392,7 @@ export class HistoryStore {
       if (next > last + target.cell || tileOf(next, target.cell) - tileOf(from, target.cell) >= MAX_READ_TILES || blocked(next)) break;
       last = next;
     }
-    const to = Math.min(tileEnd(tileOf(last, target.cell), target.cell), cellStart(this.env.now(), target.cell) + 2 * target.cell);
+    const to = Math.min(tileEnd(tileOf(last, target.cell), target.cell), cellStart(Math.max(this.env.now(), this.meta?.now ?? 0), target.cell) + 2 * target.cell);
     if (to > from) this.read(target, from, to, role);
   }
 
