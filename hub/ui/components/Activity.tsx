@@ -296,7 +296,7 @@ export const stacksHeight = (width: number) => (width < 560 ? 160 : 200);
  * in it. It reads, and moves through time, as the chart does (`useTimeAxis`), and is made
  * taller as the chart is (`plot`, `onBase`).
  */
-function Stacks({
+const Stacks = memo(function Stacks({
   activity,
   origin,
   groups,
@@ -524,4 +524,4 @@ function Stacks({
       )}
     </div>
   );
-}
+});

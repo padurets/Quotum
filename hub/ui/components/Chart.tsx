@@ -242,7 +242,7 @@ export const plotHeight = (width: number) => (width < 560 ? 220 : 300);
  * made taller, the plot is as tall as `plot` (CSS pixels), never lower than by itself;
  * it tells how tall that is (`onBase`, CSS pixels).
  */
-export function Chart({
+export const Chart = memo(function Chart({
   lines,
   plans = [],
   forecasts = [],
@@ -691,4 +691,4 @@ export function Chart({
       {!lines.length && empty && <div className="chart-empty">{empty}</div>}
     </div>
   );
-}
+});

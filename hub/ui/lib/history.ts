@@ -1,4 +1,4 @@
-import {useSyncExternalStore} from 'react';
+import {useDeferredValue, useSyncExternalStore} from 'react';
 import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, cellStart, compose, targetOf, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer, type HistoryMeta, type Target} from '../../server/domain/history';
 import {page, useHistoryStart, type PageEvent, type PageState} from './board';
 import {hubNow} from './clock';
@@ -542,7 +542,13 @@ if (typeof window !== 'undefined') {
   chosen();
 }
 export function useHistory(): Shown {return useSyncExternalStore(loader.subscribe, loader.get, loader.get);}
-export function useHistoryPlot(): PlotBuffer | null {return useSyncExternalStore(loader.subscribePlot, loader.getPlot, loader.getPlot);}
+export function useHistoryPlot(): PlotBuffer | null {
+  const current = useSyncExternalStore(loader.subscribePlot, loader.getPlot, loader.getPlot);
+  // Input can interrupt preparation of the replacing strip. Clear/cancel and a
+  // complete answer still retire it immediately, together with committed quantities.
+  const prepared = useDeferredValue(current);
+  return current && prepared?.token === current.token && prepared.epoch === current.epoch ? prepared : null;
+}
 const answeredStart = () => loader.get().history?.historyStart ?? null;
 export function useHistoryBegins(): number {
   const answered = useSyncExternalStore(loader.subscribe, answeredStart, answeredStart);
