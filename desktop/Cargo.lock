@@ -2812,7 +2812,7 @@ dependencies = [
 
 [[package]]
 name = "quotum-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dirs 7.0.0",
  "jiff",
@@ -2827,7 +2827,7 @@ dependencies = [
 
 [[package]]
 name = "quotum-desktop"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "futures-lite",

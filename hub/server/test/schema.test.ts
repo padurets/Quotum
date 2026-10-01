@@ -18,6 +18,8 @@ const RELEASED = [
   '93bef51f9d1b8ff1ad525301dfeac3f98c87068d6211e6e02f6388bc1de4cfb2', // 0.3
   'f0137f7875aee26476d1eb2b6f010b1365475c6e8cc452e863c282c4104c729b', // 0.4
   '1fd789e182b8d729fc874051306490e42a2b6c37d36cca805ec47464fafdf999', // 0.4
+  '2001aa53d351ad58d717191dea8ada0028145647b8372751d54edf73e50c84bf', // 0.5
+  '9ff26257825602cd24c4e8b209e8ff9ac70a8713dbc9697720c3b1d0a50d1748', // 0.5
 ];
 
 test('released layout steps never change; new ones come after them', () => {
