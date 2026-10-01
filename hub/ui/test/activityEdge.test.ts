@@ -28,13 +28,20 @@ test('the actual activity edge painter retains full and partial bars when a sele
     return {getAttribute: (name: string) => attributes.get(name) ?? null, setAttribute: (name: string, value: string) => attributes.set(name, value)};
   };
   const mask = {current: element()}, paths = groups.map(() => element());
-  const edges = {current: {querySelectorAll: () => paths}}, edgePaint = {current: () => {}};
+  let committedPaints = 0;
+  const committed = () => {committedPaints++;};
+  const edges = {current: {querySelectorAll: () => paths}}, edgePaint = {current: committed};
+  const commits: (() => void)[] = [];
   const source = readFileSync(new URL('../components/Activity.tsx', import.meta.url), 'utf8');
-  const start = source.indexOf('edgePaint.current = () => {');
-  const body = source.slice(start, source.indexOf('\n  };', start) + 5);
+  const start = source.search(/(?:const paintEdges|edgePaint.current) = \(\) => \{/);
+  const body = source.slice(start, source.indexOf('useLayoutEffect(() => pan.subscribe', start));
   const y = (ms: number) => 100 - ms / (.7 * H) * 100;
-  runInNewContext(body, {edgePaint, strip, mask, edges, pan, from: selected.from, to: selected.to, targetOf, cellStart, plotBar, groups, by: 'project', painted: {current: ''}, barMs: strip.barMs, vertical: {max: .7 * H}, height: 100, perMs: 1 / H, x: (at: number) => (at - selected.from) / H, y});
+  runInNewContext(body, {edgePaint, strip, mask, edges, pan, from: selected.from, to: selected.to, targetOf, cellStart, plotBar, groups, by: 'project', painted: {current: ''}, barMs: strip.barMs, vertical: {max: .7 * H}, height: 100, perMs: 1 / H, x: (at: number) => (at - selected.from) / H, y, useLayoutEffect: (commit: () => void) => commits.push(commit)});
+  assert.equal(edgePaint.current, committed, 'a preparing render cannot replace the painter of the old DOM');
   edgePaint.current();
+  assert.equal(committedPaints, 1);
+  assert.equal(mask.current.getAttribute('width'), null);
+  commits[0]();
   assert.ok(Number(mask.current.getAttribute('width')) > 0, 'the inner mask retains complete bars');
   assert.equal(expected.agentMs, DAY * 7 / 10);
   for (const bar of [expected.cells[0], expected.cells.at(-1)!]) {

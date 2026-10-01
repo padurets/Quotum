@@ -5,7 +5,7 @@ import {clock, num, shortDay, stamp, workHours} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
 import {activityEmpty, activityScale, atOnce, groupColors, mutedKey} from '../lib/activity';
 import {ACTIVITY_BY, setMuted, setPrefs, usePrefs} from '../lib/prefs';
-import {answeredRangeLabel, setTimeRange, useTimeRange, type TimeRange} from '../lib/timeRange';
+import {answeredRangeLabel, setTimeRange, timeRangeKey, useTimeRange, type TimeRange} from '../lib/timeRange';
 import {cellLabel, frameChangesAt, frameOf, measuredTo, niceTicks} from '../lib/periods';
 import {ACTIVITY, cardId, isHidden, withHidden, type Arrange} from '../lib/view';
 import {useLineup, useTitles, type Title} from '../lib/board';
@@ -254,6 +254,8 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
       : said.key === 'knownFrom' || said.key === 'noneSince'
         ? t(`activity.${said.key}`, {time: stamp(said.at)})
         : t(`activity.${said.key}`);
+  const answered = history?.range === (selected ? timeRangeKey(selected) : prefs.range);
+  const emptyFrame = answered && panning === null && !strip ? empty : null;
 
   return (
     <section ref={panel} className={`panel activity ${loading ? 'is-loading' : ''}`} data-time="chart" aria-label={t('activity.title')} aria-busy={loading} data-history-range={history?.range}>
@@ -262,7 +264,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
         <ActivitySettings arrange={arrange} />
       </div>
       <Totals activity={activity} shownMs={shownMs} since={since} />
-      {empty && !strip ? (
+      {!history ? (
         <div className="chart chart-loading" style={plot === undefined ? undefined : {height: plot}}>
           {empty}
         </div>
@@ -271,7 +273,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
           <Stacks
             activity={activity!}
             origin={history!.since}
-            groups={presentation.shown}
+            groups={emptyFrame ? [] : presentation.shown}
             from={from}
             to={to}
             unknownTo={since}
@@ -280,10 +282,11 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
             onBase={onBase}
             strip={strip}
             by={by}
-            allMuted={presentation.identities.length > 0 && presentation.shown.length === 0}
+            allMuted={!emptyFrame && presentation.identities.length > 0 && presentation.shown.length === 0}
+            empty={emptyFrame}
           />
           <div className="legend">
-            {presentation.identities.map(identity => (
+            {(emptyFrame ? [] : presentation.identities).map(identity => (
               <LegendItem key={identity.key} groupKey={identity.key} by={by} group={groups.find(group => group.key === identity.key) ?? null} name={groupName(identity, by, titles)} color={identity.color} muted={!!prefs.muted[mutedKey(by, identity.key)]} />
             ))}
           </div>
@@ -315,6 +318,7 @@ const Stacks = memo(function Stacks({
   strip,
   by,
   allMuted,
+  empty,
 }: {
   activity: ActivityData;
   /** Where the answer begins: the bars are drawn from there, so their numbers stay small however old the hub. */
@@ -331,6 +335,7 @@ const Stacks = memo(function Stacks({
   strip: PlotBuffer | null;
   by: ActivityDimension;
   allMuted: boolean;
+  empty: string | null;
 }) {
   const barMs = strip?.barMs ?? activity.barMs;
   const hatchFrom = strip?.from ?? from;
@@ -394,7 +399,7 @@ const Stacks = memo(function Stacks({
   const edges = useRef<SVGGElement>(null);
   const edgePaint = useRef(() => {});
   const painted = useRef('');
-  edgePaint.current = () => {
+  const paintEdges = () => {
     if (!strip || !mask.current || !edges.current) return;
     const draft = pan.get();
     const range = draft ? {from: draft.from, to: draft.to} : {from, to};
@@ -425,7 +430,8 @@ const Stacks = memo(function Stacks({
     }
     edges.current.querySelectorAll('path').forEach((path, i) => {if (path.getAttribute('d') !== paths[i]) path.setAttribute('d', paths[i]);});
   };
-  useLayoutEffect(() => {painted.current = ''; edgePaint.current();});
+  // Input uses the committed groups while React prepares their replacement.
+  useLayoutEffect(() => {edgePaint.current = paintEdges; painted.current = ''; paintEdges();});
   useLayoutEffect(() => pan.subscribe(() => edgePaint.current()), []);
   useEffect(() => {if (!strip) painted.current = '';}, [strip]);
 
@@ -510,6 +516,7 @@ const Stacks = memo(function Stacks({
           <rect x={x(hover)} width={Math.max(1, x(hover + barMs) - x(hover))} y={top} height={height - top - bottom} className="hover-band" />
         )}
       </svg>
+      {empty && <div className="chart-empty">{empty}</div>}
       {allMuted && <div className="chart-empty">{t('activity.allOff')}</div>}
       {hover !== null && bar && parts.length > 0 && !drag && (
         <Tooltip tip={tip} className={narrow ? 'is-below' : ''} style={tipStyle}>

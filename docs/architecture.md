@@ -807,6 +807,8 @@ chart and activity-legend readouts even before movement starts. The plot and leg
 keep their height through the gesture, final fold and resulting range; extra legend
 entries scroll inside. Ordinary range navigation or a layout/language change measures
 them again. Changing the time frame by hand therefore cannot resize the chart.
+An answered activity frame without work keeps its time axis and legend viewport;
+its empty message sits inside the plot, which still accepts the next gesture.
 
 While panning, the history store keeps the previous complete answer for the table,
 activity totals and legend numbers. A separate bounded plot buffer decodes the same
