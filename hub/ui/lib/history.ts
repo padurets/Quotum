@@ -113,7 +113,7 @@ export class HistoryStore {
     if (since === 0) this.invalidate();
     else {
       for (const [cell, tiles] of this.grids) for (const tile of tiles.values()) {
-        if (tile.to > since) tile.validTo = Math.min(tile.validTo, Math.max(tile.from, cellStart(since, cell)));
+        if (tile.to > since) tile.validTo = Math.min(tile.validTo, Math.max(tile.readFrom, cellStart(since, cell)));
       }
       for (const flight of this.flights) if (flight.epoch === this.epoch && flight.to > since) flight.touched = Math.min(flight.touched, cellStart(since, flight.cell));
     }
@@ -144,7 +144,7 @@ export class HistoryStore {
     this.epoch++;
     this.cutTo = null;
     this.clear('retry');
-    for (const tiles of this.grids.values()) for (const tile of tiles.values()) tile.validTo = tile.readTo = tile.from;
+    for (const tiles of this.grids.values()) for (const tile of tiles.values()) tile.readFrom = tile.validTo = tile.readTo = tile.from;
     this.needsCompose = true;
   }
 
@@ -178,7 +178,8 @@ export class HistoryStore {
     for (let k = target.k0; k <= target.k1; k++) {
       const at = k * target.cell;
       if (this.cutTo !== null && at >= this.cutTo) continue;
-      if (at >= (this.grids.get(target.cell)?.get(tileOf(at, target.cell))?.readTo ?? -Infinity)) return false;
+      const tile = this.grids.get(target.cell)?.get(tileOf(at, target.cell));
+      if (!tile || at < tile.readFrom || at >= tile.readTo) return false;
     }
     return true;
   }
@@ -188,7 +189,8 @@ export class HistoryStore {
     for (let k = target.k0; k <= target.k1; k++) {
       const at = k * target.cell;
       if (this.cutTo !== null && at >= this.cutTo) continue;
-      if (at < (this.grids.get(target.cell)?.get(tileOf(at, target.cell))?.validTo ?? -Infinity)) continue;
+      const tile = this.grids.get(target.cell)?.get(tileOf(at, target.cell));
+      if (tile && at >= tile.readFrom && at < tile.validTo) continue;
       if ([...this.flights].some(f => f.epoch === this.epoch && f.cell === target.cell && f.from <= at && f.to > at && f.touched > at)) continue;
       bad.push(at);
     }
@@ -206,7 +208,7 @@ export class HistoryStore {
     const target = this.target();
     if (target.k1 < target.k0) return this.env.dropTimeRange();
     if (this.needsCompose && this.meta && this.full(target)) {
-      const chunks = [...(this.grids.get(target.cell)?.values() ?? [])].filter(t => t.to > target.k0 * target.cell && t.from <= target.k1 * target.cell).sort((a, b) => a.from - b.from).map(tile => {tile.shownAt = this.env.now(); return tile.chunk(this.meta!.known);});
+      const chunks = [...(this.grids.get(target.cell)?.values() ?? [])].filter(t => t.readTo > t.readFrom && t.readTo > target.k0 * target.cell && t.readFrom <= target.k1 * target.cell).sort((a, b) => a.from - b.from).map(tile => {tile.shownAt = this.env.now(); return tile.chunk(this.meta!.known);});
       this.shown = {...compose(chunks, this.meta, target, this.windows), board: this.board};
       this.needsCompose = false;
       this.publish();
@@ -216,7 +218,9 @@ export class HistoryStore {
     if ([...this.flights].some(f => f.epoch === this.epoch && f.target === target.key && f.cell === target.cell)) return;
     const bad = this.bad(target);
     if (!bad.length) return;
-    const from = this.tile(bad[0], target.cell).validTo;
+    const first = this.tile(bad[0], target.cell);
+    // Cold reads omit the unseen head. Entering a held tile's head fills it once.
+    const from = first.readTo === first.readFrom ? bad[0] : bad[0] < first.readFrom ? first.from : first.validTo;
     const to = Math.min(tileEnd(tileOf(bad.at(-1)!, target.cell), target.cell), cellStart(this.env.now(), target.cell) + 2 * target.cell);
     const flight: Flight = {seq: ++this.seq, epoch: this.epoch, target: target.key, newsSeq: this.newsSeq, cell: target.cell, from, to, touched: Infinity};
     this.flights.add(flight);
@@ -231,8 +235,18 @@ export class HistoryStore {
       if (tile.writeSeq > flight.seq) continue;
       tile.merge(chunk, answer.known);
       tile.writeSeq = flight.seq;
-      if (chunk.from <= tile.validTo) tile.validTo = Math.max(tile.validTo, Math.min(chunk.to, cellStart(flight.touched, flight.cell)));
-      if (chunk.from <= tile.readTo) tile.readTo = Math.max(tile.readTo, chunk.to);
+      const freshEnd = Math.max(chunk.from, Math.min(chunk.to, cellStart(flight.touched, flight.cell)));
+      if (tile.readFrom === tile.readTo) {
+        tile.readFrom = chunk.from;
+        tile.readTo = chunk.to;
+        tile.validTo = freshEnd;
+      } else if (chunk.from <= tile.readTo && chunk.to >= tile.readFrom) {
+        // A touched bridge in the new head breaks the fresh prefix of the old suffix.
+        if (chunk.from < tile.readFrom && freshEnd < tile.readFrom) tile.validTo = freshEnd;
+        else if (chunk.from <= tile.validTo) tile.validTo = Math.max(tile.validTo, freshEnd);
+        tile.readFrom = Math.min(tile.readFrom, chunk.from);
+        tile.readTo = Math.max(tile.readTo, chunk.to);
+      }
     }
     if (flight.seq > this.metaSeq) {
       this.metaSeq = flight.seq;

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import type {Chunk} from '../../server/domain/history';
+import {compose, targetOf} from '../../server/domain/history';
 import {HistoryTile} from '../lib/historyTiles';
 
 const M = 60_000;
@@ -60,4 +61,44 @@ test('a partial new epoch retains still-held suffix rows while clearing replaced
   assert.equal(held.activity.cells.length, 2);
   tile.merge({from: 0, to: 2 * M, series: [], activity: {sessions: [], devices: {}, cells: []}, resets: [], grants: []}, known);
   assert.deepEqual(tile.chunk(known), {from: 0, to: 2 * M, series: [], activity: {sessions: [], devices: {}, cells: []}, resets: [], grants: []});
+});
+
+test('a readable suffix remaps sparse activity and filters series and events at both edges', () => {
+  const tile = new HistoryTile(0, M);
+  const a = chunk(10 * M, 'A'), b = chunk(20 * M, 'B');
+  a.resets = [['s', 'wA', 10 * M]]; b.resets = [['s', 'wB', 20 * M]];
+  a.grants = [['s', 10 * M, 1]]; b.grants = [['s', 20 * M, 2]];
+  tile.merge(a, known); tile.merge(b, known);
+  tile.readFrom = 20 * M; tile.readTo = 21 * M;
+  const held = tile.chunk(known);
+  assert.equal(held.from, b.from);
+  assert.deepEqual(held.series, b.series);
+  assert.equal(held.activity.cells[0][0], 0);
+  assert.deepEqual(held.resets, b.resets); assert.deepEqual(held.grants, b.grants);
+  const target = targetOf(M, b.to, 'past', {from: b.from, to: b.to});
+  const meta = {now: b.to, historyStart: 0, known}, windows = new Set(['s wA', 's wB']);
+  assert.deepEqual(compose([held], meta, target, windows), compose([b], meta, target, windows));
+});
+
+test('every whole-cell cut of a packed tile composes as the original complete cells', () => {
+  const whole: Chunk = {from: 0, to: 60 * M, series: [], activity: {sessions: [], devices: {}, cells: []}, resets: [['s', 'wA', 5 * M], ['s', 'wB', 25 * M]], grants: [['s', 12 * M, 2], ['s', 59 * M, 1]]};
+  for (let i = 0; i < 60; i += 3) {
+    const piece = chunk(i * M, i % 2 ? 'A' : 'B');
+    for (const line of piece.series) {
+      let series = whole.series.find(s => s.window === line.window);
+      if (!series) {series = {...line, cells: []}; whole.series.push(series);}
+      series.cells.push([i, 80 - i / 10, .1234, 12_345, {o: i % 2 ? 80.0123 : null, l: 80.0045, g: 1, w: [.1234, 5000, .1]}]);
+    }
+    const offset = whole.activity.sessions.length;
+    whole.activity.sessions.push(...piece.activity.sessions.map(([ref, ...rest]): Chunk['activity']['sessions'][number] => [`${i}-${ref}`, ...rest]));
+    Object.assign(whole.activity.devices, piece.activity.devices);
+    whole.activity.cells.push([i, M, [[offset, 40_000], [offset + 1, 40_000]], piece.activity.cells[0][3]]);
+  }
+  const tile = new HistoryTile(0, M); tile.merge(whole, known);
+  const windows = new Set(['s wA', 's wB']), meta = {now: whole.to, historyStart: 0, known};
+  for (let a = 0; a < 60; a++) for (let b = a + 1; b <= 60; b++) {
+    tile.readFrom = a * M; tile.readTo = b * M;
+    const target = targetOf((b - a) * M, whole.to, 'cut', {from: a * M, to: b * M});
+    assert.deepEqual(compose([tile.chunk(known)], meta, target, windows), compose([whole], meta, target, windows), `${a}..${b}`);
+  }
 });

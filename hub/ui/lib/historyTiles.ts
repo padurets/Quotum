@@ -8,6 +8,7 @@ type Group = ['s' | 'p' | 'd', string];
 
 /** A tile owns one buffer per series and one for sparse activity, without cell objects. */
 export class HistoryTile {
+  readFrom: number;
   validTo: number;
   readTo: number;
   writeSeq = 0;
@@ -21,7 +22,7 @@ export class HistoryTile {
   private grants: Chunk['grants'] = [];
 
   constructor(readonly from: number, readonly cell: number) {
-    this.validTo = this.readTo = from;
+    this.readFrom = this.validTo = this.readTo = from;
   }
 
   get to() {return this.from + TILE_CELLS * this.cell;}
@@ -126,21 +127,22 @@ export class HistoryTile {
     return Array.from({length: 60}, (_, i) => Array.from(values.subarray(offsets[i], offsets[i + 1])));
   }
 
-  /** Only the read prefix is materialized; old epoch data stays held until replaced. */
+  /** Only the read interval is materialized; old epoch data stays held until replaced. */
   chunk(known: HistoryMeta['known']): Chunk {
-    const chunk: Chunk = {from: this.from, to: this.readTo, series: [], activity: {sessions: this.sessions, devices: this.devices, cells: []}, resets: this.resets.filter(([, , at]) => at < this.readTo), grants: this.grants.filter(([, at]) => at < this.readTo)};
+    const first = (this.readFrom - this.from) / this.cell;
+    const chunk: Chunk = {from: this.readFrom, to: this.readTo, series: [], activity: {sessions: this.sessions, devices: this.devices, cells: []}, resets: this.resets.filter(([, , at]) => at >= this.readFrom && at < this.readTo), grants: this.grants.filter(([, at]) => at >= this.readFrom && at < this.readTo)};
     for (const s of this.series.values()) {
       const cells: DecodedCell[] = [];
-      for (let i = 0; this.from + i * this.cell < this.readTo; i++) {
+      for (let i = first; this.from + i * this.cell < this.readTo; i++) {
         const at = i * FIELDS;
         if (Number.isNaN(s.values[at])) continue;
         const v = s.values.subarray(at, at + FIELDS);
         cells.push({at: this.from + i * this.cell, low: v[0], first: v[1], last: v[2], open: Number.isNaN(v[3]) ? null : v[3], gap: !!v[4], hold: v[5], spent: v[6], covered: v[7], work: [v[8], v[9], v[10]]});
       }
-      if (cells.length) chunk.series.push(encodeCells(s.source, s.window, this.from, this.cell, Math.max(known.work, known.sources[s.source] ?? Infinity), cells));
+      if (cells.length) chunk.series.push(encodeCells(s.source, s.window, this.readFrom, this.cell, Math.max(known.work, known.sources[s.source] ?? Infinity), cells));
     }
     this.activityRows().forEach((row, i) => {
-      if (!row.length || this.from + i * this.cell >= this.readTo) return;
+      if (!row.length || i < first || this.from + i * this.cell >= this.readTo) return;
       const [active, count] = row;
       const members: Chunk['activity']['cells'][number][2] = [];
       let at = 2;
@@ -148,7 +150,7 @@ export class HistoryTile {
       const groupCount = row[at++];
       const groups: Chunk['activity']['cells'][number][3] = [];
       for (let n = 0; n < groupCount; n++, at += 2) groups.push([...this.groups[row[at]], row[at + 1]]);
-      chunk.activity.cells.push([i, active, members, groups]);
+      chunk.activity.cells.push([i - first, active, members, groups]);
     });
     return chunk;
   }

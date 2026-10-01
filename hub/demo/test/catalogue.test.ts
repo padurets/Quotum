@@ -1,4 +1,4 @@
-import {compose, targetOf, tileOf, tileStart, type HistoryAnswer} from '../../server/domain/history.js';
+import {compose, targetOf, type HistoryAnswer} from '../../server/domain/history.js';
 import {periodOf} from '../../ui/lib/periods.js';
 import {test, type TestContext} from 'node:test';
 import assert from 'node:assert/strict';
@@ -169,7 +169,7 @@ class Reading {
       const selected = typeof range === 'string' ? null : {from: this.stand.start + range.from, to: this.stand.start + range.to};
       const length = typeof range === 'string' ? periodOf(range).ms : range.to - range.from;
       const target = targetOf(length, this.now, typeof range === 'string' ? range : `${selected!.from}-${selected!.to}`, selected);
-      const from = tileStart(tileOf(target.k0 * target.cell, target.cell), target.cell);
+      const from = target.k0 * target.cell;
       const to = (target.k1 + 1) * target.cell;
       this.histories.set(key, Promise.all([
         this.reader(board).get<HistoryAnswer>(`/api/history?cell=${target.cell}&from=${from}&to=${to}&board=${encodeURIComponent(id)}`),

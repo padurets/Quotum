@@ -322,8 +322,10 @@ when they go quiet; each credit sends `history` with its earliest credited time.
 board has neither measurements nor working agents and sends no such news.
 
 The page keeps tiles of its open board with a bounded memory budget, preserving its
-current frame. A `history` event makes cells from `since` stale and reads only the
-frame's missing or stale prefix. Reconnect, a changed lineup or `since: 0` makes all
+current frame. Cold reading starts at the frame's first cell; whole inner tiles remain
+cacheable. The page tracks each tile's read interval, so its omitted head stays unknown.
+Entering that head fills the tile once for subsequent frames. A `history` event makes
+cells from `since` stale and reads only what the frame needs. Reconnect, a changed lineup or `since: 0` makes all
 tiles stale. Answers of another `run` are discarded. The shown frame stays undimmed
 while its own cells refresh; a different frame keeps the previous one dimmed until
 all of its cells have been read. Cells beyond the hub's cut remain known empty until

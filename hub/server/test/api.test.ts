@@ -666,7 +666,7 @@ async function readFrame(call: Awaited<ReturnType<typeof hub>>['call'], query: s
   const selected = params.has('from') ? {from: Number(params.get('from')), to: Number(params.get('to'))} : null;
   const period = periodOf(params.get('range') ?? '24h');
   const target = targetOf(selected ? selected.to - selected.from : period.ms, Date.now(), selected ? `${selected.from}-${selected.to}` : period.id, selected);
-  const from = tileStart(tileOf(target.k0 * target.cell, target.cell), target.cell);
+  const from = target.k0 * target.cell;
   const to = (target.k1 + 1) * target.cell;
   const result = await call('GET', `/api/history?board=${overview.body.board.id}&cell=${target.cell}&from=${from}&to=${to}`, {as});
   if (result.status !== 200) return result;

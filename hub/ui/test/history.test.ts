@@ -43,14 +43,14 @@ function harness(budget?: number) {
   return {store, reads, advance, start, now: () => now, dropped: () => dropped, timers};
 }
 
-test('the first snapshot reads once from a tile edge; news reads only the tail, without dimming', async () => {
+test('the first snapshot reads once from the frame cell; news reads only the tail, without dimming', async () => {
   const h = harness();
   h.store.open('b'); h.store.hello('run'); await flush();
   assert.equal(h.reads.length, 0);
   h.store.snapshot(['s'], ['s w']); await flush();
   assert.equal(h.reads.length, 1);
   const first = h.reads[0];
-  assert.equal(first.from, tileStart(tileOf(NOW - 24 * H, first.cell), first.cell));
+  assert.equal(first.from, cellStart(NOW - 24 * H, first.cell));
   await first.answer();
   assert.equal(h.store.get().history?.range, '24h');
   h.store.news(NOW); await flush();
@@ -335,4 +335,55 @@ test('choosing another target clears a retry belonging to the previous target', 
   h.store.choose('7d', null); await flush();
   assert.equal(h.timers.size, 0);
   assert.equal(h.reads.length, 2);
+});
+
+test('an unseen head is filled once on navigation and later frames reuse the whole tile', async () => {
+  const h = harness(); h.store.choose('1h', null); await h.start();
+  assert.equal(h.reads[0].from, NOW - H);
+  await h.reads[0].answer();
+  const selected = {from: NOW - H - 18 * M, to: NOW - 18 * M};
+  await h.advance(1000); h.store.choose('1h', selected); await flush();
+  assert.equal(h.reads.length, 2, 'the omitted head was not marked read');
+  assert.equal(h.reads[1].from, tileStart(tileOf(selected.from, M), M));
+  assert.equal(h.reads[1].to, tileEnd(tileOf(selected.from, M), M));
+  await h.reads[1].answer();
+  await h.advance(1000); h.store.choose('1h', null); await flush();
+  await h.advance(1000); h.store.choose('1h', selected); await flush();
+  assert.equal(h.reads.length, 2);
+  assert.equal(h.store.get().loading, false);
+});
+
+test('news before the read interval refreshes its suffix without filling an unseen head', async () => {
+  const h = harness(); h.store.choose('1h', null); await h.start(); await h.reads[0].answer();
+  h.store.news(NOW - H - 10 * M); await flush();
+  assert.equal(h.reads[1].from, NOW - H);
+  await h.reads[1].answer();
+  await h.advance(1000);
+  h.store.choose('1h', {from: NOW - H - 18 * M, to: NOW - 18 * M}); await flush();
+  assert.equal(h.reads.length, 3, 'refresh did not prove the omitted head known');
+});
+
+test('head expansion keeps the stale bridge unread until a follow-up covers it', async () => {
+  const h = harness(); h.store.choose('1h', null); await h.start(); await h.reads[0].answer();
+  await h.advance(1000);
+  h.store.choose('1h', {from: NOW - H - 18 * M, to: NOW - 18 * M}); await flush();
+  const since = NOW - H - 11 * M;
+  h.store.news(since); h.store.news(since); await flush();
+  assert.equal(h.reads.length, 2, 'head news coalesces behind the pending read');
+  await h.reads[1].answer();
+  assert.equal(h.reads.length, 3);
+  assert.equal(h.reads[2].from, since, 'the stale bridge before the old suffix cannot be skipped');
+  await h.reads[2].answer();
+  assert.equal(h.reads.length, 3);
+});
+
+test('a new epoch discards knowledge of a prefetched head and cold-reads only the current frame', async () => {
+  const h = harness(); h.store.choose('1h', null); await h.start(); await h.reads[0].answer();
+  await h.advance(1000); h.store.choose('1h', {from: NOW - H - 18 * M, to: NOW - 18 * M}); await flush(); await h.reads[1].answer();
+  await h.advance(1000); h.store.choose('1h', null); await flush();
+  h.store.snapshot(['s'], ['s w']); await flush();
+  assert.equal(h.reads[2].from, cellStart(h.now() - H, M));
+  await h.reads[2].answer();
+  await h.advance(1000); h.store.choose('1h', {from: NOW - H - 18 * M, to: NOW - 18 * M}); await flush();
+  assert.equal(h.reads.length, 4, 'old epoch buffers outside the new interval remain unknown');
 });

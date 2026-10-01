@@ -410,7 +410,10 @@ them), kept for 90 days.
   start and the last measurement give the table's edges. Cell totals are rounded to four
   decimal places and added for a frame. Resets inside a cell void only their step.
   The page keeps history as tiles of 60 cells aligned to the epoch, reading only missing
-  or changed cells through `GET /api/history`. The hub reads at most eight tiles at once,
+  or changed cells through `GET /api/history`. A cold read starts at the frame's first
+  cell, omitting the unseen head of its first tile. Each tile records the interval read
+  in this connection. Entering its unread head fills that tile once; subsequent frames
+  reuse it. The hub reads at most eight tiles at once,
   in one pass through each measured window, including its preceding sample. Each cell
   carries the point, its edges and break, spending and work, and per-session activity;
   compact indexes and omitted defaults keep the answers small. Every window with samples
