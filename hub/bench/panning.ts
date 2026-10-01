@@ -14,6 +14,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
   };
   const settled = () => cdp.evaluate(`(async()=>{const until=Date.now()+15000;while(document.querySelector('.history.is-loading, .activity.is-loading') || document.querySelector('.chart > svg[data-pan-end]')){if(Date.now()>until)throw new Error('charts did not settle');await new Promise(r=>setTimeout(r,20));}await new Promise(r=>setTimeout(r,250));})()`);
   const reports: PanReading[] = [];
+  const originalHorizon = await cdp.evaluate<string>(`JSON.parse(localStorage.getItem('quotum.prefs')||'{}').horizon||'auto'`);
   let interception = false;
   await cdp.send('Emulation.setDeviceMetricsOverride', {width: 1280, height: 900, deviceScaleFactor: 1, mobile: false});
   await cdp.evaluate(`(() => {
@@ -22,6 +23,10 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
     document.head.append(style); document.querySelector('.analytics-head')?.scrollIntoView();
   })()`);
   try {
+    // A manual horizon keeps the 30d source's full 1.25-width path inside retention.
+    await click('.history .panel-head .picker > button');
+    await click('.history .popover .segmented button', 1);
+    await key(true, 'Escape', 27); await key(false, 'Escape', 27);
     for (const [period, index] of [['24h', 4], ['30d', 8]] as const) {
       await click('.period .picker > button');
       await click('.period .popover .popover-row', index);
@@ -124,6 +129,9 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
     await cdp.send('Emulation.setCPUThrottlingRate', {rate: 1});
     if (interception) await cdp.send('Network.emulateNetworkConditions', {offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1});
     await cdp.evaluate(`(() => {const p=window.__quotumPan;if(p){p.running=false;cancelAnimationFrame(p.raf);p.observer?.disconnect();window.fetch=p.originalFetch;history.pushState=p.originalPush;}document.getElementById('quotum-pan-layout')?.remove();})()`);
+    await click('.history .panel-head .picker > button');
+    await click('.history .popover .segmented button', Math.max(0, ['auto', '1d', '3d', '7d'].indexOf(originalHorizon)));
+    await key(true, 'Escape', 27); await key(false, 'Escape', 27);
     await cdp.send('Emulation.clearDeviceMetricsOverride');
   }
 }
