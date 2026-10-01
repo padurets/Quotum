@@ -71,7 +71,7 @@ export function MoneySettings({sources,hidden,series}:{sources:readonly Named[];
         {!!s.keysCount&&<button className="popover-row" onClick={()=>choose(s.id)}><span>{t('money.keySeries',{count:s.keysCount})}</span><b>›</b></button>}
         {!s.keysCount&&selected.some(([id,m])=>id===s.id&&m!=='balance')&&<button className="popover-row" onClick={()=>choose(s.id)}><span>{t('money.selectedDetails')}</span><b>›</b></button>}
       </div>)}</div>
-      <button className="popover-row" onClick={()=>{const next={...prefs.money.selected};delete next[unit];setPrefs({money:{...prefs.money,selected:next}});}}>{t('money.resetSelection')}</button>
     </>}
+    <div className="popover-section"><button className="popover-row" onClick={()=>{const next={...prefs.money.selected};delete next[unit];setPrefs({money:{...prefs.money,selected:next}});}}>{t('money.resetSelection')}</button></div>
   </>;
 }

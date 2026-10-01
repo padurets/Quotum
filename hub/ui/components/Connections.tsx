@@ -58,10 +58,9 @@ export function ConnectedAccounts({userId,local,trustedKeys}:{userId:string;loca
     <h3>{t('sources.title')}</h3>
     <ErrorLine error={error}/>
     {list?.length===0&&<p className="admin-empty">{t('sources.empty')}</p>}
-    {!!list?.length&&<div className="table-wrap"><table className="admin-table"><thead><tr><th>{t('sources.account')}</th><th>{t('sources.expires')}</th><th/></tr></thead><tbody>{list.map(record=><tr key={record.id}>
-      <td><b>{record.sourceId&&titles[record.sourceId]?.title||PROVIDERS[record.provider]?.name||record.provider}</b><small>{record.hint?`…${record.hint}`:'—'}</small>{record.lastError&&<ErrorLine error={new ApiError(400,record.lastError)}/>}</td>
+    {!!list?.length&&<div className="table-wrap"><table className="admin-table accounts-table"><thead><tr><th>{t('sources.account')}</th><th>{t('sources.expires')}</th></tr></thead><tbody>{list.map(record=><tr key={record.id}>
+      <td><b>{record.sourceId&&titles[record.sourceId]?.title||PROVIDERS[record.provider]?.name||record.provider}</b><small>{record.hint?`…${record.hint}`:'—'}</small>{record.lastError&&<ErrorLine error={new ApiError(400,record.lastError)}/>}<div className="account-actions"><button type="button" className="link-button" disabled={!available} onClick={()=>setEdit(record)}>{t('sources.replace')}</button><button type="button" className="link-button danger" onClick={()=>setRemoving(record)}>{t('sources.remove')}</button></div></td>
       <td>{record.expiresAt===null?t('sources.noExpiry'):stamp(record.expiresAt)}</td>
-      <td><div className="button-row"><button type="button" className="link-button" disabled={!available} onClick={()=>setEdit(record)}>{t('sources.replace')}</button><button type="button" className="link-button danger" onClick={()=>setRemoving(record)}>{t('sources.remove')}</button></div></td>
     </tr>)}</tbody></table></div>}
     {edit&&<Modal title={t('sources.replace')} onClose={()=>setEdit(null)}><SourceKeyForm key={userId} replace={edit} local={local} trustedKeys={trustedKeys} onClose={()=>setEdit(null)} onSaved={()=>{setEdit(null);void read();}}/></Modal>}
     {removing&&<Modal title={t('sources.remove')} onClose={()=>setRemoving(null)}><p className="dialog-text">{t('sources.removeText')}</p><div className="button-row"><button className="button" onClick={()=>setRemoving(null)}>{t('common.cancel')}</button><button className="button danger" onClick={()=>void remove()}>{t('sources.remove')}</button></div></Modal>}

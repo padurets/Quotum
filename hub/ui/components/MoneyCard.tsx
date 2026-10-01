@@ -55,7 +55,7 @@ function AllKeys({source,board,onClose}:{source:Card;board:string;onClose:()=>vo
     {changed&&<p className="drawer-note">{t('money.changed')}</p>}
     <ErrorLine error={error}/>
     {page?.inventory&&<p className="drawer-note">{page.inventory.complete?t('money.inventory',{count:page.inventory.observed}):t('money.inventoryPartial')}</p>}
-    <div className="table-wrap"><table className="admin-table"><thead><tr><th>{t('money.key')}</th><th>{t('money.usage')}</th><th>{t('money.month')}</th><th>{t('money.cap')}</th><th>{t('money.reset')}</th></tr></thead><tbody>{page?.keys.map(part=>{
+    <div className="table-wrap"><table className="admin-table source-keys-table"><thead><tr><th>{t('money.key')}</th><th>{t('money.usage')}</th><th>{t('money.month')}</th><th>{t('money.cap')}</th><th>{t('money.reset')}</th></tr></thead><tbody>{page?.keys.map(part=>{
       const usage=page.meters.find(m=>m.id===`key:${part.id}:usage`),cap=page.meters.find(m=>m.id===`key:${part.id}:cap`);
       return <tr key={part.id} className={part.presence==='missing'||usage?.stale?'is-stale':undefined}>
         <td><b>{keyName(part)}</b><KeyStatus part={part}/>{part.includeByok&&<small>{t('money.byok')}</small>}</td>
