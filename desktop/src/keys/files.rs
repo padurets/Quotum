@@ -276,7 +276,10 @@ mod tests {
     use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt, symlink};
     fn root() -> PathBuf {
         let parent = std::env::var_os("QUOTUM_TEST_PRIVATE_DIR").map(PathBuf::from).unwrap_or_else(|| {
-            std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(std::env::temp_dir).join(".cache")
+            // Docker's unprivileged build user may have no writable home directory.
+            std::env::var_os("CARGO_HOME").map(PathBuf::from).unwrap_or_else(|| {
+                std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(std::env::temp_dir).join(".cache")
+            })
         });
         fs::DirBuilder::new().recursive(true).mode(0o700).create(&parent).unwrap();
         let root = parent.join(format!("keys-files-{}-{}", std::process::id(), getrandom::u64().unwrap()));

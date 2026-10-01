@@ -383,7 +383,7 @@ fn build(
             let shell = shell.clone();
             move |url, _| {
                 // Links that open a new window go to the browser; nothing else opens.
-                if matches!(url.scheme(), "http" | "https") && !private_hub_url(url, &shell.state().capabilities) {
+                if matches!(url.scheme(), "http" | "https") && !private_hub_url(&url, &shell.state().capabilities) {
                     let _ = tauri_plugin_opener::open_url(url.as_str(), None::<&str>);
                 }
                 NewWindowResponse::Deny
