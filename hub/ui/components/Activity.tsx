@@ -344,8 +344,21 @@ function Stacks({
     for (const {group} of groups) for (const [at, ms] of group.cells) sums.set(at, (sums.get(at) ?? 0) + ms);
     return sums;
   }, [groups]);
-  const [edgeMax, setEdgeMax] = useState(0);
-  const vertical = activityScale(Math.max(edgeMax, 0, ...heights.values()));
+  const possibleMax = useMemo(() => {
+    if (!strip) return 0;
+    const keys = new Set(groups.map(({group}) => group.key));
+    const bars = new Map<number, number>();
+    for (const [at, row] of strip.activityCells) {
+      const bar = cellStart(at, barMs);
+      const ms = [...row.parts[by]].reduce((sum, [key, part]) => sum + (keys.has(key) ? part.ms : 0), 0);
+      bars.set(bar, (bars.get(bar) ?? 0) + ms);
+    }
+    return Math.max(0, ...bars.values());
+  }, [strip, groups, by, barMs]);
+  const maxSeen = useRef(0);
+  const busiest = Math.max(possibleMax, 0, ...heights.values());
+  maxSeen.current = pan.active() ? Math.max(maxSeen.current, busiest) : busiest;
+  const vertical = activityScale(maxSeen.current);
   const y = (value: number) => top + (1 - value / vertical.max) * (height - top - bottom);
 
   // One path a group, stacked in the order of the groups. Bars wide enough to read as such
@@ -399,11 +412,11 @@ function Stacks({
     painted.current = key;
     const start = target.k0 * strip.cell, end = (target.k1 + 1) * strip.cell;
     const firstFull = Math.ceil(start / barMs) * barMs, lastFull = Math.floor(end / barMs) * barMs;
-    mask.current.setAttribute('x', String(x(firstFull)));
-    mask.current.setAttribute('width', String(Math.max(0, x(lastFull) - x(firstFull))));
+    const maskX = String(x(firstFull)), maskWidth = String(Math.max(0, x(lastFull) - x(firstFull)));
+    if (mask.current.getAttribute('x') !== maskX) mask.current.setAttribute('x', maskX);
+    if (mask.current.getAttribute('width') !== maskWidth) mask.current.setAttribute('width', maskWidth);
     const starts = [...new Set([cellStart(start, barMs), cellStart(end - 1, barMs)])].filter(at => at < firstFull || at >= lastFull);
     const paths = groups.map(() => '');
-    let max = 0;
     for (const at of starts) {
       const bar = plotBar(strip, at, target, by);
       if (!bar) continue;
@@ -417,14 +430,12 @@ function Stacks({
         total += ms;
         paths[i] += `M${a.toFixed(1)},${y(total).toFixed(1)}H${b.toFixed(1)}V${y(low).toFixed(1)}H${a.toFixed(1)}Z`;
       });
-      max = Math.max(max, total);
     }
-    if (max > vertical.max) setEdgeMax(max);
-    edges.current.querySelectorAll('path').forEach((path, i) => path.setAttribute('d', paths[i]));
+    edges.current.querySelectorAll('path').forEach((path, i) => {if (path.getAttribute('d') !== paths[i]) path.setAttribute('d', paths[i]);});
   };
   useLayoutEffect(() => {painted.current = ''; edgePaint.current();});
   useLayoutEffect(() => pan.subscribe(() => edgePaint.current()), []);
-  useEffect(() => {if (!strip) {setEdgeMax(0); painted.current = '';}}, [strip]);
+  useEffect(() => {if (!strip) painted.current = '';}, [strip]);
 
   const partialBar = strip && hover !== null ? plotBar(strip, hover, targetOf(strip.length, to, 'hover', {from, to}), by) : null;
   const bar = hover === null ? null : strip ? partialBar ? [hover, partialBar.activeMs, partialBar.agentMs, partialBar.agents] : null : activity.cells.find(([start]) => start === hover);
