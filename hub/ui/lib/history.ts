@@ -62,9 +62,10 @@ export class HistoryStore {
   private strip: Target | null = null;
   private version = 0;
   private plotVersion = -1;
+  private plotIdentity = '';
   private aheadFailed = false;
   private readonly plotListeners = new Set<() => void>();
-  private readonly plotChunks = new Map<HistoryTile, {seq: number; from: number; to: number; chunk: Chunk}>();
+  private readonly plotChunks = new Map<string, {seq: number; from: number; to: number; chunk: Chunk}>();
 
   constructor(private readonly env: HistoryEnv, private readonly budget = STORED_BYTES) {}
 
@@ -331,13 +332,18 @@ export class HistoryStore {
     if (this.plotVersion === this.version) return;
     const strip = this.strip;
     const tiles = [...(this.grids.get(strip.cell)?.values() ?? [])].filter(t => t.readTo > t.readFrom && t.readTo > strip.k0 * strip.cell && t.readFrom <= strip.k1 * strip.cell).sort((a, b) => a.from - b.from);
-    const retained = new Set(tiles);
-    for (const tile of this.plotChunks.keys()) if (!retained.has(tile)) this.plotChunks.delete(tile);
+    const identity = `${this.epoch}:${this.interest?.token ?? this.plot?.token}:${strip.cell}:${strip.k0}:${strip.k1}:${this.windowsKey}:${this.cutTo}:${JSON.stringify(this.meta.known)}:${tiles.map(tile => `${tile.from},${tile.writeSeq},${tile.readFrom},${tile.readTo}`).join(';')}`;
+    this.plotVersion = this.version;
+    if (identity === this.plotIdentity) return;
+    this.plotIdentity = identity;
+    const retained = new Set(tiles.map(tile => `${tile.cell}:${tile.from}`));
+    for (const key of this.plotChunks.keys()) if (!retained.has(key)) this.plotChunks.delete(key);
     const chunks = tiles.map(tile => {
-      let decoded = this.plotChunks.get(tile);
+      const key = `${tile.cell}:${tile.from}`;
+      let decoded = this.plotChunks.get(key);
       if (!decoded || decoded.seq !== tile.writeSeq || decoded.from !== tile.readFrom || decoded.to !== tile.readTo) {
         decoded = {seq: tile.writeSeq, from: tile.readFrom, to: tile.readTo, chunk: tile.chunk(this.meta!.known, true)};
-        this.plotChunks.set(tile, decoded);
+        this.plotChunks.set(key, decoded);
       }
       return decoded.chunk;
     });
@@ -350,7 +356,6 @@ export class HistoryStore {
     }
     if (this.cutTo !== null && this.cutTo <= (strip.k1 + 1) * strip.cell) intervals.push([this.cutTo, (strip.k1 + 1) * strip.cell]);
     const coverage: Coverage = intervals.sort((a, b) => a[0] - b[0]);
-    this.plotVersion = this.version;
     this.setPlot(plotOf(chunks, this.meta, strip, coverage, this.windows, this.interest?.token ?? this.plot?.token ?? 0, this.epoch, this.version));
   }
 

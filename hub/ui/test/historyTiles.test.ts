@@ -3,6 +3,7 @@ import {test} from 'node:test';
 import type {Chunk} from '../../server/domain/history';
 import {compose, targetOf} from '../../server/domain/history';
 import {HistoryTile} from '../lib/historyTiles';
+import {plotOf} from '../lib/historyPlot';
 
 const M = 60_000;
 const known = {work: 0, sources: {s: 0}};
@@ -18,6 +19,24 @@ function chunk(from: number, ref: string): Chunk {
     resets: [], grants: [],
   };
 }
+
+test('plot extraction from packed cells preserves points, gaps, holds and activity through each readable cut', () => {
+  const tile = new HistoryTile(0, M);
+  const input = chunk(0, 'A');
+  input.to = 3 * M;
+  input.series[0].cells = [[0, 80, 1, M], [1, 70, 1, M, {g: 1, h: 2 * M}], [2, 60, 1, M]];
+  tile.merge(input, known);
+  const meta = {known, now: 3 * M, historyStart: 0};
+  for (let first = 0; first < 3; first++) for (let end = first + 1; end <= 3; end++) {
+    tile.readFrom = first * M; tile.readTo = end * M;
+    const target = targetOf(15 * M, 3 * M, 'plot', {from: tile.readFrom, to: tile.readTo});
+    const coverage = [[tile.readFrom, tile.readTo]] as [number, number][];
+    const full = plotOf([tile.chunk(known)], meta, target, coverage, new Set(['s wA']), 1, 1, 1);
+    const quick = plotOf([tile.chunk(known, true)], meta, target, coverage, new Set(['s wA']), 1, 1, 1);
+    assert.deepEqual(quick.series, full.series);
+    assert.deepEqual(quick.activityCells, full.activityCells);
+  }
+});
 
 test('replacing one cell compacts unused sessions, groups, devices and empty series', () => {
   const tile = new HistoryTile(0, M);

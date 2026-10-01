@@ -100,7 +100,8 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
     if (!strip) {registry.current = null; return answered;}
     if (registry.current?.token !== strip.token) registry.current = {token: strip.token, seed: answered, lines: answered};
     const state = registry.current;
-    state.lines = lineRegistry(state.seed, state.lines, linesOf(strip, sources, view, prefs.kind));
+    const eligibleSeed = state.seed.filter(line => answered.some(current => current.key === line.key));
+    state.lines = lineRegistry(eligibleSeed, state.lines, linesOf(strip, sources, view, prefs.kind));
     return state.lines;
   }, [strip, answered, sources, view, prefs.kind, locale]);
 
@@ -247,7 +248,7 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
           from={from}
           now={measured}
           to={to}
-          cellMs={history.cellMs}
+          cellMs={strip?.cell ?? history.cellMs}
           strip={strip}
           empty={lines.length ? t('chart.empty') : null}
           onSelect={setTimeRange}

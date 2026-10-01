@@ -166,7 +166,7 @@ const LegendItem = memo(function LegendItem({group, name, color, muted, onToggle
 export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const {history, loading} = useHistory();
   const strip = useHistoryPlot();
-  const registry = useRef<{token: number; seed: GroupIdentity[]; groups: GroupIdentity[]} | null>(null);
+  const registry = useRef<{token: number; by: ActivityDimension; seed: GroupIdentity[]; groups: GroupIdentity[]} | null>(null);
   const panel = useRef<HTMLElement>(null);
   // Made taller by its owner, the widget gives the room to the stacks, as the chart does.
   const {plot, onBase} = usePlot(panel);
@@ -195,7 +195,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const presentation = useMemo(() => {
     const seed = groups.map((group, i) => ({key: group.key, name: group.name, color: colors[i]}));
     if (!strip) {registry.current = null; return {identities: seed, shown};}
-    if (registry.current?.token !== strip.token) registry.current = {token: strip.token, seed, groups: seed};
+    if (registry.current?.token !== strip.token || registry.current.by !== by) registry.current = {token: strip.token, by, seed, groups: seed};
     const candidates = new Map<string, Pick<PlotGroup, 'key' | 'name'>>();
     for (const row of strip.activityCells.values()) for (const [key, part] of row.parts[by]) candidates.set(key, {key, name: part.name});
     const state = registry.current;

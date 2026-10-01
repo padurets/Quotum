@@ -67,10 +67,12 @@ export function useTimeAxis({
   const source = useRef(Symbol('chart'));
   const panning = usePanning();
   const historyStart = useHistoryBegins();
-  const panPointer = useRef<{token: number; id: number; x: number} | null>(null);
+  const panPointer = useRef<{token: number; id: number; x: number; left: number; width: number} | null>(null);
   const captured = useRef<{token: number; from: number; to: number; end: number} | null>(null);
   const finished = useRef<{from: number; to: number; end: number} | null>(null);
   const lastPan = useRef<ReturnType<typeof pan.get>>(null);
+  const wheelBounds = useRef<DOMRect | null>(null);
+  const panLayers = useRef<SVGGElement[]>([]);
   /** Where a drag across the chart started and where it is now, in chart pixels. */
   const [drag, setDrag] = useState<{start: number; end: number} | null>(null);
   /** A finger held on the chart, before it starts a range. */
@@ -92,8 +94,9 @@ export function useTimeAxis({
   const wheelPan = useRef<(event: WheelEvent) => boolean>(() => false);
   wheelPan.current = event => {
     if (!onSelect || dragging.current) return false;
-    const rect = svg.current?.getBoundingClientRect();
+    const rect = pan.active() && wheelBounds.current ? wheelBounds.current : svg.current?.getBoundingClientRect();
     if (!rect || event.clientX < rect.left + left * scale || event.clientX > rect.right - right * scale) return false;
+    wheelBounds.current = rect;
     return pan.wheel(() => startPan('wheel'), event);
   };
   const dragging = useRef(false);
@@ -129,14 +132,17 @@ export function useTimeAxis({
     if (frame && captured.current?.token !== frame.token) {
       foldTicket.current++;
       captured.current = {token: frame.token, ...visualGeometry()};
-      for (const layer of element.querySelectorAll<SVGGElement>('.slides')) layer.getAnimations().forEach(animation => animation.cancel());
+      panLayers.current = [...element.querySelectorAll<SVGGElement>('.slides')];
+      for (const layer of panLayers.current) {
+        layer.getAnimations().forEach(animation => animation.cancel());
+        layer.parentElement!.setAttribute('clip-path', `url(#${CSS.escape(clip)})`);
+      }
       setFolding(false);
     }
     const origin = captured.current;
     const dx = frame && origin ? -(frame.to - frame.originEnd) / (origin.to - origin.from) * (width - left - right) : 0;
-    for (const layer of element.querySelectorAll<SVGGElement>('.slides')) {
+    for (const layer of panLayers.current) {
       layer.style.transform = frame ? `translateX(${dx}px)` : '';
-      if (frame) layer.parentElement!.setAttribute('clip-path', `url(#${CSS.escape(clip)})`);
     }
     if (frame) {
       lastPan.current = frame;
@@ -157,6 +163,8 @@ export function useTimeAxis({
       captured.current = null;
       lastPan.current = null;
       panPointer.current = null;
+      wheelBounds.current = null;
+      panLayers.current = [];
     }
   };
   useLayoutEffect(() => pan.subscribe(() => paintPan.current()), []);
@@ -216,14 +224,15 @@ export function useTimeAxis({
     return ((event.clientX - rect.left) / rect.width) * width;
   };
   const onPointerMove = (event: PointerEvent<SVGSVGElement>) => {
-    const px = toChart(event);
-    pointer.current = px;
     if (panPointer.current?.id === event.pointerId) {
       const held = panPointer.current;
+      pointer.current = (event.clientX - held.left) / held.width * width;
       pan.move(held.token, held.x - event.clientX);
       held.x = event.clientX;
       return;
     }
+    const px = toChart(event);
+    pointer.current = px;
     if (panning || folding) return;
     const held = holding.current;
     // A finger that moves before the hold is up reads the cells instead.
@@ -241,7 +250,8 @@ export function useTimeAxis({
       const token = pan.begin(startPan('pointer'));
       if (token !== null) {
         element.setPointerCapture(pointerId);
-        panPointer.current = {token, id: pointerId, x: event.clientX};
+        const rect = element.getBoundingClientRect();
+        panPointer.current = {token, id: pointerId, x: event.clientX, left: rect.left, width: rect.width};
         event.preventDefault();
       }
       return;
