@@ -178,6 +178,7 @@ export async function start(ctx, c, port, built) {
     QUOTUM_ALLOWED_HOSTS: [...new Set(['localhost', '127.0.0.1', ...(c.QUOTUM_ALLOWED_HOSTS || '').split(',').map(h => h.trim()).filter(Boolean), ...(url ? [new URL(url).hostname] : [])])].join(','),
     QUOTUM_RESETS: 'off'};
   for (const key of ['QUOTUM_PUBLIC_URL', 'QUOTUM_TRUST_PROXY', 'QUOTUM_FRAME_ANCESTORS']) if (c[key]) env[key] = c[key];
+  if (mode === 'hub' && c.QUOTUM_SECRET_KEY_FILE) env.QUOTUM_SECRET_KEY_FILE = path.resolve(ctx.root, c.QUOTUM_SECRET_KEY_FILE);
   if (url) { env.QUOTUM_PUBLIC_URL = url; env.QUOTUM_TRUST_PROXY = 'true'; }
   const fd = openSync(log, 'a', 0o600);
   const child = spawn(process.execPath, [built.controller ?? path.join(here, 'serve.mjs'), ctx.root, ctx.record, instance], {cwd: ctx.root, env, detached: true, stdio: ['ignore', fd, fd, 'ipc']});
