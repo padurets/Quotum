@@ -315,6 +315,8 @@ export class Live {
     private readonly stand: Stand,
     private readonly rhythm: Rhythm,
     private readonly paced = false,
+    private readonly reportSessions = (_machine: Machine, sessions: ReturnType<typeof sessionsAt>) => sessions,
+    private readonly reported = (_machine: Machine, _at: number) => {},
   ) {}
 
   /** Measurement times of a card by a machine in (from, to]: minutes on its cadence. */
@@ -407,8 +409,9 @@ export class Live {
   /** One machine tells its list as of `t`; the hub must file every agent on it. */
   async reportOne(machine: Machine, t: number, now: number) {
     if (!awake(machine, t)) return;
-    const sessions = sessionsAt(this.stand.set, machine, this.stand.start, t);
+    const sessions = this.reportSessions(machine, sessionsAt(this.stand.set, machine, this.stand.start, t));
     const {accepted} = await this.stand.agents.get(machine.id)!.sessions(sessions, now);
     if (accepted !== sessions.length) throw new Error(`machine ${machine.id}: the hub filed ${accepted} of its ${sessions.length} running agents`);
+    this.reported(machine, now);
   }
 }

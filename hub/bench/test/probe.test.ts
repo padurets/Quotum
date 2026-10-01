@@ -97,9 +97,9 @@ function page() {
   };
   vm.runInNewContext(probeScript(), context);
   const hook = context.__REACT_DEVTOOLS_GLOBAL_HOOK__ as {supportsFiber: boolean; onCommitFiberRoot(id: number, root: {current: Fiber}): void};
-  const probed = context.__quotumBench as {reset(): void; read(): Reading};
+  const probed = context.__quotumBench as {reset(): void; read(): Reading; seriesChanged(key: string, last: string): number | null; forgetCards(): void};
   // What the page answers comes over as JSON, as Runtime.evaluate returns it.
-  const bench = {reset: () => probed.reset(), read: (): Reading => JSON.parse(JSON.stringify(probed.read()))};
+  const bench = {reset: () => probed.reset(), read: (): Reading => JSON.parse(JSON.stringify(probed.read())), seriesChanged: (key: string, last: string) => probed.seriesChanged(key, last), forget: () => probed.forgetCards()};
   return {hook, bench, mutate: (...targets: unknown[]) => observer!(targets.map(target => ({target})))};
 }
 
@@ -121,6 +121,20 @@ test('the probe, sent as text, counts a part of the page once per commit however
   assert.ok(reading.instrumentMs >= 0);
   bench.reset();
   assert.deepEqual(bench.read().renders, []);
+});
+
+test('a graph measurement is seen only at its expected point value', () => {
+  const {bench, mutate} = page();
+  const attrs = {'data-series': 's1 weekly', 'data-last': '60000:80'};
+  const path = el('path', el('section', null, {}, 'analytics'), attrs);
+  mutate(path);
+  assert.ok(bench.seriesChanged('s1 weekly', '60000:80') !== null);
+  assert.equal(bench.seriesChanged('s1 weekly', '60000:79'), null);
+  attrs['data-last'] = '60000:79';
+  mutate(path);
+  assert.ok(bench.seriesChanged('s1 weekly', '60000:79') !== null);
+  bench.forget();
+  assert.equal(bench.seriesChanged('s1 weekly', '60000:79'), null);
 });
 
 test('the probe counts DOM changes by part once per callback, and notes when a card first changed outside what shows time', () => {

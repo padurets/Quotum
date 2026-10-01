@@ -12,7 +12,7 @@ export type Touches = {
   touchUser(user: string): void;
   /** What is the same for everyone changed: the reset trackers' news. */
   touchHub(): void;
-  /** A source has measurements at `since` or later that its charts have not shown. */
+  /** A source's history changed from `since`: a measurement or credited agent work. */
   history(source: string, since: number): void;
   /** Some sessions of this person may have ended. */
   dropSessions(user: string): void;

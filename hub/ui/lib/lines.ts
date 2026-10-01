@@ -6,7 +6,7 @@ import {DASHES} from './providers';
 import {cardId, colorOf} from './view';
 
 /** A series of the history as the chart and the table show it: named, coloured, with its value now. */
-export type Line = HistorySeries & {key: string; name: string; color: string; dash: string; current: number};
+export type Line = HistorySeries & Pick<Win, 'kind' | 'label' | 'minutes'> & {provider: string; key: string; name: string; color: string; dash: string; current: number};
 
 /**
  * The board's series of one kind of window that have data in the period. Only what the
@@ -18,17 +18,25 @@ export function linesOf(history: History | null, sources: {id: string; provider:
   if (!history || !sources) return [];
   const perSource: Record<string, number> = {};
   const hidden = new Set([...view.windows, ...view.hidden]);
-  return history.series.flatMap(entry => {
+  const rank = (entry: HistorySeries) => {
+    const source = sources.findIndex(s => s.id === entry.sourceId);
+    return source * 100 + (sources[source]?.windows.findIndex(w => w.id === entry.windowId) ?? 99);
+  };
+  return [...history.series].sort((a, b) => rank(a) - rank(b)).flatMap(entry => {
     const source = hidden.has(cardId(entry.sourceId)) ? undefined : sources.find(s => s.id === entry.sourceId);
     const live = source?.windows.find(w => w.id === entry.windowId);
-    if (!source || !live || entry.kind !== kind || !entry.points.length || hidden.has(windowKey(entry.sourceId, entry.windowId))) return [];
+    if (!source || !live || live.kind !== kind || !entry.points.length || hidden.has(windowKey(entry.sourceId, entry.windowId))) return [];
     const index = (perSource[entry.sourceId] = (perSource[entry.sourceId] ?? -1) + 1);
     return [
       {
         ...entry,
+        provider: source.provider,
+        kind: live.kind,
+        label: live.label,
+        minutes: live.minutes,
         key: windowKey(entry.sourceId, entry.windowId),
-        name: seriesName(source, entry),
-        color: colorOf(view, entry.sourceId, entry.provider),
+        name: seriesName(source, live),
+        color: colorOf(view, entry.sourceId, source.provider),
         dash: DASHES[index % DASHES.length],
         current: live.remaining,
       },

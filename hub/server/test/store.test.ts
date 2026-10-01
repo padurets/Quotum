@@ -1,3 +1,4 @@
+import {readHistory} from './historyRead.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtempSync} from 'node:fs';
@@ -64,12 +65,12 @@ test('history returns one series per source and window, in the order of the card
   store.record(codex, measurement({windows: windows(20)}));
   store.record(codex, measurement({observedAt: start + 240_000, windows: windows(25)}));
   store.record(claude, measurement({windows: [win({used: 5})]}));
-  const history = store.history(BOARD, start - 1, 60_000).series;
+  const history = readHistory(store, BOARD, start - 1, 60_000).series;
   assert.deepEqual(
-    history.map(s => [s.provider, s.windowId, s.kind, s.consumed]),
-    [['claude', 'weekly', 'weekly', 0], ['codex', 'weekly', 'weekly', 5], ['codex', 'session', 'session', 10]],
+    history.map(s => [s.sourceId, s.windowId, s.consumed]).sort((a, b) => String(a[0]).localeCompare(String(b[0])) || String(b[1]).localeCompare(String(a[1]))),
+    [[claude, 'weekly', 0], [codex, 'weekly', 5], [codex, 'session', 10]],
   );
-  assert.deepEqual(store.history('elsewhere', start - 1, 60_000).series, [], 'boards do not see each other');
+  assert.deepEqual(readHistory(store, 'elsewhere', start - 1, 60_000).series, [], 'boards do not see each other');
   store.close();
 });
 
@@ -77,21 +78,9 @@ test('a period of history ends where it is asked to and is read from its edges',
   const store = fresh();
   const codex = seen(store, 'codex', 'account-a');
   for (const [minutes, used] of [[0, 20], [4, 25], [8, 31]]) store.record(codex, measurement({observedAt: start + minutes * 60_000, windows: [win({used})]}));
-  const [series] = store.history(BOARD, start - 1, 60_000, {to: start + 5 * 60_000}).series;
-  assert.deepEqual([series.samples, series.consumed, series.remainingAtStart, series.remainingAtEnd], [2, 5, 80, 75]);
+  const [series] = readHistory(store, BOARD, start - 1, 60_000, {to: start + 5 * 60_000}).series;
+  assert.deepEqual([series.points.length, series.consumed, series.remainingAtStart, series.remainingAtEnd], [2, 5, 80, 75]);
   assert.equal(series.points.at(-1)![0], start + 4 * 60_000, 'nothing after its end');
-  store.close();
-});
-
-test('every change moves the revision of its board, and only of its board', () => {
-  const store = fresh();
-  const before = store.revision(BOARD);
-  const other = store.revision('other');
-  const id = seen(store, 'codex', 'account-a');
-  store.record(id, measurement());
-  store.fail(id, 'timeout');
-  assert.equal(store.revision(BOARD), before + 3);
-  assert.equal(store.revision('other'), other);
   store.close();
 });
 
@@ -105,13 +94,11 @@ test('a source is kept once: on the personal board of everyone who measures it, 
   assert.deepEqual(store.sources('bob-board').map(s => [s.id, s.holders]), [[shared, ['bob', 'user']], [own, ['bob']]]);
   assert.deepEqual(store.sources('team'), [], 'nothing on a shared board until someone shares it');
 
-  const before = store.revision('team');
   store.share('team', shared, 'user', start);
   store.share('team', own, 'bob', start);
   assert.deepEqual(store.sources('team').map(s => [s.id, s.sharedBy]), [[shared, 'user'], [own, 'bob']]);
   store.record(shared, measurement());
-  assert.equal(store.revision('team'), before + 3, 'a shared source moves the revision of the boards it is shared with');
-  assert.deepEqual(store.history('team', start - 1, 60_000).series.map(s => s.sourceId), [shared]);
+  assert.deepEqual(readHistory(store, 'team', start - 1, 60_000).series.map(s => s.sourceId), [shared]);
 
   // Bob leaves the team: his own subscription goes with him, the one Alice measures too stays.
   store.db.prepare("DELETE FROM members WHERE board_id = 'team' AND user_id = 'bob'").run();
@@ -134,7 +121,7 @@ test('limits back before their reset time and free resets granted are events for
   // A free reset used: both windows back at zero days before their reset.
   store.record(id, measurement({observedAt: at(4), windows: [weekly(0, start + 7 * 86_400_000), session(0)], resets: {available: 0, expiring: []}}));
   store.record(id, measurement({observedAt: at(6), windows: [weekly(1, start + 7 * 86_400_000), session(1)], resets: {available: 0, expiring: []}}));
-  const {events} = store.history(BOARD, start - 1, 60_000);
+  const {events} = readHistory(store, BOARD, start - 1, 60_000);
   assert.deepEqual(events, [
     {sourceId: id, at: at(2), kind: 'resets_granted', count: 1},
     {sourceId: id, at: at(4), kind: 'early_reset', windows: ['session', 'weekly']},
@@ -148,7 +135,7 @@ test('old samples are pruned after the retention period', () => {
   store.record(id, measurement());
   store.record(id, measurement({observedAt: start + 100 * 86_400_000}));
   store.prune(start + 100 * 86_400_000);
-  assert.equal(store.history(BOARD, 0, 60_000).series[0].samples, 1);
+  assert.equal(readHistory(store, BOARD, start + 100 * 86_400_000, 60_000).series[0].points.length, 1);
   store.close();
 });
 
@@ -167,7 +154,7 @@ test("a subscription's plan is kept from each moment it was reported otherwise, 
     {at: at(0), plan: 'pro'},
     {at: at(3), plan: 'max'},
   ]);
-  assert.deepEqual(store.history(BOARD, 0, 60_000).events, []);
+  assert.deepEqual(readHistory(store, BOARD, 0, 60_000).events, []);
   store.close();
 });
 

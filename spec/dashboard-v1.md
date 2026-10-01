@@ -96,7 +96,7 @@ change as it was.
 | `forecast` | `{id, forecast}` | Where the recent pace of the source's weekly windows leads, as the hub works it out, changed. |
 | `mine` | `{sources: string[]}` | Which sources of the board the reader's devices measure changed. |
 | `boards` | `{boards}` | The reader's boards changed: made, deleted, renamed, joined, left. |
-| `history` | `{sources: string[], since}` | These sources have measurements taken at `since` or later that the chart has not shown; with `since` 0, all of the board's history reads otherwise: whose agents' work it shows, or under which names, changed (a card hidden or shown, someone joining or leaving, a project or a machine renamed). |
+| `history` | `{sources: string[], since}` | History of these sources changed from `since`: a measurement or credited agent work (see [Reading history](#reading-history)); with `since` 0, all of the board's history reads otherwise: whose agents' work it shows, or under which names, changed (a card hidden or shown, someone joining or leaving, a project or a machine renamed). |
 | `resets` | `{resets, trackers, past}` | The reset trackers' news changed. |
 | `ping` | `{now}` | Every `heartbeatMs`, with the hub's clock. |
 | `bye` | `{reason}` | Last: the hub lets the reader go (see below). |
@@ -191,6 +191,147 @@ reset leaving the history) goes out when it does.
 | `gone` | The board was deleted, or the reader is no longer on it. | Opens another board. |
 | `restart` | The hub stops, or could not work out the board. | Connects again in a few seconds. |
 | `limit` | A newer reader took its place, or it fell 256 KiB behind. | Connects again, not sooner than in 30 seconds. |
+
+## Reading history
+
+```
+GET /api/history?board=<id>&cell=<ms>&from=<ms>&to=<ms>
+```
+
+The signed-in reader's cells on a shared time grid, for the chart, table and agent
+activity. Access is checked before the query: `401 unauthorized` without a session,
+`404 board_not_found` without access to the board. A malformed query is
+`400 invalid_request`. The answer is `application/json`, never reused by HTTP caches.
+
+The grid rule is shared by hub and page (`hub/server/domain/history.ts`). Its cells are
+1, 5, 15, 30, 60, 120, 360 and 720 minutes; a frame takes the finest cell that keeps its
+length within 360 cells, with 5% over allowed. Reading accepts the grids a frame of at
+most 31 days uses, through 120 minutes. A cell is `[k·cell, (k+1)·cell)`, aligned to the
+epoch. A tile is 60 cells, also aligned to the epoch. Period names belong to the page.
+
+`cell`, `from` and `to` are decimal integers of 1–15 digits. `cell` must be a supported
+reading grid and `from` must be on a cell edge. `to` must be on a cell edge or beyond
+now; it is rounded out and cut to the end of the cell containing `now + 30 seconds`,
+the clock tolerance of ingest. After cutting, `to > from` and at most eight tiles may
+be touched. `from` is no earlier than the tile containing the start of the sample
+retention period. The hub credits machines that went quiet before reading the cells.
+
+```ts
+{
+  now: number,
+  run: string, // this start of the hub, the same as hello.epoch
+  historyStart: number,
+  known: {work: number, sources: Record<string, number>},
+  chunks: Chunk[]
+}
+```
+
+`known.work` is when the hub began keeping work. `known.sources` gives when each shown
+subscription came to the board; hidden cards are absent. The chunks cover the cut
+`[from, to)` whole, including empty cells, in time order, cut at tile edges. A whole tile
+ending no later than now is closed. Closed tiles are cached under their board, grid and
+tile, with the board's work selection and names; measurements and credited work
+invalidate affected tiles. Tiles near the retention edge are counted anew. Actual retention
+deletions invalidate the server cache before its next read: a closed tile may depend on
+a preceding sample of any age. This is private housekeeping, with no new `history`
+event; observations the page already holds follow its usual data and connection lifecycle.
+
+```ts
+type Chunk = {
+  from: number; to: number;
+  series: {
+    source: string; window: string; hold: number; open: number | null;
+    cells: [index: number, low: number, spent: number, covered: number, extra?: {
+      f?: number; l?: number; o?: number | null; g?: 1; h?: number;
+      w?: [spent: number, covered: number, duringWork: number];
+    }][];
+  }[];
+  activity: {
+    sessions: [ref: string, source: string, project: string | null, device: string][];
+    devices: Record<string, string>;
+    cells: [index: number, active: number,
+      sessions: (number | [sessionIndex: number, agentMs: number])[],
+      groups: ['s' | 'p' | 'd', key: string, activeMs: number][]][];
+  };
+  resets: [source: string, window: string, at: number][];
+  grants: [source: string, at: number, count: number][];
+};
+```
+
+Cell indexes are relative to `chunk.from / cell`. Each series contains only cells with
+measurements, in order. Every window with measurements is included, even one the card
+no longer reports; the page selects current windows and takes their kind, label and
+length from the cards. The point is `low`, the lowest remaining share, rounded to two
+decimal places. `hold` is the last measurement's `staleAfterMs` in the cell. A line breaks
+before a cell when its start is more than `max(cell, previous.staleAfterMs)` after the
+previous measured cell's start, including the sample before the chunk.
+
+A proven step between consecutive measurements belongs to the cell of the later one:
+`spent` adds its percentage-point delta and `covered` adds its elapsed milliseconds.
+Resets, corrections and missing measurements void only their step. `first` and `last`
+are the remaining shares of the cell's first and last measurements. `open` is the share
+held at its start: the previous measurement, unless its step is a gap, or a reset already
+happened before the cell began. Otherwise it is null. Remaining shares and spending
+other than `low` are rounded to four decimal places; time is in whole milliseconds.
+Frame totals add the rounded cells, and remaining at its edges is `open ?? first` of
+its first measured cell and `last` of its last.
+
+Only differences from these decoded defaults are written:
+
+| Field | Default |
+|---|---|
+| `first` (`f`) | `low`; used only when `open` is null |
+| `last` (`l`) | `low` |
+| `open` (`o`) | series `open` in its first measured cell, then the preceding measured cell's `last` |
+| break (`g`) | 0 |
+| `hold` (`h`) | series `hold` |
+| work (`w`) | `[spent, 0, 0]` at or after the subscription's known threshold, `[0, 0, 0]` before |
+
+A field is omitted only when its rounded value equals the decoded default. `f` is
+omitted while `open` is not null. The subscription's known threshold is
+`S = max(known.work, known.sources[source])`. Work stretches are selected by the board's
+holders and cut at the later of each holder's joining threshold and `S`. For proven
+steps starting at or after `S`, `w` adds the delta, overlap with the subscription's
+union of selected work, and the whole delta when that overlap is positive. Work before
+`S` is not attributed; a hidden card has no work record in the frame.
+
+Activity includes those same selected stretches within each cell. `active` is their
+union. Each session's time is additive, so parallel agents count separately. A session
+is its index in the chunk's `sessions`; when its time equals `active`, that index alone
+is written. Groups are subscriptions (`s`, source id), projects (`p`, the project name
+or null as JSON) and machines (`d`, device id). A group's active time defaults to the
+longest time of its member sessions in the cell, and is written only when it differs.
+Machine names are in `devices`. Only sessions with selected work in the chunk appear.
+
+The page adds cell activity into bars of a length chosen from the requested frame's
+length (`barOf`), keeping a set of session references to count distinct agents in each
+bar and frame. Group agent time is the sum of its sessions; group active time is the
+sum of its cell unions. Groups rank by agent time, active time, name and key.
+
+`resets` names each early-reset pair whose later sample is in the chunk, including a
+pair entering it. The frame selects current windows and groups a source's resets
+within 15 minutes of each group's first reset. `grants` names each grant of free resets
+in the chunk, without grouping.
+
+A live frame starts at the whole cell containing `now - length` and includes the cell
+of `now + 30 seconds`. A selected range goes out to whole cells and stops no later than
+that same cell. Measurements on its right edge belong to the next cell. A range reaching
+past now includes accepted fast-clock measurements in their own cells; a chart shows a
+point only once that cell's start has come. Work is credited from machine reports, or
+when they go quiet; each credit sends `history` with its earliest credited time. An idle
+board has neither measurements nor working agents and sends no such news.
+The hub's clock advances independently of the known empty data suffix. A selected
+range wholly beyond its current grid cut returns to the chosen period.
+
+The page keeps tiles of its open board with a bounded memory budget, preserving its
+current frame. Cold reading starts at the frame's first cell; whole inner tiles remain
+cacheable. The page tracks each tile's read interval, so its omitted head stays unknown.
+Entering that head fills the tile once for subsequent frames. A `history` event makes
+cells from `since` stale and reads only what the frame needs. Reconnect, a changed lineup or `since: 0` makes all
+tiles stale. Answers of another `run` are discarded. The shown frame stays undimmed
+while its own cells refresh; a different frame keeps the previous one dimmed until
+all of its cells have been read. Cells beyond the hub's cut remain known empty until
+news arrives. Time alone never reads history.
 
 ## Requesting fresh limits
 
@@ -310,7 +451,12 @@ A reader hears exactly what the board's snapshot gives them: the same people, th
 cards, the same agents as the dashboard shows them, and of other boards only the list of
 their own. What is theirs alone, which sources their devices measure and their role on
 each board, goes to their streams only. Events carry no secrets, no email addresses and
-no session ids.
+no sign-in session ids.
+History exposes each selected coding-agent session's time by cell, with its project and
+machine. Its opaque eight-character reference is stable only within one board and one
+start of the hub, derived with a fresh secret key; it reveals neither database session
+ids nor how many sessions other boards have. These are coding-agent sessions, separate
+from sign-in sessions. A restart changes the references and `run` together.
 Desktop observation barriers carry only source/window identifiers and corrected times
 from those sources; they add no client output, credentials or provider identity.
 

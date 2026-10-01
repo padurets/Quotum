@@ -32,3 +32,16 @@ test('a browser gone meanwhile answers nothing: a command is refused at once, no
   const waited = new Promise((_, reject) => setTimeout(() => reject(new Error('still waiting')), 1000).unref());
   await assert.rejects(Promise.race([cdp.send('Performance.getMetrics'), waited]), /Performance.getMetrics: the browser closed the connection/);
 });
+
+test('history bytes are counted by path after reads finish, separately from other traffic', () => {
+  const cdp = browser();
+  const requests = new Requests(cdp as unknown as Cdp);
+  requests.counting = true;
+  cdp.emit('Network.requestWillBeSent', {requestId: 'history', type: 'Fetch', request: {url: 'http://localhost/api/history?cell=60000'}});
+  cdp.emit('Network.requestWillBeSent', {requestId: 'session', type: 'Fetch', request: {url: 'http://localhost/api/session'}});
+  assert.equal(requests.historyPending, 1);
+  cdp.emit('Network.loadingFinished', {requestId: 'session', encodedDataLength: 999});
+  cdp.emit('Network.loadingFinished', {requestId: 'history', encodedDataLength: 2345});
+  assert.equal(requests.historyPending, 0);
+  assert.equal(requests.bytesByPath['/api/history'], 2345);
+});

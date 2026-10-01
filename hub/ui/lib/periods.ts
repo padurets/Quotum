@@ -11,8 +11,7 @@ const DAY = 24 * HOUR;
 export type Period = {id: string; ms: number; future: number};
 
 /**
- * The periods the analytics offer, shortest first, named as the hub names them
- * (config.history.ranges); a test keeps the two lists the same.
+ * The periods the analytics offer, shortest first; history cells use their length.
  */
 export const PERIODS: Period[] = [
   {id: '1h', ms: HOUR, future: 10 * MINUTE},
