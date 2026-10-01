@@ -11,7 +11,7 @@ import {
   verifyPassword,
 } from '../domain/auth.js';
 import type {Guards, Hub} from '../api.js';
-import type {Board} from '../store/directory.js';
+import type {Board, User} from '../store/directory.js';
 import {parseView} from '../domain/view.js';
 import {longerThan} from '../domain/ingest.js';
 import {PROJECT_NAME_CHARS} from '../domain/projects.js';
@@ -46,6 +46,18 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
   const signups = new Limiter(10, 60 * 60_000);
   const lookups = new Limiter(30, 60_000);
 
+  // Session reads and authentication replies have the same authority and private fields.
+  const sessionAnswer = (user: User | null) => {
+    const first = !local && directory.userCount() === 0;
+    const outcome = hub.credentials!.report.outcome;
+    const available = ['created', 'ok', 'rotated'].includes(outcome);
+    return {
+      user, boards: user ? directory.boards(user.id) : [], signup: {first, open: !local && (first || config.auth.signup === 'open')}, local: !!local,
+      ...(user ? {trustedKeys: {available, reason: available ? null : outcome === 'mismatch' ? 'secret_key_mismatch' : 'secret_key_missing'}} : {}),
+      ...(user && local ? {secretKey: {outcome, storageAtStart: hub.secretSnapshot?.storageAtStart ?? null, wasFileAtStart: hub.secretSnapshot?.wasFileAtStart ?? false}} : {}),
+    };
+  };
+
   const signIn = (request: Parameters<typeof setSession>[0], reply: Parameters<typeof setSession>[1], userId: string) => {
     const secret = newSecret('qt_s');
     directory.createSession(secret, userId, Date.now(), config.auth.sessionTtlMs);
@@ -63,12 +75,7 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
     return reply.code(202).send({ok: true});
   });
 
-  app.get('/api/session', request => {
-    const user = currentUser(request, directory);
-    const first = !local && directory.userCount() === 0;
-    const signup = {first, open: !local && (first || config.auth.signup === 'open')};
-    return {user, boards: user ? directory.boards(user.id) : [], signup, local: !!local};
-  });
+  app.get('/api/session', request => sessionAnswer(currentUser(request, directory)));
 
   app.post<{Params: {board: string; source: string}}>('/api/boards/:board/sources/:source/frequency', (request, reply) => {
     const {board, source} = request.params;
@@ -106,7 +113,7 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
       if (first) setup.done();
       if (board) directory.addMember(board.id, user.id, now);
       signIn(request, reply, user.id);
-      return {user, boards: directory.boards(user.id), joined: board?.id ?? null};
+      return {...sessionAnswer(user), joined: board?.id ?? null};
     });
 
     app.post<{Body: Body}>('/api/auth/login', async (request, reply) => {
@@ -124,7 +131,7 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
       const board = str(request.body?.invite) ? directory.inviteBoard(str(request.body?.invite), now) : null;
       if (board) directory.addMember(board.id, found.user.id, now);
       signIn(request, reply, found.user.id);
-      return {user: found.user, boards: directory.boards(found.user.id), joined: board?.id ?? null};
+      return {...sessionAnswer(found.user), joined: board?.id ?? null};
     });
 
     /** Changing one's name needs nothing more; a new email or password needs the current password. */

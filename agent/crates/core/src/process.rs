@@ -132,7 +132,8 @@ const APPIMAGE_VARIABLES: &[&str] = &[
 ];
 const APPIMAGE_PREFIXES: &[&str] = &["GST_PLUGIN_", "GTK_", "GDK_", "GIO_"];
 
-/// The environment of a client: this process's, with its PATH (see [`client_path`]), and
+/// The environment of a client: this process's without QUOTUM_* settings and keys,
+/// with its PATH (see [`client_path`]), and
 /// without what an AppImage the agent runs in set for itself, inside it (`$APPDIR`) or
 /// not. Names are one variable whatever their case on Windows (`Path` and `PATH`).
 pub fn client_env(
@@ -148,6 +149,10 @@ pub fn client_env(
     };
     let mut env: Vec<(OsString, OsString)> = Vec::new();
     for (name, value) in inherited {
+        // The hub's trusted keys and the agent's settings never reach a provider client.
+        if quotum_variable(&name, windows) {
+            continue;
+        }
         // The first of a name wins, as a lookup of it would.
         if !env.iter().any(|(n, _)| name.to_str().is_some_and(|text| is(n, text))) {
             env.push((name, value));
@@ -180,6 +185,11 @@ pub fn client_env(
         (_, None) => {}
     }
     env
+}
+
+fn quotum_variable(name: &OsStr, windows: bool) -> bool {
+    let text = name.to_string_lossy();
+    if windows { text.to_ascii_uppercase().starts_with("QUOTUM_") } else { text.starts_with("QUOTUM_") }
 }
 
 fn is_executable(path: &Path) -> bool {
@@ -228,7 +238,9 @@ impl Client {
             .envs(client_env(program, env::vars_os(), cfg!(windows), &home()))
             .env("NO_COLOR", "1");
         for (key, value) in env {
-            command.env(key, value);
+            if !quotum_variable(OsStr::new(key), cfg!(windows)) {
+                command.env(key, value);
+            }
         }
         lower_priority(&mut command);
 
@@ -512,7 +524,6 @@ mod tests {
         pairs.iter().map(|(n, v)| (OsString::from(n), OsString::from(v))).collect()
     }
 
-    #[cfg(unix)]
     fn get<'a>(env: &'a [(OsString, OsString)], name: &str) -> Option<&'a OsStr> {
         env.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_os_str())
     }
@@ -646,6 +657,37 @@ mod tests {
         assert_eq!(paths.len(), 1);
         let dirs: Vec<PathBuf> = env::split_paths(&paths[0].1).collect();
         assert_eq!(dirs[..2], [PathBuf::from("C:\\tools"), PathBuf::from("C:\\Windows\\system32")]);
+    }
+
+    #[test]
+    fn provider_clients_inherit_no_quotum_variables() {
+        for windows in [false, true] {
+            for program in ["claude", "codex", "agy"] {
+                let inherited = os(&[
+                    ("QUOTUM_SECRET_KEY", "synthetic-canary"),
+                    ("QUOTUM_SECRET_KEY_PREVIOUS", "synthetic-canary"),
+                    ("QUOTUM_CONFIG", "private-config"),
+                    ("QUOTUM_UNKNOWN", "private"),
+                    ("quotum_secret_key", "mixed-case"),
+                    ("QUOTUM", "ordinary"),
+                    ("LANG", "en_US.UTF-8"),
+                ]);
+                let env = client_env(Path::new(program), inherited, windows, Path::new("/nonexistent"));
+                assert!(get(&env, "QUOTUM_SECRET_KEY").is_none());
+                assert!(get(&env, "QUOTUM_SECRET_KEY_PREVIOUS").is_none());
+                assert!(get(&env, "QUOTUM_CONFIG").is_none());
+                assert!(get(&env, "QUOTUM_UNKNOWN").is_none());
+                assert_eq!(get(&env, "quotum_secret_key").is_none(), windows);
+                assert_eq!(get(&env, "QUOTUM").unwrap(), "ordinary");
+                assert_eq!(get(&env, "LANG").unwrap(), "en_US.UTF-8");
+            }
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn a_real_stand_in_cannot_receive_quotum_overrides() {
+        let mut client = Client::spawn(Path::new("/bin/sh"), &["-c", r#"if [ -z "${QUOTUM_SECRET_KEY+x}" ] && [ -z "${QUOTUM_CONFIG+x}" ]; then echo '{"absent":true}'; else echo '{"absent":false}'; fi"#], &[("QUOTUM_SECRET_KEY", "synthetic-canary"), ("QUOTUM_CONFIG", "synthetic-config")], &env::temp_dir(), Duration::from_secs(2), &Stop::new()).unwrap();
+        assert_eq!(client.wait_for(|v| v.get("absent").is_some()).unwrap()["absent"], true);
     }
 
     #[test]

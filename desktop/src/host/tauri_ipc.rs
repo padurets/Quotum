@@ -102,6 +102,18 @@ pub fn take_over(webview: Webview, shell: State<'_, Arc<Shell>>) -> Result<Value
     execute(webview, shell, Request::TakeOver)
 }
 #[tauri::command(async)]
+pub fn reset_secret_key(
+    webview: Webview,
+    shell: State<'_, Arc<Shell>>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<Value, String> {
+    match request.body() {
+        tauri::ipc::InvokeBody::Json(Value::Object(fields)) if fields.is_empty() => {}
+        _ => return Err("secret_key_reset_invalid".into()),
+    }
+    execute(webview, shell, Request::ResetSecretKey)
+}
+#[tauri::command(async)]
 pub fn set_autostart(webview: Webview, shell: State<'_, Arc<Shell>>, on: bool) -> Result<Value, String> {
     execute(webview, shell, Request::SetAutostart { on })
 }
@@ -172,14 +184,15 @@ mod tests {
     }
 
     #[test]
-    fn the_board_gets_the_seven_commands_and_the_apps_own_pages_only_quit() {
+    fn the_board_gets_the_commands_and_the_apps_own_pages_only_quit() {
         let hub = built(hub_capability(23456));
         assert!(!hub.local, "not the app's own pages");
         let urls = &hub.remote.as_ref().unwrap().urls;
         assert_eq!(urls, &["http://127.0.0.1:23456/*"]);
         assert_eq!(hub.windows, ["main"]);
-        assert_eq!(hub.permissions.len(), 8);
+        assert_eq!(hub.permissions.len(), 9);
         assert!(hub.permissions.iter().any(|p| p.identifier().get() == "allow-watch-state"));
+        assert!(hub.permissions.iter().any(|p| p.identifier().get() == "allow-reset-secret-key"));
         let own = built(own_capability());
         assert!(own.local && own.remote.is_none());
         assert_eq!(own.permissions.len(), 1);

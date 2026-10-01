@@ -59,8 +59,9 @@ test('migration defaults old sources to Auto; every choice survives reopening an
   t.after(() => rmSync(folder, {recursive: true}));
   const file = path.join(folder, 'db.sqlite');
   const old = new DatabaseSync(file);
-  for (const step of STEPS.slice(0, -1)) old.exec(step);
-  old.exec(`PRAGMA user_version = ${STEPS.length - 1}`);
+  // Layout 5 is the last one before measuring preferences, whatever is appended later.
+  for (const step of STEPS.slice(0, 5)) old.exec(step);
+  old.exec('PRAGMA user_version = 5');
   old.prepare('INSERT INTO meta VALUES (?, ?)').run('historyStart', String(T));
   old.prepare('INSERT INTO sources VALUES (?, ?, ?, ?)').run('old', 'codex', ACCOUNT, T);
   old.close();

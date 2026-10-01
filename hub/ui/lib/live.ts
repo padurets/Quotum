@@ -51,6 +51,8 @@ export type LiveEnv = {
   unauthorized(): void;
   /** The board is gone: the page reads its session again. */
   gone(): void;
+  /** First confirmed hub, and each subsequent restart, refresh session capabilities. */
+  epochChanged(): void;
   /** The path of the page's own entry script; null when not known. */
   script: string | null;
   reload(): void;
@@ -122,6 +124,7 @@ export class Live {
   private attempt = 0;
   private abort: AbortController | null = null;
   private lease: string | null = null;
+  private confirmedEpoch: string | null = null;
   /** Of the current connection: whether its `hello`, `snapshot` and first `ping` came. */
   private hello = false;
   private pinged = false;
@@ -457,6 +460,10 @@ export class Live {
   /** What `hello` says: the hub's clock, its heartbeat, and whether this page is of the build it serves. */
   private greeted(hello: Hello) {
     this.env.dispatch({type: 'hub', event: {type: 'hello', data: {epoch: hello.epoch}}});
+    if (this.confirmedEpoch !== hello.epoch) {
+      this.confirmedEpoch = hello.epoch;
+      this.env.epochChanged();
+    }
     this.heartbeatMs = hello.heartbeatMs;
     this.env.heard(hello.now);
     if (!hello.client || !this.env.script || hello.client === this.env.script) return;
@@ -538,7 +545,7 @@ async function boardNotFound(response: Response): Promise<boolean> {
 const inBrowser = typeof window !== 'undefined';
 
 /** The page's one connection, once the page knows its script and how to ask for a session. */
-export function startLive(env: Pick<LiveEnv, 'dispatch' | 'unauthorized' | 'gone' | 'script' | 'hubNow' | 'heard'>): Live {
+export function startLive(env: Pick<LiveEnv, 'dispatch' | 'unauthorized' | 'gone' | 'epochChanged' | 'script' | 'hubNow' | 'heard'>): Live {
   const live = new Live({
     ...env,
     fetch: (url, init) => fetch(url, init),

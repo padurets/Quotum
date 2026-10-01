@@ -84,6 +84,77 @@ also provide Chromium's setuid helper.
 Tests never start a real Claude Code, Codex or Antigravity client: they use recorded
 answers and stand-in programs, so they cost nothing and don't depend on your accounts.
 
+### Trusted-key storage
+
+Ordinary tests use synthetic keys and store ports. The real system-store tests are
+explicitly ignored, create their own random namespace, and need an isolated backend.
+On Linux, prepare a protected directory under your home (not `/tmp`, whose writable
+ancestors are deliberately refused), then run the GNOME Keyring checks on a private bus:
+
+```sh
+mkdir -p "$HOME/.cache/quotum-key-tests"
+chmod 700 "$HOME/.cache/quotum-key-tests"
+export QUOTUM_TEST_PRIVATE_DIR="$HOME/.cache/quotum-key-tests"
+export QUOTUM_KEYRING_SMOKE=1
+export XDG_DATA_HOME="$QUOTUM_TEST_PRIVATE_DIR/keyring-data"
+cd desktop
+dbus-run-session -- sh -c 'printf quotum-test-password | gnome-keyring-daemon --unlock > /dev/null && cargo test --locked native_store_is_local_scoped_byte_safe_and_recovers_without_pointer -- --ignored --test-threads=1 && cargo test --locked native_controller_recovers_pointer_stages_rotation_and_preserves_foreign_keys -- --ignored --test-threads=1'
+```
+
+Windows CI runs the scoped Credential Manager roundtrip with Local persistence,
+reads it in a new process and tests private ACLs, rejection of junctions and deletion
+through the same checked native file handle. It also checks the native controller's
+file-to-store rotation cleanup and the isolated key helper. CI does
+not prove persistence through a real reboot or access from a noninteractive logon.
+
+Use a dedicated test profile for that acceptance, with the installer and the portable
+ZIP in a path with spaces. From PowerShell, run the helper with the actual executable:
+
+```powershell
+./desktop/smoke/keys-windows.ps1 -App 'C:\path with spaces\quotum-desktop.exe'
+```
+
+It disables all providers, isolates config/state/app data under
+`%LOCALAPPDATA%\Quotum key QA`, and reads only the exact key target in that profile's
+marker. Before a launch it marks start-at-login as already decided in that profile,
+keeping its other app settings, so the person's global Run entry is unchanged.
+`-VerifyOnly` does not launch the app or change the profile's configuration or ACL;
+it writes only its safe result report. The report contains the target, protection
+result and start-at-login check, never key bytes.
+Open app settings in English and Russian: expect system-store protection, no file
+history and no reset action. Quit and run the helper again; the target must be the
+same. Reboot without deleting the profile, then run the helper with `-VerifyOnly`;
+the same Local credential must be readable before the app starts. Run it with
+`-Hidden` to check background startup and reopen through a second launch.
+
+For the noninteractive case, use Task Scheduler under the same test user with
+*Run whether user is logged on or not*, and run the helper with `-VerifyOnly`, then
+`-Hidden`. Pass `-Work` with the exact profile path from `key-report.json`; do not
+depend on that logon's default environment selecting the same app-data path. Keep
+the task's result and safe report. When that logon can access the
+user's credential store, expect the same target. If it cannot, expect waiting and
+preserved data, with no replacement key or implicit reset. Hidden startup in an
+interactive session is a separate case, not proof of a noninteractive logon. Remove
+only this test task, its recorded exact credential target and its isolated profile
+after acceptance; leave the person's other credentials and app profile alone.
+
+On Linux, also run open and locked KWallet and KeePassXC, including an absent default
+collection. Each test bus must have one Secret Service owner. An unavailable or locked
+default must not cause a new store key. The ignored
+`native_controller_keeps_one_pending_unlock_and_accepts_its_late_result` uses the real
+controller and store: it creates its own fixture, asks the driver to lock the default
+collection and send a newline, then holds one unlock beyond 60 seconds. Count the
+visible prompt, unlock it and expect recovery with the same target. Repeat with
+`QUOTUM_TEST_UNLOCK_CANCEL=1`, cancel after the deadline and expect waiting with the
+marker preserved. The cancelled fixture stays in that disposable backend for
+inspection. Do not run these destructive lock scenarios against a person's keyring.
+
+For settings-only visual checks, `cd hub && npm run demo:keys` serves seven safe app
+states at its printed loopback address. Select `?state=waiting&lang=ru` or the other
+states listed in `hub/demo/key-storage.ts`. Check both languages, a narrow window and
+reset confirmation. This fixture has no native store authority; also inspect the
+actual packaged app. The board benchmark and ordinary package smoke remain required.
+
 ## The demo board
 
 ### Worktree development stands

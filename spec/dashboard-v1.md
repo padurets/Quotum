@@ -441,6 +441,12 @@ its person; over the hub's, of its person if they have one, else it is refused w
 
 ## Privacy
 
+Connector credential records, hints, abilities and key fingerprints are never part of
+a board's state. A source failure whose code begins with `secret_key_` or `credential_`
+is projected as `unmeasured`, for its owner too; details remain in the owner's
+credential API. Snapshot, source delta, long poll and desktop attention use this same
+projection.
+
 A reader hears exactly what the board's snapshot gives them: the same people, the same
 cards, the same agents as the dashboard shows them, and of other boards only the list of
 their own. What is theirs alone, which sources their devices measure and their role on

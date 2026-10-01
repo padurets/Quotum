@@ -135,6 +135,9 @@ test('the first person signs up freely and gets a personal board; later ones nee
   assert.match(String(signup.cookie), /quotum_session=qt_s_.+; Path=\/; HttpOnly; SameSite=Lax/);
   assert.deepEqual(signup.body.boards.map((b: any) => [b.name, b.personal, b.role]), [['', true, 'owner']]);
   assert.equal(signup.body.user.email, 'alice@example.com');
+  assert.deepEqual(signup.body.trustedKeys, {available: false, reason: 'secret_key_missing'});
+  const {joined: _signupJoined, ...signupSession} = signup.body;
+  assert.deepEqual((await call('GET', '/api/session', {as: 'alice'})).body, signupSession);
   const alices = signup.body.boards[0].id;
 
   assert.equal((await call('POST', '/api/auth/signup', {as: 'bob', body: {email: 'bob@example.com', name: 'Bob', password: 'correct horse'}})).body.error, 'signup_closed');
@@ -151,7 +154,10 @@ test('the first person signs up freely and gets a personal board; later ones nee
   assert.equal((await call('POST', `/api/boards/${team.body.id}/invites`, {as: 'bob'})).status, 403, 'members do not invite');
 
   assert.equal((await call('POST', '/api/auth/login', {body: {email: 'alice@example.com', password: 'wrong'}})).status, 401);
-  assert.equal((await call('POST', '/api/auth/login', {as: 'alice2', body: {email: 'alice@example.com', password: 'correct horse'}})).status, 200);
+  const login = await call('POST', '/api/auth/login', {as: 'alice2', body: {email: 'alice@example.com', password: 'correct horse'}});
+  assert.equal(login.status, 200);
+  const {joined: _loginJoined, ...loginSession} = login.body;
+  assert.deepEqual((await call('GET', '/api/session', {as: 'alice2'})).body, loginSession);
   await call('POST', '/api/auth/logout', {as: 'alice2'});
   assert.equal((await call('GET', '/api/session', {as: 'alice2'})).body.user, null);
 });

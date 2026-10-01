@@ -687,6 +687,7 @@ select option { background: #141419; }
 .button.danger:hover:not(:disabled) { background: #f1787038; }
 .button:disabled { opacity: .5; cursor: default; }
 .button-row { display: flex; gap: 10px; justify-content: flex-end; }
+.button-row.is-wrap { flex-wrap: wrap; }
 .link-button { cursor: pointer; border: 0; background: none; padding: 0; color: var(--text-3); font-size: 12.5px; }
 .link-button:hover { color: var(--text); }
 .link-button.danger:hover { color: var(--crit); }

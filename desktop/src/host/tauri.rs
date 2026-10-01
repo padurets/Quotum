@@ -64,6 +64,7 @@ pub fn run(args: Args) {
             tauri_ipc::app_state,
             tauri_ipc::save_settings,
             tauri_ipc::save_desktop_settings,
+            tauri_ipc::reset_secret_key,
             tauri_ipc::take_over,
             tauri_ipc::set_autostart,
             tauri_ipc::reenter,

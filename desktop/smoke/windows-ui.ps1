@@ -559,7 +559,10 @@ try {
     Invoke-Step 'keeping the diagnostics' {
       New-Item -ItemType Directory -Force $Diagnostics | Out-Null
       [IO.File]::WriteAllText((Join-Path $Diagnostics 'report.json'), $json)
-      Copy-Item "$work/processes.json", "$work/app/logs/*.log" -Destination $Diagnostics -ErrorAction SilentlyContinue
+      Copy-Item -LiteralPath "$work/processes.json" -Destination $Diagnostics -ErrorAction SilentlyContinue
+      Get-ChildItem -LiteralPath "$work/app/logs" -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $Diagnostics
+      }
       Write-Host "Diagnostics kept in $Diagnostics"
     }
   }

@@ -34,6 +34,7 @@ export type ProviderSettings = {
 };
 /** `seq`: a later state has a larger one (desktop/src/notifier.rs); the page keeps the newest. */
 export type AppState = {
+  secretKey?: {state: 'keystore' | 'file' | 'waiting' | 'missing'; outcome: 'created' | 'ok' | 'rotated' | 'mismatch' | 'missing' | null; wasFile: boolean; retainedFile: boolean; resetAvailable: boolean; busy: boolean};
   seq: number;
   agent: AgentState;
   providers: ProviderSettings[];
@@ -102,6 +103,7 @@ function reportPanelHeight(heightCssPx: number): Promise<void> {
 }
 
 export const app = {
+  resetSecretKey: () => change('reset_secret_key'),
   saveDesktopSettings: (patch: {notifications?: Partial<NonNullable<AppState['notifications']>>; locale?: Locale}) => change('save_desktop_settings', {patch}),
   openMain: () => ask<void>('open_main'),
   closePanel: () => ask<void>('close_panel'),

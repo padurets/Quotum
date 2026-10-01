@@ -167,6 +167,7 @@ function navigate(entry) {
 }
 
 ipcMain.handle('quotum:invoke', (event, command, args) => {
+  if (command === 'reset_secret_key' && args !== undefined) throw new Error('secret_key_reset_invalid');
   const entry = [...surfaces.values()].find(e => event.sender === e.window.webContents);
   if (!entry || entry.dismissed || (entry.role === 'compact' && !current(entry)) || event.senderFrame !== entry.window.webContents.mainFrame || !policy.mayInvoke(event.senderFrame.url, target, command, entry.role)) throw new Error('not the board of the running hub');
   if (pending.size >= 16) throw new Error('too many pending app commands');
