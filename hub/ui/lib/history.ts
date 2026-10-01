@@ -482,7 +482,9 @@ export class HistoryStore {
       this.schedule();
       return;
     }
-    if (error instanceof ApiError && error.status === 400 && this.selected && target.cell === flight.cell && flight.from <= target.k0 * target.cell && flight.to > target.k1 * target.cell) return this.env.dropTimeRange();
+    // A necessary read of this selected target validates it, even in a partial
+    // final batch. Obsolete and speculative failures were excluded above.
+    if (error instanceof ApiError && error.status === 400 && this.selected) return this.env.dropTimeRange();
     this.clear('retry');
     this.timers.set('retry', this.env.setTimeout(() => {this.clear('retry'); this.schedule();}, RETRY_MS));
   }

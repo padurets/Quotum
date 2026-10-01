@@ -87,6 +87,22 @@ test('a successful speculative response preserves the failed visible target retr
   h.store.close();
 });
 
+test('an expired committed pan range drops after a required partial read returns 400', async () => {
+  const h = harness(); await h.start(); await h.reads[0].answer();
+  const range = {from: NOW - 90 * 24 * H + H, to: NOW - 89 * 24 * H + H};
+  h.store.pan({token: 1, length: 24 * H, ...range, direction: 0}); await flush();
+  h.store.choose('24h', range); h.store.endPan(true); await flush();
+  await h.advance(6 * H);
+  const inherited = pending(h)[0];
+  await inherited.fail(new ApiError(400, 'invalid_request'));
+  const current = pending(h)[0];
+  assert.ok(current.to < range.to, 'the final batch contains only one tile');
+  await current.fail(new ApiError(400, 'invalid_request'));
+  assert.equal(h.dropped(), 1);
+  assert.equal(h.timers.size, 0);
+  h.store.close();
+});
+
 test('memory pressure stops speculative reads without new input and retains visible coverage', async () => {
   for (const budget of [90_000, 100_000, 120_000]) {
     const h = harness(budget); await h.start();
