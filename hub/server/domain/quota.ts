@@ -65,7 +65,7 @@ const RESET_TOLERANCE = 60_000;
  * Whether consumption between two consecutive samples of one window is provable.
  * Only positive movement inside one uninterrupted reset window counts.
  */
-export function edge(a: Sample, b: Sample): Edge {
+export function edge(a: Pick<Sample, 'at' | 'used' | 'resetAt' | 'staleAfterMs'>, b: Pick<Sample, 'at' | 'used' | 'resetAt' | 'staleAfterMs'>): Edge {
   const no = (reason: Edge['reason']): Edge => ({valid: false, delta: 0, reason});
   const elapsed = b.at - a.at;
   if (elapsed <= 0 || elapsed > a.staleAfterMs) return no('gap');
@@ -82,59 +82,4 @@ export function edge(a: Sample, b: Sample): Edge {
 
   if (b.used < a.used - 0.05) return no('correction');
   return {valid: true, delta: Math.max(0, b.used - a.used), reason: 'continuous'};
-}
-
-export type Point = {at: number; used: number; remaining: number; segment: number; staleAfterMs: number};
-
-/**
- * The samples of one window of one source, in time order: chart points and the
- * consumption `edge` can prove. The line breaks only where data is missing; a reset is
- * a real movement of the quota and is drawn as such.
- */
-export function series(samples: Sample[]) {
-  let consumed = 0;
-  let coveredMs = 0;
-  let segment = 0;
-  const points: Point[] = samples.map((sample, i) => {
-    if (i) {
-      const previous = samples[i - 1];
-      const step = edge(previous, sample);
-      if (step.valid) {
-        consumed += step.delta;
-        coveredMs += sample.at - previous.at;
-      }
-      if (step.reason === 'gap') segment++;
-    }
-    return {at: sample.at, used: sample.used, remaining: sample.remaining, segment, staleAfterMs: sample.staleAfterMs};
-  });
-  // What was left at the first and the last measurement: a selected period is read from its edges.
-  return {points, consumed, coveredMs, samples: samples.length, remainingAtStart: samples[0]?.remaining ?? null, remainingAtEnd: samples.at(-1)?.remaining ?? null};
-}
-
-/**
- * Puts a series on a shared time grid. A cell shows the *lowest* remaining value seen
- * in it (the conservative reading). On the grid a line breaks only where a whole cell
- * is empty; shorter hiccups are below its resolution.
- */
-export function onGrid(points: Point[], cellMs: number): Point[] {
-  const cells: Point[] = [];
-  let segment = 0;
-  let previous: Point | undefined;
-  for (const point of points) {
-    const at = Math.floor(point.at / cellMs) * cellMs;
-    const current = cells.at(-1);
-    if (current?.at === at) {
-      if (point.remaining < current.remaining) {
-        current.remaining = point.remaining;
-        current.used = point.used;
-      }
-      previous = point;
-      continue;
-    }
-    const gap = previous ? at - Math.floor(previous.at / cellMs) * cellMs > Math.max(cellMs, previous.staleAfterMs) : false;
-    if (current && gap) segment++;
-    cells.push({...point, at, segment});
-    previous = point;
-  }
-  return cells;
 }

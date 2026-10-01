@@ -1,6 +1,8 @@
+import {cellsOf} from '../domain/cells.js';
+import {compose, type Chunk} from '../domain/history.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {edge, onGrid, series, type Point, type Sample} from '../domain/quota.js';
+import {edge, type Sample} from '../domain/quota.js';
 
 const start = 1_800_000_000_000;
 const sample = (change: Partial<Sample> = {}): Sample => ({
@@ -17,6 +19,14 @@ const sample = (change: Partial<Sample> = {}): Sample => ({
   minutes: 10080,
   ...change,
 });
+
+function series(samples: Sample[], cell = 60_000) {
+  const from = Math.floor(samples[0].at / cell) * cell;
+  const to = Math.floor(samples.at(-1)!.at / cell) * cell + cell;
+  const known = {work: 0, sources: {codex: 0}};
+  const chunks = cellsOf([{source: 'codex', window: 'weekly', samples}], [], {}, cell, from, to, known) as unknown as Chunk[];
+  return compose(chunks, {now: to, historyStart: 0, known}, {cell, k0: from / cell, k1: to / cell - 1, length: to - from, live: false, key: '', now: to}, new Set(['codex weekly'])).series[0];
+}
 
 test('deltas are percentage points between consecutive samples of a window', () => {
   assert.equal(edge(sample(), sample({at: start + 120_000, used: 24})).delta, 4);
@@ -54,19 +64,19 @@ test('chart continuity breaks only on gaps; a reset is drawn, not counted', () =
     sample({at: start + 900_000, used: 3, ...later}),
     sample({at: start + 1_020_000, used: 4, ...later}),
   ]);
-  assert.deepEqual(result.points.map(p => p.segment), [0, 0, 0, 1, 1]);
+  assert.deepEqual(result.points.map(p => p[2]), [1, 1, 1, 2, 2]);
   assert.equal(result.consumed, 11);
 });
 
 test('series share one time grid: lowest value per cell, breaks only on empty cells', () => {
   const minute = 60_000;
-  const point = (at: number, remaining: number): Point => ({at: start + at * minute, used: 100 - remaining, remaining, segment: 0, staleAfterMs: 330_000});
-  const grid = onGrid([point(0, 90), point(2, 88), point(4, 87), point(6, 86), point(8, 85), point(20, 70), point(22, 69)], 5 * minute);
+  const point = (at: number, remaining: number) => sample({at: start + at * minute, used: 100 - remaining, remaining});
+  const grid = series([point(0, 90), point(2, 88), point(4, 87), point(6, 86), point(8, 85), point(20, 70), point(22, 69)], 5 * minute).points;
   assert.deepEqual(
-    grid.map(p => [(p.at - start) / minute, p.remaining, p.segment]),
-    [[0, 87, 0], [5, 85, 0], [20, 69, 1]],
+    grid.map(p => [(p[0] - start) / minute, p[1], p[2]]),
+    [[0, 87, 1], [5, 85, 1], [20, 69, 2]],
   );
   // A 6-minute hiccup inside adjacent cells is below the grid resolution.
-  const hiccup = onGrid([point(0, 50), point(7, 49)], 5 * minute);
-  assert.deepEqual(hiccup.map(p => p.segment), [0, 0]);
+  const hiccup = series([point(0, 50), point(7, 49)], 5 * minute);
+  assert.deepEqual(hiccup.points.map(p => p[2]), [1, 1]);
 });

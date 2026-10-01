@@ -4,13 +4,13 @@ import {clock, day, stamp} from './format';
 /** A period selected on the chart, in milliseconds. */
 export type TimeRange = {from: number; to: number};
 
-/** The shortest and longest periods the hub reads (config.history.minSpanMs, maxSpanMs). */
+/** The shortest and longest selections the page offers. */
 export const MIN_TIME_RANGE = 15 * 60_000;
 const MAX_TIME_RANGE = 31 * 86_400_000;
 const DAY = 86_400_000;
 
 /**
- * Whether history on screen is of a selected range (the hub names it `<from>-<to>`), not a
+ * Whether history on screen is of a selected range (the page names it `<from>-<to>`), not a
  * period ending now: what the analytics show follows the data they have, so the
  * headings of a range never stand over a period's numbers while the next answer loads.
  */
@@ -20,8 +20,9 @@ export const ofTimeRange = (history: {range: string} | null) => !!history && his
  * The selection lives in the address (`?from=…&to=…`, with the board it was selected on):
  * a reload keeps it, a link to a burst of work can be shared with the others on the
  * board, and Back undoes a selection. Only its form and length are checked here: its end
- * may be past the page's clock, which the hub's may be ahead of. The hub cuts it at its
- * own now, and refuses one too short then; the chosen period comes back (`dropTimeRange`).
+ * may be past the page's clock, which the hub's may be ahead of. A selection wholly
+ * beyond the hub's cut (the end of the cell at hubNow() + 30 seconds) is dropped; the
+ * chosen period comes back (`dropTimeRange`).
  */
 export function parseTimeRange(search: string): TimeRange | null {
   const params = new URLSearchParams(search);

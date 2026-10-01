@@ -220,7 +220,8 @@ A new state of the board gets an entry in the catalogue, with the codes it shows
 `expect` (the file's header explains them): `npm test` then checks it holds, and it is
 on the board for the next person. One a working hub never holds for long is named in the
 header instead, with the tests that hold it. `npm run demo -- --still` keeps the board
-still: nothing is measured after the start, and no card goes stale for three hours.
+still: nothing is measured after the start, and no card goes stale for three hours; running
+agents still work and their credited activity advances.
 
 For README screenshots, use `npm run demo -- showcase --still`. Capture the cards and
 the analytics separately in English and Russian, with the same viewport and preferences.
@@ -233,19 +234,21 @@ the tilted board beneath its title. Preserve the typography, proportions and bac
 when replacing the underlying screenshots, and compress the PNGs with pngquant.
 Use only the demo’s synthetic accounts and machines.
 
-`npm run bench` (after `npm run build`) runs such a still demo, opens Ana's board in
-headless Chrome and holds it to the budget in `hub/bench/budget.ts`: for two minutes
-(five without `--ci`) the idle page asks the hub nothing, is told nothing but `ping`,
-renders and changes nothing but what shows time (and that no more than it reads
-otherwise), and spends a fifth of the script it did before it was driven by events;
-then twenty measurements of one card all show on it, 19 of them within a second,
-rendering no other card nor the header (what shows time there, only as its clock would).
-After the readings, it also checks that consecutive frequency saves with the native
-arrow keys keep focus in the card's menu. It prints the readings as JSON and exits 1
-over budget or on a failed keyboard check. It needs Chrome:
+`npm run bench` (after `npm run build`) uses a still demo whose agents repeat their
+lists without working, opens Ana's board in headless Chrome and checks the budget in
+`hub/bench/budget.ts`. During warmup no `history` may arrive. For two minutes (five
+without `--ci`) an idle board with neither measurements nor working agents asks nothing,
+is told only `ping`, renders and changes only what shows time, and spends a fifth of
+the script it did before events. Then twenty measurements reach their card and chart,
+19 within a second, reading a small tail of history rather than the whole period.
+Finally the stand's laptop reports one working agent: each credited report makes at
+most one small history read and renders only its card, agents and analytics. The report
+prints latency, history bytes and reads as JSON and exits 1 over budget. After the
+readings, it also checks that consecutive frequency saves with native arrow keys keep
+focus in the card's menu and fails otherwise. It needs Chrome:
 `QUOTUM_CHROME`, `google-chrome` or `chromium` on `PATH`, or `--cdp http://host:port` to
-one already running. CI runs it on every push; run it yourself when you change the
-dashboard and have Chrome.
+one already running. CI runs it on every push; run it when you change the dashboard
+and have Chrome.
 
 ## Pull requests
 

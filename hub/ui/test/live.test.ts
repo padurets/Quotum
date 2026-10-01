@@ -228,7 +228,7 @@ test('row 1, 3, 4: a board opens a stream with the header, and hello with snapsh
   assert.equal(h.connection()?.status, 'connecting', 'the snapshot is not there yet');
   await stream.write(frame('snapshot', SNAPSHOT) + frame('card', {id: 's1'}));
   assert.deepEqual(h.connection(), {type: 'connection', status: 'live', lostAt: null});
-  assert.deepEqual(h.hubEvents(), ['snapshot', 'card']);
+  assert.deepEqual(h.hubEvents(), ['hello', 'snapshot', 'card']);
   assert.deepEqual(h.heard, [123]);
 });
 
@@ -298,7 +298,7 @@ test('row 6, 17: a long poll brings the board, then asks again at once, applying
       {type: 'cadence', data: {id: 's1', cadence: null}},
     ],
   });
-  assert.deepEqual(h.hubEvents(), ['snapshot', 'card', 'cadence']);
+  assert.deepEqual(h.hubEvents(), ['hello', 'snapshot', 'card', 'cadence']);
   // The hub holds each poll up to 25 s; ten minutes after polls began, a stream again.
   const began = h.timers.t;
   while (h.timers.t - began < 10 * MIN) {
@@ -356,7 +356,7 @@ test('rows 7, 8, 11: 401 or bye unauthorized ends it for sign-in; 404 or bye gon
       {type: 'card', data: {id: 's'}},
     ],
   });
-  assert.deepEqual([p.said, p.hubEvents()], [['gone'], ['snapshot']]);
+  assert.deepEqual([p.said, p.hubEvents()], [['gone'], ['hello', 'snapshot']]);
 
   // While polling: 401 and 404 of the hub, and bye unauthorized, as in a stream.
   for (const [status, error, said] of [
@@ -502,7 +502,7 @@ test('events that come after bye in the same chunk are not heard', async () => {
   const h = harness();
   const stream = await h.golive();
   await stream.write(frame('bye', {reason: 'restart'}) + frame('card', {id: 'late'}));
-  assert.deepEqual(h.hubEvents(), ['snapshot']);
+  assert.deepEqual(h.hubEvents(), ['hello', 'snapshot']);
 });
 
 test('row 3: the answer came, and its hello and snapshot have ten seconds from then', async () => {
@@ -1057,7 +1057,7 @@ test('events of a connection the page closed never reach the page', async () => 
   h.live.open('b2');
   await flush();
   await stream.write(frame('card', {id: 'old'})).catch(() => {});
-  assert.deepEqual(h.hubEvents(), ['snapshot']);
+  assert.deepEqual(h.hubEvents(), ['hello', 'snapshot']);
   h.live.close();
   await h.timers.advance(10 * MIN);
   assert.equal(h.asked.length, 2);

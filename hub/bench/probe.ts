@@ -103,7 +103,7 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
   };
   const page = globalThis as unknown as {
     __REACT_DEVTOOLS_GLOBAL_HOOK__: object;
-    __quotumBench: {reset(): void; read(): Reading; forgetCards(): void; cardChanged(id: string): number | null};
+    __quotumBench: {reset(): void; read(): Reading; forgetCards(): void; cardChanged(id: string): number | null; seriesChanged(key: string, last: string): number | null};
     MutationObserver: new (callback: (records: {target: {nodeType: number; parentElement: Element | null}}[]) => void) => {
       observe(target: unknown, options: object): void;
     };
@@ -116,6 +116,7 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
   let renders = new Map<Element | null, number>();
   let mutations = new Map<Element | null, number>();
   let cardChanged: Record<string, number> = {};
+  let seriesChanged: Record<string, number> = {};
   const names = new WeakMap<Element, number>();
   let named = 0;
 
@@ -170,12 +171,17 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
     new page.MutationObserver(records => {
       const began = clock.now();
       const nodes = new Set<Element | null>();
+      const at = clock.timeOrigin + clock.now();
       for (const record of records) {
         const element = record.target.nodeType === 1 ? (record.target as unknown as Element) : record.target.parentElement;
         nodes.add(element ? element.closest(selector) : null);
+        const series = element?.closest('[data-series]');
+        if (series) {
+          const key = `${series.getAttribute('data-series')}\n${series.getAttribute('data-last')}`;
+          seriesChanged[key] ??= at;
+        }
       }
       bump(mutations, nodes);
-      const at = clock.timeOrigin + clock.now();
       for (const node of nodes) {
         if (!node || node.hasAttribute('data-time')) continue;
         const card = node.closest('[data-card]')?.getAttribute('data-card');
@@ -193,12 +199,15 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
       renders = new Map();
       mutations = new Map();
       cardChanged = {};
+      seriesChanged = {};
     },
     read: () => ({instrumentMs, commits, renders: listed(renders), mutations: listed(mutations), cardChanged}),
     forgetCards() {
       cardChanged = {};
+      seriesChanged = {};
     },
     cardChanged: id => cardChanged[id] ?? null,
+    seriesChanged: (key, last) => seriesChanged[`${key}\n${last}`] ?? null,
   };
 }
 

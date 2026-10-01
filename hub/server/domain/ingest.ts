@@ -2,7 +2,7 @@ import {providers, type Provider} from './sources.js';
 import type {FreeResets, Kind, Measurement, Win} from './quota.js';
 
 /** Clocks within this of the hub's are taken as they are; beyond it, agent times are shifted. */
-export const CLOCK_TOLERANCE_MS = 30_000;
+export {CLOCK_TOLERANCE_MS} from './history.js';
 
 /**
  * Ingest format v1 (spec/ingest-v1.md): what an agent sends. Parsing is strict; a

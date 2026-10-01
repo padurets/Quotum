@@ -10,7 +10,7 @@ test('the command takes a set and a reset scene, and refuses anything else with 
   assert.throws(() => parseArgs(['--resets', 'nope']), /Unknown reset scene "nope"[\s\S]*scenes: +announced/);
   assert.throws(() => parseArgs(['--resets']), /Unknown reset scene/);
   assert.throws(() => parseArgs(['all', 'showcase']), /Unknown argument "showcase"/);
-  assert.deepEqual([parseArgs([]).still, parseArgs(['showcase', '--still']).still], [false, true], 'still: only the time moves');
+  assert.deepEqual([parseArgs([]).still, parseArgs(['showcase', '--still']).still], [false, true], 'still: measurements stop, running agents still work');
 });
 
 test('the demo reaches the hub where it listens and lets it answer that host', () => {

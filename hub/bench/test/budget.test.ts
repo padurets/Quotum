@@ -1,9 +1,15 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {IDLE_SCRIPT_MS_PER_SECOND, idleProblems, LATENCY_P95_MS, measuredProblems, percentile, type Idle, type Measured} from '../budget.js';
+import {chartProblems, IDLE_SCRIPT_MS_PER_SECOND, idleProblems, LATENCY_P95_MS, measuredProblems, percentile, renderProblems, type Idle, type Measured} from '../budget.js';
 import type {Counted} from '../probe.js';
 
 const MIN = 60_000;
+
+test('work reports use the render budget independently of measurement latency', () => {
+  const report = {card: 's1', renders: [part('card:s1', null, 1), part('agents', null, 1), part('analytics', null, 1)], mutations: [], from: 0, to: MIN};
+  assert.deepEqual(renderProblems(report), []);
+  assert.match(renderProblems({...report, renders: [...report.renders, part('header', null, 1)]}).join('\n'), /rendered/);
+});
 const part = (region: string, kind: string | null, count: number): Counted => ({
   node: kind ? `span[data-time=${kind}]#1` : 'div#2',
   time: kind !== null,
@@ -87,6 +93,14 @@ test('a measurement that never shows fails, however quick the others', () => {
   const lost = [...Array.from({length: 19}, () => 120), Infinity];
   const problems = measuredProblems({card: 's1', latencies: lost, renders: [part('card:s1', null, 19)], mutations: [], from: 0, to: MIN});
   assert.deepEqual(problems, ['1 of 20 measurements never showed on their card']);
+});
+
+test('one lost chart update fails even when the other nineteen keep p95 within budget', () => {
+  const quick = Array.from({length: 19}, () => 120);
+  assert.deepEqual(chartProblems([...quick, 120]), []);
+  assert.equal(percentile([...quick, Infinity], .95), 120);
+  assert.deepEqual(chartProblems([...quick, Infinity]), ['1 of 20 measurements never showed on their chart']);
+  assert.match(chartProblems([...quick.slice(0, 18), LATENCY_P95_MS + 1, Infinity]).join('\n'), /95th percentile/);
 });
 
 test('what shows time on another card renders with the clock, not with each measurement', () => {

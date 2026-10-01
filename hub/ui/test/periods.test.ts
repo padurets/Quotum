@@ -1,10 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {frameOf, periodLabel, periodOf, PERIODS, step} from '../lib/periods';
-import {complete} from '../lib/history';
 import {heardHub, hubNow} from '../lib/clock';
 import {setLocale} from '../i18n';
-import type {History} from '../lib/types';
 
 const minute = 60_000;
 const hour = 60 * minute;
@@ -79,15 +77,6 @@ test('‹ stops where history starts, or the hub stops keeping it, and is off th
   }
   assert.equal(range.from, Math.ceil((now - 90 * day + hour) / minute) * minute, 'an hour inside the 90 days the hub keeps');
   assert.equal(step(range, '30d', -1, now, 0), null);
-});
-
-test('only an answer that is all there is of a range is kept on the page', () => {
-  const cellMs = 5 * minute;
-  const range = {from: now - 2 * day - 3 * minute, to: now - day - 3 * minute};
-  const answer = {range: '', now, since: 0, to: Math.ceil(range.to / cellMs) * cellMs, cellMs, historyStart: 0, series: [], events: [], refreshInMs: null, activity: {since: 0, known: null, barMs: 60_000, activeMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}}} as History;
-  assert.equal(complete(answer, range), true);
-  assert.equal(complete({...answer, to: now - day - 4 * minute}, range), false, 'cut to the hub’s now');
-  assert.equal(complete({...answer, refreshInMs: 60_000}, range), false, 'a newer one is on its way: a range whose work is still credited too');
 });
 
 test('the page reckons the hub’s clock from the last answer, ahead or behind its own', () => {
