@@ -13,6 +13,7 @@ import {Directory} from './store/directory.js';
 import {Setup} from './setup.js';
 import {bootstrapLocal} from './local.js';
 import {Credentials, readInputs, resetIntent, SecretError, startSecrets} from './secrets/index.js';
+import {HubSources} from './hubSources.js';
 
 /** One line of JSON on stdout about the hub itself: the desktop app reads these. */
 const say = (event: object) => console.log(JSON.stringify(event));
@@ -50,7 +51,9 @@ async function main() {
   const resets = new ResetFeed((provider, reset) => store.announce(provider, reset));
   const setup = new Setup(!local && directory.userCount() === 0, config.auth.setupCode);
   const ingest = new Ingest(store, directory, new Duty(), new Cadence());
-  const app = await buildApp({store, directory, resets, ingest, pairing: new Pairing(directory), setup, local: local && {key: local.key}, credentials: new Credentials(store.db, inputs.current, secretKey), secretSnapshot: {storageAtStart: inputs.storageAtStart, wasFileAtStart: inputs.wasFileAtStart}});
+  const credentials=new Credentials(store,inputs.current,secretKey);
+  const hubSources=new HubSources(store,credentials);
+  const app = await buildApp({store, directory, resets, ingest, pairing: new Pairing(directory), setup, local: local && {key: local.key}, credentials,hubSources, secretSnapshot: {storageAtStart: inputs.storageAtStart, wasFileAtStart: inputs.wasFileAtStart}});
 
   let closing = false;
   let pruning: ReturnType<typeof setInterval> | undefined;
@@ -59,6 +62,7 @@ async function main() {
     closing = true;
     clearInterval(pruning);
     resets.stop();
+    hubSources.stop();
     await app.close();
     store.close();
     process.exit(0);
@@ -106,6 +110,7 @@ async function main() {
     console.log(`\nQuotum has no account yet. ${where} and create the first one with the setup code ${setup.pending}\n`);
   }
   resets.start();
+  hubSources.start();
 
   const prune = () => {
     const now = Date.now();

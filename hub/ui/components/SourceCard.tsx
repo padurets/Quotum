@@ -5,11 +5,14 @@ import {countdown, countdownChangesAt, duration, earliest, num, stamp} from '../
 import {cadenceChangesAt, cadenceOf, dotChangesAt, dotOf, errorText, level, problemOf, resetLine, resetLineChangesAt, windowName} from '../lib/quota';
 import {t, useLocale} from '../i18n';
 import {DEFAULT_PLAN, isValidPlan, planAt, planChangesAt, planNote, planTotal, type WeeklyPlan} from '../lib/plan';
-import {LOGOS} from './logos';
+import {logoOf} from './logos';
+import {MoneyCard,AccessMark} from './MoneyCard';
 import {cardId, colorOf, isWindowHidden, planOf, weeklyPlanOf, withColor, withHidden, withName, withPlan, withPlanned, withWindowHidden, type Arrange} from '../lib/view';
 import {CARD_COLORS, MIDDLE_STEP, PROVIDERS} from '../lib/providers';
 import {call} from '../lib/http';
-import {useCadence, useCard, useConnection, useMine, useRefresh, useResetsFor, useSessions, useTitle} from '../lib/board';
+import {useCadence, useCard, useConnection, useMine, useRefresh, useResetsFor, useSessions, useSourceAccess, useTitle} from '../lib/board';
+import {keyName, money, capLeft} from '../lib/money';
+import {providerOf} from '../../server/domain/providers';
 import {useClock} from '../lib/clock';
 import {FreeResets} from './ResetMarks';
 import {Tray} from './Tray';
@@ -237,6 +240,7 @@ function CardColor({source, arrange}: {source: Card; arrange: Arrange}) {
 function Frequency({source, board}: {source: Card; board: string}) {
   useLocale();
   const mine = useMine(source.id);
+  const byHub = providerOf(source.provider)?.measuredBy === 'hub';
   const connection = useConnection();
   const connected = connection.status === 'live' || connection.status === 'polling';
   const [pending, setPending] = useState(false);
@@ -279,12 +283,10 @@ function Frequency({source, board}: {source: Card; board: string}) {
           />
         </div>
       ) : <div className="popover-note">{t(`frequency.${selected}`)}</div>}
-      <div className="popover-note">{t('frequency.hint')}</div>
+      <div className="popover-note">{t(byHub?'frequency.hubHint':'frequency.hint')}</div>
       <details className="popover-note">
         <summary className="link-button">{t('frequency.aboutAuto')}</summary>
-        <p>{t('frequency.autoActivity')}</p>
-        <p>{t('frequency.autoLimits')}</p>
-        <p>{t('frequency.autoMinimum')}</p>
+        {byHub?<><p>{t('frequency.hubAuto')}</p><p>{t('frequency.hubMinimum')}</p></>:<><p>{t('frequency.autoActivity')}</p><p>{t('frequency.autoLimits')}</p><p>{t('frequency.autoMinimum')}</p></>}
       </details>
       <ErrorLine error={error} />
     </>
@@ -331,13 +333,24 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
           })}
         </>
       )}
+      {owner && !!source.keys?.length && (
+        <>
+          <div className="popover-title popover-section">{t('source.show')}</div>
+          {source.keys.map(part => {
+            const key = windowKey(source.id, `key:${part.id}`);
+            const cap = source.meters?.find(m => m.id === `key:${part.id}:cap`);
+            const usage = source.meters?.find(m => m.id === `key:${part.id}:usage`);
+            return <SwitchRow key={part.id} on={!hidden.has(key)} onChange={on => arrange.update(view => withWindowHidden(view, key, !on))} value={money(cap ? capLeft(cap) : usage?.amount)}>{keyName(part)}</SwitchRow>;
+          })}
+        </>
+      )}
       {owner && (
         <>
           <div className="popover-title popover-section">{t('source.color')}</div>
           <CardColor source={source} arrange={arrange} />
         </>
       )}
-      {owner && (
+      {owner && source.windows.length>0 && (
         <div className="popover-section">
           <SwitchRow on={planned} onChange={on => arrange.update(view => withPlanned(view, source.id, on))}>
             {t('source.plan')}
@@ -450,7 +463,7 @@ export function CardMark({source}: {source: Card}) {
       onPointerLeave={() => setHovered(false)}
       onPointerUp={event => event.pointerType === 'touch' && setTip(true)}
     >
-      <img className="provider-logo" src={LOGOS[source.provider]} alt="" />
+      <img className="provider-logo" src={logoOf(source.provider)} alt="" />
       {pending ? (
         <i className="spinner" aria-hidden="true" />
       ) : dot.warn || failed ? (
@@ -471,7 +484,8 @@ export function CardMark({source}: {source: Card}) {
 function CardTray({source}: {source: Card}) {
   const sessions = useSessions(source.id);
   const resets = useResetsFor(source.provider);
-  return <Tray resets={resets} current={!!source.resets?.available && <FreeResets resets={source.resets} />} sessions={sessions} />;
+  const access = useSourceAccess(source.id);
+  return <Tray resets={resets} news={access && <AccessMark id={source.id}/>} current={!!source.resets?.available&&<FreeResets resets={source.resets}/>} sessions={sessions} />;
 }
 
 /**
@@ -500,10 +514,11 @@ export const SourceCard = memo(function SourceCard({id, arrange, boardId, person
       </div>
 
       <div className="limits">
+        {source.meters&&<MoneyCard source={source} board={boardId} view={arrange.view}/>}
         {visible.map(w => (
           <Limit key={w.id} w={w} measuredAt={source.successAt} weekly={weekly} />
         ))}
-        {!source.windows.length && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
+        {!source.windows.length && !source.meters?.length && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
         {!!source.windows.length && !visible.length && <AllHidden source={source} arrange={arrange} />}
       </div>
       <CardTray source={source} />

@@ -1,4 +1,5 @@
 import {barOf, type Activity, type ActivityGroup, type Dimension, type SeriesWork} from './work.js';
+import {composeMeters, type MeterHistory, type MeterSeriesCells} from './meterHistory.js';
 
 /** The shared grid, from the finest cell that keeps a frame within its budget. */
 export const CELLS = [1, 5, 15, 30, 60, 120, 360, 720].map(minutes => minutes * 60_000);
@@ -43,6 +44,7 @@ export type Chunk<Ref = string> = {
   from: number;
   to: number;
   series: SeriesCells[];
+  meterSeries?: MeterSeriesCells[];
   activity: ActivityCells<Ref>;
   resets: [string, string, number][];
   grants: [string, number, number][];
@@ -72,6 +74,7 @@ export type History = {
   cellMs: number;
   historyStart: number;
   series: HistorySeries[];
+  meterSeries?: MeterHistory[];
   events: SourceEvent[];
   activity: Activity & {since: number; known: {from: number; to: number} | null};
 };
@@ -232,6 +235,7 @@ export function compose(chunks: readonly Chunk[], meta: HistoryMeta, target: Tar
   for (const dim of DIMENSIONS) groups[dim] = [...by[dim].values()].sort((a, b) => b.agentMs - a.agentMs || b.activeMs - a.activeMs || compare(a.name ?? '', b.name ?? '') || compare(a.key, b.key)).map(g => ({key: g.key, name: g.name, activeMs: g.activeMs, agentMs: g.agentMs, agents: g.refs.size, cells: [...g.bars].sort((a, b) => a[0] - b[0])}));
   return {
     range: target.key, live: target.live, since, to, cellMs: cell, historyStart: meta.historyStart,
+    ...(ordered.some(c => c.meterSeries !== undefined) ? {meterSeries: composeMeters(ordered,cell,since,to)} : {}),
     series: [...series.values()].map(row => row.line).sort((a, b) => compare(a.sourceId, b.sourceId) || compare(a.windowId, b.windowId)),
     events: [...resets, ...grants].sort((a, b) => a.at - b.at),
     activity: {since: activitySince, known: knownFrom < to ? {from: knownFrom, to} : null, barMs, activeMs, agentMs, agents: refs.size, cells: [...bars].sort((a, b) => a[0] - b[0]).map(([at, b]) => [at, b.active, b.agent, b.refs.size]), by: groups},

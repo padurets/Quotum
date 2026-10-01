@@ -210,7 +210,7 @@ function Dashboard({
             ))}
           </div>
         ) : empty && local ? (
-          <LocalOnboarding onSettings={() => setAccount(true)} />
+          <LocalOnboarding onSettings={() => setAccount(true)} onConnect={()=>setMachines('connect')} />
         ) : empty && board?.personal ? (
           <section className="panel onboarding">
             <h2>{t('onboarding.title')}</h2>
@@ -255,14 +255,13 @@ function Dashboard({
           </section>
         )}
       </main>
-      {machines && <MachinesDialog tab={machines} onTab={setMachines} onClose={closeMachines} local={local} />}
+      {machines && <MachinesDialog tab={machines} onTab={setMachines} onClose={closeMachines} local={local} userId={user.id} trustedKeys={trustedKeys} />}
       {people && board && !board.personal && (
         <BoardDialog board={board} userId={user.id} tab={people} onTab={setPeople} onClose={() => setPeople(null)} />
       )}
       {account && (
         <AccountPanel
           user={user}
-          trustedKeys={trustedKeys}
           onChanged={refresh}
           onSignedOut={onSignedOut}
           onClose={() => setAccount(false)}

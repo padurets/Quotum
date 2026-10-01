@@ -1,6 +1,10 @@
 import {cellOf, cellStart} from '../server/domain/history.js';
 import {createServer} from 'node:net';
-import {realpathSync} from 'node:fs';
+import {realpathSync,writeFileSync} from 'node:fs';
+import path from 'node:path';
+import {MONEY_KEY} from '../demo/money.js';
+import type {Credential} from '../server/store/credentials.js';
+import type {Meter} from '../server/domain/meters.js';
 import {fileURLToPath} from 'node:url';
 import {SETS} from '../demo/catalogue.js';
 import {addressOf, Demo, prepare, Stop} from '../demo/index.js';
@@ -12,7 +16,7 @@ import {probeScript, type Reading} from './probe.js';
 import {delta, round, scriptPerSecond, tally, type Metrics} from './report.js';
 import {overviewCards, stillProblems, warmUntil} from './still.js';
 import {hear, type Heard} from './stream.js';
-import {frequencyKeys} from './controls.js';
+import {frequencyKeys, moneyView} from './controls.js';
 
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
@@ -124,7 +128,7 @@ async function main() {
     process.exit(code);
   };
   const set = SETS[0];
-  const demo = new Demo({set, scene: set.scene, still: true, idleAgents: true, address, onExit: () => void finish(1)});
+  const demo = new Demo({set, scene: set.scene, still: true, idleAgents: true,money:false, address, onExit: () => void finish(1)});
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(signal, () => void finish(1));
 
   try {
@@ -197,6 +201,8 @@ async function main() {
     // The readings above are frozen: keyboard checks do not enter the performance budget.
     say('checking consecutive frequency saves with native arrow keys');
     await frequencyKeys(cdp);
+    const monetary=await moneyPhase(demo,stand,cdp);
+    problems.push(...monetary.problems);
     const result = {
       set: set.id,
       idle: {
@@ -224,6 +230,7 @@ async function main() {
         mutations: tally(measured.reading.mutations).outsideBy,
       },
       work: worked.reports,
+      money:monetary,
       problems,
     };
     console.log(JSON.stringify(result, null, 2));
@@ -275,6 +282,55 @@ async function measure(stand: Awaited<ReturnType<Demo['run']>>, cdp: Cdp) {
   }
   await drain(requests); requests.counting = false;
   return {source, latencies, chartLatencies, historyBytes: (requests.bytesByPath['/api/history'] ?? 0) / MEASUREMENTS, reading: await cdp.evaluate<Reading>('__quotumBench.read()'), from, to: Date.now()};
+}
+
+async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:Cdp) {
+  const owner=stand.people.get(people(stand.set)[0].id)!;
+  say('checking money updates, partial inventory, pagination, selection and unchanged observations');
+  const record=await owner.post<Credential>('/api/credentials',{provider:'openrouter',secret:MONEY_KEY(1),allowNoExpiry:true});
+  const source=record.sourceId!;
+  const shownBy=Date.now()+SHOWN_WITHIN;
+  while(!await cdp.evaluate<boolean>(`!!document.querySelector('[data-card="${source}"] [data-money]')`)){if(Date.now()>shownBy)throw new Stop('money card did not appear');await sleep(20);}
+  await cdp.evaluate(`Array.from(document.querySelectorAll('.analytics-head button')).find(b=>b.textContent==='USD')?.click()`);
+  const readyBy=Date.now()+SHOWN_WITHIN;
+  while(!await cdp.evaluate<boolean>(`!!document.querySelector('[data-series="${source} balance"]')`)){if(Date.now()>readyBy)throw new Stop('money chart did not appear');await sleep(20);}
+  await cdp.evaluate('__quotumBench.reset()');
+  const from=Date.now(),latencies:number[]=[],chartLatencies:number[]=[],requests=new Requests(cdp);requests.counting=true;
+  for(let i=0;i<6;i++) {
+    await cdp.evaluate('__quotumBench.forgetCards()');
+    const at=Date.now(),credits=i<2?70:90,usage=33+(i+1)/10;
+    writeFileSync(path.join(demo.dir,'money-control.json'),JSON.stringify({at,credits,usage}));
+    await owner.post('/api/credentials/'+record.id,{secret:MONEY_KEY(1),allowNoExpiry:true});
+    const value=String(Math.round((credits-usage)*1_000_000)),last=cellStart(at,cellOf(86_400_000))+':'+value;
+    let card:number|null=null,chart:number|null=null;
+    while((card===null||chart===null)&&Date.now()<at+SHOWN_WITHIN){
+      card=await cdp.evaluate<number|null>(`__quotumBench.cardChanged(${JSON.stringify(source)})`);
+      chart=await cdp.evaluate<number|null>(`__quotumBench.seriesChanged(${JSON.stringify(source+' balance')},${JSON.stringify(last)})`);
+      if(card===null||chart===null)await sleep(20);
+    }
+    latencies.push(card===null?Infinity:card-at);chartLatencies.push(chart===null?Infinity:chart-at);await sleep(at+4_000-Date.now());
+  }
+  await drain(requests);requests.counting=false;
+  const reading=await cdp.evaluate<Reading>('__quotumBench.read()'),to=Date.now();
+  const problems=[...measuredProblems({card:source,latencies,renders:reading.renders,mutations:reading.mutations,from,to}),...chartProblems(chartLatencies)];
+  const bytes=(requests.bytesByPath['/api/history']??0)/6;if(bytes>HISTORY_BYTES_PER_MEASUREMENT)problems.push('money history exceeds the existing measurement byte budget');
+  const first=await owner.get<{keys:unknown[];next:string|null}>('/api/boards/'+owner.personalBoard+'/sources/'+source+'/keys?limit=50');
+  if(first.keys.length!==50||!first.next)problems.push('money key pagination did not expose a full first page');
+  const second=await owner.get<{keys:unknown[]}>('/api/boards/'+owner.personalBoard+'/sources/'+source+'/keys?limit=50&after='+encodeURIComponent(first.next??''));
+  if(second.keys.length!==7)problems.push('money key pagination lost the final page');
+  const state=await owner.get<Snapshot>('/api/overview?board='+owner.personalBoard);
+  if(state.sources.find(s=>s.id===source)?.inventory?.complete!==false)problems.push('partial money inventory was reported complete');
+  const capped=await owner.post<Credential>('/api/credentials',{provider:'openrouter',secret:MONEY_KEY(5),allowNoExpiry:true});
+  const cappedSource=capped.sourceId!;
+  let cap:Meter|undefined;
+  const cappedBy=Date.now()+SHOWN_WITHIN;
+  while(!cap) {
+    const cappedState=await owner.get<Snapshot>('/api/overview?board='+owner.personalBoard);
+    cap=cappedState.sources.find(s=>s.id===cappedSource)?.meters?.find(m=>m.kind==='cap'&&m.limit==='0');
+    if(!cap){if(Date.now()>cappedBy)throw new Stop('zero-cap money fixture did not appear');await sleep(20);}
+  }
+  await moneyView(cdp,source,cappedSource,cap.id);
+  return {count:latencies.length,p95Ms:Math.round(percentile(latencies,.95)),chartP95Ms:Math.round(percentile(chartLatencies,.95)),historyBytesPerMeasurement:bytes,problems};
 }
 
 async function drain(requests: Requests) {

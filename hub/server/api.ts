@@ -5,7 +5,8 @@ import Fastify, {type FastifyReply, type FastifyRequest} from 'fastify';
 import staticFiles from '@fastify/static';
 import {config, serviceName, version} from './config.js';
 import type {Ingest} from './ingest.js';
-import {HistoryTiles} from './history.js';
+import {HistoryLimit, HistoryTiles} from './history.js';
+import {selectionOf, type MeterSelection} from './domain/meterHistory.js';
 import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, READ_CELLS, cellStart, tileOf, tileStart} from './domain/history.js';
 import type {Pairing} from './pairing.js';
 import type {ResetFeed} from './resets.js';
@@ -21,12 +22,14 @@ import {agentRoutes} from './routes/agents.js';
 import {localRoutes} from './local.js';
 import {credentialRoutes} from './routes/credentials.js';
 import {Credentials, startSecrets, type SecretInputs} from './secrets/index.js';
+import type {HubSources} from './hubSources.js';
+import {sourceKeyRoutes} from './routes/sourceKeys.js';
 
 /**
  * `local`: the desktop app's hub, with the key its window enters with (see local.ts); null
  * on a server. `events`: what open dashboards hear, made here when not given.
  */
-export type Hub = {store: Store; directory: Directory; resets: ResetFeed; ingest: Ingest; pairing: Pairing; setup: Setup; local: {key: string} | null; events?: Events; credentials?: Credentials; secretSnapshot?: Pick<SecretInputs, 'storageAtStart' | 'wasFileAtStart'>};
+export type Hub = {store: Store; directory: Directory; resets: ResetFeed; ingest: Ingest; pairing: Pairing; setup: Setup; local: {key: string} | null; events?: Events; credentials?: Credentials; hubSources?:HubSources; secretSnapshot?: Pick<SecretInputs, 'storageAtStart' | 'wasFileAtStart'>};
 
 /** Route helpers shared by the route modules. */
 export type Guards = {
@@ -72,7 +75,7 @@ function clientError(error: NodeJS.ErrnoException, socket: Socket & {_httpMessag
  * at `/local`, and what is about accounts, sharing and connecting is not there.
  */
 export async function buildApp(hub: Hub) {
-  hub = {...hub, credentials: hub.credentials ?? new Credentials(hub.store.db, null, startSecrets(hub.store.db, {current: null, previous: null, reset: null, storageAtStart: null, wasFileAtStart: false}))};
+  hub = {...hub, credentials: hub.credentials ?? new Credentials(hub.store, null, startSecrets(hub.store.db, {current: null, previous: null, reset: null, storageAtStart: null, wasFileAtStart: false}))};
   const {store, directory} = hub;
   const projection = new Projection(hub);
   const {requestTimeoutMs, checkMs} = config.http;
@@ -96,6 +99,8 @@ export async function buildApp(hub: Hub) {
   const events = hub.events ?? new Events(hub);
   events.onHistory = (source, since) => history.touch(source, since);
   events.attach();
+  hub.credentials!.setObserver(events);
+  hub.hubSources?.setObserver(events);
 
   app.addHook('onRequest', async (request, reply) => {
     // The health check answers any host: a container asks it at 127.0.0.1 whatever the hub's own address.
@@ -159,7 +164,7 @@ export async function buildApp(hub: Hub) {
     return snapshot;
   });
 
-  app.get<{Querystring: {cell?: string; from?: string; to?: string; board?: string}}>('/api/history', (request, reply) => {
+  app.get<{Querystring: {cell?: string; from?: string; to?: string; board?: string; meters?: string; unit?: string}}>('/api/history', (request, reply) => {
     const access = guards.board(request, reply, request.query.board);
     if (!access) return reply;
     const now = Date.now();
@@ -175,7 +180,15 @@ export async function buildApp(hub: Hub) {
     if (to <= from || to % cell || from < oldest || tileOf(to - 1, cell) - tileOf(from, cell) + 1 > MAX_READ_TILES) return reply.code(400).send({error: 'invalid_request'});
     const board = access.board.id;
     const shown = store.shown(board, directory.view(board).hidden);
-    const chunks = history.read(board, cell, from, to, now, shown);
+    let meters: MeterSelection | undefined;
+    if (request.query.meters !== undefined || request.query.unit !== undefined) {
+      try {meters=selectionOf(JSON.parse(request.query.meters??''),request.query.unit);} catch {return reply.code(400).send({error:'invalid_request'});}
+      // A shared hidden source is not a history capability, even when its id is known.
+      if (meters.ids.some(([source])=>!shown.has(source))) return reply.code(404).send({error:'not_found'});
+    }
+    let chunks: string[];
+    try {chunks=history.read(board, cell, from, to, now, shown, meters);}
+    catch(error){if(error instanceof HistoryLimit)return reply.code(413).send({error:'history_limit'});throw error;}
     const meta = JSON.stringify({now, run: events.epoch, historyStart: store.historyStart(now), known: store.historyKnown(shown)});
     return reply.type('application/json').send(`${meta.slice(0, -1)},"chunks":[${chunks.join(',')}]}`);
   });
@@ -190,6 +203,7 @@ export async function buildApp(hub: Hub) {
   app.addHook('preClose', async () => events.close());
   eventRoutes(app, directory, events, guards, !!hub.local);
   accountRoutes(app, hub, guards);
+  sourceKeyRoutes(app,hub,guards);
   await app.register(async scope => credentialRoutes(scope, hub.credentials!, guards));
   agentRoutes(app, hub);
   if (hub.local) localRoutes(app, hub, hub.local.key);

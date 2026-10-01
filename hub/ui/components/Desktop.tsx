@@ -122,12 +122,13 @@ export function AgentBanner() {
 }
 
 /** An empty board in the app: whether numbers come soon, and where the settings are. */
-export function LocalOnboarding({onSettings}: {onSettings: () => void}) {
+export function LocalOnboarding({onSettings,onConnect}: {onSettings: () => void;onConnect:()=>void}) {
   const agent = useApp()?.agent;
   return (
     <section className="panel onboarding">
       <h2>{t('local.onboardingTitle')}</h2>
       <p>{t(onboardingText(agent))}</p>
+      <button type="button" className="button primary" onClick={onConnect}>{t('onboarding.connect')}</button>
       <button type="button" className="button" onClick={onSettings}>
         {t('local.openSettings')}
       </button>

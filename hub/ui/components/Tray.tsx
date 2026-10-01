@@ -30,13 +30,13 @@ function hasRoom(tray: HTMLElement) {
  * or the agents change, not as time passes: the tray itself renders with time only when
  * news comes or goes, what the news says is a part of its own (`ResetNews`).
  */
-export function Tray({resets, current, sessions}: {resets: ResetStatus | undefined; current: ReactNode; sessions: LiveSession[]}) {
+export function Tray({resets, news: extraNews, current, sessions}: {resets: ResetStatus | undefined; news?: ReactNode; current: ReactNode; sessions: LiveSession[]}) {
   const tray = useRef<HTMLElement>(null);
   const [roomy, setRoomy] = useState(true);
   const now = useClock(now => resetLabelChangesAt(resets, now));
   const news = !!resetLabel(resets, now);
   // What adds or removes something to watch; a change of size within is caught by the observer.
-  const layout = `${news}/${!!current}/${Math.min(sessions.length, DRAWN + 1)}`;
+  const layout = `${news}/${!!extraNews}/${!!current}/${Math.min(sessions.length, DRAWN + 1)}`;
 
   useLayoutEffect(() => {
     const element = tray.current;
@@ -51,9 +51,10 @@ export function Tray({resets, current, sessions}: {resets: ResetStatus | undefin
 
   return (
     <footer className="card-foot" ref={tray} data-time="tray">
-      {news && resets && (
+      {(news || extraNews) && (
         <div className="tray-news">
-          <ResetNews status={resets} />
+          {news && resets && <ResetNews status={resets} />}
+          {extraNews}
         </div>
       )}
       {current}

@@ -12,7 +12,8 @@
 export const CODEX_RESETS = {name: 'Codex Resets', url: 'https://codex-resets.com/'};
 export const CLAUDE_RESETS = {name: 'Claude Resets', url: 'https://claude-resets.com/'};
 
-export type ResetProvider = 'claude' | 'codex';
+export type {ResetProvider} from './providers.js';
+import type {ResetProvider} from './providers.js';
 export type ResetEvent = {url: string; text: string; at: number};
 
 export type ResetStatus = {

@@ -22,7 +22,7 @@ export type View = {
   hidden: string[];
   /** Widgets off until the owner turns them on (the list of running agents), turned on. */
   shown: string[];
-  /** `<source id>/<window id>` of windows hidden from cards and the chart. */
+  /** Hidden windows (`source/window`) and card key previews (`source/key:opaque-id`). */
   windows: string[];
   plans: Record<string, number[]>;
   /** Source ids whose plan is switched off on this board. */

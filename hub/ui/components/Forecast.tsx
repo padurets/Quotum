@@ -21,7 +21,8 @@ import {planChangesAt} from '../lib/plan';
 import {lineWork, workLeftChangesAt, workText, type WorkColumn} from '../lib/work';
 import {FORECAST, chosenPlanOf, columnShown, planOf, withColumn, withHidden, type Arrange} from '../lib/view';
 import {linesOf, type Line} from '../lib/lines';
-import {usePrefs} from '../lib/prefs';
+import {usePrefs,usePref} from '../lib/prefs';
+import {MoneyTable} from './MoneyAnalytics';
 import {ofTimeRange} from '../lib/timeRange';
 import {useForecastsOf, useLineup, useNamed, useResetNews} from '../lib/board';
 import {hubNow, useClock} from '../lib/clock';
@@ -87,7 +88,7 @@ const shown = (key: string, cell: Cell | TimedCell, render: (cell: Cell, time?: 
  * it changes with time (the plan, where the forecast leads, the hours of work left) are
  * parts of their own.
  */
-export const Forecast = memo(function Forecast({arrange}: {arrange: Arrange}) {
+const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange}) {
   const {history, loading} = useHistory();
   const sources = useNamed(arrange.view.names);
   const lineup = useLineup();
@@ -308,4 +309,8 @@ export const Forecast = memo(function Forecast({arrange}: {arrange: Arrange}) {
       )}
     </section>
   );
+});
+
+export const Forecast=memo(function Forecast({arrange}:{arrange:Arrange}) {
+  const money=usePref('money');return money.unit?<MoneyTable arrange={arrange}/>:<WindowForecast arrange={arrange}/>;
 });

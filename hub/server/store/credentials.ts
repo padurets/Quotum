@@ -32,11 +32,18 @@ export class CredentialStore {
   get(owner: string, id: string): CredentialRow | null {
     return this.db.prepare('SELECT * FROM credentials WHERE user_id = ? AND id = ?').get(owner, id) as CredentialRow | undefined ?? null;
   }
+  current(row: CredentialRow): boolean {
+    return !!this.db.prepare('SELECT 1 FROM credentials WHERE id=? AND user_id=? AND source_id IS ? AND nonce=? AND cipher=?').get(row.id,row.user_id,row.source_id,row.nonce,row.cipher);
+  }
+  bound(source:string):CredentialRow[] {
+    return this.db.prepare('SELECT * FROM credentials WHERE source_id=? ORDER BY CASE WHEN last_error IS NULL AND unreadable=0 THEN 0 ELSE 1 END,created_at,id').all(source) as CredentialRow[];
+  }
   add(row: CredentialRow): void {
     this.db.prepare('INSERT INTO credentials (id, user_id, provider, source_id, cipher, nonce, key_version, hint, abilities, created_at, expires_at, last_used_at, last_error, unreadable) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(row.id, row.user_id, row.provider, row.source_id, row.cipher, row.nonce, row.key_version, row.hint, row.abilities, row.created_at, row.expires_at, row.last_used_at, row.last_error, row.unreadable);
   }
-  replace(owner: string, id: string, sealed: Sealed, generation: number, hint: string | null): boolean {
-    return this.db.prepare('UPDATE credentials SET cipher = ?, nonce = ?, key_version = ?, hint = ?, unreadable = 0, last_error = NULL WHERE user_id = ? AND id = ?').run(sealed.cipher, sealed.nonce, generation, hint, owner, id).changes !== 0;
+  replace(owner: string, id: string, sealed: Sealed, generation: number, hint: string | null, previous?: Sealed): boolean {
+    return this.db.prepare('UPDATE credentials SET cipher = ?, nonce = ?, key_version = ?, hint = ?, unreadable = 0, last_error = NULL WHERE user_id = ? AND id = ?'+(previous?' AND nonce=? AND cipher=?':''))
+      .run(sealed.cipher, sealed.nonce, generation, hint, owner, id,...(previous?[previous.nonce,previous.cipher]:[])).changes !== 0;
   }
   remove(owner: string, id: string): void {
     this.db.prepare('DELETE FROM credentials WHERE user_id = ? AND id = ?').run(owner, id);

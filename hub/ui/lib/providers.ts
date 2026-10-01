@@ -1,4 +1,4 @@
-import {providerNames} from '../../server/domain/presentation';
+import {catalogue} from '../../server/domain/providers';
 
 /**
  * Identity colors are fixed per provider and deliberately avoid the status hues
@@ -6,11 +6,7 @@ import {providerNames} from '../../server/domain/presentation';
  * Validated for colour-vision deficiency as a three-slot categorical set.
  * Their logos are in components/logos.ts.
  */
-export const PROVIDERS: Record<string, {name: string; color: string}> = {
-  claude: {name: providerNames.claude, color: '#de7b5b'},
-  codex: {name: providerNames.codex, color: '#6897f0'},
-  antigravity: {name: providerNames.antigravity, color: '#d271b3'},
-};
+export const PROVIDERS: Record<string, {name: string; color: string}> = Object.fromEntries(catalogue.map(p => [p.id, {name: p.name, color: p.color}]));
 
 /** The colour of a series whose provider has none. */
 export const FALLBACK_COLOR = '#8b90b5';

@@ -525,12 +525,42 @@ them), kept for 90 days.
   latest one), and listed for as long as samples are kept, so the chart marks every
   one of its period, however far back it is moved.
 
+Hub-measured sources keep exact unit-valued meters separately from percentage
+windows. OpenRouter stores credits and lifetime usage; balance is their difference,
+spending is positive usage movement and a top-up is positive credits movement.
+Readings use signed integer millionths, with sparse value/semantic changes and
+continuous observation spans. Unchanged heartbeats extend freshness without another
+reading. Retention keeps one predecessor to distinguish a late increase from a reset.
+A missing key is stale after one successful traversal and archived after two successive
+successful misses; partial traversals never confirm absence, and history is retained.
+
+Money history uses the same bounded tiles, cache and page loader. Its exact strings,
+historical cap semantics and original spending intervals stay separate from the window
+Float64 codec. A logical balance selection internally reads its two counters. Axes and
+arithmetic never combine units; money does not contribute percentage attention,
+forecast or quota notifications.
+
+A hub polling service starts after readiness and stops before SQLite closes, with at
+most two concurrent jobs and one per source. It rechecks access versions and source
+generation before committing a result, so deletion and replacement discard late
+answers. Auto intervals stretch from two to fifteen minutes; existing fixed preferences
+also apply. Permanent access failures pause automatic retries. Refresh requires a
+source holding and shares a one-minute cooldown across boards. Owner source access is
+projected separately for each reader, outside the shared board cache.
+
 ## Trusted connector keys
 
 The hub has a write-only credential service, separate from password and machine-token
-hashes. No production provider uses it yet. Connector adapters are registered in code;
+hashes. OpenRouter uses it for a management key, through code-owned GET operations
+for the account, credits, workspaces and keys. Connector adapters are registered in code;
 tests inject their own adapter. Each credential belongs to its person and can be
-created, replaced, listed or removed only by that person's session. Mutations require
+created, replaced, listed or removed only by that person's session. Create and replacement
+identify the account outside SQLite, then commit encrypted access and its verified
+source holding atomically. A replacement cannot change the account. No-expiry access
+requires explicit consent. Creation retries can use an owner-scoped UUID for 24 hours;
+a deletion leaves its replay tombstone. Deleting the last own access releases that
+person's holding, preserving others and history. Missing or broken access preserves
+last measurements and a neutral shared failure, with details only for its owner. Mutations require
 an explicit same-site Origin before parsing, accept only a connector's strict printable
 ASCII key format, and are limited to ten attempts a minute per person and address.
 Replies contain only the safe record details, including a last-four hint; neither the

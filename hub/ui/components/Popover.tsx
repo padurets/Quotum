@@ -290,9 +290,9 @@ export function Popover({
 }
 
 /** A labelled on/off row for popovers. */
-export function SwitchRow({on, onChange, children, value, className = ''}: {on: boolean; onChange: (on: boolean) => void; children: ReactNode; value?: ReactNode; className?: string}) {
+export function SwitchRow({on, onChange, children, value, className = '', disabled}: {on: boolean; onChange: (on: boolean) => void; children: ReactNode; value?: ReactNode; className?: string; disabled?: boolean}) {
   return (
-    <button type="button" className={`popover-row ${className}`} role="switch" aria-checked={on} onClick={() => onChange(!on)}>
+    <button type="button" className={`popover-row ${className}`} role="switch" aria-checked={on} disabled={disabled} onClick={() => onChange(!on)}>
       <i className={`switch ${on ? 'on' : ''}`} />
       <span>{children}</span>
       {value !== undefined && <b>{value}</b>}

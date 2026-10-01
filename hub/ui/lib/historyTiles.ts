@@ -1,4 +1,5 @@
 import {decodeCells, encodeCells, TILE_CELLS, type Chunk, type DecodedCell, type HistoryMeta} from '../../server/domain/history';
+import {MeterTile} from './meterTiles';
 
 const FIELDS = 11;
 const HEAD = 248; // 61 uint32 offsets, padded to a float64 boundary.
@@ -20,18 +21,23 @@ export class HistoryTile {
   private activity = new ArrayBuffer(HEAD);
   private resets: Chunk['resets'] = [];
   private grants: Chunk['grants'] = [];
+  private readonly meters: MeterTile;
+  private hasMeters=false;
 
   constructor(readonly from: number, readonly cell: number) {
     this.readFrom = this.validTo = this.readTo = from;
+    this.meters=new MeterTile(from,cell);
   }
 
   get to() {return this.from + TILE_CELLS * this.cell;}
 
   get bytes() {
-    return this.activity.byteLength + [...this.series.values()].reduce((sum, s) => sum + s.values.byteLength + 256, 0) + this.sessions.length * 320 + this.groups.length * 192 + (this.resets.length + this.grants.length) * 192 + 1024;
+    return this.activity.byteLength + this.meters.bytes + [...this.series.values()].reduce((sum, s) => sum + s.values.byteLength + 256, 0) + this.sessions.length * 320 + this.groups.length * 192 + (this.resets.length + this.grants.length) * 192 + 1024;
   }
 
   merge(chunk: Chunk, known: HistoryMeta['known']) {
+    this.hasMeters ||= chunk.meterSeries!==undefined;
+    this.meters.merge(chunk.from,chunk.to,chunk.meterSeries??[]);
     const first = (chunk.from - this.from) / this.cell;
     const last = (chunk.to - this.from) / this.cell;
     for (const s of this.series.values()) s.values.fill(NaN, first * FIELDS, last * FIELDS);
@@ -131,6 +137,7 @@ export class HistoryTile {
   chunk(known: HistoryMeta['known']): Chunk {
     const first = (this.readFrom - this.from) / this.cell;
     const chunk: Chunk = {from: this.readFrom, to: this.readTo, series: [], activity: {sessions: this.sessions, devices: this.devices, cells: []}, resets: this.resets.filter(([, , at]) => at >= this.readFrom && at < this.readTo), grants: this.grants.filter(([, at]) => at >= this.readFrom && at < this.readTo)};
+    if(this.hasMeters)chunk.meterSeries=this.meters.chunk(this.readFrom,this.readTo);
     for (const s of this.series.values()) {
       const cells: DecodedCell[] = [];
       for (let i = first; this.from + i * this.cell < this.readTo; i++) {

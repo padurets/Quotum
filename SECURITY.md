@@ -21,8 +21,12 @@ Quotum's agent asks the installed coding clients for limits. It never reads prov
 tokens, cookies or credential files, and provider clients inherit none of Quotum's
 environment variables. The hub's trusted connector credentials use a separate,
 write-only path: AES-256-GCM encryption before database writes, with its encryption key
-(KEK) outside the database and data directory. No production provider uses this path
-yet.
+(KEK) outside the database and data directory. OpenRouter uses this path for a
+dedicated management key. That key can create, edit and delete provider keys; Quotum
+uses only fixed GET operations for identity, credits, workspaces and key measurements.
+Access without expiry requires explicit consent. Revoke the key at OpenRouter when
+it is no longer needed. Key names and measured spending are shared board data;
+management secrets, raw creator ids, masked labels and raw key hashes are not.
 
 On a server, configure `QUOTUM_SECRET_KEY` or `QUOTUM_SECRET_KEY_FILE`; without it,
 ordinary subscriptions still work, but connecting with a trusted key is unavailable.

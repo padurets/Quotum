@@ -9,7 +9,9 @@
 
 Quotum shows how much of your coding-agent subscriptions is left — Claude Code, Codex
 and Antigravity — on every machine you work on, in one place: for you alone or for a
-whole team. You host it yourself, and it never touches your provider tokens.
+whole team. It also shows OpenRouter balances and API-key caps. You host it yourself;
+the agent never reads provider tokens, and the hub encrypts the management key you
+explicitly connect.
 
 ![The Quotum dashboard](docs/dashboard.png)
 
@@ -181,7 +183,7 @@ day, not a script thrown together over a weekend. In practice that meant:
   and then every five as it stays quiet for hours; and less often while nothing happens,
   down to once every 15 minutes. The machine on duty asks the hub every 15 seconds, which
   starts nothing.
-- **Your credentials stay where they are.** Quotum never reads, stores or sends provider
+- **Client credentials stay where they are.** The agent never reads, stores or sends provider
   tokens or cookies. What leaves the machine: percentages and reset times, plan names,
   a one-way hash of each account id (so the hub can tell two machines share one
   account), the machine's name and random id, the short message of a client that
@@ -302,6 +304,35 @@ licences) and as a bare binary (`quotum-cli-<platform>`, what the installers and
 [build provenance](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations)
 (`gh attestation verify <file> -R padurets/quotum`). **From source:**
 `cd agent && cargo build --release` (Rust 1.85 or newer) gives `target/release/quotum`.
+
+## Connecting OpenRouter
+
+Open **My connections**, choose **Connect**, then **OpenRouter**.
+Create a dedicated OpenRouter management key in
+[OpenRouter key settings](https://openrouter.ai/settings/keys), give it an expiry and
+paste it into the password field. A key without expiry needs an explicit confirmation.
+The key can create, edit and delete provider API keys; Quotum uses only fixed read
+operations. A server hub needs its separate encryption key configured, and its operator
+can decrypt saved access. See [SECURITY.md](SECURITY.md) for the protection and limits.
+
+The card shows the credit balance, observed spending for the UTC day, week (starting
+Monday) and month through the last measurement, whose time appears in the amount's
+tooltip, and a preview of five keys. The card's settings switch each key's display.
+**All keys** pages through the full measurement table. The chart's own settings select
+key usage and remaining limits for analytics. Choose **USD** in the
+shared analytics controls for the money chart and table. Account balances are selected
+by default; at most 32 logical series are drawn, with visible overflow. The chart uses
+one unit per axis and keeps the same time range and gestures as subscription history.
+Wallet balances have no percentage; only positive key limits do.
+
+A top-up is separate from spending: spending comes from the lifetime usage counter.
+Before the first baseline, history is unknown. Partial history and spending observed
+after a gap retain their uncertainty and original interval. Key names and monetary
+measurements are shared with board members, while saved access details stay private.
+Only holders can refresh a hub-measured source. Replace or remove your saved access in
+the same panel; removing it does not revoke the provider key. Revoked or expired access
+preserves the last measurements. The compact panel displays money too; tray minimums
+and quota notifications continue to use percentage windows only.
 
 ## Updating
 

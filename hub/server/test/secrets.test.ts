@@ -60,6 +60,19 @@ test('KEK format rejects invalid bytes and noncanonical trailing bits', () => {
   assert.throws(() => SecretKey.parse(Buffer.alloc(43, 255)), fail('secret_key_invalid'));
 });
 
+test('an asynchronous connector retains plaintext through awaits and wipes it after success or rejection', async()=>{
+  const k=key(),sealed=k.seal(identity,canary);
+  let borrowed:Buffer|undefined;
+  await k.use({...identity,...sealed},async plain=>{
+    borrowed=plain;await Promise.resolve();assert.deepEqual(plain,canary);
+  });
+  assert.ok(borrowed?.every(byte=>byte===0));
+  await assert.rejects(k.use({...identity,...sealed},async plain=>{
+    borrowed=plain;await Promise.resolve();assert.deepEqual(plain,canary);throw new SecretError('connector_failed');
+  }),/connector_failed/);
+  assert.ok(borrowed?.every(byte=>byte===0));
+});
+
 test('input capture removes the secret namespace even on failure and checks variable presence', () => {
   const env: Record<string, string | undefined> = {QUOTUM_SECRET_KEY: '', QUOTUM_SECRET_KEY_FILE: '', QUOTUM_SECRET_KEY_EXTRA: 'private', KEEP: 'ok'};
   assert.throws(() => readInputs(env, '.', false), fail('secret_key_configuration_invalid'));

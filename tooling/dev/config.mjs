@@ -7,7 +7,7 @@ const defaults = {DEV_PORT_START: '8080', DEV_MODE: 'demo', DEV_SET: 'all', DEV_
   SLOT_CPUS: '4', DEV_ACCESS: 'none', PUBLIC_DOMAIN: '', CODER_WORKSPACE_ID: '', CODER_WORKSPACE_AGENT_NAME: '',
   CODER_WORKSPACE_NAME: '', CODER_WORKSPACE_OWNER_NAME: ''};
 const addressKeys = ['QUOTUM_PUBLIC_URL', 'QUOTUM_ALLOWED_HOSTS', 'QUOTUM_TRUST_PROXY', 'QUOTUM_FRAME_ANCESTORS'];
-export const configKeys = [...Object.keys(defaults), ...addressKeys, 'QUOTUM_PORT'];
+export const configKeys = [...Object.keys(defaults), ...addressKeys, 'QUOTUM_PORT', 'QUOTUM_SECRET_KEY_FILE'];
 const snapshot = Symbol('saved development configuration');
 const managed = file => Object.fromEntries(configKeys.filter(key => file[key] !== undefined).map(key => [key, file[key]]));
 

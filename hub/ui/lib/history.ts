@@ -5,17 +5,19 @@ import {hubNow} from './clock';
 import {HistoryTile} from './historyTiles';
 import {ApiError, call} from './http';
 import {periodOf} from './periods';
-import {onPrefs, prefs} from './prefs';
+import {onPrefs, prefs,setPrefs} from './prefs';
 import type {Store} from './store';
 import {dropTimeRange, onTimeRange, timeRange, timeRangeKey, type TimeRange} from './timeRange';
 import type {History} from './types';
+import type {MeterSelection} from '../../server/domain/meterHistory';
+import {moneySelection} from './moneySelection';
 
 const SETTLE_MS = 300;
 const RETRY_MS = 15_000;
 const STORED_BYTES = 15 * 1024 * 1024;
 
 export type HistoryEnv = {
-  read(board: string, cell: number, from: number, to: number): Promise<HistoryAnswer>;
+  read(board: string, cell: number, from: number, to: number, meters?: MeterSelection): Promise<HistoryAnswer>;
   now(): number;
   /** Elapsed time stays independent of corrections to the estimated hub clock. */
   elapsedNow?(): number;
@@ -24,7 +26,7 @@ export type HistoryEnv = {
   dropTimeRange(): void;
   schedule?(run: () => void): void;
 };
-export type Shown = {history: History | null; loading: boolean};
+export type Shown = {history: History | null; loading: boolean;error?:'history_limit'};
 type Flight = {seq: number; epoch: number; target: string; newsSeq: number; cell: number; from: number; to: number; touched: number; startedAt: number};
 
 /** History belongs to the open board. Cells are read only when missing or touched. */
@@ -39,6 +41,7 @@ export class HistoryStore {
   private lineupKey = '';
   private windowsKey = '';
   private windows = new Set<string>();
+  private meters: MeterSelection | undefined;
   private period = '24h';
   private selected: TimeRange | null = null;
   private shown: History | null = null;
@@ -53,6 +56,7 @@ export class HistoryStore {
   private needsCompose = false;
   private readonly listeners = new Set<() => void>();
   private state: Shown = {history: null, loading: false};
+  private historyLimit=false;
 
   constructor(private readonly env: HistoryEnv, private readonly budget = STORED_BYTES) {}
 
@@ -66,6 +70,7 @@ export class HistoryStore {
     this.epoch++;
     this.board = null;
     this.ready = false;
+    this.historyLimit=false;
     this.run = null;
     this.shown = this.meta = null;
     this.metaAt = null;
@@ -111,6 +116,17 @@ export class HistoryStore {
     this.schedule();
   }
 
+  setMeters(meters: MeterSelection | undefined) {
+    if(JSON.stringify(meters)===JSON.stringify(this.meters))return;
+    this.meters=meters;
+    this.historyLimit=false;
+    this.grids.clear();
+    this.shown=null;
+    this.invalidate();
+    this.schedule();
+    this.publish();
+  }
+
   news(since: number) {
     this.newsSeq++;
     this.cutTo = null;
@@ -128,6 +144,7 @@ export class HistoryStore {
     const key = selected ? timeRangeKey(selected) : period;
     if (key === (this.selected ? timeRangeKey(this.selected) : this.period)) return;
     this.period = period;
+    this.historyLimit=false;
     this.selected = selected;
     this.needsCompose = true;
     this.clear('retry');
@@ -164,8 +181,9 @@ export class HistoryStore {
   private publish() {
     const history = this.shown;
     const loading = !!history && history.range !== this.target().key;
-    if (history === this.state.history && loading === this.state.loading) return;
-    this.state = {history, loading};
+    const error=this.historyLimit?'history_limit' as const:undefined;
+    if (history === this.state.history && loading === this.state.loading&&error===this.state.error) return;
+    this.state = {history, loading,...(error?{error}:{})};
     for (const listener of this.listeners) listener();
   }
 
@@ -211,7 +229,7 @@ export class HistoryStore {
   }
 
   private pump() {
-    if (!this.board || !this.ready || !this.run) return;
+    if (!this.board || !this.ready || !this.run || this.historyLimit) return;
     const target = this.target();
     if (target.k1 < target.k0) return this.env.dropTimeRange();
     if (this.selected && this.meta && this.metaAt !== null) {
@@ -236,7 +254,7 @@ export class HistoryStore {
     const to = Math.min(tileEnd(tileOf(bad.at(-1)!, target.cell), target.cell), cellStart(this.env.now(), target.cell) + 2 * target.cell);
     const flight: Flight = {seq: ++this.seq, epoch: this.epoch, target: target.key, newsSeq: this.newsSeq, cell: target.cell, from, to, touched: Infinity, startedAt: this.elapsedNow()};
     this.flights.add(flight);
-    this.env.read(this.board, target.cell, from, to).then(answer => this.merge(flight, answer), error => this.failed(flight, error));
+    this.env.read(this.board, target.cell, from, to, this.meters).then(answer => this.merge(flight, answer), error => this.failed(flight, error));
   }
 
   private merge(flight: Flight, answer: HistoryAnswer) {
@@ -279,6 +297,7 @@ export class HistoryStore {
   private failed(flight: Flight, error: unknown) {
     this.flights.delete(flight);
     if (flight.epoch !== this.epoch) return;
+    if(error instanceof ApiError&&error.code==='history_limit') {this.historyLimit=true;this.shown=null;this.publish();return;}
     const target = this.target();
     if (flight.target !== target.key || flight.cell !== target.cell || !this.bad(target).some(at => at >= flight.from && at < flight.to)) {
       this.schedule();
@@ -313,7 +332,7 @@ export class HistoryStore {
 
 const keyOf = (lineup: string[]) => JSON.stringify([...lineup].sort());
 export const loader = new HistoryStore({
-  read: (board, cell, from, to) => call<HistoryAnswer>('GET', `/api/history?board=${encodeURIComponent(board)}&cell=${cell}&from=${from}&to=${to}`),
+  read: (board, cell, from, to, meters) => call<HistoryAnswer>('GET', `/api/history?board=${encodeURIComponent(board)}&cell=${cell}&from=${from}&to=${to}${meters ? '&unit='+encodeURIComponent(meters.unit)+'&meters='+encodeURIComponent(JSON.stringify(meters.ids)) : ''}`),
   now: hubNow,
   setTimeout: (run, ms) => setTimeout(run, ms),
   clearTimeout: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
@@ -333,12 +352,22 @@ export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>)
       else if (hub.type === 'card') loader.setWindows(windowsOf(state));
       else if (hub.type === 'history') loader.news(hub.data.since);
     }
+    const board=state.board;
+    if(board) {
+      const settings=prefs().money,result=moneySelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view.hidden,settings);
+      if(result.removed&&settings.unit&&settings.selected[settings.unit])setPrefs({money:{...settings,removed:result.removed,selected:{...settings.selected,[settings.unit]:result.selection!.ids}}});
+      loader.setMeters(result.selection);
+    }
   });
 }
 const windowsOf = (state: PageState) => Object.values(state.board?.cards ?? {}).flatMap(card => card.windows.map(window => `${card.id} ${window.id}`));
 follow(loader, page);
 if (typeof window !== 'undefined') {
-  const chosen = () => loader.choose(prefs().range, timeRange());
+  const chosen = () => {
+    loader.choose(prefs().range, timeRange());
+    const board=page.get().board;
+    if(board)loader.setMeters(moneySelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view.hidden,prefs().money).selection);
+  };
   onPrefs(chosen);
   onTimeRange(chosen);
   chosen();

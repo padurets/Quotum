@@ -1,0 +1,32 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {Store} from '../store/store.js';
+import {Directory} from '../store/directory.js';
+import {buildApp} from '../api.js';
+import {Cadence} from '../cadence.js';
+import {Duty} from '../duty.js';
+import {Ingest} from '../ingest.js';
+import {Pairing} from '../pairing.js';
+import {Setup} from '../setup.js';
+import {ResetFeed} from '../resets.js';
+import {newSecret} from '../domain/auth.js';
+import type {KeyPart,Meter} from '../domain/meters.js';
+
+test('members page safe keys but cannot refresh, while cursors bind source and inventory revision',async t=>{
+  const now=Date.now(),store=new Store(':memory:',now),directory=new Directory(store.db);
+  const alice=directory.createUser('a@fixture.example','Alice','unused',now),bob=directory.createUser('b@fixture.example','Bob','unused',now);
+  const cookies=new Map<string,string>();for(const user of [alice,bob]){const token=newSecret('qt_s');directory.createSession(token,user.id,now,60_000);cookies.set(user.id,'quotum_session='+token);}
+  const board=directory.createBoard('Shared',alice.id,now);directory.addMember(board.id,bob.id,now);
+  const source=store.source('openrouter','1'.repeat(24),now);store.hold(source,alice.id,now);store.share(board.id,source,alice.id,now);
+  const keys:KeyPart[]=Array.from({length:57},(_,i)=>({id:i.toString(16).padStart(12,'0'),name:'key-'+String(i).padStart(2,'0'),disabled:false,expiresAt:null,includeByok:false,at:now,staleAfterMs:300_000,presence:'observed',missCount:0,periods:{day:'1',week:'1',month:'1'}}));
+  const meter=(id:string,at=now):Meter=>({id,amount:'1',kind:'counter',unit:'USD',limit:null,at,staleAfterMs:300_000,stale:false,resetAt:null,minutes:null,scope:null,label:null});
+  const record=(at:number,list:KeyPart[])=>store.record(source,{type:'meters',observedAt:at,staleAfterMs:300_000,meters:[meter('credits',at),meter('usage',at),...list.map(k=>meter('key:'+k.id+':usage',at))],keys:list.map(k=>({...k,at})),inventoryComplete:true,inventoryError:null});record(now,keys);
+  const app=await buildApp({store,directory,ingest:new Ingest(store,directory,new Duty(),new Cadence()),resets:new ResetFeed(undefined,()=>{}),pairing:new Pairing(directory),setup:new Setup(false,null),local:null});t.after(async()=>{await app.close();store.close();});
+  const base='/api/boards/'+board.id+'/sources/'+source;
+  const get=(after?:string)=>app.inject({method:'GET',url:base+'/keys?limit=50'+(after?'&after='+encodeURIComponent(after):''),headers:{cookie:cookies.get(bob.id)}});
+  const first=(await get()).json();assert.equal(first.keys.length,50);assert.equal(first.total,57);assert.ok(first.next);
+  const second=(await get(first.next)).json();assert.equal(second.keys.length,7);assert.equal(second.next,null);assert.equal(JSON.stringify(second).includes('credentialIds'),false);
+  const refresh=await app.inject({method:'POST',url:base+'/refresh',headers:{cookie:cookies.get(bob.id),origin:'http://localhost'}});assert.equal(refresh.statusCode,403);assert.equal(refresh.json().error,'refresh_forbidden');
+  record(now+1,keys.map((k,i)=>i? k:{...k,name:'changed'}));assert.equal((await get(first.next)).statusCode,409);
+  const bad=await get(first.next+'wrong');assert.equal(bad.statusCode,400);
+});

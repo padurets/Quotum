@@ -1,6 +1,6 @@
-import claude from '../icons/claude.svg';
-import codex from '../icons/codex.svg';
-import antigravity from '../icons/antigravity.svg';
+import {providerOf} from '../../server/domain/providers';
 
-/** Each provider's logo, by provider id (lib/providers.ts has their names and colours). */
-export const LOGOS: Record<string, string> = {claude, codex, antigravity};
+const assets = import.meta.glob<string>('../icons/*.svg', {eager: true, query: '?url', import: 'default'});
+
+/** Resolve the catalogue's asset, with a neutral icon for a provider this build lacks. */
+export const logoOf = (provider: string) => assets[`../icons/${providerOf(provider)?.logoAsset ?? 'unknown'}.svg`] ?? assets['../icons/unknown.svg'];

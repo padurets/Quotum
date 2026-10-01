@@ -12,6 +12,7 @@ import {ResetFeed} from '../resets.js';
 import {newSecret} from '../domain/auth.js';
 import {Directory} from '../store/directory.js';
 import {Store} from '../store/store.js';
+import {catalogue} from '../domain/providers.js';
 
 const S = 1000;
 const MIN = 60_000;
@@ -19,6 +20,49 @@ const HOUR = 60 * MIN;
 const t0 = Date.parse('2026-09-22T12:00:00Z');
 const iso = (ms: number) => new Date(ms).toISOString();
 const ACCOUNT = 'a1b2c3d4e5f6a1b2c3d4e5f6';
+
+test('a hub source failure leaves percentage attention current and publishes safe provider capabilities', () => {
+  const h = hub();
+  h.deliver(t0, 7 * MIN);
+  const before = h.projection.attention(h.board, t0);
+  const source = h.store.source('openrouter', '111111111111111111111111', t0);
+  h.store.hold(source, h.alice.id, t0);
+  h.store.fail(source, 'credential_revoked');
+  assert.deepEqual(h.projection.attention(h.board, t0), before);
+  const snapshot = h.projection.snapshot(h.alice.id, h.board, t0)!;
+  assert.deepEqual(snapshot.providers, catalogue);
+  assert.equal(snapshot.sources.find(s => s.id === source)?.error, 'unmeasured');
+  h.store.close();
+});
+
+test('calendar spending stops at its observation and advances UTC periods without claiming new coverage', () => {
+  const h = hub();
+  const start = Date.parse('2026-09-22T00:00:00Z');
+  const source = h.store.source('openrouter', '111111111111111111111111', start);
+  h.store.hold(source, h.alice.id, start);
+  const record = (at: number, usage: string, credits: string) => h.store.record(source, {
+    type: 'meters', observedAt: at, staleAfterMs: 86_400_000, keys: [], inventoryComplete: true, inventoryError: null,
+    meters: [['usage', usage], ['credits', credits]].map(([id, amount]) => ({
+      id, amount, kind: 'counter' as const, unit: 'USD', at, staleAfterMs: 86_400_000, stale: false,
+      limit: null, resetAt: null, minutes: null, scope: null, label: null,
+    })),
+  });
+  record(start, '30000000', '50000000');
+  record(t0, '33000000', '70000000');
+  const read = (now: number) => h.projection.sourcePart(h.store.sources(h.board).find(s => s.id === source)!, h.projection.members(h.board), now);
+  const today = read(t0 + MIN).value.card.spending!.day;
+  assert.equal(today.to, t0);
+  assert.equal(today.amount, '3000000');
+  assert.equal(today.complete, true, 'coverage ends at the observation');
+  const midnight = start + 86_400_000;
+  assert.ok(walk(read, t0 + MIN, midnight + HOUR).includes(midnight));
+  const tomorrow = read(midnight).value.card;
+  assert.equal(tomorrow.successAt, t0);
+  assert.equal(tomorrow.spending!.day.to, midnight);
+  assert.equal(tomorrow.spending!.day.amount, null, 'there has been no observation in the new day');
+  assert.equal(tomorrow.spending!.day.complete, false);
+  h.store.close();
+});
 const machine = (id: string) => ({id: `${id}-0123456789`, name: id, os: 'linux', arch: 'x86_64'});
 
 /** A hub with Alice, whose laptop measures one Codex account at the hub's pace. */

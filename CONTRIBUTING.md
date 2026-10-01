@@ -187,6 +187,11 @@ Settings are in [.env.example](.env.example). `DEV_SET=showcase DEV_STILL=true m
 uses the still showcase; `DEV_SET=activity` uses the activity set. `DEV_RESETS` selects
 a scene from `hub/demo/catalogue.ts`. `DEV_MODE=hub make dev` starts an ordinary hub on
 isolated persistent data with reset trackers disabled. No mode starts coding clients.
+To connect trusted sources in hub mode, set `QUOTUM_SECRET_KEY_FILE` in `.env` to a
+private file containing the encryption key described in the README. Relative paths
+start at the checkout root. Keep it outside `hub-data` and version control; only its
+path enters the stand's configuration. Demo, builds and component checks do not inherit
+it. After changing a key file's contents, restart with `make down` and `make dev`.
 Changing mode restarts the owned stand. Demo data goes away on stop; hub data stays in
 `.quotum-dev/hub-data` until the tree is removed. Managed state, build stamps and logs
 are private local files, outside source control. Info labels demo fixture defaults and

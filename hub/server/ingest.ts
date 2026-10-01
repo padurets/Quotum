@@ -5,7 +5,7 @@ import {Forecasts} from './forecasts.js';
 import {Sessions} from './sessions.js';
 import {ACTIVE_WITHIN_MS, type Cadence, type Signals, type Why} from './cadence.js';
 import type {Duty} from './duty.js';
-import {providers, type Provider} from './domain/sources.js';
+import {clientProviders as providers, type Provider} from './domain/providers.js';
 import type {Device, Directory, Token} from './store/directory.js';
 import type {Store} from './store/store.js';
 import {tell, type Touches} from './touches.js';
@@ -166,9 +166,10 @@ export class Ingest {
     const device = this.device(credential, request, now);
     const iso = (ms: number) => new Date(ms).toISOString();
     // Asking moves the pace and who is on duty, which the board shows.
-    tell(this.observer, o => o.touchSources(request.subscriptions.flatMap(s => this.store.findSource(s.provider, subscriptionKey(s, device.userId)) ?? [])));
+    tell(this.observer, o => o.touchSources(request.subscriptions.flatMap(s => 'measuredBy' in s ? [] : this.store.findSource(s.provider, subscriptionKey(s, device.userId)) ?? [])));
     return {
       subscriptions: request.subscriptions.map(s => {
+        if ('measuredBy' in s) return {provider: s.provider, measure: false, onDuty: false, askInMs: 86_400_000, until: iso(now + 86_400_000)};
         const key = subscriptionKey(s, device.userId);
         const source = this.store.findSource(s.provider, key);
         this.restoreFixed(source, key, now);

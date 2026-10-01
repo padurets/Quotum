@@ -5,10 +5,10 @@ import {SecretError, type Credentials} from '../secrets/index.js';
 
 export async function credentialRoutes(app: FastifyInstance, credentials: Credentials, guards: Guards) {
   const attempts = new Limiter(10, 60_000);
-  app.setErrorHandler((error: {statusCode?: number}, _request, reply) => {
+  app.setErrorHandler((error: {statusCode?: number}, request, reply) => {
     const code = error instanceof SecretError ? error.code : error.statusCode === 413 ? 'credential_invalid' : error.statusCode && error.statusCode < 500 ? 'credential_invalid' : 'credential_failed';
-    const status = code === 'credential_not_found' ? 404 : code === 'credential_cleanup_pending' ? 503 : code === 'secret_key_missing' || code === 'secret_key_mismatch' ? 409 : code === 'credential_invalid' || code === 'credential_provider_unknown' ? 400 : 500;
-    return reply.code(status).send({error: code});
+    const status = code === 'credential_not_found' ? request.method==='POST' && request.routeOptions.url==='/api/credentials' ? 409 : 404 : code === 'credential_cleanup_pending' ? 503 : ['secret_key_missing','secret_key_mismatch','credential_expiry_confirmation','credential_account_mismatch','credential_conflict'].includes(code) ? 409 : ['credential_invalid','credential_provider_unknown','credential_expired','credential_revoked','credential_wrong_type','credential_permission'].includes(code) ? 400 : 500;
+    return reply.code(status).send({error: code,...(code==='credential_expiry_confirmation'?{expiresAt:null}:{})});
   });
   app.addHook('onRequest', async (request, reply) => {
     const user = guards.user(request, reply);
@@ -22,8 +22,10 @@ export async function credentialRoutes(app: FastifyInstance, credentials: Creden
     if (keys.some(key => attempts.blocked(key))) return reply.header('Retry-After', '60').code(429).send({error: 'too_many_attempts'});
     for (const key of keys) attempts.record(key);
   });
-  const body = (value: unknown, names: readonly string[]): Record<string, unknown> => {
-    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== names.length || !names.every(name => Object.hasOwn(value, name))) throw new SecretError('credential_invalid');
+  const body = (value: unknown, names: readonly string[], optional:readonly string[]=[]): Record<string, unknown> => {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || !Object.keys(value).every(name=>names.includes(name)||optional.includes(name)) || !names.every(name => Object.hasOwn(value, name))) throw new SecretError('credential_invalid');
+    const input=value as Record<string,unknown>;
+    if(input.allowNoExpiry!==undefined&&typeof input.allowNoExpiry!=='boolean'||input.requestId!==undefined&&(typeof input.requestId!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(input.requestId)))throw new SecretError('credential_invalid');
     return value as Record<string, unknown>;
   };
   const id = (value: string) => {
@@ -34,19 +36,19 @@ export async function credentialRoutes(app: FastifyInstance, credentials: Creden
     const user = guards.user(request, reply);
     return user ? {credentials: credentials.list(user.id)} : reply;
   });
-  app.post('/api/credentials', {bodyLimit: 32 * 1024}, (request, reply) => {
+  app.post('/api/credentials', {bodyLimit: 32 * 1024}, async (request, reply) => {
     const user = guards.user(request, reply);
     if (!user) return reply;
-    const input = body(request.body, ['provider', 'secret']);
+    const input = body(request.body, ['provider', 'secret'],['allowNoExpiry','requestId']);
     if (typeof input.provider !== 'string' || !/^[a-z][a-z0-9_-]{0,63}$/.test(input.provider) || typeof input.secret !== 'string') throw new SecretError('credential_invalid');
-    return reply.code(201).send(credentials.create(user.id, input.provider, input.secret));
+    return reply.code(201).send(await credentials.create(user.id, input.provider, input.secret,{allowNoExpiry:input.allowNoExpiry as boolean|undefined,requestId:input.requestId as string|undefined}));
   });
   app.post<{Params: {id: string}}>('/api/credentials/:id', {bodyLimit: 32 * 1024}, (request, reply) => {
     const user = guards.user(request, reply);
     if (!user) return reply;
-    const input = body(request.body, ['secret']);
+    const input = body(request.body, ['secret'],['allowNoExpiry']);
     if (typeof input.secret !== 'string') throw new SecretError('credential_invalid');
-    return credentials.replace(user.id, id(request.params.id), input.secret);
+    return credentials.replace(user.id, id(request.params.id), input.secret,{allowNoExpiry:input.allowNoExpiry as boolean|undefined});
   });
   app.delete<{Params: {id: string}}>('/api/credentials/:id', {bodyLimit: 32 * 1024}, (request, reply) => {
     const user = guards.user(request, reply);

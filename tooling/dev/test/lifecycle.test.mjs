@@ -90,6 +90,21 @@ async function hubStand(t) {
   return {ctx, c, port, state};
 }
 
+test('an explicit encryption-key file reaches only the hub, as an absolute path outside its data', async t => {
+  const {ctx} = fixture(t);
+  standIn(ctx);
+  const entry = path.join(ctx.root, 'hub/dist/server/index.js');
+  writeFileSync(entry, readFileSync(entry, 'utf8').replace("const server=createServer", `writeFileSync(process.env.QUOTUM_DATA_DIR+'/key-input', JSON.stringify({file:process.env.QUOTUM_SECRET_KEY_FILE??null,rawPresent:Object.hasOwn(process.env,'QUOTUM_SECRET_KEY')}));\nconst server=createServer`));
+  writeFileSync(path.join(ctx.root, '.env'), 'QUOTUM_SECRET_KEY_FILE=private-key\n');
+  writeFileSync(path.join(ctx.root, 'private-key'), 'synthetic key file', {mode: 0o600});
+  const c = {...config(ctx.root, {}), DEV_MODE: 'hub', DEV_PORT_START: String(await freeBase())};
+  const port = await allocate(ctx, c, null);
+  const state = await start(ctx, c, port, {inputs: 'fixture-build', commit: 'fixture', output: 'fixture'});
+  assert.deepEqual(readJson(path.join(state.data, 'key-input')), {file: path.join(ctx.root, 'private-key'), rawPresent: false});
+  assert.equal(state.config.QUOTUM_SECRET_KEY_FILE, 'private-key');
+  assert.equal(isolatedEnv({QUOTUM_SECRET_KEY_FILE: path.join(ctx.root, 'private-key')}).QUOTUM_SECRET_KEY_FILE, undefined);
+});
+
 test('dotenv keeps unknown settings and literal shell text; malformed input is not rewritten', t => {
   const {ctx} = fixture(t);
   const text = '# personal settings\nUSER_SETTING="literal $(false) `false`" # keep\nDEV_SET=showcase\n';

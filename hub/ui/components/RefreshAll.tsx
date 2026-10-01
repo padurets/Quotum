@@ -52,7 +52,8 @@ export function RefreshAll({board, ids}: {board: string; ids: string[]}) {
     setSending(true);
     setOffline(false);
     setAttempt(previous => previous + 1);
-    const next = startRefreshRows(ids, state.board?.refresh ?? {});
+    const allowed=ids.filter(id=>state.board?.refresh[id]?.by!=='hub'||state.board.sourceAccess?.[id]?.canRefresh===true);
+    const next = startRefreshRows(allowed, state.board?.refresh ?? {});
     setRows(next);
     const current = () => alive.current && page.get().board?.id === board;
     const answered = (id: string, error: unknown = null) => {

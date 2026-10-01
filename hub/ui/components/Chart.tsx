@@ -1,4 +1,4 @@
-import {Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties} from 'react';
+import {Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties,type ReactNode} from 'react';
 import {clock, countdown, countdownChangesAt, num, shortDay, stamp} from '../lib/format';
 import {t, useLocale} from '../i18n';
 import type {Line} from '../lib/lines';
@@ -254,6 +254,8 @@ export function Chart({
   onStep,
   plot,
   onBase,
+  axis,
+  stepped=false,
 }: {
   lines: Line[];
   plans?: PlanLine[];
@@ -272,8 +274,10 @@ export function Chart({
   onStep?: (direction: -1 | 1) => void;
   plot?: number;
   onBase?: (height: number) => void;
+  axis?:{min:number;max:number;ticks:number[];label:string;formatTick:(value:number)=>string;formatValue:(key:string,value:number,at:number)=>string;rawValue?:(key:string,at:number)=>string;detail?:(key:string,at:number)=>ReactNode};
+  stepped?:boolean;
 }) {
-  const left = 40;
+  const left = axis?76:40;
   const right = 12;
   const {box, svg, width, scale, hover, drag, x, timeAt, clip, handlers} = useTimeAxis({from, to, end: now, cellMs, left, right, onSelect, onStep});
 
@@ -284,7 +288,7 @@ export function Chart({
   const bottom = 28;
   /** A cell is drawn at its middle (the last, partial one at "now"). */
   const bx = (cell: number) => x(Math.min(now, cell + cellMs / 2));
-  const y = (value: number) => top + (1 - value / 100) * (height - top - bottom);
+  const y = (value: number) => top + (1 - (value-(axis?.min??0)) / ((axis?.max??100)-(axis?.min??0))) * (height - top - bottom);
   const {ticks, daily} = niceTicks(from, to, width < 560 ? 4 : 7);
 
   const paths = useMemo(
@@ -308,11 +312,11 @@ export function Chart({
         }
         const fixed = (value: number) => value.toFixed(1);
         return {
-          line: runs.map(run => run.map(([px, py], i) => `${i ? 'L' : 'M'}${fixed(px)},${fixed(py)}`).join('')).join(''),
+          line: runs.map(run => run.map(([px, py], i) => stepped&&i?`H${fixed(px)}V${fixed(py)}`:`${i ? 'L' : 'M'}${fixed(px)},${fixed(py)}`).join('')).join(''),
           last: runs.at(-1)?.at(-1) ?? null,
         };
       }),
-    [lines, from, to, now, width, height, cellMs],
+    [lines, from, to, now, width, height, cellMs,axis,stepped],
   );
 
   const none = {left: false, plan: false, gap: false, forecast: false};
@@ -449,7 +453,7 @@ export function Chart({
         style={{height: `${height * scale}px`}}
         preserveAspectRatio="none"
         role="img"
-        aria-label={t('chart.label')}
+        aria-label={axis?.label??t('chart.label')}
         className={onSelect ? 'is-selectable' : undefined}
         {...handlers}
       >
@@ -468,13 +472,12 @@ export function Chart({
             )}
           </g>
         </g>
-        <line x1={left} x2={width - right} y1={y(30)} y2={y(30)} className="threshold warn" />
-        <line x1={left} x2={width - right} y1={y(10)} y2={y(10)} className="threshold crit" />
-        {[0, 25, 50, 75, 100].map(value => (
+        {!axis&&<><line x1={left} x2={width - right} y1={y(30)} y2={y(30)} className="threshold warn" /><line x1={left} x2={width - right} y1={y(10)} y2={y(10)} className="threshold crit" /></>}
+        {(axis?.ticks??[0, 25, 50, 75, 100]).map(value => (
           <g key={value}>
             <line x1={left} x2={width - right} y1={y(value)} y2={y(value)} className={value === 0 ? 'axis-line' : 'grid'} />
             <text x={left - 8} y={y(value) + 4} textAnchor="end" className="tick">
-              {value}%
+              {axis?axis.formatTick(value):`${value}%`}
             </text>
           </g>
         ))}
@@ -528,7 +531,7 @@ export function Chart({
               );
             })}
             {lines.map((line, i) => (
-              <path key={line.key} d={paths[i].line} data-series={`${line.sourceId} ${line.windowId}`} data-last={line.points.filter(p => p[0] <= now).at(-1)?.slice(0, 2).join(':')} className="series" stroke={line.color} strokeDasharray={line.dash || undefined} />
+              <path key={line.key} d={paths[i].line} data-series={`${line.sourceId} ${line.windowId}`} data-last={(()=>{const last=line.points.filter(p=>p[0]<=now).at(-1);return last?[last[0],axis?.rawValue?.(line.key,last[0])??last[1]].join(':'):undefined;})()} className="series" stroke={line.color} strokeDasharray={line.dash || undefined} />
             ))}
             {/* Announcements are read over the lines, each on its own backing. */}
             {announced.map(marker => {
@@ -612,7 +615,7 @@ export function Chart({
               <div className="tooltip-grid" style={{gridTemplateColumns: `14px minmax(0, 1fr) repeat(${columnCount}, auto)`}}>
                 <span />
                 <span />
-                {columns.left && <span className="tooltip-head">{t('chart.left')}</span>}
+                {columns.left && <span className="tooltip-head">{axis?.label??t('chart.left')}</span>}
                 {columns.plan && <span className="tooltip-head">{t('chart.plan')}</span>}
                 {columns.gap && <span className="tooltip-head">{t('chart.gap')}</span>}
                 {columns.forecast && <span className="tooltip-head">{t('chart.forecast')}</span>}
@@ -622,7 +625,7 @@ export function Chart({
                       <line x1="0" x2="14" y1="2" y2="2" stroke={row.line.color} strokeWidth="2" strokeDasharray={row.line.dash || undefined} />
                     </svg>
                     <span className="tooltip-name">{row.line.name}</span>
-                    {columns.left && <strong>{row.left !== null && `${num(row.left)}%`}</strong>}
+                    {columns.left && <strong>{row.left !== null && (axis?axis.formatValue(row.line.key,row.left,hover!):`${num(row.left)}%`)}</strong>}
                     {columns.plan && <span className="tooltip-plan">{row.plan !== null && `${num(row.plan)}%`}</span>}
                     {columns.gap && <span className={`tooltip-gap ${row.gap !== null ? gapTone(row.gap) : ''}`}>{row.gap !== null && gapText(row.gap)}</span>}
                     {columns.forecast && <span className="tooltip-forecast">{row.forecast !== null && `${num(row.forecast)}%`}</span>}
@@ -630,6 +633,7 @@ export function Chart({
                 ))}
               </div>
             )}
+            {axis?.detail&&rows.map(row=><div className="tooltip-mark" key={'money:'+row.line.key}>{axis.detail!(row.line.key,hover!)}</div>)}
             {grid && markerReadout.length > 0 && <div className="tooltip-sep" />}
             {markerReadout.map(marker => (
               <div className={`tooltip-mark ${marker.strong ? 'is-strong' : ''}`} key={marker.key}>

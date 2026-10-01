@@ -7,7 +7,7 @@ import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {Store, WORK_NAMES} from '../store/store.js';
 import {SCHEMA_VERSION} from '../store/schema.js';
-import type {Measurement, Win} from '../domain/quota.js';
+import type {WindowMeasurement as Measurement, Win} from '../domain/quota.js';
 
 const start = 1_800_000_000_000;
 const BOARD = 'board';
