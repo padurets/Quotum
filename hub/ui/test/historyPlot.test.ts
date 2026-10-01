@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {compose, targetOf, type Chunk, type HistoryMeta} from '../../server/domain/history';
-import {covered, plotBar, plotOf} from '../lib/historyPlot';
+import {covered, plotBar, plotGroups, plotOf, type PlotGroup} from '../lib/historyPlot';
 import {groupRegistry} from '../lib/plotRegistry';
 import {HistoryTile} from '../lib/historyTiles';
 
@@ -83,4 +83,31 @@ test('every activity dimension remains exact when first read from a retained plo
   }
   const cell = buffer.activityCells.get(0)!;
   assert.equal(cell.parts.project, cell.parts.project);
+});
+
+test('strip groups match detailed whole-cell bars without computing their unused metrics', () => {
+  const target = targetOf(24 * H, NOW, 'groups', {from: 5 * M, to: 24 * H + 5 * M});
+  const first = chunk(0, H), second = chunk(H, 3 * H);
+  second.activity.devices.d = 'Renamed device';
+  for (const part of [first, second]) {
+    part.activity.sessions.push(['other', 's', 'Q', 'e']);
+    part.activity.devices.e = 'Other device';
+    for (const cell of part.activity.cells) cell[2] = [[0, 5 * M], [1, 2.5 * M]];
+  }
+  for (const coverage of [[[0, 25 * H]], [[0, H], [H + 5 * M, 25 * H]], []] as [number, number][][]) {
+    const buffer = plotOf([first, second], meta, target, coverage, new Set(['s w']), 1, 1, 1);
+    for (const by of ['source', 'project', 'device'] as const) {
+      const expected = new Map<string, PlotGroup>();
+      for (let at = 0; at < 25 * H; at += H) {
+        const bar = plotBar(buffer, at, target, by);
+        if (!bar) continue;
+        for (const [key, part] of bar.groups) {
+          let group = expected.get(key);
+          if (!group) {group = {key, name: part.name, cells: []}; expected.set(key, group);}
+          group.cells.push([at, part.ms]);
+        }
+      }
+      assert.deepEqual(plotGroups(buffer, target, by), [...expected.values()]);
+    }
+  }
 });

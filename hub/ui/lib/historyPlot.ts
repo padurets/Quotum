@@ -157,12 +157,21 @@ export function plotGroups(buffer: PlotBuffer, target: Pick<Target, 'k0' | 'k1'>
   const groups = new Map<string, PlotGroup>();
   const from = cellStart(target.k0 * buffer.cell, buffer.barMs), to = (target.k1 + 1) * buffer.cell;
   for (let at = from; at < to; at += buffer.barMs) {
-    const bar = plotBar(buffer, at, target, by);
-    if (!bar) continue;
-    for (const [key, part] of bar.groups) {
-      let group = groups.get(key);
-      if (!group) {group = {key, name: part.name, cells: []}; groups.set(key, group);}
-      group.cells.push([at, part.ms]);
+    const a = Math.max(at, target.k0 * buffer.cell), b = Math.min(at + buffer.barMs, to);
+    if (a >= b || !covered(buffer.coverage, a, b)) continue;
+    // The strip needs group heights, not a set of every agent in each bar.
+    // Detailed metrics are computed only for an edge or a readout by plotBar.
+    for (let cell = a; cell < b; cell += buffer.cell) {
+      const row = buffer.activityCells.get(cell);
+      if (!row) continue;
+      for (const [key, part] of row.parts[by]) {
+        let group = groups.get(key);
+        if (!group) {group = {key, name: part.name, cells: []}; groups.set(key, group);}
+        const last = group.cells.at(-1);
+        if (last?.[0] === at) last[1] += part.ms;
+        else group.cells.push([at, 0 + part.ms]);
+        if (group.cells.length === 1) group.name = part.name;
+      }
     }
   }
   return [...groups.values()];
