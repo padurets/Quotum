@@ -252,7 +252,6 @@ export function Chart({
   cellMs,
   empty,
   onSelect,
-  onStep,
   plot,
   onBase,
   strip = null,
@@ -270,15 +269,13 @@ export function Chart({
   empty: string | null;
   /** A time range dragged across the chart, as in Grafana. */
   onSelect?: (range: TimeRange) => void;
-  /** A swipe sideways on a touchpad, or Shift with the wheel: back (-1) or forward (1) through time. */
-  onStep?: (direction: -1 | 1) => void;
   plot?: number;
   onBase?: (height: number) => void;
   strip?: PlotBuffer | null;
 }) {
   const left = 40;
   const right = 12;
-  const axis = useTimeAxis({from, to, end: now, cellMs, left, right, onSelect, onStep});
+  const axis = useTimeAxis({from, to, end: now, cellMs, left, right, onSelect});
   const {box, svg, width, scale, drag, timeAt, clip, handlers, basis, panning} = axis;
   const x = strip ? axis.drawX : axis.x;
   const hover = axis.hover !== null && (!strip || axis.hover > now || covered(strip.coverage, axis.hover, axis.hover + cellMs)) ? axis.hover : null;

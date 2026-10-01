@@ -1,4 +1,4 @@
-import {cellStart, decodeCells, type Chunk, type HistoryMeta, type SourceEvent, type Target} from '../../server/domain/history';
+import {cellStart, type Chunk, type HistoryMeta, type SourceEvent, type Target} from '../../server/domain/history';
 import {barOf} from '../../server/domain/work';
 import type {ActivityDimension} from './types';
 import type {PlotSeries} from './lines';
@@ -38,15 +38,17 @@ export function plotOf(chunks: readonly Chunk[], meta: HistoryMeta, target: Targ
       const key = `${values.source} ${values.window}`;
       if (!windows.has(key)) continue;
       let row = series.get(key);
-      for (const v of decodeCells(values, chunk.from, target.cell, Math.max(meta.known.work, meta.known.sources[values.source] ?? Infinity))) {
-        if (v.at < from || v.at >= to) continue;
+      for (const [i, low, , , extra] of values.cells) {
+        const at = chunk.from + i * target.cell;
+        const hold = extra?.h ?? values.hold;
+        if (at < from || at >= to) continue;
         if (!row) {
-          row = {line: {sourceId: values.source, windowId: values.window, points: [], staleAfterMs: v.hold}, last: v.at, segment: 1};
+          row = {line: {sourceId: values.source, windowId: values.window, points: [], staleAfterMs: hold}, last: at, segment: 1};
           series.set(key, row);
-        } else if (v.gap || !covered(coverage, row.last, v.at + target.cell)) row.segment++;
-        row.line.points.push([v.at, v.low, row.segment]);
-        row.line.staleAfterMs = v.hold;
-        row.last = v.at;
+        } else if (extra?.g || !covered(coverage, row.last, at + target.cell)) row.segment++;
+        row.line.points.push([at, low, row.segment]);
+        row.line.staleAfterMs = hold;
+        row.last = at;
       }
     }
     for (const [i, active, members] of chunk.activity.cells) {

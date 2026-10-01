@@ -4,11 +4,11 @@ import {clock, num, shortDay, stamp, workHours} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
 import {activityEmpty, activityScale, atOnce, groupColors, mutedKey, shownActivity} from '../lib/activity';
 import {ACTIVITY_BY, setMuted, setPrefs, usePrefs} from '../lib/prefs';
-import {goTo, setTimeRange, useTimeRange, type TimeRange} from '../lib/timeRange';
-import {cellLabel, frameChangesAt, frameOf, measuredTo, niceTicks, step} from '../lib/periods';
+import {answeredRangeLabel, setTimeRange, useTimeRange, type TimeRange} from '../lib/timeRange';
+import {cellLabel, frameChangesAt, frameOf, measuredTo, niceTicks} from '../lib/periods';
 import {ACTIVITY, cardId, isHidden, withHidden, type Arrange} from '../lib/view';
 import {useLineup, useTitles, type Title} from '../lib/board';
-import {hubNow, useClock} from '../lib/clock';
+import {useClock} from '../lib/clock';
 import {useHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
 import {plotBar, plotGroups, type PlotBuffer, type PlotGroup} from '../lib/historyPlot';
 import {groupRegistry, type GroupIdentity} from '../lib/plotRegistry';
@@ -221,7 +221,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   return (
     <section ref={panel} className={`panel activity ${loading ? 'is-loading' : ''}`} data-time="chart" aria-label={t('activity.title')} aria-busy={loading}>
       <div className="panel-head">
-        <h2>{t('activity.title')}</h2>
+        <div><h2>{t('activity.title')}</h2>{history && <span className="answered-range">{t('history.answeredRange', {range: answeredRangeLabel(history)})}</span>}</div>
         <ActivitySettings arrange={arrange} />
       </div>
       {activity?.known && activity.activeMs > 0 && (
@@ -256,7 +256,6 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
             to={to}
             unknownTo={since}
             onSelect={setTimeRange}
-            onStep={direction => goTo(step(selected, prefs.range, direction, hubNow(), historyStart))}
             plot={plot}
             onBase={onBase}
             strip={strip}
@@ -290,7 +289,6 @@ function Stacks({
   to,
   unknownTo,
   onSelect,
-  onStep,
   plot,
   onBase,
   strip,
@@ -306,7 +304,6 @@ function Stacks({
   /** Where what is known of the period begins, when after its start: the part before is marked. */
   unknownTo: number | null;
   onSelect: (range: TimeRange) => void;
-  onStep: (direction: -1 | 1) => void;
   plot: number | undefined;
   onBase: (height: number) => void;
   strip: PlotBuffer | null;
@@ -316,7 +313,7 @@ function Stacks({
   // Room for the scale's longest label ("480h" or "30 мин") within the widget.
   const left = 48;
   const right = 12;
-  const axis = useTimeAxis({from, to, end: to, cellMs: barMs, left, right, onSelect, onStep});
+  const axis = useTimeAxis({from, to, end: to, cellMs: barMs, left, right, onSelect});
   const {box, svg, width, scale, hover, drag, clip, handlers, basis} = axis;
   const x = strip ? axis.drawX : axis.x;
   const narrow = width < 560;

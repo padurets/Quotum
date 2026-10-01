@@ -306,6 +306,7 @@ export const en = {
   'history.forecast': 'Forecast',
   'history.planHint': 'The plan is set in each subscription widget’s settings',
   'history.loading': 'Loading history…',
+  'history.answeredRange': 'Totals for {range}',
   'history.settings': 'Chart settings',
   'chart.panHint': 'Swipe sideways or hold Shift with the wheel or a drag to move through time. Drag without Shift to select a range.',
   'history.horizon': 'Look ahead',

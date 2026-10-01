@@ -128,10 +128,20 @@ export class HistoryTile {
   }
 
   /** Only the read interval is materialized; old epoch data stays held until replaced. */
-  chunk(known: HistoryMeta['known']): Chunk {
+  chunk(known: HistoryMeta['known'], plot = false): Chunk {
     const first = (this.readFrom - this.from) / this.cell;
     const chunk: Chunk = {from: this.readFrom, to: this.readTo, series: [], activity: {sessions: this.sessions, devices: this.devices, cells: []}, resets: this.resets.filter(([, , at]) => at >= this.readFrom && at < this.readTo), grants: this.grants.filter(([, at]) => at >= this.readFrom && at < this.readTo)};
     for (const s of this.series.values()) {
+      if (plot) {
+        const cells: Chunk['series'][number]['cells'] = [];
+        for (let i = first; this.from + i * this.cell < this.readTo; i++) {
+          const at = i * FIELDS;
+          if (Number.isNaN(s.values[at])) continue;
+          cells.push([i - first, s.values[at], 0, 0, {g: s.values[at + 4] ? 1 : undefined, h: s.values[at + 5]}]);
+        }
+        if (cells.length) chunk.series.push({source: s.source, window: s.window, hold: 0, open: null, cells});
+        continue;
+      }
       const cells: DecodedCell[] = [];
       for (let i = first; this.from + i * this.cell < this.readTo; i++) {
         const at = i * FIELDS;

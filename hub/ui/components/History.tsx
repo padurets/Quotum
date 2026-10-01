@@ -5,15 +5,15 @@ import {planAt, started, weeklyPlanLine} from '../lib/plan';
 import {announcedOf, clip, forecastLine, type Context} from '../lib/forecast';
 import {PROVIDERS} from '../lib/providers';
 import {HORIZONS, setMuted, setPrefs, usePrefs} from '../lib/prefs';
-import {goTo, setTimeRange, useTimeRange} from '../lib/timeRange';
-import {frameChangesAt, frameOf, measuredTo, step} from '../lib/periods';
+import {setTimeRange, useTimeRange} from '../lib/timeRange';
+import {frameChangesAt, frameOf, measuredTo} from '../lib/periods';
 import {HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
 import {chartEvents, chartResets, linesOf, type PlotLine} from '../lib/lines';
 import {lineRegistry} from '../lib/plotRegistry';
 import {Chart, type Marker} from './Chart';
 import {chartMoments, lastRunOut, type ForecastLine, type PlanLine} from '../lib/readout';
 import {useForecastsOf, useLineup, useNamed, usePastResets, useResetNews, useResetsFor} from '../lib/board';
-import {hubNow, useClock} from '../lib/clock';
+import {useClock} from '../lib/clock';
 import {useHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
 import {t, useLocale} from '../i18n';
 import {Segmented} from './Kit';
@@ -251,7 +251,6 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
           strip={strip}
           empty={lines.length ? t('chart.empty') : null}
           onSelect={setTimeRange}
-          onStep={direction => goTo(step(selected, prefs.range, direction, hubNow(), historyStart))}
           plot={plot}
           onBase={onBase}
         />

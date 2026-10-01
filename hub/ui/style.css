@@ -533,6 +533,7 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 .activity-totals { display: flex; flex-wrap: wrap; gap: 2px 16px; margin-top: 6px; font-size: 12.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .activity-totals > span { white-space: nowrap; }
 .activity-totals b { color: var(--text); font-weight: 500; }
+.answered-range { display: block; margin-top: 3px; font-size: 11px; color: var(--text-3); }
 .activity-totals + .chart { margin-top: 12px; }
 .activity-since { font-size: 11px; color: var(--text-2); border: 1px solid var(--hair-2); padding: 0 6px; border-radius: 5px; }
 .activity .chart-loading { min-height: 200px; }

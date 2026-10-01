@@ -301,6 +301,7 @@ export const ru = {
   'history.forecast': 'Прогноз',
   'history.planHint': 'План задаётся в настройках виджета подписки',
   'history.loading': 'Загружаем историю…',
+  'history.answeredRange': 'Итоги за {range}',
   'history.settings': 'Настройки графика',
   'chart.panHint': 'Листайте вбок или удерживайте Shift при прокрутке или перетаскивании, чтобы двигаться во времени. Перетаскивание без Shift выбирает диапазон.',
   'history.horizon': 'Горизонт',

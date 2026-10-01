@@ -34,9 +34,9 @@ export function slideOf(before: {from: number; end: number}, after: {from: numbe
  * (`timeAt`), and the cell under the pointer (`hover`, its start), read anew after a step.
  * A mouse or a pen drags a range across it at once, as in Grafana; a finger sliding along
  * it reads its cells, and held still for a moment starts a range instead. A swipe sideways
- * on a touchpad, or Shift with the wheel, steps through time; after a step, what lies in
- * its `.slides` layers slides in from the side it came from, each layer's parent clipped
- * to the plot (`clip`, the id of a clip path the chart defines) meanwhile. `end` is where
+ * on a touchpad, Shift with the wheel, or Shift-drag pans both charts through one shared
+ * transaction. Its `.slides` layers move within the plot's clip. After an arrow step
+ * they slide in from the side it came from. `end` is where
  * measurements end. A label telling a time (`.is-pointed`) is read, not dragged from.
  */
 export function useTimeAxis({
@@ -56,8 +56,6 @@ export function useTimeAxis({
   right: number;
   /** A time range dragged across the chart. */
   onSelect?: (range: TimeRange) => void;
-  /** Back (-1) or forward (1) through time. */
-  onStep?: (direction: -1 | 1) => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const svg = useRef<SVGSVGElement>(null);
@@ -65,6 +63,7 @@ export function useTimeAxis({
   const [scale, setScale] = useState(1);
   const [hover, setHover] = useState<number | null>(null);
   const [folding, setFolding] = useState(false);
+  const foldTicket = useRef(0);
   const source = useRef(Symbol('chart'));
   const panning = usePanning();
   const historyStart = useHistoryBegins();
@@ -128,6 +127,7 @@ export function useTimeAxis({
     if (!element) return;
     const frame = pan.get();
     if (frame && captured.current?.token !== frame.token) {
+      foldTicket.current++;
       captured.current = {token: frame.token, ...visualGeometry()};
       for (const layer of element.querySelectorAll<SVGGElement>('.slides')) layer.getAnimations().forEach(animation => animation.cancel());
       setFolding(false);
@@ -161,6 +161,7 @@ export function useTimeAxis({
   };
   useLayoutEffect(() => pan.subscribe(() => paintPan.current()), []);
   useEffect(() => () => {
+    foldTicket.current++;
     if (pan.source === source.current) pan.cancel();
   }, []);
   useEffect(() => {
@@ -301,12 +302,13 @@ export function useTimeAxis({
       const ratio = (to - from) / (previous.to - previous.from);
       const offset = left * (1 - ratio) + (from - previous.from) / (previous.to - previous.from) * (width - left - right);
       setFolding(true);
+      const ticket = ++foldTicket.current;
       const animations: Animation[] = [];
       for (const layer of element.querySelectorAll<SVGGElement>('.slides')) {
         layer.parentElement!.setAttribute('clip-path', `url(#${CSS.escape(clip)})`);
         animations.push(layer.animate([{transform: `translateX(${offset}px) scaleX(${ratio})`}, {transform: 'none'}], {duration: 160, easing: 'ease-out'}));
       }
-      Promise.allSettled(animations.map(animation => animation.finished)).then(() => {if (!pan.active()) setFolding(false);});
+      Promise.allSettled(animations.map(animation => animation.finished)).then(() => {if (foldTicket.current === ticket && !pan.active()) setFolding(false);});
       return;
     }
     const dx = slideOf(before, {from, end, to}, width - left - right);

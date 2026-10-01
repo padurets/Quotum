@@ -1,5 +1,5 @@
 import {useSyncExternalStore} from 'react';
-import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, cellStart, compose, targetOf, tileEnd, tileOf, tileStart, type HistoryAnswer, type HistoryMeta, type Target} from '../../server/domain/history';
+import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, cellStart, compose, targetOf, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer, type HistoryMeta, type Target} from '../../server/domain/history';
 import {page, useHistoryStart, type PageEvent, type PageState} from './board';
 import {hubNow} from './clock';
 import {HistoryTile} from './historyTiles';
@@ -64,6 +64,7 @@ export class HistoryStore {
   private plotVersion = -1;
   private aheadFailed = false;
   private readonly plotListeners = new Set<() => void>();
+  private readonly plotChunks = new Map<HistoryTile, {seq: number; from: number; to: number; chunk: Chunk}>();
 
   constructor(private readonly env: HistoryEnv, private readonly budget = STORED_BYTES) {}
 
@@ -87,6 +88,7 @@ export class HistoryStore {
     this.interest = null;
     this.plotPending = false;
     this.strip = null;
+    this.plotChunks.clear();
     this.setPlot(null);
     this.clear('settle');
     this.clear('retry');
@@ -183,6 +185,7 @@ export class HistoryStore {
     if (!commit) {
       this.plotPending = false;
       this.strip = null;
+      this.plotChunks.clear();
       this.setPlot(null);
     }
     this.clear('settle');
@@ -201,6 +204,7 @@ export class HistoryStore {
     this.version++;
     this.aheadFailed = false;
     this.strip = null;
+    this.plotChunks.clear();
     this.setPlot(null);
     for (const tiles of this.grids.values()) for (const tile of tiles.values()) tile.readFrom = tile.validTo = tile.readTo = tile.from;
     this.needsCompose = true;
@@ -285,6 +289,7 @@ export class HistoryStore {
       if (this.plotPending) {
         this.plotPending = false;
         this.strip = null;
+        this.plotChunks.clear();
         this.setPlot(null);
       }
       this.publish();
@@ -326,7 +331,16 @@ export class HistoryStore {
     if (this.plotVersion === this.version) return;
     const strip = this.strip;
     const tiles = [...(this.grids.get(strip.cell)?.values() ?? [])].filter(t => t.readTo > t.readFrom && t.readTo > strip.k0 * strip.cell && t.readFrom <= strip.k1 * strip.cell).sort((a, b) => a.from - b.from);
-    const chunks = tiles.map(tile => tile.chunk(this.meta!.known));
+    const retained = new Set(tiles);
+    for (const tile of this.plotChunks.keys()) if (!retained.has(tile)) this.plotChunks.delete(tile);
+    const chunks = tiles.map(tile => {
+      let decoded = this.plotChunks.get(tile);
+      if (!decoded || decoded.seq !== tile.writeSeq || decoded.from !== tile.readFrom || decoded.to !== tile.readTo) {
+        decoded = {seq: tile.writeSeq, from: tile.readFrom, to: tile.readTo, chunk: tile.chunk(this.meta!.known, true)};
+        this.plotChunks.set(tile, decoded);
+      }
+      return decoded.chunk;
+    });
     const intervals: [number, number][] = [];
     for (const tile of tiles) {
       const a = Math.max(tile.readFrom, strip.k0 * strip.cell), b = Math.min(tile.readTo, (strip.k1 + 1) * strip.cell);
