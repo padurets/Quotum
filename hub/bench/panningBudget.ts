@@ -6,6 +6,8 @@ export type PanReading = {
   peakFlights: number; maxTiles: number; duplicateReads: number;
   pushesDuring: number; pushesAfter: number; expectedPushes: number;
   forbiddenMutations: number; coldReads: number; undimmed: boolean;
+  segments?: Record<string, {count: number; p95: number; max: number}>;
+  outliers?: {ms: number; segment: string; pending: number; requests: number}[];
 };
 
 /** Empty callbacks, missing input samples and an idle chart can never pass a frame budget. */

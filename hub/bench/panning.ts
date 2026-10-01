@@ -38,7 +38,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
       })()`);
       await cdp.evaluate(`(() => {
         const root=document.querySelector('.history .chart>svg');
-        const probe=window.__quotumPan={frames:[],latency:[],inputs:0,updated:0,pending:[],last:0,pushesDuring:0,pushesAfter:0,forbiddenMutations:0,undimmed:getComputedStyle(root).opacity==='1',coldReads:0,peakFlights:0,maxTiles:0,duplicateReads:0,flights:new Map(),running:true,feeding:false};
+        const probe=window.__quotumPan={frames:[],latency:[],inputs:0,updated:0,pending:[],last:0,pushesDuring:0,pushesAfter:0,forbiddenMutations:0,undimmed:getComputedStyle(root).opacity==='1',coldReads:0,peakFlights:0,maxTiles:0,duplicateReads:0,flights:new Map(),running:true,feeding:false,segment:'wheel',samples:[]};
         const originalPush=history.pushState.bind(history);probe.originalPush=originalPush;
         history.pushState=(...args)=>{if(probe.feeding)probe.pushesDuring++;else probe.pushesAfter++;originalPush(...args);};
         const input=e=>{if(e.type==='wheel'&&(!e.cancelable||(!e.deltaX&&!e.shiftKey)))return;if(e.type==='pointermove'&&!e.buttons)return;probe.inputs++;probe.pending.push(performance.now());};
@@ -63,7 +63,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
           const nextPhase=active?'pan':folding?'fold':'idle';
           // The wheel's intentional 200 ms rest is stationary, before the fold begins.
           if(nextPhase!==phase){probe.last=0;previous=current;phase=nextPhase;}
-          if((active||folding)&&current!==previous){probe.updated++;if(probe.last)probe.frames.push(now-probe.last);probe.last=now;probe.latency.push(...probe.pending.splice(0).map(at=>now-at));}
+          if((active||folding)&&current!==previous){probe.updated++;if(probe.last){const ms=now-probe.last;probe.frames.push(ms);probe.samples.push({ms,segment:folding?'fold':probe.segment,pending:probe.pending.length,requests:probe.flights.size});}probe.last=now;probe.latency.push(...probe.pending.splice(0).map(at=>now-at));}
           if(!active&&!folding)probe.last=0;
           previous=current;probe.undimmed&&=!root.closest('.is-loading')&&(!root.style.opacity||root.style.opacity==='1');probe.raf=requestAnimationFrame(tick);
         };probe.raf=requestAnimationFrame(tick);
@@ -84,11 +84,13 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
       interception = false;
       await settled();
       // Shift-drag keeps capture when the pointer leaves the SVG, without extra inertia.
+      await cdp.evaluate(`window.__quotumPan.segment='drag'`);
       await key(true, 'Shift', 16);
       await mouse('mousePressed', geometry.x, geometry.y, 8);
       await cdp.evaluate(`window.__quotumPan.undimmed&&=getComputedStyle(document.querySelector('.history .chart>svg')).opacity==='1'`);
       await cdp.evaluate('window.__quotumPan.feeding=true');
       sent.length = 0;
+      await cdp.evaluate(`window.__quotumPan.segment='return'`);
       for (let i = 1; i <= 60; i++) {sent.push(mouse('mouseMoved', geometry.x + i * 12, geometry.y, 8)); await pace(16);}
       await Promise.all(sent);
       await cdp.evaluate('window.__quotumPan.feeding=false');
@@ -110,7 +112,8 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
         const p=window.__quotumPan;p.running=false;cancelAnimationFrame(p.raf);p.observer.disconnect();
         document.querySelector('.history .chart>svg').removeEventListener('wheel',p.input,true);document.querySelector('.history .chart>svg').removeEventListener('pointermove',p.input,true);
         window.fetch=p.originalFetch;history.pushState=p.originalPush;
-        return {frames:p.frames,latency:p.latency,inputs:p.inputs,updated:p.updated,pushesDuring:p.pushesDuring,pushesAfter:p.pushesAfter,forbiddenMutations:p.forbiddenMutations,undimmed:p.undimmed,coldReads:p.coldReads,peakFlights:p.peakFlights,maxTiles:p.maxTiles,duplicateReads:p.duplicateReads};
+        const segments={};for(const segment of ['wheel','drag','return','fold']){const values=p.samples.filter(s=>s.segment===segment).map(s=>s.ms).sort((a,b)=>a-b);segments[segment]={count:values.length,p95:values[Math.ceil(values.length*.95)-1]??0,max:values.at(-1)??0};}
+        return {frames:p.frames,latency:p.latency,inputs:p.inputs,updated:p.updated,pushesDuring:p.pushesDuring,pushesAfter:p.pushesAfter,forbiddenMutations:p.forbiddenMutations,undimmed:p.undimmed,coldReads:p.coldReads,peakFlights:p.peakFlights,maxTiles:p.maxTiles,duplicateReads:p.duplicateReads,segments,outliers:p.samples.filter(s=>s.ms>50)};
       })()`);
       report.period = period; report.series = geometry.series; report.charts = geometry.charts; report.rate = 4; report.expectedPushes = 3;
       reports.push(report);
