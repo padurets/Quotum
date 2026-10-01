@@ -13,8 +13,8 @@ export class HistoryTile {
   writeSeq = 0;
   shownAt = 0;
   private readonly series = new Map<string, PackedSeries>();
-  private readonly sessions: Session[] = [];
-  private readonly groups: Group[] = [];
+  private sessions: Session[] = [];
+  private groups: Group[] = [];
   private readonly devices: Record<string, string> = {};
   private activity = new ArrayBuffer(HEAD);
   private resets: Chunk['resets'] = [];
@@ -48,6 +48,11 @@ export class HistoryTile {
         packed.values.set([v.low, v.first, v.last, v.open ?? NaN, +v.gap, v.hold, v.spent, v.covered, ...v.work], i);
       }
     }
+    for (const [key, s] of this.series) {
+      let kept = false;
+      for (let i = 0; i < s.values.length; i += FIELDS) if (!Number.isNaN(s.values[i])) {kept = true; break;}
+      if (!kept) this.series.delete(key);
+    }
     const rows = this.activityRows();
     const translated = chunk.activity.sessions.map(session => {
       let index = this.sessions.findIndex(s => s[0] === session[0]);
@@ -71,6 +76,7 @@ export class HistoryTile {
       }
       rows[first + i] = row;
     }
+    this.compact(rows);
     this.activity = new ArrayBuffer(HEAD + rows.reduce((sum, row) => sum + row.length, 0) * 8);
     const offsets = new Uint32Array(this.activity, 0, 61);
     const values = new Float64Array(this.activity, HEAD);
@@ -79,6 +85,39 @@ export class HistoryTile {
     offsets[60] = at;
     this.resets = [...this.resets.filter(([, , at]) => at < chunk.from || at >= chunk.to), ...chunk.resets];
     this.grants = [...this.grants.filter(([, at]) => at < chunk.from || at >= chunk.to), ...chunk.grants];
+  }
+
+  /** References in all retained rows survive, including a suffix not yet read in this epoch. */
+  private compact(rows: number[][]) {
+    const sessions: Session[] = [], groups: Group[] = [];
+    const sessionIndexes = new Map<number, number>(), groupIndexes = new Map<number, number>();
+    const devices = new Set<string>();
+    for (const row of rows) {
+      if (!row.length) continue;
+      let at = 2;
+      for (let n = 0; n < row[1]; n++, at += 2) {
+        const old = row[at];
+        if (!sessionIndexes.has(old)) {
+          sessionIndexes.set(old, sessions.length);
+          const session = this.sessions[old];
+          sessions.push(session); devices.add(session[3]);
+        }
+        row[at] = sessionIndexes.get(old)!;
+      }
+      const count = row[at++];
+      for (let n = 0; n < count; n++, at += 2) {
+        const old = row[at];
+        if (!groupIndexes.has(old)) {
+          groupIndexes.set(old, groups.length);
+          const group = this.groups[old];
+          groups.push(group);
+          if (group[0] === 'd') devices.add(group[1]);
+        }
+        row[at] = groupIndexes.get(old)!;
+      }
+    }
+    this.sessions = sessions; this.groups = groups;
+    for (const device of Object.keys(this.devices)) if (!devices.has(device)) delete this.devices[device];
   }
 
   private activityRows(): number[][] {

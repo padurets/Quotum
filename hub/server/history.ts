@@ -20,6 +20,7 @@ export class HistoryTiles {
   private readonly key = randomBytes(32);
   private readonly kept = new Map<string, Kept>();
   private bytes = 0;
+  private retentionRevision = 0;
 
   constructor(private readonly store: Store, private readonly budget = 32 * 1024 * 1024) {}
 
@@ -39,6 +40,11 @@ export class HistoryTiles {
 
   /** JSON is stored as sent, so hits do not allocate or serialize all the cells again. */
   read(board: string, cell: number, from: number, to: number, now: number, shown: Shown): string[] {
+    if (this.retentionRevision !== this.store.retentionRevision) {
+      this.kept.clear();
+      this.bytes = 0;
+      this.retentionRevision = this.store.retentionRevision;
+    }
     const sources = new Set(this.store.sources(board).map(s => s.id));
     const oldest = now - (config.retention.sampleDays - 1) * 86_400_000;
     const parts: {from: number; to: number; tile: number; key: string; eligible: boolean; json?: string}[] = [];

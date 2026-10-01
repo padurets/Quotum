@@ -208,7 +208,10 @@ subscription came to the board; hidden cards are absent. The chunks cover the cu
 `[from, to)` whole, including empty cells, in time order, cut at tile edges. A whole tile
 ending no later than now is closed. Closed tiles are cached under their board, grid and
 tile, with the board's work selection and names; measurements and credited work
-invalidate affected tiles. Tiles near the retention edge are counted anew.
+invalidate affected tiles. Tiles near the retention edge are counted anew. Actual retention
+deletions invalidate the server cache before its next read: a closed tile may depend on
+a preceding sample of any age. This is private housekeeping, with no new `history`
+event; observations the page already holds follow its usual data and connection lifecycle.
 
 ```ts
 type Chunk = {

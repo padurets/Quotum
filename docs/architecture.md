@@ -394,8 +394,13 @@ them), kept for 90 days.
   tile ending before now is cached on the hub, within 32 MiB. Every measurement and
   credited work invalidates tiles it can affect, including an empty tile of that source;
   a changed `Store.workKey` (lineup, work selection, project or machine names) recounts it.
-  Tiles near retention's edge are never cached. The page keeps packed buffers within an
-  estimated 15 MiB, protecting the frame on screen. Session references are opaque and
+  Tiles near retention's edge are never cached. Deleting retained samples, work or events
+  advances a private store revision; the next server read clears the tile cache before
+  looking for hits. Even a distant tile can depend on a preceding sample of any age.
+  This housekeeping emits no history event: observations already read by the page stay
+  until its usual data or connection changes. The page keeps packed buffers within an
+  estimated 15 MiB, protecting the frame on screen and removing dictionaries no retained
+  cell uses after replacement. Session references are opaque and
   change with the hub's run, so answers cannot mix runs. A machine's list credits work
   with its next list or after five minutes of silence (`KEEP_MS`, up to 200 seconds of
   work); each credit tells history its actual start. The chart begins where the history
@@ -631,8 +636,11 @@ work. The page makes cells from `since` stale and reads only those its frame nee
 without a rate limit or a timer. Reconnect, a new lineup, or a change of whose work the
 board shows or its names (`Store.workKey`) makes all tiles stale. The last frame stays
 undimmed while its tail loads. A frame of another period stays dimmed until its cells
-are complete. Time alone never rebuilds or reads history; cells past the hub's cut are
-known empty until new data arrives. Nothing that shows data or time keeps a timer of its
+are complete. One pending read per target coalesces news until its response, while another
+target can read independently. Errors and retries belong to the target that requested
+them. Time alone never rebuilds or reads history; cells past the hub's cut are
+known empty until new data arrives, and a response predating news cannot restore that
+proof. Nothing that shows data or time keeps a timer of its
 own (a tooltip or a gesture may wait a moment; `hub/ui/test/timers.test.ts` lists where).
 `npm run bench` checks a board without measurements or working agents asks nothing and
 renders only what shows time. It also checks measurements reach the card and chart

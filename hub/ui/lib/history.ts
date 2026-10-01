@@ -23,7 +23,7 @@ export type HistoryEnv = {
   schedule?(run: () => void): void;
 };
 export type Shown = {history: History | null; loading: boolean};
-type Flight = {seq: number; epoch: number; cell: number; from: number; to: number; touched: number};
+type Flight = {seq: number; epoch: number; target: string; newsSeq: number; cell: number; from: number; to: number; touched: number};
 
 /** History belongs to the open board. Cells are read only when missing or touched. */
 export class HistoryStore {
@@ -33,6 +33,7 @@ export class HistoryStore {
   private epoch = 0;
   private seq = 0;
   private metaSeq = 0;
+  private newsSeq = 0;
   private lineupKey = '';
   private windowsKey = '';
   private windows = new Set<string>();
@@ -107,13 +108,14 @@ export class HistoryStore {
   }
 
   news(since: number) {
+    this.newsSeq++;
     this.cutTo = null;
     if (since === 0) this.invalidate();
     else {
       for (const [cell, tiles] of this.grids) for (const tile of tiles.values()) {
         if (tile.to > since) tile.validTo = Math.min(tile.validTo, Math.max(tile.from, cellStart(since, cell)));
       }
-      for (const flight of this.flights) if (flight.epoch === this.epoch && flight.to > since) flight.touched = Math.min(flight.touched, since);
+      for (const flight of this.flights) if (flight.epoch === this.epoch && flight.to > since) flight.touched = Math.min(flight.touched, cellStart(since, flight.cell));
     }
     this.schedule();
   }
@@ -124,6 +126,7 @@ export class HistoryStore {
     this.period = period;
     this.selected = selected;
     this.needsCompose = true;
+    this.clear('retry');
     const now = this.env.now();
     const quick = now - this.changedAt < SETTLE_MS;
     this.changedAt = now;
@@ -209,11 +212,13 @@ export class HistoryStore {
       this.publish();
     }
     if (this.timers.has('settle') || this.timers.has('retry')) return;
+    // News accumulates behind this target's pending read; another target can read now.
+    if ([...this.flights].some(f => f.epoch === this.epoch && f.target === target.key && f.cell === target.cell)) return;
     const bad = this.bad(target);
     if (!bad.length) return;
     const from = this.tile(bad[0], target.cell).validTo;
     const to = Math.min(tileEnd(tileOf(bad.at(-1)!, target.cell), target.cell), cellStart(this.env.now(), target.cell) + 2 * target.cell);
-    const flight: Flight = {seq: ++this.seq, epoch: this.epoch, cell: target.cell, from, to, touched: Infinity};
+    const flight: Flight = {seq: ++this.seq, epoch: this.epoch, target: target.key, newsSeq: this.newsSeq, cell: target.cell, from, to, touched: Infinity};
     this.flights.add(flight);
     this.env.read(this.board, target.cell, from, to).then(answer => this.merge(flight, answer), error => this.failed(flight, error));
   }
@@ -235,9 +240,10 @@ export class HistoryStore {
       const to = answer.chunks.at(-1)?.to;
       // A later read on a coarser grid does not revoke the earlier empty suffix;
       // only history news or a new epoch can put data there.
-      if (to !== undefined && to > answer.now + CLOCK_TOLERANCE_MS) this.cutTo = Math.min(this.cutTo ?? to, to);
+      if (flight.newsSeq === this.newsSeq && to !== undefined && to > answer.now + CLOCK_TOLERANCE_MS) this.cutTo = Math.min(this.cutTo ?? to, to);
     }
     this.needsCompose = true;
+    if (!this.bad(this.target()).length) this.clear('retry');
     this.evict();
     this.schedule();
   }
@@ -246,6 +252,10 @@ export class HistoryStore {
     this.flights.delete(flight);
     if (flight.epoch !== this.epoch) return;
     const target = this.target();
+    if (flight.target !== target.key || flight.cell !== target.cell || !this.bad(target).some(at => at >= flight.from && at < flight.to)) {
+      this.schedule();
+      return;
+    }
     if (error instanceof ApiError && error.status === 400 && this.selected && target.cell === flight.cell && flight.from <= target.k0 * target.cell && flight.to > target.k1 * target.cell) return this.env.dropTimeRange();
     this.clear('retry');
     this.timers.set('retry', this.env.setTimeout(() => {this.clear('retry'); this.schedule();}, RETRY_MS));

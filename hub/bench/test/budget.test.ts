@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {IDLE_SCRIPT_MS_PER_SECOND, idleProblems, LATENCY_P95_MS, measuredProblems, percentile, renderProblems, type Idle, type Measured} from '../budget.js';
+import {chartProblems, IDLE_SCRIPT_MS_PER_SECOND, idleProblems, LATENCY_P95_MS, measuredProblems, percentile, renderProblems, type Idle, type Measured} from '../budget.js';
 import type {Counted} from '../probe.js';
 
 const MIN = 60_000;
@@ -93,6 +93,14 @@ test('a measurement that never shows fails, however quick the others', () => {
   const lost = [...Array.from({length: 19}, () => 120), Infinity];
   const problems = measuredProblems({card: 's1', latencies: lost, renders: [part('card:s1', null, 19)], mutations: [], from: 0, to: MIN});
   assert.deepEqual(problems, ['1 of 20 measurements never showed on their card']);
+});
+
+test('one lost chart update fails even when the other nineteen keep p95 within budget', () => {
+  const quick = Array.from({length: 19}, () => 120);
+  assert.deepEqual(chartProblems([...quick, 120]), []);
+  assert.equal(percentile([...quick, Infinity], .95), 120);
+  assert.deepEqual(chartProblems([...quick, Infinity]), ['1 of 20 measurements never showed on their chart']);
+  assert.match(chartProblems([...quick.slice(0, 18), LATENCY_P95_MS + 1, Infinity]).join('\n'), /95th percentile/);
 });
 
 test('what shows time on another card renders with the clock, not with each measurement', () => {

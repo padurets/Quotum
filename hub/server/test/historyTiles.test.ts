@@ -134,3 +134,46 @@ test('a changed known work start cannot reuse activity or expose sessions before
   assert.equal(h.calls(), 2);
   h.store.close();
 });
+
+test('actual retention deletion invalidates closed tiles, while a no-op prune preserves hits and refs', () => {
+  const h = fixture(), day = 24 * H, now = start + 3 * H;
+  h.sample(now - 91 * day, 80);
+  h.sample(start, 0);
+  h.read(); assert.equal(h.calls(), 1);
+  const ref = h.tiles.ref(h.board, 1);
+  h.store.prune(now); h.read();
+  assert.equal(h.calls(), 2, 'deleting a predecessor can affect a tile far from the retention edge');
+  assert.equal(h.tiles.ref(h.board, 1), ref);
+  h.store.prune(now); h.read();
+  assert.equal(h.calls(), 2, 'no deleted history keeps the cache warm');
+  h.store.db.prepare("INSERT INTO announcements(provider, at, url, text) VALUES ('codex', ?, 'https://example.com', 'old')").run(now - 91 * day);
+  h.store.prune(now); h.read();
+  assert.equal(h.calls(), 2, 'unrelated retention housekeeping does not flush history');
+  h.store.close();
+});
+
+test('a later prune failure cannot preserve cached history after samples were already deleted', () => {
+  const h = fixture(), day = 24 * H, now = start + 3 * H;
+  h.sample(now - 91 * day, 80); h.sample(start, 0);
+  h.store.creditWork(h.device, now - 91 * day, now - 91 * day + M, [{source: h.source, origin: 'terminal', startedAt: start, project: 'P', folder: '', ordinal: 0}]);
+  h.read(); assert.equal(h.calls(), 1);
+  h.store.db.exec("CREATE TRIGGER fail_work_prune BEFORE DELETE ON agent_work BEGIN SELECT RAISE(FAIL, 'failed work prune'); END");
+  assert.throws(() => h.store.prune(now), /failed work prune/);
+  assert.equal((h.store.db.prepare('SELECT count(*) AS n FROM samples WHERE at < ?').get(now - 90 * day) as {n: number}).n, 0);
+  h.read(); assert.equal(h.calls(), 2);
+  h.store.close();
+});
+
+test('work and event deletions also invalidate a held tile without changing its work key', () => {
+  const h = fixture(), day = 24 * H, now = start + 3 * H;
+  const agent = {source: h.source, origin: 'terminal' as const, startedAt: start, project: 'P', folder: '', ordinal: 0};
+  h.store.creditWork(h.device, now - 91 * day, now - 91 * day + M, [agent]);
+  h.store.creditWork(h.device, start, start + M, [agent]);
+  const shown = h.store.shown(h.board, []), key = h.store.workKey(h.board, shown);
+  h.read(); h.store.prune(now);
+  assert.equal(h.store.workKey(h.board, shown), key);
+  h.read(); assert.equal(h.calls(), 2);
+  h.store.db.prepare("INSERT INTO events(source_id, at, kind, detail) VALUES (?, ?, 'resets_granted', '1')").run(h.source, now - 91 * day);
+  h.store.prune(now); h.read(); assert.equal(h.calls(), 3);
+  h.store.close();
+});

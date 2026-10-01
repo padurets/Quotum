@@ -259,3 +259,80 @@ test('a coarser grid cannot forget the empty suffix of a previously seen finer g
   await flush();
   assert.equal(h.reads.length, 3, 'news alone revokes the empty suffix');
 });
+
+test('news beyond an old cut is read after the flight, including an accepted fast-clock sample', async () => {
+  const h = harness();
+  await h.advance(89_000); await h.start();
+  const served = h.now(), old = h.reads[0];
+  await h.advance(3000);
+  const sampleAt = h.now() + 29_000;
+  assert.ok(sampleAt <= h.now() + CLOCK_TOLERANCE_MS);
+  h.store.news(sampleAt); h.store.news(sampleAt); await flush();
+  assert.equal(h.reads.length, 1, 'news coalesces behind the pending flight');
+  await old.answer({now: served});
+  assert.equal(h.reads.length, 2, 'the stale response cannot prove the sample cell empty');
+  const fresh = h.reads[1], at = cellStart(sampleAt, fresh.cell);
+  const chunks: Chunk[] = [];
+  const end = cellStart(h.now() + CLOCK_TOLERANCE_MS, fresh.cell) + fresh.cell;
+  for (let from = fresh.from; from < end;) {
+    const to = Math.min(end, tileEnd(tileOf(from, fresh.cell), fresh.cell));
+    const chunk = empty(from, to);
+    if (from <= at && to > at) chunk.series = [{source: 's', window: 'w', hold: 300_000, open: null, cells: [[(at - from) / fresh.cell, 73, 0, 0]]}];
+    chunks.push(chunk); from = to;
+  }
+  await fresh.answer({chunks});
+  assert.ok(h.store.get().history?.series[0].points.some(([t, low]) => t === at && low === 73));
+  assert.equal(h.timers.size, 0);
+  assert.equal(h.reads.length, 2);
+});
+
+test('continuous news with the page clock ahead coalesces and eventually records a fresh hub cut', async () => {
+  const h = harness(); await h.start();
+  const served = NOW - 5 * M;
+  for (let n = 0; n < 4; n++) {
+    h.store.news(served); h.store.news(served); await flush();
+    assert.equal(h.reads.length, n + 1, 'one pending read per target');
+    await h.reads[n].answer({now: served});
+    assert.equal(h.reads.length, n + 2, 'one follow-up for accumulated news');
+  }
+  await h.reads.at(-1)!.answer({now: served});
+  assert.equal(h.reads.length, 5);
+  assert.equal(h.timers.size, 0);
+  assert.equal(h.store.get().history?.range, '24h');
+});
+
+test('a 400 from a wider old range cannot drop a nested valid selection', async () => {
+  const h = harness(), day = 24 * H;
+  h.store.choose('24h', {from: NOW - 90 * day - 6 * H, to: NOW - 89 * day - 6 * H});
+  await h.start();
+  await h.advance(1000);
+  const selected = {from: NOW - 90 * day + H, to: NOW - 90 * day + 13 * H};
+  h.store.choose('12h', selected); await flush();
+  assert.equal(h.reads.length, 1, 'the old read temporarily covers the new range');
+  await h.reads[0].fail(new ApiError(400, 'invalid_request'));
+  assert.equal(h.dropped(), 0);
+  assert.equal(h.reads.length, 2, 'failed coverage is read for the new selection');
+  await h.reads[1].answer();
+  assert.equal(h.store.get().history?.range, `${selected.from}-${selected.to}`);
+  assert.equal(h.timers.size, 0);
+});
+
+test('an abandoned flight failure cannot delay current history news after the new period succeeds', async () => {
+  const h = harness(); await h.start();
+  await h.advance(1000); h.store.choose('7d', null); await flush();
+  assert.equal(h.reads.length, 2, 'another target does not wait for the pending flight');
+  await h.reads[0].fail(new Error('old read failed'));
+  await h.reads[1].answer();
+  assert.equal(h.store.get().history?.range, '7d');
+  assert.equal(h.timers.size, 0);
+  await h.advance(1000); h.store.news(h.now()); await flush();
+  assert.equal(h.reads.length, 3);
+});
+
+test('choosing another target clears a retry belonging to the previous target', async () => {
+  const h = harness(); await h.start(); await h.reads[0].fail(new Error('offline'));
+  assert.equal(h.timers.size, 1);
+  h.store.choose('7d', null); await flush();
+  assert.equal(h.timers.size, 0);
+  assert.equal(h.reads.length, 2);
+});

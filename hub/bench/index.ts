@@ -6,7 +6,7 @@ import {SETS} from '../demo/catalogue.js';
 import {addressOf, Demo, prepare, Stop} from '../demo/index.js';
 import {cards, MIN, people, snapshot} from '../demo/model.js';
 import type {Snapshot} from '../server/projection.js';
-import {HISTORY_BYTES_PER_MEASUREMENT, LATENCY_P95_MS, idleProblems, measuredProblems, percentile, renderProblems} from './budget.js';
+import {chartProblems, HISTORY_BYTES_PER_MEASUREMENT, idleProblems, measuredProblems, percentile, renderProblems} from './budget.js';
 import {attachedChrome, findChrome, launchChrome, openTab, type Browser, type Cdp} from './cdp.js';
 import {probeScript, type Reading} from './probe.js';
 import {delta, round, scriptPerSecond, tally, type Metrics} from './report.js';
@@ -182,7 +182,7 @@ async function main() {
     const problems = [
       ...idleProblems(idle),
       ...worked.problems,
-      ...(percentile(measured.chartLatencies, .95) <= LATENCY_P95_MS ? [] : ['a measurement missed the chart latency budget']),
+      ...chartProblems(measured.chartLatencies),
       ...(measured.historyBytes <= HISTORY_BYTES_PER_MEASUREMENT ? [] : [`history read ${measured.historyBytes} bytes per measurement, above budget`]),
       ...measuredProblems({
         card: measured.source,
@@ -214,6 +214,7 @@ async function main() {
         medianMs: Math.round(percentile(measured.latencies, 0.5)),
         p95Ms: Math.round(percentile(measured.latencies, 0.95)),
         chartP95Ms: Math.round(percentile(measured.chartLatencies, 0.95)),
+        chartLost: measured.chartLatencies.filter(latency => !Number.isFinite(latency)).length,
         historyBytesPerMeasurement: measured.historyBytes,
         renders: tally(measured.reading.renders).outsideBy,
         mutations: tally(measured.reading.mutations).outsideBy,

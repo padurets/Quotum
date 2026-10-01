@@ -59,6 +59,7 @@ export class Store {
   /** When this database was made. */
   private readonly created: number;
   private observer: Touches | null = null;
+  private pruned = 0;
 
   constructor(file: string, now = Date.now()) {
     this.db = new DatabaseSync(file);
@@ -615,6 +616,9 @@ export class Store {
     return Number((this.db.prepare("SELECT value FROM meta WHERE key = 'agentWorkSince'").get() as {value: string}).value);
   }
 
+  /** Retention can remove the predecessor of a cell far beyond the retention edge. */
+  get retentionRevision() {return this.pruned;}
+
   /**
    * Forgets samples, events, announcements, agents' work and forecasts' memory older than
    * the retention period; corrected project names stay until undone, and so does the plan
@@ -623,15 +627,16 @@ export class Store {
   prune(now: number) {
     this.db.prepare('DELETE FROM attention_windows WHERE source_id NOT IN (SELECT id FROM sources)').run();
     const cutoff = now - config.retention.sampleDays * 86_400_000;
-    this.db.prepare('DELETE FROM samples WHERE at < ?').run(cutoff);
-    this.db.prepare('DELETE FROM agent_work WHERE to_at < ?').run(cutoff);
+    // Each successful deletion counts immediately: a later statement may fail.
+    if (this.db.prepare('DELETE FROM samples WHERE at < ?').run(cutoff).changes) this.pruned++;
+    if (this.db.prepare('DELETE FROM agent_work WHERE to_at < ?').run(cutoff).changes) this.pruned++;
     // A session without work is not needed; one still running is made again when credited.
     this.db.prepare('DELETE FROM agent_sessions WHERE NOT EXISTS (SELECT 1 FROM agent_work WHERE session_id = agent_sessions.id)').run();
-    this.db
+    if (this.db
       .prepare(
         "DELETE FROM events WHERE at < ? AND NOT (kind = 'plan' AND at = (SELECT max(at) FROM events e WHERE e.source_id = events.source_id AND e.kind = 'plan' AND e.at < ?))",
       )
-      .run(cutoff, cutoff);
+      .run(cutoff, cutoff).changes) this.pruned++;
     this.db.prepare('DELETE FROM announcements WHERE at < ?').run(cutoff);
     // What a forecast kept is read as JSON: anything else is forgotten too.
     this.db

@@ -84,6 +84,34 @@ const batch = (id: string, failures: object[] = []) => ({
   failures,
 });
 
+test('history recounts a cached early reset when retention removes its distant predecessor', async t => {
+  const M = 60_000, H = 60 * M, day = 24 * H;
+  let now = tileStart(tileOf(Date.now(), M), M);
+  t.mock.method(Date, 'now', () => now);
+  const h = await hub();
+  t.after(async () => {await h.app.close(); h.store.close();});
+  const board = await h.person('ana');
+  const {created_by: user} = h.store.db.prepare('SELECT created_by FROM boards WHERE id = ?').get(board) as {created_by: string};
+  const a = now - 90 * day + M, from = now - 88 * day, to = from + H;
+  const source = h.store.source('codex', 'retention', a - day);
+  h.store.hold(source, user, a - day);
+  for (const [at, used] of [[a, 80], [from + M, 0]]) h.store.record(source, {observedAt: at, staleAfterMs: 5 * M, plan: '', resets: null, windows: [{id: 'weekly', kind: 'weekly', label: null, used, remaining: 100 - used, resetAt: a + 7 * day, minutes: 10080}]});
+  const read = async () => {
+    const response = await h.call('GET', `/api/history?board=${board}&cell=${M}&from=${from}&to=${to}`, {as: 'ana'});
+    assert.equal(response.status, 200);
+    return response.body as HistoryAnswer;
+  };
+  const before = await read();
+  assert.equal(before.chunks[0].resets.length, 1);
+  assert.equal(before.chunks[0].series[0].cells[0][4]?.g, 1);
+  now += 2 * M; h.store.prune(now);
+  const after = await read();
+  assert.deepEqual(after.chunks, h.store.cells(board, M, from, to, {now}));
+  assert.deepEqual(after.chunks[0].resets, []);
+  assert.equal(after.chunks[0].series[0].cells[0][4]?.g, undefined);
+  assert.equal(after.run, before.run);
+});
+
 test('passwords are salted scrypt hashes; typed codes are forgiving', async () => {
   const stored = await hashPassword('correct horse');
   assert.match(stored, /^scrypt\$32768\$8\$1\$/);
