@@ -9,13 +9,14 @@ import {onPrefs, prefs} from './prefs';
 import type {Store} from './store';
 import {dropTimeRange, onTimeRange, timeRange, timeRangeKey, type TimeRange} from './timeRange';
 import type {History} from './types';
+import type {MeterSelection} from '../../server/domain/meterHistory';
 
 const SETTLE_MS = 300;
 const RETRY_MS = 15_000;
 const STORED_BYTES = 15 * 1024 * 1024;
 
 export type HistoryEnv = {
-  read(board: string, cell: number, from: number, to: number): Promise<HistoryAnswer>;
+  read(board: string, cell: number, from: number, to: number, meters?: MeterSelection): Promise<HistoryAnswer>;
   now(): number;
   /** Elapsed time stays independent of corrections to the estimated hub clock. */
   elapsedNow?(): number;
@@ -39,6 +40,7 @@ export class HistoryStore {
   private lineupKey = '';
   private windowsKey = '';
   private windows = new Set<string>();
+  private meters: MeterSelection | undefined;
   private period = '24h';
   private selected: TimeRange | null = null;
   private shown: History | null = null;
@@ -109,6 +111,16 @@ export class HistoryStore {
     this.windows = next;
     this.needsCompose = true;
     this.schedule();
+  }
+
+  setMeters(meters: MeterSelection | undefined) {
+    if(JSON.stringify(meters)===JSON.stringify(this.meters))return;
+    this.meters=meters;
+    this.grids.clear();
+    this.shown=null;
+    this.invalidate();
+    this.schedule();
+    this.publish();
   }
 
   news(since: number) {
@@ -236,7 +248,7 @@ export class HistoryStore {
     const to = Math.min(tileEnd(tileOf(bad.at(-1)!, target.cell), target.cell), cellStart(this.env.now(), target.cell) + 2 * target.cell);
     const flight: Flight = {seq: ++this.seq, epoch: this.epoch, target: target.key, newsSeq: this.newsSeq, cell: target.cell, from, to, touched: Infinity, startedAt: this.elapsedNow()};
     this.flights.add(flight);
-    this.env.read(this.board, target.cell, from, to).then(answer => this.merge(flight, answer), error => this.failed(flight, error));
+    this.env.read(this.board, target.cell, from, to, this.meters).then(answer => this.merge(flight, answer), error => this.failed(flight, error));
   }
 
   private merge(flight: Flight, answer: HistoryAnswer) {
@@ -313,7 +325,7 @@ export class HistoryStore {
 
 const keyOf = (lineup: string[]) => JSON.stringify([...lineup].sort());
 export const loader = new HistoryStore({
-  read: (board, cell, from, to) => call<HistoryAnswer>('GET', `/api/history?board=${encodeURIComponent(board)}&cell=${cell}&from=${from}&to=${to}`),
+  read: (board, cell, from, to, meters) => call<HistoryAnswer>('GET', `/api/history?board=${encodeURIComponent(board)}&cell=${cell}&from=${from}&to=${to}${meters ? '&unit='+encodeURIComponent(meters.unit)+'&meters='+encodeURIComponent(JSON.stringify(meters.ids)) : ''}`),
   now: hubNow,
   setTimeout: (run, ms) => setTimeout(run, ms),
   clearTimeout: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),

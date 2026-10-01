@@ -2,6 +2,7 @@ import type {DatabaseSync} from 'node:sqlite';
 import {amount} from '../domain/amount.js';
 import {calendarSpending, sameMeter, validateMeter, type Meter, type MeterMeasurement, type MeterSpan, type Reading} from '../domain/meters.js';
 import type {SourceState} from '../domain/quota.js';
+import {meterCells, type MeterGroup, type MeterSelection, type MeterSeriesCells} from '../domain/meterHistory.js';
 
 type ReadingRow = {meter_id: string; at: bigint; previous_at: bigint | null; kind: Meter['kind']; unit: string; amount: bigint; limit_amount: bigint | null; reset_at: bigint | null; minutes: bigint | null; scope: string | null; label: string | null; stale_after_ms: bigint};
 const numberOf = (value: bigint | null) => value === null ? null : Number(value);
@@ -74,6 +75,21 @@ export class MeterStore {
   calendar(source: string, now: number) {
     const from = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), 1) - 7 * 86_400_000;
     return calendarSpending(this.readings(source, 'usage', from, now + 1), this.spans(source, 'usage', 0, now), now);
+  }
+
+  groups(selection: MeterSelection, from: number, to: number): MeterGroup[] {
+    return selection.ids.map(([source,meter]): MeterGroup => {
+      const usage = meter === 'balance' ? 'usage' : meter;
+      const group = {source,meter,readings:this.readings(source,usage,from,to),spans:this.spans(source,usage,0,to)};
+      if (meter !== 'balance') return group;
+      const provider = this.db.prepare('SELECT provider FROM sources WHERE id=?').get(source)?.provider;
+      if (provider !== 'openrouter') return {...group,readings:this.readings(source,meter,from,to),spans:this.spans(source,meter,0,to)};
+      return {...group,paired:{readings:this.readings(source,'credits',from,to),spans:this.spans(source,'credits',0,to)}};
+    });
+  }
+
+  cells(selection: MeterSelection, from: number, to: number, cell: number, groups=this.groups(selection,from,to)): MeterSeriesCells[] {
+    return groups.flatMap(group=>meterCells(group,selection.unit,from,to,cell));
   }
 
   prune(cutoff: number): boolean {

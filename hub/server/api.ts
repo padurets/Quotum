@@ -5,7 +5,8 @@ import Fastify, {type FastifyReply, type FastifyRequest} from 'fastify';
 import staticFiles from '@fastify/static';
 import {config, serviceName, version} from './config.js';
 import type {Ingest} from './ingest.js';
-import {HistoryTiles} from './history.js';
+import {HistoryLimit, HistoryTiles} from './history.js';
+import {selectionOf, type MeterSelection} from './domain/meterHistory.js';
 import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, READ_CELLS, cellStart, tileOf, tileStart} from './domain/history.js';
 import type {Pairing} from './pairing.js';
 import type {ResetFeed} from './resets.js';
@@ -159,7 +160,7 @@ export async function buildApp(hub: Hub) {
     return snapshot;
   });
 
-  app.get<{Querystring: {cell?: string; from?: string; to?: string; board?: string}}>('/api/history', (request, reply) => {
+  app.get<{Querystring: {cell?: string; from?: string; to?: string; board?: string; meters?: string; unit?: string}}>('/api/history', (request, reply) => {
     const access = guards.board(request, reply, request.query.board);
     if (!access) return reply;
     const now = Date.now();
@@ -175,7 +176,15 @@ export async function buildApp(hub: Hub) {
     if (to <= from || to % cell || from < oldest || tileOf(to - 1, cell) - tileOf(from, cell) + 1 > MAX_READ_TILES) return reply.code(400).send({error: 'invalid_request'});
     const board = access.board.id;
     const shown = store.shown(board, directory.view(board).hidden);
-    const chunks = history.read(board, cell, from, to, now, shown);
+    let meters: MeterSelection | undefined;
+    if (request.query.meters !== undefined || request.query.unit !== undefined) {
+      try {meters=selectionOf(JSON.parse(request.query.meters??''),request.query.unit);} catch {return reply.code(400).send({error:'invalid_request'});}
+      // A shared hidden source is not a history capability, even when its id is known.
+      if (meters.ids.some(([source])=>!shown.has(source))) return reply.code(404).send({error:'not_found'});
+    }
+    let chunks: string[];
+    try {chunks=history.read(board, cell, from, to, now, shown, meters);}
+    catch(error){if(error instanceof HistoryLimit)return reply.code(413).send({error:'history_limit'});throw error;}
     const meta = JSON.stringify({now, run: events.epoch, historyStart: store.historyStart(now), known: store.historyKnown(shown)});
     return reply.type('application/json').send(`${meta.slice(0, -1)},"chunks":[${chunks.join(',')}]}`);
   });

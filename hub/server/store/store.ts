@@ -13,6 +13,7 @@ import {members, projectGroups, type ProjectGroup} from '../domain/projects.js';
 import {tell, type Touches} from '../touches.js';
 import {migrate} from './schema.js';
 import {MeterStore} from './meters.js';
+import type {MeterSelection} from '../domain/meterHistory.js';
 
 /** A session credited with work (server/sessions.ts): its names as reported, '' for none. */
 export type WorkKey = {source: string; origin: Origin; startedAt: number; project: string; folder: string; ordinal: number};
@@ -406,7 +407,7 @@ export class Store {
   }
 
   /** Complete cells of every measured window, read once through a run of missing tiles. */
-  cells(board: string, cellMs: number, from: number, to: number, {now = Date.now(), shown = this.shown(board, [])}: {now?: number; shown?: Shown} = {}): Chunk<number>[] {
+  cells(board: string, cellMs: number, from: number, to: number, {now = Date.now(), shown = this.shown(board, []), meters}: {now?: number; shown?: Shown; meters?: MeterSelection} = {}): Chunk<number>[] {
     const sources = this.sources(board);
     // Skip through window names on the primary key; testing time inside the recursive
     // step would scan the source's whole retained history for every missing name.
@@ -440,6 +441,10 @@ export class Store {
     const grants = this.db.prepare("SELECT source_id, at, detail FROM events WHERE source_id IN (SELECT value FROM json_each(?)) AND kind = 'resets_granted' AND at >= ? AND at < ?")
       .all(JSON.stringify(sources.map(s => s.id)), from, to) as {source_id: string; at: number; detail: string}[];
     for (const event of grants) chunks[tileOf(event.at, cellMs) - tileOf(from, cellMs)].grants.push([event.source_id, event.at, Number(event.detail)]);
+    if (meters) {
+      const groups=this.meters.groups(meters,from,to);
+      for (const chunk of chunks) chunk.meterSeries = this.meters.cells(meters,chunk.from,chunk.to,cellMs,groups);
+    }
     return chunks;
   }
 

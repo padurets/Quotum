@@ -2,6 +2,9 @@ import {createHmac, randomBytes} from 'node:crypto';
 import {config} from './config.js';
 import {tileEnd, tileOf, tileStart, type Chunk} from './domain/history.js';
 import type {Shown, Store} from './store/store.js';
+import type {MeterSelection} from './domain/meterHistory.js';
+
+export class HistoryLimit extends Error { constructor() {super('history_limit');} }
 
 type Kept = {workKey: string; sources: Set<string>; cell: number; tile: number; json: string; bytes: number};
 
@@ -39,7 +42,7 @@ export class HistoryTiles {
   }
 
   /** JSON is stored as sent, so hits do not allocate or serialize all the cells again. */
-  read(board: string, cell: number, from: number, to: number, now: number, shown: Shown): string[] {
+  read(board: string, cell: number, from: number, to: number, now: number, shown: Shown, meters?: MeterSelection): string[] {
     if (this.retentionRevision !== this.store.retentionRevision) {
       this.kept.clear();
       this.bytes = 0;
@@ -51,7 +54,7 @@ export class HistoryTiles {
     for (let at = from; at < to;) {
       const tile = tileOf(at, cell);
       const end = Math.min(to, tileEnd(tile, cell));
-      parts.push({from: at, to: end, tile, key: `${board} ${cell} ${tile}`, eligible: at === tileStart(tile, cell) && end === tileEnd(tile, cell) && end <= now && at >= oldest});
+      parts.push({from: at, to: end, tile, key: `${board} ${cell} ${tile}${meters ? ' '+JSON.stringify(meters) : ''}`, eligible: at === tileStart(tile, cell) && end === tileEnd(tile, cell) && end <= now && at >= oldest});
       at = end;
     }
     const workKey = parts.some(p => p.eligible) ? this.store.workKey(board, shown) : '';
@@ -66,11 +69,12 @@ export class HistoryTiles {
       if (parts[i].json !== undefined) {i++; continue;}
       const start = i;
       while (i < parts.length && parts[i].json === undefined) i++;
-      const chunks = this.store.cells(board, cell, parts[start].from, parts[i - 1].to, {now, shown});
+      const chunks = this.store.cells(board, cell, parts[start].from, parts[i - 1].to, {now, shown, meters});
       chunks.forEach((raw, offset) => {
         const part = parts[start + offset];
         const chunk: Chunk = {...raw, activity: {...raw.activity, sessions: raw.activity.sessions.map(([id, ...rest]) => [this.ref(board, id), ...rest])}};
         const json = (part.json = compactJSON(chunk));
+        if (meters && Buffer.byteLength(json) > this.budget / 2) throw new HistoryLimit();
         if (part.eligible) {
           this.drop(part.key);
           const bytes = Buffer.byteLength(json);
@@ -80,6 +84,8 @@ export class HistoryTiles {
         }
       });
     }
-    return parts.map(p => p.json!);
+    const result=parts.map(p => p.json!);
+    if(meters && result.reduce((sum,json)=>sum+Buffer.byteLength(json),0)>this.budget/2)throw new HistoryLimit();
+    return result;
   }
 }
