@@ -4,7 +4,7 @@ import {PROVIDERS} from '../lib/providers';
 import {merging, renaming, restoring, shown, timeless, type ProjectGroup, type Projects as ProjectList} from '../lib/projects';
 import {errorText} from '../lib/quota';
 import {call} from '../lib/http';
-import {LOGOS} from './logos';
+import {logoOf} from './logos';
 import {CopyField, ErrorLine, Field, Modal, Segmented} from './Kit';
 import {Popover} from './Popover';
 import {rich, t} from '../i18n';
@@ -41,7 +41,7 @@ function Agents({device}: {device: Device}) {
         const title = [PROVIDERS[provider]?.name ?? provider, failure && errorText(failure.error), failure?.detail].filter(Boolean).join(' — ');
         return (
           <span key={provider} className={`agent-icon ${failure ? 'is-failing' : ''}`} title={title}>
-            <img src={LOGOS[provider]} alt={title} />
+            <img src={logoOf(provider)} alt={title} />
           </span>
         );
       })}

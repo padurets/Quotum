@@ -1,7 +1,7 @@
 import {sha256} from './auth.js';
 
-export const providers = ['claude', 'codex', 'antigravity'] as const;
-export type Provider = (typeof providers)[number];
+import type {Provider} from './providers.js';
+export {providers, type Provider} from './providers.js';
 
 /**
  * A source is one subscription, kept once on the hub however many devices measure it.

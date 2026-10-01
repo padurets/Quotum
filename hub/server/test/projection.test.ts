@@ -12,6 +12,7 @@ import {ResetFeed} from '../resets.js';
 import {newSecret} from '../domain/auth.js';
 import {Directory} from '../store/directory.js';
 import {Store} from '../store/store.js';
+import {catalogue} from '../domain/providers.js';
 
 const S = 1000;
 const MIN = 60_000;
@@ -19,6 +20,20 @@ const HOUR = 60 * MIN;
 const t0 = Date.parse('2026-09-22T12:00:00Z');
 const iso = (ms: number) => new Date(ms).toISOString();
 const ACCOUNT = 'a1b2c3d4e5f6a1b2c3d4e5f6';
+
+test('a hub source failure leaves percentage attention current and publishes safe provider capabilities', () => {
+  const h = hub();
+  h.deliver(t0, 7 * MIN);
+  const before = h.projection.attention(h.board, t0);
+  const source = h.store.source('openrouter', '111111111111111111111111', t0);
+  h.store.hold(source, h.alice.id, t0);
+  h.store.fail(source, 'credential_revoked');
+  assert.deepEqual(h.projection.attention(h.board, t0), before);
+  const snapshot = h.projection.snapshot(h.alice.id, h.board, t0)!;
+  assert.deepEqual(snapshot.providers, catalogue);
+  assert.equal(snapshot.sources.find(s => s.id === source)?.error, 'unmeasured');
+  h.store.close();
+});
 const machine = (id: string) => ({id: `${id}-0123456789`, name: id, os: 'linux', arch: 'x86_64'});
 
 /** A hub with Alice, whose laptop measures one Codex account at the hub's pace. */

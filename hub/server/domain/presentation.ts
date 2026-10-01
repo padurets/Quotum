@@ -1,5 +1,7 @@
+import {catalogue} from './providers.js';
+
 /** Identity and visibility shared by the board and its background reader. */
-export const providerNames: Record<string, string> = {claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity'};
+export const providerNames: Record<string, string> = Object.fromEntries(catalogue.map(p => [p.id, p.name]));
 export const cardId = (source: string) => `source:${source}`;
 export const windowKey = (source: string, window: string) => `${source}/${window}`;
 export const isWindowHidden = (view: {windows: string[]}, source: string, window: string) => view.windows.includes(windowKey(source, window));

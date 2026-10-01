@@ -563,8 +563,11 @@ test('S15: a check-in with a malformed pace is refused', () => {
   assert.throws(() => parseCheckin(body({paced: 'yes'})), Invalid);
   for (const minIntervalMs of [59_999, 86_400_001, 90_000.5, '120000']) assert.throws(() => parseCheckin(sub({minIntervalMs})), Invalid, String(minIntervalMs));
   const parsed = parseCheckin(sub({minIntervalMs: 60_000}));
+  assert.ok(!('measuredBy' in parsed.subscriptions[0]));
   assert.deepEqual([parsed.paced, parsed.subscriptions[0].minIntervalMs], [false, 60_000]);
-  assert.equal(parseCheckin(body({paced: true})).subscriptions[0].minIntervalMs, null);
+  const paced = parseCheckin(body({paced: true})).subscriptions[0];
+  assert.ok(!('measuredBy' in paced));
+  assert.equal(paced.minIntervalMs, null);
 });
 
 test('S15: what the board sees of the pace stays the same until the moment the hub says it changes by itself', () => {

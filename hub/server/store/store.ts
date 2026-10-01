@@ -12,6 +12,7 @@ import type {Stretch} from '../domain/work.js';
 import {members, projectGroups, type ProjectGroup} from '../domain/projects.js';
 import {tell, type Touches} from '../touches.js';
 import {migrate} from './schema.js';
+import {MeterStore} from './meters.js';
 
 /** A session credited with work (server/sessions.ts): its names as reported, '' for none. */
 export type WorkKey = {source: string; origin: Origin; startedAt: number; project: string; folder: string; ordinal: number};
@@ -57,6 +58,7 @@ export type BoardSource = Source & {holders: string[]; sharedBy: string | null};
  */
 export class Store {
   readonly db: DatabaseSync;
+  readonly meters: MeterStore;
   /** When this database was made. */
   private readonly created: number;
   private observer: Touches | null = null;
@@ -65,6 +67,7 @@ export class Store {
   constructor(file: string, now = Date.now()) {
     this.db = new DatabaseSync(file);
     migrate(this.db, now);
+    this.meters = new MeterStore(this.db);
     this.created = Number((this.db.prepare("SELECT value FROM meta WHERE key = 'historyStart'").get() as {value: string}).value);
   }
 
@@ -77,7 +80,7 @@ export class Store {
    */
   historyStart(now: number): number {
     const kept = now - config.retention.sampleDays * 86_400_000;
-    const oldest = (this.db.prepare('SELECT MIN(at) AS at FROM samples WHERE at >= ?').get(kept) as {at: number | null}).at;
+    const oldest = (this.db.prepare('SELECT min(at) AS at FROM (SELECT min(at) AS at FROM samples WHERE at>=? UNION ALL SELECT min(at) AS at FROM readings WHERE at>=?)').get(kept, kept) as {at: number | null}).at;
     return oldest === null ? this.created : Math.min(this.created, oldest);
   }
 
@@ -304,6 +307,21 @@ export class Store {
    */
   record(id: string, measurement: Measurement) {
     const previous = this.state(id);
+    if ('meters' in measurement) {
+      this.db.exec('SAVEPOINT record');
+      let since: number;
+      try {
+        since = this.meters.record(id, previous, measurement).since;
+        this.db.exec('RELEASE record');
+      } catch (error) {
+        this.db.exec('ROLLBACK TO record');
+        this.db.exec('RELEASE record');
+        throw error;
+      }
+      tell(this.observer, o => o.touchSources([id]));
+      tell(this.observer, o => o.history(id, since));
+      return;
+    }
     const {provider} = previous;
     // Only when both measurements report free resets: one that does not say nothing about them.
     const granted = measurement.resets && previous.resets ? measurement.resets.available - previous.resets.available : 0;
@@ -640,6 +658,7 @@ export class Store {
     const cutoff = now - config.retention.sampleDays * 86_400_000;
     // Each successful deletion counts immediately: a later statement may fail.
     if (this.db.prepare('DELETE FROM samples WHERE at < ?').run(cutoff).changes) this.pruned++;
+    if (this.meters.prune(cutoff)) this.pruned++;
     if (this.db.prepare('DELETE FROM agent_work WHERE to_at < ?').run(cutoff).changes) this.pruned++;
     // A session without work is not needed; one still running is made again when credited.
     this.db.prepare('DELETE FROM agent_sessions WHERE NOT EXISTS (SELECT 1 FROM agent_work WHERE session_id = agent_sessions.id)').run();

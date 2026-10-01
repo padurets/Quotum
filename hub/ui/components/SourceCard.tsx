@@ -5,7 +5,7 @@ import {countdown, countdownChangesAt, duration, earliest, num, stamp} from '../
 import {cadenceChangesAt, cadenceOf, dotChangesAt, dotOf, errorText, level, problemOf, resetLine, resetLineChangesAt, windowName} from '../lib/quota';
 import {t, useLocale} from '../i18n';
 import {DEFAULT_PLAN, isValidPlan, planAt, planChangesAt, planNote, planTotal, type WeeklyPlan} from '../lib/plan';
-import {LOGOS} from './logos';
+import {logoOf} from './logos';
 import {cardId, colorOf, isWindowHidden, planOf, weeklyPlanOf, withColor, withHidden, withName, withPlan, withPlanned, withWindowHidden, type Arrange} from '../lib/view';
 import {CARD_COLORS, MIDDLE_STEP, PROVIDERS} from '../lib/providers';
 import {call} from '../lib/http';
@@ -450,7 +450,7 @@ export function CardMark({source}: {source: Card}) {
       onPointerLeave={() => setHovered(false)}
       onPointerUp={event => event.pointerType === 'touch' && setTip(true)}
     >
-      <img className="provider-logo" src={LOGOS[source.provider]} alt="" />
+      <img className="provider-logo" src={logoOf(source.provider)} alt="" />
       {pending ? (
         <i className="spinner" aria-hidden="true" />
       ) : dot.warn || failed ? (

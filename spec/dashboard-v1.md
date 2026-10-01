@@ -85,7 +85,7 @@ change as it was.
 | `event` | `data` | When |
 |---|---|---|
 | `hello` | `{epoch, now, client, heartbeatMs}` | First. `epoch`: when this start of the hub began, base 36. `now`: the hub's clock. `client`: the path of the page's entry script the hub serves (`/assets/index-<hash>.js`), null without a build. `heartbeatMs`: 25000. |
-| `snapshot` | `{board, view, historyStart, sources, sessions, cadence, refresh, forecast, mine, boards, resets}` | Second: the board for this reader. |
+| `snapshot` | `{providers, board, view, historyStart, sources, sessions, cadence, refresh, forecast, mine, boards, resets}` | Second: the board for this reader. |
 | `board` | `{board: {id, name, personal}}` | The board was renamed. |
 | `view` | `{view}` | The board's view was saved. |
 | `lineup` | `{sources: string[]}` | The board's sources, in order, changed. |
@@ -122,6 +122,13 @@ In a `snapshot`, `sources` are the cards of the board's sources in its order; `s
 `{id, name, personal}`; the reader's role is in `boards`, each `{id, name, personal,
 role}`, as it is theirs alone. `resets` is what `GET /api/resets` answers. `historyStart`
 is when the board's history begins as of the snapshot; `GET /api/history` tells it later.
+
+`providers` is the public code-owned catalogue: each entry has `id`, `name`, `color`,
+`logoAsset`, `order`, `measuredBy` (`client` or `hub`), `meterKinds`, `resets`, and either
+`clientId` or `connectorId`. It contains no credentials or user addresses. Readers use
+an unknown id itself as its name and a neutral icon and colour; an unknown capability
+does not imply quota notifications. Only providers with `window` capability contribute
+to the percentage attention state, including a client source awaiting its first window.
 
 A card is `{id, provider, plan, successAt, error, stale, windows, resets, owners,
 staleAfterMs, measureIntervalMs}`: the source's last measurement (`successAt`, its

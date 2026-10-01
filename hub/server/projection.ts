@@ -1,5 +1,6 @@
 import {level, sameWindow, type AttentionState, type Candidate} from './domain/attention.js';
 import {sourceHidden, isWindowHidden, titled} from './domain/presentation.js';
+import {catalogue, providerOf} from './domain/providers.js';
 import type {Refresh} from './domain/refresh.js';
 import {config} from './config.js';
 import type {Ingest} from './ingest.js';
@@ -43,6 +44,7 @@ export type HubPart = {resets: Partial<Record<ResetProvider, ResetStatus>>; trac
 
 /** The whole board for one reader at once (spec: `snapshot`). */
 export type Snapshot = Omit<BoardPart, 'lineup'> & {
+  providers: typeof catalogue;
   historyStart: number;
   sources: Card[];
   sessions: Record<string, BoardSession[]>;
@@ -124,6 +126,7 @@ export class Projection {
     let minimum: AttentionState['minimum'] = null;
     let partial = false;
     for (const card of cards) {
+      if (!providerOf(card.provider)?.meterKinds.some(kind => kind === 'window')) continue;
       const windows = card.windows.filter(w => !isWindowHidden(view, card.id, w.id));
       // A waiting source has no windows yet; it still makes a known minimum partial.
       if (!card.windows.length || windows.length) partial ||= card.stale || !!card.error || card.successAt === null;
@@ -184,6 +187,7 @@ export class Projection {
     const members = this.members(board);
     const sources = lineup.map(source => this.sourcePart(source, members, now).value);
     return {
+      providers: catalogue,
       board: part.board,
       view: part.view,
       historyStart: this.hub.store.historyStart(now),

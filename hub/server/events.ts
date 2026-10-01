@@ -3,6 +3,7 @@ import {randomBytes} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import path from 'node:path';
 import {config} from './config.js';
+import {catalogue} from './domain/providers.js';
 import type {Ingest} from './ingest.js';
 import type {ResetFeed} from './resets.js';
 import {earliest, Projection, type HubPart} from './projection.js';
@@ -634,6 +635,7 @@ export class Events implements Touches {
       }
       const value = (key: string) => watched.base.get(key)?.value;
       snapshot = {
+        providers: catalogue,
         board: value('board'),
         view: value('view'),
         historyStart: this.parts.store.historyStart(now),

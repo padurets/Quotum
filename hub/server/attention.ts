@@ -1,5 +1,5 @@
 import {advanceWindow, batchCandidates, sameWindow, type AttentionEvents, type Candidate, type Invalidation, type QuotaCandidate, type WindowLedger, type WindowSample} from './domain/attention.js';
-import type {Measurement, SourceState} from './domain/quota.js';
+import type {WindowMeasurement as Measurement, SourceState} from './domain/quota.js';
 import type {ResetProvider, ResetStatus} from './domain/resets.js';
 import type {Store} from './store/store.js';
 import {trouble} from './touches.js';
