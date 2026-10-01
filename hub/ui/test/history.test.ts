@@ -11,11 +11,13 @@ const flush = async () => {for (let i = 0; i < 5; i++) await Promise.resolve();}
 const empty = (from: number, to: number): Chunk => ({from, to, series: [], activity: {sessions: [], devices: {}, cells: []}, resets: [], grants: []});
 function harness(budget?: number) {
   let now = NOW;
+  let elapsed = 0;
   let dropped = 0;
   const timers = new Map<unknown, {at: number; run: () => void}>();
   const reads: {board: string; cell: number; from: number; to: number; answer(patch?: Partial<HistoryAnswer>): Promise<void>; fail(error: unknown): Promise<void>}[] = [];
   const store = new HistoryStore({
     now: () => now,
+    elapsedNow: () => elapsed,
     read: (board, cell, from, to) => new Promise((resolve, reject) => reads.push({board, cell, from, to,
       async answer(patch = {}) {
         const end = Math.min(to, cellStart((patch.now ?? now) + CLOCK_TOLERANCE_MS, cell) + cell);
@@ -35,12 +37,12 @@ function harness(budget?: number) {
     for (;;) {
       const next = [...timers].filter(([, t]) => t.at <= end).sort((a, b) => a[1].at - b[1].at)[0];
       if (!next) break;
-      now = next[1].at; timers.delete(next[0]); next[1].run(); await flush();
+      elapsed += next[1].at - now; now = next[1].at; timers.delete(next[0]); next[1].run(); await flush();
     }
-    now = end;
+    elapsed += end - now; now = end;
   };
   const start = async () => {store.open('b'); store.hello('run'); store.snapshot(['s'], ['s w']); await flush();};
-  return {store, reads, advance, start, now: () => now, dropped: () => dropped, timers};
+  return {store, reads, advance, start, now: () => now, dropped: () => dropped, timers, correctClock: (ms: number) => {now += ms;}};
 }
 
 test('the first snapshot reads once from the frame cell; news reads only the tail, without dimming', async () => {
@@ -217,6 +219,29 @@ test('quiet time admits a selection after an old data cut without another histor
   assert.equal(h.reads.length, 1);
   assert.equal(h.store.get().history?.range, `${selected.from}-${selected.to}`);
   assert.equal(h.store.get().loading, false);
+});
+
+test('a corrected hub-clock estimate cannot shorten elapsed time and drop a valid selection', async () => {
+  const h = harness(); await h.start();
+  await h.reads[0].answer({now: NOW - 5 * M});
+  h.correctClock(-5 * M);
+  await h.advance(25 * M);
+  const selected = {from: NOW + 17 * M, to: NOW + 32 * M};
+  h.store.choose('24h', selected); await flush();
+  assert.equal(h.dropped(), 0);
+  assert.equal(h.reads.length, 1);
+  assert.equal(h.store.get().history?.range, `${selected.from}-${selected.to}`);
+  assert.equal(h.store.get().loading, false);
+});
+
+test('the age of a delayed answer counts when admitting a selection across a grid cut', async () => {
+  const h = harness(); await h.advance(24_000); await h.start();
+  const sent = h.now(); await h.advance(11_000);
+  await h.reads[0].answer({now: sent});
+  const from = cellStart(sent, M) + M;
+  h.store.choose('24h', {from, to: from + 15 * M}); await flush();
+  assert.equal(h.dropped(), 0);
+  assert.equal(h.reads.length, 2, 'the valid finer-grid selection reads its missing cells');
 });
 
 test('window metadata changes recompose without reading, and only after a fresh epoch is full', async () => {

@@ -17,13 +17,15 @@ const STORED_BYTES = 15 * 1024 * 1024;
 export type HistoryEnv = {
   read(board: string, cell: number, from: number, to: number): Promise<HistoryAnswer>;
   now(): number;
+  /** Elapsed time stays independent of corrections to the estimated hub clock. */
+  elapsedNow?(): number;
   setTimeout(run: () => void, ms: number): unknown;
   clearTimeout(timer: unknown): void;
   dropTimeRange(): void;
   schedule?(run: () => void): void;
 };
 export type Shown = {history: History | null; loading: boolean};
-type Flight = {seq: number; epoch: number; target: string; newsSeq: number; cell: number; from: number; to: number; touched: number};
+type Flight = {seq: number; epoch: number; target: string; newsSeq: number; cell: number; from: number; to: number; touched: number; startedAt: number};
 
 /** History belongs to the open board. Cells are read only when missing or touched. */
 export class HistoryStore {
@@ -157,6 +159,8 @@ export class HistoryStore {
     return targetOf(length, Math.max(this.env.now(), this.meta?.now ?? 0), key, this.selected);
   }
 
+  private elapsedNow() {return this.env.elapsedNow?.() ?? performance.now();}
+
   private publish() {
     const history = this.shown;
     const loading = !!history && history.range !== this.target().key;
@@ -212,7 +216,7 @@ export class HistoryStore {
     if (target.k1 < target.k0) return this.env.dropTimeRange();
     if (this.selected && this.meta && this.metaAt !== null) {
       // The data cut stays empty as time moves; range admission follows the hub clock.
-      const now = this.meta.now + Math.max(0, this.env.now() - this.metaAt);
+      const now = this.meta.now + Math.max(0, this.elapsedNow() - this.metaAt);
       if (target.k0 * target.cell >= cellStart(now + CLOCK_TOLERANCE_MS, target.cell) + target.cell) return this.env.dropTimeRange();
     }
     if (this.needsCompose && this.meta && this.full(target)) {
@@ -230,7 +234,7 @@ export class HistoryStore {
     // Cold reads omit the unseen head. Entering a held tile's head fills it once.
     const from = first.readTo === first.readFrom ? bad[0] : bad[0] < first.readFrom ? first.from : first.validTo;
     const to = Math.min(tileEnd(tileOf(bad.at(-1)!, target.cell), target.cell), cellStart(this.env.now(), target.cell) + 2 * target.cell);
-    const flight: Flight = {seq: ++this.seq, epoch: this.epoch, target: target.key, newsSeq: this.newsSeq, cell: target.cell, from, to, touched: Infinity};
+    const flight: Flight = {seq: ++this.seq, epoch: this.epoch, target: target.key, newsSeq: this.newsSeq, cell: target.cell, from, to, touched: Infinity, startedAt: this.elapsedNow()};
     this.flights.add(flight);
     this.env.read(this.board, target.cell, from, to).then(answer => this.merge(flight, answer), error => this.failed(flight, error));
   }
@@ -259,7 +263,8 @@ export class HistoryStore {
     if (flight.seq > this.metaSeq) {
       this.metaSeq = flight.seq;
       this.meta = {now: answer.now, historyStart: answer.historyStart, known: answer.known};
-      this.metaAt = this.env.now();
+      // Count the whole flight so a late answer cannot falsely reject a valid range.
+      this.metaAt = flight.startedAt;
       const to = answer.chunks.at(-1)?.to;
       // A later read on a coarser grid does not revoke the earlier empty suffix;
       // only history news or a new epoch can put data there.
