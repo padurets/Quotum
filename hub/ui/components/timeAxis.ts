@@ -240,7 +240,7 @@ export function useTimeAxis({
     }
     const px = toChart(event);
     pointer.current = px;
-    if (panning || folding || (shifting && !drag)) return;
+    if (panning || folding || (shifting && event.pointerType !== 'touch' && !drag)) return;
     const held = holding.current;
     // A finger that moves before the hold is up reads the cells instead.
     if (held && Math.abs(px - held.px) > 8) cancelHold();
@@ -250,10 +250,11 @@ export function useTimeAxis({
   };
   const onPointerDown = (event: PointerEvent<SVGSVGElement>) => {
     const px = toChart(event);
-    if (!onSelect || event.button !== 0 || px < left || px > width - right || (event.target as Element).closest('.is-pointed')) return;
+    const shiftPan = event.shiftKey && event.pointerType !== 'touch';
+    if (!onSelect || event.button !== 0 || px < left || px > width - right || (!shiftPan && (event.target as Element).closest('.is-pointed'))) return;
     const element = event.currentTarget;
     const {pointerId} = event;
-    if (event.shiftKey && event.pointerType !== 'touch') {
+    if (shiftPan) {
       const token = pan.begin(startPan('pointer'));
       if (token !== null) {
         element.setPointerCapture(pointerId);
