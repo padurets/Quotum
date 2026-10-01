@@ -67,7 +67,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
           // The wheel's intentional 200 ms rest is stationary, before the fold begins.
           if(nextPhase!==phase){probe.last=0;previous=current;phase=nextPhase;}
           const moved=current.map((value,i)=>value!==previous[i]);
-          if(active){probe.synchronized&&=charts.every((svg,i)=>svg.dataset.panEnd===root.dataset.panEnd&&Math.abs(Number(svg.dataset.panEnd)-Number(svg.dataset.panOrigin)+matrices[i].e*Number(svg.dataset.panScale))<.01);moved.forEach((changed,i)=>{if(changed)probe.chartUpdates[i]++;});}
+          if(active){probe.synchronized&&=charts.every((svg,i)=>svg.dataset.panEnd===root.dataset.panEnd&&Math.abs((Number(svg.dataset.panEnd)-Number(svg.dataset.panOrigin))/Number(svg.dataset.panScale)+matrices[i].e)<.01);moved.forEach((changed,i)=>{if(changed)probe.chartUpdates[i]++;});}
           // Each input reaches both plots. Activity has no future, so only the
           // remaining-share chart must move during the final future fold.
           if(active&&moved.every(Boolean)||folding&&moved[0]){probe.updated++;if(probe.last){const ms=now-probe.last;probe.frames.push(ms);probe.samples.push({ms,segment:folding?'fold':probe.segment,pending:probe.pending.length,requests:probe.flights.size});}probe.last=now;probe.latency.push(...probe.pending.splice(0).map(at=>now-at));}
