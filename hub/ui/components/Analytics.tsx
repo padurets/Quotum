@@ -2,7 +2,7 @@ import {useRef, useState} from 'react';
 import type {Kind} from '../lib/types';
 import {setPrefs, usePrefs} from '../lib/prefs';
 import {PERIODS, periodLabel, periodOf, step, stepChangesAt} from '../lib/periods';
-import {goTo, setTimeRange, timeRangeLabel, useTimeRange} from '../lib/timeRange';
+import {goTo, setTimeRange, timeRangeLabel, useTimeRange, type TimeRange} from '../lib/timeRange';
 import {hubNow, useClock} from '../lib/clock';
 import {useHistoryBegins} from '../lib/history';
 import {t} from '../i18n';
@@ -37,6 +37,12 @@ const ChevronIcon = () => (
   </svg>
 );
 
+/** Only the small label follows animation frames; the picker and navigation stay still. */
+function PeriodName({selected, range}: {selected: TimeRange | null; range: string}) {
+  const preview = usePanFrame();
+  return <span>{preview ? timeRangeLabel(preview) : selected ? timeRangeLabel(selected) : periodLabel(periodOf(range))}</span>;
+}
+
 /**
  * The period of the analytics (agent activity, the chart and the table): one of a list,
  * ending now, or a time range in the past, dragged across a chart or stepped back to with
@@ -49,7 +55,6 @@ const ChevronIcon = () => (
 function PeriodSwitch({historyStart}: {historyStart: number}) {
   const {range} = usePrefs();
   const selected = useTimeRange();
-  const preview = usePanFrame();
   const now = useClock(now => stepChangesAt(selected, range, now, historyStart));
   const [open, setOpen] = useState(false);
   const group = useRef<HTMLDivElement>(null);
@@ -81,7 +86,7 @@ function PeriodSwitch({historyStart}: {historyStart: number}) {
         onOpenChange={setOpen}
         trigger={
           <span className="period-name">
-            <span>{preview ? timeRangeLabel(preview) : selected ? timeRangeLabel(selected) : periodLabel(periodOf(range))}</span>
+            <PeriodName selected={selected} range={range} />
             <ChevronIcon />
           </span>
         }
