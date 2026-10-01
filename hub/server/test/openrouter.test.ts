@@ -33,7 +33,7 @@ test('OpenRouter verifies management authority, stable organization identity and
 });
 
 test('a monthly key cap uses authoritative remainder rather than lifetime usage and scrubs supplier echoes',async()=>{
-  const c=connector(op=>op==='keys'?{data:[key(1,{name:secret.toString()}),key(2,{limit:0,limit_remaining:0}),key(3,{limit:10,limit_remaining:-1,disabled:true})]}:undefined);
+  const c=connector(op=>op==='keys'?{data:[key(1,{name:secret.toString().toUpperCase()}),key(2,{limit:0,limit_remaining:0}),key(3,{limit:10,limit_remaining:-1,disabled:true})]}:undefined);
   const id=await c.identify(secret),answer=await c.measure(secret,id);
   const measurement=answer.measurement!;
   assert.equal(measurement.inventoryComplete,true);assert.equal(measurement.keys.length,3);

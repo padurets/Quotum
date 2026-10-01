@@ -27,7 +27,7 @@ const expiry=(value:unknown):number|null=>{
 };
 const safeName=(value:unknown,secret:Buffer):string|null=>{
   if(typeof value!=='string')return null;
-  if(value.includes(secret.toString('ascii'))||/sk-or-v1-[a-zA-Z0-9_-]+/.test(value))return null;
+  if(value.includes(secret.toString('ascii'))||/sk-or-v1-[a-zA-Z0-9_-]+/i.test(value))return null;
   return Array.from(value.replace(/[\u0000-\u001f\u007f-\u009f]/g,'').trim()).slice(0,120).join('')||null;
 };
 const base=(id:string,amount:string,at:number):Meter=>({id,kind:'counter',unit:'USD',amount,at,staleAfterMs:204_000,stale:false,limit:null,resetAt:null,minutes:null,scope:null,label:null});

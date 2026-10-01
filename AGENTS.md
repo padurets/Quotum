@@ -89,6 +89,15 @@ and platform smoke checks still apply.
   projections, errors or logs. Connectors use only their fixed HTTPS transport;
   provider clients inherit no `QUOTUM_*` variables. Never log a raw crypto or keyring
   error, whose contents may include secret bytes.
+- **The provider catalogue defines authority.** Known hub-measured providers are
+  dropped from agent snapshots, failures and sessions before their other fields are
+  parsed. Check-in replies preserve those elements' positions and tell the agent to
+  wait off duty. No such traffic creates a source, holding or duty.
+- **Meters keep their units and precision.** Money is whole integer millionths,
+  serialized as exact decimal strings. Counter spending, top-ups and cap remaining
+  are separate from percentage windows; they never enter quota forecasts or native
+  quota notifications. Historical cap semantics and uncertain spending intervals
+  survive history packing and retention.
 - **The protocol is a spec.** A change to what the agent sends or the hub answers goes
   into `spec/ingest-v1.md` in the same commit, including its Privacy section; a change to
   the events the hub tells its dashboard, into `spec/dashboard-v1.md`.
