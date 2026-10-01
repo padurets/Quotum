@@ -88,6 +88,11 @@ jobs:
           echo "QUOTUM_COMMIT=${COMMIT::7}" >> "$GITHUB_ENV"
           echo "VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' desktop/Cargo.toml | head -n 1)" >> "$GITHUB_ENV"
       - run: node desktop/prepare.mjs --target ${{ matrix.target }}
+      - name: Bundled hub startup diagnostics
+        working-directory: hub
+        env:
+          QUOTUM_TEST_HUB_ENTRY: ${{ github.workspace }}/hub/dist/app/server.mjs
+        run: node --import tsx --test server/test/startup.test.ts
       - if: runner.os == 'Linux'
         working-directory: desktop
         run: cargo fmt --check

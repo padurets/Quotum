@@ -544,8 +544,9 @@ check keys. AES-256-GCM binds each credential to its id, owner and provider, usi
 fresh 12-byte nonce per write. SQLite keeps only ciphertext and its tag, nonce and key
 generation. A full key check value in `meta` identifies the database's KEK; its first
 eight bytes are the diagnostic fingerprint. The KEK is never written to SQLite or its
-data directory. Input variables are removed after capture, and Node reports exclude
-the environment.
+data directory. Input variables are removed after capture. The entry point protects
+Node reports and sets a private file mode before loading configuration or other hub
+modules, so even early startup failures exclude the environment from diagnostics.
 
 Startup reports `created`, `ok`, `rotated`, `mismatch` or `missing`, with safe
 fingerprints and record counts. Missing or mismatched keys preserve every credential
