@@ -33,7 +33,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
       })()`);
       await cdp.evaluate(`(() => {
         const root=document.querySelector('.history .chart>svg');
-        const probe=window.__quotumPan={frames:[],latency:[],inputs:0,updated:0,pending:[],last:0,pushesDuring:0,pushesAfter:0,forbiddenMutations:0,undimmed:true,coldReads:0,peakFlights:0,maxTiles:0,duplicateReads:0,flights:new Map(),running:true,feeding:false};
+        const probe=window.__quotumPan={frames:[],latency:[],inputs:0,updated:0,pending:[],last:0,pushesDuring:0,pushesAfter:0,forbiddenMutations:0,undimmed:getComputedStyle(root).opacity==='1',coldReads:0,peakFlights:0,maxTiles:0,duplicateReads:0,flights:new Map(),running:true,feeding:false};
         const originalPush=history.pushState.bind(history);probe.originalPush=originalPush;
         history.pushState=(...args)=>{if(probe.feeding)probe.pushesDuring++;else probe.pushesAfter++;originalPush(...args);};
         const input=e=>{if(e.type==='wheel'&&(!e.cancelable||(!e.deltaX&&!e.shiftKey)))return;if(e.type==='pointermove'&&!e.buttons)return;probe.inputs++;probe.pending.push(performance.now());};
@@ -60,7 +60,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
           if(nextPhase!==phase){probe.last=0;previous=current;phase=nextPhase;}
           if((active||folding)&&current!==previous){probe.updated++;if(probe.last)probe.frames.push(now-probe.last);probe.last=now;probe.latency.push(...probe.pending.splice(0).map(at=>now-at));}
           if(!active&&!folding)probe.last=0;
-          previous=current;probe.undimmed&&=getComputedStyle(root).opacity==='1';probe.raf=requestAnimationFrame(tick);
+          previous=current;probe.undimmed&&=!root.closest('.is-loading')&&(!root.style.opacity||root.style.opacity==='1');probe.raf=requestAnimationFrame(tick);
         };probe.raf=requestAnimationFrame(tick);
       })()`);
       await cdp.send('Emulation.setCPUThrottlingRate', {rate: 4});
@@ -70,7 +70,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
       const wheel = (dx: number, shift = false) => cdp.send('Input.dispatchMouseEvent', {type: 'mouseWheel', x: geometry.x, y: geometry.y, deltaX: dx, deltaY: 0, modifiers: shift ? 8 : 0});
       const sent: Promise<unknown>[] = [];
       await cdp.evaluate('window.__quotumPan.feeding=true');
-      // The browser generates native wheel input at frame cadence, without a CDP IPC per delta.
+      // The browser generates native wheel input without a CDP IPC per delta.
       const scroll = (distance: number) => cdp.send('Input.synthesizeScrollGesture', {x: geometry.x, y: geometry.y, xDistance: distance, yDistance: 0, speed: 720, gestureSourceType: 'mouse', preventFling: true});
       await scroll(geometry.width * 1.25);
       await scroll(-geometry.width * 1.25 / 3);
@@ -82,6 +82,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
       // Shift-drag keeps capture when the pointer leaves the SVG, without extra inertia.
       await key(true, 'Shift', 16);
       await mouse('mousePressed', geometry.x, geometry.y, 8);
+      await cdp.evaluate(`window.__quotumPan.undimmed&&=getComputedStyle(document.querySelector('.history .chart>svg')).opacity==='1'`);
       await cdp.evaluate('window.__quotumPan.feeding=true');
       sent.length = 0;
       for (let i = 1; i <= 60; i++) {sent.push(mouse('mouseMoved', geometry.x + i * 12, geometry.y, 8)); await pace(16);}
