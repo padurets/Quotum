@@ -1,7 +1,7 @@
 import {useEffect, useId, useLayoutEffect, useRef, useState, type PointerEvent} from 'react';
 import {hubNow} from '../lib/clock';
 import {draggedRange, timeRange, type TimeRange} from '../lib/timeRange';
-import {pan, usePanning, type PanStart} from '../lib/pan';
+import {pan, usePanning, type PanStart, type PanStop} from '../lib/pan';
 import {prefs} from '../lib/prefs';
 import {periodOf} from '../lib/periods';
 import {useHistoryBegins} from '../lib/history';
@@ -69,8 +69,7 @@ export function useTimeAxis({
   const historyStart = useHistoryBegins();
   const panPointer = useRef<{token: number; id: number; x: number; left: number; width: number} | null>(null);
   const captured = useRef<{token: number; from: number; to: number; end: number} | null>(null);
-  const finished = useRef<{from: number; to: number; end: number} | null>(null);
-  const lastPan = useRef<ReturnType<typeof pan.get>>(null);
+  const finished = useRef<{from: number; to: number; end: number; stop: PanStop} | null>(null);
   const wheelBounds = useRef<DOMRect | null>(null);
   const panLayers = useRef<SVGGElement[]>([]);
   /** Where a drag across the chart started and where it is now, in chart pixels. */
@@ -130,6 +129,7 @@ export function useTimeAxis({
     if (!element) return;
     const frame = pan.get();
     if (frame && captured.current?.token !== frame.token) {
+      finished.current = null;
       foldTicket.current++;
       captured.current = {token: frame.token, ...visualGeometry()};
       panLayers.current = [...element.querySelectorAll<SVGGElement>('.slides')];
@@ -145,25 +145,14 @@ export function useTimeAxis({
       layer.style.transform = frame ? `translateX(${dx}px)` : '';
     }
     if (frame) {
-      lastPan.current = frame;
       element.dataset.panEnd = String(frame.to);
       element.classList.add('is-panning');
       element.classList.toggle('is-grabbing', frame.source === source.current && frame.input === 'pointer');
     } else {
-      const last = lastPan.current;
-      if (origin && last) {
-        const selected = timeRange();
-        const committed = last.origin === null ? selected !== null : !selected || selected.from !== last.origin.from || selected.to !== last.origin.to;
-        if (committed) {
-          const delta = last.to - last.originEnd;
-          finished.current = {from: origin.from + delta, to: origin.to + delta, end: last.to};
-        }
-      }
       delete element.dataset.panEnd;
       element.classList.remove('is-grabbing');
       element.classList.remove('is-panning');
       captured.current = null;
-      lastPan.current = null;
       const held = panPointer.current;
       panPointer.current = null;
       if (held && element.hasPointerCapture(held.id)) element.releasePointerCapture(held.id);
@@ -171,7 +160,18 @@ export function useTimeAxis({
       panLayers.current = [];
     }
   };
-  useLayoutEffect(() => pan.subscribe(() => paintPan.current()), []);
+  useLayoutEffect(() => {
+    const unsubscribe = pan.subscribe(() => paintPan.current());
+    if (pan.active()) paintPan.current();
+    return unsubscribe;
+  }, []);
+  useLayoutEffect(() => pan.onStop(stop => {
+    const origin = captured.current;
+    if (!origin || origin.token !== stop.draft.token) return;
+    const delta = stop.presented.to - stop.draft.originEnd;
+    finished.current = {from: origin.from + delta, to: origin.to + delta, end: stop.presented.to, stop};
+    captured.current = null;
+  }), []);
   useEffect(() => () => {
     foldTicket.current++;
     if (pan.source === source.current) pan.cancel();
@@ -313,21 +313,30 @@ export function useTimeAxis({
     shown.current = {from, end};
     const element = svg.current;
     const previous = finished.current;
-    finished.current = null;
-    if (!before || !element || panning || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    if (!before || !element || panning) return;
     if (previous) {
-      const ratio = (to - from) / (previous.to - previous.from);
-      const offset = left * (1 - ratio) + (from - previous.from) / (previous.to - previous.from) * (width - left - right);
-      setFolding(true);
-      const ticket = ++foldTicket.current;
-      const animations: Animation[] = [];
-      for (const layer of element.querySelectorAll<SVGGElement>('.slides')) {
-        layer.parentElement!.setAttribute('clip-path', `url(#${CSS.escape(clip)})`);
-        animations.push(layer.animate([{transform: `translateX(${offset}px) scaleX(${ratio})`}, {transform: 'none'}], {duration: 160, easing: 'ease-out'}));
+      const selected = timeRange();
+      const expected = previous.stop.range;
+      const matches = selected === expected || !!selected && !!expected && selected.from === expected.from && selected.to === expected.to;
+      if (!matches && !previous.stop.canceled) return;
+      finished.current = null;
+      if (matches && !previous.stop.changed) return;
+      if (matches && matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+      if (matches) {
+        const ratio = (to - from) / (previous.to - previous.from);
+        const offset = left * (1 - ratio) + (from - previous.from) / (previous.to - previous.from) * (width - left - right);
+        setFolding(true);
+        const ticket = ++foldTicket.current;
+        const animations: Animation[] = [];
+        for (const layer of element.querySelectorAll<SVGGElement>('.slides')) {
+          layer.parentElement!.setAttribute('clip-path', `url(#${CSS.escape(clip)})`);
+          animations.push(layer.animate([{transform: `translateX(${offset}px) scaleX(${ratio})`}, {transform: 'none'}], {duration: 160, easing: 'ease-out'}));
+        }
+        Promise.allSettled(animations.map(animation => animation.finished)).then(() => {if (foldTicket.current === ticket && !pan.active()) setFolding(false);});
+        return;
       }
-      Promise.allSettled(animations.map(animation => animation.finished)).then(() => {if (foldTicket.current === ticket && !pan.active()) setFolding(false);});
-      return;
     }
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     const dx = slideOf(before, {from, end, to}, width - left - right);
     if (!dx) return;
     for (const layer of element.querySelectorAll<SVGGElement>('.slides')) {
@@ -340,7 +349,7 @@ export function useTimeAxis({
       layer.animate([{transform: `translateX(${start}px)`}, {transform: 'none'}], {duration: SLIDE_MS, easing: 'cubic-bezier(.2, .7, .3, 1)'});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [from, end, to]);
+  }, [from, end, to, panning]);
 
   return {box, svg, width, scale, hover: panning || folding ? null : hover, drag, x, drawX, timeAt, clip, handlers, basis, panning: panning !== null || folding};
 }

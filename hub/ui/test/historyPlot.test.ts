@@ -37,3 +37,12 @@ test('plot metadata preserves surviving colors through a rank swap and new group
   assert.ok(next.find(g => g.key === 'R')!.color !== 'violet');
   assert.deepEqual(groupRegistry(seed, next, [{key: 'Q', name: 'Q'}]).map(g => g.key), ['P', 'Q']);
 });
+
+test('a changed strip reuses immutable activity cells while retaining exact edge accounting', () => {
+  const target = targetOf(24 * H, NOW, 'strip', {from: 0, to: 2 * H});
+  const source = chunk(0, 2 * H);
+  const a = plotOf([source], meta, target, [[0, 2 * H]], new Set(['s w']), 1, 1, 1);
+  const b = plotOf([source], meta, {...target, k0: 1}, [[0, 2 * H]], new Set(['s w']), 1, 1, 2);
+  assert.equal(a.activityCells.get(5 * M), b.activityCells.get(5 * M));
+  assert.equal(plotBar(b, 0, {...target, k0: 1}, 'project')!.agentMs, 55 * M);
+});

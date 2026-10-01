@@ -42,6 +42,34 @@ export type PlotBuffer = {
   knownFrom: number;
 };
 
+const activityDecoded = new WeakMap<Chunk['activity'], {from: number; cell: number; rows: Map<number, PlotBar>}>();
+function activityOf(chunk: Chunk, cell: number) {
+  const activity = chunk.activity;
+  let saved = activityDecoded.get(activity);
+  if (saved && saved.from === chunk.from && saved.cell === cell) return saved.rows;
+  const sessions = activity.sessions.map(([ref, source, project, device]) => ({ref, keys: {source, project: JSON.stringify(project), device}, names: {source: null, project, device: activity.devices[device] ?? null}}));
+  const rows = new Map<number, PlotBar>();
+  for (const [i, active, members] of activity.cells) {
+    const at = chunk.from + i * cell;
+    const parts: PlotBar['parts'] = {source: new Map(), project: new Map(), device: new Map()};
+    const refs = new Set<string>();
+    let agentMs = 0;
+    for (const member of members) {
+      const [index, ms] = typeof member === 'number' ? [member, active] : member;
+      const {ref, keys, names} = sessions[index];
+      refs.add(ref); agentMs += ms;
+      for (const by of ['source', 'project', 'device'] as const) {
+        const old = parts[by].get(keys[by]);
+        parts[by].set(keys[by], {ms: (old?.ms ?? 0) + ms, name: names[by]});
+      }
+    }
+    rows.set(at, {at, activeMs: active, agentMs, refs, parts});
+  }
+  saved = {from: chunk.from, cell, rows};
+  activityDecoded.set(activity, saved);
+  return rows;
+}
+
 export function covered(coverage: Coverage, from: number, to: number): boolean {
   for (const [a, b] of coverage) {
     if (a > from) return false;
@@ -77,24 +105,9 @@ export function plotOf(chunks: readonly Chunk[], meta: HistoryMeta, target: Targ
         row.segment = segment + offset;
       }
     }
-    for (const [i, active, members] of chunk.activity.cells) {
-      const at = chunk.from + i * target.cell;
+    for (const [at, row] of activityOf(chunk, target.cell)) {
       if (at < from || at >= to) continue;
-      const parts: PlotBar['parts'] = {source: new Map(), project: new Map(), device: new Map()};
-      const refs = new Set<string>();
-      let agentMs = 0;
-      for (const member of members) {
-        const [index, ms] = typeof member === 'number' ? [member, active] : member;
-        const [ref, source, project, device] = chunk.activity.sessions[index];
-        refs.add(ref); agentMs += ms;
-        const keys = {source, project: JSON.stringify(project), device};
-        const names = {source: null, project, device: chunk.activity.devices[device] ?? null};
-        for (const by of ['source', 'project', 'device'] as const) {
-          const old = parts[by].get(keys[by]);
-          parts[by].set(keys[by], {ms: (old?.ms ?? 0) + ms, name: names[by]});
-        }
-      }
-      activityCells.set(at, {at, activeMs: active, agentMs, refs, parts});
+      activityCells.set(at, row);
     }
     for (const [sourceId, window, at] of chunk.resets) {
       if (at < from || at >= to || !windows.has(`${sourceId} ${window}`)) continue;

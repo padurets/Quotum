@@ -26,6 +26,7 @@ export type PanStart = {
   span: number;
   width: number;
 };
+export type PanStop = {draft: PanFrame; presented: PanFrame; range: TimeRange | null; changed: boolean; canceled: boolean};
 export type PanEnv = {
   now(): number;
   commit(range: TimeRange | null): void;
@@ -48,6 +49,7 @@ export class Pan {
   private swipe: Swipe = SWIPE;
   private readonly listeners = new Set<() => void>();
   private readonly phaseListeners = new Set<() => void>();
+  private readonly stopListeners = new Set<(stop: PanStop) => void>();
   private readonly charts = new Map<symbol, () => {end: number; future: number}>();
 
   constructor(private readonly env: PanEnv) {}
@@ -55,6 +57,8 @@ export class Pan {
   active = () => this.draft?.token ?? null;
   subscribe = (listener: () => void) => {this.listeners.add(listener); return () => void this.listeners.delete(listener);};
   onPhase = (listener: () => void) => {this.phaseListeners.add(listener); return () => void this.phaseListeners.delete(listener);};
+  /** Visual consumers prepare their final geometry before the address can render it. */
+  onStop = (listener: (stop: PanStop) => void) => {this.stopListeners.add(listener); return () => void this.stopListeners.delete(listener);};
   get input() {return this.draft?.input ?? null;}
   get source() {return this.draft?.source ?? null;}
   register(source: symbol, geometry: () => {end: number; future: number}) {
@@ -115,8 +119,12 @@ export class Pan {
     const now = Math.round(this.env.now());
     const end = Math.min(Math.round(draft.to), now);
     const result = !moved ? undefined : now - end <= 8 * this.scale ? 'live' : {from: end - draft.length, to: end};
+    const range = result === undefined ? draft.origin : result === 'live' ? null : result;
+    const changed = result !== undefined && !sameRange(draft.origin, range);
+    const stop: PanStop = {draft, presented: this.state ?? draft, range, changed, canceled: false};
     this.clear();
-    if (result !== undefined && !sameRange(draft.origin, result === 'live' ? null : result)) this.env.commit(result === 'live' ? null : result);
+    for (const listener of this.stopListeners) listener(stop);
+    if (changed) this.env.commit(range);
     this.notify();
     this.phase();
     return result;
@@ -124,7 +132,9 @@ export class Pan {
 
   cancel(token = this.draft?.token) {
     if (!this.draft || token !== this.draft.token) return;
+    const stop: PanStop = {draft: this.draft, presented: this.state ?? this.draft, range: this.draft.origin, changed: false, canceled: true};
     this.clear();
+    for (const listener of this.stopListeners) listener(stop);
     this.notify();
     this.phase();
   }

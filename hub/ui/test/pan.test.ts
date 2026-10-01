@@ -129,3 +129,21 @@ test('pointer drag excludes concurrent wheel and a non-cancelable event is untou
   assert.equal(s.pan.wheel(s.start, {...wheel(1_000), cancelable: false}), false);
   assert.equal(s.pan.active(), null);
 });
+
+test('final geometry is delivered before the URL commit, including an input not yet painted', () => {
+  const s = setup();
+  const order: string[] = [];
+  s.pan.onStop(stop => {
+    assert.equal(s.commits.length, 0);
+    assert.equal(s.pan.active(), null);
+    assert.equal(stop.presented.to, s.now);
+    assert.equal(stop.draft.to, s.now - DAY / 10);
+    assert.equal(stop.changed, true);
+    order.push('prepared');
+  });
+  const token = s.pan.begin(s.start)!;
+  s.pan.move(token, -50);
+  s.pan.finish(token);
+  assert.deepEqual(order, ['prepared']);
+  assert.equal(s.commits.length, 1);
+});
