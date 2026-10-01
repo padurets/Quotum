@@ -316,10 +316,11 @@ export function Chart({
               cached = {geometry, line: pieces.join(''), last: end};
               blockPaths.current.set(block, cached);
             }
+            const bridge = join && cached.line && last ? `M${last[0].toFixed(1)},${last[1].toFixed(1)}L` + cached.line.slice(1) : cached.line;
             if (cached.last) last = cached.last;
-            return join && cached.line ? 'L' + cached.line.slice(1) : cached.line;
+            return {key: `${block.from}:${block.to}`, line: bridge};
           });
-          return {line: parts.join(''), last};
+          return {line: '', last, parts};
         }
         const runs: [number, number][][] = [];
         let segment = -1;
@@ -341,6 +342,7 @@ export function Chart({
         return {
           line: runs.map(run => run.map(([px, py], i) => `${i ? 'L' : 'M'}${fixed(px)},${fixed(py)}`).join('')).join(''),
           last: runs.at(-1)?.at(-1) ?? null,
+          parts: null,
         };
       });
       for (const block of blockPaths.current.keys()) if (!retained.has(block)) blockPaths.current.delete(block);
@@ -563,7 +565,9 @@ export function Chart({
               );
             })}
             {lines.map((line, i) => (
-              <path key={line.key} d={paths[i].line} data-series={`${line.sourceId} ${line.windowId}`} data-last={line.points.filter(p => p[0] <= now).at(-1)?.slice(0, 2).join(':')} className="series" stroke={line.color} strokeDasharray={line.dash || undefined} />
+              <g key={line.key} data-series={`${line.sourceId} ${line.windowId}`} data-last={line.points.filter(p => p[0] <= now).at(-1)?.slice(0, 2).join(':')} stroke={line.color} strokeDasharray={line.dash || undefined}>
+                {paths[i].parts ? paths[i].parts!.map(part => <path key={part.key} d={part.line} className="series" />) : <path d={paths[i].line} className="series" />}
+              </g>
             ))}
             {/* Announcements are read over the lines, each on its own backing. */}
             {announced.map(marker => {
