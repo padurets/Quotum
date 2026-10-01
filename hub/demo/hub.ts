@@ -20,7 +20,7 @@ transport.send=async(operation,secret,query={})=>{
   if(index<0)throw new SecretError('credential_invalid');
   type Control={credits?:number;usage?:number;at?:number};
   let control:Control|null=null;
-  try{control=JSON.parse(readFileSync(path.join(process.env.QUOTUM_DATA_DIR!,'money-control.json'),'utf8')) as Control;}catch{/* The ordinary demo has no benchmark control. */}
+  if(index===1)try{control=JSON.parse(readFileSync(path.join(process.env.QUOTUM_DATA_DIR!,'money-control.json'),'utf8')) as Control;}catch{/* The ordinary demo has no benchmark control. */}
   observed=control?.at??Date.now();
   if(operation==='key') {
     const count=(identified.get(index)??0)+1;identified.set(index,count);
