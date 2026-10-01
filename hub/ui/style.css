@@ -575,6 +575,8 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 .marker-label.is-forecast rect { fill: var(--surface); stroke: var(--hair); }
 /* What is drawn over the lines never takes the pointer from what is under it (a label telling a time). */
 .crosshair, .selection, .line-end { pointer-events: none; }
+/* The axis reads positions, so input need not hit-test every segment of a plot. */
+.chart .slides { pointer-events: none; }
 .hover-band { fill: #ffffff06; }
 .crosshair line { stroke: var(--text-3); stroke-width: 1; stroke-dasharray: 2 3; }
 .crosshair circle { stroke: var(--bg); stroke-width: 2; }
