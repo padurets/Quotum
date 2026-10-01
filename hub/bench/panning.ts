@@ -31,7 +31,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
       await click('.period .picker > button');
       await click('.period .popover .popover-row', index);
       await settled();
-      await cdp.evaluate(`(() => {document.querySelector('.history .chart>svg').scrollIntoView({block:'start'});scrollBy(0,-170);})()`);
+      await cdp.evaluate(`(async () => {for(let i=0;i<3;i++){await new Promise(requestAnimationFrame);const r=document.querySelector('.history .chart>svg').getBoundingClientRect();scrollBy(0,r.top-140);}})()`);
       const geometry = await cdp.evaluate<{x: number; y: number; width: number; series: number; charts: number}>(`(() => {
         const svg=document.querySelector('.history .chart>svg'), r=svg.getBoundingClientRect();
         const charts=[...document.querySelectorAll('.chart>svg')].filter(e=>{const b=e.getBoundingClientRect();return b.top>=0&&b.bottom<=innerHeight;}).length;
