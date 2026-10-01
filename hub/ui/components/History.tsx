@@ -19,6 +19,7 @@ import {t, useLocale} from '../i18n';
 import {Segmented} from './Kit';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
 import {usePlot} from './sizing';
+import {pan, usePanning} from '../lib/pan';
 
 /**
  * The chart's own settings: whether it draws the plan and the forecast (where either has
@@ -91,9 +92,20 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
   const selected = useTimeRange();
   // On with the next cell, when what the chart points at past its right edge comes due (drawn
   // within it then), or when a forecast is drawn no more.
-  const now = useClock(now => earliest(frameChangesAt(selected, history?.cellMs ?? 60_000, now), ...moments.filter(at => at > now)));
+  const clockNow = useClock(now => earliest(frameChangesAt(selected, history?.cellMs ?? 60_000, now), ...moments.filter(at => at > now)));
   const codex = useResetsFor('codex');
   const past = usePastResets();
+  const panning = usePanning();
+  const captured = useRef<{token: number; now: number; sources: typeof sources; forecasts: typeof hubForecasts; lineup: typeof lineup; news: typeof news; codex: typeof codex; view: typeof view} | null>(null);
+  if (panning !== null && captured.current?.token !== panning) captured.current = {token: panning, now: Math.max(clockNow, pan.get()?.originEnd ?? clockNow), sources, forecasts: hubForecasts, lineup, news, codex, view};
+  const context = panning !== null ? captured.current : null;
+  const now = context?.now ?? clockNow;
+  const futureSources = context?.sources ?? sources;
+  const futureForecasts = context?.forecasts ?? hubForecasts;
+  const futureLineup = context?.lineup ?? lineup;
+  const futureNews = context?.news ?? news;
+  const futureCodex = context?.codex ?? codex;
+  const futureView = context?.view ?? view;
 
   const answered = useMemo(() => linesOf(history, sources, view, prefs.kind), [history, sources, prefs.kind, view.windows, view.hidden, view.colors, locale]);
   const lines = useMemo(() => {
@@ -111,7 +123,7 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
   const {from, future} = frame;
   const measured = measuredTo(frame, history, selected, prefs.range);
   // An announced Codex reset matters only where Codex is on the chart.
-  const announced = frame.live && visible.some(line => line.provider === 'codex') ? (codex?.scheduled?.scheduledFor ?? null) : null;
+  const announced = frame.live && visible.some(line => line.provider === 'codex') ? (futureCodex?.scheduled?.scheduledFor ?? null) : null;
   // The spending plan applies to weekly windows, when a line on the chart has a plan.
   const planAvailable = prefs.kind === 'weekly' && visible.some(line => planOf(view, line.sourceId) !== null);
   const planShown = planAvailable && prefs.showPlan;
@@ -120,15 +132,15 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
   const ahead = useMemo(
     () =>
       visible.flatMap(line => {
-        const source = sources.find(s => s.id === line.sourceId);
+        const source = futureSources.find(s => s.id === line.sourceId);
         const live = source?.windows.find(w => w.id === line.windowId);
         const measuredAt = source?.successAt ?? null;
-        const forecast = live?.kind === 'weekly' ? (hubForecasts[lineup.indexOf(line.sourceId)]?.[line.windowId] ?? null) : null;
-        const context: Context = {windows: source?.windows ?? [], freeResets: source?.resets?.available ?? 0, announced: announcedOf(news, line.provider, measuredAt)};
+        const forecast = live?.kind === 'weekly' ? (futureForecasts[futureLineup.indexOf(line.sourceId)]?.[line.windowId] ?? null) : null;
+        const context: Context = {windows: source?.windows ?? [], freeResets: source?.resets?.available ?? 0, announced: announcedOf(futureNews, line.provider, measuredAt)};
         const drawn = forecastLine(live, measuredAt, now, forecast, context, -Infinity, Infinity);
         return drawn ? [{line, drawn}] : [];
       }),
-    [visible, sources, now, hubForecasts, lineup, news],
+    [visible, futureSources, now, futureForecasts, futureLineup, futureNews],
   );
   // A range in the past has no forecast, so nothing to switch.
   const forecastAvailable = frame.live && ahead.length > 0;
@@ -197,9 +209,9 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
     if (!planShown) return [];
     const seen = new Map<string, PlanLine>();
     for (const line of visible) {
-      const source = sources.find(s => s.id === line.sourceId);
+      const source = futureSources.find(s => s.id === line.sourceId);
       const live = source?.windows.find(w => w.id === line.windowId);
-      const plan = planOf(view, line.sourceId);
+      const plan = planOf(futureView, line.sourceId);
       // Idle rolling windows (reset = now + 7 days) have not started: no plan to show.
       if (!plan || !live?.resetAt || live.minutes !== 10080 || !planAt(live, source?.successAt ?? null, now, plan)) continue;
       const key = `${line.sourceId}@${Math.round(live.resetAt / 3_600_000)}`;
@@ -216,7 +228,7 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
       });
     }
     return [...seen.values()];
-  }, [visible, sources, from, to, now, planShown, view, locale]);
+  }, [visible, futureSources, from, to, now, planShown, futureView, locale]);
 
   const forecasts: ForecastLine[] = useMemo(
     () =>

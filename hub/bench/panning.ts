@@ -50,11 +50,14 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
           if(!probe.running||!probe.feeding)return;
           for(const record of records){const element=record.target.nodeType===1?record.target:record.target.parentElement;if(element?.closest('.card,.topbar,.agents-panel,.forecast,.activity-totals')&&!element.closest('[data-time]'))probe.forbiddenMutations++;}
         });probe.observer.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true});
-        let previous='0:1';
+        let previous='0:1',phase='idle';
         const tick=()=>{
           if(!probe.running)return;
           const now=performance.now(),layer=root.querySelector('.slides'),active=!!root.dataset.panEnd,folding=!active&&layer.getAnimations().some(a=>a.playState==='running');
           const transform=active?layer.style.transform:folding?getComputedStyle(layer).transform:'none',matrix=new DOMMatrix(transform&&transform!=='none'?transform:undefined),current=matrix.e+':'+matrix.a;
+          const nextPhase=active?'pan':folding?'fold':'idle';
+          // The wheel's intentional 200 ms rest is stationary, before the fold begins.
+          if(nextPhase!==phase){probe.last=0;previous=current;phase=nextPhase;}
           if((active||folding)&&current!==previous){probe.updated++;if(probe.last)probe.frames.push(now-probe.last);probe.last=now;probe.latency.push(...probe.pending.splice(0).map(at=>now-at));}
           if(!active&&!folding)probe.last=0;
           previous=current;probe.undimmed&&=getComputedStyle(root).opacity==='1';probe.raf=requestAnimationFrame(tick);
