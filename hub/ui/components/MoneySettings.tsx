@@ -63,7 +63,7 @@ export function MoneySettings({sources,hidden,series}:{sources:readonly Named[];
           return row(id,meter,[history?.semantics?.label??meter,t(history?.kind==='cap'?'money.cap':'money.usage')].join(' — '));
         })}
       </div>
-      <div className="button-row popover-pad"><button className="button" disabled={!back.length} onClick={()=>{setAfter(back.at(-1));setBack(back.slice(0,-1));}}>{t('history.back')}</button><button className="button" disabled={!page?.next} onClick={()=>{setBack([...back,after]);setAfter(page!.next!);}}>{t('money.next')}</button></div>
+      {(!!page?.next||back.length>0)&&<div className="button-row popover-pad"><button className="button" disabled={!back.length} onClick={()=>{setAfter(back.at(-1));setBack(back.slice(0,-1));}}>{t('money.previous')}</button><button className="button" disabled={!page?.next} onClick={()=>{setBack([...back,after]);setAfter(page!.next!);}}>{t('money.next')}</button></div>}
     </>:<>
       <div className="popover-scroll">{accounts.map(s=><div key={s.id} className="popover-section">
         <div className="popover-title">{s.title}</div>

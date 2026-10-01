@@ -12,6 +12,7 @@ import {CARD_COLORS, MIDDLE_STEP, PROVIDERS} from '../lib/providers';
 import {call} from '../lib/http';
 import {useCadence, useCard, useConnection, useMine, useRefresh, useResetsFor, useSessions, useSourceAccess, useTitle} from '../lib/board';
 import {keyName, money, capLeft} from '../lib/money';
+import {providerOf} from '../../server/domain/providers';
 import {useClock} from '../lib/clock';
 import {FreeResets} from './ResetMarks';
 import {Tray} from './Tray';
@@ -239,6 +240,7 @@ function CardColor({source, arrange}: {source: Card; arrange: Arrange}) {
 function Frequency({source, board}: {source: Card; board: string}) {
   useLocale();
   const mine = useMine(source.id);
+  const byHub = providerOf(source.provider)?.measuredBy === 'hub';
   const connection = useConnection();
   const connected = connection.status === 'live' || connection.status === 'polling';
   const [pending, setPending] = useState(false);
@@ -281,12 +283,10 @@ function Frequency({source, board}: {source: Card; board: string}) {
           />
         </div>
       ) : <div className="popover-note">{t(`frequency.${selected}`)}</div>}
-      <div className="popover-note">{t('frequency.hint')}</div>
+      <div className="popover-note">{t(byHub?'frequency.hubHint':'frequency.hint')}</div>
       <details className="popover-note">
         <summary className="link-button">{t('frequency.aboutAuto')}</summary>
-        <p>{t('frequency.autoActivity')}</p>
-        <p>{t('frequency.autoLimits')}</p>
-        <p>{t('frequency.autoMinimum')}</p>
+        {byHub?<><p>{t('frequency.hubAuto')}</p><p>{t('frequency.hubMinimum')}</p></>:<><p>{t('frequency.autoActivity')}</p><p>{t('frequency.autoLimits')}</p><p>{t('frequency.autoMinimum')}</p></>}
       </details>
       <ErrorLine error={error} />
     </>

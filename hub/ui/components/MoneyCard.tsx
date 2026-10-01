@@ -54,7 +54,7 @@ function AllKeys({source,board,onClose}:{source:Card;board:string;onClose:()=>vo
   return <Modal title={t('money.keys',{count:source.keysCount??0})} onClose={onClose} wide>
     {changed&&<p className="drawer-note">{t('money.changed')}</p>}
     <ErrorLine error={error}/>
-    <p className="drawer-note">{page?.inventory?.complete?t('money.inventory',{count:page.inventory.observed}):t('money.inventoryPartial')}</p>
+    {page?.inventory&&<p className="drawer-note">{page.inventory.complete?t('money.inventory',{count:page.inventory.observed}):t('money.inventoryPartial')}</p>}
     <div className="table-wrap"><table className="admin-table"><thead><tr><th>{t('money.key')}</th><th>{t('money.usage')}</th><th>{t('money.month')}</th><th>{t('money.cap')}</th><th>{t('money.reset')}</th></tr></thead><tbody>{page?.keys.map(part=>{
       const usage=page.meters.find(m=>m.id===`key:${part.id}:usage`),cap=page.meters.find(m=>m.id===`key:${part.id}:cap`);
       return <tr key={part.id} className={part.presence==='missing'||usage?.stale?'is-stale':undefined}>
@@ -65,7 +65,7 @@ function AllKeys({source,board,onClose}:{source:Card;board:string;onClose:()=>vo
         <td>{cap&&<CapReset meter={cap}/>}</td>
       </tr>;
     })}</tbody></table></div>
-    <div className="button-row"><button className="button" disabled={!back.length} onClick={()=>{setAfter(back.at(-1));setBack(back.slice(0,-1));}}>{t('history.back')}</button><button className="button" disabled={!page?.next} onClick={()=>{setBack([...back,after]);setAfter(page!.next!);}}>{t('money.next')}</button></div>
+    {(!!page?.next||back.length>0)&&<div className="button-row"><button className="button" disabled={!back.length} onClick={()=>{setAfter(back.at(-1));setBack(back.slice(0,-1));}}>{t('money.previous')}</button><button className="button" disabled={!page?.next} onClick={()=>{setBack([...back,after]);setAfter(page!.next!);}}>{t('money.next')}</button></div>}
   </Modal>;
 }
 export function MoneyCard({source,board,view,compact=false}:{source:Card;board:string;view?:View;compact?:boolean}) {

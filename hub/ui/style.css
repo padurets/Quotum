@@ -893,7 +893,7 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .money-summaries > div { display: flex; flex-direction: column; gap: 4px; font-variant-numeric: tabular-nums; }
 .money-summaries small, .money-key-values, .money-cap small, .money-key-head small { color: var(--text-3); font-size: .76rem; }
 .money-partial { margin-left: 4px; color: var(--text-3); }
-.money-preview, .money-key-list { display: grid; gap: 10px; }
+.money-preview { display: grid; gap: 10px; }
 .money-key { display: grid; gap: 5px; min-width: 0; width: 100%; }
 .money-key-head, .money-key-values { display: flex; justify-content: space-between; gap: 10px; min-width: 0; flex-wrap: wrap; }
 .money-key-head > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; font-size: .82rem; }
@@ -901,11 +901,7 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .money-cap .meter { grid-column: 1; height: 3px; }
 .money-cap small { grid-column: 2; grid-row: 1 / 3; align-self: center; }
 .is-stale { opacity: .6; }
-.money-key-list > .popover-row { display: grid; gap: 10px; padding: 12px; }
-.money-selectors { display: flex; gap: 16px; flex-wrap: wrap; font-size: .8rem; }
-.money-selectors label, .source-consent { display: flex; gap: 8px; align-items: flex-start; }
-.connection-row { display: flex; justify-content: space-between; gap: 12px; margin-top: 12px; }
-.connection-row > div { display: grid; gap: 4px; min-width: 0; }
+.source-consent { display: flex; gap: 8px; align-items: flex-start; }
 .money-table-wrap { overflow-x: auto; }
 .money-table { width: 100%; border-collapse: collapse; font-size: .85rem; font-variant-numeric: tabular-nums; }
 .money-table th, .money-table td { padding: 10px 12px; text-align: right; }
@@ -913,4 +909,4 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .money-table th { color: var(--text-3); font-weight: 500; }
 .money-table tbody tr:hover { background: var(--hair); }
 .compact .money-balance > strong { font-size: 1.15rem; }
-@media (max-width: 480px) { .money-summaries { gap: 4px; font-size: .75rem; } .connection-row { flex-wrap: wrap; } }
+@media (max-width: 480px) { .money-summaries { gap: 4px; font-size: .75rem; } }
