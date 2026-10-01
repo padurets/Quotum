@@ -670,6 +670,8 @@ them. Time alone never rebuilds or reads history; cells past the hub's cut are
 known empty until new data arrives, and a response predating news cannot restore that
 proof. Nothing that shows data or time keeps a timer of its
 own (a tooltip or a gesture may wait a moment; `hub/ui/test/timers.test.ts` lists where).
+Range validity follows the hub clock as it advances from the latest read; a range
+wholly beyond its current grid cut returns to the chosen period.
 `npm run bench` checks a board without measurements or working agents asks nothing and
 renders only what shows time. It also checks measurements reach the card and chart
 within a second, small reads per measurement, and one small read for a machine report

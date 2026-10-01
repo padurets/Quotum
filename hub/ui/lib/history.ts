@@ -41,6 +41,7 @@ export class HistoryStore {
   private selected: TimeRange | null = null;
   private shown: History | null = null;
   private meta: HistoryMeta | null = null;
+  private metaAt: number | null = null;
   private cutTo: number | null = null;
   private readonly grids = new Map<number, Map<number, HistoryTile>>();
   private readonly flights = new Set<Flight>();
@@ -65,6 +66,7 @@ export class HistoryStore {
     this.ready = false;
     this.run = null;
     this.shown = this.meta = null;
+    this.metaAt = null;
     this.metaSeq = 0;
     this.cutTo = null;
     this.grids.clear();
@@ -143,6 +145,7 @@ export class HistoryStore {
   private invalidate() {
     this.epoch++;
     this.cutTo = null;
+    this.metaAt = null;
     this.clear('retry');
     for (const tiles of this.grids.values()) for (const tile of tiles.values()) tile.readFrom = tile.validTo = tile.readTo = tile.from;
     this.needsCompose = true;
@@ -207,6 +210,11 @@ export class HistoryStore {
     if (!this.board || !this.ready || !this.run) return;
     const target = this.target();
     if (target.k1 < target.k0) return this.env.dropTimeRange();
+    if (this.selected && this.meta && this.metaAt !== null) {
+      // The data cut stays empty as time moves; range admission follows the hub clock.
+      const now = this.meta.now + Math.max(0, this.env.now() - this.metaAt);
+      if (target.k0 * target.cell >= cellStart(now + CLOCK_TOLERANCE_MS, target.cell) + target.cell) return this.env.dropTimeRange();
+    }
     if (this.needsCompose && this.meta && this.full(target)) {
       const chunks = [...(this.grids.get(target.cell)?.values() ?? [])].filter(t => t.readTo > t.readFrom && t.readTo > target.k0 * target.cell && t.readFrom <= target.k1 * target.cell).sort((a, b) => a.from - b.from).map(tile => {tile.shownAt = this.env.now(); return tile.chunk(this.meta!.known);});
       this.shown = {...compose(chunks, this.meta, target, this.windows), board: this.board};
@@ -251,6 +259,7 @@ export class HistoryStore {
     if (flight.seq > this.metaSeq) {
       this.metaSeq = flight.seq;
       this.meta = {now: answer.now, historyStart: answer.historyStart, known: answer.known};
+      this.metaAt = this.env.now();
       const to = answer.chunks.at(-1)?.to;
       // A later read on a coarser grid does not revoke the earlier empty suffix;
       // only history news or a new epoch can put data there.

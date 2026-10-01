@@ -195,6 +195,30 @@ test('a cut is recorded even when the requested end exactly equals the hub cut',
   h.store.news(h.now()); await flush(); assert.equal(h.reads.length, 2);
 });
 
+test('a selection beyond the advancing hub clock drops even below an older coarse-grid cut', async () => {
+  for (const offset of [-4 * M, -2 * M]) {
+    const h = harness(); await h.start();
+    await h.reads[0].answer({now: NOW - 5 * M});
+    const shown = h.store.get().history;
+    h.store.choose('24h', {from: NOW + offset, to: NOW + offset + 15 * M}); await flush();
+    assert.equal(h.dropped(), 1);
+    assert.equal(h.reads.length, 1);
+    assert.equal(h.store.get().history, shown, 'an invalid selection cannot publish a ready empty frame');
+  }
+});
+
+test('quiet time admits a selection after an old data cut without another history read', async () => {
+  const h = harness(); await h.start();
+  await h.reads[0].answer({now: NOW - 5 * M});
+  await h.advance(25 * M);
+  const selected = {from: NOW + 3 * M, to: NOW + 18 * M};
+  h.store.choose('24h', selected); await flush();
+  assert.equal(h.dropped(), 0);
+  assert.equal(h.reads.length, 1);
+  assert.equal(h.store.get().history?.range, `${selected.from}-${selected.to}`);
+  assert.equal(h.store.get().loading, false);
+});
+
 test('window metadata changes recompose without reading, and only after a fresh epoch is full', async () => {
   const h = harness(); await h.start();
   const r = h.reads[0];

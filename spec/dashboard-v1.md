@@ -320,6 +320,8 @@ past now includes accepted fast-clock measurements in their own cells; a chart s
 point only once that cell's start has come. Work is credited from machine reports, or
 when they go quiet; each credit sends `history` with its earliest credited time. An idle
 board has neither measurements nor working agents and sends no such news.
+The hub's clock advances independently of the known empty data suffix. A selected
+range wholly beyond its current grid cut returns to the chosen period.
 
 The page keeps tiles of its open board with a bounded memory budget, preserving its
 current frame. Cold reading starts at the frame's first cell; whole inner tiles remain
