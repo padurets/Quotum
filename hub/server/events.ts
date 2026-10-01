@@ -4,6 +4,8 @@ import {readFileSync} from 'node:fs';
 import path from 'node:path';
 import {config} from './config.js';
 import {catalogue} from './domain/providers.js';
+import type {Credentials} from './secrets/credentials.js';
+import type {HubSources} from './hubSources.js';
 import type {Ingest} from './ingest.js';
 import type {ResetFeed} from './resets.js';
 import {earliest, Projection, type HubPart} from './projection.js';
@@ -144,13 +146,14 @@ export class Events implements Touches {
 
   // What readers last got of what is theirs, and of the hub's news.
   private readonly mines = new Map<string, string>();
+  private readonly sourceAccess=new Map<string,string>();
   private readonly boardLists = new Map<string, {json: string; value: unknown}>();
   private hub: {key: string; json: string; value: HubPart} | null = null;
   private hubDeadline: {at: number; cancel: () => void} | null = null;
   private stopHubRecheck: (() => void) | null = null;
 
   constructor(
-    private readonly parts: {store: Store; directory: Directory; ingest: Ingest; resets: ResetFeed},
+    private readonly parts: {store: Store; directory: Directory; ingest: Ingest; resets: ResetFeed;credentials?:Credentials;hubSources?:HubSources},
     private readonly options: EventsOptions = config.events,
     private readonly clock: Clock = realClock,
     client = clientScript(),
@@ -364,10 +367,16 @@ export class Events implements Touches {
     }
 
     const mines = new Map<string, Frame[]>();
+    const accesses=new Map<string,Frame[]>();
     const lists = new Map<string, Frame[]>();
     for (const watched of this.watched.values()) {
       for (const sub of watched.subscribers) {
         let own: Frame[] = [];
+        let access:Frame[]=[];
+        if(users.has(sub.user)||sources.has(watched.id)||whole.has(watched.id)) {
+          try {const key=sub.user+'\n'+watched.id;if(!accesses.has(key))accesses.set(key,this.refreshSourceAccess(sub.user,watched.id,lineups,now));access=accesses.get(key)!;}
+          catch(error){trouble(error);failed.users.add(sub.user);this.sourceAccess.delete(sub.user+'\n'+watched.id);}
+        }
         if (users.has(sub.user)) {
           const key = `${sub.user}\n${watched.id}`;
           try {
@@ -383,7 +392,7 @@ export class Events implements Touches {
             this.boardLists.delete(sub.user);
           }
         }
-        const frames = [...(heads.get(watched.id) ?? []), ...own, ...(tails.get(watched.id) ?? []), ...news];
+        const frames = [...(heads.get(watched.id) ?? []), ...own, ...access, ...(tails.get(watched.id) ?? []), ...news];
         if (sub.fresh) continue;
         if (sub.desktop && (sources.has(watched.id) || whole.has(watched.id) || frames.length || sub.pending.length || sub.invalidations.size || sub.rebaseline)) {
           const attention = this.attentionFrames(sub, sub.rebaseline, now);
@@ -493,6 +502,12 @@ export class Events implements Touches {
     if (this.mines.get(key) === json) return [];
     this.mines.set(key, json);
     return [{type: 'mine', data: `{"sources":${json}}`}];
+  }
+  private refreshSourceAccess(user:string,board:string,lineups:Map<string,BoardSource[]>,now:number):Frame[] {
+    const lineup=lineups.get(board)??this.projection.lineup(board);
+    const key=user+'\n'+board,json=JSON.stringify(this.projection.sourceAccess(user,lineup,now));
+    if(this.sourceAccess.get(key)===json)return [];
+    this.sourceAccess.set(key,json);return [{type:'sourceAccess',data:json}];
   }
 
   /** The reader's boards with their role on each, when they changed. */
@@ -636,6 +651,7 @@ export class Events implements Touches {
       const value = (key: string) => watched.base.get(key)?.value;
       snapshot = {
         providers: catalogue,
+        sourceAccess:JSON.parse(this.sourceAccess.get(reader.user+'\n'+reader.board)??'{}'),
         board: value('board'),
         view: value('view'),
         historyStart: this.parts.store.historyStart(now),
@@ -705,7 +721,7 @@ export class Events implements Touches {
     const watched = this.watched.get(sub.board);
     watched?.subscribers.delete(sub);
     const all = [...this.subscribers.values()];
-    if (!all.some(s => s.user === sub.user && s.board === sub.board)) this.mines.delete(`${sub.user}\n${sub.board}`);
+    if (!all.some(s => s.user === sub.user && s.board === sub.board)) {this.mines.delete(`${sub.user}\n${sub.board}`);this.sourceAccess.delete(sub.user+'\n'+sub.board);}
     if (!all.some(s => s.user === sub.user)) this.boardLists.delete(sub.user);
     if (watched && !watched.subscribers.size) {
       watched.deadline?.cancel();

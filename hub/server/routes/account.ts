@@ -16,6 +16,7 @@ import {parseView} from '../domain/view.js';
 import {longerThan} from '../domain/ingest.js';
 import {PROJECT_NAME_CHARS} from '../domain/projects.js';
 import {validFrequency} from '../domain/frequency.js';
+import {providerOf} from '../domain/providers.js';
 import {currentUser, Limiter, publicOrigin, sessionSecret, setSession} from '../session.js';
 
 type Body = Record<string, unknown>;
@@ -66,10 +67,12 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
 
   app.post<{Params: {board: string; source: string}}>('/api/boards/:board/sources/:source/refresh', (request, reply) => {
     const {board, source} = request.params;
-    if (!guards.board(request, reply, board)) return;
-    if (!store.sources(board).some(s => s.id === source)) return notFound(reply);
+    const access=guards.board(request, reply, board);if(!access)return;
+    const found=store.sources(board).find(s=>s.id===source);if(!found)return notFound(reply);
+    const byHub=providerOf(found.provider)?.measuredBy==='hub';
+    if(byHub&&!store.holds(access.user.id,source))return reply.code(403).send({error:'refresh_forbidden'});
     const now = Date.now();
-    const result = hub.ingest.requestRefresh(source, now);
+    const result = byHub?hub.hubSources?.requestRefresh(source,now)??{status:'unavailable',retryAt:null}:hub.ingest.requestRefresh(source, now);
     if (result.status === 'too_soon') return reply.header('Retry-After', Math.ceil((result.retryAt! - now) / 1000)).code(429).send({error: 'refresh_too_soon'});
     if (result.status === 'unavailable') return reply.code(409).send({error: 'refresh_unavailable'});
     return reply.code(202).send({ok: true});
@@ -84,7 +87,10 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
     if (!store.sources(board).some(s => s.id === source)) return notFound(reply);
     if (!store.holds(access.user.id, source)) return reply.code(403).send({error: 'frequency_forbidden'});
     if (!validFrequency(request.body)) return reply.code(400).send({error: 'invalid_request'});
-    if (store.setMeasureInterval(source, request.body.intervalMs)) hub.ingest.frequencyChanged(source, Date.now());
+    if (store.setMeasureInterval(source, request.body.intervalMs)) {
+      if(providerOf(store.state(source).provider)?.measuredBy==='hub')hub.hubSources?.frequencyChanged(source,Date.now());
+      else hub.ingest.frequencyChanged(source, Date.now());
+    }
     return {ok: true};
   });
 

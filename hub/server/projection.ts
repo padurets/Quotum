@@ -1,6 +1,9 @@
 import {level, sameWindow, type AttentionState, type Candidate} from './domain/attention.js';
 import {sourceHidden, isWindowHidden, titled} from './domain/presentation.js';
 import {catalogue, providerOf} from './domain/providers.js';
+import {utcPeriods,type CalendarSpend} from './domain/meters.js';
+import type {Credentials,SourceAccess} from './secrets/credentials.js';
+import type {HubSources} from './hubSources.js';
 import type {Refresh} from './domain/refresh.js';
 import {config} from './config.js';
 import type {Ingest} from './ingest.js';
@@ -30,10 +33,10 @@ import type {Announcement, BoardSource, Store} from './store/store.js';
 export type Timed<T> = {value: T; changesAt: number | null};
 
 /** A source as a card shows it: its state, whose it is on this board, and whether its numbers are too old. */
-export type Card = SourceState & {owners: string[]; stale: boolean; measureIntervalMs: MeasureIntervalMs};
+export type Card = SourceState & {owners: string[]; stale: boolean; measureIntervalMs: MeasureIntervalMs;spending?:CalendarSpend;keysCount?:number};
 
 /** When a source is measured next and why, while its holder follows the hub's pace. */
-export type Cadence = {next: number; why: Why} | null;
+export type Cadence = {by?:'hub';next: number; why: Why} | null;
 
 export type BoardPart = {board: {id: string; name: string; personal: boolean}; view: View; lineup: string[]};
 export type SourcePart = {card: Card; sessions: BoardSession[]; cadence: Cadence; refresh: Refresh};
@@ -45,6 +48,7 @@ export type HubPart = {resets: Partial<Record<ResetProvider, ResetStatus>>; trac
 /** The whole board for one reader at once (spec: `snapshot`). */
 export type Snapshot = Omit<BoardPart, 'lineup'> & {
   providers: typeof catalogue;
+  sourceAccess:Record<string,SourceAccess>;
   historyStart: number;
   sources: Card[];
   sessions: Record<string, BoardSession[]>;
@@ -64,11 +68,11 @@ const DAY = 86_400_000;
 /** Credential failures are private even to other members of a source's shared board. */
 export function publicSourceState(state: SourceState): SourceState {
   const error = state.error?.startsWith('secret_key_') || state.error?.startsWith('credential_') ? 'unmeasured' : state.error;
-  return {id: state.id, provider: state.provider, plan: state.plan, successAt: state.successAt, error, windows: state.windows, staleAfterMs: state.staleAfterMs, resets: state.resets};
+  return {id: state.id, provider: state.provider, plan: state.plan, successAt: state.successAt, error, windows: state.windows, staleAfterMs: state.staleAfterMs, resets: state.resets,...(state.meters?{meters:state.meters,keys:state.keys,inventory:state.inventory}:{})};
 }
 
 export class Projection {
-  constructor(private readonly hub: {store: Store; directory: Directory; ingest: Ingest; resets: ResetFeed}) {}
+  constructor(private readonly hub: {store: Store; directory: Directory; ingest: Ingest; resets: ResetFeed;credentials?:Credentials;hubSources?:HubSources}) {}
 
   /** The sources a board shows, in order, with whose they are. */
   lineup(board: string): BoardSource[] {
@@ -102,12 +106,21 @@ export class Projection {
     const state = publicSourceState(store.state(source.id));
     const stale = state.successAt === null || state.staleAfterMs === null || now - state.successAt > state.staleAfterMs;
     const card: Card = {...state, owners: source.holders.flatMap(id => members.get(id) ?? []).sort(), stale, measureIntervalMs: store.measureInterval(source.id)};
+    if(card.meters) {
+      const keys=card.keys??[];card.keysCount=keys.length;card.keys=keys.slice(0,5).map(k=>({...k,periods:{day:utcPeriods(k.at).day===utcPeriods(now).day?k.periods.day:null,week:utcPeriods(k.at).week===utcPeriods(now).week?k.periods.week:null,month:utcPeriods(k.at).month===utcPeriods(now).month?k.periods.month:null}}));
+      const preview=new Set(card.keys.map(k=>k.id));
+      card.meters=card.meters.filter(m=>!m.id.startsWith('key:')||preview.has(m.id.split(':')[1])).map(m=>({...m,stale:m.stale||now>m.at+m.staleAfterMs||m.kind==='cap'&&m.resetAt!==null&&m.resetAt<=now}));
+      const credits=card.meters.find(m=>m.id==='credits'),usage=card.meters.find(m=>m.id==='usage');
+      if(credits&&usage&&credits.unit===usage.unit)card.meters.push({...usage,id:'balance',kind:'balance',amount:(BigInt(credits.amount)-BigInt(usage.amount)).toString(),stale:credits.stale||usage.stale});
+      card.spending=store.meters.calendar(source.id,now,state.successAt??utcPeriods(now).day);
+    }
     const people = source.holders.filter(id => members.has(id));
-    const refresh = ingest.refresh(source.id, now);
-    const cadence = ingest.nextMeasurement(source.id, source.account, now);
+    const byHub=providerOf(source.provider)?.measuredBy==='hub';
+    const refresh = byHub?this.hub.hubSources?.refresh(source.id,now)??{value:{by:'hub' as const,unavailable:'no_access' as const,availableAt:null,retryAt:null,request:null},changesAt:null}:ingest.refresh(source.id, now);
+    const cadence = byHub?this.hub.hubSources?.cadence(source.id)??{value:null,changesAt:null}:ingest.nextMeasurement(source.id, source.account, now);
     return {
       value: {card, sessions: ingest.live.of(source.id, people, now), cadence: cadence.value, refresh: refresh.value},
-      changesAt: earliest(...state.windows.map(w => w.resetAt !== null && w.resetAt > now ? w.resetAt : null), stale ? null : state.successAt! + state.staleAfterMs! + 1, ingest.live.ofChangesAt(source.id, people, now), cadence.changesAt, refresh.changesAt),
+      changesAt: earliest(...state.windows.map(w => w.resetAt !== null && w.resetAt > now ? w.resetAt : null),...(card.meters??[]).map(m=>m.stale?null:m.at+m.staleAfterMs+1),...(card.meters??[]).map(m=>m.resetAt!==null&&m.resetAt>now?m.resetAt:null),card.meters?utcPeriods(now).day+86_400_000:null,this.hub.credentials?.nextExpiry(source.id,now)??null, stale ? null : state.successAt! + state.staleAfterMs! + 1, ingest.live.ofChangesAt(source.id, people, now), cadence.changesAt, refresh.changesAt),
     };
   }
 
@@ -164,6 +177,11 @@ export class Projection {
   mine(user: string, lineup: BoardSource[]): string[] {
     return lineup.filter(s => s.holders.includes(user)).map(s => s.id);
   }
+  sourceAccess(user:string,lineup:BoardSource[],now:number):Record<string,SourceAccess> {
+    return Object.fromEntries(lineup.flatMap(s=>{
+      const access=this.hub.credentials?.access(user,s.id,now);return access?[[s.id,access]]:[];
+    }));
+  }
 
   /** What is the reader's own on every board: their boards with their role on each. */
   boards(user: string): Board[] {
@@ -188,6 +206,7 @@ export class Projection {
     const sources = lineup.map(source => this.sourcePart(source, members, now).value);
     return {
       providers: catalogue,
+      sourceAccess:this.sourceAccess(user,lineup,now),
       board: part.board,
       view: part.view,
       historyStart: this.hub.store.historyStart(now),

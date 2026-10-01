@@ -84,6 +84,7 @@ export const en = {
   'refresh.failed': 'Could not refresh the limits. Try again later.',
   'refresh.unavailable': 'The device could not finish the update. Try again.',
   'refresh.no_result': 'The update did not arrive in time. Try again.',
+  'refresh.no_access': 'No measurement access is available.',
   'refresh.no_device': 'No device is available to refresh these limits. Start Quotum on a device using this subscription.',
   'refresh.unsupported': 'The device sending these limits does not accept refresh requests. Update Quotum on that device and keep it running.',
   'refresh.silent': 'The device is not responding. Check that it is online and Quotum is running.',

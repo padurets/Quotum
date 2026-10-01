@@ -37,7 +37,7 @@ try {
   const supplier = createServer({key:TLS_KEY, cert:TLS_CERT}, (request, response) => response.end(JSON.stringify({ok:true, echo:request.headers.authorization, creator_user_id:'ignored'})));
   supplier.listen(0, '127.0.0.1'); await once(supplier, 'listening');
   const transport = new ConnectorTransport({host:'127.0.0.1', port:(supplier.address() as AddressInfo).port, operations:{probe:{path:'/probe'}}}, {ca:TLS_CERT});
-  const credentials = new secrets.Credentials(store.db, inputs.current, report, new Map([['test', {id:'test', secretFormat:(value:string) => value.length >= 16, abilities:['balance'], transport, map:() => ({abilities:['balance'], expiresAt:null}), identify:async () => ({account:'0'.repeat(24),abilities:['balance'],expiresAt:Date.now()+3_600_000}), measure:async () => {throw new secrets.SecretError('connector_invalid_response');}}]]));
+  const credentials = new secrets.Credentials(store, inputs.current, report, new Map([['test', {id:'test', secretFormat:(value:string) => value.length >= 16, abilities:['balance'], transport, map:() => ({abilities:['balance'], expiresAt:null}), identify:async () => ({account:'0'.repeat(24),abilities:['balance'],expiresAt:Date.now()+3_600_000}), measure:async () => {throw new secrets.SecretError('connector_invalid_response');}}]]));
   const app = await buildApp({store, directory, credentials, ingest:new Ingest(store, directory, new Duty(), new Cadence()), pairing:new Pairing(directory), resets:new ResetFeed(undefined, () => {}), setup:new Setup(false, null), local:null});
   await app.listen({host:'127.0.0.1', port:0}); say({event:'start', port:(app.server.address() as AddressInfo).port, secretKey:report});
   const lines = createInterface({input:process.stdin});

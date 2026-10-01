@@ -22,12 +22,13 @@ import {agentRoutes} from './routes/agents.js';
 import {localRoutes} from './local.js';
 import {credentialRoutes} from './routes/credentials.js';
 import {Credentials, startSecrets, type SecretInputs} from './secrets/index.js';
+import type {HubSources} from './hubSources.js';
 
 /**
  * `local`: the desktop app's hub, with the key its window enters with (see local.ts); null
  * on a server. `events`: what open dashboards hear, made here when not given.
  */
-export type Hub = {store: Store; directory: Directory; resets: ResetFeed; ingest: Ingest; pairing: Pairing; setup: Setup; local: {key: string} | null; events?: Events; credentials?: Credentials; secretSnapshot?: Pick<SecretInputs, 'storageAtStart' | 'wasFileAtStart'>};
+export type Hub = {store: Store; directory: Directory; resets: ResetFeed; ingest: Ingest; pairing: Pairing; setup: Setup; local: {key: string} | null; events?: Events; credentials?: Credentials; hubSources?:HubSources; secretSnapshot?: Pick<SecretInputs, 'storageAtStart' | 'wasFileAtStart'>};
 
 /** Route helpers shared by the route modules. */
 export type Guards = {
@@ -73,7 +74,7 @@ function clientError(error: NodeJS.ErrnoException, socket: Socket & {_httpMessag
  * at `/local`, and what is about accounts, sharing and connecting is not there.
  */
 export async function buildApp(hub: Hub) {
-  hub = {...hub, credentials: hub.credentials ?? new Credentials(hub.store.db, null, startSecrets(hub.store.db, {current: null, previous: null, reset: null, storageAtStart: null, wasFileAtStart: false}))};
+  hub = {...hub, credentials: hub.credentials ?? new Credentials(hub.store, null, startSecrets(hub.store.db, {current: null, previous: null, reset: null, storageAtStart: null, wasFileAtStart: false}))};
   const {store, directory} = hub;
   const projection = new Projection(hub);
   const {requestTimeoutMs, checkMs} = config.http;
@@ -97,6 +98,8 @@ export async function buildApp(hub: Hub) {
   const events = hub.events ?? new Events(hub);
   events.onHistory = (source, since) => history.touch(source, since);
   events.attach();
+  hub.credentials!.setObserver(events);
+  hub.hubSources?.setObserver(events);
 
   app.addHook('onRequest', async (request, reply) => {
     // The health check answers any host: a container asks it at 127.0.0.1 whatever the hub's own address.

@@ -1,6 +1,6 @@
 import type {DatabaseSync} from 'node:sqlite';
 import {amount} from '../domain/amount.js';
-import {calendarSpending, sameMeter, validateMeter, type Meter, type MeterMeasurement, type MeterSpan, type Reading} from '../domain/meters.js';
+import {calendarSpending,spending,utcPeriods, sameMeter, validateMeter, type Meter, type MeterMeasurement, type MeterSpan, type Reading} from '../domain/meters.js';
 import type {SourceState} from '../domain/quota.js';
 import {meterCells, type MeterGroup, type MeterSelection, type MeterSeriesCells} from '../domain/meterHistory.js';
 
@@ -72,9 +72,12 @@ export class MeterStore {
     return rows.map(r => ({from: r.from_at, to: r.to_at, staleAfterMs: r.stale_after_ms}));
   }
 
-  calendar(source: string, now: number) {
+  calendar(source: string, now: number, asOf=now) {
     const from = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), 1) - 7 * 86_400_000;
-    return calendarSpending(this.readings(source, 'usage', from, now + 1), this.spans(source, 'usage', 0, now), now);
+    const readings=this.readings(source,'usage',from,now+1),spans=this.spans(source,'usage',0,now);
+    if(asOf===now)return calendarSpending(readings,spans,now);
+    const periods=utcPeriods(now);
+    return {day:spending(readings,spans,periods.day,Math.max(periods.day,asOf)),week:spending(readings,spans,periods.week,Math.max(periods.week,asOf)),month:spending(readings,spans,periods.month,Math.max(periods.month,asOf))};
   }
 
   groups(selection: MeterSelection, from: number, to: number): MeterGroup[] {

@@ -27,7 +27,7 @@ async function harness(options: {available?: boolean; report?: SecretKeyReport} 
   const directory = new Directory(store.db);
   const key = options.available === false ? null : SecretKey.parse(Buffer.from(KEK));
   const report = options.report ?? startSecrets(store.db, {current: key, previous: null, reset: null, storageAtStart: null, wasFileAtStart: false});
-  const credentials = new Credentials(store.db, key, report, new Map([['test', fixture]]));
+  const credentials = new Credentials(store, key, report, new Map([['test', fixture]]));
   const cookies = new Map<string, string>();
   const users = new Map<string, string>();
   for (const name of ['alice', 'bob']) {
@@ -155,13 +155,13 @@ test('raw SQL failures are code-only and preserve the previous credential', asyn
 test('an old probe cannot change the status of a replaced credential', async t => {
   const h = await harness(); t.after(async () => { await h.app.close(); h.store.close(); });
   const owner = h.users.get('alice')!;
-  const id = h.credentials.create(owner, 'test', CANARY).id;
+  const id = (await h.credentials.create(owner, 'test', CANARY)).id;
   let finish!: (value: unknown) => void;
   const original = fixture.transport.send;
   fixture.transport.send = () => new Promise(resolve => { finish = resolve; });
   t.after(() => { fixture.transport.send = original; });
   const old = h.credentials.probe(owner, id, 'balance');
-  h.credentials.replace(owner, id, CANARY + '_replacement');
+  await h.credentials.replace(owner, id, CANARY + '_replacement');
   finish({}); await old;
   const current = h.credentials.list(owner)[0];
   assert.equal(current.lastUsedAt, null);
@@ -173,13 +173,13 @@ for (const reason of ['missing', 'mismatch', 'unknown-provider'] as const) {
   test(`a ${reason} probe preserves a previously unreadable credential and startup count`, async t => {
     const h = await harness(); t.after(async () => { await h.app.close(); h.store.close(); });
     const owner = h.users.get('alice')!;
-    const id = h.credentials.create(owner, 'test', CANARY).id;
+    const id = (await h.credentials.create(owner, 'test', CANARY)).id;
     h.store.db.prepare("UPDATE credentials SET cipher = zeroblob(length(cipher)), unreadable = 1, last_error = 'credential_unreadable' WHERE id = ?").run(id);
     const before = h.store.db.prepare('SELECT cipher, nonce FROM credentials WHERE id = ?').get(id)!;
     const matching = SecretKey.parse(Buffer.from(KEK));
     const key = reason === 'missing' ? null : reason === 'mismatch' ? SecretKey.parse(Buffer.from(Buffer.alloc(32, 8).toString('base64url'))) : matching;
     const report = startSecrets(h.store.db, {current: key, previous: null, reset: null, storageAtStart: null, wasFileAtStart: false});
-    const credentials = new Credentials(h.store.db, key, report, reason === 'unknown-provider' ? new Map() : new Map([['test', fixture]]));
+    const credentials = new Credentials(h.store, key, report, reason === 'unknown-provider' ? new Map() : new Map([['test', fixture]]));
     const code = reason === 'unknown-provider' ? 'credential_provider_unknown' : `secret_key_${reason}`;
     await assert.rejects(credentials.probe(owner, id, 'balance'), error => error instanceof SecretError && error.code === code);
     const after = credentials.list(owner)[0];
@@ -194,7 +194,7 @@ for (const reason of ['missing', 'mismatch', 'unknown-provider'] as const) {
 test('a transport failure after authenticated decryption clears a stale unreadable flag', async t => {
   const h = await harness(); t.after(async () => { await h.app.close(); h.store.close(); });
   const owner = h.users.get('alice')!;
-  const id = h.credentials.create(owner, 'test', CANARY).id;
+  const id = (await h.credentials.create(owner, 'test', CANARY)).id;
   h.store.db.prepare("UPDATE credentials SET unreadable = 1, last_error = 'credential_unreadable' WHERE id = ?").run(id);
   const original = fixture.transport.send;
   fixture.transport.send = async (_operation, secret) => {
@@ -212,13 +212,13 @@ test('a transport failure after authenticated decryption clears a stale unreadab
 test('an authenticated probe failure cannot clear a replacement credential unreadable flag', async t => {
   const h = await harness(); t.after(async () => { await h.app.close(); h.store.close(); });
   const owner = h.users.get('alice')!;
-  const id = h.credentials.create(owner, 'test', CANARY).id;
+  const id = (await h.credentials.create(owner, 'test', CANARY)).id;
   let reject!: (error: Error) => void;
   const original = fixture.transport.send;
   fixture.transport.send = () => new Promise((_resolve, fail) => { reject = fail; });
   t.after(() => { fixture.transport.send = original; });
   const old = h.credentials.probe(owner, id, 'balance');
-  h.credentials.replace(owner, id, CANARY + '_replacement');
+  await h.credentials.replace(owner, id, CANARY + '_replacement');
   h.store.db.prepare("UPDATE credentials SET unreadable = 1, last_error = 'credential_unreadable' WHERE id = ?").run(id);
   reject(new SecretError('connector_timeout'));
   await assert.rejects(old, error => error instanceof SecretError && error.code === 'connector_timeout');
@@ -226,4 +226,18 @@ test('an authenticated probe failure cannot clear a replacement credential unrea
   assert.equal(current.unreadable, true);
   assert.equal(current.lastError, 'credential_unreadable');
   h.clean(JSON.stringify(current));
+});
+
+test('HTTP replacement requires explicit no-expiry consent and rejects creation request ids',async t=>{
+  const h=await harness();t.after(async()=>{await h.app.close();h.store.close();});
+  const created=(await h.call('POST','/api/credentials',{provider:'test',secret:CANARY})).json();
+  const before=h.store.db.prepare('SELECT cipher,nonce,source_id FROM credentials WHERE id=?').get(created.id);
+  const original=fixture.identify;
+  fixture.identify=async()=>({account:'0'.repeat(24),abilities:['balance'],expiresAt:null});t.after(()=>{fixture.identify=original;});
+  const response=await h.call('POST','/api/credentials/'+created.id,{secret:CANARY+'_next'});
+  assert.equal(response.statusCode,409);assert.deepEqual(response.json(),{error:'credential_expiry_confirmation',expiresAt:null});
+  assert.deepEqual(h.store.db.prepare('SELECT cipher,nonce,source_id FROM credentials WHERE id=?').get(created.id),before);
+  assert.equal((await h.call('POST','/api/credentials/'+created.id,{secret:CANARY,allowNoExpiry:true,requestId:'11111111-1111-4111-8111-111111111111'})).statusCode,400);
+  assert.equal((await h.call('POST','/api/credentials/'+created.id,{secret:CANARY,allowNoExpiry:true})).statusCode,200);
+  h.clean(response.body);
 });

@@ -14,6 +14,7 @@ import {tell, type Touches} from '../touches.js';
 import {migrate} from './schema.js';
 import {MeterStore} from './meters.js';
 import type {MeterSelection} from '../domain/meterHistory.js';
+import {providerOf} from '../domain/providers.js';
 
 /** A session credited with work (server/sessions.ts): its names as reported, '' for none. */
 export type WorkKey = {source: string; origin: Origin; startedAt: number; project: string; folder: string; ordinal: number};
@@ -215,6 +216,13 @@ export class Store {
     }
   }
 
+  release(source:string,userId:string) {
+    const boards=this.boardsOf(source);
+    if(!this.db.prepare('DELETE FROM holders WHERE source_id=? AND user_id=?').run(source,userId).changes)return;
+    for(const {board_id} of this.db.prepare('SELECT board_id FROM shares WHERE source_id=?').all(source) as {board_id:string}[])this.unshareOrphans(board_id);
+    tell(this.observer,o=>{o.touchBoards(boards);o.touchUser(userId);});
+  }
+
   /**
    * A person disconnected devices: what only those devices measured for them is no
    * longer theirs. It leaves their personal board, and the shared boards where no other
@@ -229,6 +237,7 @@ export class Store {
       )
       .all(userId, userId) as {source_id: string}[];
     for (const {source_id: source} of orphans) {
+      if(providerOf(this.state(source).provider)?.measuredBy==='hub')continue;
       const shown = this.observer ? this.boardsOf(source) : [];
       if (!this.db.prepare('DELETE FROM holders WHERE source_id = ? AND user_id = ?').run(source, userId).changes) continue;
       tell(this.observer, o => {
