@@ -8,7 +8,8 @@ import {firstSignup, haltRequests, healthy} from './client.js';
 import {SCENES, SETS} from './catalogue.js';
 import {earliest, liveStep, MIN, people, SECOND, type DemoSet} from './model.js';
 import {Store} from '../server/store/store.js';
-import {emailOf, Live, PASSWORD, seedWork, setUp, type Stand} from './setup.js';
+import {Live, seedWork, setUp, type Stand} from './setup.js';
+import {accessOf} from './access.js';
 import {Trackers} from './trackers.js';
 
 /**
@@ -109,7 +110,7 @@ class Output {
  */
 export class Demo {
   readonly start = Math.floor(Date.now() / MIN) * MIN;
-  private readonly dir = mkdtempSync(path.join(os.tmpdir(), 'quotum-demo-'));
+  readonly dir: string;
   private readonly output = new Output();
   private hub: ChildProcess | undefined;
   private trackers: Trackers | undefined;
@@ -117,8 +118,10 @@ export class Demo {
   stopping = false;
 
   constructor(
-    private readonly options: {set: DemoSet; scene: string; still: boolean; address: ReturnType<typeof addressOf>; onExit: (code: number) => void},
-  ) {}
+    private readonly options: {set: DemoSet; scene: string; still: boolean; address: ReturnType<typeof addressOf>; onExit: (code: number, cause?: 'port_in_use') => void; dataDir?: string; hubRoot?: string},
+  ) {
+    this.dir = options.dataDir ?? mkdtempSync(path.join(os.tmpdir(), 'quotum-demo-'));
+  }
 
   get pid() {
     return this.hub?.pid;
@@ -140,15 +143,16 @@ export class Demo {
       QUOTUM_RESETS_CLAUDE_URL: urls.claude,
       QUOTUM_ALLOWED_HOSTS: address.hosts,
     });
-    const hub = (this.hub = spawn(process.execPath, ['dist/server/index.js'], {cwd: HUB, env, stdio: ['ignore', 'pipe', 'pipe']}));
+    const hub = (this.hub = spawn(process.execPath, ['dist/server/index.js'], {cwd: this.options.hubRoot ?? HUB, env, stdio: ['ignore', 'pipe', 'pipe']}));
     hub.stdout!.on('data', chunk => this.output.add(chunk));
     hub.stderr!.on('data', chunk => this.output.add(chunk));
-    hub.on('exit', (code, signal) => {
+    // close follows the output streams too: the hub's port-error line is complete.
+    hub.on('close', (code, signal) => {
       if (this.stopping) return;
       // Ctrl+C reaches the hub too, which may be done before the demo hears of it: a clean exit is a stop.
       if (code === 0) return this.options.onExit(0);
       console.error(`\nThe hub stopped by itself (${signal ? `killed by ${signal}` : `exit ${code}`}). Its output:\n${this.output}`);
-      this.options.onExit(1);
+      this.options.onExit(1, this.output.toString().includes('"code":"port_in_use"') ? 'port_in_use' : undefined);
     });
 
     await ready(hub, address.base, this.output);
@@ -183,7 +187,7 @@ export class Demo {
     return stand;
   }
 
-  /** Stops the hub and the stand-in trackers, and leaves nothing behind; once. */
+  /** Stops once; only a directory this Demo created belongs to it. */
   async stop() {
     if (this.stopping) return;
     this.stopping = true;
@@ -199,7 +203,7 @@ export class Demo {
       clearTimeout(late);
     }
     await this.trackers?.close();
-    rmSync(this.dir, {recursive: true, force: true, maxRetries: 5});
+    if (this.options.dataDir === undefined) rmSync(this.dir, {recursive: true, force: true, maxRetries: 5});
   }
 
   /**
@@ -225,9 +229,9 @@ export class Demo {
 }
 
 /** Checks the hub is built and the port free before anything starts. */
-export async function prepare(address: ReturnType<typeof addressOf>) {
+export async function prepare(address: ReturnType<typeof addressOf>, hubRoot = HUB) {
   for (const built of ['dist/server/index.js', 'dist/client/index.html']) {
-    if (!existsSync(path.join(HUB, built))) throw new Stop(`The hub is not built (no ${built}): run npm run build first.`);
+    if (!existsSync(path.join(hubRoot, built))) throw new Stop(`The hub is not built (no ${built}): run npm run build first.`);
   }
   await portFree(address.bind, address.port);
 }
@@ -291,6 +295,7 @@ async function selfCheck(stand: Stand, trackers: Trackers) {
 
 /** Where to go and how to sign in; `took` is seconds since the command started. */
 function greet(stand: Stand, address: ReturnType<typeof addressOf>, pid: number, scene: string, still: boolean, took: number) {
+  const access = accessOf(stand.set);
   const url = process.env.QUOTUM_PUBLIC_URL || address.base;
   const others = SETS.filter(s => s.id !== stand.set.id).map(s => s.id);
   console.log(
@@ -302,8 +307,8 @@ function greet(stand: Stand, address: ReturnType<typeof addressOf>, pid: number,
       `  resets ${scene}`,
       ...(still ? ['  still  nothing is measured: only the time moves'] : []),
       '',
-      `  Sign in as (password ${PASSWORD}):`,
-      ...people(stand.set).map(p => `    ${emailOf(p.id).padEnd(20)} ${p.name}`),
+      `  Sign in as (password ${access.password}):`,
+      ...access.accounts.map(p => `    ${p.email.padEnd(20)} ${p.name}`),
       '',
       `  Other sets: ${others.join(', ')}; reset scenes: ${SCENES.map(s => s.id).join(', ')}`,
       `  npm run demo -- ${others[0] ?? stand.set.id} --resets <scene>`,
