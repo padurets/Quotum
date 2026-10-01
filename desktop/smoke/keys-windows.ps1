@@ -99,7 +99,11 @@ if (-not $VerifyOnly) {
     if ($arguments.Count) { Start-Process -FilePath $appPath -ArgumentList $arguments | Out-Null }
     else { Start-Process -FilePath $appPath | Out-Null }
   } finally {
-    foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name,$previous[$name]) }
+    foreach ($name in $names) {
+      # PowerShell 7 can preserve an empty value; a missing variable needs a .NET null.
+      $value = if ($null -eq $previous[$name]) { [NullString]::Value } else { $previous[$name] }
+      [Environment]::SetEnvironmentVariable($name,$value)
+    }
   }
 }
 

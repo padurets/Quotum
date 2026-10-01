@@ -9,6 +9,9 @@ $run = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($canaryPath)
 $personRun = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\Microsoft\Windows\CurrentVersion\Run')
 $before = if ($personRun) { $personRun.GetValue('Quotum', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) } else { $null }
 $launches = [Collections.Generic.List[bool]]::new()
+$names = @('QUOTUM_APP_DATA_DIR','QUOTUM_STATE_DIR','QUOTUM_CONFIG','QUOTUM_RESETS')
+$originalEnvironment = @{}
+foreach ($name in $names) { $originalEnvironment[$name] = [Environment]::GetEnvironmentVariable($name) }
 
 Add-Type @'
 using System;
@@ -63,7 +66,11 @@ try {
   $settingsPath = Join-Path $work 'app/app.json'
   [IO.File]::WriteAllText($settingsPath, '{"port":23456,"locale":"ru","takeOverConfirmed":true,"autostartDefaulted":false,"fixture":{"nested":"preserved"}}')
   [QuotumKeyHelperFixture]::Create($target)
-  $names = @('QUOTUM_APP_DATA_DIR','QUOTUM_STATE_DIR','QUOTUM_CONFIG','QUOTUM_RESETS')
+  # Cover absent, existing and empty values; Windows PowerShell treats empty as absent.
+  [Environment]::SetEnvironmentVariable('QUOTUM_APP_DATA_DIR', [NullString]::Value)
+  [Environment]::SetEnvironmentVariable('QUOTUM_STATE_DIR', '')
+  [Environment]::SetEnvironmentVariable('QUOTUM_CONFIG', 'helper-test-original')
+  [Environment]::SetEnvironmentVariable('QUOTUM_RESETS', 'helper-test-original')
   $environment = @{}
   foreach ($name in $names) { $environment[$name] = [Environment]::GetEnvironmentVariable($name) }
   & $helper -App $PSCommandPath -Work $work | Out-Null
@@ -82,6 +89,10 @@ try {
   if ($after -ne $before -or $null -ne $run.GetValue($canaryName)) { throw 'The helper changed a start-at-login entry' }
   Write-Output 'keys-windows helper: ordinary, hidden, metadata, VerifyOnly and Run-entry isolation passed'
 } finally {
+  foreach ($name in $names) {
+    $value = if ($null -eq $originalEnvironment[$name]) { [NullString]::Value } else { $originalEnvironment[$name] }
+    [Environment]::SetEnvironmentVariable($name, $value)
+  }
   [QuotumKeyHelperFixture]::Remove($target)
   $run.DeleteValue($canaryName, $false)
   $run.Dispose()
