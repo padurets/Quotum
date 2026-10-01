@@ -2,7 +2,7 @@ import {memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState} from
 import type {Activity as ActivityData, ActivityDimension, ActivityGroup} from '../lib/types';
 import {clock, num, shortDay, stamp, workHours} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
-import {activityEmpty, activityScale, atOnce, groupColors, mutedKey, shownActivity} from '../lib/activity';
+import {activityEmpty, activityScale, atOnce, groupColors, mutedKey} from '../lib/activity';
 import {ACTIVITY_BY, setMuted, setPrefs, usePrefs} from '../lib/prefs';
 import {answeredRangeLabel, setTimeRange, useTimeRange, type TimeRange} from '../lib/timeRange';
 import {cellLabel, frameChangesAt, frameOf, measuredTo, niceTicks} from '../lib/periods';
@@ -72,7 +72,8 @@ function Metrics({agentMs, activeMs, agents, shownMs}: {agentMs: number; activeM
 }
 
 /** Hover and touch state belong to one legend entry, leaving the stacks untouched. */
-const LegendItem = memo(function LegendItem({group, name, color, muted, onToggle}: {group: ActivityGroup | null; name: string; color: string; muted: boolean; onToggle: () => void}) {
+const LegendItem = memo(function LegendItem({group, groupKey, by, name, color, muted}: {group: ActivityGroup | null; groupKey: string; by: ActivityDimension; name: string; color: string; muted: boolean}) {
+  useLocale();
   const id = useId();
   const button = useRef<HTMLButtonElement>(null);
   const wrap = useRef<HTMLDivElement>(null);
@@ -126,7 +127,7 @@ const LegendItem = memo(function LegendItem({group, name, color, muted, onToggle
         className="legend-item"
         aria-describedby={id}
         aria-pressed={!muted}
-        onClick={onToggle}
+        onClick={() => setMuted(mutedKey(by, groupKey), !muted)}
         onFocus={event => {
           setFocused(event.currentTarget.matches(':focus-visible'));
           setDismissed(false);
@@ -154,6 +155,30 @@ const LegendItem = memo(function LegendItem({group, name, color, muted, onToggle
         <span className="tooltip-time">{name}</span>
         {group ? <Metrics agentMs={group.agentMs} activeMs={group.activeMs} agents={group.agents} /> : <span>{t('activity.pendingRange')}</span>}
       </span>
+    </div>
+  );
+});
+
+/** Complete quantities do not render for partial plot arrivals. */
+const Totals = memo(function Totals({activity, shownMs, since}: {activity: ActivityData | null; shownMs: number; since: number | null}) {
+  useLocale();
+  if (!activity?.known || activity.activeMs <= 0) return null;
+  return (
+    <div className="activity-totals">
+      <span title={t('activity.agentHoursHint')}>
+        {t('activity.agentHours')} <b>{workHours(activity.agentMs)}</b>
+        {shownMs < activity.agentMs && <span className="activity-since activity-shown">{t('activity.shown', {time: workHours(shownMs)})}</span>}
+      </span>
+      <span title={t('activity.activeHint')}>
+        {t('activity.active')} <b>{workHours(activity.activeMs)}</b>
+      </span>
+      <span title={t('activity.agentsHint')}>
+        {t('activity.agents')} <b>{num(activity.agents)}</b>
+      </span>
+      <span title={t('activity.atOnceHint')}>
+        {t('activity.atOnce')} <b>{atOnce(activity.agentMs, activity.activeMs)}</b>
+      </span>
+      {since !== null && <span className="activity-since">{t('activity.since', {time: stamp(since)})}</span>}
     </div>
   );
 });
@@ -210,7 +235,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
     const plotted = state.groups.filter(group => !prefs.muted[mutedKey(by, group.key)]).map(identity => ({group: data.get(identity.key) ?? {key: identity.key, name: identity.name, cells: []}, color: identity.color, name: groupName(identity, by, titles)}));
     return {identities: state.groups, shown: plotted};
   }, [strip, groups, colors, shown, by, arrange.view, titles, prefs.muted]);
-  const shownMs = shownActivity(shown.map(({group}) => group)).agentMs;
+  const shownMs = useMemo(() => shown.reduce((sum, {group}) => sum + group.agentMs, 0), [shown]);
   const shownSources = lineup.filter(id => titles[id] && !isHidden(arrange.view, cardId(id)));
   // Known from later than the period the hub answered begins (not the page's frame, whose clock may be a minute behind).
   const since = history && activity?.known && activity.known.from > history.since ? activity.known.from : null;
@@ -230,24 +255,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
         <div><h2>{t('activity.title')}</h2>{history && <span className="answered-range">{t('history.answeredRange', {range: answeredRangeLabel(history)})}</span>}</div>
         <ActivitySettings arrange={arrange} />
       </div>
-      {activity?.known && activity.activeMs > 0 && (
-        <div className="activity-totals">
-          <span title={t('activity.agentHoursHint')}>
-            {t('activity.agentHours')} <b>{workHours(activity.agentMs)}</b>
-            {shownMs < activity.agentMs && <span className="activity-since activity-shown">{t('activity.shown', {time: workHours(shownMs)})}</span>}
-          </span>
-          <span title={t('activity.activeHint')}>
-            {t('activity.active')} <b>{workHours(activity.activeMs)}</b>
-          </span>
-          <span title={t('activity.agentsHint')}>
-            {t('activity.agents')} <b>{num(activity.agents)}</b>
-          </span>
-          <span title={t('activity.atOnceHint')}>
-            {t('activity.atOnce')} <b>{atOnce(activity.agentMs, activity.activeMs)}</b>
-          </span>
-          {since !== null && <span className="activity-since">{t('activity.since', {time: stamp(since)})}</span>}
-        </div>
-      )}
+      <Totals activity={activity} shownMs={shownMs} since={since} />
       {empty && !strip ? (
         <div className="chart chart-loading" style={plot === undefined ? undefined : {height: plot}}>
           {empty}
@@ -270,7 +278,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
           />
           <div className="legend">
             {presentation.identities.map(identity => (
-              <LegendItem key={identity.key} group={groups.find(group => group.key === identity.key) ?? null} name={groupName(identity, by, titles)} color={identity.color} muted={!!prefs.muted[mutedKey(by, identity.key)]} onToggle={() => setMuted(mutedKey(by, identity.key), !prefs.muted[mutedKey(by, identity.key)])} />
+              <LegendItem key={identity.key} groupKey={identity.key} by={by} group={groups.find(group => group.key === identity.key) ?? null} name={groupName(identity, by, titles)} color={identity.color} muted={!!prefs.muted[mutedKey(by, identity.key)]} />
             ))}
           </div>
         </>

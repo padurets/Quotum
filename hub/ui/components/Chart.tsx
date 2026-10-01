@@ -1,4 +1,4 @@
-import {Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties} from 'react';
+import {Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement} from 'react';
 import {clock, countdown, countdownChangesAt, num, shortDay, stamp} from '../lib/format';
 import {t, useLocale} from '../i18n';
 import type {PlotBlock, PlotLine as Line} from '../lib/lines';
@@ -292,7 +292,7 @@ export function Chart({
   const tickFrom = strip?.from ?? from, tickTo = strip?.to ?? to;
   const {ticks, daily} = niceTicks(tickFrom, tickTo, (width < 560 ? 4 : 7) * (tickTo - tickFrom) / (basis.to - basis.from));
 
-  const blockPaths = useRef(new Map<PlotBlock, {geometry: string; line: string; last: [number, number] | null}>());
+  const blockPaths = useRef(new Map<PlotBlock, {geometry: string; line: string; last: [number, number] | null; drawn?: {line: string; element: ReactElement}}>());
   const paths = useMemo(
     () => {
       const retained = new Set<PlotBlock>();
@@ -320,7 +320,8 @@ export function Chart({
             }
             const bridge = join && cached.line && last ? `M${last[0].toFixed(1)},${last[1].toFixed(1)}L` + cached.line.slice(1) : cached.line;
             if (cached.last) last = cached.last;
-            return {key: `${block.from}:${block.to}`, line: bridge};
+            if (cached.drawn?.line !== bridge) cached.drawn = {line: bridge, element: <path key={`${block.from}:${block.to}`} d={bridge} className="series" />};
+            return cached.drawn.element;
           });
           return {line: '', last, parts};
         }
@@ -567,7 +568,7 @@ export function Chart({
             })}
             {lines.map((line, i) => (
               <g key={line.key} data-series={`${line.sourceId} ${line.windowId}`} data-last={line.points.filter(p => p[0] <= now).at(-1)?.slice(0, 2).join(':')} stroke={line.color} strokeDasharray={line.dash || undefined}>
-                {paths[i].parts ? paths[i].parts!.map(part => <path key={part.key} d={part.line} className="series" />) : <path d={paths[i].line} className="series" />}
+                {paths[i].parts ?? <path d={paths[i].line} className="series" />}
               </g>
             ))}
             {/* Announcements are read over the lines, each on its own backing. */}
