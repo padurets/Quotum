@@ -333,7 +333,7 @@ export const en = {
   'history.loading': 'Loading history…',
   'history.answeredRange': 'Totals for {range}',
   'history.settings': 'Chart settings',
-  'chart.panHint': 'Swipe sideways or hold Shift with the wheel or a drag to move through time. Drag without Shift to select a range.',
+  'chart.panHint': 'Swipe sideways or hold Shift with the wheel or a drag to move through time. Release Shift to finish scrolling. Drag without Shift to select a range.',
   'history.horizon': 'Look ahead',
   'history.horizonAuto': 'auto',
   'history.horizonNote': 'With the plan or the forecast on the chart',

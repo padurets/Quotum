@@ -147,3 +147,66 @@ test('final geometry is delivered before the URL commit, including an input not 
   assert.deepEqual(order, ['prepared']);
   assert.equal(s.commits.length, 1);
 });
+
+test('Shift-wheel retains its scale across pauses and commits only on releasing Shift', () => {
+  const s = setup();
+  s.pan.setShift(true);
+  s.pan.wheel({...s.start, span: 2 * DAY}, {...wheel(1_000), shiftKey: true});
+  s.paint();
+  const first = s.pan.get()!;
+  s.pan.wheel({...s.start, span: DAY, width: 1_000}, {...wheel(1_500), shiftKey: true});
+  s.paint();
+  assert.equal(s.pan.get()!.token, first.token);
+  assert.equal(first.originEnd - first.to, first.to - s.pan.get()!.to);
+  assert.equal(s.timers.size + s.commits.length, 0);
+  s.pan.setShift(false);
+  assert.equal(s.commits.length, 1);
+  assert.equal(s.pan.active(), null);
+});
+
+test('Shift selects chart input immediately after a vertical page wheel', () => {
+  const s = setup();
+  assert.equal(s.pan.wheel(s.start, {...wheel(1_000, 0), deltaY: -12}), false);
+  s.pan.setShift(true);
+  assert.equal(s.pan.wheel(s.start, {...wheel(1_016, 0), deltaY: -12, shiftKey: true}), true);
+  s.paint();
+  assert.equal(s.pan.get()!.to, s.now - 12 * DAY / 500);
+  s.pan.setShift(false);
+  assert.equal(s.commits.length, 1);
+});
+
+test('Shift-wheel return and cancellation never add an address entry on key release', () => {
+  for (const cancel of [false, true]) {
+    const s = setup();
+    s.pan.wheel(s.start, {...wheel(1_000), shiftKey: true});
+    if (cancel) s.pan.cancel();
+    else s.pan.wheel(s.start, {...wheel(1_500, 12), shiftKey: true});
+    s.clock(DAY);
+    s.pan.setShift(false);
+    assert.equal(s.commits.length + s.timers.size + s.frames.size, 0);
+  }
+});
+
+test('a pointer can continue a held Shift-wheel transaction and release it once', () => {
+  const s = setup();
+  s.pan.wheel(s.start, {...wheel(1_000), shiftKey: true});
+  s.paint();
+  const token = s.pan.get()!.token;
+  assert.equal(s.pan.begin(s.start), token);
+  s.pan.move(token, -12);
+  s.pan.setShift(false);
+  assert.equal(s.pan.active(), token, 'pointer capture remains latched');
+  s.pan.finish(token);
+  assert.equal(s.commits.length, 1);
+  assert.equal(s.commits[0]!.to, s.now - 24 * DAY / 500);
+});
+
+test('browser wheel properties on its prototype survive modifier normalization', () => {
+  const s = setup();
+  const event = Object.create({...wheel(1_000), shiftKey: true}) as ReturnType<typeof wheel>;
+  assert.equal(s.pan.wheel(s.start, event), true);
+  s.paint();
+  assert.equal(s.pan.get()!.to, s.now - 12 * DAY / 500);
+  s.pan.setShift(false);
+  assert.equal(s.commits.length, 1);
+});

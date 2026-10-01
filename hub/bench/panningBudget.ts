@@ -5,7 +5,7 @@ export type PanReading = {
   frames: number[]; latency: number[]; inputs: number; updated: number;
   peakFlights: number; maxTiles: number; duplicateReads: number;
   pushesDuring: number; pushesAfter: number; expectedPushes: number;
-  forbiddenMutations: number; coldReads: number; undimmed: boolean;
+  forbiddenMutations: number; coldReads: number; undimmed: boolean; sizeStable: boolean;
   segments?: Record<string, {count: number; p95: number; max: number}>;
   outliers?: {ms: number; segment: string; pending: number; requests: number}[];
 };
@@ -22,5 +22,6 @@ export function panningProblems(reading: PanReading): string[] {
   if (reading.pushesDuring || reading.pushesAfter !== reading.expectedPushes) found.push('panning did not commit exactly once per completed changed gesture');
   if (reading.forbiddenMutations) found.push('panning changed cards, header, agents, table or activity totals while moving');
   if (!reading.undimmed || !reading.coldReads) found.push('panning did not exercise an undimmed unread edge');
+  if (!reading.sizeStable) found.push('panning resized a chart while moving or completing its range');
   return found;
 }

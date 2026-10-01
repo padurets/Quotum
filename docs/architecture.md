@@ -800,7 +800,13 @@ The future moves with the strip during the gesture, then folds away over 160 ms 
 release in the past, or unfolds on returning to live. Reduced motion skips this final
 transition. Release within eight source pixels of now restores the chosen live preset.
 One changed gesture creates one address entry; cancellation or returning to the exact
-origin creates none. The wheel ends after a 200 ms pause and has no added inertia.
+origin creates none. A horizontal wheel ends after a 200 ms pause. Shift-wheel keeps
+one captured scale across pauses and ends when Shift is released, like a held drag;
+a pointer can continue that transaction. Neither adds inertia. Holding Shift hides
+chart and activity-legend readouts even before movement starts. The plot and legend
+keep their height through the gesture, final fold and resulting range; extra legend
+entries scroll inside. Ordinary range navigation or a layout/language change measures
+them again. Changing the time frame by hand therefore cannot resize the chart.
 
 While panning, the history store keeps the previous complete answer for the table,
 activity totals and legend numbers. A separate bounded plot buffer decodes the same

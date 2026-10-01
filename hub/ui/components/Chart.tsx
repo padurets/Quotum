@@ -381,7 +381,7 @@ export const Chart = memo(function Chart({
   const {shown: past, more} = edgeFit(announced.length, beyond, Math.floor((height - top - bottom - 26) / LABEL_STEP) + 1);
   /** A label past the right edge pointed at or tapped: the tooltip tells its time instead of the cell's values, or theirs. */
   const [edge, setEdge] = useState<{key: string; tapped: boolean} | null>(null);
-  const edgeMarkers = !edge ? [] : edge.key === MORE ? more : past.filter(m => m.key === edge.key);
+  const edgeMarkers = panning || !edge ? [] : edge.key === MORE ? more : past.filter(m => m.key === edge.key);
   const edgeKey = edgeMarkers.length ? edge!.key : null;
   // A label taken away under the pointer (a step to a range, which has no future) says nothing
   // of it: what it told is forgotten, so the tooltip reads the cells again.

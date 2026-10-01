@@ -1,4 +1,5 @@
 import {memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState} from 'react';
+import {createPortal} from 'react-dom';
 import type {Activity as ActivityData, ActivityDimension, ActivityGroup} from '../lib/types';
 import {clock, num, shortDay, stamp, workHours} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
@@ -13,7 +14,7 @@ import {useHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
 import {plotBar, plotGroups, type PlotBuffer, type PlotGroup} from '../lib/historyPlot';
 import {groupRegistry, type GroupIdentity} from '../lib/plotRegistry';
 import {StackPaths} from '../lib/stackPaths';
-import {pan, usePanning} from '../lib/pan';
+import {pan, usePanning, useShifting} from '../lib/pan';
 import {targetOf, cellStart} from '../../server/domain/history';
 import {colorOf} from '../lib/view';
 import {t, useLocale, type Key} from '../i18n';
@@ -74,6 +75,7 @@ function Metrics({agentMs, activeMs, agents, shownMs}: {agentMs: number; activeM
 /** Hover and touch state belong to one legend entry, leaving the stacks untouched. */
 const LegendItem = memo(function LegendItem({group, groupKey, by, name, color, muted}: {group: ActivityGroup | null; groupKey: string; by: ActivityDimension; name: string; color: string; muted: boolean}) {
   useLocale();
+  const shifting = useShifting();
   const id = useId();
   const button = useRef<HTMLButtonElement>(null);
   const wrap = useRef<HTMLDivElement>(null);
@@ -81,8 +83,9 @@ const LegendItem = memo(function LegendItem({group, groupKey, by, name, color, m
   const [focused, setFocused] = useState(false);
   const [pinned, setPinned] = useState(0);
   const [dismissed, setDismissed] = useState(false);
-  const active = !dismissed && (hovered || focused || pinned > 0);
-  const tip = useBubble(active, button);
+  const active = !shifting && !dismissed && (hovered || focused || pinned > 0);
+  const container = button.current?.closest<HTMLElement>('.activity');
+  const tip = useBubble(active, button, container);
   useEffect(() => {
     if (!active) return;
     // A bubble opened by the pointer must dismiss even while another control has focus.
@@ -107,10 +110,23 @@ const LegendItem = memo(function LegendItem({group, groupKey, by, name, color, m
       removeEventListener('pointerdown', outside);
     };
   }, [pinned]);
+  const bubble = (
+    <span
+      ref={tip}
+      id={id}
+      role="tooltip"
+      className={`activity-legend-tip glass ${active ? 'is-open' : ''}`}
+      onPointerDown={event => event.stopPropagation()}
+      onClick={event => event.stopPropagation()}
+    >
+      <span className="tooltip-time">{name}</span>
+      {group ? <Metrics agentMs={group.agentMs} activeMs={group.activeMs} agents={group.agents} /> : <span>{t('activity.pendingRange')}</span>}
+    </span>
+  );
   return (
     <div
       ref={wrap}
-      className="activity-legend-item"
+      className={`activity-legend-item ${active ? 'is-open' : ''}`}
       onPointerEnter={event => {
         if (event.pointerType !== 'touch') {
           setHovered(true);
@@ -144,17 +160,7 @@ const LegendItem = memo(function LegendItem({group, groupKey, by, name, color, m
         <span>{name}</span>
         <b>{group ? workHours(group.agentMs) : '—'}</b>
       </button>
-      <span
-        ref={tip}
-        id={id}
-        role="tooltip"
-        className={`activity-legend-tip glass ${active ? 'is-open' : ''}`}
-        onPointerDown={event => event.stopPropagation()}
-        onClick={event => event.stopPropagation()}
-      >
-        <span className="tooltip-time">{name}</span>
-        {group ? <Metrics agentMs={group.agentMs} activeMs={group.activeMs} agents={group.agents} /> : <span>{t('activity.pendingRange')}</span>}
-      </span>
+      {container ? createPortal(bubble, container) : bubble}
     </div>
   );
 });

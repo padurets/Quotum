@@ -8,7 +8,7 @@ export type Swipe = {axis: 'x' | 'y' | null; last: number};
 
 export const SWIPE: Swipe = {axis: null, last: -Infinity};
 
-/** A pause this long ends a gesture. */
+/** A pause this long releases the axis lock and ends a wheel without held Shift. */
 export const WHEEL_END_MS = 200;
 /** Pixels in a line and a page of a wheel that counts in those (`deltaMode` 1 and 2). */
 const SCALE = [1, 16, 400];

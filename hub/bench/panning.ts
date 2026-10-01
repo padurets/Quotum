@@ -39,7 +39,8 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
       })()`);
       await cdp.evaluate(`(() => {
         const root=document.querySelector('.history .chart>svg');
-        const probe=window.__quotumPan={frames:[],latency:[],inputs:0,updated:0,pending:[],last:0,pushesDuring:0,pushesAfter:0,forbiddenMutations:0,undimmed:getComputedStyle(root).opacity==='1',coldReads:0,peakFlights:0,maxTiles:0,duplicateReads:0,flights:new Map(),running:true,feeding:false,segment:'wheel',samples:[]};
+        const charts=[root,document.querySelector('.activity .chart>svg')],size=svg=>svg.getAttribute('viewBox')+':'+svg.style.height,sizes=charts.map(size);
+        const probe=window.__quotumPan={frames:[],latency:[],inputs:0,updated:0,pending:[],last:0,pushesDuring:0,pushesAfter:0,forbiddenMutations:0,undimmed:getComputedStyle(root).opacity==='1',sizeStable:true,coldReads:0,peakFlights:0,maxTiles:0,duplicateReads:0,flights:new Map(),running:true,feeding:false,segment:'wheel',samples:[]};
         const originalPush=history.pushState.bind(history);probe.originalPush=originalPush;
         history.pushState=(...args)=>{if(probe.feeding)probe.pushesDuring++;else probe.pushesAfter++;originalPush(...args);};
         const input=e=>{if(e.type==='wheel'&&(!e.cancelable||(!e.deltaX&&!e.shiftKey)))return;if(e.type==='pointermove'&&!e.buttons)return;probe.inputs++;const at=e.timeStamp>1e12?e.timeStamp-performance.timeOrigin:e.timeStamp;probe.pending.push(Math.min(performance.now(),at));};
@@ -60,6 +61,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
         const tick=()=>{
           if(!probe.running)return;
           const now=performance.now(),layer=root.querySelector('.slides'),active=!!root.dataset.panEnd,folding=!active&&layer.getAnimations().some(a=>a.playState==='running');
+          probe.sizeStable&&=charts.every((svg,i)=>svg.isConnected&&size(svg)===sizes[i]);
           const transform=active?layer.style.transform:folding?getComputedStyle(layer).transform:'none',matrix=new DOMMatrix(transform&&transform!=='none'?transform:undefined),current=matrix.e+':'+matrix.a;
           const nextPhase=active?'pan':folding?'fold':'idle';
           // The wheel's intentional 200 ms rest is stationary, before the fold begins.
@@ -114,15 +116,27 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
         document.querySelector('.history .chart>svg').removeEventListener('wheel',p.input,true);document.querySelector('.history .chart>svg').removeEventListener('pointermove',p.input,true);
         window.fetch=p.originalFetch;history.pushState=p.originalPush;
         const segments={};for(const segment of ['wheel','drag','return','fold']){const values=p.samples.filter(s=>s.segment===segment).map(s=>s.ms).sort((a,b)=>a-b);segments[segment]={count:values.length,p95:values[Math.ceil(values.length*.95)-1]??0,max:values.at(-1)??0};}
-        return {frames:p.frames,latency:p.latency,inputs:p.inputs,updated:p.updated,pushesDuring:p.pushesDuring,pushesAfter:p.pushesAfter,forbiddenMutations:p.forbiddenMutations,undimmed:p.undimmed,coldReads:p.coldReads,peakFlights:p.peakFlights,maxTiles:p.maxTiles,duplicateReads:p.duplicateReads,segments,outliers:p.samples.filter(s=>s.ms>50)};
+        return {frames:p.frames,latency:p.latency,inputs:p.inputs,updated:p.updated,pushesDuring:p.pushesDuring,pushesAfter:p.pushesAfter,forbiddenMutations:p.forbiddenMutations,undimmed:p.undimmed,sizeStable:p.sizeStable,coldReads:p.coldReads,peakFlights:p.peakFlights,maxTiles:p.maxTiles,duplicateReads:p.duplicateReads,segments,outliers:p.samples.filter(s=>s.ms>50)};
       })()`);
       report.period = period; report.series = geometry.series; report.charts = geometry.charts; report.rate = 4; report.expectedPushes = 3;
       reports.push(report);
       await cdp.send('Emulation.setCPUThrottlingRate', {rate: 1});
       const live = await cdp.evaluate<boolean>(`!new URLSearchParams(location.search).has('from')`);
       if (!live) throw new Error(`${period} pan did not return to live`);
-      // Native Shift deltaX at the live bound is owned but remains a no-op.
-      await wheel(12, true); await wait(240);
+      // Held Shift-wheel has the same uninterrupted scale as dragging, across rests.
+      await mouse('mouseMoved', geometry.x, geometry.y);
+      await key(true, 'Shift', 16);
+      await wait(30);
+      if (await cdp.evaluate<boolean>(`!!document.querySelector('.history .tooltip,.activity .tooltip,.activity-legend-tip.is-open')`)) throw new Error('holding Shift left a chart readout visible');
+      await wheel(-12, true); await wait(300);
+      const first = await cdp.evaluate<number>(`new DOMMatrix(document.querySelector('.history .slides').style.transform).e`);
+      if (!(await cdp.evaluate<boolean>(`!!document.querySelector('[data-pan-end]')&&!new URLSearchParams(location.search).has('from')`))) throw new Error('Shift-wheel committed before Shift was released');
+      await wheel(-12, true); await wait(240);
+      const second = await cdp.evaluate<number>(`new DOMMatrix(document.querySelector('.history .slides').style.transform).e`);
+      if (!Number.isFinite(first) || first <= 0 || Math.abs(second - 2 * first) > .01) throw new Error('Shift-wheel changed its scale during a pause');
+      await wheel(24, true); await wait(40);
+      await key(false, 'Shift', 16); await wait(240);
+      if (!(await cdp.evaluate<boolean>(`!document.querySelector('[data-pan-end]')&&!new URLSearchParams(location.search).has('from')`))) throw new Error('Shift-wheel return did not preserve live');
       await cdp.evaluate(`history.back()`); await wait(300);
       if (!(await cdp.evaluate<boolean>(`new URLSearchParams(location.search).has('from')`))) throw new Error('Back did not restore the whole previous gesture');
       await cdp.evaluate(`history.forward()`); await wait(300);

@@ -12,12 +12,12 @@ export type PanFrame = TimeRange & {
   length: number;
   direction: -1 | 0 | 1;
   source: symbol;
-  input: 'wheel' | 'pointer';
+  input: 'wheel' | 'shift-wheel' | 'pointer';
   lookAhead: number;
 };
 export type PanStart = {
   source: symbol;
-  input: 'wheel' | 'pointer';
+  input: 'wheel' | 'shift-wheel' | 'pointer';
   selected: TimeRange | null;
   length: number;
   now: number;
@@ -47,6 +47,7 @@ export class Pan {
   private raf: unknown = null;
   private timer: unknown = null;
   private swipe: Swipe = SWIPE;
+  private shift = false;
   private readonly listeners = new Set<() => void>();
   private readonly phaseListeners = new Set<() => void>();
   private readonly stopListeners = new Set<(stop: PanStop) => void>();
@@ -55,19 +56,40 @@ export class Pan {
   constructor(private readonly env: PanEnv) {}
   get = () => this.state;
   active = () => this.draft?.token ?? null;
+  shifting = () => this.shift;
   subscribe = (listener: () => void) => {this.listeners.add(listener); return () => void this.listeners.delete(listener);};
   onPhase = (listener: () => void) => {this.phaseListeners.add(listener); return () => void this.phaseListeners.delete(listener);};
   /** Visual consumers prepare their final geometry before the address can render it. */
   onStop = (listener: (stop: PanStop) => void) => {this.stopListeners.add(listener); return () => void this.stopListeners.delete(listener);};
   get input() {return this.draft?.input ?? null;}
   get source() {return this.draft?.source ?? null;}
+  setShift(held: boolean) {
+    if (held === this.shift) return;
+    this.shift = held;
+    this.swipe = SWIPE;
+    if (held && this.draft?.input === 'wheel') {
+      this.draft = {...this.draft, input: 'shift-wheel'};
+      if (this.state) this.state = {...this.state, input: 'shift-wheel'};
+      if (this.timer !== null) this.env.clearTimeout(this.timer);
+      this.timer = null;
+    } else if (!held && this.draft?.input === 'shift-wheel') this.finish(this.draft.token);
+    this.phase();
+  }
   register(source: symbol, geometry: () => {end: number; future: number}) {
     this.charts.set(source, geometry);
     return () => {if (this.source === source) this.cancel(); this.charts.delete(source);};
   }
 
   begin(start: PanStart): number | null {
-    if (this.draft || start.width <= 0 || start.span <= 0) return null;
+    if (start.width <= 0 || start.span <= 0) return null;
+    if (this.draft?.input === 'shift-wheel' && start.input === 'pointer') {
+      this.scale = start.span / start.width;
+      this.draft = {...this.draft, source: start.source, input: 'pointer'};
+      if (this.state) this.state = {...this.state, source: start.source, input: 'pointer'};
+      this.notify();
+      return this.draft.token;
+    }
+    if (this.draft) return null;
     const geometries = [...this.charts.values()].map(read => read());
     const now = Math.max(start.now, ...geometries.map(g => g.end));
     const end = start.selected?.to ?? now;
@@ -99,15 +121,17 @@ export class Pan {
 
   wheel(start: Omit<PanStart, 'input'> | (() => Omit<PanStart, 'input'>), event: Parameters<typeof swiped>[1]): boolean {
     if (this.input === 'pointer') return false;
-    const result = swiped(this.swipe, event);
-    if (result.ended && this.draft) this.finish(this.draft.token);
+    if (event.shiftKey && event.cancelable) this.setShift(true);
+    const shifted = this.shift || event.shiftKey;
+    const result = swiped(this.swipe, {deltaX: event.deltaX, deltaY: event.deltaY, deltaMode: event.deltaMode, cancelable: event.cancelable, timeStamp: event.timeStamp, shiftKey: shifted});
+    if (result.ended && this.draft && this.input !== 'shift-wheel') this.finish(this.draft.token);
     this.swipe = result.state;
     if (!result.own) return false;
-    const token = this.draft?.token ?? this.begin({...typeof start === 'function' ? start() : start, input: 'wheel'});
+    const token = this.draft?.token ?? this.begin({...typeof start === 'function' ? start() : start, input: shifted ? 'shift-wheel' : 'wheel'});
     if (token === null) return false;
     this.move(token, result.delta);
     if (this.timer !== null) this.env.clearTimeout(this.timer);
-    this.timer = this.env.setTimeout(() => this.finish(token), WHEEL_END_MS);
+    this.timer = shifted ? null : this.env.setTimeout(() => this.finish(token), WHEEL_END_MS);
     return true;
   }
 
@@ -161,14 +185,16 @@ export const pan = new Pan({
 });
 /** Plot hooks hear the phase only; the small period label may read each drawn frame. */
 export const usePanning = () => useSyncExternalStore(pan.onPhase, pan.active, pan.active);
+export const useShifting = () => useSyncExternalStore(pan.onPhase, pan.shifting, pan.shifting);
 export const usePanFrame = () => useSyncExternalStore(pan.subscribe, pan.get, pan.get);
 
 if (typeof window !== 'undefined') {
   const cancel = () => pan.cancel();
-  addEventListener('blur', cancel);
+  addEventListener('blur', () => {cancel(); pan.setShift(false);});
   addEventListener('popstate', cancel);
-  addEventListener('keydown', event => {if (event.key === 'Escape') cancel();});
-  document.addEventListener('visibilitychange', () => {if (document.hidden) cancel();});
+  addEventListener('keydown', event => {pan.setShift(event.shiftKey); if (event.key === 'Escape') cancel();});
+  addEventListener('keyup', event => pan.setShift(event.shiftKey));
+  document.addEventListener('visibilitychange', () => {if (document.hidden) {cancel(); pan.setShift(false);}});
   onTimeRange(cancel);
   let context = prefs();
   onPrefs(() => {

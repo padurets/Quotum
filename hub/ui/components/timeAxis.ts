@@ -1,7 +1,7 @@
 import {useEffect, useId, useLayoutEffect, useRef, useState, type PointerEvent} from 'react';
 import {hubNow} from '../lib/clock';
 import {draggedRange, timeRange, type TimeRange} from '../lib/timeRange';
-import {pan, usePanning, type PanStart, type PanStop} from '../lib/pan';
+import {pan, usePanning, useShifting, type PanStart, type PanStop} from '../lib/pan';
 import {prefs} from '../lib/prefs';
 import {periodOf} from '../lib/periods';
 import {useHistoryBegins} from '../lib/history';
@@ -35,7 +35,8 @@ export function slideOf(before: {from: number; end: number}, after: {from: numbe
  * A mouse or a pen drags a range across it at once, as in Grafana; a finger sliding along
  * it reads its cells, and held still for a moment starts a range instead. A swipe sideways
  * on a touchpad, Shift with the wheel, or Shift-drag pans both charts through one shared
- * transaction. Its `.slides` layers move within the plot's clip. After an arrow step
+ * transaction. Holding Shift also hides readouts before movement starts. Its `.slides`
+ * layers move within the plot's clip. After an arrow step
  * they slide in from the side it came from. `end` is where
  * measurements end. A label telling a time (`.is-pointed`) is read, not dragged from.
  */
@@ -66,6 +67,7 @@ export function useTimeAxis({
   const foldTicket = useRef(0);
   const source = useRef(Symbol('chart'));
   const panning = usePanning();
+  const shifting = useShifting();
   const historyStart = useHistoryBegins();
   const panPointer = useRef<{token: number; id: number; x: number; left: number; width: number} | null>(null);
   const captured = useRef<{token: number; from: number; to: number; end: number} | null>(null);
@@ -220,9 +222,9 @@ export function useTimeAxis({
   // After a step the pointer stands over another time: the chart reads that.
   useEffect(() => {
     const px = pointer.current;
-    if (!panning && !folding && px !== null && px >= left && px <= width - right) setHover(Math.floor(timeAt(px) / cellMs) * cellMs);
+    if (!shifting && !panning && !folding && px !== null && px >= left && px <= width - right) setHover(Math.floor(timeAt(px) / cellMs) * cellMs);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [from, to, cellMs, panning, folding]);
+  }, [from, to, cellMs, shifting, panning, folding]);
 
   const toChart = (event: PointerEvent<SVGSVGElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -238,7 +240,7 @@ export function useTimeAxis({
     }
     const px = toChart(event);
     pointer.current = px;
-    if (panning || folding) return;
+    if (panning || folding || (shifting && !drag)) return;
     const held = holding.current;
     // A finger that moves before the hold is up reads the cells instead.
     if (held && Math.abs(px - held.px) > 8) cancelHold();
@@ -351,5 +353,5 @@ export function useTimeAxis({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [from, end, to, panning]);
 
-  return {box, svg, width, scale, hover: panning || folding ? null : hover, drag, x, drawX, timeAt, clip, handlers, basis, panning: panning !== null || folding};
+  return {box, svg, width, scale, hover: shifting || panning || folding ? null : hover, drag, x, drawX, timeAt, clip, handlers, basis, panning: shifting || panning !== null || folding};
 }
