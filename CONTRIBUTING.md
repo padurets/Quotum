@@ -124,6 +124,9 @@ credentials. A failed build leaves an earlier live stand available.
 Successful builds freeze the server, demo source and supervisor together. Later source
 edits enter a new build, and managed data is removed only by the controller after its
 ownership check. A directory supplied to the standalone demo remains caller-owned.
+The launcher records supervisor ownership before authorizing startup. An interrupted
+registration cannot start a backend later; an already registered process remains
+available to verified cleanup after its launcher exits.
 
 The optional `DEV_ACCESS=coder` profile requires `PUBLIC_DOMAIN` and the workspace/agent
 metadata in the example (the agent environment may supply them). It verifies that

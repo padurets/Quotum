@@ -505,6 +505,107 @@ test('orphaned child group is recovered after supervisor death', async t => {
   assert.equal(await portFree(port), true);
 });
 
+test('caller death before supervisor registration cannot resurrect a completed down', async t => {
+  const {ctx, base} = fixture(t);
+  standIn(ctx);
+  const port = await freeBase();
+  const gate = path.join(base, 'supervisor-held');
+  const release = path.join(base, 'supervisor-release');
+  const controller = path.join(base, 'gated-serve.mjs');
+  writeFileSync(controller, `import fs from 'node:fs';
+import {syncBuiltinESMExports} from 'node:module';
+const read=fs.readFileSync;
+let held=false;
+fs.readFileSync=(file,...args)=>{
+ if(!held && file===\`/proc/\${process.pid}/stat\`){
+  held=true;fs.writeFileSync(${JSON.stringify(gate)},String(process.pid));
+  while(!fs.existsSync(${JSON.stringify(release)}))Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);
+ }
+ return read(file,...args);
+};
+syncBuiltinESMExports();
+await import(${JSON.stringify(new URL('../serve.mjs', import.meta.url).href)});
+`);
+  const callerFile = path.join(base, 'caller.mjs');
+  writeFileSync(callerFile, `import path from 'node:path';
+import {context,locked} from ${JSON.stringify(new URL('../system.mjs', import.meta.url).href)};
+import {config,allocate} from ${JSON.stringify(new URL('../config.mjs', import.meta.url).href)};
+import {start} from ${JSON.stringify(new URL('../runtime.mjs', import.meta.url).href)};
+const ctx=context(process.argv[2]);
+await locked(path.join(ctx.shared,ctx.id+'.lock'),async()=>{
+ const c=config(ctx.root,{DEV_MODE:'hub',DEV_PORT_START:process.argv[3]});
+ const port=await allocate(ctx,c,null);
+ await start(ctx,c,port,{inputs:'registration-fixture',output:'fixture',controller:process.argv[4]});
+});
+
+`);
+  const caller = spawn(process.execPath, [callerFile, ctx.root, String(port), controller], {env: isolatedEnv(), stdio: 'ignore'});
+  const exited = new Promise(resolve => caller.once('exit', (code, signal) => resolve({code, signal})));
+  let supervisor;
+  try {
+    for (let i = 0; i < 1000 && !existsSync(gate); i++) await sleep(10);
+    assert.equal(existsSync(gate), true);
+    supervisor = processOf(Number(readFileSync(gate, 'utf8')));
+    assert.ok(supervisor);
+    const starting = readJson(ctx.record);
+    assert.equal(starting.status, 'starting');
+    assert.equal(starting.supervisor, undefined);
+    caller.kill('SIGKILL');
+    assert.equal((await exited).signal, 'SIGKILL');
+    await command('down', ctx.root);
+    assert.equal(readJson(ctx.record).status, 'stopped');
+    assert.equal(await portFree(port), true);
+    writeFileSync(release, 'continue');
+    for (let i = 0; i < 1000 && processOf(supervisor.pid); i++) await sleep(10);
+    assert.equal(processOf(supervisor.pid), null);
+    assert.equal(readJson(ctx.record).instance, starting.instance);
+    assert.equal(readJson(ctx.record).status, 'stopped');
+    assert.equal(await portFree(port), true);
+    assert.equal(readJson(path.join(ctx.local, 'lease.json')).initial, true);
+  } finally {
+    writeFileSync(release, 'continue');
+    if (caller.exitCode === null && caller.signalCode === null) { caller.kill('SIGKILL'); await exited; }
+    if (supervisor && processOf(supervisor.pid)?.start === supervisor.start) {
+      saveJson(ctx.record, {...readJson(ctx.record), supervisor});
+      await stop(ctx);
+    }
+  }
+});
+
+test('caller death after durable registration but before authorization remains recoverable', async t => {
+  const {ctx, base} = fixture(t);
+  standIn(ctx);
+  const port = await freeBase();
+  const callerFile = path.join(base, 'registered-caller.mjs');
+  writeFileSync(callerFile, `import fs from 'node:fs';
+import path from 'node:path';
+import {syncBuiltinESMExports} from 'node:module';
+const {context,locked}=await import(${JSON.stringify(new URL('../system.mjs', import.meta.url).href)});
+const ctx=context(process.argv[2]);
+const rename=fs.renameSync;
+fs.renameSync=(a,b)=>{rename(a,b);if(b===ctx.record && JSON.parse(fs.readFileSync(b,'utf8')).supervisor)process.kill(process.pid,'SIGKILL')};
+syncBuiltinESMExports();
+const {config,allocate}=await import(${JSON.stringify(new URL('../config.mjs', import.meta.url).href)});
+const {start}=await import(${JSON.stringify(new URL('../runtime.mjs', import.meta.url).href)});
+await locked(path.join(ctx.shared,ctx.id+'.lock'),async()=>{
+ const c=config(ctx.root,{DEV_MODE:'hub',DEV_PORT_START:process.argv[3]});
+ const port=await allocate(ctx,c,null);
+ await start(ctx,c,port,{inputs:'registered-fixture',output:'fixture'});
+});
+`);
+  const caller = spawn(process.execPath, [callerFile, ctx.root, String(port)], {env: isolatedEnv(), stdio: 'ignore'});
+  const outcome = await new Promise(resolve => caller.once('exit', (code, signal) => resolve({code, signal})));
+  assert.equal(outcome.signal, 'SIGKILL');
+  const journal = readJson(ctx.record);
+  assert.equal(journal.status, 'starting');
+  assert.ok(journal.supervisor);
+  await command('down', ctx.root);
+  assert.equal(readJson(ctx.record).status, 'stopped');
+  assert.equal(processOf(journal.supervisor.pid), null);
+  assert.equal(await portFree(port), true);
+  assert.equal(readJson(path.join(ctx.local, 'lease.json')).initial, true);
+});
+
 test('transient environ unreadability is retried without weakening ownership verification', async t => {
   const {ctx, state} = await hubStand(t);
   const starting = {...state, status: 'starting', hub: null};

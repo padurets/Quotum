@@ -69,7 +69,7 @@ export function sameProcess(identity) {
   if (!identity) return false;
   return sameIdentity(processOf(identity.pid), identity);
 }
-function sameIdentity(observed, recorded) {
+export function sameIdentity(observed, recorded) {
   return !!observed && !!recorded && ['pid', 'group', 'session', 'start', 'boot'].every(key => observed[key] === recorded[key]);
 }
 export function groupMembers(group) {

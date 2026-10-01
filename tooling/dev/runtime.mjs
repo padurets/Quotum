@@ -5,7 +5,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {externalUrl} from './access.mjs';
 import {assertConfig, configKeys, portFree, savedConfig, validateState} from './config.mjs';
-import {cleanEnv, git, hash, listenerOwned, locked, ownedMembers, processOf, readJson, sameProcess, saveJson, sleep, waitOwnedMembers} from './system.mjs';
+import {cleanEnv, git, hash, listenerOwned, locked, ownedMembers, processOf, readJson, sameIdentity, sameProcess, saveJson, sleep, waitOwnedMembers} from './system.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export function isolatedEnv(env = process.env) {
@@ -192,6 +192,16 @@ export async function start(ctx, c, port, built) {
         reject(Object.assign(new Error(`Stand exited before readiness; inspect ${log}.`), {code: journal?.instance === instance ? journal.failureCode : undefined}));
       });
       child.on('message', message => {
+        if (message.event === 'register') {
+          try {
+            const journal = readJson(ctx.record);
+            const supervisor = processOf(child.pid);
+            if (journal?.instance !== instance || journal.status !== 'starting' || supervisor?.group !== child.pid || !sameIdentity(supervisor, message.supervisor)) throw new Error('Supervisor registration identity changed.');
+            // Record ownership under the caller's operation lock before authorizing startup.
+            saveJson(ctx.record, {...journal, supervisor});
+            child.send({event: 'registered'}, error => { if (error) { clearTimeout(timeout); reject(error); } });
+          } catch (error) { clearTimeout(timeout); reject(error); }
+        }
         if (message.event === 'ready') { clearTimeout(timeout); resolve(); }
         if (message.event === 'failed') { clearTimeout(timeout); reject(Object.assign(new Error(`Stand could not start; inspect ${log}.`), {code: message.code})); }
       });
@@ -199,7 +209,7 @@ export async function start(ctx, c, port, built) {
     if (!(await healthy(readJson(ctx.record)))) throw new Error('Readiness identity/listener check failed.');
     assertConfig(ctx.root, savedConfig(c), port);
   } catch (error) {
-    // The supervisor writes its identity before opening a listener, even if our caller dies.
+    // An unregistered supervisor cannot start; registered ownership survives caller death.
     await sleep(100);
     await stop(ctx);
     throw error;

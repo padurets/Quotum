@@ -1,16 +1,14 @@
 import {spawn} from 'node:child_process';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {listenerOwned, processOf, readJson, saveJson, sleep} from './system.mjs';
+import {listenerOwned, processOf, readJson, sameIdentity, saveJson, sleep} from './system.mjs';
 import {assertConfig} from './config.mjs';
 
 const [root, record, instance] = process.argv.slice(2);
 let state = readJson(record);
 if (state?.root !== root || state.instance !== instance || state.status !== 'starting') throw new Error('Invalid start journal.');
-state.supervisor = processOf(process.pid);
-saveJson(record, state);
-let demo, hub, stopping = false;
-const tell = message => { if (process.connected) process.send(message); };
+let demo, hub, stopping = false, registered = false;
+const tell = message => { if (process.connected) process.send(message, () => {}); };
 const write = updates => {
   if (readJson(record)?.instance !== instance) throw new Error('Instance journal changed.');
   state = {...state, ...updates};
@@ -27,11 +25,31 @@ async function stop(code) {
     await exited;
     clearTimeout(timeout);
   }
-  write({status: 'stopped'});
+  if (registered) write({status: 'stopped'});
   process.exit(code);
 }
 for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, () => void stop(0));
 try {
+  const identity = processOf(process.pid);
+  await new Promise((resolve, reject) => {
+    const finish = error => {
+      clearTimeout(timeout);
+      process.off('message', message);
+      process.off('disconnect', disconnected);
+      if (error) reject(error); else resolve();
+    };
+    const message = value => { if (value.event === 'registered') finish(); };
+    const disconnected = () => finish(new Error('Start caller exited before supervisor registration.'));
+    const timeout = setTimeout(() => finish(new Error('Supervisor registration timed out.')), 10000);
+    process.on('message', message);
+    process.once('disconnect', disconnected);
+    if (!process.connected) disconnected();
+    else process.send({event: 'register', supervisor: identity}, error => { if (error) finish(error); });
+  });
+  state = readJson(record);
+  if (state?.instance !== instance || state.status !== 'starting' || !sameIdentity(state.supervisor, identity)) throw new Error('Supervisor registration was cancelled.');
+  registered = true;
+  if (stopping) process.exit(0);
   if (state.mode === 'demo') {
     const sourceHub = state.build.hub ?? path.join(root, 'hub');
     // tsx's ESM registration API handles the existing demo's TypeScript entrypoint.
@@ -84,7 +102,7 @@ try {
 } catch (error) {
   console.error(error.message);
   const failureCode = /taken|EADDRINUSE|port_in_use/.test(error.message) ? 'PORT_BUSY' : 'START_FAILED';
-  write({failureCode});
+  if (registered) write({failureCode});
   tell({event: 'failed', code: failureCode});
   await stop(1);
 }
