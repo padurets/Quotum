@@ -1,4 +1,4 @@
-import {valueIn, type Line} from './lines';
+import {valueIn, type PlotLine as Line} from './lines';
 import {PLAN_TOLERANCE} from './plan';
 
 /** The spending plan of one weekly window, drawn as a faint dotted line in its colour; `lines` are the keys of the lines it plans. */

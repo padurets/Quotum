@@ -6,6 +6,7 @@ import {goTo, setTimeRange, timeRangeLabel, useTimeRange} from '../lib/timeRange
 import {hubNow, useClock} from '../lib/clock';
 import {useHistoryBegins} from '../lib/history';
 import {t} from '../i18n';
+import {pan, usePanFrame} from '../lib/pan';
 import {Segmented} from './Kit';
 import {Popover} from './Popover';
 
@@ -48,12 +49,14 @@ const ChevronIcon = () => (
 function PeriodSwitch({historyStart}: {historyStart: number}) {
   const {range} = usePrefs();
   const selected = useTimeRange();
+  const preview = usePanFrame();
   const now = useClock(now => stepChangesAt(selected, range, now, historyStart));
   const [open, setOpen] = useState(false);
   const group = useRef<HTMLDivElement>(null);
   // A choice closes the list, or takes away the range's own button: focus goes to the list's button.
   const refocus = () => requestAnimationFrame(() => group.current?.querySelector<HTMLButtonElement>('.picker > button')?.focus());
   const choose = (id: string) => {
+    pan.cancel();
     setOpen(false);
     if (selected) setTimeRange(null);
     setPrefs({range: id});
@@ -64,6 +67,7 @@ function PeriodSwitch({historyStart}: {historyStart: number}) {
   // An arrow that has taken the chart as far as it goes turns off, and focus would fall to
   // the page: it goes to the list's button instead.
   const go = (direction: -1 | 1) => {
+    pan.cancel();
     const at = hubNow();
     const next = step(selected, range, direction, at, historyStart);
     goTo(next);
@@ -77,7 +81,7 @@ function PeriodSwitch({historyStart}: {historyStart: number}) {
         onOpenChange={setOpen}
         trigger={
           <span className="period-name">
-            <span>{selected ? timeRangeLabel(selected) : periodLabel(periodOf(range))}</span>
+            <span>{preview ? timeRangeLabel(preview) : selected ? timeRangeLabel(selected) : periodLabel(periodOf(range))}</span>
             <ChevronIcon />
           </span>
         }
@@ -112,6 +116,7 @@ function PeriodSwitch({historyStart}: {historyStart: number}) {
           aria-label={t('history.rangeClear')}
           title={t('history.rangeClear')}
           onClick={() => {
+            pan.cancel();
             setTimeRange(null);
             refocus();
           }}

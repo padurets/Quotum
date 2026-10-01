@@ -8,12 +8,13 @@ import {HORIZONS, setMuted, setPrefs, usePrefs} from '../lib/prefs';
 import {goTo, setTimeRange, useTimeRange} from '../lib/timeRange';
 import {frameChangesAt, frameOf, measuredTo, step} from '../lib/periods';
 import {HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
-import {chartEvents, chartResets, linesOf} from '../lib/lines';
+import {chartEvents, chartResets, linesOf, type PlotLine} from '../lib/lines';
+import {lineRegistry} from '../lib/plotRegistry';
 import {Chart, type Marker} from './Chart';
 import {chartMoments, lastRunOut, type ForecastLine, type PlanLine} from '../lib/readout';
 import {useForecastsOf, useLineup, useNamed, usePastResets, useResetNews, useResetsFor} from '../lib/board';
 import {hubNow, useClock} from '../lib/clock';
-import {useHistory, useHistoryBegins} from '../lib/history';
+import {useHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
 import {t, useLocale} from '../i18n';
 import {Segmented} from './Kit';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
@@ -29,6 +30,7 @@ function HistorySettings({arrange, planAvailable, forecastAvailable, horizonNote
   const {horizon, showPlan, showForecast} = usePrefs();
   return (
     <Popover label={t('history.settings')} icon={<SlidersIcon />}>
+      <div className="popover-note">{t('chart.panHint')}</div>
       {(planAvailable || forecastAvailable) && (
         <div className="popover-section">
           <div className="popover-title">{t('history.show')}</div>
@@ -71,6 +73,8 @@ function HistorySettings({arrange, planAvailable, forecastAvailable, horizonNote
  */
 export const History = memo(function History({arrange}: {arrange: Arrange}) {
   const {history, loading} = useHistory();
+  const strip = useHistoryPlot();
+  const registry = useRef<{token: number; seed: PlotLine[]; lines: PlotLine[]} | null>(null);
   const panel = useRef<HTMLElement>(null);
   // Made taller by its owner, the widget gives the room to the plot, not to empty space under the legend.
   const {plot, onBase} = usePlot(panel);
@@ -91,7 +95,14 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
   const codex = useResetsFor('codex');
   const past = usePastResets();
 
-  const lines = useMemo(() => linesOf(history, sources, view, prefs.kind), [history, sources, prefs.kind, view.windows, view.hidden, view.colors, locale]);
+  const answered = useMemo(() => linesOf(history, sources, view, prefs.kind), [history, sources, prefs.kind, view.windows, view.hidden, view.colors, locale]);
+  const lines = useMemo(() => {
+    if (!strip) {registry.current = null; return answered;}
+    if (registry.current?.token !== strip.token) registry.current = {token: strip.token, seed: answered, lines: answered};
+    const state = registry.current;
+    state.lines = lineRegistry(state.seed, state.lines, linesOf(strip, sources, view, prefs.kind));
+    return state.lines;
+  }, [strip, answered, sources, view, prefs.kind, locale]);
 
   const visible = useMemo(() => lines.filter(line => !prefs.muted[line.key]), [lines, prefs.muted]);
   const historyStart = useHistoryBegins();
@@ -154,7 +165,7 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
       list.push({key, at: live.resetAt, label: t('chart.reset', {source: source ? sourceLabel(source) : line.provider}), color: line.color});
     }
     // What happened to the sources on the chart: their limits came back early, or free resets were granted.
-    for (const {event, lines: shown} of chartEvents(history?.events ?? [], visible, from)) {
+    for (const {event, lines: shown} of chartEvents(strip?.events ?? history?.events ?? [], visible, strip?.from ?? from)) {
       const source = sources.find(s => s.id === event.sourceId);
       const name = source ? sourceLabel(source) : shown[0].provider;
       list.push({
@@ -177,7 +188,7 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
       });
     }
     return list;
-  }, [announced, visible, sources, history, past, from, to, measured, view, locale]);
+  }, [announced, visible, sources, history, strip, past, from, to, measured, view, locale]);
 
   // One plan line per distinct weekly window; windows of a source that share a reset
   // (e.g. Claude weekly and Fable) share one plan.
@@ -237,6 +248,7 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
           now={measured}
           to={to}
           cellMs={history.cellMs}
+          strip={strip}
           empty={lines.length ? t('chart.empty') : null}
           onSelect={setTimeRange}
           onStep={direction => goTo(step(selected, prefs.range, direction, hubNow(), historyStart))}

@@ -1,7 +1,7 @@
 import {Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties} from 'react';
 import {clock, countdown, countdownChangesAt, num, shortDay, stamp} from '../lib/format';
 import {t, useLocale} from '../i18n';
-import type {Line} from '../lib/lines';
+import type {PlotLine as Line} from '../lib/lines';
 import {useClock} from '../lib/clock';
 import {gapText, gapTone, readout as readCell, runOutPast, valueAt, type ForecastLine, type PlanLine} from '../lib/readout';
 import type {TimeRange} from '../lib/timeRange';
@@ -9,6 +9,7 @@ import {cellLabel, niceTicks} from '../lib/periods';
 import {coverOf, edgeOf} from '../lib/place';
 import {Tooltip, useTip} from './Tooltip';
 import {useTimeAxis} from './timeAxis';
+import {covered, type PlotBuffer} from '../lib/historyPlot';
 
 /**
  * A moment on the time axis: ahead, a known window reset or an announced extra one;
@@ -254,6 +255,7 @@ export function Chart({
   onStep,
   plot,
   onBase,
+  strip = null,
 }: {
   lines: Line[];
   plans?: PlanLine[];
@@ -272,10 +274,14 @@ export function Chart({
   onStep?: (direction: -1 | 1) => void;
   plot?: number;
   onBase?: (height: number) => void;
+  strip?: PlotBuffer | null;
 }) {
   const left = 40;
   const right = 12;
-  const {box, svg, width, scale, hover, drag, x, timeAt, clip, handlers} = useTimeAxis({from, to, end: now, cellMs, left, right, onSelect, onStep});
+  const axis = useTimeAxis({from, to, end: now, cellMs, left, right, onSelect, onStep});
+  const {box, svg, width, scale, drag, timeAt, clip, handlers, basis, panning} = axis;
+  const x = strip ? axis.drawX : axis.x;
+  const hover = axis.hover !== null && (!strip || axis.hover > now || covered(strip.coverage, axis.hover, axis.hover + cellMs)) ? axis.hover : null;
 
   const base = plotHeight(width);
   const height = plot === undefined ? base : Math.max(base, plot / scale);
@@ -285,7 +291,8 @@ export function Chart({
   /** A cell is drawn at its middle (the last, partial one at "now"). */
   const bx = (cell: number) => x(Math.min(now, cell + cellMs / 2));
   const y = (value: number) => top + (1 - value / 100) * (height - top - bottom);
-  const {ticks, daily} = niceTicks(from, to, width < 560 ? 4 : 7);
+  const tickFrom = strip?.from ?? from, tickTo = strip?.to ?? to;
+  const {ticks, daily} = niceTicks(tickFrom, tickTo, (width < 560 ? 4 : 7) * (tickTo - tickFrom) / (basis.to - basis.from));
 
   const paths = useMemo(
     () =>
@@ -294,7 +301,7 @@ export function Chart({
         let segment = -1;
         let previousX = -1;
         for (const [at, remaining, group] of line.points) {
-          if (at + cellMs < from) continue;
+          if (at + cellMs < (strip?.from ?? from)) continue;
           // The answer on screen may be of another period while the next loads: what lies past the end is not drawn.
           if (at > now) break;
           const px = bx(at);
@@ -312,7 +319,7 @@ export function Chart({
           last: runs.at(-1)?.at(-1) ?? null,
         };
       }),
-    [lines, from, to, now, width, height, cellMs],
+    [lines, from, to, now, width, height, cellMs, basis.from, basis.to, strip],
   );
 
   const none = {left: false, plan: false, gap: false, forecast: false};
@@ -348,8 +355,8 @@ export function Chart({
   // A label taken away under the pointer (a step to a range, which has no future) says nothing
   // of it: what it told is forgotten, so the tooltip reads the cells again.
   useEffect(() => {
-    if (edge && !edgeKey) setEdge(null);
-  }, [edge, edgeKey]);
+    if (edge && (!edgeKey || panning)) setEdge(null);
+  }, [edge, edgeKey, panning]);
   useEffect(() => {
     if (!edge?.tapped) return;
     const hide = () => setEdge(null);
@@ -453,12 +460,13 @@ export function Chart({
         className={onSelect ? 'is-selectable' : undefined}
         {...handlers}
       >
+        <desc>{t('chart.panHint')}</desc>
         <defs>
           <clipPath id={clip}>
             <rect x={left} y={0} width={width - left - right} height={height} />
           </clipPath>
         </defs>
-        <g>
+        <g clipPath={`url(#${CSS.escape(clip)})`}>
           <g className="slides">
             {to > now && (
               <g className="future">
@@ -478,7 +486,7 @@ export function Chart({
             </text>
           </g>
         ))}
-        <g>
+        <g clipPath={`url(#${CSS.escape(clip)})`}>
           <g className="slides">
             {ticks.map(tick => (
               <text key={tick} x={x(tick)} y={height - 8} textAnchor="middle" className="tick">
@@ -488,7 +496,7 @@ export function Chart({
           </g>
         </g>
 
-        <g>
+        <g clipPath={`url(#${CSS.escape(clip)})`}>
           <g className="slides">
             {plans.map(plan => (
               <path
@@ -541,6 +549,9 @@ export function Chart({
                 </MarkerLabel>
               );
             })}
+          </g>
+        </g>
+        <g>
             {/* Beyond the visible future: at the right edge, with the distance, one under another. */}
             {past.map(label => (
               <EdgeLabel
@@ -554,7 +565,7 @@ export function Chart({
                 y={stackRows.get(label.key)!}
                 room={width - left - right - 6}
                 fonts={fonts}
-                onEdge={setEdge}
+                onEdge={panning ? () => {} : setEdge}
               />
             ))}
             {more.length > 0 && (
@@ -563,7 +574,7 @@ export function Chart({
                 y={stackRows.get(MORE)!}
                 end
                 fonts={fonts}
-                onTip={(shown, tapped) => setEdge(shown ? {key: MORE, tapped} : null)}
+                onTip={(shown, tapped) => !panning && setEdge(shown ? {key: MORE, tapped} : null)}
               >
                 {t('chart.more', {count: more.length})}
               </MarkerLabel>
@@ -577,7 +588,6 @@ export function Chart({
                   </g>
                 ) : null,
               )}
-          </g>
         </g>
         {drag && (
           <rect x={Math.min(drag.start, drag.end)} width={Math.abs(drag.end - drag.start)} y={top} height={height - top - bottom} className="selection" />
@@ -591,7 +601,7 @@ export function Chart({
         )}
       </svg>
 
-      {edgeKey ? (
+      {edgeKey && !panning ? (
         <Tooltip tip={tip} className="is-edge" style={edgePlace.below ? {right: 0, top: `${(edgeRow + 11) * scale - edgePlace.by}px`, maxHeight: edgePlace.cut ?? undefined} : {right: 0, bottom: `calc(100% - ${(edgeRow - 18) * scale}px)`}}>
           {edgeMarkers.map(marker => (
             <Fragment key={marker.key}>

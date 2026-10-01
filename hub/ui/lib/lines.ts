@@ -1,4 +1,4 @@
-import type {History, HistorySeries, Kind, SourceEvent, View, Win} from './types';
+import type {HistorySeries, Kind, SourceEvent, View, Win} from './types';
 import type {PastResets} from './resets';
 import {windowKey} from './types';
 import {seriesName} from './quota';
@@ -6,7 +6,10 @@ import {DASHES} from './providers';
 import {cardId, colorOf} from './view';
 
 /** A series of the history as the chart and the table show it: named, coloured, with its value now. */
-export type Line = HistorySeries & Pick<Win, 'kind' | 'label' | 'minutes'> & {provider: string; key: string; name: string; color: string; dash: string; current: number};
+export type PlotSeries = Pick<HistorySeries, 'sourceId' | 'windowId' | 'points' | 'staleAfterMs'>;
+type LineName = Pick<Win, 'kind' | 'label' | 'minutes'> & {provider: string; key: string; name: string; color: string; dash: string; current: number};
+export type PlotLine = PlotSeries & LineName;
+export type Line = HistorySeries & LineName;
 
 /**
  * The board's series of one kind of window that have data in the period. Only what the
@@ -14,11 +17,11 @@ export type Line = HistorySeries & Pick<Win, 'kind' | 'label' | 'minutes'> & {pr
  * hidden on the board, or any of a card hidden on the board is left out. A source's windows share its colour and differ by
  * dash.
  */
-export function linesOf(history: History | null, sources: {id: string; provider: string; title?: string; windows: Win[]}[] | null, view: View, kind: Kind): Line[] {
+export function linesOf<T extends PlotSeries>(history: {series: readonly T[]} | null, sources: {id: string; provider: string; title?: string; windows: Win[]}[] | null, view: View, kind: Kind): (T & LineName)[] {
   if (!history || !sources) return [];
   const perSource: Record<string, number> = {};
   const hidden = new Set([...view.windows, ...view.hidden]);
-  const rank = (entry: HistorySeries) => {
+  const rank = (entry: PlotSeries) => {
     const source = sources.findIndex(s => s.id === entry.sourceId);
     return source * 100 + (sources[source]?.windows.findIndex(w => w.id === entry.windowId) ?? 99);
   };
@@ -73,7 +76,7 @@ export function valueIn(points: Line['points'], cell: number, now: number, holdM
  * What happened to sources that the chart marks: from `from` on, where it draws a line of
  * the source (limits back early, on a window that came back); with those lines.
  */
-export function chartEvents(events: SourceEvent[], lines: Line[], from: number) {
+export function chartEvents(events: SourceEvent[], lines: PlotLine[], from: number) {
   return events.flatMap(event => {
     const on = lines.filter(line => line.sourceId === event.sourceId && (event.kind !== 'early_reset' || event.windows.includes(line.windowId)));
     return event.at < from || !on.length ? [] : [{event, lines: on}];
@@ -81,7 +84,7 @@ export function chartEvents(events: SourceEvent[], lines: Line[], from: number) 
 }
 
 /** The resets for everyone that the chart marks: from `from` to `to`, of a provider it draws a line of; with that line. */
-export function chartResets(past: PastResets, lines: Line[], from: number, to: number) {
+export function chartResets(past: PastResets, lines: PlotLine[], from: number, to: number) {
   return (Object.keys(past) as (keyof PastResets)[]).flatMap(provider => {
     const line = lines.find(l => l.provider === provider);
     return line ? (past[provider] ?? []).filter(reset => reset.at >= from && reset.at <= to).map(reset => ({provider, reset, line})) : [];

@@ -9,7 +9,12 @@ import {cellLabel, frameChangesAt, frameOf, measuredTo, niceTicks, step} from '.
 import {ACTIVITY, cardId, isHidden, withHidden, type Arrange} from '../lib/view';
 import {useLineup, useTitles, type Title} from '../lib/board';
 import {hubNow, useClock} from '../lib/clock';
-import {useHistory, useHistoryBegins} from '../lib/history';
+import {useHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
+import {plotBar, plotGroups, type PlotBuffer, type PlotGroup} from '../lib/historyPlot';
+import {groupRegistry, type GroupIdentity} from '../lib/plotRegistry';
+import {pan} from '../lib/pan';
+import {targetOf, cellStart} from '../../server/domain/history';
+import {colorOf} from '../lib/view';
 import {t, useLocale, type Key} from '../i18n';
 import {Segmented} from './Kit';
 import {HideRow, Popover, SlidersIcon} from './Popover';
@@ -22,7 +27,7 @@ const MINUTE = 60_000;
 const LABELS: Record<ActivityDimension, Key> = {source: 'activity.bySource', project: 'activity.byProject', device: 'activity.byDevice'};
 
 /** A group as the legend and the tooltip name it. */
-function groupName(group: ActivityGroup, by: ActivityDimension, titles: Record<string, Title>) {
+function groupName(group: Pick<ActivityGroup, 'key' | 'name'>, by: ActivityDimension, titles: Record<string, Title>) {
   if (by === 'source') return titles[group.key] ? sourceLabel(titles[group.key]) : group.key;
   return group.name ?? (by === 'project' ? t('activity.noProject') : group.key);
 }
@@ -32,6 +37,7 @@ function ActivitySettings({arrange}: {arrange: Arrange}) {
   const {activityBy} = usePrefs();
   return (
     <Popover label={t('activity.settings')} icon={<SlidersIcon />}>
+      <div className="popover-note">{t('chart.panHint')}</div>
       <div className="popover-section">
         <div className="popover-title">{t('activity.by')}</div>
         <div className="popover-pad">
@@ -65,7 +71,7 @@ function Metrics({agentMs, activeMs, agents, shownMs}: {agentMs: number; activeM
 }
 
 /** Hover and touch state belong to one legend entry, leaving the stacks untouched. */
-function LegendItem({group, name, color, muted, onToggle}: {group: ActivityGroup; name: string; color: string; muted: boolean; onToggle: () => void}) {
+const LegendItem = memo(function LegendItem({group, name, color, muted, onToggle}: {group: ActivityGroup | null; name: string; color: string; muted: boolean; onToggle: () => void}) {
   const id = useId();
   const button = useRef<HTMLButtonElement>(null);
   const wrap = useRef<HTMLDivElement>(null);
@@ -134,7 +140,7 @@ function LegendItem({group, name, color, muted, onToggle}: {group: ActivityGroup
       >
         <i className="activity-swatch" style={{background: color}} />
         <span>{name}</span>
-        <b>{workHours(group.agentMs)}</b>
+        <b>{group ? workHours(group.agentMs) : '—'}</b>
       </button>
       <span
         ref={tip}
@@ -145,11 +151,11 @@ function LegendItem({group, name, color, muted, onToggle}: {group: ActivityGroup
         onClick={event => event.stopPropagation()}
       >
         <span className="tooltip-time">{name}</span>
-        <Metrics agentMs={group.agentMs} activeMs={group.activeMs} agents={group.agents} />
+        {group ? <Metrics agentMs={group.agentMs} activeMs={group.activeMs} agents={group.agents} /> : <span>{t('activity.pendingRange')}</span>}
       </span>
     </div>
   );
-}
+});
 
 /**
  * Agent-hours on the analytics' time axis, stacked by subscription, project or machine.
@@ -159,6 +165,8 @@ function LegendItem({group, name, color, muted, onToggle}: {group: ActivityGroup
  */
 export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const {history, loading} = useHistory();
+  const strip = useHistoryPlot();
+  const registry = useRef<{token: number; seed: GroupIdentity[]; groups: GroupIdentity[]} | null>(null);
   const panel = useRef<HTMLElement>(null);
   // Made taller by its owner, the widget gives the room to the stacks, as the chart does.
   const {plot, onBase} = usePlot(panel);
@@ -175,7 +183,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const to = measuredTo(frame, history, selected, prefs.range);
   const activity = history?.activity ?? null;
   // What the groups look like changes with the answer, the board and the legend, not with time: the same objects as the clock moves the frame.
-  const {groups, colors, names, muted, shown} = useMemo(() => {
+  const {groups, colors, shown} = useMemo(() => {
     const groups = activity?.by[by] ?? [];
     const colors = groupColors(groups, by, arrange.view, source => titles[source]?.provider ?? '');
     const names = groups.map(group => groupName(group, by, titles));
@@ -184,6 +192,18 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
     return {groups, colors, names, muted, shown};
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activity, by, arrange.view, titles, prefs.muted, locale]);
+  const presentation = useMemo(() => {
+    const seed = groups.map((group, i) => ({key: group.key, name: group.name, color: colors[i]}));
+    if (!strip) {registry.current = null; return {identities: seed, shown};}
+    if (registry.current?.token !== strip.token) registry.current = {token: strip.token, seed, groups: seed};
+    const candidates = new Map<string, Pick<PlotGroup, 'key' | 'name'>>();
+    for (const row of strip.activityCells.values()) for (const [key, part] of row.parts[by]) candidates.set(key, {key, name: part.name});
+    const state = registry.current;
+    state.groups = groupRegistry(state.seed, state.groups, [...candidates.values()], by === 'source' ? key => colorOf(arrange.view, key, titles[key]?.provider ?? '') : undefined);
+    const data = new Map(plotGroups(strip, {k0: strip.from / strip.cell, k1: strip.to / strip.cell - 1}, by).map(group => [group.key, group]));
+    const plotted = state.groups.filter(group => !prefs.muted[mutedKey(by, group.key)]).map(identity => ({group: data.get(identity.key) ?? {key: identity.key, name: identity.name, cells: []}, color: identity.color, name: groupName(identity, by, titles)}));
+    return {identities: state.groups, shown: plotted};
+  }, [strip, groups, colors, shown, by, arrange.view, titles, prefs.muted]);
   const shownMs = shownActivity(shown.map(({group}) => group)).agentMs;
   const shownSources = lineup.filter(id => titles[id] && !isHidden(arrange.view, cardId(id)));
   // Known from later than the period the hub answered begins (not the page's frame, whose clock may be a minute behind).
@@ -222,7 +242,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
           {since !== null && <span className="activity-since">{t('activity.since', {time: stamp(since)})}</span>}
         </div>
       )}
-      {empty ? (
+      {empty && !strip ? (
         <div className="chart chart-loading" style={plot === undefined ? undefined : {height: plot}}>
           {empty}
         </div>
@@ -231,7 +251,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
           <Stacks
             activity={activity!}
             origin={history!.since}
-            groups={shown}
+            groups={presentation.shown}
             from={from}
             to={to}
             unknownTo={since}
@@ -239,10 +259,12 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
             onStep={direction => goTo(step(selected, prefs.range, direction, hubNow(), historyStart))}
             plot={plot}
             onBase={onBase}
+            strip={strip}
+            by={by}
           />
           <div className="legend">
-            {groups.map((group, i) => (
-              <LegendItem key={group.key} group={group} name={names[i]} color={colors[i]} muted={muted[i]} onToggle={() => setMuted(mutedKey(by, group.key), !muted[i])} />
+            {presentation.identities.map(identity => (
+              <LegendItem key={identity.key} group={groups.find(group => group.key === identity.key) ?? null} name={groupName(identity, by, titles)} color={identity.color} muted={!!prefs.muted[mutedKey(by, identity.key)]} onToggle={() => setMuted(mutedKey(by, identity.key), !prefs.muted[mutedKey(by, identity.key)])} />
             ))}
           </div>
         </>
@@ -271,12 +293,14 @@ function Stacks({
   onStep,
   plot,
   onBase,
+  strip,
+  by,
 }: {
   activity: ActivityData;
   /** Where the answer begins: the bars are drawn from there, so their numbers stay small however old the hub. */
   origin: number;
   /** The groups switched on in the legend, bottom to top, each with its colour and name. */
-  groups: {group: ActivityGroup; color: string; name: string}[];
+  groups: {group: PlotGroup; color: string; name: string}[];
   from: number;
   to: number;
   /** Where what is known of the period begins, when after its start: the part before is marked. */
@@ -285,24 +309,34 @@ function Stacks({
   onStep: (direction: -1 | 1) => void;
   plot: number | undefined;
   onBase: (height: number) => void;
+  strip: PlotBuffer | null;
+  by: ActivityDimension;
 }) {
-  const barMs = activity.barMs;
+  const barMs = strip?.barMs ?? activity.barMs;
   // Room for the scale's longest label ("480h" or "30 мин") within the widget.
   const left = 48;
   const right = 12;
-  const {box, svg, width, scale, hover, drag, x, clip, handlers} = useTimeAxis({from, to, end: to, cellMs: barMs, left, right, onSelect, onStep});
+  const axis = useTimeAxis({from, to, end: to, cellMs: barMs, left, right, onSelect, onStep});
+  const {box, svg, width, scale, hover, drag, clip, handlers, basis} = axis;
+  const x = strip ? axis.drawX : axis.x;
   const narrow = width < 560;
   const base = stacksHeight(width);
   const height = plot === undefined ? base : Math.max(base, plot / scale);
   useLayoutEffect(() => onBase(base * scale), [base, scale, onBase]);
   const top = 12;
   const bottom = 28;
-  const span = Math.max(MINUTE, to - from);
-  const {ticks, daily} = niceTicks(from, to, narrow ? 4 : 7);
+  const span = Math.max(MINUTE, basis.to - basis.from);
+  const tickFrom = strip?.from ?? from, tickTo = strip?.to ?? to;
+  const {ticks, daily} = niceTicks(tickFrom, tickTo, (narrow ? 4 : 7) * (tickTo - tickFrom) / span);
 
   // How tall each bar's stack is, of the groups shown: the scale reaches the tallest.
-  const heights = useMemo(() => shownActivity(groups.map(({group}) => group)).cells, [groups]);
-  const vertical = activityScale(Math.max(0, ...heights.values()));
+  const heights = useMemo(() => {
+    const sums = new Map<number, number>();
+    for (const {group} of groups) for (const [at, ms] of group.cells) sums.set(at, (sums.get(at) ?? 0) + ms);
+    return sums;
+  }, [groups]);
+  const [edgeMax, setEdgeMax] = useState(0);
+  const vertical = activityScale(Math.max(edgeMax, 0, ...heights.values()));
   const y = (value: number) => top + (1 - value / vertical.max) * (height - top - bottom);
 
   // One path a group, stacked in the order of the groups. Bars wide enough to read as such
@@ -311,10 +345,11 @@ function Stacks({
   // the start of the answer (`origin`) and moved into place whole, clipped to the plot: as
   // the clock moves the frame on by a cell, only where they stand changes.
   const perMs = (width - left - right) / span;
+  const pathOrigin = strip?.from ?? origin;
   const paths = useMemo(() => {
     const base = new Map<number, number>();
     const edge = (value: number) => value.toFixed(1);
-    const at = (time: number) => (time - origin) * perMs;
+    const at = (time: number) => (time - pathOrigin) * perMs;
     const apart = perMs * barMs >= 8;
     const gap = apart ? 0.5 : 0;
     return groups.map(({group}) => {
@@ -338,12 +373,55 @@ function Stacks({
         .join('');
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groups, origin, perMs, barMs, height, vertical.max]);
+  }, [groups, pathOrigin, perMs, barMs, height, vertical.max]);
 
-  const bar = hover === null ? null : activity.cells.find(([start]) => start === hover);
+  const innerClip = `${clip}-inner`;
+  const mask = useRef<SVGRectElement>(null);
+  const edges = useRef<SVGGElement>(null);
+  const edgePaint = useRef(() => {});
+  const painted = useRef('');
+  edgePaint.current = () => {
+    if (!strip || !mask.current || !edges.current) return;
+    const draft = pan.get();
+    const range = draft ? {from: draft.from, to: draft.to} : {from, to};
+    const target = targetOf(strip.length, draft?.originEnd ?? to, 'edge', range);
+    const key = `${target.k0}:${target.k1}:${strip.version}:${vertical.max}:${height}:${perMs}:${groups.map(g => g.group.key).join(',')}`;
+    if (key === painted.current) return;
+    painted.current = key;
+    const start = target.k0 * strip.cell, end = (target.k1 + 1) * strip.cell;
+    const firstFull = Math.ceil(start / barMs) * barMs, lastFull = Math.floor(end / barMs) * barMs;
+    mask.current.setAttribute('x', String(x(firstFull)));
+    mask.current.setAttribute('width', String(Math.max(0, x(lastFull) - x(firstFull))));
+    const starts = [...new Set([cellStart(start, barMs), cellStart(end - 1, barMs)])].filter(at => at < firstFull || at >= lastFull);
+    const paths = groups.map(() => '');
+    let max = 0;
+    for (const at of starts) {
+      const bar = plotBar(strip, at, target, by);
+      if (!bar) continue;
+      let total = 0;
+      const gap = perMs * barMs >= 8 ? 0.5 : 0;
+      const a = x(at) + gap, b = x(at + barMs) - gap;
+      groups.forEach(({group}, i) => {
+        const ms = bar.groups.get(group.key)?.ms ?? 0;
+        if (!ms) return;
+        const low = total;
+        total += ms;
+        paths[i] += `M${a.toFixed(1)},${y(total).toFixed(1)}H${b.toFixed(1)}V${y(low).toFixed(1)}H${a.toFixed(1)}Z`;
+      });
+      max = Math.max(max, total);
+    }
+    if (max > vertical.max) setEdgeMax(max);
+    edges.current.querySelectorAll('path').forEach((path, i) => path.setAttribute('d', paths[i]));
+  };
+  useLayoutEffect(() => {painted.current = ''; edgePaint.current();});
+  useLayoutEffect(() => pan.subscribe(() => edgePaint.current()), []);
+  useEffect(() => {if (!strip) {setEdgeMax(0); painted.current = '';}}, [strip]);
+
+  const partialBar = strip && hover !== null ? plotBar(strip, hover, targetOf(strip.length, to, 'hover', {from, to}), by) : null;
+  const bar = hover === null ? null : strip ? partialBar ? [hover, partialBar.activeMs, partialBar.agentMs, partialBar.agents] : null : activity.cells.find(([start]) => start === hover);
   // What the hovered bar draws: over one whose groups are all switched off, nothing tells of it, as over an empty one.
   const parts =
-    hover === null ? [] : groups.flatMap(({group, color, name}) => group.cells.filter(([start]) => start === hover).map(([, ms]) => ({key: group.key, color, name, ms})));
+    hover === null ? [] : groups.flatMap(({group, color, name}) => strip ? partialBar?.groups.has(group.key) ? [{key: group.key, color, name, ms: partialBar.groups.get(group.key)!.ms}] : [] : group.cells.filter(([start]) => start === hover).map(([, ms]) => ({key: group.key, color, name, ms})));
   const shownMs = parts.reduce((sum, part) => sum + part.ms, 0);
   const hoverX = hover === null ? 0 : x(Math.max(from, Math.min(to, hover + barMs / 2)));
   const {tip, style: tipStyle} = useTip(svg, {width, at: hoverX, narrow, rises: true, bottom: height * scale});
@@ -360,10 +438,12 @@ function Stacks({
   return (
     <div className="chart activity-chart" ref={box}>
       <svg ref={svg} viewBox={`0 0 ${width} ${height}`} style={{height: `${height * scale}px`}} preserveAspectRatio="none" role="img" aria-label={t('activity.label')} className="is-selectable" {...handlers}>
+        <desc>{t('chart.panHint')}</desc>
         <defs>
           <clipPath id={clip}>
             <rect x={left} y={0} width={width - left - right} height={height} />
           </clipPath>
+          <clipPath id={innerClip}><rect ref={mask} x={left} y={top} width={width - left - right} height={height - top - bottom} /></clipPath>
           <pattern id={`${clip}-hatch`} width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
             <line x1="0" x2="0" y1="0" y2="6" className="activity-hatch" />
           </pattern>
@@ -376,7 +456,7 @@ function Stacks({
             </text>
           </g>
         ))}
-        <g>
+        <g clipPath={`url(#${CSS.escape(clip)})`}>
           <g className="slides">
             {ticks.map(tick => (
               <text key={tick} x={x(tick)} y={height - 8} textAnchor="middle" className="tick">
@@ -385,7 +465,7 @@ function Stacks({
             ))}
           </g>
         </g>
-        <g>
+        <g clipPath={`url(#${CSS.escape(clip)})`}>
           <g className="slides">
             {unknownTo !== null && (
               <g className="activity-unknown">
@@ -402,13 +482,14 @@ function Stacks({
                 </text>
               </g>
             )}
-            <g clipPath={`url(#${CSS.escape(clip)})`}>
-              <g transform={`translate(${(left + (origin - from) * perMs).toFixed(1)} 0)`}>
+            <g clipPath={strip ? `url(#${CSS.escape(innerClip)})` : undefined}>
+              <g transform={`translate(${(left + (pathOrigin - basis.from) * perMs).toFixed(1)} 0)`}>
                 {groups.map(({group, color}, i) => (
                   <path key={group.key} d={paths[i]} fill={color} className="activity-stack" />
                 ))}
               </g>
             </g>
+            {strip && <g ref={edges}>{groups.map(({group, color}) => <path key={group.key} fill={color} className="activity-stack" />)}</g>}
           </g>
         </g>
         {drag && <rect x={Math.min(drag.start, drag.end)} width={Math.abs(drag.end - drag.start)} y={top} height={height - top - bottom} className="selection" />}

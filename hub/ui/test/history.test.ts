@@ -9,24 +9,26 @@ const H = 60 * M;
 const NOW = Date.parse('2026-09-26T12:23:00Z');
 const flush = async () => {for (let i = 0; i < 5; i++) await Promise.resolve();};
 const empty = (from: number, to: number): Chunk => ({from, to, series: [], activity: {sessions: [], devices: {}, cells: []}, resets: [], grants: []});
+const pending = (h: ReturnType<typeof harness>) => h.reads.filter(r => !r.settled && !r.signal?.aborted);
 function harness(budget?: number) {
   let now = NOW;
   let elapsed = 0;
   let dropped = 0;
   const timers = new Map<unknown, {at: number; run: () => void}>();
-  const reads: {board: string; cell: number; from: number; to: number; answer(patch?: Partial<HistoryAnswer>): Promise<void>; fail(error: unknown): Promise<void>}[] = [];
+  const reads: {board: string; cell: number; from: number; to: number; signal?: AbortSignal; settled: boolean; answer(patch?: Partial<HistoryAnswer>): Promise<void>; fail(error: unknown): Promise<void>}[] = [];
   const store = new HistoryStore({
     now: () => now,
     elapsedNow: () => elapsed,
-    read: (board, cell, from, to) => new Promise((resolve, reject) => reads.push({board, cell, from, to,
+    read: (board, cell, from, to, signal) => new Promise((resolve, reject) => reads.push({board, cell, from, to, signal, settled: false,
       async answer(patch = {}) {
+        this.settled = true;
         const end = Math.min(to, cellStart((patch.now ?? now) + CLOCK_TOLERANCE_MS, cell) + cell);
         const chunks: Chunk[] = [];
         for (let a = from; a < end;) {const b = Math.min(end, tileEnd(tileOf(a, cell), cell)); chunks.push(empty(a, b)); a = b;}
         resolve({run: 'run', now, historyStart: 0, known: {work: 0, sources: {s: 0}}, chunks, ...patch});
         await flush();
       },
-      async fail(error) {reject(error); await flush();},
+      async fail(error) {this.settled = true; reject(error); await flush();},
     })),
     setTimeout: (run, ms) => {const id = {}; timers.set(id, {at: now + ms, run}); return id;},
     clearTimeout: id => {timers.delete(id);},
@@ -44,6 +46,91 @@ function harness(budget?: number) {
   const start = async () => {store.open('b'); store.hello('run'); store.snapshot(['s'], ['s w']); await flush();};
   return {store, reads, advance, start, now: () => now, dropped: () => dropped, timers, correctClock: (ms: number) => {now += ms;}};
 }
+
+test('pan publishes partial coverage without changing totals, with at most two disjoint tile flights', async () => {
+  const h = harness(); await h.start(); await h.reads[0].answer();
+  const answered = h.store.get().history;
+  h.store.pan({token: 1, length: 24 * H, from: NOW - 36 * H, to: NOW - 12 * H, direction: -1});
+  await flush();
+  assert.equal(h.store.get().history, answered);
+  assert.equal(h.store.get().loading, false);
+  assert.ok(h.store.getPlot()!.coverage.length);
+  assert.ok(pending(h).length <= 2);
+  const [a, b] = pending(h);
+  assert.ok(a, 'visible head is requested');
+  if (b) assert.ok(tileOf(a.to - 1, a.cell) < tileOf(b.from, b.cell) || tileOf(b.to - 1, b.cell) < tileOf(a.from, a.cell));
+  for (const r of pending(h)) assert.ok(tileOf(r.to - 1, r.cell) - tileOf(r.from, r.cell) + 1 <= 8);
+  for (let i = 0; i < 100; i++) h.store.pan({token: 1, length: 24 * H, from: NOW - 36 * H - i, to: NOW - 12 * H - i, direction: -1});
+  await flush();
+  assert.ok(pending(h).length <= 2);
+  assert.equal(h.store.get().history, answered);
+  h.store.endPan(false);
+  await flush();
+  assert.equal(h.store.getPlot(), null);
+});
+
+test('pan prioritizes the latest visible cells, aborts abandoned interests and ignores their errors', async () => {
+  const h = harness(); await h.start(); await h.reads[0].answer();
+  h.store.pan({token: 1, length: 24 * H, from: NOW - 48 * H, to: NOW - 24 * H, direction: -1}); await flush();
+  const old = pending(h);
+  h.store.pan({token: 1, length: 24 * H, from: NOW - 10 * H, to: NOW, direction: 1}); await flush();
+  assert.ok(old.some(r => r.signal?.aborted));
+  for (const r of old) if (r.signal?.aborted) await r.fail(new ApiError(400, 'invalid_request'));
+  assert.equal(h.dropped(), 0);
+  assert.equal(h.timers.size, 0);
+  assert.ok(pending(h).length <= 2);
+  h.store.endPan(false);
+});
+
+test('ahead failure sets no retry and cannot drop a range or block visible work', async () => {
+  const h = harness(); await h.start(); await h.reads[0].answer();
+  h.store.pan({token: 1, length: 24 * H, from: NOW - 24 * H, to: NOW, direction: -1}); await flush();
+  const ahead = pending(h)[0];
+  assert.ok(ahead);
+  await ahead.fail(new ApiError(400, 'invalid_request'));
+  assert.equal(h.dropped(), 0);
+  assert.equal(h.timers.size, 0);
+  const count = h.reads.length;
+  await h.advance(60_000);
+  assert.equal(h.reads.length, count);
+  h.store.pan({token: 1, length: 24 * H, from: NOW - 48 * H, to: NOW - 24 * H, direction: -1}); await flush();
+  assert.ok(pending(h).some(r => r.from <= NOW - 48 * H));
+  h.store.endPan(false);
+});
+
+test('stopping a cold pan keeps its old exact answer until all final cells arrive', async () => {
+  const h = harness(); await h.start(); await h.reads[0].answer();
+  const old = h.store.get().history;
+  const range = {from: NOW - 36 * H, to: NOW - 12 * H};
+  h.store.pan({token: 1, length: 24 * H, ...range, direction: -1}); await flush();
+  h.store.choose('24h', range);
+  h.store.endPan(true); await flush();
+  assert.equal(h.store.get().history, old);
+  assert.equal(h.store.get().loading, false);
+  for (let i = 0; i < 8 && pending(h).length; i++) for (const read of [...pending(h)]) await read.answer();
+  assert.equal(h.store.get().history!.range, `${range.from}-${range.to}`);
+  assert.equal(h.store.getPlot(), null);
+  const count = h.reads.length;
+  await h.advance(60_000);
+  assert.equal(h.reads.length, count);
+});
+
+test('visible plus ahead exceeding eight tiles is batched without concurrent same-tile writes', async () => {
+  const h = harness(); h.store.choose('30d', null); await h.start(); await h.reads[0].answer();
+  h.store.pan({token: 1, length: 30 * 24 * H, from: NOW - 60 * 24 * H, to: NOW - 30 * 24 * H, direction: -1}); await flush();
+  for (let i = 0; i < 12 && pending(h).length; i++) {
+    const flights = [...pending(h)];
+    assert.ok(flights.length <= 2);
+    for (const r of flights) assert.ok(tileOf(r.to - 1, r.cell) - tileOf(r.from, r.cell) + 1 <= 8);
+    if (flights.length === 2) {
+      const [a, b] = flights;
+      assert.ok(tileOf(a.to - 1, a.cell) < tileOf(b.from, b.cell) || tileOf(b.to - 1, b.cell) < tileOf(a.from, a.cell));
+    }
+    for (const r of flights.reverse()) await r.answer();
+  }
+  assert.equal(pending(h).length, 0);
+  h.store.endPan(false);
+});
 
 test('the first snapshot reads once from the frame cell; news reads only the tail, without dimming', async () => {
   const h = harness();

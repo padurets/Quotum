@@ -1,7 +1,10 @@
 import {useEffect, useId, useLayoutEffect, useRef, useState, type PointerEvent} from 'react';
 import {hubNow} from '../lib/clock';
-import {draggedRange, type TimeRange} from '../lib/timeRange';
-import {SWIPE, swiped} from '../lib/swipe';
+import {draggedRange, timeRange, type TimeRange} from '../lib/timeRange';
+import {pan, usePanning, type PanStart} from '../lib/pan';
+import {prefs} from '../lib/prefs';
+import {periodOf} from '../lib/periods';
+import {useHistoryBegins} from '../lib/history';
 import {useSizing} from './sizing';
 
 /** How long a finger rests on a chart before it starts a range. */
@@ -44,7 +47,6 @@ export function useTimeAxis({
   left,
   right,
   onSelect,
-  onStep,
 }: {
   from: number;
   to: number;
@@ -62,6 +64,14 @@ export function useTimeAxis({
   const [width, setWidth] = useState(900);
   const [scale, setScale] = useState(1);
   const [hover, setHover] = useState<number | null>(null);
+  const [folding, setFolding] = useState(false);
+  const source = useRef(Symbol('chart'));
+  const panning = usePanning();
+  const historyStart = useHistoryBegins();
+  const panPointer = useRef<{token: number; id: number; x: number} | null>(null);
+  const captured = useRef<{token: number; from: number; to: number; end: number} | null>(null);
+  const finished = useRef<{from: number; to: number; end: number} | null>(null);
+  const lastPan = useRef<ReturnType<typeof pan.get>>(null);
   /** Where a drag across the chart started and where it is now, in chart pixels. */
   const [drag, setDrag] = useState<{start: number; end: number} | null>(null);
   /** A finger held on the chart, before it starts a range. */
@@ -74,31 +84,91 @@ export function useTimeAxis({
   };
   useEffect(() => () => cancelHold(), []);
 
-  // The wheel is heard natively, so the chart can keep a swipe from scrolling the page
-  // sideways or going back in the browser. Nothing renders until the gesture steps.
-  const swipe = useRef(SWIPE);
-  const stepped = useRef(onStep);
-  stepped.current = onStep;
+  const startPan = (input: 'wheel' | 'pointer'): PanStart => {
+    const selected = timeRange();
+    const now = Math.max(hubNow(), end);
+    return {source: source.current, input, selected, length: selected ? selected.to - selected.from : periodOf(prefs().range).ms, now, historyStart, span: to - from, width: (width - left - right) * scale};
+  };
+  const wheelPan = useRef<(event: WheelEvent) => boolean>(() => false);
+  wheelPan.current = event => {
+    if (!onSelect || dragging.current) return false;
+    const rect = svg.current?.getBoundingClientRect();
+    if (!rect || event.clientX < rect.left + left * scale || event.clientX > rect.right - right * scale) return false;
+    return pan.wheel(() => startPan('wheel'), event);
+  };
   const dragging = useRef(false);
   dragging.current = drag !== null;
   useEffect(() => {
     const element = svg.current;
     if (!element) return;
     const wheel = (event: WheelEvent) => {
-      if (!stepped.current || dragging.current) return;
-      const result = swiped(swipe.current, event);
-      swipe.current = result.state;
-      if (result.own) event.preventDefault();
-      if (result.step) stepped.current(result.step);
+      if (wheelPan.current(event)) event.preventDefault();
     };
     element.addEventListener('wheel', wheel, {passive: false});
     return () => element.removeEventListener('wheel', wheel);
+  }, []);
+
+  const paintPan = useRef(() => {});
+  const geometry = useRef({end, future: to - end});
+  geometry.current = {end, future: to - end};
+  useLayoutEffect(() => pan.register(source.current, () => geometry.current), []);
+  paintPan.current = () => {
+    const element = svg.current;
+    if (!element) return;
+    const frame = pan.get();
+    if (frame && captured.current?.token !== frame.token) {
+      captured.current = {token: frame.token, from, to, end};
+      for (const layer of element.querySelectorAll<SVGGElement>('.slides')) layer.getAnimations().forEach(animation => animation.cancel());
+      setFolding(false);
+    }
+    const origin = captured.current;
+    const dx = frame && origin ? -(frame.to - frame.originEnd) / (origin.to - origin.from) * (width - left - right) : 0;
+    for (const layer of element.querySelectorAll<SVGGElement>('.slides')) {
+      layer.style.transform = frame ? `translateX(${dx}px)` : '';
+      if (frame) layer.parentElement!.setAttribute('clip-path', `url(#${CSS.escape(clip)})`);
+    }
+    if (frame) {
+      lastPan.current = frame;
+      element.dataset.panEnd = String(frame.to);
+      element.classList.toggle('is-grabbing', frame.source === source.current && frame.input === 'pointer');
+    } else {
+      const last = lastPan.current;
+      if (origin && last) {
+        const selected = timeRange();
+        const committed = last.origin === null ? selected !== null : !selected || selected.from !== last.origin.from || selected.to !== last.origin.to;
+        if (committed) {
+          const delta = last.to - last.originEnd;
+          finished.current = {from: origin.from + delta, to: origin.to + delta, end: last.to};
+        }
+      }
+      delete element.dataset.panEnd;
+      element.classList.remove('is-grabbing');
+      captured.current = null;
+      lastPan.current = null;
+      panPointer.current = null;
+    }
+  };
+  useLayoutEffect(() => pan.subscribe(() => paintPan.current()), []);
+  useEffect(() => () => {
+    if (pan.source === source.current) pan.cancel();
+  }, []);
+  useEffect(() => {
+    if (panning) {cancelHold(); setDrag(null); setHover(null);}
+  }, [panning]);
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => svg.current?.classList.toggle('is-grabbable', event.shiftKey);
+    const blur = () => svg.current?.classList.remove('is-grabbable');
+    addEventListener('keydown', key);
+    addEventListener('keyup', key);
+    addEventListener('blur', blur);
+    return () => {removeEventListener('keydown', key); removeEventListener('keyup', key); removeEventListener('blur', blur);};
   }, []);
 
   const measured = useRef<number | null>(null);
   const measure = (next: number) => {
     // At a fractional scale the same box reads a hair apart (a 60th of a pixel) by its rect and by the observer: no new width.
     if (measured.current !== null && Math.abs(next - measured.current) < 1 / 32) return;
+    if (pan.source === source.current) pan.cancel();
     measured.current = next;
     const drawn = Math.max(280, Math.round(next));
     setWidth(drawn);
@@ -117,15 +187,17 @@ export function useTimeAxis({
     return () => observer.disconnect();
   }, []);
 
-  const span = Math.max(60_000, to - from);
-  const x = (at: number) => left + ((Math.min(to, Math.max(from, at)) - from) / span) * (width - left - right);
-  const timeAt = (px: number) => from + ((px - left) / (width - left - right)) * span;
+  const basis = captured.current ?? {from, to, end};
+  const span = Math.max(60_000, basis.to - basis.from);
+  const drawX = (at: number) => left + ((at - basis.from) / span) * (width - left - right);
+  const x = (at: number) => drawX(Math.min(basis.to, Math.max(basis.from, at)));
+  const timeAt = (px: number) => basis.from + ((px - left) / (width - left - right)) * span;
   // After a step the pointer stands over another time: the chart reads that.
   useEffect(() => {
     const px = pointer.current;
-    if (px !== null && px >= left && px <= width - right) setHover(Math.floor(timeAt(px) / cellMs) * cellMs);
+    if (!panning && !folding && px !== null && px >= left && px <= width - right) setHover(Math.floor(timeAt(px) / cellMs) * cellMs);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [from, to, cellMs]);
+  }, [from, to, cellMs, panning, folding]);
 
   const toChart = (event: PointerEvent<SVGSVGElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -134,6 +206,13 @@ export function useTimeAxis({
   const onPointerMove = (event: PointerEvent<SVGSVGElement>) => {
     const px = toChart(event);
     pointer.current = px;
+    if (panPointer.current?.id === event.pointerId) {
+      const held = panPointer.current;
+      pan.move(held.token, held.x - event.clientX);
+      held.x = event.clientX;
+      return;
+    }
+    if (panning || folding) return;
     const held = holding.current;
     // A finger that moves before the hold is up reads the cells instead.
     if (held && Math.abs(px - held.px) > 8) cancelHold();
@@ -146,6 +225,16 @@ export function useTimeAxis({
     if (!onSelect || event.button !== 0 || px < left || px > width - right || (event.target as Element).closest('.is-pointed')) return;
     const element = event.currentTarget;
     const {pointerId} = event;
+    if (event.shiftKey && event.pointerType !== 'touch') {
+      const token = pan.begin(startPan('pointer'));
+      if (token !== null) {
+        element.setPointerCapture(pointerId);
+        panPointer.current = {token, id: pointerId, x: event.clientX};
+        event.preventDefault();
+      }
+      return;
+    }
+    if (pan.active() || folding) return;
     const start = () => {
       holding.current = null;
       element.setPointerCapture(pointerId);
@@ -156,8 +245,15 @@ export function useTimeAxis({
     holding.current = {px, timer: setTimeout(start, HOLD_MS)};
   };
   // A drag of a few pixels is a click.
-  const onPointerUp = () => {
+  const onPointerUp = (event: PointerEvent<SVGSVGElement>) => {
     cancelHold();
+    const held = panPointer.current;
+    if (held?.id === event.pointerId) {
+      panPointer.current = null;
+      pan.finish(held.token);
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+      return;
+    }
     if (!drag || !onSelect) return;
     setDrag(null);
     const range = Math.abs(drag.end - drag.start) >= 6 ? draggedRange(timeAt(drag.start), timeAt(drag.end), Math.min(end, hubNow())) : null;
@@ -174,7 +270,9 @@ export function useTimeAxis({
     onPointerCancel: () => {
       cancelHold();
       setDrag(null);
+      if (panPointer.current) pan.cancel(panPointer.current.token);
     },
+    onLostPointerCapture: () => {if (panPointer.current) pan.cancel(panPointer.current.token);},
     // A held finger starts a range, not the page's menu.
     onContextMenu: (event: {preventDefault: () => void}) => (holding.current || drag) && event.preventDefault(),
   };
@@ -185,7 +283,21 @@ export function useTimeAxis({
     const before = shown.current;
     shown.current = {from, end};
     const element = svg.current;
-    if (!before || !element || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const previous = finished.current;
+    finished.current = null;
+    if (!before || !element || panning || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    if (previous) {
+      const ratio = (to - from) / (previous.to - previous.from);
+      const offset = left * (1 - ratio) + (from - previous.from) / (previous.to - previous.from) * (width - left - right);
+      setFolding(true);
+      const animations: Animation[] = [];
+      for (const layer of element.querySelectorAll<SVGGElement>('.slides')) {
+        layer.parentElement!.setAttribute('clip-path', `url(#${CSS.escape(clip)})`);
+        animations.push(layer.animate([{transform: `translateX(${offset}px) scaleX(${ratio})`}, {transform: 'none'}], {duration: 160, easing: 'ease-out'}));
+      }
+      Promise.allSettled(animations.map(animation => animation.finished)).then(() => {if (!pan.active()) setFolding(false);});
+      return;
+    }
     const dx = slideOf(before, {from, end, to}, width - left - right);
     if (!dx) return;
     for (const layer of element.querySelectorAll<SVGGElement>('.slides')) {
@@ -199,7 +311,7 @@ export function useTimeAxis({
       animation.onfinish = () => frame.removeAttribute('clip-path');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [from, end]);
+  }, [from, end, to]);
 
-  return {box, svg, width, scale, hover, drag, x, timeAt, clip, handlers};
+  return {box, svg, width, scale, hover: panning || folding ? null : hover, drag, x, drawX, timeAt, clip, handlers, basis, panning: panning !== null || folding};
 }

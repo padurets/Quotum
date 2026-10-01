@@ -567,6 +567,7 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 .marker.is-event line { stroke-dasharray: none; opacity: .4; }
 .plan-line { fill: none; stroke-width: 1.5; stroke-dasharray: 1 4; stroke-linecap: round; opacity: .55; }
 .series { fill: none; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+.series, .forecast-line, .plan-line, .activity-stack { vector-effect: non-scaling-stroke; }
 /* Where a window's pace leads: its series' colour and dash, thinner and fainter, with square ends unlike the plan's dots. */
 .forecast-line { fill: none; stroke-width: 1.25; stroke-linejoin: round; opacity: .6; }
 .marker-label.is-forecast text { fill: var(--label-color); font-weight: 500; }
@@ -578,6 +579,8 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 .crosshair circle { stroke: var(--bg); stroke-width: 2; }
 /* A time range is dragged across the chart; vertical swipes still scroll the page. */
 .chart svg.is-selectable { cursor: crosshair; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
+.chart svg.is-grabbable { cursor: grab; }
+.chart svg.is-grabbing { cursor: grabbing; }
 .selection { fill: color-mix(in oklab, var(--accent) 14%, transparent); stroke: color-mix(in oklab, var(--accent) 50%, transparent); stroke-width: 1; }
 .tooltip {
   position: absolute; top: 8px; z-index: 4; pointer-events: none; width: max-content; min-width: 190px; max-width: min(360px, 100%); overflow: hidden;
