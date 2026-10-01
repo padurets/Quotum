@@ -318,8 +318,10 @@ function Stacks({
   allMuted: boolean;
 }) {
   const barMs = strip?.barMs ?? activity.barMs;
-  const unknownTo = strip?.knownFrom ?? originUnknownTo;
   const hatchFrom = strip?.from ?? from;
+  const knownFrom = strip?.knownFrom ?? originUnknownTo;
+  const unknownTo = knownFrom !== null && knownFrom > hatchFrom ? knownFrom : null;
+  const locale = useLocale();
   // Room for the scale's longest label ("480h" or "30 мин") within the widget.
   const left = 48;
   const right = 12;
@@ -440,7 +442,7 @@ function Stacks({
   useLayoutEffect(() => {
     const label = unknownLabel.current;
     setLabelFits(!!label && label.getComputedTextLength() + 24 <= hatched);
-  });
+  }, [hatched, unknownTo, locale]);
 
   return (
     <div className="chart activity-chart" ref={box}>
