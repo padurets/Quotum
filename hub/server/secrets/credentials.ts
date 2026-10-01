@@ -70,19 +70,24 @@ export class Credentials {
   /** Connector code maps its reply before it leaves the boundary; no raw supplier fields. */
   async probe(owner: string, id: string, operation: string, signal?: AbortSignal): Promise<{abilities: readonly string[]; expiresAt: number | null}> {
     let record: CredentialRow | null = null;
+    let decrypted = false;
     try {
       const row = record = this.#repository.get(owner, id);
       if (!row) throw new SecretError('credential_not_found');
       const key = this.requireKey();
       const connector = this.connector(row.provider);
-      const reply = await key.use(row, secret => connector.transport.send(operation, secret, {}, signal));
+      const reply = await key.use(row, secret => {
+        // Only authenticated decryption can clear a previously unreadable flag.
+        decrypted = true;
+        return connector.transport.send(operation, secret, {}, signal);
+      });
       const answer = connector.map(reply);
       if (!answer || answer.abilities.some(ability => !connector.abilities.includes(ability)) || answer.expiresAt !== null && (!Number.isSafeInteger(answer.expiresAt) || answer.expiresAt < 0)) throw new SecretError('connector_invalid_response');
       this.#repository.used(owner, id, row, answer.abilities, answer.expiresAt);
       return {abilities: answer.abilities, expiresAt: answer.expiresAt};
     } catch (error) {
       const safe = error instanceof SecretError ? error : new SecretError('credential_failed');
-      try { if (record) this.#repository.error(owner, id, safe.code, safe.code === 'credential_unreadable', record); } catch { /* The original safe failure remains authoritative. */ }
+      try { if (record) this.#repository.error(owner, id, safe.code, safe.code === 'credential_unreadable' || !decrypted && !!record.unreadable, record); } catch { /* The original safe failure remains authoritative. */ }
       throw safe;
     }
   }

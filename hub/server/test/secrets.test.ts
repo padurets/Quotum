@@ -1,7 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {inspect} from 'node:util';
-import {mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync} from 'node:fs';
+import {mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
+import {execFileSync, spawnSync} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
@@ -93,6 +94,23 @@ test('key file accepts only the specified byte endings and checks real paths', (
   const outward = path.join(data, 'outward'); symlinkSync(file, outward);
   assert.throws(() => readInputs({QUOTUM_SECRET_KEY_FILE: inward}, data, false), fail('secret_key_file_in_data'));
   assert.equal(readInputs({QUOTUM_SECRET_KEY_FILE: outward}, data, false).current?.fingerprint, key().fingerprint);
+});
+
+test('a FIFO key file without a writer is rejected before the child watchdog', {skip: process.platform === 'win32'}, t => {
+  const root = mkdtempSync(path.join(tmpdir(), 'quotum-key-fifo-'));
+  t.after(() => rmSync(root, {recursive: true, force: true}));
+  const data = path.join(root, 'data'); mkdirSync(data);
+  const file = path.join(root, 'key');
+  execFileSync('mkfifo', [file], {timeout: 5000, killSignal: 'SIGKILL'});
+  const script = `import {readInputs, SecretError} from ${JSON.stringify(new URL('../secrets/index.ts', import.meta.url).href)};
+    try { readInputs({QUOTUM_SECRET_KEY_FILE: process.argv[1]}, process.argv[2], false); process.stdout.write('unexpected_success'); process.exitCode = 1; }
+    catch (error) { process.stdout.write(error instanceof SecretError ? error.code : 'unexpected_error'); }`;
+  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('QUOTUM_')));
+  const result = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script, file, data], {env, encoding: 'utf8', timeout: 5000, killSignal: 'SIGKILL'});
+  assert.equal(result.error, undefined, 'a special file must not hold startup until the watchdog kills it');
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, 'secret_key_invalid');
+  assert.equal(result.stderr, '');
 });
 
 test('missing and mismatched KEKs preserve every credential and metadata', () => {

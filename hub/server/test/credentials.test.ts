@@ -13,7 +13,7 @@ import {Setup} from '../setup.js';
 import {Directory} from '../store/directory.js';
 import {Store} from '../store/store.js';
 import {ConnectorTransport, type Connector} from '../connectors/index.js';
-import {Credentials, SecretKey, startSecrets, type SecretKeyReport} from '../secrets/index.js';
+import {Credentials, SecretError, SecretKey, startSecrets, type SecretKeyReport} from '../secrets/index.js';
 import {newSecret} from '../domain/auth.js';
 
 const CANARY = 'CANARY_PRIVATE_CREDENTIAL_0123456789';
@@ -167,4 +167,63 @@ test('an old probe cannot change the status of a replaced credential', async t =
   assert.equal(current.lastUsedAt, null);
   assert.equal(current.lastError, null);
   assert.equal(current.unreadable, false);
+});
+
+for (const reason of ['missing', 'mismatch', 'unknown-provider'] as const) {
+  test(`a ${reason} probe preserves a previously unreadable credential and startup count`, async t => {
+    const h = await harness(); t.after(async () => { await h.app.close(); h.store.close(); });
+    const owner = h.users.get('alice')!;
+    const id = h.credentials.create(owner, 'test', CANARY).id;
+    h.store.db.prepare("UPDATE credentials SET cipher = zeroblob(length(cipher)), unreadable = 1, last_error = 'credential_unreadable' WHERE id = ?").run(id);
+    const before = h.store.db.prepare('SELECT cipher, nonce FROM credentials WHERE id = ?').get(id)!;
+    const matching = SecretKey.parse(Buffer.from(KEK));
+    const key = reason === 'missing' ? null : reason === 'mismatch' ? SecretKey.parse(Buffer.from(Buffer.alloc(32, 8).toString('base64url'))) : matching;
+    const report = startSecrets(h.store.db, {current: key, previous: null, reset: null, storageAtStart: null, wasFileAtStart: false});
+    const credentials = new Credentials(h.store.db, key, report, reason === 'unknown-provider' ? new Map() : new Map([['test', fixture]]));
+    const code = reason === 'unknown-provider' ? 'credential_provider_unknown' : `secret_key_${reason}`;
+    await assert.rejects(credentials.probe(owner, id, 'balance'), error => error instanceof SecretError && error.code === code);
+    const after = credentials.list(owner)[0];
+    assert.equal(after.unreadable, true);
+    assert.equal(after.lastError, code);
+    assert.deepEqual(h.store.db.prepare('SELECT cipher, nonce FROM credentials WHERE id = ?').get(id), before);
+    assert.equal(startSecrets(h.store.db, {current: matching, previous: null, reset: null, storageAtStart: null, wasFileAtStart: false}).unreadable, 1);
+    h.clean(JSON.stringify(after));
+  });
+}
+
+test('a transport failure after authenticated decryption clears a stale unreadable flag', async t => {
+  const h = await harness(); t.after(async () => { await h.app.close(); h.store.close(); });
+  const owner = h.users.get('alice')!;
+  const id = h.credentials.create(owner, 'test', CANARY).id;
+  h.store.db.prepare("UPDATE credentials SET unreadable = 1, last_error = 'credential_unreadable' WHERE id = ?").run(id);
+  const original = fixture.transport.send;
+  fixture.transport.send = async (_operation, secret) => {
+    assert.equal(secret.toString('ascii'), CANARY);
+    throw new SecretError('connector_timeout');
+  };
+  t.after(() => { fixture.transport.send = original; });
+  await assert.rejects(h.credentials.probe(owner, id, 'balance'), error => error instanceof SecretError && error.code === 'connector_timeout');
+  const after = h.credentials.list(owner)[0];
+  assert.equal(after.unreadable, false);
+  assert.equal(after.lastError, 'connector_timeout');
+  h.clean(JSON.stringify(after));
+});
+
+test('an authenticated probe failure cannot clear a replacement credential unreadable flag', async t => {
+  const h = await harness(); t.after(async () => { await h.app.close(); h.store.close(); });
+  const owner = h.users.get('alice')!;
+  const id = h.credentials.create(owner, 'test', CANARY).id;
+  let reject!: (error: Error) => void;
+  const original = fixture.transport.send;
+  fixture.transport.send = () => new Promise((_resolve, fail) => { reject = fail; });
+  t.after(() => { fixture.transport.send = original; });
+  const old = h.credentials.probe(owner, id, 'balance');
+  h.credentials.replace(owner, id, CANARY + '_replacement');
+  h.store.db.prepare("UPDATE credentials SET unreadable = 1, last_error = 'credential_unreadable' WHERE id = ?").run(id);
+  reject(new SecretError('connector_timeout'));
+  await assert.rejects(old, error => error instanceof SecretError && error.code === 'connector_timeout');
+  const current = h.credentials.list(owner)[0];
+  assert.equal(current.unreadable, true);
+  assert.equal(current.lastError, 'credential_unreadable');
+  h.clean(JSON.stringify(current));
 });

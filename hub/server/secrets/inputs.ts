@@ -1,4 +1,4 @@
-import {closeSync, fstatSync, openSync, readSync, realpathSync} from 'node:fs';
+import {closeSync, constants, fstatSync, openSync, readSync, realpathSync} from 'node:fs';
 import path from 'node:path';
 import {SecretError, SecretKey} from './crypto.js';
 
@@ -53,7 +53,8 @@ function readKeyFile(file: string, dataDir: string): SecretKey {
     const resolved = realpathSync(file);
     const relative = path.relative(realpathSync(dataDir), resolved);
     if (!relative || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))) throw new SecretError('secret_key_file_in_data');
-    fd = openSync(resolved, 'r');
+    // A FIFO must reach the descriptor check without waiting for a writer.
+    fd = openSync(resolved, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
     const stat = fstatSync(fd);
     if (!stat.isFile() || stat.size < 43 || stat.size > 45) throw new SecretError('secret_key_invalid');
     let count = 0;
