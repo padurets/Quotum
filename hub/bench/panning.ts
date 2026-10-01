@@ -42,7 +42,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
         const probe=window.__quotumPan={frames:[],latency:[],inputs:0,updated:0,pending:[],last:0,pushesDuring:0,pushesAfter:0,forbiddenMutations:0,undimmed:getComputedStyle(root).opacity==='1',coldReads:0,peakFlights:0,maxTiles:0,duplicateReads:0,flights:new Map(),running:true,feeding:false,segment:'wheel',samples:[]};
         const originalPush=history.pushState.bind(history);probe.originalPush=originalPush;
         history.pushState=(...args)=>{if(probe.feeding)probe.pushesDuring++;else probe.pushesAfter++;originalPush(...args);};
-        const input=e=>{if(e.type==='wheel'&&(!e.cancelable||(!e.deltaX&&!e.shiftKey)))return;if(e.type==='pointermove'&&!e.buttons)return;probe.inputs++;probe.pending.push(performance.now());};
+        const input=e=>{if(e.type==='wheel'&&(!e.cancelable||(!e.deltaX&&!e.shiftKey)))return;if(e.type==='pointermove'&&!e.buttons)return;probe.inputs++;const at=e.timeStamp>1e12?e.timeStamp-performance.timeOrigin:e.timeStamp;probe.pending.push(Math.min(performance.now(),at));};
         root.addEventListener('wheel',input,true);root.addEventListener('pointermove',input,true);probe.input=input;
         const originalFetch=window.fetch.bind(window);probe.originalFetch=originalFetch;
         window.fetch=async(...args)=>{
@@ -70,9 +70,6 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
         };probe.raf=requestAnimationFrame(tick);
       })()`);
       await cdp.send('Emulation.setCPUThrottlingRate', {rate: 4});
-      await cdp.send('Debugger.enable');
-      await cdp.send('Profiler.enable');
-      await cdp.send('Profiler.start');
       // A delayed cold edge is part of the moving interval, including arrivals/rebuilds.
       await cdp.send('Network.emulateNetworkConditions', {offline: false, latency: 400, downloadThroughput: -1, uploadThroughput: -1});
       interception = true;
@@ -100,25 +97,6 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
       await mouse('mouseReleased', geometry.x + 720, geometry.y, 8);
       await key(false, 'Shift', 16);
       await settled();
-      const {profile} = await cdp.send<{profile: {nodes: {id: number; children?: number[]; callFrame: {functionName: string; scriptId: string; lineNumber: number; columnNumber: number}}[]; samples: number[]; timeDeltas: number[]}}>('Profiler.stop');
-      const self = new Map<number, number>(), parents = new Map<number, number>(), nodes = new Map(profile.nodes.map(node => [node.id, node]));
-      for (const node of profile.nodes) for (const id of node.children ?? []) parents.set(id, node.id);
-      profile.samples.forEach((id, i) => self.set(id, (self.get(id) ?? 0) + profile.timeDeltas[i]));
-      const sources = new Map<string, string[]>();
-      const hot = [];
-      for (const node of [...profile.nodes].sort((a, b) => (self.get(b.id) ?? 0) - (self.get(a.id) ?? 0)).slice(0, 18)) {
-        const chain = [];
-        let id: number | undefined = node.id;
-        for (let i = 0; id && i < 4; i++) {
-          const frame = nodes.get(id)!.callFrame;
-          if (frame.scriptId !== '0' && !sources.has(frame.scriptId)) sources.set(frame.scriptId, (await cdp.send<{scriptSource: string}>('Debugger.getScriptSource', {scriptId: frame.scriptId})).scriptSource.split('\n'));
-          chain.push({name: frame.functionName, code: sources.get(frame.scriptId)?.[frame.lineNumber]?.slice(frame.columnNumber, frame.columnNumber + 180)});
-          id = parents.get(id);
-        }
-        hot.push({ms: Math.round((self.get(node.id) ?? 0) / 1000), chain});
-      }
-      console.log('pan CPU profile', period, JSON.stringify(hot));
-      await cdp.send('Debugger.disable');
       // Native Shift deltaX returns to live, then Back/Forward restore complete gestures.
       sent.length = 0;
       await cdp.evaluate(`window.__quotumPan.segment='return'`);

@@ -46,3 +46,13 @@ test('a changed strip reuses immutable activity cells while retaining exact edge
   assert.equal(a.activityCells.get(5 * M), b.activityCells.get(5 * M));
   assert.equal(plotBar(b, 0, {...target, k0: 1}, 'project')!.agentMs, 55 * M);
 });
+
+test('filling an unread bridge joins the new line without rewriting an earlier plot', () => {
+  const target = targetOf(24 * H, NOW, 'strip', {from: 0, to: 3 * H});
+  const first = chunk(0, H), last = chunk(2 * H, 3 * H), windows = new Set(['s w']);
+  const before = plotOf([first, last], meta, target, [[0, H], [2 * H, 3 * H]], windows, 1, 1, 1);
+  const after = plotOf([first, chunk(H, 2 * H), last], meta, target, [[0, 3 * H]], windows, 1, 1, 2);
+  assert.equal(before.series[0].points[0], after.series[0].points[0], 'unchanged block points are reused');
+  assert.equal(before.series[0].points[12][2], 2, 'the original unread hole still breaks its line');
+  assert.equal(after.series[0].points[24][2], 1, 'the newly covered bridge is continuous');
+});

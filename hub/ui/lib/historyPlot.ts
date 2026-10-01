@@ -5,6 +5,18 @@ import type {PlotBlock, PlotSeries} from './lines';
 
 // Weak keys release decoded rows with the store's bounded current/replacing strip.
 const decoded = new WeakMap<SeriesCells, {from: number; cell: number; full: PlotBlock; cuts: Map<string, PlotBlock>}>();
+const linePoints = new WeakMap<PlotBlock, Map<number, PlotSeries['points']>>();
+function pointsOf(block: PlotBlock, offset: number) {
+  let offsets = linePoints.get(block);
+  if (!offsets) {offsets = new Map(); linePoints.set(block, offsets);}
+  let points = offsets.get(offset);
+  if (!points) {
+    points = block.points.map(([at, low, segment]) => [at, low, segment + offset]);
+    offsets.set(offset, points);
+    if (offsets.size > 2) offsets.delete(offsets.keys().next().value!);
+  }
+  return points;
+}
 function blockOf(values: SeriesCells, chunk: Chunk, cell: number, from: number, to: number): PlotBlock {
   let saved = decoded.get(values);
   if (!saved || saved.from !== chunk.from || saved.cell !== cell) {
@@ -82,7 +94,7 @@ export function covered(coverage: Coverage, from: number, to: number): boolean {
 /** Decodes plot data without computing frame totals, ranks or sets for every dimension. */
 export function plotOf(chunks: readonly Chunk[], meta: HistoryMeta, target: Target, coverage: Coverage, windows: ReadonlySet<string>, token: number, epoch: number, version: number): PlotBuffer {
   const from = target.k0 * target.cell, to = (target.k1 + 1) * target.cell;
-  const series = new Map<string, {line: PlotSeries; last: number; segment: number}>();
+  const series = new Map<string, {line: PlotSeries; parts: PlotSeries['points'][]; last: number; segment: number}>();
   const activityCells = new Map<number, PlotBar>();
   const events: SourceEvent[] = [];
   for (const chunk of chunks) {
@@ -94,16 +106,15 @@ export function plotOf(chunks: readonly Chunk[], meta: HistoryMeta, target: Targ
       const first = block.points[0];
       if (!first) continue;
       const join = !!row && !block.gap && covered(coverage, row.last, first[0] + target.cell);
-      if (!row) {row = {line: {sourceId: values.source, windowId: values.window, points: [], staleAfterMs: first[3], blocks: []}, last: first[0], segment: 1}; series.set(key, row);}
+      if (!row) {row = {line: {sourceId: values.source, windowId: values.window, points: [], staleAfterMs: first[3], blocks: []}, parts: [], last: first[0], segment: 1}; series.set(key, row);}
       else if (!join) row.segment++;
       row.line.blocks!.push({block, join});
       const offset = row.segment - first[2];
-      for (const [at, low, segment, hold] of block.points) {
-        row.line.points.push([at, low, segment + offset]);
-        row.line.staleAfterMs = hold;
-        row.last = at;
-        row.segment = segment + offset;
-      }
+      row.parts.push(pointsOf(block, offset));
+      const last = block.points.at(-1)!;
+      row.line.staleAfterMs = last[3];
+      row.last = last[0];
+      row.segment = last[2] + offset;
     }
     for (const [at, row] of activityOf(chunk, target.cell)) {
       if (at < from || at >= to) continue;
@@ -117,7 +128,7 @@ export function plotOf(chunks: readonly Chunk[], meta: HistoryMeta, target: Targ
     }
     for (const [sourceId, at, count] of chunk.grants) if (at >= from && at < to) events.push({sourceId, at, kind: 'resets_granted', count});
   }
-  return {token, epoch, version, from, to, cell: target.cell, length: target.length, coverage, series: [...series.values()].map(r => r.line), events: events.sort((a, b) => a.at - b.at), activityCells, barMs: barOf(target.cell, target.length), knownFrom: Math.max(meta.known.work, ...(Object.keys(meta.known.sources).length ? [Math.min(...Object.values(meta.known.sources))] : []))};
+  return {token, epoch, version, from, to, cell: target.cell, length: target.length, coverage, series: [...series.values()].map(r => ({...r.line, points: ([] as PlotSeries['points']).concat(...r.parts)})), events: events.sort((a, b) => a.at - b.at), activityCells, barMs: barOf(target.cell, target.length), knownFrom: Math.max(meta.known.work, ...(Object.keys(meta.known.sources).length ? [Math.min(...Object.values(meta.known.sources))] : []))};
 }
 
 /** A bar is all of its contributing whole cells, or unknown; never a partial stack. */

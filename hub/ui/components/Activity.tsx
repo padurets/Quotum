@@ -12,6 +12,7 @@ import {useClock} from '../lib/clock';
 import {useHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
 import {plotBar, plotGroups, type PlotBuffer, type PlotGroup} from '../lib/historyPlot';
 import {groupRegistry, type GroupIdentity} from '../lib/plotRegistry';
+import {StackPaths} from '../lib/stackPaths';
 import {pan, usePanning} from '../lib/pan';
 import {targetOf, cellStart} from '../../server/domain/history';
 import {colorOf} from '../lib/view';
@@ -367,33 +368,10 @@ function Stacks({
   // the start of the answer (`origin`) and moved into place whole, clipped to the plot: as
   // the clock moves the frame on by a cell, only where they stand changes.
   const perMs = (width - left - right) / span;
-  const pathOrigin = strip?.from ?? origin;
+  const pathOrigin = strip ? basis.from : origin;
+  const stackPaths = useRef(new StackPaths());
   const paths = useMemo(() => {
-    const base = new Map<number, number>();
-    const edge = (value: number) => value.toFixed(1);
-    const at = (time: number) => (time - pathOrigin) * perMs;
-    const apart = perMs * barMs >= 8;
-    const gap = apart ? 0.5 : 0;
-    return groups.map(({group}) => {
-      const runs: {x0: number; x1: number; low: number; high: number}[][] = [];
-      let previous: number | null = null;
-      for (const [start, ms] of group.cells) {
-        const low = base.get(start) ?? 0;
-        const high = low + ms;
-        base.set(start, high);
-        const bar = {x0: at(start) + gap, x1: at(start + barMs) - gap, low, high};
-        if (!apart && previous === start - barMs) runs.at(-1)!.push(bar);
-        else runs.push([bar]);
-        previous = start;
-      }
-      return runs
-        .map(run => {
-          const top = run.flatMap(bar => [`${edge(bar.x0)},${edge(y(bar.high))}`, `${edge(bar.x1)},${edge(y(bar.high))}`]);
-          const bottom = [...run].reverse().flatMap(bar => [`${edge(bar.x1)},${edge(y(bar.low))}`, `${edge(bar.x0)},${edge(y(bar.low))}`]);
-          return `M${[...top, ...bottom].join('L')}Z`;
-        })
-        .join('');
-    });
+    return stackPaths.current.draw(groups, pathOrigin, perMs, barMs, height, vertical.max);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groups, pathOrigin, perMs, barMs, height, vertical.max]);
 
