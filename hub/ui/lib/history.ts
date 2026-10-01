@@ -15,6 +15,8 @@ import {plotOf, type Coverage, type PlotBuffer} from './historyPlot';
 const SETTLE_MS = 300;
 const RETRY_MS = 15_000;
 const STORED_BYTES = 15 * 1024 * 1024;
+// A pan merges one tile per flight so input never waits behind a whole frame's decode.
+const PAN_READ_TILES = 1;
 
 export type HistoryEnv = {
   read(board: string, cell: number, from: number, to: number, signal?: AbortSignal): Promise<HistoryAnswer>;
@@ -387,9 +389,10 @@ export class HistoryStore {
     const first = this.tile(at, target.cell);
     const from = first.readTo === first.readFrom ? at : at < first.readFrom ? first.from : first.validTo;
     let last = at;
+    const maxTiles = this.interest ? PAN_READ_TILES : MAX_READ_TILES;
     for (const next of bad) {
       if (next <= at) continue;
-      if (next > last + target.cell || tileOf(next, target.cell) - tileOf(from, target.cell) >= MAX_READ_TILES || blocked(next)) break;
+      if (next > last + target.cell || tileOf(next, target.cell) - tileOf(from, target.cell) >= maxTiles || blocked(next)) break;
       last = next;
     }
     const to = Math.min(tileEnd(tileOf(last, target.cell), target.cell), cellStart(Math.max(this.env.now(), this.meta?.now ?? 0), target.cell) + 2 * target.cell);

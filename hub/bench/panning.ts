@@ -48,8 +48,8 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
           const url=new URL(String(args[0]),location.href);if(url.pathname!='/api/history')return originalFetch(...args);
           const cell=Number(url.searchParams.get('cell')),from=Number(url.searchParams.get('from')),to=Number(url.searchParams.get('to')),tiles=Math.floor((to-1)/(cell*60))-Math.floor(from/(cell*60))+1;
           for(const f of probe.flights.values())if(f.cell===cell&&f.from<to&&f.to>from)probe.duplicateReads++;
-          const id={};probe.flights.set(id,{cell,from,to});probe.peakFlights=Math.max(probe.peakFlights,probe.flights.size);probe.maxTiles=Math.max(probe.maxTiles,tiles);probe.coldReads++;
-          try {return await originalFetch(...args);}finally{probe.flights.delete(id);}
+          const id={},signal=args[1]?.signal,aborted=()=>probe.flights.delete(id);probe.flights.set(id,{cell,from,to});signal?.addEventListener('abort',aborted,{once:true});probe.peakFlights=Math.max(probe.peakFlights,probe.flights.size);probe.maxTiles=Math.max(probe.maxTiles,tiles);probe.coldReads++;
+          try {return await originalFetch(...args);}finally{probe.flights.delete(id);signal?.removeEventListener('abort',aborted);}
         };
         probe.observer=new MutationObserver(records=>{
           if(!probe.running||!probe.feeding)return;
