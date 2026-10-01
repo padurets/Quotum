@@ -344,6 +344,14 @@ pub fn run_hub(shell: Arc<Shell>) {
 }
 
 fn attempt(shell: &Arc<Shell>, keys: &mut Option<crate::keys::Manager>) -> Ending {
+    let ending = start_hub(shell, keys);
+    if keys.as_mut().is_some_and(|keys| keys.attempt_ended(&shell.secret_keys)) {
+        shell.wake();
+    }
+    ending
+}
+
+fn start_hub(shell: &Arc<Shell>, keys: &mut Option<crate::keys::Manager>) -> Ending {
     let port = shell.port();
     let secrets = Secrets::new();
     let (script, cwd) = hub::script(&shell.hub_dir);

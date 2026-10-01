@@ -66,6 +66,13 @@ enum Job {
     Create(KeyRef, Kek),
     Delete(Vec<(KeyRef, String)>, String),
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum JobKind {
+    Scan,
+    Create,
+    Rotate,
+    Delete,
+}
 enum Work {
     Scan(Scan),
     Created(KeyRef, Kek),
@@ -114,6 +121,9 @@ impl Worker {
                         Ok(Work::Deleted(deleted))
                     })(),
                 };
+                if work.as_ref().is_err_and(|error| stale_store(*error)) {
+                    store = None;
+                }
                 if results.send((token, work)).is_err() {
                     return;
                 }
@@ -123,6 +133,9 @@ impl Worker {
     }
 }
 type StoreFactory = Box<dyn FnMut(&str) -> Result<Box<dyn StorePort>, ErrorCode> + Send>;
+fn stale_store(error: ErrorCode) -> bool {
+    matches!(error, ErrorCode::Unavailable | ErrorCode::StoreFailure)
+}
 fn scan(
     files: &dyn FilePort,
     store: &mut Option<Box<dyn StorePort>>,
@@ -133,6 +146,7 @@ fn scan(
         Scan { candidates: Vec::new(), complete: true, available: false, absent: false, code: None, names: Vec::new() };
     let mut refs: HashSet<KeyRef> = refs.into_iter().collect();
     let mut store_search_failed = false;
+    let mut store_stale = false;
     match files.names() {
         Ok(names) => {
             scan.names.extend(names.clone());
@@ -150,6 +164,7 @@ fn scan(
             Err(error) => {
                 scan.complete = false;
                 scan.code = Some(error);
+                store_stale |= stale_store(error);
             }
         }
     }
@@ -159,6 +174,7 @@ fn scan(
             Err(error) => {
                 scan.complete = false;
                 scan.code = Some(error);
+                store_stale |= stale_store(error);
             }
         }
         match store.names() {
@@ -177,12 +193,13 @@ fn scan(
                 scan.complete = false;
                 scan.code = Some(error);
                 store_search_failed = true;
+                store_stale |= stale_store(error);
             }
         }
     }
     for reference in refs {
         // A cancelled search must not immediately ask for another unlock of a known item.
-        if store_search_failed && reference.kind == Kind::Keystore {
+        if (store_search_failed || store_stale) && reference.kind == Kind::Keystore {
             scan.names.push(reference.name);
             continue;
         }
@@ -198,8 +215,14 @@ fn scan(
             Err(error) => {
                 scan.complete = false;
                 scan.code = Some(error);
+                store_stale |= reference.kind == Kind::Keystore && stale_store(error);
             }
         }
+    }
+    // A completed transport failure can leave an owner-specific session unusable.
+    // Reconnect on the next job, never alongside a pending native prompt.
+    if store_stale {
+        *store = None;
     }
     scan
 }
@@ -338,7 +361,7 @@ pub struct Manager {
     reset_intent: Option<String>,
     generation: u64,
     token: u64,
-    in_flight: Option<(u64, u64, Instant)>,
+    in_flight: Option<(u64, u64, Instant, JobKind)>,
     attempted: HashSet<(Option<String>, KeyRef)>,
     restarts: usize,
     maximum: u64,
@@ -406,6 +429,11 @@ impl Manager {
         self.current.as_ref().and_then(|r| self.key(r)).map(Kek::fingerprint)
     }
     fn reserve(&mut self, kind: Kind) -> Result<KeyRef, ErrorCode> {
+        // The native scan can still be waiting for unlock. Its local reservations
+        // already exist on disk and must not wait for that aggregate result.
+        for name in self.files.names()? {
+            self.maximum = self.maximum.max(self.files.number(&name).unwrap_or(0));
+        }
         self.maximum = self.maximum.checked_add(1).ok_or(ErrorCode::Overflow)?;
         let name = self.files.name(self.maximum)?;
         self.files.reserve(&name)?;
@@ -422,8 +450,14 @@ impl Manager {
             return Err(ErrorCode::Timeout);
         }
         self.token = self.token.checked_add(1).ok_or(ErrorCode::Overflow)?;
+        let kind = match &job {
+            Job::Scan(_) => JobKind::Scan,
+            Job::Create(_, _) if self.rotation_staged => JobKind::Rotate,
+            Job::Create(_, _) => JobKind::Create,
+            Job::Delete(_, _) => JobKind::Delete,
+        };
         self.worker.send.send((self.token, job)).map_err(|_| ErrorCode::StoreFailure)?;
-        self.in_flight = Some((self.token, self.generation, Instant::now()));
+        self.in_flight = Some((self.token, self.generation, Instant::now(), kind));
         Ok(())
     }
     fn search(&mut self) -> Result<(), ErrorCode> {
@@ -477,7 +511,6 @@ impl Manager {
         true
     }
     pub fn startup_failure(&mut self) -> bool {
-        self.reset_pending = false;
         if self.previous.is_none() || self.rotation_failures >= 2 {
             return false;
         }
@@ -487,6 +520,16 @@ impl Manager {
             self.current = self.previous.take();
         }
         true
+    }
+    /// An input consumed by a failed spawn must not keep later explicit resets busy.
+    pub fn attempt_ended(&mut self, control: &Control) -> bool {
+        if self.reset_pending && self.reset_intent.is_none() && self.report.is_none() {
+            self.reset_pending = false;
+            control.publish(PublicState { busy: false, ..control.state() });
+            true
+        } else {
+            false
+        }
     }
     pub fn tick(&mut self, control: &Control) -> bool {
         let result = self.advance(control);
@@ -532,12 +575,24 @@ impl Manager {
     }
     fn advance(&mut self, control: &Control) -> Result<bool, ErrorCode> {
         if let Ok((token, work)) = self.worker.received.try_recv() {
-            let Some((expected, generation, _)) = self.in_flight.take() else { return Err(ErrorCode::StaleReport) };
+            let Some((expected, generation, _, kind)) = self.in_flight.take() else {
+                return Err(ErrorCode::StaleReport);
+            };
             if token != expected {
                 return Err(ErrorCode::StaleReport);
             }
             if generation == self.generation {
-                match work? {
+                let work = match work {
+                    Ok(work) => work,
+                    Err(error) => {
+                        if kind == JobKind::Rotate {
+                            self.rotation_staged = false;
+                            self.scan = None;
+                        }
+                        return Err(error);
+                    }
+                };
+                match work {
                     Work::Scan(scan) => {
                         self.names_seen |= !scan.names.is_empty();
                         for name in &scan.names {
@@ -594,14 +649,14 @@ impl Manager {
         if control.reset.swap(false, Ordering::SeqCst) {
             return self.reset();
         }
-        if self.in_flight.is_some_and(|(_, _, started)| started.elapsed() >= Duration::from_secs(60)) {
+        if self.in_flight.is_some_and(|(_, _, started, _)| started.elapsed() >= Duration::from_secs(60)) {
             self.code = Some(ErrorCode::Timeout);
         }
         let Some(report) = self.report.clone() else { return Ok(false) };
         if self.reset_pending && matches!(report.outcome, Outcome::Created | Outcome::Ok) {
             self.reset_pending = false;
         }
-        if self.scan.is_none() && self.in_flight.is_none() {
+        if self.scan.is_none() && self.in_flight.is_none() && (self.code.is_none() || Instant::now() >= self.retry_at) {
             self.search()?;
         }
         if self.next_on_open && self.scan.is_some() && self.in_flight.is_none() {
@@ -788,6 +843,7 @@ impl Manager {
         self.previous = None;
         self.candidates.push(Candidate { reference, key });
         self.reset_pending = true;
+        self.rotation_staged = false;
         self.scan = None;
         self.code = None;
         self.restarts += 1;
@@ -1204,6 +1260,247 @@ mod tests {
         assert_eq!(store.lock().unwrap().keys.len(), 1);
     }
     #[test]
+    fn recovery_reconnects_a_stale_session_but_keeps_a_locked_one() {
+        use std::sync::atomic::AtomicUsize;
+        struct Session {
+            owner: usize,
+            current_owner: Arc<AtomicUsize>,
+            unlocked: Arc<AtomicBool>,
+        }
+        impl StorePort for Session {
+            fn names(&self) -> Result<Vec<String>, ErrorCode> {
+                Ok(vec![reference(8, Kind::Keystore).name])
+            }
+            fn read(&self, _: &str) -> Result<Kek, ErrorCode> {
+                if self.owner != self.current_owner.load(Ordering::SeqCst) {
+                    Err(ErrorCode::StoreFailure)
+                } else if !self.unlocked.load(Ordering::SeqCst) {
+                    Err(ErrorCode::NoAccess)
+                } else {
+                    Ok(key(0))
+                }
+            }
+            fn create(&self, _: &str, _: &Kek) -> Result<(), ErrorCode> {
+                panic!("recovery must not replace the key")
+            }
+            fn remove(&self, _: &KeyRef) -> Result<(), ErrorCode> {
+                panic!("recovery must preserve keys")
+            }
+        }
+        let files = Arc::new(FakeFiles::default());
+        let owner = Arc::new(AtomicUsize::new(1));
+        let unlocked = Arc::new(AtomicBool::new(false));
+        let builds = Arc::new(AtomicUsize::new(0));
+        let (current_owner, readable, constructed) = (owner.clone(), unlocked.clone(), builds.clone());
+        let mut manager = Manager::with_ports(
+            files.clone(),
+            Box::new(move |_| {
+                constructed.fetch_add(1, Ordering::SeqCst);
+                Ok(Box::new(Session {
+                    owner: current_owner.load(Ordering::SeqCst),
+                    current_owner: current_owner.clone(),
+                    unlocked: readable.clone(),
+                }))
+            }),
+        )
+        .unwrap();
+        let control = Control::default();
+        started(&mut manager, Some(key(0).fingerprint()), Outcome::Missing, 2, 0);
+        until(&mut manager, &control, |m| m.scan.is_some() && m.in_flight.is_none());
+        assert_eq!(builds.load(Ordering::SeqCst), 1);
+        manager.retry_at = Instant::now();
+        manager.tick(&control);
+        until(&mut manager, &control, |m| m.in_flight.is_none());
+        assert_eq!(builds.load(Ordering::SeqCst), 1, "a locked session can still finish after unlock");
+        owner.store(2, Ordering::SeqCst);
+        unlocked.store(true, Ordering::SeqCst);
+        manager.retry_at = Instant::now();
+        manager.tick(&control);
+        until(&mut manager, &control, |m| m.in_flight.is_none());
+        assert_eq!(manager.code, Some(ErrorCode::StoreFailure));
+        assert_eq!(builds.load(Ordering::SeqCst), 1, "the failed job must finish before recreation");
+        assert!(manager.current.is_none());
+        assert!(files.data.lock().unwrap().keys.is_empty());
+        manager.retry_at = Instant::now();
+        assert!(until(&mut manager, &control, |m| m.current.is_some()));
+        assert_eq!(builds.load(Ordering::SeqCst), 2);
+        assert_eq!(manager.current, Some(reference(8, Kind::Keystore)));
+        assert_eq!(manager.supplied(), Some(key(0).fingerprint()));
+        assert!(manager.marker.as_ref().unwrap().previous.is_empty());
+        assert!(files.data.lock().unwrap().keys.is_empty());
+    }
+    #[test]
+    fn a_soft_deadline_never_reconnects_alongside_the_pending_store_job() {
+        use std::sync::atomic::AtomicUsize;
+        struct Lost {
+            entered: Sender<()>,
+            released: Mutex<Receiver<()>>,
+        }
+        impl StorePort for Lost {
+            fn names(&self) -> Result<Vec<String>, ErrorCode> {
+                self.entered.send(()).unwrap();
+                self.released.lock().unwrap().recv().unwrap();
+                Err(ErrorCode::StoreFailure)
+            }
+            fn read(&self, _: &str) -> Result<Kek, ErrorCode> {
+                panic!("a failed search must not immediately read again")
+            }
+            fn create(&self, _: &str, _: &Kek) -> Result<(), ErrorCode> {
+                panic!("recovery must not create a key")
+            }
+            fn remove(&self, _: &KeyRef) -> Result<(), ErrorCode> {
+                panic!("recovery must preserve keys")
+            }
+        }
+        let (entered, blocked) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let mut lost = Some(Lost { entered, released: Mutex::new(released) });
+        let store = Arc::new(Mutex::new(StoreData::default()));
+        store.lock().unwrap().keys.insert(reference(8, Kind::Keystore).name, key(0).encoded().into_bytes());
+        let builds = Arc::new(AtomicUsize::new(0));
+        let constructed = builds.clone();
+        let mut manager = Manager::with_ports(
+            Arc::new(FakeFiles::default()),
+            Box::new(move |_| {
+                constructed.fetch_add(1, Ordering::SeqCst);
+                if let Some(lost) = lost.take() { Ok(Box::new(lost)) } else { Ok(Box::new(FakeStore(store.clone()))) }
+            }),
+        )
+        .unwrap();
+        let control = Control::default();
+        started(&mut manager, Some(key(0).fingerprint()), Outcome::Missing, 2, 0);
+        manager.tick(&control);
+        blocked.recv_timeout(Duration::from_secs(2)).unwrap();
+        let token = manager.in_flight.as_ref().unwrap().0;
+        manager.in_flight.as_mut().unwrap().2 = Instant::now() - Duration::from_secs(61);
+        for _ in 0..10 {
+            manager.retry_at = Instant::now();
+            manager.tick(&control);
+            assert_eq!(builds.load(Ordering::SeqCst), 1);
+            assert_eq!(manager.in_flight.as_ref().unwrap().0, token);
+        }
+        assert_eq!(control.state().state, State::Waiting);
+        release.send(()).unwrap();
+        until(&mut manager, &control, |m| m.in_flight.is_none());
+        assert_eq!(builds.load(Ordering::SeqCst), 1);
+        manager.retry_at = Instant::now();
+        assert!(until(&mut manager, &control, |m| m.current.is_some()));
+        assert_eq!(builds.load(Ordering::SeqCst), 2);
+        assert_eq!(manager.current, Some(reference(8, Kind::Keystore)));
+    }
+    #[test]
+    fn a_stale_rotation_create_rechecks_the_store_and_preserves_its_orphan() {
+        use std::sync::atomic::AtomicUsize;
+        struct Session {
+            owner: usize,
+            current_owner: Arc<AtomicUsize>,
+            store: Arc<Mutex<StoreData>>,
+            block: Arc<Mutex<Option<Block>>>,
+            write_succeeded: bool,
+        }
+        impl StorePort for Session {
+            fn names(&self) -> Result<Vec<String>, ErrorCode> {
+                if self.owner != self.current_owner.load(Ordering::SeqCst) {
+                    Err(ErrorCode::StoreFailure)
+                } else {
+                    FakeStore(self.store.clone()).names()
+                }
+            }
+            fn read(&self, name: &str) -> Result<Kek, ErrorCode> {
+                if self.owner != self.current_owner.load(Ordering::SeqCst) {
+                    Err(ErrorCode::StoreFailure)
+                } else {
+                    FakeStore(self.store.clone()).read(name)
+                }
+            }
+            fn create(&self, name: &str, value: &Kek) -> Result<(), ErrorCode> {
+                let block = self.block.lock().unwrap().take();
+                if let Some(block) = block {
+                    if self.write_succeeded {
+                        FakeStore(self.store.clone()).create(name, value)?;
+                    }
+                    block.entered.send(()).unwrap();
+                    block.released.lock().unwrap().recv().unwrap();
+                    self.read(name).map(|_| ())
+                } else {
+                    FakeStore(self.store.clone()).create(name, value)?;
+                    self.read(name).map(|_| ())
+                }
+            }
+            fn remove(&self, _: &KeyRef) -> Result<(), ErrorCode> {
+                panic!("a failed staging operation cannot authorize deletion")
+            }
+        }
+        for write_succeeded in [false, true] {
+            let files = Arc::new(FakeFiles::default());
+            let old = reference(1, Kind::File);
+            let old_fp = key(0).fingerprint().to_owned();
+            {
+                let mut disk = files.data.lock().unwrap();
+                disk.keys.insert(old.name.clone(), key(0).encoded().into_bytes());
+                disk.marker =
+                    Some(Marker { version: 1, current: old.clone(), next: None, previous: Vec::new(), was_file: true });
+            }
+            let (entered, blocked) = mpsc::channel();
+            let (release, released) = mpsc::channel();
+            let block = Arc::new(Mutex::new(Some(Block { entered, released: Mutex::new(released) })));
+            let store = Arc::new(Mutex::new(StoreData::default()));
+            let owner = Arc::new(AtomicUsize::new(1));
+            let builds = Arc::new(AtomicUsize::new(0));
+            let (current_owner, backing, pending, constructed) =
+                (owner.clone(), store.clone(), block.clone(), builds.clone());
+            let mut manager = Manager::with_ports(
+                files.clone(),
+                Box::new(move |_| {
+                    constructed.fetch_add(1, Ordering::SeqCst);
+                    Ok(Box::new(Session {
+                        owner: current_owner.load(Ordering::SeqCst),
+                        current_owner: current_owner.clone(),
+                        store: backing.clone(),
+                        block: pending.clone(),
+                        write_succeeded,
+                    }))
+                }),
+            )
+            .unwrap();
+            let control = Control::default();
+            started(&mut manager, Some(&old_fp), Outcome::Missing, 1, 0);
+            until(&mut manager, &control, |m| m.current.is_some());
+            started(&mut manager, Some(&old_fp), Outcome::Ok, 1, 0);
+            manager.tick(&control);
+            blocked.recv_timeout(Duration::from_secs(2)).unwrap();
+            let token = manager.in_flight.as_ref().unwrap().0;
+            manager.in_flight.as_mut().unwrap().2 = Instant::now() - Duration::from_secs(61);
+            manager.retry_at = Instant::now();
+            manager.tick(&control);
+            assert_eq!(manager.in_flight.as_ref().unwrap().0, token);
+            assert_eq!(builds.load(Ordering::SeqCst), 1);
+            assert_eq!(manager.current, Some(old.clone()));
+            owner.store(2, Ordering::SeqCst);
+            release.send(()).unwrap();
+            until(&mut manager, &control, |m| m.in_flight.is_none());
+            assert_eq!(manager.code, Some(ErrorCode::StoreFailure));
+            assert!(!manager.rotation_staged);
+            assert!(manager.scan.is_none(), "the prior writable/complete facts are obsolete");
+            assert!(manager.marker.as_ref().unwrap().next.is_none());
+            for _ in 0..10 {
+                manager.tick(&control);
+                assert!(manager.in_flight.is_none(), "backoff precedes the fresh scan");
+                assert_eq!(builds.load(Ordering::SeqCst), 1);
+            }
+            manager.retry_at = Instant::now();
+            assert!(!until(&mut manager, &control, |m| m.marker.as_ref().unwrap().next.is_some()));
+            assert_eq!(builds.load(Ordering::SeqCst), 2);
+            assert_eq!(manager.marker.as_ref().unwrap().next, Some(reference(3, Kind::Keystore)));
+            assert_eq!(manager.current, Some(old.clone()));
+            assert_eq!(manager.supplied(), Some(old_fp.as_str()));
+            assert!(manager.marker.as_ref().unwrap().previous.is_empty());
+            assert_eq!(store.lock().unwrap().keys.contains_key(&reference(2, Kind::Keystore).name), write_succeeded);
+            assert!(files.data.lock().unwrap().reserved.contains(&reference(2, Kind::Keystore).name));
+            assert!(files.data.lock().unwrap().keys.contains_key(&old.name));
+        }
+    }
+    #[test]
     fn complete_no_entry_updates_waiting_to_missing_without_restarting_hub() {
         let mut manager = manager(Arc::new(FakeFiles::default()), Some(Arc::new(Mutex::new(StoreData::default()))));
         let control = Control::default();
@@ -1291,6 +1588,115 @@ mod tests {
         assert!(!manager.environment().iter().any(|(name, _)| name == "QUOTUM_SECRET_KEY_RESET"));
         assert_eq!(manager.supplied(), Some(target.as_str()));
         assert!(manager.marker.as_ref().unwrap().previous.is_empty());
+    }
+    #[test]
+    fn a_lost_reset_attempt_finishes_busy_without_replaying_its_input() {
+        let files = Arc::new(FakeFiles::default());
+        let mut manager = manager(files.clone(), None);
+        let control = Control::default();
+        let old = key(0).fingerprint().to_owned();
+        started(&mut manager, Some(&old), Outcome::Missing, 2, 0);
+        until(&mut manager, &control, |m| m.scan.is_some() && m.in_flight.is_none());
+        control.request_reset().unwrap();
+        assert!(manager.tick(&control));
+        assert!(control.state().busy);
+        assert!(!manager.attempt_ended(&control), "the planned restart still has an unconsumed input");
+        assert!(manager.environment().iter().any(|(name, _)| name == "QUOTUM_SECRET_KEY_RESET"));
+        assert!(manager.attempt_ended(&control), "every no-report ending finishes the consumed action");
+        assert!(!control.state().busy);
+        assert!(!manager.reset_pending);
+        assert_eq!(files.data.lock().unwrap().keys.len(), 1);
+        let new = manager.supplied().unwrap().to_owned();
+        let ordinary = manager.environment();
+        assert!(!ordinary.iter().any(|(name, _)| name == "QUOTUM_SECRET_KEY_RESET"));
+        assert!(manager.report(Report {
+            outcome: Outcome::Mismatch,
+            stored: Some(old.clone()),
+            current: Some(new),
+            credentials: 2,
+            unreadable: 0,
+        }));
+        assert!(until(&mut manager, &control, |m| m.current.is_none()));
+        started(&mut manager, Some(&old), Outcome::Missing, 2, 0);
+        until(&mut manager, &control, |m| m.scan.is_some() && m.in_flight.is_none());
+        assert!(control.state().reset_available);
+        assert!(!control.state().busy);
+        control.request_reset().unwrap();
+        assert!(manager.tick(&control), "a fresh explicit action can recover again");
+        assert_eq!(files.data.lock().unwrap().keys.len(), 2, "the first key was preserved");
+    }
+    fn private_test_directory(path: &Path) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            std::fs::DirBuilder::new().mode(0o700).create(path).unwrap();
+        }
+        #[cfg(windows)]
+        super::super::windows::private_directory(path).unwrap();
+    }
+    #[test]
+    fn reset_reads_local_reservations_while_the_native_scan_is_pending() {
+        struct Pending {
+            name: String,
+            entered: Sender<()>,
+            released: Mutex<Receiver<()>>,
+        }
+        impl StorePort for Pending {
+            fn names(&self) -> Result<Vec<String>, ErrorCode> {
+                self.entered.send(()).unwrap();
+                self.released.lock().unwrap().recv().unwrap();
+                Ok(vec![self.name.clone()])
+            }
+            fn read(&self, _: &str) -> Result<Kek, ErrorCode> {
+                Err(ErrorCode::NoAccess)
+            }
+            fn create(&self, _: &str, _: &Kek) -> Result<(), ErrorCode> {
+                panic!("reset must not start another native operation")
+            }
+            fn remove(&self, _: &KeyRef) -> Result<(), ErrorCode> {
+                panic!("reset must preserve old keys")
+            }
+        }
+        let parent = std::env::var_os("QUOTUM_TEST_PRIVATE_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| {
+            #[cfg(unix)]
+            let parent = std::env::var_os("CARGO_HOME")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::path::PathBuf::from(std::env::var_os("HOME").unwrap()).join(".cache"));
+            #[cfg(windows)]
+            let parent = std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap());
+            parent
+        });
+        let root = parent.join(format!("pending-reservations-{}-{}", std::process::id(), getrandom::u64().unwrap()));
+        private_test_directory(&root);
+        let app = root.join("app");
+        private_test_directory(&app);
+        let files = Arc::new(Files::new(&app).unwrap());
+        for number in [1, 2, 9] {
+            files.reserve(&files.name(number).unwrap()).unwrap();
+        }
+        let (entered, blocked) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let mut pending = Some(Pending { name: files.name(9).unwrap(), entered, released: Mutex::new(released) });
+        let mut manager =
+            Manager::with_ports(files.clone(), Box::new(move |_| Ok(Box::new(pending.take().unwrap())))).unwrap();
+        let control = Control::default();
+        started(&mut manager, Some(key(0).fingerprint()), Outcome::Missing, 2, 0);
+        manager.tick(&control);
+        blocked.recv_timeout(Duration::from_secs(2)).unwrap();
+        manager.in_flight.as_mut().unwrap().2 = Instant::now() - Duration::from_secs(61);
+        manager.tick(&control);
+        control.request_reset().unwrap();
+        assert!(manager.tick(&control));
+        assert_eq!(manager.current.as_ref().unwrap().name, files.name(10).unwrap());
+        assert!(manager.reset_intent.is_some());
+        assert!(files.root.join(files.name(10).unwrap()).exists());
+        for number in [1, 2, 9] {
+            assert!(files.root.join(format!("{}.reserved", files.name(number).unwrap())).exists());
+        }
+        release.send(()).unwrap();
+        until(&mut manager, &control, |m| m.in_flight.is_none());
+        drop(manager);
+        std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn late_store_creation_after_reset_remains_an_orphan_without_changing_current() {
@@ -1412,17 +1818,26 @@ mod tests {
         assert!(manager.environment().iter().any(|(name, value)| name == "QUOTUM_SECRET_KEY_STATE" && value == "file"));
         assert!(files.data.lock().unwrap().keys.contains_key(&reference(9, Kind::File).name));
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     #[test]
     #[ignore = "requires an explicitly initialized native test store and private test directory"]
     fn native_controller_recovers_pointer_stages_rotation_and_preserves_foreign_keys() {
-        use std::os::unix::fs::DirBuilderExt;
         assert_eq!(std::env::var("QUOTUM_KEYRING_SMOKE").ok().as_deref(), Some("1"));
-        let parent = std::path::PathBuf::from(std::env::var_os("QUOTUM_TEST_PRIVATE_DIR").unwrap());
+        let parent = std::env::var_os("QUOTUM_TEST_PRIVATE_DIR").or({
+            #[cfg(windows)]
+            {
+                std::env::var_os("LOCALAPPDATA")
+            }
+            #[cfg(not(windows))]
+            {
+                None
+            }
+        });
+        let parent = std::path::PathBuf::from(parent.unwrap());
         let root = parent.join(format!("native-controller-{}-{}", std::process::id(), getrandom::u64().unwrap()));
-        std::fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        private_test_directory(&root);
         let app = root.join("app");
-        std::fs::DirBuilder::new().mode(0o700).create(&app).unwrap();
+        private_test_directory(&app);
         let files = Files::new(&app).unwrap();
         let old = KeyRef { kind: Kind::File, name: files.name(1).unwrap() };
         let old_key = key(0);
@@ -1514,7 +1929,7 @@ mod tests {
                 // Keep the fixture for inspection: this isolated backend is discarded by the driver.
                 return;
             }
-            if let Some((token, _, _)) = &manager.in_flight {
+            if let Some((token, _, _, _)) = &manager.in_flight {
                 assert_eq!(*token, pending);
             }
             std::thread::sleep(Duration::from_millis(20));

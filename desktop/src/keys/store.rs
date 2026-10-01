@@ -1,14 +1,19 @@
 //! Store access runs on the serialized worker, never on a UI or async-runtime thread.
 use super::{ErrorCode, Kek, KeyRef, Kind};
-use keyring_core::Entry;
-use keyring_core::api::CredentialStoreApi;
+#[cfg(windows)]
+use keyring_core::{Entry, api::CredentialStoreApi};
+#[cfg(windows)]
 use std::collections::HashMap;
+#[cfg(target_os = "linux")]
+#[path = "linux.rs"]
+mod linux;
 
 pub struct Store {
+    #[cfg(windows)]
     service: String,
     prefix: String,
     #[cfg(target_os = "linux")]
-    inner: std::sync::Arc<zbus_secret_service_keyring_store::Store>,
+    inner: linux::Native,
     #[cfg(windows)]
     inner: std::sync::Arc<windows_native_keyring_store::Store>,
 }
@@ -42,45 +47,29 @@ impl Store {
     fn writable(&self) -> Result<(), ErrorCode> {
         #[cfg(target_os = "linux")]
         {
-            let connection = zbus::blocking::Connection::session().map_err(|_| ErrorCode::NoAccess)?;
-            let service = zbus::blocking::Proxy::new(
-                &connection,
-                "org.freedesktop.secrets",
-                "/org/freedesktop/secrets",
-                "org.freedesktop.Secret.Service",
-            )
-            .map_err(|_| ErrorCode::NoAccess)?;
-            let path: zbus::zvariant::OwnedObjectPath =
-                service.call("ReadAlias", &("default",)).map_err(|_| ErrorCode::NoAccess)?;
-            if path.as_str() == "/" {
-                return Err(ErrorCode::NoAccess);
-            }
-            let collection = zbus::blocking::Proxy::new(
-                &connection,
-                "org.freedesktop.secrets",
-                path.as_str(),
-                "org.freedesktop.Secret.Collection",
-            )
-            .map_err(|_| ErrorCode::NoAccess)?;
-            if collection.get_property::<bool>("Locked").map_err(|_| ErrorCode::NoAccess)? {
-                return Err(ErrorCode::NoAccess);
-            }
+            self.inner.writable()
         }
-        Ok(())
+        #[cfg(windows)]
+        {
+            Ok(())
+        }
     }
     pub fn new(hash: &str) -> Result<Self, ErrorCode> {
         if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
             return Err(ErrorCode::MetadataInvalid);
         }
         #[cfg(target_os = "linux")]
-        let inner = {
-            preflight()?;
-            zbus_secret_service_keyring_store::Store::new().map_err(classify)?
-        };
+        let inner = linux::Native::new(hash)?;
         #[cfg(windows)]
         let inner = windows_native_keyring_store::Store::new().map_err(classify)?;
-        Ok(Self { service: format!("quotum-kek@{hash}"), prefix: format!("hub-secret-key@{hash}#"), inner })
+        Ok(Self {
+            #[cfg(windows)]
+            service: format!("quotum-kek@{hash}"),
+            prefix: format!("hub-secret-key@{hash}#"),
+            inner,
+        })
     }
+    #[cfg(windows)]
     fn entry(&self, name: &str) -> Result<Entry, ErrorCode> {
         if number(&self.prefix, name).is_none() {
             return Err(ErrorCode::MetadataInvalid);
@@ -88,52 +77,59 @@ impl Store {
         #[cfg(windows)]
         let entry =
             self.inner.build(&self.service, name, Some(&HashMap::from([("target", name), ("persistence", "Local")])));
-        #[cfg(target_os = "linux")]
-        let entry = self.inner.build(&self.service, name, None);
         entry.map_err(classify)
     }
     pub fn read(&self, name: &str) -> Result<Kek, ErrorCode> {
-        let mut bytes = self.entry(name)?.get_secret().map_err(classify)?;
-        let result = Kek::parse(&bytes);
-        bytes.fill(0);
-        result
+        if number(&self.prefix, name).is_none() {
+            return Err(ErrorCode::MetadataInvalid);
+        }
+        #[cfg(target_os = "linux")]
+        {
+            self.inner.read(name)
+        }
+        #[cfg(windows)]
+        {
+            let mut bytes = self.entry(name)?.get_secret().map_err(classify)?;
+            let result = Kek::parse(&bytes);
+            bytes.fill(0);
+            result
+        }
     }
     pub fn create(&self, name: &str, key: &Kek) -> Result<(), ErrorCode> {
-        self.writable()?;
-        let entry = self.entry(name)?;
-        match entry.get_secret() {
-            Err(keyring_core::Error::NoEntry) => {}
-            Ok(mut bytes) => {
-                bytes.fill(0);
-                return Err(ErrorCode::MetadataInvalid);
+        if number(&self.prefix, name).is_none() {
+            return Err(ErrorCode::MetadataInvalid);
+        }
+        #[cfg(target_os = "linux")]
+        {
+            self.inner.create(name, key)
+        }
+        #[cfg(windows)]
+        {
+            self.writable()?;
+            let entry = self.entry(name)?;
+            match entry.get_secret() {
+                Err(keyring_core::Error::NoEntry) => {}
+                Ok(mut bytes) => {
+                    bytes.fill(0);
+                    return Err(ErrorCode::MetadataInvalid);
+                }
+                Err(error) => return Err(classify(error)),
             }
-            Err(error) => return Err(classify(error)),
+            let mut bytes = key.encoded().into_bytes();
+            let written = entry.set_secret(&bytes);
+            bytes.fill(0);
+            written.map_err(classify)?;
+            let read = self.read(name)?;
+            if read.bytes != key.bytes {
+                return Err(ErrorCode::StoreFailure);
+            }
+            Ok(())
         }
-        let mut bytes = key.encoded().into_bytes();
-        let written = entry.set_secret(&bytes);
-        bytes.fill(0);
-        written.map_err(classify)?;
-        let read = self.read(name)?;
-        if read.bytes != key.bytes {
-            return Err(ErrorCode::StoreFailure);
-        }
-        Ok(())
     }
     pub fn names(&self) -> Result<Vec<String>, ErrorCode> {
         #[cfg(target_os = "linux")]
         {
-            let entries = self.inner.search(&HashMap::from([("service", self.service.as_str())])).map_err(classify)?;
-            let mut names = Vec::new();
-            for entry in entries {
-                let attrs = entry.get_attributes().map_err(classify)?;
-                if attrs.get("service") != Some(&self.service) {
-                    return Err(ErrorCode::StoreFailure);
-                }
-                if let Some(name) = attrs.get("username").filter(|name| number(&self.prefix, name).is_some()) {
-                    names.push(name.clone());
-                }
-            }
-            Ok(names)
+            self.inner.names(&self.prefix)
         }
         #[cfg(windows)]
         {
@@ -141,12 +137,19 @@ impl Store {
         }
     }
     pub fn remove(&self, value: &KeyRef) -> Result<(), ErrorCode> {
-        if value.kind != Kind::Keystore {
+        if value.kind != Kind::Keystore || number(&self.prefix, &value.name).is_none() {
             return Err(ErrorCode::MetadataInvalid);
         }
-        match self.entry(&value.name)?.delete_credential() {
-            Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
-            Err(error) => Err(classify(error)),
+        #[cfg(target_os = "linux")]
+        {
+            self.inner.remove(&value.name)
+        }
+        #[cfg(windows)]
+        {
+            match self.entry(&value.name)?.delete_credential() {
+                Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
+                Err(error) => Err(classify(error)),
+            }
         }
     }
 }
@@ -159,6 +162,7 @@ pub fn number(prefix: &str, name: &str) -> Option<u64> {
     value.parse::<u64>().ok().filter(|n| *n > 0)
 }
 
+#[cfg(any(windows, test))]
 fn classify(error: keyring_core::Error) -> ErrorCode {
     match error {
         keyring_core::Error::NoEntry => ErrorCode::NoEntry,
@@ -171,33 +175,6 @@ fn classify(error: keyring_core::Error) -> ErrorCode {
         }
         _ => ErrorCode::StoreFailure,
     }
-}
-
-#[cfg(target_os = "linux")]
-fn preflight() -> Result<(), ErrorCode> {
-    use std::time::Duration;
-    use zbus::blocking::fdo::DBusProxy;
-    // Authoritative absence is the only error that permits a first-run file fallback.
-    if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
-        return Err(ErrorCode::Unavailable);
-    }
-    let builder = zbus::connection::Builder::session().map_err(|_| ErrorCode::StoreFailure)?;
-    let connection = zbus::block_on(async {
-        tokio::time::timeout(Duration::from_secs(5), builder.method_timeout(Duration::from_secs(5)).build()).await
-    })
-    .map_err(|_| ErrorCode::Timeout)?
-    .map_err(|_| ErrorCode::StoreFailure)?;
-    let connection = zbus::blocking::Connection::from(connection);
-    let proxy = DBusProxy::new(&connection).map_err(|_| ErrorCode::StoreFailure)?;
-    let owned = proxy
-        .name_has_owner(zbus::names::BusName::try_from("org.freedesktop.secrets").map_err(|_| ErrorCode::StoreFailure)?)
-        .map_err(|_| ErrorCode::StoreFailure)?;
-    let activatable = proxy
-        .list_activatable_names()
-        .map_err(|_| ErrorCode::StoreFailure)?
-        .iter()
-        .any(|name| name.as_str() == "org.freedesktop.secrets");
-    if owned || activatable { Ok(()) } else { Err(ErrorCode::Unavailable) }
 }
 
 #[cfg(test)]
@@ -257,7 +234,10 @@ mod tests {
                     .success()
             );
         }
+        #[cfg(windows)]
         store.entry(&name).unwrap().set_secret(&[255, 0, 255]).unwrap();
+        #[cfg(target_os = "linux")]
+        store.inner.set_for_test(&name, &[255, 0, 255]).unwrap();
         assert!(matches!(store.read(&name), Err(ErrorCode::InvalidBytes)));
         store.remove(&KeyRef { kind: Kind::Keystore, name: name.clone() }).unwrap();
         other.remove(&KeyRef { kind: Kind::Keystore, name: second }).unwrap();

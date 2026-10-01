@@ -8,15 +8,44 @@ param(
 $ErrorActionPreference = 'Stop'
 $appPath = (Resolve-Path -LiteralPath $App).Path
 $workPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Work)
-[IO.Directory]::CreateDirectory($workPath) | Out-Null
-$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-& icacls $workPath /inheritance:r /grant:r "*$($sid):(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'Could not protect the isolated test directory' }
 $appData = Join-Path $workPath 'app'
 $state = Join-Path $workPath 'state'
 $config = Join-Path $workPath 'quotum.toml'
-foreach ($path in @($appData, $state)) { [IO.Directory]::CreateDirectory($path) | Out-Null }
-[IO.File]::WriteAllText($config, "sessions = false`n[providers.claude]`nenabled = false`n[providers.codex]`nenabled = false`n[providers.antigravity]`nenabled = false`n")
+
+function RunEntry {
+  $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\Microsoft\Windows\CurrentVersion\Run')
+  try {
+    $missing = New-Object object
+    $value = if ($key) { $key.GetValue('Quotum', $missing, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) } else { $missing }
+    if ([object]::ReferenceEquals($value, $missing)) { return [ordered]@{present=$false} }
+    return [ordered]@{present=$true; kind=$key.GetValueKind('Quotum').ToString(); value=$value}
+  } finally { if ($key) { $key.Dispose() } }
+}
+$runBefore = RunEntry | ConvertTo-Json -Compress
+
+if ($VerifyOnly) {
+  if (-not (Test-Path -LiteralPath $appData -PathType Container)) { throw 'The isolated test profile does not exist' }
+} else {
+  [IO.Directory]::CreateDirectory($workPath) | Out-Null
+  $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+  & icacls $workPath /inheritance:r /grant:r "*$($sid):(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw 'Could not protect the isolated test directory' }
+  foreach ($path in @($appData, $state)) { [IO.Directory]::CreateDirectory($path) | Out-Null }
+  [IO.File]::WriteAllText($config, "sessions = false`n[providers.claude]`nenabled = false`n[providers.codex]`nenabled = false`n[providers.antigravity]`nenabled = false`n")
+  # The app must leave the person's global start-at-login preference alone, including after reboot.
+  $appJson = Join-Path $appData 'app.json'
+  try { $settings = if (Test-Path -LiteralPath $appJson) { Get-Content -LiteralPath $appJson -Raw | ConvertFrom-Json } else { [pscustomobject]@{} } }
+  catch { throw 'The isolated app settings are invalid' }
+  if ($settings -isnot [pscustomobject]) { throw 'The isolated app settings are invalid' }
+  $settings | Add-Member -MemberType NoteProperty -Name autostartDefaulted -Value $true -Force
+  $temporary = "$appJson.$([Guid]::NewGuid().ToString('N')).key-qa-new"
+  try {
+    [IO.File]::WriteAllText($temporary, ($settings | ConvertTo-Json -Depth 100))
+    # NullString keeps the backup parameter a .NET null on PowerShell 5.1 too.
+    if (Test-Path -LiteralPath $appJson) { [IO.File]::Replace($temporary, $appJson, [NullString]::Value) }
+    else { [IO.File]::Move($temporary, $appJson) }
+  } finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary } }
+}
 
 if (-not ('QuotumExactKeyProbe' -as [type])) {
   Add-Type @'
@@ -85,6 +114,8 @@ if ($markers.Count -ne 1) { throw 'Expected one isolated key namespace; inspect 
 $marker = Get-Content -LiteralPath $markers[0].FullName -Raw | ConvertFrom-Json
 if ($marker.current.kind -ne 'keystore' -or $marker.current.name -notmatch '^hub-secret-key@[0-9a-f]{64}#[1-9][0-9]*$') { throw 'Expected a system-store reference' }
 if (-not [QuotumExactKeyProbe]::LocalCanonicalKey($marker.current.name)) { throw 'The exact test key is unavailable or is not Local/canonical' }
-$report = [ordered]@{localKeyReadable=$true; target=$marker.current.name; wasFile=$marker.wasFile; hidden=[bool]$Hidden; profile=$workPath}
+$runAfter = RunEntry | ConvertTo-Json -Compress
+if ($runBefore -ne $runAfter) { throw 'The global start-at-login entry changed during isolated key QA' }
+$report = [ordered]@{localKeyReadable=$true; target=$marker.current.name; wasFile=$marker.wasFile; hidden=[bool]$Hidden; verifyOnly=[bool]$VerifyOnly; autostartUnchanged=$true; profile=$workPath}
 $report | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $workPath 'key-report.json')
 $report | ConvertTo-Json

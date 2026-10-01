@@ -102,7 +102,9 @@ dbus-run-session -- sh -c 'printf quotum-test-password | gnome-keyring-daemon --
 ```
 
 Windows CI runs the scoped Credential Manager roundtrip with Local persistence,
-reads it in a new process and tests private ACLs and rejection of junctions. CI does
+reads it in a new process and tests private ACLs, rejection of junctions and deletion
+through the same checked native file handle. It also checks the native controller's
+file-to-store rotation cleanup and the isolated key helper. CI does
 not prove persistence through a real reboot or access from a noninteractive logon.
 
 Use a dedicated test profile for that acceptance, with the installer and the portable
@@ -114,7 +116,11 @@ ZIP in a path with spaces. From PowerShell, run the helper with the actual execu
 
 It disables all providers, isolates config/state/app data under
 `%LOCALAPPDATA%\Quotum key QA`, and reads only the exact key target in that profile's
-marker. Its JSON report contains the target and protection result, never key bytes.
+marker. Before a launch it marks start-at-login as already decided in that profile,
+keeping its other app settings, so the person's global Run entry is unchanged.
+`-VerifyOnly` does not launch the app or change the profile's configuration or ACL;
+it writes only its safe result report. The report contains the target, protection
+result and start-at-login check, never key bytes.
 Open app settings in English and Russian: expect system-store protection, no file
 history and no reset action. Quit and run the helper again; the target must be the
 same. Reboot without deleting the profile, then run the helper with `-VerifyOnly`;

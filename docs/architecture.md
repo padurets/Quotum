@@ -1018,9 +1018,11 @@ with Local persistence, or Linux Secret Service. Discovery is limited to this
 namespace; it never enumerates all of a person's credentials. A private-file fallback
 lives in the sibling namespace, outside the hub's data. Directories and files are
 checked for ownership, permissions and symlinks or reparse points through native
-handles. Linux directories are 0700 and files 0600; Windows permits only the current
-user, SYSTEM and Administrators in the private namespace. Its system-drive ancestors
-may also be owned by Windows' privileged TrustedInstaller service. A writable default
+handles. Linux directories are 0700 and files 0600; Windows permits key reads and
+mutation only to the current user, SYSTEM and Administrators in the private namespace.
+Deletion uses the same checked handle, which denies replacement until it closes.
+Its system-drive ancestors may also be owned by Windows' privileged TrustedInstaller
+service. A writable default
 collection is required before
 creating a Linux store key. A locked collection or an incomplete search means waiting.
 
@@ -1036,6 +1038,10 @@ from the marker while keeping their keys. A later `ok` after `created` on a repl
 database cannot revive permission to delete those old keys.
 
 One worker serializes native store work away from the UI and the app's async runtime.
+A Linux session and all its item, collection and prompt requests stay with the unique
+Secret Service owner that created them. Losing that owner cancels its pending operation;
+the worker reconnects after it finishes and the retry backoff, preserving the keys and
+marker. The pinned Secret Service client carries that destination through its proxies.
 A soft 60-second deadline publishes waiting while leaving that operation able to
 finish; no second prompt runs alongside it. Retry backoff is bounded. Planned hub
 restarts have their own bounded budget, apart from crash recovery. Each Node spawn

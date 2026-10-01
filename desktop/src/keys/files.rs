@@ -192,8 +192,14 @@ impl Files {
         if value.kind != Kind::File {
             return Err(ErrorCode::MetadataInvalid);
         }
-        let _checked = open(&self.root.join(&value.name), false)?;
-        fs::remove_file(self.root.join(&value.name)).map_err(|_| ErrorCode::FileFailure)?;
+        let path = self.root.join(&value.name);
+        #[cfg(unix)]
+        {
+            let _checked = open(&path, false)?;
+            fs::remove_file(&path).map_err(|_| ErrorCode::FileFailure)?;
+        }
+        #[cfg(windows)]
+        super::windows::remove(&path)?;
         sync_directory(&self.root)
     }
 }

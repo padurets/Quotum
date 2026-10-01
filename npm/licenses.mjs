@@ -3,7 +3,8 @@
  * crate linked into it on any platform it ships for, with the license texts its package
  * carries. The agent's `quotum` and the desktop app use it. Crates that only run while
  * compiling (build scripts, procedural macros) are left out: nothing of them is in a
- * binary; so is Quotum's own code (crates from a path, not a registry). A text several
+ * binary; so is Quotum's own code. Vendored upstream crates carry explicit provenance
+ * metadata and stay in the notices even though Cargo resolves them from a path. A text several
  * crates share (spacing aside) is printed once and referred to after that.
  */
 import {execFileSync} from 'node:child_process';
@@ -31,7 +32,7 @@ export function thirdPartyLicenses(dir, name, targets, intro) {
     while (queue.length) {
       const id = queue.shift();
       const pkg = packages.get(id);
-      if (pkg.source) crates.set(`${pkg.name} ${pkg.version}`, pkg);
+      if (pkg.source || pkg.metadata?.provenance?.vendored === true) crates.set(`${pkg.name} ${pkg.version}`, pkg);
       for (const dep of nodes.get(id).deps) {
         const linked = dep.dep_kinds.some(k => k.kind === null);
         const macro = packages.get(dep.pkg).targets.some(t => t.kind.includes('proc-macro'));

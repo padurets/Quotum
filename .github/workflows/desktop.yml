@@ -111,13 +111,19 @@ jobs:
         working-directory: desktop
         env:
           QUOTUM_KEYRING_SMOKE: '1'
-        run: cargo test --locked native_store_is_local_scoped_byte_safe_and_recovers_without_pointer -- --ignored --test-threads=1
+        run: |
+          cargo test --locked native_store_is_local_scoped_byte_safe_and_recovers_without_pointer -- --ignored --test-threads=1
+          cargo test --locked native_controller_recovers_pointer_stages_rotation_and_preserves_foreign_keys -- --ignored --test-threads=1
       - name: Native loader callbacks (Linux)
         if: runner.os == 'Linux'
         working-directory: desktop
         run: xvfb-run -a cargo test --locked native_signals_keep_their_presentation -- --ignored --test-threads=1
       - name: Chromium policy tests
         run: node --test desktop/electron/policy.test.cjs
+      - name: Isolated key helper (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./desktop/smoke/test-keys-windows.ps1
       - name: Build (Linux)
         if: runner.os == 'Linux'
         run: node desktop/package-linux.mjs

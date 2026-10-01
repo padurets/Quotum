@@ -10,8 +10,8 @@ use std::path::Path;
 use std::ptr::{null, null_mut};
 use windows_sys::Win32::{
     Foundation::{
-        CloseHandle, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_NOT_FOUND, GetLastError, HANDLE,
-        INVALID_HANDLE_VALUE, LocalFree,
+        CloseHandle, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_NOT_FOUND, GENERIC_ALL, GENERIC_READ,
+        GENERIC_WRITE, GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
     },
     Security::{
         ACCESS_ALLOWED_ACE, ACL,
@@ -25,8 +25,11 @@ use windows_sys::Win32::{
         TOKEN_USER, TokenUser, WinBuiltinAdministratorsSid, WinLocalSystemSid,
     },
     Storage::FileSystem::{
-        CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
-        FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, READ_CONTROL,
+        CREATE_NEW, CreateDirectoryW, CreateFileW, DELETE, FILE_APPEND_DATA, FILE_ATTRIBUTE_REPARSE_POINT,
+        FILE_DELETE_CHILD, FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES,
+        FILE_WRITE_DATA, FILE_WRITE_EA, FileDispositionInfo, OPEN_EXISTING, READ_CONTROL, SetFileInformationByHandle,
+        WRITE_DAC, WRITE_OWNER,
     },
     System::Threading::{GetCurrentProcess, OpenProcessToken},
 };
@@ -233,12 +236,17 @@ fn check_handle(file: &File, private: bool) -> Result<(), ErrorCode> {
     if acl.is_null() || !allowed_principal(owner) {
         return Err(ErrorCode::UnsafePath);
     }
-    // Ancestors may allow creating a new child, but never replacing a protected one.
-    let forbidden = if private {
-        0x1000_0000 | 0x8000_0000 | 0x4000_0000 | 0x000d_0000 | 0x0043
-    } else {
-        0x1000_0000 | 0x4000_0000 | 0x000d_0000 | 0x0040
-    };
+    // Ancestors may allow creating a new child, but never changing or replacing a protected one.
+    let mutation = GENERIC_ALL
+        | GENERIC_WRITE
+        | DELETE
+        | WRITE_DAC
+        | WRITE_OWNER
+        | FILE_DELETE_CHILD
+        | FILE_WRITE_EA
+        | FILE_WRITE_ATTRIBUTES;
+    let forbidden =
+        if private { mutation | GENERIC_READ | FILE_READ_DATA | FILE_WRITE_DATA | FILE_APPEND_DATA } else { mutation };
     for i in 0..unsafe { (*acl).AceCount } {
         let mut ace = null_mut();
         if unsafe { GetAce(acl, u32::from(i), &mut ace) } == 0 || ace.is_null() {
@@ -258,8 +266,20 @@ fn check_handle(file: &File, private: bool) -> Result<(), ErrorCode> {
     }
     Ok(())
 }
-fn handle(path: &Path, create: bool, descriptor: Option<&Descriptor>) -> Result<File, ErrorCode> {
+#[derive(Clone, Copy)]
+enum Mode {
+    Read,
+    Create,
+    Remove,
+}
+fn handle(path: &Path, mode: Mode, descriptor: Option<&Descriptor>) -> Result<File, ErrorCode> {
     let name = wide(path)?;
+    let create = matches!(mode, Mode::Create);
+    let access = match mode {
+        Mode::Read => GENERIC_READ,
+        Mode::Create => GENERIC_WRITE,
+        Mode::Remove => DELETE | FILE_READ_ATTRIBUTES,
+    };
     let mut attributes = SECURITY_ATTRIBUTES {
         nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
         lpSecurityDescriptor: descriptor.map(|d| d.0).unwrap_or(null_mut()),
@@ -268,7 +288,7 @@ fn handle(path: &Path, create: bool, descriptor: Option<&Descriptor>) -> Result<
     let handle = unsafe {
         CreateFileW(
             name.as_ptr(),
-            if create { 0x4000_0000 | READ_CONTROL } else { 0x8000_0000 | READ_CONTROL },
+            access | READ_CONTROL,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             if create { &mut attributes } else { null() },
             if create { CREATE_NEW } else { OPEN_EXISTING },
@@ -287,7 +307,7 @@ fn handle(path: &Path, create: bool, descriptor: Option<&Descriptor>) -> Result<
 }
 pub fn check_chain(path: &Path) -> Result<(), ErrorCode> {
     for ancestor in path.ancestors() {
-        let file = handle(ancestor, false, None)?;
+        let file = handle(ancestor, Mode::Read, None)?;
         if !file.metadata().map_err(|_| ErrorCode::UnsafePath)?.is_dir() {
             return Err(ErrorCode::UnsafePath);
         }
@@ -308,28 +328,51 @@ pub fn private_directory(path: &Path) -> Result<(), ErrorCode> {
     {
         return Err(ErrorCode::FileFailure);
     }
-    let file = handle(path, false, None)?;
+    let file = handle(path, Mode::Read, None)?;
     if !file.metadata().map_err(|_| ErrorCode::UnsafePath)?.is_dir() {
         return Err(ErrorCode::UnsafePath);
     }
     check_handle(&file, true)
 }
 pub fn open(path: &Path, create: bool) -> Result<File, ErrorCode> {
+    checked_file(path, if create { Mode::Create } else { Mode::Read })
+}
+fn checked_file(path: &Path, mode: Mode) -> Result<File, ErrorCode> {
     check_chain(path.parent().ok_or(ErrorCode::UnsafePath)?)?;
-    let descriptor = if create { Some(User::new()?.descriptor()?) } else { None };
-    let file = handle(path, create, descriptor.as_ref())?;
+    let descriptor = if matches!(mode, Mode::Create) { Some(User::new()?.descriptor()?) } else { None };
+    let file = handle(path, mode, descriptor.as_ref())?;
     if !file.metadata().map_err(|_| ErrorCode::UnsafePath)?.is_file() {
         return Err(ErrorCode::UnsafePath);
     }
     check_handle(&file, true)?;
     Ok(file)
 }
+pub fn remove(path: &Path) -> Result<(), ErrorCode> {
+    let file = checked_file(path, Mode::Remove)?;
+    mark_deleted(&file)
+}
+fn mark_deleted(file: &File) -> Result<(), ErrorCode> {
+    // This handle checked the object and denies replacement until its deletion completes on close.
+    let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+    if unsafe {
+        SetFileInformationByHandle(
+            file.as_raw_handle().cast(),
+            FileDispositionInfo,
+            (&disposition as *const FILE_DISPOSITION_INFO).cast(),
+            std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
+        )
+    } == 0
+    {
+        return Err(ErrorCode::FileFailure);
+    }
+    Ok(())
+}
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::keys::{Kek, files::Files};
+    use crate::keys::{Kek, KeyRef, Kind, files::Files};
     use std::process::Command;
 
     #[test]
@@ -359,10 +402,40 @@ mod tests {
         assert_eq!(files.read(&name).unwrap().fingerprint(), key.fingerprint());
         assert!(files.create(&name, &key).is_err());
         let path = files.root.join(&name);
-        assert!(Command::new("icacls").arg(&path).args(["/grant", "*S-1-1-0:(R)"]).status().unwrap().success());
-        assert!(matches!(files.read(&name), Err(ErrorCode::UnsafePath)));
-        assert!(Command::new("icacls").arg(&path).args(["/remove:g", "*S-1-1-0"]).status().unwrap().success());
-        assert!(files.read(&name).is_ok());
+        let reference = KeyRef { kind: Kind::File, name: name.clone() };
+        for right in ["R", "AD", "WEA", "WA"] {
+            assert!(
+                Command::new("icacls")
+                    .arg(&path)
+                    .args(["/grant", &format!("*S-1-1-0:({right})")])
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            assert!(matches!(files.read(&name), Err(ErrorCode::UnsafePath)), "foreign {right}");
+            assert_eq!(files.remove(&reference), Err(ErrorCode::UnsafePath), "foreign {right}");
+            assert!(path.exists());
+            assert!(Command::new("icacls").arg(&path).args(["/remove:g", "*S-1-1-0"]).status().unwrap().success());
+            assert_eq!(files.read(&name).unwrap().fingerprint(), key.fingerprint());
+        }
+        assert!(Command::new("icacls").arg(&files.root).args(["/grant", "*S-1-1-0:(AD)"]).status().unwrap().success());
+        assert_eq!(private_directory(&files.root), Err(ErrorCode::UnsafePath));
+        assert!(Command::new("icacls").arg(&files.root).args(["/remove:g", "*S-1-1-0"]).status().unwrap().success());
+        let held = open(&path, false).unwrap();
+        assert_eq!(files.remove(&reference), Err(ErrorCode::FileFailure));
+        assert!(path.exists());
+        drop(held);
+        files.remove(&reference).unwrap();
+        assert!(matches!(files.read(&name), Err(ErrorCode::NoEntry)));
+        let next_name = files.name(2).unwrap();
+        files.create(&next_name, &key).unwrap();
+        let next_path = files.root.join(&next_name);
+        let deleting = checked_file(&next_path, Mode::Remove).unwrap();
+        assert!(std::fs::rename(&next_path, files.root.join("replacement")).is_err());
+        assert!(std::fs::remove_file(&next_path).is_err());
+        mark_deleted(&deleting).unwrap();
+        drop(deleting);
+        assert!(!next_path.exists());
         let junction = root.join("junction");
         assert!(
             Command::new("cmd")
