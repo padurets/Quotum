@@ -229,6 +229,20 @@ pub fn allowed(url: &Url, state: &HubState) -> bool {
         || matches!(state, HubState::Ready(ready) if same_origin(url, &ready.origin()))
 }
 
+/// A delayed entry request must wait for the current hub, not escape to a browser.
+#[cfg(any(test, not(target_os = "linux")))]
+pub(crate) fn private_hub_url(url: &Url, ports: &[u16]) -> bool {
+    url.scheme() == "http"
+        && url.host_str() == Some("127.0.0.1")
+        && url.port_or_known_default().is_some_and(|port| ports.contains(&port))
+}
+
+#[cfg(any(test, not(target_os = "linux")))]
+pub(crate) fn stale_hub_entry(url: &Url, state: &HubState) -> bool {
+    matches!(state, HubState::Ready(ready) if same_origin(url, &ready.origin()) && url.path() == "/local"
+        && !url.query_pairs().any(|(name, value)| name == "key" && value == ready.key))
+}
+
 /// Whether a page may call the app's commands (all but `quit`): only the board of the
 /// running hub, on its current port.
 pub fn guard(url: &Url, state: &HubState) -> bool {
@@ -266,6 +280,21 @@ mod tests {
         assert!(!allowed(&url("http://localhost:23456/"), &ready(23456)), "another address of the same port");
         assert!(allowed(&own_origin().join("error.html").unwrap(), &HubState::Down));
         assert!(!allowed(&url("https://github.com/padurets/Quotum"), &ready(23456)));
+    }
+
+    #[test]
+    fn an_old_private_entry_is_retried_inside_the_app_across_key_and_port_changes() {
+        let old = target(&ready(23456));
+        let mut restarted = ready(23456);
+        if let HubState::Ready(ready) = &mut restarted {
+            ready.key = "replacement-entry-key".into();
+        }
+        assert!(stale_hub_entry(&old, &restarted));
+        assert!(!stale_hub_entry(&target(&restarted), &restarted));
+        assert!(private_hub_url(&old, &[23456, 23457]));
+        assert!(private_hub_url(&old, &[23456]), "still private while the hub is starting");
+        assert!(!private_hub_url(&url("https://github.com/padurets/Quotum"), &[23456]));
+        assert!(!private_hub_url(&url("http://127.0.0.1:34567/"), &[23456]));
     }
 
     #[test]
