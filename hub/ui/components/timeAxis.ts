@@ -150,7 +150,7 @@ export function useTimeAxis({
     }
     if (frame) {
       element.dataset.panEnd = String(frame.to);
-      element.classList.add('is-panning');
+      if (!element.classList.contains('is-panning')) element.classList.add('is-panning');
       element.classList.toggle('is-grabbing', frame.source === source.current && frame.input === 'pointer');
     } else {
       delete element.dataset.panEnd;

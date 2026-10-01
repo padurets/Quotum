@@ -398,7 +398,7 @@ const Stacks = memo(function Stacks({
     if (!strip || !mask.current || !edges.current) return;
     const draft = pan.get();
     const range = draft ? {from: draft.from, to: draft.to} : {from, to};
-    const target = targetOf(strip.length, draft?.originEnd ?? to, 'edge', range);
+    const target = targetOf(strip.length, draft?.now ?? to, 'edge', range);
     const key = `${target.k0}:${target.k1}:${strip.version}:${vertical.max}:${height}:${perMs}:${groups.map(g => g.group.key).join(',')}`;
     if (key === painted.current) return;
     painted.current = key;

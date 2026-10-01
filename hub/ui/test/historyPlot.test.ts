@@ -3,10 +3,25 @@ import assert from 'node:assert/strict';
 import {compose, targetOf, type Chunk, type HistoryMeta} from '../../server/domain/history';
 import {covered, plotBar, plotOf} from '../lib/historyPlot';
 import {groupRegistry} from '../lib/plotRegistry';
+import {HistoryTile} from '../lib/historyTiles';
 
 const M = 60_000, H = 60 * M, NOW = 48 * H;
 const meta: HistoryMeta = {now: NOW, historyStart: 0, known: {work: 0, sources: {s: 0}}};
 const chunk = (from: number, to: number, cell = 5 * M): Chunk => ({from, to, series: [{source: 's', window: 'w', hold: H, open: 100, cells: Array.from({length: (to - from) / cell}, (_, i) => [i, 100 - i, 1, cell])}], activity: {sessions: [['r', 's', 'P', 'd']], devices: {d: 'Device'}, cells: Array.from({length: (to - from) / cell}, (_, i) => [i, cell, [0], []])}, resets: [], grants: []});
+
+test('filling a tile head preserves the same grouped reset time and window order as the complete answer', () => {
+  const tile = new HistoryTile(0, M);
+  const make = (from: number, to: number, resets: Chunk['resets']): Chunk => ({...chunk(from, to, M), resets});
+  tile.merge(make(10 * M, H, [['s', 'w', 12 * M]]), meta.known);
+  tile.readFrom = 10 * M; tile.readTo = tile.validTo = H;
+  tile.merge(make(0, 10 * M, [['s', 'u', 5 * M]]), meta.known); tile.readFrom = 0;
+  const held = tile.chunk(meta.known, true), windows = new Set(['s w', 's u']);
+  const target = targetOf(H, NOW, 'head', {from: 0, to: H});
+  const expected = compose([held], meta, target, windows).events;
+  assert.deepEqual(held.resets.map(r => r[2]), [12 * M, 5 * M], 'the real tile retains arrival order');
+  assert.deepEqual(expected, [{sourceId: 's', at: 5 * M, kind: 'early_reset', windows: ['u', 'w']}]);
+  assert.deepEqual(plotOf([held], meta, target, [[0, H]], windows, 1, 1, 1).events, expected);
+});
 
 test('loaded empty coverage is separate from unknown and line segments never cross a hole', () => {
   const target = targetOf(24 * H, NOW, 'plot', {from: 0, to: 3 * H});

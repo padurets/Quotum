@@ -1,21 +1,32 @@
-type Point = {x: number; y: number; text: string};
+type Point = {x: number; y: number; sx?: string; sy?: string};
+
+// Multiplication can round a binary value onto a decimal tie. Only those values
+// need toFixed's exact tie decision; ordinary plot coordinates need no strings.
+function rounded(value: number) {
+  const scaled = value * 10;
+  const tie = Math.abs(scaled - Math.floor(scaled) - .5) <= Number.EPSILON * Math.max(1, Math.abs(scaled)) * 2;
+  const result = tie || Math.abs(scaled) >= 1e12 ? Math.round(Number(value.toFixed(1)) * 10) : Math.round(scaled);
+  return result === 0 ? value < 0 ? -0 : 0 : result;
+}
+const coordinate = (value: number) => Object.is(value, -0) ? '-0.0' : (value / 10).toFixed(1);
 
 /** Keeps the same rounded outline, omitting only vertices on straight boundaries. */
 export function plotPath(runs: readonly (readonly (readonly [number, number])[])[]) {
   return runs.map(run => {
-    const parts: string[] = [];
+    const parts: Point[] = [];
     let before: Point | null = null, last: Point | null = null;
     for (const [x, y] of run) {
-      const sx = x.toFixed(1), sy = y.toFixed(1);
-      const next = {x: Math.round(Number(sx) * 10), y: Math.round(Number(sy) * 10), text: `${parts.length ? 'L' : 'M'}${sx},${sy}`};
+      const next: Point = {x: rounded(x), y: rounded(y)};
+      if (Math.abs(x) >= 1e11) next.sx = x.toFixed(1);
+      if (Math.abs(y) >= 1e11) next.sy = y.toFixed(1);
       if (before && last && (last.x - before.x) * (next.y - last.y) === (last.y - before.y) * (next.x - last.x) && (last.x - before.x) * (next.x - last.x) + (last.y - before.y) * (next.y - last.y) >= 0) {
-        parts[parts.length - 1] = next.text;
+        parts[parts.length - 1] = next;
       } else {
-        parts.push(next.text);
+        parts.push(next);
         before = last;
       }
       last = next;
     }
-    return parts.join('');
+    return parts.map((point, i) => `${i ? 'L' : 'M'}${point.sx ?? coordinate(point.x)},${point.sy ?? coordinate(point.y)}`).join('');
   }).join('');
 }

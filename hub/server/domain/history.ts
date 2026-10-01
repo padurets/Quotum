@@ -128,6 +128,19 @@ const dimensionOf = {s: 'source', p: 'project', d: 'device'} as const;
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 type Group = {key: string; name: string | null; activeMs: number; agentMs: number; refs: Set<string>; bars: Map<number, number>};
 
+/** Reset markers use the earliest time and stable window order, including filled tile heads. */
+export function resetEvents(chunks: readonly Chunk[], windows: ReadonlySet<string>, from: number, to: number): (SourceEvent & {kind: 'early_reset'})[] {
+  const events: (SourceEvent & {kind: 'early_reset'})[] = [];
+  const found = chunks.flatMap(chunk => chunk.resets).filter(([source, window, at]) => windows.has(`${source} ${window}`) && at >= from && at < to).sort((a, b) => a[2] - b[2]);
+  for (const [sourceId, window, at] of found) {
+    const same = events.find(event => event.sourceId === sourceId && at - event.at <= 15 * 60_000);
+    if (same) {if (!same.windows.includes(window)) same.windows.push(window);}
+    else events.push({sourceId, at, kind: 'early_reset', windows: [window]});
+  }
+  for (const event of events) event.windows.sort();
+  return events;
+}
+
 /** A frame is an additive record of whole cells; only session identity needs a set. */
 export function compose(chunks: readonly Chunk[], meta: HistoryMeta, target: Target, windows: ReadonlySet<string>): History {
   const {cell, k0, k1} = target;
@@ -217,14 +230,7 @@ export function compose(chunks: readonly Chunk[], meta: HistoryMeta, target: Tar
       }
     }
   }
-  const resets: (SourceEvent & {kind: 'early_reset'})[] = [];
-  const found = ordered.flatMap(chunk => chunk.resets).filter(([source, window, at]) => windows.has(`${source} ${window}`) && inFrame(at)).sort((a, b) => a[2] - b[2]);
-  for (const [sourceId, window, at] of found) {
-    const same = resets.find(event => event.sourceId === sourceId && at - event.at <= 15 * 60_000);
-    if (same) { if (!same.windows.includes(window)) same.windows.push(window); }
-    else resets.push({sourceId, at, kind: 'early_reset', windows: [window]});
-  }
-  for (const event of resets) event.windows.sort();
+  const resets = resetEvents(ordered, windows, since, (k1 + 1) * cell);
   const grants: SourceEvent[] = ordered.flatMap(chunk => chunk.grants).filter(([, at]) => inFrame(at)).map(([sourceId, at, count]) => ({sourceId, at, kind: 'resets_granted', count}));
   const activitySince = Math.max(meta.known.work, ...(Object.keys(meta.known.sources).length ? [Math.min(...Object.values(meta.known.sources))] : []));
   const knownFrom = Math.max(since, activitySince);

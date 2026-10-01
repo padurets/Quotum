@@ -44,6 +44,7 @@ export class Pan {
   private state: PanFrame | null = null;
   private scale = 1;
   private minEnd = 0;
+  private historyStart = 0;
   private maxEnd = 0;
   private raf: unknown = null;
   private timer: unknown = null;
@@ -96,7 +97,8 @@ export class Pan {
     const end = start.selected?.to ?? now;
     this.scale = start.span / start.width;
     this.maxEnd = now;
-    const oldest = Math.ceil(Math.max(start.historyStart, start.now - KEPT_MS + 3_600_000) / 60_000) * 60_000;
+    this.historyStart = start.historyStart;
+    const oldest = Math.ceil(Math.max(this.historyStart, start.now - KEPT_MS + 3_600_000) / 60_000) * 60_000;
     // Short history still allows the live frame; it does not invent a past full frame.
     this.minEnd = Math.min(end, oldest + start.length);
     this.draft = {token: ++this.serial, source: start.source, input: start.input, origin: start.selected, originEnd: end, now, length: start.length, from: end - start.length, to: end, direction: 0, lookAhead: Math.max(0, ...geometries.map(g => g.future))};
@@ -142,7 +144,8 @@ export class Pan {
     // Compare before consulting a fresh clock: holding a still live drag is a no-op.
     const moved = Math.round(draft.to) !== Math.round(draft.originEnd);
     const now = Math.round(this.env.now());
-    const end = Math.min(Math.round(draft.to), now);
+    const oldest = Math.ceil(Math.max(this.historyStart, now - KEPT_MS + 3_600_000) / 60_000) * 60_000;
+    const end = Math.max(Math.min(now, oldest + draft.length), Math.min(Math.round(draft.to), now));
     const result = !moved ? undefined : now - end <= 8 * this.scale ? 'live' : {from: end - draft.length, to: end};
     const range = result === undefined ? draft.origin : result === 'live' ? null : result;
     const changed = result !== undefined && !sameRange(draft.origin, range);

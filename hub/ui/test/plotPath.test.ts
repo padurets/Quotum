@@ -14,3 +14,27 @@ test('steps and holes retain every turning point and their separate runs', () =>
 test('collinear reversal keeps the far corner rather than shortening the drawn line', () => {
   assert.equal(plotPath([[[0, 0], [10, 10], [0, 0]]]), 'M0.0,0.0L10.0,10.0L0.0,0.0');
 });
+
+test('numeric simplification matches decimal formatting at ties, negative zero and ordinary plot coordinates', () => {
+  const reference = (runs: [number, number][][]) => runs.map(run => {
+    const kept: {x: number; y: number; text: string}[] = [];
+    let before: typeof kept[number] | null = null, last: typeof kept[number] | null = null;
+    for (const [x, y] of run) {
+      const sx = x.toFixed(1), sy = y.toFixed(1);
+      const next = {x: Math.round(Number(sx) * 10), y: Math.round(Number(sy) * 10), text: `${kept.length ? 'L' : 'M'}${sx},${sy}`};
+      if (before && last && (last.x - before.x) * (next.y - last.y) === (last.y - before.y) * (next.x - last.x) && (last.x - before.x) * (next.x - last.x) + (last.y - before.y) * (next.y - last.y) >= 0) kept[kept.length - 1] = next;
+      else {kept.push(next); before = last;}
+      last = next;
+    }
+    return kept.map(p => p.text).join('');
+  }).join('');
+  const special = [-0, -.0001, .0001, 2.55, -2.55, 1e22, -1e22, Infinity, -Infinity, NaN];
+  let seed = 77;
+  const random = () => {seed = Math.imul(seed, 1664525) + 1013904223 | 0; return (seed >>> 0) / 2 ** 32;};
+  const runs: [number, number][][] = [special.map((x, i) => [x, special[special.length - i - 1]])];
+  for (let run = 0; run < 200; run++) runs.push(Array.from({length: 200}, (_, i) => {
+    const x = run % 3 === 0 ? (i - 100) / 10 + .05 : (random() - .5) * 100_000;
+    return [x, run % 2 ? x : (random() - .5) * 1000];
+  }));
+  assert.equal(plotPath(runs), reference(runs));
+});

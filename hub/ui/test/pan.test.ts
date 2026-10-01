@@ -52,6 +52,19 @@ test('a still drag and an upper-bound wheel do not freeze live after the clock a
   }
 });
 
+test('a moved frame clamps to the fresh retention boundary after a late clock correction', () => {
+  const s = setup();
+  const token = s.pan.begin({...s.start, historyStart: 0})!;
+  s.pan.move(token, -1e6); s.paint();
+  const captured = s.pan.get()!;
+  s.clock(6 * 3_600_000);
+  s.pan.finish(token);
+  const result = s.commits[0]!;
+  assert.equal(result.from, s.now + 6 * 3_600_000 - 90 * DAY + 3_600_000);
+  assert.equal(result.to - result.from, DAY);
+  assert.ok(result.from > captured.from);
+});
+
 test('return to origin is a no-op before fresh live snap, including nearby custom ranges', () => {
   for (const selected of [null, {from: 99 * DAY - 1_000, to: 100 * DAY - 1_000}]) {
     const s = setup(selected);

@@ -1,4 +1,4 @@
-import {cellStart, type Chunk, type HistoryMeta, type SourceEvent, type SeriesCells, type Target} from '../../server/domain/history';
+import {cellStart, resetEvents, type Chunk, type HistoryMeta, type SourceEvent, type SeriesCells, type Target} from '../../server/domain/history';
 import {barOf} from '../../server/domain/work';
 import type {ActivityDimension} from './types';
 import type {PlotBlock, PlotSeries} from './lines';
@@ -104,7 +104,7 @@ export function plotOf(chunks: readonly Chunk[], meta: HistoryMeta, target: Targ
   const from = target.k0 * target.cell, to = (target.k1 + 1) * target.cell;
   const series = new Map<string, {line: PlotSeries; parts: PlotSeries['points'][]; last: number; segment: number}>();
   const activityCells = new Map<number, PlotBar>();
-  const events: SourceEvent[] = [];
+  const events: SourceEvent[] = resetEvents(chunks, windows, from, to);
   for (const chunk of chunks) {
     for (const values of chunk.series) {
       const key = `${values.source} ${values.window}`;
@@ -127,12 +127,6 @@ export function plotOf(chunks: readonly Chunk[], meta: HistoryMeta, target: Targ
     for (const [at, row] of activityOf(chunk, target.cell)) {
       if (at < from || at >= to) continue;
       activityCells.set(at, row);
-    }
-    for (const [sourceId, window, at] of chunk.resets) {
-      if (at < from || at >= to || !windows.has(`${sourceId} ${window}`)) continue;
-      const previous = events.find(e => e.kind === 'early_reset' && e.sourceId === sourceId && Math.abs(e.at - at) <= 15 * 60_000);
-      if (previous?.kind === 'early_reset') {if (!previous.windows.includes(window)) previous.windows.push(window);}
-      else events.push({sourceId, at, kind: 'early_reset', windows: [window]});
     }
     for (const [sourceId, at, count] of chunk.grants) if (at >= from && at < to) events.push({sourceId, at, kind: 'resets_granted', count});
   }
