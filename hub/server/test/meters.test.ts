@@ -111,7 +111,7 @@ test('a sparse heartbeat reserves the WAL writer before reading its span',()=>{
     if(sql.startsWith('SELECT from_at,to_at,stale_after_ms FROM meter_spans')) {
       const get=statement.get.bind(statement);
       statement.get=(...args)=>{
-        const result=get(...args);
+        const result=Reflect.apply(get,statement,args);
         if(!attempted){attempted=true;try{peer.db.prepare('INSERT INTO meta VALUES (?,?)').run('concurrent-write','peer');peerWrote=true;}catch{/* The first connection must already hold the writer. */}}
         return result;
       };
