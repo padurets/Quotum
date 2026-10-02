@@ -1,5 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {runInNewContext} from 'node:vm';
+import ts from 'typescript';
 import {StackPaths} from '../lib/stackPaths';
 
 const groups = [{group: {key: 'p', name: 'P', cells: [[0, 2], [10, 3], [30, 1]] as [number, number][]}}, {group: {key: 'q', name: 'Q', cells: [[0, 1], [10, 2]] as [number, number][]}}];
@@ -42,4 +45,23 @@ test('retained group paths match a cold draw after edits, holes, muting and reor
   assert.deepEqual(retained.groups.get('q')!.order, [0, 10]);
   cache.draw([], 0, .1, 10, 140, 10);
   assert.equal(retained.groups.size, 0, 'a replaced empty strip leaves no retained paths');
+});
+
+test('dense whole-cell stacks format shared coordinates once and retain their exact outline', () => {
+  const source = readFileSync(new URL('../lib/stackPaths.ts', import.meta.url), 'utf8');
+  const counted = source.replace('value.toFixed(1)', '(globalThis.formatCalls++, value.toFixed(1))');
+  assert.notEqual(counted, source, 'the counter instruments the actual coordinate formatter');
+  const context = {formatCalls: 0, exports: {} as {StackPaths: typeof StackPaths}};
+  runInNewContext(ts.transpileModule(counted, {compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS}}).outputText, context);
+  const H = 3_600_000;
+  const dense = Array.from({length: 24}, (_, g) => ({group: {key: String(g), name: null,
+    cells: Array.from({length: 720}, (_, i): [number, number] => [i * 2 * H, ((i + g) % 3 + 1) * H]),
+  }}));
+  const cache = new context.exports.StackPaths();
+  const actual = cache.draw(dense, 30 * H, 1294 / (30 * 24 * H), 2 * H, 200, 72 * H);
+  assert.deepEqual([...actual], new StackPaths().draw(dense, 30 * H, 1294 / (30 * 24 * H), 2 * H, 200, 72 * H));
+  assert.ok(context.formatCalls < 3 * 720, 'dense whole-cell geometry must not format coordinates per group');
+  context.formatCalls = 0;
+  assert.deepEqual([...cache.draw(dense, 30 * H, 1294 / (30 * 24 * H), 2 * H, 200, 72 * H)], [...actual]);
+  assert.equal(context.formatCalls, 0, 'an unchanged strip needs no coordinate formatting');
 });

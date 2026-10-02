@@ -12,10 +12,23 @@ export class StackPaths {
   draw(groups: readonly {group: PlotGroup}[], origin: number, perMs: number, barMs: number, height: number, max: number) {
     const geometry = `${origin}:${perMs}:${barMs}:${height}:${max}`;
     if (geometry !== this.geometry) {this.geometry = geometry; this.groups.clear();}
-    const base = new Map<number, number>();
+    const base = new Map<number, {value: number; edge?: [string, string]; y?: string}>();
     const gap = perMs * barMs >= 8 ? .5 : 0;
     const fixed = (value: number) => value.toFixed(1);
     const y = (value: number) => 12 + (1 - value / max) * (height - 40);
+    const positions = new Map<number, [string, string]>();
+    const levels = new Map<number, string>();
+    const position = (at: number) => {
+      let pair = positions.get(at);
+      if (!pair) {pair = [fixed((at - origin) * perMs + gap), fixed((at + barMs - origin) * perMs - gap)]; positions.set(at, pair);}
+      return pair;
+    };
+    const level = (value: number) => {
+      let text = levels.get(value);
+      // Whole cells repeat a few levels; varied values need no growing format cache.
+      if (text === undefined) {text = fixed(y(value)); if (levels.size < 128) levels.set(value, text);}
+      return text;
+    };
     const retained = new Set<string>();
     const paths = groups.map(({group}) => {
       retained.add(group.key);
@@ -26,17 +39,21 @@ export class StackPaths {
       let index = 0;
       for (const [at, ms] of group.cells) {
         kept.add(at);
-        const low = base.get(at) ?? 0, high = low + ms;
-        base.set(at, high);
+        let state = base.get(at);
+        if (!state) {state = {value: 0}; base.set(at, state);}
+        const low = state.value, high = low + ms;
+        state.value = high;
         if (cache.order[index++] !== at) changed = true;
         let corners = cache.bars.get(at);
         if (!corners || corners.low !== low || corners.high !== high) {
-          const x0 = fixed((at - origin) * perMs + gap), x1 = fixed((at + barMs - origin) * perMs - gap);
-          const top = fixed(y(high)), bottom = fixed(y(low));
-          corners = {low, high, top: [`${x0},${top}`, `${x1},${top}`], bottom: [`${x0},${bottom}`, `${x1},${bottom}`], topY: top, bottomY: bottom};
+          const [x0, x1] = position(at);
+          const top = level(high), bottom = state.y ?? level(low);
+          // The preceding group's top is this group's bottom at the same bar.
+          corners = {low, high, top: [`${x0},${top}`, `${x1},${top}`], bottom: state.edge ?? [`${x0},${bottom}`, `${x1},${bottom}`], topY: top, bottomY: bottom};
           cache.bars.set(at, corners);
           changed = true;
         }
+        state.edge = corners.top; state.y = corners.topY;
       }
       for (const at of cache.bars.keys()) if (!kept.has(at)) cache.bars.delete(at);
       if (!changed) return cache.path;
