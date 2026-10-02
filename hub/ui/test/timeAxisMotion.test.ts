@@ -85,3 +85,22 @@ test('the actual cursor follows shared Shift state after visibility-only cancell
   context.document.hidden = false; dispatch('visibilitychange');
   assert.equal(classes.has('is-grabbable'), false);
 });
+
+test('starting from a settled axis avoids a style flush but samples an interrupted fold', () => {
+  const source = readFileSync(new URL('../components/timeAxis.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('  const visualGeometry = () => {');
+  const body = source.slice(start, source.indexOf('  const geometry = ', start)) + '\nglobalThis.read=visualGeometry;';
+  let animated = false, reads = 0;
+  const context = {box: {current: {querySelector: () => ({getAnimations: () => animated ? [{}] : []})}},
+    from: 0, to: 1000, end: 800, left: 40, right: 12, width: 900,
+    getComputedStyle: () => {reads++; return {transform: 'matrix'};},
+    DOMMatrix: class {a = .5; e = 20;}, read: null as unknown as () => {from: number; to: number; end: number}};
+  runInNewContext(ts.transpileModule(body, {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText, context);
+  assert.equal(context.read().to, 1000);
+  assert.equal(reads, 0, 'the ordinary start must not flush styles for an unanimated SVG');
+  animated = true;
+  const sampled = context.read();
+  assert.equal(reads, 1);
+  assert.equal(sampled.to - sampled.from, 2000, 'an interrupted fold retains its actual displayed scale');
+  assert.equal(sampled.end, 800);
+});

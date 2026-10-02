@@ -45,26 +45,29 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
         history.pushState=(...args)=>{if(probe.feeding)probe.pushesDuring++;else probe.pushesAfter++;originalPush(...args);};
         const owner=root.parentElement,types=['wheel','pointerdown','pointermove','pointerup'];
         let gesture=null;
-        const anchor=()=>{if(gesture&&root.dataset.panEnd){gesture.started=true;gesture.origin=Number(root.dataset.panOrigin);gesture.scale=Number(root.dataset.panScale);}};
-        const begin=x=>{gesture={pixels:0,x,started:false,origin:null,scale:null};anchor();};
+        const capturedInputs=new WeakMap();
+        const capture=e=>{const delivered=performance.now(),at=e.timeStamp>1e12?e.timeStamp-performance.timeOrigin:e.timeStamp;capturedInputs.set(e,{at:Math.min(delivered,at),delivered});};
+        const begin=(token,x)=>{gesture={token,pixels:0,x,started:!!root.dataset.panEnd,origin:Number(root.dataset.panOrigin),scale:Number(root.dataset.panScale)};};
         const input=e=>{
-          if(e.type==='pointerdown'){if(!gesture||!root.dataset.panEnd)begin(e.clientX);else gesture.x=e.clientX;return;}
-          if(e.type==='pointerup'){anchor();return;}
+          const captured=capturedInputs.get(e);if(!captured)return;capturedInputs.delete(e);
+          const token=root.dataset.panToken;
+          // The native handler can finish an expired wheel transaction and
+          // begin another one in this event. Observe its resulting token.
+          if(e.type==='pointerdown'){if(!gesture||gesture.token!==token)begin(token,e.clientX);else gesture.x=e.clientX;return;}
+          if(e.type==='pointerup')return;
           if(e.type==='wheel'){
             if(!e.cancelable||(!e.deltaX&&!e.shiftKey))return;
-            if(!gesture||!root.dataset.panEnd)begin();
+            if(!gesture||gesture.token!==token)begin(token);
             const unit=[1,16,400][e.deltaMode]||1;
             gesture.pixels-=(e.deltaX||(e.shiftKey?e.deltaY:0))*unit;
           }else{
             if(!e.buttons||!gesture)return;
             gesture.pixels+=e.clientX-gesture.x;gesture.x=e.clientX;
           }
-          anchor();probe.inputs++;
-          const at=e.timeStamp>1e12?e.timeStamp-performance.timeOrigin:e.timeStamp;
-          const delivered=performance.now();
-          probe.pending.push({at:Math.min(delivered,at),delivered,segment:probe.segment,pixels:gesture.pixels,gesture});
+          probe.inputs++;
+          probe.pending.push({...captured,segment:probe.segment,pixels:gesture.pixels,gesture});
         };
-        for(const type of types)owner.addEventListener(type,input,true);
+        for(const type of types){owner.addEventListener(type,capture,true);window.addEventListener(type,input);}
         const originalFetch=window.fetch.bind(window);probe.originalFetch=originalFetch;
         window.fetch=async(...args)=>{
           const url=new URL(String(args[0]),location.href);if(url.pathname!='/api/history')return originalFetch(...args);
@@ -79,7 +82,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
         });probe.observer.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true});
         const originalRAF=window.requestAnimationFrame||requestAnimationFrame;
         const schedule=callback=>originalRAF.call(window,callback);
-        let previous=['0:1','0:1'],phase='idle',lastFrame=null;
+        let previous=['0:1','0:1'],phase='idle',lastFrame=null,paintedToken=null;
         const consume=(count,now)=>{for(const input of probe.pending.splice(0,count)){const ms=now-input.at;probe.latency.push(ms);probe.responses.push({ms,queued:input.delivered-input.at,processed:now-input.delivered,segment:input.segment,requests:probe.flights.size});}};
         const sample=(stamp,afterCallback=false)=>{
           if(!probe.running)return;
@@ -88,12 +91,11 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
           const matrices=layers.map((layer,i)=>{const transform=active?layer.style.transform:folding&&i===0?getComputedStyle(layer.querySelector('.slides')).transform:'none';const matrix=new DOMMatrix(transform&&transform!=='none'?transform:undefined);if(folding)matrix.e*=scales[i];return matrix;}),current=matrices.map(matrix=>matrix.e+':'+matrix.a);
           const nextPhase=active?'pan':folding?'fold':'idle';
           // The wheel's intentional 200 ms rest is stationary, before the fold begins.
-          if(nextPhase!==phase){probe.last=0;lastFrame=null;previous=nextPhase==='pan'?['0:1','0:1']:current;phase=nextPhase;}
+          if(nextPhase!==phase||active&&paintedToken!==root.dataset.panToken){probe.last=0;lastFrame=null;previous=nextPhase==='pan'?['0:1','0:1']:current;phase=nextPhase;paintedToken=root.dataset.panToken;}
           const moved=current.map((value,i)=>value!==previous[i]);
           if(active){probe.synchronized&&=charts.every((svg,i)=>svg.dataset.panEnd===root.dataset.panEnd&&Math.abs((Number(svg.dataset.panEnd)-Number(svg.dataset.panOrigin))/Number(svg.dataset.panScale)+matrices[i].e)<.01)&&[...charts[1].parentElement.querySelectorAll('.plot-move')].filter(layer=>layer.querySelector('.activity-stack')).every(layer=>Math.abs(new DOMMatrix(layer.style.transform||undefined).e-matrices[1].e)<.01);moved.forEach((changed,i)=>{if(changed)probe.chartUpdates[i]++;});}
           // Each input reaches both plots. Activity has no future, so only the
           // remaining-share chart must move during the final future fold.
-          if(active)anchor();
           if(active&&probe.synchronized&&(moved.every(Boolean)||afterCallback)){
             // Coalesced input reaches its final position together. A newer event
             // cannot be credited by the artwork of an earlier event.
@@ -124,7 +126,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
           if(root.dataset.panEnd&&!probe.pending.length&&lastFrame!==stamp)probe.last=0;
           probe.raf=schedule(tick);
         };
-        probe.cleanup=()=>{probe.running=false;cancelAnimationFrame(probe.raf);probe.observer.disconnect();for(const type of types)owner.removeEventListener(type,input,true);window.requestAnimationFrame=originalRAF;window.fetch=originalFetch;history.pushState=originalPush;};
+        probe.cleanup=()=>{probe.running=false;cancelAnimationFrame(probe.raf);probe.observer.disconnect();for(const type of types){owner.removeEventListener(type,capture,true);window.removeEventListener(type,input);}window.requestAnimationFrame=originalRAF;window.fetch=originalFetch;history.pushState=originalPush;};
         probe.raf=schedule(tick);
       })()`);
       await cdp.send('Emulation.setCPUThrottlingRate', {rate: 4});

@@ -115,8 +115,9 @@ export function useTimeAxis({
   const paintPan = useRef(() => {});
   const visualGeometry = () => {
     const layer = box.current?.querySelector<SVGGElement>('[data-plot-main] .slides');
-    const moving = layer ? getComputedStyle(layer).transform : 'none';
-    if (moving === 'none' || !layer?.getAnimations().length) return {from, to, end};
+    if (!layer?.getAnimations().length) return {from, to, end};
+    const moving = getComputedStyle(layer).transform;
+    if (moving === 'none') return {from, to, end};
     const matrix = new DOMMatrix(moving);
     const ratio = matrix.a || 1;
     const span = (to - from) / ratio;
@@ -134,6 +135,7 @@ export function useTimeAxis({
       finished.current = null;
       foldTicket.current++;
       captured.current = {token: frame.token, ...visualGeometry()};
+      element.dataset.panToken = String(frame.token);
       element.dataset.panOrigin = String(frame.originEnd);
       element.dataset.panScale = String((captured.current.to - captured.current.from) / ((width - left - right) * scale));
       box.current?.querySelectorAll<SVGGElement>('.slides').forEach(layer => layer.getAnimations().forEach(animation => animation.cancel()));
@@ -150,6 +152,7 @@ export function useTimeAxis({
       element.classList.toggle('is-grabbing', frame.source === source.current && frame.input === 'pointer');
     } else {
       delete element.dataset.panEnd;
+      delete element.dataset.panToken;
       delete element.dataset.panOrigin;
       delete element.dataset.panScale;
       element.classList.remove('is-grabbing');

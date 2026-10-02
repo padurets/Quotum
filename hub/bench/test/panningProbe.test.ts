@@ -10,7 +10,7 @@ const probe = source.match(/await cdp\.evaluate\(`(\(\(\) => \{\n\s*const root=d
 
 function fixture() {
   let time = 0;
-  const callbacks: ((stamp: number) => void)[] = [], listeners = new Map<string, (event: object) => void>();
+  const callbacks: ((stamp: number) => void)[] = [], listeners = new Map<string, (event: object) => void>(), bubble = new Map<string, (event: object) => void>();
   const schedule = (callback: (stamp: number) => void) => {callbacks.push(callback); return callbacks.length;};
   const layer = (data = false) => ({style: {transform: 'none'}, querySelector: (selector: string) => selector === '.activity-stack' ? data ? {} : null : {getAnimations: () => []}});
   const historyLayer = layer(), activityLayer = layer(true), activityTicks = layer(), activityEdge = layer(true);
@@ -28,8 +28,8 @@ function fixture() {
     },
   });
   const historySvg = svg(historyLayer), activitySvg = svg(activityLayer);
-  Object.assign(historySvg.dataset, {panOrigin: '0', panScale: '1', panEnd: '0'});
-  Object.assign(activitySvg.dataset, {panOrigin: '0', panScale: String(12 / 7), panEnd: '0'});
+  Object.assign(historySvg.dataset, {panToken: '1', panOrigin: '0', panScale: '1', panEnd: '0'});
+  Object.assign(activitySvg.dataset, {panToken: '1', panOrigin: '0', panScale: String(12 / 7), panEnd: '0'});
   const context = {
     performance: {now: () => time, timeOrigin: 0}, URL, URLSearchParams, location: {href: 'https://example.test/', search: ''},
     document: {body: {}, querySelector: (selector: string) => selector.startsWith('.history') ? historySvg : activitySvg},
@@ -37,11 +37,15 @@ function fixture() {
     requestAnimationFrame: schedule, cancelAnimationFrame: () => {},
     MutationObserver: class {observe() {} disconnect() {}},
     DOMMatrix: class {a = 1; e: number; constructor(value: string | undefined) {this.e = Number(value?.match(/translateX\(([-.\d]+)px\)/)?.[1] ?? 0);}},
-    window: {fetch: async () => ({}), requestAnimationFrame: schedule},
+    window: {fetch: async () => ({}), requestAnimationFrame: schedule, addEventListener: (type: string, callback: (event: object) => void) => bubble.set(type, callback), removeEventListener: () => {}},
   };
   runInNewContext(probe, context);
   const reading = (context.window as typeof context.window & {__quotumPan: PanReading & {pending: object[]}}).__quotumPan;
-  const wheel = (stamp: number, delivered: number, deltaMode = 0) => {time = delivered; listeners.get('wheel')!({type: 'wheel', cancelable: true, deltaX: 12, deltaMode, shiftKey: false, timeStamp: stamp});};
+  const wheel = (stamp: number, delivered: number, deltaMode = 0, handled = () => {}) => {
+    time = delivered;
+    const event = {type: 'wheel', cancelable: true, deltaX: 12, deltaMode, shiftKey: false, timeStamp: stamp};
+    listeners.get('wheel')!(event); handled(); bubble.get('wheel')!(event);
+  };
   const update = (i: number, at: number, moves = true, synchronized = true, proportional = true, historyMoves = true, edgeMoves = true) => {
     time = at;
     historySvg.dataset.panEnd = String(12 * i); activitySvg.dataset.panEnd = String(12 * (synchronized ? i : i - 1));
@@ -129,4 +133,18 @@ test('causal input positions preserve the line and page wheel units', () => {
     assert.equal(f.reading.latency.length, 1);
     assert.equal(f.reading.pending.length, 0);
   }
+});
+
+test('an implicit wheel restart receives a fresh immutable gesture anchor', () => {
+  const f = fixture();
+  f.wheel(0, 0); f.requestFrame(() => f.update(1, 16.7)); f.runFrame(16.7);
+  f.wheel(300, 320, 0, () => {
+    Object.assign(f.historySvg.dataset, {panToken: '2', panOrigin: '12', panEnd: '12'});
+    Object.assign(f.activitySvg.dataset, {panToken: '2', panOrigin: '12', panEnd: '12'});
+  });
+  f.requestFrame(() => {f.update(1, 322);f.historySvg.dataset.panEnd='24';f.activitySvg.dataset.panEnd='24';});
+  f.runFrame(321);
+  assert.equal(f.reading.pending.length, 0, 'the new wheel token must not retain the previous cumulative offset');
+  assert.equal(f.reading.latency[1], 22, 'delivery and handler work stay included after a restart');
+  assert.equal(f.reading.updated, 2, 'equal CSS offsets in different gesture bases are separate updated frames');
 });
