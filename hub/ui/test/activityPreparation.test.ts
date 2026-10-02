@@ -25,9 +25,11 @@ test('actual activity preparation reuses both strips through restarted renders w
   };
   const current = buffer(0), replacing = buffer(barMs);
   let index = 0, aggregates = 0, draws = 0;
+  const commits: (() => void)[] = [];
+  const useLayoutEffect = (effect: () => void) => commits.push(effect);
   const refs: {current: unknown}[] = [];
   const useRef = (value: unknown) => refs[index++] ?? (refs[index - 1] = {current: value});
-  const hook = {exports: {} as {usePlotMemo: <T>(calculate: () => T, deps: readonly unknown[]) => T}, require: () => ({useRef})};
+  const hook = {exports: {} as {usePlotMemo: <T>(calculate: () => T, deps: readonly unknown[]) => T}, require: () => ({useRef, useLayoutEffect})};
   const options = {compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.React}};
   runInNewContext(ts.transpileModule(readFileSync(new URL('../components/plotMemo.ts', import.meta.url), 'utf8'), options).outputText, hook);
   class CountedPaths extends StackPaths {
@@ -38,10 +40,10 @@ test('actual activity preparation reuses both strips through restarted renders w
   const body = `function prepare(strip,by){${data}\nreturn data;}\n` + source.slice(source.indexOf('const Stacks = memo(function Stacks(')) + '\nglobalThis.prepare=prepare;globalThis.Stacks=Stacks;';
   const x = (at: number) => 48 + at / length * 340;
   const context = {React, useRef, usePlotMemo: hook.exports.usePlotMemo, useMemo: (calculate: () => unknown) => calculate(),
-    memo: (component: unknown) => component, useState: (value: unknown) => [value, () => {}], useEffect: () => {}, useLayoutEffect: () => {},
+    memo: (component: unknown) => component, useState: (value: unknown) => [value, () => {}], useEffect: () => {}, useLayoutEffect,
     CSS: {escape: (id: string) => id}, StackPaths: CountedPaths, stacksHeight, activityScale, niceTicks, cellStart, MINUTE: 60_000,
     plotGroups: (...args: Parameters<typeof plotGroups>) => {aggregates++; return plotGroups(...args);},
-    pan: {active: () => 1}, useLocale: () => 'en',
+    pan: {active: () => 1, subscribe: () => () => {}}, useLocale: () => 'en',
     useTimeAxis: () => ({box: {current: null}, svg: {current: null}, width: 400, scale: 1, hover: null, drag: null, clip: 'c', handlers: {}, basis: {from: 0, to: length, end: length}, x, drawX: x, active: true}),
     useTip: () => ({tip: {current: null}, style: {}}), PlotLayer: () => null, PlotOverlay: () => null, Tooltip: () => null,
     clock: () => '', shortDay: () => '', workHours: () => '', stamp: () => '', t: (key: string) => key,
@@ -56,6 +58,7 @@ test('actual activity preparation reuses both strips through restarted renders w
   };
   const render = (strip: PlotBuffer, color: string) => {
     index = 0;
+    commits.length = 0;
     const groups = [...context.prepare(strip, 'source').values()].map(group => ({group, color, name: group.key}));
     const actual = pathsOf(context.Stacks({activity: {barMs}, origin: 0, groups, from: 0, to: length, unknownTo: null,
       plot: undefined, onBase: () => {}, onSelect: () => {}, strip, by: 'source', allMuted: false, empty: null}));
@@ -63,7 +66,9 @@ test('actual activity preparation reuses both strips through restarted renders w
     assert.deepEqual(actual, expected, 'every restarted render has the cold producer outline');
     return actual;
   };
-  const first = render(current, 'blue'), next = render(replacing, 'green');
+  const first = render(current, 'blue');
+  commits.splice(0).forEach(commit => commit());
+  const next = render(replacing, 'green');
   for (let i = 0; i < 20; i++) {
     assert.deepEqual(render(current, 'red'), first);
     assert.deepEqual(render(replacing, 'orange'), next);
