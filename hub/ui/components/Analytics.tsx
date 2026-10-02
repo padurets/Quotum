@@ -1,12 +1,12 @@
-import {useRef, useState} from 'react';
+import {useLayoutEffect, useRef, useState} from 'react';
 import type {Kind} from '../lib/types';
 import {setPrefs, usePrefs} from '../lib/prefs';
 import {PERIODS, periodLabel, periodOf, step, stepChangesAt} from '../lib/periods';
 import {goTo, setTimeRange, timeRangeLabel, useTimeRange, type TimeRange} from '../lib/timeRange';
 import {hubNow, useClock} from '../lib/clock';
 import {useHistoryBegins} from '../lib/history';
-import {t} from '../i18n';
-import {pan, usePanFrame} from '../lib/pan';
+import {t, useLocale} from '../i18n';
+import {pan} from '../lib/pan';
 import {Segmented} from './Kit';
 import {Popover} from './Popover';
 
@@ -37,10 +37,22 @@ const ChevronIcon = () => (
   </svg>
 );
 
-/** Only the small label follows animation frames; the picker and navigation stay still. */
+/** The label follows frames without interrupting React's preparation of a new strip. */
 function PeriodName({selected, range}: {selected: TimeRange | null; range: string}) {
-  const preview = usePanFrame();
-  return <span>{preview ? timeRangeLabel(preview) : selected ? timeRangeLabel(selected) : periodLabel(periodOf(range))}</span>;
+  useLocale();
+  const text = useRef<HTMLSpanElement>(null);
+  const update = useRef(() => {});
+  const label = selected ? timeRangeLabel(selected) : periodLabel(periodOf(range));
+  const paint = () => {
+    const element = text.current;
+    if (!element) return;
+    const preview = pan.get();
+    const current = preview ? timeRangeLabel(preview) : label;
+    if (element.textContent !== current) element.textContent = current;
+  };
+  useLayoutEffect(() => {update.current = paint; paint();});
+  useLayoutEffect(() => pan.subscribe(() => update.current()), []);
+  return <span ref={text}>{label}</span>;
 }
 
 /**

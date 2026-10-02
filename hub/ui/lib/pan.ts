@@ -190,7 +190,6 @@ export const pan = new Pan({
 /** Plot hooks hear the phase only; the small period label may read each drawn frame. */
 export const usePanning = () => useSyncExternalStore(pan.onPhase, pan.active, pan.active);
 export const useShifting = () => useSyncExternalStore(pan.onPhase, pan.shifting, pan.shifting);
-export const usePanFrame = () => useSyncExternalStore(pan.subscribe, pan.get, pan.get);
 
 if (typeof window !== 'undefined') {
   const cancel = () => pan.cancel();
