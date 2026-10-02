@@ -139,9 +139,6 @@ export function useTimeAxis({
       box.current?.querySelectorAll<SVGGElement>('.slides').forEach(layer => layer.getAnimations().forEach(animation => animation.cancel()));
       setFolding(false);
     }
-    // React may replace a surface while preparing a strip. Publish its owners
-    // after the DOM commit, and retain the same CSS projection for the gesture.
-    if (frame) panLayers.current = [...(box.current?.querySelectorAll<HTMLElement>('.plot-move') ?? [])];
     const origin = captured.current;
     const dx = frame && origin ? -(frame.to - frame.originEnd) / (origin.to - origin.from) * (width - left - right) : 0;
     for (const layer of panLayers.current) {
@@ -165,7 +162,12 @@ export function useTimeAxis({
       panLayers.current = [];
     }
   };
-  useLayoutEffect(() => {paintPan.current = paint; if (pan.active()) paint();});
+  // Native input keeps the committed surface owners while React prepares a strip.
+  useLayoutEffect(() => {
+    panLayers.current = [...(box.current?.querySelectorAll<HTMLElement>('.plot-move') ?? [])];
+    paintPan.current = paint;
+    if (pan.active()) paint();
+  });
   useLayoutEffect(() => {
     const unsubscribe = pan.subscribe(() => paintPan.current());
     if (pan.active()) paintPan.current();

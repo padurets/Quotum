@@ -480,14 +480,14 @@ export const Chart = memo(function Chart({
 
   return (
     <div className="chart" ref={box} {...handlers}>
-      <PlotLayer width={width} height={height} scale={scale} left={left} right={right} under>
-        {to > now && (
+      {to > now && (
+        <PlotLayer width={width} height={height} scale={scale} left={left} right={right} under>
           <g className="future">
             <rect x={x(now)} width={x(to) - x(now)} y={top} height={height - top - bottom} className="future-zone" />
             <line x1={x(now)} x2={x(now)} y1={top} y2={height - bottom} className="now-line" />
           </g>
-        )}
-      </PlotLayer>
+        </PlotLayer>
+      )}
       <svg
         ref={svg}
         viewBox={`0 0 ${width} ${height}`}
@@ -511,16 +511,13 @@ export const Chart = memo(function Chart({
             </text>
           </g>
         ))}
-
       </svg>
-      <PlotLayer width={width} height={height} scale={scale} left={left} right={right}>
+      <PlotLayer width={width} height={height} scale={scale} left={left} right={right} main>
         {ticks.map(tick => (
           <text key={tick} x={x(tick)} y={height - 8} textAnchor="middle" className="tick">
             {daily ? shortDay(tick) : clock(tick)}
           </text>
         ))}
-      </PlotLayer>
-      <PlotLayer width={width} height={height} scale={scale} left={left} right={right} main>
         {plans.map(plan => (
           <path
             key={plan.key}

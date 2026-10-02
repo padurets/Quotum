@@ -521,9 +521,11 @@ const Stacks = memo(function Stacks({
           </g>
         </g>
       </PlotLayer>
-      <PlotLayer width={width} height={height} scale={scale} left={left} right={right}>
-        {strip && <g ref={edges}>{groups.map(({group, color}) => <path key={group.key} fill={color} className="activity-stack" />)}</g>}
-      </PlotLayer>
+      {strip && (
+        <PlotLayer width={width} height={height} scale={scale} left={left} right={right}>
+          <g ref={edges}>{groups.map(({group, color}) => <path key={group.key} fill={color} className="activity-stack" />)}</g>
+        </PlotLayer>
+      )}
       <PlotOverlay width={width} height={height}>
         {drag && <rect x={Math.min(drag.start, drag.end)} width={Math.abs(drag.end - drag.start)} y={top} height={height - top - bottom} className="selection" />}
         {hover !== null && bar && parts.length > 0 && (
