@@ -56,3 +56,32 @@ test('the actual axis publishes committed HTML owners and applies the captured C
   assert.equal(next.style.transform, 'translateX(54px)', 'a new gesture can move the committed artwork before another render commits');
   pan.cancel(); paintPan.current();
 });
+
+test('the actual cursor follows shared Shift state after visibility-only cancellation', () => {
+  const pan = new Pan({now: () => 0, commit: () => {}, requestFrame: () => null, cancelFrame: () => {}, setTimeout: () => null, clearTimeout: () => {}});
+  const classes = new Set<string>(), events = new Map<string, ((event?: {key: string; shiftKey: boolean}) => void)[]>();
+  const listen = (type: string, callback: (event?: {key: string; shiftKey: boolean}) => void) => events.set(type, [...events.get(type) ?? [], callback]);
+  const dispatch = (type: string, event?: {key: string; shiftKey: boolean}) => events.get(type)?.forEach(callback => callback(event));
+  let mounted = false;
+  const context = {pan, window: {}, document: {hidden: false, addEventListener: listen}, addEventListener: listen,
+    removeEventListener: () => {}, onTimeRange: () => {}, onPrefs: () => {}, prefs: () => ({}),
+    svg: {current: {classList: {toggle: (name: string, on: boolean) => {if (on) classes.add(name); else classes.delete(name);}, remove: (name: string) => classes.delete(name)}}},
+    shifting: false, panning: null, folding: false,
+    useLayoutEffect: (effect: () => void) => effect(),
+    useEffect: (effect: () => void) => {if (!mounted) effect();},
+  };
+  const panSource = readFileSync(new URL('../lib/pan.ts', import.meta.url), 'utf8');
+  const options = {compilerOptions: {target: ts.ScriptTarget.ES2022}};
+  runInNewContext(ts.transpileModule(panSource.slice(panSource.indexOf("if (typeof window !== 'undefined')")), options).outputText, context);
+  const axis = readFileSync(new URL('../components/timeAxis.ts', import.meta.url), 'utf8');
+  const cursor = axis.slice(axis.indexOf("  useLayoutEffect(() => {svg.current?.classList.toggle('is-panning'"), axis.indexOf('  const measured ='));
+  const render = () => {context.shifting = pan.shifting(); runInNewContext(ts.transpileModule(cursor, options).outputText, context); mounted = true;};
+  render(); pan.onPhase(render);
+  dispatch('keydown', {key: 'Shift', shiftKey: true});
+  assert.ok(classes.has('is-grabbable'));
+  context.document.hidden = true; dispatch('visibilitychange');
+  assert.equal(pan.shifting(), false);
+  assert.equal(classes.has('is-grabbable'), false, 'visibility-only cancellation clears the grab cursor without a blur or keyup');
+  context.document.hidden = false; dispatch('visibilitychange');
+  assert.equal(classes.has('is-grabbable'), false);
+});

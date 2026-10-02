@@ -187,14 +187,7 @@ export function useTimeAxis({
     if (panning) {cancelHold(); setDrag(null); setHover(null);}
   }, [panning]);
   useLayoutEffect(() => {svg.current?.classList.toggle('is-panning', panning !== null || folding);}, [panning, folding]);
-  useEffect(() => {
-    const key = (event: KeyboardEvent) => svg.current?.classList.toggle('is-grabbable', event.shiftKey);
-    const blur = () => svg.current?.classList.remove('is-grabbable');
-    addEventListener('keydown', key);
-    addEventListener('keyup', key);
-    addEventListener('blur', blur);
-    return () => {removeEventListener('keydown', key); removeEventListener('keyup', key); removeEventListener('blur', blur);};
-  }, []);
+  useLayoutEffect(() => {svg.current?.classList.toggle('is-grabbable', shifting);}, [shifting]);
 
   const measured = useRef<number | null>(null);
   const measure = (next: number) => {
