@@ -12,6 +12,7 @@ import {useLineup, useTitles, type Title} from '../lib/board';
 import {useClock} from '../lib/clock';
 import {useHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
 import {plotBar, plotGroups, type PlotBuffer, type PlotGroup} from '../lib/historyPlot';
+import {usePlotMemo} from './plotMemo';
 import {groupRegistry, type GroupIdentity} from '../lib/plotRegistry';
 import {StackPaths} from '../lib/stackPaths';
 import {pan, usePanning, useShifting} from '../lib/pan';
@@ -230,6 +231,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
     return {groups, colors, names, muted, shown};
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activity, by, arrange.view, titles, prefs.muted, locale]);
+  const data = usePlotMemo(() => strip ? new Map(plotGroups(strip, {k0: strip.from / strip.cell, k1: strip.to / strip.cell - 1}, by).map(group => [group.key, group])) : null, [strip, by]);
   const presentation = useMemo(() => {
     const seed = groups.map((group, i) => ({key: group.key, name: group.name, color: colors[i]}));
     if (!strip) {registry.current = null; return {identities: seed, shown};}
@@ -238,10 +240,9 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
     for (const row of strip.activityCells.values()) for (const [key, part] of row.parts[by]) candidates.set(key, {key, name: part.name});
     const state = registry.current;
     state.groups = groupRegistry(state.seed, state.groups, [...candidates.values()], by === 'source' ? key => colorOf(arrange.view, key, titles[key]?.provider ?? '') : undefined);
-    const data = new Map(plotGroups(strip, {k0: strip.from / strip.cell, k1: strip.to / strip.cell - 1}, by).map(group => [group.key, group]));
-    const plotted = state.groups.filter(group => !prefs.muted[mutedKey(by, group.key)]).map(identity => ({group: data.get(identity.key) ?? {key: identity.key, name: identity.name, cells: []}, color: identity.color, name: groupName(identity, by, titles)}));
+    const plotted = state.groups.filter(group => !prefs.muted[mutedKey(by, group.key)]).map(identity => ({group: data!.get(identity.key) ?? {key: identity.key, name: identity.name, cells: EMPTY_CELLS}, color: identity.color, name: groupName(identity, by, titles)}));
     return {identities: state.groups, shown: plotted};
-  }, [strip, groups, colors, shown, by, arrange.view, titles, prefs.muted]);
+  }, [strip, data, groups, colors, shown, by, arrange.view, titles, prefs.muted]);
   const shownMs = useMemo(() => shown.reduce((sum, {group}) => sum + group.agentMs, 0), [shown]);
   const shownSources = lineup.filter(id => titles[id] && !isHidden(arrange.view, cardId(id)));
   // Known from later than the period the hub answered begins (not the page's frame, whose clock may be a minute behind).
@@ -306,6 +307,8 @@ export const stacksHeight = (width: number) => (width < 560 ? 160 : 200);
  * in it. It reads, and moves through time, as the chart does (`useTimeAxis`), and is made
  * taller as the chart is (`plot`, `onBase`).
  */
+const EMPTY_CELLS: PlotGroup['cells'] = [];
+
 const Stacks = memo(function Stacks({
   activity,
   origin,
@@ -360,14 +363,19 @@ const Stacks = memo(function Stacks({
   const {ticks, daily} = niceTicks(tickFrom, tickTo, (narrow ? 4 : 7) * (tickTo - tickFrom) / span);
 
   // How tall each bar's stack is, of the groups shown: the scale reaches the tallest.
-  const heights = useMemo(() => {
+  // Names and colors still paint from the current props; stacking needs only the
+  // order, keys and immutable cells, even when a render attempt is restarted.
+  const inputs: unknown[] = [];
+  for (const {group} of groups) inputs.push(group.key, group.cells);
+  const stacked = usePlotMemo(() => groups.map(({group}) => ({group})), inputs);
+  const heights = usePlotMemo(() => {
     const sums = new Map<number, number>();
-    for (const {group} of groups) for (const [at, ms] of group.cells) sums.set(at, (sums.get(at) ?? 0) + ms);
+    for (const {group} of stacked) for (const [at, ms] of group.cells) sums.set(at, (sums.get(at) ?? 0) + ms);
     return sums;
-  }, [groups]);
-  const possibleMax = useMemo(() => {
+  }, [stacked]);
+  const possibleMax = usePlotMemo(() => {
     if (!strip) return 0;
-    const keys = new Set(groups.map(({group}) => group.key));
+    const keys = new Set(stacked.map(({group}) => group.key));
     const bars = new Map<number, number>();
     for (const [at, row] of strip.activityCells) {
       const bar = cellStart(at, barMs);
@@ -376,7 +384,7 @@ const Stacks = memo(function Stacks({
       bars.set(bar, (bars.get(bar) ?? 0) + ms);
     }
     return Math.max(0, ...bars.values());
-  }, [strip, groups, by, barMs]);
+  }, [strip, stacked, by, barMs]);
   const maxSeen = useRef(0);
   const busiest = Math.max(possibleMax, 0, ...heights.values());
   maxSeen.current = pan.active() ? Math.max(maxSeen.current, busiest) : busiest;
@@ -391,10 +399,10 @@ const Stacks = memo(function Stacks({
   const perMs = (width - left - right) / span;
   const pathOrigin = strip ? basis.from : origin;
   const stackPaths = useRef(new StackPaths());
-  const paths = useMemo(() => {
-    return stackPaths.current.draw(groups, pathOrigin, perMs, barMs, height, vertical.max);
+  const paths = usePlotMemo(() => {
+    return stackPaths.current.draw(stacked, pathOrigin, perMs, barMs, height, vertical.max);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groups, pathOrigin, perMs, barMs, height, vertical.max]);
+  }, [stacked, pathOrigin, perMs, barMs, height, vertical.max]);
 
   const innerClip = `${clip}-inner`;
   const bandClip = useRef<HTMLDivElement>(null);

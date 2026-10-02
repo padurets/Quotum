@@ -9,6 +9,7 @@ import {activityEmpty, activityScale} from '../lib/activity';
 import {StackPaths} from '../lib/stackPaths';
 import {stacksHeight} from '../components/Activity';
 import {plotLayerFixture} from './plotLayerFixture';
+import {usePlotMemo} from '../components/plotMemo';
 import {Pan} from '../lib/pan';
 import {niceTicks} from '../lib/periods';
 import {cellStart} from '../../server/domain/history';
@@ -26,7 +27,7 @@ test('the actual empty activity result keeps its time axis and legend container 
   const history: History = {since: range.from, to: range.to, range: `${range.from}-${range.to}`, live: false, cellMs: 5 * M, historyStart: 0, series: [], events: [], activity: {known: {from: range.from, to: range.to}, since: 0, barMs: H, activeMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}}};
   const x = (at: number) => 48 + (at - range.from) / DAY * 340;
   const context = {
-    React, ...React, CSS: {escape: (id: string) => id}, StackPaths, stacksHeight, activityScale, niceTicks, cellStart, activityEmpty, MINUTE: M, clipPlot, PlotLayer, PlotOverlay,
+    React, ...React, CSS: {escape: (id: string) => id}, StackPaths, stacksHeight, activityScale, niceTicks, cellStart, activityEmpty, MINUTE: M, clipPlot, PlotLayer, PlotOverlay, usePlotMemo,
     pan: new Pan({now: () => NOW, commit: () => {}, requestFrame: () => null, cancelFrame: () => {}, setTimeout: () => null, clearTimeout: () => {}}),
     useLocale: () => 'en', useTimeAxis: () => ({box: {current: null}, svg: {current: null}, width: 400, scale: 1, hover: null, drag: null, clip: 'c', handlers: {}, basis: {...range, end: range.to}, x, drawX: x}),
     clock: () => '', shortDay: () => '', workHours: () => '', stamp: () => '', t: (key: string) => key,
