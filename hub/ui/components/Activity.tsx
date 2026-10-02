@@ -232,17 +232,20 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activity, by, arrange.view, titles, prefs.muted, locale]);
   const data = usePlotMemo(() => strip ? new Map(plotGroups(strip, {k0: strip.from / strip.cell, k1: strip.to / strip.cell - 1}, by).map(group => [group.key, group])) : null, [strip, by]);
+  const candidates = usePlotMemo(() => {
+    const found = new Map<string, Pick<PlotGroup, 'key' | 'name'>>();
+    if (strip) for (const row of strip.activityCells.values()) for (const [key, part] of row.parts[by]) found.set(key, {key, name: part.name});
+    return [...found.values()];
+  }, [strip, by]);
   const presentation = useMemo(() => {
     const seed = groups.map((group, i) => ({key: group.key, name: group.name, color: colors[i]}));
     if (!strip) {registry.current = null; return {identities: seed, shown};}
     if (registry.current?.token !== strip.token || registry.current.by !== by) registry.current = {token: strip.token, by, seed, groups: seed};
-    const candidates = new Map<string, Pick<PlotGroup, 'key' | 'name'>>();
-    for (const row of strip.activityCells.values()) for (const [key, part] of row.parts[by]) candidates.set(key, {key, name: part.name});
     const state = registry.current;
-    state.groups = groupRegistry(state.seed, state.groups, [...candidates.values()], by === 'source' ? key => colorOf(arrange.view, key, titles[key]?.provider ?? '') : undefined);
+    state.groups = groupRegistry(state.seed, state.groups, candidates, by === 'source' ? key => colorOf(arrange.view, key, titles[key]?.provider ?? '') : undefined);
     const plotted = state.groups.filter(group => !prefs.muted[mutedKey(by, group.key)]).map(identity => ({group: data!.get(identity.key) ?? {key: identity.key, name: identity.name, cells: EMPTY_CELLS}, color: identity.color, name: groupName(identity, by, titles)}));
     return {identities: state.groups, shown: plotted};
-  }, [strip, data, groups, colors, shown, by, arrange.view, titles, prefs.muted]);
+  }, [strip, data, candidates, groups, colors, shown, by, arrange.view, titles, prefs.muted]);
   const shownMs = useMemo(() => shown.reduce((sum, {group}) => sum + group.agentMs, 0), [shown]);
   const shownSources = lineup.filter(id => titles[id] && !isHidden(arrange.view, cardId(id)));
   // Known from later than the period the hub answered begins (not the page's frame, whose clock may be a minute behind).

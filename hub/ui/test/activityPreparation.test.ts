@@ -5,7 +5,7 @@ import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import * as React from 'react';
 import {activityScale} from '../lib/activity';
-import {plotGroups, type PlotBuffer} from '../lib/historyPlot';
+import {plotGroups, type PlotBuffer, type PlotGroup} from '../lib/historyPlot';
 import {StackPaths} from '../lib/stackPaths';
 import {stacksHeight} from '../components/Activity';
 import {cellStart} from '../../server/domain/history';
@@ -13,8 +13,11 @@ import {niceTicks} from '../lib/periods';
 
 test('actual activity preparation reuses both strips through restarted renders with exact paths', () => {
   const H = 3_600_000, length = 30 * 24 * H, barMs = 2 * H;
+  let scans = 0;
   const buffer = (start: number): PlotBuffer => {
     const activityCells: PlotBuffer['activityCells'] = new Map();
+    const values = activityCells.values.bind(activityCells);
+    activityCells.values = () => {scans++; return values();};
     for (let i = 0; i < 480; i++) {
       const at = start + i * barMs;
       const parts = new Map(Array.from({length: 30}, (_, j) => [`s${j}`, {ms: (j + 1) * 60_000, name: null}]));
@@ -36,8 +39,8 @@ test('actual activity preparation reuses both strips through restarted renders w
     override draw(...args: Parameters<StackPaths['draw']>) {draws++; return super.draw(...args);}
   }
   const source = readFileSync(new URL('../components/Activity.tsx', import.meta.url), 'utf8');
-  const data = source.match(/  const data = usePlotMemo[^\n]+/)![0];
-  const body = `function prepare(strip,by){${data}\nreturn data;}\n` + source.slice(source.indexOf('const Stacks = memo(function Stacks(')) + '\nglobalThis.prepare=prepare;globalThis.Stacks=Stacks;';
+  const data = source.slice(source.indexOf('  const data = usePlotMemo'), source.indexOf('  const presentation = useMemo'));
+  const body = `function prepare(strip,by){${data}\nreturn {data,candidates};}\n` + source.slice(source.indexOf('const Stacks = memo(function Stacks(')) + '\nglobalThis.prepare=prepare;globalThis.Stacks=Stacks;';
   const x = (at: number) => 48 + at / length * 340;
   const context = {React, useRef, usePlotMemo: hook.exports.usePlotMemo, useMemo: (calculate: () => unknown) => calculate(),
     memo: (component: unknown) => component, useState: (value: unknown) => [value, () => {}], useEffect: () => {}, useLayoutEffect,
@@ -47,7 +50,7 @@ test('actual activity preparation reuses both strips through restarted renders w
     useTimeAxis: () => ({box: {current: null}, svg: {current: null}, width: 400, scale: 1, hover: null, drag: null, clip: 'c', handlers: {}, basis: {from: 0, to: length, end: length}, x, drawX: x, active: true}),
     useTip: () => ({tip: {current: null}, style: {}}), PlotLayer: () => null, PlotOverlay: () => null, Tooltip: () => null,
     clock: () => '', shortDay: () => '', workHours: () => '', stamp: () => '', t: (key: string) => key,
-    prepare: null as unknown as (strip: PlotBuffer, by: string) => Map<string, {key: string; name: null; cells: [number, number][]}>,
+    prepare: null as unknown as (strip: PlotBuffer, by: string) => {data: Map<string, PlotGroup>; candidates: Pick<PlotGroup, 'key' | 'name'>[]},
     Stacks: null as unknown as (props: object) => React.ReactNode,
   };
   runInNewContext(ts.transpileModule(body, options).outputText, context);
@@ -59,7 +62,9 @@ test('actual activity preparation reuses both strips through restarted renders w
   const render = (strip: PlotBuffer, color: string) => {
     index = 0;
     commits.length = 0;
-    const groups = [...context.prepare(strip, 'source').values()].map(group => ({group, color, name: group.key}));
+    const {data, candidates} = context.prepare(strip, 'source');
+    assert.deepEqual(JSON.parse(JSON.stringify(candidates)), Array.from({length: 30}, (_, j) => ({key: `s${j}`, name: null})));
+    const groups = [...data.values()].map(group => ({group, color, name: group.key}));
     const actual = pathsOf(context.Stacks({activity: {barMs}, origin: 0, groups, from: 0, to: length, unknownTo: null,
       plot: undefined, onBase: () => {}, onSelect: () => {}, strip, by: 'source', allMuted: false, empty: null}));
     const expected = new StackPaths().draw(groups, 0, 340 / length, barMs, stacksHeight(400), activityScale(465 * 60_000).max);
@@ -74,5 +79,14 @@ test('actual activity preparation reuses both strips through restarted renders w
     assert.deepEqual(render(replacing, 'orange'), next);
   }
   assert.equal(aggregates, 2, 'the actual parent does not repeat immutable plotGroups extraction');
+  assert.equal(scans, 2, 'the actual parent does not repeat immutable identity extraction');
   assert.equal(draws, 2, 'the actual Stacks does not repeat either retained geometry calculation');
+
+  const partial = buffer(2 * barMs);
+  partial.coverage = [[partial.from, partial.to - barMs]];
+  partial.activityCells.get(partial.to - barMs)!.parts.source.set('pending', {ms: 60_000, name: 'New group'});
+  index = 0;
+  const prepared = context.prepare(partial, 'source');
+  assert.equal(prepared.data.has('pending'), false, 'an unread bar cannot contribute a numeric height');
+  assert.equal(prepared.candidates.find(group => group.key === 'pending')?.name, 'New group', 'a group in a partial bar still joins the visual registry');
 });
