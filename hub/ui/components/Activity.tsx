@@ -371,7 +371,8 @@ const Stacks = memo(function Stacks({
     const bars = new Map<number, number>();
     for (const [at, row] of strip.activityCells) {
       const bar = cellStart(at, barMs);
-      const ms = [...row.parts[by]].reduce((sum, [key, part]) => sum + (keys.has(key) ? part.ms : 0), 0);
+      let ms = 0;
+      for (const [key, part] of row.parts[by]) if (keys.has(key)) ms += part.ms;
       bars.set(bar, (bars.get(bar) ?? 0) + ms);
     }
     return Math.max(0, ...bars.values());

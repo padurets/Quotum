@@ -27,3 +27,19 @@ test('wide bars keep their gaps when the plot scale and data change', () => {
   const moved = cache.draw([{group: {...groups[0].group, cells: [[10, 4]]}}], 10, 1, 10, 140, 10);
   assert.equal(moved[0], 'M0.5,72.0L9.5,72.0L9.5,112.0L0.5,112.0Z');
 });
+
+test('retained group paths match a cold draw after edits, holes, muting and reordering', () => {
+  const cache = new StackPaths();
+  const updates = [groups, groups.map(({group}) => ({group: {...group, cells: group.cells.map(([at, ms]) => [at, ms] as [number, number])}})),
+    [groups[1], groups[0]], [groups[1]], [{group: {...groups[0].group, cells: [[0, 4], [30, 1]] as [number, number][]}}, groups[1]],
+    [{group: {...groups[0].group, cells: [[30, 1], [0, 4]] as [number, number][]}}, groups[1]], [], groups];
+  for (const perMs of [.1, 1]) for (const input of updates) {
+    assert.deepEqual(cache.draw(input, 0, perMs, 10, 140, 10), new StackPaths().draw(input, 0, perMs, 10, 140, 10));
+  }
+  const retained = cache as unknown as {groups: Map<string, {bars: Map<number, unknown>; order: number[]; path: string}>};
+  cache.draw([groups[1]], 0, .1, 10, 140, 10);
+  assert.equal(retained.groups.size, 1, 'muted groups release their strings and corners');
+  assert.deepEqual(retained.groups.get('q')!.order, [0, 10]);
+  cache.draw([], 0, .1, 10, 140, 10);
+  assert.equal(retained.groups.size, 0, 'a replaced empty strip leaves no retained paths');
+});
