@@ -103,12 +103,12 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
           if(active&&moved.every(Boolean)||folding&&moved[0]){
             if(stamp!==lastFrame){probe.updated++;if(probe.last){const ms=now-probe.last;probe.frames.push(ms);probe.samples.push({ms,segment:folding?'fold':probe.segment,pending:demand,requests:probe.flights.size});}probe.last=now;lastFrame=stamp;}
           }
-          if(!active&&!folding&&probe.pending.length&&!root.classList.contains('is-panning')){
+          if(!active&&!folding&&probe.pending.length&&charts.every(svg=>!svg.classList.contains('is-panning'))){
             // Release may commit the last coalesced input before its own RAF.
             // Its effect is observable only after the final geometry and fold.
-            const end=Number(owner.dataset.axisEnd),selected=new URLSearchParams(location.search).has('to');
+            const ends=charts.map(svg=>Number(svg.parentElement.dataset.axisEnd)),selected=new URLSearchParams(location.search).has('to');
             let reached=-1;
-            for(let i=0;i<probe.pending.length;i++){const input=probe.pending[i],g=input.gesture;const tolerance=selected?1.1:8*g.scale+1.1;if(g.started&&g.scale>0&&Math.abs(end-(g.origin-input.pixels*g.scale))<=tolerance)reached=i;}
+            for(let i=0;i<probe.pending.length;i++){const input=probe.pending[i],g=input.gesture;const tolerance=selected?1.1:8*g.scale+1.1;if(g.started&&g.scale>0&&ends.every(end=>Math.abs(end-(g.origin-input.pixels*g.scale))<=tolerance))reached=i;}
             if(reached>=0)consume(reached+1,now);
           }
           if(!active&&!folding)probe.last=0;

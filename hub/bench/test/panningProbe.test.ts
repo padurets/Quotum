@@ -114,9 +114,11 @@ test('unpainted final input is credited only after its geometry commits', () => 
   f.context.location.search = '?from=0&to=12';
   f.runFrame(16.7);
   assert.equal(f.reading.latency.length, 0, 'the address alone cannot prove the final chart updated');
-  f.historySvg.parentElement.dataset.axisEnd = '12'; f.activitySvg.parentElement.dataset.axisEnd = '12';
+  f.historySvg.parentElement.dataset.axisEnd = '12';
   f.runFrame(33.4);
-  assert.equal(f.reading.latency[0], 33.4);
+  assert.equal(f.reading.latency.length, 0, 'both charts must publish the final geometry');
+  f.activitySvg.parentElement.dataset.axisEnd = '12'; f.runFrame(50.1);
+  assert.equal(f.reading.latency[0], 50.1);
   assert.equal(f.reading.updated, 0, 'final metadata cannot manufacture moving frames');
 });
 
