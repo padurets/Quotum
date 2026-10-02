@@ -355,7 +355,7 @@ export const Chart = memo(function Chart({
   );
 
   const none = {left: false, plan: false, gap: false, forecast: false};
-  const {rows, columns} = hover === null ? {rows: [], columns: none} : readCell(lines, plans, hover, cellMs, now, to, forecasts);
+  const {rows, columns} = hover === null ? {rows: [], columns: none} : readCell(lines, plans, hover, cellMs, now, to, forecasts, strip?.coverage);
   const columnCount = Object.values(columns).filter(Boolean).length;
   // A cell ahead of now where no line reads anything says only what happens in it.
   const grid = rows.length > 0 && columnCount > 0;

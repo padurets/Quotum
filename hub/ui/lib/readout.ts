@@ -1,4 +1,5 @@
 import {valueIn, type PlotLine as Line} from './lines';
+import type {Coverage} from './historyPlot';
 import {PLAN_TOLERANCE} from './plan';
 
 /** The spending plan of one weekly window, drawn as a faint dotted line in its colour; `lines` are the keys of the lines it plans. */
@@ -70,10 +71,10 @@ export type Columns = {left: boolean; plan: boolean; gap: boolean; forecast: boo
  * a line has no value of its own: its plan, and where its pace leads until its window
  * runs out, each a column only where the cell reads one.
  */
-export function readout(lines: Line[], plans: PlanLine[], cell: number, cellMs: number, now: number, to: number, forecasts: ForecastLine[] = []): {rows: ReadoutRow[]; columns: Columns} {
+export function readout(lines: Line[], plans: PlanLine[], cell: number, cellMs: number, now: number, to: number, forecasts: ForecastLine[] = [], coverage?: Coverage): {rows: ReadoutRow[]; columns: Columns} {
   const at = Math.min(to, cell + cellMs / 2);
   const rows = lines.map(line => {
-    const value = valueIn(line.points, cell, now, Math.max(cellMs, line.staleAfterMs)) ?? null;
+    const value = valueIn(line.points, cell, now, Math.max(cellMs, line.staleAfterMs), coverage) ?? null;
     const runs = plans.find(plan => plan.lines.includes(line.key))?.runs;
     const planned = runs ? valueAt(runs, at) : undefined;
     const left = value === null ? null : Math.round(value);

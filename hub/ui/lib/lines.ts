@@ -4,6 +4,7 @@ import {windowKey} from './types';
 import {seriesName} from './quota';
 import {DASHES} from './providers';
 import {cardId, colorOf} from './view';
+import {covered, type Coverage} from './historyPlot';
 
 /** A series of the history as the chart and the table show it: named, coloured, with its value now. */
 export type PlotBlock = {from: number; to: number; gap: boolean; points: readonly [at: number, remaining: number, segment: number, hold: number][]};
@@ -54,7 +55,7 @@ export function linesOf<T extends PlotSeries>(history: {series: readonly T[]} | 
  * a short period, and a value holds until the next one; the last one, only as long as it
  * is fresh (`holdMs`), as a gap between two would be.
  */
-export function valueIn(points: Line['points'], cell: number, now: number, holdMs: number): number | undefined {
+export function valueIn(points: Line['points'], cell: number, now: number, holdMs: number, coverage?: Coverage): number | undefined {
   if (cell > now) return undefined;
   let low = 0;
   let high = points.length - 1;
@@ -68,6 +69,8 @@ export function valueIn(points: Line['points'], cell: number, now: number, holdM
   }
   if (found < 0) return undefined;
   const [at, value, segment] = points[found];
+  // An unread interval may contain a newer measurement or a break in this line.
+  if (coverage && !covered(coverage, at, cell + 1)) return undefined;
   const next = points[found + 1];
   if (at === cell) return value;
   return next ? (next[2] === segment ? value : undefined) : cell - at <= holdMs ? value : undefined;
