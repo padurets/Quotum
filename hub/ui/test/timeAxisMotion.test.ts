@@ -25,7 +25,7 @@ test('the actual axis publishes committed HTML owners and applies the captured C
   const captured = {current: null};
   const paintPan = {current: () => {}};
   const context = {pan, source, svg, box, panLayers, captured, paintPan, finished: {current: null}, foldTicket: {current: 0},
-    visualGeometry: () => ({...selected, end: selected.to}), setFolding: () => {},
+    visualGeometry: () => ({...selected, end: selected.to}), setFolding: () => {}, cancelSlides: () => {},
     width: 600, left: 40, right: 20, scale: .5, panPointer: {current: null as {id: number} | null}, wheelBounds: {current: null},
     useLayoutEffect: (commit: () => void) => commits.push(commit),
   };
@@ -90,17 +90,47 @@ test('starting from a settled axis avoids a style flush but samples an interrupt
   const source = readFileSync(new URL('../components/timeAxis.ts', import.meta.url), 'utf8');
   const start = source.indexOf('  const visualGeometry = () => {');
   const body = source.slice(start, source.indexOf('  const geometry = ', start)) + '\nglobalThis.read=visualGeometry;';
-  let animated = false, reads = 0;
-  const context = {box: {current: {querySelector: () => ({getAnimations: () => animated ? [{}] : []})}},
+  let reads = 0;
+  const layer = {getAnimations: () => {throw new Error('animation lookup must not flush styles');}};
+  const animations = {current: new Map()};
+  const context = {box: {current: {querySelector: () => layer}}, animations,
     from: 0, to: 1000, end: 800, left: 40, right: 12, width: 900,
     getComputedStyle: () => {reads++; return {transform: 'matrix'};},
     DOMMatrix: class {a = .5; e = 20;}, read: null as unknown as () => {from: number; to: number; end: number}};
   runInNewContext(ts.transpileModule(body, {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText, context);
   assert.equal(context.read().to, 1000);
   assert.equal(reads, 0, 'the ordinary start must not flush styles for an unanimated SVG');
-  animated = true;
+  animations.current.set(layer, {});
   const sampled = context.read();
   assert.equal(reads, 1);
   assert.equal(sampled.to - sampled.from, 2000, 'an interrupted fold retains its actual displayed scale');
   assert.equal(sampled.end, 800);
+});
+
+test('the actual slide owner cancels replacements and releases only its own completed animation', async () => {
+  const source = readFileSync(new URL('../components/timeAxis.ts', import.meta.url), 'utf8');
+  const region = source.slice(source.indexOf('  const animations = '), source.indexOf('  const source = '));
+  const cleanups: (() => void)[] = [];
+  const context = {useRef: (current: unknown) => ({current}), useEffect: (effect: () => () => void) => cleanups.push(effect()),
+    animateSlide: null as unknown as (layer: object, frames: object[], options: object) => unknown,
+    animations: null as unknown as {current: Map<object, unknown>}};
+  runInNewContext(ts.transpileModule(`{${region}\nglobalThis.animateSlide=animateSlide;globalThis.animations=animations;}`, {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText, context);
+  const created: {finished: Promise<void>; finish(): void; cancel(): void; canceled: boolean}[] = [];
+  const layer = {animate: () => {
+    let finish!: () => void;
+    const animation = {finished: new Promise<void>(resolve => {finish = resolve;}), finish: () => finish(), canceled: false, cancel() {this.canceled = true;}};
+    created.push(animation); return animation;
+  }};
+  context.animateSlide(layer, [], {duration: 160});
+  context.animateSlide(layer, [], {duration: 220});
+  assert.equal(created[0].canceled, true);
+  assert.equal(context.animations.current.size, 1);
+  created[0].finish(); await Promise.resolve();
+  assert.equal(context.animations.current.get(layer), created[1], 'a late completion cannot retire its replacement');
+  created[1].finish(); await Promise.resolve();
+  assert.equal(context.animations.current.size, 0);
+  context.animateSlide(layer, [], {duration: 160});
+  cleanups.forEach(cleanup => cleanup());
+  assert.equal(created[2].canceled, true);
+  assert.equal(context.animations.current.size, 0, 'unmount releases every owned animation');
 });

@@ -1,4 +1,4 @@
-import {Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement} from 'react';
+import {Fragment, memo, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactElement} from 'react';
 import {clock, countdown, countdownChangesAt, num, shortDay, stamp} from '../lib/format';
 import {t, useLocale} from '../i18n';
 import type {PlotBlock, PlotLine as Line} from '../lib/lines';
@@ -12,6 +12,7 @@ import {useTimeAxis} from './timeAxis';
 import {PlotLayer, PlotOverlay} from './PlotLayer';
 import {covered, type PlotBuffer} from '../lib/historyPlot';
 import {plotPath} from '../lib/plotPath';
+import {usePlotMemo} from './plotMemo';
 
 /**
  * A moment on the time axis: ahead, a known window reset or an announced extra one;
@@ -287,17 +288,21 @@ export const Chart = memo(function Chart({
   useLayoutEffect(() => onBase?.(base * scale), [base, scale, onBase]);
   const top = 12;
   const bottom = 28;
-  /** A cell is drawn at its middle (the last, partial one at "now"). */
-  const bx = (cell: number) => x(Math.min(now, cell + cellMs / 2));
+  // Until a matching strip is prepared, move the geometry already on screen.
+  // The gesture's fresh clock must not rebuild all of those committed paths.
+  const drawFrom = axis.active && !strip ? basis.from : from;
+  const drawNow = axis.active && !strip ? basis.end : now;
+  /** A cell is drawn at its middle (the last, partial one at the drawn end). */
+  const bx = (cell: number) => x(Math.min(drawNow, cell + cellMs / 2));
   const y = (value: number) => top + (1 - value / 100) * (height - top - bottom);
   const tickFrom = strip?.from ?? from, tickTo = strip?.to ?? to;
   const {ticks, daily} = niceTicks(tickFrom, tickTo, (width < 560 ? 4 : 7) * (tickTo - tickFrom) / (basis.to - basis.from));
 
   const blockPaths = useRef(new Map<PlotBlock, {geometry: string; line: string; last: [number, number] | null; drawn?: {line: string; element: ReactElement}}>());
-  const paths = useMemo(
+  const paths = usePlotMemo(
     () => {
       const retained = new Set<PlotBlock>();
-      const geometry = `${basis.from}:${basis.to}:${now}:${width}:${height}:${cellMs}`;
+      const geometry = `${basis.from}:${basis.to}:${drawNow}:${width}:${height}:${cellMs}`;
       const result = lines.map(line => {
         if (strip && line.blocks) {
           let last: [number, number] | null = null;
@@ -309,7 +314,7 @@ export const Chart = memo(function Chart({
               const runs: [number, number][][] = [];
               let end: [number, number] | null = null;
               for (const [at, remaining, group] of block.points) {
-                if (at > now) break;
+                if (at > drawNow) break;
                 const px = bx(at), py = y(remaining);
                 if (group === segment && px - previousX < .5) continue;
                 if (group !== segment) runs.push([]);
@@ -330,9 +335,9 @@ export const Chart = memo(function Chart({
         let segment = -1;
         let previousX = -1;
         for (const [at, remaining, group] of line.points) {
-          if (at + cellMs < (strip?.from ?? from)) continue;
+          if (at + cellMs < (strip?.from ?? drawFrom)) continue;
           // The answer on screen may be of another period while the next loads: what lies past the end is not drawn.
-          if (at > now) break;
+          if (at > drawNow) break;
           const px = bx(at);
           const py = y(remaining);
           if (group !== segment) {
@@ -351,7 +356,7 @@ export const Chart = memo(function Chart({
       for (const block of blockPaths.current.keys()) if (!retained.has(block)) blockPaths.current.delete(block);
       return result;
     },
-    [lines, from, to, now, width, height, cellMs, basis.from, basis.to, strip],
+    [lines, drawFrom, drawNow, width, height, cellMs, basis.from, basis.to, strip],
   );
 
   const none = {left: false, plan: false, gap: false, forecast: false};

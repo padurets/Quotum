@@ -65,6 +65,21 @@ export function useTimeAxis({
   const [hover, setHover] = useState<number | null>(null);
   const [folding, setFolding] = useState(false);
   const foldTicket = useRef(0);
+  const animations = useRef(new Map<SVGGElement, Animation>());
+  // The axis owns these animations; finding them through the DOM flushes styles.
+  const animateSlide = (layer: SVGGElement, frames: Keyframe[], options: KeyframeAnimationOptions) => {
+    animations.current.get(layer)?.cancel();
+    const animation = layer.animate(frames, options);
+    animations.current.set(layer, animation);
+    const release = () => {if (animations.current.get(layer) === animation) animations.current.delete(layer);};
+    animation.finished.then(release, release);
+    return animation;
+  };
+  const cancelSlides = () => {
+    for (const animation of animations.current.values()) animation.cancel();
+    animations.current.clear();
+  };
+  useEffect(() => cancelSlides, []);
   const source = useRef(Symbol('chart'));
   const panning = usePanning();
   const shifting = useShifting();
@@ -115,7 +130,7 @@ export function useTimeAxis({
   const paintPan = useRef(() => {});
   const visualGeometry = () => {
     const layer = box.current?.querySelector<SVGGElement>('[data-plot-main] .slides');
-    if (!layer?.getAnimations().length) return {from, to, end};
+    if (!layer || !animations.current.has(layer)) return {from, to, end};
     const moving = getComputedStyle(layer).transform;
     if (moving === 'none') return {from, to, end};
     const matrix = new DOMMatrix(moving);
@@ -138,7 +153,7 @@ export function useTimeAxis({
       element.dataset.panToken = String(frame.token);
       element.dataset.panOrigin = String(frame.originEnd);
       element.dataset.panScale = String((captured.current.to - captured.current.from) / ((width - left - right) * scale));
-      box.current?.querySelectorAll<SVGGElement>('.slides').forEach(layer => layer.getAnimations().forEach(animation => animation.cancel()));
+      cancelSlides();
       setFolding(false);
     }
     const origin = captured.current;
@@ -332,11 +347,11 @@ export function useTimeAxis({
         const offset = left * (1 - ratio) + (from - previous.from) / (previous.to - previous.from) * (width - left - right);
         setFolding(true);
         const ticket = ++foldTicket.current;
-        const animations: Animation[] = [];
+        const folding: Animation[] = [];
         for (const layer of box.current!.querySelectorAll<SVGGElement>('.slides')) {
-          animations.push(layer.animate([{transform: `translateX(${offset}px) scaleX(${ratio})`}, {transform: 'none'}], {duration: 160, easing: 'ease-out'}));
+          folding.push(animateSlide(layer, [{transform: `translateX(${offset}px) scaleX(${ratio})`}, {transform: 'none'}], {duration: 160, easing: 'ease-out'}));
         }
-        Promise.allSettled(animations.map(animation => animation.finished)).then(() => {if (foldTicket.current === ticket && !pan.active()) setFolding(false);});
+        Promise.allSettled(folding.map(animation => animation.finished)).then(() => {if (foldTicket.current === ticket && !pan.active()) setFolding(false);});
         return;
       }
     }
@@ -347,8 +362,7 @@ export function useTimeAxis({
       // A step taken while the last one still slides goes on from where that one is, not back.
       const moving = getComputedStyle(layer).transform;
       const start = dx + (moving === 'none' ? 0 : new DOMMatrix(moving).m41);
-      layer.getAnimations().forEach(animation => animation.cancel());
-      layer.animate([{transform: `translateX(${start}px)`}, {transform: 'none'}], {duration: SLIDE_MS, easing: 'cubic-bezier(.2, .7, .3, 1)'});
+      animateSlide(layer, [{transform: `translateX(${start}px)`}, {transform: 'none'}], {duration: SLIDE_MS, easing: 'cubic-bezier(.2, .7, .3, 1)'});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [from, end, to, panning]);
