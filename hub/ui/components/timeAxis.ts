@@ -159,7 +159,6 @@ export function useTimeAxis({
       panPointer.current = null;
       if (held && box.current?.hasPointerCapture(held.id)) box.current.releasePointerCapture(held.id);
       wheelBounds.current = null;
-      panLayers.current = [];
     }
   };
   // Native input keeps the committed surface owners while React prepares a strip.

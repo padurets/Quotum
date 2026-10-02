@@ -51,4 +51,8 @@ test('the actual axis publishes committed HTML owners and applies the captured C
   assert.equal(released, 1, 'capture is released by the chart box, which owns the input');
   assert.equal(next.style.transform, '');
   assert.equal(svg.current.dataset.panEnd, undefined);
+  const continued = pan.begin({source: source.current, input: 'pointer', selected, length: H, now, historyStart: 0, span: H, width: 270})!;
+  pan.move(continued, -54); frames.shift()!(); paintPan.current();
+  assert.equal(next.style.transform, 'translateX(54px)', 'a new gesture can move the committed artwork before another render commits');
+  pan.cancel(); paintPan.current();
 });
