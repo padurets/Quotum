@@ -35,8 +35,8 @@ export function slideOf(before: {from: number; end: number}, after: {from: numbe
  * A mouse or a pen drags a range across it at once, as in Grafana; a finger sliding along
  * it reads its cells, and held still for a moment starts a range instead. A swipe sideways
  * on a touchpad, Shift with the wheel, or Shift-drag pans both charts through one shared
- * transaction. Holding Shift also hides readouts before movement starts. Its `.slides`
- * layers move within the plot's clip. After an arrow step
+ * transaction. Holding Shift also hides readouts before movement starts. HTML owners
+ * move the prepared SVG within stationary clips. After an arrow step
  * they slide in from the side it came from. `end` is where
  * measurements end. A label telling a time (`.is-pointed`) is read, not dragged from.
  */
@@ -73,7 +73,7 @@ export function useTimeAxis({
   const captured = useRef<{token: number; from: number; to: number; end: number} | null>(null);
   const finished = useRef<{from: number; to: number; end: number; stop: PanStop} | null>(null);
   const wheelBounds = useRef<DOMRect | null>(null);
-  const panLayers = useRef<SVGGElement[]>([]);
+  const panLayers = useRef<HTMLElement[]>([]);
   /** Where a drag across the chart started and where it is now, in chart pixels. */
   const [drag, setDrag] = useState<{start: number; end: number} | null>(null);
   /** A finger held on the chart, before it starts a range. */
@@ -93,7 +93,7 @@ export function useTimeAxis({
     return {source: source.current, input, selected, length: selected ? selected.to - selected.from : periodOf(prefs().range).ms, now, historyStart, span: visual.to - visual.from, width: (width - left - right) * scale};
   };
   const wheelPan = useRef<(event: WheelEvent) => boolean>(() => false);
-  wheelPan.current = event => {
+  const wheelInput = (event: WheelEvent) => {
     if (!onSelect || dragging.current) return false;
     const rect = pan.active() && wheelBounds.current ? wheelBounds.current : svg.current?.getBoundingClientRect();
     if (!rect || event.clientX < rect.left + left * scale || event.clientX > rect.right - right * scale) return false;
@@ -101,9 +101,9 @@ export function useTimeAxis({
     return pan.wheel(() => startPan('wheel'), event);
   };
   const dragging = useRef(false);
-  dragging.current = drag !== null;
+  useLayoutEffect(() => {wheelPan.current = wheelInput; dragging.current = drag !== null;});
   useEffect(() => {
-    const element = svg.current;
+    const element = box.current;
     if (!element) return;
     const wheel = (event: WheelEvent) => {
       if (wheelPan.current(event)) event.preventDefault();
@@ -114,7 +114,7 @@ export function useTimeAxis({
 
   const paintPan = useRef(() => {});
   const visualGeometry = () => {
-    const layer = svg.current?.querySelector<SVGGElement>('.slides');
+    const layer = box.current?.querySelector<SVGGElement>('[data-plot-main] .slides');
     const moving = layer ? getComputedStyle(layer).transform : 'none';
     if (moving === 'none' || !layer?.getAnimations().length) return {from, to, end};
     const matrix = new DOMMatrix(moving);
@@ -124,9 +124,9 @@ export function useTimeAxis({
     return {from: start, to: start + span, end};
   };
   const geometry = useRef({end, future: to - end});
-  geometry.current = {end, future: to - end};
+  useLayoutEffect(() => {geometry.current = {end, future: to - end};});
   useLayoutEffect(() => pan.register(source.current, () => geometry.current), []);
-  paintPan.current = () => {
+  const paint = () => {
     const element = svg.current;
     if (!element) return;
     const frame = pan.get();
@@ -135,18 +135,17 @@ export function useTimeAxis({
       foldTicket.current++;
       captured.current = {token: frame.token, ...visualGeometry()};
       element.dataset.panOrigin = String(frame.originEnd);
-      element.dataset.panScale = String((captured.current.to - captured.current.from) / (width - left - right));
-      panLayers.current = [...element.querySelectorAll<SVGGElement>('.slides')];
-      for (const layer of panLayers.current) {
-        layer.getAnimations().forEach(animation => animation.cancel());
-        layer.parentElement!.setAttribute('clip-path', `url(#${CSS.escape(clip)})`);
-      }
+      element.dataset.panScale = String((captured.current.to - captured.current.from) / ((width - left - right) * scale));
+      box.current?.querySelectorAll<SVGGElement>('.slides').forEach(layer => layer.getAnimations().forEach(animation => animation.cancel()));
       setFolding(false);
     }
+    // React may replace a surface while preparing a strip. Publish its owners
+    // after the DOM commit, and retain the same CSS projection for the gesture.
+    if (frame) panLayers.current = [...(box.current?.querySelectorAll<HTMLElement>('.plot-move') ?? [])];
     const origin = captured.current;
     const dx = frame && origin ? -(frame.to - frame.originEnd) / (origin.to - origin.from) * (width - left - right) : 0;
     for (const layer of panLayers.current) {
-      layer.style.transform = frame ? `translateX(${dx}px)` : '';
+      layer.style.transform = frame ? `translateX(${dx * scale}px)` : '';
     }
     if (frame) {
       element.dataset.panEnd = String(frame.to);
@@ -161,11 +160,12 @@ export function useTimeAxis({
       captured.current = null;
       const held = panPointer.current;
       panPointer.current = null;
-      if (held && element.hasPointerCapture(held.id)) element.releasePointerCapture(held.id);
+      if (held && box.current?.hasPointerCapture(held.id)) box.current.releasePointerCapture(held.id);
       wheelBounds.current = null;
       panLayers.current = [];
     }
   };
+  useLayoutEffect(() => {paintPan.current = paint; if (pan.active()) paint();});
   useLayoutEffect(() => {
     const unsubscribe = pan.subscribe(() => paintPan.current());
     if (pan.active()) paintPan.current();
@@ -230,11 +230,11 @@ export function useTimeAxis({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [from, to, cellMs, shifting, panning, folding]);
 
-  const toChart = (event: PointerEvent<SVGSVGElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect();
+  const toChart = (event: PointerEvent<HTMLDivElement>) => {
+    const rect = svg.current!.getBoundingClientRect();
     return ((event.clientX - rect.left) / rect.width) * width;
   };
-  const onPointerMove = (event: PointerEvent<SVGSVGElement>) => {
+  const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
     if (panPointer.current?.id === event.pointerId) {
       const held = panPointer.current;
       pointer.current = (event.clientX - held.left) / held.width * width;
@@ -252,7 +252,7 @@ export function useTimeAxis({
     if (px < left || px > width - right) return setHover(null);
     setHover(Math.floor(timeAt(px) / cellMs) * cellMs);
   };
-  const onPointerDown = (event: PointerEvent<SVGSVGElement>) => {
+  const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     const px = toChart(event);
     const shiftPan = event.shiftKey && event.pointerType !== 'touch';
     if (!onSelect || event.button !== 0 || px < left || px > width - right || (!shiftPan && (event.target as Element).closest('.is-pointed'))) return;
@@ -262,7 +262,7 @@ export function useTimeAxis({
       const token = pan.begin(startPan('pointer'));
       if (token !== null) {
         element.setPointerCapture(pointerId);
-        const rect = element.getBoundingClientRect();
+        const rect = svg.current!.getBoundingClientRect();
         panPointer.current = {token, id: pointerId, x: event.clientX, left: rect.left, width: rect.width};
         event.preventDefault();
       }
@@ -279,7 +279,7 @@ export function useTimeAxis({
     holding.current = {px, timer: setTimeout(start, HOLD_MS)};
   };
   // A drag of a few pixels is a click.
-  const onPointerUp = (event: PointerEvent<SVGSVGElement>) => {
+  const onPointerUp = (event: PointerEvent<HTMLDivElement>) => {
     cancelHold();
     const held = panPointer.current;
     if (held?.id === event.pointerId) {
@@ -301,12 +301,12 @@ export function useTimeAxis({
     },
     onPointerDown,
     onPointerUp,
-    onPointerCancel: (event: PointerEvent<SVGSVGElement>) => {
+    onPointerCancel: (event: PointerEvent<HTMLDivElement>) => {
       cancelHold();
       setDrag(null);
       if (panPointer.current?.id === event.pointerId) pan.cancel(panPointer.current.token);
     },
-    onLostPointerCapture: (event: PointerEvent<SVGSVGElement>) => {
+    onLostPointerCapture: (event: PointerEvent<HTMLDivElement>) => {
       if (panPointer.current?.id === event.pointerId && !event.currentTarget.hasPointerCapture(event.pointerId)) pan.cancel(panPointer.current.token);
     },
     // A held finger starts a range, not the page's menu.
@@ -335,8 +335,7 @@ export function useTimeAxis({
         setFolding(true);
         const ticket = ++foldTicket.current;
         const animations: Animation[] = [];
-        for (const layer of element.querySelectorAll<SVGGElement>('.slides')) {
-          layer.parentElement!.setAttribute('clip-path', `url(#${CSS.escape(clip)})`);
+        for (const layer of box.current!.querySelectorAll<SVGGElement>('.slides')) {
           animations.push(layer.animate([{transform: `translateX(${offset}px) scaleX(${ratio})`}, {transform: 'none'}], {duration: 160, easing: 'ease-out'}));
         }
         Promise.allSettled(animations.map(animation => animation.finished)).then(() => {if (foldTicket.current === ticket && !pan.active()) setFolding(false);});
@@ -346,17 +345,15 @@ export function useTimeAxis({
     if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     const dx = slideOf(before, {from, end, to}, width - left - right);
     if (!dx) return;
-    for (const layer of element.querySelectorAll<SVGGElement>('.slides')) {
-      const frame = layer.parentElement!;
+    for (const layer of box.current!.querySelectorAll<SVGGElement>('.slides')) {
       // A step taken while the last one still slides goes on from where that one is, not back.
       const moving = getComputedStyle(layer).transform;
       const start = dx + (moving === 'none' ? 0 : new DOMMatrix(moving).m41);
       layer.getAnimations().forEach(animation => animation.cancel());
-      frame.setAttribute('clip-path', `url(#${CSS.escape(clip)})`);
       layer.animate([{transform: `translateX(${start}px)`}, {transform: 'none'}], {duration: SLIDE_MS, easing: 'cubic-bezier(.2, .7, .3, 1)'});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [from, end, to, panning]);
 
-  return {box, svg, width, scale, hover: shifting || panning || folding ? null : hover, drag, x, drawX, timeAt, clip, handlers, basis, panning: shifting || panning !== null || folding};
+  return {box, svg, width, scale, hover: shifting || panning || folding ? null : hover, drag, x, drawX, timeAt, clip, handlers, basis, active: panning !== null, panning: shifting || panning !== null || folding};
 }

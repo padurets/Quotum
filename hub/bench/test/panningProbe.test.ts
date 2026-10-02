@@ -9,15 +9,18 @@ import {panningProblems, type PanReading} from '../panningBudget';
 const source = readFileSync(new URL('../panning.ts', import.meta.url), 'utf8');
 const probe = source.match(/await cdp\.evaluate\(`(\(\(\) => \{\n\s*const root=document\.querySelector\('\.history \.chart>svg'\);[\s\S]+?\}\)\(\))`\);/)![1];
 
-function run(moves: boolean, synchronized: boolean, proportional = true): PanReading {
+function run(moves: boolean, synchronized: boolean, proportional = true, historyMoves = true): PanReading {
   let time = 0, nextFrame = () => {};
   const listeners = new Map<string, (event: object) => void>();
-  const layer = () => ({style: {transform: 'none'}, getAnimations: () => []});
+  const layer = () => ({style: {transform: 'none'}, querySelector: () => ({getAnimations: () => []})});
   const historyLayer = layer(), activityLayer = layer();
+  const hiddenHistory = layer(), hiddenActivity = layer();
   const svg = (slides: ReturnType<typeof layer>) => ({
     isConnected: true, dataset: {} as Record<string, string>, style: {height: '200px'},
-    getAttribute: () => '0 0 900 200', querySelector: () => slides, closest: () => null,
-    addEventListener: (name: string, fn: (event: object) => void) => listeners.set(name, fn),
+    getAttribute: () => '0 0 900 200', closest: () => null,
+    querySelector: () => slides === historyLayer ? hiddenHistory : hiddenActivity,
+    getBoundingClientRect: () => ({width: 450}), viewBox: {baseVal: {width: 900}},
+    parentElement: {querySelector: () => slides, addEventListener: (name: string, fn: (event: object) => void) => listeners.set(name, fn)},
   });
   const historySvg = svg(historyLayer), activitySvg = svg(activityLayer);
   Object.assign(historySvg.dataset, {panOrigin: '0', panScale: '1'});
@@ -38,8 +41,10 @@ function run(moves: boolean, synchronized: boolean, proportional = true): PanRea
     historySvg.dataset.panEnd = String(12 * (i + 1));
     activitySvg.dataset.panEnd = String(12 * (synchronized ? i + 1 : i));
     listeners.get('wheel')!({type: 'wheel', cancelable: true, deltaX: 12, shiftKey: false, timeStamp: time});
-    historyLayer.style.transform = `translateX(${-12 * (i + 1)}px)`;
+    if (historyMoves) historyLayer.style.transform = `translateX(${-12 * (i + 1)}px)`;
     if (moves) activityLayer.style.transform = `translateX(${-(proportional ? 7 : 14) * (i + 1)}px)`;
+    hiddenHistory.style.transform = `translateX(${-12 * (i + 1)}px)`;
+    hiddenActivity.style.transform = `translateX(${-7 * (i + 1)}px)`;
     nextFrame();
   }
   return {...reading, period: '24h', series: 12, charts: 2, rate: 4, expectedPushes: 0, coldReads: 1};
@@ -47,7 +52,7 @@ function run(moves: boolean, synchronized: boolean, proportional = true): PanRea
 
 test('the actual probe measures input only after both charts move on the same time frame', () => {
   assert.deepEqual(panningProblems(run(true, true)), []);
-  for (const reading of [run(false, true), run(true, false), run(true, true, false)]) {
+  for (const reading of [run(false, true), run(true, false), run(true, true, false), run(true, true, true, false)]) {
     assert.ok(panningProblems(reading).some(problem => problem.includes('both charts')));
   }
 });

@@ -23,6 +23,7 @@ import {HideRow, Popover, SlidersIcon} from './Popover';
 import {Tooltip, useBubble, useTip} from './Tooltip';
 import {useTimeAxis} from './timeAxis';
 import {usePlot} from './sizing';
+import {clipPlot, PlotLayer, PlotOverlay} from './PlotLayer';
 
 const MINUTE = 60_000;
 
@@ -346,7 +347,7 @@ const Stacks = memo(function Stacks({
   const left = 48;
   const right = 12;
   const axis = useTimeAxis({from, to, end: to, cellMs: barMs, left, right, onSelect});
-  const {box, svg, width, scale, hover, drag, clip, handlers, basis} = axis;
+  const {box, svg, width, scale, hover, drag, clip, handlers, basis, active} = axis;
   const x = strip ? axis.drawX : axis.x;
   const narrow = width < 560;
   const base = stacksHeight(width);
@@ -395,23 +396,38 @@ const Stacks = memo(function Stacks({
   }, [groups, pathOrigin, perMs, barMs, height, vertical.max]);
 
   const innerClip = `${clip}-inner`;
+  const bandClip = useRef<HTMLDivElement>(null);
   const mask = useRef<SVGRectElement>(null);
   const edges = useRef<SVGGElement>(null);
   const edgePaint = useRef(() => {});
   const painted = useRef('');
   const paintEdges = () => {
-    if (!strip || !mask.current || !edges.current) return;
+    if (!bandClip.current) return;
+    if (!strip || !mask.current || !edges.current) {
+      clipPlot(bandClip.current, left * scale, (width - right) * scale, width * scale);
+      return;
+    }
     const draft = pan.get();
     const range = draft ? {from: draft.from, to: draft.to} : {from, to};
     const target = targetOf(strip.length, draft?.now ?? to, 'edge', range);
+    const start = target.k0 * strip.cell, end = (target.k1 + 1) * strip.cell;
+    const firstFull = Math.ceil(start / barMs) * barMs, lastFull = Math.floor(end / barMs) * barMs;
+    if (draft) {
+      const dx = -(draft.to - draft.originEnd) * perMs;
+      const a = Math.max(left, Math.min(width - right, x(firstFull) + dx));
+      const b = Math.max(a, Math.min(width - right, x(lastFull) + dx));
+      clipPlot(bandClip.current, a * scale, b * scale, width * scale);
+    } else {
+      // The short final SVG fold transforms its mask with the artwork, preserving
+      // non-scaling strokes. Continuous input only changes the HTML band clip.
+      clipPlot(bandClip.current, left * scale, (width - right) * scale, width * scale);
+      const maskX = String(x(firstFull)), maskWidth = String(Math.max(0, x(lastFull) - x(firstFull)));
+      if (mask.current.getAttribute('x') !== maskX) mask.current.setAttribute('x', maskX);
+      if (mask.current.getAttribute('width') !== maskWidth) mask.current.setAttribute('width', maskWidth);
+    }
     const key = `${target.k0}:${target.k1}:${strip.version}:${vertical.max}:${height}:${perMs}:${groups.map(g => g.group.key).join(',')}`;
     if (key === painted.current) return;
     painted.current = key;
-    const start = target.k0 * strip.cell, end = (target.k1 + 1) * strip.cell;
-    const firstFull = Math.ceil(start / barMs) * barMs, lastFull = Math.floor(end / barMs) * barMs;
-    const maskX = String(x(firstFull)), maskWidth = String(Math.max(0, x(lastFull) - x(firstFull)));
-    if (mask.current.getAttribute('x') !== maskX) mask.current.setAttribute('x', maskX);
-    if (mask.current.getAttribute('width') !== maskWidth) mask.current.setAttribute('width', maskWidth);
     const starts = [...new Set([cellStart(start, barMs), cellStart(end - 1, barMs)])].filter(at => at < firstFull || at >= lastFull);
     const paths = groups.map(() => '');
     for (const at of starts) {
@@ -455,13 +471,10 @@ const Stacks = memo(function Stacks({
   }, [unknownTo, locale]);
 
   return (
-    <div className="chart activity-chart" ref={box}>
-      <svg ref={svg} viewBox={`0 0 ${width} ${height}`} style={{height: `${height * scale}px`}} preserveAspectRatio="none" role="img" aria-label={t('activity.label')} className="is-selectable" {...handlers}>
+    <div className="chart activity-chart" ref={box} {...handlers}>
+      <svg ref={svg} viewBox={`0 0 ${width} ${height}`} style={{height: `${height * scale}px`}} preserveAspectRatio="none" role="img" aria-label={t('activity.label')} className="is-selectable">
         <desc>{t('chart.panHint')}</desc>
         <defs>
-          <clipPath id={clip}>
-            <rect x={left} y={0} width={width - left - right} height={height} />
-          </clipPath>
           <clipPath id={innerClip}><rect ref={mask} x={left} y={top} width={width - left - right} height={height - top - bottom} /></clipPath>
           <pattern id={`${clip}-hatch`} width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
             <line x1="0" x2="0" y1="0" y2="6" className="activity-hatch" />
@@ -475,47 +488,48 @@ const Stacks = memo(function Stacks({
             </text>
           </g>
         ))}
-        <g clipPath={`url(#${CSS.escape(clip)})`}>
-          <g className="slides">
-            {ticks.map(tick => (
-              <text key={tick} x={x(tick)} y={height - 8} textAnchor="middle" className="tick">
-                {daily ? shortDay(tick) : clock(tick)}
-              </text>
+      </svg>
+      <PlotLayer width={width} height={height} scale={scale} left={left} right={right} main>
+        {ticks.map(tick => (
+          <text key={tick} x={x(tick)} y={height - 8} textAnchor="middle" className="tick">
+            {daily ? shortDay(tick) : clock(tick)}
+          </text>
+        ))}
+
+        {unknownTo !== null && (
+          <g className="activity-unknown">
+            <rect x={x(hatchFrom)} width={hatched} y={top} height={height - top - bottom} fill={`url(#${CSS.escape(clip)}-hatch)`} />
+            <text
+              ref={unknownLabel}
+              x={(x(hatchFrom) + x(unknownTo)) / 2}
+              y={top + (height - top - bottom) / 2}
+              textAnchor="middle"
+              className="activity-unknown-label"
+              visibility={labelFits ? undefined : 'hidden'}
+            >
+              {t('activity.notKnown', {time: stamp(unknownTo)})}
+            </text>
+          </g>
+        )}
+      </PlotLayer>
+      <PlotLayer width={width} height={height} scale={scale} left={left} right={right} clipRef={bandClip} top={top} bottom={bottom}>
+        <g clipPath={strip && !active ? `url(#${CSS.escape(innerClip)})` : undefined}>
+          <g transform={`translate(${(left + (pathOrigin - basis.from) * perMs).toFixed(1)} 0)`}>
+            {groups.map(({group, color}, i) => (
+              <path key={group.key} d={paths[i]} fill={color} className="activity-stack" />
             ))}
           </g>
         </g>
-        <g clipPath={`url(#${CSS.escape(clip)})`}>
-          <g className="slides">
-            {unknownTo !== null && (
-              <g className="activity-unknown">
-                <rect x={x(hatchFrom)} width={hatched} y={top} height={height - top - bottom} fill={`url(#${CSS.escape(clip)}-hatch)`} />
-                <text
-                  ref={unknownLabel}
-                  x={(x(hatchFrom) + x(unknownTo)) / 2}
-                  y={top + (height - top - bottom) / 2}
-                  textAnchor="middle"
-                  className="activity-unknown-label"
-                  visibility={labelFits ? undefined : 'hidden'}
-                >
-                  {t('activity.notKnown', {time: stamp(unknownTo)})}
-                </text>
-              </g>
-            )}
-            <g clipPath={strip ? `url(#${CSS.escape(innerClip)})` : undefined}>
-              <g transform={`translate(${(left + (pathOrigin - basis.from) * perMs).toFixed(1)} 0)`}>
-                {groups.map(({group, color}, i) => (
-                  <path key={group.key} d={paths[i]} fill={color} className="activity-stack" />
-                ))}
-              </g>
-            </g>
-            {strip && <g ref={edges}>{groups.map(({group, color}) => <path key={group.key} fill={color} className="activity-stack" />)}</g>}
-          </g>
-        </g>
+      </PlotLayer>
+      <PlotLayer width={width} height={height} scale={scale} left={left} right={right}>
+        {strip && <g ref={edges}>{groups.map(({group, color}) => <path key={group.key} fill={color} className="activity-stack" />)}</g>}
+      </PlotLayer>
+      <PlotOverlay width={width} height={height}>
         {drag && <rect x={Math.min(drag.start, drag.end)} width={Math.abs(drag.end - drag.start)} y={top} height={height - top - bottom} className="selection" />}
         {hover !== null && bar && parts.length > 0 && (
           <rect x={x(hover)} width={Math.max(1, x(hover + barMs) - x(hover))} y={top} height={height - top - bottom} className="hover-band" />
         )}
-      </svg>
+      </PlotOverlay>
       {empty && <div className="chart-empty">{empty}</div>}
       {allMuted && <div className="chart-empty">{t('activity.allOff')}</div>}
       {hover !== null && bar && parts.length > 0 && !drag && (

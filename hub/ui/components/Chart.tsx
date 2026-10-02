@@ -9,6 +9,7 @@ import {cellLabel, niceTicks} from '../lib/periods';
 import {coverOf, edgeOf} from '../lib/place';
 import {Tooltip, useTip} from './Tooltip';
 import {useTimeAxis} from './timeAxis';
+import {PlotLayer, PlotOverlay} from './PlotLayer';
 import {covered, type PlotBuffer} from '../lib/historyPlot';
 import {plotPath} from '../lib/plotPath';
 
@@ -277,7 +278,7 @@ export const Chart = memo(function Chart({
   const left = 40;
   const right = 12;
   const axis = useTimeAxis({from, to, end: now, cellMs, left, right, onSelect});
-  const {box, svg, width, scale, drag, timeAt, clip, handlers, basis, panning} = axis;
+  const {box, svg, width, scale, drag, timeAt, handlers, basis, panning} = axis;
   const x = strip ? axis.drawX : axis.x;
   const hover = axis.hover !== null && (!strip || axis.hover > now || covered(strip.coverage, axis.hover, axis.hover + cellMs)) ? axis.hover : null;
 
@@ -478,7 +479,15 @@ export const Chart = memo(function Chart({
   const bandWidth = Math.max(1, x(Math.min(to, (hover ?? 0) + cellMs)) - x(hover ?? 0));
 
   return (
-    <div className="chart" ref={box}>
+    <div className="chart" ref={box} {...handlers}>
+      <PlotLayer width={width} height={height} scale={scale} left={left} right={right} under>
+        {to > now && (
+          <g className="future">
+            <rect x={x(now)} width={x(to) - x(now)} y={top} height={height - top - bottom} className="future-zone" />
+            <line x1={x(now)} x2={x(now)} y1={top} y2={height - bottom} className="now-line" />
+          </g>
+        )}
+      </PlotLayer>
       <svg
         ref={svg}
         viewBox={`0 0 ${width} ${height}`}
@@ -489,24 +498,9 @@ export const Chart = memo(function Chart({
         role="img"
         aria-label={t('chart.label')}
         className={onSelect ? 'is-selectable' : undefined}
-        {...handlers}
       >
         <desc>{t('chart.panHint')}</desc>
-        <defs>
-          <clipPath id={clip}>
-            <rect x={left} y={0} width={width - left - right} height={height} />
-          </clipPath>
-        </defs>
-        <g clipPath={`url(#${CSS.escape(clip)})`}>
-          <g className="slides">
-            {to > now && (
-              <g className="future">
-                <rect x={x(now)} width={x(to) - x(now)} y={top} height={height - top - bottom} className="future-zone" />
-                <line x1={x(now)} x2={x(now)} y1={top} y2={height - bottom} className="now-line" />
-              </g>
-            )}
-          </g>
-        </g>
+
         <line x1={left} x2={width - right} y1={y(30)} y2={y(30)} className="threshold warn" />
         <line x1={left} x2={width - right} y1={y(10)} y2={y(10)} className="threshold crit" />
         {[0, 25, 50, 75, 100].map(value => (
@@ -517,79 +511,77 @@ export const Chart = memo(function Chart({
             </text>
           </g>
         ))}
-        <g clipPath={`url(#${CSS.escape(clip)})`}>
-          <g className="slides">
-            {ticks.map(tick => (
-              <text key={tick} x={x(tick)} y={height - 8} textAnchor="middle" className="tick">
-                {daily ? shortDay(tick) : clock(tick)}
-              </text>
-            ))}
-          </g>
-        </g>
 
-        <g clipPath={`url(#${CSS.escape(clip)})`}>
-          <g className="slides">
-            {plans.map(plan => (
-              <path
-                key={plan.key}
-                className="plan-line"
-                stroke={plan.color}
-                d={plan.runs.map(run => run.map(([at, value], i) => `${i ? 'L' : 'M'}${x(at).toFixed(1)},${y(value).toFixed(1)}`).join('')).join('')}
-              />
-            ))}
-            {forecasts.map(forecast => (
-              <path
-                key={forecast.key}
-                className="forecast-line"
-                stroke={forecast.color}
-                strokeDasharray={forecast.dash || undefined}
-                d={forecast.points.map(([at, value], i) => `${i ? 'L' : 'M'}${x(at).toFixed(1)},${y(value).toFixed(1)}`).join('')}
-              />
-            ))}
-            {markers.map(marker => {
-              if (marker.at > (marker.past ? strip?.to ?? to : to)) return null;
-              const mx = x(marker.at);
-              if (marker.past) {
-                return (
-                  <g key={marker.key} className="marker is-event">
-                    <line x1={mx} x2={mx} y1={top} y2={height - bottom} stroke={marker.color} />
-                    <path d={diamond(mx, top)} fill={marker.color} />
-                    <title>{[`${marker.label} · ${cellLabel(marker.at, 0)}`, marker.detail].filter(Boolean).join('\n')}</title>
-                  </g>
-                );
-              }
-              return (
-                <g key={marker.key} className={`marker ${marker.strong ? 'is-strong' : ''}`}>
-                  <line x1={mx} x2={mx} y1={top} y2={height - bottom} stroke={marker.strong ? undefined : marker.color} />
-                  {!marker.strong && <circle cx={mx} cy={y(100)} r={3} fill={marker.color} />}
-                  <title>{`${marker.label} · ${cellLabel(marker.at, 0)}`}</title>
-                </g>
-              );
-            })}
-            {lines.map((line, i) => (
-              <g key={line.key} data-series={`${line.sourceId} ${line.windowId}`} data-last={line.points.filter(p => p[0] <= now).at(-1)?.slice(0, 2).join(':')} stroke={line.color} strokeDasharray={line.dash || undefined}>
-                {paths[i].parts ?? <path d={paths[i].line} className="series" />}
+      </svg>
+      <PlotLayer width={width} height={height} scale={scale} left={left} right={right}>
+        {ticks.map(tick => (
+          <text key={tick} x={x(tick)} y={height - 8} textAnchor="middle" className="tick">
+            {daily ? shortDay(tick) : clock(tick)}
+          </text>
+        ))}
+      </PlotLayer>
+      <PlotLayer width={width} height={height} scale={scale} left={left} right={right} main>
+        {plans.map(plan => (
+          <path
+            key={plan.key}
+            className="plan-line"
+            stroke={plan.color}
+            d={plan.runs.map(run => run.map(([at, value], i) => `${i ? 'L' : 'M'}${x(at).toFixed(1)},${y(value).toFixed(1)}`).join('')).join('')}
+          />
+        ))}
+        {forecasts.map(forecast => (
+          <path
+            key={forecast.key}
+            className="forecast-line"
+            stroke={forecast.color}
+            strokeDasharray={forecast.dash || undefined}
+            d={forecast.points.map(([at, value], i) => `${i ? 'L' : 'M'}${x(at).toFixed(1)},${y(value).toFixed(1)}`).join('')}
+          />
+        ))}
+        {markers.map(marker => {
+          if (marker.at > (marker.past ? strip?.to ?? to : to)) return null;
+          const mx = x(marker.at);
+          if (marker.past) {
+            return (
+              <g key={marker.key} className="marker is-event">
+                <line x1={mx} x2={mx} y1={top} y2={height - bottom} stroke={marker.color} />
+                <path d={diamond(mx, top)} fill={marker.color} />
+                <title>{[`${marker.label} · ${cellLabel(marker.at, 0)}`, marker.detail].filter(Boolean).join('\n')}</title>
               </g>
-            ))}
-            {/* Announcements are read over the lines, each on its own backing. */}
-            {announced.map(marker => {
-              const mx = x(marker.at);
-              const nearRight = mx > width - right - 150;
-              const lx = nearRight ? mx - 6 : mx + 6;
-              return (
-                <MarkerLabel key={marker.key} x={lx} y={stackRows.get(marker.key) ?? labelY(lx, nearRight)} end={nearRight} fonts={fonts}>
-                  {marker.label}
-                </MarkerLabel>
-              );
-            })}
-            {hover === null && lines.map((line, i) => paths[i].last ? (
-              <g key={`${line.key}-end`} className="line-end">
-                <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={7} fill={line.color} opacity={0.18} />
-                <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={3} fill={line.color} />
-              </g>
-            ) : null)}
+            );
+          }
+          return (
+            <g key={marker.key} className={`marker ${marker.strong ? 'is-strong' : ''}`}>
+              <line x1={mx} x2={mx} y1={top} y2={height - bottom} stroke={marker.strong ? undefined : marker.color} />
+              {!marker.strong && <circle cx={mx} cy={y(100)} r={3} fill={marker.color} />}
+              <title>{`${marker.label} · ${cellLabel(marker.at, 0)}`}</title>
+            </g>
+          );
+        })}
+        {lines.map((line, i) => (
+          <g key={line.key} data-series={`${line.sourceId} ${line.windowId}`} data-last={line.points.filter(p => p[0] <= now).at(-1)?.slice(0, 2).join(':')} stroke={line.color} strokeDasharray={line.dash || undefined}>
+            {paths[i].parts ?? <path d={paths[i].line} className="series" />}
           </g>
-        </g>
+        ))}
+        {/* Announcements are read over the lines, each on its own backing. */}
+        {announced.map(marker => {
+          const mx = x(marker.at);
+          const nearRight = mx > width - right - 150;
+          const lx = nearRight ? mx - 6 : mx + 6;
+          return (
+            <MarkerLabel key={marker.key} x={lx} y={stackRows.get(marker.key) ?? labelY(lx, nearRight)} end={nearRight} fonts={fonts}>
+              {marker.label}
+            </MarkerLabel>
+          );
+        })}
+        {hover === null && lines.map((line, i) => paths[i].last ? (
+          <g key={`${line.key}-end`} className="line-end">
+            <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={7} fill={line.color} opacity={0.18} />
+            <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={3} fill={line.color} />
+          </g>
+        ) : null)}
+      </PlotLayer>
+      <PlotOverlay width={width} height={height}>
         <g>
             {/* Beyond the visible future: at the right edge, with the distance, one under another. */}
             {past.map(label => (
@@ -629,7 +621,7 @@ export const Chart = memo(function Chart({
             {rows.map(row => row.value !== null && <circle key={row.line.key} cx={hoverX} cy={y(row.value)} r={4} fill={row.line.color} />)}
           </g>
         )}
-      </svg>
+      </PlotOverlay>
 
       {edgeKey && !panning ? (
         <Tooltip tip={tip} className="is-edge" style={edgePlace.below ? {right: 0, top: `${(edgeRow + 11) * scale - edgePlace.by}px`, maxHeight: edgePlace.cut ?? undefined} : {right: 0, bottom: `calc(100% - ${(edgeRow - 18) * scale}px)`}}>

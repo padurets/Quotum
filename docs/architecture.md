@@ -796,6 +796,10 @@ period comes back. A horizontal touchpad swipe, Shift with the wheel, or Shift w
 mouse or pen drag moves both charts continuously. A page-local transaction captures
 each chart's scale in CSS pixels and applies the same time delta on animation frames;
 plain dragging still selects a range and touch retains its hold-to-select gesture.
+Prepared SVG artwork moves in composited HTML surfaces behind a stationary clip;
+the axes and readouts stay in place. The chart container owns pointer capture and
+wheel input, projected through its fixed SVG viewport, including labels in another
+surface. Surface geometry and painters become visible only after their DOM commits.
 The future moves with the strip during the gesture, then folds away over 160 ms on
 release in the past, or unfolds on returning to live. Reduced motion skips this final
 transition. Release within eight source pixels of now restores the chosen live preset.
@@ -814,8 +818,11 @@ While panning, the history store keeps the previous complete answer for the tabl
 activity totals and legend numbers. A separate bounded plot buffer decodes the same
 tiles without computing frame totals. Known parts stay undimmed, lines break across
 unread cells, and an activity stack appears only when every contributing whole cell is
-read. Two edge bars are recomputed when the draft crosses a cell; moving within a cell
-only translates the prepared SVG strip. A temporary shared registry keeps plot and
+read. A stationary HTML inset clips the long activity band to whole bars without
+laying out that SVG again. Two short edge bars in their own SVG are recomputed when
+the draft crosses a cell; moving within a cell only translates the prepared artwork
+and updates its clip. The final 160 ms fold stays inside SVG to preserve stroke widths.
+A temporary shared registry keeps plot and
 legend colors and dashes consistent, adding new groups with a pending total. Visible
 missing cells take priority over one adjacent frame of read-ahead, with at most one
 visible and one speculative request, eight tiles each. Writes to the same tile are

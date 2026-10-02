@@ -523,10 +523,18 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 
 .chart { position: relative; margin-top: 18px; }
 /* Dimmed while the next period loads. Not the chart itself: that would lay its tooltip under the next widget. */
-.panel .chart > svg, .panel .table-wrap { transition: opacity .2s; }
-.panel.is-loading .chart > svg, .panel.is-loading .table-wrap { opacity: .5; }
+.panel .chart > svg, .panel .plot-layer, .panel .plot-overlay, .panel .table-wrap { transition: opacity .2s; }
+.panel.is-loading .chart > svg, .panel.is-loading .plot-layer, .panel.is-loading .plot-overlay, .panel.is-loading .table-wrap { opacity: .5; }
 .panel-loading, .panel-empty { margin: 18px 0 0; min-height: 96px; display: grid; place-items: center; color: var(--text-3); font-size: 13px; }
 .chart > svg { display: block; width: 100%; touch-action: pan-y; overflow: visible; }
+.chart > svg { position: relative; z-index: 1; pointer-events: none; }
+.plot-layer, .plot-overlay { position: absolute; inset: 0; pointer-events: none; }
+.plot-layer { z-index: 2; }
+.plot-layer.is-under { z-index: 0; }
+.plot-overlay { z-index: 3; }
+.plot-clip { position: absolute; top: 0; bottom: 0; overflow: hidden; }
+.plot-move { position: absolute; top: 0; height: 100%; }
+.plot-move > svg, .plot-overlay > svg { display: block; width: 100%; height: 100%; overflow: visible; }
 .chart-loading, .chart-empty { min-height: 220px; display: grid; place-items: center; color: var(--text-3); font-size: 13px; }
 .chart-empty { position: absolute; inset: 0; min-height: 0; pointer-events: none; }
 /* Agent activity: its totals a quieter line under the title, each a whole, its value as the legend's. */
@@ -585,9 +593,12 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 .chart svg.is-selectable { cursor: crosshair; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
 .chart svg.is-grabbable { cursor: grab; }
 .chart svg.is-grabbing { cursor: grabbing; }
-/* Promote only the moving chart; the board and idle charts retain no extra layer. */
-.chart svg.is-panning { overflow: hidden; contain: paint; will-change: transform; transform: translateZ(0); }
-.chart svg.is-panning .slides { will-change: transform; }
+.chart:has(> svg.is-selectable) { cursor: crosshair; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
+.chart:has(> svg.is-grabbable) { cursor: grab; }
+.chart:has(> svg.is-grabbing) { cursor: grabbing; }
+/* SVG content is rasterized again only when it changes, not for each translation. */
+.chart:has(> svg.is-panning) .plot-move { will-change: transform; }
+.chart:has(> svg.is-panning) .plot-clip.is-band { will-change: clip-path; }
 .selection { fill: color-mix(in oklab, var(--accent) 14%, transparent); stroke: color-mix(in oklab, var(--accent) 50%, transparent); stroke-width: 1; }
 .tooltip {
   position: absolute; top: 8px; z-index: 4; pointer-events: none; width: max-content; min-width: 190px; max-width: min(360px, 100%); overflow: hidden;
