@@ -48,7 +48,8 @@ function PeriodName({selected, range}: {selected: TimeRange | null; range: strin
     if (!element) return;
     const preview = pan.get();
     const current = preview ? timeRangeLabel(preview) : label;
-    if (element.textContent !== current) element.textContent = current;
+    const node = element.firstChild;
+    if (node && node.nodeValue !== current) node.nodeValue = current;
   };
   useLayoutEffect(() => {update.current = paint; paint();});
   useLayoutEffect(() => pan.subscribe(() => update.current()), []);

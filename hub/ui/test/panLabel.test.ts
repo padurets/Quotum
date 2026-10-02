@@ -11,7 +11,8 @@ test('the actual period label paints pan frames without scheduling React renders
   const body = source.slice(start, end) + '\nglobalThis.PeriodName=PeriodName;';
   let preview: TimeRange | null = null, subscribed = () => {}, renderRefs = 0, writes = 0;
   let content = '';
-  const element = {get textContent() {return content;}, set textContent(value: string) {content = value; writes++;}};
+  const element = {firstChild: {get nodeValue() {return content;}, set nodeValue(value: string) {content = value; writes++;}},
+    set textContent(_value: string) {throw new Error('the caption must retain its React-owned text node');}};
   const text = {current: element}, update = {current: () => {}};
   const commits: (() => void)[] = [];
   const context = {React: {createElement: (_type: string, props: unknown, children: string) => ({props, children})},
