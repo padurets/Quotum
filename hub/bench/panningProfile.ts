@@ -44,13 +44,30 @@ export async function profilePanning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>)
       row.count++; row.ms += event.dur / 1000; row.max = Math.max(row.max, event.dur / 1000);
       trace.set(event.name, row);
     }
-    console.error('pan diagnostic ' + JSON.stringify({top, trace: [...trace].sort((a, b) => b[1].ms - a[1].ms).slice(0, 16)}));
+    const preparation = await cdp.evaluate(`(() => {const diagnostic=window.__quotumStackDiagnostic;if(!diagnostic)return null;diagnostic.instance.draw=diagnostic.original;delete window.__quotumStackDiagnostic;return diagnostic.samples;})()`);
+    console.error('pan diagnostic ' + JSON.stringify({top, preparation, trace: [...trace].sort((a, b) => b[1].ms - a[1].ms).slice(0, 16)}));
   };
   const measured = {
     evaluate: cdp.evaluate.bind(cdp),
     send: async <T = unknown>(method: string, params: object = {}): Promise<T> => {
       const rate = (params as {rate?: number}).rate;
       if (method === 'Emulation.setCPUThrottlingRate' && rate === 4) {
+        await cdp.evaluate(`(() => {
+          const element=document.querySelector('.activity .chart'),key=Object.keys(element).find(key=>key.startsWith('__reactFiber'));
+          let fiber=element[key];
+          for(let depth=0;fiber&&depth<4;depth++,fiber=fiber.return)for(let hook=fiber.memoizedState,index=0;hook&&index<80;hook=hook.next,index++){
+            const instance=hook.memoizedState?.current;
+            if(!instance||typeof instance.draw!=='function'||!(instance.groups instanceof Map))continue;
+            const diagnostic=window.__quotumStackDiagnostic={instance,original:instance.draw,samples:[]};
+            instance.draw=function(groups,...geometry){
+              const before=this.geometry,old=new Map([...this.groups].map(([key,value])=>[key,value.path]));
+              const started=performance.now(),result=diagnostic.original.call(this,groups,...geometry);
+              diagnostic.samples.push({ms:performance.now()-started,geometryChanged:before!==this.geometry,geometry:this.geometry,groups:groups.length,cells:groups.reduce((total,row)=>total+row.group.cells.length,0),changedPaths:[...this.groups].filter(([key,value])=>old.get(key)!==value.path).length});
+              return result;
+            };
+            return;
+          }
+        })()`);
         events = [];
         await cdp.send('Tracing.start', {categories: 'devtools.timeline', transferMode: 'ReportEvents'});
         await cdp.send('Profiler.start'); active = true;
@@ -61,6 +78,7 @@ export async function profilePanning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>)
   try {await panning(measured);}
   finally {
     if (active) await stop();
+    await cdp.evaluate(`(() => {const diagnostic=window.__quotumStackDiagnostic;if(diagnostic){diagnostic.instance.draw=diagnostic.original;delete window.__quotumStackDiagnostic;}})()`);
     await cdp.send('Emulation.setCPUThrottlingRate', {rate: 1});
     await cdp.send('Debugger.disable');
     await cdp.send('Profiler.disable');
