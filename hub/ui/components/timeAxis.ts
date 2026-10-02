@@ -288,6 +288,7 @@ export function useTimeAxis({
     if (range) onSelect(range);
   };
   const handlers = {
+    'data-axis-end': basis.end,
     onPointerMove,
     onPointerLeave: () => {
       pointer.current = null;

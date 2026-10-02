@@ -43,8 +43,27 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
         const probe=window.__quotumPan={frames:[],latency:[],inputs:0,updated:0,chartUpdates:[0,0],synchronized:true,pending:[],last:0,pushesDuring:0,pushesAfter:0,forbiddenMutations:0,undimmed:getComputedStyle(root).opacity==='1',sizeStable:true,coldReads:0,peakFlights:0,maxTiles:0,duplicateReads:0,flights:new Map(),running:true,feeding:false,segment:'wheel',samples:[]};
         const originalPush=history.pushState.bind(history);probe.originalPush=originalPush;
         history.pushState=(...args)=>{if(probe.feeding)probe.pushesDuring++;else probe.pushesAfter++;originalPush(...args);};
-        const input=e=>{if(e.type==='wheel'&&(!e.cancelable||(!e.deltaX&&!e.shiftKey)))return;if(e.type==='pointermove'&&!e.buttons)return;probe.inputs++;const at=e.timeStamp>1e12?e.timeStamp-performance.timeOrigin:e.timeStamp;probe.pending.push(Math.min(performance.now(),at));};
-        root.parentElement.addEventListener('wheel',input,true);root.parentElement.addEventListener('pointermove',input,true);probe.input=input;
+        const owner=root.parentElement,types=['wheel','pointerdown','pointermove','pointerup'];
+        let gesture=null;
+        const anchor=()=>{if(gesture&&root.dataset.panEnd){gesture.started=true;gesture.origin=Number(root.dataset.panOrigin);gesture.scale=Number(root.dataset.panScale);}};
+        const begin=x=>{gesture={pixels:0,x,started:false,origin:null,scale:null};anchor();};
+        const input=e=>{
+          if(e.type==='pointerdown'){if(!gesture||!root.dataset.panEnd)begin(e.clientX);else gesture.x=e.clientX;return;}
+          if(e.type==='pointerup'){anchor();return;}
+          if(e.type==='wheel'){
+            if(!e.cancelable||(!e.deltaX&&!e.shiftKey))return;
+            if(!gesture||!root.dataset.panEnd)begin();
+            const unit=[1,16,400][e.deltaMode]||1;
+            gesture.pixels-=(e.deltaX||(e.shiftKey?e.deltaY:0))*unit;
+          }else{
+            if(!e.buttons||!gesture)return;
+            gesture.pixels+=e.clientX-gesture.x;gesture.x=e.clientX;
+          }
+          anchor();probe.inputs++;
+          const at=e.timeStamp>1e12?e.timeStamp-performance.timeOrigin:e.timeStamp;
+          probe.pending.push({at:Math.min(performance.now(),at),pixels:gesture.pixels,gesture});
+        };
+        for(const type of types)owner.addEventListener(type,input,true);
         const originalFetch=window.fetch.bind(window);probe.originalFetch=originalFetch;
         window.fetch=async(...args)=>{
           const url=new URL(String(args[0]),location.href);if(url.pathname!='/api/history')return originalFetch(...args);
@@ -57,23 +76,55 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
           if(!probe.running||!probe.feeding)return;
           for(const record of records){const element=record.target.nodeType===1?record.target:record.target.parentElement,clock=element?.closest('[data-time]'),timeOnly=clock&&clock.getAttribute('data-time')!=='chart';if(element?.closest('.card,.topbar,.agents-panel,.forecast,.activity-totals')&&!timeOnly)probe.forbiddenMutations++;}
         });probe.observer.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true});
-        let previous=['0:1','0:1'],phase='idle';
-        const tick=()=>{
+        const originalRAF=window.requestAnimationFrame||requestAnimationFrame;
+        const schedule=callback=>originalRAF.call(window,callback);
+        let previous=['0:1','0:1'],phase='idle',lastFrame=null;
+        const consume=(count,now)=>probe.latency.push(...probe.pending.splice(0,count).map(input=>now-input.at));
+        const sample=(stamp,afterCallback=false)=>{
           if(!probe.running)return;
-          const now=performance.now(),layers=[root.parentElement.querySelector('.plot-move[data-plot-main]'),charts[1].parentElement.querySelector('.plot-clip.is-band > .plot-move')],active=!!root.dataset.panEnd,folding=!active&&layers[0].querySelector('.slides').getAnimations().some(a=>a.playState==='running');
+          const now=performance.now(),demand=probe.pending.length,layers=[root.parentElement.querySelector('.plot-move[data-plot-main]'),charts[1].parentElement.querySelector('.plot-clip.is-band > .plot-move')],active=!!root.dataset.panEnd,folding=!active&&layers[0].querySelector('.slides').getAnimations().some(a=>a.playState==='running');
           probe.sizeStable&&=charts.every((svg,i)=>svg.isConnected&&size(svg)===sizes[i]);
           const matrices=layers.map((layer,i)=>{const transform=active?layer.style.transform:folding&&i===0?getComputedStyle(layer.querySelector('.slides')).transform:'none';const matrix=new DOMMatrix(transform&&transform!=='none'?transform:undefined);if(folding)matrix.e*=scales[i];return matrix;}),current=matrices.map(matrix=>matrix.e+':'+matrix.a);
           const nextPhase=active?'pan':folding?'fold':'idle';
           // The wheel's intentional 200 ms rest is stationary, before the fold begins.
-          if(nextPhase!==phase){probe.last=0;previous=current;phase=nextPhase;}
+          if(nextPhase!==phase){probe.last=0;lastFrame=null;previous=nextPhase==='pan'?['0:1','0:1']:current;phase=nextPhase;}
           const moved=current.map((value,i)=>value!==previous[i]);
           if(active){probe.synchronized&&=charts.every((svg,i)=>svg.dataset.panEnd===root.dataset.panEnd&&Math.abs((Number(svg.dataset.panEnd)-Number(svg.dataset.panOrigin))/Number(svg.dataset.panScale)+matrices[i].e)<.01)&&[...charts[1].parentElement.querySelectorAll('.plot-move')].filter(layer=>layer.querySelector('.activity-stack')).every(layer=>Math.abs(new DOMMatrix(layer.style.transform||undefined).e-matrices[1].e)<.01);moved.forEach((changed,i)=>{if(changed)probe.chartUpdates[i]++;});}
           // Each input reaches both plots. Activity has no future, so only the
           // remaining-share chart must move during the final future fold.
-          if(active&&moved.every(Boolean)||folding&&moved[0]){probe.updated++;if(probe.last){const ms=now-probe.last;probe.frames.push(ms);probe.samples.push({ms,segment:folding?'fold':probe.segment,pending:probe.pending.length,requests:probe.flights.size});}probe.last=now;probe.latency.push(...probe.pending.splice(0).map(at=>now-at));}
+          if(active)anchor();
+          if(active&&probe.synchronized&&(moved.every(Boolean)||afterCallback)){
+            // Coalesced input reaches its final position together. A newer event
+            // cannot be credited by the artwork of an earlier event.
+            let reached=-1;
+            for(let i=0;i<probe.pending.length;i++){const input=probe.pending[i];if(input.gesture===gesture&&Math.abs(input.pixels-matrices[0].e)<.1)reached=i;}
+            if(reached>=0)consume(reached+1,now);
+          }
+          if(active&&moved.every(Boolean)||folding&&moved[0]){
+            if(stamp!==lastFrame){probe.updated++;if(probe.last){const ms=now-probe.last;probe.frames.push(ms);probe.samples.push({ms,segment:folding?'fold':probe.segment,pending:demand,requests:probe.flights.size});}probe.last=now;lastFrame=stamp;}
+          }
+          if(!active&&!folding&&probe.pending.length&&!root.classList.contains('is-panning')){
+            // Release may commit the last coalesced input before its own RAF.
+            // Its effect is observable only after the final geometry and fold.
+            const end=Number(owner.dataset.axisEnd),selected=new URLSearchParams(location.search).has('to');
+            let reached=-1;
+            for(let i=0;i<probe.pending.length;i++){const input=probe.pending[i],g=input.gesture;const tolerance=selected?1.1:8*g.scale+1.1;if(g.started&&g.scale>0&&Math.abs(end-(g.origin-input.pixels*g.scale))<=tolerance)reached=i;}
+            if(reached>=0)consume(reached+1,now);
+          }
           if(!active&&!folding)probe.last=0;
-          previous=current;probe.undimmed&&=charts.every(svg=>!svg.closest('.is-loading')&&(!svg.style.opacity||svg.style.opacity==='1'));probe.raf=requestAnimationFrame(tick);
-        };probe.raf=requestAnimationFrame(tick);
+          previous=current;probe.undimmed&&=charts.every(svg=>!svg.closest('.is-loading')&&(!svg.style.opacity||svg.style.opacity==='1'));
+        };
+        window.requestAnimationFrame=callback=>schedule(stamp=>{try{callback.call(window,stamp);}finally{if(probe.running&&probe.pending.length)sample(stamp,true);}});
+        const tick=stamp=>{
+          if(!probe.running)return;
+          if(!root.dataset.panEnd)sample(stamp);
+          // Input-free stationary frames carry no movement demand. A pending
+          // event keeps the interval open, so delayed work still fails budget.
+          if(root.dataset.panEnd&&!probe.pending.length&&lastFrame!==stamp)probe.last=0;
+          probe.raf=schedule(tick);
+        };
+        probe.cleanup=()=>{probe.running=false;cancelAnimationFrame(probe.raf);probe.observer.disconnect();for(const type of types)owner.removeEventListener(type,input,true);window.requestAnimationFrame=originalRAF;window.fetch=originalFetch;history.pushState=originalPush;};
+        probe.raf=schedule(tick);
       })()`);
       await cdp.send('Emulation.setCPUThrottlingRate', {rate: 4});
       // A delayed cold edge is part of the moving interval, including arrivals/rebuilds.
@@ -116,9 +167,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
       await cdp.evaluate('window.__quotumPan.feeding=false');
       await wait(240); await settled();
       const report = await cdp.evaluate<PanReading>(`(() => {
-        const p=window.__quotumPan;p.running=false;cancelAnimationFrame(p.raf);p.observer.disconnect();
-        document.querySelector('.history .chart').removeEventListener('wheel',p.input,true);document.querySelector('.history .chart').removeEventListener('pointermove',p.input,true);
-        window.fetch=p.originalFetch;history.pushState=p.originalPush;
+        const p=window.__quotumPan;p.cleanup();
         const segments={};for(const segment of ['wheel','drag','return','fold']){const values=p.samples.filter(s=>s.segment===segment).map(s=>s.ms).sort((a,b)=>a-b);segments[segment]={count:values.length,p95:values[Math.ceil(values.length*.95)-1]??0,max:values.at(-1)??0};}
         return {frames:p.frames,latency:p.latency,inputs:p.inputs,updated:p.updated,chartUpdates:p.chartUpdates,synchronized:p.synchronized,pushesDuring:p.pushesDuring,pushesAfter:p.pushesAfter,forbiddenMutations:p.forbiddenMutations,undimmed:p.undimmed,sizeStable:p.sizeStable,coldReads:p.coldReads,peakFlights:p.peakFlights,maxTiles:p.maxTiles,duplicateReads:p.duplicateReads,segments,outliers:p.samples.filter(s=>s.ms>50)};
       })()`);
@@ -170,7 +219,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
   } finally {
     await cdp.send('Emulation.setCPUThrottlingRate', {rate: 1});
     if (interception) await cdp.send('Network.emulateNetworkConditions', {offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1});
-    await cdp.evaluate(`(() => {const p=window.__quotumPan;if(p){p.running=false;cancelAnimationFrame(p.raf);p.observer?.disconnect();window.fetch=p.originalFetch;history.pushState=p.originalPush;}document.getElementById('quotum-pan-layout')?.remove();})()`);
+    await cdp.evaluate(`(() => {window.__quotumPan?.cleanup();document.getElementById('quotum-pan-layout')?.remove();})()`);
     try {
       if (await cdp.evaluate<boolean>(`!document.querySelector('.history .popover')`)) await click('.history .panel-head .picker > button');
       await click('.history .popover .segmented button', Math.max(0, ['auto', '1d', '3d', '7d'].indexOf(originalHorizon)));
