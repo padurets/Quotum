@@ -1,4 +1,4 @@
-import {useLayoutEffect, useRef, useState} from 'react';
+import {useRef, useState, useSyncExternalStore} from 'react';
 import type {Kind} from '../lib/types';
 import {setPrefs, usePrefs} from '../lib/prefs';
 import {PERIODS, periodLabel, periodOf, step, stepChangesAt} from '../lib/periods';
@@ -37,23 +37,14 @@ const ChevronIcon = () => (
   </svg>
 );
 
-/** The label follows frames without interrupting React's preparation of a new strip. */
+/** Subscribe to the words shown, so unchanged dates do not interrupt strip preparation. */
 function PeriodName({selected, range}: {selected: TimeRange | null; range: string}) {
   useLocale();
-  const text = useRef<HTMLSpanElement>(null);
-  const update = useRef(() => {});
-  const label = selected ? timeRangeLabel(selected) : periodLabel(periodOf(range));
-  const paint = () => {
-    const element = text.current;
-    if (!element) return;
-    const preview = pan.get();
-    const current = preview ? timeRangeLabel(preview) : label;
-    const node = element.firstChild;
-    if (node && node.nodeValue !== current) node.nodeValue = current;
-  };
-  useLayoutEffect(() => {update.current = paint; paint();});
-  useLayoutEffect(() => pan.subscribe(() => update.current()), []);
-  return <span ref={text}>{label}</span>;
+  const preview = useSyncExternalStore(pan.subscribe, () => {
+    const frame = pan.get();
+    return frame ? timeRangeLabel(frame) : null;
+  }, () => null);
+  return <span>{preview ?? (selected ? timeRangeLabel(selected) : periodLabel(periodOf(range)))}</span>;
 }
 
 /**
