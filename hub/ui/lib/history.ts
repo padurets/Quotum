@@ -593,6 +593,8 @@ export class HistoryStore {
   }
 
   private evict() {
+    let bytes = this.estimatedBytes;
+    if (bytes <= this.budget) return;
     const target = this.interest ? this.plotTarget() : this.target();
     const ahead = this.interest?.direction ? this.aheadTarget(target) : null;
     const candidates: {cell: number; n: number; tile: HistoryTile}[] = [];
@@ -601,7 +603,6 @@ export class HistoryStore {
       if (cell === target.cell && tile.to > target.k0 * cell && tile.from <= target.k1 * cell) continue;
       candidates.push({cell, n, tile});
     }
-    let bytes = this.estimatedBytes;
     for (const {cell, n, tile} of candidates.sort((a, b) => a.tile.shownAt - b.tile.shownAt)) {
       if (bytes <= this.budget) break;
       this.grids.get(cell)!.delete(n);
