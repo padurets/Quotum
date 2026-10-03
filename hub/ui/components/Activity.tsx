@@ -385,7 +385,13 @@ const Stacks = memo(function Stacks({
     const vertical = activityScale(maximum);
     const perMs = (width - left - right) / span;
     const pathOrigin = incomingStrip ? basis.from : incomingOrigin;
-    const paths = yield* stackPaths.current.drawPrepared(incomingGroups, pathOrigin, perMs, barMs, height, vertical.max);
+    const drawn: typeof incomingGroups = [];
+    if (!incomingStrip) for (const row of incomingGroups) {
+      const cells: typeof row.group.cells = [];
+      for (const cell of row.group.cells) {if (cell[0] + barMs > basis.from - span / 2 && cell[0] < basis.to + span / 2) cells.push(cell); yield;}
+      drawn.push({...row, group: {...row.group, cells}}); yield;
+    }
+    const paths = yield* stackPaths.current.drawPrepared(incomingStrip ? incomingGroups : drawn, pathOrigin, perMs, barMs, height, vertical.max);
     return {basis, barMs, heights, maximum, vertical, perMs, pathOrigin, paths, groups: incomingGroups, strip: incomingStrip, activity: incomingActivity, originUnknownTo: incomingUnknownTo};
   }, [...inputs, requested.from, requested.to, requested.end], `${by}:${width}:${height}`, incomingReady);
   const model = prepared.value;

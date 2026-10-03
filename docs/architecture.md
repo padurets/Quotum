@@ -851,8 +851,11 @@ fold; both charts immediately place their retained data in the requested project
 Ready data keeps that projection when it replaces the borrowed model. Borrowed data
 keeps its own coverage and time domain, so future points are clipped rather than
 clamped into an edge and a requested past frame shows no old future labels.
-Clock movement reprojects the ready drawing without preparing its unchanged numeric
-series again. That drawing keeps the data cutoff it was prepared with; the current
+Ordinary clock movement reprojects the ready drawing without preparing its unchanged
+numeric series again. Its bounded overscan rebases in slices only when the requested
+frame crosses the cached margin. Future outlines are clipped to that drawing extent;
+their full facts remain available for readouts and later navigation. The drawing
+keeps the data cutoff it was prepared with; the current
 frame supplies the future boundary, readouts and expiry of forecasts, plans and reset
 markers. Forecast availability stays independent of its display switch. Child drawing
 jobs wait for their input model to be ready, so a clock wake cannot publish intermediate

@@ -13,6 +13,7 @@ import {navigationKey, type AxisNavigation} from '../lib/axisNavigation';
 import {PlotLayer, PlotOverlay} from './PlotLayer';
 import {covered, type PlotBuffer} from '../lib/historyPlot';
 import {plotPathPrepared} from '../lib/plotPath';
+import {clipPrepared} from '../lib/forecast';
 import {usePrepared, usePreparationBasis} from './prepared';
 
 /**
@@ -300,14 +301,14 @@ export const Chart = memo(function Chart({
   useLayoutEffect(() => onBase?.(base * scale), [base, scale, onBase]);
   const top = 12, bottom = 28;
   const inputs = [incomingLines, incomingPlans, incomingForecasts, incomingMarkers, incomingStrip, width, height, cellMs, modelContext, navigation && navigationKey(navigation), desiredLive];
-  const requested = usePreparationBasis(axis.basis, inputs, axis.active, incomingReady);
+  const requested = usePreparationBasis({...axis.basis, end: axis.active && !incomingStrip ? axis.basis.end : desiredNow}, inputs, axis.active, incomingReady);
   const blockPaths = useRef(new WeakMap<PlotBlock, {geometry: string; line: string; last: [number, number] | null}>());
   const prepared = usePrepared(function* () {
     const basis = {from: requested.from, to: requested.to, end: requested.end};
     const span = Math.max(60_000, basis.to - basis.from);
     const x = (at: number) => left + (at - basis.from) / span * (width - left - right);
     const drawFrom = basis.from;
-    const drawNow = axis.active && !incomingStrip ? basis.end : desiredNow;
+    const drawNow = basis.end;
     const bx = (at: number) => x(Math.min(drawNow, at + cellMs / 2));
     const y = (value: number) => top + (1 - value / 100) * (height - top - bottom);
     const geometry = `${basis.from}:${basis.to}:${drawNow}:${width}:${height}:${cellMs}`;
@@ -359,17 +360,23 @@ export const Chart = memo(function Chart({
     const markers: Marker[] = [];
     for (const marker of incomingMarkers) {if (desiredLive || marker.past) markers.push(marker); yield;}
     const planPaths: string[] = [], forecastPaths: string[] = [];
+    const futureFrom = incomingStrip?.from ?? basis.from - span / 2;
+    const futureTo = incomingStrip ? incomingStrip.to + Math.max(0, desiredTo - desiredNow) : basis.to + span / 2;
     for (const plan of incomingPlans) {
       let path = '';
-      for (const run of plan.runs) for (let i = 0; i < run.length; i++) {const [at, value] = run[i]; path += `${i ? 'L' : 'M'}${x(at).toFixed(1)},${y(value).toFixed(1)}`; yield;}
+      for (const raw of plan.runs) {
+        const run = yield* clipPrepared(raw, futureFrom, futureTo);
+        for (let i = 0; i < run.length; i++) {const [at, value] = run[i]; path += `${i ? 'L' : 'M'}${x(at).toFixed(1)},${y(value).toFixed(1)}`; yield;}
+      }
       planPaths.push(path);
     }
     for (const forecast of forecasts) {
       let path = '';
-      for (let i = 0; i < forecast.points.length; i++) {const [at, value] = forecast.points[i]; path += `${i ? 'L' : 'M'}${x(at).toFixed(1)},${y(value).toFixed(1)}`; yield;}
+      const points = yield* clipPrepared(forecast.points, futureFrom, futureTo);
+      for (let i = 0; i < points.length; i++) {const [at, value] = points[i]; path += `${i ? 'L' : 'M'}${x(at).toFixed(1)},${y(value).toFixed(1)}`; yield;}
       forecastPaths.push(path);
     }
-    return {basis, lines: incomingLines, plans: incomingPlans, forecasts, markers, strip: incomingStrip, from: desiredFrom, now: desiredNow, to: desiredTo, paths, planPaths, forecastPaths};
+    return {basis, lines: incomingLines, plans: incomingPlans, forecasts, markers, strip: incomingStrip, from: basis.from, now: drawNow, to: basis.to, paths, planPaths, forecastPaths};
   }, [...inputs, requested.from, requested.to, requested.end], `${modelContext}:${width}:${height}:${cellMs}`, incomingReady);
   const model = prepared.value;
   const basis = model?.basis ?? axis.basis;

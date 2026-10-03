@@ -9,6 +9,10 @@ export class PreparationBasis {
   private saved: {deps: readonly unknown[]; value: Projection} | null = null;
   get(value: Projection, deps: readonly unknown[], captured: boolean, enabled = true): Projection {
     if (enabled && (!this.saved || !same(this.saved.deps, deps) || captured && (value.from !== this.saved.value.from || value.to !== this.saved.value.to || value.end !== this.saved.value.end))) this.saved = {deps: [...deps], value: {from: value.from, to: value.to, end: value.end}};
+    else if (enabled && !captured && this.saved) {
+      const previous = this.saved.value, margin = Math.max(60_000, previous.to - previous.from) / 4;
+      if (value.from < previous.from - margin || value.to > previous.to + margin) this.saved = {...this.saved, value: {from: value.from, to: value.to, end: previous.end}};
+    }
     return this.saved?.value ?? value;
   }
 }

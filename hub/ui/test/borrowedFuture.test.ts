@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {plotPathPrepared} from '../lib/plotPath';
+import {clipPrepared} from '../lib/forecast';
 import {navigationKey} from '../lib/axisNavigation';
 import {preparationFixture} from './preparationFixture';
 
@@ -17,7 +18,7 @@ test('a borrowed live model in a requested past frame neither clamps future path
   const context = {...hook, axis: {active: false}, requested: {from: 0, to: H, end: H},
     incomingLines: [], incomingPlans: [{key: 'p', runs: [[[2 * H, 80], [3 * H, 0]]]}], incomingForecasts: [forecast], incomingMarkers: [marker],
     incomingStrip: null, desiredFrom: 0, desiredTo: H, desiredNow: H, desiredLive: false, incomingReady: true, modelContext: 'test', navigation: {context: 'test', range: 'past'}, navigationKey,
-    NO_FORECASTS: [], cellMs: 60_000, width: 900, height: 220, left: 40, right: 12, top: 12, bottom: 28, plotPathPrepared,
+    NO_FORECASTS: [], cellMs: 60_000, width: 900, height: 220, left: 40, right: 12, top: 12, bottom: 28, plotPathPrepared, clipPrepared,
     currentClock: H, prepared: {value: {forecasts: [forecast], forecastPaths: ['future'], markers: [marker]}},
     runOutPast: (values: unknown[]) => {assert.equal(values.length, 0, 'past navigation must not use old future labels'); return [];}, stamp: () => '', t: () => '',
     draw: null as unknown as () => {value: Model | null; ready: boolean}, read: null as unknown as () => {forecasts: unknown[]; beyond: unknown[]; announced: unknown[]},
@@ -34,6 +35,6 @@ test('a borrowed live model in a requested past frame neither clamps future path
   const ready = render().value!;
   assert.equal(ready.forecasts.length, 0); assert.equal(ready.markers.length, 0);
   const coordinates = [...ready.planPaths[0].matchAll(/[ML]([-\d.]+),/g)].map(match => Number(match[1]));
-  assert.ok(coordinates.length === 2 && coordinates.every(x => x > 888), 'the old future plan remains outside the requested viewport');
-  assert.notEqual(coordinates[0], coordinates[1], 'out-of-frame points must not become a fabricated right-edge vertical');
+  assert.equal(coordinates.length, 0, 'the old future plan is outside the bounded drawing extent');
+  assert.equal(context.incomingPlans[0].runs[0].length, 2, 'clipping artwork cannot change the retained raw plan');
 });
