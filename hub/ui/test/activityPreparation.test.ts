@@ -23,7 +23,7 @@ test('actual Activity generators hold one coherent model and produce exact stack
     }
     return {token: 1, epoch: 1, version: start, from: start, to: start + 480 * barMs, cell: barMs, length, barMs, coverage: [[start, start + 480 * barMs]], activityCells, series: [], events: [], knownFrom: start};
   };
-  const parent = preparationFixture(), child = preparationFixture(); let aggregates = 0, draws = 0;
+  const parent = preparationFixture(), child = preparationFixture(); let aggregates = 0, draws = 0, tickFrame: [number, number] = [0, 0];
   class CountedPaths extends StackPaths {override *drawPrepared(...args: Parameters<StackPaths['drawPrepared']>) {draws++; return yield* super.drawPrepared(...args);}}
   const source = readFileSync(new URL('../components/Activity.tsx', import.meta.url), 'utf8');
   const start = source.indexOf('  const prepared = usePrepared(');
@@ -35,7 +35,7 @@ test('actual Activity generators hold one coherent model and produce exact stack
     EMPTY_CELLS: [], registry: {current: null}, groups: [], colors: [], shown: [], strip: buffer(0), by: 'project', prefs: {muted: {}}, locale: 'en', history: {board: 'b'}, arrange: {view: {}}, titles: {},
     groupRegistry, groupName: (group: {key: string}) => group.key, mutedKey: (_by: string, key: string) => key,
     plotGroupsPrepared: function* (...args: Parameters<typeof plotGroupsPrepared>) {aggregates++; return yield* plotGroupsPrepared(...args);},
-    StackPaths: CountedPaths, stacksHeight: () => 160, activityScale, niceTicks, cellStart, MINUTE: 60_000,
+    StackPaths: CountedPaths, stacksHeight: () => 160, activityScale, niceTicks: (...args: Parameters<typeof niceTicks>) => {tickFrame = [args[0], args[1]]; return niceTicks(...args);}, cellStart, MINUTE: 60_000,
     CSS: {escape: (id: string) => id}, pan: {active: () => 1, subscribe: () => () => {}}, useLocale: () => 'en',
     useTimeAxis: () => axis,
     useTip: () => ({tip: {current: null}, style: {}}), PlotLayer: () => null, PlotOverlay: () => null, Tooltip: () => null,
@@ -59,7 +59,7 @@ test('actual Activity generators hold one coherent model and produce exact stack
     if (!React.isValidElement<{className?: string; d?: string; children?: React.ReactNode}>(node)) return [];
     return node.props.className === 'activity-stack' && node.props.d !== undefined ? [node.props.d] : pathsOf(node.props.children);
   };
-  const props = {activity: {barMs}, origin: 0, groups: current.shown, from: 0, to: length, unknownTo: null, plot: undefined, onBase: () => {}, onSelect: () => {}, strip: current.strip, prepared: true, navigation, by: 'project', allMuted: false, empty: null};
+  const props = {activity: {barMs}, origin: 0, groups: current.shown, from: 0, to: length, unknownTo: null, plot: undefined, onBase: () => {}, onSelect: () => {}, strip: current.strip as PlotBuffer | null, prepared: true, navigation, by: 'project', allMuted: false, empty: null};
   const renderChild = () => {Object.assign(context, child); child.begin(); return pathsOf(context.Stacks(props));};
   assert.deepEqual(renderChild(), []); assert.equal(draws, 0); child.commit(); child.finish();
   const actual = renderChild();
@@ -73,4 +73,8 @@ test('actual Activity generators hold one coherent model and produce exact stack
   axis.basis = {from: props.from, to: props.to, end: props.to};
   renderChild(); child.commit(); child.finish(); assert.equal(draws, 1, 'unready parent input cannot prepare borrowed data');
   props.prepared = true; renderChild(); child.commit(); child.finish(); assert.equal(draws, 2, 'reenabling schedules only the latest ready owner');
+  props.strip = null; renderChild(); child.commit(); child.finish(); renderChild(); assert.equal(draws, 3);
+  props.from += 60_000; props.to += 60_000; axis.basis = {from: props.from, to: props.to, end: props.to};
+  renderChild(); child.commit(); child.finish();
+  assert.equal(draws, 3); assert.deepEqual(tickFrame, [props.from, props.to], 'new clock ticks enter the current axis without redrawing its retained stacks');
 });

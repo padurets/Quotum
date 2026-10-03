@@ -401,7 +401,7 @@ const Stacks = memo(function Stacks({
   const x = (at: number) => left + (at - basis.from) / span * (width - left - right);
   const y = (value: number) => top + (1 - value / vertical.max) * (height - top - bottom);
   const hover = incomingReady && prepared.ready ? axis.hover : null;
-  const tickFrom = strip?.from ?? basis.from, tickTo = strip?.to ?? basis.to;
+  const tickFrom = strip?.from ?? from, tickTo = strip?.to ?? to;
   const {ticks, daily} = niceTicks(tickFrom, tickTo, (narrow ? 4 : 7) * (tickTo - tickFrom) / span);
   useLayoutEffect(() => {if (model) maxSeen.current = model.maximum; axis.commitDrawing(basis, incomingReady && prepared.ready);});
 
