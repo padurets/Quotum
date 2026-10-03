@@ -293,7 +293,7 @@ export const Chart = memo(function Chart({
   const height = plot === undefined ? base : Math.max(base, plot / scale);
   useLayoutEffect(() => onBase?.(base * scale), [base, scale, onBase]);
   const top = 12, bottom = 28;
-  const blockPaths = useRef(new Map<PlotBlock, {geometry: string; line: string; last: [number, number] | null}>());
+  const blockPaths = useRef(new WeakMap<PlotBlock, {geometry: string; line: string; last: [number, number] | null}>());
   const prepared = usePrepared(function* () {
     const basis = {from: requested.from, to: requested.to, end: requested.end};
     const span = Math.max(60_000, basis.to - basis.from);
@@ -303,7 +303,6 @@ export const Chart = memo(function Chart({
     const bx = (at: number) => x(Math.min(drawNow, at + cellMs / 2));
     const y = (value: number) => top + (1 - value / 100) * (height - top - bottom);
     const geometry = `${basis.from}:${basis.to}:${drawNow}:${width}:${height}:${cellMs}`;
-    const retained = new Set<PlotBlock>();
     const paths: {line: string; last: [number, number] | null; parts: {key: string; line: string}[] | null; latest: string | undefined}[] = [];
     for (const line of incomingLines) {
       let latest: string | undefined;
@@ -312,7 +311,6 @@ export const Chart = memo(function Chart({
         let last: [number, number] | null = null;
         const parts: {key: string; line: string}[] = [];
         for (const {block, join} of line.blocks) {
-          retained.add(block);
           let cached = blockPaths.current.get(block);
           if (!cached || cached.geometry !== geometry) {
             let segment = -1, previousX = -Infinity;
@@ -360,7 +358,6 @@ export const Chart = memo(function Chart({
       for (let i = 0; i < forecast.points.length; i++) {const [at, value] = forecast.points[i]; path += `${i ? 'L' : 'M'}${x(at).toFixed(1)},${y(value).toFixed(1)}`; yield;}
       forecastPaths.push(path);
     }
-    for (const block of blockPaths.current.keys()) {if (!retained.has(block)) blockPaths.current.delete(block); yield;}
     return {basis, lines: incomingLines, plans: incomingPlans, forecasts: incomingForecasts, markers: incomingMarkers, strip: incomingStrip, from: desiredFrom, now: desiredNow, to: desiredTo, paths, planPaths, forecastPaths};
   }, [incomingLines, incomingPlans, incomingForecasts, incomingMarkers, incomingStrip, desiredFrom, desiredNow, desiredTo, width, height, cellMs, requested.from, requested.to, requested.end, axis.active], `${modelContext}:${width}:${height}:${cellMs}`);
   const model = prepared.value;

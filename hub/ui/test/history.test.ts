@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import {followPan, HistoryStore} from '../lib/history';
 import {Pan} from '../lib/pan';
 import {covered} from '../lib/historyPlot';
+import {HistoryTile} from '../lib/historyTiles';
 import {Preparations} from '../lib/prepare';
 import {ApiError} from '../lib/http';
-import {CLOCK_TOLERANCE_MS, cellStart, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer} from '../../server/domain/history';
+import {CLOCK_TOLERANCE_MS, cellStart, targetOf, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer} from '../../server/domain/history';
 
 const M = 60_000;
 const H = 60 * M;
@@ -690,5 +691,51 @@ test('epoch cancellation during staging releases the raw answer and reservations
   assert.equal(h.internals.responses.size, 0); assert.equal(h.internals.reservations.size, 0);
   await h.finish(); assert.equal(h.store.get().history, null);
   for (const grid of h.internals.grids.values()) for (const tile of grid.values()) assert.equal(tile.writeSeq, 0);
+  h.store.close();
+});
+
+test('a waiting raw answer owns a processing slot and takes the newly committed base of its reserved tile', async () => {
+  const h = cooperativeHarness(); await h.start(); await h.reads[0].answer(); await h.finish();
+  const wanted = targetOf(24 * H, h.now(), 'test', {from: h.now() - 48 * H, to: h.now() - 24 * H});
+  const from = tileStart(tileOf(wanted.k0 * wanted.cell, wanted.cell), wanted.cell), to = from + 60 * wanted.cell;
+  const reader = h.store as unknown as {read(target: typeof wanted, from: number, to: number, role: 'visible'): void};
+  reader.read(wanted, from, to, 'visible'); reader.read({...wanted, key: 'test-newer'}, from, to, 'visible');
+  const [old, next] = pending(h);
+  const rich = empty(from, to);
+  rich.activity.sessions = Array.from({length: 200}, (_, i) => [`ref${i}`, 's', 'project', 'd']);
+  rich.activity.cells = [[0, wanted.cell, Array.from({length: 200}, (_, i) => i), []]];
+  await old.answer({chunks: [rich]}); h.tick(); await next.answer({chunks: [rich]});
+  assert.equal(h.internals.responses.size, 2);
+  assert.equal([...h.internals.responses.values()].filter(response => !response.started).length, 1, 'same-tile staging waits without leaving the two-answer admission bound');
+  assert.equal(h.internals.reservations.size, 1);
+  await h.finish();
+  const tile = h.internals.grids.get(wanted.cell)!.get(tileOf(from, wanted.cell))!;
+  assert.equal(tile.writeSeq, 3, 'the younger writer stages from the atomically committed ready entry');
+  assert.equal(h.internals.responses.size, 0); assert.equal(h.internals.reservations.size, 0);
+  h.store.close();
+});
+
+test('replacing a pinned ready entry cancels stale staging even when its sequence and boundaries look unchanged', async () => {
+  const h = cooperativeHarness(); await h.start(); await h.reads[0].answer(); h.tick();
+  for (const [cell, grid] of h.internals.grids) for (const [key, old] of grid) {
+    const next = new HistoryTile(tileStart(key, cell), cell); next.readFrom = old.readFrom; next.readTo = old.readTo; next.writeSeq = old.writeSeq; grid.set(key, next);
+  }
+  await h.finish();
+  assert.equal(h.store.get().history, null);
+  assert.equal(h.internals.responses.size, 0); assert.equal(h.internals.reservations.size, 0, 'invalidated ownership must release the waiting answer and reservations');
+  assert.ok(pending(h).length, 'required cells become readable again after discard');
+  await pending(h)[0].answer(); await h.finish();
+  assert.equal(h.store.get().history?.range, '24h');
+  h.store.close();
+});
+
+test('history news during staging uses the last touched prefix while metadata keeps the original flight clock', async () => {
+  const h = cooperativeHarness(); await h.start();
+  const initial = h.reads[0]; await initial.answer(); h.tick();
+  const touched = cellStart(h.now() - 10 * H, initial.cell);
+  h.store.news(touched); await flush(); await h.finish();
+  for (const grid of h.internals.grids.values()) for (const tile of grid.values()) if (tile.readTo > touched) assert.ok((tile as unknown as {validTo: number}).validTo <= Math.max(tile.readFrom, touched));
+  assert.equal((h.store as unknown as {metaAt: number}).metaAt, 0, 'merging time cannot replace the flight’s original clock anchor');
+  assert.ok(pending(h).some(read => read.from <= touched && read.to > touched), 'the touched suffix remains required after publication');
   h.store.close();
 });

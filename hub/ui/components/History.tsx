@@ -93,9 +93,9 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
   const selected = useTimeRange();
   // On with the next cell, when what the chart points at past its right edge comes due (drawn
   // within it then), or when a forecast is drawn no more.
-  const clockNow = useClock(now => earliest(frameChangesAt(selected, history?.cellMs ?? 60_000, now), ...moments.filter(at => at > now)));
   const codex = useResetsFor('codex');
   const past = usePastResets();
+  const clockNow = useClock(now => earliest(frameChangesAt(selected, history?.cellMs ?? 60_000, now), ...moments.filter(at => at > now)), [history, strip, sources, hubForecasts, lineup, news, prefs, selected, view, locale, codex, past]);
   const panning = usePanning();
   const captured = useRef<{token: number; now: number; lookAhead: number; sources: typeof sources; forecasts: typeof hubForecasts; lineup: typeof lineup; news: typeof news; codex: typeof codex; view: typeof view} | null>(null);
   if (panning === null) captured.current = null;

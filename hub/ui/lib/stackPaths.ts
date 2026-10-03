@@ -31,9 +31,10 @@ export class StackPaths {
       return text;
     };
     const retained = new Set<string>();
+    for (const {group} of groups) {retained.add(group.key); yield;}
+    for (const key of this.groups.keys()) {if (!retained.has(key)) this.groups.delete(key); yield;}
     const paths: string[] = [];
     for (const {group} of groups) {
-      retained.add(group.key);
       let cache = this.groups.get(group.key);
       if (!cache) {cache = {bars: new Map(), order: [], path: '', dirty: true}; this.groups.set(group.key, cache);}
       const kept = new Set<number>();
@@ -92,7 +93,6 @@ export class StackPaths {
       cache.order = order; cache.path = path; cache.dirty = false;
       paths.push(path);
     }
-    for (const key of this.groups.keys()) {if (!retained.has(key)) this.groups.delete(key); yield;}
     return paths;
   }
   draw(...args: Parameters<StackPaths['drawPrepared']>): string[] {return drain(this.drawPrepared(...args));}

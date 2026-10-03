@@ -211,7 +211,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const by = prefs.activityBy;
   const locale = useLocale();
   const selected = useTimeRange();
-  const clockNow = useClock(now => frameChangesAt(selected, history?.cellMs ?? 60_000, now));
+  const clockNow = useClock(now => frameChangesAt(selected, history?.cellMs ?? 60_000, now), [history, strip, prefs, selected, titles, arrange.view, locale]);
   const panning = usePanning();
   const captured = useRef<{token: number; now: number} | null>(null);
   if (panning === null) captured.current = null;

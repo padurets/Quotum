@@ -1,3 +1,6 @@
+import {readFileSync} from 'node:fs';
+import {runInNewContext} from 'node:vm';
+import ts from 'typescript';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {PageClock} from '../lib/clock';
@@ -368,4 +371,26 @@ test('the forecast cell says when it reads otherwise: its countdown, its tone, i
     const line = (now: number) => forecastLine(live, T0, now, forecast, context, -Infinity, Infinity);
     changesAtItsMoment(`${what}: its line`, line, now => line(now)?.until ?? null, [...moments, ...(line(T0) ? before(line(T0)!.until) : [])]);
   }
+});
+
+test('the actual clock hook keeps a preparation intent stable through completion renders and advances on data or clock wakes', () => {
+  let now = T0, index = 0, subscribed = false;
+  const slots: unknown[] = [];
+  const clock = new PageClock({now: () => now, visible: () => true, setTimeout: () => null, clearTimeout: () => {}});
+  const context = {clock, hubNow: clock.hubNow, exports: {} as {useClock: (changesAt: (now: number) => number | null, context?: readonly unknown[]) => number},
+    useState: (initial: () => unknown) => {const at = index++; if (!(at in slots)) slots[at] = initial(); return [slots[at]];},
+    useRef: (initial: unknown) => slots[index++] ?? (slots[index - 1] = {current: initial}),
+    useSyncExternalStore: (subscribe: (listen: () => void) => unknown, get: () => number) => {if (!subscribed) {subscribed = true; subscribe(() => {});} return get();},
+    useLayoutEffect: (effect: () => void) => effect(),
+  };
+  const source = readFileSync(new URL('../lib/clock.ts', import.meta.url), 'utf8');
+  runInNewContext(ts.transpileModule(source.slice(source.indexOf('export function useClock(')), {compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS}}).outputText, context);
+  const render = (captured?: readonly unknown[]) => {index = 0; return context.exports.useClock(t => frameChangesAt(null, MIN, t), captured);};
+  const data = {}, fresh = {};
+  assert.equal(render([data]), T0);
+  now += 5_000; assert.equal(render([data]), T0, 'saved-model state cannot continuously replace its own intent');
+  assert.equal(render([fresh]), now, 'new data gets the time at which it rendered');
+  now += MIN; clock.wakeDue(); assert.equal(render([fresh]), now);
+  clock.heard(now + 5_000); assert.equal(render([fresh]), now + 5_000, 'a hub clock correction remains observable');
+  now += 250; assert.equal(render(), now + 5_000, 'ordinary clock consumers retain their render-time behavior');
 });
