@@ -146,7 +146,7 @@ export function useTimeAxis({
   const paintPan = useRef(() => {});
   const visualGeometry = (): DrawingGeometry => {
     const base = drawing.current;
-    const layer = box.current?.querySelector<SVGGElement>('[data-plot-main] .slides');
+    const layer = animations.current.size ? box.current?.querySelector<SVGGElement>('[data-plot-main] .slides') : null;
     let {a, b, offset} = pose.current;
     if (layer && animations.current.has(layer)) {
       const moving = getComputedStyle(layer).transform;
@@ -470,5 +470,5 @@ export function useTimeAxis({
     animateProjection(visual, wanted.current.projection, SLIDE_MS, false);
   };
 
-  return {box, svg, width, scale, commitDrawing, visualGeometry, screenX: (at: number) => {const visible = visualGeometry(); return left + (at - visible.from) / (visible.to - visible.from) * (width - left - right);}, get held() {return finished.current !== null;}, hover: shifting || panning || folding || finished.current !== null ? null : hover, drag, x, drawX, timeAt, clip, handlers, basis, active: panning !== null, panning: shifting || panning !== null || folding || finished.current !== null};
+  return {box, svg, width, scale, commitDrawing, visualGeometry, screenX: (at: number) => {if (animations.current.size) {const visible = visualGeometry(); return left + (at - visible.from) / (visible.to - visible.from) * (width - left - right);} const base = drawing.current; return pose.current.a * (left + (at - base.from) / Math.max(60_000, base.to - base.from) * (width - left - right)) + pose.current.b + pose.current.offset / scale;}, get held() {return finished.current !== null;}, hover: shifting || panning || folding || finished.current !== null ? null : hover, drag, x, drawX, timeAt, clip, handlers, basis, active: panning !== null, panning: shifting || panning !== null || folding || finished.current !== null};
 }
