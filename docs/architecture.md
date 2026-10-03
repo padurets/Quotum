@@ -831,7 +831,8 @@ selection. The existing 15 MiB tile estimate protects the visible frame. On rele
 speculation stops and exact totals switch only after the final frame is complete.
 Numeric preparation runs outside React rendering through one cancellable MessageChannel
 scheduler. Its shared generators yield between small cell, session, group, event and point
-operations; server and synchronous readers drain those same generators. Each owner
+operations. UI slices target one millisecond and check the deadline after at most sixteen
+generator advances; server and synchronous readers drain those same generators. Each owner
 keeps only its latest job. Tile responses use private COW staging and publish their
 tiles, read bounds and metadata together. At most two responses are admitted for
 processing, including raw answers waiting for a tile reservation; ordinary HTTP

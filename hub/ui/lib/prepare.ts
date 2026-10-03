@@ -10,7 +10,7 @@ export class Preparations {
   private readonly queue: object[] = [];
   private pending = false;
   private disposed = false;
-  constructor(private readonly env: PreparationEnv, private readonly quantum = 3) {}
+  constructor(private readonly env: PreparationEnv, private readonly quantum = 1) {}
 
   replace<T>(owner: object, work: Preparation<T>, valid: () => boolean, ready: (value: T) => void) {
     if (this.disposed) {work.return(undefined as T); return;}
@@ -45,7 +45,7 @@ export class Preparations {
         const deadline = this.env.now() + this.quantum;
         let step: IteratorResult<void, unknown> | undefined;
         do {
-          for (let n = 0; n < 64; n++) {step = job.work.next(); if (step.done) break;}
+          for (let n = 0; n < 16; n++) {step = job.work.next(); if (step.done) break;}
         } while (!step!.done && this.env.now() < deadline);
         if (this.jobs.get(owner) === job) {
           if (step!.done) {

@@ -15,6 +15,28 @@ export function sliced() {
   return {scheduler, tasks, tick, finish, disposed: () => disposed};
 }
 
+test('actual default slices release the UI after one millisecond of primitive work and complete identically', () => {
+  let clock = 0, advances = 0, published: number | null = null;
+  const tasks: (() => void)[] = [], spans: number[] = [];
+  const source = function* (cost: () => void): Preparation<number> {
+    let sum = 0;
+    for (let i = 0; i < 256; i++) {sum += i; cost(); yield;}
+    return sum;
+  };
+  const expected = drain(source(() => {}));
+  const scheduler = new Preparations({now: () => clock, post: run => tasks.push(run)});
+  scheduler.replace({}, source(() => {clock += 1 / 16; advances++;}), () => true, value => {published = value;});
+  while (tasks.length) {
+    const start = clock, before = advances;
+    tasks.shift()!(); spans.push(clock - start);
+    assert.ok(clock - start <= 1, 'a costed primitive generator cannot monopolize the next input task');
+    assert.ok(advances - before <= 16, 'the deadline check bounds accumulated primitive work');
+    assert.ok(tasks.length <= 1, 'shorter slices still retain only one posted message');
+  }
+  assert.equal(published, expected); assert.equal(advances, 256); assert.equal(clock, 16);
+  assert.equal(scheduler.size, 0); assert.ok(spans.length > 1);
+});
+
 test('the real scheduler retains one latest generator per owner and releases cancelled buffers', () => {
   const h = sliced(), a = {}, b = {};
   let returned = 0, count = 0;
