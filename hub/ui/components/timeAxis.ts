@@ -170,7 +170,7 @@ export function useTimeAxis({
   useLayoutEffect(() => {geometry.current = {end: drawing.current.end, future: Math.max(0, visualGeometry().to - visualGeometry().from - (timeRange() ? timeRange()!.to - timeRange()!.from : periodOf(prefs().range).ms))};});
   useLayoutEffect(() => pan.register(source.current, () => {
     const visual = visualGeometry();
-    return {end: drawing.current.end, future: Math.max(0, visual.to - visual.from - (timeRange() ? timeRange()!.to - timeRange()!.from : periodOf(prefs().range).ms))};
+    return {end: wanted.current.projection.end, future: Math.max(0, visual.to - visual.from - (timeRange() ? timeRange()!.to - timeRange()!.from : periodOf(prefs().range).ms))};
   }), []);
   const paint = () => {
     const element = svg.current;
@@ -470,5 +470,5 @@ export function useTimeAxis({
     animateProjection(visual, wanted.current.projection, SLIDE_MS, false);
   };
 
-  return {box, svg, width, scale, commitDrawing, visualGeometry, screenX: (at: number) => {const base = drawing.current; return pose.current.a * (left + (at - base.from) / (base.to - base.from) * (width - left - right)) + pose.current.b + pose.current.offset / scale;}, get held() {return finished.current !== null;}, hover: shifting || panning || folding || finished.current !== null ? null : hover, drag, x, drawX, timeAt, clip, handlers, basis, active: panning !== null, panning: shifting || panning !== null || folding || finished.current !== null};
+  return {box, svg, width, scale, commitDrawing, visualGeometry, screenX: (at: number) => {const visible = visualGeometry(); return left + (at - visible.from) / (visible.to - visible.from) * (width - left - right);}, get held() {return finished.current !== null;}, hover: shifting || panning || folding || finished.current !== null ? null : hover, drag, x, drawX, timeAt, clip, handlers, basis, active: panning !== null, panning: shifting || panning !== null || folding || finished.current !== null};
 }

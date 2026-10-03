@@ -74,3 +74,14 @@ test('ready future hints place the current preset/horizon independently of the s
   assert.notEqual(navigationKey(axisNavigation('board', null, prefs)), navigationKey(axisNavigation('board', null, next)));
   assert.equal(navigationKey(navigationAt(axisNavigation('board', A, prefs), B)), navigationKey(axisNavigation('board', B, prefs)));
 });
+
+test('stationary overlay coordinates use the actual affine pose and stay finite on an empty axis', () => {
+  for (const base of [A, {from: 10 * H, to: 10 * H, end: 10 * H}]) {
+    const h = axisPresentationFixture(base, axisNavigation('board', null, prefs));
+    h.context.pose.current = {a: 1.3, b: -70, offset: 30};
+    for (const at of [base.from, base.from + 60_000]) {
+      const x = h.context.screenX(at); assert.ok(Number.isFinite(x));
+      near(x * h.context.scale, h.point(at));
+    }
+  }
+});

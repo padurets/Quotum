@@ -38,14 +38,15 @@ export function axisPresentationFixture(base: DrawingGeometry, navigation: AxisN
       const inverse = (px: number) => drawing.current.from + (((px - pose.current.offset) / scale - pose.current.b) / pose.current.a - left) / inner * span;
       return {from: inverse(left * scale), to: inverse((width - right) * scale), end: drawing.current.end};
     },
-    useLayoutEffect: () => {}, publish: null as unknown as () => void,
+    useLayoutEffect: () => {}, publish: null as unknown as () => void, screenX: null as unknown as (at: number) => number,
     commit: null as unknown as (next: DrawingGeometry, ready: boolean) => void,
   };
   const source = readFileSync(new URL('../components/timeAxis.ts', import.meta.url), 'utf8');
   const start = source.indexOf('  const projectionOf = ');
   const code = source.slice(start, source.indexOf('\n  return {box, svg', start));
-  runInNewContext(ts.transpileModule(`${code}\nglobalThis.publish=publishWanted;globalThis.commit=commitDrawing;`, {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText, context);
+  const screenX = source.slice(source.indexOf('screenX: (at: number) => ')).split(', get held')[0].replace('screenX: ', '');
+  runInNewContext(ts.transpileModule(`${code}\nglobalThis.publish=publishWanted;globalThis.commit=commitDrawing;globalThis.screenX=${screenX};`, {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText, context);
   const navigate = (next: DrawingGeometry, intent: AxisNavigation) => {context.from = next.from; context.to = next.to; context.end = next.end; context.requestedNavigation = intent; context.publish();};
-  const point = (at: number) => scale * (pose.current.a * (left + (at - drawing.current.from) / (drawing.current.to - drawing.current.from) * (width - left - right)) + pose.current.b) + pose.current.offset;
+  const point = (at: number) => scale * (pose.current.a * (left + (at - drawing.current.from) / Math.max(60_000, drawing.current.to - drawing.current.from) * (width - left - right)) + pose.current.b) + pose.current.offset;
   return {context, navigate, point, active, layers, slides, animations, classes, canceledFrames, advance: (ms: number) => {now += ms;}};
 }

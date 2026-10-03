@@ -12,7 +12,7 @@ import {useBoardId, useLineup, useTitles, type Title} from '../lib/board';
 import {useClock} from '../lib/clock';
 import {useHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
 import {plotBar, plotGroupsPrepared, type PlotBuffer, type PlotGroup} from '../lib/historyPlot';
-import {usePrepared} from './prepared';
+import {usePrepared, usePreparationBasis} from './prepared';
 import {axisNavigation, navigationKey, type AxisNavigation} from '../lib/axisNavigation';
 import {groupRegistry, type GroupIdentity} from '../lib/plotRegistry';
 import {StackPaths} from '../lib/stackPaths';
@@ -353,7 +353,6 @@ const Stacks = memo(function Stacks({
   const left = 48, right = 12;
   const axis = useTimeAxis({from, to, end: to, cellMs: incomingStrip?.barMs ?? incomingActivity.barMs, left, right, onSelect, ready: incomingReady, navigation});
   const {box, svg, width, scale, drag, clip, handlers, active} = axis;
-  const requested = axis.basis;
   const narrow = width < 560;
   const base = stacksHeight(width);
   const height = plot === undefined ? base : Math.max(base, plot / scale);
@@ -361,6 +360,8 @@ const Stacks = memo(function Stacks({
   const top = 12, bottom = 28;
   const maxSeen = useRef(0);
   const stackPaths = useRef(new StackPaths());
+  const inputs = [incomingGroups, incomingStrip, incomingActivity, incomingOrigin, incomingUnknownTo, by, width, height, navigationKey(navigation)];
+  const requested = usePreparationBasis(axis.basis, inputs, active, incomingReady);
   const prepared = usePrepared(function* () {
     const basis = {from: requested.from, to: requested.to, end: requested.end};
     const span = Math.max(MINUTE, basis.to - basis.from);
@@ -386,9 +387,9 @@ const Stacks = memo(function Stacks({
     const pathOrigin = incomingStrip ? basis.from : incomingOrigin;
     const paths = yield* stackPaths.current.drawPrepared(incomingGroups, pathOrigin, perMs, barMs, height, vertical.max);
     return {basis, barMs, heights, maximum, vertical, perMs, pathOrigin, paths, groups: incomingGroups, strip: incomingStrip, activity: incomingActivity, originUnknownTo: incomingUnknownTo};
-  }, [incomingGroups, incomingStrip, incomingActivity, incomingOrigin, incomingUnknownTo, by, requested.from, requested.to, requested.end, width, height, active, navigationKey(navigation)], `${by}:${width}:${height}`, incomingReady);
+  }, [...inputs, requested.from, requested.to, requested.end], `${by}:${width}:${height}`, incomingReady);
   const model = prepared.value;
-  const basis = model?.basis ?? requested;
+  const basis = model?.basis ?? axis.basis;
   const groups = model?.groups ?? [], strip = model?.strip ?? null, activity = model?.activity ?? incomingActivity;
   const barMs = model?.barMs ?? incomingActivity.barMs;
   const vertical = model?.vertical ?? activityScale(0);
@@ -397,7 +398,7 @@ const Stacks = memo(function Stacks({
   const knownFrom = strip?.knownFrom ?? model?.originUnknownTo ?? incomingUnknownTo;
   const unknownTo = knownFrom !== null && knownFrom > hatchFrom ? knownFrom : null;
   const span = Math.max(MINUTE, basis.to - basis.from);
-  const x = (at: number) => left + ((strip ? at : Math.min(basis.to, Math.max(basis.from, at))) - basis.from) / span * (width - left - right);
+  const x = (at: number) => left + (at - basis.from) / span * (width - left - right);
   const y = (value: number) => top + (1 - value / vertical.max) * (height - top - bottom);
   const hover = incomingReady && prepared.ready ? axis.hover : null;
   const tickFrom = strip?.from ?? basis.from, tickTo = strip?.to ?? basis.to;
@@ -466,7 +467,7 @@ const Stacks = memo(function Stacks({
   const parts =
     hover === null ? [] : groups.flatMap(({group, color, name}) => strip ? partialBar?.groups.has(group.key) ? [{key: group.key, color, name, ms: partialBar.groups.get(group.key)!.ms}] : [] : group.cells.filter(([start]) => start === hover).map(([, ms]) => ({key: group.key, color, name, ms})));
   const shownMs = parts.reduce((sum, part) => sum + part.ms, 0);
-  const hoverX = hover === null ? 0 : x(Math.max(from, Math.min(to, hover + barMs / 2)));
+  const hoverX = hover === null ? 0 : axis.screenX(Math.max(from, Math.min(to, hover + barMs / 2)));
   const {tip, style: tipStyle} = useTip(svg, {width, at: hoverX, narrow, rises: true, bottom: height * scale});
   // The label of the part not known shows only where it fits within its hatching, measured
   // as drawn (its length depends on the language and the font), never over the scale.
@@ -538,7 +539,7 @@ const Stacks = memo(function Stacks({
       <PlotOverlay width={width} height={height}>
         {drag && <rect x={Math.min(drag.start, drag.end)} width={Math.abs(drag.end - drag.start)} y={top} height={height - top - bottom} className="selection" />}
         {hover !== null && bar && parts.length > 0 && (
-          <rect x={x(hover)} width={Math.max(1, x(hover + barMs) - x(hover))} y={top} height={height - top - bottom} className="hover-band" />
+          <rect x={axis.screenX(hover)} width={Math.max(1, axis.screenX(hover + barMs) - axis.screenX(hover))} y={top} height={height - top - bottom} className="hover-band" />
         )}
       </PlotOverlay>
       {empty && <div className="chart-empty">{empty}</div>}

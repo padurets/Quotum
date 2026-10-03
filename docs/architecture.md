@@ -851,6 +851,13 @@ fold; both charts immediately place their retained data in the requested project
 Ready data keeps that projection when it replaces the borrowed model. Borrowed data
 keeps its own coverage and time domain, so future points are clipped rather than
 clamped into an edge and a requested past frame shows no old future labels.
+Clock movement reprojects the ready drawing without preparing its unchanged numeric
+series again. That drawing keeps the data cutoff it was prepared with; the current
+frame supplies the future boundary, readouts and expiry of forecasts, plans and reset
+markers. Forecast availability stays independent of its display switch. Child drawing
+jobs wait for their input model to be ready, so a clock wake cannot publish intermediate
+geometry built from stale parent data. Stationary hover overlays use the same composed
+coordinates as the displayed artwork.
 If a speculative response is evicted to fit that budget, its interest stops reading
 ahead until movement or history news changes what is needed.
 

@@ -2,7 +2,7 @@ import {memo, useLayoutEffect, useRef} from 'react';
 import {earliest, num} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
 import {planAt, started, weeklyPlanLinePrepared} from '../lib/plan';
-import {announcedOf, clipPrepared, forecastLinePrepared, type Context} from '../lib/forecast';
+import {announcedOf, forecastLinePrepared, type Context} from '../lib/forecast';
 import {PROVIDERS} from '../lib/providers';
 import {HORIZONS, setMuted, setPrefs, usePrefs} from '../lib/prefs';
 import {setTimeRange, useTimeRange} from '../lib/timeRange';
@@ -21,7 +21,7 @@ import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
 import {usePlot} from './sizing';
 import {pan, usePanning} from '../lib/pan';
 import {usePrepared} from './prepared';
-import {axisNavigation} from '../lib/axisNavigation';
+import {axisNavigation, navigationKey} from '../lib/axisNavigation';
 import {historyProjection, type ProjectionHints} from '../lib/historyProjection';
 
 /**
@@ -153,10 +153,10 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
     for (const line of visible) {
       yield;
       const source = sources.find(s => s.id === line.sourceId), live = source?.windows.find(w => w.id === line.windowId);
-      if (!live?.resetAt || live.resetAt <= measured || live.resetAt > to || !started(live, source?.successAt ?? null)) continue;
+      if (!live?.resetAt || live.resetAt <= measured || !started(live, source?.successAt ?? null)) continue;
       const key = `${line.sourceId}@${Math.round(live.resetAt / 60_000)}`;
       if (seen.has(key)) continue;
-      seen.add(key); markers.push({key, at: live.resetAt, label: t('chart.reset', {source: source ? sourceLabel(source) : line.provider}), color: line.color});
+      seen.add(key); markers.push({key, at: live.resetAt, until: live.resetAt, label: t('chart.reset', {source: source ? sourceLabel(source) : line.provider}), color: line.color});
     }
     for (const {event, lines: shown} of yield* chartEventsPrepared(strip?.events ?? history?.events ?? [], visible, strip?.from ?? from)) {
       const source = sources.find(s => s.id === event.sourceId), name = source ? sourceLabel(source) : shown[0].provider;
@@ -172,26 +172,27 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
       if (!plan || !live?.resetAt || live.minutes !== 10080 || !planAt(live, source?.successAt ?? null, now, plan)) continue;
       const key = `${line.sourceId}@${Math.round(live.resetAt / 3_600_000)}`, shared = plans.get(key);
       if (shared) {shared.lines.push(line.key); continue;}
-      plans.set(key, {key, lines: [line.key], color: line.color, runs: yield* weeklyPlanLinePrepared(live.resetAt, strip?.from ?? from, Math.max(to, strip?.to ?? to), plan)});
+      plans.set(key, {key, lines: [line.key], color: line.color, until: live.resetAt, runs: yield* weeklyPlanLinePrepared(live.resetAt, live.resetAt - 7 * 86_400_000, live.resetAt + 4 * 7 * 86_400_000, plan)});
     }
     const forecasts: ForecastLine[] = [];
     if (forecastShown) for (const {line, drawn} of ahead) {
-      const points = yield* clipPrepared(drawn.points, from, to);
-      if (points.length) forecasts.push({key: line.key, name: line.name, color: line.color, dash: line.dash, points, zero: drawn.zero, at: drawn.at}); yield;
+      const points = drawn.points;
+      if (points.length) forecasts.push({key: line.key, name: line.name, color: line.color, dash: line.dash, points, zero: drawn.zero, at: drawn.at, until: drawn.until}); yield;
     }
-    return {hints, lines, visible, markers, plans: [...plans.values()], forecasts, to, from, measured, now: strip ? now : measured, cellMs: strip?.cell ?? history?.cellMs ?? 60_000, strip, frame, planAvailable, forecastAvailable, planShown, forecastShown, moments: chartMoments(markers, ahead.map(a => a.drawn), to), registry: nextRegistry};
-  }, [history, strip, sources, view, prefs, locale, futureSources, futureForecasts, futureLineup, futureNews, futureCodex, futureView, from, measured, now, frame.live, context?.lookAhead], `${history?.board}:${prefs.kind}`);
+    return {futureFacts: ahead.map(a => ({zero: a.drawn.zero, until: a.drawn.until})), hints, lines, visible, markers, plans: [...plans.values()], forecasts, to, from, measured, now: strip ? now : measured, cellMs: strip?.cell ?? history?.cellMs ?? 60_000, strip, frame, planAvailable, forecastAvailable, planShown, forecastShown, moments: [...chartMoments(markers, ahead.map(a => a.drawn), to), ...[...plans.values()].map(plan => plan.until!)], registry: nextRegistry};
+  }, [history, strip, sources, view, prefs, locale, futureSources, futureForecasts, futureLineup, futureNews, futureCodex, futureView, navigationKey(navigation)], `${history?.board}:${prefs.kind}`);
   const model = prepared.value;
   useLayoutEffect(() => {if (model) registry.current = model.registry;}, [model]);
   const lines = model?.lines ?? [];
   const moments = model?.moments ?? [];
-  const wantedTo = historyProjection(frame, measured, prefs, model?.hints ?? null, context?.lookAhead);
+  const currentHints = model ? {...model.hints, forecast: model.futureFacts.some(forecast => now < forecast.until), zeros: model.futureFacts.filter(forecast => now < forecast.until).map(forecast => forecast.zero)} : null;
+  const wantedTo = historyProjection(frame, measured, prefs, currentHints, context?.lookAhead);
 
   return (
     <section ref={panel} className={`panel history ${loading ? 'is-loading' : ''}`} data-time="chart" aria-label={t('history.label')} aria-busy={loading}>
       <div className="panel-head">
         <h2>{t('history.title')}</h2>
-        <HistorySettings arrange={arrange} planAvailable={model?.planAvailable ?? false} forecastAvailable={frame.live && (model?.hints.forecast ?? false)} horizonNote={frame.live && !model?.planShown && !model?.forecastShown} />
+        <HistorySettings arrange={arrange} planAvailable={model?.planAvailable ?? false} forecastAvailable={frame.live && (currentHints?.forecast ?? false)} horizonNote={frame.live && !model?.planShown && !model?.forecastShown} />
       </div>
 
       <Chart
@@ -204,6 +205,7 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
           to={wantedTo}
           navigation={navigation}
           live={frame.live}
+          clock={now}
           cellMs={model?.cellMs ?? history?.cellMs ?? 60_000}
           strip={model?.strip ?? null}
           prepared={prepared.ready}

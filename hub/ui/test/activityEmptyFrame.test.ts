@@ -28,9 +28,9 @@ test('the actual empty activity result keeps its time axis and legend container 
   const history: History = {since: range.from, to: range.to, range: `${range.from}-${range.to}`, live: false, cellMs: 5 * M, historyStart: 0, series: [], events: [], activity: {known: {from: range.from, to: range.to}, since: 0, barMs: H, activeMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}}};
   const x = (at: number) => 48 + (at - range.from) / DAY * 340;
   const context = {
-    navigationKey, navigation: {context: 'test', range: 'range'}, React, ...React, CSS: {escape: (id: string) => id}, StackPaths, stacksHeight, activityScale, niceTicks, cellStart, activityEmpty, MINUTE: M, clipPlot, PlotLayer, PlotOverlay, usePrepared: (work: () => Generator<void, unknown, void>) => ({value: drain(work()), ready: true}), EMPTY_ACTIVITY: history.activity,
+    navigationKey, navigation: {context: 'test', range: 'range'}, React, ...React, CSS: {escape: (id: string) => id}, StackPaths, stacksHeight, activityScale, niceTicks, cellStart, activityEmpty, MINUTE: M, clipPlot, PlotLayer, PlotOverlay, usePreparationBasis: (basis: unknown) => basis, usePrepared: (work: () => Generator<void, unknown, void>) => ({value: drain(work()), ready: true}), EMPTY_ACTIVITY: history.activity,
     pan: new Pan({now: () => NOW, commit: () => {}, requestFrame: () => null, cancelFrame: () => {}, setTimeout: () => null, clearTimeout: () => {}}),
-    useLocale: () => 'en', useTimeAxis: () => ({box: {current: null}, svg: {current: null}, width: 400, scale: 1, hover: null, drag: null, clip: 'c', handlers: {}, basis: {...range, end: range.to}, x, drawX: x, commitDrawing: () => {}}),
+    useLocale: () => 'en', useTimeAxis: () => ({box: {current: null}, svg: {current: null}, width: 400, scale: 1, hover: null, drag: null, clip: 'c', handlers: {}, basis: {...range, end: range.to}, x, drawX: x, screenX: x, commitDrawing: () => {}}),
     clock: () => '', shortDay: () => '', workHours: () => '', stamp: () => '', t: (key: string) => key,
     Tooltip: () => null, useTip: () => ({tip: {current: null}, style: {}}), panel: {current: null}, loading: false,
     history: history as History | null, activity: history.activity, plot: undefined as number | undefined, onBase: () => {}, arrange: {},

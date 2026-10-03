@@ -11,7 +11,7 @@ test('actual quota generators prepare outside render and retain displayed paths 
   const lines = Array.from({length: 50}, (_, i) => ({points: [...Array.from({length: 720}, (_, j) => [j * cellMs, (i + j) % 100, 1]), [end + 4500, 5, 1], [end + 15_000, 0, 1]]}));
   const hook = preparationFixture(); let calculations = 0;
   const source = readFileSync(new URL('../components/Chart.tsx', import.meta.url), 'utf8');
-  const start = source.indexOf('  const blockPaths = '), region = source.slice(start, source.indexOf('  const model = ', start));
+  const start = source.indexOf('  const inputs = '), region = source.slice(start, source.indexOf('  const model = ', start));
   type Model = {paths: {line: string; last: [number, number] | null}[]};
   const context = {...hook, axis: {active: false}, incomingStrip: null as object | null,
     desiredFrom: 0, desiredTo: end, desiredNow: end, requested: {from: 0, to: end, end}, incomingLines: lines,
@@ -20,10 +20,16 @@ test('actual quota generators prepare outside render and retain displayed paths 
     draw: null as unknown as () => {value: Model | null; ready: boolean},
   };
   runInNewContext(ts.transpileModule(`function draw(){${region}\nreturn prepared;}\nglobalThis.draw=draw;`, {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText, context);
+  Object.defineProperty(context.axis, 'basis', {get: () => context.requested});
   const render = () => {hook.begin(); return context.draw();};
   assert.equal(render().value, null); assert.equal(calculations, 0, 'urgent render cannot run the generator');
   hook.commit(); hook.tick(); assert.ok(calculations < 50); hook.finish();
   const current = render().value!; assert.equal(calculations, 50);
+  context.desiredFrom += cellMs; context.desiredTo += cellMs; context.desiredNow += cellMs;
+  context.requested = {from: context.desiredFrom, to: context.desiredTo, end: context.desiredNow};
+  assert.equal(render().value, current); hook.commit(); hook.finish();
+  assert.equal(render().ready, true); assert.equal(calculations, 50, 'a pure clock wake projects the existing paths without numeric preparation');
+  context.desiredFrom = 0; context.desiredTo = end; context.desiredNow = end; context.requested = {from: 0, to: end, end};
   context.axis.active = true; context.desiredFrom += 9000; context.desiredTo += 9000; context.desiredNow += 9000;
   assert.equal(render().value, current, 'a new intent keeps the displayed numeric model'); hook.commit(); hook.tick();
   context.incomingStrip = {from: 0}; assert.equal(render().value, current); hook.commit(); hook.finish();

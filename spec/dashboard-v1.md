@@ -344,6 +344,9 @@ current drawing and final gesture pose until a complete matching replacement has
 committed. A newer user navigation supersedes that held pose immediately and projects
 the retained data in the requested frame while preparation continues. The retained
 data keeps its own coverage; a ready replacement cannot revive the old navigation.
+Clock movement reprojects that ready drawing without rebuilding unchanged numeric
+series. Its factual data cutoff stays separate from the current frame's future boundary
+and expiry checks. Drawing preparation waits for its parent input model to be ready.
 This adds no wire fields.
 
 ## Requesting fresh limits

@@ -30,13 +30,14 @@ test('actual Activity generators hold one coherent model and produce exact stack
   const region = source.slice(start, source.indexOf('  const shownMs = ', start));
   type Model = {identities: {key: string; name: string | null}[]; shown: {group: PlotGroup; color: string; name: string}[]; strip: PlotBuffer};
   const navigation = {context: 'test', range: 'range'};
+  const axis = {box: {current: null}, svg: {current: null}, width: 400, scale: 1, hover: null, drag: null, clip: 'c', handlers: {}, basis: {from: 0, to: length, end: length}, active: false, screenX: (at: number) => 48 + (at - axis.basis.from) / length * 340, commitDrawing: () => {}};
   const context = {navigationKey, React, ...parent, memo: (fn: unknown) => fn, useState: child.useState, useEffect: () => {}, useId: () => 'c',
     EMPTY_CELLS: [], registry: {current: null}, groups: [], colors: [], shown: [], strip: buffer(0), by: 'project', prefs: {muted: {}}, locale: 'en', history: {board: 'b'}, arrange: {view: {}}, titles: {},
     groupRegistry, groupName: (group: {key: string}) => group.key, mutedKey: (_by: string, key: string) => key,
     plotGroupsPrepared: function* (...args: Parameters<typeof plotGroupsPrepared>) {aggregates++; return yield* plotGroupsPrepared(...args);},
     StackPaths: CountedPaths, stacksHeight: () => 160, activityScale, niceTicks, cellStart, MINUTE: 60_000,
     CSS: {escape: (id: string) => id}, pan: {active: () => 1, subscribe: () => () => {}}, useLocale: () => 'en',
-    useTimeAxis: () => ({box: {current: null}, svg: {current: null}, width: 400, scale: 1, hover: null, drag: null, clip: 'c', handlers: {}, basis: {from: 0, to: length, end: length}, active: true, commitDrawing: () => {}}),
+    useTimeAxis: () => axis,
     useTip: () => ({tip: {current: null}, style: {}}), PlotLayer: () => null, PlotOverlay: () => null, Tooltip: () => null,
     clock: () => '', shortDay: () => '', workHours: () => '', stamp: () => '', t: (key: string) => key,
     prepareParent: null as unknown as () => {value: Model | null; ready: boolean}, Stacks: null as unknown as (props: object) => React.ReactNode,
@@ -64,4 +65,12 @@ test('actual Activity generators hold one coherent model and produce exact stack
   const actual = renderChild();
   const expected = new StackPaths().draw(current.shown, 0, 340 / length, barMs, 160, activityScale(465 * 60_000).max);
   assert.deepEqual([...actual], expected); assert.equal(draws, 1);
+  props.from += 60_000; props.to += 60_000;
+  axis.basis = {from: props.from, to: props.to, end: props.to};
+  assert.deepEqual([...renderChild()], expected); child.commit(); child.finish();
+  assert.equal(draws, 1, 'clock movement cannot redraw numeric stacks');
+  props.prepared = false; props.from += barMs; props.to += barMs;
+  axis.basis = {from: props.from, to: props.to, end: props.to};
+  renderChild(); child.commit(); child.finish(); assert.equal(draws, 1, 'unready parent input cannot prepare borrowed data');
+  props.prepared = true; renderChild(); child.commit(); child.finish(); assert.equal(draws, 2, 'reenabling schedules only the latest ready owner');
 });

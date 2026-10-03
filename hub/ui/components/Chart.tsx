@@ -13,13 +13,13 @@ import {navigationKey, type AxisNavigation} from '../lib/axisNavigation';
 import {PlotLayer, PlotOverlay} from './PlotLayer';
 import {covered, type PlotBuffer} from '../lib/historyPlot';
 import {plotPathPrepared} from '../lib/plotPath';
-import {usePrepared} from './prepared';
+import {usePrepared, usePreparationBasis} from './prepared';
 
 /**
  * A moment on the time axis: ahead, a known window reset or an announced extra one;
  * behind (`past`), something that happened to a source, such as an early reset.
  */
-export type Marker = {key: string; at: number; label: string; color: string; strong?: boolean; past?: boolean; detail?: string};
+export type Marker = {key: string; at: number; label: string; color: string; strong?: boolean; past?: boolean; detail?: string; until?: number};
 
 /** The mark of a past event: a small diamond centred at (x, y). */
 const diamond = (x: number, y: number, r = 4) => `M${x},${y - r}l${r},${r}l${-r},${r}l${-r},${-r}z`;
@@ -267,6 +267,7 @@ export const Chart = memo(function Chart({
   modelContext = '',
   navigation,
   live: desiredLive = true,
+  clock: currentClock = desiredNow,
 }: {
   lines: Line[];
   plans?: PlanLine[];
@@ -288,22 +289,24 @@ export const Chart = memo(function Chart({
   modelContext?: string;
   navigation?: AxisNavigation;
   live?: boolean;
+  clock?: number;
 }) {
   const left = 40;
   const right = 12;
   const axis = useTimeAxis({from: desiredFrom, to: desiredTo, end: desiredNow, cellMs, left, right, onSelect, ready: incomingReady, navigation});
   const {box, svg, width, scale, drag, timeAt, handlers, panning} = axis;
-  const requested = axis.basis;
   const base = plotHeight(width);
   const height = plot === undefined ? base : Math.max(base, plot / scale);
   useLayoutEffect(() => onBase?.(base * scale), [base, scale, onBase]);
   const top = 12, bottom = 28;
+  const inputs = [incomingLines, incomingPlans, incomingForecasts, incomingMarkers, incomingStrip, width, height, cellMs, modelContext, navigation && navigationKey(navigation), desiredLive];
+  const requested = usePreparationBasis(axis.basis, inputs, axis.active, incomingReady);
   const blockPaths = useRef(new WeakMap<PlotBlock, {geometry: string; line: string; last: [number, number] | null}>());
   const prepared = usePrepared(function* () {
     const basis = {from: requested.from, to: requested.to, end: requested.end};
     const span = Math.max(60_000, basis.to - basis.from);
     const x = (at: number) => left + (at - basis.from) / span * (width - left - right);
-    const drawFrom = axis.active && !incomingStrip ? basis.from : desiredFrom;
+    const drawFrom = basis.from;
     const drawNow = axis.active && !incomingStrip ? basis.end : desiredNow;
     const bx = (at: number) => x(Math.min(drawNow, at + cellMs / 2));
     const y = (value: number) => top + (1 - value / 100) * (height - top - bottom);
@@ -367,16 +370,20 @@ export const Chart = memo(function Chart({
       forecastPaths.push(path);
     }
     return {basis, lines: incomingLines, plans: incomingPlans, forecasts, markers, strip: incomingStrip, from: desiredFrom, now: desiredNow, to: desiredTo, paths, planPaths, forecastPaths};
-  }, [incomingLines, incomingPlans, incomingForecasts, incomingMarkers, incomingStrip, desiredFrom, desiredNow, desiredTo, width, height, cellMs, requested.from, requested.to, requested.end, axis.active, navigation && navigationKey(navigation), desiredLive], `${modelContext}:${width}:${height}:${cellMs}`, incomingReady);
+  }, [...inputs, requested.from, requested.to, requested.end], `${modelContext}:${width}:${height}:${cellMs}`, incomingReady);
   const model = prepared.value;
-  const basis = model?.basis ?? requested;
-  const lines = model?.lines ?? [], plans = model?.plans ?? [], forecasts = desiredLive ? model?.forecasts ?? [] : [], markers = model?.markers ?? [];
-  const strip = model?.strip ?? null, from = model?.from ?? desiredFrom, now = model?.now ?? desiredNow, to = model?.to ?? desiredTo;
-  const paths = model?.paths ?? [], planPaths = model?.planPaths ?? [], forecastPaths = model?.forecastPaths ?? [];
+  const basis = model?.basis ?? axis.basis;
+  const lines = model?.lines ?? [];
+  const planRows = (model?.plans ?? []).map((plan, index) => ({plan, path: model!.planPaths[index]})).filter(row => currentClock < (row.plan.until ?? Infinity));
+  const forecastRows = (desiredLive ? model?.forecasts ?? [] : []).map((forecast, index) => ({forecast, path: model!.forecastPaths[index]})).filter(row => currentClock < (row.forecast.until ?? Infinity));
+  const plans = planRows.map(row => row.plan), forecasts = forecastRows.map(row => row.forecast);
+  const markers = (model?.markers ?? []).filter(marker => currentClock < (marker.until ?? Infinity));
+  const strip = model?.strip ?? null, from = desiredFrom, now = desiredNow, to = desiredTo;
+  const paths = model?.paths ?? [], planPaths = planRows.map(row => row.path), forecastPaths = forecastRows.map(row => row.path);
   const span = Math.max(60_000, basis.to - basis.from);
-  const x = (at: number) => left + ((strip ? at : Math.min(basis.to, Math.max(basis.from, at))) - basis.from) / span * (width - left - right);
+  const x = (at: number) => left + (at - basis.from) / span * (width - left - right);
   const y = (value: number) => top + (1 - value / 100) * (height - top - bottom);
-  const bx = (at: number) => x(Math.min(now, at + cellMs / 2));
+  const bx = (at: number) => axis.screenX(Math.min(now, at + cellMs / 2));
   const hover = incomingReady && prepared.ready && axis.hover !== null && (!strip || axis.hover > now || covered(strip.coverage, axis.hover, axis.hover + cellMs)) ? axis.hover : null;
   const tickFrom = strip?.from ?? from, tickTo = strip?.to ?? to;
   const {ticks, daily} = niceTicks(tickFrom, tickTo, (width < 560 ? 4 : 7) * (tickTo - tickFrom) / span);
@@ -473,7 +480,7 @@ export const Chart = memo(function Chart({
     stackTop,
   );
   // A cell ahead of now is read at its middle; the one holding now, at now.
-  const hoverX = hover === null ? 0 : hover > now ? x(Math.min(to, hover + cellMs / 2)) : bx(hover);
+  const hoverX = hover === null ? 0 : hover > now ? axis.screenX(Math.min(to, hover + cellMs / 2)) : bx(hover);
   // On a narrow chart it spans the chart's width under the plot; a marker's time stands over its label and does not rise.
   const narrow = width < 560;
   const {tip, style: tipStyle} = useTip(svg, {width, at: hoverX, narrow, rises: !edgeKey, bottom: height * scale});
@@ -504,7 +511,7 @@ export const Chart = memo(function Chart({
     addEventListener('scroll', scrolled, {passive: true});
     return () => removeEventListener('scroll', scrolled);
   }, [edgeShown]);
-  const bandWidth = Math.max(1, x(Math.min(to, (hover ?? 0) + cellMs)) - x(hover ?? 0));
+  const bandWidth = Math.max(1, axis.screenX(Math.min(to, (hover ?? 0) + cellMs)) - axis.screenX(hover ?? 0));
 
   return (
     <div className="chart" ref={box} {...handlers}>
@@ -641,7 +648,7 @@ export const Chart = memo(function Chart({
         )}
         {hover !== null && (
           <g className="crosshair">
-            <rect x={x(hover)} width={bandWidth} y={top} height={height - top - bottom} className="hover-band" />
+            <rect x={axis.screenX(hover)} width={bandWidth} y={top} height={height - top - bottom} className="hover-band" />
             <line x1={hoverX} x2={hoverX} y1={top} y2={height - bottom} />
             {rows.map(row => row.value !== null && <circle key={row.line.key} cx={hoverX} cy={y(row.value)} r={4} fill={row.line.color} />)}
           </g>
