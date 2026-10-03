@@ -10,6 +10,7 @@ import {StackPaths} from '../lib/stackPaths';
 import {groupRegistry} from '../lib/plotRegistry';
 import {cellStart} from '../../server/domain/history';
 import {niceTicks} from '../lib/periods';
+import {navigationKey} from '../lib/axisNavigation';
 import {preparationFixture} from './preparationFixture';
 
 test('actual Activity generators hold one coherent model and produce exact stacks after interrupted preparation', () => {
@@ -28,7 +29,8 @@ test('actual Activity generators hold one coherent model and produce exact stack
   const start = source.indexOf('  const prepared = usePrepared(');
   const region = source.slice(start, source.indexOf('  const shownMs = ', start));
   type Model = {identities: {key: string; name: string | null}[]; shown: {group: PlotGroup; color: string; name: string}[]; strip: PlotBuffer};
-  const context = {React, ...parent, memo: (fn: unknown) => fn, useState: child.useState, useEffect: () => {}, useId: () => 'c',
+  const navigation = {context: 'test', range: 'range'};
+  const context = {navigationKey, React, ...parent, memo: (fn: unknown) => fn, useState: child.useState, useEffect: () => {}, useId: () => 'c',
     EMPTY_CELLS: [], registry: {current: null}, groups: [], colors: [], shown: [], strip: buffer(0), by: 'project', prefs: {muted: {}}, locale: 'en', history: {board: 'b'}, arrange: {view: {}}, titles: {},
     groupRegistry, groupName: (group: {key: string}) => group.key, mutedKey: (_by: string, key: string) => key,
     plotGroupsPrepared: function* (...args: Parameters<typeof plotGroupsPrepared>) {aggregates++; return yield* plotGroupsPrepared(...args);},
@@ -56,7 +58,7 @@ test('actual Activity generators hold one coherent model and produce exact stack
     if (!React.isValidElement<{className?: string; d?: string; children?: React.ReactNode}>(node)) return [];
     return node.props.className === 'activity-stack' && node.props.d !== undefined ? [node.props.d] : pathsOf(node.props.children);
   };
-  const props = {activity: {barMs}, origin: 0, groups: current.shown, from: 0, to: length, unknownTo: null, plot: undefined, onBase: () => {}, onSelect: () => {}, strip: current.strip, prepared: true, by: 'project', allMuted: false, empty: null};
+  const props = {activity: {barMs}, origin: 0, groups: current.shown, from: 0, to: length, unknownTo: null, plot: undefined, onBase: () => {}, onSelect: () => {}, strip: current.strip, prepared: true, navigation, by: 'project', allMuted: false, empty: null};
   const renderChild = () => {Object.assign(context, child); child.begin(); return pathsOf(context.Stacks(props));};
   assert.deepEqual(renderChild(), []); assert.equal(draws, 0); child.commit(); child.finish();
   const actual = renderChild();

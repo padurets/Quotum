@@ -8,11 +8,11 @@ import {HORIZONS, setMuted, setPrefs, usePrefs} from '../lib/prefs';
 import {setTimeRange, useTimeRange} from '../lib/timeRange';
 import {frameChangesAt, frameOf, measuredTo} from '../lib/periods';
 import {HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
-import {chartEvents, chartResets, linesPrepared, type PlotLine} from '../lib/lines';
+import {chartEventsPrepared, chartResetsPrepared, linesPrepared, type PlotLine} from '../lib/lines';
 import {lineRegistry} from '../lib/plotRegistry';
 import {Chart, type Marker} from './Chart';
-import {chartMoments, lastRunOut, type ForecastLine, type PlanLine} from '../lib/readout';
-import {useForecastsOf, useLineup, useNamed, usePastResets, useResetNews, useResetsFor} from '../lib/board';
+import {chartMoments, type ForecastLine, type PlanLine} from '../lib/readout';
+import {useBoardId, useForecastsOf, useLineup, useNamed, usePastResets, useResetNews, useResetsFor} from '../lib/board';
 import {useClock} from '../lib/clock';
 import {useHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
 import {t, useLocale} from '../i18n';
@@ -21,6 +21,8 @@ import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
 import {usePlot} from './sizing';
 import {pan, usePanning} from '../lib/pan';
 import {usePrepared} from './prepared';
+import {axisNavigation} from '../lib/axisNavigation';
+import {historyProjection, type ProjectionHints} from '../lib/historyProjection';
 
 /**
  * The chart's own settings: whether it draws the plan and the forecast (where either has
@@ -91,6 +93,8 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
   // The chart moves to the period asked for at once, drawing the answer it has until the
   // next one comes. A time range is in the past: the chart shows just it, without the future.
   const selected = useTimeRange();
+  const board = useBoardId();
+  const navigation = axisNavigation(board, selected, prefs);
   // On with the next cell, when what the chart points at past its right edge comes due (drawn
   // within it then), or when a forecast is drawn no more.
   const codex = useResetsFor('codex');
@@ -125,7 +129,8 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
     }
     const visible: PlotLine[] = [];
     for (const line of lines) {if (!prefs.muted[line.key]) visible.push(line); yield;}
-    const announced = frame.live && visible.some(line => line.provider === 'codex') ? (futureCodex?.scheduled?.scheduledFor ?? null) : null;
+    const scheduled = visible.some(line => line.provider === 'codex') ? (futureCodex?.scheduled?.scheduledFor ?? null) : null;
+    const announced = frame.live ? scheduled : null;
     const planAvailable = prefs.kind === 'weekly' && visible.some(line => planOf(view, line.sourceId) !== null);
     const planShown = planAvailable && prefs.showPlan;
     const ahead: {line: PlotLine; drawn: NonNullable<ReturnType<typeof forecastLinePrepared> extends Generator<void, infer R, void> ? R : never>}[] = [];
@@ -140,12 +145,8 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
     }
     const forecastAvailable = frame.live && ahead.length > 0;
     const forecastShown = forecastAvailable && prefs.showForecast;
-    const reach = measured + (measured - from) * .75;
-    const runOut = forecastShown ? lastRunOut(ahead.map(a => a.drawn), reach) : 0;
-    const projectedTo = !(planShown || forecastShown) || !frame.live ? measured : prefs.horizon === 'auto'
-      ? Math.max(announced && announced > measured && announced + frame.future * .25 > measured + frame.future ? Math.min(reach, announced + frame.future * .25) : measured + frame.future, runOut)
-      : measured + frame.future;
-    const to = context ? measured + context.lookAhead : projectedTo;
+    const hints: ProjectionHints = {plan: planAvailable, forecast: ahead.length > 0, announced: scheduled, zeros: ahead.map(a => a.drawn.zero)};
+    const to = historyProjection(frame, measured, prefs, hints, context?.lookAhead);
     const markers: Marker[] = [];
     if (announced && announced > from) markers.push({key: 'announced-codex', at: announced, label: t('chart.announcedCodex'), color: 'var(--accent)', strong: true});
     const seen = new Set<string>();
@@ -157,11 +158,11 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
       if (seen.has(key)) continue;
       seen.add(key); markers.push({key, at: live.resetAt, label: t('chart.reset', {source: source ? sourceLabel(source) : line.provider}), color: line.color});
     }
-    for (const {event, lines: shown} of chartEvents(strip?.events ?? history?.events ?? [], visible, strip?.from ?? from)) {
+    for (const {event, lines: shown} of yield* chartEventsPrepared(strip?.events ?? history?.events ?? [], visible, strip?.from ?? from)) {
       const source = sources.find(s => s.id === event.sourceId), name = source ? sourceLabel(source) : shown[0].provider;
       markers.push({key: `${event.kind}-${event.sourceId}-${event.at}`, at: event.at, label: event.kind === 'early_reset' ? t('chart.earlyReset', {source: name}) : t('chart.resetsGranted', {count: event.count, source: name}), color: shown[0].color, past: true}); yield;
     }
-    for (const {provider, reset, line} of chartResets(past, visible, strip?.from ?? from, strip?.to ?? measured)) {
+    for (const {provider, reset, line} of yield* chartResetsPrepared(past, visible, strip?.from ?? from, strip?.to ?? measured)) {
       markers.push({key: `announced-${provider}-${reset.at}`, at: reset.at, label: t('chart.resetForAll', {source: PROVIDERS[provider]?.name ?? provider}), detail: reset.text, color: line.color, past: true}); yield;
     }
     const plans = new Map<string, PlanLine>();
@@ -178,18 +179,19 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
       const points = yield* clipPrepared(drawn.points, from, to);
       if (points.length) forecasts.push({key: line.key, name: line.name, color: line.color, dash: line.dash, points, zero: drawn.zero, at: drawn.at}); yield;
     }
-    return {lines, visible, markers, plans: [...plans.values()], forecasts, to, from, measured, now: strip ? now : measured, cellMs: strip?.cell ?? history?.cellMs ?? 60_000, strip, frame, planAvailable, forecastAvailable, planShown, forecastShown, moments: chartMoments(markers, ahead.map(a => a.drawn), to), registry: nextRegistry};
+    return {hints, lines, visible, markers, plans: [...plans.values()], forecasts, to, from, measured, now: strip ? now : measured, cellMs: strip?.cell ?? history?.cellMs ?? 60_000, strip, frame, planAvailable, forecastAvailable, planShown, forecastShown, moments: chartMoments(markers, ahead.map(a => a.drawn), to), registry: nextRegistry};
   }, [history, strip, sources, view, prefs, locale, futureSources, futureForecasts, futureLineup, futureNews, futureCodex, futureView, from, measured, now, frame.live, context?.lookAhead], `${history?.board}:${prefs.kind}`);
   const model = prepared.value;
   useLayoutEffect(() => {if (model) registry.current = model.registry;}, [model]);
   const lines = model?.lines ?? [];
   const moments = model?.moments ?? [];
+  const wantedTo = historyProjection(frame, measured, prefs, model?.hints ?? null, context?.lookAhead);
 
   return (
     <section ref={panel} className={`panel history ${loading ? 'is-loading' : ''}`} data-time="chart" aria-label={t('history.label')} aria-busy={loading}>
       <div className="panel-head">
         <h2>{t('history.title')}</h2>
-        <HistorySettings arrange={arrange} planAvailable={model?.planAvailable ?? false} forecastAvailable={model?.forecastAvailable ?? false} horizonNote={frame.live && !model?.planShown && !model?.forecastShown} />
+        <HistorySettings arrange={arrange} planAvailable={model?.planAvailable ?? false} forecastAvailable={frame.live && (model?.hints.forecast ?? false)} horizonNote={frame.live && !model?.planShown && !model?.forecastShown} />
       </div>
 
       <Chart
@@ -197,9 +199,11 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
           plans={model?.plans}
           forecasts={model?.forecasts}
           markers={model?.markers}
-          from={model?.from ?? from}
-          now={model?.now ?? measured}
-          to={model?.to ?? measured}
+          from={from}
+          now={strip ? now : measured}
+          to={wantedTo}
+          navigation={navigation}
+          live={frame.live}
           cellMs={model?.cellMs ?? history?.cellMs ?? 60_000}
           strip={model?.strip ?? null}
           prepared={prepared.ready}

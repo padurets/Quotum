@@ -8,11 +8,12 @@ import {ACTIVITY_BY, setMuted, setPrefs, usePrefs} from '../lib/prefs';
 import {answeredRangeLabel, setTimeRange, timeRangeKey, useTimeRange, type TimeRange} from '../lib/timeRange';
 import {cellLabel, frameChangesAt, frameOf, measuredTo, niceTicks} from '../lib/periods';
 import {ACTIVITY, cardId, isHidden, withHidden, type Arrange} from '../lib/view';
-import {useLineup, useTitles, type Title} from '../lib/board';
+import {useBoardId, useLineup, useTitles, type Title} from '../lib/board';
 import {useClock} from '../lib/clock';
 import {useHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
 import {plotBar, plotGroupsPrepared, type PlotBuffer, type PlotGroup} from '../lib/historyPlot';
 import {usePrepared} from './prepared';
+import {axisNavigation, navigationKey, type AxisNavigation} from '../lib/axisNavigation';
 import {groupRegistry, type GroupIdentity} from '../lib/plotRegistry';
 import {StackPaths} from '../lib/stackPaths';
 import {pan, usePanning, useShifting} from '../lib/pan';
@@ -211,6 +212,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const by = prefs.activityBy;
   const locale = useLocale();
   const selected = useTimeRange();
+  const navigation = axisNavigation(useBoardId(), selected, prefs);
   const clockNow = useClock(now => frameChangesAt(selected, history?.cellMs ?? 60_000, now), [history, strip, prefs, selected, titles, arrange.view, locale]);
   const panning = usePanning();
   const captured = useRef<{token: number; now: number} | null>(null);
@@ -285,6 +287,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
             onBase={onBase}
             strip={presentation.strip}
             prepared={prepared.ready}
+            navigation={navigation}
             by={by}
             allMuted={!emptyFrame && presentation.identities.length > 0 && presentation.shown.length === 0}
             empty={!history ? empty : emptyFrame}
@@ -322,6 +325,7 @@ const Stacks = memo(function Stacks({
   onBase,
   strip: incomingStrip,
   prepared: incomingReady,
+  navigation,
   by,
   allMuted,
   empty,
@@ -340,13 +344,14 @@ const Stacks = memo(function Stacks({
   onBase: (height: number) => void;
   strip: PlotBuffer | null;
   prepared: boolean;
+  navigation: AxisNavigation;
   by: ActivityDimension;
   allMuted: boolean;
   empty: string | null;
 }) {
   const locale = useLocale();
   const left = 48, right = 12;
-  const axis = useTimeAxis({from, to, end: to, cellMs: incomingStrip?.barMs ?? incomingActivity.barMs, left, right, onSelect, ready: incomingReady});
+  const axis = useTimeAxis({from, to, end: to, cellMs: incomingStrip?.barMs ?? incomingActivity.barMs, left, right, onSelect, ready: incomingReady, navigation});
   const {box, svg, width, scale, drag, clip, handlers, active} = axis;
   const requested = axis.basis;
   const narrow = width < 560;
@@ -381,7 +386,7 @@ const Stacks = memo(function Stacks({
     const pathOrigin = incomingStrip ? basis.from : incomingOrigin;
     const paths = yield* stackPaths.current.drawPrepared(incomingGroups, pathOrigin, perMs, barMs, height, vertical.max);
     return {basis, barMs, heights, maximum, vertical, perMs, pathOrigin, paths, groups: incomingGroups, strip: incomingStrip, activity: incomingActivity, originUnknownTo: incomingUnknownTo};
-  }, [incomingGroups, incomingStrip, incomingActivity, incomingOrigin, incomingUnknownTo, by, requested.from, requested.to, requested.end, width, height, active], `${by}:${width}:${height}`);
+  }, [incomingGroups, incomingStrip, incomingActivity, incomingOrigin, incomingUnknownTo, by, requested.from, requested.to, requested.end, width, height, active, navigationKey(navigation)], `${by}:${width}:${height}`);
   const model = prepared.value;
   const basis = model?.basis ?? requested;
   const groups = model?.groups ?? [], strip = model?.strip ?? null, activity = model?.activity ?? incomingActivity;

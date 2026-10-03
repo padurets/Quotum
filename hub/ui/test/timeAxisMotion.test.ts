@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {Pan} from '../lib/pan';
+import {navigationAt, navigationKey} from '../lib/axisNavigation';
 
 const offsetIs = (transform: string, expected: number, message?: string) => assert.ok(Math.abs(Number(transform.match(/translateX\(([-.\d]+)px\)/)?.[1] ?? 0) - expected) < 1e-9, message);
 
@@ -26,7 +27,7 @@ test('the actual axis publishes committed HTML owners and applies the captured C
   const panLayers = {current: [] as ReturnType<typeof makeLayer>[]};
   const captured = {current: null};
   const paintPan = {current: () => {}};
-  const context = {pan, source, svg, box, panLayers, captured, paintPan, finished: {current: null}, foldTicket: {current: 0},
+  const context = {pan, source, svg, box, panLayers, captured, paintPan, wanted: {current: {navigation: {context: 'test', range: 'range'}}}, motion: {current: null}, finished: {current: null}, foldTicket: {current: 0},
     drawing: {current: {...selected, end: selected.to}}, pose: {current: {a: 1, b: 0, offset: 0}}, finalFrame: {current: null}, folding: false,
     visualGeometry: () => ({...selected, end: selected.to}), freezeSlides: () => {}, setFolding: () => {}, cancelSlides: () => {},
     width: 600, left: 40, right: 20, scale: .5, panPointer: {current: null as {id: number} | null}, wheelBounds: {current: null},
@@ -151,14 +152,16 @@ test('the actual drawing commit holds pending geometry and starts its final fold
   const before = scale * (pose.current.a * (left + known / (old.to - old.from) * inner) + pose.current.b) + pose.current.offset;
   const context = {shown: {current: old}, drawing: {current: old}, svg: {current: {dataset: {} as Record<string, string>}}, box: {current: {querySelectorAll: () => slides}},
     panLayers: {current: layers}, pose, pan: {active: () => null}, paintPan: {current: () => {}},
-    finished: {current: {visual, stop: {range: selected, canceled: false}} as {visual: typeof visual; stop: {range: typeof selected; canceled: boolean}} | null},
+    navigationKey, wanted: {current: {navigation: {context: 'test', range: 'range'}, projection: {from: selected.from, to: selected.to, end: selected.to}}}, requestedNavigation: {context: 'test', range: 'range'}, motion: {current: null}, captured: {current: null},
+    finished: {current: {navigation: {context: 'test', range: 'range'}, visual, stop: {range: selected, canceled: false}} as {navigation: {context: string; range: string}; visual: typeof visual; stop: {range: typeof selected; canceled: boolean}} | null},
     finalFrame: {current: 1 as number | null}, timeRange: () => selected, left, right, width, scale, from: selected.from, to: selected.to,
     foldTicket: {current: 0}, animations: {current: new Map()}, matchMedia: () => ({matches: false}), setFolding: () => {},
     animateSlide: (_layer: object, next: Keyframe[]) => {frames.push(next); return {finished: new Promise(() => {})};}, slideOf: () => 0,
+    visualGeometry: () => visual, cancelSlides: () => {}, useLayoutEffect: () => {}, performance: {now: () => 0},
     commit: null as unknown as (geometry: typeof old, ready: boolean) => void,
   };
   const source = readFileSync(new URL('../components/timeAxis.ts', import.meta.url), 'utf8');
-  const start = source.indexOf('  const commitDrawing = '), body = source.slice(start, source.indexOf('\n  return {box, svg', start));
+  const start = source.indexOf('  const projectionOf = '), body = source.slice(start, source.indexOf('\n  return {box, svg', start));
   runInNewContext(ts.transpileModule(`${body}\nglobalThis.commit=commitDrawing;`, {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText, context);
   context.commit(old, false);
   assert.equal(layers[0].style.transform, 'held'); assert.equal(frames.length, 0);
@@ -193,8 +196,8 @@ test('the actual last-input RAF uses the gesture CSS scale rather than the mount
   const token = pan.begin({source: Symbol('chart'), input: 'pointer', selected, length: H, now, historyStart: 0, span: H, width: 270})!;
   pan.move(token, -27); inputFrames.shift()!();
   const layer = {style: {transform: 'translateX(44px)'}};
-  const context = {pan, width: 900, left: 40, right: 20, scale: 1,
-    captured: {current: {token, ...selected, end: selected.to, visual: {...selected, end: selected.to}, pose: {a: 1, b: 0, offset: 17}, pixelsPerMs: 270 / H}},
+  const context = {pan, navigationAt, drawing: {current: {...selected, end: selected.to}}, box: {current: null}, width: 900, left: 40, right: 20, scale: 1,
+    captured: {current: {token, ...selected, end: selected.to, visual: {...selected, end: selected.to}, pose: {a: 1, b: 0, offset: 17}, pixelsPerMs: 270 / H, navigation: {context: 'test', range: 'range'}, innerWidth: 540, cssScale: .5, left: 40}},
     finished: {current: null}, pose: {current: {a: 1, b: 0, offset: 44}}, finalFrame: {current: null}, panLayers: {current: [layer]},
     setFolding: () => {}, present: () => {}, requestAnimationFrame: (run: () => void) => {finalFrames.push(run); return finalFrames.length;},
     useLayoutEffect: (effect: () => void) => effect(),

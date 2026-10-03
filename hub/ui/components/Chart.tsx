@@ -9,6 +9,7 @@ import {cellLabel, niceTicks} from '../lib/periods';
 import {coverOf, edgeOf} from '../lib/place';
 import {Tooltip, useTip} from './Tooltip';
 import {useTimeAxis} from './timeAxis';
+import {navigationKey, type AxisNavigation} from '../lib/axisNavigation';
 import {PlotLayer, PlotOverlay} from './PlotLayer';
 import {covered, type PlotBuffer} from '../lib/historyPlot';
 import {plotPathPrepared} from '../lib/plotPath';
@@ -264,6 +265,8 @@ export const Chart = memo(function Chart({
   strip: incomingStrip = null,
   prepared: incomingReady = true,
   modelContext = '',
+  navigation,
+  live: desiredLive = true,
 }: {
   lines: Line[];
   plans?: PlanLine[];
@@ -283,10 +286,12 @@ export const Chart = memo(function Chart({
   strip?: PlotBuffer | null;
   prepared?: boolean;
   modelContext?: string;
+  navigation?: AxisNavigation;
+  live?: boolean;
 }) {
   const left = 40;
   const right = 12;
-  const axis = useTimeAxis({from: desiredFrom, to: desiredTo, end: desiredNow, cellMs, left, right, onSelect, ready: incomingReady});
+  const axis = useTimeAxis({from: desiredFrom, to: desiredTo, end: desiredNow, cellMs, left, right, onSelect, ready: incomingReady, navigation});
   const {box, svg, width, scale, drag, timeAt, handlers, panning} = axis;
   const requested = axis.basis;
   const base = plotHeight(width);
@@ -297,7 +302,7 @@ export const Chart = memo(function Chart({
   const prepared = usePrepared(function* () {
     const basis = {from: requested.from, to: requested.to, end: requested.end};
     const span = Math.max(60_000, basis.to - basis.from);
-    const x = (at: number) => left + ((incomingStrip ? at : Math.min(basis.to, Math.max(basis.from, at))) - basis.from) / span * (width - left - right);
+    const x = (at: number) => left + (at - basis.from) / span * (width - left - right);
     const drawFrom = axis.active && !incomingStrip ? basis.from : desiredFrom;
     const drawNow = axis.active && !incomingStrip ? basis.end : desiredNow;
     const bx = (at: number) => x(Math.min(drawNow, at + cellMs / 2));
@@ -347,22 +352,25 @@ export const Chart = memo(function Chart({
         paths.push({line: yield* plotPathPrepared(runs), last: runs.at(-1)?.at(-1) ?? null, parts: null, latest});
       }
     }
+    const forecasts = desiredLive ? incomingForecasts : NO_FORECASTS;
+    const markers: Marker[] = [];
+    for (const marker of incomingMarkers) {if (desiredLive || marker.past) markers.push(marker); yield;}
     const planPaths: string[] = [], forecastPaths: string[] = [];
     for (const plan of incomingPlans) {
       let path = '';
       for (const run of plan.runs) for (let i = 0; i < run.length; i++) {const [at, value] = run[i]; path += `${i ? 'L' : 'M'}${x(at).toFixed(1)},${y(value).toFixed(1)}`; yield;}
       planPaths.push(path);
     }
-    for (const forecast of incomingForecasts) {
+    for (const forecast of forecasts) {
       let path = '';
       for (let i = 0; i < forecast.points.length; i++) {const [at, value] = forecast.points[i]; path += `${i ? 'L' : 'M'}${x(at).toFixed(1)},${y(value).toFixed(1)}`; yield;}
       forecastPaths.push(path);
     }
-    return {basis, lines: incomingLines, plans: incomingPlans, forecasts: incomingForecasts, markers: incomingMarkers, strip: incomingStrip, from: desiredFrom, now: desiredNow, to: desiredTo, paths, planPaths, forecastPaths};
-  }, [incomingLines, incomingPlans, incomingForecasts, incomingMarkers, incomingStrip, desiredFrom, desiredNow, desiredTo, width, height, cellMs, requested.from, requested.to, requested.end, axis.active], `${modelContext}:${width}:${height}:${cellMs}`);
+    return {basis, lines: incomingLines, plans: incomingPlans, forecasts, markers, strip: incomingStrip, from: desiredFrom, now: desiredNow, to: desiredTo, paths, planPaths, forecastPaths};
+  }, [incomingLines, incomingPlans, incomingForecasts, incomingMarkers, incomingStrip, desiredFrom, desiredNow, desiredTo, width, height, cellMs, requested.from, requested.to, requested.end, axis.active, navigation && navigationKey(navigation), desiredLive], `${modelContext}:${width}:${height}:${cellMs}`);
   const model = prepared.value;
   const basis = model?.basis ?? requested;
-  const lines = model?.lines ?? [], plans = model?.plans ?? [], forecasts = model?.forecasts ?? [], markers = model?.markers ?? [];
+  const lines = model?.lines ?? [], plans = model?.plans ?? [], forecasts = desiredLive ? model?.forecasts ?? [] : [], markers = model?.markers ?? [];
   const strip = model?.strip ?? null, from = model?.from ?? desiredFrom, now = model?.now ?? desiredNow, to = model?.to ?? desiredTo;
   const paths = model?.paths ?? [], planPaths = model?.planPaths ?? [], forecastPaths = model?.forecastPaths ?? [];
   const span = Math.max(60_000, basis.to - basis.from);
@@ -390,15 +398,15 @@ export const Chart = memo(function Chart({
   // Past the right edge: an announcement, then where windows run out, the soonest first, each
   // said there (`EdgeLabel`), how soon by the page's clock as the table says it.
   const beyond = [
-    ...markers.filter(m => m.strong && !m.past && m.at > to).map(m => ({key: m.key, label: m.label, at: m.at, time: stamp(m.at), color: undefined, runsOut: false})),
+    ...markers.filter(m => desiredLive && m.strong && !m.past && m.at > desiredTo).map(m => ({key: m.key, label: m.label, at: m.at, time: stamp(m.at), color: undefined, runsOut: false})),
     // Spaces drawn as one: a name typed with two in a row reads, and measures, as SVG draws it.
-    ...runOutPast(forecasts, to)
+    ...runOutPast(forecasts, desiredTo)
       .sort((a, b) => a.at - b.at)
       .map(f => ({key: `forecast-${f.key}`, label: f.name.replace(/\s+/g, ' '), at: f.at, time: t('forecast.runsOutAt', {time: stamp(f.at)}), color: f.color, runsOut: true})),
   ];
   // With the announcements inside the chart, as many as the plot has rows for, from the first
   // row by one edge of the plot to the last by the other; the rest are said together.
-  const announced = markers.filter(m => m.strong && !m.past && m.at <= to);
+  const announced = markers.filter(m => desiredLive && m.strong && !m.past && m.at <= desiredTo);
   const {shown: past, more} = edgeFit(announced.length, beyond, Math.floor((height - top - bottom - 26) / LABEL_STEP) + 1);
   /** A label past the right edge pointed at or tapped: the tooltip tells its time instead of the cell's values, or theirs. */
   const [edge, setEdge] = useState<{key: string; tapped: boolean} | null>(null);
@@ -556,7 +564,7 @@ export const Chart = memo(function Chart({
           />
         ))}
         {markers.map(marker => {
-          if (marker.at > (marker.past ? strip?.to ?? to : to)) return null;
+          if (!desiredLive && !marker.past || marker.at > (marker.past ? strip?.to ?? desiredTo : desiredTo)) return null;
           const mx = x(marker.at);
           if (marker.past) {
             return (

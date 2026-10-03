@@ -85,19 +85,40 @@ export function valueIn(points: Line['points'], cell: number, now: number, holdM
  * What happened to sources that the chart marks: from `from` on, where it draws a line of
  * the source (limits back early, on a window that came back); with those lines.
  */
-export function chartEvents(events: SourceEvent[], lines: PlotLine[], from: number) {
-  return events.flatMap(event => {
-    const on = lines.filter(line => line.sourceId === event.sourceId && (event.kind !== 'early_reset' || event.windows.includes(line.windowId)));
-    return event.at < from || !on.length ? [] : [{event, lines: on}];
-  });
+export function* chartEventsPrepared(events: SourceEvent[], lines: PlotLine[], from: number): Preparation<{event: SourceEvent; lines: PlotLine[]}[]> {
+  const result: {event: SourceEvent; lines: PlotLine[]}[] = [];
+  for (const event of events) {
+    yield;
+    if (event.at < from) continue;
+    const on: PlotLine[] = [];
+    for (const line of lines) {
+      yield;
+      if (line.sourceId !== event.sourceId) continue;
+      if (event.kind === 'early_reset') {
+        let matches = false;
+        for (const window of event.windows) {yield; if (window === line.windowId) {matches = true; break;}}
+        if (!matches) continue;
+      }
+      on.push(line);
+    }
+    if (on.length) result.push({event, lines: on});
+  }
+  return result;
 }
 
-/** The resets for everyone that the chart marks: from `from` to `to`, of a provider it draws a line of; with that line. */
-export function chartResets(past: PastResets, lines: PlotLine[], from: number, to: number) {
-  return (Object.keys(past) as (keyof PastResets)[]).flatMap(provider => {
-    const line = lines.find(l => l.provider === provider);
-    return line ? (past[provider] ?? []).filter(reset => reset.at >= from && reset.at <= to).map(reset => ({provider, reset, line})) : [];
-  });
+/** The resets for everyone that the chart marks, preserving provider and tracker order. */
+export function* chartResetsPrepared(past: PastResets, lines: PlotLine[], from: number, to: number): Preparation<{provider: keyof PastResets; reset: NonNullable<PastResets[keyof PastResets]>[number]; line: PlotLine}[]> {
+  const result: {provider: keyof PastResets; reset: NonNullable<PastResets[keyof PastResets]>[number]; line: PlotLine}[] = [];
+  for (const provider of Object.keys(past) as (keyof PastResets)[]) {
+    let line: PlotLine | undefined;
+    for (const candidate of lines) {yield; if (candidate.provider === provider) {line = candidate; break;}}
+    if (!line) continue;
+    for (const reset of past[provider] ?? []) {yield; if (reset.at >= from && reset.at <= to) result.push({provider, reset, line});}
+  }
+  return result;
 }
+
+export function chartEvents(...args: Parameters<typeof chartEventsPrepared>) {return drain(chartEventsPrepared(...args));}
+export function chartResets(...args: Parameters<typeof chartResetsPrepared>) {return drain(chartResetsPrepared(...args));}
 
 export function linesOf<T extends PlotSeries>(...args: Parameters<typeof linesPrepared<T>>): (T & LineName)[] {return drain(linesPrepared(...args));}
