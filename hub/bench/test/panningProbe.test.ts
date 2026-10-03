@@ -12,11 +12,11 @@ function fixture() {
   let time = 0;
   const callbacks: ((stamp: number) => void)[] = [], listeners = new Map<string, (event: object) => void>(), bubble = new Map<string, (event: object) => void>();
   const schedule = (callback: (stamp: number) => void) => {callbacks.push(callback); return callbacks.length;};
-  const layer = (data = false) => ({style: {transform: 'none'}, querySelector: (selector: string) => selector === '.activity-stack' ? data ? {} : null : {getAnimations: () => []}});
+  const layer = (data = false) => {const slides = {style: {transform: 'none'}, getAnimations: () => []}; return {style: {transform: 'none'}, slides, querySelector: (selector: string) => selector === '.activity-stack' ? data ? {} : null : slides};};
   const historyLayer = layer(), activityLayer = layer(true), activityTicks = layer(), activityEdge = layer(true);
   const hiddenHistory = layer(), hiddenActivity = layer();
   const svg = (slides: ReturnType<typeof layer>) => ({
-    isConnected: true, dataset: {drawReady: 'true'} as Record<string, string>, style: {height: '200px'},
+    isConnected: true, dataset: {drawReady: 'true', drawFrom: '0', drawTo: slides === historyLayer ? '424' : '720'} as Record<string, string>, style: {height: '200px'},
     classList: {contains: () => false}, getAttribute: () => '0 0 900 200', closest: () => null,
     querySelector: () => slides === historyLayer ? hiddenHistory : hiddenActivity,
     getBoundingClientRect: () => ({width: 450}), viewBox: {baseVal: {width: 900}},
@@ -36,7 +36,7 @@ function fixture() {
     history: {pushState: () => {}}, getComputedStyle: () => ({opacity: '1', transform: 'none'}),
     requestAnimationFrame: schedule, cancelAnimationFrame: () => {},
     MutationObserver: class {observe() {} disconnect() {}},
-    DOMMatrix: class {a = 1; e: number; constructor(value: string | undefined) {this.e = Number(value?.match(/translateX\(([-.\d]+)px\)/)?.[1] ?? 0);}},
+    DOMMatrix: class {a: number; e: number; constructor(value: string | undefined) {this.a = Number(value?.match(/scaleX\(([-.\d]+)\)/)?.[1] ?? 1);this.e = Number(value?.match(/translateX\(([-.\d]+)px\)/)?.[1] ?? 0);}},
     window: {fetch: async () => ({}), requestAnimationFrame: schedule, addEventListener: (type: string, callback: (event: object) => void) => bubble.set(type, callback), removeEventListener: () => {}},
   };
   runInNewContext(probe, context);
@@ -57,7 +57,7 @@ function fixture() {
   };
   const frame = (at: number) => {time = at; return callbacks.splice(0);};
   const runFrame = (at: number) => frame(at).forEach(callback => callback(at));
-  return {reading, wheel, update, frame, runFrame, requestFrame: context.window.requestAnimationFrame, context, historySvg, activitySvg};
+  return {reading, wheel, update, frame, runFrame, requestFrame: context.window.requestAnimationFrame, context, historySvg, activitySvg, historyLayer, activityLayer};
 }
 
 function run(moves: boolean, synchronized: boolean, proportional = true, historyMoves = true, edgeMoves = true): PanReading {
@@ -139,8 +139,9 @@ test('an implicit wheel restart receives a fresh immutable gesture anchor', () =
   const f = fixture();
   f.wheel(0, 0); f.requestFrame(() => f.update(1, 16.7)); f.runFrame(16.7);
   f.wheel(300, 320, 0, () => {
-    Object.assign(f.historySvg.dataset, {panToken: '2', panOrigin: '12', panEnd: '12'});
-    Object.assign(f.activitySvg.dataset, {panToken: '2', panOrigin: '12', panEnd: '12'});
+    Object.assign(f.historySvg.dataset, {panToken: '2', panOrigin: '12', panEnd: '12', drawFrom: '12', drawTo: '436'});
+    Object.assign(f.activitySvg.dataset, {panToken: '2', panOrigin: '12', panEnd: '12', drawFrom: '12', drawTo: '732'});
+    f.historyLayer.style.transform = f.activityLayer.style.transform = 'none';
   });
   f.requestFrame(() => {f.update(1, 322);f.historySvg.dataset.panEnd='24';f.activitySvg.dataset.panEnd='24';});
   f.runFrame(321);
@@ -152,6 +153,7 @@ test('an implicit wheel restart receives a fresh immutable gesture anchor', () =
 test('a nonzero HTML baseline is retained on restart without crediting a model swap as movement', () => {
   const f = fixture();
   f.historySvg.dataset.panBase = '23'; f.activitySvg.dataset.panBase = '13';
+  f.historyLayer.style.transform = 'translateX(23px)'; f.activityLayer.style.transform = 'translateX(13px)';
   f.wheel(0, 0);
   f.requestFrame(() => {f.update(1, 16.7); f.historySvg.dataset.panEnd = '12'; f.historySvg.parentElement.querySelector('').style.transform = 'translateX(11px)'; f.activitySvg.parentElement.querySelector('.plot-clip.is-band > .plot-move').style.transform = 'translateX(6px)'; f.activitySvg.parentElement.querySelectorAll().forEach(layer => {layer.style.transform = 'translateX(6px)';});});
   f.runFrame(16.7);
@@ -168,4 +170,29 @@ test('a pending drawing model cannot credit the final input from the URL or axis
   assert.equal(f.reading.latency.length, 0);
   f.activitySvg.dataset.drawReady = 'true'; f.runFrame(33.4);
   assert.equal(f.reading.latency[0], 33.4);
+});
+
+test('the actual probe rejects a wrong frozen SVG scale or a changed domain behind matching HTML movement', () => {
+  for (const wrong of ['svg', 'domain']) {
+    const f = fixture();
+    for (let i = 1; i <= 100; i++) {
+      f.wheel(i * 16.7, i * 16.7);
+      f.requestFrame(() => {f.update(i, i * 16.7); if (wrong === 'svg') f.historyLayer.slides.style.transform = 'scaleX(2)'; else f.activitySvg.dataset.drawFrom = '40';});
+      f.runFrame(i * 16.7);
+    }
+    const reading = {...f.reading, period: '24h', series: 12, charts: 2, rate: 4, expectedPushes: 0, coldReads: 1};
+    assert.ok(panningProblems(reading).some(problem => problem.includes('both charts')), wrong);
+    assert.equal(f.reading.latency.length, 0, 'a reached HTML offset alone cannot credit the wrong composed drawing');
+  }
+});
+
+test('a coherent numeric model and SVG matrix replacement preserves the shown time without manufacturing input', () => {
+  const f = fixture();
+  f.wheel(0, 0);
+  f.requestFrame(() => {f.update(1, 16.7); f.historySvg.dataset.drawTo = '848'; f.historyLayer.slides.style.transform = 'translateX(-40px) scaleX(2)';});
+  f.runFrame(16.7);
+  assert.equal(f.reading.latency.length, 1);
+  const count = f.reading.updated;
+  f.requestFrame(() => {}); f.runFrame(33.4);
+  assert.equal(f.reading.updated, count, 'the inner projection swap itself is not a movement frame');
 });
