@@ -286,7 +286,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
             plot={plot}
             onBase={onBase}
             strip={presentation.strip}
-            prepared={prepared.ready}
+            prepared={prepared.ready && (panning !== null || answered)}
             navigation={navigation}
             by={by}
             allMuted={!emptyFrame && presentation.identities.length > 0 && presentation.shown.length === 0}

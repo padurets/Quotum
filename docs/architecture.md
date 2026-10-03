@@ -845,6 +845,9 @@ the address immediately and presents its last pending delta on RAF; the final po
 stays held until the matching drawing model is ready. The SVG fold and CSS offset
 reset then start from the same displayed coordinates. A new gesture samples that
 actual presentation, including an interrupted fold, separately from its URL origin.
+Partial plots continue to publish during the gesture. Its final drawing readiness
+also requires the complete history answer for the requested range, so a partial
+strip cannot start the fold before that answer replaces it.
 User navigation owns the requested projection separately from drawing readiness.
 Back, a preset or a horizon change retires an older held pose and its pending RAF or
 fold; both charts immediately place their retained data in the requested projection.

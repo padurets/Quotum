@@ -5,7 +5,7 @@ import {planAt, started, weeklyPlanLinePrepared} from '../lib/plan';
 import {announcedOf, forecastLinePrepared, type Context} from '../lib/forecast';
 import {PROVIDERS} from '../lib/providers';
 import {HORIZONS, setMuted, setPrefs, usePrefs} from '../lib/prefs';
-import {setTimeRange, useTimeRange} from '../lib/timeRange';
+import {setTimeRange, timeRangeKey, useTimeRange} from '../lib/timeRange';
 import {frameChangesAt, frameOf, measuredTo} from '../lib/periods';
 import {HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
 import {chartEventsPrepared, chartResetsPrepared, linesPrepared, type PlotLine} from '../lib/lines';
@@ -93,6 +93,7 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
   // The chart moves to the period asked for at once, drawing the answer it has until the
   // next one comes. A time range is in the past: the chart shows just it, without the future.
   const selected = useTimeRange();
+  const answered = history?.range === (selected ? timeRangeKey(selected) : prefs.range);
   const board = useBoardId();
   const navigation = axisNavigation(board, selected, prefs);
   // On with the next cell, when what the chart points at past its right edge comes due (drawn
@@ -208,7 +209,7 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
           clock={now}
           cellMs={model?.cellMs ?? history?.cellMs ?? 60_000}
           strip={model?.strip ?? null}
-          prepared={prepared.ready}
+          prepared={prepared.ready && (panning !== null || answered)}
           modelContext={`${history?.board}:${prefs.kind}`}
           empty={!history ? t('history.loading') : lines.length ? t('chart.empty') : null}
           onSelect={setTimeRange}
