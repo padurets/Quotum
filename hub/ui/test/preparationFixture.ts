@@ -19,7 +19,7 @@ export function preparationFixture() {
     if (deps && old?.deps && deps.length === old.deps.length && deps.every((v, i) => Object.is(v, old.deps![i]))) return;
     effects.push(() => {old?.cleanup?.(); slots[at] = {deps, cleanup: effect()};});
   };
-  const context = {exports: {} as {usePrepared: <T>(work: () => Preparation<T>, deps: readonly unknown[], context?: unknown) => {value: T | null; ready: boolean}}, require: (name: string) => name === 'react' ? {useRef, useState, useLayoutEffect} : {prepare: <T>(owner: object, work: Preparation<T>, valid: () => boolean, ready: (v: T) => void) => prepare(owner, work, valid, ready, scheduler), preparations: () => scheduler}};
+  const context = {exports: {} as {usePrepared: <T>(work: () => Preparation<T>, deps: readonly unknown[], context?: unknown, enabled?: boolean) => {value: T | null; ready: boolean}}, require: (name: string) => name === 'react' ? {useRef, useState, useLayoutEffect} : {prepare: <T>(owner: object, work: Preparation<T>, valid: () => boolean, ready: (v: T) => void) => prepare(owner, work, valid, ready, scheduler), preparations: () => scheduler}};
   runInNewContext(ts.transpileModule(readFileSync(new URL('../components/prepared.ts', import.meta.url), 'utf8'), {compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS}}).outputText, context);
   return {useRef, useState, useLayoutEffect, usePrepared: context.exports.usePrepared,
     begin: () => {index = 0; effects.length = 0;},

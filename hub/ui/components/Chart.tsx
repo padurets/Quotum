@@ -367,7 +367,7 @@ export const Chart = memo(function Chart({
       forecastPaths.push(path);
     }
     return {basis, lines: incomingLines, plans: incomingPlans, forecasts, markers, strip: incomingStrip, from: desiredFrom, now: desiredNow, to: desiredTo, paths, planPaths, forecastPaths};
-  }, [incomingLines, incomingPlans, incomingForecasts, incomingMarkers, incomingStrip, desiredFrom, desiredNow, desiredTo, width, height, cellMs, requested.from, requested.to, requested.end, axis.active, navigation && navigationKey(navigation), desiredLive], `${modelContext}:${width}:${height}:${cellMs}`);
+  }, [incomingLines, incomingPlans, incomingForecasts, incomingMarkers, incomingStrip, desiredFrom, desiredNow, desiredTo, width, height, cellMs, requested.from, requested.to, requested.end, axis.active, navigation && navigationKey(navigation), desiredLive], `${modelContext}:${width}:${height}:${cellMs}`, incomingReady);
   const model = prepared.value;
   const basis = model?.basis ?? requested;
   const lines = model?.lines ?? [], plans = model?.plans ?? [], forecasts = desiredLive ? model?.forecasts ?? [] : [], markers = model?.markers ?? [];

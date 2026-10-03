@@ -1,3 +1,4 @@
+import {preparationFixture} from './preparationFixture';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {Preparations, drain, type Preparation} from '../lib/prepare';
@@ -56,4 +57,24 @@ test('staging session, device and series changes cannot mutate a live tile or a 
   assert.equal(staged.chunk(known).activity.devices.d, 'new');
   assert.deepEqual(tile.chunk(known), copy);
   assert.deepEqual(before, copy, 'later merges leave prior snapshots immutable');
+});
+
+test('the actual hook cancels unready incoming work, retains its current model and prepares only the latest coherent input', () => {
+  const h = preparationFixture();
+  const made: string[] = [], advanced: string[] = [], returned: string[] = [];
+  const work = function* (key: string): Preparation<string> {made.push(key); try {for (let i = 0; i < 1000; i++) {advanced.push(key); yield;} return key;} finally {returned.push(key);}};
+  const render = (key: string, enabled = true, context = 'same') => {h.begin(); return h.usePrepared(() => work(key), [key], context, enabled);};
+  assert.equal(render('A').value, null); h.commit(); h.finish();
+  const current = render('A'); assert.equal(current.value, 'A'); assert.equal(current.ready, true); h.commit();
+  assert.equal(render('B').value, 'A'); h.commit(); h.tick();
+  const before = advanced.length;
+  const pending = render('C', false); assert.equal(pending.value, 'A'); assert.equal(pending.ready, false); h.commit(); h.finish();
+  assert.equal(advanced.length, before, 'no stale incoming model can advance after cancellation');
+  assert.deepEqual(returned, ['A', 'B']);
+  assert.equal(render('D', false).value, 'A'); h.commit(); h.finish();
+  assert.deepEqual(made, ['A', 'B'], 'unready input must not start a numeric generator');
+  assert.equal(render('D').value, 'A'); h.commit(); h.finish();
+  assert.equal(render('D').value, 'D'); assert.equal(render('D').ready, true);
+  assert.deepEqual(made, ['A', 'B', 'D']);
+  const incompatible = render('E', false, 'other'); assert.equal(incompatible.value, null); assert.equal(incompatible.ready, false); h.commit();
 });

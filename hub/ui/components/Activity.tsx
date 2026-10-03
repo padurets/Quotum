@@ -386,7 +386,7 @@ const Stacks = memo(function Stacks({
     const pathOrigin = incomingStrip ? basis.from : incomingOrigin;
     const paths = yield* stackPaths.current.drawPrepared(incomingGroups, pathOrigin, perMs, barMs, height, vertical.max);
     return {basis, barMs, heights, maximum, vertical, perMs, pathOrigin, paths, groups: incomingGroups, strip: incomingStrip, activity: incomingActivity, originUnknownTo: incomingUnknownTo};
-  }, [incomingGroups, incomingStrip, incomingActivity, incomingOrigin, incomingUnknownTo, by, requested.from, requested.to, requested.end, width, height, active, navigationKey(navigation)], `${by}:${width}:${height}`);
+  }, [incomingGroups, incomingStrip, incomingActivity, incomingOrigin, incomingUnknownTo, by, requested.from, requested.to, requested.end, width, height, active, navigationKey(navigation)], `${by}:${width}:${height}`, incomingReady);
   const model = prepared.value;
   const basis = model?.basis ?? requested;
   const groups = model?.groups ?? [], strip = model?.strip ?? null, activity = model?.activity ?? incomingActivity;

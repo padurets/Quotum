@@ -16,7 +16,7 @@ test('a borrowed live model in a requested past frame neither clamps future path
   type Model = {planPaths: string[]; forecasts: unknown[]; markers: unknown[]};
   const context = {...hook, axis: {active: false}, requested: {from: 0, to: H, end: H},
     incomingLines: [], incomingPlans: [{key: 'p', runs: [[[2 * H, 80], [3 * H, 0]]]}], incomingForecasts: [forecast], incomingMarkers: [marker],
-    incomingStrip: null, desiredFrom: 0, desiredTo: H, desiredNow: H, desiredLive: false, modelContext: 'test', navigation: {context: 'test', range: 'past'}, navigationKey,
+    incomingStrip: null, desiredFrom: 0, desiredTo: H, desiredNow: H, desiredLive: false, incomingReady: true, modelContext: 'test', navigation: {context: 'test', range: 'past'}, navigationKey,
     NO_FORECASTS: [], cellMs: 60_000, width: 900, height: 220, left: 40, right: 12, top: 12, bottom: 28, plotPathPrepared,
     prepared: {value: {forecasts: [forecast], markers: [marker]}},
     runOutPast: (values: unknown[]) => {assert.equal(values.length, 0, 'past navigation must not use old future labels'); return [];}, stamp: () => '', t: () => '',
