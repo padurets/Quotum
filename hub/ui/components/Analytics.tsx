@@ -39,10 +39,12 @@ const ChevronIcon = () => (
 
 /** Subscribe to the words shown, so unchanged dates do not interrupt strip preparation. */
 function PeriodName({selected, range}: {selected: TimeRange | null; range: string}) {
-  useLocale();
+  const locale = useLocale();
+  const caption = useRef<{frame: ReturnType<typeof pan.get>; locale: typeof locale; label: string | null} | null>(null);
   const preview = useSyncExternalStore(pan.subscribe, () => {
     const frame = pan.get();
-    return frame ? timeRangeLabel(frame) : null;
+    if (!caption.current || caption.current.frame !== frame || caption.current.locale !== locale) caption.current = {frame, locale, label: frame ? timeRangeLabel(frame) : null};
+    return caption.current.label;
   }, () => null);
   return <span>{preview ?? (selected ? timeRangeLabel(selected) : periodLabel(periodOf(range)))}</span>;
 }
