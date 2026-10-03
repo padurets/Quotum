@@ -16,6 +16,7 @@ export class HistoryTile {
   writeSeq = 0;
   shownAt = 0;
   private readonly series = new Map<string, PackedSeries>();
+  private seriesBytes = 0;
   private sessions: Session[] = [];
   private groups: Group[] = [];
   private readonly devices: Record<string, string> = {};
@@ -30,7 +31,7 @@ export class HistoryTile {
   get to() {return this.from + TILE_CELLS * this.cell;}
 
   get bytes() {
-    return this.activity.byteLength + [...this.series.values()].reduce((sum, s) => sum + s.values.byteLength + 256, 0) + this.sessions.length * 320 + this.groups.length * 192 + (this.resets.length + this.grants.length) * 192 + 1024;
+    return this.activity.byteLength + this.seriesBytes + this.sessions.length * 320 + this.groups.length * 192 + (this.resets.length + this.grants.length) * 192 + 1024;
   }
 
   /** A private COW tile keeps every published buffer untouched until response commit. */
@@ -38,7 +39,7 @@ export class HistoryTile {
     const copy = new HistoryTile(this.from, this.cell);
     copy.readFrom = this.readFrom; copy.readTo = this.readTo; copy.validTo = this.validTo;
     copy.writeSeq = this.writeSeq; copy.shownAt = this.shownAt;
-    for (const [key, series] of this.series) {copy.series.set(key, series); yield;}
+    for (const [key, series] of this.series) {copy.series.set(key, series); copy.seriesBytes += series.values.byteLength + 256; yield;}
     for (const session of this.sessions) {copy.sessions.push(session); yield;}
     for (const group of this.groups) {copy.groups.push(group); yield;}
     for (const key in this.devices) {copy.devices[key] = this.devices[key]; yield;}
@@ -65,6 +66,7 @@ export class HistoryTile {
         const values = new Float64Array(TILE_CELLS * FIELDS);
         values.fill(NaN);
         this.series.set(key, (packed = {source: s.source, window: s.window, values}));
+        this.seriesBytes += values.byteLength + 256;
       }
       const since = Math.max(known.work, known.sources[s.source] ?? Infinity);
       for (const v of yield* decodeCellsPrepared(s, chunk.from, this.cell, since)) {
@@ -76,7 +78,7 @@ export class HistoryTile {
     for (const [key, s] of this.series) {
       let kept = false;
       for (let i = 0; i < s.values.length; i += FIELDS) {yield; if (!Number.isNaN(s.values[i])) {kept = true; break;}}
-      if (!kept) this.series.delete(key);
+      if (!kept) {this.series.delete(key); this.seriesBytes -= s.values.byteLength + 256;}
     }
     const rows = yield* this.activityRowsPrepared();
     const translated: number[] = [];
