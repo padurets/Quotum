@@ -830,7 +830,7 @@ serialized, obsolete requests are aborted and speculative errors cannot drop the
 selection. The existing 15 MiB tile estimate protects the visible frame. On release,
 speculation stops and exact totals switch only after the final frame is complete.
 Numeric preparation runs outside React rendering through one cancellable MessageChannel
-scheduler. Its shared generators yield between small cell, session, group and point
+scheduler. Its shared generators yield between small cell, session, group, event and point
 operations; server and synchronous readers drain those same generators. Each owner
 keeps only its latest job. Tile responses use private COW staging and publish their
 tiles, read bounds and metadata together. At most two responses are admitted for
@@ -845,6 +845,12 @@ the address immediately and presents its last pending delta on RAF; the final po
 stays held until the matching drawing model is ready. The SVG fold and CSS offset
 reset then start from the same displayed coordinates. A new gesture samples that
 actual presentation, including an interrupted fold, separately from its URL origin.
+User navigation owns the requested projection separately from drawing readiness.
+Back, a preset or a horizon change retires an older held pose and its pending RAF or
+fold; both charts immediately place their retained data in the requested projection.
+Ready data keeps that projection when it replaces the borrowed model. Borrowed data
+keeps its own coverage and time domain, so future points are clipped rather than
+clamped into an edge and a requested past frame shows no old future labels.
 If a speculative response is evicted to fit that budget, its interest stops reading
 ahead until movement or history news changes what is needed.
 

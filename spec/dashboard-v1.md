@@ -341,7 +341,10 @@ alone never reads history. Numerical projection and response staging run in canc
 slices. Tile data and read boundaries publish atomically for a complete response;
 waiting raw answers share the two-owner processing bound. The graphs keep their
 current drawing and final gesture pose until a complete matching replacement has
-committed, with no additional wire fields.
+committed. A newer user navigation supersedes that held pose immediately and projects
+the retained data in the requested frame while preparation continues. The retained
+data keeps its own coverage; a ready replacement cannot revive the old navigation.
+This adds no wire fields.
 
 ## Requesting fresh limits
 
