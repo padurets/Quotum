@@ -183,3 +183,28 @@ test('sampling and freezing an owned fold keeps its matrix after cancelling the 
   assert.equal(layer.style.transform, 'translateX(21px) scaleX(0.6)');
   assert.equal(other.style.transform, layer.style.transform, 'every drawing layer keeps the same sampled SVG pose');
 });
+
+test('the actual last-input RAF uses the gesture CSS scale rather than the mount-time axis closure', () => {
+  const H = 3_600_000, now = 100 * H, selected = {from: now - 2 * H, to: now - H};
+  const inputFrames: (() => void)[] = [], finalFrames: (() => void)[] = [];
+  const pan = new Pan({now: () => now, commit: () => {}, requestFrame: run => {inputFrames.push(run); return run;}, cancelFrame: () => {}, setTimeout: () => null, clearTimeout: () => {}});
+  const token = pan.begin({source: Symbol('chart'), input: 'pointer', selected, length: H, now, historyStart: 0, span: H, width: 270})!;
+  pan.move(token, -27); inputFrames.shift()!();
+  const layer = {style: {transform: 'translateX(44px)'}};
+  const context = {pan, width: 900, left: 40, right: 20, scale: 1,
+    captured: {current: {token, ...selected, end: selected.to, visual: {...selected, end: selected.to}, pose: {a: 1, b: 0, offset: 17}, pixelsPerMs: 270 / H}},
+    finished: {current: null}, pose: {current: {a: 1, b: 0, offset: 44}}, finalFrame: {current: null}, panLayers: {current: [layer]},
+    setFolding: () => {}, present: () => {}, requestAnimationFrame: (run: () => void) => {finalFrames.push(run); return finalFrames.length;},
+    useLayoutEffect: (effect: () => void) => effect(),
+  };
+  const source = readFileSync(new URL('../components/timeAxis.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('  useLayoutEffect(() => pan.onStop(stop => {');
+  const body = source.slice(start, source.indexOf('  useEffect(() => () => {', start));
+  runInNewContext(ts.transpileModule(body, {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText, context);
+  pan.move(token, -13); pan.finish(token);
+  assert.equal(layer.style.transform, 'translateX(44px)', 'logical release holds the last painted pose');
+  finalFrames.shift()!();
+  const offset = Number(layer.style.transform.match(/translateX\(([-.\d]+)px\)/)![1]);
+  assert.ok(Math.abs(offset - 57) < 1e-9, 'the last 13px input is presented at the actual captured 270px plot width');
+  assert.ok(Math.abs(context.pose.current.offset - 57) < 1e-9);
+});

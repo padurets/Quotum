@@ -91,7 +91,7 @@ export function useTimeAxis({
   const shifting = useShifting();
   const historyStart = useHistoryBegins();
   const panPointer = useRef<{token: number; id: number; x: number; left: number; width: number} | null>(null);
-  const captured = useRef<(DrawingGeometry & {token: number; visual: DrawingGeometry; pose: Pose}) | null>(null);
+  const captured = useRef<(DrawingGeometry & {token: number; visual: DrawingGeometry; pose: Pose; pixelsPerMs: number}) | null>(null);
   const drawing = useRef<DrawingGeometry>({from, to, end});
   const pose = useRef<Pose>({a: 1, b: 0, offset: 0});
   const finalFrame = useRef<number | null>(null);
@@ -176,7 +176,7 @@ export function useTimeAxis({
       foldTicket.current++;
       const visual = visualGeometry();
       freezeSlides();
-      captured.current = {token: frame.token, ...drawing.current, visual, pose: {...pose.current}};
+      captured.current = {token: frame.token, ...drawing.current, visual, pose: {...pose.current}, pixelsPerMs: (width - left - right) * scale / (visual.to - visual.from)};
       element.dataset.panToken = String(frame.token);
       element.dataset.panOrigin = String(frame.originEnd);
       element.dataset.panScale = String((visual.to - visual.from) / ((width - left - right) * scale));
@@ -184,7 +184,7 @@ export function useTimeAxis({
       setFolding(false);
     }
     const origin = captured.current;
-    if (frame && origin) pose.current.offset = origin.pose.offset - (frame.to - frame.originEnd) / (origin.visual.to - origin.visual.from) * (width - left - right) * scale;
+    if (frame && origin) pose.current.offset = origin.pose.offset - (frame.to - frame.originEnd) * origin.pixelsPerMs;
     for (const layer of panLayers.current) layer.style.transform = pose.current.offset ? `translateX(${pose.current.offset}px)` : '';
     if (frame) {
       element.dataset.panEnd = String(frame.to);
@@ -226,7 +226,7 @@ export function useTimeAxis({
     finalFrame.current = requestAnimationFrame(() => {
       finalFrame.current = null;
       if (pan.active() || finished.current?.stop !== stop) return;
-      pose.current.offset = origin.pose.offset - delta / (origin.visual.to - origin.visual.from) * (width - left - right) * scale;
+      pose.current.offset = origin.pose.offset - delta * origin.pixelsPerMs;
       for (const layer of panLayers.current) layer.style.transform = pose.current.offset ? `translateX(${pose.current.offset}px)` : '';
       present(value => value + 1);
     });
