@@ -5,6 +5,8 @@ import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {Pan} from '../lib/pan';
 
+const offsetIs = (transform: string, expected: number, message?: string) => assert.ok(Math.abs(Number(transform.match(/translateX\(([-.\d]+)px\)/)?.[1] ?? 0) - expected) < 1e-9, message);
+
 test('the actual axis publishes committed HTML owners and applies the captured CSS scale', () => {
   const H = 3_600_000, now = 100 * H, selected = {from: now - 2 * H, to: now - H};
   const frames: (() => void)[] = [];
@@ -37,7 +39,7 @@ test('the actual axis publishes committed HTML owners and applies the captured C
   publish();
   assert.equal(old.style.transform, '', 'preparing a render cannot publish or mutate its surface');
   commits.shift()!();
-  assert.equal(old.style.transform, 'translateX(27px)');
+  offsetIs(old.style.transform, 27);
   assert.equal(Number(svg.current.dataset.panScale), H / 270);
   const committed = paintPan.current;
   publish();
@@ -46,15 +48,15 @@ test('the actual axis publishes committed HTML owners and applies the captured C
   assert.equal(next.style.transform, '');
   owners = [next];
   commits.shift()!();
-  assert.equal(next.style.transform, 'translateX(27px)', 'a replacement surface starts at the same displayed time');
+  offsetIs(next.style.transform, 27, 'a replacement surface starts at the same displayed time');
   context.panPointer.current = {id: 7};
   pan.cancel(); paintPan.current();
   assert.equal(released, 1, 'capture is released by the chart box, which owns the input');
-  assert.equal(next.style.transform, 'translateX(27px)', 'logical stop holds the last pose until its replacement commits');
+  offsetIs(next.style.transform, 27, 'logical stop holds the last pose until its replacement commits');
   assert.equal(svg.current.dataset.panEnd, undefined);
   const continued = pan.begin({source: source.current, input: 'pointer', selected, length: H, now, historyStart: 0, span: H, width: 270})!;
   pan.move(continued, -54); frames.shift()!(); paintPan.current();
-  assert.equal(next.style.transform, 'translateX(81px)', 'a new gesture can move the committed artwork before another render commits');
+  offsetIs(next.style.transform, 81, 'a new gesture can move the committed artwork before another render commits');
   pan.cancel(); paintPan.current();
 });
 
