@@ -43,6 +43,13 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
         const probe=window.__quotumPan={frames:[],latency:[],responses:[],inputs:0,updated:0,chartUpdates:[0,0],synchronized:true,pending:[],last:0,pushesDuring:0,pushesAfter:0,forbiddenMutations:0,undimmed:getComputedStyle(root).opacity==='1',sizeStable:true,coldReads:0,peakFlights:0,maxTiles:0,duplicateReads:0,flights:new Map(),running:true,feeding:false,segment:'wheel',samples:[]};
         const originalPush=history.pushState.bind(history);probe.originalPush=originalPush;
         history.pushState=(...args)=>{if(probe.feeding)probe.pushesDuring++;else probe.pushesAfter++;originalPush(...args);};
+        probe.returnSnapshot=()=>({now:Date.now(),url:location.search,charts:charts.map((svg,i)=>{
+          const left=i?48:40,box=svg.viewBox.baseVal.width,inner=box-left-12,r=svg.getBoundingClientRect(),scale=r.width/box;
+          const layer=svg.parentElement.querySelector(i?'.plot-clip.is-band > .plot-move':'.plot-move[data-plot-main]'),slides=layer.querySelector('.slides'),matrix=slides.getScreenCTM();
+          const from=Number(svg.dataset.drawFrom),to=Number(svg.dataset.drawTo),span=Math.max(60000,to-from);
+          const timeAt=x=>from+((x-matrix.e)/matrix.a-left)/inner*span;
+          return {from,to,ready:svg.dataset.drawReady,panning:svg.classList.contains('is-panning'),visibleFrom:timeAt(r.left+left*scale),visibleTo:timeAt(r.right-12*scale),perMs:matrix.a*inner/span,panOrigin:svg.dataset.panOrigin,panScale:svg.dataset.panScale,matrix:{a:matrix.a,e:matrix.e}};
+        })});
         const owner=root.parentElement,types=['wheel','pointerdown','pointermove','pointerup'];
         let gesture=null;
         const capturedInputs=new WeakMap();
@@ -67,6 +74,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
             if(!gesture||gesture.token!==token)begin(token);
             const unit=[1,16,400][e.deltaMode]||1;
             gesture.pixels-=(e.deltaX||(e.shiftKey?e.deltaY:0))*unit;
+            if(probe.returnInput){const trace=probe.returnInput;trace.pixels-=(e.deltaX||(e.shiftKey?e.deltaY:0))*unit;trace.events++;if(trace.tokens.at(-1)?.token!==token)trace.tokens.push({token,origin:Number(root.dataset.panOrigin),scale:Number(root.dataset.panScale),at:e.timeStamp,delivered:captured.delivered,pixels:trace.pixels});trace.last={at:e.timeStamp,delivered:captured.delivered};}
           }else{
             if(!e.buttons||!gesture)return;
             gesture.pixels+=e.clientX-gesture.x;gesture.x=e.clientX;
@@ -167,6 +175,8 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
       // Native Shift deltaX returns to live, then Back/Forward restore complete gestures.
       sent.length = 0;
       await cdp.evaluate(`window.__quotumPan.segment='return'`);
+      const returnBefore = await cdp.evaluate<unknown>('window.__quotumPan.returnSnapshot()');
+      await cdp.evaluate('window.__quotumPan.returnInput={pixels:0,events:0,tokens:[]}');
       await cdp.evaluate('window.__quotumPan.feeding=true');
       const returnPixels = await cdp.evaluate<number>(`(() => {
         const p=new URLSearchParams(location.search),from=Number(p.get('from')),to=Number(p.get('to'));
@@ -176,6 +186,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
       await scroll(-Math.max(0, returnPixels - 4));
       await cdp.evaluate('window.__quotumPan.feeding=false');
       await wait(240); await settled();
+      await cdp.evaluate('window.__quotumPan.returnAfter=window.__quotumPan.returnSnapshot()');
       const report = await cdp.evaluate<PanReading>(`(() => {
         const p=window.__quotumPan;p.cleanup();
         const segments={};for(const segment of ['wheel','drag','return','fold']){const values=p.samples.filter(s=>s.segment===segment).map(s=>s.ms).sort((a,b)=>a-b);segments[segment]={count:values.length,p95:values[Math.ceil(values.length*.95)-1]??0,max:values.at(-1)??0};}
@@ -185,7 +196,11 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
       reports.push(report);
       await cdp.send('Emulation.setCPUThrottlingRate', {rate: 1});
       const live = await cdp.evaluate<boolean>(`!new URLSearchParams(location.search).has('from')`);
-      if (!live) throw new Error(`${period} pan did not return to live`);
+      if (!live) {
+        const returned = await cdp.evaluate<unknown>('({after:window.__quotumPan.returnAfter,input:window.__quotumPan.returnInput})');
+        throw new Error(`${period} pan did not return to live: ${JSON.stringify({before: returnBefore, returnPixels, returned, report})}`);
+      }
+      await cdp.evaluate('window.__quotumPan.returnInput=null');
       // Held Shift-wheel has the same uninterrupted scale as dragging, across rests.
       await mouse('mouseMoved', geometry.x, geometry.y);
       await key(true, 'Shift', 16);
