@@ -1,5 +1,5 @@
-import {useDeferredValue, useSyncExternalStore} from 'react';
-import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, cellStart, compose, targetOf, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer, type HistoryMeta, type Target} from '../../server/domain/history';
+import {useSyncExternalStore} from 'react';
+import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, cellStart, composePrepared, targetOf, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer, type HistoryMeta, type Target} from '../../server/domain/history';
 import {page, useHistoryStart, type PageEvent, type PageState} from './board';
 import {hubNow} from './clock';
 import {HistoryTile} from './historyTiles';
@@ -10,7 +10,9 @@ import type {Store} from './store';
 import {dropTimeRange, onTimeRange, timeRange, timeRangeKey, type TimeRange} from './timeRange';
 import type {History} from './types';
 import {pan, type Pan} from './pan';
-import {plotOf, type Coverage, type PlotBuffer} from './historyPlot';
+import {plotPrepared, type Coverage, type PlotBuffer} from './historyPlot';
+
+import {prepare, preparations, type Preparation, type Preparations} from './prepare';
 
 const SETTLE_MS = 300;
 const RETRY_MS = 15_000;
@@ -27,9 +29,12 @@ export type HistoryEnv = {
   clearTimeout(timer: unknown): void;
   dropTimeRange(): void;
   schedule?(run: () => void): void;
+  preparations?: Preparations | null;
 };
 export type Shown = {history: History | null; loading: boolean};
 type Flight = {seq: number; epoch: number; target: string; newsSeq: number; cell: number; from: number; to: number; touched: number; startedAt: number; controller: AbortController; role: 'visible' | 'ahead'};
+type ResponseOwner = {answer: HistoryAnswer; keys: string[]; started: boolean};
+type TilePin = {tile: HistoryTile; seq: number; from: number; to: number};
 export type PlotInterest = {token: number; length: number; from: number; to: number; direction: -1 | 0 | 1};
 
 /** History belongs to the open board. Cells are read only when missing or touched. */
@@ -62,12 +67,18 @@ export class HistoryStore {
   private plotPending = false;
   private plot: PlotBuffer | null = null;
   private strip: Target | null = null;
+  private stripToken = 0;
   private version = 0;
   private plotVersion = -1;
   private plotIdentity = '';
   private aheadStopped = false;
   private readonly plotListeners = new Set<() => void>();
-  private readonly plotChunks = new Map<string, {seq: number; from: number; to: number; chunk: Chunk}>();
+  private readonly plotOwner = {};
+  private readonly composeOwner = {};
+  private composeIdentity = '';
+  private readonly responses = new Map<Flight, ResponseOwner>();
+  private readonly reservations = new Map<string, Flight>();
+  private readonly plotChunks = new Map<string, {tile: HistoryTile; seq: number; from: number; to: number; chunk: Chunk}>();
 
   constructor(private readonly env: HistoryEnv, private readonly budget = STORED_BYTES) {}
 
@@ -77,7 +88,16 @@ export class HistoryStore {
     this.board = board;
   }
 
+  private get preparations() {return this.env.preparations === undefined ? preparations() : this.env.preparations;}
+
+  private cancelProjection() {
+    this.preparations?.cancel(this.plotOwner);
+    this.preparations?.cancel(this.composeOwner);
+    this.plotIdentity = this.composeIdentity = '';
+  }
+
   close() {
+    this.cancelProjection();
     this.epoch++;
     this.board = null;
     this.ready = false;
@@ -152,6 +172,7 @@ export class HistoryStore {
     this.period = period;
     this.selected = selected;
     this.needsCompose = true;
+    this.reconsiderResponses();
     this.clear('retry');
     const now = this.env.now();
     const quick = now - this.changedAt < SETTLE_MS;
@@ -170,6 +191,7 @@ export class HistoryStore {
   pan(interest: PlotInterest) {
     const previous = this.interest;
     this.interest = interest;
+    this.reconsiderResponses();
     this.plotPending = true;
     const next = this.plotTarget();
     const cell = next.cell;
@@ -184,6 +206,7 @@ export class HistoryStore {
 
   endPan(commit: boolean) {
     this.interest = null;
+    this.reconsiderResponses();
     for (const flight of [...this.flights]) if (flight.role === 'ahead') this.abort(flight);
     if (!commit) {
       this.plotPending = false;
@@ -199,6 +222,7 @@ export class HistoryStore {
   get estimatedBytes() {return [...this.grids.values()].reduce((sum, tiles) => sum + [...tiles.values()].reduce((sum, tile) => sum + tile.bytes, 0), 0);}
 
   private invalidate() {
+    this.cancelProjection();
     this.epoch++;
     this.cutTo = null;
     this.metaAt = null;
@@ -271,6 +295,7 @@ export class HistoryStore {
   }
 
   private pump() {
+    this.startResponses();
     if (!this.board || !this.ready || !this.run) return;
     const target = this.target();
     if (this.interest) {
@@ -285,18 +310,7 @@ export class HistoryStore {
       const now = this.meta.now + Math.max(0, this.elapsedNow() - this.metaAt);
       if (target.k0 * target.cell >= cellStart(now + CLOCK_TOLERANCE_MS, target.cell) + target.cell) return this.env.dropTimeRange();
     }
-    if (this.needsCompose && this.meta && this.full(target)) {
-      const chunks = [...(this.grids.get(target.cell)?.values() ?? [])].filter(t => t.readTo > t.readFrom && t.readTo > target.k0 * target.cell && t.readFrom <= target.k1 * target.cell).sort((a, b) => a.from - b.from).map(tile => {tile.shownAt = this.env.now(); return tile.chunk(this.meta!.known);});
-      this.shown = {...compose(chunks, this.meta, target, this.windows), board: this.board};
-      this.needsCompose = false;
-      if (this.plotPending) {
-        this.plotPending = false;
-        this.strip = null;
-        this.plotChunks.clear();
-        this.setPlot(null);
-      }
-      this.publish();
-    }
+    if (this.needsCompose && this.meta && this.full(target)) this.prepareCompose(target);
     if (this.plotPending) this.publishPlot();
     if (this.plotPending) {
       for (const flight of [...this.flights]) {
@@ -327,7 +341,8 @@ export class HistoryStore {
     if (!this.meta || !this.plotPending) return;
     const visible = this.plotTarget();
     const half = visible.length / 2;
-    if (!this.strip || this.strip.cell !== visible.cell || this.plot?.token !== (this.interest?.token ?? this.plot?.token) || visible.k0 * visible.cell < this.strip.k0 * visible.cell + half / 2 || (visible.k1 + 1) * visible.cell > (this.strip.k1 + 1) * visible.cell - half / 2) {
+    if (!this.strip || this.strip.cell !== visible.cell || this.stripToken !== (this.interest?.token ?? this.stripToken) || visible.k0 * visible.cell < this.strip.k0 * visible.cell + half / 2 || (visible.k1 + 1) * visible.cell > (this.strip.k1 + 1) * visible.cell - half / 2) {
+      this.stripToken = this.interest?.token ?? this.stripToken;
       this.strip = {...visible, k0: Math.floor((visible.k0 * visible.cell - half) / visible.cell), k1: Math.ceil(((visible.k1 + 1) * visible.cell + half) / visible.cell) - 1};
       this.plotVersion = -1;
     }
@@ -340,15 +355,6 @@ export class HistoryStore {
     this.plotIdentity = identity;
     const retained = new Set(tiles.map(tile => `${tile.cell}:${tile.from}`));
     for (const key of this.plotChunks.keys()) if (!retained.has(key)) this.plotChunks.delete(key);
-    const chunks = tiles.map(tile => {
-      const key = `${tile.cell}:${tile.from}`;
-      let decoded = this.plotChunks.get(key);
-      if (!decoded || decoded.seq !== tile.writeSeq || decoded.from !== tile.readFrom || decoded.to !== tile.readTo) {
-        decoded = {seq: tile.writeSeq, from: tile.readFrom, to: tile.readTo, chunk: tile.chunk(this.meta!.known, true)};
-        this.plotChunks.set(key, decoded);
-      }
-      return decoded.chunk;
-    });
     const intervals: [number, number][] = [];
     for (const tile of tiles) {
       const a = Math.max(tile.readFrom, strip.k0 * strip.cell), b = Math.min(tile.readTo, (strip.k1 + 1) * strip.cell);
@@ -358,7 +364,51 @@ export class HistoryStore {
     }
     if (this.cutTo !== null && this.cutTo <= (strip.k1 + 1) * strip.cell) intervals.push([this.cutTo, (strip.k1 + 1) * strip.cell]);
     const coverage: Coverage = intervals.sort((a, b) => a[0] - b[0]);
-    this.setPlot(plotOf(chunks, this.meta, strip, coverage, this.windows, this.interest?.token ?? this.plot?.token ?? 0, this.epoch, this.version));
+    const pins = this.pins(tiles), meta = this.meta, windows = this.windows;
+    const token = this.interest?.token ?? this.plot?.token ?? 0, epoch = this.epoch, version = this.version;
+    const valid = () => this.plotIdentity === identity && this.epoch === epoch && this.plotPending && this.windows === windows && this.pinsValid(pins);
+    const work = function* (store: HistoryStore): Preparation<PlotBuffer> {
+      const chunks: Chunk[] = [];
+      for (const {tile, seq, from, to} of pins) {
+        const key = `${tile.cell}:${tile.from}`;
+        let saved = store.plotChunks.get(key);
+        if (!saved || saved.tile !== tile || saved.seq !== seq || saved.from !== from || saved.to !== to) {
+          const chunk = yield* tile.chunkPrepared(meta.known, true);
+          saved = {tile, seq, from, to, chunk};
+          if (valid()) store.plotChunks.set(key, saved);
+        }
+        chunks.push(saved.chunk); yield;
+      }
+      return yield* plotPrepared(chunks, meta, strip, coverage, windows, token, epoch, version);
+    };
+    prepare(this.plotOwner, work(this), valid, plot => this.setPlot(plot), this.preparations);
+  }
+
+  private pins(tiles: HistoryTile[]): TilePin[] {return tiles.map(tile => ({tile, seq: tile.writeSeq, from: tile.readFrom, to: tile.readTo}));}
+  private pinsValid(pins: TilePin[]) {
+    return pins.every(({tile, seq, from, to}) => this.grids.get(tile.cell)?.get(tileOf(tile.from, tile.cell)) === tile && tile.writeSeq === seq && tile.readFrom === from && tile.readTo === to);
+  }
+
+  private prepareCompose(target: Target) {
+    const meta = this.meta!, board = this.board!, epoch = this.epoch, version = this.version, windows = this.windows;
+    const identity = `${epoch}:${version}:${target.key}:${target.k0}:${target.k1}`;
+    if (identity === this.composeIdentity) return;
+    this.composeIdentity = identity;
+    const tiles = [...(this.grids.get(target.cell)?.values() ?? [])].filter(t => t.readTo > t.readFrom && t.readTo > target.k0 * target.cell && t.readFrom <= target.k1 * target.cell).sort((a, b) => a.from - b.from);
+    const pins = this.pins(tiles);
+    const valid = () => !this.interest && this.board === board && this.epoch === epoch && this.version === version && this.windows === windows && this.composeIdentity === identity && this.target().key === target.key && this.pinsValid(pins);
+    const work = function* (): Preparation<History> {
+      const chunks: Chunk[] = [];
+      for (const {tile} of pins) {chunks.push(yield* tile.chunkPrepared(meta.known)); yield;}
+      return {...yield* composePrepared(chunks, meta, target, windows), board};
+    };
+    prepare(this.composeOwner, work(), valid, history => {
+      for (const {tile} of pins) tile.shownAt = this.env.now();
+      this.shown = history;
+      this.needsCompose = false;
+      if (this.plotPending) {this.plotPending = false; this.strip = null; this.plotChunks.clear(); this.preparations?.cancel(this.plotOwner); this.setPlot(null);}
+      this.publish();
+    }, this.preparations);
   }
 
   private aheadTarget(visible: Target): Target {
@@ -420,7 +470,7 @@ export class HistoryStore {
     this.env.read(this.board!, target.cell, from, to, flight.controller.signal).then(answer => this.merge(flight, answer), error => this.failed(flight, error));
   }
 
-  private abort(flight: Flight) {this.flights.delete(flight); flight.controller.abort();}
+  private abort(flight: Flight) {this.preparations?.cancel(flight); this.responses.delete(flight); for (const [key, owner] of this.reservations) if (owner === flight) this.reservations.delete(key); this.flights.delete(flight); flight.controller.abort();}
   private abortFlights() {for (const flight of [...this.flights]) this.abort(flight);}
   private setPlot(plot: PlotBuffer | null) {
     if (this.plot === plot) return;
@@ -428,42 +478,95 @@ export class HistoryStore {
     for (const listener of this.plotListeners) listener();
   }
 
+  private responsePriority(flight: Flight) {
+    if (flight.controller.signal.aborted || flight.epoch !== this.epoch) return -1;
+    const target = this.interest ? this.plotTarget() : this.target();
+    if (flight.cell === target.cell && flight.to > target.k0 * target.cell && flight.from <= target.k1 * target.cell) return 2;
+    if (this.interest?.direction) {
+      const ahead = this.aheadTarget(target);
+      if (!this.aheadStopped && flight.cell === ahead.cell && flight.to > ahead.k0 * ahead.cell && flight.from <= ahead.k1 * ahead.cell) return 1;
+    }
+    return 0;
+  }
+
+  private reconsiderResponses() {
+    for (const flight of this.responses.keys()) if (this.responsePriority(flight) < 1) this.abort(flight);
+    this.startResponses();
+  }
+
   private merge(flight: Flight, answer: HistoryAnswer) {
-    this.flights.delete(flight);
-    if (flight.controller.signal.aborted || flight.epoch !== this.epoch || answer.run !== this.run) return;
-    for (const chunk of answer.chunks) {
-      const tile = this.tile(chunk.from, flight.cell);
-      if (tile.writeSeq > flight.seq) continue;
-      tile.merge(chunk, answer.known);
-      tile.writeSeq = flight.seq;
-      const freshEnd = Math.max(chunk.from, Math.min(chunk.to, cellStart(flight.touched, flight.cell)));
-      if (tile.readFrom === tile.readTo) {
-        tile.readFrom = chunk.from;
-        tile.readTo = chunk.to;
-        tile.validTo = freshEnd;
-      } else if (chunk.from <= tile.readTo && chunk.to >= tile.readFrom) {
-        // A touched bridge in the new head breaks the fresh prefix of the old suffix.
-        if (chunk.from < tile.readFrom && freshEnd < tile.readFrom) tile.validTo = freshEnd;
-        else if (chunk.from <= tile.validTo) tile.validTo = Math.max(tile.validTo, freshEnd);
-        tile.readFrom = Math.min(tile.readFrom, chunk.from);
-        tile.readTo = Math.max(tile.readTo, chunk.to);
-      }
+    if (!this.flights.has(flight) || flight.controller.signal.aborted || flight.epoch !== this.epoch || answer.run !== this.run) {this.abort(flight); return;}
+    if (this.responses.size >= 2) {
+      const incoming = this.responsePriority(flight);
+      const victim = [...this.responses.keys()].sort((a, b) => this.responsePriority(a) - this.responsePriority(b) || a.seq - b.seq)[0];
+      const priority = this.responsePriority(victim);
+      if (incoming > priority || incoming === priority && flight.seq > victim.seq) {if (priority < 2) this.aheadStopped = true; this.abort(victim);}
+      else {if (incoming < 2) this.aheadStopped = true; this.abort(flight); this.schedule(); return;}
     }
-    if (flight.seq > this.metaSeq) {
-      this.metaSeq = flight.seq;
-      this.meta = {now: answer.now, historyStart: answer.historyStart, known: answer.known};
-      // Count the whole flight so a late answer cannot falsely reject a valid range.
-      this.metaAt = flight.startedAt;
-      const to = answer.chunks.at(-1)?.to;
-      // A later read on a coarser grid does not revoke the earlier empty suffix;
-      // only history news or a new epoch can put data there.
-      if (flight.newsSeq === this.newsSeq && to !== undefined && to > answer.now + CLOCK_TOLERANCE_MS) this.cutTo = Math.min(this.cutTo ?? to, to);
+    const keys = [...new Set(answer.chunks.map(chunk => `${flight.cell}:${tileOf(chunk.from, flight.cell)}`))];
+    this.responses.set(flight, {answer, keys, started: false});
+    this.startResponses();
+  }
+
+  private startResponses() {
+    for (const [flight, response] of this.responses) {
+      if (response.started || response.keys.some(key => this.reservations.has(key))) continue;
+      for (const key of response.keys) this.reservations.set(key, flight);
+      response.started = true;
+      const pins = new Map<HistoryTile, {seq: number; staged: HistoryTile; chunks: Chunk[]}>();
+      const valid = () => this.responses.get(flight) === response && this.flights.has(flight) && !flight.controller.signal.aborted && flight.epoch === this.epoch && response.answer.run === this.run && response.keys.every(key => this.reservations.get(key) === flight) && [...pins].every(([base, pin]) => this.grids.get(base.cell)?.get(tileOf(base.from, base.cell)) === base && base.writeSeq === pin.seq);
+      const work = function* (store: HistoryStore): Preparation<void> {
+        let completed = false;
+        try {
+        for (const chunk of response.answer.chunks) {
+          const base = store.tile(chunk.from, flight.cell);
+          if (base.writeSeq > flight.seq) continue;
+          let pin = pins.get(base);
+          if (!pin) {pin = {seq: base.writeSeq, staged: base, chunks: []}; pins.set(base, pin);}
+          pin.staged = yield* pin.staged.staged(chunk, response.answer.known);
+          pin.chunks.push(chunk); yield;
+        }
+        completed = true;
+        } finally {
+          if (!completed && store.responses.get(flight) === response) {store.releaseResponse(flight); store.schedule();}
+        }
+      };
+      prepare(flight, work(this), valid, () => {
+        // No yield between the last ownership check and the entire response's publication.
+        for (const [base, {staged, chunks}] of pins) {
+          staged.readFrom = base.readFrom; staged.readTo = base.readTo; staged.validTo = base.validTo;
+          staged.writeSeq = flight.seq;
+          for (const chunk of chunks) {
+            const freshEnd = Math.max(chunk.from, Math.min(chunk.to, cellStart(flight.touched, flight.cell)));
+            if (staged.readFrom === staged.readTo) {staged.readFrom = chunk.from; staged.readTo = chunk.to; staged.validTo = freshEnd;}
+            else if (chunk.from <= staged.readTo && chunk.to >= staged.readFrom) {
+              if (chunk.from < staged.readFrom && freshEnd < staged.readFrom) staged.validTo = freshEnd;
+              else if (chunk.from <= staged.validTo) staged.validTo = Math.max(staged.validTo, freshEnd);
+              staged.readFrom = Math.min(staged.readFrom, chunk.from); staged.readTo = Math.max(staged.readTo, chunk.to);
+            }
+          }
+          this.grids.get(base.cell)!.set(tileOf(base.from, base.cell), staged);
+        }
+        const answer = response.answer;
+        if (flight.seq > this.metaSeq) {
+          this.metaSeq = flight.seq;
+          this.meta = {now: answer.now, historyStart: answer.historyStart, known: answer.known};
+          this.metaAt = flight.startedAt;
+          const to = answer.chunks.at(-1)?.to;
+          if (flight.newsSeq === this.newsSeq && to !== undefined && to > answer.now + CLOCK_TOLERANCE_MS) this.cutTo = Math.min(this.cutTo ?? to, to);
+        }
+        this.releaseResponse(flight);
+        this.needsCompose = true;
+        this.version++;
+        if (!this.bad(this.interest ? this.plotTarget() : this.target()).length) this.clear('retry');
+        this.evict(); this.startResponses(); this.schedule();
+      }, this.preparations);
     }
-    this.needsCompose = true;
-    this.version++;
-    if (!this.bad(this.interest ? this.plotTarget() : this.target()).length) this.clear('retry');
-    this.evict();
-    this.schedule();
+  }
+
+  private releaseResponse(flight: Flight) {
+    this.responses.delete(flight); this.flights.delete(flight);
+    for (const [key, owner] of this.reservations) if (owner === flight) this.reservations.delete(key);
   }
 
   private failed(flight: Flight, error: unknown) {
@@ -494,6 +597,7 @@ export class HistoryStore {
     const ahead = this.interest?.direction ? this.aheadTarget(target) : null;
     const candidates: {cell: number; n: number; tile: HistoryTile}[] = [];
     for (const [cell, tiles] of this.grids) for (const [n, tile] of tiles) {
+      if (this.reservations.has(`${cell}:${n}`)) continue;
       if (cell === target.cell && tile.to > target.k0 * cell && tile.from <= target.k1 * cell) continue;
       candidates.push({cell, n, tile});
     }
@@ -501,6 +605,7 @@ export class HistoryStore {
     for (const {cell, n, tile} of candidates.sort((a, b) => a.tile.shownAt - b.tile.shownAt)) {
       if (bytes <= this.budget) break;
       this.grids.get(cell)!.delete(n);
+      this.version++;
       bytes -= tile.bytes;
       // This interest cannot retain its speculative coverage. Another response
       // must not restart it; movement or news can try a new interest instead.
@@ -570,11 +675,7 @@ if (typeof window !== 'undefined') {
 }
 export function useHistory(): Shown {return useSyncExternalStore(loader.subscribe, loader.get, loader.get);}
 export function useHistoryPlot(): PlotBuffer | null {
-  const current = useSyncExternalStore(loader.subscribePlot, loader.getPlot, loader.getPlot);
-  // Input can interrupt preparation of the replacing strip. Clear/cancel and a
-  // complete answer still retire it immediately, together with committed quantities.
-  const prepared = useDeferredValue(current);
-  return current && prepared?.token === current.token && prepared.epoch === current.epoch ? prepared : null;
+  return useSyncExternalStore(loader.subscribePlot, loader.getPlot, loader.getPlot);
 }
 const answeredStart = () => loader.get().history?.historyStart ?? null;
 export function useHistoryBegins(): number {

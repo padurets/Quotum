@@ -1,3 +1,5 @@
+import {drain, type Preparation} from './prepare';
+
 type Point = {x: number; y: number; sx?: string; sy?: string};
 
 // Multiplication can round a binary value onto a decimal tie. Only those values
@@ -11,11 +13,13 @@ function rounded(value: number) {
 const coordinate = (value: number) => Object.is(value, -0) ? '-0.0' : (value / 10).toFixed(1);
 
 /** Keeps the same rounded outline, omitting only vertices on straight boundaries. */
-export function plotPath(runs: readonly (readonly (readonly [number, number])[])[]) {
-  return runs.map(run => {
+export function* plotPathPrepared(runs: readonly (readonly (readonly [number, number])[])[]): Preparation<string> {
+  let result = '';
+  for (const run of runs) {
     const parts: Point[] = [];
     let before: Point | null = null, last: Point | null = null;
     for (const [x, y] of run) {
+      yield;
       const next: Point = {x: rounded(x), y: rounded(y)};
       if (Math.abs(x) >= 1e11) next.sx = x.toFixed(1);
       if (Math.abs(y) >= 1e11) next.sy = y.toFixed(1);
@@ -27,6 +31,9 @@ export function plotPath(runs: readonly (readonly (readonly [number, number])[])
       }
       last = next;
     }
-    return parts.map((point, i) => `${i ? 'L' : 'M'}${point.sx ?? coordinate(point.x)},${point.sy ?? coordinate(point.y)}`).join('');
-  }).join('');
+    for (let i = 0; i < parts.length; i++) {const point = parts[i]; result += `${i ? 'L' : 'M'}${point.sx ?? coordinate(point.x)},${point.sy ?? coordinate(point.y)}`; yield;}
+  }
+  return result;
 }
+
+export function plotPath(...args: Parameters<typeof plotPathPrepared>): string {return drain(plotPathPrepared(...args));}

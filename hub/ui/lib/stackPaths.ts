@@ -1,6 +1,7 @@
+import {drain, type Preparation} from './prepare';
 import type {PlotGroup} from './historyPlot';
 
-type GroupPath = {bars: Map<number, Corners>; order: number[]; path: string};
+type GroupPath = {bars: Map<number, Corners>; order: number[]; path: string; dirty: boolean};
 
 type Corners = {low: number; high: number; top: [string, string]; bottom: [string, string]; topY: string; bottomY: string};
 
@@ -9,7 +10,7 @@ export class StackPaths {
   private geometry = '';
   private groups = new Map<string, GroupPath>();
 
-  draw(groups: readonly {group: PlotGroup}[], origin: number, perMs: number, barMs: number, height: number, max: number) {
+  *drawPrepared(groups: readonly {group: PlotGroup}[], origin: number, perMs: number, barMs: number, height: number, max: number): Preparation<string[]> {
     const geometry = `${origin}:${perMs}:${barMs}:${height}:${max}`;
     if (geometry !== this.geometry) {this.geometry = geometry; this.groups.clear();}
     const base = new Map<number, {value: number; edge?: [string, string]; y?: string}>();
@@ -30,20 +31,22 @@ export class StackPaths {
       return text;
     };
     const retained = new Set<string>();
-    const paths = groups.map(({group}) => {
+    const paths: string[] = [];
+    for (const {group} of groups) {
       retained.add(group.key);
       let cache = this.groups.get(group.key);
-      if (!cache) {cache = {bars: new Map(), order: [], path: ''}; this.groups.set(group.key, cache);}
+      if (!cache) {cache = {bars: new Map(), order: [], path: '', dirty: true}; this.groups.set(group.key, cache);}
       const kept = new Set<number>();
-      let changed = cache.order.length !== group.cells.length;
+      cache.dirty ||= cache.order.length !== group.cells.length;
       let index = 0;
       for (const [at, ms] of group.cells) {
+        yield;
         kept.add(at);
         let state = base.get(at);
         if (!state) {state = {value: 0}; base.set(at, state);}
         const low = state.value, high = low + ms;
         state.value = high;
-        if (cache.order[index++] !== at) changed = true;
+        if (cache.order[index++] !== at) cache.dirty = true;
         let corners = cache.bars.get(at);
         if (!corners || corners.low !== low || corners.high !== high) {
           const [x0, x1] = position(at);
@@ -51,22 +54,28 @@ export class StackPaths {
           // The preceding group's top is this group's bottom at the same bar.
           corners = {low, high, top: [`${x0},${top}`, `${x1},${top}`], bottom: state.edge ?? [`${x0},${bottom}`, `${x1},${bottom}`], topY: top, bottomY: bottom};
           cache.bars.set(at, corners);
-          changed = true;
+          cache.dirty = true;
         }
         state.edge = corners.top; state.y = corners.topY;
       }
-      for (const at of cache.bars.keys()) if (!kept.has(at)) cache.bars.delete(at);
-      if (!changed) return cache.path;
+      for (const at of cache.bars.keys()) {if (!kept.has(at)) {cache.dirty = true; cache.bars.delete(at);} yield;}
+      if (!cache.dirty) {paths.push(cache.path); continue;}
       const runs: string[] = [];
       let tops: string[] = [], bottoms: string[] = [], previous: number | null = null;
       let topY: string | null = null, bottomY: string | null = null;
-      const finish = () => {
-        if (tops.length) runs.push(`M${tops.join('L')}L${bottoms.reverse().join('L')}Z`);
+      const finish = function* (): Preparation<void> {
+        if (tops.length) {
+          let run = 'M';
+          for (let i = 0; i < tops.length; i++) {run += `${i ? 'L' : ''}${tops[i]}`; yield;}
+          for (let i = bottoms.length - 1; i >= 0; i--) {run += `L${bottoms[i]}`; yield;}
+          runs.push(`${run}Z`);
+        }
         tops = []; bottoms = []; topY = bottomY = null;
       };
       for (const [at] of group.cells) {
+        yield;
         const corners = cache.bars.get(at)!;
-        if (gap || previous !== at - barMs) finish();
+        if (gap || previous !== at - barMs) yield* finish();
         // Equal adjacent heights have one straight boundary, with no extra vertices
         // for the SVG parser. Steps and unread holes retain all their corners.
         if (topY === corners.topY) tops[tops.length - 1] = corners.top[1];
@@ -75,11 +84,16 @@ export class StackPaths {
         else bottoms.push(...corners.bottom);
         topY = corners.topY; bottomY = corners.bottomY; previous = at;
       }
-      finish();
-      cache.order = group.cells.map(([at]) => at);
-      return cache.path = runs.join('');
-    });
-    for (const key of this.groups.keys()) if (!retained.has(key)) this.groups.delete(key);
+      yield* finish();
+      const order: number[] = [];
+      for (const [at] of group.cells) {order.push(at); yield;}
+      let path = '';
+      for (const run of runs) {path += run; yield;}
+      cache.order = order; cache.path = path; cache.dirty = false;
+      paths.push(path);
+    }
+    for (const key of this.groups.keys()) {if (!retained.has(key)) this.groups.delete(key); yield;}
     return paths;
   }
+  draw(...args: Parameters<StackPaths['drawPrepared']>): string[] {return drain(this.drawPrepared(...args));}
 }

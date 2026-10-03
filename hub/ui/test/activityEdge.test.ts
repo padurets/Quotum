@@ -38,7 +38,7 @@ test('the actual activity edge painter retains full and partial bars when a sele
   const start = source.search(/(?:const paintEdges|edgePaint.current) = \(\) => \{/);
   const body = source.slice(start, source.indexOf('useLayoutEffect(() => pan.subscribe', start));
   const y = (ms: number) => 100 - ms / (.7 * H) * 100;
-  runInNewContext(body, {edgePaint, strip, mask, bandClip, clipPlot, edges, pan, from: selected.from, to: selected.to, targetOf, cellStart, plotBar, groups, by: 'project', painted: {current: ''}, barMs: strip.barMs, vertical: {max: .7 * H}, height: 100, width: 24, scale: 1, left: 0, right: 0, perMs: 1 / H, x: (at: number) => (at - selected.from) / H, y, useLayoutEffect: (commit: () => void) => commits.push(commit)});
+  runInNewContext(body, {axis: {held: false, visualGeometry: () => ({from: pan.get()!.from, to: pan.get()!.to}), screenX: (at: number) => (at - selected.from) / H - (pan.get()!.to - pan.get()!.originEnd) / H}, edgePaint, strip, mask, bandClip, clipPlot, edges, pan, from: selected.from, to: selected.to, targetOf, cellStart, plotBar, groups, by: 'project', painted: {current: ''}, barMs: strip.barMs, vertical: {max: .7 * H}, height: 100, width: 24, scale: 1, left: 0, right: 0, perMs: 1 / H, x: (at: number) => (at - selected.from) / H, y, useLayoutEffect: (commit: () => void) => commits.push(commit)});
   assert.equal(edgePaint.current, committed, 'a preparing render cannot replace the painter of the old DOM');
   edgePaint.current();
   assert.equal(committedPaints, 1);

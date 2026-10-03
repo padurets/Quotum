@@ -829,6 +829,22 @@ visible and one speculative request, eight tiles each. Writes to the same tile a
 serialized, obsolete requests are aborted and speculative errors cannot drop the
 selection. The existing 15 MiB tile estimate protects the visible frame. On release,
 speculation stops and exact totals switch only after the final frame is complete.
+Numeric preparation runs outside React rendering through one cancellable MessageChannel
+scheduler. Its shared generators yield between small cell, session, group and point
+operations; server and synchronous readers drain those same generators. Each owner
+keeps only its latest job. Tile responses use private COW staging and publish their
+tiles, read bounds and metadata together. At most two responses are admitted for
+processing, including raw answers waiting for a tile reservation; ordinary HTTP
+scheduling remains separate. Flights and reservations remain owned until commit or
+discard. Completed projections pin the current tile entry and its write sequence.
+
+Each chart replaces one typed drawing model whole after preparation, then publishes
+its geometry and painters after the DOM commits. Input keeps the displayed model and
+its composed SVG matrix and CSS offset until that handoff. Finishing a gesture commits
+the address immediately and presents its last pending delta on RAF; the final pose
+stays held until the matching drawing model is ready. The SVG fold and CSS offset
+reset then start from the same displayed coordinates. A new gesture samples that
+actual presentation, including an interrupted fold, separately from its URL origin.
 If a speculative response is evicted to fit that budget, its interest stops reading
 ahead until movement or history news changes what is needed.
 

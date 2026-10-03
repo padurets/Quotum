@@ -1,4 +1,4 @@
-import {Fragment, memo, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactElement} from 'react';
+import {Fragment, memo, useEffect, useLayoutEffect, useRef, useState, type CSSProperties} from 'react';
 import {clock, countdown, countdownChangesAt, num, shortDay, stamp} from '../lib/format';
 import {t, useLocale} from '../i18n';
 import type {PlotBlock, PlotLine as Line} from '../lib/lines';
@@ -11,8 +11,8 @@ import {Tooltip, useTip} from './Tooltip';
 import {useTimeAxis} from './timeAxis';
 import {PlotLayer, PlotOverlay} from './PlotLayer';
 import {covered, type PlotBuffer} from '../lib/historyPlot';
-import {plotPath} from '../lib/plotPath';
-import {usePlotMemo} from './plotMemo';
+import {plotPathPrepared} from '../lib/plotPath';
+import {usePrepared} from './prepared';
 
 /**
  * A moment on the time axis: ahead, a known window reset or an announced extra one;
@@ -244,20 +244,26 @@ export const plotHeight = (width: number) => (width < 560 ? 220 : 300);
  * made taller, the plot is as tall as `plot` (CSS pixels), never lower than by itself;
  * it tells how tall that is (`onBase`, CSS pixels).
  */
+const NO_PLANS: PlanLine[] = [];
+const NO_FORECASTS: ForecastLine[] = [];
+const NO_MARKERS: Marker[] = [];
+
 export const Chart = memo(function Chart({
-  lines,
-  plans = [],
-  forecasts = [],
-  markers = [],
-  from,
-  now,
-  to,
+  lines: incomingLines,
+  plans: incomingPlans = NO_PLANS,
+  forecasts: incomingForecasts = NO_FORECASTS,
+  markers: incomingMarkers = NO_MARKERS,
+  from: desiredFrom,
+  now: desiredNow,
+  to: desiredTo,
   cellMs,
   empty,
   onSelect,
   plot,
   onBase,
-  strip = null,
+  strip: incomingStrip = null,
+  prepared: incomingReady = true,
+  modelContext = '',
 }: {
   lines: Line[];
   plans?: PlanLine[];
@@ -275,89 +281,101 @@ export const Chart = memo(function Chart({
   plot?: number;
   onBase?: (height: number) => void;
   strip?: PlotBuffer | null;
+  prepared?: boolean;
+  modelContext?: string;
 }) {
   const left = 40;
   const right = 12;
-  const axis = useTimeAxis({from, to, end: now, cellMs, left, right, onSelect});
-  const {box, svg, width, scale, drag, timeAt, handlers, basis, panning} = axis;
-  const x = strip ? axis.drawX : axis.x;
-  const hover = axis.hover !== null && (!strip || axis.hover > now || covered(strip.coverage, axis.hover, axis.hover + cellMs)) ? axis.hover : null;
-
+  const axis = useTimeAxis({from: desiredFrom, to: desiredTo, end: desiredNow, cellMs, left, right, onSelect, ready: incomingReady});
+  const {box, svg, width, scale, drag, timeAt, handlers, panning} = axis;
+  const requested = axis.basis;
   const base = plotHeight(width);
   const height = plot === undefined ? base : Math.max(base, plot / scale);
   useLayoutEffect(() => onBase?.(base * scale), [base, scale, onBase]);
-  const top = 12;
-  const bottom = 28;
-  // Until a matching strip is prepared, move the geometry already on screen.
-  // The gesture's fresh clock must not rebuild all of those committed paths.
-  const drawFrom = axis.active && !strip ? basis.from : from;
-  const drawNow = axis.active && !strip ? basis.end : now;
-  /** A cell is drawn at its middle (the last, partial one at the drawn end). */
-  const bx = (cell: number) => x(Math.min(drawNow, cell + cellMs / 2));
-  const y = (value: number) => top + (1 - value / 100) * (height - top - bottom);
-  const tickFrom = strip?.from ?? from, tickTo = strip?.to ?? to;
-  const {ticks, daily} = niceTicks(tickFrom, tickTo, (width < 560 ? 4 : 7) * (tickTo - tickFrom) / (basis.to - basis.from));
-
-  const blockPaths = useRef(new Map<PlotBlock, {geometry: string; line: string; last: [number, number] | null; drawn?: {line: string; element: ReactElement}}>());
-  const paths = usePlotMemo(
-    () => {
-      const retained = new Set<PlotBlock>();
-      const geometry = `${basis.from}:${basis.to}:${drawNow}:${width}:${height}:${cellMs}`;
-      const result = lines.map(line => {
-        if (strip && line.blocks) {
-          let last: [number, number] | null = null;
-          const parts = line.blocks.map(({block, join}) => {
-            retained.add(block);
-            let cached = blockPaths.current.get(block);
-            if (!cached || cached.geometry !== geometry) {
-              let segment = -1, previousX = -Infinity;
-              const runs: [number, number][][] = [];
-              let end: [number, number] | null = null;
-              for (const [at, remaining, group] of block.points) {
-                if (at > drawNow) break;
-                const px = bx(at), py = y(remaining);
-                if (group === segment && px - previousX < .5) continue;
-                if (group !== segment) runs.push([]);
-                runs.at(-1)!.push([px, py]);
-                segment = group; previousX = px; end = [px, py];
-              }
-              cached = {geometry, line: plotPath(runs), last: end};
-              blockPaths.current.set(block, cached);
+  const top = 12, bottom = 28;
+  const blockPaths = useRef(new Map<PlotBlock, {geometry: string; line: string; last: [number, number] | null}>());
+  const prepared = usePrepared(function* () {
+    const basis = {from: requested.from, to: requested.to, end: requested.end};
+    const span = Math.max(60_000, basis.to - basis.from);
+    const x = (at: number) => left + ((incomingStrip ? at : Math.min(basis.to, Math.max(basis.from, at))) - basis.from) / span * (width - left - right);
+    const drawFrom = axis.active && !incomingStrip ? basis.from : desiredFrom;
+    const drawNow = axis.active && !incomingStrip ? basis.end : desiredNow;
+    const bx = (at: number) => x(Math.min(drawNow, at + cellMs / 2));
+    const y = (value: number) => top + (1 - value / 100) * (height - top - bottom);
+    const geometry = `${basis.from}:${basis.to}:${drawNow}:${width}:${height}:${cellMs}`;
+    const retained = new Set<PlotBlock>();
+    const paths: {line: string; last: [number, number] | null; parts: {key: string; line: string}[] | null; latest: string | undefined}[] = [];
+    for (const line of incomingLines) {
+      let latest: string | undefined;
+      for (const [at, remaining] of line.points) {if (at > drawNow) break; latest = `${at}:${remaining}`; yield;}
+      if (incomingStrip && line.blocks) {
+        let last: [number, number] | null = null;
+        const parts: {key: string; line: string}[] = [];
+        for (const {block, join} of line.blocks) {
+          retained.add(block);
+          let cached = blockPaths.current.get(block);
+          if (!cached || cached.geometry !== geometry) {
+            let segment = -1, previousX = -Infinity;
+            const runs: [number, number][][] = [];
+            let end: [number, number] | null = null;
+            for (const [at, remaining, group] of block.points) {
+              yield;
+              if (at > drawNow) break;
+              const px = bx(at), py = y(remaining);
+              if (group === segment && px - previousX < .5) continue;
+              if (group !== segment) runs.push([]);
+              runs.at(-1)!.push([px, py]); segment = group; previousX = px; end = [px, py];
             }
-            const bridge = join && cached.line && last ? `M${last[0].toFixed(1)},${last[1].toFixed(1)}L` + cached.line.slice(1) : cached.line;
-            if (cached.last) last = cached.last;
-            if (cached.drawn?.line !== bridge) cached.drawn = {line: bridge, element: <path key={`${block.from}:${block.to}`} d={bridge} className="series" />};
-            return cached.drawn.element;
-          });
-          return {line: '', last, parts};
+            cached = {geometry, line: yield* plotPathPrepared(runs), last: end};
+            blockPaths.current.set(block, cached);
+          }
+          const bridge = join && cached.line && last ? `M${last[0].toFixed(1)},${last[1].toFixed(1)}L${cached.line.slice(1)}` : cached.line;
+          if (cached.last) last = cached.last;
+          parts.push({key: `${block.from}:${block.to}`, line: bridge}); yield;
         }
+        paths.push({line: '', last, parts, latest});
+      } else {
         const runs: [number, number][][] = [];
-        let segment = -1;
-        let previousX = -1;
+        let segment = -1, previousX = -1;
         for (const [at, remaining, group] of line.points) {
-          if (at + cellMs < (strip?.from ?? drawFrom)) continue;
-          // The answer on screen may be of another period while the next loads: what lies past the end is not drawn.
+          yield;
+          if (at + cellMs < (incomingStrip?.from ?? drawFrom)) continue;
           if (at > drawNow) break;
-          const px = bx(at);
-          const py = y(remaining);
-          if (group !== segment) {
-            runs.push([]);
-            segment = group;
-          } else if (px - previousX < 0.5) continue;
-          runs.at(-1)!.push([px, py]);
-          previousX = px;
+          const px = bx(at), py = y(remaining);
+          if (group !== segment) {runs.push([]); segment = group;}
+          else if (px - previousX < .5) continue;
+          runs.at(-1)!.push([px, py]); previousX = px;
         }
-        return {
-          line: plotPath(runs),
-          last: runs.at(-1)?.at(-1) ?? null,
-          parts: null,
-        };
-      });
-      for (const block of blockPaths.current.keys()) if (!retained.has(block)) blockPaths.current.delete(block);
-      return result;
-    },
-    [lines, drawFrom, drawNow, width, height, cellMs, basis.from, basis.to, strip],
-  );
+        paths.push({line: yield* plotPathPrepared(runs), last: runs.at(-1)?.at(-1) ?? null, parts: null, latest});
+      }
+    }
+    const planPaths: string[] = [], forecastPaths: string[] = [];
+    for (const plan of incomingPlans) {
+      let path = '';
+      for (const run of plan.runs) for (let i = 0; i < run.length; i++) {const [at, value] = run[i]; path += `${i ? 'L' : 'M'}${x(at).toFixed(1)},${y(value).toFixed(1)}`; yield;}
+      planPaths.push(path);
+    }
+    for (const forecast of incomingForecasts) {
+      let path = '';
+      for (let i = 0; i < forecast.points.length; i++) {const [at, value] = forecast.points[i]; path += `${i ? 'L' : 'M'}${x(at).toFixed(1)},${y(value).toFixed(1)}`; yield;}
+      forecastPaths.push(path);
+    }
+    for (const block of blockPaths.current.keys()) {if (!retained.has(block)) blockPaths.current.delete(block); yield;}
+    return {basis, lines: incomingLines, plans: incomingPlans, forecasts: incomingForecasts, markers: incomingMarkers, strip: incomingStrip, from: desiredFrom, now: desiredNow, to: desiredTo, paths, planPaths, forecastPaths};
+  }, [incomingLines, incomingPlans, incomingForecasts, incomingMarkers, incomingStrip, desiredFrom, desiredNow, desiredTo, width, height, cellMs, requested.from, requested.to, requested.end, axis.active], `${modelContext}:${width}:${height}:${cellMs}`);
+  const model = prepared.value;
+  const basis = model?.basis ?? requested;
+  const lines = model?.lines ?? [], plans = model?.plans ?? [], forecasts = model?.forecasts ?? [], markers = model?.markers ?? [];
+  const strip = model?.strip ?? null, from = model?.from ?? desiredFrom, now = model?.now ?? desiredNow, to = model?.to ?? desiredTo;
+  const paths = model?.paths ?? [], planPaths = model?.planPaths ?? [], forecastPaths = model?.forecastPaths ?? [];
+  const span = Math.max(60_000, basis.to - basis.from);
+  const x = (at: number) => left + ((strip ? at : Math.min(basis.to, Math.max(basis.from, at))) - basis.from) / span * (width - left - right);
+  const y = (value: number) => top + (1 - value / 100) * (height - top - bottom);
+  const bx = (at: number) => x(Math.min(now, at + cellMs / 2));
+  const hover = incomingReady && prepared.ready && axis.hover !== null && (!strip || axis.hover > now || covered(strip.coverage, axis.hover, axis.hover + cellMs)) ? axis.hover : null;
+  const tickFrom = strip?.from ?? from, tickTo = strip?.to ?? to;
+  const {ticks, daily} = niceTicks(tickFrom, tickTo, (width < 560 ? 4 : 7) * (tickTo - tickFrom) / span);
+  useLayoutEffect(() => {axis.commitDrawing(basis, incomingReady && prepared.ready);});
 
   const none = {left: false, plan: false, gap: false, forecast: false};
   const {rows, columns} = hover === null ? {rows: [], columns: none} : readCell(lines, plans, hover, cellMs, now, to, forecasts, strip?.coverage);
@@ -523,21 +541,21 @@ export const Chart = memo(function Chart({
             {daily ? shortDay(tick) : clock(tick)}
           </text>
         ))}
-        {plans.map(plan => (
+        {plans.map((plan, i) => (
           <path
             key={plan.key}
             className="plan-line"
             stroke={plan.color}
-            d={plan.runs.map(run => run.map(([at, value], i) => `${i ? 'L' : 'M'}${x(at).toFixed(1)},${y(value).toFixed(1)}`).join('')).join('')}
+            d={planPaths[i]}
           />
         ))}
-        {forecasts.map(forecast => (
+        {forecasts.map((forecast, i) => (
           <path
             key={forecast.key}
             className="forecast-line"
             stroke={forecast.color}
             strokeDasharray={forecast.dash || undefined}
-            d={forecast.points.map(([at, value], i) => `${i ? 'L' : 'M'}${x(at).toFixed(1)},${y(value).toFixed(1)}`).join('')}
+            d={forecastPaths[i]}
           />
         ))}
         {markers.map(marker => {
@@ -561,8 +579,8 @@ export const Chart = memo(function Chart({
           );
         })}
         {lines.map((line, i) => (
-          <g key={line.key} data-series={`${line.sourceId} ${line.windowId}`} data-last={line.points.filter(p => p[0] <= now).at(-1)?.slice(0, 2).join(':')} stroke={line.color} strokeDasharray={line.dash || undefined}>
-            {paths[i].parts ?? <path d={paths[i].line} className="series" />}
+          <g key={line.key} data-series={`${line.sourceId} ${line.windowId}`} data-last={paths[i]?.latest} stroke={line.color} strokeDasharray={line.dash || undefined}>
+            {paths[i].parts?.map(part => <path key={part.key} d={part.line} className="series" />) ?? <path d={paths[i].line} className="series" />}
           </g>
         ))}
         {/* Announcements are read over the lines, each on its own backing. */}

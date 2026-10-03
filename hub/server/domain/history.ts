@@ -1,3 +1,4 @@
+import {drain, ordered, type Preparation} from './prepare.js';
 import {barOf, type Activity, type ActivityGroup, type Dimension, type SeriesWork} from './work.js';
 
 /** The shared grid, from the finest cell that keeps a frame within its budget. */
@@ -84,14 +85,15 @@ export const round4 = (value: number) => Math.round(value * 10_000) / 10_000;
 const roundOpen = (value: number | null) => value === null ? null : round4(value);
 
 /** Defaults compare at the precision the reader sees, including its rounded low. */
-export function encodeCells(source: string, window: string, from: number, cell: number, since: number, cells: DecodedCell[]): SeriesCells {
+export function* encodeCellsPrepared(source: string, window: string, from: number, cell: number, since: number, cells: DecodedCell[]): Preparation<SeriesCells> {
   const holds = new Map<number, number>();
-  for (const v of cells) holds.set(v.hold, (holds.get(v.hold) ?? 0) + 1);
+  for (const v of cells) {holds.set(v.hold, (holds.get(v.hold) ?? 0) + 1); yield;}
   // The most common hold keeps cadence changes from repeating an override in every cell.
-  const hold = [...holds].sort((a, b) => b[1] - a[1])[0][0];
+  const hold = (yield* ordered(holds, (a, b) => b[1] - a[1]))[0][0];
   const open = roundOpen(cells[0].open);
   let previous = open;
-  const encoded = cells.map((v): SeriesCell => {
+  const encoded: SeriesCell[] = [];
+  for (const v of cells) {
     const low = Math.round(v.low * 100) / 100;
     const spent = round4(v.spent);
     const extra: CellExtra = {};
@@ -107,20 +109,22 @@ export function encodeCells(source: string, window: string, from: number, cell: 
     previous = extra.l ?? low;
     const row: SeriesCell = [(v.at - from) / cell, low, spent, v.covered];
     if (Object.keys(extra).length) row.push(extra);
-    return row;
-  });
+    encoded.push(row); yield;
+  }
   return {source, window, hold, open, cells: encoded};
 }
 
-export function decodeCells(series: SeriesCells, from: number, cell: number, since: number): DecodedCell[] {
+export function* decodeCellsPrepared(series: SeriesCells, from: number, cell: number, since: number): Preparation<DecodedCell[]> {
   let previous = series.open;
-  return series.cells.map(([i, low, spent, covered, extra = {}]) => {
+  const cells: DecodedCell[] = [];
+  for (const [i, low, spent, covered, extra = {}] of series.cells) {
     const at = from + i * cell;
     const open = 'o' in extra ? extra.o! : previous;
     const last = extra.l ?? low;
     previous = last;
-    return {at, low, spent, covered, open, first: extra.f ?? low, last, gap: !!extra.g, hold: extra.h ?? series.hold, work: extra.w ?? [at >= since ? spent : 0, 0, 0]};
-  });
+    cells.push({at, low, spent, covered, open, first: extra.f ?? low, last, gap: !!extra.g, hold: extra.h ?? series.hold, work: extra.w ?? [at >= since ? spent : 0, 0, 0]}); yield;
+  }
+  return cells;
 }
 
 const DIMENSIONS: Dimension[] = ['source', 'project', 'device'];
@@ -129,33 +133,36 @@ const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 type Group = {key: string; name: string | null; activeMs: number; agentMs: number; refs: Set<string>; bars: Map<number, number>};
 
 /** Reset markers use the earliest time and stable window order, including filled tile heads. */
-export function resetEvents(chunks: readonly Chunk[], windows: ReadonlySet<string>, from: number, to: number): (SourceEvent & {kind: 'early_reset'})[] {
+export function* resetEventsPrepared(chunks: readonly Chunk[], windows: ReadonlySet<string>, from: number, to: number): Preparation<(SourceEvent & {kind: 'early_reset'})[]> {
   const events: (SourceEvent & {kind: 'early_reset'})[] = [];
-  const found = chunks.flatMap(chunk => chunk.resets).filter(([source, window, at]) => windows.has(`${source} ${window}`) && at >= from && at < to).sort((a, b) => a[2] - b[2]);
+  const matching: Chunk['resets'] = [];
+  for (const chunk of chunks) for (const row of chunk.resets) {if (windows.has(`${row[0]} ${row[1]}`) && row[2] >= from && row[2] < to) matching.push(row); yield;}
+  const found = yield* ordered(matching, (a, b) => a[2] - b[2]);
   for (const [sourceId, window, at] of found) {
-    const same = events.find(event => event.sourceId === sourceId && at - event.at <= 15 * 60_000);
+    let same: (SourceEvent & {kind: 'early_reset'}) | undefined;
+    for (const event of events) {yield; if (event.sourceId === sourceId && at - event.at <= 15 * 60_000) {same = event; break;}}
     if (same) {if (!same.windows.includes(window)) same.windows.push(window);}
     else events.push({sourceId, at, kind: 'early_reset', windows: [window]});
   }
-  for (const event of events) event.windows.sort();
+  for (const event of events) event.windows = yield* ordered(event.windows, compare);
   return events;
 }
 
 /** A frame is an additive record of whole cells; only session identity needs a set. */
-export function compose(chunks: readonly Chunk[], meta: HistoryMeta, target: Target, windows: ReadonlySet<string>): History {
+export function* composePrepared(chunks: readonly Chunk[], meta: HistoryMeta, target: Target, windows: ReadonlySet<string>): Preparation<History> {
   const {cell, k0, k1} = target;
   const since = k0 * cell;
   const to = Math.min((k1 + 1) * cell, Math.max(target.now, meta.now));
   const inFrame = (at: number) => at >= since && at < (k1 + 1) * cell;
   const S = (source: string) => Math.max(meta.known.work, meta.known.sources[source] ?? Infinity);
-  const ordered = [...chunks].sort((a, b) => a.from - b.from);
+  const chunksInOrder = yield* ordered(chunks, (a, b) => a.from - b.from);
   const barMs = barOf(cell, target.length);
   const bars = new Map<number, {active: number; agent: number; refs: Set<string>}>();
   const by: Record<Dimension, Map<string, Group>> = {source: new Map(), project: new Map(), device: new Map()};
   const refs = new Set<string>();
   let activeMs = 0;
   let agentMs = 0;
-  for (const chunk of ordered) {
+  for (const chunk of chunksInOrder) {
     for (const [i, active, members, overrides] of chunk.activity.cells) {
       const at = chunk.from + i * cell;
       if (!inFrame(at)) continue;
@@ -166,6 +173,7 @@ export function compose(chunks: readonly Chunk[], meta: HistoryMeta, target: Tar
       activeMs += active;
       const parts: Record<Dimension, Map<string, {ms: number; max: number; name: string | null; refs: string[]}>> = {source: new Map(), project: new Map(), device: new Map()};
       for (const member of members) {
+        yield;
         const [n, ms] = typeof member === 'number' ? [member, active] : member;
         const [ref, source, project, device] = chunk.activity.sessions[n];
         refs.add(ref);
@@ -175,6 +183,7 @@ export function compose(chunks: readonly Chunk[], meta: HistoryMeta, target: Tar
         const keys = {source, project: JSON.stringify(project), device};
         const names = {source: null, project, device: chunk.activity.devices[device] ?? null};
         for (const dim of DIMENSIONS) {
+          yield;
           const key = keys[dim];
           const part = parts[dim].get(key) ?? {ms: 0, max: 0, name: names[dim], refs: []};
           part.ms += ms;
@@ -184,30 +193,32 @@ export function compose(chunks: readonly Chunk[], meta: HistoryMeta, target: Tar
         }
       }
       const values: Record<Dimension, Map<string, number>> = {source: new Map(), project: new Map(), device: new Map()};
-      for (const [dim, key, ms] of overrides) values[dimensionOf[dim]].set(key, ms);
+      for (const [dim, key, ms] of overrides) {values[dimensionOf[dim]].set(key, ms); yield;}
       for (const dim of DIMENSIONS) for (const [key, part] of parts[dim]) {
+        yield;
         const group = by[dim].get(key) ?? {key, name: part.name, activeMs: 0, agentMs: 0, refs: new Set(), bars: new Map()};
         group.name = part.name;
         group.activeMs += values[dim].get(key) ?? part.max;
         group.agentMs += part.ms;
-        for (const ref of part.refs) group.refs.add(ref);
+        for (const ref of part.refs) {group.refs.add(ref); yield;}
         group.bars.set(bar, (group.bars.get(bar) ?? 0) + part.ms);
         by[dim].set(key, group);
       }
     }
   }
   const holes: [number, number][] = [];
-  let readTo = ordered[0]?.to ?? 0;
-  for (const chunk of ordered.slice(1)) {
+  let readTo = chunksInOrder[0]?.to ?? 0;
+  for (const chunk of chunksInOrder.slice(1)) {
     if (chunk.from > readTo) holes.push([readTo, chunk.from]);
     readTo = Math.max(readTo, chunk.to);
   }
   const series = new Map<string, {line: HistorySeries; last: number; segment: number}>();
-  for (const chunk of ordered) for (const values of chunk.series) {
+  for (const chunk of chunksInOrder) for (const values of chunk.series) {
     const key = `${values.source} ${values.window}`;
     if (!windows.has(key)) continue;
     let row = series.get(key);
-    for (const v of decodeCells(values, chunk.from, cell, S(values.source))) {
+    for (const v of yield* decodeCellsPrepared(values, chunk.from, cell, S(values.source))) {
+      yield;
       if (!inFrame(v.at)) continue;
       if (!row) {
         const from = Math.max(since, S(values.source));
@@ -230,16 +241,31 @@ export function compose(chunks: readonly Chunk[], meta: HistoryMeta, target: Tar
       }
     }
   }
-  const resets = resetEvents(ordered, windows, since, (k1 + 1) * cell);
-  const grants: SourceEvent[] = ordered.flatMap(chunk => chunk.grants).filter(([, at]) => inFrame(at)).map(([sourceId, at, count]) => ({sourceId, at, kind: 'resets_granted', count}));
+  const resets = yield* resetEventsPrepared(chunksInOrder, windows, since, (k1 + 1) * cell);
+  const grants: SourceEvent[] = [];
+  for (const chunk of chunksInOrder) for (const [sourceId, at, count] of chunk.grants) {if (inFrame(at)) grants.push({sourceId, at, kind: 'resets_granted', count}); yield;}
   const activitySince = Math.max(meta.known.work, ...(Object.keys(meta.known.sources).length ? [Math.min(...Object.values(meta.known.sources))] : []));
   const knownFrom = Math.max(since, activitySince);
   const groups = {} as Record<Dimension, ActivityGroup[]>;
-  for (const dim of DIMENSIONS) groups[dim] = [...by[dim].values()].sort((a, b) => b.agentMs - a.agentMs || b.activeMs - a.activeMs || compare(a.name ?? '', b.name ?? '') || compare(a.key, b.key)).map(g => ({key: g.key, name: g.name, activeMs: g.activeMs, agentMs: g.agentMs, agents: g.refs.size, cells: [...g.bars].sort((a, b) => a[0] - b[0])}));
+  for (const dim of DIMENSIONS) {
+    groups[dim] = [];
+    for (const g of yield* ordered(by[dim].values(), (a, b) => b.agentMs - a.agentMs || b.activeMs - a.activeMs || compare(a.name ?? '', b.name ?? '') || compare(a.key, b.key))) {
+      groups[dim].push({key: g.key, name: g.name, activeMs: g.activeMs, agentMs: g.agentMs, agents: g.refs.size, cells: yield* ordered(g.bars, (a, b) => a[0] - b[0])}); yield;
+    }
+  }
+  const lines: HistorySeries[] = [];
+  for (const row of series.values()) {lines.push(row.line); yield;}
+  const activityCells: Activity['cells'] = [];
+  for (const [at, b] of yield* ordered(bars, (a, b) => a[0] - b[0])) {activityCells.push([at, b.active, b.agent, b.refs.size]); yield;}
   return {
     range: target.key, live: target.live, since, to, cellMs: cell, historyStart: meta.historyStart,
-    series: [...series.values()].map(row => row.line).sort((a, b) => compare(a.sourceId, b.sourceId) || compare(a.windowId, b.windowId)),
-    events: [...resets, ...grants].sort((a, b) => a.at - b.at),
-    activity: {since: activitySince, known: knownFrom < to ? {from: knownFrom, to} : null, barMs, activeMs, agentMs, agents: refs.size, cells: [...bars].sort((a, b) => a[0] - b[0]).map(([at, b]) => [at, b.active, b.agent, b.refs.size]), by: groups},
+    series: yield* ordered(lines, (a, b) => compare(a.sourceId, b.sourceId) || compare(a.windowId, b.windowId)),
+    events: yield* ordered([...resets, ...grants], (a, b) => a.at - b.at),
+    activity: {since: activitySince, known: knownFrom < to ? {from: knownFrom, to} : null, barMs, activeMs, agentMs, agents: refs.size, cells: activityCells, by: groups},
   };
 }
+
+export function encodeCells(...args: Parameters<typeof encodeCellsPrepared>): SeriesCells {return drain(encodeCellsPrepared(...args));}
+export function decodeCells(...args: Parameters<typeof decodeCellsPrepared>): DecodedCell[] {return drain(decodeCellsPrepared(...args));}
+export function resetEvents(...args: Parameters<typeof resetEventsPrepared>): (SourceEvent & {kind: 'early_reset'})[] {return drain(resetEventsPrepared(...args));}
+export function compose(...args: Parameters<typeof composePrepared>): History {return drain(composePrepared(...args));}

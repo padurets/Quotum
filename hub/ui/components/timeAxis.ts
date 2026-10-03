@@ -13,6 +13,9 @@ const HOLD_MS = 450;
 /** How long a chart's content takes to slide in after a step through time. */
 const SLIDE_MS = 220;
 
+export type DrawingGeometry = {from: number; to: number; end: number};
+type Pose = {a: number; b: number; offset: number};
+
 /**
  * How far a chart's content slides in after it steps through time, in pixels: from
  * where it was drawn to where it is now, so the eye follows which way it went. None
@@ -48,6 +51,7 @@ export function useTimeAxis({
   left,
   right,
   onSelect,
+  ready = true,
 }: {
   from: number;
   to: number;
@@ -57,6 +61,7 @@ export function useTimeAxis({
   right: number;
   /** A time range dragged across the chart. */
   onSelect?: (range: TimeRange) => void;
+  ready?: boolean;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const svg = useRef<SVGSVGElement>(null);
@@ -64,6 +69,7 @@ export function useTimeAxis({
   const [scale, setScale] = useState(1);
   const [hover, setHover] = useState<number | null>(null);
   const [folding, setFolding] = useState(false);
+  const [, present] = useState(0);
   const foldTicket = useRef(0);
   const animations = useRef(new Map<SVGGElement, Animation>());
   // The axis owns these animations; finding them through the DOM flushes styles.
@@ -85,8 +91,11 @@ export function useTimeAxis({
   const shifting = useShifting();
   const historyStart = useHistoryBegins();
   const panPointer = useRef<{token: number; id: number; x: number; left: number; width: number} | null>(null);
-  const captured = useRef<{token: number; from: number; to: number; end: number} | null>(null);
-  const finished = useRef<{from: number; to: number; end: number; stop: PanStop} | null>(null);
+  const captured = useRef<(DrawingGeometry & {token: number; visual: DrawingGeometry; pose: Pose}) | null>(null);
+  const drawing = useRef<DrawingGeometry>({from, to, end});
+  const pose = useRef<Pose>({a: 1, b: 0, offset: 0});
+  const finalFrame = useRef<number | null>(null);
+  const finished = useRef<{visual: DrawingGeometry; stop: PanStop} | null>(null);
   const wheelBounds = useRef<DOMRect | null>(null);
   const panLayers = useRef<HTMLElement[]>([]);
   /** Where a drag across the chart started and where it is now, in chart pixels. */
@@ -105,7 +114,8 @@ export function useTimeAxis({
     const selected = timeRange();
     const now = Math.max(hubNow(), end);
     const visual = visualGeometry();
-    return {source: source.current, input, selected, length: selected ? selected.to - selected.from : periodOf(prefs().range).ms, now, historyStart, span: visual.to - visual.from, width: (width - left - right) * scale};
+    const length = selected ? selected.to - selected.from : periodOf(prefs().range).ms;
+    return {source: source.current, input, selected, length, semanticEnd: Math.min(now, visual.from + length), now, historyStart, span: visual.to - visual.from, width: (width - left - right) * scale};
   };
   const wheelPan = useRef<(event: WheelEvent) => boolean>(() => false);
   const wheelInput = (event: WheelEvent) => {
@@ -128,39 +138,54 @@ export function useTimeAxis({
   }, []);
 
   const paintPan = useRef(() => {});
-  const visualGeometry = () => {
+  const visualGeometry = (): DrawingGeometry => {
+    const base = drawing.current;
     const layer = box.current?.querySelector<SVGGElement>('[data-plot-main] .slides');
-    if (!layer || !animations.current.has(layer)) return {from, to, end};
-    const moving = getComputedStyle(layer).transform;
-    if (moving === 'none') return {from, to, end};
-    const matrix = new DOMMatrix(moving);
-    const ratio = matrix.a || 1;
-    const span = (to - from) / ratio;
-    const start = from + (left * (1 - ratio) - matrix.e) / (width - left - right) * span;
-    return {from: start, to: start + span, end};
+    let {a, b, offset} = pose.current;
+    if (layer && animations.current.has(layer)) {
+      const moving = getComputedStyle(layer).transform;
+      if (moving !== 'none') {const matrix = new DOMMatrix(moving); a = matrix.a || 1; b = matrix.e;}
+    }
+    const span = Math.max(60_000, base.to - base.from);
+    const inverse = (px: number) => base.from + (((px - offset) / scale - b) / a - left) / (width - left - right) * span;
+    const start = inverse(left * scale), finish = inverse((width - right) * scale);
+    return {from: start, to: finish, end: Math.min(base.end, finish)};
+  };
+  const freezeSlides = () => {
+    const layer = box.current?.querySelector<SVGGElement>('[data-plot-main] .slides');
+    if (layer && animations.current.has(layer)) {
+      const moving = getComputedStyle(layer).transform;
+      if (moving !== 'none') {const matrix = new DOMMatrix(moving); pose.current.a = matrix.a || 1; pose.current.b = matrix.e;}
+    }
+    cancelSlides();
+    for (const layer of box.current?.querySelectorAll<SVGGElement>('.slides') ?? []) layer.style.transform = `translateX(${pose.current.b}px) scaleX(${pose.current.a})`;
   };
   const geometry = useRef({end, future: to - end});
-  useLayoutEffect(() => {geometry.current = {end, future: to - end};});
-  useLayoutEffect(() => pan.register(source.current, () => geometry.current), []);
+  useLayoutEffect(() => {geometry.current = {end: drawing.current.end, future: Math.max(0, visualGeometry().to - visualGeometry().from - (timeRange() ? timeRange()!.to - timeRange()!.from : periodOf(prefs().range).ms))};});
+  useLayoutEffect(() => pan.register(source.current, () => {
+    const visual = visualGeometry();
+    return {end: drawing.current.end, future: Math.max(0, visual.to - visual.from - (timeRange() ? timeRange()!.to - timeRange()!.from : periodOf(prefs().range).ms))};
+  }), []);
   const paint = () => {
     const element = svg.current;
     if (!element) return;
     const frame = pan.get();
     if (frame && captured.current?.token !== frame.token) {
+      if (finalFrame.current !== null) {cancelAnimationFrame(finalFrame.current); finalFrame.current = null;}
       finished.current = null;
       foldTicket.current++;
-      captured.current = {token: frame.token, ...visualGeometry()};
+      const visual = visualGeometry();
+      freezeSlides();
+      captured.current = {token: frame.token, ...drawing.current, visual, pose: {...pose.current}};
       element.dataset.panToken = String(frame.token);
       element.dataset.panOrigin = String(frame.originEnd);
-      element.dataset.panScale = String((captured.current.to - captured.current.from) / ((width - left - right) * scale));
-      cancelSlides();
+      element.dataset.panScale = String((visual.to - visual.from) / ((width - left - right) * scale));
+      element.dataset.panBase = String(pose.current.offset);
       setFolding(false);
     }
     const origin = captured.current;
-    const dx = frame && origin ? -(frame.to - frame.originEnd) / (origin.to - origin.from) * (width - left - right) : 0;
-    for (const layer of panLayers.current) {
-      layer.style.transform = frame ? `translateX(${dx * scale}px)` : '';
-    }
+    if (frame && origin) pose.current.offset = origin.pose.offset - (frame.to - frame.originEnd) / (origin.visual.to - origin.visual.from) * (width - left - right) * scale;
+    for (const layer of panLayers.current) layer.style.transform = pose.current.offset ? `translateX(${pose.current.offset}px)` : '';
     if (frame) {
       element.dataset.panEnd = String(frame.to);
       if (!element.classList.contains('is-panning')) element.classList.add('is-panning');
@@ -170,8 +195,9 @@ export function useTimeAxis({
       delete element.dataset.panToken;
       delete element.dataset.panOrigin;
       delete element.dataset.panScale;
+      delete element.dataset.panBase;
       element.classList.remove('is-grabbing');
-      element.classList.remove('is-panning');
+      element.classList.toggle('is-panning', finished.current !== null || folding);
       captured.current = null;
       const held = panPointer.current;
       panPointer.current = null;
@@ -193,18 +219,28 @@ export function useTimeAxis({
   useLayoutEffect(() => pan.onStop(stop => {
     const origin = captured.current;
     if (!origin || origin.token !== stop.draft.token) return;
-    const delta = stop.presented.to - stop.draft.originEnd;
-    finished.current = {from: origin.from + delta, to: origin.to + delta, end: stop.presented.to, stop};
+    const delta = stop.draft.to - stop.draft.originEnd;
+    finished.current = {visual: {...origin.visual, from: origin.visual.from + delta, to: origin.visual.to + delta}, stop};
+    setFolding(true);
+    // Logical completion is immediate; the last accepted delta still reaches a real RAF.
+    finalFrame.current = requestAnimationFrame(() => {
+      finalFrame.current = null;
+      if (pan.active() || finished.current?.stop !== stop) return;
+      pose.current.offset = origin.pose.offset - delta / (origin.visual.to - origin.visual.from) * (width - left - right) * scale;
+      for (const layer of panLayers.current) layer.style.transform = pose.current.offset ? `translateX(${pose.current.offset}px)` : '';
+      present(value => value + 1);
+    });
     captured.current = null;
   }), []);
   useEffect(() => () => {
     foldTicket.current++;
+    if (finalFrame.current !== null) cancelAnimationFrame(finalFrame.current);
     if (pan.source === source.current) pan.cancel();
   }, []);
   useEffect(() => {
     if (panning) {cancelHold(); setDrag(null); setHover(null);}
   }, [panning]);
-  useLayoutEffect(() => {svg.current?.classList.toggle('is-panning', panning !== null || folding);}, [panning, folding]);
+  useLayoutEffect(() => {svg.current?.classList.toggle('is-panning', panning !== null || folding || finished.current !== null);}, [panning, folding]);
   useLayoutEffect(() => {svg.current?.classList.toggle('is-grabbable', shifting);}, [shifting]);
 
   const measured = useRef<number | null>(null);
@@ -230,11 +266,11 @@ export function useTimeAxis({
     return () => observer.disconnect();
   }, []);
 
-  const basis = captured.current ?? {from, to, end};
+  const basis: DrawingGeometry = captured.current ?? (finished.current && !ready ? drawing.current : {from, to, end});
   const span = Math.max(60_000, basis.to - basis.from);
   const drawX = (at: number) => left + ((at - basis.from) / span) * (width - left - right);
   const x = (at: number) => drawX(Math.min(basis.to, Math.max(basis.from, at)));
-  const timeAt = (px: number) => basis.from + ((px - left) / (width - left - right)) * span;
+  const timeAt = (px: number) => {const visual = visualGeometry(); return visual.from + ((px - left) / (width - left - right)) * (visual.to - visual.from);};
   // After a step the pointer stands over another time: the chart reads that.
   useEffect(() => {
     const px = pointer.current;
@@ -327,45 +363,59 @@ export function useTimeAxis({
   };
 
   const clip = useId();
-  const shown = useRef<{from: number; end: number} | null>(null);
-  useLayoutEffect(() => {
+  const shown = useRef<DrawingGeometry | null>(null);
+  const commitDrawing = (next: DrawingGeometry, ready: boolean) => {
     const before = shown.current;
-    shown.current = {from, end};
+    shown.current = next;
+    drawing.current = next;
     const element = svg.current;
+    if (!element) return;
+    element.dataset.drawFrom = String(next.from);
+    element.dataset.drawTo = String(next.to);
+    element.dataset.drawReady = String(ready);
+    if (pan.active()) {
+      // A prepared strip uses the captured base and its frozen matrix, plus the current input offset.
+      for (const layer of box.current?.querySelectorAll<SVGGElement>('.slides') ?? []) layer.style.transform = `translateX(${pose.current.b}px) scaleX(${pose.current.a})`;
+      paintPan.current();
+      return;
+    }
     const previous = finished.current;
-    if (!before || !element || panning) return;
+    if (previous && (!ready || finalFrame.current !== null)) return;
     if (previous) {
-      const selected = timeRange();
-      const expected = previous.stop.range;
+      const selected = timeRange(), expected = previous.stop.range;
       const matches = selected === expected || !!selected && !!expected && selected.from === expected.from && selected.to === expected.to;
       if (!matches && !previous.stop.canceled) return;
       finished.current = null;
-      if (matches && !previous.stop.changed) return;
-      if (matches && matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-      if (matches) {
-        const ratio = (to - from) / (previous.to - previous.from);
-        const offset = left * (1 - ratio) + (from - previous.from) / (previous.to - previous.from) * (width - left - right);
-        setFolding(true);
-        const ticket = ++foldTicket.current;
-        const folding: Animation[] = [];
-        for (const layer of box.current!.querySelectorAll<SVGGElement>('.slides')) {
-          folding.push(animateSlide(layer, [{transform: `translateX(${offset}px) scaleX(${ratio})`}, {transform: 'none'}], {duration: 160, easing: 'ease-out'}));
-        }
-        Promise.allSettled(folding.map(animation => animation.finished)).then(() => {if (foldTicket.current === ticket && !pan.active()) setFolding(false);});
-        return;
+      const visual = previous.visual;
+      const ratio = (next.to - next.from) / (visual.to - visual.from);
+      const offset = left * (1 - ratio) + (next.from - visual.from) / (visual.to - visual.from) * (width - left - right);
+      pose.current = {a: ratio, b: offset, offset: 0};
+      for (const layer of panLayers.current) layer.style.transform = '';
+      const ticket = ++foldTicket.current;
+      const folds: Animation[] = [];
+      for (const layer of box.current?.querySelectorAll<SVGGElement>('.slides') ?? []) {
+        layer.style.transform = '';
+        if (!matchMedia('(prefers-reduced-motion: reduce)').matches && (Math.abs(ratio - 1) > 1e-9 || Math.abs(offset) > 1e-9)) folds.push(animateSlide(layer, [{transform: `translateX(${offset}px) scaleX(${ratio})`}, {transform: 'none'}], {duration: 160, easing: 'ease-out'}));
       }
+      if (!folds.length) {pose.current = {a: 1, b: 0, offset: 0}; setFolding(false);}
+      else Promise.allSettled(folds.map(animation => animation.finished)).then(() => {if (foldTicket.current === ticket && !pan.active()) {pose.current = {a: 1, b: 0, offset: 0}; setFolding(false);}});
+      return;
     }
-    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    const dx = slideOf(before, {from, end, to}, width - left - right);
-    if (!dx) return;
-    for (const layer of box.current!.querySelectorAll<SVGGElement>('.slides')) {
-      // A step taken while the last one still slides goes on from where that one is, not back.
-      const moving = getComputedStyle(layer).transform;
-      const start = dx + (moving === 'none' ? 0 : new DOMMatrix(moving).m41);
-      animateSlide(layer, [{transform: `translateX(${start}px)`}, {transform: 'none'}], {duration: SLIDE_MS, easing: 'cubic-bezier(.2, .7, .3, 1)'});
+    if (!ready) {
+      // Navigation can borrow matching old data in the requested projection while its model prepares.
+      const ratio = (next.to - next.from) / (to - from);
+      pose.current = {a: ratio, b: left * (1 - ratio) + (next.from - from) / (to - from) * (width - left - right), offset: 0};
+      for (const layer of box.current?.querySelectorAll<SVGGElement>('.slides') ?? []) layer.style.transform = `translateX(${pose.current.b}px) scaleX(${ratio})`;
+      return;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [from, end, to, panning]);
+    if (!before || before === next || animations.current.size || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const dx = slideOf(before, next, width - left - right);
+    for (const layer of box.current?.querySelectorAll<SVGGElement>('.slides') ?? []) {
+      layer.style.transform = '';
+      if (dx) animateSlide(layer, [{transform: `translateX(${dx}px)`}, {transform: 'none'}], {duration: SLIDE_MS, easing: 'cubic-bezier(.2, .7, .3, 1)'});
+    }
+    pose.current = {a: 1, b: 0, offset: 0};
+  };
 
-  return {box, svg, width, scale, hover: shifting || panning || folding ? null : hover, drag, x, drawX, timeAt, clip, handlers, basis, active: panning !== null, panning: shifting || panning !== null || folding};
+  return {box, svg, width, scale, commitDrawing, visualGeometry, screenX: (at: number) => {const base = drawing.current; return pose.current.a * (left + (at - base.from) / (base.to - base.from) * (width - left - right)) + pose.current.b + pose.current.offset / scale;}, held: finished.current !== null, hover: shifting || panning || folding || finished.current !== null ? null : hover, drag, x, drawX, timeAt, clip, handlers, basis, active: panning !== null, panning: shifting || panning !== null || folding || finished.current !== null};
 }

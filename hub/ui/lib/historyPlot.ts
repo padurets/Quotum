@@ -1,30 +1,36 @@
-import {cellStart, resetEvents, type Chunk, type HistoryMeta, type SourceEvent, type SeriesCells, type Target} from '../../server/domain/history';
+import {cellStart, resetEventsPrepared, type Chunk, type HistoryMeta, type SourceEvent, type SeriesCells, type Target} from '../../server/domain/history';
 import {barOf} from '../../server/domain/work';
 import type {ActivityDimension} from './types';
 import type {PlotBlock, PlotSeries} from './lines';
 
+import {drain, type Preparation} from './prepare';
+import {ordered} from '../../server/domain/prepare';
+
 // Weak keys release decoded rows with the store's bounded current/replacing strip.
 const decoded = new WeakMap<SeriesCells, {from: number; cell: number; full: PlotBlock; cuts: Map<string, PlotBlock>}>();
 const linePoints = new WeakMap<PlotBlock, Map<number, PlotSeries['points']>>();
-function pointsOf(block: PlotBlock, offset: number) {
+function* pointsOf(block: PlotBlock, offset: number): Preparation<PlotSeries['points']> {
   let offsets = linePoints.get(block);
   if (!offsets) {offsets = new Map(); linePoints.set(block, offsets);}
   let points = offsets.get(offset);
   if (!points) {
-    points = block.points.map(([at, low, segment]) => [at, low, segment + offset]);
+    points = [];
+    for (const [at, low, segment] of block.points) {points.push([at, low, segment + offset]); yield;}
     offsets.set(offset, points);
     if (offsets.size > 2) offsets.delete(offsets.keys().next().value!);
   }
   return points;
 }
-function blockOf(values: SeriesCells, chunk: Chunk, cell: number, from: number, to: number): PlotBlock {
+function* blockOf(values: SeriesCells, chunk: Chunk, cell: number, from: number, to: number): Preparation<PlotBlock> {
   let saved = decoded.get(values);
   if (!saved || saved.from !== chunk.from || saved.cell !== cell) {
     let segment = 1;
-    const points = values.cells.map(([i, low, , , extra], index): [number, number, number, number] => {
+    const points: [number, number, number, number][] = [];
+    for (let index = 0; index < values.cells.length; index++) {
+      const [i, low, , , extra] = values.cells[index];
       if (index && extra?.g) segment++;
-      return [chunk.from + i * cell, low, segment, extra?.h ?? values.hold];
-    });
+      points.push([chunk.from + i * cell, low, segment, extra?.h ?? values.hold]); yield;
+    }
     saved = {from: chunk.from, cell, full: {from: chunk.from, to: chunk.to, gap: !!values.cells[0]?.[4]?.g, points}, cuts: new Map()};
     decoded.set(values, saved);
   }
@@ -32,7 +38,9 @@ function blockOf(values: SeriesCells, chunk: Chunk, cell: number, from: number, 
   const key = `${from}:${to}`;
   let cut = saved.cuts.get(key);
   if (!cut) {
-    cut = {...saved.full, from: Math.max(chunk.from, from), to: Math.min(chunk.to, to), points: saved.full.points.filter(([at]) => at >= from && at < to)};
+    const points: PlotBlock['points'][number][] = [];
+    for (const point of saved.full.points) {if (point[0] >= from && point[0] < to) points.push(point); yield;}
+    cut = {...saved.full, from: Math.max(chunk.from, from), to: Math.min(chunk.to, to), points};
     saved.cuts.set(key, cut);
     if (saved.cuts.size > 2) saved.cuts.delete(saved.cuts.keys().next().value!);
   }
@@ -55,38 +63,32 @@ export type PlotBuffer = {
 };
 
 const activityDecoded = new WeakMap<Chunk['activity'], {from: number; cell: number; rows: Map<number, PlotBar>}>();
-function activityOf(chunk: Chunk, cell: number) {
+function* activityOf(chunk: Chunk, cell: number): Preparation<Map<number, PlotBar>> {
   const activity = chunk.activity;
-  let saved = activityDecoded.get(activity);
+  const saved = activityDecoded.get(activity);
   if (saved && saved.from === chunk.from && saved.cell === cell) return saved.rows;
-  const sessions = activity.sessions.map(([ref, source, project, device]) => ({ref, keys: {source, project: JSON.stringify(project), device}, names: {source: null, project, device: activity.devices[device] ?? null}}));
+  const sessions: {ref: string; keys: Record<ActivityDimension, string>; names: Record<ActivityDimension, string | null>}[] = [];
+  for (const [ref, source, project, device] of activity.sessions) {
+    sessions.push({ref, keys: {source, project: JSON.stringify(project), device}, names: {source: null, project, device: activity.devices[device] ?? null}}); yield;
+  }
   const rows = new Map<number, PlotBar>();
   for (const [i, active, members] of activity.cells) {
     const at = chunk.from + i * cell;
     const refs = new Set<string>();
     let agentMs = 0;
+    const parts: PlotBar['parts'] = {source: new Map(), project: new Map(), device: new Map()};
     for (const member of members) {
       const [index, ms] = typeof member === 'number' ? [member, active] : member;
-      refs.add(sessions[index].ref); agentMs += ms;
-    }
-    // The chart shows one dimension. Decode another only when it is actually read.
-    const decoded: Partial<PlotBar['parts']> = {};
-    const partsOf = (by: ActivityDimension) => {
-      if (decoded[by]) return decoded[by];
-      const parts = new Map<string, {ms: number; name: string | null}>();
-      for (const member of members) {
-        const [index, ms] = typeof member === 'number' ? [member, active] : member;
-        const {keys, names} = sessions[index];
-        const old = parts.get(keys[by]);
-        parts.set(keys[by], {ms: (old?.ms ?? 0) + ms, name: names[by]});
+      const {ref, keys, names} = sessions[index];
+      refs.add(ref); agentMs += ms;
+      for (const by of ['source', 'project', 'device'] as const) {
+        const old = parts[by].get(keys[by]);
+        parts[by].set(keys[by], {ms: (old?.ms ?? 0) + ms, name: names[by]}); yield;
       }
-      return decoded[by] = parts;
-    };
-    const parts = {get source() {return partsOf('source');}, get project() {return partsOf('project');}, get device() {return partsOf('device');}};
-    rows.set(at, {at, activeMs: active, agentMs, refs, parts});
+    }
+    rows.set(at, {at, activeMs: active, agentMs, refs, parts}); yield;
   }
-  saved = {from: chunk.from, cell, rows};
-  activityDecoded.set(activity, saved);
+  activityDecoded.set(activity, {from: chunk.from, cell, rows});
   return rows;
 }
 
@@ -100,17 +102,17 @@ export function covered(coverage: Coverage, from: number, to: number): boolean {
 }
 
 /** Decodes plot data without computing frame totals, ranks or sets for every dimension. */
-export function plotOf(chunks: readonly Chunk[], meta: HistoryMeta, target: Target, coverage: Coverage, windows: ReadonlySet<string>, token: number, epoch: number, version: number): PlotBuffer {
+export function* plotPrepared(chunks: readonly Chunk[], meta: HistoryMeta, target: Target, coverage: Coverage, windows: ReadonlySet<string>, token: number, epoch: number, version: number): Preparation<PlotBuffer> {
   const from = target.k0 * target.cell, to = (target.k1 + 1) * target.cell;
   const series = new Map<string, {line: PlotSeries; parts: PlotSeries['points'][]; last: number; segment: number}>();
   const activityCells = new Map<number, PlotBar>();
-  const events: SourceEvent[] = resetEvents(chunks, windows, from, to);
+  const events: SourceEvent[] = yield* resetEventsPrepared(chunks, windows, from, to);
   for (const chunk of chunks) {
     for (const values of chunk.series) {
       const key = `${values.source} ${values.window}`;
       if (!windows.has(key)) continue;
       let row = series.get(key);
-      const block = blockOf(values, chunk, target.cell, from, to);
+      const block = yield* blockOf(values, chunk, target.cell, from, to);
       const first = block.points[0];
       if (!first) continue;
       const join = !!row && !block.gap && covered(coverage, row.last, first[0] + target.cell);
@@ -118,19 +120,25 @@ export function plotOf(chunks: readonly Chunk[], meta: HistoryMeta, target: Targ
       else if (!join) row.segment++;
       row.line.blocks!.push({block, join});
       const offset = row.segment - first[2];
-      row.parts.push(pointsOf(block, offset));
+      row.parts.push(yield* pointsOf(block, offset));
       const last = block.points.at(-1)!;
       row.line.staleAfterMs = last[3];
       row.last = last[0];
       row.segment = last[2] + offset;
     }
-    for (const [at, row] of activityOf(chunk, target.cell)) {
+    for (const [at, row] of yield* activityOf(chunk, target.cell)) {
       if (at < from || at >= to) continue;
-      activityCells.set(at, row);
+      activityCells.set(at, row); yield;
     }
-    for (const [sourceId, at, count] of chunk.grants) if (at >= from && at < to) events.push({sourceId, at, kind: 'resets_granted', count});
+    for (const [sourceId, at, count] of chunk.grants) {if (at >= from && at < to) events.push({sourceId, at, kind: 'resets_granted', count}); yield;}
   }
-  return {token, epoch, version, from, to, cell: target.cell, length: target.length, coverage, series: [...series.values()].map(r => ({...r.line, points: ([] as PlotSeries['points']).concat(...r.parts)})), events: events.sort((a, b) => a.at - b.at), activityCells, barMs: barOf(target.cell, target.length), knownFrom: Math.max(meta.known.work, ...(Object.keys(meta.known.sources).length ? [Math.min(...Object.values(meta.known.sources))] : []))};
+  const lines: PlotSeries[] = [];
+  for (const row of series.values()) {
+    const points: PlotSeries['points'] = [];
+    for (const part of row.parts) for (const point of part) {points.push(point); yield;}
+    lines.push({...row.line, points});
+  }
+  return {token, epoch, version, from, to, cell: target.cell, length: target.length, coverage, series: lines, events: yield* ordered(events, (a, b) => a.at - b.at), activityCells, barMs: barOf(target.cell, target.length), knownFrom: Math.max(meta.known.work, ...(Object.keys(meta.known.sources).length ? [Math.min(...Object.values(meta.known.sources))] : []))};
 }
 
 /** A bar is all of its contributing whole cells, or unknown; never a partial stack. */
@@ -153,7 +161,7 @@ export function plotBar(buffer: PlotBuffer, at: number, target: Pick<Target, 'k0
   return {groups, agentMs, activeMs, agents: refs.size};
 }
 
-export function plotGroups(buffer: PlotBuffer, target: Pick<Target, 'k0' | 'k1'>, by: ActivityDimension): PlotGroup[] {
+export function* plotGroupsPrepared(buffer: PlotBuffer, target: Pick<Target, 'k0' | 'k1'>, by: ActivityDimension): Preparation<PlotGroup[]> {
   const groups = new Map<string, PlotGroup>();
   const from = cellStart(target.k0 * buffer.cell, buffer.barMs), to = (target.k1 + 1) * buffer.cell;
   for (let at = from; at < to; at += buffer.barMs) {
@@ -165,6 +173,7 @@ export function plotGroups(buffer: PlotBuffer, target: Pick<Target, 'k0' | 'k1'>
       const row = buffer.activityCells.get(cell);
       if (!row) continue;
       for (const [key, part] of row.parts[by]) {
+        yield;
         let group = groups.get(key);
         if (!group) {group = {key, name: part.name, cells: []}; groups.set(key, group);}
         const last = group.cells.at(-1);
@@ -176,3 +185,6 @@ export function plotGroups(buffer: PlotBuffer, target: Pick<Target, 'k0' | 'k1'>
   }
   return [...groups.values()];
 }
+
+export function plotOf(...args: Parameters<typeof plotPrepared>): PlotBuffer {return drain(plotPrepared(...args));}
+export function plotGroups(...args: Parameters<typeof plotGroupsPrepared>): PlotGroup[] {return drain(plotGroupsPrepared(...args));}

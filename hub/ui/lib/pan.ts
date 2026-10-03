@@ -26,8 +26,10 @@ export type PanStart = {
   /** Includes this chart's future and its actual CSS plot width. */
   span: number;
   width: number;
+  /** The visible semantic end can differ from the URL while a previous model finishes. */
+  semanticEnd?: number;
 };
-export type PanStop = {draft: PanFrame; presented: PanFrame; range: TimeRange | null; changed: boolean; canceled: boolean};
+export type PanStop = {draft: PanFrame; presented: PanFrame; range: TimeRange | null; changed: boolean; canceled: boolean; releaseNow: number};
 export type PanEnv = {
   now(): number;
   commit(range: TimeRange | null): void;
@@ -94,7 +96,7 @@ export class Pan {
     if (this.draft) return null;
     const geometries = [...this.charts.values()].map(read => read());
     const now = Math.max(start.now, ...geometries.map(g => g.end));
-    const end = start.selected?.to ?? now;
+    const end = start.semanticEnd ?? start.selected?.to ?? now;
     this.scale = start.span / start.width;
     this.maxEnd = now;
     this.historyStart = start.historyStart;
@@ -149,7 +151,7 @@ export class Pan {
     const result = !moved ? undefined : now - end <= 8 * this.scale ? 'live' : {from: end - draft.length, to: end};
     const range = result === undefined ? draft.origin : result === 'live' ? null : result;
     const changed = result !== undefined && !sameRange(draft.origin, range);
-    const stop: PanStop = {draft, presented: this.state ?? draft, range, changed, canceled: false};
+    const stop: PanStop = {draft, presented: this.state ?? draft, range, changed, canceled: false, releaseNow: now};
     this.clear();
     for (const listener of this.stopListeners) listener(stop);
     if (changed) this.env.commit(range);
@@ -160,7 +162,7 @@ export class Pan {
 
   cancel(token = this.draft?.token) {
     if (!this.draft || token !== this.draft.token) return;
-    const stop: PanStop = {draft: this.draft, presented: this.state ?? this.draft, range: this.draft.origin, changed: false, canceled: true};
+    const stop: PanStop = {draft: this.draft, presented: this.state ?? this.draft, range: this.draft.origin, changed: false, canceled: true, releaseNow: this.env.now()};
     this.clear();
     for (const listener of this.stopListeners) listener(stop);
     this.notify();

@@ -1,3 +1,4 @@
+import {drain} from '../lib/prepare';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -51,7 +52,7 @@ test('dense whole-cell stacks format shared coordinates once and retain their ex
   const source = readFileSync(new URL('../lib/stackPaths.ts', import.meta.url), 'utf8');
   const counted = source.replace('value.toFixed(1)', '(globalThis.formatCalls++, value.toFixed(1))');
   assert.notEqual(counted, source, 'the counter instruments the actual coordinate formatter');
-  const context = {formatCalls: 0, exports: {} as {StackPaths: typeof StackPaths}};
+  const context = {require: () => ({drain}), formatCalls: 0, exports: {} as {StackPaths: typeof StackPaths}};
   runInNewContext(ts.transpileModule(counted, {compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS}}).outputText, context);
   const H = 3_600_000;
   const dense = Array.from({length: 24}, (_, g) => ({group: {key: String(g), name: null,
@@ -64,4 +65,15 @@ test('dense whole-cell stacks format shared coordinates once and retain their ex
   context.formatCalls = 0;
   assert.deepEqual([...cache.draw(dense, 30 * H, 1294 / (30 * 24 * H), 2 * H, 200, 72 * H)], [...actual]);
   assert.equal(context.formatCalls, 0, 'an unchanged strip needs no coordinate formatting');
+});
+
+test('cancelling inside changed corners leaves the group dirty until its outline completes', () => {
+  const cache = new StackPaths();
+  const input = [{group: {key: 'a', name: null, cells: Array.from({length: 180}, (_, i): [number, number] => [i * 10, i % 3 + 1])}}];
+  cache.draw(input, 0, .01, 10, 140, 10);
+  const changed = [{group: {...input[0].group, cells: input[0].group.cells.map(([at, value]): [number, number] => [at, value + 1])}}];
+  const partial = cache.drawPrepared(changed, 0, .01, 10, 140, 10);
+  for (let i = 0; i < 90; i++) assert.equal(partial.next().done, false);
+  partial.return([]);
+  assert.deepEqual(cache.draw(changed, 0, .01, 10, 140, 10), new StackPaths().draw(changed, 0, .01, 10, 140, 10));
 });

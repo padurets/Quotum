@@ -1,14 +1,14 @@
-import {memo, useMemo, useRef} from 'react';
+import {memo, useLayoutEffect, useRef} from 'react';
 import {earliest, num} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
-import {planAt, started, weeklyPlanLine} from '../lib/plan';
-import {announcedOf, clip, forecastLine, type Context} from '../lib/forecast';
+import {planAt, started, weeklyPlanLinePrepared} from '../lib/plan';
+import {announcedOf, clipPrepared, forecastLinePrepared, type Context} from '../lib/forecast';
 import {PROVIDERS} from '../lib/providers';
 import {HORIZONS, setMuted, setPrefs, usePrefs} from '../lib/prefs';
 import {setTimeRange, useTimeRange} from '../lib/timeRange';
 import {frameChangesAt, frameOf, measuredTo} from '../lib/periods';
 import {HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
-import {chartEvents, chartResets, linesOf, type PlotLine} from '../lib/lines';
+import {chartEvents, chartResets, linesPrepared, type PlotLine} from '../lib/lines';
 import {lineRegistry} from '../lib/plotRegistry';
 import {Chart, type Marker} from './Chart';
 import {chartMoments, lastRunOut, type ForecastLine, type PlanLine} from '../lib/readout';
@@ -20,6 +20,7 @@ import {Segmented} from './Kit';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
 import {usePlot} from './sizing';
 import {pan, usePanning} from '../lib/pan';
+import {usePrepared} from './prepared';
 
 /**
  * The chart's own settings: whether it draws the plan and the forecast (where either has
@@ -108,172 +109,106 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
   const futureCodex = context?.codex ?? codex;
   const futureView = context?.view ?? view;
 
-  const answered = useMemo(() => linesOf(history, sources, view, prefs.kind), [history, sources, prefs.kind, view.windows, view.hidden, view.colors, locale]);
-  const lines = useMemo(() => {
-    if (!strip) {registry.current = null; return answered;}
-    if (registry.current?.token !== strip.token) registry.current = {token: strip.token, seed: answered, lines: answered};
-    const state = registry.current;
-    const eligibleSeed = state.seed.filter(line => answered.some(current => current.key === line.key));
-    state.lines = lineRegistry(eligibleSeed, state.lines, linesOf(strip, sources, view, prefs.kind));
-    return state.lines;
-  }, [strip, answered, sources, view, prefs.kind, locale]);
-
-  const visible = useMemo(() => lines.filter(line => !prefs.muted[line.key]), [lines, prefs.muted]);
   const historyStart = useHistoryBegins();
   const frame = frameOf(selected, prefs, now, historyStart);
-  const {from, future} = frame;
+  const from = frame.from;
   const measured = measuredTo(frame, history, selected, prefs.range);
-  // An announced Codex reset matters only where Codex is on the chart.
-  const announced = frame.live && visible.some(line => line.provider === 'codex') ? (futureCodex?.scheduled?.scheduledFor ?? null) : null;
-  // The spending plan applies to weekly windows, when a line on the chart has a plan.
-  const planAvailable = prefs.kind === 'weekly' && visible.some(line => planOf(view, line.sourceId) !== null);
-  const planShown = planAvailable && prefs.showPlan;
-  // Where each window leads, for the lines that have a forecast to draw: a weekly window as
-  // the hub foresees it, from the card's last value; a five-hour one by its own pace.
-  const ahead = useMemo(
-    () =>
-      visible.flatMap(line => {
-        const source = futureSources.find(s => s.id === line.sourceId);
-        const live = source?.windows.find(w => w.id === line.windowId);
-        const measuredAt = source?.successAt ?? null;
-        const forecast = live?.kind === 'weekly' ? (futureForecasts[futureLineup.indexOf(line.sourceId)]?.[line.windowId] ?? null) : null;
-        const context: Context = {windows: source?.windows ?? [], freeResets: source?.resets?.available ?? 0, announced: announcedOf(futureNews, line.provider, measuredAt)};
-        const drawn = forecastLine(live, measuredAt, now, forecast, context, -Infinity, Infinity);
-        return drawn ? [{line, drawn}] : [];
-      }),
-    [visible, futureSources, now, futureForecasts, futureLineup, futureNews],
-  );
-  // A range in the past has no forecast, so nothing to switch.
-  const forecastAvailable = frame.live && ahead.length > 0;
-  const forecastShown = forecastAvailable && prefs.showForecast;
-  // Without the plan or the forecast the chart ends now (an announced reset is pointed at
-  // from the right edge). With either, on `auto` some future stays on the right,
-  // stretched to include an announced reset when close, and to the last moment the
-  // forecast says a window runs out within reach: it may take up to ~40% of the width,
-  // anything further out is pointed at from the edge instead. A chosen horizon is kept as is.
-  const reach = measured + (measured - from) * 0.75;
-  const runOut = forecastShown ? lastRunOut(ahead.map(a => a.drawn), reach) : 0;
-  const projectedTo = !(planShown || forecastShown) || !frame.live
-    ? measured
-    : prefs.horizon === 'auto'
-      ? Math.max(
-          announced && announced > measured && announced + future * 0.25 > measured + future ? Math.min(reach, announced + future * 0.25) : measured + future,
-          runOut,
-        )
-      : measured + future;
-  const to = context ? measured + context.lookAhead : projectedTo;
-
-  const markers: Marker[] = useMemo(() => {
-    const list: Marker[] = [];
-    if (announced && announced > from) {
-      list.push({key: 'announced-codex', at: announced, label: t('chart.announcedCodex'), color: 'var(--accent)', strong: true});
+  const prepared = usePrepared(function* () {
+    const answered = yield* linesPrepared(history, sources, view, prefs.kind);
+    let lines: PlotLine[] = answered;
+    let nextRegistry: typeof registry.current = null;
+    if (strip) {
+      const previous = registry.current?.token === strip.token ? registry.current : {token: strip.token, seed: answered, lines: answered};
+      const eligibleSeed = previous.seed.filter(line => answered.some(current => current.key === line.key));
+      lines = lineRegistry(eligibleSeed, previous.lines, yield* linesPrepared(strip, sources, view, prefs.kind));
+      nextRegistry = {token: strip.token, seed: previous.seed, lines};
     }
-    const seen = new Set<string>();
-    for (const line of visible) {
-      const source = sources.find(s => s.id === line.sourceId);
-      const live = source?.windows.find(w => w.id === line.windowId);
-      // A reset is marked for a window that has started, whether or not the board plans it.
-      if (!live?.resetAt || live.resetAt <= measured || live.resetAt > to || !started(live, source?.successAt ?? null)) continue;
-      const key = `${line.sourceId}@${Math.round(live.resetAt / 60_000)}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      list.push({key, at: live.resetAt, label: t('chart.reset', {source: source ? sourceLabel(source) : line.provider}), color: line.color});
-    }
-    // What happened to the sources on the chart: their limits came back early, or free resets were granted.
-    for (const {event, lines: shown} of chartEvents(strip?.events ?? history?.events ?? [], visible, strip?.from ?? from)) {
-      const source = sources.find(s => s.id === event.sourceId);
-      const name = source ? sourceLabel(source) : shown[0].provider;
-      list.push({
-        key: `${event.kind}-${event.sourceId}-${event.at}`,
-        at: event.at,
-        label: event.kind === 'early_reset' ? t('chart.earlyReset', {source: name}) : t('chart.resetsGranted', {count: event.count, source: name}),
-        color: shown[0].color,
-        past: true,
-      });
-    }
-    // Resets for everyone the trackers reported, on the providers the chart shows.
-    for (const {provider, reset, line} of chartResets(past, visible, strip?.from ?? from, strip?.to ?? measured)) {
-      list.push({
-        key: `announced-${provider}-${reset.at}`,
-        at: reset.at,
-        label: t('chart.resetForAll', {source: PROVIDERS[provider]?.name ?? provider}),
-        detail: reset.text,
-        color: line.color,
-        past: true,
-      });
-    }
-    return list;
-  }, [announced, visible, sources, history, strip, past, from, to, measured, view, locale]);
-
-  // One plan line per distinct weekly window; windows of a source that share a reset
-  // (e.g. Claude weekly and Fable) share one plan.
-  const plans: PlanLine[] = useMemo(() => {
-    if (!planShown) return [];
-    const seen = new Map<string, PlanLine>();
+    const visible: PlotLine[] = [];
+    for (const line of lines) {if (!prefs.muted[line.key]) visible.push(line); yield;}
+    const announced = frame.live && visible.some(line => line.provider === 'codex') ? (futureCodex?.scheduled?.scheduledFor ?? null) : null;
+    const planAvailable = prefs.kind === 'weekly' && visible.some(line => planOf(view, line.sourceId) !== null);
+    const planShown = planAvailable && prefs.showPlan;
+    const ahead: {line: PlotLine; drawn: NonNullable<ReturnType<typeof forecastLinePrepared> extends Generator<void, infer R, void> ? R : never>}[] = [];
     for (const line of visible) {
       const source = futureSources.find(s => s.id === line.sourceId);
       const live = source?.windows.find(w => w.id === line.windowId);
-      const plan = planOf(futureView, line.sourceId);
-      // Idle rolling windows (reset = now + 7 days) have not started: no plan to show.
-      if (!plan || !live?.resetAt || live.minutes !== 10080 || !planAt(live, source?.successAt ?? null, now, plan)) continue;
-      const key = `${line.sourceId}@${Math.round(live.resetAt / 3_600_000)}`;
-      const shared = seen.get(key);
-      if (shared) {
-        shared.lines.push(line.key);
-        continue;
-      }
-      seen.set(key, {
-        key,
-        lines: [line.key],
-        color: line.color,
-        runs: weeklyPlanLine(live.resetAt, strip?.from ?? from, Math.max(to, strip?.to ?? to), plan),
-      });
+      const measuredAt = source?.successAt ?? null;
+      const forecast = live?.kind === 'weekly' ? (futureForecasts[futureLineup.indexOf(line.sourceId)]?.[line.windowId] ?? null) : null;
+      const context: Context = {windows: source?.windows ?? [], freeResets: source?.resets?.available ?? 0, announced: announcedOf(futureNews, line.provider, measuredAt)};
+      const drawn = yield* forecastLinePrepared(live, measuredAt, now, forecast, context, -Infinity, Infinity);
+      if (drawn) ahead.push({line, drawn}); yield;
     }
-    return [...seen.values()];
-  }, [visible, futureSources, from, to, now, planShown, futureView, strip, locale]);
-
-  const forecasts: ForecastLine[] = useMemo(
-    () =>
-      !forecastShown
-        ? []
-        : ahead.flatMap(({line, drawn}) => {
-            const points = clip(drawn.points, from, to);
-            return points.length ? [{key: line.key, name: line.name, color: line.color, dash: line.dash, points, zero: drawn.zero, at: drawn.at}] : [];
-          }),
-    [ahead, forecastShown, from, to],
-  );
-  // When an announced reset the chart points at past its right edge (Chart.tsx) comes due,
-  // and when a line it may draw, shown or not, is drawn no more.
-  const moments = chartMoments(markers, ahead.map(a => a.drawn), to);
+    const forecastAvailable = frame.live && ahead.length > 0;
+    const forecastShown = forecastAvailable && prefs.showForecast;
+    const reach = measured + (measured - from) * .75;
+    const runOut = forecastShown ? lastRunOut(ahead.map(a => a.drawn), reach) : 0;
+    const projectedTo = !(planShown || forecastShown) || !frame.live ? measured : prefs.horizon === 'auto'
+      ? Math.max(announced && announced > measured && announced + frame.future * .25 > measured + frame.future ? Math.min(reach, announced + frame.future * .25) : measured + frame.future, runOut)
+      : measured + frame.future;
+    const to = context ? measured + context.lookAhead : projectedTo;
+    const markers: Marker[] = [];
+    if (announced && announced > from) markers.push({key: 'announced-codex', at: announced, label: t('chart.announcedCodex'), color: 'var(--accent)', strong: true});
+    const seen = new Set<string>();
+    for (const line of visible) {
+      yield;
+      const source = sources.find(s => s.id === line.sourceId), live = source?.windows.find(w => w.id === line.windowId);
+      if (!live?.resetAt || live.resetAt <= measured || live.resetAt > to || !started(live, source?.successAt ?? null)) continue;
+      const key = `${line.sourceId}@${Math.round(live.resetAt / 60_000)}`;
+      if (seen.has(key)) continue;
+      seen.add(key); markers.push({key, at: live.resetAt, label: t('chart.reset', {source: source ? sourceLabel(source) : line.provider}), color: line.color});
+    }
+    for (const {event, lines: shown} of chartEvents(strip?.events ?? history?.events ?? [], visible, strip?.from ?? from)) {
+      const source = sources.find(s => s.id === event.sourceId), name = source ? sourceLabel(source) : shown[0].provider;
+      markers.push({key: `${event.kind}-${event.sourceId}-${event.at}`, at: event.at, label: event.kind === 'early_reset' ? t('chart.earlyReset', {source: name}) : t('chart.resetsGranted', {count: event.count, source: name}), color: shown[0].color, past: true}); yield;
+    }
+    for (const {provider, reset, line} of chartResets(past, visible, strip?.from ?? from, strip?.to ?? measured)) {
+      markers.push({key: `announced-${provider}-${reset.at}`, at: reset.at, label: t('chart.resetForAll', {source: PROVIDERS[provider]?.name ?? provider}), detail: reset.text, color: line.color, past: true}); yield;
+    }
+    const plans = new Map<string, PlanLine>();
+    if (planShown) for (const line of visible) {
+      yield;
+      const source = futureSources.find(s => s.id === line.sourceId), live = source?.windows.find(w => w.id === line.windowId), plan = planOf(futureView, line.sourceId);
+      if (!plan || !live?.resetAt || live.minutes !== 10080 || !planAt(live, source?.successAt ?? null, now, plan)) continue;
+      const key = `${line.sourceId}@${Math.round(live.resetAt / 3_600_000)}`, shared = plans.get(key);
+      if (shared) {shared.lines.push(line.key); continue;}
+      plans.set(key, {key, lines: [line.key], color: line.color, runs: yield* weeklyPlanLinePrepared(live.resetAt, strip?.from ?? from, Math.max(to, strip?.to ?? to), plan)});
+    }
+    const forecasts: ForecastLine[] = [];
+    if (forecastShown) for (const {line, drawn} of ahead) {
+      const points = yield* clipPrepared(drawn.points, from, to);
+      if (points.length) forecasts.push({key: line.key, name: line.name, color: line.color, dash: line.dash, points, zero: drawn.zero, at: drawn.at}); yield;
+    }
+    return {lines, visible, markers, plans: [...plans.values()], forecasts, to, from, measured, now: strip ? now : measured, cellMs: strip?.cell ?? history?.cellMs ?? 60_000, strip, frame, planAvailable, forecastAvailable, planShown, forecastShown, moments: chartMoments(markers, ahead.map(a => a.drawn), to), registry: nextRegistry};
+  }, [history, strip, sources, view, prefs, locale, futureSources, futureForecasts, futureLineup, futureNews, futureCodex, futureView, from, measured, now, frame.live, context?.lookAhead], `${history?.board}:${prefs.kind}`);
+  const model = prepared.value;
+  useLayoutEffect(() => {if (model) registry.current = model.registry;}, [model]);
+  const lines = model?.lines ?? [];
+  const moments = model?.moments ?? [];
 
   return (
     <section ref={panel} className={`panel history ${loading ? 'is-loading' : ''}`} data-time="chart" aria-label={t('history.label')} aria-busy={loading}>
       <div className="panel-head">
         <h2>{t('history.title')}</h2>
-        <HistorySettings arrange={arrange} planAvailable={planAvailable} forecastAvailable={forecastAvailable} horizonNote={frame.live && !planShown && !forecastShown} />
+        <HistorySettings arrange={arrange} planAvailable={model?.planAvailable ?? false} forecastAvailable={model?.forecastAvailable ?? false} horizonNote={frame.live && !model?.planShown && !model?.forecastShown} />
       </div>
 
-      {history ? (
-        <Chart
-          lines={visible}
-          plans={plans}
-          forecasts={forecasts}
-          markers={markers}
-          from={from}
-          now={strip ? now : measured}
-          to={to}
-          cellMs={strip?.cell ?? history.cellMs}
-          strip={strip}
-          empty={lines.length ? t('chart.empty') : null}
+      <Chart
+          lines={model?.visible ?? []}
+          plans={model?.plans}
+          forecasts={model?.forecasts}
+          markers={model?.markers}
+          from={model?.from ?? from}
+          now={model?.now ?? measured}
+          to={model?.to ?? measured}
+          cellMs={model?.cellMs ?? history?.cellMs ?? 60_000}
+          strip={model?.strip ?? null}
+          prepared={prepared.ready}
+          modelContext={`${history?.board}:${prefs.kind}`}
+          empty={!history ? t('history.loading') : lines.length ? t('chart.empty') : null}
           onSelect={setTimeRange}
           plot={plot}
           onBase={onBase}
         />
-      ) : (
-        <div className="chart chart-loading" style={plot === undefined ? undefined : {height: plot}}>
-          {t('history.loading')}
-        </div>
-      )}
 
       <div className="legend">
         {lines.map(line => (

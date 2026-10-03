@@ -90,7 +90,9 @@ export {KEY_STORAGE} from './key-storage.js';
  * Continuous panning, partial loading and future folding are short-lived transitions:
  * ui/test/pan.test.ts, history.test.ts and historyPlot.test.ts hold their input,
  * cancellation, coverage and whole-cell accounting; bench/panning.ts exercises native
- * wheel and Shift-drag with delayed history on both charts.
+ * wheel and Shift-drag with delayed history on both charts. Cooperative preparation
+ * and the held final pose are checked by ui/test/prepare.test.ts, history.test.ts and
+ * timeAxisMotion.test.ts; they add no lasting demo state.
  *
  * Two states of a weekly window's forecast never last on a working hub, and have no entry:
  * `renewing`, the moment between a measurement and the hub's forecast of it (the hub works

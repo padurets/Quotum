@@ -223,3 +223,16 @@ test('browser wheel properties on its prototype survive modifier normalization',
   s.pan.setShift(false);
   assert.equal(s.commits.length, 1);
 });
+
+test('restarting from an unfinished visible frame separates its semantic end from its URL origin', () => {
+  const commits: unknown[] = [], frames: (() => void)[] = [];
+  const H = 3_600_000, now = 100 * H, origin = {from: now - 2 * H, to: now - H};
+  const pan = new Pan({now: () => now, commit: value => commits.push(value), requestFrame: run => {frames.push(run); return run;}, cancelFrame: () => {}, setTimeout: () => null, clearTimeout: () => {}});
+  const start = {source: Symbol('chart'), input: 'pointer' as const, selected: origin, semanticEnd: origin.to - H / 4, length: H, now, historyStart: 0, span: 2 * H, width: 600};
+  const token = pan.begin(start)!;
+  assert.equal(pan.get()!.to, start.semanticEnd);
+  pan.finish(token); assert.deepEqual(commits, [], 'a no-motion restart preserves its URL origin');
+  const next = pan.begin(start)!; pan.move(next, -30); frames.pop()!();
+  assert.equal(pan.get()!.to, start.semanticEnd - H / 10);
+  pan.cancel(next); assert.deepEqual(commits, [], 'cancel rolls back to the address rather than the borrowed visible frame');
+});

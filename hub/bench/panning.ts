@@ -12,7 +12,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
     await mouse('mousePressed', point.x, point.y);
     await mouse('mouseReleased', point.x, point.y);
   };
-  const settled = () => cdp.evaluate(`(async()=>{const until=Date.now()+15000,p=new URLSearchParams(location.search),wanted=p.has('from')?p.get('from')+'-'+p.get('to'):JSON.parse(localStorage.getItem('quotum.prefs')||'{}').range||'24h';while(document.querySelector('.history.is-loading, .activity.is-loading') || document.querySelector('.chart > svg[data-pan-end]')||document.querySelector('.forecast')?.dataset.historyRange!==wanted){if(Date.now()>until)throw new Error('charts and complete totals did not settle');await new Promise(r=>setTimeout(r,20));}await new Promise(r=>setTimeout(r,250));})()`);
+  const settled = () => cdp.evaluate(`(async()=>{const until=Date.now()+15000,p=new URLSearchParams(location.search),wanted=p.has('from')?p.get('from')+'-'+p.get('to'):JSON.parse(localStorage.getItem('quotum.prefs')||'{}').range||'24h';while(document.querySelector('.history.is-loading, .activity.is-loading') || document.querySelector('.chart > svg[data-pan-end], .chart > svg[data-draw-ready="false"], .chart > svg.is-panning')||document.querySelector('.forecast')?.dataset.historyRange!==wanted){if(Date.now()>until)throw new Error('charts and complete totals did not settle');await new Promise(r=>setTimeout(r,20));}await new Promise(r=>setTimeout(r,250));})()`);
   const reports: PanReading[] = [];
   const originalHorizon = await cdp.evaluate<string>(`JSON.parse(localStorage.getItem('quotum.prefs')||'{}').horizon||'auto'`);
   let interception = false;
@@ -47,7 +47,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
         let gesture=null;
         const capturedInputs=new WeakMap();
         const capture=e=>{const delivered=performance.now(),at=e.timeStamp>1e12?e.timeStamp-performance.timeOrigin:e.timeStamp;capturedInputs.set(e,{at:Math.min(delivered,at),delivered});};
-        const begin=(token,x)=>{gesture={token,pixels:0,x,started:!!root.dataset.panEnd,origin:Number(root.dataset.panOrigin),scale:Number(root.dataset.panScale)};};
+        const begin=(token,x)=>{gesture={token,pixels:0,x,started:!!root.dataset.panEnd,origin:Number(root.dataset.panOrigin),scale:Number(root.dataset.panScale),baseline:Number(root.dataset.panBase||0)};};
         const input=e=>{
           const captured=capturedInputs.get(e);if(!captured)return;capturedInputs.delete(e);
           const token=root.dataset.panToken;
@@ -91,22 +91,22 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
           const matrices=layers.map((layer,i)=>{const transform=active?layer.style.transform:folding&&i===0?getComputedStyle(layer.querySelector('.slides')).transform:'none';const matrix=new DOMMatrix(transform&&transform!=='none'?transform:undefined);if(folding)matrix.e*=scales[i];return matrix;}),current=matrices.map(matrix=>matrix.e+':'+matrix.a);
           const nextPhase=active?'pan':folding?'fold':'idle';
           // The wheel's intentional 200 ms rest is stationary, before the fold begins.
-          if(nextPhase!==phase||active&&paintedToken!==root.dataset.panToken){probe.last=0;lastFrame=null;previous=nextPhase==='pan'?['0:1','0:1']:current;phase=nextPhase;paintedToken=root.dataset.panToken;}
+          if(nextPhase!==phase||active&&paintedToken!==root.dataset.panToken){probe.last=0;lastFrame=null;previous=nextPhase==='pan'?charts.map(svg=>(Number(svg.dataset.panBase||0))+':1'):current;phase=nextPhase;paintedToken=root.dataset.panToken;}
           const moved=current.map((value,i)=>value!==previous[i]);
-          if(active){probe.synchronized&&=charts.every((svg,i)=>svg.dataset.panEnd===root.dataset.panEnd&&Math.abs((Number(svg.dataset.panEnd)-Number(svg.dataset.panOrigin))/Number(svg.dataset.panScale)+matrices[i].e)<.01)&&[...charts[1].parentElement.querySelectorAll('.plot-move')].filter(layer=>layer.querySelector('.activity-stack')).every(layer=>Math.abs(new DOMMatrix(layer.style.transform||undefined).e-matrices[1].e)<.01);moved.forEach((changed,i)=>{if(changed)probe.chartUpdates[i]++;});}
+          if(active){probe.synchronized&&=charts.every((svg,i)=>svg.dataset.panEnd===root.dataset.panEnd&&Math.abs((Number(svg.dataset.panEnd)-Number(svg.dataset.panOrigin))/Number(svg.dataset.panScale)+matrices[i].e-Number(svg.dataset.panBase||0))<.01)&&[...charts[1].parentElement.querySelectorAll('.plot-move')].filter(layer=>layer.querySelector('.activity-stack')).every(layer=>Math.abs(new DOMMatrix(layer.style.transform||undefined).e-matrices[1].e)<.01);moved.forEach((changed,i)=>{if(changed)probe.chartUpdates[i]++;});}
           // Each input reaches both plots. Activity has no future, so only the
           // remaining-share chart must move during the final future fold.
           if(active&&probe.synchronized&&(moved.every(Boolean)||afterCallback)){
             // Coalesced input reaches its final position together. A newer event
             // cannot be credited by the artwork of an earlier event.
             let reached=-1;
-            for(let i=0;i<probe.pending.length;i++){const input=probe.pending[i];if(input.gesture===gesture&&Math.abs(input.pixels-matrices[0].e)<.1)reached=i;}
+            for(let i=0;i<probe.pending.length;i++){const input=probe.pending[i];if(input.gesture===gesture&&Math.abs(input.gesture.baseline+input.pixels-matrices[0].e)<.1)reached=i;}
             if(reached>=0)consume(reached+1,now);
           }
           if(active&&moved.every(Boolean)||folding&&moved[0]){
             if(stamp!==lastFrame){probe.updated++;if(probe.last){const ms=now-probe.last;probe.frames.push(ms);probe.samples.push({ms,segment:folding?'fold':probe.segment,pending:demand,requests:probe.flights.size});}probe.last=now;lastFrame=stamp;}
           }
-          if(!active&&!folding&&probe.pending.length&&charts.every(svg=>!svg.classList.contains('is-panning'))){
+          if(!active&&!folding&&probe.pending.length&&charts.every(svg=>svg.dataset.drawReady==='true'&&!svg.classList.contains('is-panning'))){
             // Release may commit the last coalesced input before its own RAF.
             // Its effect is observable only after the final geometry and fold.
             const ends=charts.map(svg=>Number(svg.parentElement.dataset.axisEnd)),selected=new URLSearchParams(location.search).has('to');

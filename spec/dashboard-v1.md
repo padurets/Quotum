@@ -337,7 +337,11 @@ continues to supply the table and totals until the final range is complete. Pann
 prioritizes visible missing cells and reads at most one adjacent frame in its direction,
 with at most two requests and eight tiles per request; speculative reading ends with
 the gesture. Cells beyond the hub's cut remain known empty until news arrives. Time
-alone never reads history.
+alone never reads history. Numerical projection and response staging run in cancellable
+slices. Tile data and read boundaries publish atomically for a complete response;
+waiting raw answers share the two-owner processing bound. The graphs keep their
+current drawing and final gesture pose until a complete matching replacement has
+committed, with no additional wire fields.
 
 ## Requesting fresh limits
 

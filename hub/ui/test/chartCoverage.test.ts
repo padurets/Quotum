@@ -34,11 +34,11 @@ test('the actual chart does not carry a held value through unread history after 
     await flush();
   };
   const source = readFileSync(new URL('../components/Chart.tsx', import.meta.url), 'utf8');
-  const hoverSource = source.match(/  const hover = axis\.hover[^\n]+/)![0];
+  const hoverSource = source.match(/  const hover = incomingReady[^\n]+/)![0];
   const rowsSource = source.slice(source.indexOf('  const none = {'), source.indexOf('  const columnCount'));
   const chart = (strip: PlotBuffer | null, lines: PlotSeries[], hover = at('11:06'), to = at('11:40'), plans: PlanLine[] = [], forecasts: ForecastLine[] = []) =>
     runInNewContext(hoverSource + '\n' + rowsSource + '\n({hover,rows});', {
-      axis: {hover}, strip, now, cellMs: M, covered, plans, forecasts, to, readCell,
+      axis: {hover}, incomingReady: true, prepared: {ready: true}, strip, now, cellMs: M, covered, plans, forecasts, to, readCell,
       lines: lines.map(line => ({...line, key: 's w'})),
     }) as {hover: number | null; rows: ReadoutRow[]};
   try {

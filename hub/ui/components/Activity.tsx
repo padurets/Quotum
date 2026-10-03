@@ -11,8 +11,8 @@ import {ACTIVITY, cardId, isHidden, withHidden, type Arrange} from '../lib/view'
 import {useLineup, useTitles, type Title} from '../lib/board';
 import {useClock} from '../lib/clock';
 import {useHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
-import {plotBar, plotGroups, type PlotBuffer, type PlotGroup} from '../lib/historyPlot';
-import {usePlotMemo} from './plotMemo';
+import {plotBar, plotGroupsPrepared, type PlotBuffer, type PlotGroup} from '../lib/historyPlot';
+import {usePrepared} from './prepared';
 import {groupRegistry, type GroupIdentity} from '../lib/plotRegistry';
 import {StackPaths} from '../lib/stackPaths';
 import {pan, usePanning, useShifting} from '../lib/pan';
@@ -27,6 +27,7 @@ import {usePlot} from './sizing';
 import {clipPlot, PlotLayer, PlotOverlay} from './PlotLayer';
 
 const MINUTE = 60_000;
+const EMPTY_ACTIVITY: ActivityData = {since: 0, known: null, barMs: MINUTE, activeMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}};
 
 const LABELS: Record<ActivityDimension, Key> = {source: 'activity.bySource', project: 'activity.byProject', device: 'activity.byDevice'};
 
@@ -231,21 +232,23 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
     return {groups, colors, names, muted, shown};
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activity, by, arrange.view, titles, prefs.muted, locale]);
-  const data = usePlotMemo(() => strip ? new Map(plotGroups(strip, {k0: strip.from / strip.cell, k1: strip.to / strip.cell - 1}, by).map(group => [group.key, group])) : null, [strip, by]);
-  const candidates = usePlotMemo(() => {
+  const prepared = usePrepared(function* () {
+    const data = new Map<string, PlotGroup>();
     const found = new Map<string, Pick<PlotGroup, 'key' | 'name'>>();
-    if (strip) for (const row of strip.activityCells.values()) for (const [key, part] of row.parts[by]) found.set(key, {key, name: part.name});
-    return [...found.values()];
-  }, [strip, by]);
-  const presentation = useMemo(() => {
+    if (strip) {
+      for (const group of yield* plotGroupsPrepared(strip, {k0: strip.from / strip.cell, k1: strip.to / strip.cell - 1}, by)) {data.set(group.key, group); yield;}
+      for (const row of strip.activityCells.values()) for (const [key, part] of row.parts[by]) {found.set(key, {key, name: part.name}); yield;}
+    }
     const seed = groups.map((group, i) => ({key: group.key, name: group.name, color: colors[i]}));
-    if (!strip) {registry.current = null; return {identities: seed, shown};}
-    if (registry.current?.token !== strip.token || registry.current.by !== by) registry.current = {token: strip.token, by, seed, groups: seed};
-    const state = registry.current;
-    state.groups = groupRegistry(state.seed, state.groups, candidates, by === 'source' ? key => colorOf(arrange.view, key, titles[key]?.provider ?? '') : undefined);
-    const plotted = state.groups.filter(group => !prefs.muted[mutedKey(by, group.key)]).map(identity => ({group: data!.get(identity.key) ?? {key: identity.key, name: identity.name, cells: EMPTY_CELLS}, color: identity.color, name: groupName(identity, by, titles)}));
-    return {identities: state.groups, shown: plotted};
-  }, [strip, data, candidates, groups, colors, shown, by, arrange.view, titles, prefs.muted]);
+    if (!strip) return {identities: seed, shown, strip, registry: null};
+    const previous = registry.current?.token === strip.token && registry.current.by === by ? registry.current : {token: strip.token, by, seed, groups: seed};
+    const identities = groupRegistry(previous.seed, previous.groups, [...found.values()], by === 'source' ? key => colorOf(arrange.view, key, titles[key]?.provider ?? '') : undefined);
+    const plotted: {group: PlotGroup; color: string; name: string}[] = [];
+    for (const identity of identities) {if (!prefs.muted[mutedKey(by, identity.key)]) plotted.push({group: data.get(identity.key) ?? {key: identity.key, name: identity.name, cells: EMPTY_CELLS}, color: identity.color, name: groupName(identity, by, titles)}); yield;}
+    return {identities, shown: plotted, strip, registry: {token: strip.token, by, seed: previous.seed, groups: identities}};
+  }, [strip, groups, colors, shown, by, arrange.view, titles, prefs.muted, locale], `${history?.board}:${by}`);
+  const presentation = prepared.value ?? {identities: [], shown: [], strip: null};
+  useLayoutEffect(() => {if (prepared.value) registry.current = prepared.value.registry;}, [prepared.value]);
   const shownMs = useMemo(() => shown.reduce((sum, {group}) => sum + group.agentMs, 0), [shown]);
   const shownSources = lineup.filter(id => titles[id] && !isHidden(arrange.view, cardId(id)));
   // Known from later than the period the hub answered begins (not the page's frame, whose clock may be a minute behind).
@@ -269,15 +272,10 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
         <ActivitySettings arrange={arrange} />
       </div>
       <Totals activity={activity} shownMs={shownMs} since={since} />
-      {!history ? (
-        <div className="chart chart-loading" style={plot === undefined ? undefined : {height: plot}}>
-          {empty}
-        </div>
-      ) : (
-        <>
+      <>
           <Stacks
-            activity={activity!}
-            origin={history!.since}
+            activity={activity ?? EMPTY_ACTIVITY}
+            origin={history?.since ?? from}
             groups={emptyFrame ? [] : presentation.shown}
             from={from}
             to={to}
@@ -285,18 +283,18 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
             onSelect={setTimeRange}
             plot={plot}
             onBase={onBase}
-            strip={strip}
+            strip={presentation.strip}
+            prepared={prepared.ready}
             by={by}
             allMuted={!emptyFrame && presentation.identities.length > 0 && presentation.shown.length === 0}
-            empty={emptyFrame}
+            empty={!history ? empty : emptyFrame}
           />
           <div className="legend">
             {(emptyFrame ? [] : presentation.identities).map(identity => (
               <LegendItem key={identity.key} groupKey={identity.key} by={by} group={groups.find(group => group.key === identity.key) ?? null} name={groupName(identity, by, titles)} color={identity.color} muted={!!prefs.muted[mutedKey(by, identity.key)]} />
             ))}
           </div>
-        </>
-      )}
+      </>
     </section>
   );
 });
@@ -313,16 +311,17 @@ export const stacksHeight = (width: number) => (width < 560 ? 160 : 200);
 const EMPTY_CELLS: PlotGroup['cells'] = [];
 
 const Stacks = memo(function Stacks({
-  activity,
-  origin,
-  groups,
+  activity: incomingActivity,
+  origin: incomingOrigin,
+  groups: incomingGroups,
   from,
   to,
-  unknownTo: originUnknownTo,
+  unknownTo: incomingUnknownTo,
   onSelect,
   plot,
   onBase,
-  strip,
+  strip: incomingStrip,
+  prepared: incomingReady,
   by,
   allMuted,
   empty,
@@ -340,72 +339,65 @@ const Stacks = memo(function Stacks({
   plot: number | undefined;
   onBase: (height: number) => void;
   strip: PlotBuffer | null;
+  prepared: boolean;
   by: ActivityDimension;
   allMuted: boolean;
   empty: string | null;
 }) {
-  const barMs = strip?.barMs ?? activity.barMs;
-  const hatchFrom = strip?.from ?? from;
-  const knownFrom = strip?.knownFrom ?? originUnknownTo;
-  const unknownTo = knownFrom !== null && knownFrom > hatchFrom ? knownFrom : null;
   const locale = useLocale();
-  // Room for the scale's longest label ("480h" or "30 мин") within the widget.
-  const left = 48;
-  const right = 12;
-  const axis = useTimeAxis({from, to, end: to, cellMs: barMs, left, right, onSelect});
-  const {box, svg, width, scale, hover, drag, clip, handlers, basis, active} = axis;
-  const x = strip ? axis.drawX : axis.x;
+  const left = 48, right = 12;
+  const axis = useTimeAxis({from, to, end: to, cellMs: incomingStrip?.barMs ?? incomingActivity.barMs, left, right, onSelect, ready: incomingReady});
+  const {box, svg, width, scale, drag, clip, handlers, active} = axis;
+  const requested = axis.basis;
   const narrow = width < 560;
   const base = stacksHeight(width);
   const height = plot === undefined ? base : Math.max(base, plot / scale);
   useLayoutEffect(() => onBase(base * scale), [base, scale, onBase]);
-  const top = 12;
-  const bottom = 28;
-  const span = Math.max(MINUTE, basis.to - basis.from);
-  const tickFrom = strip?.from ?? from, tickTo = strip?.to ?? to;
-  const {ticks, daily} = niceTicks(tickFrom, tickTo, (narrow ? 4 : 7) * (tickTo - tickFrom) / span);
-
-  // How tall each bar's stack is, of the groups shown: the scale reaches the tallest.
-  // Names and colors still paint from the current props; stacking needs only the
-  // order, keys and immutable cells, even when a render attempt is restarted.
-  const inputs: unknown[] = [];
-  for (const {group} of groups) inputs.push(group.key, group.cells);
-  const stacked = usePlotMemo(() => groups.map(({group}) => ({group})), inputs);
-  const heights = usePlotMemo(() => {
-    const sums = new Map<number, number>();
-    for (const {group} of stacked) for (const [at, ms] of group.cells) sums.set(at, (sums.get(at) ?? 0) + ms);
-    return sums;
-  }, [stacked]);
-  const possibleMax = usePlotMemo(() => {
-    if (!strip) return 0;
-    const keys = new Set(stacked.map(({group}) => group.key));
+  const top = 12, bottom = 28;
+  const maxSeen = useRef(0);
+  const stackPaths = useRef(new StackPaths());
+  const prepared = usePrepared(function* () {
+    const basis = {from: requested.from, to: requested.to, end: requested.end};
+    const span = Math.max(MINUTE, basis.to - basis.from);
+    const barMs = incomingStrip?.barMs ?? incomingActivity.barMs;
+    const heights = new Map<number, number>(), keys = new Set<string>();
+    for (const {group} of incomingGroups) {
+      keys.add(group.key);
+      for (const [at, ms] of group.cells) {heights.set(at, (heights.get(at) ?? 0) + ms); yield;}
+    }
     const bars = new Map<number, number>();
-    for (const [at, row] of strip.activityCells) {
+    if (incomingStrip) for (const [at, row] of incomingStrip.activityCells) {
       const bar = cellStart(at, barMs);
       let ms = 0;
-      for (const [key, part] of row.parts[by]) if (keys.has(key)) ms += part.ms;
+      for (const [key, part] of row.parts[by]) {if (keys.has(key)) ms += part.ms; yield;}
       bars.set(bar, (bars.get(bar) ?? 0) + ms);
     }
-    return Math.max(0, ...bars.values());
-  }, [strip, stacked, by, barMs]);
-  const maxSeen = useRef(0);
-  const busiest = Math.max(possibleMax, 0, ...heights.values());
-  maxSeen.current = pan.active() ? Math.max(maxSeen.current, busiest) : busiest;
-  const vertical = activityScale(maxSeen.current);
+    let busiest = 0;
+    for (const value of heights.values()) {busiest = Math.max(busiest, value); yield;}
+    for (const value of bars.values()) {busiest = Math.max(busiest, value); yield;}
+    const maximum = active ? Math.max(maxSeen.current, busiest) : busiest;
+    const vertical = activityScale(maximum);
+    const perMs = (width - left - right) / span;
+    const pathOrigin = incomingStrip ? basis.from : incomingOrigin;
+    const paths = yield* stackPaths.current.drawPrepared(incomingGroups, pathOrigin, perMs, barMs, height, vertical.max);
+    return {basis, barMs, heights, maximum, vertical, perMs, pathOrigin, paths, groups: incomingGroups, strip: incomingStrip, activity: incomingActivity, originUnknownTo: incomingUnknownTo};
+  }, [incomingGroups, incomingStrip, incomingActivity, incomingOrigin, incomingUnknownTo, by, requested.from, requested.to, requested.end, width, height, active], `${by}:${width}:${height}`);
+  const model = prepared.value;
+  const basis = model?.basis ?? requested;
+  const groups = model?.groups ?? [], strip = model?.strip ?? null, activity = model?.activity ?? incomingActivity;
+  const barMs = model?.barMs ?? incomingActivity.barMs;
+  const vertical = model?.vertical ?? activityScale(0);
+  const paths = model?.paths ?? [], perMs = model?.perMs ?? (width - left - right) / Math.max(MINUTE, basis.to - basis.from), pathOrigin = model?.pathOrigin ?? basis.from;
+  const hatchFrom = strip?.from ?? basis.from;
+  const knownFrom = strip?.knownFrom ?? model?.originUnknownTo ?? incomingUnknownTo;
+  const unknownTo = knownFrom !== null && knownFrom > hatchFrom ? knownFrom : null;
+  const span = Math.max(MINUTE, basis.to - basis.from);
+  const x = (at: number) => left + ((strip ? at : Math.min(basis.to, Math.max(basis.from, at))) - basis.from) / span * (width - left - right);
   const y = (value: number) => top + (1 - value / vertical.max) * (height - top - bottom);
-
-  // One path a group, stacked in the order of the groups. Bars wide enough to read as such
-  // stand apart; narrower ones run together into a band, so a long period is not striped,
-  // and only the band's edges part it from the groups above and below. They are drawn from
-  // the start of the answer (`origin`), or the gesture's fixed basis, and moved whole,
-  // clipped to the plot: as the clock moves by a cell, only where they stand changes.
-  const perMs = (width - left - right) / span;
-  const pathOrigin = strip ? basis.from : origin;
-  const stackPaths = useRef(new StackPaths());
-  const paths = usePlotMemo(() => {
-    return stackPaths.current.draw(stacked, pathOrigin, perMs, barMs, height, vertical.max);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stacked, pathOrigin, perMs, barMs, height, vertical.max]);
+  const hover = incomingReady && prepared.ready ? axis.hover : null;
+  const tickFrom = strip?.from ?? basis.from, tickTo = strip?.to ?? basis.to;
+  const {ticks, daily} = niceTicks(tickFrom, tickTo, (narrow ? 4 : 7) * (tickTo - tickFrom) / span);
+  useLayoutEffect(() => {if (model) maxSeen.current = model.maximum; axis.commitDrawing(basis, incomingReady && prepared.ready);});
 
   const innerClip = `${clip}-inner`;
   const bandClip = useRef<HTMLDivElement>(null);
@@ -420,14 +412,14 @@ const Stacks = memo(function Stacks({
       return;
     }
     const draft = pan.get();
-    const range = draft ? {from: draft.from, to: draft.to} : {from, to};
+    const visual = axis.visualGeometry();
+    const range = draft || axis.held ? {from: visual.from, to: visual.from + (draft?.length ?? strip.length)} : {from, to};
     const target = targetOf(strip.length, draft?.now ?? to, 'edge', range);
     const start = target.k0 * strip.cell, end = (target.k1 + 1) * strip.cell;
     const firstFull = Math.ceil(start / barMs) * barMs, lastFull = Math.floor(end / barMs) * barMs;
-    if (draft) {
-      const dx = -(draft.to - draft.originEnd) * perMs;
-      const a = Math.max(left, Math.min(width - right, x(firstFull) + dx));
-      const b = Math.max(a, Math.min(width - right, x(lastFull) + dx));
+    if (draft || axis.held) {
+      const a = Math.max(left, Math.min(width - right, axis.screenX(firstFull)));
+      const b = Math.max(a, Math.min(width - right, axis.screenX(lastFull)));
       clipPlot(bandClip.current, a * scale, b * scale, width * scale);
     } else {
       // The short final SVG fold transforms its mask with the artwork, preserving

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {followPan, HistoryStore} from '../lib/history';
 import {Pan} from '../lib/pan';
 import {covered} from '../lib/historyPlot';
+import {Preparations} from '../lib/prepare';
 import {ApiError} from '../lib/http';
 import {CLOCK_TOLERANCE_MS, cellStart, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer} from '../../server/domain/history';
 
@@ -12,7 +13,7 @@ const NOW = Date.parse('2026-09-26T12:23:00Z');
 const flush = async () => {for (let i = 0; i < 5; i++) await Promise.resolve();};
 const empty = (from: number, to: number): Chunk => ({from, to, series: [], activity: {sessions: [], devices: {}, cells: []}, resets: [], grants: []});
 const pending = (h: ReturnType<typeof harness>) => h.reads.filter(r => !r.settled && !r.signal?.aborted);
-function harness(budget?: number) {
+function harness(budget?: number, preparations?: Preparations) {
   let now = NOW;
   let elapsed = 0;
   let dropped = 0;
@@ -20,6 +21,7 @@ function harness(budget?: number) {
   const reads: {board: string; cell: number; from: number; to: number; signal?: AbortSignal; settled: boolean; answer(patch?: Partial<HistoryAnswer>): Promise<void>; fail(error: unknown): Promise<void>}[] = [];
   const store = new HistoryStore({
     now: () => now,
+    preparations,
     elapsedNow: () => elapsed,
     read: (board, cell, from, to, signal) => new Promise((resolve, reject) => reads.push({board, cell, from, to, signal, settled: false,
       async answer(patch = {}) {
@@ -632,4 +634,61 @@ test('a new epoch discards knowledge of a prefetched head and cold-reads only th
   await h.reads[2].answer();
   await h.advance(1000); h.store.choose('1h', {from: NOW - H - 18 * M, to: NOW - 18 * M}); await flush();
   assert.equal(h.reads.length, 4, 'old epoch buffers outside the new interval remain unknown');
+});
+
+function cooperativeHarness() {
+  const tasks: (() => void)[] = []; let clock = 0;
+  const preparations = new Preparations({now: () => clock++, post: run => tasks.push(run)});
+  const h = harness(undefined, preparations);
+  const tick = () => tasks.shift()?.();
+  const finish = async () => {for (let i = 0; i < 10_000; i++) {while (tasks.length) tick(); await flush(); if (!tasks.length) return;} throw new Error('preparation did not quiesce');};
+  const internals = h.store as unknown as {responses: Map<object, {started: boolean}>; reservations: Map<string, object>; flights: Set<object>; grids: Map<number, Map<number, {readFrom: number; readTo: number; writeSeq: number}>>};
+  return {...h, tasks, tick, finish, internals, preparations};
+}
+
+test('a sliced whole response publishes no live tile, boundaries or history before its atomic commit', async () => {
+  const h = cooperativeHarness(); await h.start();
+  await h.reads[0].answer();
+  assert.equal(h.internals.responses.size, 1);
+  h.tick();
+  assert.equal(h.store.get().history, null);
+  for (const grid of h.internals.grids.values()) for (const tile of grid.values()) {assert.equal(tile.writeSeq, 0); assert.equal(tile.readFrom, tile.readTo);}
+  assert.ok(h.internals.flights.size && h.internals.reservations.size, 'the answer retains its HTTP slot and tile reservations through staging');
+  await h.finish();
+  assert.equal(h.store.get().history?.range, '24h');
+  assert.equal(h.internals.responses.size, 0); assert.equal(h.internals.reservations.size, 0);
+  h.store.close();
+});
+
+test('nine ordinary HTTP flights admit at most two active or waiting answers and eventually complete the newest target', async () => {
+  const h = cooperativeHarness(); await h.start(); await h.reads[0].answer(); await h.finish();
+  for (const hours of [48, 72, 96, 120, 144, 168, 192, 216, 240]) {
+    h.store.choose('24h', {from: h.now() - (24 + hours) * H, to: h.now() - hours * H});
+    await flush(); await h.advance(400);
+  }
+  const reads = pending(h);
+  assert.equal(reads.length, 9, 'ordinary HTTP scheduling retains its previous concurrency');
+  const wanted = {from: h.now() - 264 * H - 400, to: h.now() - 240 * H - 400};
+  for (const read of reads) {
+    await read.answer();
+    assert.ok(h.internals.responses.size <= 2, 'raw waiting answers count in the same admission bound');
+    assert.ok([...h.internals.responses.values()].filter(response => response.started).length <= 2);
+  }
+  const chosen = h.store as unknown as {selected: {from: number; to: number}};
+  assert.deepEqual(chosen.selected, wanted);
+  await h.finish();
+  for (let i = 0; i < 10 && pending(h).length; i++) {for (const read of pending(h)) await read.answer(); await h.finish();}
+  assert.equal(h.store.get().history?.range, `${wanted.from}-${wanted.to}`);
+  assert.equal(h.internals.responses.size, 0); assert.equal(h.internals.reservations.size, 0);
+  const count = h.reads.length; await flush(); await h.finish(); assert.equal(h.reads.length, count, 'discard cannot manufacture a speculative fetch loop');
+  h.store.close();
+});
+
+test('epoch cancellation during staging releases the raw answer and reservations without publishing its tile', async () => {
+  const h = cooperativeHarness(); await h.start(); await h.reads[0].answer(); h.tick();
+  h.store.hello('new-run');
+  assert.equal(h.internals.responses.size, 0); assert.equal(h.internals.reservations.size, 0);
+  await h.finish(); assert.equal(h.store.get().history, null);
+  for (const grid of h.internals.grids.values()) for (const tile of grid.values()) assert.equal(tile.writeSeq, 0);
+  h.store.close();
 });

@@ -16,7 +16,7 @@ function fixture() {
   const historyLayer = layer(), activityLayer = layer(true), activityTicks = layer(), activityEdge = layer(true);
   const hiddenHistory = layer(), hiddenActivity = layer();
   const svg = (slides: ReturnType<typeof layer>) => ({
-    isConnected: true, dataset: {} as Record<string, string>, style: {height: '200px'},
+    isConnected: true, dataset: {drawReady: 'true'} as Record<string, string>, style: {height: '200px'},
     classList: {contains: () => false}, getAttribute: () => '0 0 900 200', closest: () => null,
     querySelector: () => slides === historyLayer ? hiddenHistory : hiddenActivity,
     getBoundingClientRect: () => ({width: 450}), viewBox: {baseVal: {width: 900}},
@@ -147,4 +147,25 @@ test('an implicit wheel restart receives a fresh immutable gesture anchor', () =
   assert.equal(f.reading.pending.length, 0, 'the new wheel token must not retain the previous cumulative offset');
   assert.equal(f.reading.latency[1], 22, 'delivery and handler work stay included after a restart');
   assert.equal(f.reading.updated, 2, 'equal CSS offsets in different gesture bases are separate updated frames');
+});
+
+test('a nonzero HTML baseline is retained on restart without crediting a model swap as movement', () => {
+  const f = fixture();
+  f.historySvg.dataset.panBase = '23'; f.activitySvg.dataset.panBase = '13';
+  f.wheel(0, 0);
+  f.requestFrame(() => {f.update(1, 16.7); f.historySvg.dataset.panEnd = '12'; f.historySvg.parentElement.querySelector('').style.transform = 'translateX(11px)'; f.activitySvg.parentElement.querySelector('.plot-clip.is-band > .plot-move').style.transform = 'translateX(6px)'; f.activitySvg.parentElement.querySelectorAll().forEach(layer => {layer.style.transform = 'translateX(6px)';});});
+  f.runFrame(16.7);
+  assert.equal(f.reading.latency.length, 1);
+  assert.equal(f.reading.pending.length, 0);
+});
+
+test('a pending drawing model cannot credit the final input from the URL or axis alone', () => {
+  const f = fixture(); f.wheel(0, 0);
+  delete f.historySvg.dataset.panEnd; delete f.activitySvg.dataset.panEnd;
+  f.context.location.search = '?from=0&to=12';
+  f.historySvg.parentElement.dataset.axisEnd = f.activitySvg.parentElement.dataset.axisEnd = '12';
+  f.activitySvg.dataset.drawReady = 'false'; f.runFrame(16.7);
+  assert.equal(f.reading.latency.length, 0);
+  f.activitySvg.dataset.drawReady = 'true'; f.runFrame(33.4);
+  assert.equal(f.reading.latency[0], 33.4);
 });

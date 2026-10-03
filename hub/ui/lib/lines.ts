@@ -1,3 +1,5 @@
+import {drain, type Preparation} from './prepare';
+import {ordered} from '../../server/domain/prepare';
 import type {HistorySeries, Kind, SourceEvent, View, Win} from './types';
 import type {PastResets} from './resets';
 import {windowKey} from './types';
@@ -19,7 +21,7 @@ export type Line = HistorySeries & LineName;
  * hidden on the board, or any of a card hidden on the board is left out. A source's windows share its colour and differ by
  * dash.
  */
-export function linesOf<T extends PlotSeries>(history: {series: readonly T[]} | null, sources: {id: string; provider: string; title?: string; windows: Win[]}[] | null, view: View, kind: Kind): (T & LineName)[] {
+export function* linesPrepared<T extends PlotSeries>(history: {series: readonly T[]} | null, sources: {id: string; provider: string; title?: string; windows: Win[]}[] | null, view: View, kind: Kind): Preparation<(T & LineName)[]> {
   if (!history || !sources) return [];
   const perSource: Record<string, number> = {};
   const hidden = new Set([...view.windows, ...view.hidden]);
@@ -27,12 +29,14 @@ export function linesOf<T extends PlotSeries>(history: {series: readonly T[]} | 
     const source = sources.findIndex(s => s.id === entry.sourceId);
     return source * 100 + (sources[source]?.windows.findIndex(w => w.id === entry.windowId) ?? 99);
   };
-  return [...history.series].sort((a, b) => rank(a) - rank(b)).flatMap(entry => {
+  const result: (T & LineName)[] = [];
+  for (const entry of yield* ordered(history.series, (a, b) => rank(a) - rank(b))) {
+    yield;
     const source = hidden.has(cardId(entry.sourceId)) ? undefined : sources.find(s => s.id === entry.sourceId);
     const live = source?.windows.find(w => w.id === entry.windowId);
-    if (!source || !live || live.kind !== kind || !entry.points.length || hidden.has(windowKey(entry.sourceId, entry.windowId))) return [];
+    if (!source || !live || live.kind !== kind || !entry.points.length || hidden.has(windowKey(entry.sourceId, entry.windowId))) continue;
     const index = (perSource[entry.sourceId] = (perSource[entry.sourceId] ?? -1) + 1);
-    return [
+    result.push(
       {
         ...entry,
         provider: source.provider,
@@ -45,8 +49,9 @@ export function linesOf<T extends PlotSeries>(history: {series: readonly T[]} | 
         dash: DASHES[index % DASHES.length],
         current: live.remaining,
       },
-    ];
-  });
+    );
+  }
+  return result;
 }
 
 /**
@@ -94,3 +99,5 @@ export function chartResets(past: PastResets, lines: PlotLine[], from: number, t
     return line ? (past[provider] ?? []).filter(reset => reset.at >= from && reset.at <= to).map(reset => ({provider, reset, line})) : [];
   });
 }
+
+export function linesOf<T extends PlotSeries>(...args: Parameters<typeof linesPrepared<T>>): (T & LineName)[] {return drain(linesPrepared(...args));}
