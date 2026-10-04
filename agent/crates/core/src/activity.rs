@@ -1,7 +1,8 @@
 //! Which coding agents run on this machine, and whether they are working: read from the
 //! process metadata alone. No client settings, hooks or session files are read or changed:
-//! a session is a client's process, and it works while it and what it started (tools,
-//! builds, tests) spend CPU time.
+//! a session is a client's process, and it works while its owned process tree spends CPU.
+//! Proven service/shared branches have their own accounting and no inherited project.
+//! Reaped CPU of their ancestors is ambiguous and excluded for those process births.
 //!
 //! The agent may check this often, so a check is one pass over the process list for
 //! names and parents; start times, CPU times and folders are read only for the clients'
@@ -12,7 +13,7 @@
 //! folder by the `.git` above it (see [`place`]); git is not run and none of its settings
 //! is read.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
@@ -81,16 +82,45 @@ pub struct Proc {
     pub parent: u32,
     pub name: String,
     /// Its start and CPU time, when the list gives them at no extra cost (Linux).
-    pub times: Option<(Millis, u64)>,
+    pub times: Option<Times>,
     pub(crate) native_birth: Option<Vec<u8>>,
-    /// A proven service invocation, otherwise unknown and eligible to be a session.
+    /// Linux process session, not a coding-agent session identity.
+    pub sid: Option<u32>,
+    /// Executable file identity on Linux; no executable contents are read.
+    pub image: Option<(u64, u64)>,
+    /// Bounded invocation classification; unavailable metadata proves no new boundary.
     pub role: Role,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
     Unknown,
+    Unavailable,
     Service,
+    Runtime,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Times {
+    pub started: Millis,
+    pub own: u64,
+    pub reaped: u64,
+}
+
+impl Proc {
+    fn key(&self) -> Option<(u32, Vec<u8>)> {
+        Some(cache_key(self.pid, self.times?.started, self.native_birth.as_deref()))
+    }
+
+    fn same_process(&self, other: &Proc) -> bool {
+        self.pid == other.pid
+            && self.name == other.name
+            && self.parent == other.parent
+            && self.sid == other.sid
+            && self.image == other.image
+            && self.native_birth == other.native_birth
+            && (self.native_birth.is_some() || self.times.map(|t| t.started) == other.times.map(|t| t.started))
+    }
 }
 
 /// Read only enough of a NUL-separated invocation to recognise a known service role.
@@ -103,48 +133,62 @@ fn codex_role(mut input: impl Read) -> Role {
     let mut ended = false;
     for _ in 0..2048 {
         if input.read_exact(&mut byte).is_err() {
-            return Role::Unknown;
+            return Role::Unavailable;
         }
         if byte[0] == 0 {
             ended = true;
             break;
         }
     }
-    if !ended || invocation_word(&mut input, &[b"app-server\0"]) != Some(0) {
+    if !ended {
         return Role::Unknown;
     }
+    match invocation_word(&mut input, &[b"app-server\0"]) {
+        Ok(Some(0)) => (),
+        Ok(_) => return Role::Unknown,
+        Err(_) => return Role::Unavailable,
+    }
+    match input.read_exact(&mut byte) {
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Role::Runtime,
+        Err(_) => return Role::Unavailable,
+        Ok(()) if byte[0] == b'-' => return Role::Runtime,
+        Ok(()) => (),
+    }
+    // Replay the first byte of the subcommand without reading any argument values.
+    let mut input = byte.as_slice().chain(input);
     match invocation_word(&mut input, &[b"proxy\0", b"daemon\0"]) {
-        Some(0) => Role::Service,
-        Some(1) if invocation_word(&mut input, &[b"pid-update-loop\0"]) == Some(0) => Role::Service,
-        _ => Role::Unknown,
+        Ok(Some(0)) => Role::Service,
+        Ok(Some(1)) => match invocation_word(&mut input, &[b"pid-update-loop\0"]) {
+            Ok(Some(0)) => Role::Service,
+            Ok(_) => Role::Unknown,
+            Err(_) => Role::Unavailable,
+        },
+        Ok(_) => Role::Unknown,
+        Err(_) => Role::Unavailable,
     }
 }
 
 #[cfg(any(target_os = "linux", test))]
-fn invocation_word(input: &mut impl Read, words: &[&[u8]]) -> Option<usize> {
+fn invocation_word(input: &mut impl Read, words: &[&[u8]]) -> std::io::Result<Option<usize>> {
     let mut possible: Vec<usize> = (0..words.len()).collect();
-    for at in 0..words.iter().map(|word| word.len()).max()? {
+    for at in 0..words.iter().map(|word| word.len()).max().unwrap_or(0) {
         let mut byte = [0];
-        input.read_exact(&mut byte).ok()?;
+        input.read_exact(&mut byte)?;
         possible.retain(|&i| words[i].get(at) == Some(&byte[0]));
         if possible.is_empty() {
-            return None;
+            return Ok(None);
         }
         if byte[0] == 0 {
-            return possible.first().copied();
+            return Ok(possible.first().copied());
         }
     }
-    None
+    Ok(None)
 }
 
 #[cfg(any(target_os = "linux", test))]
 fn with_role(mut before: Proc, role: Role, after: Option<Proc>) -> Option<Proc> {
     let after = after?;
-    if before.pid != after.pid
-        || before.name != after.name
-        || before.native_birth != after.native_birth
-        || (before.native_birth.is_none() && before.times.map(|t| t.0) != after.times.map(|t| t.0))
-    {
+    if !before.same_process(&after) {
         return None;
     }
     before.role = role;
@@ -159,7 +203,7 @@ fn cache_key(pid: u32, wall: Millis, native: Option<&[u8]>) -> (u32, Vec<u8>) {
 
 /// What the last look saw of a session.
 struct Seen {
-    /// CPU time of its tree, and when that was read.
+    /// CPU time of its owned tree on the current accounting basis, and when it was read.
     cpu: u64,
     at: Instant,
     wall: Millis,
@@ -173,6 +217,26 @@ impl Seen {
     fn last_worked(&self, started_at: Millis, now: Millis) -> Option<Millis> {
         self.busy_wall.filter(|&at| self.working == Some(false) && started_at <= at && at <= now)
     }
+}
+
+type ProcessKey = (u32, Vec<u8>);
+
+#[derive(Default)]
+struct Lifetime {
+    name: String,
+    image: Option<(u64, u64)>,
+    role: Option<Role>,
+    shared: bool,
+    reaped_unsafe: bool,
+}
+
+#[derive(PartialEq, Eq)]
+struct Basis {
+    name: String,
+    image: Option<(u64, u64)>,
+    role: Role,
+    shared: bool,
+    unsafe_processes: Vec<ProcessKey>,
 }
 
 /// Looks at the running clients again and again; working or idle is told by the CPU time
@@ -189,6 +253,10 @@ pub struct Activity {
     places: HashMap<(u32, Vec<u8>), (PathBuf, Place)>,
     /// Whether sessions are placed at all: with project names turned off, no folder is looked at.
     placing: bool,
+    /// Shared authority and unsafe reaping survive reparenting and missing metadata.
+    lifetimes: HashMap<ProcessKey, Lifetime>,
+    /// Changing ownership invalidates a delta and hold computed from the old tree.
+    bases: HashMap<ProcessKey, Basis>,
 }
 
 impl Activity {
@@ -210,72 +278,239 @@ impl Activity {
         } else {
             Vec::new()
         };
-        Activity { homes: both(home), temps, shielded, last: HashMap::new(), places: HashMap::new(), placing }
+        Activity {
+            homes: both(home),
+            temps,
+            shielded,
+            last: HashMap::new(),
+            places: HashMap::new(),
+            placing,
+            lifetimes: HashMap::new(),
+            bases: HashMap::new(),
+        }
     }
 
     pub fn look(&mut self) -> Vec<Session> {
         let now = Instant::now();
         let wall = crate::model::now_ms();
         let procs = sys::processes();
-        let listed: HashMap<u32, Option<(Millis, u64)>> = procs.iter().map(|p| (p.pid, p.times)).collect();
-        let times = |pid: u32| listed.get(&pid).copied().flatten().or_else(|| sys::times(pid));
-        let mut seen = HashMap::new();
-        let mut folders = Vec::new();
-        let listed_births: HashMap<u32, _> = procs.iter().map(|p| (p.pid, p.native_birth.clone())).collect();
-        let mut sessions: Vec<Session> = sessions(&procs, std::process::id(), &sys::exe)
-            .into_iter()
-            // Other people's clients on a shared machine are theirs, and on their accounts.
-            .filter(|found| sys::mine(found.pid))
-            .filter_map(|Found { provider, pid, origin, tree }| {
-                // What the tree spent, with what its finished processes spent (as far as the
-                // system keeps that). A session of another kind it started and that ended
-                // shows up there too, for a minute: rare, since the one that started it is
-                // working on its result then.
-                let native_birth = listed_births.get(&pid).cloned().flatten();
-                if native_birth.is_some() && sys::birth(pid) != native_birth {
-                    return None;
+        self.lifetimes.retain(|(pid, _), _| !sys::gone(*pid));
+        self.observe(&procs, std::process::id(), now, wall, &sys::verified, &sys::cwd, &sys::exe, &sys::mine)
+    }
+
+    /// The production sampling path with process metadata supplied by the OS or stand-ins.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn observe(
+        &mut self,
+        procs: &[Proc],
+        own: u32,
+        now: Instant,
+        wall: Millis,
+        read: &dyn Fn(&Proc) -> Option<Proc>,
+        cwd: &dyn Fn(u32) -> Option<PathBuf>,
+        exe: &dyn Fn(u32) -> Option<String>,
+        mine: &dyn Fn(u32) -> bool,
+    ) -> Vec<Session> {
+        let by_pid: HashMap<_, _> = procs.iter().map(|p| (p.pid, p)).collect();
+        let mut relevant = HashSet::new();
+        for p in procs.iter().filter(|p| provider_of(&p.name).is_some() && mine(p.pid)) {
+            relevant.insert(p.pid);
+            relevant.extend(ancestors(p.pid, &by_pid));
+        }
+        // Descendants are CPU contributors, even when their name is not a client.
+        let mut tree: Vec<_> = relevant
+            .iter()
+            .copied()
+            .filter(|pid| by_pid.get(pid).is_some_and(|p| provider_of(&p.name).is_some()))
+            .collect();
+        let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+        for p in procs {
+            children.entry(p.parent).or_default().push(p.pid);
+        }
+        let mut at = 0;
+        while at < tree.len() && tree.len() < 4096 {
+            for &pid in children.get(&tree[at]).into_iter().flatten() {
+                if tree.len() < 4096 && relevant.insert(pid) {
+                    tree.push(pid);
                 }
-                let measured: Vec<Option<(Millis, u64)>> = tree.iter().map(|&p| times(p)).collect();
-                let (started_at, _) = (*measured.first()?)?;
-                let cpu: u64 = measured.iter().flatten().map(|&(_, cpu)| cpu).sum();
-                let key = cache_key(pid, started_at, native_birth.as_deref());
-                let next = judged(self.last.get(&key), cpu, now, wall, working_share(provider));
-                let working = next.working;
-                let last_worked = next.last_worked(started_at, wall);
-                seen.insert(key.clone(), next);
-                folders.push((key, pid));
-                Some(Session {
-                    provider,
-                    pid,
-                    native_birth,
-                    started_at,
-                    project: None,
-                    folder: None,
-                    working,
-                    last_worked,
-                    origin,
-                })
+            }
+            at += 1;
+        }
+        let mut validated: Vec<_> = procs.iter().filter(|p| relevant.contains(&p.pid)).filter_map(read).collect();
+        for p in &mut validated {
+            let Some(key) = p.key() else { continue };
+            // A reused PID proves the older birth ended; absence alone proves nothing.
+            self.lifetimes.retain(|old, _| old.0 != p.pid || *old == key);
+            let lifetime = self.lifetimes.entry(key).or_default();
+            if lifetime.name != p.name || lifetime.image != p.image {
+                lifetime.shared = false;
+                lifetime.role = None;
+            }
+            if p.role != Role::Unavailable && lifetime.role != Some(p.role) {
+                lifetime.shared = false;
+            }
+            lifetime.name = p.name.clone();
+            lifetime.image = p.image;
+            if p.role == Role::Unavailable {
+                // The OS snapshot already bracketed this role read with birth checks.
+                // Losing a later read does not revoke its proven boundary.
+                let listed_role = by_pid.get(&p.pid).filter(|listed| listed.same_process(p)).map(|p| p.role);
+                p.role = lifetime.role.or(listed_role).unwrap_or(Role::Unknown);
+            }
+            if p.role != Role::Unavailable {
+                lifetime.role = Some(p.role);
+            }
+        }
+        let shared: HashSet<_> = validated
+            .iter()
+            .filter_map(|p| {
+                let key = p.key()?;
+                self.lifetimes.get(&key)?.shared.then_some(p.pid)
             })
             .collect();
-        for (session, Place { folder, project }) in sessions.iter_mut().zip(self.placed(folders, &sys::cwd)) {
-            (session.folder, session.project) = (folder, project);
+        let checked_exe = |pid| {
+            let listed = validated.iter().find(|p| p.pid == pid)?;
+            let before = read(listed)?;
+            let path = exe(pid)?;
+            let after = read(&before)?;
+            before.same_process(&after).then_some(path)
+        };
+        let planned = sessions_with(procs, own, &checked_exe, &shared);
+        let found = sessions_with(&validated, own, &checked_exe, &shared);
+        let original = by_pid;
+        let by_pid: HashMap<_, _> = validated.iter().map(|p| (p.pid, p)).collect();
+        let incomplete: HashSet<_> =
+            planned.iter().filter(|f| f.tree.iter().any(|pid| !by_pid.contains_key(pid))).map(|f| f.pid).collect();
+        // A boundary proven in the initial snapshot may already have exited or exec'd
+        // by validation. Its old branch can still be reaped into validated ancestors.
+        for pid in procs
+            .iter()
+            .filter(|p| p.role == Role::Service)
+            .map(|p| p.pid)
+            .chain(planned.iter().filter(|f| f.shared).map(|f| f.pid))
+        {
+            for ancestor in ancestors(pid, &original) {
+                if let Some(p) = by_pid.get(&ancestor).filter(|p| original[&ancestor].same_process(p)) {
+                    if let Some(key) = p.key() {
+                        self.lifetimes.entry(key).or_default().reaped_unsafe = true;
+                    }
+                }
+            }
         }
-        // Recheck after times, role/origin and cwd: a PID reused during metadata reads
-        // contributes neither a session nor a cache entry on this look.
-        sessions.retain(|session| {
-            let valid = session.native_birth.as_ref().map_or_else(
-                || sys::times(session.pid).is_some_and(|times| times.0 == session.started_at),
-                |birth| sys::birth(session.pid).as_ref() == Some(birth),
-            );
-            if !valid {
-                let key = cache_key(session.pid, session.started_at, session.native_birth.as_deref());
-                seen.remove(&key);
+        let barriers: HashSet<_> = validated
+            .iter()
+            .filter(|p| p.role == Role::Service)
+            .map(|p| p.pid)
+            .chain(found.iter().filter(|f| f.shared).map(|f| f.pid))
+            .collect();
+        for &pid in &barriers {
+            for ancestor in ancestors(pid, &by_pid) {
+                if let Some(key) = by_pid.get(&ancestor).and_then(|p| p.key()) {
+                    self.lifetimes.entry(key).or_default().reaped_unsafe = true;
+                }
+            }
+        }
+        for f in &found {
+            if f.shared {
+                if let Some(key) = by_pid[&f.pid].key() {
+                    self.lifetimes.entry(key).or_default().shared = true;
+                }
+            }
+        }
+        let mut seen = HashMap::new();
+        let mut bases = HashMap::new();
+        let mut folders = Vec::new();
+        let mut result = Vec::new();
+        for f in found.into_iter().filter(|f| mine(f.pid)) {
+            let root = by_pid[&f.pid];
+            let Some(key) = root.key() else { continue };
+            let mut cpu = 0u64;
+            let mut unsafe_processes = Vec::new();
+            // Recheck every contributor, not only the root. A failed read is no busy evidence.
+            let mut complete = !incomplete.contains(&f.pid);
+            for pid in &f.tree {
+                if !mine(*pid) {
+                    continue;
+                }
+                let p = by_pid[pid];
+                let Some(current) =
+                    read(p).filter(|q| p.same_process(q) && (q.role == Role::Unavailable || p.role == q.role))
+                else {
+                    complete = false;
+                    continue;
+                };
+                let Some(times) = current.times else {
+                    complete = false;
+                    continue;
+                };
+                let unsafe_reaped =
+                    p.key().is_some_and(|key| self.lifetimes.get(&key).is_some_and(|l| l.reaped_unsafe));
+                cpu = cpu.saturating_add(times.own);
+                if unsafe_reaped {
+                    unsafe_processes.extend(p.key());
+                } else {
+                    cpu = cpu.saturating_add(times.reaped);
+                }
+            }
+            unsafe_processes.sort();
+            let basis = Basis {
+                name: root.name.clone(),
+                image: root.image,
+                role: root.role,
+                shared: f.shared,
+                unsafe_processes,
+            };
+            let before = self.last.get(&key).filter(|_| self.bases.get(&key) == Some(&basis) && complete);
+            let next = judged(before, cpu, now, wall, working_share(f.provider));
+            let started_at = root.times.unwrap().started;
+            let working = if complete { next.working } else { None };
+            let last_worked = next.last_worked(started_at, wall);
+            if complete {
+                seen.insert(key.clone(), next);
+                bases.insert(key.clone(), basis);
+            }
+            if f.shared {
                 self.places.remove(&key);
+            } else {
+                folders.push((key.clone(), f.pid));
+            }
+            result.push(Session {
+                provider: f.provider,
+                pid: f.pid,
+                native_birth: root.native_birth.clone(),
+                started_at,
+                project: None,
+                folder: None,
+                working,
+                last_worked,
+                origin: f.origin,
+            });
+        }
+        let placed = self.placed(folders.clone(), cwd);
+        let places: HashMap<_, _> = folders.into_iter().map(|(_, pid)| pid).zip(placed).collect();
+        result.retain_mut(|session| {
+            let root = by_pid[&session.pid];
+            let valid = read(root)
+                .is_some_and(|p| root.same_process(&p) && (p.role == Role::Unavailable || root.role == p.role));
+            if !valid {
+                if let Some(key) = root.key() {
+                    seen.remove(&key);
+                    bases.remove(&key);
+                    self.places.remove(&key);
+                }
+            } else if let Some(place) = places.get(&session.pid) {
+                session.folder = place.folder.clone();
+                session.project = place.project.clone();
             }
             valid
         });
         self.last = seen;
-        sessions
+        self.bases = bases;
+        self.lifetimes.retain(|key, l| {
+            by_pid.get(&key.0).is_none_or(|p| p.key().as_ref() == Some(key))
+                && (l.shared || l.reaped_unsafe || by_pid.contains_key(&key.0))
+        });
+        result
     }
 
     /// Where the sessions of a look are, by their folders now (`cwd` tells a process's, none
@@ -388,64 +623,84 @@ fn provider_of(name: &str) -> Option<Provider> {
 /// The sessions among `procs`. Not sessions: clients started by the agent itself to
 /// measure (below this process `own` or any `quotum`), known service roles, and a client
 /// under another of the same kind (a launcher and the program it runs). A session under a session of another kind is its
-/// own, and its tree is not counted in the one above. `exe` gives the path of a program,
-/// asked only of what runs a session and its name does not tell (see [`origin`]). A service
-/// ancestor does not hide a real client: an updater may restart a server that serves work.
+/// own, and its tree is not counted in the one above. Proven service and shared runtime
+/// boundaries stop folding and CPU ownership, but never measurement ancestry exclusion.
+/// `exe` identifies editor ancestors whose names alone do not tell their origin.
+fn ancestors(pid: u32, by_pid: &HashMap<u32, &Proc>) -> Vec<u32> {
+    let mut list = Vec::new();
+    let mut at = by_pid.get(&pid).map(|p| p.parent);
+    while let Some(parent) = at.filter(|&a| a != 0 && a != pid && !list.contains(&a) && list.len() < 64) {
+        list.push(parent);
+        at = by_pid.get(&parent).map(|p| p.parent);
+    }
+    list
+}
+
 pub fn sessions(procs: &[Proc], own: u32, exe: &dyn Fn(u32) -> Option<String>) -> Vec<Found> {
+    sessions_with(procs, own, exe, &HashSet::new())
+}
+
+fn sessions_with(procs: &[Proc], own: u32, exe: &dyn Fn(u32) -> Option<String>, shared: &HashSet<u32>) -> Vec<Found> {
     let by_pid: HashMap<u32, &Proc> = procs.iter().map(|p| (p.pid, p)).collect();
     let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
     for p in procs {
         children.entry(p.parent).or_default().push(p.pid);
     }
-    // Every ancestor of `pid`, nearest first; a cycle of stale parents ends the walk.
-    let ancestors = |pid: u32| {
-        let mut list = Vec::new();
-        let mut at = by_pid.get(&pid).map(|p| p.parent);
-        while let Some(parent) = at.filter(|&a| a != 0 && a != pid && !list.contains(&a) && list.len() < 64) {
-            list.push(parent);
-            at = by_pid.get(&parent).map(|p| p.parent);
-        }
-        list
+    let boundary = |p: &Proc| {
+        p.role == Role::Service
+            || shared.contains(&p.pid)
+            || (p.role == Role::Runtime && {
+                let above = ancestors(p.pid, &by_pid);
+                let owner = above.iter().filter_map(|pid| by_pid.get(pid)).find(|p| provider_of(&p.name).is_some());
+                owner.is_some_and(|owner| p.sid.zip(owner.sid).is_some_and(|(a, b)| a != b))
+            })
     };
     let client = |p: &Proc| (p.role != Role::Service).then(|| provider_of(&p.name)).flatten();
-    let session = |p: &Proc| -> Option<(Provider, Origin)> {
-        let provider = client(p)?;
-        let above: Vec<&Proc> = ancestors(p.pid).iter().filter_map(|a| by_pid.get(a).copied()).collect();
-        let measuring = p.pid == own || above.iter().any(|q| q.pid == own || is_quotum(&q.name));
-        let launched = above.iter().find_map(|q| client(q)) == Some(provider);
-        (!measuring && !launched).then(|| (provider, origin(&above, exe)))
-    };
-    let found: HashMap<u32, (Provider, Origin)> = procs.iter().filter_map(|p| Some((p.pid, session(p)?))).collect();
-
-    let mut list: Vec<Found> = found
+    let mut found = HashMap::new();
+    for p in procs {
+        let Some(provider) = client(p) else { continue };
+        let above: Vec<&Proc> = ancestors(p.pid, &by_pid).iter().filter_map(|pid| by_pid.get(pid).copied()).collect();
+        // Measurement exclusion crosses every boundary, unlike ownership folding.
+        if p.pid == own || is_quotum(&p.name) || above.iter().any(|p| p.pid == own || is_quotum(&p.name)) {
+            continue;
+        }
+        let separated = boundary(p) || above.iter().any(|p| boundary(p));
+        let owner = above.iter().take_while(|p| !boundary(p)).find_map(|p| client(p));
+        if !boundary(p) && owner == Some(provider) {
+            continue;
+        }
+        let origin = origin(&above, exe);
+        let shared = separated || (p.role == Role::Runtime && owner.is_none() && origin == Origin::Terminal);
+        found.insert(p.pid, (provider, origin, shared));
+    }
+    let mut list: Vec<_> = found
         .iter()
-        .map(|(&pid, &(provider, origin))| {
+        .map(|(&pid, &(provider, origin, shared))| {
             let mut tree = vec![pid];
-            let mut i = 0;
-            while i < tree.len() && tree.len() < 4096 {
-                // Each process has one parent, so going down reaches a process again only
-                // through a cycle back to the session itself, which is in `found`.
-                for &child in children.get(&tree[i]).into_iter().flatten() {
-                    if !found.contains_key(&child) {
+            let mut at = 0;
+            while at < tree.len() && tree.len() < 4096 {
+                for &child in children.get(&tree[at]).into_iter().flatten() {
+                    if !found.contains_key(&child) && !boundary(by_pid[&child]) && tree.len() < 4096 {
                         tree.push(child);
                     }
                 }
-                i += 1;
+                at += 1;
             }
-            Found { provider, pid, origin, tree }
+            Found { provider, pid, origin, tree, shared }
         })
         .collect();
-    list.sort_by_key(|found| (found.provider, found.pid));
+    list.sort_by_key(|f| (f.provider, f.pid));
     list
 }
 
-/// A session found in the process list, with the pids of its tree (itself and what it started).
+/// A process session and its owned CPU tree. Shared roots have no placement authority.
 #[derive(Debug, PartialEq)]
 pub struct Found {
     pub provider: Provider,
     pub pid: u32,
     pub origin: Origin,
     pub tree: Vec<u32>,
+    pub shared: bool,
 }
 
 /// Where a client runs, from the programs above it: an editor, the desktop app of its
@@ -715,10 +970,12 @@ mod sys {
     //! /proc: one small file per process for the list.
 
     use std::fs;
+    #[cfg(target_os = "linux")]
+    use std::os::unix::fs::MetadataExt;
     use std::path::PathBuf;
     use std::sync::OnceLock;
 
-    use super::{Proc, Role};
+    use super::{Proc, Role, Times};
     use crate::model::Millis;
 
     /// A process from /proc/<pid>/stat: its name, parent, start and the CPU time it and its
@@ -732,14 +989,19 @@ mod sys {
         // cstime) and 22 (start, in ticks after boot).
         let mut fields = text.get(close + 2..)?.split(' ').skip(1).map(|field| field.parse::<u64>().ok());
         let parent = fields.next()??;
-        let cpu = [fields.nth(9)??, fields.next()??, fields.next()??, fields.next()??].iter().sum::<u64>();
+        let _group = fields.next()??;
+        let sid = fields.next()??;
+        let own = fields.nth(7)?? + fields.next()??;
+        let reaped = fields.next()?? + fields.next()??;
         let start = fields.nth(4)??;
         let tick = ticks_per_second();
         let started = boot_time().map(|boot| boot * 1000 + (start * 1000 / tick) as Millis);
-        let times = started.map(|at| (at, cpu * 1000 / tick));
+        let times = started.map(|started| Times { started, own: own * 1000 / tick, reaped: reaped * 1000 / tick });
         Some(Proc {
             pid,
             parent: parent as u32,
+            sid: Some(sid as u32),
+            image: fs::metadata(format!("/proc/{pid}/exe")).ok().map(|m| (m.dev(), m.ino())),
             name: name.to_string(),
             times,
             native_birth: boot_id().map(|boot| crate::session_identity::birth(boot.as_bytes(), pid, start)),
@@ -759,8 +1021,9 @@ mod sys {
                 {
                     return Some(p);
                 }
-                let role =
-                    fs::File::open(format!("/proc/{}/cmdline", p.pid)).map(super::codex_role).unwrap_or(Role::Unknown);
+                let role = fs::File::open(format!("/proc/{}/cmdline", p.pid))
+                    .map(super::codex_role)
+                    .unwrap_or(Role::Unavailable);
                 // The role must belong to the process we listed, even if it exited and its
                 // pid was reused during the read. Never cache a role by pid alone.
                 let pid = p.pid;
@@ -769,10 +1032,30 @@ mod sys {
             .collect()
     }
 
-    pub fn times(pid: u32) -> Option<(Millis, u64)> {
+    pub fn verified(listed: &Proc) -> Option<Proc> {
+        let before = stat(listed.pid)?;
+        if !listed.same_process(&before) {
+            return None;
+        }
+        let role = if super::provider_of(&before.name) == Some(crate::model::Provider::Codex) && mine(before.pid) {
+            fs::File::open(format!("/proc/{}/cmdline", before.pid)).map(super::codex_role).unwrap_or(Role::Unavailable)
+        } else {
+            Role::Unknown
+        };
+        let after = stat(before.pid);
+        super::with_role(before, role, after)
+    }
+
+    pub fn gone(pid: u32) -> bool {
+        fs::metadata(format!("/proc/{pid}")).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+    }
+
+    #[cfg(test)]
+    pub fn times(pid: u32) -> Option<Times> {
         stat(pid)?.times
     }
 
+    #[cfg(test)]
     pub fn birth(pid: u32) -> Option<Vec<u8>> {
         stat(pid)?.native_birth
     }
@@ -835,7 +1118,7 @@ mod sys {
     use std::path::PathBuf;
     use std::sync::OnceLock;
 
-    use super::{Proc, Role};
+    use super::{Proc, Role, Times};
     use crate::model::Millis;
 
     /// `flavor` of `pid` into a zeroed `T`, when the system gives all of it.
@@ -900,6 +1183,8 @@ mod sys {
                 Some(Proc {
                     pid: pid as u32,
                     parent: bsd.pbi_ppid,
+                    sid: None,
+                    image: None,
                     name,
                     times: None,
                     native_birth,
@@ -909,7 +1194,39 @@ mod sys {
             .collect()
     }
 
-    pub fn times(pid: u32) -> Option<(Millis, u64)> {
+    pub fn verified(listed: &Proc) -> Option<Proc> {
+        let before: libc::proc_bsdinfo = info(listed.pid, libc::PROC_PIDTBSDINFO)?;
+        let native_birth = birth(listed.pid);
+        let times = times(listed.pid)?;
+        let after: libc::proc_bsdinfo = info(listed.pid, libc::PROC_PIDTBSDINFO)?;
+        let current = Proc {
+            times: Some(times),
+            native_birth: native_birth.clone(),
+            name: process_name(listed.pid, &after),
+            parent: after.pbi_ppid,
+            ..listed.clone()
+        };
+        let stable = before.pbi_start_tvsec == after.pbi_start_tvsec
+            && before.pbi_start_tvusec == after.pbi_start_tvusec
+            && before.pbi_ppid == after.pbi_ppid
+            && process_name(listed.pid, &before) == current.name
+            && native_birth == birth(listed.pid)
+            && times.started == after.pbi_start_tvsec as Millis * 1000 + after.pbi_start_tvusec as Millis / 1000;
+        (stable
+            && listed.name == current.name
+            && listed.parent == current.parent
+            && listed.native_birth.as_ref().is_none_or(|birth| Some(birth) == native_birth.as_ref())
+            && listed.times.is_none_or(|t| t.started == times.started))
+        .then_some(current)
+    }
+
+    pub fn gone(pid: u32) -> bool {
+        // SAFETY: signal zero observes existence only; denied access is not proof of exit.
+        (unsafe { libc::kill(pid as libc::pid_t, 0) }) != 0
+            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    }
+
+    pub fn times(pid: u32) -> Option<Times> {
         let bsd: libc::proc_bsdinfo = info(pid, libc::PROC_PIDTBSDINFO)?;
         let started = bsd.pbi_start_tvsec as Millis * 1000 + bsd.pbi_start_tvusec as Millis / 1000;
         // SAFETY: the call fills a plain struct of the version asked for.
@@ -920,9 +1237,13 @@ mod sys {
         }?;
         // With what its finished children spent. The times are in mach time units:
         // nanoseconds on Intel, not on Apple silicon.
-        let total = usage.ri_user_time + usage.ri_system_time + usage.ri_child_user_time + usage.ri_child_system_time;
         let (numer, denom) = timebase();
-        Some((started, (total as u128 * numer as u128 / denom as u128 / 1_000_000) as u64))
+        let millis = |time: u64| (time as u128 * numer as u128 / denom as u128 / 1_000_000) as u64;
+        Some(Times {
+            started,
+            own: millis(usage.ri_user_time + usage.ri_system_time),
+            reaped: millis(usage.ri_child_user_time + usage.ri_child_system_time),
+        })
     }
 
     pub fn birth(pid: u32) -> Option<Vec<u8>> {
@@ -1012,7 +1333,7 @@ mod sys {
     use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
     use windows_sys::Win32::System::Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
 
-    use super::{Proc, Role};
+    use super::{Proc, Role, Times};
     use crate::model::Millis;
 
     pub fn processes() -> Vec<Proc> {
@@ -1032,6 +1353,8 @@ mod sys {
                 list.push(Proc {
                     pid: entry.th32ProcessID,
                     parent: entry.th32ParentProcessID,
+                    sid: None,
+                    image: None,
                     name: name.clone(),
                     times: None,
                     native_birth: super::provider_of(&name)
@@ -1046,15 +1369,13 @@ mod sys {
         list
     }
 
-    fn named_birth(pid: u32, listed_name: &str) -> Option<Vec<u8>> {
+    fn named_process(pid: u32, listed_name: &str) -> bool {
         use windows_sys::Win32::System::Threading::QueryFullProcessImageNameW;
-        let before = birth(pid)?;
-        // A process-list snapshot may be older than the PID's current occupant. Read
-        // only its executable name to confirm the snapshot's name belongs to this birth.
-        let matches = unsafe {
+        // SAFETY: the handle is closed and the image-name buffer has a fixed bound.
+        unsafe {
             let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
             if process.is_null() {
-                return None;
+                return false;
             }
             let mut buffer = [0u16; 512];
             let mut length = buffer.len() as u32;
@@ -1063,8 +1384,12 @@ mod sys {
             ok && std::path::Path::new(&String::from_utf16_lossy(&buffer[..length.min(512) as usize]))
                 .file_name()
                 .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case(listed_name))
-        };
-        (matches && birth(pid).as_ref() == Some(&before)).then_some(before)
+        }
+    }
+
+    fn named_birth(pid: u32, listed_name: &str) -> Option<Vec<u8>> {
+        let before = birth(pid)?;
+        (named_process(pid, listed_name) && birth(pid).as_ref() == Some(&before)).then_some(before)
     }
 
     /// A bounded optional native identity capability. No telemetry offsets or tails
@@ -1118,8 +1443,36 @@ mod sys {
         Some(crate::session_identity::birth(&boot, pid, sequence))
     }
 
+    pub fn verified(listed: &Proc) -> Option<Proc> {
+        let before = times(listed.pid)?;
+        let native_birth = named_birth(listed.pid, &listed.name);
+        // Without telemetry, still verify the executable name and creation timestamp.
+        if native_birth.is_none() && !named_process(listed.pid, &listed.name) {
+            return None;
+        }
+        let after = times(listed.pid)?;
+        let current = Proc { times: Some(after), native_birth: native_birth.clone(), ..listed.clone() };
+        (before.started == after.started
+            && native_birth == birth(listed.pid)
+            && listed.native_birth.as_ref().is_none_or(|birth| Some(birth) == native_birth.as_ref())
+            && listed.times.is_none_or(|t| t.started == after.started))
+        .then_some(current)
+    }
+
+    pub fn gone(pid: u32) -> bool {
+        // Access denial and unsupported telemetry do not prove exit.
+        unsafe {
+            let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if !process.is_null() {
+                CloseHandle(process);
+                return false;
+            }
+            windows_sys::Win32::Foundation::GetLastError() == 87
+        }
+    }
+
     /// Windows keeps no time of finished children: what a tool spent is counted while it runs.
-    pub fn times(pid: u32) -> Option<(Millis, u64)> {
+    pub fn times(pid: u32) -> Option<Times> {
         let as_100ns = |t: FILETIME| (t.dwHighDateTime as u64) << 32 | t.dwLowDateTime as u64;
         // SAFETY: the handle is closed below; the times are plain structs.
         unsafe {
@@ -1133,7 +1486,7 @@ mod sys {
             CloseHandle(process);
             // FILETIME counts 100 ns since 1601; the Unix epoch is 11 644 473 600 s later.
             let started = (as_100ns(created) / 10_000) as Millis - 11_644_473_600_000;
-            ok.then_some((started, (as_100ns(kernel) + as_100ns(user)) / 10_000))
+            ok.then_some(Times { started, own: (as_100ns(kernel) + as_100ns(user)) / 10_000, reaped: 0 })
         }
     }
 
@@ -1183,13 +1536,19 @@ mod sys {
 mod sys {
     use std::path::PathBuf;
 
-    use super::Proc;
+    use super::{Proc, Times};
     use crate::model::Millis;
 
     pub fn processes() -> Vec<Proc> {
         Vec::new()
     }
-    pub fn times(_: u32) -> Option<(Millis, u64)> {
+    pub fn verified(_: &Proc) -> Option<Proc> {
+        None
+    }
+    pub fn gone(_: u32) -> bool {
+        false
+    }
+    pub fn times(_: u32) -> Option<Times> {
         None
     }
     pub fn birth(_: u32) -> Option<Vec<u8>> {
@@ -1211,7 +1570,16 @@ mod tests {
     use super::*;
 
     fn p(pid: u32, parent: u32, name: &str) -> Proc {
-        Proc { pid, parent, name: name.into(), times: None, native_birth: None, role: Role::Unknown }
+        Proc {
+            pid,
+            parent,
+            name: name.into(),
+            times: None,
+            native_birth: None,
+            sid: None,
+            image: None,
+            role: Role::Unknown,
+        }
     }
 
     fn found(procs: &[Proc]) -> Vec<(Provider, u32, Vec<u32>)> {
@@ -1224,6 +1592,34 @@ mod tests {
 
     fn codex(pid: u32, parent: u32, invocation: &[u8]) -> Proc {
         Proc { role: codex_role(invocation), ..p(pid, parent, "codex") }
+    }
+
+    #[test]
+    fn shared_work_does_not_activate_its_idle_launcher() {
+        let rows = [
+            p(10, 1, "codex"),
+            codex(11, 10, b"codex\0app-server\0daemon\0pid-update-loop\0"),
+            codex(12, 11, b"codex\0app-server\0"),
+            p(13, 12, "bash"),
+            p(20, 1, "codex"),
+        ];
+        let found = sessions(&rows, 900, &|_| None);
+        let launcher = found.iter().find(|f| f.pid == 10).unwrap();
+        assert_eq!(launcher.tree, vec![10], "service nodes themselves are accounting barriers");
+        let cpu = launcher
+            .tree
+            .iter()
+            .map(|pid| match pid {
+                12 => 600,
+                13 => 900,
+                _ => 0,
+            })
+            .sum();
+        let now = Instant::now();
+        let first = judged(None, 0, now, 0, working_share(Provider::Codex));
+        let next =
+            judged(Some(&first), cpu, now + std::time::Duration::from_secs(15), 15_000, working_share(Provider::Codex));
+        assert_eq!(next.working, Some(false), "foreign tools must not activate the idle launcher");
     }
 
     #[test]
@@ -1253,7 +1649,7 @@ mod tests {
             found(&procs),
             vec![
                 (Provider::Codex, 11, vec![11, 12]),
-                (Provider::Codex, 30, vec![30, 31, 32]),
+                (Provider::Codex, 30, vec![30, 31]),
                 (Provider::Codex, 41, vec![41]),
                 (Provider::Codex, 51, vec![51]),
             ]
@@ -1265,7 +1661,7 @@ mod tests {
         for invocation in [b"codex\0app-server\0daemon\0pid-update-loop\0".as_slice(), b"codex\0app-server\0proxy\0"] {
             assert_eq!(codex_role(invocation), Role::Service);
             for end in 0..invocation.len() {
-                assert_eq!(codex_role(&invocation[..end]), Role::Unknown, "partial prefix at {end}");
+                assert_ne!(codex_role(&invocation[..end]), Role::Service, "partial prefix at {end}");
             }
         }
         for invocation in [
@@ -1273,11 +1669,9 @@ mod tests {
             b"codex\0app-server daemon pid-update-loop\0",
             b"codex\0--config\0app-server\0daemon\0pid-update-loop\0",
             b"codex\0--\0app-server\0daemon\0pid-update-loop\0",
-            b"codex\0app-server\0--listen\0proxy\0",
             b"codex\0app-server\0daemon\0pid-update-loop-later\0",
             b"codex\0app-server\0proxying\0",
             b"codex\0app-server\0daemon\0restart\0",
-            b"codex\0app-server\0--managed-daemon\0",
         ] {
             let proc = codex(10, 1, invocation);
             assert_eq!(proc.role, Role::Unknown);
@@ -1307,18 +1701,18 @@ mod tests {
                 Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
             }
         }
-        assert_eq!(codex_role(Denied), Role::Unknown);
+        assert_eq!(codex_role(Denied), Role::Unavailable);
     }
 
     #[test]
     fn a_role_is_not_attached_to_an_exited_or_reused_process() {
-        let before = Proc { times: Some((100, 20)), ..p(10, 1, "codex") };
+        let before = Proc { times: Some(Times { started: 100, own: 20, reaped: 0 }), ..p(10, 1, "codex") };
         assert!(with_role(before.clone(), Role::Service, None).is_none());
-        let reused = Proc { times: Some((200, 0)), ..before.clone() };
+        let reused = Proc { times: Some(Times { started: 200, own: 0, reaped: 0 }), ..before.clone() };
         assert!(with_role(before.clone(), Role::Service, Some(reused)).is_none());
         let replaced = Proc { name: "bash".into(), ..before.clone() };
         assert!(with_role(before.clone(), Role::Service, Some(replaced)).is_none());
-        let later = Proc { times: Some((100, 50)), ..before.clone() };
+        let later = Proc { times: Some(Times { started: 100, own: 50, reaped: 0 }), ..before.clone() };
         assert_eq!(with_role(before.clone(), Role::Unknown, Some(later.clone())).unwrap().role, Role::Unknown);
         assert_eq!(with_role(before, Role::Service, Some(later)).unwrap().role, Role::Service);
     }
@@ -1716,6 +2110,8 @@ mod tests {
             last: HashMap::new(),
             places: HashMap::new(),
             placing: true,
+            lifetimes: HashMap::new(),
+            bases: HashMap::new(),
         };
         let (key, other) = ((7, 1), (8, 1));
         let worktree = both(Some("wt"), Some("quotum"));
@@ -1820,7 +2216,7 @@ mod tests {
         let own = sys::processes().into_iter().find(|p| p.pid == me).expect("in the list");
         #[cfg(unix)]
         assert_eq!(own.parent, std::os::unix::process::parent_id());
-        let (started, cpu) = own.times.or_else(|| sys::times(me)).expect("its times");
+        let Times { started, own: cpu, .. } = own.times.or_else(|| sys::times(me)).expect("its times");
         let now = crate::model::now_ms();
         assert!(started <= now + 1_000 && now - started < 3_600_000, "started within the hour: {started} vs {now}");
         let spin = Instant::now();
@@ -1828,7 +2224,7 @@ mod tests {
         while spin.elapsed().as_millis() < 300 {
             spun = std::hint::black_box(spun.wrapping_add(1));
         }
-        let (_, later) = sys::times(me).expect("its times again");
+        let later = sys::times(me).expect("its times again").own;
         assert!(later > cpu, "CPU time grows: {cpu} then {later}");
         assert!(sys::mine(me));
         #[cfg(unix)]
@@ -1940,8 +2336,12 @@ mod tests {
             cache_key(7, 100, Some(&crate::session_identity::birth(b"boot", 7, 124)))
         );
         assert_ne!(cache_key(7, 100, None), cache_key(7, 200, None));
-        let before = Proc { times: Some((100, 20)), native_birth: Some(native), ..p(7, 1, "codex") };
-        let shifted = Proc { times: Some((200, 30)), ..before.clone() };
+        let before = Proc {
+            times: Some(Times { started: 100, own: 20, reaped: 0 }),
+            native_birth: Some(native),
+            ..p(7, 1, "codex")
+        };
+        let shifted = Proc { times: Some(Times { started: 200, own: 30, reaped: 0 }), ..before.clone() };
         assert!(with_role(before.clone(), Role::Service, Some(shifted)).is_some());
         let reused = Proc { native_birth: Some(crate::session_identity::birth(b"boot", 7, 124)), ..before.clone() };
         assert!(with_role(before, Role::Service, Some(reused)).is_none());
@@ -1957,3 +2357,6 @@ mod tests {
         assert!(second.iter().filter(|s| first.iter().any(|f| f.pid == s.pid)).all(|s| s.working.is_some()));
     }
 }
+
+#[cfg(test)]
+pub(crate) mod attribution;

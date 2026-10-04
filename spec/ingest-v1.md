@@ -349,11 +349,11 @@ of running agents for five minutes after its last request, then forgets it.
 | `provider` | As in a snapshot. |
 | `account`, `accountName` | The subscription, as in a check-in, as far as the agent knows it. Without them the hub takes the subscription this machine last delivered for that provider; the reference agent leaves out a session of a client that names its account while it does not know which one that is (signed in anew since it measured). Either way, only a subscription the device's person holds (their devices measured it). |
 | `origin` | Where it runs: `terminal`, `editor` (a client an editor runs, one per window) or `app` (a provider's desktop app, one client for all its chats). |
-| `project` | The project it works in, never a path: the name of the git repository its folder is in (for a worktree, of the repository it belongs to), else the name of the folder. Absent when the folder that names it (the repository's main folder, else the folder itself) is the home folder, above it or temporary. A repository is looked for in the folder and the folders above it, stopping before the home folder (neither it nor anything above it is looked at), and on macOS not in or through the folders the system guards (Desktop, Documents, Downloads, iCloud Drive, other volumes): there the project is the folder. Paths are checked as git writes them; a chain of links made by hand may still lead there. The hub counts time under this name, and boards show it. A longer name than 120 characters is cut, not refused. |
+| `project` | The project it works in, never a path. The reference agent leaves project and folder absent for a proven shared runtime or one without a proven client/window owner; an inherited working directory is not project authority. For an owned session: the name of the git repository its folder is in (for a worktree, of the repository it belongs to), else the name of the folder. Absent when the folder that names it (the repository's main folder, else the folder itself) is the home folder, above it or temporary. A repository is looked for in the folder and the folders above it, stopping before the home folder (neither it nor anything above it is looked at), and on macOS not in or through the folders the system guards (Desktop, Documents, Downloads, iCloud Drive, other volumes): there the project is the folder. Paths are checked as git writes them; a chain of links made by hand may still lead there. The hub counts time under this name, and boards show it. A longer name than 120 characters is cut, not refused. |
 | `folder` | The name of the folder it works in, when that is not `project` (a subfolder or a worktree), and the folder is not the home folder, above it or temporary. Boards show it under the project in the lists of running agents, so agents of one project stay apart; where the agent tells none and its person renamed the project, the name reported for the project is shown there instead. Cut like `project`. |
 | `startedAt` | When it started; a time ahead of the hub's is taken as now. |
 | `sessionId` | Optional opaque process identity: exactly 32 lower-case hex characters, unique across the report. Absent or null means legacy identity. Invalid types, malformed or duplicate IDs reject the whole report with `400 {"error":"invalid_request","detail":"sessionId"}`. It is scoped to the authenticated device, unchanged by clock correction. Older hubs ignore it. |
-| `working` | Whether it is working now (the agent's judgement: its processes spend CPU time), or idle. |
+| `working` | Whether it is working now (the agent's judgement: its owned processes spend CPU time), or idle. The reference agent excludes proven service/shared branches from ancestor CPU and ignores ambiguous finished-child CPU for each affected ancestor process birth; self CPU and live owned tools remain counted. A change of accounting basis resets the incompatible delta and hold. |
 | `lastWorkedAt` | Optional: when an idle session was last seen spending CPU like a working one. Absent while working or when unknown, including after the agent restarts or the clocks jump. The reference agent remembers the observation's wall time without recalculating it, and sends it only between `startedAt` and now. The hub corrects it for clock skew as it does `startedAt`, limits it to now and brings a time before `startedAt` up to `startedAt`; an invalid time is refused. |
 
 The reference agent finds a repository by the `.git` in the folder and the folders above
@@ -379,7 +379,9 @@ where that subscription is shown, whoever brought it.
 The hub keeps when each session worked, with its machine, subscription, where it runs,
 since when and its project and folder names: each list counts until the next one, for at
 most 200 seconds. How long agents worked, and how long any of them did, are worked out
-from that. The person whose machines they are can rename projects and merge them, which
+from that. A corrected full list ends future credit under the previous list at its
+arrival; it can still close the preceding interval up to that cutoff and never repairs
+older work. The person whose machines they are can rename projects and merge them, which
 applies to all time kept.
 
 The reference agent derives `sessionId` from the first 16 bytes of SHA-256 over
@@ -432,13 +434,18 @@ can measure a source of such a provider; the agent contract sends no provider se
 What never leaves the machine: provider tokens, cookies, account ids and emails,
 prompts, file contents, file paths.
 
-To distinguish running sessions from known Codex maintenance and transport processes,
-the reference agent on Linux reads only a bounded invocation prefix of its user's
-Codex processes from process metadata: at most 2048 bytes to skip the executable name,
-then exact comparisons of the leading role, stopping at the first mismatch or a
-recognised role. It reads no following argument values or process environments and
-retains, logs and sends no command line. Unknown or unreadable roles remain eligible
-to be sessions; macOS and Windows currently do not read invocation roles.
+To distinguish Codex maintenance, transport and runtime roles and establish accounting
+boundaries, the reference agent on Linux reads only a bounded invocation prefix of
+its user's Codex processes: at most 2048 bytes to skip the executable name, then exact
+leading role comparisons, stopping at a mismatch, a recognised service role or the
+first runtime option-prefix byte. It also reads OS process-session IDs and executable
+file identity, checking process birth around metadata and CPU reads. It reads no
+following argument values or process environments and retains, logs and sends no
+command line. Unknown or initially unreadable roles prove no boundary; previously
+proven boundaries can survive unreadable metadata for the same process birth. These
+metadata and caches stay on the machine. macOS and Windows currently have no invocation
+role or shared process-session detector; their existing process observations remain
+eligible. No new wire fields or provider content are needed for this accounting.
 
 What is sent: the pseudonym of each account, the plan name, percentages and reset times
 of the windows, free resets and when each expires, the client's version, the machine's random id, its name
