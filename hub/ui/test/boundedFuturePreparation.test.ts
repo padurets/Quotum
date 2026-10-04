@@ -16,7 +16,7 @@ test('full future facts produce bounded artwork and a rare clock rebase preserve
   const context = {...hook, axis: {active: false, basis: {from: 9 * DAY, to: 11 * DAY, end}},
     incomingLines: [{points: [[9 * DAY, 70, 1], [end, 60, 1]]}], incomingPlans: [{key: 'plan', runs: raw}], incomingForecasts: [{points: [[end, 60], [12 * DAY, 0]]}], incomingMarkers: [],
     incomingStrip: null as {from: number; to: number} | null, desiredFrom: 9 * DAY, desiredTo: 11 * DAY, desiredNow: end,
-    modelContext: '', navigation: undefined, desiredLive: true, incomingReady: true,
+    valueAxis: undefined, stepped: false, modelContext: '', navigation: undefined, desiredLive: true, incomingReady: true,
     cellMs: 60_000, width: 900, height: 220, left: 40, right: 12, top: 12, bottom: 28, clipPrepared,
     plotPathPrepared: function* (...args: Parameters<typeof plotPathPrepared>) {calculations++; return yield* plotPathPrepared(...args);},
     draw: null as unknown as () => {value: Model | null; ready: boolean},

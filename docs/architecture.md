@@ -24,7 +24,8 @@ accounts. This document explains how the parts work and why they are built this 
 - **hub/** — the dashboard service: Node 24, Fastify, the SQLite built into Node, a
   React UI. It decides which device measures which subscription, stores measurements,
   applies the rules (what counts as spending, what is a reset, what is a gap) and
-  serves the dashboard. It never talks to providers itself.
+  serves the dashboard. Hub-measured providers, such as OpenRouter, use its read-only
+  connectors and encrypted credentials; subscription measurements come from agents.
 - **spec/** — the contracts: the [ingest format](../spec/ingest-v1.md) between the two
   (anything that speaks it can deliver to a hub), and the
   [dashboard's events](../spec/dashboard-v1.md) between the hub and its page.
@@ -542,12 +543,63 @@ them), kept for 90 days.
   latest one), and listed for as long as samples are kept, so the chart marks every
   one of its period, however far back it is moved.
 
+Hub-measured sources keep exact unit-valued meters separately from percentage
+windows. OpenRouter stores credits and lifetime usage; balance is their difference,
+spending is positive usage movement and a top-up is positive credits movement.
+The account pair keeps the time its response arrived. Each key page has its own
+observation time for counters, period totals and cap resets, even when a traversal
+crosses a UTC boundary. One atomic store write preserves those independent times.
+Readings use signed integer millionths, with sparse value/semantic changes and
+continuous observation spans. Unchanged heartbeats extend freshness without another
+reading. Retention keeps one predecessor to distinguish a late increase from a reset.
+A missing key is stale after one successful traversal and archived after two successive
+successful misses; partial traversals never confirm absence, and history is retained.
+A valid null limit explicitly ends the current cap, including in a partial round.
+Invalid money leaves stay distinct from null. The ledger retains the last confirmed
+span endpoint as evidence through archival and retention; reappearance uses that
+heartbeat time as its spending anchor.
+
+Money history uses the same bounded tiles, cache and page loader. Its exact strings,
+historical cap semantics and original spending intervals stay separate from the window
+Float64 codec. A logical balance selection internally reads its two counters. Axes and
+arithmetic never combine units; money does not contribute percentage attention,
+forecast or quota notifications.
+Money cells are packed separately, with small header and interval leaves; unchanged
+cells share their byte buffers during private staging. Packing, decoding and composition
+yield between leaves and cells through the shared preparation scheduler. Monetary
+points also enter the progressive plot during a gesture while table totals retain the
+last complete answer. A monetary visible frame that cannot fit the existing 15 MiB
+tile estimate reports the history limit before publication, without dropping data.
+The plot holds raw monetary cells and the visible period separately. Spending
+composition uses that period's interval classifier even when the drawing holds wider
+neighboring cells; a cached movement updates the period without rereading the tiles.
+
+A hub polling service starts after readiness and stops before SQLite closes, with at
+most two concurrent jobs and one per source. It rechecks access versions and source
+generation before committing a result, so deletion and replacement discard late
+answers. Auto intervals stretch from two to fifteen minutes; existing fixed preferences
+also apply. OpenRouter bounds its whole round to sixty seconds; exhausting the
+inventory budget preserves successful account measurements. Lifecycle cancellation
+still discards the whole result. An inventory rate limit ends the traversal and its
+bounded Retry-After delays automatic and manual retries. Permanent access failures pause automatic retries. Refresh requires a
+source holding and shares a one-minute cooldown across boards. Owner source access is
+projected separately for each reader, outside the shared board cache.
+Frequency saves publish the new preference during an active poll; its cadence is
+recomputed after that poll finishes.
+
 ## Trusted connector keys
 
 The hub has a write-only credential service, separate from password and machine-token
-hashes. No production provider uses it yet. Connector adapters are registered in code;
+hashes. OpenRouter uses it for a management key, through code-owned GET operations
+for the account, credits, workspaces and keys. Connector adapters are registered in code;
 tests inject their own adapter. Each credential belongs to its person and can be
-created, replaced, listed or removed only by that person's session. Mutations require
+created, replaced, listed or removed only by that person's session. Create and replacement
+identify the account outside SQLite, then commit encrypted access and its verified
+source holding atomically. A replacement cannot change the account. No-expiry access
+requires explicit consent. Creation retries can use an owner-scoped UUID for 24 hours;
+a deletion leaves its replay tombstone. Deleting the last own access releases that
+person's holding, preserving others and history. Missing or broken access preserves
+last measurements and a neutral shared failure, with details only for its owner. Mutations require
 an explicit same-site Origin before parsing, accept only a connector's strict printable
 ASCII key format, and are limited to ten attempts a minute per person and address.
 Replies contain only the safe record details, including a last-four hint; neither the
@@ -589,10 +641,12 @@ and its limits.
   signs up without an invitation but with its setup code: a new hub prints one to its
   log, so only whoever started it can claim it. After that, signing up needs an invite
   link unless the hub is open (`QUOTUM_SIGNUP=open`).
-- **Devices** are running agents, and each belongs to a person. The *Machines* dialog
+- **Devices** are running agents, and each belongs to a person. The *My connections* dialog
   shows a person's devices, what each delivers and the last failure of each client
-  there (not logged in, too old…); the person names them there. Its *Projects* tab
-  lists the projects their agents worked on, with the machines and when they last did:
+  there (not logged in, too old…); the person names them there. The same list contains
+  their provider accounts, and its Connect menu opens a device or provider form directly.
+  *Agent activity → Settings → Manage projects* lists the projects their agents worked
+  on, with the machines and when they last did:
   the person renames them and merges several into one, which applies everywhere they are
   shown and to all the time kept (only on their own machines), and gives a reported name
   back its own to undo it. How long agents worked is not shown there. A device connects in

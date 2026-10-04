@@ -5,10 +5,12 @@ import {hubNow} from './clock';
 import {HistoryTile} from './historyTiles';
 import {ApiError, call} from './http';
 import {periodOf} from './periods';
-import {onPrefs, prefs} from './prefs';
+import {onPrefs, prefs,setPrefs} from './prefs';
 import type {Store} from './store';
 import {dropTimeRange, onTimeRange, timeRange, timeRangeKey, type TimeRange} from './timeRange';
 import type {History} from './types';
+import type {MeterSelection} from '../../server/domain/meterHistory';
+import {moneySelection} from './moneySelection';
 import {pan, type Pan} from './pan';
 import {plotPrepared, type Coverage, type PlotBuffer} from './historyPlot';
 
@@ -19,7 +21,7 @@ const RETRY_MS = 15_000;
 const STORED_BYTES = 15 * 1024 * 1024;
 
 export type HistoryEnv = {
-  read(board: string, cell: number, from: number, to: number, signal?: AbortSignal): Promise<HistoryAnswer>;
+  read(board: string, cell: number, from: number, to: number, signal?: AbortSignal, meters?: MeterSelection): Promise<HistoryAnswer>;
   now(): number;
   /** Elapsed time stays independent of corrections to the estimated hub clock. */
   elapsedNow?(): number;
@@ -29,7 +31,7 @@ export type HistoryEnv = {
   schedule?(run: () => void): void;
   preparations?: Preparations | null;
 };
-export type Shown = {history: History | null; loading: boolean};
+export type Shown = {history: History | null; loading: boolean;error?:'history_limit'};
 type Flight = {seq: number; epoch: number; target: string; newsSeq: number; cell: number; from: number; to: number; touched: number; startedAt: number; controller: AbortController; role: 'visible' | 'ahead'};
 type ResponseOwner = {answer: HistoryAnswer; keys: string[]; started: boolean};
 type TilePin = {tile: HistoryTile; seq: number; from: number; to: number};
@@ -47,6 +49,7 @@ export class HistoryStore {
   private lineupKey = '';
   private windowsKey = '';
   private windows = new Set<string>();
+  private meters: MeterSelection | undefined;
   private period = '24h';
   private selected: TimeRange | null = null;
   private shown: History | null = null;
@@ -61,6 +64,7 @@ export class HistoryStore {
   private needsCompose = false;
   private readonly listeners = new Set<() => void>();
   private state: Shown = {history: null, loading: false};
+  private historyLimit=false;
   private interest: PlotInterest | null = null;
   private panReads = false;
   private cohort = '';
@@ -104,6 +108,7 @@ export class HistoryStore {
     this.epoch++;
     this.board = null;
     this.ready = false;
+    this.historyLimit=false;
     this.run = null;
     this.shown = this.meta = null;
     this.metaAt = null;
@@ -158,6 +163,17 @@ export class HistoryStore {
     this.schedule();
   }
 
+  setMeters(meters: MeterSelection | undefined) {
+    if(JSON.stringify(meters)===JSON.stringify(this.meters))return;
+    this.meters=meters;
+    this.historyLimit=false;
+    this.grids.clear();
+    this.shown=null;
+    this.invalidate();
+    this.schedule();
+    this.publish();
+  }
+
   news(since: number) {
     this.newsSeq++;
     this.cutTo = null;
@@ -176,6 +192,7 @@ export class HistoryStore {
     const key = selected ? timeRangeKey(selected) : period;
     if (key === (this.selected ? timeRangeKey(this.selected) : this.period)) return;
     this.period = period;
+    this.historyLimit=false;
     this.selected = selected;
     if (!this.interest) this.panReads = false;
     this.needsCompose = true;
@@ -202,6 +219,7 @@ export class HistoryStore {
     this.plotPending = true;
     const next = this.plotTarget();
     const cell = next.cell;
+    if(this.meters&&this.plot?.cell===cell)this.setPlot(this.plot);
     const cohort = `${interest.token}:${this.epoch}:${cell}`;
     if (this.cohort !== cohort) {
       this.cohort = cohort;
@@ -273,8 +291,9 @@ export class HistoryStore {
   private publish() {
     const history = this.shown;
     const loading = !this.plotPending && !!history && history.range !== this.target().key;
-    if (history === this.state.history && loading === this.state.loading) return;
-    this.state = {history, loading};
+    const error=this.historyLimit?'history_limit' as const:undefined;
+    if (history === this.state.history && loading === this.state.loading&&error===this.state.error) return;
+    this.state = {history, loading,...(error?{error}:{})};
     for (const listener of this.listeners) listener();
   }
 
@@ -321,7 +340,8 @@ export class HistoryStore {
 
   private pump() {
     this.startResponses();
-    if (!this.board || !this.ready || !this.run) return;
+    if (!this.board || !this.ready || !this.run || this.historyLimit) return;
+    if(this.meters){this.evict();if(this.historyLimit)return;}
     const target = this.target();
     if (this.interest) {
       this.publishPlot();
@@ -522,12 +542,16 @@ export class HistoryStore {
   private read(target: Target, from: number, to: number, role: Flight['role']) {
     const flight: Flight = {seq: ++this.seq, epoch: this.epoch, target: target.key, newsSeq: this.newsSeq, cell: target.cell, from, to, touched: Infinity, startedAt: this.elapsedNow(), controller: new AbortController(), role};
     this.flights.add(flight);
-    this.env.read(this.board!, target.cell, from, to, flight.controller.signal).then(answer => this.merge(flight, answer), error => this.failed(flight, error));
+    this.env.read(this.board!, target.cell, from, to, flight.controller.signal, this.meters).then(answer => this.merge(flight, answer), error => this.failed(flight, error));
   }
 
   private abort(flight: Flight) {this.preparations?.cancel(flight); this.responses.delete(flight); for (const [key, owner] of this.reservations) if (owner === flight) this.reservations.delete(key); this.flights.delete(flight); flight.controller.abort();}
   private abortFlights() {for (const flight of [...this.flights]) this.abort(flight);}
   private setPlot(plot: PlotBuffer | null) {
+    if(plot&&this.meters&&this.meta) {
+      const target=this.plotTarget(),from=target.k0*target.cell,to=Math.min((target.k1+1)*target.cell,this.meta.now);
+      if(plot.meterFrame?.from!==from||plot.meterFrame.to!==to)plot={...plot,meterFrame:{from,to}};
+    }
     if (this.plot === plot) return;
     this.plot = plot;
     for (const listener of this.plotListeners) listener();
@@ -630,6 +654,7 @@ export class HistoryStore {
   private failed(flight: Flight, error: unknown) {
     this.flights.delete(flight);
     if (flight.controller.signal.aborted || flight.epoch !== this.epoch) return;
+    if(error instanceof ApiError&&error.code==='history_limit') {this.limit();return;}
     if (this.interest) {
       const visible = this.plotTarget();
       const needed = flight.cell === visible.cell && this.bad(visible).some(at => at >= flight.from && at < flight.to);
@@ -648,6 +673,13 @@ export class HistoryStore {
     if (error instanceof ApiError && error.status === 400 && this.selected) return this.env.dropTimeRange();
     this.clear('retry');
     this.timers.set('retry', this.env.setTimeout(() => {this.clear('retry'); this.schedule();}, RETRY_MS));
+  }
+
+  private limit() {
+    this.historyLimit=true;
+    this.cancelProjection();this.abortFlights();
+    this.grids.clear();this.plotChunks.clear();this.strip=null;
+    this.shown=null;this.setPlot(null);this.clear('retry');this.publish();
   }
 
   private evict() {
@@ -670,6 +702,11 @@ export class HistoryStore {
       // must not restart it; movement or news can try a new interest instead.
       if (ahead && cell === ahead.cell && tile.readTo > tile.readFrom && tile.readTo > ahead.k0 * cell && tile.readFrom <= ahead.k1 * cell) this.aheadStopped = true;
     }
+    if(this.meters&&bytes>this.budget) {
+      let visible=0;
+      for(const tile of this.grids.get(target.cell)?.values()??[])if(tile.readTo>tile.readFrom&&tile.to>target.k0*target.cell&&tile.from<=target.k1*target.cell)visible+=tile.bytes;
+      if(visible>this.budget)this.limit();
+    }
   }
 
   private clear(name: 'settle' | 'retry') {
@@ -681,7 +718,7 @@ export class HistoryStore {
 
 const keyOf = (lineup: string[]) => JSON.stringify([...lineup].sort());
 export const loader = new HistoryStore({
-  read: (board, cell, from, to, signal) => call<HistoryAnswer>('GET', `/api/history?board=${encodeURIComponent(board)}&cell=${cell}&from=${from}&to=${to}`, undefined, 12_000, signal),
+  read: (board, cell, from, to, signal, meters) => call<HistoryAnswer>('GET', `/api/history?board=${encodeURIComponent(board)}&cell=${cell}&from=${from}&to=${to}${meters ? '&unit='+encodeURIComponent(meters.unit)+'&meters='+encodeURIComponent(JSON.stringify(meters.ids)) : ''}`, undefined, 12_000, signal),
   now: hubNow,
   setTimeout: (run, ms) => setTimeout(run, ms),
   clearTimeout: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
@@ -700,6 +737,12 @@ export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>)
       else if (hub.type === 'lineup') {loader.lineup(state.board?.lineup ?? []); loader.setWindows(windowsOf(state));}
       else if (hub.type === 'card') loader.setWindows(windowsOf(state));
       else if (hub.type === 'history') loader.news(hub.data.since);
+    }
+    const board=state.board;
+    if(board) {
+      const settings=prefs().money,result=moneySelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view.hidden,settings);
+      if(result.removed&&settings.unit&&settings.selected[settings.unit])setPrefs({money:{...settings,removed:result.removed,selected:{...settings.selected,[settings.unit]:result.selection!.ids}}});
+      loader.setMeters(result.selection);
     }
   });
 }
@@ -727,7 +770,11 @@ export function followPan(loader: HistoryStore, gesture: Pick<Pan, 'get' | 'subs
 
 if (typeof window !== 'undefined') {
   followPan(loader, pan, timeRange);
-  const chosen = () => loader.choose(prefs().range, timeRange());
+  const chosen = () => {
+    loader.choose(prefs().range, timeRange());
+    const board=page.get().board;
+    if(board)loader.setMeters(moneySelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view.hidden,prefs().money).selection);
+  };
   onPrefs(chosen);
   onTimeRange(chosen);
   chosen();

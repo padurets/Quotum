@@ -2,21 +2,32 @@ import {Agent, request} from 'node:https';
 import {SecretError, type SecretCode} from '../secrets/crypto.js';
 
 export type Destination = {host: string; port: number; operations: Readonly<Record<string, {path: string; query?: readonly string[]}>>};
+export class ConnectorStatus extends SecretError {
+  readonly status: number | null;
+  readonly retryAfterMs: number | null;
+  constructor(status:number,retryAfter:unknown) {
+    super('connector_status');
+    this.status=[401,403,429].includes(status)||status>=500&&status<=599 ? status : null;
+    this.retryAfterMs=typeof retryAfter==='string' && /^\d{1,6}$/.test(retryAfter) ? Math.min(Number(retryAfter)*1000,3_600_000) : null;
+  }
+}
 
 /** This transport accepts operations from connector code, never URLs from a caller. */
 export class ConnectorTransport {
   #agent: Agent;
   private readonly destination: Destination;
-  constructor(destination: Destination, options: {ca?: string; timeoutMs?: number; maxBytes?: number} = {}) {
+  constructor(destination: Destination, options: {ca?: string; timeoutMs?: number; maxBytes?: number; decode?: (json:string)=>unknown} = {}) {
     if (!/^[a-z0-9.-]+$/.test(destination.host) || destination.host !== destination.host.toLowerCase() || !Number.isInteger(destination.port) || destination.port < 1 || destination.port > 65535 || Object.values(destination.operations).some(op => !/^\/[A-Za-z0-9/_-]*$/.test(op.path))) throw new SecretError('connector_destination_invalid');
     // An explicit agent has no global proxy settings, including Node's environment proxy.
     this.#agent = new Agent({rejectUnauthorized: true, ...(options.ca ? {ca: options.ca} : {})});
     this.destination = Object.freeze({host: destination.host, port: destination.port, operations: Object.freeze(Object.fromEntries(Object.entries(destination.operations).map(([name, op]) => [name, Object.freeze({path: op.path, ...(op.query ? {query: Object.freeze([...op.query])} : {})})])))});
     this.timeoutMs = options.timeoutMs ?? 10_000;
     this.maxBytes = options.maxBytes ?? 1024 * 1024;
+    this.decode=options.decode??JSON.parse;
   }
   private readonly timeoutMs: number;
   private readonly maxBytes: number;
+  private readonly decode:(json:string)=>unknown;
 
   send(operation: string, secret: Buffer, query: Readonly<Record<string, string>> = {}, signal?: AbortSignal): Promise<unknown> {
     const spec = Object.hasOwn(this.destination.operations, operation) ? this.destination.operations[operation] : undefined;
@@ -26,18 +37,18 @@ export class ConnectorTransport {
     return new Promise((resolve, reject) => {
       let done = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
-      const finish = (code: SecretCode | null, value?: unknown) => {
+      const finish = (code: SecretCode | SecretError | null, value?: unknown) => {
         if (done) return;
         done = true;
         clearTimeout(timer);
         signal?.removeEventListener('abort', cancel);
-        if (code) reject(new SecretError(code)); else resolve(value);
+        if (code) reject(code instanceof SecretError ? code : new SecretError(code)); else resolve(value);
       };
       const cancel = () => { finish('connector_cancelled'); req.destroy(); };
       const req = request({protocol: 'https:', hostname: this.destination.host, port: this.destination.port, path: spec.path + (search ? '?' + search : ''), method: 'GET', agent: this.#agent, rejectUnauthorized: true, headers: {authorization: `Bearer ${secret.toString('ascii')}`, accept: 'application/json'}}, response => {
         const status = response.statusCode ?? 0;
         if (status >= 300 && status < 400) { finish('connector_redirect'); response.destroy(); return; }
-        if (status < 200 || status >= 300) { finish('connector_status'); response.destroy(); return; }
+        if (status < 200 || status >= 300) { finish(new ConnectorStatus(status,response.headers['retry-after'])); response.destroy(); return; }
         const chunks: Buffer[] = [];
         let size = 0;
         response.on('data', (chunk: Buffer) => {
@@ -47,7 +58,7 @@ export class ConnectorTransport {
         });
         response.on('end', () => {
           if (done) return;
-          try { finish(null, JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
+          try { finish(null, this.decode(Buffer.concat(chunks).toString('utf8'))); }
           catch { finish('connector_invalid_response'); }
         });
         response.on('error', () => finish('connector_failed'));

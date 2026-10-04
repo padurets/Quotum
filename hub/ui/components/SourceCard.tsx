@@ -5,11 +5,15 @@ import {countdown, countdownChangesAt, duration, earliest, num, stamp} from '../
 import {cadenceChangesAt, cadenceOf, dotChangesAt, dotOf, errorText, level, problemOf, resetLine, resetLineChangesAt, windowName} from '../lib/quota';
 import {t, useLocale} from '../i18n';
 import {DEFAULT_PLAN, isValidPlan, planAt, planChangesAt, planNote, planTotal, type WeeklyPlan} from '../lib/plan';
-import {LOGOS} from './logos';
+import {logoOf} from './logos';
+import {MeterBar} from './Meter';
+import {KeyScaleSettings} from './KeyScaleSettings';
+import {MoneyCard,AccessMark} from './MoneyCard';
 import {cardId, colorOf, isWindowHidden, planOf, weeklyPlanOf, withColor, withHidden, withName, withPlan, withPlanned, withWindowHidden, type Arrange} from '../lib/view';
 import {CARD_COLORS, MIDDLE_STEP, PROVIDERS} from '../lib/providers';
 import {call} from '../lib/http';
-import {useCadence, useCard, useConnection, useMine, useRefresh, useResetsFor, useSessions, useTitle} from '../lib/board';
+import {useCadence, useCard, useConnection, useMine, useRefresh, useResetsFor, useSessions, useSourceAccess, useTitle} from '../lib/board';
+import {providerOf} from '../../server/domain/providers';
 import {useClock} from '../lib/clock';
 import {FreeResets} from './ResetMarks';
 import {Tray} from './Tray';
@@ -72,12 +76,7 @@ export function ResetLine({w, short = false}: {w: Win; short?: boolean}) {
 
 /** The same remaining-quota meter in a card and in the tray's compact rows. */
 export function LimitMeter({w, children}: {w: Win; children?: ReactNode}) {
-  return (
-    <div className="meter" role="progressbar" aria-label={windowName(w).replaceAll(' · ', '\n')} aria-valuenow={Math.round(w.remaining)} aria-valuemin={0} aria-valuemax={100}>
-      <span className="meter-track"><i className={`fill fill-${level(w.remaining)}`} style={{width: `${Math.max(w.remaining, 1)}%`}} /></span>
-      {children}
-    </div>
-  );
+  return <MeterBar remaining={w.remaining} label={windowName(w).replaceAll(' · ', '\n')}>{children}</MeterBar>;
 }
 
 function Limit({w, measuredAt, weekly}: {w: Win; measuredAt: number | null; weekly: WeeklyPlan | null}) {
@@ -237,6 +236,7 @@ function CardColor({source, arrange}: {source: Card; arrange: Arrange}) {
 function Frequency({source, board}: {source: Card; board: string}) {
   useLocale();
   const mine = useMine(source.id);
+  const byHub = providerOf(source.provider)?.measuredBy === 'hub';
   const connection = useConnection();
   const connected = connection.status === 'live' || connection.status === 'polling';
   const [pending, setPending] = useState(false);
@@ -279,12 +279,10 @@ function Frequency({source, board}: {source: Card; board: string}) {
           />
         </div>
       ) : <div className="popover-note">{t(`frequency.${selected}`)}</div>}
-      <div className="popover-note">{t('frequency.hint')}</div>
+      <div className="popover-note">{t(byHub?'frequency.hubHint':'frequency.hint')}</div>
       <details className="popover-note">
         <summary className="link-button">{t('frequency.aboutAuto')}</summary>
-        <p>{t('frequency.autoActivity')}</p>
-        <p>{t('frequency.autoLimits')}</p>
-        <p>{t('frequency.autoMinimum')}</p>
+        {byHub?<><p>{t('frequency.hubAuto')}</p><p>{t('frequency.hubMinimum')}</p></>:<><p>{t('frequency.autoActivity')}</p><p>{t('frequency.autoLimits')}</p><p>{t('frequency.autoMinimum')}</p></>}
       </details>
       <ErrorLine error={error} />
     </>
@@ -317,7 +315,6 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
           <CardName source={source} arrange={arrange} />
         </>
       )}
-      <Frequency key={`${boardId}:${source.id}`} source={source} board={boardId} />
       {owner && source.windows.length > 1 && (
         <>
           <div className="popover-title popover-section">{t('source.show')}</div>
@@ -331,13 +328,14 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
           })}
         </>
       )}
+      {owner && !!source.keysCount && open && <KeyScaleSettings source={source} board={boardId} arrange={arrange}/>}
       {owner && (
         <>
           <div className="popover-title popover-section">{t('source.color')}</div>
           <CardColor source={source} arrange={arrange} />
         </>
       )}
-      {owner && (
+      {owner && source.windows.length>0 && (
         <div className="popover-section">
           <SwitchRow on={planned} onChange={on => arrange.update(view => withPlanned(view, source.id, on))}>
             {t('source.plan')}
@@ -350,6 +348,7 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
           )}
         </div>
       )}
+      <Frequency key={`${boardId}:${source.id}`} source={source} board={boardId} />
       <div className={owner ? 'popover-section' : undefined}>
         <RefreshAction id={source.id} board={boardId} onAccepted={() => setOpen(false)} />
         {owner && <HideRow section={false} onHide={() => arrange.update(view => withHidden(view, cardId(source.id), true))}>{t('widget.hide')}</HideRow>}
@@ -410,6 +409,8 @@ export function CardMark({source}: {source: Card}) {
   });
   const problem = problemOf(source);
   const dot = dotOf(source, now);
+  const partial=source.inventory?.complete===false;
+  const warn=dot.warn||failed||partial;
   // How the measurements go lives in the logo's dot alone: its colour (how fresh, or in
   // trouble) and its tooltip; a line of its own would only repeat it and make the card taller.
   const status = problem ?? (source.successAt ? t('source.measured', {at: stamp(source.successAt)}) : errorText('waiting'));
@@ -418,6 +419,7 @@ export function CardMark({source}: {source: Card}) {
   const lines = [
     ...(refresh?.request ? refreshText(refresh, now).split('\n') : []),
     status,
+    ...(partial?[t('money.inventoryPartial'),t('money.inventory',{count:source.inventory!.observed})]:[]),
     ...(!pending && cadence ? (cadence.when === 'nextSoon' ? [t('source.nextSoon')] : [t('source.nextIn', {time: countdown(cadence.next - now)}), stamp(cadence.next)]) : []),
     ...(!pending && cadence ? [t(`source.why.${cadence.why}`)] : []),
   ];
@@ -441,7 +443,7 @@ export function CardMark({source}: {source: Card}) {
   }, [tip]);
   return (
     <span
-      className={`provider-mark ${dot.warn || failed ? 'is-warn' : ''} ${tip ? 'is-tipped' : ''}`}
+      className={`provider-mark ${warn ? 'is-warn' : ''} ${tip ? 'is-tipped' : ''}`}
       data-time="mark"
       data-refresh={outcome ?? 'idle'}
       aria-label={lines.join('\n')}
@@ -450,10 +452,10 @@ export function CardMark({source}: {source: Card}) {
       onPointerLeave={() => setHovered(false)}
       onPointerUp={event => event.pointerType === 'touch' && setTip(true)}
     >
-      <img className="provider-logo" src={LOGOS[source.provider]} alt="" />
+      <img className="provider-logo" src={logoOf(source.provider)} alt="" />
       {pending ? (
         <i className="spinner" aria-hidden="true" />
-      ) : dot.warn || failed ? (
+      ) : warn ? (
         <i className="dot dot-warn" />
       ) : (
         <i className={`dot dot-fresh ${dot.pulsing ? 'is-pulsing' : ''}`} style={{'--fresh': dot.fresh} as CSSProperties} />
@@ -471,7 +473,8 @@ export function CardMark({source}: {source: Card}) {
 function CardTray({source}: {source: Card}) {
   const sessions = useSessions(source.id);
   const resets = useResetsFor(source.provider);
-  return <Tray resets={resets} current={!!source.resets?.available && <FreeResets resets={source.resets} />} sessions={sessions} />;
+  const access = useSourceAccess(source.id);
+  return <Tray resets={resets} news={access && <AccessMark id={source.id}/>} current={!!source.resets?.available&&<FreeResets resets={source.resets}/>} sessions={sessions} />;
 }
 
 /**
@@ -492,18 +495,21 @@ export const SourceCard = memo(function SourceCard({id, arrange, boardId, person
     <article className="card" data-card={id} style={{'--card-color': colorOf(arrange.view, source.id, source.provider)} as CSSProperties}>
       <div className="card-head">
         <CardMark source={source} />
-        <div className="card-title">
-          <h2>{title}</h2>
-          {source.plan && <span className="plan">{source.plan.replace(/^Claude\s+/i, '')}</span>}
+        <div className="card-heading">
+          <div className="card-title"><h2 title={title}>{title}</h2>
+            {source.plan&&<span className="plan">{source.plan.replace(/^Claude\s+/i,'')}</span>}
+          </div>
+          {(source.meters||providerOf(source.provider))&&<small className="resource-type">{t(source.meters||providerOf(source.provider)?.measuredBy==='hub'?'resource.budget':'resource.subscription')}</small>}
         </div>
         <SourceSettings key={boardId} source={source} title={title} arrange={arrange} boardId={boardId} takeOff={takeOff} />
       </div>
 
       <div className="limits">
+        {source.meters&&<MoneyCard source={source} board={boardId} view={arrange.view}/>}
         {visible.map(w => (
           <Limit key={w.id} w={w} measuredAt={source.successAt} weekly={weekly} />
         ))}
-        {!source.windows.length && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
+        {!source.windows.length && !source.meters?.length && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
         {!!source.windows.length && !visible.length && <AllHidden source={source} arrange={arrange} />}
       </div>
       <CardTray source={source} />

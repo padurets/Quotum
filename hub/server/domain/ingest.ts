@@ -1,5 +1,6 @@
 import {providers, type Provider} from './sources.js';
-import type {FreeResets, Kind, Measurement, Win} from './quota.js';
+import {providerOf, type ClientProvider} from './providers.js';
+import type {FreeResets, Kind, WindowMeasurement, Win} from './quota.js';
 
 /** Clocks within this of the hub's are taken as they are; beyond it, agent times are shifted. */
 export {CLOCK_TOLERANCE_MS} from './history.js';
@@ -18,7 +19,7 @@ export type AgentWindow = {
 };
 
 export type AgentSnapshot = {
-  provider: Provider;
+  provider: ClientProvider;
   account: string | null;
   /** A name the owner gave a subscription whose client does not identify it. */
   accountName: string | null;
@@ -31,7 +32,7 @@ export type AgentSnapshot = {
   resets: FreeResets | null;
 };
 
-export type AgentFailure = {provider: Provider; observedAt: number; error: string; detail: string | null};
+export type AgentFailure = {provider: ClientProvider; observedAt: number; error: string; detail: string | null};
 
 export type AgentBatch = {
   version: 1;
@@ -95,6 +96,12 @@ function provider(value: unknown): Provider {
   return value as Provider;
 }
 
+/** Read authority before any provider-specific fields, preserving strict client parsing. */
+function clientItem(value: unknown, what: string): value is Obj & {provider: ClientProvider} {
+  if (!isObject(value)) throw new Invalid(what);
+  return providerOf(provider(value.provider))!.measuredBy === 'client';
+}
+
 function list(value: unknown, what: string, max: number): unknown[] {
   // An optional field may be left out or null (the spec); either way the list is empty.
   if (value === undefined || value === null) return [];
@@ -146,7 +153,7 @@ function parseSnapshot(value: unknown): AgentSnapshot {
   const windows = list(value.windows, 'windows', LIMITS.windows).map(parseWindow);
   if (!windows.length) throw new Invalid('windows');
   return {
-    provider: provider(value.provider),
+    provider: provider(value.provider) as ClientProvider,
     account: account(value.account),
     accountName: text(value.accountName, 'accountName', true),
     plan: text(value.plan, 'plan', true),
@@ -163,7 +170,7 @@ function parseFailure(value: unknown): AgentFailure {
   if (!isObject(value)) throw new Invalid('failure');
   if (!(AGENT_ERRORS as readonly unknown[]).includes(value.error)) throw new Invalid('error');
   return {
-    provider: provider(value.provider),
+    provider: provider(value.provider) as ClientProvider,
     observedAt: time(value.observedAt, 'observedAt')!,
     error: value.error as string,
     detail: typeof value.detail === 'string' ? value.detail.slice(0, 200) : null,
@@ -199,8 +206,8 @@ export function parseBatch(body: unknown): AgentBatch {
     version: 1,
     ...sender,
     sentAt: time(input.sentAt, 'sentAt')!,
-    snapshots: list(input.snapshots, 'snapshots', LIMITS.items).map(parseSnapshot),
-    failures: list(input.failures, 'failures', LIMITS.items).map(parseFailure),
+    snapshots: list(input.snapshots, 'snapshots', LIMITS.items).filter(value => clientItem(value, 'snapshot')).map(parseSnapshot),
+    failures: list(input.failures, 'failures', LIMITS.items).filter(value => clientItem(value, 'failure')).map(parseFailure),
   };
 }
 
@@ -209,21 +216,26 @@ export function parseBatch(body: unknown): AgentBatch {
  * `paced`: the device follows the hub's pace; `minIntervalMs`: the most often it agrees
  * to measure a subscription.
  */
+type ClientSubscription = {provider: ClientProvider; account: string | null; accountName: string | null; active: boolean; minIntervalMs: number | null};
+type HubSubscription = {provider: Exclude<Provider, ClientProvider>; measuredBy: 'hub'};
 export type Checkin = AgentSender & {
   paced: boolean;
-  subscriptions: {provider: Provider; account: string | null; accountName: string | null; active: boolean; minIntervalMs: number | null}[];
+  subscriptions: (ClientSubscription | HubSubscription)[];
 };
 
 export function parseCheckin(body: unknown): Checkin {
   const sender = parseSender(body);
   const paced = (body as Obj).paced ?? false;
   if (typeof paced !== 'boolean') throw new Invalid('paced');
-  const subscriptions = list((body as Obj).subscriptions, 'subscriptions', 16).map(value => {
+  const subscriptions = list((body as Obj).subscriptions, 'subscriptions', 16).map((value): ClientSubscription | HubSubscription => {
+    if (!isObject(value)) throw new Invalid('subscription');
+    const id = provider(value.provider);
+    if (providerOf(id)!.measuredBy === 'hub') return {provider: id as HubSubscription['provider'], measuredBy: 'hub'};
     if (!isObject(value) || typeof (value.active ?? false) !== 'boolean') throw new Invalid('subscription');
     const least = value.minIntervalMs ?? null;
     if (least !== null && (!Number.isInteger(least) || (least as number) < 60_000 || (least as number) > 86_400_000)) throw new Invalid('minIntervalMs');
     return {
-      provider: provider(value.provider),
+      provider: id as ClientProvider,
       account: account(value.account),
       accountName: text(value.accountName, 'accountName', true),
       active: value.active === true,
@@ -239,13 +251,13 @@ export function parseCheckin(body: unknown): Checkin {
  * device's person's own (optionally one of several, by the name they gave it), never
  * the machine's.
  */
-export function subscriptionKey(snapshot: Pick<AgentSnapshot, 'account' | 'accountName' | 'provider'>, userId: string): string {
+export function subscriptionKey(snapshot: {account: string | null; accountName: string | null; provider: Provider}, userId: string): string {
   if (snapshot.account) return snapshot.account;
   const name = snapshot.accountName ? `/${snapshot.accountName.trim().toLowerCase()}` : '';
   return `user:${userId}/${snapshot.provider}${name}`;
 }
 
-export function toMeasurement(snapshot: AgentSnapshot): Measurement {
+export function toMeasurement(snapshot: AgentSnapshot): WindowMeasurement {
   const windows: Win[] = snapshot.windows.map(w => ({
     id: w.id,
     kind: w.kind,
@@ -264,7 +276,7 @@ export type Origin = (typeof ORIGINS)[number];
 
 export type AgentSession = {
   sessionId: string | null;
-  provider: Provider;
+  provider: ClientProvider;
   account: string | null;
   accountName: string | null;
   origin: Origin;
@@ -284,7 +296,7 @@ export function parseSessions(body: unknown): SessionReport {
   const sender = parseSender(body);
   const input = body as Obj;
   const ids = new Set<string>();
-  const sessions = list(input.sessions, 'sessions', 200).map(value => {
+  const sessions = list(input.sessions, 'sessions', 200).filter(value => clientItem(value, 'session')).map(value => {
     if (!isObject(value)) throw new Invalid('session');
     const sessionId = value.sessionId ?? null;
     if (sessionId !== null) {
@@ -295,7 +307,7 @@ export function parseSessions(body: unknown): SessionReport {
     if (typeof value.working !== 'boolean') throw new Invalid('working');
     return {
       sessionId,
-      provider: provider(value.provider),
+      provider: provider(value.provider) as ClientProvider,
       account: account(value.account),
       accountName: text(value.accountName, 'accountName', true),
       origin: value.origin as Origin,

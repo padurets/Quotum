@@ -29,7 +29,7 @@ import {AccountPanel} from './components/Account';
 import {AuthScreen} from './components/AuthScreen';
 import {DevicePage} from './components/DevicePage';
 import {InvitePage} from './components/InvitePage';
-import {MachinesDialog, type MachinesTab} from './components/Machines';
+import {ConnectionsDialog, type ConnectionsStart} from './components/Machines';
 import {BoardDialog, type BoardTab} from './components/BoardDialog';
 import {AgentBanner, LocalOnboarding, OpenInApp, QuitButton, TakeOver} from './components/Desktop';
 import {app, appLocale, followApp, inApp, type AppState} from './lib/app';
@@ -97,7 +97,7 @@ function Dashboard({
   const arrange = useView(useBoardId() ?? '', translated, role === 'owner');
   const titles = useTitles(arrange.view.names);
   const prefs = usePrefs();
-  const [machines, setMachines] = useState<MachinesTab | null>(null);
+  const [machines, setMachines] = useState<ConnectionsStart | null>(null);
   const [people, setPeople] = useState<BoardTab | null>(null);
   const [account, setAccount] = useState(false);
   const closeMachines = useCallback(() => setMachines(null), []);
@@ -195,7 +195,7 @@ function Dashboard({
             />
           ) : null
         }
-        onDevices={() => setMachines('devices')}
+        onDevices={() => setMachines('list')}
         onPeople={!local && board && !board.personal ? () => setPeople('shares') : null}
         user={user}
         onAccount={() => setAccount(true)}
@@ -210,7 +210,7 @@ function Dashboard({
             ))}
           </div>
         ) : empty && local ? (
-          <LocalOnboarding onSettings={() => setAccount(true)} />
+          <LocalOnboarding onSettings={() => setAccount(true)} onConnect={()=>setMachines('connect')} />
         ) : empty && board?.personal ? (
           <section className="panel onboarding">
             <h2>{t('onboarding.title')}</h2>
@@ -255,14 +255,13 @@ function Dashboard({
           </section>
         )}
       </main>
-      {machines && <MachinesDialog tab={machines} onTab={setMachines} onClose={closeMachines} local={local} />}
+      {machines && <ConnectionsDialog start={machines} onClose={closeMachines} local={local} userId={user.id} trustedKeys={trustedKeys} />}
       {people && board && !board.personal && (
         <BoardDialog board={board} userId={user.id} tab={people} onTab={setPeople} onClose={() => setPeople(null)} />
       )}
       {account && (
         <AccountPanel
           user={user}
-          trustedKeys={trustedKeys}
           onChanged={refresh}
           onSignedOut={onSignedOut}
           onClose={() => setAccount(false)}
@@ -299,14 +298,14 @@ function App() {
   if (session.local) {
     if (!session.user) return <OpenInApp compact={path === '/compact'} />;
     if (path === '/compact') return <Compact live={live} />;
-    return <Dashboard user={session.user} trustedKeys={session.trustedKeys} local refresh={refresh} onSignedOut={() => void refresh()} />;
+    return <Dashboard key={session.user.id} user={session.user} trustedKeys={session.trustedKeys} local refresh={refresh} onSignedOut={() => void refresh()} />;
   }
   if (path === '/compact' && session.user) return <Compact live={live} />;
   if (path === '/device') return <DevicePage session={session} onSession={signedIn} />;
   const invite = path.match(/^\/invite\/([\w-]+)$/);
   if (invite) return <InvitePage secret={invite[1]} session={session} onSession={signedIn} onJoined={id => (rememberBoard(id), void refresh())} />;
   if (!session.user) return <AuthScreen session={session} onSignedIn={signedIn} />;
-  return <Dashboard user={session.user} trustedKeys={session.trustedKeys} local={false} refresh={refresh} onSignedOut={() => void refresh()} />;
+  return <Dashboard key={session.user.id} user={session.user} trustedKeys={session.trustedKeys} local={false} refresh={refresh} onSignedOut={() => void refresh()} />;
 }
 
 createRoot(document.getElementById('root')!).render(<App />);

@@ -1,6 +1,6 @@
 import {Fragment, useRef, useState} from 'react';
 import {t, useLocale} from '../i18n';
-import {useConnection, useRefresh} from '../lib/board';
+import {useConnection, useRefresh,useSourceAccess} from '../lib/board';
 import {useClock} from '../lib/clock';
 import {refreshErrorChangesAt, refreshErrorText, refreshPending, requestRefresh, useSending} from '../lib/refresh';
 
@@ -16,6 +16,8 @@ type Failure = {kind: 'offline'} | {kind: 'request'; error: unknown; previous: n
 export function RefreshAction({id, board, onAccepted}: {id: string; board: string; onAccepted: () => void}) {
   useLocale();
   const state = useRefresh(id);
+  const access=useSourceAccess(id);
+  const allowed=state?.by!=='hub'||access?.canRefresh===true;
   const connection = useConnection();
   // Sent from this menu, one opened before or the header: the item waits for that answer.
   const sending = useSending(board, id);
@@ -31,7 +33,7 @@ export function RefreshAction({id, board, onAccepted}: {id: string; board: strin
         ? refreshErrorText(failure.error, state, now)
         : null;
   const send = async () => {
-    if (sending || pending) return;
+    if (sending || pending || !allowed) return;
     setFailure(null);
     if (!connected) {
       setFailure({kind: 'offline'});
@@ -48,7 +50,7 @@ export function RefreshAction({id, board, onAccepted}: {id: string; board: strin
   };
   return (
     <div data-time="refresh">
-      <button ref={action} type="button" className="popover-row" disabled={sending || pending} onClick={() => void send()}>
+      <button ref={action} type="button" className="popover-row" disabled={sending || pending || !allowed} onClick={() => void send()}>
         {sending || pending ? <i className="spinner" aria-hidden="true" /> : <RefreshIcon />}
         <span>{t(pending ? 'refresh.inProgress' : sending ? 'refresh.sending' : 'refresh.action')}</span>
       </button>

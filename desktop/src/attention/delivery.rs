@@ -19,6 +19,7 @@ pub struct Board {
     cards: BTreeMap<String, Value>,
     lineup: Vec<String>,
     view: Value,
+    providers: Value,
     baselines: BTreeMap<String, BTreeMap<String, i64>>,
 }
 impl Board {
@@ -27,6 +28,7 @@ impl Board {
         self.lineup.clear();
         self.baselines.clear();
         self.view = snapshot["view"].clone();
+        self.providers = snapshot["providers"].clone();
         if let Some(cards) = snapshot["sources"].as_array() {
             for card in cards {
                 if let Some(id) = card["id"].as_str() {
@@ -126,12 +128,12 @@ impl Board {
                         .filter(|id| self.cards.get(*id).is_some_and(|c| c["provider"] == provider))
                         .count()
                         + 1;
-                    let provider = match provider {
-                        "codex" => "Codex",
-                        "claude" => "Claude",
-                        "antigravity" => "Antigravity",
-                        other => other,
-                    };
+                    let provider = self
+                        .providers
+                        .as_array()
+                        .and_then(|entries| entries.iter().find(|entry| entry["id"] == provider))
+                        .and_then(|entry| entry["name"].as_str())
+                        .unwrap_or(provider);
                     q.name = if number == 1 { provider.into() } else { format!("{provider} {number}") };
                 }
                 true
@@ -304,7 +306,7 @@ mod tests {
     #[test]
     fn queued_candidates_follow_latest_names_and_visibility() {
         let mut board = Board::default();
-        board.snapshot(json!({"view":{"hidden":[],"windows":[],"names":{}},"sources":[{"id":"one","provider":"codex","successAt":1,"windows":[{"id":"week","kind":"weekly","label":null,"minutes":10080}]},{"id":"two","provider":"codex","successAt":1,"windows":[{"id":"week","kind":"weekly","label":null,"minutes":10080}]}]}));
+        board.snapshot(json!({"providers":[{"id":"codex","name":"Codex"}],"view":{"hidden":[],"windows":[],"names":{}},"sources":[{"id":"one","provider":"codex","successAt":1,"windows":[{"id":"week","kind":"weekly","label":null,"minutes":10080}]},{"id":"two","provider":"codex","successAt":1,"windows":[{"id":"week","kind":"weekly","label":null,"minutes":10080}]}]}));
         let mut candidate: Candidate = serde_json::from_value(json!({"id":"event","kind":"low","at":10,"observedFrom":1,"observedAt":2,"sourceId":"two","windowId":"week","provider":"codex","name":"old name","window":{"kind":"weekly","label":null,"minutes":10080},"remaining":29,"resetAt":null})).unwrap();
         assert!(board.resolve(&mut candidate));
         assert!(matches!(&candidate, Candidate::Quota(q) if q.name == "Codex 2"));

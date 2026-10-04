@@ -1,5 +1,6 @@
 """Native popup lifecycle, on tray.sh's private bus and an isolated Xvfb display."""
 import ctypes as C
+import inspect
 import os
 from pathlib import Path
 import re
@@ -107,6 +108,22 @@ def check_panel(bus, item, child, root, env):
             if value:
                 return value
             time.sleep(.01)
+        pid = engine()
+        focus, revert = C.c_ulong(), C.c_int()
+        x.XGetInputFocus(display, C.byref(focus), C.byref(revert))
+        def windows(owner):
+            return [dict(id=w.id, override=w.override, x=w.x, y=w.y, width=w.width, height=w.height)
+                    for w in visible(owner)] if owner else []
+        states = {}
+        for owner in [child.pid, pid]:
+            try:
+                states[owner] = [line for line in Path(f'/proc/{owner}/status').read_text().splitlines()
+                                 if line.startswith(('Name:', 'State:', 'PPid:'))]
+            except OSError:
+                pass
+        print({'failedLine': inspect.currentframe().f_back.f_lineno, 'focus': focus.value,
+               'controllerWindows': windows(child.pid), 'engineWindows': windows(pid),
+               'processStates': states}, flush=True)
         raise RuntimeError('native panel operation timed out')
 
     def engine():
@@ -117,6 +134,18 @@ def check_panel(bus, item, child, root, env):
 
     def activate():
         bus.call_sync(item, '/StatusNotifierItem', 'org.kde.StatusNotifierItem', 'Activate', GLib.Variant('(ii)', (600, 440)), None, Gio.DBusCallFlags.NONE, 3000, None)
+
+    def main_revision():
+        log = root / 'app/logs/hub.log'
+        matches = re.findall(r'app: main window request (\d+)', log.read_text()) if log.exists() else []
+        return int(matches[-1]) if matches else 0
+
+    def open_main():
+        revision = main_revision()
+        subprocess.run([child.args[0]], env=env, timeout=5, check=True)
+        # A second process exits after writing to the socket, before the controller
+        # necessarily accepts it. The next tray action must follow acceptance.
+        wait(lambda: main_revision() > revision)
 
     try:
         for cancel in [False, True]:
@@ -159,13 +188,13 @@ def check_panel(bus, item, child, root, env):
         wait(lambda: engine() is None)
         # Reopening main was accepted first, but its browser is paused. A newer
         # tray request must remain foreground when both queued heads are drained.
-        subprocess.run([child.args[0]], env=env, timeout=5, check=True)
+        open_main()
         pid = wait(engine)
         board = wait(lambda: next((w for w in visible(pid) if not w.override), None))
         x.XSelectInput(display, board.id, 1 << 21)  # FocusChangeMask
         os.kill(pid, signal.SIGSTOP)
         try:
-            subprocess.run([child.args[0]], env=env, timeout=5, check=True)
+            open_main()
             activate()
             loader = wait(lambda: visible(child.pid))
             wait(lambda: focused_inside(loader[0].id))

@@ -13,9 +13,13 @@ function rounded(value: number) {
 const coordinate = (value: number) => Object.is(value, -0) ? '-0.0' : (value / 10).toFixed(1);
 
 /** Keeps the same rounded outline, omitting only vertices on straight boundaries. */
-export function* plotPathPrepared(runs: readonly (readonly (readonly [number, number])[])[]): Preparation<string> {
+export function* plotPathPrepared(runs: readonly (readonly (readonly [number, number])[])[],stepped=false): Preparation<string> {
   let result = '';
   for (const run of runs) {
+    if(stepped) {
+      for(let i=0;i<run.length;i++){const [x,y]=run[i];result+=i?`H${x.toFixed(1)}V${y.toFixed(1)}`:`M${x.toFixed(1)},${y.toFixed(1)}`;yield;}
+      continue;
+    }
     const parts: Point[] = [];
     let before: Point | null = null, last: Point | null = null;
     for (const [x, y] of run) {

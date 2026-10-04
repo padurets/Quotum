@@ -5,7 +5,7 @@ import {mkdtempSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
-import {STEPS} from '../store/schema.js';
+import {STEPS,migrate} from '../store/schema.js';
 import {Store} from '../store/store.js';
 
 /**
@@ -67,4 +67,20 @@ test('identity migration preserves exact legacy session IDs, keys and intervals'
   assert.match(String(store.db.prepare("EXPLAIN QUERY PLAN SELECT id FROM agent_sessions WHERE device_id='device' AND source_id='codex:1' AND started_at=123 AND origin='terminal' AND project='P' AND folder='wt' AND ordinal=3 AND producer_id IS NULL").get()!.detail), /agent_sessions_legacy_key/);
   assert.match(String(store.db.prepare("EXPLAIN QUERY PLAN SELECT id FROM agent_sessions WHERE device_id='device' AND producer_id='abc' AND source_id='codex:1' AND origin='terminal' AND project='P' AND folder='wt'").get()!.detail), /agent_sessions_stable_key/);
   store.close();
+});
+
+test('money storage upgrades the stable-session layout without changing its identities or work',()=>{
+  const db=new DatabaseSync(':memory:');
+  try {
+    for(const step of STEPS.slice(0,8))db.exec(step);
+    db.exec('PRAGMA user_version = 8');
+    db.exec("INSERT INTO agent_sessions VALUES (42, 'device', 'codex:1', 'terminal', 123, 'P', 'wt', 0, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')");
+    db.exec('INSERT INTO agent_work VALUES (42, 1000, 2000)');
+    const sessions=db.prepare('SELECT * FROM agent_sessions').all(),work=db.prepare('SELECT * FROM agent_work').all();
+    migrate(db,3000);
+    assert.deepEqual(db.prepare('SELECT * FROM agent_sessions').all(),sessions);
+    assert.deepEqual(db.prepare('SELECT * FROM agent_work').all(),work);
+    assert.equal(db.prepare('PRAGMA user_version').get()?.user_version,9);
+    for(const name of ['readings','meter_spans'])assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name));
+  }finally{db.close();}
 });

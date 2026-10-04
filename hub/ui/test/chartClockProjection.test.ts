@@ -16,7 +16,7 @@ test('current clock presentation keeps paired future paths, raw marker coordinat
   const context = {React, prepared: {ready: true, value: {basis, now: H, lines: [], plans: [{key: 'expired', until: H}, {key: 'valid', until: 3 * H}], planPaths: ['expired-plan', 'valid-plan'],
     forecasts: [{key: 'expired', until: H}, {key: 'valid', until: 3 * H}], forecastPaths: ['expired-forecast', 'valid-forecast'],
     markers: [{key: 'entering', at: 2 * H + minute, until: 3 * H, label: 'reset', color: 'red'}, {key: 'expired', at: H, until: H}], paths: [], strip: null}},
-    currentClock: H + minute, desiredFrom: minute, desiredNow: H + minute, desiredTo: 2 * H, desiredLive: true,
+    valueAxis: undefined, currentClock: H + minute, desiredFrom: minute, desiredNow: H + minute, desiredTo: 2 * H, desiredLive: true,
     incomingReady: true, cellMs: minute, left: 40, right: 12, width: 900, height: 220, top: 12, bottom: 28,
     axis: {basis, hover: H, screenX: (at: number) => 40 + (at - context.desiredFrom) / (context.desiredTo - context.desiredFrom) * 848, commitDrawing: () => {}},
     niceTicks: () => ({ticks: [], daily: false}), useLayoutEffect: () => {}, cellLabel: () => '',

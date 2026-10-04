@@ -1,4 +1,4 @@
-import {Fragment, memo, useEffect, useLayoutEffect, useRef, useState, type CSSProperties} from 'react';
+import {Fragment, memo, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode} from 'react';
 import {clock, countdown, countdownChangesAt, num, shortDay, stamp} from '../lib/format';
 import {t, useLocale} from '../i18n';
 import type {PlotBlock, PlotLine as Line} from '../lib/lines';
@@ -263,6 +263,8 @@ export const Chart = memo(function Chart({
   onSelect,
   plot,
   onBase,
+  axis: valueAxis,
+  stepped=false,
   strip: incomingStrip = null,
   prepared: incomingReady = true,
   modelContext = '',
@@ -285,6 +287,8 @@ export const Chart = memo(function Chart({
   onSelect?: (range: TimeRange) => void;
   plot?: number;
   onBase?: (height: number) => void;
+  axis?:{min:number;max:number;ticks:number[];label:string;formatTick:(value:number)=>string;formatValue:(key:string,value:number,at:number)=>string;rawValue?:(key:string,at:number)=>string;detail?:(key:string,at:number)=>ReactNode};
+  stepped?:boolean;
   strip?: PlotBuffer | null;
   prepared?: boolean;
   modelContext?: string;
@@ -292,7 +296,7 @@ export const Chart = memo(function Chart({
   live?: boolean;
   clock?: number;
 }) {
-  const left = 40;
+  const left = valueAxis?76:40;
   const right = 12;
   const axis = useTimeAxis({from: desiredFrom, to: desiredTo, end: desiredNow, cellMs, left, right, onSelect, ready: incomingReady, navigation});
   const {box, svg, width, scale, drag, timeAt, handlers, panning} = axis;
@@ -300,7 +304,7 @@ export const Chart = memo(function Chart({
   const height = plot === undefined ? base : Math.max(base, plot / scale);
   useLayoutEffect(() => onBase?.(base * scale), [base, scale, onBase]);
   const top = 12, bottom = 28;
-  const inputs = [incomingLines, incomingPlans, incomingForecasts, incomingMarkers, incomingStrip, width, height, cellMs, modelContext, navigation && navigationKey(navigation), desiredLive];
+  const inputs = [incomingLines, incomingPlans, incomingForecasts, incomingMarkers, incomingStrip, width, height, cellMs, modelContext, navigation && navigationKey(navigation), desiredLive, valueAxis, stepped];
   const requested = usePreparationBasis({...axis.basis, end: axis.active && !incomingStrip ? axis.basis.end : desiredNow}, inputs, axis.active, incomingReady);
   const blockPaths = useRef(new WeakMap<PlotBlock, {geometry: string; line: string; last: [number, number] | null}>());
   const prepared = usePrepared(function* () {
@@ -310,12 +314,14 @@ export const Chart = memo(function Chart({
     const drawFrom = basis.from;
     const drawNow = basis.end;
     const bx = (at: number) => x(Math.min(drawNow, at + cellMs / 2));
-    const y = (value: number) => top + (1 - value / 100) * (height - top - bottom);
-    const geometry = `${basis.from}:${basis.to}:${drawNow}:${width}:${height}:${cellMs}`;
+    const y = (value: number) => top + (1 - (value-(valueAxis?.min??0)) / ((valueAxis?.max??100)-(valueAxis?.min??0))) * (height - top - bottom);
+    const geometry = `${basis.from}:${basis.to}:${drawNow}:${width}:${height}:${cellMs}:${valueAxis?.min??0}:${valueAxis?.max??100}:${stepped}`;
     const paths: {line: string; last: [number, number] | null; parts: {key: string; line: string}[] | null; latest: string | undefined}[] = [];
     for (const line of incomingLines) {
       let latest: string | undefined;
-      for (const [at, remaining] of line.points) {if (at > drawNow) break; latest = `${at}:${remaining}`; yield;}
+      let lastAt:number|undefined;
+      for (const [at, remaining] of line.points) {if (at > drawNow) break; latest = `${at}:${remaining}`; lastAt=at; yield;}
+      if(lastAt!==undefined&&valueAxis?.rawValue)latest=`${lastAt}:${valueAxis.rawValue(line.key,lastAt)}`;
       if (incomingStrip && line.blocks) {
         let last: [number, number] | null = null;
         const parts: {key: string; line: string}[] = [];
@@ -333,7 +339,7 @@ export const Chart = memo(function Chart({
               if (group !== segment) runs.push([]);
               runs.at(-1)!.push([px, py]); segment = group; previousX = px; end = [px, py];
             }
-            cached = {geometry, line: yield* plotPathPrepared(runs), last: end};
+            cached = {geometry, line: yield* plotPathPrepared(runs,stepped), last: end};
             blockPaths.current.set(block, cached);
           }
           const bridge = join && cached.line && last ? `M${last[0].toFixed(1)},${last[1].toFixed(1)}L${cached.line.slice(1)}` : cached.line;
@@ -353,7 +359,7 @@ export const Chart = memo(function Chart({
           else if (px - previousX < .5) continue;
           runs.at(-1)!.push([px, py]); previousX = px;
         }
-        paths.push({line: yield* plotPathPrepared(runs), last: runs.at(-1)?.at(-1) ?? null, parts: null, latest});
+        paths.push({line: yield* plotPathPrepared(runs,stepped), last: runs.at(-1)?.at(-1) ?? null, parts: null, latest});
       }
     }
     const forecasts = desiredLive ? incomingForecasts : NO_FORECASTS;
@@ -376,9 +382,10 @@ export const Chart = memo(function Chart({
       for (let i = 0; i < points.length; i++) {const [at, value] = points[i]; path += `${i ? 'L' : 'M'}${x(at).toFixed(1)},${y(value).toFixed(1)}`; yield;}
       forecastPaths.push(path);
     }
-    return {basis, lines: incomingLines, plans: incomingPlans, forecasts, markers, strip: incomingStrip, from: basis.from, now: drawNow, to: basis.to, paths, planPaths, forecastPaths};
+    return {basis, valueAxis, lines: incomingLines, plans: incomingPlans, forecasts, markers, strip: incomingStrip, from: basis.from, now: drawNow, to: basis.to, paths, planPaths, forecastPaths};
   }, [...inputs, requested.from, requested.to, requested.end], `${modelContext}:${width}:${height}:${cellMs}`, incomingReady);
   const model = prepared.value;
+  const shownAxis=model?.valueAxis??valueAxis;
   const basis = model?.basis ?? axis.basis;
   const lines = model?.lines ?? [];
   const planRows = (model?.plans ?? []).map((plan, index) => ({plan, path: model!.planPaths[index]})).filter(row => currentClock < (row.plan.until ?? Infinity));
@@ -389,7 +396,7 @@ export const Chart = memo(function Chart({
   const paths = model?.paths ?? [], planPaths = planRows.map(row => row.path), forecastPaths = forecastRows.map(row => row.path);
   const span = Math.max(60_000, basis.to - basis.from);
   const x = (at: number) => left + (at - basis.from) / span * (width - left - right);
-  const y = (value: number) => top + (1 - value / 100) * (height - top - bottom);
+  const y = (value: number) => top + (1 - (value-(shownAxis?.min??0)) / ((shownAxis?.max??100)-(shownAxis?.min??0))) * (height - top - bottom);
   const bx = (at: number) => axis.screenX(Math.min(now, at + cellMs / 2));
   const hover = incomingReady && prepared.ready && axis.hover !== null && (!strip || axis.hover > now || covered(strip.coverage, axis.hover, axis.hover + cellMs)) ? axis.hover : null;
   const tickFrom = strip?.from ?? from, tickTo = strip?.to ?? to;
@@ -538,18 +545,18 @@ export const Chart = memo(function Chart({
         style={{height: `${height * scale}px`}}
         preserveAspectRatio="none"
         role="img"
-        aria-label={t('chart.label')}
+        aria-label={shownAxis?.label??t('chart.label')}
         className={onSelect ? 'is-selectable' : undefined}
       >
         <desc>{t('chart.panHint')}</desc>
 
-        <line x1={left} x2={width - right} y1={y(30)} y2={y(30)} className="threshold warn" />
-        <line x1={left} x2={width - right} y1={y(10)} y2={y(10)} className="threshold crit" />
-        {[0, 25, 50, 75, 100].map(value => (
+        {!shownAxis&&<><line x1={left} x2={width - right} y1={y(30)} y2={y(30)} className="threshold warn" />
+        <line x1={left} x2={width - right} y1={y(10)} y2={y(10)} className="threshold crit" /></>}
+        {(shownAxis?.ticks??[0, 25, 50, 75, 100]).map(value => (
           <g key={value}>
             <line x1={left} x2={width - right} y1={y(value)} y2={y(value)} className={value === 0 ? 'axis-line' : 'grid'} />
             <text x={left - 8} y={y(value) + 4} textAnchor="end" className="tick">
-              {value}%
+              {shownAxis?shownAxis.formatTick(value):`${value}%`}
             </text>
           </g>
         ))}
@@ -683,7 +690,7 @@ export const Chart = memo(function Chart({
               <div className="tooltip-grid" style={{gridTemplateColumns: `14px minmax(0, 1fr) repeat(${columnCount}, auto)`}}>
                 <span />
                 <span />
-                {columns.left && <span className="tooltip-head">{t('chart.left')}</span>}
+                {columns.left && <span className="tooltip-head">{shownAxis?.label??t('chart.left')}</span>}
                 {columns.plan && <span className="tooltip-head">{t('chart.plan')}</span>}
                 {columns.gap && <span className="tooltip-head">{t('chart.gap')}</span>}
                 {columns.forecast && <span className="tooltip-head">{t('chart.forecast')}</span>}
@@ -693,7 +700,7 @@ export const Chart = memo(function Chart({
                       <line x1="0" x2="14" y1="2" y2="2" stroke={row.line.color} strokeWidth="2" strokeDasharray={row.line.dash || undefined} />
                     </svg>
                     <span className="tooltip-name">{row.line.name}</span>
-                    {columns.left && <strong>{row.left !== null && `${num(row.left)}%`}</strong>}
+                    {columns.left && <strong>{row.left !== null && (shownAxis?shownAxis.formatValue(row.line.key,row.left,hover!):`${num(row.left)}%`)}</strong>}
                     {columns.plan && <span className="tooltip-plan">{row.plan !== null && `${num(row.plan)}%`}</span>}
                     {columns.gap && <span className={`tooltip-gap ${row.gap !== null ? gapTone(row.gap) : ''}`}>{row.gap !== null && gapText(row.gap)}</span>}
                     {columns.forecast && <span className="tooltip-forecast">{row.forecast !== null && `${num(row.forecast)}%`}</span>}
@@ -701,6 +708,7 @@ export const Chart = memo(function Chart({
                 ))}
               </div>
             )}
+            {shownAxis?.detail&&rows.map(row=><div className="tooltip-mark" key={'money:'+row.line.key}>{shownAxis.detail!(row.line.key,hover!)}</div>)}
             {grid && markerReadout.length > 0 && <div className="tooltip-sep" />}
             {markerReadout.map(marker => (
               <div className={`tooltip-mark ${marker.strong ? 'is-strong' : ''}`} key={marker.key}>

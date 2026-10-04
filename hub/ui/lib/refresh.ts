@@ -26,7 +26,7 @@ export function refreshText(state: Refresh, now: number): string {
   const status = state.request?.status;
   const main =
     status === 'queued' && state.request!.notBefore <= now
-      ? t('refresh.nextCheckin')
+      ? t(state.by==='hub'?'refresh.hubQueued':'refresh.nextCheckin')
       : status
         ? t(`refresh.${status}`)
         : state.unavailable

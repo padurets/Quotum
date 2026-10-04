@@ -11,6 +11,8 @@ import {Store} from '../server/store/store.js';
 import {Live, seedWork, setUp, type Stand} from './setup.js';
 import {accessOf} from './access.js';
 import {Trackers} from './trackers.js';
+import {seedMoney} from './money.js';
+import {Directory} from '../server/store/directory.js';
 
 /**
  * `npm run demo -- [set] [--resets <scene>] [--still]`: a hub on throwaway data, filled with
@@ -135,7 +137,7 @@ export class Demo {
   }
 
   constructor(
-    private readonly options: {set: DemoSet; scene: string; still: boolean; idleAgents?: boolean; address: ReturnType<typeof addressOf>; onExit: (code: number, cause?: 'port_in_use') => void; dataDir?: string; hubRoot?: string},
+    private readonly options: {set: DemoSet; scene: string; still: boolean; idleAgents?: boolean;money?:boolean; address: ReturnType<typeof addressOf>; onExit: (code: number, cause?: 'port_in_use') => void; dataDir?: string; hubRoot?: string},
   ) {
     this.dir = options.dataDir ?? mkdtempSync(path.join(os.tmpdir(), 'quotum-demo-'));
   }
@@ -159,8 +161,9 @@ export class Demo {
       QUOTUM_RESETS_CODEX_URL: urls.codex,
       QUOTUM_RESETS_CLAUDE_URL: urls.claude,
       QUOTUM_ALLOWED_HOSTS: address.hosts,
+      QUOTUM_SECRET_KEY:Buffer.alloc(32,31).toString('base64url'),
     });
-    const hub = (this.hub = spawn(process.execPath, ['dist/server/index.js'], {cwd: this.options.hubRoot ?? HUB, env, stdio: ['ignore', 'pipe', 'pipe']}));
+    const hub = (this.hub = spawn(process.execPath, ['--import','tsx',path.join(path.dirname(fileURLToPath(import.meta.url)),'hub.ts')], {cwd: this.options.hubRoot ?? HUB, env, stdio: ['ignore', 'pipe', 'pipe']}));
     hub.stdout!.on('data', chunk => this.output.add(chunk));
     hub.stderr!.on('data', chunk => this.output.add(chunk));
     // close follows the output streams too: the hub's port-error line is complete.
@@ -179,6 +182,7 @@ export class Demo {
     const store = new Store(path.join(this.dir, 'quotum.sqlite'));
     try {
       seedWork(store, stand);
+      if(this.options.money!==false&&(set.id==='all'||set.id==='money'))await seedMoney(store,new Directory(store.db),stand);
     } finally {
       store.close();
     }

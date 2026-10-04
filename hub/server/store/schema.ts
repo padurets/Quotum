@@ -149,6 +149,20 @@ export const STEPS = [
     (device_id, producer_id, source_id, origin, project, folder) WHERE producer_id IS NOT NULL;
   CREATE INDEX agent_sessions_by_project ON agent_sessions (device_id, project, source_id);
   `,
+  // 9 — exact unit-valued measurements and continuous observation spans.
+  `
+  CREATE TABLE readings (
+    source_id TEXT NOT NULL, meter_id TEXT NOT NULL, at INTEGER NOT NULL, previous_at INTEGER,
+    kind TEXT NOT NULL, unit TEXT NOT NULL, amount INTEGER NOT NULL, limit_amount INTEGER,
+    reset_at INTEGER, minutes INTEGER, scope TEXT, label TEXT, stale_after_ms INTEGER NOT NULL,
+    PRIMARY KEY (source_id, meter_id, at)) WITHOUT ROWID;
+  CREATE INDEX readings_by_time ON readings (at);
+  CREATE TABLE meter_spans (
+    source_id TEXT NOT NULL, meter_id TEXT NOT NULL, from_at INTEGER NOT NULL, to_at INTEGER NOT NULL,
+    stale_after_ms INTEGER NOT NULL, PRIMARY KEY (source_id, meter_id, from_at)) WITHOUT ROWID;
+  CREATE INDEX meter_spans_by_end ON meter_spans (to_at);
+  CREATE INDEX credentials_by_source ON credentials (source_id, created_at, id);
+  `,
 ];
 
 export const SCHEMA_VERSION = STEPS.length;

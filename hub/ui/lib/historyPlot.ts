@@ -55,6 +55,9 @@ export type PlotBuffer = {
   from: number; to: number; cell: number; length: number;
   coverage: Coverage;
   series: PlotSeries[];
+  /** Money keeps drawing data separate from the visible period used for spending. */
+  meterChunks?: readonly Chunk[];
+  meterFrame?: {from:number;to:number};
   events: SourceEvent[];
   /** Decoded cells are held only for this bounded strip, for exact edge replacements. */
   activityCells: Map<number, PlotBar>;
@@ -138,7 +141,9 @@ export function* plotPrepared(chunks: readonly Chunk[], meta: HistoryMeta, targe
     for (const part of row.parts) for (const point of part) {points.push(point); yield;}
     lines.push({...row.line, points});
   }
-  return {token, epoch, version, from, to, cell: target.cell, length: target.length, coverage, series: lines, events: yield* ordered(events, (a, b) => a.at - b.at), activityCells, barMs: barOf(target.cell, target.length), knownFrom: Math.max(meta.known.work, ...(Object.keys(meta.known.sources).length ? [Math.min(...Object.values(meta.known.sources))] : []))};
+  return {token, epoch, version, from, to, cell: target.cell, length: target.length, coverage, series: lines,
+    ...(chunks.some(c=>c.meterSeries!==undefined)?{meterChunks:chunks}:{}),
+    events: yield* ordered(events, (a, b) => a.at - b.at), activityCells, barMs: barOf(target.cell, target.length), knownFrom: Math.max(meta.known.work, ...(Object.keys(meta.known.sources).length ? [Math.min(...Object.values(meta.known.sources))] : []))};
 }
 
 /** A bar is all of its contributing whole cells, or unknown; never a partial stack. */

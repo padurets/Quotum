@@ -85,7 +85,7 @@ change as it was.
 | `event` | `data` | When |
 |---|---|---|
 | `hello` | `{epoch, now, client, heartbeatMs}` | First. `epoch`: when this start of the hub began, base 36. `now`: the hub's clock. `client`: the path of the page's entry script the hub serves (`/assets/index-<hash>.js`), null without a build. `heartbeatMs`: 25000. |
-| `snapshot` | `{board, view, historyStart, sources, sessions, cadence, refresh, forecast, mine, boards, resets}` | Second: the board for this reader. |
+| `snapshot` | `{providers, sourceAccess, board, view, historyStart, sources, sessions, cadence, refresh, forecast, mine, boards, resets}` | Second: the board for this reader. |
 | `board` | `{board: {id, name, personal}}` | The board was renamed. |
 | `view` | `{view}` | The board's view was saved. |
 | `lineup` | `{sources: string[]}` | The board's sources, in order, changed. |
@@ -95,6 +95,7 @@ change as it was.
 | `refresh` | `{id, refresh}` | A source's refresh availability, request or cooldown changed. |
 | `forecast` | `{id, forecast}` | Where the recent pace of the source's weekly windows leads, as the hub works it out, changed. |
 | `mine` | `{sources: string[]}` | Which sources of the board the reader's devices measure changed. |
+| `sourceAccess` | `{<source id>: {error, expiresAt, canRefresh, credentialIds}}` | The reader's own connector access changed, cleared when the holding or board access ends. |
 | `boards` | `{boards}` | The reader's boards changed: made, deleted, renamed, joined, left. |
 | `history` | `{sources: string[], since}` | History of these sources changed from `since`: a measurement or credited agent work (see [Reading history](#reading-history)); with `since` 0, all of the board's history reads otherwise: whose agents' work it shows, or under which names, changed (a card hidden or shown, someone joining or leaving, a project or a machine renamed). |
 | `resets` | `{resets, trackers, past}` | The reset trackers' news changed. |
@@ -122,6 +123,13 @@ In a `snapshot`, `sources` are the cards of the board's sources in its order; `s
 `{id, name, personal}`; the reader's role is in `boards`, each `{id, name, personal,
 role}`, as it is theirs alone. `resets` is what `GET /api/resets` answers. `historyStart`
 is when the board's history begins as of the snapshot; `GET /api/history` tells it later.
+
+`providers` is the public code-owned catalogue: each entry has `id`, `name`, `color`,
+`logoAsset`, `order`, `measuredBy` (`client` or `hub`), `meterKinds`, `resets`, and either
+`clientId` or `connectorId`. It contains no credentials or user addresses. Readers use
+an unknown id itself as its name and a neutral icon and colour; an unknown capability
+does not imply quota notifications. Only providers with `window` capability contribute
+to the percentage attention state, including a client source awaiting its first window.
 
 A card is `{id, provider, plan, successAt, error, stale, windows, resets, owners,
 staleAfterMs, measureIntervalMs}`: the source's last measurement (`successAt`, its
@@ -478,6 +486,97 @@ A new one over a limit takes the place of the oldest in that limit: of its sessi
 its person; over the hub's, of its person if they have one, else it is refused with
 `429`. So connections a sleeping laptop left behind never keep a new tab out.
 
+## Exact meters and hub connections
+
+Card key scales use the existing view's `windows` visibility list with
+`<source id>/key:<opaque key id>` entries. The default preview stays visible unless
+hidden; `shown` holds explicitly enabled scales beyond it, using the same entry format.
+An explicit enabled choice survives changes in preview ordering. The card's switches
+also apply to compact. Card settings page through key-scale switches; there is no
+key-table dialog. Chart series are chosen independently in the chart's own settings.
+Both resource types use the same segmented meter; balances have no percentage meter.
+
+A hub-measured card may also carry `meters`, `keys` (a preview of at most five),
+`keysCount`, `inventory` and `spending`. A meter is `{id, kind, unit, amount, limit,
+resetAt, minutes, scope, label, at, staleAfterMs, stale}`. Kind is `counter`, `balance`
+or `cap`; a cap's amount is used, its remaining is limit minus amount. A zero limit
+has no percentage. All money fields are canonical decimal strings of whole millionths,
+quantized once from the supplier's original decimal token, with nearest rounding and
+halfway values away from zero. They use signed 64-bit SQLite integers; totals use exact
+integer arithmetic and never combine units. A balance has no 100%.
+
+OpenRouter stores credits and lifetime usage counters; its balance is derived from
+the pair. A credit increase is a top-up, and a usage increase is spending.
+Key observations use the arrival time of their inventory page; account counters
+keep the time of their paired response. UTC cap resets and period totals use the
+key's own observation time, which can be later than the account observation.
+Initial counters are baselines. Counter corrections are not spending. Account calendar
+periods are UTC, with Monday starting the week. `spending` gives day/week/month summaries with
+`from`, `to` (the last account observation, or the current period start before its first
+observation), `amount` or null, `complete`, `knownFrom`, `uncertain` and `unlocated`.
+Completeness ends at that observation. Calendar spending remains available as data for
+analytics; source cards show current balances and enabled caps, without spending summaries.
+An unlocated step retains its original `{from, to, amount, evidence}`; evidence is
+`continuous`, `gap` or `estimate`. A continuous step crossing midnight may be known
+for the week and unlocated for the day. No spending is assigned a guessed time.
+
+Key parts contain an opaque id, name, disabled/expiry/BYOK scope metadata, observation
+and freshness, `presence` and `missCount`, and current provider day/week/month usage.
+A key missing from one successful traversal remains stale; two successive successful
+missing traversals archive it. Partial traversals do not confirm absence. A reappearance
+restores the same id and history. Inventory completeness describes a bounded traversal,
+not an atomic supplier snapshot. Amounts and key names are shared measurement data.
+A confirmed unlimited key loses its current cap even during a partial traversal;
+an invalid cap remains unknown and preserves the last cap as stale. Historical readings
+survive removal. The last confirmed observation also survives archival and retention,
+so a returning key's spending interval begins at that observation.
+
+`GET /api/history` additionally accepts `unit` and `meters`: a JSON array of at most
+32 logical `[sourceId, meterId]` pairs, sorted and deduplicated. Sources must be visible
+on the board. `balance` resolves its internal counter pair without spending extra
+selection slots. Cache keys include the selection. Without these fields the existing
+window protocol is unchanged. Each chunk may carry `meterSeries`, whose entries are
+`{source, meter, kind, unit, semantics, cells}`. Semantics is `{limit, resetAt, minutes,
+scope, label}` as it actually held before the chunk, or null.
+
+A meter cell is `[index, value, spentInternal, spentExceptional, coveredMs, extra?]`.
+Value is the historical amount, or remaining for a cap. The composed money frame also
+keeps exact known spending per point, so the spending view draws only located spending.
+Summaries distinguish missing coverage from zero spending: no covered interval gives
+an unknown amount, and a known subtotal with incomplete coverage is marked partial.
+Different kind or unit identities that occur inside one cell retain separate series.
+Progressive drawing may hold neighboring cells for movement, while spending uses the
+visible whole-cell period. Loading those neighbors cannot change its amounts or make
+a boundary-crossing step located within that period.
+Extra may give `first`, `open`
+(including explicit null), `segment`, historical `semantics`, original exceptional
+`steps`, `topupInternal` and `topupSteps`. Amounts remain strings throughout packing.
+Known cell spending and original steps compose once over the effective whole-cell
+range. OpenRouter balance spending comes from usage, and top-ups from credits.
+A frame that cannot fit losslessly in the history budget returns `413 history_limit`.
+
+Connections use owner-only `POST /api/credentials` with `{provider, secret,
+allowNoExpiry?, requestId?}` and replacement with `{secret, allowNoExpiry?}`. An access
+without expiry requires explicit `allowNoExpiry: true`; otherwise the hub returns
+`409 credential_expiry_confirmation` without writing. Replacement keeps owner, provider
+and source; a different account is refused. The optional creation requestId is a UUID,
+replayed for the same owner/provider for 24 hours, with a tombstone after deletion.
+Replacement accepts no requestId. Deleting the last own bound credential releases
+that person's holding and orphan shares, preserving other holders and history.
+
+Hub cadence and refresh carry `by: "hub"`, with no device identity. Hub refresh
+requires both board membership and a source holding; a shared reader without a holding
+receives `403 refresh_forbidden`. Requests join an active job and share one source
+cooldown of 60 seconds across boards and holders. Fixed measurement preferences retain
+the existing interval choices. Permanent access failures disable automatic retries
+until replacement, an available explicit refresh or restart.
+
+The reader-only `sourceAccess` map contains only their own bound credential ids,
+expiry and safe access error, plus whether the source can refresh. It never enters the
+shared board cache. Other readers receive no entries. Shared card access failures are
+neutral `unmeasured`; management keys, hints, encrypted bytes, raw creator ids and raw key hashes
+are absent from every shared projection. Credential details remain owner-only.
+
 ## Privacy
 
 Connector credential records, hints, abilities and key fingerprints are never part of
@@ -591,3 +690,20 @@ Disconnected readers retain no notification queue. There is
 no replay through `Last-Event-ID`, after restart, or across a baseline. A crash
 between consumption and native delivery may lose a notification; successful
 native submission does not guarantee the operating system displayed it.
+
+The full current key inventory is read through
+`GET /api/boards/:board/sources/:source/keys?limit=50&after=<cursor>`.
+Board membership and visible source are required; a member may read measurements.
+The response is `{keys, meters, total, inventory, next}` with at most 50 keys. Total
+counts retained current keys and does not promise supplier completeness. A cursor is
+bound to source, ordering revision and this hub run. A changed ordering returns
+`409 keys_changed`; a forged or mismatched cursor returns `400 invalid_request`.
+No credential records enter this endpoint.
+
+Alternatively, `ids` is a JSON array of 1–50 opaque key ids, mutually exclusive with
+`after` and `limit`. It returns only those current keys and their meters in inventory
+order, with `next: null`. Enabled scales beyond the preview use this bounded read when
+their source changes; they never poll. Membership and source visibility still apply.
+Chart settings show current and selected archived keys through the same pages of at
+most ten keys. Selected current keys on other pages are not duplicated. An open page
+reloads after a successful source measurement.

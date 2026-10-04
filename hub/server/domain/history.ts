@@ -1,5 +1,6 @@
 import {drain, ordered, type Preparation} from './prepare.js';
 import {barOf, type Activity, type ActivityGroup, type Dimension, type SeriesWork} from './work.js';
+import {composeMetersPrepared, type MeterHistory, type MeterSeriesCells} from './meterHistory.js';
 
 /** The shared grid, from the finest cell that keeps a frame within its budget. */
 export const CELLS = [1, 5, 15, 30, 60, 120, 360, 720].map(minutes => minutes * 60_000);
@@ -44,6 +45,7 @@ export type Chunk<Ref = string> = {
   from: number;
   to: number;
   series: SeriesCells[];
+  meterSeries?: MeterSeriesCells[];
   activity: ActivityCells<Ref>;
   resets: [string, string, number][];
   grants: [string, number, number][];
@@ -73,6 +75,7 @@ export type History = {
   cellMs: number;
   historyStart: number;
   series: HistorySeries[];
+  meterSeries?: MeterHistory[];
   events: SourceEvent[];
   activity: Activity & {since: number; known: {from: number; to: number} | null};
 };
@@ -259,6 +262,7 @@ export function* composePrepared(chunks: readonly Chunk[], meta: HistoryMeta, ta
   for (const [at, b] of yield* ordered(bars, (a, b) => a[0] - b[0])) {activityCells.push([at, b.active, b.agent, b.refs.size]); yield;}
   return {
     range: target.key, live: target.live, since, to, cellMs: cell, historyStart: meta.historyStart,
+    ...(chunksInOrder.some(c => c.meterSeries !== undefined) ? {meterSeries: yield* composeMetersPrepared(chunksInOrder,cell,since,to)} : {}),
     series: yield* ordered(lines, (a, b) => compare(a.sourceId, b.sourceId) || compare(a.windowId, b.windowId)),
     events: yield* ordered([...resets, ...grants], (a, b) => a.at - b.at),
     activity: {since: activitySince, known: knownFrom < to ? {from: knownFrom, to} : null, barMs, activeMs, agentMs, agents: refs.size, cells: activityCells, by: groups},

@@ -30,6 +30,7 @@ import {
 } from './model.js';
 /** Durable app settings, in `npm run demo:keys`; checking and reset busy are transient and tested. */
 export {KEY_STORAGE} from './key-storage.js';
+export {MONEY_SCENES} from './money.js';
 
 /**
  * The catalogue of the demo board: every state the dashboard knows today, one entry each,
@@ -509,13 +510,13 @@ const all: DemoSet = {
         'The chart\'s tooltip has a row for every line in the legend\'s order, with what is left, the plan and the gap in columns up to now, and after it the plan and where each forecast leads; on a phone it stays whole on the screen',
         'The chart\'s settings switch the plan and the forecast on and off, under "On the chart"',
         'On a narrow window the labels past the chart\'s right edge stay within the plot, the soonest first: those with no room are said together as "and N more →", which tells each of them and its time when pointed at or tapped',
-        'My machines → Projects: quotum once, on the laptop, though three agents work in three folders (the tray and quotum\'s agents in the list\'s dialog show it three times, with hub and quotum.feat-18-desktop-app under two of them)',
-        'Renamed or merged in My machines, a project is shown under its new name in the tray and the list of agents too, merged ones as one group',
+        'Agent activity → Settings → Manage projects: quotum once, on the laptop, though three agents work in three folders (the tray and quotum\'s agents in the list\'s dialog show it three times, with hub and quotum.feat-18-desktop-app under two of them)',
+        'Renamed or merged in Manage projects, a project is shown under its new name in the tray and the list of agents too, merged ones as one group',
         'Merge Quotum into quotum: one row, with both machines and "from: Quotum"; give Quotum back its name: as it was',
         'docs gathers docs-site, and gives it back',
         'Escape in the merge menu closes only the menu',
         'The merge menu with many selected, at the bottom of the dialog: its glass is whole',
-        'My machines → Projects shows no agent time',
+        'Agent activity → Settings → Manage projects shows no agent time',
         'Agent activity by project: seven projects in colour, the rest grey, each its own row in the legend and the tooltip, switched off and on alone',
         'The long project name wraps inside its activity legend bubble, including on a phone; opening it never widens the page',
       ],
@@ -627,7 +628,7 @@ const all: DemoSet = {
       id: 'old-nuc',
       gone: -3 * HOUR,
       expect: [{via: 'token'}],
-      look: ['«My machines» shows it seen when the demo started, not three hours ago: the hub dates every contact by its own clock'],
+      look: ['«My connections» shows it seen when the demo started, not three hours ago: the hub dates every contact by its own clock'],
     },
     {kind: 'machine', id: 'ben-mac', person: 'ben', os: 'macos', failures: [{provider: 'antigravity', error: 'failed'}], expect: [{failure: {provider: 'antigravity', error: 'failed'}}]},
     {kind: 'machine', id: 'dan-laptop', person: 'dan', expect: [{via: 'token'}]},
@@ -1613,4 +1614,5 @@ const activity: DemoSet = {
   ],
 };
 
-export const SETS: DemoSet[] = [all, showcase, activity];
+const money:DemoSet={...all,id:'money',about:'Subscriptions beside OpenRouter balances, key caps, partial inventory and private access failures'};
+export const SETS: DemoSet[] = [all, showcase, activity,money];

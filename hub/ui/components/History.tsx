@@ -5,6 +5,8 @@ import {planAt, started, weeklyPlanLinePrepared} from '../lib/plan';
 import {announcedOf, forecastLinePrepared, type Context} from '../lib/forecast';
 import {PROVIDERS} from '../lib/providers';
 import {HORIZONS, setMuted, setPrefs, usePrefs} from '../lib/prefs';
+import {usePref} from '../lib/prefs';
+import {MoneyHistory} from './MoneyAnalytics';
 import {setTimeRange, timeRangeKey, useTimeRange} from '../lib/timeRange';
 import {frameChangesAt, frameOf, measuredTo} from '../lib/periods';
 import {HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
@@ -75,7 +77,7 @@ function HistorySettings({arrange, planAvailable, forecastAvailable, horizonNote
  * the history's grid at a time, a label past its right edge counts down on its own, and a
  * forecast's line goes when the table no longer says where its window leads.
  */
-export const History = memo(function History({arrange}: {arrange: Arrange}) {
+const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange}) {
   const {history, loading} = useHistory();
   const strip = useHistoryPlot();
   const registry = useRef<{token: number; seed: PlotLine[]; lines: PlotLine[]} | null>(null);
@@ -237,4 +239,8 @@ export const History = memo(function History({arrange}: {arrange: Arrange}) {
       </div>
     </section>
   );
+});
+
+export const History=memo(function History({arrange}:{arrange:Arrange}) {
+  const money=usePref('money');return money.unit?<MoneyHistory arrange={arrange}/>:<WindowHistory arrange={arrange}/>;
 });

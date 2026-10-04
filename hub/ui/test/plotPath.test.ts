@@ -2,6 +2,10 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {plotPath} from '../lib/plotPath';
 
+test('money steps hold the previous value until the next observation and preserve gaps',()=>{
+  assert.equal(plotPath([[[0,12],[1,10],[2,15]],[[4,9],[5,8]]],true),'M0.0,12.0H1.0V10.0H2.0V15.0M4.0,9.0H5.0V8.0');
+});
+
 test('straight rounded runs retain their endpoints without redundant vertices', () => {
   assert.equal(plotPath([Array.from({length: 60}, (_, i): [number, number] => [i, 80])]), 'M0.0,80.0L59.0,80.0');
   assert.equal(plotPath([[[.12, .21], [.22, .31], [.32, .41]]]), 'M0.1,0.2L0.3,0.4');

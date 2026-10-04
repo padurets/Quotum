@@ -579,6 +579,14 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn a_hub_measured_provider_waits_off_duty_for_a_day() {
+        let now = 1_000;
+        let directive = json!({"provider": "openrouter", "measure": false, "onDuty": false,
+            "askInMs": 86400000, "until": "2026-10-02T12:00:00Z"});
+        assert_eq!(read_directive(&directive, now), Directive::Wait { ask_at: now + 86_400_000, on_duty: false });
+    }
+
     /// Status, header lines and body of an answer.
     type Answer = (u16, &'static str, String);
     type Seen = Arc<Mutex<Vec<(String, Value)>>>;

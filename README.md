@@ -9,7 +9,9 @@
 
 Quotum shows how much of your coding-agent subscriptions is left — Claude Code, Codex
 and Antigravity — on every machine you work on, in one place: for you alone or for a
-whole team. You host it yourself, and it never touches your provider tokens.
+whole team. It also shows OpenRouter balances and API-key caps. You host it yourself;
+the agent never reads provider tokens, and the hub encrypts the management key you
+explicitly connect.
 
 ![The Quotum dashboard](docs/dashboard.png)
 
@@ -187,7 +189,7 @@ day, not a script thrown together over a weekend. In practice that meant:
   and then every five as it stays quiet for hours; and less often while nothing happens,
   down to once every 15 minutes. The machine on duty asks the hub every 15 seconds, which
   starts nothing.
-- **Your credentials stay where they are.** Quotum never reads, stores or sends provider
+- **Client credentials stay where they are.** The agent never reads, stores or sends provider
   tokens or cookies. What leaves the machine: percentages and reset times, plan names,
   a one-way hash of each account id (so the hub can tell two machines share one
   account), the machine's name and random id, the short message of a client that
@@ -203,7 +205,7 @@ day, not a script thrown together over a weekend. In practice that meant:
   the board and when the subscription came to it (on their own board, all of it). The hub
   keeps when each agent worked, with its machine, project and folder names, for 90 days,
   and the names you give your projects until you undo them; you see and correct your
-  projects in *My machines*. The full list is in the [spec](spec/ingest-v1.md#privacy).
+  projects through *Agent activity → Settings → Manage projects*. The full list is in the [spec](spec/ingest-v1.md#privacy).
 - **The numbers mean what they say.** Only a real increase inside one reset window
   counts as spending. Resets, corrections and gaps in the data never show up as
   consumption. The agent says when its next measurement is due, so a sparse series isn't
@@ -279,7 +281,7 @@ have your system start `quotum run`, the same in the foreground (a systemd user
 service, launchd, Windows autostart). With npx, put `npx` before every command.
 
 **Many machines at once** (images, VMs, containers): create a machine token in the
-dashboard (*My machines → Connect*) and start every machine with it. Each one joins as
+dashboard (*My connections → Connect → Device*) and start every machine with it. Each one joins as
 yours by itself:
 
 ```sh
@@ -295,7 +297,7 @@ QUOTUM_HUB_URL=https://quotum.example.com QUOTUM_HUB_TOKEN=qt_m_… quotum start
 ```
 
 A machine token is one person's: every teammate creates their own. Machines are named
-in *My machines*, so an image doesn't need a name per copy.
+in *My connections*, so an image doesn't need a name per copy.
 
 **Sharing with a team.** Create a shared board, invite people with a link, and share
 your subscriptions with it (*People and subscriptions → Subscriptions*). You can take
@@ -308,6 +310,41 @@ licences) and as a bare binary (`quotum-cli-<platform>`, what the installers and
 [build provenance](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations)
 (`gh attestation verify <file> -R padurets/quotum`). **From source:**
 `cd agent && cargo build --release` (Rust 1.85 or newer) gives `target/release/quotum`.
+
+## Connecting OpenRouter
+
+Open **My connections**, choose **Connect**, then **OpenRouter**.
+Create a dedicated OpenRouter management key in
+[OpenRouter key settings](https://openrouter.ai/settings/keys), give it an expiry and
+paste it into the password field. A key without expiry needs an explicit confirmation.
+The key can create, edit and delete provider API keys; Quotum uses only fixed read
+operations. A server hub needs its separate encryption key configured, and its operator
+can decrypt saved access. See [SECURITY.md](SECURITY.md) for the protection and limits.
+
+The original plan label stays beside the title; a small second line identifies the
+resource as **Subscription** or **Budget**. The budget card shows only current state:
+its balance and enabled key-limit scales with their reset times. Its settings switch
+individual scales, including keys beyond the initial five-key preview. Scales use the
+same segmented meters as subscriptions; keys without a spending limit have no scale.
+Spending belongs to analytics.
+Settings show at most ten keys per page. Access turns amber seven days before expiry;
+expired, revoked or forbidden access is red. Working keys without expiry have no expiry
+mark. Temporary read failures are amber.
+The chart's own settings select
+key usage and remaining limits for analytics. Choose **USD** in the
+shared analytics controls for the money chart and table. Account balances are selected
+by default; at most 32 logical series are drawn, with visible overflow. The chart uses
+one unit per axis and keeps the same time range and gestures as subscription history.
+Wallet balances have no percentage; only positive key limits do.
+
+A top-up is separate from spending: spending comes from the lifetime usage counter.
+Before the first baseline, history is unknown. Partial history and spending observed
+after a gap retain their uncertainty and original interval. Key names and monetary
+measurements are shared with board members, while saved access details stay private.
+Only holders can refresh a hub-measured source. Replace or remove your saved access in
+the same panel; removing it does not revoke the provider key. Revoked or expired access
+preserves the last measurements. The compact panel displays money too; tray minimums
+and quota notifications continue to use percentage windows only.
 
 ## Updating
 
@@ -494,7 +531,8 @@ over plain HTTP/1.1, about five.
 - `npm run demo` in `hub/` (after `npm run build`): a live board on throwaway data with
   every state the dashboard knows that lasts on a working hub, no network or account
   needed; Ctrl+C stops it and leaves nothing behind. `npm run demo -- showcase` is the
-  board of the images above.
+  board of the images above. `npm run demo -- money --still` puts subscriptions beside
+  every monetary case on Ana's personal board.
 
 Project layout:
 

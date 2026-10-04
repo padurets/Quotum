@@ -2,6 +2,7 @@ import {useSyncExternalStore} from 'react';
 import {readAgentsBy, readAgentsSort, type AgentsBy, type AgentsSort} from './agents';
 import {ANALYTICS_KINDS, type ActivityDimension, type Kind} from './types';
 import {DEFAULT_PERIOD, periodOf} from './periods';
+import {DEFAULT_MONEY,readMoney,type MoneyPrefs} from './moneySelection';
 
 /** How far the chart looks ahead: `auto` follows the period. */
 export type Horizon = 'auto' | '1d' | '3d' | '7d';
@@ -16,6 +17,7 @@ export type Horizon = 'auto' | '1d' | '3d' | '7d';
  * board is arranged is the board's own (lib/view.ts).
  */
 export type Prefs = {
+  money:MoneyPrefs;
   /** Series switched off in the chart legend. */
   muted: Record<string, true>;
   range: string;
@@ -40,7 +42,7 @@ export type Prefs = {
 const KEY = 'quotum.prefs';
 export const HORIZONS: Horizon[] = ['auto', '1d', '3d', '7d'];
 export const ACTIVITY_BY: ActivityDimension[] = ['source', 'project', 'device'];
-const DEFAULTS: Prefs = {muted: {}, range: DEFAULT_PERIOD, kind: 'weekly', horizon: 'auto', showPlan: true, showForecast: true, showResets: true, locked: false, agentsSort: null, agentsBy: 'project', activityBy: 'project'};
+const DEFAULTS: Prefs = {money:DEFAULT_MONEY,muted: {}, range: DEFAULT_PERIOD, kind: 'weekly', horizon: 'auto', showPlan: true, showForecast: true, showResets: true, locked: false, agentsSort: null, agentsBy: 'project', activityBy: 'project'};
 
 function read(): Prefs {
   try {
@@ -52,7 +54,7 @@ function read(): Prefs {
     if (!HORIZONS.includes(stored.horizon)) stored.horizon = DEFAULTS.horizon;
     if (!ACTIVITY_BY.includes(stored.activityBy)) stored.activityBy = DEFAULTS.activityBy;
     const {muted, range, kind, horizon, showPlan, showForecast, showResets, locked, activityBy} = stored;
-    return {muted, range, kind, horizon, showPlan, showForecast, showResets, locked: locked === true, agentsSort: readAgentsSort(stored.agentsSort), agentsBy: readAgentsBy(stored.agentsBy), activityBy};
+    return {money:readMoney(stored.money),muted, range, kind, horizon, showPlan, showForecast, showResets, locked: locked === true, agentsSort: readAgentsSort(stored.agentsSort), agentsBy: readAgentsBy(stored.agentsBy), activityBy};
   } catch {
     return DEFAULTS;
   }

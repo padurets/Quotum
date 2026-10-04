@@ -1,4 +1,5 @@
 import type {Provider} from './sources.js';
+import type {KeyPart, Meter, MeterMeasurement} from './meters.js';
 
 /** A window's length as the agent classifies it (spec: Window `kind`). */
 export type Kind = 'session' | 'weekly' | 'other';
@@ -22,7 +23,7 @@ export type Win = {
 export type FreeResets = {available: number; expiring: {count: number; expiresAt: number | null}[]};
 
 /** One measurement of a source: every window the client reported at one moment. */
-export type Measurement = {
+export type WindowMeasurement = {
   observedAt: number;
   plan: string;
   windows: Win[];
@@ -31,6 +32,7 @@ export type Measurement = {
   /** Null when the client does not report free resets. */
   resets: FreeResets | null;
 };
+export type Measurement = WindowMeasurement | MeterMeasurement;
 
 /** A stored window value. */
 export type Sample = Win & {
@@ -51,6 +53,9 @@ export type SourceState = {
   windows: Win[];
   staleAfterMs: number | null;
   resets: FreeResets | null;
+  meters?: Meter[];
+  keys?: KeyPart[];
+  inventory?: {complete: boolean; observed: number; missing: number; error: string | null};
 };
 
 export type Edge = {

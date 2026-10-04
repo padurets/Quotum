@@ -107,6 +107,14 @@ with tempfile.TemporaryDirectory(prefix='quotum-late-tray-') as directory:
                 if os.environ.get('QUOTUM_TEST_PANEL') == '1':
                     from panel import check_panel
                     result['panel'] = check_panel(bus, registered[0], child, root, env)
+        except Exception as error:
+            # Preserve the synthetic launch log before the temporary profile is removed.
+            try:
+                subprocess.run([sys.executable, str(Path(__file__).with_name('diagnostic.py')),
+                                str(root), f'native panel check failed: {error}'], timeout=5)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+            raise
         finally:
             child.terminate()
             try:

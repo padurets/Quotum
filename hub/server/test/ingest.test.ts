@@ -110,6 +110,26 @@ test('a malformed batch is refused whole', () => {
   assert.equal(parsed.snapshots[0].windows[0].resetsAt, start + 5 * 86_400_000);
 });
 
+test('hub providers are dropped before their fields are parsed, without claiming a source', () => {
+  const {store, ingest, token, board} = setup();
+  const hub = {provider: 'openrouter', account: 'invalid', observedAt: 'invalid', windows: false, active: 'invalid', error: {secret: 'ignored'}};
+  const body = {...batch([snapshot(start, 5)]), snapshots: [snapshot(start, 5), hub], failures: [hub]};
+  assert.equal(ingest.accept(token, body, start).accepted, 1);
+  assert.deepEqual(store.states(board).map(s => s.provider), ['codex']);
+  assert.equal((store.db.prepare("SELECT count(*) AS n FROM sources WHERE provider = 'openrouter'").get() as {n: number}).n, 0);
+  const request = {...body, subscriptions: [{provider: 'codex'}, hub, {provider: 'claude'}]};
+  for (const paced of [false, true]) {
+    const answers = ingest.checkin(token, {...request, paced}, start).subscriptions;
+    assert.deepEqual(answers.map(s => s.provider), ['codex', 'openrouter', 'claude']);
+    assert.deepEqual(answers[1], {provider: 'openrouter', measure: false, onDuty: false, askInMs: 86_400_000, until: iso(start + 86_400_000)});
+  }
+  assert.equal(ingest.sessions(token, {...body, sessions: [{provider: 'codex', account: snapshot(start, 5).account, origin: 'terminal', startedAt: iso(start), working: true}, hub]}, start).accepted, 1);
+  assert.throws(() => parseSessions({...body, sessions: [{provider: 'unknown'}]}), /provider/);
+  assert.throws(() => parseBatch({...body, snapshots: [hub, null]}), /snapshot/);
+  assert.throws(() => parseBatch({...body, failures: [{provider: 'unknown'}]}), /provider/);
+  store.close();
+});
+
 test('a window keeps its kind and the scope label the agent gave, nothing else', () => {
   const parsed = parseBatch(batch([snapshot(start, 5, {windows: [{id: 'weekly:fable', kind: 'weekly', minutes: null, label: 'Fable', usedPercent: 1, resetsAt: null}]})]));
   const [w] = parsed.snapshots[0].windows;
@@ -331,4 +351,5 @@ test('session IDs are exact opaque lowercase hex, unique even before source filt
     assert.throws(() => parseSessions(running([{sessionId: value}])), (error: Invalid) => error.what === 'sessionId');
   }
   assert.throws(() => parseSessions(running([{sessionId}, {sessionId, account: 'f'.repeat(24)}])), (error: Invalid) => error.what === 'sessionId');
+  assert.equal(parseSessions(running([{provider:'openrouter',sessionId:{}},{sessionId},{provider:'openrouter',sessionId}])).sessions[0].sessionId,sessionId,'hub authority is dropped before session identity parsing and deduplication');
 });

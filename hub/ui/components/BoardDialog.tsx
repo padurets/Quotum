@@ -3,7 +3,7 @@ import {PROVIDERS} from '../lib/providers';
 import {call} from '../lib/http';
 import {boardTitle, type Board} from '../lib/session';
 import {useTitles} from '../lib/board';
-import {LOGOS} from './logos';
+import {logoOf} from './logos';
 import {CopyField, ErrorLine, Modal, Segmented} from './Kit';
 import {SwitchRow} from './Popover';
 import {t} from '../i18n';
@@ -17,7 +17,7 @@ type Shares = {
 type Member = {id: string; name: string; email: string; role: 'owner' | 'member'};
 
 const providerName = (provider: string) => PROVIDERS[provider]?.name ?? provider;
-const Logo = ({provider}: {provider: string}) => <img className="share-logo" src={LOGOS[provider]} alt="" />;
+const Logo = ({provider}: {provider: string}) => <img className="share-logo" src={logoOf(provider)} alt="" />;
 
 /**
  * What a shared board shows and what the reader could add to it. Everyone shares what

@@ -4,7 +4,7 @@ import sys
 
 root = Path(sys.argv[1])
 parts = [sys.argv[2]]
-for name in ['output.log', 'app/logs/hub.log', 'app/logs/agent.log']:
+for name in ['output.log', 'launch.log', 'app/logs/hub.log', 'app/logs/agent.log']:
     file = root / name
     if file.exists():
         lines = file.read_text(errors='replace').splitlines()[-12:]

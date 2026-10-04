@@ -30,7 +30,7 @@ export class PageClock {
   /** How far the hub's clock is ahead of the page's (behind, when negative). */
   private skew = 0;
   private readonly watches = new Set<Watch>();
-  private timer: {handle: unknown} | null = null;
+  private timer: {handle: unknown; at: number} | null = null;
 
   constructor(private readonly env: ClockEnv) {}
 
@@ -88,18 +88,24 @@ export class PageClock {
 
   /** One timer, for the nearest moment any part changes; none on a hidden tab. */
   private arm() {
+    let nearest = Infinity;
+    if (this.env.visible()) for (const watch of this.watches) {
+      if (watch.due !== null && watch.due < nearest) nearest = watch.due;
+    }
+    const now = this.env.now();
+    const at = Number.isFinite(nearest) ? now + Math.min(Math.max(nearest - this.hubNow(now), NEAREST), FURTHEST) : null;
+    // A commit updates many labels; their unchanged nearest deadline needs no new timer.
+    if (this.timer?.at === at) return;
     if (this.timer) this.env.clearTimeout(this.timer.handle);
     this.timer = null;
-    if (!this.env.visible()) return;
-    const dues = [...this.watches].flatMap(w => (w.due === null ? [] : [w.due]));
-    if (!dues.length) return;
-    const wait = Math.min(Math.max(Math.min(...dues) - this.hubNow(), NEAREST), FURTHEST);
+    if (at === null) return;
     this.timer = {
+      at,
       // Late or not (a sleep holds timers up), whatever is due by then is woken.
       handle: this.env.setTimeout(() => {
         this.timer = null;
         this.wakeDue();
-      }, wait),
+      }, at - now),
     };
   }
 }
