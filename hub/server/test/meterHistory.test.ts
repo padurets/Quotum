@@ -25,9 +25,10 @@ test('cap history carries its actual historical remaining and limit after the cu
   record(store,source,1,[cap(1,'2000000','10000000')]);
   record(store,source,60_001,[cap(60_001,'3000000','20000000')]);
   record(store,source,120_001,[]);
-  const series=store.meters.cells(selectionOf([[source,'key:111111111111:cap']],'USD'),0,120_000,60_000);
-  const result=composeMeters([{from:0,meterSeries:series}],60_000,0,120_000)[0];
+  const series=store.meters.cells(selectionOf([[source,'key:111111111111:cap']],'USD'),0,180_000,60_000);
+  const result=composeMeters([{from:0,meterSeries:series}],60_000,0,180_000)[0];
   assert.deepEqual(result.points.map(p=>[p.value,p.semantics?.limit]),[['8000000','10000000'],['17000000','20000000']]);
+  assert.equal(result.points.some(p=>p.at===60_000),false,'a coalesced cell across different allowances is unknown');
   assert.equal(result.spent,'0');
   store.close();
 });

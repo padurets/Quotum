@@ -12,6 +12,7 @@ import type {Stretch} from '../domain/work.js';
 import {members, projectGroups, type ProjectGroup} from '../domain/projects.js';
 import {tell, type Touches} from '../touches.js';
 import {migrate} from './schema.js';
+import type {QuotaObservation, MeterMeasurement} from '../domain/meters.js';
 import {MeterStore} from './meters.js';
 import type {MeterSelection} from '../domain/meterHistory.js';
 import {providerOf} from '../domain/providers.js';
@@ -316,6 +317,25 @@ export class Store {
    * detail: its name) from each moment it was reported otherwise, the first one included:
    * a forecast's history begins anew after a change (domain/forecast.ts, `planSince`).
    */
+  quotaObservation(id:string,observation:QuotaObservation,measurement?:MeterMeasurement) {
+    this.db.exec('SAVEPOINT quota_observation');
+    let accepted=false,since=observation.observedAt;
+    try {
+      this.db.prepare('UPDATE state SET payload=payload WHERE source_id=?').run(id);
+      const previous=this.state(id);
+      if(observation.observedAt>(previous.quota?.observedAt??-Infinity)) {
+        if(measurement&&(measurement.observedAt!==observation.observedAt||JSON.stringify(measurement.meters.map(m=>m.id).sort())!==JSON.stringify([...observation.receivedIds].sort())))throw new Error('invalid_quota_observation');
+        if(!measurement&&observation.receivedIds.length)throw new Error('invalid_quota_observation');
+        const result=this.meters.observeQuota(id,previous,observation);
+        if(measurement)since=Math.min(since,this.meters.record(id,result.state,measurement).since);
+        accepted=true;
+      }
+      this.db.exec('RELEASE quota_observation');
+    }catch(error){this.db.exec('ROLLBACK TO quota_observation');this.db.exec('RELEASE quota_observation');throw error;}
+    if(accepted)tell(this.observer,o=>{o.touchSources([id]);o.history(id,since);});
+    return accepted;
+  }
+
   record(id: string, measurement: Measurement) {
     const previous = this.state(id);
     if ('meters' in measurement) {

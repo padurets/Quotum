@@ -49,7 +49,7 @@ test('credentials are owner-only, write-only, and never shared with a board', as
   const created = await h.call('POST', '/api/credentials', {provider: 'test', secret: CANARY});
   assert.equal(created.statusCode, 201);
   const dto = created.json();
-  assert.deepEqual(Object.keys(dto).sort(), ['abilities', 'createdAt', 'expiresAt', 'hint', 'id', 'lastError', 'lastUsedAt', 'provider', 'sourceId', 'unreadable']);
+  assert.deepEqual(Object.keys(dto).sort(), ['abilities', 'createdAt', 'expiresAt', 'expiryKind', 'hint', 'id', 'identityOrigin', 'lastError', 'lastUsedAt', 'provider', 'sourceId', 'unreadable']);
   assert.equal(dto.hint, CANARY.slice(-4));
   assert.equal((await h.call('GET', '/api/credentials')).json().credentials.length, 1);
   assert.deepEqual((await h.call('GET', '/api/credentials', undefined, 'bob')).json(), {credentials: []});
@@ -235,7 +235,7 @@ test('HTTP replacement requires explicit no-expiry consent and rejects creation 
   const original=fixture.identify;
   fixture.identify=async()=>({account:'0'.repeat(24),abilities:['balance'],expiresAt:null});t.after(()=>{fixture.identify=original;});
   const response=await h.call('POST','/api/credentials/'+created.id,{secret:CANARY+'_next'});
-  assert.equal(response.statusCode,409);assert.deepEqual(response.json(),{error:'credential_expiry_confirmation',expiresAt:null});
+  assert.equal(response.statusCode,409);assert.deepEqual(response.json(),{error:'credential_expiry_confirmation',expiresAt:null,expiryKind:'none'});
   assert.deepEqual(h.store.db.prepare('SELECT cipher,nonce,source_id FROM credentials WHERE id=?').get(created.id),before);
   assert.equal((await h.call('POST','/api/credentials/'+created.id,{secret:CANARY,allowNoExpiry:true,requestId:'11111111-1111-4111-8111-111111111111'})).statusCode,400);
   assert.equal((await h.call('POST','/api/credentials/'+created.id,{secret:CANARY,allowNoExpiry:true})).statusCode,200);

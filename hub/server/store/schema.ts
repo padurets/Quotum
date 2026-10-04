@@ -163,6 +163,17 @@ export const STEPS = [
   CREATE INDEX meter_spans_by_end ON meter_spans (to_at);
   CREATE INDEX credentials_by_source ON credentials (source_id, created_at, id);
   `,
+  // 10 — declared account provenance, unknown key expiry and hard quota history bounds.
+  `
+  CREATE TABLE source_identity (
+    source_id TEXT PRIMARY KEY REFERENCES sources(id), kind TEXT NOT NULL CHECK (kind IN ('supplier','declared')),
+    owner_id TEXT REFERENCES users(id), CHECK ((kind='declared' AND owner_id IS NOT NULL) OR (kind='supplier' AND owner_id IS NULL)));
+  INSERT INTO source_identity (source_id,kind,owner_id) SELECT id,'supplier',NULL FROM sources WHERE provider='openrouter';
+  ALTER TABLE credentials ADD COLUMN expiry_kind TEXT NOT NULL DEFAULT 'none' CHECK (expiry_kind IN ('dated','none','unknown'));
+  UPDATE credentials SET expiry_kind='dated' WHERE expires_at IS NOT NULL;
+  ALTER TABLE meter_spans ADD COLUMN hold_until INTEGER;
+  `,
+
 ];
 
 export const SCHEMA_VERSION = STEPS.length;

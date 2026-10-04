@@ -4,10 +4,10 @@ import {drain, ordered, type Preparation} from './prepare.js';
 
 export const MAX_METERS = 32;
 export type MeterSelection = {unit: Unit; ids: [source: string, meter: string][]};
-export type MeterCellExtra = {first?: string; open?: string | null; segment?: number; semantics?: MeterSemantics; steps?: ExceptionalStep[]; topupInternal?: string; topupSteps?: ExceptionalStep[]};
+export type MeterCellExtra = {first?: string; open?: string | null; segment?: number; knownFrom?: number; knownUntil?: number; semantics?: MeterSemantics; steps?: ExceptionalStep[]; topupInternal?: string; topupSteps?: ExceptionalStep[]};
 export type MeterCell = [index: number, value: string, spentInternal: string, spentExceptional: string, coveredMs: number, extra?: MeterCellExtra];
 export type MeterSeriesCells = {source: string; meter: string; kind: MeterKind; unit: Unit; semantics: MeterSemantics | null; cells: MeterCell[]};
-export type MeterHistory = {sourceId: string; meterId: string; kind: MeterKind; unit: Unit; semantics: MeterSemantics | null; start: string | null; end: string | null; spent: string; unlocated: ExceptionalStep[]; topup: string; topupUnlocated: ExceptionalStep[]; coveredMs: number; points: {at: number; value: string; spent:string;segment: number; semantics: MeterSemantics | null; steps: ExceptionalStep[]}[]};
+export type MeterHistory = {sourceId: string; meterId: string; kind: MeterKind; unit: Unit; semantics: MeterSemantics | null; start: string | null; end: string | null; spent: string; unlocated: ExceptionalStep[]; topup: string; topupUnlocated: ExceptionalStep[]; coveredMs: number; points: {at: number; knownFrom?: number; knownUntil?: number; value: string; spent:string;segment: number; semantics: MeterSemantics | null; steps: ExceptionalStep[]}[]};
 export type MeterGroup = {source: string; meter: string; readings: Reading[]; spans: MeterSpan[]; paired?: {readings: Reading[]; spans: MeterSpan[]}};
 
 export function selectionOf(raw: unknown, unit: unknown): MeterSelection {
@@ -25,7 +25,7 @@ const predecessor = (rows: readonly Reading[], at: number) => {
   return undefined;
 };
 const coverage = (spans: readonly MeterSpan[], from: number, to: number) => spans.reduce((sum,s) => sum + Math.max(0,Math.min(to,s.to)-Math.max(from,s.from)),0);
-const fresh = (spans: readonly MeterSpan[], at: number) => spans.some(s => s.from <= at && s.to + s.staleAfterMs >= at);
+const fresh = (spans: readonly MeterSpan[], at: number) => spans.some(s => s.from <= at && at < Math.min(s.to + s.staleAfterMs + 1,s.holdUntil??Infinity));
 
 /** Values are steps, while spending keeps the original observation intervals. */
 export function meterCells(group: MeterGroup, unit: Unit, from: number, to: number, cell: number): MeterSeriesCells[] {
@@ -76,12 +76,34 @@ export function meterCells(group: MeterGroup, unit: Unit, from: number, to: numb
       if (!credits || credits.unit!==unit || !fresh(group.paired.spans,at)) return null;
       return (amount(credits.amount)-amount(r.amount)).toString();
     };
+    const admitted:{from:number;to:number;row:Reading;segment:number}[]=[];
+    if(kind==='cap')for(let i=0;i<group.readings.length;i++) {
+      const row=group.readings[i];if(!matches(row))continue;
+      for(const span of group.spans) {
+        const start=Math.max(row.at,span.from),end=Math.min(group.readings[i+1]?.at??Infinity,span.to+span.staleAfterMs+1,span.holdUntil??Infinity,row.resetAt??Infinity);
+        if(end>start)admitted.push({from:start,to:end,row,segment:span.from});
+      }
+    }
     for (let at=from,index=0;at<to;at+=cell,index++) {
       const end=Math.min(at+cell,to);
+      if(kind==='cap') {
+        const intervals=admitted.filter(s=>s.from<end&&s.to>at);
+        if(!intervals.length)continue;
+        // A coarse cell cannot assert one value across incompatible quota periods.
+        const first=intervals[0];
+        if(intervals.some((s,i)=>!sameCap(s.row,first.row)||i>0&&intervals[i-1].to<s.from))continue;
+        const knownFrom=Math.max(at,first.from),knownUntil=Math.min(end,intervals.at(-1)!.to);
+        const nextSemantics=semanticsOf(first.row),value=plottedAmount(first.row);
+        const extra:MeterCellExtra={knownFrom,knownUntil,segment:first.segment,open:knownFrom===at?value:null};
+        if(JSON.stringify(nextSemantics)!==JSON.stringify(semantics))extra.semantics=nextSemantics;
+        semantics=nextSemantics;
+        series.cells.push([index,value,'0','0',coverage(group.spans,knownFrom,knownUntil),extra]);
+        previousValue=value;continue;
+      }
       const closing=predecessor(group.readings,end-1);
       let last=matches(closing)?closing:undefined;
       if(!last)for(let i=group.readings.length-1;i>=0;i--){const row=group.readings[i];if(row.at<at)break;if(row.at<end&&matches(row)){last=row;break;}}
-      if (!matches(last) || !fresh(group.spans,Math.max(at,last.at)) || kind==='cap' && last.resetAt!==null && last.resetAt<=at) continue;
+      if (!matches(last) || !fresh(group.spans,Math.max(at,last.at))) continue;
       const pointAt=Math.max(at,last.at,group.paired ? predecessor(group.paired.readings,end-1)?.at??at : at);
       const value=valueOf(last,pointAt);
       if (value===null) continue;
@@ -110,6 +132,7 @@ export function meterCells(group: MeterGroup, unit: Unit, from: number, to: numb
   }
   return output;
 }
+const sameCap=(a:Reading,b:Reading)=>a.amount===b.amount&&JSON.stringify(semanticsOf(a))===JSON.stringify(semanticsOf(b));
 const sumSteps = (steps: readonly ExceptionalStep[]) => steps.reduce((sum,s)=>sum+BigInt(s.amount),0n).toString();
 
 /** Whole cells and exceptional intervals compose identically, regardless of tile partition. */
@@ -161,11 +184,11 @@ export function* composeMetersPrepared(chunks: readonly {from:number;meterSeries
       }
       if(at!==previous+cell || (extra.segment??0)!==lastLocal)segment++;
       previous=at;lastLocal=extra.segment??0;
-      points.push({at,value:row[1],spent:(spent-previousSpent).toString(),segment,semantics,steps:extra.steps??[]});yield;
+      points.push({at,...(extra.knownFrom!==undefined&&extra.knownUntil!==undefined?{knownFrom:extra.knownFrom,knownUntil:extra.knownUntil}:{}),value:row[1],spent:(spent-previousSpent).toString(),segment,semantics,steps:extra.steps??[]});yield;
     }
     const first=rows[0][1].row,last=rows.at(-1)![1];
     const start=first[5] && 'open' in first[5] ? first[5].open! : first[5]?.first??first[1];
-    result.push({sourceId:series.source,meterId:series.meter,kind:series.kind,unit:series.unit,semantics:last.semantics,start,end:last.row[1],spent:spent.toString(),unlocated,topup:topup.toString(),topupUnlocated,coveredMs,points});yield;
+    result.push({sourceId:series.source,meterId:series.meter,kind:series.kind,unit:series.unit,semantics:last.semantics,start,end:series.kind==='cap'&&(last.row[5]?.knownUntil??-Infinity)<to?null:last.row[1],spent:spent.toString(),unlocated,topup:topup.toString(),topupUnlocated,coveredMs,points});yield;
   }
   return result;
 }
