@@ -8,7 +8,7 @@ import {DEFAULT_PLAN, isValidPlan, planAt, planChangesAt, planNote, planTotal, t
 import {logoOf} from './logos';
 import {MeterBar} from './Meter';
 import {KeyScaleSettings} from './KeyScaleSettings';
-import {MoneyCard,AccessMark} from './MoneyCard';
+import {MoneyCard,AccessMark,BalanceMark} from './MoneyCard';
 import {cardId, colorOf, isWindowHidden, planOf, weeklyPlanOf, withColor, withHidden, withName, withPlan, withPlanned, withWindowHidden, type Arrange} from '../lib/view';
 import {CARD_COLORS, MIDDLE_STEP, PROVIDERS} from '../lib/providers';
 import {call} from '../lib/http';
@@ -474,7 +474,7 @@ function CardTray({source}: {source: Card}) {
   const sessions = useSessions(source.id);
   const resets = useResetsFor(source.provider);
   const access = useSourceAccess(source.id);
-  return <Tray resets={resets} news={access && <AccessMark id={source.id}/>} current={!!source.resets?.available&&<FreeResets resets={source.resets}/>} sessions={sessions} />;
+  return <Tray resets={resets} news={<><BalanceMark source={source}/>{access&&<AccessMark id={source.id}/>}</>} current={!!source.resets?.available&&<FreeResets resets={source.resets}/>} sessions={sessions} />;
 }
 
 /**
@@ -509,7 +509,7 @@ export const SourceCard = memo(function SourceCard({id, arrange, boardId, person
         {visible.map(w => (
           <Limit key={w.id} w={w} measuredAt={source.successAt} weekly={weekly} />
         ))}
-        {!source.windows.length && !source.meters?.length && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
+        {!source.windows.length && !source.meters && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
         {!!source.windows.length && !visible.length && <AllHidden source={source} arrange={arrange} />}
       </div>
       <CardTray source={source} />

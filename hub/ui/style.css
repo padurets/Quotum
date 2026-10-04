@@ -979,3 +979,7 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
   .connection-status { display: none; }
   .connection-mobile-status { display: block; }
 }
+
+.money-breakdown {display:grid;gap:4px;padding:4px 0;font-size:12px;color:var(--muted);}
+.money-breakdown > div {display:flex;gap:12px;justify-content:space-between;flex-wrap:wrap;}
+.money-body .is-stale {opacity:.6;}

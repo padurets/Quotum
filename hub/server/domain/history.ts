@@ -63,7 +63,7 @@ export type HistorySeries = {
   remainingAtStart: number | null;
   remainingAtEnd: number | null;
   staleAfterMs: number;
-  points: [cellStart: number, remaining: number, segment: number][];
+  points: [cellStart: number, remaining: number, segment: number, validUntil?:number][];
   work: SeriesWork | null;
 };
 export type History = {

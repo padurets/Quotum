@@ -12,7 +12,7 @@ export type BoardTab = 'shares' | 'members';
 
 type Shares = {
   shared: {source: string; provider: string; sharedBy: string; mine: boolean}[];
-  mine: {source: string; provider: string; shared: boolean; devices: string[]}[];
+  mine: {source: string; provider: string; shared: boolean; devices: string[];accountLabel?:string}[];
 };
 type Member = {id: string; name: string; email: string; role: 'owner' | 'member'};
 
@@ -76,7 +76,7 @@ function SharesTab({board}: {board: Board}) {
         {shares.mine.length ? (
           <div className="share-switches">
             {shares.mine.map(s => (
-              <SwitchRow key={s.source} on={s.shared} onChange={on => change(s.source, on)} value={s.devices.join(', ') || undefined}>
+              <SwitchRow key={s.source} on={s.shared} onChange={on => change(s.source, on)} value={s.accountLabel||s.devices.join(', ') || undefined}>
                 <span className="share-name">
                   <Logo provider={s.provider} />
                   {providerName(s.provider)}

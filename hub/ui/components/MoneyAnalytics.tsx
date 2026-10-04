@@ -4,7 +4,7 @@ import {useHistory,useHistoryBegins,useHistoryPlot} from '../lib/history';
 import {usePrefs,setPrefs,setMuted} from '../lib/prefs';
 import {moneySelection} from '../lib/moneySelection';
 import {money} from '../lib/money';
-import {moneyIdentity,moneyTotal,type MeterHistory} from '../lib/moneyView';
+import {moneyIdentity,moneyPointAt,moneyTotal,type MeterHistory} from '../lib/moneyView';
 import {colorOf,columnShown,withColumn,withHidden,HISTORY,FORECAST,type Arrange} from '../lib/view';
 import {frameOf,frameChangesAt,measuredTo} from '../lib/periods';
 import {useTimeRange,setTimeRange,timeRangeKey} from '../lib/timeRange';
@@ -23,6 +23,7 @@ import {usePanning} from '../lib/pan';
 import {composeMetersPrepared} from '../../server/domain/meterHistory';
 
 function nameOf(series:MeterHistory,title:string) {
+  if(series.role)return [title,t(`money.${series.role}`)].join(' — ');
   const detail=series.meterId==='balance'?'':series.semantics?.label??series.meterId;
   return [title,detail,series.kind==='cap'?t('money.cap'):series.meterId==='balance'?'':t('money.usage')].filter(Boolean).join(' — ');
 }
@@ -32,7 +33,7 @@ function SelectionNotice() {
   const removed=result.removed||(prefs.money.removed??0);
   return <>{result.omitted>0&&<p className="drawer-note">{t('money.limit',{count:result.omitted})}</p>}{removed>0&&<p className="drawer-note">{t('money.removed',{count:removed})}</p>}</>;
 }
-const pointAt=(series:MeterHistory,at:number)=>series.points.filter(p=>p.at<=at).at(-1);
+const pointAt=moneyPointAt;
 
 export function MoneyHistory({arrange}:{arrange:Arrange}) {
   const board=useBoardId(),locale=useLocale(),{history,loading,error}=useHistory(),prefs=usePrefs(),sources=useNamed(arrange.view.names);
@@ -49,9 +50,10 @@ export function MoneyHistory({arrange}:{arrange:Arrange}) {
     for(const source of plotted) {
       if(source.unit!==unit)continue;
       let entry=source;
+      if(prefs.money.view==='spending'&&source.spent===null)continue;
       if(prefs.money.view==='spending'&&source.kind!=='cap') {
         let cumulative=0n;const points:MeterHistory['points']=[];
-        for(const point of source.points){cumulative+=BigInt(point.spent);points.push({...point,value:cumulative.toString()});yield;}
+        for(const point of source.points){cumulative+=BigInt(point.spent!);points.push({...point,value:cumulative.toString()});yield;}
         entry={...source,start:'0',end:source.spent,points};
       }
       entries.push(entry);
@@ -63,8 +65,8 @@ export function MoneyHistory({arrange}:{arrange:Arrange}) {
     for(const series of visible) {
       const card=sources.find(c=>c.id===series.sourceId),scaled=(value:string)=>Number(BigInt(value)-origin)/1_000_000;
       const points:Line['points']=[];
-      for(const point of series.points){points.push([point.at,scaled(point.value),point.segment]);yield;}
-      lines.push({sourceId:series.sourceId,windowId:series.meterId,key:moneyIdentity(series),name:nameOf(series,card?.title??series.sourceId),provider:card?.provider??'',kind:'other',label:series.semantics?.label??null,minutes:null,color:colorOf(arrange.view,series.sourceId,card?.provider??''),dash:series.kind==='cap'?'7 5':'',current:scaled(series.end??'0'),consumed:0,coveredMs:series.coveredMs,remainingAtStart:series.start===null?null:scaled(series.start),remainingAtEnd:series.end===null?null:scaled(series.end),staleAfterMs:86_400_000,points,work:null});yield;
+      for(const point of series.points){points.push([point.at,scaled(point.value),point.segment,point.validUntil]);yield;}
+      lines.push({sourceId:series.sourceId,windowId:series.meterId,key:moneyIdentity(series),name:nameOf(series,card?.title??series.sourceId),provider:card?.provider??'',kind:'other',label:series.semantics?.label??null,minutes:null,color:colorOf(arrange.view,series.sourceId,card?.provider??''),dash:series.kind==='cap'?'7 5':'',current:scaled(series.end??'0'),consumed:0,coveredMs:series.coveredMs,remainingAtStart:series.start===null?null:scaled(series.start),remainingAtEnd:series.end===null?null:scaled(series.end),pointMode:series.pointMode,staleAfterMs:86_400_000,points,work:null});yield;
     }
     return {entries,lines,origin,span,pad,strip};
   },[history,strip,prefs.muted,unit,prefs.money.view,sources,arrange.view,locale],`${board}:${unit}`);
@@ -74,7 +76,7 @@ export function MoneyHistory({arrange}:{arrange:Arrange}) {
     const origin=model?.origin??0n,span=model?.span??1_000_000n,pad=model?.pad??1n;
     const min=-Number(pad)/1_000_000,max=Number(span+pad)/1_000_000;
     return {min,max,ticks:Array.from({length:5},(_,i)=>min+(max-min)*i/4),label:t('money.value')+' ('+unit+')',
-      rawValue:(key:string,at:number)=>{const series=entries.find(s=>moneyIdentity(s)===key);return series&&pointAt(series,at)?.value||'0';},
+      rawValue:(key:string,at:number)=>{const series=entries.find(s=>moneyIdentity(s)===key);return series&&pointAt(series,at)?.value;},
       formatTick:(value:number)=>money((origin+BigInt(Math.round(value*1_000_000))).toString(),unit).slice(0,-unit.length-1),
       formatValue:(key:string,_value:number,at:number)=>{const series=entries.find(s=>moneyIdentity(s)===key);return money(series&&pointAt(series,at)?.value,unit,true);},
       detail:(key:string,at:number)=>{
@@ -90,9 +92,10 @@ export function MoneyHistory({arrange}:{arrange:Arrange}) {
       {arrange.owner&&<HideRow onHide={()=>arrange.update(v=>({...v,hidden:[...v.hidden,HISTORY]}))}>{t('widget.hide')}</HideRow>}
     </Popover></div>
     <SelectionNotice/>
+    {prefs.money.view==='spending'&&original.some(s=>s.spent===null)&&<p className="drawer-note" title={t('money.noSpending')}>{t('money.unsupportedSpending',{count:new Set(original.filter(s=>s.spent===null).map(s=>s.sourceId)).size})}</p>}
     {error&&<p className="form-error">{t('money.historyLimit')}</p>}
-    <Chart lines={lines} axis={axis} stepped from={frame.from} now={strip?now:measured} to={frame.to} cellMs={strip?.cell??history?.cellMs??60_000} strip={model?.strip??null} prepared={prepared.ready&&(panning!==null||answered)} empty={!lines.length?t('money.unknown'):null} plot={plot} onBase={onBase} onSelect={setTimeRange} navigation={navigation} live={frame.live} clock={now} modelContext={JSON.stringify([board,unit])}/>
-    <div className="legend">{original.map(s=>{const key=moneyIdentity(s),card=sources.find(c=>c.id===s.sourceId),total=prefs.money.view==='spending'&&s.kind!=='cap'&&history?moneyTotal(s,history.since,history.to):null,value=total?total.amount:s.end;return <button type="button" key={key} className="legend-item" aria-pressed={!prefs.muted[key]} onClick={()=>setMuted(key,!prefs.muted[key])}><svg width="18" height="6" aria-hidden="true"><line x1="1" x2="17" y1="3" y2="3" stroke={colorOf(arrange.view,s.sourceId,card?.provider??'')} strokeWidth="2.5" strokeDasharray={s.kind==='cap'?'7 5':undefined}/></svg><span>{nameOf(s,card?.title??s.sourceId)}</span><b title={total?.unknown?t('money.unknown'):total?.partial?t('money.partial'):undefined}>{money(value,s.unit)}{total?.partial&&<small className="money-partial">*</small>}</b></button>;})}</div>
+    <Chart lines={lines} axis={axis} stepped from={frame.from} now={strip?now:measured} to={frame.to} cellMs={strip?.cell??history?.cellMs??60_000} strip={model?.strip??null} prepared={prepared.ready&&(panning!==null||answered)} empty={!lines.length?prefs.money.view==='spending'&&original.some(s=>s.spent===null)?t('money.noSpending'):t('money.unknown'):null} plot={plot} onBase={onBase} onSelect={setTimeRange} navigation={navigation} live={frame.live} clock={now} modelContext={JSON.stringify([board,unit])}/>
+    <div className="legend">{original.map(s=>{const key=moneyIdentity(s),card=sources.find(c=>c.id===s.sourceId),total=prefs.money.view==='spending'&&s.kind!=='cap'&&history?moneyTotal(s,history.since,history.to):null,value=total?total.amount:s.end;return <button type="button" key={key} className="legend-item" aria-pressed={!prefs.muted[key]} onClick={()=>setMuted(key,!prefs.muted[key])}><svg width="18" height="6" aria-hidden="true"><line x1="1" x2="17" y1="3" y2="3" stroke={colorOf(arrange.view,s.sourceId,card?.provider??'')} strokeWidth="2.5" strokeDasharray={s.kind==='cap'?'7 5':undefined}/></svg><span>{nameOf(s,card?.title??s.sourceId)}</span><b title={total?.unknown?t('money.unknown'):total?.partial?t('money.partial'):undefined}>{s.spent===null&&prefs.money.view==='spending'?t('money.unavailable'):money(value,s.unit)}{total?.partial&&s.spent!==null&&<small className="money-partial">*</small>}</b></button>;})}</div>
   </section>;
 }
 export function MoneyTable({arrange}:{arrange:Arrange}) {
@@ -107,6 +110,7 @@ export function MoneyTable({arrange}:{arrange:Arrange}) {
     {error&&<p className="form-error">{t('money.historyLimit')}</p>}
     <div className="table-wrap"><table className="monetary-table"><thead><tr><th>{t('money.key')}</th>{columns.map(([id,label])=><th key={id}>{t(label)}</th>)}</tr></thead><tbody>{history?.meterSeries?.filter(s=>s.unit===prefs.money.unit).map(s=><tr key={moneyIdentity(s)}><td>{nameOf(s,sources.find(c=>c.id===s.sourceId)?.title??s.sourceId)}</td>{columns.map(([id])=>{
       if(id==='value')return <td key={id} title={money(s.end,s.unit,true)}>{money(s.end,s.unit)}</td>;
+      if(id==='spending'&&s.spent===null||id==='topup'&&s.topup===null)return <td key={id} title={t('money.noSpending')}>{t('money.unavailable')}</td>;
       if(id==='spending'&&s.kind==='cap'||id==='topup'&&s.kind!=='balance')return <td key={id}>—</td>;
       const topup=id==='topup',total=moneyTotal(s,history.since,history.to,topup),steps=topup?s.topupUnlocated:s.unlocated;
       const title=[total.unknown?t('money.unknown'):total.partial?t('money.partial'):'',...steps.map(p=>`${money(p.amount,s.unit,true)}\n${stamp(p.from)} — ${stamp(p.to)}`)].filter(Boolean).join('\n');

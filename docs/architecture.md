@@ -559,6 +559,25 @@ Invalid money leaves stay distinct from null. The ledger retains the last confir
 span endpoint as evidence through archival and retention; reappearance uses that
 heartbeat time as its spending anchor.
 
+DeepSeek reports totals, granted credits and topped-up balances separately for CNY
+and USD. Stable catalogue descriptors identify total and component roles. Its
+balance-only policy makes spending and top-up events unavailable at the ledger,
+packed-cell, composition and UI boundaries; balance changes never become estimates.
+`balanceStatus` carries the supplier's availability boolean, partial issues and its own
+observation/freshness. Accepted empty or partial replies retain missing numerical
+values as stale and persist an exclusive interruption on their observation spans.
+A same-value return starts a new span without inventing a changed reading. Accepted
+status time is the watermark even when numerical success is older.
+
+Observation-mode money cells retain their actual sample offset, segment and exclusive
+validity, bounded by their fixed grid cell and span interruption/TTL. Composition can
+emit a confirmed opening prefix before an ordinary change in the same span, while
+new or recovered spans have no prefix. Packing preserves these fields and replaces
+the whole selected interval, including an empty response. The existing chart uses
+actual observation anchors and raw pointer time for these series. A deadline endpoint
+is geometry, never a measurement. Subscription and OpenRouter series retain their
+cell midpoint and snapped readout. No value carries into an unconfirmed next cell.
+
 Money history uses the same bounded tiles, cache and page loader. Its exact strings,
 historical cap semantics and original spending intervals stay separate from the window
 Float64 codec. A logical balance selection internally reads its two counters. Axes and
@@ -596,7 +615,14 @@ tests inject their own adapter. Each credential belongs to its person and can be
 created, replaced, listed or removed only by that person's session. Create and replacement
 identify the account outside SQLite, then commit encrypted access and its verified
 source holding atomically. A replacement cannot change the account. No-expiry access
-requires explicit consent. Creation retries can use an owner-scoped UUID for 24 hours;
+requires explicit consent. DeepSeek has declared identity: each owner creates an
+immutable account UUID and private name, independent of keys. An owner/provider-scoped
+pseudonym determines the source. Same-account replacement requires an attestation;
+a different account needs a new connection. Removing the last key releases the holding
+but preserves identity and retained history for explicit reconnection. A persisted
+last-binding deletion trigger advances its lifecycle revision. Unknown key expiry is
+stored separately from no expiry and requires its own acknowledgement. Owner account
+pagination and sharing labels never enter shared source projections. Creation retries can use an owner-scoped UUID for 24 hours;
 a deletion leaves its replay tombstone. Deleting the last own access releases that
 person's holding, preserving others and history. Missing or broken access preserves
 last measurements and a neutral shared failure, with details only for its owner. Mutations require
@@ -611,7 +637,11 @@ followed by one LF or CRLF, from a regular file whose real path is outside the d
 directory. The two inputs are exclusive. HKDF-SHA256 derives separate encryption and
 check keys. AES-256-GCM binds each credential to its id, owner and provider, using a
 fresh 12-byte nonce per write. SQLite keeps only ciphertext and its tag, nonce and key
-generation. A full key check value in `meta` identifies the database's KEK; its first
+generation. Asynchronous credential operations capture and recheck the full current
+key check value and monotonic epoch inside the commit transaction. Real rotation,
+reset and replacement of an unused key advance the epoch, including empty-account
+resets and an A→B→A sequence; an old loaded key cannot submit new work.
+A full key check value in `meta` identifies the database's KEK; its first
 eight bytes are the diagnostic fingerprint. The KEK is never written to SQLite or its
 data directory. Input variables are removed after capture. The entry point protects
 Node reports and sets a private file mode before loading configuration or other hub

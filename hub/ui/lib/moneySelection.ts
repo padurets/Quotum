@@ -1,3 +1,4 @@
+import {balanceDescriptor} from '../../server/domain/providers';
 import {isUnit} from '../../server/domain/amount';
 import {MAX_METERS,selectionOf,type MeterSelection} from '../../server/domain/meterHistory';
 import type {Card} from './types';
@@ -18,7 +19,7 @@ export function moneySelection(cards:readonly Card[],hidden:readonly string[],se
   const shown=cards.filter(c=>!hidden.includes('source:'+c.id)),visible=new Set(shown.map(c=>c.id));
   const explicit=settings.selected[settings.unit];
   const ids=explicit??shown.flatMap(card=>{
-    const balance=card.meters?.find(m=>m.kind==='balance'&&m.unit===settings.unit);
+    const balance=card.meters?.find(m=>m.kind==='balance'&&m.unit===settings.unit&&balanceDescriptor(card.provider,m.id)?.role==='total');
     return balance?[[card.id,balance.id] as [string,string]]:[];
   });
   const admitted=ids.filter(([source])=>visible.has(source));

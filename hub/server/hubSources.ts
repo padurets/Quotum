@@ -1,4 +1,6 @@
 import {ConnectorStatus} from './connectors/transport.js';
+import {balanceStatusOf,type MeterMeasurement} from './domain/meters.js';
+import type {SourceState} from './domain/quota.js';
 import {providerOf} from './domain/providers.js';
 import type {Refresh,RefreshRequest} from './domain/refresh.js';
 import {Credentials,permanentAccess} from './secrets/credentials.js';
@@ -8,6 +10,14 @@ import {tell,type Touches} from './touches.js';
 import {realClock,type Clock} from './events.js';
 
 type Job={generation:number;next:number|null;last:number|null;retryAt:number;interval:number;failures:number;controller:AbortController|null;request:RefreshRequest|null;requestedAt:number|null};
+
+export function measurementFingerprint(state:SourceState,measurement?:MeterMeasurement):string {
+  if(!state.balanceStatus&&!measurement?.balanceStatus)return JSON.stringify((measurement?.meters??state.meters)?.map(m=>[m.id,m.amount,m.limit,m.resetAt]));
+  const current=new Map((state.meters??[]).map(m=>[m.id,{...m,stale:measurement?true:m.stale}]));
+  for(const meter of measurement?.meters??[])current.set(meter.id,{...meter,stale:false});
+  const status=measurement?balanceStatusOf(state.provider,state.meters??[],measurement):state.balanceStatus;
+  return JSON.stringify({meters:[...current.values()].sort((a,b)=>a.id.localeCompare(b.id)).map(m=>[m.id,m.unit,m.amount,m.limit,m.resetAt,m.stale]),status:status?[status.isAvailable,status.partial,status.issues]:null});
+}
 
 /** Hub authority has one job per source and never claims a device's duty. */
 export class HubSources {
@@ -51,16 +61,16 @@ export class HubSources {
     if(job.request){job.request.status='waiting';job.request.dispatchAt=at;}
     this.touch(source);
     const valid=()=>this.running&&this.jobs.get(source)===job&&job.generation===generation&&!controller.signal.aborted;
-    const before=JSON.stringify(this.store.state(source).meters?.map(m=>[m.id,m.amount,m.limit,m.resetAt]));
+    const previous=this.store.state(source),before=measurementFingerprint(previous);
     try {
       // The connector bounds its round and may retain successful account data when
       // inventory runs out of time. This signal cancels the source lifecycle only.
       const result=await this.credentials.measure(source,controller.signal,valid,result=>{
-        const after=JSON.stringify(result.measurement?.meters.map(m=>[m.id,m.amount,m.limit,m.resetAt]));
+        const after=measurementFingerprint(previous,result.measurement);
         return this.store.measureInterval(source)??(before===after?Math.min(job.interval*2,900_000):120_000);
       });
       if(!valid())return;if(!result)throw new SecretError('connector_timeout');
-      const after=JSON.stringify(result.measurement?.meters.map(m=>[m.id,m.amount,m.limit,m.resetAt]));
+      const after=measurementFingerprint(this.store.state(source));
       job.failures=0;job.interval=this.store.measureInterval(source)??(before===after?Math.min(job.interval*2,900_000):120_000);
       // Freshness belongs to the accepted observation; it is never extended after failure.
       job.retryAt=this.clock.now()+(result.retryAfterMs??0);

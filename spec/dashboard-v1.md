@@ -95,7 +95,7 @@ change as it was.
 | `refresh` | `{id, refresh}` | A source's refresh availability, request or cooldown changed. |
 | `forecast` | `{id, forecast}` | Where the recent pace of the source's weekly windows leads, as the hub works it out, changed. |
 | `mine` | `{sources: string[]}` | Which sources of the board the reader's devices measure changed. |
-| `sourceAccess` | `{<source id>: {error, expiresAt, canRefresh, credentialIds}}` | The reader's own connector access changed, cleared when the holding or board access ends. |
+| `sourceAccess` | `{<source id>: {error, expiresAt, expiryKind, canRefresh, credentialIds}}` | The reader's own connector access changed, cleared when the holding or board access ends. |
 | `boards` | `{boards}` | The reader's boards changed: made, deleted, renamed, joined, left. |
 | `history` | `{sources: string[], since}` | History of these sources changed from `since`: a measurement or credited agent work (see [Reading history](#reading-history)); with `since` 0, all of the board's history reads otherwise: whose agents' work it shows, or under which names, changed (a card hidden or shown, someone joining or leaving, a project or a machine renamed). |
 | `resets` | `{resets, trackers, past}` | The reset trackers' news changed. |
@@ -126,7 +126,10 @@ is when the board's history begins as of the snapshot; `GET /api/history` tells 
 
 `providers` is the public code-owned catalogue: each entry has `id`, `name`, `color`,
 `logoAsset`, `order`, `measuredBy` (`client` or `hub`), `meterKinds`, `resets`, and either
-`clientId` or `connectorId`. It contains no credentials or user addresses. Readers use
+`clientId` or `connectorId`. Monetary entries additionally declare `spending` and
+`topups` (`counter` or `unavailable`) and `balances` descriptors with stable `meterId`,
+`unit` and `role` (`total`, `granted` or `toppedUp`) under `monetary`.
+It contains no credentials or user addresses. Readers use
 an unknown id itself as its name and a neutral icon and colour; an unknown capability
 does not imply quota notifications. Only providers with `window` capability contribute
 to the percentage attention state, including a client source awaiting its first window.
@@ -536,7 +539,7 @@ so a returning key's spending interval begins at that observation.
 on the board. `balance` resolves its internal counter pair without spending extra
 selection slots. Cache keys include the selection. Without these fields the existing
 window protocol is unchanged. Each chunk may carry `meterSeries`, whose entries are
-`{source, meter, kind, unit, semantics, cells}`. Semantics is `{limit, resetAt, minutes,
+`{source, meter, kind, unit, semantics, cells, accounting?, role?, pointMode?}`. Semantics is `{limit, resetAt, minutes,
 scope, label}` as it actually held before the chunk, or null.
 
 A meter cell is `[index, value, spentInternal, spentExceptional, coveredMs, extra?]`.
@@ -553,9 +556,54 @@ Extra may give `first`, `open`
 `steps`, `topupInternal` and `topupSteps`. Amounts remain strings throughout packing.
 Known cell spending and original steps compose once over the effective whole-cell
 range. OpenRouter balance spending comes from usage, and top-ups from credits.
+DeepSeek series have `accounting: {spending: "unavailable", topups: "unavailable"}`.
+Their two spending cell slots are null, exceptional/top-up steps are absent, and
+composed `spent`, `topup` and per-point `spent` are null. They keep numeric balance
+values, coverage and their catalogue role. Missing capability never becomes zero.
+The UI omits unsupported spending lines and explains unavailable table quantities.
+
+DeepSeek `pointMode: "observation"` cells additionally use `pointOffsetMs` (omitted
+means zero) and an exclusive absolute `validUntil` (omitted means fixed grid cell end).
+The actual point time is grid time plus offset. Normalized observation points always
+materialize a deadline. An accepted missing currency closes its availability at that
+observation, and a same-value recovery starts another segment at its actual time.
+An ordinary change in a continuous span can emit a separate confirmed opening prefix
+from the grid edge to the primary point; a first or recovered sample cannot. Deadlines
+never exceed the fixed grid cell end, so later heartbeats cannot extend finished cells.
+The existing chart draws these actual anchors and reads raw pointer time; deadline
+endpoints are not samples. OpenRouter and percentage series retain cell placement.
+Replacing a selected interval with empty series removes its old packed rows too.
+
+DeepSeek cards may carry `balanceStatus: {isAvailable, at, staleAfterMs, partial, issues}`.
+Issues are only `currency_invalid`, `currency_unknown`, `currency_duplicate`,
+`currency_missing` and `empty_balances`. The boolean is a supplier funds status, separate
+from authentication. Each currency's three exact strings are an atomic tuple; partial
+updates retain absent tuples as stale. Valid empty reads clear current request errors
+without renewing numerical freshness. `balanceStatus.at` is the accepted watermark.
+Currency totals never include their components again, and units never share an axis.
+Connecting a source preserves `unit: null` subscription analytics until currency selection.
+
 A frame that cannot fit losslessly in the history budget returns `413 history_limit`.
 
-Connections use owner-only `POST /api/credentials` with `{provider, secret,
+DeepSeek connections use owner-only `POST /api/credentials` with
+`{provider: "deepseek", secret, account: {kind: "new", name} | {kind: "existing", id},
+confirmSameAccount?, allowUnknownExpiry?, requestId?}`. Existing account selection
+requires `confirmSameAccount: true` before provider work. Replacement accepts only
+`{secret, confirmSameAccount: true, allowUnknownExpiry?}`. Its API cannot verify the
+owner's identity declaration. Account names are normalized private labels, unique
+per owner/provider, independent of immutable UUIDs and keys. A new account creates a
+new source; last-key removal preserves identity and retained history for reconnection.
+`GET /api/source-accounts?provider=deepseek&limit=1..50&after=<UUID>` returns owner-only
+`{accounts: [{id, provider, name, sourceId, connected}], next}` in UUID order.
+`expiryKind: "unknown"` is distinct from `none` and `at`. Saving unknown expiry requires
+`allowUnknownExpiry: true`; a missing consent returns
+`409 {error: "credential_expiry_confirmation", expiresAt: null, expiryKind: "unknown"}`.
+The owner credential DTO includes `accountId`, `accountName` and `expiryKind`.
+Creation replay binds owner, provider and account selector; changed targets conflict.
+A last-binding withdrawal revision and current encryption-key epoch invalidate pending
+creates, replacement and polls, including resets with no credentials.
+
+OpenRouter connections use owner-only `POST /api/credentials` with `{provider, secret,
 allowNoExpiry?, requestId?}` and replacement with `{secret, allowNoExpiry?}`. An access
 without expiry requires explicit `allowNoExpiry: true`; otherwise the hub returns
 `409 credential_expiry_confirmation` without writing. Replacement keeps owner, provider
@@ -572,14 +620,16 @@ the existing interval choices. Permanent access failures disable automatic retri
 until replacement, an available explicit refresh or restart.
 
 The reader-only `sourceAccess` map contains only their own bound credential ids,
-expiry and safe access error, plus whether the source can refresh. It never enters the
+`expiryKind`, expiry and safe access error, plus whether the source can refresh. It never enters the
 shared board cache. Other readers receive no entries. Shared card access failures are
 neutral `unmeasured`; management keys, hints, encrypted bytes, raw creator ids and raw key hashes
-are absent from every shared projection. Credential details remain owner-only.
+are absent from every shared projection. Credential details remain owner-only. The sharing picker's `mine` rows may include
+`accountLabel` for the reader's own declared accounts, joined through their holding;
+`shared` rows and public card names never inherit that label.
 
 ## Privacy
 
-Connector credential records, hints, abilities and key fingerprints are never part of
+Declared account IDs/names, connector credential records, hints, abilities and key fingerprints are never part of
 a board's state. A source failure whose code begins with `secret_key_` or `credential_`
 is projected as `unmeasured`, for its owner too; details remain in the owner's
 credential API. Snapshot, source delta, long poll and desktop attention use this same

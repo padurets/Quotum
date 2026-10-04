@@ -315,11 +315,12 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
           sharedBy: s.sharedBy ? (names.get(s.sharedBy) ?? '') : '',
           mine: s.holders.includes(access.user.id),
         })),
-        // With the reader's devices that measure each: two accounts of one provider are told apart by them.
+        // Only the holder sees the private account label used to distinguish their sources.
         mine: store.held(access.user.id).map(s => ({
           source: s.id,
           provider: s.provider,
           shared: ids.has(s.id),
+          ...(()=>{const name=store.db.prepare('SELECT name FROM declared_accounts WHERE user_id=? AND provider=? AND source_id=?').get(access.user.id,s.provider,s.id)?.name;return typeof name==='string'?{accountLabel:name}:{};})(),
           devices: store
             .deviceSources(access.user.id)
             .filter(d => d.source === s.id)

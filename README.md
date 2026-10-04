@@ -9,8 +9,8 @@
 
 Quotum shows how much of your coding-agent subscriptions is left — Claude Code, Codex
 and Antigravity — on every machine you work on, in one place: for you alone or for a
-whole team. It also shows OpenRouter balances and API-key caps. You host it yourself;
-the agent never reads provider tokens, and the hub encrypts the management key you
+whole team. It also shows OpenRouter balances and API-key caps, and DeepSeek balances. You host it yourself;
+the agent never reads provider tokens, and the hub encrypts the dedicated provider key you
 explicitly connect.
 
 ![The Quotum dashboard](docs/dashboard.png)
@@ -310,6 +310,30 @@ licences) and as a bare binary (`quotum-cli-<platform>`, what the installers and
 [build provenance](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations)
 (`gh attestation verify <file> -R padurets/quotum`). **From source:**
 `cd agent && cargo build --release` (Rust 1.85 or newer) gives `target/release/quotum`.
+
+## Connecting DeepSeek
+
+In **My connections**, choose **Connect → DeepSeek** and enter a dedicated API key
+from [DeepSeek key settings](https://platform.deepseek.com/api_keys). Name the account
+privately, or explicitly reconnect an existing one. DeepSeek does not return an account
+ID: you declare the identity, and replacing a key requires confirmation that it belongs
+to the same account. Removing access preserves that identity and retained history.
+Another account needs a new connection. An ordinary API key may authorize model calls;
+Quotum uses only the fixed [balance read](https://api-docs.deepseek.com/api/get-user-balance/).
+Key expiry is unknown and saving it requires an explicit acknowledgement. Server and
+desktop modes use the same encrypted credential protection described in [SECURITY.md](SECURITY.md).
+
+The card and compact panel show each available currency separately, with total,
+granted and topped-up balances. Choose **CNY** or **USD** explicitly in analytics;
+connecting an account keeps your existing subscription view. Totals are selected by
+default; components can be added in the chart's settings. The total is not added to its
+components, and currencies are never converted or summed. Spending and top-up events
+are **unavailable** because the endpoint has no spending counter; a balance change
+cannot establish spending. An omitted currency keeps its last value as stale and
+breaks its history until a valid observation returns. A failed request preserves the
+last valid reading. The supplier's insufficient-funds notice is separate from rejected
+access. Saved access and private account names remain owner-only on shared boards.
+Only holders may refresh the source.
 
 ## Connecting OpenRouter
 

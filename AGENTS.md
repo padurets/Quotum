@@ -106,7 +106,10 @@ and platform smoke checks still apply.
   serialized as exact decimal strings. Counter spending, top-ups and cap remaining
   are separate from percentage windows; they never enter quota forecasts or native
   quota notifications. Historical cap semantics and uncertain spending intervals
-  survive history packing and retention.
+  survive history packing and retention. Catalogue balance roles and accounting
+  capabilities are authoritative: balance-only sources never infer spending or top-up
+  events. Accepted missing observations preserve values but end availability; actual
+  sample anchors and exclusive deadlines survive packing, drawing and readout.
 - **The protocol is a spec.** A change to what the agent sends or the hub answers goes
   into `spec/ingest-v1.md` in the same commit, including its Privacy section; a change to
   the events the hub tells its dashboard, into `spec/dashboard-v1.md`.

@@ -1,3 +1,6 @@
+import {monetaryOf,balanceDescriptor} from '../../server/domain/providers';
+import type {Card} from './types';
+import {t} from '../i18n';
 import type {Meter,KeyPart} from '../../server/domain/meters';
 import type {SourceAccess} from '../../server/secrets/credentials';
 import {countdownChangesAt} from './format';
@@ -46,3 +49,13 @@ export function accessChangesAt(access:Access|null|undefined,now:number):number|
   const warning=at-ACCESS_WARNING_MS;
   return warning>now?warning:Math.min(at,countdownChangesAt(at,now)??at);
 }
+
+export function balanceGroups(source:Pick<Card,'provider'|'meters'>) {
+  return (monetaryOf(source.provider)?.balances??[]).filter(d=>d.role==='total').flatMap(d=>{
+    const total=source.meters?.find(m=>m.id===d.meterId&&m.unit===d.unit);
+    if(!total)return [];
+    const components=(source.meters??[]).flatMap(m=>{const role=balanceDescriptor(source.provider,m.id)?.role;return m.unit===d.unit&&role&&role!=='total'?[{meter:m,role}]:[];});
+    return [{total,components}];
+  });
+}
+export const balanceRoleLabel=(role:'total'|'granted'|'toppedUp')=>t(`money.${role}`);

@@ -34,9 +34,9 @@ const safeName=(value:unknown,secret:Buffer):string|null=>{
 const base=(id:string,amount:string,at:number):Meter=>({id,kind:'counter',unit:'USD',amount,at,staleAfterMs:204_000,stale:false,limit:null,resetAt:null,minutes:null,scope:null,label:null});
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export function openRouter(transport=new ConnectorTransport({host:'openrouter.ai',port:443,operations:{key:{path:'/api/v1/key'},credits:{path:'/api/v1/credits'},workspaces:{path:'/api/v1/workspaces',query:['offset','limit']},keys:{path:'/api/v1/keys',query:['offset','workspace_id','include_disabled']}}},{decode:decodeOpenRouter}),now=Date.now):Connector {
+export function openRouter(transport=new ConnectorTransport({host:'openrouter.ai',port:443,operations:{key:{path:'/api/v1/key'},credits:{path:'/api/v1/credits'},workspaces:{path:'/api/v1/workspaces',query:['offset','limit']},keys:{path:'/api/v1/keys',query:['offset','workspace_id','include_disabled']}}},{decode:decodeOpenRouter}),now=Date.now):Connector<ConnectorIdentity & {identityKind:'provider'}> {
   const abilities=['balance','usage','manage_keys'] as const;
-  const identity=async(secret:Buffer,signal?:AbortSignal):Promise<ConnectorIdentity>=>{
+  const identity=async(secret:Buffer,signal?:AbortSignal):Promise<ConnectorIdentity & {identityKind:'provider'}>=>{
     const key=data(await transport.send('key',secret,{},signal));
     if(key.is_management_key!==true)throw new SecretError('credential_wrong_type');
     const expiresAt=expiry(key.expires_at);
@@ -46,9 +46,9 @@ export function openRouter(transport=new ConnectorTransport({host:'openrouter.ai
     const account=createHash('sha256').update('quotum/account/v1\nopenrouter\n'+id.trim().toLowerCase()).digest('hex').slice(0,24);
     const credits=data(await transport.send('credits',secret,{},signal)),at=now();
     const measurement:MeterMeasurement={type:'meters',observedAt:at,staleAfterMs:204_000,meters:[base('credits',money(credits.total_credits),at),base('usage',money(credits.total_usage),at)],keys:[],inventoryComplete:false,inventoryError:'connector_inventory_partial'};
-    return {account,abilities:[...abilities],expiresAt,measurement};
+    return {identityKind:'provider',account,abilities:[...abilities],expiresAt,measurement};
   };
-  return {id:'openrouter',secretFormat:value=>/^sk-or-v1-[0-9a-f]{64}$/.test(value),abilities,transport,map:()=>null,
+  return {id:'openrouter',identityKind:'provider',secretFormat:value=>/^sk-or-v1-[0-9a-f]{64}$/.test(value),abilities,transport,map:()=>null,
     async identify(secret,signal){
       try{return await identity(secret,signal);}catch(error){
         if(error instanceof ConnectorStatus&&error.status===401)throw new SecretError('credential_revoked');

@@ -3,7 +3,8 @@ import {useBoardId,type Named} from '../lib/board';
 import {ApiError,call} from '../lib/http';
 import {archivedKeyGroups,moneySelection} from '../lib/moneySelection';
 import {usePrefs,setPrefs} from '../lib/prefs';
-import {keyName} from '../lib/money';
+import {balanceDescriptor,monetaryOf} from '../../server/domain/providers';
+import {balanceRoleLabel,keyName} from '../lib/money';
 import type {MeterHistory} from '../lib/moneyView';
 import {MAX_METERS} from '../../server/domain/meterHistory';
 import {t} from '../i18n';
@@ -60,7 +61,7 @@ export function MoneySettings({sources,hidden,series}:{sources:readonly Named[];
   };
   const membershipReady=inCard||selectedKeys==='[]'||membership?.context===membershipContext;
   const current=new Set(inCard?source?.keys?.map(k=>k.id):membership?.context===membershipContext?membership.keys:[]);
-  const archived=source&&membershipReady?archivedKeyGroups(source.id,selected,current,series):[];
+  const archived=source&&membershipReady?archivedKeyGroups(source.id,selected.filter(([,meter])=>!balanceDescriptor(source.provider,meter)),current,series):[];
   const free=KEYS_PER_PAGE-(page?.keys.length??0),extraPages=Math.ceil(Math.max(0,archived.length-free)/KEYS_PER_PAGE);
   const archivalIndex=Math.min(archivePage,extraPages);
   const archivedStart=archivalIndex?free+(archivalIndex-1)*KEYS_PER_PAGE:0;
@@ -68,13 +69,14 @@ export function MoneySettings({sources,hidden,series}:{sources:readonly Named[];
   const total=(page?.total??source?.keysCount??0)+archived.length;
   const busy=!inCard&&loading;
   useEffect(()=>{if(archivePage>extraPages)setArchivePage(extraPages);},[archivePage,extraPages]);
+  const balances=(s:Named)=>(monetaryOf(s.provider)?.balances??[]).filter(d=>d.unit===unit).map(d=>row(s.id,d.meterId,balanceRoleLabel(d.role),!s.meters?.some(m=>m.id===d.meterId)));
   return <>
     <div className="popover-title popover-section">{t('source.show')}</div>
     <p className="popover-note">{selected.length} / {MAX_METERS}</p>
     {source?<>
       {accounts.length>1&&<button className="popover-row" onClick={()=>setSource(null)}><span>← {t('money.accounts')}</span></button>}
       <div className="popover-title">{source.title}</div>
-      {row(source.id,'balance',t('money.balance'))}
+      {balances(source)}
       <ErrorLine error={error}/>
       {changed&&<p className="popover-note">{t('money.changed')}</p>}
       {(page?.inventory??source.inventory)?.complete===false&&<p className="popover-note">{t('money.inventoryPartial')}</p>}
@@ -100,9 +102,9 @@ export function MoneySettings({sources,hidden,series}:{sources:readonly Named[];
     </>:<>
       <div>{accounts.map(s=><div key={s.id} className="popover-section">
         <div className="popover-title">{s.title}</div>
-        {row(s.id,'balance',t('money.balance'))}
+        {balances(s)}
         {!!s.keysCount&&<button className="popover-row" onClick={()=>choose(s.id)}><span>{t('money.keySeries',{count:s.keysCount})}</span><b>›</b></button>}
-        {!s.keysCount&&selected.some(([id,m])=>id===s.id&&m!=='balance')&&<button className="popover-row" onClick={()=>choose(s.id)}><span>{t('money.selectedDetails')}</span><b>›</b></button>}
+        {!s.keysCount&&selected.some(([id,m])=>id===s.id&&!balanceDescriptor(s.provider,m))&&<button className="popover-row" onClick={()=>choose(s.id)}><span>{t('money.selectedDetails')}</span><b>›</b></button>}
       </div>)}</div>
     </>}
     <div className="popover-section"><button className="popover-row" onClick={()=>{const next={...prefs.money.selected};delete next[unit];setPrefs({money:{...prefs.money,selected:next}});}}>{t('money.resetSelection')}</button></div>

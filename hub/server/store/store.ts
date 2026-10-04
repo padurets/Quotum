@@ -320,12 +320,14 @@ export class Store {
     const previous = this.state(id);
     if ('meters' in measurement) {
       this.db.exec('SAVEPOINT record');
-      let since: number;
+      let since: number|null;
       try {
         // A sparse heartbeat reads before it writes. Reserve the writer first so a
         // concurrent connection cannot invalidate that read snapshot in WAL mode.
         this.db.prepare('UPDATE state SET payload=payload WHERE source_id=?').run(id);
-        since = this.meters.record(id, this.state(id), measurement).since;
+        const current=this.state(id);
+        if(measurement.observedAt<=Math.max(current.successAt??-Infinity,current.balanceStatus?.at??-Infinity)) {this.db.exec('RELEASE record');return;}
+        since = this.meters.record(id, current, measurement).since;
         this.db.exec('RELEASE record');
       } catch (error) {
         this.db.exec('ROLLBACK TO record');
@@ -333,7 +335,7 @@ export class Store {
         throw error;
       }
       tell(this.observer, o => o.touchSources([id]));
-      tell(this.observer, o => o.history(id, since));
+      if(since!==null)tell(this.observer, o => o.history(id, since!));
       return;
     }
     const {provider} = previous;

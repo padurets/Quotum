@@ -1,7 +1,7 @@
 import type {Card,View} from '../lib/types';
 import type {KeyPart,Meter} from '../../server/domain/meters';
 import {useSourceAccess} from '../lib/board';
-import {money,keyName,capLeft,capPercent,capStale,capChangesAt,accessTone,accessChangesAt,ACCESS_WARNING_MS} from '../lib/money';
+import {balanceGroups,balanceRoleLabel,money,keyName,capLeft,capPercent,capStale,capChangesAt,accessTone,accessChangesAt,ACCESS_WARNING_MS} from '../lib/money';
 import {stamp,countdown,duration,countdownChangesAt,earliest} from '../lib/format';
 import {useClock} from '../lib/clock';
 import {t} from '../i18n';
@@ -45,14 +45,30 @@ export function KeyMetrics({part,meters,compact=false}:{part:KeyPart;meters:read
   </div>;
 }
 export function MoneyCard({source,board,view,compact=false}:{source:Card;board:string;view?:View;compact?:boolean}) {
-  const balance=source.meters?.find(m=>m.id==='balance'),{keys,meters,error}=useShownKeys(source,view,board);
-  const unit=balance?.unit??'USD',formatted=money(balance?.amount,unit),amount=balance?.amount==null?formatted:formatted.slice(0,-unit.length-1);
+  const groups=balanceGroups(source),{keys,meters,error}=useShownKeys(source,view,board);
   return <div className="money-body">
-    <div className="money-balance" title={money(balance?.amount,unit,true)}><span>{t('money.accountBalance')}</span><span className="limit-value" data-money={balance?.amount}>{amount}{balance?.amount!=null&&<small>{unit}</small>}</span></div>
+    {!groups.length&&<div className="money-balance">{t(source.balanceStatus?'money.noBalance':'money.unknown')}</div>}
+    {groups.map(({total,components})=>{
+      const formatted=money(total.amount,total.unit),amount=formatted.slice(0,-total.unit.length-1);
+      const breakdown=<div className="money-breakdown">{components.map(({meter,role})=><div key={meter.id} className={meter.stale?'is-stale':''} title={[money(meter.amount,meter.unit,true),stamp(meter.at),meter.stale?t('money.stale'):''].filter(Boolean).join('\n')}><span>{balanceRoleLabel(role)}</span><span>{money(meter.amount,meter.unit)}</span></div>)}</div>;
+      return <div key={total.id} className={total.stale?'is-stale':''}>
+        <div className="money-balance" title={[money(total.amount,total.unit,true),stamp(total.at),total.stale?t('money.stale'):''].filter(Boolean).join('\n')}><span>{compact&&components.length?<Popover label={t('money.breakdown')} trigger={t('money.accountBalance')} triggerClass="link-button" up>{breakdown}</Popover>:t('money.accountBalance')}</span><span className="limit-value" data-money={total.amount}>{amount}<small>{total.unit}</small></span></div>
+        {!compact&&breakdown}
+      </div>;
+    })}
     <div className="limits money-limits">{keys.map(part=><KeyMetrics key={part.id} part={part} meters={meters} compact={compact}/>)}</div>
     <ErrorLine error={error}/>
   </div>;
 }
+/** Safe supplier facts use the existing news mark, with their own freshness. */
+export function BalanceMark({source}:{source:Card}) {
+  const status=source.balanceStatus;
+  const now=useClock(now=>status&&now<=status.at+status.staleAfterMs?status.at+status.staleAfterMs+1:null);
+  if(!status||status.isAvailable&&!status.partial)return null;
+  const lines=[...(!status.isAvailable?[t('money.balanceUnavailable')]:[]),...(status.issues.includes('empty_balances')?[t('money.noBalance')]:status.partial?[t('money.balancePartial')]:[]),stamp(status.at),...(now>status.at+status.staleAfterMs?[t('money.stale')]:[])];
+  return <span data-time="balance-status"><Popover label={lines.join('\n')} up align="left" triggerClass="tray-pill" trigger={<span aria-hidden="true">!</span>}><div className="tray-panel"><div className="tray-panel-head">{lines.map((line,i)=><p key={i} className={i?'tray-panel-when':'tray-panel-lead'}>{line}</p>)}</div></div></Popover></span>;
+}
+
 export function AccessMark({id}:{id:string}) {
   const access=useSourceAccess(id);
   const now=useClock(now=>accessChangesAt(access,now));
@@ -60,7 +76,7 @@ export function AccessMark({id}:{id:string}) {
   const tone=accessTone(access,now);
   if(tone===null)return null;
   const text=access.error?new ApiError(400,access.error):null;
-  const expiry=access.expiresAt===null?t('sources.noExpiry'):access.expiresAt<=now?t('money.expired'):t('money.expirySoon',{time:stamp(access.expiresAt)});
+  const expiry=access.expiryKind==='unknown'?t('sources.unknownExpiry'):access.expiresAt===null?t('sources.noExpiry'):access.expiresAt<=now?t('money.expired'):t('money.expirySoon',{time:stamp(access.expiresAt)});
   const lead=text?messageOf(text):expiry;
   return <span data-time="access-expiry"><Popover label={lead} up align="left" triggerClass={`tray-pill access-mark${tone==='neutral'?'':` is-${tone}`}`} trigger={<>
     <svg className="tray-icon" viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><circle cx="8" cy="8" r="4"/><path d="m11 11 9 9m-5-5 3-3m-1 5 3-3"/></svg>

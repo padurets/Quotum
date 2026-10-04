@@ -7,7 +7,7 @@ export class ConnectorStatus extends SecretError {
   readonly retryAfterMs: number | null;
   constructor(status:number,retryAfter:unknown) {
     super('connector_status');
-    this.status=[401,403,429].includes(status)||status>=500&&status<=599 ? status : null;
+    this.status=[401,402,403,429].includes(status)||status>=500&&status<=599 ? status : null;
     this.retryAfterMs=typeof retryAfter==='string' && /^\d{1,6}$/.test(retryAfter) ? Math.min(Number(retryAfter)*1000,3_600_000) : null;
   }
 }

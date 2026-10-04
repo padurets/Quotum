@@ -63,7 +63,7 @@ export class MeterTile {
         const index=first+row[0];
         cells.set(index,yield* pack({row:[index,...row.slice(1)] as MeterCell,before,semantics}));
       }
-      if(!this.series.has(key))this.series.set(key,{series:{source:s.source,meter:s.meter,kind:s.kind,unit:s.unit},cells:new Map(),bytes:0});
+      if(!this.series.has(key))this.series.set(key,{series:{source:s.source,meter:s.meter,kind:s.kind,unit:s.unit,accounting:s.accounting,role:s.role,pointMode:s.pointMode},cells:new Map(),bytes:0});
     }
     for(const [key,cells] of rows) {
       if(!cells.size){this.series.delete(key);continue;}

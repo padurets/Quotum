@@ -30,6 +30,7 @@ import {
 } from './model.js';
 /** Durable app settings, in `npm run demo:keys`; checking and reset busy are transient and tested. */
 export {KEY_STORAGE} from './key-storage.js';
+export {DEEPSEEK_SCENES} from './deepseek.js';
 export {MONEY_SCENES} from './money.js';
 
 /**
@@ -1614,5 +1615,5 @@ const activity: DemoSet = {
   ],
 };
 
-const money:DemoSet={...all,id:'money',about:'Subscriptions beside OpenRouter balances, key caps, partial inventory and private access failures'};
+const money:DemoSet={...all,id:'money',about:'Subscriptions beside OpenRouter and DeepSeek wallets, partial readings and private access failures'};
 export const SETS: DemoSet[] = [all, showcase, activity,money];

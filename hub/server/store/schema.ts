@@ -163,6 +163,23 @@ export const STEPS = [
   CREATE INDEX meter_spans_by_end ON meter_spans (to_at);
   CREATE INDEX credentials_by_source ON credentials (source_id, created_at, id);
   `,
+  // 10 — declared accounts, truthful expiry and accepted observation interruptions.
+  `
+  CREATE TABLE declared_accounts (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, provider TEXT NOT NULL, source_id TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL, name_key TEXT NOT NULL, created_at INTEGER NOT NULL,
+    lifecycle_revision INTEGER NOT NULL DEFAULT 0 CHECK(typeof(lifecycle_revision)='integer' AND lifecycle_revision>=0), UNIQUE(user_id,provider,name_key));
+  CREATE INDEX declared_accounts_by_owner ON declared_accounts (user_id,provider,id);
+  ALTER TABLE credentials ADD COLUMN expiry_kind TEXT NOT NULL DEFAULT 'none' CHECK(expiry_kind IN ('at','none','unknown'));
+  UPDATE credentials SET expiry_kind='at' WHERE expires_at IS NOT NULL;
+  ALTER TABLE meter_spans ADD COLUMN interrupted_at INTEGER;
+  CREATE TRIGGER declared_account_withdrawn AFTER DELETE ON credentials
+    WHEN NOT EXISTS (SELECT 1 FROM credentials WHERE user_id=OLD.user_id AND source_id=OLD.source_id)
+    BEGIN
+      UPDATE declared_accounts SET lifecycle_revision=lifecycle_revision+1
+        WHERE user_id=OLD.user_id AND provider=OLD.provider AND source_id=OLD.source_id;
+    END;
+  `,
 ];
 
 export const SCHEMA_VERSION = STEPS.length;

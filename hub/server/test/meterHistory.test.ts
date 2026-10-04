@@ -51,6 +51,12 @@ test('meter selection normalizes duplicates, stays bounded and rejects raw hashe
   assert.throws(()=>selectionOf([['s','balance']],'usd'));
 });
 
+test('unavailable accounting never consumes numerical or exceptional spending slots',()=>{
+  const series:MeterSeriesCells={source:'s',meter:'balance:CNY',kind:'balance',unit:'CNY',semantics:null,accounting:{spending:'unavailable',topups:'unavailable'},cells:[[0,'2000000',null,null,1000,{steps:[{from:0,to:1,amount:'1000000',evidence:'estimate'}],topupInternal:'2000000',topupSteps:[{from:0,to:1,amount:'2000000',evidence:'estimate'}]}]]};
+  const result=composeMeters([{from:0,meterSeries:[series]}],60000,0,60000)[0];
+  assert.equal(result.spent,null);assert.equal(result.topup,null);assert.equal(result.points[0].spent,null);assert.deepEqual(result.unlocated,[]);assert.deepEqual(result.topupUnlocated,[]);assert.deepEqual(result.points[0].steps,[]);
+});
+
 test('a kind or unit transition within one cell retains both identities and the confirmed delta',()=>{
   for(const change of [{kind:'balance' as const},{unit:'requests' as const}]) {
     const store=new Store(':memory:',1),source=store.source('openrouter','111111111111111111111111',1);

@@ -1,5 +1,8 @@
+import {balanceDescriptor} from './providers.js';
 import {amount, isUnit, type Unit} from './amount.js';
 
+export type BalanceIssue = 'currency_invalid'|'currency_unknown'|'currency_duplicate'|'currency_missing'|'empty_balances';
+export type BalanceStatus = {isAvailable:boolean;at:number;staleAfterMs:number;partial:boolean;issues:BalanceIssue[]};
 export type MeterKind = 'counter' | 'balance' | 'cap';
 export type MeterSemantics = {limit: string | null; resetAt: number | null; minutes: number | null; scope: string | null; label: string | null};
 export type Meter = MeterSemantics & {id: string; kind: MeterKind; unit: Unit; amount: string; at: number; staleAfterMs: number; stale: boolean};
@@ -9,9 +12,9 @@ export type KeyPart = {
   periods: {day: string | null; week: string | null; month: string | null};
 };
 /** Confirmed uncapped key IDs let partial rounds end a cap while retaining its history. */
-export type MeterMeasurement = {type: 'meters'; observedAt: number; staleAfterMs: number; meters: Meter[]; keys: KeyPart[]; inventoryComplete: boolean; inventoryError: string | null; uncapped?: string[]};
+export type MeterMeasurement = {type: 'meters'; observedAt: number; staleAfterMs: number; meters: Meter[]; keys: KeyPart[]; inventoryComplete: boolean; inventoryError: string | null; uncapped?: string[]; balanceStatus?:BalanceStatus};
 export type Reading = Omit<Meter, 'stale'> & {previousAt: number | null};
-export type MeterSpan = {from: number; to: number; staleAfterMs: number};
+export type MeterSpan = {from: number; to: number; staleAfterMs: number;interruptedAt?:number};
 export type ExceptionalStep = {from: number; to: number; amount: string; evidence: 'continuous' | 'gap' | 'estimate'};
 export type SpendSummary = {from: number; to: number; amount: string | null; complete: boolean; knownFrom: number | null; uncertain: boolean; unlocated: ExceptionalStep[]};
 export type CalendarSpend = {day: SpendSummary; week: SpendSummary; month: SpendSummary};
@@ -65,4 +68,13 @@ export function utcPeriods(now: number): {day: number; week: number; month: numb
 export function calendarSpending(readings: readonly Reading[], spans: readonly MeterSpan[], now: number): CalendarSpend {
   const p = utcPeriods(now);
   return {day: spending(readings, spans, p.day, now), week: spending(readings, spans, p.week, now), month: spending(readings, spans, p.month, now)};
+}
+
+/** The persisted status and cadence compare the same retained logical observation. */
+export function balanceStatusOf(provider:string,previous:readonly Meter[],measurement:MeterMeasurement):BalanceStatus|undefined {
+  const status=measurement.balanceStatus;if(!status)return undefined;
+  const accepted=new Set(measurement.meters.map(m=>m.id));
+  const missing=previous.some(m=>balanceDescriptor(provider,m.id)&&!accepted.has(m.id));
+  const issues=[...new Set([...status.issues,...(missing?['currency_missing' as const]:[])])].sort();
+  return {...status,partial:issues.length>0,issues};
 }

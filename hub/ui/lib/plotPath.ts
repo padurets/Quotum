@@ -41,3 +41,23 @@ export function* plotPathPrepared(runs: readonly (readonly (readonly [number, nu
 }
 
 export function plotPath(...args: Parameters<typeof plotPathPrepared>): string {return drain(plotPathPrepared(...args));}
+
+/** Deadline endpoints draw a held value; they are never measurement markers. */
+export function* observationRunsPrepared(points:readonly [number,number,number,number?][],from:number,to:number,now:number):Preparation<{runs:[number,number][][];last:[number,number]|null}> {
+  const runs:[number,number][][]=[];
+  let last:[number,number]|null=null,previousEnd=-Infinity,segment=-1;
+  for(let i=0;i<points.length;i++) {
+    const [at,value,group,deadline]=points[i];yield;
+    if(at>now||at>=to)break;
+    if(!Number.isSafeInteger(deadline)||deadline!<=at||deadline!<=from)continue;
+    const beginning=Math.max(from,at),end=Math.min(deadline!,points[i+1]?.[0]??Infinity,now,to);
+    if(end<beginning)continue;
+    if(group!==segment||previousEnd!==beginning)runs.push([]);
+    const run=runs.at(-1)!;
+    if(run.at(-1)?.[0]!==beginning||run.at(-1)?.[1]!==value)run.push([beginning,value]);
+    if(end>beginning)run.push([end,value]);
+    previousEnd=end;segment=group;
+    if(at>=from)last=[at,value];
+  }
+  return {runs,last};
+}
