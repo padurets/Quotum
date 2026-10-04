@@ -263,12 +263,10 @@ export function seedWork(store: Store, stand: Stand) {
             return {agent, sessionId, key: {source: stand.sources.get(card.id)!, origin: told.origin, startedAt: told.startedAt, project: told.project ?? '', folder: told.folder ?? ''}};
           }),
       );
-      const open = new Map<string, {key: WorkKey; from: number; to: number}>();
-      const credit = (stretch: {key: WorkKey; from: number; to: number}) => store.creditWork(device, start + stretch.from, start + stretch.to, [stretch.key]);
       for (let t = since; t < 0; t += MIN) {
         // Legacy agents alike in all of it keep their ordinal among the working ones, as the hub tells them.
         const alike = new Map<string, number>();
-        const working = new Set<string>();
+        const working: WorkKey[] = [];
         for (const {agent, key, sessionId} of awake(machine, t) ? agents : []) {
           if (agent.since > t || (agent.until !== undefined && t >= agent.until)) continue;
           if (!agent.works || !isOn(agent.works, t)) continue;
@@ -276,19 +274,11 @@ export function seedWork(store: Store, stand: Stand) {
           const ordinal = alike.get(plain) ?? 0;
           alike.set(plain, ordinal + 1);
           const identity = sessionId ? {kind: 'stable' as const, sessionId} : {kind: 'legacy' as const, ordinal};
-          const id = JSON.stringify([key, identity]);
-          working.add(id);
-          const stretch = open.get(id);
-          if (stretch) stretch.to = t + MIN;
-          else open.set(id, {key: {...key, identity}, from: t, to: t + MIN});
+          working.push({...key, identity});
         }
-        for (const [id, stretch] of open) {
-          if (working.has(id)) continue;
-          credit(stretch);
-          open.delete(id);
-        }
+        // Credit parallel namespaces together, before their high-water ends advance.
+        store.creditWork(device, start + t, start + t + MIN, working);
       }
-      for (const stretch of open.values()) credit(stretch);
     }
     db.exec('COMMIT');
   } catch (error) {
