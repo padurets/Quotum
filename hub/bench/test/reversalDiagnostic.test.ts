@@ -19,15 +19,17 @@ test('a responsive diagnostic preserves its result or error and releases its dea
 test('the original stalled page is diagnosed without pre-enabling V8 and a recovered input cannot pass',async t=>{
   t.mock.timers.enable({apis:['setTimeout']});
   t.mock.method(globalThis,'fetch',async()=>new Response(JSON.stringify({webSocketDebuggerUrl:'ws://fixture.invalid'})));
-  let controlClosed=false;
+  let controlClosed=false,independentClosed=false;
   const control={send:async()=>({processInfo:[{type:'renderer',id:1,cpuTime:1}]}),close:()=>{controlClosed=true;}};
-  t.mock.method(Cdp,'connect',async()=>control as unknown as Cdp);
+  const independent={evaluate:async()=>({responsive:true}),close:()=>{independentClosed=true;}};
+  t.mock.method(Cdp,'connect',async(url:string)=>(url==='ws://page.invalid'?independent:control) as unknown as Cdp);
   const messages:unknown[]=[],commands:string[]=[];
   t.mock.method(console,'error',(message:unknown)=>{messages.push(message);});
   let paused:((event:{callFrames:[]})=>void)|undefined,releaseInput!:()=>void;
   const input=new Promise<void>(resolve=>{releaseInput=resolve;});
-  const page={on:(_method:string,listener:typeof paused)=>{paused=listener;},send:async(method:string)=>{
+  const page={endpoint:'ws://page.invalid',on:(_method:string,listener:typeof paused)=>{paused=listener;},send:async(method:string)=>{
     commands.push(method);
+    if(method==='Runtime.evaluate')throw new Error('stalled original session');
     if(method==='Debugger.pause')paused?.({callFrames:[]});
     if(method==='Profiler.stop'){releaseInput();return {profile:{nodes:[],samples:[],timeDeltas:[]}};}
     return {};
@@ -38,5 +40,7 @@ test('the original stalled page is diagnosed without pre-enabling V8 and a recov
   t.mock.timers.tick(5000);await failed;await observer.close();
   assert.ok(commands.includes('Debugger.pause'));
   assert.ok(messages.some(message=>String(message).includes('"activation":"after stall"')));
+  assert.ok(messages.some(message=>String(message).includes('"independentState":{"responsive":true}')));
+  assert.equal(independentClosed,true);
   assert.equal(controlClosed,true);
 });

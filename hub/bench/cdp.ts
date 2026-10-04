@@ -14,7 +14,7 @@ export class Cdp {
   private readonly waiting = new Map<number, {resolve: (value: never) => void; reject: (error: Error) => void; method: string; timer: ReturnType<typeof setTimeout>}>();
   private readonly listeners = new Map<string, ((params: never) => void)[]>();
 
-  private constructor(private readonly socket: WebSocket) {
+  private constructor(private readonly socket: WebSocket,readonly endpoint:string|null=null) {
     socket.addEventListener('message', event => {
       const message = JSON.parse(String(event.data)) as {id?: number; result?: unknown; error?: {message: string}; method?: string; params?: unknown};
       if (message.id !== undefined) {
@@ -34,7 +34,7 @@ export class Cdp {
     return new Promise((resolve, reject) => {
       const socket = new WebSocket(url);
       const timer = setTimeout(() => {socket.close(); reject(new Error('the browser did not open its DevTools connection in 30 s'));}, 30_000);
-      socket.addEventListener('open', () => {clearTimeout(timer); resolve(new Cdp(socket));}, {once: true});
+      socket.addEventListener('open', () => {clearTimeout(timer); resolve(new Cdp(socket,url));}, {once: true});
       socket.addEventListener('error', () => {clearTimeout(timer); reject(new Error(`cannot reach the browser at ${url}`));}, {once: true});
     });
   }

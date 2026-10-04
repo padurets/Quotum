@@ -34,6 +34,15 @@ export async function observeReversal(page:Cdp,browser:Browser,profileBeforeInpu
     const after=await processes().catch(error=>String(error));
     const browserCpu=Array.isArray(after)?after.map(p=>({type:p.type,id:p.id,cpuSeconds:p.cpuTime,cpuDeltaSeconds:p.cpuTime-(before.find(prior=>prior.id===p.id)?.cpuTime??p.cpuTime)})):after;
     const pageState=await bounded('page state before debugger',page.send<{result?:{value?:unknown}}>('Runtime.evaluate',{expression:'({visibility:document.visibilityState,focus:document.hasFocus(),ready:document.readyState})',returnByValue:true})).then(r=>r.result?.value,error=>String(error));
+    let independentState:unknown;
+    if(page.endpoint){
+      let independent:Cdp|undefined;
+      try{
+        independent=await Cdp.connect(page.endpoint);
+        independentState=await bounded('independent page state',independent.evaluate('({visibility:document.visibilityState,focus:document.hasFocus(),ready:document.readyState})'));
+      }catch(error){independentState=String(error);}
+      finally{independent?.close();}
+    }
     const renderers=Array.isArray(after)?after.filter(p=>p.type==='renderer').sort((a,b)=>(b.cpuTime-(before.find(p=>p.id===b.id)?.cpuTime??b.cpuTime))-(a.cpuTime-(before.find(p=>p.id===a.id)?.cpuTime??a.cpuTime))):[];
     const native=renderers.length&&browser.diagnostics?await bounded('native process state',browser.diagnostics(renderers.map(p=>p.id),renderers[0].id),10000).catch(error=>String(error)):undefined;
     const activation=profileBeforeInput?'before input':await enable().then(()=> 'after stall',error=>String(error));
@@ -52,7 +61,7 @@ export async function observeReversal(page:Cdp,browser:Browser,profileBeforeInpu
       profile.samples?.forEach((id,i)=>durations.set(id,(durations.get(id)??0)+(profile.timeDeltas?.[i]??0)/1000));
       top=[...durations].sort((a,b)=>b[1]-a[1]).slice(0,15).map(([id,ms])=>({ms,frame:profile.nodes.find(n=>n.id===id)?.callFrame}));
     }
-    console.error('reversal diagnostic '+JSON.stringify({label,activation,browserCpu,native,pageState,pagePause:pause,pausedEvent:event,pausedFrames:frames,profile:top}));
+    console.error('reversal diagnostic '+JSON.stringify({label,activation,browserCpu,native,pageState,independentState,pagePause:pause,pausedEvent:event,pausedFrames:frames,profile:top}));
     await bounded('resume page',page.send('Debugger.resume')).catch(()=>{});
   };
   return {
