@@ -5,7 +5,6 @@ import type {PlotBlock, PlotSeries} from './lines';
 
 import {drain, type Preparation} from './prepare';
 import {ordered} from '../../server/domain/prepare';
-import {composeMetersPrepared, type MeterHistory} from '../../server/domain/meterHistory';
 
 // Weak keys release decoded rows with the store's bounded current/replacing strip.
 const decoded = new WeakMap<SeriesCells, {from: number; cell: number; full: PlotBlock; cuts: Map<string, PlotBlock>}>();
@@ -56,7 +55,9 @@ export type PlotBuffer = {
   from: number; to: number; cell: number; length: number;
   coverage: Coverage;
   series: PlotSeries[];
-  meterSeries?: MeterHistory[];
+  /** Money keeps drawing data separate from the visible period used for spending. */
+  meterChunks?: readonly Chunk[];
+  meterFrame?: {from:number;to:number};
   events: SourceEvent[];
   /** Decoded cells are held only for this bounded strip, for exact edge replacements. */
   activityCells: Map<number, PlotBar>;
@@ -141,7 +142,7 @@ export function* plotPrepared(chunks: readonly Chunk[], meta: HistoryMeta, targe
     lines.push({...row.line, points});
   }
   return {token, epoch, version, from, to, cell: target.cell, length: target.length, coverage, series: lines,
-    ...(chunks.some(c=>c.meterSeries!==undefined)?{meterSeries:yield* composeMetersPrepared(chunks,target.cell,from,to)}:{}),
+    ...(chunks.some(c=>c.meterSeries!==undefined)?{meterChunks:chunks}:{}),
     events: yield* ordered(events, (a, b) => a.at - b.at), activityCells, barMs: barOf(target.cell, target.length), knownFrom: Math.max(meta.known.work, ...(Object.keys(meta.known.sources).length ? [Math.min(...Object.values(meta.known.sources))] : []))};
 }
 

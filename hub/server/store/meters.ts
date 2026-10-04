@@ -22,11 +22,11 @@ export class MeterStore {
       ids.add(meter.id);
       const old = current.get(meter.id);
       if (old && old.at >= meter.at) continue;
+      const last = this.db.prepare('SELECT from_at,to_at,stale_after_ms FROM meter_spans WHERE source_id=? AND meter_id=? ORDER BY from_at DESC LIMIT 1').get(source, meter.id) as {from_at: number; to_at: number; stale_after_ms: number} | undefined;
       if (!old || !sameMeter(old, meter)) {
         this.db.prepare('INSERT INTO readings (source_id,meter_id,at,previous_at,kind,unit,amount,limit_amount,reset_at,minutes,scope,label,stale_after_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
-          .run(source, meter.id, meter.at, old?.at ?? null, meter.kind, meter.unit, amount(meter.amount), meter.limit === null ? null : amount(meter.limit), meter.resetAt, meter.minutes, meter.scope, meter.label, meter.staleAfterMs);
+          .run(source, meter.id, meter.at, old?.at ?? last?.to_at ?? null, meter.kind, meter.unit, amount(meter.amount), meter.limit === null ? null : amount(meter.limit), meter.resetAt, meter.minutes, meter.scope, meter.label, meter.staleAfterMs);
       }
-      const last = this.db.prepare('SELECT from_at,to_at,stale_after_ms FROM meter_spans WHERE source_id=? AND meter_id=? ORDER BY from_at DESC LIMIT 1').get(source, meter.id) as {from_at: number; to_at: number; stale_after_ms: number} | undefined;
       if (last && old && meter.at - last.to_at <= last.stale_after_ms && old.kind === meter.kind && old.unit === meter.unit) {
         this.db.prepare('UPDATE meter_spans SET to_at=?,stale_after_ms=? WHERE source_id=? AND meter_id=? AND from_at=?').run(meter.at, meter.staleAfterMs, source, meter.id, last.from_at);
       } else this.db.prepare('INSERT INTO meter_spans VALUES (?,?,?,?,?)').run(source, meter.id, meter.at, meter.at, meter.staleAfterMs);
@@ -39,6 +39,15 @@ export class MeterStore {
       if (!/^[0-9a-f]{12}$/.test(key.id) || observed.has(key.id)) throw new Error('invalid_key_part');
       observed.add(key.id);
       keys.set(key.id, {...key, presence: 'observed', missCount: 0});
+    }
+    // Only a producer's confirmed null cap ends it. Omission in a partial reply
+    // remains unknown and preserves the last measurement.
+    for(const key of measurement.uncapped??[]) {
+      const id=`key:${key}:cap`;
+      if(!observed.has(key)||ids.has(id))throw new Error('invalid_key_part');
+      current.delete(id);
+      this.db.prepare('UPDATE meter_spans SET stale_after_ms=min(stale_after_ms,max(0,?-to_at-1)) WHERE source_id=? AND meter_id=? AND from_at=(SELECT max(from_at) FROM meter_spans WHERE source_id=? AND meter_id=?)')
+        .run(measurement.observedAt,source,id,source,id);
     }
     for (const [id, key] of keys) if (!observed.has(id)) {
       const missCount = key.missCount + (measurement.inventoryComplete ? 1 : 0);
@@ -97,7 +106,9 @@ export class MeterStore {
 
   prune(cutoff: number): boolean {
     let changed = this.db.prepare('DELETE FROM readings WHERE at<? AND at<(SELECT max(at) FROM readings r WHERE r.source_id=readings.source_id AND r.meter_id=readings.meter_id AND r.at<?)').run(cutoff, cutoff).changes > 0;
-    changed = this.db.prepare('DELETE FROM meter_spans WHERE to_at<?').run(cutoff).changes > 0 || changed;
+    // The last endpoint is evidence of an unchanged observation, even after the
+    // current meter has been archived and its changed reading is much older.
+    changed = this.db.prepare('DELETE FROM meter_spans WHERE to_at<? AND from_at<(SELECT max(from_at) FROM meter_spans s WHERE s.source_id=meter_spans.source_id AND s.meter_id=meter_spans.meter_id)').run(cutoff).changes > 0 || changed;
     // Preserve a crossing span's continuity without making its old head visible.
     changed = this.db.prepare('UPDATE meter_spans SET from_at=? WHERE from_at<? AND to_at>=?').run(cutoff, cutoff, cutoff).changes > 0 || changed;
     return changed;

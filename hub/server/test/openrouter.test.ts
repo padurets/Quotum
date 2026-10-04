@@ -77,7 +77,10 @@ test('repeated pages cannot loop and access errors distinguish stored expiry wit
 
 test('the decoder uses original decimal tokens and invalid precision fails only its field',()=>{
   const parsed=decodeOpenRouter('{"data":{"total_credits":9007199254.740993,"total_usage":0.1000005,"usage":1e309,"name":"kept text"}}') as {data:Record<string,unknown>};
-  assert.deepEqual(parsed.data,{total_credits:'9007199254740993',total_usage:'100001',usage:null,name:'kept text'});
+  assert.deepEqual(parsed.data,{total_credits:'9007199254740993',total_usage:'100001',name:'kept text'});
+  const caps=decodeOpenRouter('{"data":[{"limit":null},{"limit":"invalid"},{"limit":1e309}]}') as {data:Record<string,unknown>[]};
+  assert.equal(caps.data[0].limit,null);
+  assert.ok(caps.data.slice(1).every(cap=>!Object.hasOwn(cap,'limit')),'invalid amounts cannot become confirmed unlimited caps');
   const status=new ConnectorStatus(429,'36000');assert.equal(status.retryAfterMs,3_600_000);
   assert.equal(new ConnectorStatus(429,secret.toString()).retryAfterMs,null);
 });
@@ -131,4 +134,21 @@ test('the round deadline keeps successful counters without aborting the caller l
   assert.equal(answer.measurement?.meters.find(m=>m.id==='usage')?.amount,'9000000');
   assert.equal(answer.measurement?.inventoryComplete,false);
   assert.equal(caller.signal.aborted,false);
+});
+
+test('confirmed null caps clear current scales even in partial inventory, while malformed caps remain unknown',async()=>{
+  let limit:unknown=15,partial=false,at=now;
+  const c=connector(op=>op==='keys'?{data:[key(1,{limit}),...(partial?[key(2,{usage:'invalid'})]:[])]}:undefined);
+  const store=new Store(':memory:',at),identity=await c.identify(secret),source=store.source('openrouter',identity.account,at);
+  const record=async()=>{const answer=await c.measure(secret,identity),m=answer.measurement!;at+=60000;store.record(source,{...m,observedAt:at,meters:m.meters.map(v=>({...v,at})),keys:m.keys.map(k=>({...k,at}))});return m;};
+  try {
+    await record();const cap=store.state(source).meters!.find(m=>m.kind==='cap')!.id;
+    limit='invalid';await record();assert.equal(store.state(source).meters!.find(m=>m.id===cap)?.stale,true);
+    limit=null;partial=true;const m=await record();
+    assert.equal(m.inventoryComplete,false);assert.equal(m.uncapped?.length,1);
+    assert.equal(store.state(source).meters!.some(m=>m.id===cap),false);
+    assert.equal(store.state(source).keys?.[0].presence,'observed');
+    assert.equal(store.meters.readings(source,cap,0,at+1).length,1,'historical cap remains exact');
+    assert.equal(store.meters.cells({unit:'USD',ids:[[source,cap]]},at+60000,at+120000,60000).length,0,'confirmed absence does not carry the old cap into future cells');
+  }finally{store.close();}
 });

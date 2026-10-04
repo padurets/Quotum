@@ -10,8 +10,8 @@ const MONEY=new Set(['total_credits','total_usage','limit','limit_remaining','us
 export function decodeOpenRouter(json:string):unknown {
   return JSON.parse(json, ((name:string,value:unknown,context?:{source?:string})=>{
     if(MONEY.has(name) && value!==null) {
-      if(typeof value!=='number'||!context?.source)return null;
-      try{return decimal(context.source).toString();}catch{return null;}
+      if(typeof value!=='number'||!context?.source)return undefined;
+      try{return decimal(context.source).toString();}catch{return undefined;}
     }
     return value;
   }) as Parameters<typeof JSON.parse>[1]);
@@ -110,7 +110,7 @@ export function openRouter(transport=new ConnectorTransport({host:'openrouter.ai
                   seenKeys.add(raw.hash);progress++;
                   const id=createHash('sha256').update(raw.hash).digest('hex').slice(0,12);
                   if(hashes.has(id)&&hashes.get(id)!==raw.hash) {
-                    measurement.keys=measurement.keys.filter(k=>k.id!==id);measurement.meters=measurement.meters.filter(m=>!m.id.startsWith('key:'+id+':'));throw new SecretError('connector_inventory_partial');
+                    measurement.keys=measurement.keys.filter(k=>k.id!==id);measurement.meters=measurement.meters.filter(m=>!m.id.startsWith('key:'+id+':'));measurement.uncapped=measurement.uncapped?.filter(k=>k!==id);throw new SecretError('connector_inventory_partial');
                   }
                   hashes.set(id,raw.hash);
                   const name=safeName(raw.name,secret),expiresAt=expiry(raw.expires_at);
@@ -120,6 +120,7 @@ export function openRouter(transport=new ConnectorTransport({host:'openrouter.ai
                   }
                   const usage={...base('key:'+id+':usage',money(raw.usage),at),label:name};
                   measurement.keys.push(key);measurement.meters.push(usage);
+                  if(raw.limit===null)(measurement.uncapped??=[]).push(id);
                   if(raw.limit!==null) {
                     try {
                       const limit=money(raw.limit);

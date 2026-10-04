@@ -523,6 +523,10 @@ A key missing from one successful traversal remains stale; two successive succes
 missing traversals archive it. Partial traversals do not confirm absence. A reappearance
 restores the same id and history. Inventory completeness describes a bounded traversal,
 not an atomic supplier snapshot. Amounts and key names are shared measurement data.
+A confirmed unlimited key loses its current cap even during a partial traversal;
+an invalid cap remains unknown and preserves the last cap as stale. Historical readings
+survive removal. The last confirmed observation also survives archival and retention,
+so a returning key's spending interval begins at that observation.
 
 `GET /api/history` additionally accepts `unit` and `meters`: a JSON array of at most
 32 logical `[sourceId, meterId]` pairs, sorted and deduplicated. Sources must be visible
@@ -538,6 +542,9 @@ keeps exact known spending per point, so the spending view draws only located sp
 Summaries distinguish missing coverage from zero spending: no covered interval gives
 an unknown amount, and a known subtotal with incomplete coverage is marked partial.
 Different kind or unit identities that occur inside one cell retain separate series.
+Progressive drawing may hold neighboring cells for movement, while spending uses the
+visible whole-cell period. Loading those neighbors cannot change its amounts or make
+a boundary-crossing step located within that period.
 Extra may give `first`, `open`
 (including explicit null), `segment`, historical `semantics`, original exceptional
 `steps`, `topupInternal` and `topupSteps`. Amounts remain strings throughout packing.

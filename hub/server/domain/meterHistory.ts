@@ -113,10 +113,11 @@ export function meterCells(group: MeterGroup, unit: Unit, from: number, to: numb
 const sumSteps = (steps: readonly ExceptionalStep[]) => steps.reduce((sum,s)=>sum+BigInt(s.amount),0n).toString();
 
 /** Whole cells and exceptional intervals compose identically, regardless of tile partition. */
-export function composeMeters(chunks: readonly {from:number;meterSeries?:MeterSeriesCells[]}[], cell:number, from:number,to:number): MeterHistory[] {
-  return drain(composeMetersPrepared(chunks,cell,from,to));
+export function composeMeters(chunks: readonly {from:number;meterSeries?:MeterSeriesCells[]}[], cell:number, from:number,to:number,quantities={from,to}): MeterHistory[] {
+  return drain(composeMetersPrepared(chunks,cell,from,to,quantities));
 }
-export function* composeMetersPrepared(chunks: readonly {from:number;meterSeries?:MeterSeriesCells[]}[], cell:number, from:number,to:number): Preparation<MeterHistory[]> {
+/** Drawing can include neighboring cells; quantities belong only to the factual frame. */
+export function* composeMetersPrepared(chunks: readonly {from:number;meterSeries?:MeterSeriesCells[]}[], cell:number, from:number,to:number,quantities={from,to}): Preparation<MeterHistory[]> {
   const groups=new Map<string,{series:MeterSeriesCells; cells:Map<number,{row:MeterCell;semantics:MeterSemantics|null}>}>();
   for(const chunk of yield* ordered(chunks,(a,b)=>a.from-b.from)) for(const series of chunk.meterSeries??[]) {
     const key=meterIdentity(series);
@@ -139,10 +140,11 @@ export function* composeMetersPrepared(chunks: readonly {from:number;meterSeries
     const seen=new Set<string>();
     const classify=function* (steps:ExceptionalStep[],top:boolean):Preparation<void> {
       for(const step of steps) {
+        if(step.to<quantities.from||step.to>quantities.to){yield;continue;}
         const key=JSON.stringify([top,step.from,step.to,step.evidence]);
         if(!seen.has(key)) {
           seen.add(key);
-          if(locatedIn(step,from,to)){if(top)topup+=BigInt(step.amount);else spent+=BigInt(step.amount);}
+          if(locatedIn(step,quantities.from,quantities.to)){if(top)topup+=BigInt(step.amount);else spent+=BigInt(step.amount);}
           else (top?topupUnlocated:unlocated).push(step);
         }
         yield;
@@ -153,8 +155,10 @@ export function* composeMetersPrepared(chunks: readonly {from:number;meterSeries
     for(const [at,{row,semantics}] of rows) {
       const extra=row[5]??{};
       const previousSpent=spent;
-      spent+=BigInt(row[2]);topup+=BigInt(extra.topupInternal??'0');coveredMs+=row[4];
-      yield* classify(extra.steps??[],false);yield* classify(extra.topupSteps??[],true);
+      if(at>=quantities.from&&at<quantities.to) {
+        spent+=BigInt(row[2]);topup+=BigInt(extra.topupInternal??'0');coveredMs+=row[4];
+        yield* classify(extra.steps??[],false);yield* classify(extra.topupSteps??[],true);
+      }
       if(at!==previous+cell || (extra.segment??0)!==lastLocal)segment++;
       previous=at;lastLocal=extra.segment??0;
       points.push({at,value:row[1],spent:(spent-previousSpent).toString(),segment,semantics,steps:extra.steps??[]});yield;

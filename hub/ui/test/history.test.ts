@@ -6,6 +6,7 @@ import {covered} from '../lib/historyPlot';
 import {HistoryTile} from '../lib/historyTiles';
 import {Preparations} from '../lib/prepare';
 import {ApiError} from '../lib/http';
+import {composeMeters} from '../../server/domain/meterHistory';
 import {CLOCK_TOLERANCE_MS, READ_CELLS, cellOf, cellStart, compose, targetOf, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer} from '../../server/domain/history';
 
 const M = 60_000;
@@ -64,9 +65,15 @@ test('a monetary pan exposes newly read points while keeping the complete table 
   const range={from:NOW-48*H,to:NOW-24*H};h.store.pan({token:1,length:24*H,...range,direction:-1});await flush();
   for(let i=0;i<20&&pending(h).length;i++)for(const read of [...pending(h)])await answer(read);
   const plot=h.store.getPlot()!;
-  assert.ok(plot.meterSeries?.[0].points.some(point=>point.at>=range.from&&point.at<range.to));
-  assert.equal(plot.meterSeries?.[0].end,'9007199254740993');
+  const series=composeMeters(plot.meterChunks!,plot.cell,plot.from,plot.to,plot.meterFrame);
+  assert.ok(series[0].points.some(point=>point.at>=range.from&&point.at<range.to));
+  assert.equal(series[0].end,'9007199254740993');
   assert.equal(h.store.get().history,complete);
+  const chunks=plot.meterChunks,reads=h.reads.length;
+  h.store.pan({token:1,length:24*H,from:range.from+plot.cell,to:range.to+plot.cell,direction:0});await flush();
+  assert.equal(h.store.getPlot()!.meterChunks,chunks,'cached movement does not rebuild the drawing strip');
+  assert.equal(h.store.getPlot()!.meterFrame!.from,Math.floor((range.from+plot.cell)/plot.cell)*plot.cell);
+  assert.equal(h.reads.length,reads);
   h.store.choose('24h',range);h.store.endPan(true);await flush();
   assert.notEqual(h.store.get().history,complete);h.store.close();
 });

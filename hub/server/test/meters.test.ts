@@ -87,6 +87,25 @@ test('only two successful missing traversals archive a key; partial and reappear
   store.close();
 });
 
+test('an archived key keeps its last actual heartbeat as spending evidence through retention',()=>{
+  for(const retained of [false,true]) {
+    const store=new Store(':memory:',1),source=store.source('openrouter','1'.repeat(24),1),id='012345abcdef',mid=`key:${id}:usage`;
+    const heartbeat=30*86400000,back=retained?130*86400000:heartbeat+180000;
+    const key=(at:number)=>({id,name:null,disabled:false,expiresAt:null,includeByok:false,at,staleAfterMs:300000,presence:'observed' as const,missCount:0,periods:{day:null,week:null,month:null}});
+    const seen=(at:number,value:string)=>store.record(source,measure(at,[meter(mid,at,value)],[key(at)]));
+    try {
+      seen(1,'10000000');seen(heartbeat,'10000000');
+      store.record(source,measure(heartbeat+60000,[]));store.record(source,measure(heartbeat+120000,[]));
+      if(retained)store.prune(back);
+      seen(back,'15000000');
+      const rows=store.meters.readings(source,mid,0,back+1),spans=store.meters.spans(source,mid,0,back+1);
+      assert.equal(rows.at(-1)?.previousAt,heartbeat);
+      assert.equal(spending(rows,spans,heartbeat,back).unlocated[0].from,heartbeat);
+      assert.equal(spending(rows,spans,heartbeat,back).unlocated[0].to,back);
+    }finally{store.close();}
+  }
+});
+
 test('pruning retains a predecessor beyond ninety days and rejects invalid neighbors atomically', () => {
   const store = new Store(':memory:', 1);
   const source = store.source('openrouter', '111111111111111111111111', 1);

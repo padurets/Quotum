@@ -219,6 +219,7 @@ export class HistoryStore {
     this.plotPending = true;
     const next = this.plotTarget();
     const cell = next.cell;
+    if(this.meters&&this.plot?.cell===cell)this.setPlot(this.plot);
     const cohort = `${interest.token}:${this.epoch}:${cell}`;
     if (this.cohort !== cohort) {
       this.cohort = cohort;
@@ -547,6 +548,10 @@ export class HistoryStore {
   private abort(flight: Flight) {this.preparations?.cancel(flight); this.responses.delete(flight); for (const [key, owner] of this.reservations) if (owner === flight) this.reservations.delete(key); this.flights.delete(flight); flight.controller.abort();}
   private abortFlights() {for (const flight of [...this.flights]) this.abort(flight);}
   private setPlot(plot: PlotBuffer | null) {
+    if(plot&&this.meters&&this.meta) {
+      const target=this.plotTarget(),from=target.k0*target.cell,to=Math.min((target.k1+1)*target.cell,this.meta.now);
+      if(plot.meterFrame?.from!==from||plot.meterFrame.to!==to)plot={...plot,meterFrame:{from,to}};
+    }
     if (this.plot === plot) return;
     this.plot = plot;
     for (const listener of this.plotListeners) listener();

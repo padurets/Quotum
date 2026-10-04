@@ -20,6 +20,7 @@ import {MoneySettings} from './MoneySettings';
 import {axisNavigation} from '../lib/axisNavigation';
 import {usePrepared} from './prepared';
 import {usePanning} from '../lib/pan';
+import {composeMetersPrepared} from '../../server/domain/meterHistory';
 
 function nameOf(series:MeterHistory,title:string) {
   const detail=series.meterId==='balance'?'':series.semantics?.label??series.meterId;
@@ -44,7 +45,8 @@ export function MoneyHistory({arrange}:{arrange:Arrange}) {
   const prepared=usePrepared(function* () {
     const entries:MeterHistory[]=[],visible:MeterHistory[]=[];
     let low:bigint|null=null,high:bigint|null=null;
-    for(const source of strip?.meterSeries??original) {
+    const plotted=strip?.meterChunks?yield* composeMetersPrepared(strip.meterChunks,strip.cell,strip.from,strip.to,strip.meterFrame):original;
+    for(const source of plotted) {
       if(source.unit!==unit)continue;
       let entry=source;
       if(prefs.money.view==='spending'&&source.kind!=='cap') {

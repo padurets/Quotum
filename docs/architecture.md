@@ -551,6 +551,10 @@ continuous observation spans. Unchanged heartbeats extend freshness without anot
 reading. Retention keeps one predecessor to distinguish a late increase from a reset.
 A missing key is stale after one successful traversal and archived after two successive
 successful misses; partial traversals never confirm absence, and history is retained.
+A valid null limit explicitly ends the current cap, including in a partial round.
+Invalid money leaves stay distinct from null. The ledger retains the last confirmed
+span endpoint as evidence through archival and retention; reappearance uses that
+heartbeat time as its spending anchor.
 
 Money history uses the same bounded tiles, cache and page loader. Its exact strings,
 historical cap semantics and original spending intervals stay separate from the window
@@ -563,6 +567,9 @@ yield between leaves and cells through the shared preparation scheduler. Monetar
 points also enter the progressive plot during a gesture while table totals retain the
 last complete answer. A monetary visible frame that cannot fit the existing 15 MiB
 tile estimate reports the history limit before publication, without dropping data.
+The plot holds raw monetary cells and the visible period separately. Spending
+composition uses that period's interval classifier even when the drawing holds wider
+neighboring cells; a cached movement updates the period without rereading the tiles.
 
 A hub polling service starts after readiness and stops before SQLite closes, with at
 most two concurrent jobs and one per source. It rechecks access versions and source
@@ -574,6 +581,8 @@ still discards the whole result. An inventory rate limit ends the traversal and 
 bounded Retry-After delays automatic and manual retries. Permanent access failures pause automatic retries. Refresh requires a
 source holding and shares a one-minute cooldown across boards. Owner source access is
 projected separately for each reader, outside the shared board cache.
+Frequency saves publish the new preference during an active poll; its cadence is
+recomputed after that poll finishes.
 
 ## Trusted connector keys
 

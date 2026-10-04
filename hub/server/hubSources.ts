@@ -103,9 +103,10 @@ export class HubSources {
     this.touch(source);this.arm();return {status:'accepted',retryAt:null};
   }
   frequencyChanged(source:string,now:number) {
+    this.touch(source);
     const job=this.jobs.get(source);if(!job||job.controller)return;
     const fixed=this.store.measureInterval(source);
     if(job.next!==null)job.next=Math.max(now,(this.store.state(source).successAt??now)+(fixed??job.interval),(job.last??-Infinity)+60_000,job.retryAt);
-    this.arm();this.touch(source);
+    this.arm();
   }
 }

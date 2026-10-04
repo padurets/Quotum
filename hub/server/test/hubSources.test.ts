@@ -63,6 +63,20 @@ test('a connector-completed partial round is committed without a competing poll 
   }finally{h.sources.stop();h.store.close();}
 });
 
+test('frequency saves publish immediately during a poll, including a return to the previous value',async()=>{
+  const h=harness();try {
+    const source=(await h.connect()).sourceId!;h.store.setMeasureInterval(source,900000);
+    h.delay();h.clock.tick(1);h.sources.start();h.clock.tick();await settle();
+    const intervals:(number|null)[]=[];
+    const noop=()=>{};
+    h.sources.setObserver({touchSources:()=>{intervals.push(h.store.measureInterval(source));},touchBoards:noop,touchUser:noop,touchHub:noop,history:noop,dropSessions:noop,dropMember:noop,dropBoard:noop});
+    for(const interval of [60000,900000] as const){h.store.setMeasureInterval(source,interval);h.sources.frequencyChanged(source,h.clock.now());}
+    assert.deepEqual(intervals,[60000,900000]);
+    assert.equal(h.calls,1,'saving does not start a second poll');
+    h.finish();await settle();assert.equal(h.sources.cadence(source).value?.next,h.clock.now()+900000);
+  }finally{h.sources.stop();h.store.close();}
+});
+
 test('verified connections deduplicate an account, preserve holds until the last own key and keep replay tombstones',async()=>{
   const h=harness();try {
     const requestId='11111111-1111-4111-8111-111111111111';
