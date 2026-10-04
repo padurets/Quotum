@@ -8,7 +8,7 @@ import {level, windowName} from '../lib/quota';
 import {num} from '../lib/format';
 import {t, useLocale} from '../i18n';
 import {CardMark, LimitMeter, ResetLine} from './SourceCard';
-import {MoneyCard} from './MoneyCard';
+import {MoneyCard,QuotaCard} from './MoneyCard';
 import {providerOf} from '../../server/domain/providers';
 import type {startLive} from '../lib/live';
 
@@ -26,11 +26,11 @@ const Row = memo(function Row({id}: {id: string}) {
   return <section className="card compact-card">
     <div className="card-head">
       <CardMark source={card}/><div className="card-heading"><h2 title={title}>{title}</h2>
-        {(card.meters||providerOf(card.provider))&&<small className="resource-type">{t(card.meters||providerOf(card.provider)?.measuredBy==='hub'?'resource.budget':'resource.subscription')}</small>}
+        {(card.meters||providerOf(card.provider))&&<small className="resource-type">{t(providerOf(card.provider)?.funding==='wallet'?'resource.budget':'resource.subscription')}</small>}
       </div>
       {sessions.length > 0 && <small className="compact-agents" title={t('desktop.total', {count: sessions.length})}>{working}</small>}
     </div>
-    {card.meters?.length?<MoneyCard source={card} board={board??''} view={view} compact/>:!windows.length&&<p className="compact-quality">{t('desktop.unavailable')}</p>}
+    {card.provider==='zai'?<QuotaCard source={card} compact/>:card.meters?.length?<MoneyCard source={card} board={board??''} view={view} compact/>:!windows.length&&<p className="compact-quality">{t('desktop.unavailable')}</p>}
     {windows.map(w => <div className="compact-limit" key={w.id}>
       <div className="compact-window-name">
         <span title={windowName(w).replaceAll(' · ', '\n')}>{windowName(w).split(' · ').map((part, i) => <span key={i}>{part}</span>)}</span>

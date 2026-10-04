@@ -24,7 +24,11 @@ write-only path: AES-256-GCM encryption before database writes, with its encrypt
 (KEK) outside the database and data directory. OpenRouter uses this path for a
 dedicated management key. That key can create, edit and delete provider keys; Quotum
 uses only fixed GET operations for identity, credits, workspaces and key measurements.
-Access without expiry requires explicit consent. Revoke the key at OpenRouter when
+Access without expiry requires explicit consent. z.ai personal quota access uses the
+same encryption boundary with a dedicated ordinary API key, which may also permit
+model requests; Quotum calls only its fixed quota GET. Its unknown expiry has separate
+consent. Account identity is owner-declared: replacement requires explicit same-account
+confirmation and cannot verify it through the quota interface. Revoke the key at OpenRouter when
 it is no longer needed. Key names and measured spending are shared board data;
 management secrets, raw creator ids, masked labels and raw key hashes are not.
 

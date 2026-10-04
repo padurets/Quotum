@@ -3,7 +3,7 @@ import {useBoardId,type Named} from '../lib/board';
 import {ApiError,call} from '../lib/http';
 import {archivedKeyGroups,moneySelection} from '../lib/moneySelection';
 import {usePrefs,setPrefs} from '../lib/prefs';
-import {keyName} from '../lib/money';
+import {capName,keyName} from '../lib/money';
 import type {MeterHistory} from '../lib/moneyView';
 import {MAX_METERS} from '../../server/domain/meterHistory';
 import {t} from '../i18n';
@@ -13,7 +13,7 @@ import {KEYS_PER_PAGE,KeyPages,KeyPageContent} from './KeyPages';
 import type {KeyPage} from '../lib/moneyKeys';
 
 /** Series are chosen in the chart's settings; the key table only reads measurements. */
-export function MoneySettings({sources,hidden,series}:{sources:readonly Named[];hidden:readonly string[];series:readonly MeterHistory[]}) {
+export function KeyMoneySettings({sources,hidden,series}:{sources:readonly Named[];hidden:readonly string[];series:readonly MeterHistory[]}) {
   const board=useBoardId(),prefs=usePrefs(),unit=prefs.money.unit??'USD';
   const accounts=sources.filter(s=>!hidden.includes('source:'+s.id)&&s.meters?.some(m=>m.kind==='balance'&&m.unit===unit));
   const [sourceId,setSource]=useState<string|null>(()=>accounts.length===1?accounts[0].id:null);
@@ -107,4 +107,24 @@ export function MoneySettings({sources,hidden,series}:{sources:readonly Named[];
     </>}
     <div className="popover-section"><button className="popover-row" onClick={()=>{const next={...prefs.money.selected};delete next[unit];setPrefs({money:{...prefs.money,selected:next}});}}>{t('money.resetSelection')}</button></div>
   </>;
+}
+
+export function MoneySettings(props:Parameters<typeof KeyMoneySettings>[0]) {
+  const prefs=usePrefs(),unit=prefs.money.unit;
+  if(!unit?.startsWith('credits:'))return <KeyMoneySettings {...props}/>;
+  return <QuotaSettings {...props}/>;
+}
+function QuotaSettings({sources,hidden}:Parameters<typeof KeyMoneySettings>[0]) {
+  const prefs=usePrefs(),unit=prefs.money.unit!;
+  const selected=moneySelection(sources,hidden,prefs.money).selection?.ids??[];
+  const toggle=(id:string,meter:string,on:boolean)=>{
+    const ids=on?[...selected,[id,meter] as [string,string]]:selected.filter(([s,m])=>s!==id||m!==meter);
+    if(ids.length>MAX_METERS)return;
+    setPrefs({money:{...prefs.money,removed:0,selected:{...prefs.money.selected,[unit]:ids}}});
+  };
+  return <><div className="popover-title">{t('source.show')}</div><p className="popover-note">{selected.length} / {MAX_METERS}</p>
+    {sources.filter(s=>!hidden.includes('source:'+s.id)&&s.meters?.some(m=>m.unit===unit)).map(source=><div key={source.id} className="popover-section"><div className="popover-title">{source.title}</div>
+      {source.meters?.filter(m=>m.kind==='cap'&&m.unit===unit).map(m=>{const on=selected.some(([s,id])=>s===source.id&&id===m.id);return <SwitchRow key={m.id} on={on} disabled={!on&&selected.length>=MAX_METERS} onChange={on=>toggle(source.id,m.id,on)}>{capName(m)}</SwitchRow>;})}
+    </div>)}
+    <p className="popover-note">{t('quota.budgetOnly')}</p></>;
 }

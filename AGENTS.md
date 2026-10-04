@@ -105,7 +105,7 @@ and platform smoke checks still apply.
 - **Meters keep their units and precision.** Money is whole integer millionths,
   serialized as exact decimal strings. Counter spending, top-ups and cap remaining
   are separate from percentage windows; they never enter quota forecasts or native
-  quota notifications. Historical cap semantics and uncertain spending intervals
+  quota notifications. Historical cap semantics, exclusive quota validity bounds and uncertain spending intervals
   survive history packing and retention.
 - **The protocol is a spec.** A change to what the agent sends or the hub answers goes
   into `spec/ingest-v1.md` in the same commit, including its Privacy section; a change to

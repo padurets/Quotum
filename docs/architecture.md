@@ -559,6 +559,24 @@ Invalid money leaves stay distinct from null. The ledger retains the last confir
 span endpoint as evidence through archival and retention; reappearance uses that
 heartbeat time as its spending anchor.
 
+Personal Global z.ai Coding Plan quotas are hub-measured subscription caps in
+`credits:zai`, separate from monetary counters. The adapter supports only the observed
+`CREDIT_LIMIT` tuples `(unit=3, number=5)` and `(unit=6, number=1)`; allowance and usage
+come from original JSON numeric tokens, quantized once to integer millionths. Legacy
+prompt/token/MCP and unknown quota shapes remain unsupported. Valid neighboring caps
+survive partial replies and optional invalid reset fields; missing amounts never
+become zero. The fixed raw-Authorization GET is the provider-published usage plugin
+interface, not a versioned quota OpenAPI schema. No model request is needed.
+
+Accepted quota outcomes persist completeness and observation time independently from
+last success. Authenticated missing quotas hard-close `meter_spans.hold_until` in the
+same transaction as accepted neighboring readings. Recovery opens a new span, even
+inside the previous freshness deadline. No-valid replies create no reading or
+heartbeat. Historical cap cells carry their own exclusive `knownFrom`/`knownUntil`
+bounds through packing, composition, chart geometry and readout; no value crosses an
+omission, reset, missing cell or freshness deadline. A coarse cell with incompatible
+segments remains unknown. Cap usage is neither a spending counter nor a top-up.
+
 Money history uses the same bounded tiles, cache and page loader. Its exact strings,
 historical cap semantics and original spending intervals stay separate from the window
 Float64 codec. A logical balance selection internally reads its two counters. Axes and
@@ -604,6 +622,17 @@ an explicit same-site Origin before parsing, accept only a connector's strict pr
 ASCII key format, and are limited to ten attempts a minute per person and address.
 Replies contain only the safe record details, including a last-four hint; neither the
 key nor encrypted bytes go to the dashboard's events or shared boards.
+
+z.ai does not supply account identity or key expiry. Its connector declares authenticated
+access without an account pseudonym; the credential service creates a random,
+owner-local logical account and stores `source_identity` provenance atomically with
+the encrypted credential and holding. New connections never merge by key or plan.
+Explicit same-account replacement keeps that source and history, with the API's
+identity-verification limitation explained in My connections. Unknown expiry requires
+its own consent and remains distinct from a known deadline or confirmed absence of
+one. z.ai HTTP and envelope authentication rejections have a neutral private code;
+shared credential failures remain `unmeasured`. Ordinary z.ai keys may permit model
+requests, though Quotum calls only the fixed quota GET.
 
 `QUOTUM_SECRET_KEY` supplies 32 random bytes as canonical unpadded base64url (43
 characters); `QUOTUM_SECRET_KEY_FILE` instead reads those characters, optionally

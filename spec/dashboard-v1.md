@@ -500,10 +500,28 @@ A hub-measured card may also carry `meters`, `keys` (a preview of at most five),
 `keysCount`, `inventory` and `spending`. A meter is `{id, kind, unit, amount, limit,
 resetAt, minutes, scope, label, at, staleAfterMs, stale}`. Kind is `counter`, `balance`
 or `cap`; a cap's amount is used, its remaining is limit minus amount. A zero limit
-has no percentage. All money fields are canonical decimal strings of whole millionths,
+has no percentage. All unit-valued amount fields are canonical decimal strings of whole millionths,
 quantized once from the supplier's original decimal token, with nearest rounding and
 halfway values away from zero. They use signed 64-bit SQLite integers; totals use exact
 integer arithmetic and never combine units. A balance has no 100%.
+
+Hub sources carry `identityOrigin: "supplier" | "declared"`. The latter denotes an
+owner-declared logical account; it does not claim provider verification. Personal
+Global z.ai sources have two independent cap meters in `credits:zai`:
+`quota:credit:5h` (300 minutes, scope `five_hour`) and `quota:credit:week`
+(10080 minutes, scope `weekly`). Their allowances overlap and are never added.
+There is no monetary balance, key inventory, calendar spending, forecast or native
+percentage-window attention for these caps. Provider catalogue `funding` is
+`subscription` or `wallet`, independently of measurement authority.
+
+A quota card carries `quota: {observedAt, generation: "credit" | null, complete,
+issue: "empty" | "unsupported" | "invalid" | "missing" | null}`. Partial readings
+update only accepted meters. An authenticated omission closes the old meter's
+historical validity immediately and leaves its current value stale. Empty,
+unsupported and invalid replies retain all last valid readings without extending
+success or freshness. Authentication and transport failures preserve the former
+freshness deadline. Resets are supplied epoch milliseconds or null; elapsed time
+never restores quota. The allowlisted plan is `lite`, `pro`, `max` or unknown.
 
 OpenRouter stores credits and lifetime usage counters; its balance is derived from
 the pair. A credit increase is a top-up, and a usage increase is spending.
@@ -550,19 +568,41 @@ visible whole-cell period. Loading those neighbors cannot change its amounts or 
 a boundary-crossing step located within that period.
 Extra may give `first`, `open`
 (including explicit null), `segment`, historical `semantics`, original exceptional
-`steps`, `topupInternal` and `topupSteps`. Amounts remain strings throughout packing.
+`steps`, `topupInternal` and `topupSteps`. Cap cells additionally carry
+`knownFrom` and `knownUntil`, exclusive epoch-millisecond validity bounds clipped to
+that cell, the observation span's freshness and hard omission boundary, and any
+reported reset. Cells mixing incompatible quota semantics are unavailable. These
+bounds survive packing and composition; both drawing and readout require the
+requested fetched cell and its own interval. Missing bounds or cells grant no
+carry-forward, including internal/trailing gaps. Other meter kinds keep their
+existing interpretation. Amounts remain strings throughout packing.
 Known cell spending and original steps compose once over the effective whole-cell
 range. OpenRouter balance spending comes from usage, and top-ups from credits.
 A frame that cannot fit losslessly in the history budget returns `413 history_limit`.
 
 Connections use owner-only `POST /api/credentials` with `{provider, secret,
-allowNoExpiry?, requestId?}` and replacement with `{secret, allowNoExpiry?}`. An access
+allowNoExpiry?, allowUnknownExpiry?, requestId?}` and replacement with
+`{secret, allowNoExpiry?, allowUnknownExpiry?, sameAccount?}`. An access
 without expiry requires explicit `allowNoExpiry: true`; otherwise the hub returns
-`409 credential_expiry_confirmation` without writing. Replacement keeps owner, provider
+`409 credential_expiry_confirmation` with `{expiresAt: null, expiryKind: "none"}`
+without writing. Replacement keeps owner, provider
 and source; a different account is refused. The optional creation requestId is a UUID,
 replayed for the same owner/provider for 24 hours, with a tombstone after deletion.
 Replacement accepts no requestId. Deleting the last own bound credential releases
 that person's holding and orphan shares, preserving other holders and history.
+
+z.ai expiry is `unknown`, distinct from confirmed `none` and `dated`. Owner credential
+DTOs include `expiryKind` and `identityOrigin`; private source access includes
+`expiryKind`. An unknown-expiry key requires `allowUnknownExpiry: true`, otherwise
+`409 credential_expiry_confirmation` carries `{expiresAt: null, expiryKind: "unknown"}`.
+Every new declared connection creates a separate owner-local source; it cannot select
+or merge another source. Replacement requires `sameAccount: true` before any provider
+call; missing consent gives `409 credential_account_confirmation`. It preserves the
+source and history based on the owner's declaration, which z.ai does not verify.
+Another account must use a new connection. Supplier identity checks remain required,
+and supplier connectors reject declared-identity consent flags. Incorrect field types
+and unsupported options give `400 credential_invalid`. A rejected z.ai key gives
+`credential_auth_rejected`, without asserting revocation or expiry.
 
 Hub cadence and refresh carry `by: "hub"`, with no device identity. Hub refresh
 requires both board membership and a source holding; a shared reader without a holding

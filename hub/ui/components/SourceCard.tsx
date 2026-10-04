@@ -8,7 +8,7 @@ import {DEFAULT_PLAN, isValidPlan, planAt, planChangesAt, planNote, planTotal, t
 import {logoOf} from './logos';
 import {MeterBar} from './Meter';
 import {KeyScaleSettings} from './KeyScaleSettings';
-import {MoneyCard,AccessMark} from './MoneyCard';
+import {MoneyCard,QuotaCard,QuotaMark,AccessMark} from './MoneyCard';
 import {cardId, colorOf, isWindowHidden, planOf, weeklyPlanOf, withColor, withHidden, withName, withPlan, withPlanned, withWindowHidden, type Arrange} from '../lib/view';
 import {CARD_COLORS, MIDDLE_STEP, PROVIDERS} from '../lib/providers';
 import {call} from '../lib/http';
@@ -474,7 +474,7 @@ function CardTray({source}: {source: Card}) {
   const sessions = useSessions(source.id);
   const resets = useResetsFor(source.provider);
   const access = useSourceAccess(source.id);
-  return <Tray resets={resets} news={access && <AccessMark id={source.id}/>} current={!!source.resets?.available&&<FreeResets resets={source.resets}/>} sessions={sessions} />;
+  return <Tray resets={resets} news={<>{access&&<AccessMark id={source.id}/>}<QuotaMark source={source}/></>} current={!!source.resets?.available&&<FreeResets resets={source.resets}/>} sessions={sessions} />;
 }
 
 /**
@@ -499,17 +499,17 @@ export const SourceCard = memo(function SourceCard({id, arrange, boardId, person
           <div className="card-title"><h2 title={title}>{title}</h2>
             {source.plan&&<span className="plan">{source.plan.replace(/^Claude\s+/i,'')}</span>}
           </div>
-          {(source.meters||providerOf(source.provider))&&<small className="resource-type">{t(source.meters||providerOf(source.provider)?.measuredBy==='hub'?'resource.budget':'resource.subscription')}</small>}
+          {(source.meters||providerOf(source.provider))&&<small className="resource-type">{t(providerOf(source.provider)?.funding==='wallet'?'resource.budget':'resource.subscription')}</small>}
         </div>
         <SourceSettings key={boardId} source={source} title={title} arrange={arrange} boardId={boardId} takeOff={takeOff} />
       </div>
 
       <div className="limits">
-        {source.meters&&<MoneyCard source={source} board={boardId} view={arrange.view}/>}
+        {source.provider==='zai'?<QuotaCard source={source}/>:source.meters&&<MoneyCard source={source} board={boardId} view={arrange.view}/>}
         {visible.map(w => (
           <Limit key={w.id} w={w} measuredAt={source.successAt} weekly={weekly} />
         ))}
-        {!source.windows.length && !source.meters?.length && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
+        {source.provider!=='zai' && !source.windows.length && !source.meters?.length && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
         {!!source.windows.length && !visible.length && <AllHidden source={source} arrange={arrange} />}
       </div>
       <CardTray source={source} />

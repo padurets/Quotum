@@ -10,10 +10,11 @@ import {covered, type Coverage} from './historyPlot';
 
 /** A series of the history as the chart and the table show it: named, coloured, with its value now. */
 export type PlotBlock = {from: number; to: number; gap: boolean; points: readonly [at: number, remaining: number, segment: number, hold: number][]};
-export type PlotSeries = Pick<HistorySeries, 'sourceId' | 'windowId' | 'points' | 'staleAfterMs'> & {blocks?: {block: PlotBlock; join: boolean}[]};
+export type CapCell = {at:number;from:number;to:number;value:number};
+export type PlotSeries = Pick<HistorySeries, 'sourceId' | 'windowId' | 'points' | 'staleAfterMs'> & {capCells?: readonly CapCell[];blocks?: {block: PlotBlock; join: boolean}[]};
 type LineName = Pick<Win, 'kind' | 'label' | 'minutes'> & {provider: string; key: string; name: string; color: string; dash: string; current: number};
 export type PlotLine = PlotSeries & LineName;
-export type Line = HistorySeries & LineName;
+export type Line = HistorySeries & LineName & {capCells?: readonly CapCell[]};
 
 /**
  * The board's series of one kind of window that have data in the period. Only what the

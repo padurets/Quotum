@@ -19,7 +19,7 @@ export function moneySelection(cards:readonly Card[],hidden:readonly string[],se
   const explicit=settings.selected[settings.unit];
   const ids=explicit??shown.flatMap(card=>{
     const balance=card.meters?.find(m=>m.kind==='balance'&&m.unit===settings.unit);
-    return balance?[[card.id,balance.id] as [string,string]]:[];
+    return balance?[[card.id,balance.id] as [string,string]]:card.meters?.filter(m=>m.kind==='cap'&&m.unit===settings.unit&&!m.id.startsWith('key:')).map(m=>[card.id,m.id] as [string,string])??[];
   });
   const admitted=ids.filter(([source])=>visible.has(source));
   return {selection:selectionOf(admitted.slice(0,MAX_METERS),settings.unit),omitted:Math.max(0,admitted.length-MAX_METERS),removed:ids.length-admitted.length};
