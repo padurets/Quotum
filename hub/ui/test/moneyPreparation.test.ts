@@ -21,4 +21,10 @@ test('the actual prepared money chart keeps its value axis, step geometry and ex
   hook.begin();context.draw();hook.commit();hook.finish();hook.begin();const model=context.draw().value!;
   assert.equal(model.valueAxis,valueAxis);assert.equal(model.paths[0].line,'M252.0,147.0H464.0V57.0');
   assert.equal(model.paths[0].latest,'60000:10000000');assert.equal(exactReads,1);
+  context.valueAxis={min:0,max:20,rawValue:()=> '3000000'};
+  context.incomingLines=[{key:'money',points:[[0,0,1],[60000,3,1]]}];
+  hook.begin();const pending=context.draw();
+  assert.equal(pending.value,model,'the same account and unit retain their drawing during a display-mode change');
+  assert.equal(pending.ready,false);hook.commit();hook.finish();hook.begin();
+  const next=context.draw().value!;assert.equal(next.valueAxis,context.valueAxis);assert.equal(next.paths[0].latest,'60000:3000000');
 });

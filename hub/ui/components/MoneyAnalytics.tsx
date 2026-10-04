@@ -63,7 +63,7 @@ export function MoneyHistory({arrange}:{arrange:Arrange}) {
     </Popover></div>
     <SelectionNotice/>
     {error&&<p className="form-error">{t('money.historyLimit')}</p>}
-    <Chart lines={lines} axis={axis} stepped from={frame.from} now={measured} to={frame.to} cellMs={history?.cellMs??60_000} empty={!lines.length?t('money.unknown'):null} plot={plot} onBase={onBase} onSelect={setTimeRange} navigation={navigation} live={frame.live} clock={now} modelContext={navigation.context}/>
+    <Chart lines={lines} axis={axis} stepped from={frame.from} now={measured} to={frame.to} cellMs={history?.cellMs??60_000} empty={!lines.length?t('money.unknown'):null} plot={plot} onBase={onBase} onSelect={setTimeRange} navigation={navigation} live={frame.live} clock={now} modelContext={JSON.stringify([board,unit])}/>
     <div className="legend">{entries.map(s=>{const key=moneyIdentity(s),card=sources.find(c=>c.id===s.sourceId);return <button type="button" key={key} className="legend-item" aria-pressed={!prefs.muted[key]} onClick={()=>setMuted(key,!prefs.muted[key])}><svg width="18" height="6" aria-hidden="true"><line x1="1" x2="17" y1="3" y2="3" stroke={colorOf(arrange.view,s.sourceId,card?.provider??'')} strokeWidth="2.5" strokeDasharray={s.kind==='cap'?'7 5':undefined}/></svg><span>{nameOf(s,card?.title??s.sourceId)}</span><b>{money(s.end,s.unit)}</b></button>;})}</div>
   </section>;
 }
