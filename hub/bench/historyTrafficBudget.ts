@@ -21,23 +21,34 @@ export function readUnion(cells: ReadonlySet<number>, cell: number): [number, nu
 
 export function bodyBounds(body: BodyCount, transfer?: Transfer) {
   if (!Number.isFinite(body.lower) || body.lower < 0) throw new Error('invalid encoded body lower bound');
+  if (transfer && body.id !== undefined && body.id !== transfer.id || body.responseId !== undefined && body.id !== body.responseId) throw new Error('history transfer identity mismatch');
+  if (transfer && !transfer.sent && body.lower !== 0) throw new Error('body arrived before the fixture sent it');
   if (!body.complete) {
-    if (transfer && !transfer.sent) {
-      if (body.lower !== 0) throw new Error('body arrived before the fixture sent it');
+    if (transfer && !transfer.sent && transfer.aborted) {
       return {lower: 0, upper: 0, unknown: 0, partial: 1};
     }
     const upper = transfer?.encoded;
     return {lower: body.lower, upper: upper !== undefined && body.lower <= upper ? upper : null, unknown: 1, partial: 1};
   }
-  if (!transfer || body.coding !== 'br' || body.length !== transfer.encoded || body.lower !== transfer.encoded || body.decoded !== transfer.decoded) throw new Error('complete history body has no matching Brotli payload proof');
+  if (!transfer?.sent || body.coding !== 'br' || body.length !== transfer.encoded || body.lower !== transfer.encoded || body.decoded !== transfer.decoded) throw new Error('complete history body has no matching Brotli payload proof');
   return {lower: body.lower, upper: body.lower, unknown: 0, partial: 0};
+}
+
+/** Query coordinates are reusable after cancellation; only attempt identity joins IO. */
+export function transferFor(body: BodyCount, transfers: readonly Transfer[]): Transfer | undefined {
+  if (body.id === undefined) return;
+  const matches = transfers.filter(transfer => transfer.id === body.id);
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 export function bodyTotals(reads: {count: BodyCount; transfer?: Transfer}[]) {
   const complete = {count: 0, decoded: 0, encoded: 0};
   const partial = {count: 0, encodedLower: 0, encodedUpper: 0 as number | null};
   let decoded: number | null = 0, encodedLower = 0, encodedUpper: number | null = 0, unknown = 0;
+  const identities = new Set<string>();
   for (const {count, transfer} of reads) {
+    const id = count.id ?? transfer?.id;
+    if (id !== undefined) {if (identities.has(id)) throw new Error('history attempt counted more than once'); identities.add(id);}
     const bounds = bodyBounds(count, transfer);
     encodedLower += bounds.lower; encodedUpper = encodedUpper === null || bounds.upper === null ? null : encodedUpper + bounds.upper; unknown += bounds.unknown;
     const decodedUpper = count.complete ? count.decoded! : bounds.upper === 0 ? 0 : transfer?.decoded ?? null;

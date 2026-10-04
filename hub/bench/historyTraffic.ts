@@ -3,10 +3,11 @@ import {cellStart, compose, targetOf, tileOf, type Chunk, type HistoryAnswer} fr
 import {followPan, HistoryStore} from '../ui/lib/history';
 import {Pan} from '../ui/lib/pan';
 import type {HistoryTile} from '../ui/lib/historyTiles';
-import {HistoryCutChanged, bodyTotals, readUnion, stableHistory, trafficProblems} from './historyTrafficBudget';
+import {HistoryCutChanged, bodyTotals, readUnion, stableHistory, trafficProblems, transferFor} from './historyTrafficBudget';
 import {HISTORY_CODEC, historyBody, historyProxy, type BodyCount} from './historyProxy';
-import {browserHistoryTraffic} from './historyTrafficBrowser';
+import {browserCancellationTraffic, browserHistoryTraffic} from './historyTrafficBrowser';
 import type {Browser} from './cdp';
+import {cancellationTraffic} from './historyCancellation';
 
 const DAY = 86_400_000;
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -88,10 +89,8 @@ export async function historyTraffic(upstream: string, cookie: string, board: st
           assert.equal(freshOverlap, 0, 'fresh cells were read again'); assert.equal(ownershipOverlap, 0, 'conflicting tile writers'); assert.ok(peakFlights <= 2);
           assert.ok([...requested].filter(at => !visited.has(at) && !bridges.has(at)).length <= Math.min(60, Math.ceil(length / cell / 4)), 'unvisited optional cells exceeded the buffer');
           const coldBodies = bodies.filter(b => b.phase === phase);
-          const totals = bodyTotals(coldBodies.map(({count, from, to}) => {
-            const transfer = proxy.transfers.find(t => t.id === count.id) ?? proxy.transfers.find(t => t.phase === phase && t.from === from && t.to === to);
-            return {count, transfer};
-          }));
+          await proxy.settled(phase);
+          const totals = bodyTotals(coldBodies.map(({count}) => ({count, transfer: transferFor(count, proxy.transfers)})));
           proxy.phase(`${name}/reference`);
           let referenceDecoded = 0, referenceEncoded = 0;
           const readReference = async (from: number, to: number) => {
@@ -123,8 +122,10 @@ export async function historyTraffic(upstream: string, cookie: string, board: st
         } finally {store.close(); await Promise.allSettled([...pending]);}
       }
     }
+    const cancellations = await cancellationTraffic(proxy, cookie, board, windows);
     const native = browser ? await browserHistoryTraffic(browser, proxy, cookie, board) : null;
+    const nativeCancellations = browser ? await browserCancellationTraffic(browser, proxy, cookie) : null;
     if (native) problems.push(...native.problems);
-    return {codec: HISTORY_CODEC, reports, invalidated, native, problems};
+    return {codec: HISTORY_CODEC, reports, invalidated, cancellations, native, nativeCancellations, problems};
   } finally {await proxy.close();}
 }

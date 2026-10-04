@@ -2,18 +2,18 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {brotliCompressSync, constants} from 'node:zlib';
-import {historyBody, historyProxy, type BodyCount, type Transfer} from '../historyProxy';
-import {HistoryCutChanged, bodyBounds, bodyTotals, stableHistory, trafficProblems} from '../historyTrafficBudget';
+import {HISTORY_ATTEMPT_HEADER, historyBody, historyProxy, type BodyCount, type Transfer} from '../historyProxy';
+import {HistoryCutChanged, bodyBounds, bodyTotals, stableHistory, trafficProblems, transferFor} from '../historyTrafficBudget';
 
 const transfer: Transfer = {id: '1', phase: 'cold', cell: 1, from: 0, to: 60, started: 0, sent: true, finished: true, aborted: false, decoded: 100, encoded: 40};
 test('body budgets require actual matching coding and payload lengths, never transport totals', () => {
-  const body = {complete: true, decoded: 100, lower: 40, upper: 40, length: 40, coding: 'br'};
+  const body = {id: '1', complete: true, decoded: 100, lower: 40, upper: 40, length: 40, coding: 'br'};
   assert.equal(bodyBounds(body, transfer).upper, 40);
-  for (const bad of [{...body, coding: 'identity'}, {...body, lower: 200}, {...body, decoded: 99}, {...body, length: 39}]) assert.throws(() => bodyBounds(bad, transfer));
+  for (const bad of [{...body, coding: 'identity'}, {...body, lower: 200}, {...body, decoded: 99}, {...body, length: 39}, {...body, id: 'different'}, {...body, responseId: 'different'}]) assert.throws(() => bodyBounds(bad, transfer));
   assert.throws(() => bodyBounds(body));
   assert.deepEqual(bodyBounds({complete: false, lower: 12}, transfer), {lower: 12, upper: 40, unknown: 1, partial: 1});
   assert.equal(bodyBounds({complete: false, lower: 0}).upper, null);
-  assert.deepEqual(bodyBounds({complete: false, lower: 0}, {...transfer, sent: false}), {lower: 0, upper: 0, unknown: 0, partial: 1});
+  assert.deepEqual(bodyBounds({complete: false, lower: 0}, {...transfer, sent: false, finished: false, aborted: true}), {lower: 0, upper: 0, unknown: 0, partial: 1});
   const reading = {name: 'cold', attempts: 5, maxAttempts: 7, decoded: 100, encodedUpper: 40, referenceDecoded: 100, referenceEncoded: 40, ratios: true};
   assert.deepEqual(trafficProblems(reading), []);
   for (const bad of [{...reading, attempts: 8}, {...reading, decoded: 151}, {...reading, encodedUpper: 81}, {...reading, encodedUpper: null}]) assert.ok(trafficProblems(bad).length);
@@ -61,7 +61,7 @@ test('the Chrome observer excludes headers and preserves aborted-body uncertaint
   assert.equal(complete.count?.lower, 40, 'the 1000-byte transport total is not a body');
   assert.equal(bodyBounds(complete.count!, {...transfer, decoded: Buffer.byteLength(JSON.stringify(f.answer))}).upper, 40);
   f.start('2'); f.emit('Network.dataReceived', {requestId: '2', encodedDataLength: 12}); f.emit('Network.loadingFailed', {requestId: '2', canceled: true});
-  assert.deepEqual(bodyBounds(f.observer.reads[1].count!, transfer), {lower: 12, upper: 40, unknown: 1, partial: 1});
+  assert.deepEqual(bodyBounds(f.observer.reads[1].count!, {...transfer, id: '2'}), {lower: 12, upper: 40, unknown: 1, partial: 1});
   f.emit('Network.requestWillBeSent', {requestId: '3', request: {url: 'http://localhost/api/history?cell=1&from=0&to=60'}});
   f.emit('Network.loadingFailed', {requestId: '3', canceled: true});
   assert.equal(bodyBounds(f.observer.reads[2].count!).upper, null, 'missing fixture evidence must stay unknown');
@@ -77,13 +77,13 @@ test('abort before proxy delivery is proved zero body while the attempted reques
     const read = historyBody(`${proxy.url}/api/history?cell=1&from=0&to=60`, '', controller.signal, count => {counted = count;});
     const failed = assert.rejects(read);
     for (let n = 0; n < 100 && !proxy.transfers[0]?.encoded; n++) await new Promise(resolve => setTimeout(resolve, 2));
-    assert.ok(proxy.transfers[0]?.encoded); controller.abort(); await failed;
+    assert.ok(proxy.transfers[0]?.encoded); controller.abort(); await failed; await proxy.settled('cancel');
     assert.equal(proxy.transfers.length, 1); assert.equal(bodyBounds(counted!, proxy.transfers[0]).upper, 0);
   } finally {await proxy.close(); await new Promise<void>(resolve => upstream.close(() => resolve()));}
 });
 
 test('complete payloads and partial bounds remain separate in a bounded verdict', () => {
-  const counts = bodyTotals([{count: {complete: true, decoded: 100, lower: 40, length: 40, coding: 'br'}, transfer}, {count: {complete: false, lower: 12}, transfer}]);
+  const counts = bodyTotals([{count: {complete: true, decoded: 100, lower: 40, length: 40, coding: 'br'}, transfer}, {count: {id: '2', complete: false, lower: 12}, transfer: {...transfer, id: '2'}}]);
   assert.deepEqual(counts.complete, {count: 1, decoded: 100, encoded: 40});
   assert.deepEqual(counts.partial, {count: 1, encodedLower: 12, encodedUpper: 40});
   assert.equal(counts.decoded, 200); assert.equal(counts.encodedLower, 52); assert.equal(counts.encodedUpper, 80); assert.equal(counts.unknown, 1); assert.equal(counts.byteVerdict, 'bounded');
@@ -123,7 +123,80 @@ test('an actual partial Brotli delivery counts payload bytes and retains the ful
     const url = `http://127.0.0.1:${(upstream.address() as {port: number}).port}/api/history`;
     await assert.rejects(historyBody(url, '', controller.signal, count => {counted = count;}));
     assert.equal(counted!.complete, false); assert.equal(counted!.lower, 12, 'only the delivered compressed prefix is known');
-    const bounds = bodyBounds(counted!, {...transfer, decoded: decoded.length, encoded: encoded.length, finished: false, aborted: true});
+    const bounds = bodyBounds(counted!, {...transfer, id: counted!.id!, decoded: decoded.length, encoded: encoded.length, finished: false, aborted: true});
     assert.equal(bounds.lower, 12); assert.equal(bounds.upper, encoded.length); assert.equal(bounds.unknown, 1);
   } finally {controller.abort(); upstream.closeAllConnections(); await new Promise<void>(resolve => upstream.close(() => resolve()));}
+});
+
+test('pending or unidentified attempts never borrow an earlier cancelled range’s zero-body proof', () => {
+  const pending = {...transfer, sent: false, finished: false, aborted: false};
+  assert.deepEqual(bodyBounds({id: pending.id, complete: false, lower: 0}, pending), {lower: 0, upper: 40, unknown: 1, partial: 1});
+  assert.equal(transferFor({complete: false, lower: 0}, [{...pending, aborted: true}]), undefined);
+  assert.equal(transferFor({id: '1', complete: false, lower: 0}, [pending, pending]), undefined);
+  assert.throws(() => bodyBounds({id: 'other', complete: false, lower: 0}, {...pending, aborted: true}));
+  assert.throws(() => bodyTotals([{count: {id: '1', complete: false, lower: 0}, transfer}, {count: {id: '1', complete: false, lower: 0}, transfer}]));
+});
+
+test('same-range aborted retries retain distinct pre-header identities and fail an excessive aggregate byte budget', async () => {
+  const answer = {run: 'r', values: Array.from({length: 6000}, (_, i) => [i, `sample-${i}`, i / 19])};
+  const waiting: import('node:http').ServerResponse[] = [];
+  const upstream = createServer((req, res) => {assert.equal(req.headers[HISTORY_ATTEMPT_HEADER], undefined, 'fixture identity is stripped before the hub'); waiting.push(res);});
+  await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+  const proxy = await historyProxy(`http://127.0.0.1:${(upstream.address() as {port: number}).port}`), counts: BodyCount[] = [];
+  const ready = async (index: number) => {const end = Date.now() + 2000; while (!waiting[index]) {if (Date.now() > end) throw new Error('upstream did not receive attempt'); await new Promise(resolve => setTimeout(resolve, 1));} return waiting[index];};
+  try {
+    proxy.phase('retry');
+    const url = `${proxy.url}/api/history?cell=1&from=0&to=60`;
+    for (let index = 0; index < 3; index++) {
+      const controller = new AbortController(), read = historyBody(url, '', controller.signal, count => counts.push(count)), failed = assert.rejects(read);
+      const response = await ready(index), record = proxy.transfers[index];
+      if (index === 0) controller.abort();
+      else {
+        let sent = false;
+        Object.defineProperty(record, 'sent', {get: () => sent, set(value: boolean) {sent = value; if (value) queueMicrotask(() => controller.abort());}});
+        response.end(JSON.stringify(answer));
+      }
+      await failed; await proxy.settled('retry');
+      assert.ok(counts[index].id, 'request identity exists even without response headers');
+      assert.equal(counts[index].responseId, undefined);
+      assert.equal(transferFor(counts[index], proxy.transfers), record);
+    }
+    const read = historyBody(url, '', undefined, count => counts.push(count));
+    (await ready(3)).end(JSON.stringify(answer)); assert.deepEqual(await read, answer); await proxy.settled('retry');
+    assert.equal(new Set(counts.map(count => count.id)).size, 4);
+    const totals = bodyTotals(counts.map(count => ({count, transfer: transferFor(count, proxy.transfers)})));
+    const reference = counts[3];
+    assert.equal(totals.unknown, 2); assert.equal(totals.byteVerdict, 'bounded');
+    assert.equal(totals.decoded, 3 * reference.decoded!); assert.equal(totals.encodedUpper, 3 * reference.lower);
+    assert.equal(trafficProblems({name: 'retry', attempts: 4, ...totals, referenceDecoded: reference.decoded!, referenceEncoded: reference.lower, ratios: true}).length, 2);
+  } finally {await proxy.close(); upstream.closeAllConnections(); await new Promise<void>(resolve => upstream.close(() => resolve()));}
+});
+
+test('Chrome request headers preserve a cancelled attempt identity before response headers', () => {
+  const f = cdpFixture();
+  f.emit('Network.requestWillBeSent', {requestId: 'raw1', request: {url: 'http://localhost/api/history?cell=1&from=0&to=60', headers: {[HISTORY_ATTEMPT_HEADER]: 'b1:1'}}});
+  f.emit('Network.loadingFailed', {requestId: 'raw1', canceled: true});
+  assert.equal(f.observer.reads[0].count?.id, 'b1:1'); assert.equal(f.observer.reads[0].canceled, true);
+  f.emit('Network.requestWillBeSent', {requestId: 'raw2', request: {url: 'http://localhost/api/history?cell=1&from=0&to=60'}});
+  f.emit('Network.loadingFailed', {requestId: 'raw2', canceled: true});
+  f.emit('Network.requestWillBeSentExtraInfo', {requestId: 'raw2', headers: {[HISTORY_ATTEMPT_HEADER]: 'b1:2'}});
+  assert.equal(f.observer.reads[1].count?.id, 'b1:2', 'late extra headers update the terminal count instead of matching a query');
+});
+
+import {runInNewContext} from 'node:vm';
+import {historyPageScript} from '../historyTrafficBrowser';
+
+test('the browser fixture tags each fetch before IO and keeps cancellation identity without response headers', async () => {
+  const calls: {resource: unknown; init: RequestInit}[] = [];
+  const window = {fetch: async (resource: unknown, init: RequestInit) => {calls.push({resource, init}); return {};}, __quotumHistoryAttempts: {} as Record<string, {aborted: boolean}>};
+  runInNewContext(historyPageScript('24h'), {window, location: {href: 'http://localhost:8080/'}, localStorage: {setItem: () => {}}, URL, Headers, Request});
+  const headers = new Headers({Accept: 'application/json'}), controller = new AbortController();
+  await window.fetch('/api/history?cell=1&from=0&to=60', {headers, signal: controller.signal, credentials: 'same-origin'});
+  await window.fetch('/api/history?cell=1&from=0&to=60', {headers});
+  const ids = calls.map(call => new Headers(call.init.headers).get(HISTORY_ATTEMPT_HEADER)!);
+  assert.ok(ids.every(Boolean)); assert.notEqual(ids[0], ids[1]);
+  assert.equal(calls[0].init.signal, controller.signal); assert.equal(calls[0].init.credentials, 'same-origin');
+  assert.equal(headers.has(HISTORY_ATTEMPT_HEADER), false, 'the production options are not mutated');
+  controller.abort(); assert.equal(window.__quotumHistoryAttempts[ids[0]].aborted, true);
+  assert.equal(window.__quotumHistoryAttempts[ids[1]].aborted, false);
 });
