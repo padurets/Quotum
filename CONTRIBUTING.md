@@ -330,6 +330,11 @@ the tilted board beneath its title. Preserve the typography, proportions and bac
 when replacing the underlying screenshots, and compress the PNGs with pngquant.
 Use only the demo’s synthetic accounts and machines.
 
+Refresh `docs/openrouter.png` and `docs/openrouter.ru.png` from
+`npm run demo -- money --still` too. Show a healthy wallet's balance and capped keys
+beside a subscription, with the same viewport, crop and browser-window frame in both
+languages.
+
 `npm run bench` (after `npm run build`) uses a still demo whose agents repeat their
 lists without working, opens Ana's board in headless Chrome and checks the budget in
 `hub/bench/budget.ts`. During warmup no `history` may arrive. For two minutes (five
