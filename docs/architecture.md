@@ -757,6 +757,9 @@ across people, as agent activity counts it), machine or subscription, each viewe
 themselves, or lists each agent: a group tells how many of its agents work, how long they
 have worked (each running agent's credited work, which the hub sends with it) and their
 last activity as a date and time, or now while any works; an unknown time is a dash.
+In a narrow grouped list, the default first line pairs the name with the agent count;
+the second pairs credited work on the left with last activity on the right, aligned
+with the line above.
 Machines and subscriptions are in the individual agents' details, opened by clicking
 the group. A folder stays under the project in the same table cell, wrapping long
 worktree names. Their default columns fit a wide dialog as a table with rows highlighted

@@ -453,6 +453,8 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 .agents-compact-main > .agents-project { flex: 1; }
 .agents-compact-details { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 4px 0 0 15px; color: var(--text-3); font-size: 11.5px; }
 .agents-compact-details > span { min-width: 0; overflow-wrap: anywhere; }
+/* Group names have no leading mark: work and last activity line up with the name and tally above. */
+.agents-compact.is-grouped .agents-compact-details { margin-left: 0; justify-content: space-between; }
 /* The table of limits as a list: a window's name and what is left, then its other values, each with its heading, wrapping whole. */
 .forecast-compact-main { display: flex; align-items: baseline; gap: 10px; min-width: 0; font-size: 13px; }
 /* The gap sets the name after its colour, which the details below line up with. */

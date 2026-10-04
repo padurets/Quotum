@@ -359,7 +359,7 @@ function AgentsRows({
     const lead: AgentColumn = single ? 'activity' : 'agents';
     const details = columns.filter(column => column !== lead);
     return (
-      <ul className="agents-compact agents-rows" ref={body as RefObject<HTMLUListElement | null>}>
+      <ul className={`agents-compact agents-rows ${single ? '' : 'is-grouped'}`} ref={body as RefObject<HTMLUListElement | null>}>
         {groups.map(group => {
           const session = group.rows[0].session;
           return (
