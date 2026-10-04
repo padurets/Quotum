@@ -887,9 +887,10 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 
 /* Unit-valued sources share the board's card and table surfaces. */
 .money-body { display: grid; gap: 12px; min-width: 0; }
-.money-balance { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
-.money-balance > span { color: var(--text-3); }
-.money-balance > strong { font-size: 1.65rem; font-variant-numeric: tabular-nums; }
+.money-balance { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px 12px; }
+.money-balance > span:first-child { color: var(--text-3); }
+.money-balance .limit-value { max-width: 100%; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.money-limits:not(:empty) { border-top: 1px solid var(--hair); padding-top: 16px; margin-top: 4px; }
 .money-partial { margin-left: 4px; color: var(--text-3); }
 .money-limit .limit-top { flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
 .money-limit .limit-name { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -904,7 +905,9 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .money-limit:has(.cap-stale), .compact-limit.is-money:has(.cap-stale) { opacity: .6; }
 .source-consent { display: flex; gap: 8px; align-items: flex-start; }
 .monetary-table th:not(:first-child), .monetary-table td:not(:first-child) { text-align: right; }
-.compact .money-balance > strong { font-size: 1.15rem; }
+.compact .money-balance .limit-value { font-size: 1.15rem; }
+.compact .money-balance .limit-value small { font-size: 11px; }
+.compact .money-limits:not(:empty) { padding-top: 8px; margin-top: 0; }
 
 /* Connections use the same inset rows as other lists on glass. */
 .connections-toolbar { display: flex; justify-content: flex-end; }

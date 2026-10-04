@@ -668,6 +668,7 @@ export const en = {
   "sources.noExpiryConsent": "I understand this key has no expiry and explicitly allow saving it.",
   "sources.noExpiry": "No expiry",
   "money.balance": "Balance",
+  "money.accountBalance": "Account balance",
   "money.spending": "Spending",
   "money.day": "Today (UTC)",
   "money.week": "This week (UTC)",

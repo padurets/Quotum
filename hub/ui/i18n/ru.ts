@@ -663,6 +663,7 @@ export const ru = {
   "sources.noExpiryConsent": "Понимаю, что у ключа нет срока, и явно разрешаю его сохранить.",
   "sources.noExpiry": "Без срока",
   "money.balance": "Баланс",
+  "money.accountBalance": "Общий баланс",
   "money.spending": "Расход",
   "money.day": "За день (UTC)",
   "money.week": "За неделю (UTC)",
