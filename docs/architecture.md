@@ -347,6 +347,8 @@ this is kept (`agentWorkSince`): before it, how agents worked is not known. A bo
 live lists tell each running agent's credited work so far, found by the names it is
 credited under (sessions alike in all of it told apart by their place in the machine's
 list, working or not).
+The agents panel opened from a card's tray shows this credited work time for each
+session in agent-hours, with its project and folder, grouped by machine.
 
 The analytics show it over their period. The table tells, for each window, its
 subscription's active time, what the window spent per active hour, what share of its
@@ -744,7 +746,8 @@ themselves, or lists each agent: a group tells how many of its agents work, how 
 have worked (each running agent's credited work, which the hub sends with it) and their
 last activity as a date and time, or now while any works; an unknown time is a dash.
 Machines and subscriptions are in the individual agents' details, opened by clicking
-the group. Their default columns fit a wide dialog as a table with rows highlighted
+the group. A folder stays under the project in the same table cell, wrapping long
+worktree names. Their default columns fit a wide dialog as a table with rows highlighted
 edge to edge; a narrow dialog uses an inset compact list. The list can be shorter than its rows: it
 shows the most whole rows that fit, in its own order, and a last row saying how many
 more, which opens them all in a dialog; to know how many fit, it lays all its rows out

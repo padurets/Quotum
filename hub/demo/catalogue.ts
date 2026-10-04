@@ -457,7 +457,7 @@ const all: DemoSet = {
       name: 'Ana',
       agents: true,
       // Heights she chose, which the benchmark renders too: the list after all her cards however many, 32 rows tall, so most of its
-      // agents show with their running times and a few are left to the dialog; the analytics taller than drawn by themselves.
+      // agents show with their work totals and a few are left to the dialog; the analytics taller than drawn by themselves.
       agentsPlace: {x: 0, y: 99, w: 6, h: 32},
       places: {activity: {x: 0, y: 0, w: 6, h: 12}, history: {x: 0, y: 1, w: 6, h: 16}, forecast: {x: 0, y: 2, w: 6, h: 30}},
       projects: {'docs-site': 'docs'},
@@ -494,6 +494,8 @@ const all: DemoSet = {
         'The list\'s settings, for every viewer, group it by machine or subscription, or put each agent on a row of its own; the owner also picks its columns, how long each agent has run among them, off at first',
         'The table of agents in a dialog has a way back to all the groups when it was opened from them, and none when opened from a row',
         'At the wide dialog width, default agent details form a table whose rows highlight from edge to edge; on a narrow screen they form an inset list',
+        'Directories stay under the project in the same table cell; long worktree names wrap so they can be read without hovering',
+        'The card tray\'s agents panel labels its right column Agent-hours and shows each session\'s credited work rather than its running duration; infra has zero work although its client is open',
         'The list of agents is 32 rows tall: the first projects that fit whole, then "N more projects", which opens them all in a dialog, in the same order and columns, sorted there as in the widget',
         'Agent activity and the chart are taller than they draw themselves: the room goes to the plot, the totals, heads and legends stay whole',
         'The table is 30 rows tall: room under it on a wide screen; on a narrow one, where it is a list, it is as tall as its rows',

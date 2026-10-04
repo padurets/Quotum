@@ -125,7 +125,10 @@ export function Agents({sessions, roomy = true}: {sessions: LiveSession[]; roomy
         </>
       }
     >
-      <div className="popover-title">{t('agents.title')}</div>
+      <div className="popover-title agents-list-head">
+        <span>{t('agents.title')}</span>
+        <span title={t('agents.workedHint')}>{t('agents.worked')}</span>
+      </div>
       <div className="agents-list popover-scroll">
         {machines.map(machine => (
           <section key={machine.id} className="agents-machine">
@@ -142,7 +145,10 @@ export function Agents({sessions, roomy = true}: {sessions: LiveSession[]; roomy
                   {folderOf(session) && <small>{folderOf(session)}</small>}
                   <span className="sr-only">, {stateOf(session)}</span>
                 </span>
-                <Since className="agents-age" from={session.startedAt} />
+                <span className="agents-age" title={t('agents.workedHint')}>
+                  <span className="sr-only">{t('agents.worked')}: </span>
+                  {workHours(session.workedMs)}
+                </span>
               </div>
             ))}
           </section>
