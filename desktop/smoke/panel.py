@@ -1,5 +1,6 @@
 """Native popup lifecycle, on tray.sh's private bus and an isolated Xvfb display."""
 import ctypes as C
+import inspect
 import os
 from pathlib import Path
 import re
@@ -107,6 +108,22 @@ def check_panel(bus, item, child, root, env):
             if value:
                 return value
             time.sleep(.01)
+        pid = engine()
+        focus, revert = C.c_ulong(), C.c_int()
+        x.XGetInputFocus(display, C.byref(focus), C.byref(revert))
+        def windows(owner):
+            return [dict(id=w.id, override=w.override, x=w.x, y=w.y, width=w.width, height=w.height)
+                    for w in visible(owner)] if owner else []
+        states = {}
+        for owner in [child.pid, pid]:
+            try:
+                states[owner] = [line for line in Path(f'/proc/{owner}/status').read_text().splitlines()
+                                 if line.startswith(('Name:', 'State:', 'PPid:'))]
+            except OSError:
+                pass
+        print({'failedLine': inspect.currentframe().f_back.f_lineno, 'focus': focus.value,
+               'controllerWindows': windows(child.pid), 'engineWindows': windows(pid),
+               'processStates': states}, flush=True)
         raise RuntimeError('native panel operation timed out')
 
     def engine():
