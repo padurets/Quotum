@@ -23,10 +23,11 @@ function setup() {
   return {store, live: new Sessions(store), ann, bob, laptop: machine(ann, 'laptop'), server: machine(bob, 'server')};
 }
 
-type Given = {source?: string; working?: boolean; project?: string | null; folder?: string | null; startedAt?: number; origin?: Origin};
+type Given = {sessionId?: string | null; source?: string; working?: boolean; project?: string | null; folder?: string | null; startedAt?: number; origin?: Origin};
 
 /** A session as a machine's report brings it, started an hour before the tests begin unless said. */
-const session = (device: string, {source = 'codex:1', working = true, project = null, folder = null, startedAt = start - 3_600_000, origin = 'terminal'}: Given = {}) => ({
+const session = (device: string, {sessionId = null, source = 'codex:1', working = true, project = null, folder = null, startedAt = start - 3_600_000, origin = 'terminal'}: Given = {}) => ({
+  sessionId,
   source,
   device: {id: device, name: device},
   origin,
@@ -58,7 +59,7 @@ test('reports and quiet-machine sweeps tell history of exactly the credited work
   live.sweep(start + 60 * minute);
   assert.deepEqual(news, [['codex:1', start + 15_000]], 'late credit starts at the old report, not at the sweep');
   news.length = 0;
-  store.creditWork(laptop, start, start + 10_000, [{source: 'codex:1', origin: 'terminal', startedAt: working.sentStartedAt, project: '', folder: '', ordinal: 0}]);
+  store.creditWork(laptop, start, start + 10_000, [{source: 'codex:1', origin: 'terminal', startedAt: working.sentStartedAt, project: '', folder: '', identity: {kind: 'legacy' as const, ordinal: 0}}]);
   assert.deepEqual(news, [], 'already credited time tells nothing');
   live.report(laptop, ann, [session(laptop, {working: false})], start + 60 * minute);
   live.report(laptop, ann, [], start + 61 * minute);
@@ -359,4 +360,89 @@ test("a board shows the sessions of those on it who measure the subscription, ea
   live.forget([laptop]);
   assert.deepEqual(live.of('codex:1', [ann, bob], start).map(s => s.device.id), [server]);
   store.close();
+});
+
+test('a board tells how long each running agent has worked, as its lists credited it, twins each their own', () => {
+  const {store, live, ann, laptop} = setup();
+  const quotum = session(laptop, {project: 'quotum', sessionId: 'a'.repeat(32)});
+  const docs = session(laptop, {project: 'docs', working: false, sessionId: 'b'.repeat(32)});
+  const worked = (at: number) => live.of('codex:1', [ann], at).map(s => [s.project, s.workedMs === null ? null : s.workedMs / minute]);
+  live.report(laptop, ann, [quotum, docs], start);
+  assert.deepEqual(worked(start), [['quotum', 0], ['docs', 0]], 'nothing credited before a second list');
+  live.report(laptop, ann, [quotum, docs], start + 2 * minute);
+  assert.deepEqual(worked(start + 2 * minute), [['quotum', 2], ['docs', 0]]);
+  // Two agents alike in everything work for a minute, then the first rests while the second goes on.
+  const twin = session(laptop, {project: 'twin', sessionId: 'c'.repeat(32)});
+  const resting = {...twin, working: false};
+  const second = {...twin, sessionId: 'd'.repeat(32)};
+  live.report(laptop, ann, [twin, second], start + 3 * minute);
+  live.report(laptop, ann, [resting, second], start + 4 * minute);
+  live.report(laptop, ann, [resting, second], start + 6 * minute);
+  assert.deepEqual(worked(start + 6 * minute), [['twin', 1], ['twin', 3]], 'the one still working keeps its time apart');
+  // Over again, the time it worked before is still its own.
+  live.report(laptop, ann, [quotum, docs], start + 7 * minute);
+  assert.deepEqual(worked(start + 7 * minute), [['quotum', 3], ['docs', 0]]);
+  store.close();
+});
+
+test('stable twins keep their own retained credit through disappearance, reorder, idle and return', () => {
+  const {store, live, ann, laptop} = setup();
+  const a = session(laptop, {project: 'twins', sessionId: 'a'.repeat(32)});
+  const b = {...a, sessionId: 'b'.repeat(32)};
+  live.report(laptop, ann, [a, b], start);
+  live.report(laptop, ann, [b], start + minute);
+  live.report(laptop, ann, [b, {...a, working: false}], start + 3 * minute);
+  assert.deepEqual(live.of('codex:1', [ann], start + 3 * minute).map(s => s.workedMs), [3 * minute, minute]);
+  live.report(laptop, ann, [a, {...b, working: false}], start + 4 * minute);
+  live.report(laptop, ann, [a, b], start + 5 * minute);
+  assert.deepEqual(live.of('codex:1', [ann], start + 5 * minute).map(s => s.workedMs), [2 * minute, 4 * minute]);
+  assert.equal(count(store, 'agent_sessions'), 2);
+  store.close();
+});
+
+test('stable contexts have global high water after restart and current-source counters only', () => {
+  const {store, live, ann, laptop} = setup();
+  const a = session(laptop, {project: 'P', sessionId: 'a'.repeat(32)});
+  live.report(laptop, ann, [a], start);
+  live.report(laptop, ann, [{...a, source: 'codex:2', project: 'Q', folder: 'wt', origin: 'editor', sentStartedAt: a.sentStartedAt - minute}], start + minute);
+  live.report(laptop, ann, [a], start + 2 * minute);
+  assert.equal(live.of('codex:1', [ann], start + 2 * minute)[0].workedMs, minute);
+  assert.equal(store.worked(laptop, [{source: 'codex:2', project: '', folder: '', origin: 'app', startedAt: 0, identity: {kind: 'stable', sessionId: a.sessionId!}}])[0], minute);
+  const restarted = new Sessions(store);
+  restarted.report(laptop, ann, [{...a, project: 'new', sentStartedAt: 123}], start);
+  restarted.report(laptop, ann, [], start + 3 * minute);
+  assert.equal(all(store).reduce((sum, stretch) => sum + stretch.to - stretch.from, 0), 3 * minute, 'global identity high water clips the rolled-back context after restart');
+  assert.equal(count(store, 'agent_sessions'), 3, 'contextual rows remain separate');
+  store.close();
+});
+
+test('legacy ordinals remain working-only, mixed stable rows consume them, and live legacy credit stays unknown', () => {
+  const {store, live, ann, laptop} = setup();
+  const old = session(laptop, {project: 'twins'});
+  live.report(laptop, ann, [{...old, working: false}, old, {...old, sessionId: 'a'.repeat(32)}, old], start);
+  live.report(laptop, ann, [], start + minute);
+  const keys = store.db.prepare('SELECT ordinal, producer_id FROM agent_sessions ORDER BY id').all();
+  assert.deepEqual(keys.map(row => [row.ordinal, row.producer_id]), [[0, null], [0, 'a'.repeat(32)], [2, null]]);
+  live.report(laptop, ann, [old], start + minute);
+  assert.equal(live.of('codex:1', [ann], start + minute)[0].workedMs, null);
+  assert.equal(all(store).reduce((sum, s) => sum + s.to - s.from, 0), 3 * minute);
+  store.close();
+});
+
+test('cutover clips only opposite retained credit, and mixed namespaces use a snapshot in either order', () => {
+  for (const reversed of [false, true]) {
+    const {store, laptop} = setup();
+    const context = {source: 'codex:1', origin: 'terminal' as const, startedAt: 0, project: '', folder: ''};
+    const legacy = {...context, identity: {kind: 'legacy' as const, ordinal: 0}};
+    const stable = {...context, identity: {kind: 'stable' as const, sessionId: 'a'.repeat(32)}};
+    store.creditWork(laptop, start, start + minute, [legacy]);
+    store.creditWork(laptop, start - minute, start + 2 * minute, [stable]);
+    assert.deepEqual(all(store).map(s => [s.from - start, s.to - start]), [[0, minute], [minute, 2 * minute]]);
+    const freshStable = {...stable, identity: {kind: 'stable' as const, sessionId: 'b'.repeat(32)}};
+    store.creditWork(laptop, start + minute, start + 3 * minute, reversed ? [freshStable, legacy] : [legacy, freshStable]);
+    const rows = all(store);
+    assert.equal(rows.filter(s => s.session === 1).reduce((sum, s) => sum + s.to - s.from, 0), 2 * minute, 'downgrade is clipped against stable high water');
+    assert.equal(rows.filter(s => s.session === 3).reduce((sum, s) => sum + s.to - s.from, 0), 2 * minute, 'stable parallel credit is independent of loop order');
+    store.close();
+  }
 });

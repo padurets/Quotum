@@ -1,5 +1,5 @@
 import {useSyncExternalStore} from 'react';
-import {readAgentsSort, type AgentsSort} from './agents';
+import {readAgentsBy, readAgentsSort, type AgentsBy, type AgentsSort} from './agents';
 import {ANALYTICS_KINDS, type ActivityDimension, type Kind} from './types';
 import {DEFAULT_PERIOD, periodOf} from './periods';
 
@@ -10,7 +10,8 @@ export type Horizon = 'auto' | '1d' | '3d' | '7d';
  * How this reader looks at the dashboard, whatever the board: the period and window type
  * of its analytics (agent activity, the chart and the table), the chart's horizon, lines
  * and groups switched off in either chart's legend, whether it draws the plan and the
- * forecast, what the activity widget stacks by, reset announcements, and whether the
+ * forecast, what the list of agents gathers by and how it sorts, what the activity widget
+ * stacks by, reset announcements, and whether the
  * widgets are locked in place. How a
  * board is arranged is the board's own (lib/view.ts).
  */
@@ -30,6 +31,8 @@ export type Prefs = {
   locked: boolean;
   /** How this viewer orders agents, shared by all boards. */
   agentsSort: AgentsSort;
+  /** What this viewer gathers the list of agents by. */
+  agentsBy: AgentsBy;
   /** What the activity widget stacks its hours by. */
   activityBy: ActivityDimension;
 };
@@ -37,7 +40,7 @@ export type Prefs = {
 const KEY = 'quotum.prefs';
 export const HORIZONS: Horizon[] = ['auto', '1d', '3d', '7d'];
 export const ACTIVITY_BY: ActivityDimension[] = ['source', 'project', 'device'];
-const DEFAULTS: Prefs = {muted: {}, range: DEFAULT_PERIOD, kind: 'weekly', horizon: 'auto', showPlan: true, showForecast: true, showResets: true, locked: false, agentsSort: null, activityBy: 'project'};
+const DEFAULTS: Prefs = {muted: {}, range: DEFAULT_PERIOD, kind: 'weekly', horizon: 'auto', showPlan: true, showForecast: true, showResets: true, locked: false, agentsSort: null, agentsBy: 'project', activityBy: 'project'};
 
 function read(): Prefs {
   try {
@@ -49,7 +52,7 @@ function read(): Prefs {
     if (!HORIZONS.includes(stored.horizon)) stored.horizon = DEFAULTS.horizon;
     if (!ACTIVITY_BY.includes(stored.activityBy)) stored.activityBy = DEFAULTS.activityBy;
     const {muted, range, kind, horizon, showPlan, showForecast, showResets, locked, activityBy} = stored;
-    return {muted, range, kind, horizon, showPlan, showForecast, showResets, locked: locked === true, agentsSort: readAgentsSort(stored.agentsSort), activityBy};
+    return {muted, range, kind, horizon, showPlan, showForecast, showResets, locked: locked === true, agentsSort: readAgentsSort(stored.agentsSort), agentsBy: readAgentsBy(stored.agentsBy), activityBy};
   } catch {
     return DEFAULTS;
   }

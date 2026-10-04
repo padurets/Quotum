@@ -931,6 +931,7 @@ mod tests {
     #[test]
     fn running_agents_are_told_to_the_hub_that_knows_them_and_an_older_one_is_left_alone() {
         let session = RunningSession {
+            session_id: None,
             provider: Provider::Codex,
             account: Some("4b7e0c1d2e3f4a5b6c7d8e9f".into()),
             account_name: None,
@@ -956,8 +957,12 @@ mod tests {
         );
         assert_eq!(body["machine"]["id"], "0123456789abcdef");
         let idle = RunningSession { working: false, last_worked_at: Some(1_790_000_015_000), ..session };
-        assert!(current.sessions(&[idle]));
+        assert!(current.sessions(std::slice::from_ref(&idle)));
         assert_eq!(seen.lock().unwrap()[1].1["sessions"][0]["lastWorkedAt"], "2026-09-21T14:13:35Z");
+
+        let identified = RunningSession { session_id: Some("a".repeat(32)), ..idle };
+        assert!(current.sessions(&[identified]));
+        assert_eq!(seen.lock().unwrap()[2].1["sessions"][0]["sessionId"], "a".repeat(32));
 
         // A hub older than the agent: twice, then upgraded.
         let upgraded = Arc::new(AtomicBool::new(false));

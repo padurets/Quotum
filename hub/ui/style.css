@@ -453,6 +453,8 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 .agents-compact-main > .agents-project { flex: 1; }
 .agents-compact-details { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 4px 0 0 15px; color: var(--text-3); font-size: 11.5px; }
 .agents-compact-details > span { min-width: 0; overflow-wrap: anywhere; }
+/* Group names have no leading mark: work and last activity line up with the name and tally above. */
+.agents-compact.is-grouped .agents-compact-details { margin-left: 0; justify-content: space-between; }
 /* The table of limits as a list: a window's name and what is left, then its other values, each with its heading, wrapping whole. */
 .forecast-compact-main { display: flex; align-items: baseline; gap: 10px; min-width: 0; font-size: 13px; }
 /* The gap sets the name after its colour, which the details below line up with. */
@@ -465,6 +467,7 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 .forecast-compact-details > span > span { color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
 /* Cut short, it keeps a machine's heading and two rows, each with its folder under the project. */
 .agents-list { box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; width: min(340px, calc(100vw - 48px)); max-width: 100%; overflow: hidden auto; padding: 0 0 4px; --least: 116px; }
+.agents-list-head { display: flex; justify-content: space-between; gap: 12px; }
 .agents-machine h3 { display: flex; align-items: baseline; gap: 8px; margin: 0 8px 4px; font-size: 12.5px; font-weight: 560; color: var(--text); }
 .agents-machine h3 span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agents-machine h3 small { margin-left: auto; font-weight: 450; color: var(--text-3); white-space: nowrap; }
@@ -476,11 +479,20 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 .agents-project { position: relative; min-width: 0; overflow: hidden; }
 .agents-project > span, .agents-project small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agents-project small, .agents-rows td .agents-folder { color: var(--text-4); font-size: 11.5px; }
-/* Under the project, past the agent's mark. */
-.agents-rows td .agents-folder { display: block; padding-left: 17px; overflow: hidden; text-overflow: ellipsis; }
+/* A folder identifies the worktree: keep its full name below the project in the same cell. */
+.agents-rows td .agents-folder { display: block; padding-left: 38px; color: var(--text-3); white-space: normal; overflow-wrap: anywhere; }
 .agents-origin { display: inline-grid; place-items: center; color: var(--text-3); }
 .agents-origin svg { display: block; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.agents-rows td .agents-origin { margin-right: 8px; vertical-align: -2px; }
 .agents-age { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text-3); }
+/* A group of agents: its name opens them, as the whole row does. */
+.agents-rows .is-group { cursor: pointer; }
+.agents-open { display: block; max-width: 100%; border: 0; padding: 0; background: none; color: inherit; font: inherit; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: inherit; }
+.agents-rows .is-group:hover .agents-open { color: var(--text); }
+/* How many of a group's agents work, of how many, and a mark for each, as a card's tray counts them. */
+.agents-tally { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.agents-rows td .agents-tally .agent { margin-right: 0; }
+.agents-back { margin-left: -10px; }
 .card-name input { width: 100%; }
 
 /* ---------- history ---------- */

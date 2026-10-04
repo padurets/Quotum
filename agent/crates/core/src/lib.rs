@@ -9,5 +9,6 @@ pub mod process;
 pub mod providers;
 pub mod runner;
 pub mod schedule;
+mod session_identity;
 pub mod sink;
 pub mod stop;

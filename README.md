@@ -101,7 +101,10 @@ Codex         api                  idle     started 25m ago · editor
 - **Which agents run on it, and which of them work.** Under the limits, a mark per
   Claude Code, Codex or Antigravity session spending the subscription, grouped by
   machine: filled while it works, outlined while idle; its project, its folder (a
-  worktree, a folder inside the repository) and how long it runs in the tooltip. Terminals, editors and the Codex app alike.
+  worktree, a folder inside the repository) and its credited work time in agent-hours
+  in the panel. Credit belongs to the current subscription and is unknown without a
+  reliable session ID; a dash keeps that distinct from known zero. Terminals, editors
+  and the Codex app alike.
 - **Free resets.** When a provider grants resets of the limits (Codex does now and
   then), the card shows how many you have and until when.
 - **A weekly spending plan.** By default you spend 30 / 25 / 15 / 15 / 10 / 5% on the
@@ -135,14 +138,17 @@ Codex         api                  idle     started 25m ago · editor
   and [Claude Resets](https://claude-resets.com), with a link to the source. You
   can turn them off.
 - **Boards made of widgets** (a card per subscription, agent activity, the chart, the
-  table, and a list of every running agent to turn on), like a dashboard in Grafana:
+  table, and a list of the running agents to turn on, gathered by project, machine or
+  subscription, each group with how many of its agents work, their agent-hours and the
+  date and time of their last activity, or now while any works; individual agents with
+  their machines and subscriptions a click away), like a dashboard in Grafana:
   the cards show what is left now, the analytics under them share one set of filters.
   The owner places them on a six-column grid by dragging their heads, and resizes them
   to a third, a half, two thirds or the whole width. Each fills only the rows its content
   needs, so cards stack beside a tall list, unless the owner drags its bottom edge (or
   a bottom corner) to make it taller, or the list of agents shorter: the charts grow
   with it, a card never gets shorter than its content, and a shorter list ends with how
-  many more agents run, which opens them all. Either side edge changes the width. A
+  many more rows it has, which opens them all. Either side edge changes the width. A
   double click on the bottom edge or a bottom corner, or Enter or Space on the bottom
   edge, gives a widget back the height of its content. The owner names the cards,
   hides the ones they don't need (the data keeps coming) and sets the plans; everyone on

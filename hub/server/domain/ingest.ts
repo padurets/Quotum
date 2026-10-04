@@ -263,6 +263,7 @@ export const ORIGINS = ['terminal', 'editor', 'app'] as const;
 export type Origin = (typeof ORIGINS)[number];
 
 export type AgentSession = {
+  sessionId: string | null;
   provider: Provider;
   account: string | null;
   accountName: string | null;
@@ -282,11 +283,18 @@ export type SessionReport = AgentSender & {sentAt: number; sessions: AgentSessio
 export function parseSessions(body: unknown): SessionReport {
   const sender = parseSender(body);
   const input = body as Obj;
+  const ids = new Set<string>();
   const sessions = list(input.sessions, 'sessions', 200).map(value => {
     if (!isObject(value)) throw new Invalid('session');
+    const sessionId = value.sessionId ?? null;
+    if (sessionId !== null) {
+      if (typeof sessionId !== 'string' || !/^[0-9a-f]{32}$/.test(sessionId) || ids.has(sessionId)) throw new Invalid('sessionId');
+      ids.add(sessionId);
+    }
     if (!(ORIGINS as readonly unknown[]).includes(value.origin)) throw new Invalid('origin');
     if (typeof value.working !== 'boolean') throw new Invalid('working');
     return {
+      sessionId,
       provider: provider(value.provider),
       account: account(value.account),
       accountName: text(value.accountName, 'accountName', true),

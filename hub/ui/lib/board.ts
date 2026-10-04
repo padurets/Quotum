@@ -119,6 +119,15 @@ function withResets(old: HubResets | null, next: HubResets): HubResets {
   return {resets: keepEach(old?.resets, next.resets), trackers: next.trackers, past: keep(old?.past, next.past)};
 }
 
+/** Older hubs omit credit, and malformed values never become a known zero. */
+function normalizedSessions(sessions: LiveSession[]): LiveSession[] {
+  return sessions.map(session => {
+    const value = session.workedMs;
+    const workedMs = typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+    return value === workedMs ? session : {...session, workedMs};
+  });
+}
+
 function snapshot(state: PageState, data: Snapshot): PageState {
   const old = state.board?.id === data.board.id ? state.board : null;
   const board: BoardState = {
@@ -131,7 +140,7 @@ function snapshot(state: PageState, data: Snapshot): PageState {
       data.sources.map(card => card.id),
     ),
     cards: keepEach(old?.cards, Object.fromEntries(data.sources.map(card => [card.id, card]))),
-    sessions: keepEach(old?.sessions, data.sessions),
+    sessions: keepEach(old?.sessions, Object.fromEntries(Object.entries(data.sessions).map(([id, sessions]) => [id, normalizedSessions(sessions)]))),
     cadence: keepEach(old?.cadence, data.cadence),
     refresh: keepEach(old?.refresh, data.refresh),
     forecast: keepEach(old?.forecast, data.forecast),
@@ -183,7 +192,7 @@ function hub(state: PageState, event: HubEvent): PageState {
     case 'card':
       return patch(state, board => set(board, 'cards', event.data.id, event.data));
     case 'sessions':
-      return patch(state, board => set(board, 'sessions', event.data.id, event.data.sessions));
+      return patch(state, board => set(board, 'sessions', event.data.id, normalizedSessions(event.data.sessions)));
     case 'cadence':
       return patch(state, board => set(board, 'cadence', event.data.id, event.data.cadence));
     case 'refresh':

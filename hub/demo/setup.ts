@@ -20,6 +20,7 @@ import {
   personOf,
   problems,
   sessionsAt,
+  sessionId,
   snapshot,
   sourceOf,
   workSince,
@@ -246,11 +247,12 @@ export function seedWork(store: Store, stand: Stand) {
     }
     for (const machine of machines(set)) {
       const device = (db.prepare('SELECT id FROM devices WHERE user_id = ? AND machine_id = ?').get(stand.people.get(personOf(set, machine))!.id, machineInfo(machine).id) as {id: string}).id;
-      // Its agents that ever work, each with the names the hub files it under, read as the hub reads a list.
+      // Its agents, each with the names the hub files it under, read as the hub reads a list.
       const agents = cards(set).flatMap(card =>
         (card.agents ?? [])
-          .filter(agent => agent.machine === machine.id && agent.works)
-          .map(agent => {
+          .map((agent, index) => ({agent, sessionId: sessionId(card, index)}))
+          .filter(({agent}) => agent.machine === machine.id)
+          .map(({agent, sessionId}) => {
             const [told] = parseSessions({
               version: 1,
               agent: Agent.VERSION,
@@ -258,33 +260,25 @@ export function seedWork(store: Store, stand: Stand) {
               sentAt: new Date(start).toISOString(),
               sessions: [{provider: card.provider, origin: agent.origin, project: agent.project, folder: agent.folder, startedAt: new Date(start + agent.since).toISOString(), working: true}],
             }).sessions;
-            return {agent, key: {source: stand.sources.get(card.id)!, origin: told.origin, startedAt: told.startedAt, project: told.project ?? '', folder: told.folder ?? ''}};
+            return {agent, sessionId, key: {source: stand.sources.get(card.id)!, origin: told.origin, startedAt: told.startedAt, project: told.project ?? '', folder: told.folder ?? ''}};
           }),
       );
-      const open = new Map<string, {key: WorkKey; from: number; to: number}>();
-      const credit = (stretch: {key: WorkKey; from: number; to: number}) => store.creditWork(device, start + stretch.from, start + stretch.to, [stretch.key]);
       for (let t = since; t < 0; t += MIN) {
-        // Agents alike in all of it are told apart by their place among those working, as the hub tells them.
+        // Legacy agents alike in all of it keep their ordinal among the working ones, as the hub tells them.
         const alike = new Map<string, number>();
-        const working = new Set<string>();
-        for (const {agent, key} of awake(machine, t) ? agents : []) {
-          if (agent.since > t || (agent.until !== undefined && t >= agent.until) || !isOn(agent.works!, t)) continue;
+        const working: WorkKey[] = [];
+        for (const {agent, key, sessionId} of awake(machine, t) ? agents : []) {
+          if (agent.since > t || (agent.until !== undefined && t >= agent.until)) continue;
+          if (!agent.works || !isOn(agent.works, t)) continue;
           const plain = JSON.stringify(key);
           const ordinal = alike.get(plain) ?? 0;
           alike.set(plain, ordinal + 1);
-          const id = `${plain} ${ordinal}`;
-          working.add(id);
-          const stretch = open.get(id);
-          if (stretch) stretch.to = t + MIN;
-          else open.set(id, {key: {...key, ordinal}, from: t, to: t + MIN});
+          const identity = sessionId ? {kind: 'stable' as const, sessionId} : {kind: 'legacy' as const, ordinal};
+          working.push({...key, identity});
         }
-        for (const [id, stretch] of open) {
-          if (working.has(id)) continue;
-          credit(stretch);
-          open.delete(id);
-        }
+        // Credit parallel namespaces together, before their high-water ends advance.
+        store.creditWork(device, start + t, start + t + MIN, working);
       }
-      for (const stretch of open.values()) credit(stretch);
     }
     db.exec('COMMIT');
   } catch (error) {
