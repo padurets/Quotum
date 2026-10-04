@@ -1,5 +1,5 @@
 import type {DatabaseSync} from 'node:sqlite';
-import {amount} from '../domain/amount.js';
+import {amount,AMOUNT_MAX} from '../domain/amount.js';
 import {calendarSpending,spending,utcPeriods, sameMeter, validateMeter, type Meter, type MeterMeasurement, type MeterSpan, type Reading} from '../domain/meters.js';
 import type {SourceState} from '../domain/quota.js';
 import {meterCells, type MeterGroup, type MeterSelection, type MeterSeriesCells} from '../domain/meterHistory.js';
@@ -21,7 +21,7 @@ export class MeterStore {
     let incoming=measurement.meters;
     if(reports&&monthlyLimit) {
       const at=Math.max(measurement.reports!.observedAt,measurement.monthlyLimit?.observedAt??0),calendar=reportStore.calendar(source,at),allowance=reportAllowance(calendar,monthlyLimit,at),month=calendar.find(c=>c.unit===allowance?.unit)?.month;
-      if(allowance&&allowance.remaining!==null&&month?.amount!==null&&month?.amount!==undefined&&BigInt(month.amount)>=0n) {
+      if(allowance&&allowance.remaining!==null&&month?.amount!==null&&month?.amount!==undefined&&BigInt(month.amount)>=0n&&BigInt(month.amount)<=AMOUNT_MAX) {
         const start=utcPeriods(at).month,date=new Date(at),end=Date.UTC(date.getUTCFullYear(),date.getUTCMonth()+1,1);
         incoming=[...incoming,{id:'monthly',kind:'cap',unit:allowance.unit,amount:month.amount,at,staleAfterMs:measurement.staleAfterMs,stale:false,limit:allowance.limit,resetAt:end,minutes:(end-start)/60000,scope:'monthly',label:null}];
       }

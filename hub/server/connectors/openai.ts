@@ -43,7 +43,7 @@ export function openAIPlatform(transport=new ConnectorTransport({host:'api.opena
     const attempt:NonNullable<ConnectorIdentity['attempt']>={outcome:'ok',safeCode:null,retryNotBefore:null};
     const failure=(error:unknown,primary:boolean)=>{
       const code=statusCode(error);
-      const lost=code==='credential_account_mismatch'||primary&&['credential_access_invalid','credential_permission','credential_identity_unavailable'].includes(code);
+      const lost=code==='credential_account_mismatch'||code==='credential_access_invalid'||primary&&['credential_permission','credential_identity_unavailable'].includes(code);
       const degraded=!primary&&(error instanceof ConnectorStatus&&[403,404].includes(error.status??0)||code==='credential_identity_unavailable');
       if(lost||attempt.outcome!=='access_lost'&&!degraded){attempt.outcome=lost?'access_lost':'transient';attempt.safeCode=code;}
       else if(attempt.outcome==='ok'){attempt.outcome='degraded';attempt.safeCode=code;}
@@ -64,7 +64,7 @@ export function openAIPlatform(transport=new ConnectorTransport({host:'api.opena
           proved=true;reports.observedAt=at;
           for(const bucket of data.data) {
             if(object(bucket)&&Array.isArray(bucket.results)){count+=bucket.results.length;if(count>2048)throw new SecretError('connector_round_limit');}
-            if(!object(bucket)||bucket.object!=='bucket'||!Number.isSafeInteger(bucket.start_time)||!Number.isSafeInteger(bucket.end_time)||!Array.isArray(bucket.results)) {bad=true;damaged=true;continue;}
+            if(!object(bucket)||bucket.object!=='bucket'||!Number.isSafeInteger(bucket.start_time)||!Number.isSafeInteger(bucket.end_time)||!Array.isArray(bucket.results)) {bad=true;damaged=true;if(object(bucket)&&Number.isSafeInteger(bucket.start_time)){const start=(bucket.start_time as number)*1000;if(Number.isSafeInteger(start)&&start%REPORT_DAY===0)rejectDay(start);}continue;}
             const start=(bucket.start_time as number)*1000,end=(bucket.end_time as number)*1000;
             if(start%REPORT_DAY||end!==start+REPORT_DAY||start<from||end>to){bad=true;damaged=true;if(Number.isSafeInteger(start)&&start%REPORT_DAY===0)rejectDay(start);continue;}
             if(invalidDays.has(start))continue;

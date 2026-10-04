@@ -461,7 +461,11 @@ export class Store {
     for (const event of grants) chunks[tileOf(event.at, cellMs) - tileOf(from, cellMs)].grants.push([event.source_id, event.at, Number(event.detail)]);
     if (meters) {
       const groups=this.meters.groups(meters,from,to);
-      for (const chunk of chunks) {chunk.meterSeries = this.meters.cells(meters,chunk.from,chunk.to,cellMs,groups);chunk.reportSeries=this.reports.series(meters,chunk.from,chunk.to);}
+      const reports=this.reports.series(meters,from,to);
+      for (const chunk of chunks) {
+        chunk.meterSeries = this.meters.cells(meters,chunk.from,chunk.to,cellMs,groups);
+        if(reports.length)chunk.reportSeries=reports.map(series=>({...series,intervals:series.intervals.filter(row=>row.to>chunk.from&&row.from<chunk.to)})).filter(series=>series.intervals.length);
+      }
     }
     return chunks;
   }

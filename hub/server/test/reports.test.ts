@@ -130,3 +130,14 @@ test('a monthly organization allowance cannot use a single-currency subtotal of 
     const allowance=reportAllowance(calendar,store.state(source).monthlyLimit,at);assert.equal(allowance?.limit,'100000000');assert.equal(allowance?.remaining,null);assert.equal(store.state(source).meters?.some(m=>m.id==='monthly'),false);
   }finally{store.close();}
 });
+
+test('monthly sums beyond one SQLite amount preserve reports and exact allowance without a cap reading',()=>{
+  const store=new Store(':memory:',start),source=store.source('openai_platform','a'.repeat(24),start),at=start+day+1000;
+  try{store.record(source,measurement(at,[[0,'9000000000000000000'],[1,'9000000000000000000']]));const allowance=reportAllowance(store.reports.calendar(source,at),store.state(source).monthlyLimit,at);
+    assert.equal(allowance?.remaining,'-17999999999900000000');assert.equal(store.state(source).meters?.some(m=>m.id==='monthly'),false);assert.equal(store.reports.intervals(source,'costs','USD',0,at+day).length,2);
+  }finally{store.close();}
+});
+test('authentication lost at the optional limit preserves costs and stops that access',async()=>{
+  const c=adapter(op=>{if(op==='limit')throw new ConnectorStatus(401,null);return {object:'page',data:[bucket(0)],has_more:false,next_page:null};});
+  try{await assert.rejects(c.identify(secret),/credential_access_invalid/);const expected={account:'0'.repeat(24),expiresAt:null};const verified=adapter(op=>op==='costs'?{object:'page',data:[bucket(0)],has_more:false,next_page:null}:limit);const found=await verified.identify(secret);verified.transport.close();expected.account=found.account;const result=await c.measure(secret,expected);assert.equal(result.attempt?.outcome,'access_lost');assert.equal(result.measurement?.reports?.intervals.length,1);}finally{c.transport.close();}
+});
