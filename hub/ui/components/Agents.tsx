@@ -483,8 +483,8 @@ function AgentsDialog({
   const active = visibleAgentsSort(agentsSort, shown);
   const ordered = sortedGroups(group ? groupsOf(group.rows, 'none') : groups, active, shown);
   const sorting: Sorting = {active, headers: shown.map(id => ({id, title: COLUMNS[id].title})), sortBy: (column, cycle) => sortBy(active, column, cycle)};
-  const agents = group ? group.rows : groups.flatMap(g => g.rows);
-  const working = agents.filter(row => row.session.working).length;
+  const back = group !== null && initial === null;
+  const sortMenu = layout === 'list' && ordered.length > 0;
   const title = group ? (by === 'project' ? projectName(group.name) : (group.name ?? '')) : t('agents.title');
   // A control that goes (a sort with its column or its form, a group left, or with the last agent) leaves the focus in the dialog, after any render.
   useLayoutEffect(() => {
@@ -493,16 +493,16 @@ function AgentsDialog({
   return (
     <Modal title={title} wide onClose={onClose} restore={restore}>
       <div className="agents-dialog" ref={box}>
-        <div className="agents-dialog-head">
-          {group && initial === null && (
-            <button type="button" className="text-button agents-back" onClick={() => setChosen(null)}>
-              <span aria-hidden="true">←</span> {t('agents.allGroups')}
-            </button>
-          )}
-          {agents.length > 0 && <span className="panel-note">{t('agents.machineSummary', {working, count: agents.length})}</span>}
-          {group && <span className="panel-note">{t('agents.workedValue', {time: workHours(group.workedMs)})}</span>}
-          {layout === 'list' && agents.length > 0 && <SortMenu {...sorting} />}
-        </div>
+        {(back || sortMenu) && (
+          <div className="agents-dialog-head">
+            {back && (
+              <button type="button" className="text-button agents-back" onClick={() => setChosen(null)}>
+                <span aria-hidden="true">←</span> {t('agents.allGroups')}
+              </button>
+            )}
+            {sortMenu && <SortMenu {...sorting} />}
+          </div>
+        )}
         {empty ? (
           <p className="panel-empty">{t(`agents.${empty}`)}</p>
         ) : (

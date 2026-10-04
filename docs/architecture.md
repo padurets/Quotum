@@ -748,7 +748,9 @@ last activity as a date and time, or now while any works; an unknown time is a d
 Machines and subscriptions are in the individual agents' details, opened by clicking
 the group. A folder stays under the project in the same table cell, wrapping long
 worktree names. Their default columns fit a wide dialog as a table with rows highlighted
-edge to edge; a narrow dialog uses an inset compact list. The list can be shorter than its rows: it
+edge to edge; a narrow dialog uses an inset compact list. The dialog has no repeated
+count or work total above its rows; its toolbar holds only Back and list sorting when
+needed. The list can be shorter than its rows: it
 shows the most whole rows that fit, in its own order, and a last row saying how many
 more, which opens them all in a dialog; to know how many fit, it lays all its rows out
 unseen beside it, their times standing still. Such a widget tells the grid
