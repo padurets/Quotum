@@ -959,3 +959,24 @@ test('news in a connecting prefix never proves a stale bridge fresh, and a later
   assert.equal(cacheOf(h.store).get(M)!.get(tileOf(base, M))!.validTo, base + 55 * M);
   h.store.close();
 });
+
+test('final completion retains a useful owner whose old role was speculative', async () => {
+  const h = harness(); await h.start(); await h.reads[0].answer();
+  const range = {from: NOW - 25 * H, to: NOW - H};
+  h.store.pan({token: 1, length: 24 * H, ...range, direction: -1}); await flush();
+  const read = pending(h)[0], flights = (h.store as unknown as {flights: Set<{role: 'visible' | 'ahead'}>}).flights;
+  for (const flight of flights) flight.role = 'ahead';
+  h.store.choose('24h', range); h.store.endPan(true); await flush();
+  assert.equal(read.signal?.aborted, false, 'current usefulness wins over the earlier role');
+  await read.answer(); assert.equal(h.store.get().history?.range, `${range.from}-${range.to}`);
+  h.store.close();
+});
+
+test('a failed owner that became visible keeps the foreground retry even before the role pump runs', async () => {
+  const h = harness(); await h.start(); await h.reads[0].answer();
+  h.store.pan({token: 1, length: 24 * H, from: NOW - 25 * H, to: NOW - H, direction: -1}); await flush();
+  for (const flight of (h.store as unknown as {flights: Set<{role: 'visible' | 'ahead'}>}).flights) flight.role = 'ahead';
+  await pending(h)[0].fail(new Error('offline'));
+  assert.equal(h.timers.size, 1);
+  h.store.close();
+});

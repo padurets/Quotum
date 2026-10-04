@@ -16,6 +16,7 @@ import {frequencyKeys} from './controls.js';
 import {panning} from './panning.js';
 import {panningSet} from './fixture.js';
 import {profilePanning} from './panningProfile.js';
+import {historyTraffic} from './historyTraffic.js';
 
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
@@ -203,6 +204,10 @@ async function main() {
     say('checking native continuous wheel and Shift-drag at 24h and 30d, CPU ×4');
     const panned = await panning(cdp);
     problems.push(...panned.problems);
+    say('checking controlled pan traffic over fixed Brotli HTTP, separately from native performance');
+    const current = await ana.get<Snapshot>(`/api/overview?board=${encodeURIComponent(board)}`);
+    const traffic = await historyTraffic(address.base, ana.cookie, board, current.sources.flatMap(source => source.windows.map(window => `${source.id} ${window.id}`)), browser);
+    problems.push(...traffic.problems);
     const result = {
       set: set.id,
       idle: {
@@ -230,6 +235,7 @@ async function main() {
         mutations: tally(measured.reading.mutations).outsideBy,
       },
       work: worked.reports,
+      historyTraffic: traffic,
       panning: panned.reports.map(report => ({...report,
         frames: {count: report.frames.length, p95Ms: round(percentile(report.frames, .95)), p99Ms: round(percentile(report.frames, .99))},
         latency: {count: report.latency.length, p95Ms: round(percentile(report.latency, .95))},
