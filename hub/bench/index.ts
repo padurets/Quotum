@@ -314,6 +314,19 @@ async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:C
   await cdp.evaluate(`Array.from(document.querySelectorAll('.analytics-head button')).find(b=>b.textContent==='USD')?.click()`);
   const readyBy=Date.now()+SHOWN_WITHIN;
   while(!await cdp.evaluate<boolean>(`!!document.querySelector('[data-series="${source} balance"]')`)){if(Date.now()>readyBy)throw new Stop('money chart did not appear');await sleep(20);}
+  await cdp.evaluate(`(async () => {
+    let before = '', stable = 0;
+    const until = performance.now() + 5000;
+    while (stable < 3) {
+      await new Promise(requestAnimationFrame);
+      const size = JSON.stringify(Array.from(document.querySelectorAll('.widgets > .widget')).map(widget => {
+        const box = widget.getBoundingClientRect(); return [box.x, box.y, box.width, box.height];
+      }));
+      const moving = document.getAnimations().some(animation => animation.playState === 'running' && animation.effect?.target?.matches('.widget, .widget-body'));
+      stable = !moving && size === before ? stable + 1 : 0; before = size;
+      if (performance.now() > until) throw new Error('new money widget did not finish layout');
+    }
+  })()`);
   await cdp.evaluate('__quotumBench.reset()');
   const from=Date.now(),latencies:number[]=[],chartLatencies:number[]=[],requests=new Requests(cdp);requests.counting=true;
   for(let i=0;i<6;i++) {
