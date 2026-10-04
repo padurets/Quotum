@@ -22,6 +22,7 @@ import {panning} from './panning.js';
 import {panningSet} from './fixture.js';
 import {profilePanning} from './panningProfile.js';
 import {historyTraffic} from './historyTraffic.js';
+import {diagnoseReversal} from './historyTrafficBrowser.js';
 
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
@@ -217,7 +218,15 @@ async function main() {
     }
     say('checking controlled pan traffic over fixed Brotli HTTP, separately from native performance');
     const current = await ana.get<Snapshot>(`/api/overview?board=${encodeURIComponent(board)}`);
-    const traffic = await historyTraffic(address.base, ana.cookie, board, current.sources.flatMap(source => source.windows.map(window => `${source.id} ${window.id}`)), browser);
+    let traffic:Awaited<ReturnType<typeof historyTraffic>>;
+    try{traffic=await historyTraffic(address.base, ana.cookie, board, current.sources.flatMap(source => source.windows.map(window => `${source.id} ${window.id}`)), browser);}
+    catch(error){
+      if(/browser\/(?:1|30)d\/reversal/.test(String(error))){
+        say('replaying the failed reversal with page and browser diagnostics; the original failure remains');
+        try{await diagnoseReversal(browser,address.base,ana.cookie);}catch(diagnostic){say('reversal replay failed: '+String(diagnostic));}
+      }
+      throw error;
+    }
     problems.push(...traffic.problems);
     const monetary=await moneyPhase(demo,stand,cdp);
     problems.push(...monetary.problems);

@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import {cellStart, type HistoryAnswer} from '../server/domain/history';
 import {openTab, type Browser, type Cdp} from './cdp';
 import {HistoryCutChanged, bodyTotals, readUnion, stableHistory, trafficProblems, transferFor} from './historyTrafficBudget';
-import {HISTORY_ATTEMPT_HEADER, historyBody, type BodyCount, type Transfer} from './historyProxy';
+import {HISTORY_ATTEMPT_HEADER, historyBody, historyProxy, type BodyCount, type Transfer} from './historyProxy';
+import {observeReversal} from './reversalDiagnostic';
 
 const DAY = 86_400_000;
 type Read = {id: string; phase: string; from: number; to: number; cell: number; lower: number; coding?: string; length?: number; attemptId?: string; transferId?: string; canceled?: boolean; count?: BodyCount; answer?: Pick<HistoryAnswer, 'run' | 'now' | 'known'>; chunks?: [number, number][]};
@@ -172,12 +173,14 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
 }
 
 /** Native cancellation/reversal keeps one Shift-wheel token while responses are owned. */
-export async function browserCancellationTraffic(browser: Browser, proxy: TrafficProxy, cookie: string) {
+export async function browserCancellationTraffic(browser: Browser, proxy: TrafficProxy, cookie: string,diagnostic=false) {
   const reports = [];
   for (const length of [DAY, 30 * DAY]) for (const mode of ['before-headers', 'after-delivery', 'reversal'] as const) {
+    if(diagnostic&&(length!==DAY||mode!=='reversal'))continue;
     const name = `browser/${length / DAY}d/${mode}`;
     console.error(`bench: ${name}: opening seed page`);
     const {cdp, bodies, settled, geometry, seed, cell, close} = await historyPage(browser, proxy, cookie, name, length, DAY);
+    let observer:Awaited<ReturnType<typeof observeReversal>>|null=null;
     console.error(`bench: ${name}: seed page ready`);
     const phase = `${name}/gesture`, reads = () => bodies.reads.filter(r => r.phase === phase);
     let stage = 'start';
@@ -190,6 +193,7 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
     const key = (type: string, name: string, code: number, modifiers: number) => cdp.send('Input.dispatchKeyEvent', {type, key: name, code: name === 'Shift' ? 'ShiftLeft' : name, windowsVirtualKeyCode: code, modifiers});
     const wheel = (pixels: number) => cdp.send('Input.dispatchMouseEvent', {type: 'mouseWheel', x: geometry.x, y: geometry.y, deltaX: pixels, deltaY: 0, modifiers: 8});
     try {
+      observer=diagnostic?await observeReversal(cdp,browser):null;
       bodies.phase = phase; proxy.phase(phase, mode === 'after-delivery' ? 0 : 400);
       await step('shift down', () => key('keyDown', 'Shift', 16, 8));
       await step('first wheel', () => wheel(-geometry.width * .1));
@@ -199,7 +203,7 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
         await step('reverse wheel', () => wheel(geometry.width * .1));
         await step('first cancellation', () => until(() => reads()[0]?.canceled === true));
         await step('reversal frame', () => cdp.evaluate('new Promise(requestAnimationFrame)'));
-        await step('repeat wheel', () => wheel(-geometry.width * .1));
+        await step('repeat wheel', () => observer?observer.watch('repeat wheel',()=>wheel(-geometry.width * .1)):wheel(-geometry.width * .1));
         await step('repeat delivery', () => until(() => reads().length >= 2 && reads().slice(1).some(r => r.count?.complete)));
         await step('shift up', () => key('keyUp', 'Shift', 16, 0));
         await step('drawings settled', settled);
@@ -228,10 +232,18 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
       console.error(`bench: ${name}: failure state ${JSON.stringify(state)}`);
       throw error;
     } finally {
+      await observer?.close();
       cdp.at(`${name}/release shift`);
       await key('keyUp', 'Shift', 16, 0).catch(() => {}); await close();
       console.error(`bench: ${name}: page closed`);
     }
   }
   return reports;
+}
+
+/** An instrumented replay diagnoses an earlier failure and never replaces its verdict. */
+export async function diagnoseReversal(browser:Browser,upstream:string,cookie:string){
+  const proxy=await historyProxy(upstream);
+  try{await browserCancellationTraffic(browser,proxy,cookie,true);}
+  finally{await proxy.close();}
 }
