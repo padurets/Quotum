@@ -693,7 +693,7 @@ export const en = {
   "money.inactive": "Inactive",
   "money.missing": "Not found in the last successful traversal",
   "money.inventory": "{count} keys observed",
-  "money.inventoryPartial": "Partial inventory",
+  "money.inventoryPartial": "Some key data could not be retrieved",
   "money.exhausted": "Closed limit",
   "money.byok": "This limit also includes BYOK usage. Wallet spending remains separate.",
   "money.next": "Next page",

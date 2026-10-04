@@ -31,12 +31,12 @@ export function KeyScaleSettings({source,board,arrange}:{source:Card;board:strin
     <ErrorLine error={error}/>
     {changed&&<p className="popover-note">{t('money.changed')}</p>}
     {loaded?.inventory&&!loaded.inventory.complete&&<p className="popover-note">{t('money.inventoryPartial')}</p>}
-    <div className="popover-scroll">{page?.keys.map(part=>{
+    {page?.keys.map(part=>{
       const cap=page.meters.find(m=>m.id===`key:${part.id}:cap`);
       return <SwitchRow key={part.id} on={!!cap&&keyShown(arrange.view,source.id,part.id,source.keys??[])} disabled={!cap}
         onChange={on=>arrange.update(view=>withKeyShown(view,source.id,part.id,on))}
         value={cap?money(capLeft(cap)):t('money.noCap')}>{keyName(part)}</SwitchRow>;
-    })}</div>
+    })}
     {(!!page?.next||back.length>0)&&<KeyPages page={back.length+1} pages={Math.ceil((page?.total??source?.keysCount??0)/50)} previous={!!back.length} next={!!page?.next}
       onPrevious={()=>{setPage(null);setAfter(back.at(-1));setBack(back.slice(0,-1));}}
       onNext={()=>{setPage(null);setBack([...back,after]);setAfter(page!.next!);}}/>}

@@ -54,7 +54,7 @@ export function MoneySettings({sources,hidden,series}:{sources:readonly Named[];
       <ErrorLine error={error}/>
       {changed&&<p className="popover-note">{t('money.changed')}</p>}
       {page?.inventory&&!page.inventory.complete&&<p className="popover-note">{t('money.inventoryPartial')}</p>}
-      <div className="popover-scroll">
+      <div>
         {page?.keys.map(part=><div key={part.id} className="popover-section">
           <div className="popover-title">{keyName(part)}</div>
           {page.meters.filter(m=>m.unit===unit&&m.id.startsWith(`key:${part.id}:`)).map(m=>row(source.id,m.id,t(m.kind==='cap'?'money.cap':'money.usage')))}
@@ -68,7 +68,7 @@ export function MoneySettings({sources,hidden,series}:{sources:readonly Named[];
         onPrevious={()=>{setPage(null);setAfter(back.at(-1));setBack(back.slice(0,-1));}}
         onNext={()=>{setPage(null);setBack([...back,after]);setAfter(page!.next!);}}/>}
     </>:<>
-      <div className="popover-scroll">{accounts.map(s=><div key={s.id} className="popover-section">
+      <div>{accounts.map(s=><div key={s.id} className="popover-section">
         <div className="popover-title">{s.title}</div>
         {row(s.id,'balance',t('money.balance'))}
         {!!s.keysCount&&<button className="popover-row" onClick={()=>choose(s.id)}><span>{t('money.keySeries',{count:s.keysCount})}</span><b>›</b></button>}

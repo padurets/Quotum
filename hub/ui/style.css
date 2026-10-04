@@ -773,7 +773,7 @@ code { font-family: var(--mono); font-size: .92em; color: var(--text-2); }
 .app-banner p { margin: 0; color: var(--text-2); font-size: 13px; }
 .splash-text { display: flex; flex-direction: column; align-items: center; gap: 14px; }
 
-.dialog-head { display: flex; flex-shrink:0; align-items: center; justify-content: space-between; gap: 12px; position:sticky; top:-22px; z-index:1; background:var(--glass-fill); }
+.dialog-head { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 12px; }
 .dialog-head h2 { margin: 0; font-size: 16px; font-weight: 580; }
 .dialog-head .icon-button svg { stroke-width: 1.6; }
 .dialog > .segmented { align-self: flex-start; }

@@ -688,7 +688,7 @@ export const ru = {
   "money.inactive": "Неактивен",
   "money.missing": "Не обнаружен при последнем успешном обходе",
   "money.inventory": "Обнаружено ключей: {count}",
-  "money.inventoryPartial": "Неполный обход",
+  "money.inventoryPartial": "Не удалось получить все данные о ключах",
   "money.exhausted": "Закрытый лимит",
   "money.byok": "Этот лимит также учитывает BYOK. Расход кошелька учитывается отдельно.",
   "money.next": "Следующая страница",

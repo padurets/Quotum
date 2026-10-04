@@ -1,9 +1,8 @@
 import {catalogue} from '../../server/domain/providers';
 
 /**
- * Identity colors are fixed per provider and deliberately avoid the status hues
- * (green / amber / red), so a series colour never reads as a warning.
- * Validated for colour-vision deficiency as a three-slot categorical set.
+ * Identity colours come from the provider catalogue. Status colours stay in the
+ * shared UI tokens, independently of a provider's branding.
  * Their logos are in components/logos.ts.
  */
 export const PROVIDERS: Record<string, {name: string; color: string}> = Object.fromEntries(catalogue.map(p => [p.id, {name: p.name, color: p.color}]));
