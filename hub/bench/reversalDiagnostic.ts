@@ -11,25 +11,29 @@ export async function bounded<T>(label:string,work:Promise<T>,ms=5000):Promise<T
   finally{clearTimeout(timer!);}
 }
 
-/** A separate replay samples the page and browser independently; it cannot supply a passing gate. */
-export async function observeReversal(page:Cdp,browser:Browser){
+/** Samples the page and browser independently; diagnostic intervention cannot supply a passing gate. */
+export async function observeReversal(page:Cdp,browser:Browser,profileBeforeInput=true){
   const response=await fetch(browser.endpoint+'/json/version',{signal:AbortSignal.timeout(5000)});
   if(!response.ok)throw new Error('diagnostic browser endpoint refused');
   const {webSocketDebuggerUrl}=await response.json() as {webSocketDebuggerUrl:string};
   const control=await Cdp.connect(webSocketDebuggerUrl);
-  let paused:Frame[]=[],capture:Promise<void>|null=null,profileActive=false,pauseNotify:(()=>void)|null=null;
+  let paused:Frame[]=[],capture:Promise<void>|null=null,profileActive=false,debuggerEnabled=false,pauseNotify:(()=>void)|null=null;
   page.on<{callFrames:Frame[]}>('Debugger.paused',event=>{paused=event.callFrames;pauseNotify?.();});
   const processes=()=>bounded('browser process information',control.send<{processInfo:Process[]}>('SystemInfo.getProcessInfo')).then(r=>r.processInfo);
   let before:Process[];
-  try{
-    before=await processes();
-    await bounded('enable debugger',page.send('Debugger.enable'));
+  const enable=async()=>{
+    await bounded('enable debugger',page.send('Debugger.enable'));debuggerEnabled=true;
     await bounded('enable profiler',page.send('Profiler.enable'));
     await bounded('start profiler',page.send('Profiler.start'));profileActive=true;
+  };
+  try{
+    before=await processes();
+    if(profileBeforeInput)await enable();
   }catch(error){control.close();await bounded('disable failed setup',page.send('Debugger.disable')).catch(()=>{});throw error;}
   const sample=async(label:string)=>{
     const after=await processes().catch(error=>String(error));
     const browserCpu=Array.isArray(after)?after.map(p=>({type:p.type,id:p.id,cpuSeconds:p.cpuTime,cpuDeltaSeconds:p.cpuTime-(before.find(prior=>prior.id===p.id)?.cpuTime??p.cpuTime)})):after;
+    const activation=profileBeforeInput?'before input':await enable().then(()=> 'after stall',error=>String(error));
     const pausedEvent=new Promise<void>(resolve=>{pauseNotify=resolve;});
     const pause=await bounded('pause page',page.send('Debugger.pause')).then(()=> 'answered',error=>String(error));
     const event=pause==='answered'?await bounded('paused event',pausedEvent).then(()=> 'received',error=>String(error)):'no reply';
@@ -45,20 +49,24 @@ export async function observeReversal(page:Cdp,browser:Browser){
       profile.samples?.forEach((id,i)=>durations.set(id,(durations.get(id)??0)+(profile.timeDeltas?.[i]??0)/1000));
       top=[...durations].sort((a,b)=>b[1]-a[1]).slice(0,15).map(([id,ms])=>({ms,frame:profile.nodes.find(n=>n.id===id)?.callFrame}));
     }
-    console.error('reversal diagnostic '+JSON.stringify({label,browserCpu,pagePause:pause,pausedEvent:event,pausedFrames:frames,profile:top}));
+    console.error('reversal diagnostic '+JSON.stringify({label,activation,browserCpu,pagePause:pause,pausedEvent:event,pausedFrames:frames,profile:top}));
     await bounded('resume page',page.send('Debugger.resume')).catch(()=>{});
   };
   return {
     async watch<T>(label:string,run:()=>Promise<T>){
       const timer=setTimeout(()=>{capture=sample(label).catch(error=>{console.error('reversal diagnostic failed: '+String(error));});},5000);
-      try{return await run();}finally{clearTimeout(timer);if(capture)await capture;}
+      try{
+        const result=await run();
+        if(capture)throw new Error(label+': response required diagnostic intervention');
+        return result;
+      }finally{clearTimeout(timer);if(capture)await capture;}
     },
     async close(){
       try{
         if(capture)await capture;
-        await bounded('resume cleanup',page.send('Debugger.resume')).catch(()=>{});
+        if(debuggerEnabled)await bounded('resume cleanup',page.send('Debugger.resume')).catch(()=>{});
         if(profileActive)await bounded('stop profiler cleanup',page.send('Profiler.stop')).catch(()=>{});
-        await bounded('disable debugger cleanup',page.send('Debugger.disable')).catch(()=>{});
+        if(debuggerEnabled)await bounded('disable debugger cleanup',page.send('Debugger.disable')).catch(()=>{});
       }finally{control.close();}
     },
   };

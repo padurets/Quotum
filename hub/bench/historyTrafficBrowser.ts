@@ -173,7 +173,7 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
 }
 
 /** Native cancellation/reversal keeps one Shift-wheel token while responses are owned. */
-export async function browserCancellationTraffic(browser: Browser, proxy: TrafficProxy, cookie: string,diagnostic=false) {
+export async function browserCancellationTraffic(browser: Browser, proxy: TrafficProxy, cookie: string,diagnostic=false,profileBeforeInput=false) {
   const reports = [];
   for (const length of [DAY, 30 * DAY]) for (const mode of ['before-headers', 'after-delivery', 'reversal'] as const) {
     if(diagnostic&&(length!==DAY||mode!=='reversal'))continue;
@@ -193,7 +193,8 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
     const key = (type: string, name: string, code: number, modifiers: number) => cdp.send('Input.dispatchKeyEvent', {type, key: name, code: name === 'Shift' ? 'ShiftLeft' : name, windowsVirtualKeyCode: code, modifiers});
     const wheel = (pixels: number) => cdp.send('Input.dispatchMouseEvent', {type: 'mouseWheel', x: geometry.x, y: geometry.y, deltaX: pixels, deltaY: 0, modifiers: 8});
     try {
-      observer=diagnostic?await observeReversal(cdp,browser):null;
+      // The canonical failing page is observed without changing V8 before input.
+      observer=mode==='reversal'?await observeReversal(cdp,browser,profileBeforeInput):null;
       bodies.phase = phase; proxy.phase(phase, mode === 'after-delivery' ? 0 : 400);
       await step('shift down', () => key('keyDown', 'Shift', 16, 8));
       await step('first wheel', () => wheel(-geometry.width * .1));
@@ -244,6 +245,6 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
 /** An instrumented replay diagnoses an earlier failure and never replaces its verdict. */
 export async function diagnoseReversal(browser:Browser,upstream:string,cookie:string,repeats=1){
   const proxy=await historyProxy(upstream);
-  try{for(let take=0;take<repeats;take++){console.error(`reversal diagnostic replay ${take+1}/${repeats}`);await browserCancellationTraffic(browser,proxy,cookie,true);}}
+  try{for(let take=0;take<repeats;take++){const profileBeforeInput=take%2===0;console.error(`reversal diagnostic replay ${take+1}/${repeats}, profiler ${profileBeforeInput?'before input':'after stall'}`);await browserCancellationTraffic(browser,proxy,cookie,true,profileBeforeInput);}}
   finally{await proxy.close();}
 }
