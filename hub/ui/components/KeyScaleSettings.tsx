@@ -7,13 +7,14 @@ import {keyShown,withKeyShown,type Arrange} from '../lib/view';
 import {t} from '../i18n';
 import {ErrorLine} from './Kit';
 import {SwitchRow} from './Popover';
+import {KeyPages} from './KeyPages';
 
 /** A source's scales are chosen here, like subscription windows, without a key table. */
 export function KeyScaleSettings({source,board,arrange}:{source:Card;board:string;arrange:Arrange}) {
   const inCard=source.keysCount===source.keys?.length;
   const [loaded,setPage]=useState<KeyPage|null>(null),[after,setAfter]=useState<string|undefined>(),[back,setBack]=useState<(string|undefined)[]>([]);
   const [error,setError]=useState<unknown>(null),[changed,setChanged]=useState(false);
-  const page=inCard?{keys:source.keys??[],meters:source.meters??[],next:null}:loaded;
+  const page=inCard?{keys:source.keys??[],meters:source.meters??[],total:source.keysCount??0,next:null}:loaded;
   useEffect(()=>{
     if(inCard)return;
     let live=true;
@@ -29,16 +30,15 @@ export function KeyScaleSettings({source,board,arrange}:{source:Card;board:strin
     <div className="popover-title popover-section">{t('source.show')}</div>
     <ErrorLine error={error}/>
     {changed&&<p className="popover-note">{t('money.changed')}</p>}
+    {loaded?.inventory&&!loaded.inventory.complete&&<p className="popover-note">{t('money.inventoryPartial')}</p>}
     <div className="popover-scroll">{page?.keys.map(part=>{
       const cap=page.meters.find(m=>m.id===`key:${part.id}:cap`);
       return <SwitchRow key={part.id} on={!!cap&&keyShown(arrange.view,source.id,part.id,source.keys??[])} disabled={!cap}
         onChange={on=>arrange.update(view=>withKeyShown(view,source.id,part.id,on))}
         value={cap?money(capLeft(cap)):t('money.noCap')}>{keyName(part)}</SwitchRow>;
     })}</div>
-    {(!!page?.next||back.length>0)&&<div className="button-row popover-pad">
-      <button className="button" disabled={!back.length} onClick={()=>{setAfter(back.at(-1));setBack(back.slice(0,-1));}}>{t('money.previous')}</button>
-      <button className="button" disabled={!page?.next} onClick={()=>{setBack([...back,after]);setAfter(page!.next!);}}>{t('money.next')}</button>
-    </div>}
+    {(!!page?.next||back.length>0)&&<KeyPages page={back.length+1} pages={Math.ceil((page?.total??0)/50)} previous={!!back.length} next={!!page?.next}
+      onPrevious={()=>{setAfter(back.at(-1));setBack(back.slice(0,-1));}}
+      onNext={()=>{setBack([...back,after]);setAfter(page!.next!);}}/>}
   </>;
 }
-

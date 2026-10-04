@@ -892,7 +892,7 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .money-balance > strong { font-size: 1.65rem; font-variant-numeric: tabular-nums; }
 .money-summaries { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .money-summaries > div { display: flex; flex-direction: column; gap: 4px; font-variant-numeric: tabular-nums; }
-.money-summaries small, .money-key-values, .money-cap small, .money-key-head small { color: var(--text-3); font-size: .76rem; }
+.money-summaries small { color: var(--text-3); font-size: .76rem; }
 .money-partial { margin-left: 4px; color: var(--text-3); }
 .money-limit .limit-top { flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
 .money-limit .limit-name { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -924,6 +924,8 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .connection-status, .connection-mobile-status { color: var(--text-3); font-size: 12px; }
 .connection-row .picker { flex-shrink: 0; }
 .connection-mobile-status { display: none; }
+.connection-mobile-status > span { display: block; white-space: normal; overflow-wrap: anywhere; }
+.page-number { align-self: center; font-size: 11.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .connection-back { align-self: flex-start; text-align: left; }
 .connection-tokens { border-top: 1px solid var(--hair); margin-top: 6px; padding-top: 16px; }
 .connection-tokens > summary { color: var(--text-2); cursor: pointer; font-size: 13px; }

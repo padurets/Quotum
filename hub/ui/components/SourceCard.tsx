@@ -409,6 +409,8 @@ export function CardMark({source}: {source: Card}) {
   });
   const problem = problemOf(source);
   const dot = dotOf(source, now);
+  const partial=source.inventory?.complete===false;
+  const warn=dot.warn||failed||partial;
   // How the measurements go lives in the logo's dot alone: its colour (how fresh, or in
   // trouble) and its tooltip; a line of its own would only repeat it and make the card taller.
   const status = problem ?? (source.successAt ? t('source.measured', {at: stamp(source.successAt)}) : errorText('waiting'));
@@ -417,6 +419,7 @@ export function CardMark({source}: {source: Card}) {
   const lines = [
     ...(refresh?.request ? refreshText(refresh, now).split('\n') : []),
     status,
+    ...(partial?[t('money.inventoryPartial'),t('money.inventory',{count:source.inventory!.observed})]:[]),
     ...(!pending && cadence ? (cadence.when === 'nextSoon' ? [t('source.nextSoon')] : [t('source.nextIn', {time: countdown(cadence.next - now)}), stamp(cadence.next)]) : []),
     ...(!pending && cadence ? [t(`source.why.${cadence.why}`)] : []),
   ];
@@ -440,7 +443,7 @@ export function CardMark({source}: {source: Card}) {
   }, [tip]);
   return (
     <span
-      className={`provider-mark ${dot.warn || failed ? 'is-warn' : ''} ${tip ? 'is-tipped' : ''}`}
+      className={`provider-mark ${warn ? 'is-warn' : ''} ${tip ? 'is-tipped' : ''}`}
       data-time="mark"
       data-refresh={outcome ?? 'idle'}
       aria-label={lines.join('\n')}
@@ -452,7 +455,7 @@ export function CardMark({source}: {source: Card}) {
       <img className="provider-logo" src={logoOf(source.provider)} alt="" />
       {pending ? (
         <i className="spinner" aria-hidden="true" />
-      ) : dot.warn || failed ? (
+      ) : warn ? (
         <i className="dot dot-warn" />
       ) : (
         <i className={`dot dot-fresh ${dot.pulsing ? 'is-pulsing' : ''}`} style={{'--fresh': dot.fresh} as CSSProperties} />

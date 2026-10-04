@@ -9,6 +9,7 @@ import {MAX_METERS} from '../../server/domain/meterHistory';
 import {t} from '../i18n';
 import {ErrorLine} from './Kit';
 import {SwitchRow} from './Popover';
+import {KeyPages} from './KeyPages';
 import type {KeyPage} from '../lib/moneyKeys';
 
 /** Series are chosen in the chart's settings; the key table only reads measurements. */
@@ -63,7 +64,9 @@ export function MoneySettings({sources,hidden,series}:{sources:readonly Named[];
           return row(id,meter,[history?.semantics?.label??meter,t(history?.kind==='cap'?'money.cap':'money.usage')].join(' — '));
         })}
       </div>
-      {(!!page?.next||back.length>0)&&<div className="button-row popover-pad"><button className="button" disabled={!back.length} onClick={()=>{setAfter(back.at(-1));setBack(back.slice(0,-1));}}>{t('money.previous')}</button><button className="button" disabled={!page?.next} onClick={()=>{setBack([...back,after]);setAfter(page!.next!);}}>{t('money.next')}</button></div>}
+      {(!!page?.next||back.length>0)&&<KeyPages page={back.length+1} pages={Math.ceil((page?.total??0)/50)} previous={!!back.length} next={!!page?.next}
+        onPrevious={()=>{setAfter(back.at(-1));setBack(back.slice(0,-1));}}
+        onNext={()=>{setBack([...back,after]);setAfter(page!.next!);}}/>}
     </>:<>
       <div className="popover-scroll">{accounts.map(s=><div key={s.id} className="popover-section">
         <div className="popover-title">{s.title}</div>
