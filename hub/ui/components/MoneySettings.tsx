@@ -9,7 +9,7 @@ import {MAX_METERS} from '../../server/domain/meterHistory';
 import {t} from '../i18n';
 import {ErrorLine} from './Kit';
 import {SwitchRow} from './Popover';
-import {KeyPages} from './KeyPages';
+import {KEYS_PER_PAGE,KeyPages} from './KeyPages';
 import type {KeyPage} from '../lib/moneyKeys';
 
 /** Series are chosen in the chart's settings; the key table only reads measurements. */
@@ -25,7 +25,7 @@ export function MoneySettings({sources,hidden,series}:{sources:readonly Named[];
   useEffect(()=>{
     if(!sourceId||!board||inCard)return;
     let live=true;
-    call<KeyPage>('GET',`/api/boards/${encodeURIComponent(board)}/sources/${encodeURIComponent(sourceId)}/keys?limit=50${after?'&after='+encodeURIComponent(after):''}`)
+    call<KeyPage>('GET',`/api/boards/${encodeURIComponent(board)}/sources/${encodeURIComponent(sourceId)}/keys?limit=${KEYS_PER_PAGE}${after?'&after='+encodeURIComponent(after):''}`)
       .then(reply=>{if(live){setPage(reply);setError(null);}},failure=>{
         if(!live)return;
         if(failure instanceof ApiError&&failure.code==='keys_changed'){setPage(null);setChanged(true);setBack([]);setAfter(undefined);}else setError(failure);
@@ -64,7 +64,7 @@ export function MoneySettings({sources,hidden,series}:{sources:readonly Named[];
           return row(id,meter,[history?.semantics?.label??meter,t(history?.kind==='cap'?'money.cap':'money.usage')].join(' — '));
         })}
       </div>
-      {(!!page?.next||back.length>0)&&<KeyPages page={back.length+1} pages={Math.ceil((page?.total??source?.keysCount??0)/50)} previous={!!back.length} next={!!page?.next}
+      {(!!page?.next||back.length>0)&&<KeyPages page={back.length+1} pages={Math.ceil((page?.total??source?.keysCount??0)/KEYS_PER_PAGE)} previous={!!back.length} next={!!page?.next}
         onPrevious={()=>{setPage(null);setAfter(back.at(-1));setBack(back.slice(0,-1));}}
         onNext={()=>{setPage(null);setBack([...back,after]);setAfter(page!.next!);}}/>}
     </>:<>

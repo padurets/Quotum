@@ -1,5 +1,7 @@
 import {t} from '../i18n';
 
+export const KEYS_PER_PAGE = 10;
+
 /** The same compact page arrows in card and chart settings. */
 export function KeyPages({page,pages,previous,next,onPrevious,onNext}:{page:number;pages:number;previous:boolean;next:boolean;onPrevious:()=>void;onNext:()=>void}) {
   return <div className="button-row popover-pad">
