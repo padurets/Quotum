@@ -2,6 +2,7 @@ import {spawn, type ChildProcess} from 'node:child_process';
 import {accessSync, constants, mkdtempSync, rmSync} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {readFile,readdir} from 'node:fs/promises';
 
 /**
  * Just enough of the Chrome DevTools Protocol for the benchmark, over the WebSocket built
@@ -120,7 +121,30 @@ export function findChrome(env: NodeJS.ProcessEnv): string | null {
 }
 
 /** A browser the benchmark drives: the DevTools endpoint (`http://host:port`) and how to let go of it. */
-export type Browser = {endpoint: string; close(): Promise<void>};
+export type Browser = {endpoint: string; close(): Promise<void>; diagnostics?(pids:number[]):Promise<unknown>};
+
+/** Only a launched browser's descendants may expose native thread state. */
+export async function nativeProcesses(owner:number,pids:number[]){
+  const status=async(pid:number)=>readFile(`/proc/${pid}/status`,'utf8').catch(()=> '');
+  const processes=[];
+  for(const pid of pids){
+    let ancestor=pid,owned=false;
+    for(let depth=0;depth<16&&ancestor>1;depth++){
+      if(ancestor===owner){owned=true;break;}
+      ancestor=Number((await status(ancestor)).match(/^PPid:\s+(\d+)/m)?.[1]??0);
+    }
+    if(!owned)continue;
+    const state=(await status(pid)).split('\n').filter(line=>/^(Name|State|VmRSS|Threads):/.test(line));
+    const threads=[];
+    for(const id of (await readdir(`/proc/${pid}/task`).catch(()=>[])).slice(0,50)){
+      const text=await readFile(`/proc/${pid}/task/${id}/status`,'utf8').catch(()=> '');
+      const wait=await readFile(`/proc/${pid}/task/${id}/wchan`,'utf8').catch(()=> 'unavailable');
+      threads.push({id:Number(id),state:text.split('\n').filter(line=>/^(Name|State):/.test(line)),wait});
+    }
+    processes.push({pid,state,threads});
+  }
+  return processes;
+}
 
 /** Starts a headless Chrome of its own, with a throwaway profile; `sandbox: false` where the system forbids it (CI). */
 export async function launchChrome(file: string, sandbox: boolean): Promise<Browser> {
@@ -146,6 +170,10 @@ export async function launchChrome(file: string, sandbox: boolean): Promise<Brow
   });
   return {
     endpoint,
+    async diagnostics(pids:number[]){
+      const processes=chrome.exitCode===null&&chrome.signalCode===null?await nativeProcesses(chrome.pid!,pids):[];
+      return {stderr:output,processes};
+    },
     async close() {
       if (chrome.exitCode === null && chrome.signalCode === null) {
         const exited = new Promise(resolve => chrome.once('exit', resolve));

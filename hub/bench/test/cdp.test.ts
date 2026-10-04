@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {attachedChrome, Cdp, openTab} from '../cdp.js';
+import {attachedChrome, Cdp, openTab,nativeProcesses} from '../cdp.js';
 import {Requests} from '../index.js';
 
 /** Stands in for what the benchmark hears of the browser: events by name, emitted by the test. */
@@ -11,6 +11,13 @@ function browser() {
     emit: (method: string, params: unknown) => listeners.get(method)?.forEach(listener => listener(params)),
   };
 }
+
+test('native diagnostics inspect an owned process and exclude a process outside its ancestry',{skip:process.platform!=='linux'},async()=>{
+  const owned=await nativeProcesses(process.pid,[process.pid,999999999]);
+  assert.equal(owned.length,1);assert.equal(owned[0].pid,process.pid);
+  assert.ok(owned[0].threads.length>0);
+  assert.deepEqual(await nativeProcesses(999999999,[process.pid]),[]);
+});
 
 test('what the idle page asks is counted, a stream of events opened meanwhile too; not the one it opened before, nor its images', () => {
   const cdp = browser();
