@@ -23,7 +23,7 @@ import {t, useLocale, type Key} from '../i18n';
 import {Segmented} from './Kit';
 import {HideRow, Popover, SlidersIcon} from './Popover';
 import {Tooltip, useBubble, useTip} from './Tooltip';
-import {ProjectsDialog} from './Machines';
+import {ProjectsDialog} from './Projects';
 import {useTimeAxis} from './timeAxis';
 import {usePlot} from './sizing';
 import {clipPlot, PlotLayer, PlotOverlay} from './PlotLayer';

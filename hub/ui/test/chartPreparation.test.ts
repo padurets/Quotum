@@ -16,7 +16,7 @@ test('actual quota generators prepare outside render and retain displayed paths 
   type Model = {paths: {line: string; last: [number, number] | null}[]};
   const context = {...hook, axis: {active: false}, incomingStrip: null as object | null,
     desiredFrom: 0, desiredTo: end, desiredNow: end, requested: {from: 0, to: end, end}, incomingLines: lines,
-    modelContext: '', navigation: undefined, desiredLive: true, incomingReady: true, incomingPlans: [], incomingForecasts: [], incomingMarkers: [], cellMs, width: 900, height: 220, left: 40, right: 12, top: 12, bottom: 28, clipPrepared,
+    valueAxis: undefined, stepped: false, modelContext: '', navigation: undefined, desiredLive: true, incomingReady: true, incomingPlans: [], incomingForecasts: [], incomingMarkers: [], cellMs, width: 900, height: 220, left: 40, right: 12, top: 12, bottom: 28, clipPrepared,
     plotPathPrepared: function* (...args: Parameters<typeof plotPathPrepared>) {calculations++; return yield* plotPathPrepared(...args);},
     draw: null as unknown as () => {value: Model | null; ready: boolean},
   };
