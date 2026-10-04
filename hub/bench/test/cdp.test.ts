@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {Cdp} from '../cdp.js';
+import {attachedChrome, Cdp, openTab} from '../cdp.js';
 import {Requests} from '../index.js';
 
 /** Stands in for what the benchmark hears of the browser: events by name, emitted by the test. */
@@ -72,6 +72,26 @@ test('closing CDP rejects pending commands even without a socket close event', a
   const first = assert.rejects(cdp.send('Input.dispatchKeyEvent'), /the browser closed the connection/);
   const second = assert.rejects(cdp.evaluate('new Promise(requestAnimationFrame)'), /the browser closed the connection/);
   cdp.close(); await Promise.all([first, second]);
+});
+
+test('a DevTools connection timeout closes only the tab it just created in an attached browser', async t => {
+  t.mock.timers.enable({apis:['setTimeout']});
+  const calls:string[]=[],sockets:EventTarget[]=[];
+  class ConnectingSocket extends EventTarget {
+    constructor(){super();sockets.push(this);}
+    close(){}
+  }
+  const original=globalThis.WebSocket;
+  globalThis.WebSocket=ConnectingSocket as unknown as typeof WebSocket;
+  t.after(()=>{globalThis.WebSocket=original;});
+  t.mock.method(globalThis,'fetch',async(input:string)=>{
+    calls.push(input);
+    return new Response(input.includes('/json/new')?JSON.stringify({id:'owned-tab',webSocketDebuggerUrl:'ws://fixture.invalid'}):'Target closed');
+  });
+  const failed=assert.rejects(openTab(attachedChrome('http://fixture.invalid')),/did not open its DevTools connection/);
+  for(let turn=0;!sockets.length&&turn<20;turn++)await Promise.resolve();
+  assert.equal(sockets.length,1);t.mock.timers.tick(30000);await failed;
+  assert.deepEqual(calls,['http://fixture.invalid/json/new?about:blank','http://fixture.invalid/json/close/owned-tab']);
 });
 
 test('history bytes are counted by path after reads finish, separately from other traffic', () => {

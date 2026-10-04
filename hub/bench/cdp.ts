@@ -167,12 +167,15 @@ export async function openTab(browser: Browser): Promise<{cdp: Cdp; close(): Pro
   const response = await fetch(`${browser.endpoint}/json/new?about:blank`, {method: 'PUT', signal: AbortSignal.timeout(10_000)});
   if (!response.ok) throw new Error(`the browser at ${browser.endpoint} opened no tab: HTTP ${response.status}`);
   const tab = (await response.json()) as {id: string; webSocketDebuggerUrl: string};
-  const cdp = await Cdp.connect(tab.webSocketDebuggerUrl);
+  const closeTab = () => fetch(`${browser.endpoint}/json/close/${tab.id}`, {signal: AbortSignal.timeout(5_000)}).catch(() => undefined);
+  let cdp: Cdp;
+  try {cdp = await Cdp.connect(tab.webSocketDebuggerUrl);}
+  catch (error) {await closeTab(); throw error;}
   return {
     cdp,
     async close() {
       cdp.close();
-      await fetch(`${browser.endpoint}/json/close/${tab.id}`, {signal: AbortSignal.timeout(5_000)}).catch(() => undefined);
+      await closeTab();
     },
   };
 }
