@@ -133,7 +133,23 @@ export const STEPS = [
     last_used_at INTEGER, last_error TEXT, unreadable INTEGER NOT NULL DEFAULT 0);
   CREATE INDEX credentials_by_owner ON credentials (user_id, provider);
   `,
-  // 8 — exact unit-valued measurements and continuous observation spans.
+  // 8 — opaque producer identity beside the unchanged legacy session namespace.
+  `
+  ALTER TABLE agent_sessions RENAME TO agent_sessions_legacy;
+  CREATE TABLE agent_sessions (
+    id INTEGER PRIMARY KEY, device_id TEXT NOT NULL, source_id TEXT NOT NULL, origin TEXT NOT NULL,
+    started_at INTEGER NOT NULL, project TEXT NOT NULL, folder TEXT NOT NULL, ordinal INTEGER NOT NULL,
+    producer_id TEXT);
+  INSERT INTO agent_sessions (id, device_id, source_id, origin, started_at, project, folder, ordinal, producer_id)
+    SELECT id, device_id, source_id, origin, started_at, project, folder, ordinal, NULL FROM agent_sessions_legacy;
+  DROP TABLE agent_sessions_legacy;
+  CREATE UNIQUE INDEX agent_sessions_legacy_key ON agent_sessions
+    (device_id, source_id, started_at, origin, project, folder, ordinal) WHERE producer_id IS NULL;
+  CREATE UNIQUE INDEX agent_sessions_stable_key ON agent_sessions
+    (device_id, producer_id, source_id, origin, project, folder) WHERE producer_id IS NOT NULL;
+  CREATE INDEX agent_sessions_by_project ON agent_sessions (device_id, project, source_id);
+  `,
+  // 9 — exact unit-valued measurements and continuous observation spans.
   `
   CREATE TABLE readings (
     source_id TEXT NOT NULL, meter_id TEXT NOT NULL, at INTEGER NOT NULL, previous_at INTEGER,

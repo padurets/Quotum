@@ -137,6 +137,8 @@ impl Window {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunningSession {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
     pub provider: Provider,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,

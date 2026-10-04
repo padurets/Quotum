@@ -57,7 +57,7 @@ test('the plan column marks a gap of three points to the plan', () => {
 });
 
 test('agents are drawn up to ten; the table leaves out hidden cards and says why it is empty', () => {
-  const session = (): LiveSession => ({device: {id: 'd', name: 'laptop'}, origin: 'terminal', project: null, folder: null, startedAt: now, lastWorkedAt: null, working: true});
+  const session = (): LiveSession => ({device: {id: 'd', name: 'laptop'}, origin: 'terminal', project: null, folder: null, startedAt: now, lastWorkedAt: null, working: true, workedMs: 0});
   assert.equal(drawn(Array.from({length: DRAWN}, session)), true);
   assert.equal(drawn(Array.from({length: DRAWN + 1}, session)), false);
   const source = (id: string, sessions: LiveSession[]): AgentSource => ({id, provider: 'codex', sessions});

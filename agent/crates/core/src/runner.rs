@@ -314,6 +314,7 @@ impl Runner {
         accounts: &[Option<(Option<String>, Option<SystemTime>)>],
         identity_paths: &[Vec<PathBuf>],
     ) -> Vec<RunningSession> {
+        let salt = crate::session_identity::salt(&self.paths);
         let sessions = seen
             .into_iter()
             .filter_map(|session| {
@@ -329,6 +330,9 @@ impl Runner {
                 };
                 let (project, folder) = names(session.project, session.folder, self.config.projects());
                 Some(RunningSession {
+                    session_id: session.native_birth.as_deref().and_then(|native| {
+                        salt.as_ref().map(|salt| crate::session_identity::identify(salt, session.provider, native))
+                    }),
                     provider: session.provider,
                     account,
                     account_name,
@@ -422,6 +426,7 @@ mod tests {
     #[test]
     fn a_long_list_keeps_the_working_sessions_and_then_the_newest() {
         let session = |working, started_at| RunningSession {
+            session_id: None,
             provider: Provider::Claude,
             account: None,
             account_name: None,
@@ -478,6 +483,7 @@ mod tests {
     #[test]
     fn a_list_of_running_agents_goes_out_first_on_change_and_then_in_time() {
         let session = |working| RunningSession {
+            session_id: None,
             provider: Provider::Claude,
             account: None,
             account_name: None,

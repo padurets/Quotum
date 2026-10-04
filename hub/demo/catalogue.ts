@@ -347,6 +347,8 @@ const MAX_AGENTS: Agent[] = [
 ];
 
 /** Eleven, one more than a tray draws; within the first quarter of an hour one more starts and one stops. */
+MAX_AGENTS.find(agent => agent.project === 'mobile-app')!.legacy = true;
+
 const PRO_AGENTS: Agent[] = [
   {machine: 'laptop', origin: 'terminal', project: 'checkout', since: -2 * HOUR, until: 10 * MIN, works: shifts(1)},
   {machine: 'laptop', origin: 'terminal', project: 'hotfix-4821', since: 5 * MIN, works: ALWAYS},
@@ -373,6 +375,8 @@ const IOS_AGENTS: Agent[] = agents('mac-mini', [
   ['terminal', 'ios-app', -30 * MIN, shifts(0)],
   ['editor', 'ios-app', -2 * HOUR],
 ]);
+
+IOS_AGENTS.find(agent => agent.origin === 'editor')!.legacy = true;
 
 /** A narrow card with a full tray: reset news, free resets and ten agents on two machines. */
 const ON_CALL_AGENTS: Agent[] = [
@@ -458,7 +462,7 @@ const all: DemoSet = {
       name: 'Ana',
       agents: true,
       // Heights she chose, which the benchmark renders too: the list after all her cards however many, 32 rows tall, so most of its
-      // agents show with their running times and a few are left to the dialog; the analytics taller than drawn by themselves.
+      // agents show with their work totals and a few are left to the dialog; the analytics taller than drawn by themselves.
       agentsPlace: {x: 0, y: 99, w: 6, h: 32},
       places: {activity: {x: 0, y: 0, w: 6, h: 12}, history: {x: 0, y: 1, w: 6, h: 16}, forecast: {x: 0, y: 2, w: 6, h: 30}},
       projects: {'docs-site': 'docs'},
@@ -477,6 +481,12 @@ const all: DemoSet = {
         // the corrected name too (docs-site is where docs works).
         {agentsOf: 'quotum', folders: [null, 'hub', 'quotum.feat-18-desktop-app']},
         {agentsOf: 'docs', folders: ['docs-site']},
+        // The list gathers them by project: quotum's three agents on two subscriptions are one row, with work
+        // the hub credited them; infra has never worked.
+        {agentGroup: 'quotum', agents: 3, worked: true},
+        {agentGroup: 'infra', agents: 1, worked: false},
+        {agentGroup: 'mobile-app', agents: 1, worked: null},
+        {agentGroup: 'ios-app', agents: 2, worked: null, to: MIN},
         // Agent activity counts docs-site under the name Ana gave it.
         {activityOf: 'docs', by: 'project', range: '24h', hours: 2.4, from: 0, to: 0},
         {activityOf: 'docs-site', by: 'project', range: '24h', hours: null, from: 0, to: 0},
@@ -486,15 +496,22 @@ const all: DemoSet = {
         {activityEmpty: 'knownFrom', range: {from: -13 * DAY, to: -11 * DAY}, from: 0, to: 0},
       ],
       look: [
-        'The table of agents lists many rows, by activity',
-        'The list of agents is 32 rows tall: the first agents that fit whole, then "N more agents", which opens them all in a dialog, in the same order and columns, sorted there as in the widget',
+        'The list of agents gathers them by project, by activity: quotum is one row of three agents, its marks in the colours of Max and Pro, with their agent-hours and last activity (a date and time, or now while one works); a click opens its three agents, each with its folder, where it runs, machine, subscription, the time it worked and last activity',
+        'infra has no known activity time: its last activity is a dash, explained on hover',
+        'The list\'s settings, for every viewer, group it by machine or subscription, or put each agent on a row of its own; the owner also picks its columns, how long each agent has run among them, off at first',
+        'The table of agents in a dialog has a way back to all the groups when it was opened from them, and none when opened from a row',
+        'The agent details dialog has no repeated working-count or work-total summary above its rows; the toolbar appears only for Back or compact-list sorting',
+        'At the wide dialog width, default agent details form a table whose rows highlight from edge to edge; on a narrow screen they form an inset list',
+        'Each agent\'s directory appears below its project in the details table, without a separate column; long worktree names wrap and stay readable',
+        'The card tray\'s agents panel labels its right column Agent-hours and shows each session\'s credited work rather than its running duration; infra has zero work although its client is open',
+        'The list of agents is 32 rows tall: the first projects that fit whole, then "N more projects", which opens them all in a dialog, in the same order and columns, sorted there as in the widget',
         'Agent activity and the chart are taller than they draw themselves: the room goes to the plot, the totals, heads and legends stay whole',
         'The table is 30 rows tall: room under it on a wide screen; on a narrow one, where it is a list, it is as tall as its rows',
         'The chart\'s tooltip has a row for every line in the legend\'s order, with what is left, the plan and the gap in columns up to now, and after it the plan and where each forecast leads; on a phone it stays whole on the screen',
         'The chart\'s settings switch the plan and the forecast on and off, under "On the chart"',
         'On a narrow window the labels past the chart\'s right edge stay within the plot, the soonest first: those with no room are said together as "and N more →", which tells each of them and its time when pointed at or tapped',
-        'Agent activity → Settings → Manage projects: quotum once, on the laptop, though three agents work in three folders (the tray and the table show quotum three times, with hub and quotum.feat-18-desktop-app under two of them)',
-        'Renamed or merged in Manage projects, a project is shown under its new name in the tray and the table too',
+        'Agent activity → Settings → Manage projects: quotum once, on the laptop, though three agents work in three folders (the tray and quotum\'s agents in the list\'s dialog show it three times, with hub and quotum.feat-18-desktop-app under two of them)',
+        'Renamed or merged in Manage projects, a project is shown under its new name in the tray and the list of agents too, merged ones as one group',
         'Merge Quotum into quotum: one row, with both machines and "from: Quotum"; give Quotum back its name: as it was',
         'docs gathers docs-site, and gives it back',
         'Escape in the merge menu closes only the menu',
@@ -553,7 +570,7 @@ const all: DemoSet = {
       ],
       look: [
         'Cards are named with their owners',
-        'Ben sees Team as a member: no arranging, no invites; the list of agents, chosen five rows tall, shows the first of its three and how many more, and he opens them all too',
+        'Ben sees Team as a member: no arranging, no invites; the list of agents, chosen five rows tall, gathers its three into two projects, shared-infra with two of them, and he opens their agents too',
         'Agent activity by machine: the laptop and ben-mac, nothing of Dan; Ben\'s from an hour before the start',
       ],
     },
@@ -584,7 +601,7 @@ const all: DemoSet = {
       kind: 'board', id: 'grid', name: 'Grid', owner: 'ana', members: [], agents: true,
       agentsPlace: {x: 0, y: 0, w: 3, h: 16}, expect: [{state: 'widgets'}],
       look: [
-        'The agents stand on the left half, 16 rows tall: the first that fit whole, then "N more agents"; Claude, Codex and Antigravity stack on the right, their trays at the bottom of their rows',
+        'The agents stand on the left half, 16 rows tall: the first projects that fit whole, then "N more projects"; Claude, Codex and Antigravity stack on the right, their trays at the bottom of their rows',
         'Claude is as tall as its content; Codex is taller, with room over its tray; Antigravity was made 8 rows tall but shows its five windows whole',
         'Hiding three of Antigravity\'s windows brings it to its 8 rows, showing them again makes it as tall as they are',
       ],
@@ -1584,10 +1601,10 @@ const activity: DemoSet = {
   about: 'twelve agents ordered by activity, as a table and a narrow list',
   scene: 'quiet',
   entries: [
-    {kind: 'person', id: 'ana', name: 'Ana', agents: true, expect: [{rows: 12}, {firstMachines: ['workstation', 'workstation', 'laptop', 'laptop'], from: 2 * MIN, to: 10 * MIN}], look: ['At full width, sortable headers; two agents on workstation rise to the top after a minute']},
+    {kind: 'person', id: 'ana', name: 'Ana', agents: true, expect: [{rows: 12}, {firstMachines: ['workstation', 'workstation', 'laptop', 'laptop'], from: 2 * MIN, to: 10 * MIN}], look: ['At full width, sortable headers; a project a row, an agent in each; those of two agents on workstation rise to the top after a minute']},
     {
       kind: 'board', id: 'compact', name: 'Compact agents', owner: 'ana', members: [], agents: true, agentsPlace: {x: 3, y: 1, w: 2, h: 8}, expect: [{rows: 12}],
-      look: ['At a third of the grid the widget is a compact list, with a sort menu, eight rows tall: the first agents and "N more agents"; the dialog shows them all as a table'],
+      look: ['At a third of the grid the widget is a compact list, with a sort menu, eight rows tall: the first projects and "N more projects"; the dialog shows them all as a table'],
     },
     {
       kind: 'card', id: 'activity', provider: 'codex', plan: 'pro', machines: ['workstation', 'laptop', 'server'], history: DAY,

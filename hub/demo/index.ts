@@ -193,7 +193,7 @@ export class Demo {
       const idle = sessions.map(s => ({...s, working: false, lastWorkedAt: s.lastWorkedAt ?? new Date(this.start).toISOString()}));
       if (machine.id === 'laptop') {
         const card = cards(set).find(c => c.id === 'antigravity')!;
-        idle.push({provider: card.provider, ...accountOf(card), origin: 'terminal', project: 'Benchmark', folder: undefined, startedAt: new Date(this.start).toISOString(), working: this.benchWork, lastWorkedAt: new Date(this.start).toISOString()});
+        idle.push({sessionId: 'f'.repeat(32), provider: card.provider, ...accountOf(card), origin: 'terminal', project: 'Benchmark', folder: undefined, startedAt: new Date(this.start).toISOString(), working: this.benchWork, lastWorkedAt: new Date(this.start).toISOString()});
       }
       return idle;
     }, (machine, at) => {for (const heard of this.reports) heard(machine.id, at);});

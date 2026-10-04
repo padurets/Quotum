@@ -338,7 +338,7 @@ pub fn machine(paths: &Paths, config: &Config) -> Machine {
 }
 
 /// 128 random bits as hex, from the standard library's per-process random keys.
-fn random_hex() -> String {
+pub(crate) fn random_hex() -> String {
     (0..2u8)
         .map(|i| {
             let mut hasher = RandomState::new().build_hasher();

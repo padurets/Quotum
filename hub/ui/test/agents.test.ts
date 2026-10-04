@@ -1,16 +1,38 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {AGENT_COLUMNS, AGENT_WIDTHS, agentRows, agentsFit, agentsLayout, byActivity, machinesOf, nextAgentsSort, readAgentsSort, sortedRows, type AgentColumn, type AgentRow, type AgentSource} from '../lib/agents';
+import {
+  AGENT_COLUMNS,
+  AGENT_WIDTHS,
+  NAME_WIDTH,
+  agentRows,
+  agentsFit,
+  agentsLayout,
+  byActivity,
+  columnsOf,
+  groupsOf,
+  machinesOf,
+  nextAgentsSort,
+  readAgentsBy,
+  readAgentsSort,
+  sortedGroups,
+  type AgentColumn,
+  type AgentGroup,
+  type AgentRow,
+  type AgentSource,
+} from '../lib/agents';
 import type {LiveSession, View} from '../lib/types';
 import {setLocale} from '../i18n';
 
 const session = (project: string | null, change: Partial<LiveSession> = {}): LiveSession => ({
-  project, folder: null, device: {id: 'laptop', name: 'laptop'}, startedAt: 100, lastWorkedAt: null, working: false, origin: 'terminal', ...change,
+  project, folder: null, device: {id: 'laptop', name: 'laptop'}, startedAt: 100, lastWorkedAt: null, working: false, origin: 'terminal', workedMs: 0, ...change,
 });
 const row = (project: string | null, change: Partial<LiveSession> = {}, title = 'Codex'): AgentRow => ({
   session: session(project, change), source: {id: title, provider: 'codex', title, sessions: []},
 });
-const sort = (rows: AgentRow[], column: AgentColumn, descending = false, shown: readonly AgentColumn[] = AGENT_COLUMNS) => sortedRows(rows, {column, descending}, shown);
+/** Rows as single agents, in the order given (taken as activity order). */
+const each = (...rows: AgentRow[]) => groupsOf(rows, 'none');
+const projects = (groups: AgentGroup[]) => groups.map(g => g.rows[0].session.project);
+const sort = (groups: AgentGroup[], column: AgentColumn, descending = false, shown: readonly AgentColumn[] = AGENT_COLUMNS) => sortedGroups(groups, {column, descending}, shown);
 const active = [
   session('new working', {working: true, startedAt: 300}),
   session('old working', {working: true, startedAt: 10}),
@@ -53,37 +75,75 @@ test('card groups and their tray marks follow each machine’s first session; th
   assert.deepEqual(agentRows(sources, {hidden: []} as unknown as View).rows.map(r => r.source.id), ['a', 'z']);
 });
 
-test('every column sorts in both directions and equal values use activity', () => {
+test('agents gather by project, machine or subscription in the order of their most active agent, with what they share added up', () => {
+  const server = {id: 's', name: 'server'};
+  const rows = [
+    row('quotum', {working: true, workedMs: 30, device: server}, 'Claude'),
+    row('billing', {lastWorkedAt: 500, workedMs: 20}),
+    row('quotum', {lastWorkedAt: 400, workedMs: 10, folder: 'quotum.feat', startedAt: 50}),
+    row(null, {origin: 'editor'}),
+    row('quotum', {lastWorkedAt: 450, workedMs: 5}, 'Claude'),
+  ];
+  const [quotum, billing, none] = groupsOf(rows, 'project');
+  assert.deepEqual([quotum.name, billing.name, none.name], ['quotum', 'billing', null]);
+  assert.deepEqual(
+    {working: quotum.working, workedMs: quotum.workedMs, lastWorkedAt: quotum.lastWorkedAt, startedAt: quotum.startedAt, agents: quotum.rows.length},
+    {working: 1, workedMs: 45, lastWorkedAt: 450, startedAt: 50, agents: 3},
+    'the working one aside, the latest seen working',
+  );
+  assert.equal(none.lastWorkedAt, null);
+  assert.deepEqual(groupsOf(rows, 'machine').map(g => [g.name, g.rows.length]), [['server', 1], ['laptop', 4]]);
+  assert.deepEqual(groupsOf(rows, 'subscription').map(g => [g.name, g.rows.length]), [['Claude', 2], ['Codex', 3]]);
+  assert.deepEqual(groupsOf(rows, 'none').map(g => g.rows.length), [1, 1, 1, 1, 1], 'nothing to gather by: a row per agent');
+  assert.deepEqual(groupsOf([row('null'), row(null)], 'project').map(g => g.name), ['null', null], 'a project named null is not none');
+});
+
+test('groups show counts and work; machines and subscriptions belong to individual agents', () => {
+  assert.deepEqual(columnsOf('project'), {name: 'project', rest: ['agents', 'worked', 'activity']});
+  assert.deepEqual(columnsOf('machine'), {name: 'machine', rest: ['agents', 'worked', 'activity']});
+  assert.deepEqual(columnsOf('subscription'), {name: 'subscription', rest: ['agents', 'worked', 'activity']});
+  assert.deepEqual(columnsOf('none'), {name: 'project', rest: ['worked', 'activity', 'machine', 'subscription', 'running']});
+  assert.deepEqual(columnsOf('project', true), columnsOf('none'));
+  assert.deepEqual(columnsOf('machine', true).rest, ['worked', 'activity', 'subscription', 'running']);
+  assert.deepEqual(columnsOf('subscription', true).rest, ['worked', 'activity', 'machine', 'running']);
+});
+
+test('every column sorts in both directions and equal values keep activity order', () => {
   const pairs: [AgentColumn, AgentRow, AgentRow][] = [
     ['project', row('alpha'), row('zulu')],
-    ['state', row('working', {working: true}), row('idle')], ['state', row('idle'), row('window', {origin: 'editor'})],
     ['subscription', row('first', {}, 'Alpha'), row('second', {}, 'Zulu')],
     ['machine', row('first', {device: {id: 'z', name: 'Alpha'}}), row('second', {device: {id: 'a', name: 'Zulu'}})],
-    ['origin', row('terminal'), row('editor', {origin: 'editor'})], ['origin', row('editor', {origin: 'editor'}), row('app', {origin: 'app'})],
+    ['worked', row('less', {workedMs: 10}), row('more', {workedMs: 20})],
+    ['activity', row('recent', {lastWorkedAt: 300}), row('working', {working: true})], ['activity', row('earlier', {lastWorkedAt: 200}), row('recent', {lastWorkedAt: 300})],
+    ['activity', row('never'), row('earlier', {lastWorkedAt: 200})],
     ['running', row('shorter', {startedAt: 200}), row('longer', {startedAt: 10})],
   ];
   for (const locale of ['en', 'ru'] as const) {
     setLocale(locale);
     for (const [column, a, b] of pairs) {
-      assert.deepEqual(sort([b, a], column), [a, b], `${locale}: ${column} ascending`);
-      assert.deepEqual(sort([a, b], column, true), [b, a], `${locale}: ${column} descending`);
+      assert.deepEqual(projects(sort(each(b, a), column)), projects(each(a, b)), `${locale}: ${column} ascending`);
+      assert.deepEqual(projects(sort(each(a, b), column, true)), projects(each(b, a)), `${locale}: ${column} descending`);
     }
   }
   setLocale('en');
-  for (const column of ['project', 'subscription', 'machine', 'origin', 'running'] as const) {
-    const a = row('same', {working: true}), b = row('same');
-    for (const descending of [false, true]) assert.deepEqual(sort([b, a], column, descending), [a, b]);
+  const two = groupsOf([row('a', {working: true}), row('a'), row('b', {working: true})], 'project');
+  assert.deepEqual(sort(two, 'agents').map(g => g.name), ['b', 'a'], 'fewer agents first');
+  const busy = groupsOf([row('a'), row('a'), row('b', {working: true}), row('b')], 'project');
+  assert.deepEqual(sort(busy, 'agents').map(g => g.name), ['a', 'b'], 'as many: fewer working first');
+  for (const column of ['project', 'subscription', 'machine', 'worked', 'running'] as const) {
+    const groups = each(row('same', {working: true}), row('same'));
+    for (const descending of [false, true]) assert.deepEqual(sort(groups, column, descending), groups, `${column} keeps activity order`);
   }
-  const recent = row('recent', {lastWorkedAt: 200}), old = row('old', {lastWorkedAt: 100});
-  for (const descending of [false, true]) assert.deepEqual(sort([old, recent], 'state', descending), [recent, old]);
 });
 
-test('missing projects stay last, and a hidden sort column falls back to activity', () => {
-  const missing = row(null, {working: true}), named = row('z');
-  for (const descending of [false, true]) assert.deepEqual(sort([missing, named], 'project', descending), [named, missing]);
-  assert.deepEqual(sort([named, missing], 'state', true, ['project']), [missing, named]);
-  const rows = active.map(session => ({session, source: row('x').source}));
-  assert.deepEqual(sortedRows([...rows].reverse(), null, AGENT_COLUMNS), rows);
+test('no project stays last, a hidden sort column keeps activity order, and nothing sorted is the order given', () => {
+  const groups = each(row(null, {working: true}), row('z'));
+  for (const descending of [false, true]) assert.deepEqual(projects(sort(groups, 'project', descending)), ['z', null]);
+  assert.deepEqual(sort(groups, 'worked', true, ['project']), groups);
+  assert.equal(sortedGroups(groups, null, AGENT_COLUMNS), groups);
+  const grouped = groupsOf([row('z'), row('a')], 'project');
+  const {name, rest} = columnsOf('project');
+  assert.deepEqual(sort(grouped, 'machine', true, [name, ...rest]), grouped, 'a detail-only column never sorts the overview');
 });
 
 test('headers cycle through both directions and activity; the narrow menu has its own reset', () => {
@@ -95,20 +155,25 @@ test('headers cycle through both directions and activity; the narrow menu has it
   assert.deepEqual(nextAgentsSort(second, 'project', false), first);
 });
 
-test('saved sort choices accept only a known column and a boolean direction', () => {
+test('saved choices accept only a known column and a boolean direction, and a known way to gather', () => {
   for (const column of AGENT_COLUMNS) for (const descending of [false, true]) assert.deepEqual(readAgentsSort({column, descending}), {column, descending});
-  for (const value of [null, undefined, 'project', [], {}, {column: 'obsolete', descending: true}, {column: 'project'}, {column: 'project', descending: 1}]) assert.equal(readAgentsSort(value), null);
+  for (const value of [null, undefined, 'project', [], {}, {column: 'state', descending: true}, {column: 'lastwork', descending: true}, {column: 'project'}, {column: 'project', descending: 1}]) assert.equal(readAgentsSort(value), null);
+  for (const by of ['project', 'machine', 'subscription', 'none'] as const) assert.equal(readAgentsBy(by), by);
+  for (const value of [null, undefined, 'device', 1, {}]) assert.equal(readAgentsBy(value), 'project');
 });
 
 test('layout follows the widget’s width and the owner’s columns at either side of each boundary', () => {
-  for (const columns of [AGENT_COLUMNS, ['project', 'origin'] as const, ['project'] as const]) {
-    const width = columns.reduce((sum, column) => sum + AGENT_WIDTHS[column], 0);
+  for (const columns of [columnsOf('project').rest, columnsOf('none').rest, ['worked'] as AgentColumn[], [] as AgentColumn[]]) {
+    const width = columns.reduce((sum, column) => sum + AGENT_WIDTHS[column], NAME_WIDTH);
     assert.equal(agentsLayout(columns, width - 1), 'list');
     assert.equal(agentsLayout(columns, width), 'table');
     assert.equal(agentsLayout(columns, width + 1), 'table');
   }
-  assert.equal(agentsLayout(AGENT_COLUMNS, 320), 'list');
-  assert.equal(agentsLayout(['project'], 320), 'table');
+  assert.equal(agentsLayout(columnsOf('project').rest, 320), 'list');
+  assert.equal(agentsLayout([], 320), 'table');
+  assert.equal(agentsLayout(columnsOf('project').rest, 700), 'table', 'the grouped overview reserves room for all ten tally marks');
+  const details = columnsOf('project', true).rest.filter(column => column !== 'running');
+  assert.equal(agentsLayout(details, 758), 'table', 'default details fit the wide dialog, without an inset list fallback');
 });
 
 test('a list made shorter than its agents shows the most whole rows that fit, in its order, and says how many more', () => {
@@ -133,4 +198,12 @@ test('a list made shorter than its agents shows the most whole rows that fit, in
   assert.deepEqual(fit(0, [10, 10]), {shown: 1, hidden: 1, min: 50, natural: 50});
   assert.deepEqual(fit(50, [10, 10]).shown, 2);
   assert.ok(fit(Infinity, Array(37).fill(64)).natural > fit(Infinity, Array(37).fill(64)).min, 'the least of a long list is not all of it');
+});
+
+
+test('unknown agent-hours propagate to groups and sort last in both directions', () => {
+  const groups = groupsOf([row('mixed', {workedMs: 50}), row('mixed', {workedMs: null}), row('known', {workedMs: 10}), row('zero', {workedMs: 0}), row('unknown', {workedMs: null})], 'project');
+  assert.equal(groups[0].workedMs, null);
+  assert.deepEqual(projects(sort(groups, 'worked')), ['zero', 'known', 'mixed', 'unknown']);
+  assert.deepEqual(projects(sort(groups, 'worked', true)), ['known', 'zero', 'mixed', 'unknown']);
 });

@@ -137,6 +137,19 @@ staleAfterMs, measureIntervalMs}`: the source's last measurement (`successAt`, i
 its numbers hold, and its shared measuring preference. `stale` is the hub's to say, and
 it says so: a card sent when its numbers get too old.
 
+A source's `sessions` are the agents running on it, on the machines of its people on the
+board, each `{device, origin, project, folder, startedAt, lastWorkedAt, working,
+workedMs}`: its machine (`{id, name}`), where it runs, its project as its person named it
+and its folder where that is another, when it started and when an idle one last worked
+(both on the hub's clock), whether it works, and how long it has worked: the hub's
+credited work of an identified session on this current subscription across its contexts
+(see [Reading history](#reading-history)), up to its machine's latest list and as long as
+work is kept. `workedMs` is a finite nonnegative number, including known zero, or null
+when reliable session identity is unavailable. Older hubs may omit it; the page treats
+missing, null or invalid credit as unknown. A group with any unknown counter has an
+unknown total, and unknown totals sort last in either direction. A list that credits work changes
+`workedMs`, so `sessions` comes with each list while an agent works.
+
 A source's `forecast` is by the id of each of its weekly windows (the page foresees a
 five-hour window itself, by what it spent since it began): where the recent pace of that
 window leads, the same subscription's window followed through its resets of any kind, as
@@ -572,6 +585,13 @@ machine. Its opaque eight-character reference is stable only within one board an
 start of the hub, derived with a fresh secret key; it reveals neither database session
 ids nor how many sessions other boards have. These are coding-agent sessions, separate
 from sign-in sessions. A restart changes the references and `run` together.
+The joining and sharing cutoff applies to history. For a running session the board is
+allowed to list, its live `workedMs` includes retained credited work on its current
+subscription across contexts, including before that history cutoff. Without reliable
+session identity it is null, not a guessed zero. Unidentified history is never matched
+by inference, and another subscription's work is never included. The opaque producer
+ID is kept only in the hub's work ledger; no producer ID, raw native token, PID, boot
+metadata or salt appears in board state, history, errors or logs.
 Desktop observation barriers carry only source/window identifiers and corrected times
 from those sources; they add no client output, credentials or provider identity.
 

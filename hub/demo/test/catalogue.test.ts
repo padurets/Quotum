@@ -17,7 +17,7 @@ import {Directory} from '../../server/store/directory.js';
 import {Store} from '../../server/store/store.js';
 import type {ResetEvent, ResetProvider} from '../../server/domain/resets.js';
 import {setLocale} from '../../ui/i18n/index.js';
-import {agentRows, byActivity, drawn, folderOf, machinesOf} from '../../ui/lib/agents.js';
+import {agentRows, byActivity, drawn, folderOf, groupsOf, machinesOf} from '../../ui/lib/agents.js';
 import {LIVE_COLUMNS, announcedOf, forecastLayout, planCell, spentOf} from '../../ui/lib/forecast.js';
 import {dashOf, lineWork, workNotes} from '../../ui/lib/work.js';
 import {activityEmpty} from '../../ui/lib/activity.js';
@@ -265,9 +265,14 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
       return {activityKnownFrom: activity.known ? activity.known.from - stand.start : null, range};
     }
     // A widget hidden on the board shows none of its codes.
-    if (('rows' in check || 'agentsOf' in check) && isHidden(overview.view, AGENTS)) return `the table of running agents is hidden on the board ${entry.id}`;
+    if (('rows' in check || 'agentsOf' in check || 'agentGroup' in check) && isHidden(overview.view, AGENTS)) return `the table of running agents is hidden on the board ${entry.id}`;
     if ('weeklySeries' in check && isHidden(overview.view, HISTORY)) return `the chart is hidden on the board ${entry.id}`;
     const {rows, empty} = agentRows(overview.sources, overview.view);
+    if ('agentGroup' in check) {
+      const {agentGroup} = check as {agentGroup: string};
+      const group = groupsOf(rows, 'project').find(g => g.name === agentGroup);
+      return {agentGroup, agents: group?.rows.length ?? 0, worked: group?.workedMs === null ? null : (group?.workedMs ?? 0) > 0};
+    }
     if ('agentsOf' in check) {
       const {agentsOf} = check as {agentsOf: string};
       const folders = rows.filter(row => row.session.project === agentsOf).map(row => folderOf(row.session));
@@ -825,4 +830,28 @@ test('ordinary demo cards accept refresh requests; only the explicit legacy scen
   t.mock.timers.setTime(start + MIN);
   await live.pace(MIN, start + MIN);
   assert.equal((await ana.get<Snapshot>('/api/overview')).refresh[source].request?.status, 'updated');
+});
+
+test('seed and live credit share producer IDs and expose known positive, zero, legacy and mixed groups', async t => {
+  const set = setOf('all');
+  const start = Math.floor(Date.now() / HOUR) * HOUR + 7 * MIN;
+  const {stand, hub} = await bringUp(t, set, start);
+  const identities = () => hub.store.db.prepare('SELECT id, producer_id FROM agent_sessions WHERE producer_id IS NOT NULL ORDER BY id').all();
+  const seeded = identities();
+  assert.ok(seeded.length);
+  const live = new Live(stand, cadence);
+  await live.report(0, start);
+  t.mock.timers.setTime(start + MIN);
+  await live.report(MIN, start + MIN);
+  assert.deepEqual(identities(), seeded, 'live credit extends the seeded contextual rows');
+  const ana = stand.people.get('ana')!;
+  const overview = await ana.get(`/api/overview?board=${stand.boards.get('ana')}`) as Snapshot;
+  const sources = overview.sources.map(source => ({...source, sessions: overview.sessions[source.id]}));
+  const groups = groupsOf(agentRows(sources, overview.view).rows, 'project');
+  const byName = (name: string) => groups.find(group => group.name === name)!;
+  assert.ok(byName('quotum').workedMs! > 0);
+  assert.equal(byName('infra').workedMs, 0);
+  assert.equal(byName('mobile-app').workedMs, null);
+  assert.equal(byName('ios-app').workedMs, null);
+  assert.ok(byName('ios-app').rows.some(row => row.session.workedMs !== null), 'a mixed group contains known credit too');
 });

@@ -344,7 +344,24 @@ out when read (`domain/work.ts`): agent-hours add each stretch up, two agents co
 twice; active time is their union, overlaps counted once for whichever machines,
 people or projects are asked about. The corrections people make to project
 names apply when read, so they reach all the time kept. The database says since when
-this is kept (`agentWorkSince`): before it, how agents worked is not known.
+this is kept (`agentWorkSince`): before it, how agents worked is not known. A board's
+live lists tell each identified running agent's retained credited work on its current
+subscription, summed across project, folder and origin contexts. The optional opaque
+producer identity hashes a persisted private installation salt, OS, provider and native
+process birth; wall clocks and context names do not tell identity. Linux and macOS use
+boot IDs with raw process birth clocks, while Windows attempts only a validated fixed
+96-byte process telemetry prefix and falls back when unavailable. Neither raw native
+metadata nor producer IDs appear on boards or in history. A legacy session has an
+unknown live counter, shown as a dash; known zero is distinct. Legacy history retains
+its working-only ordinals, with no guessed mapping to identified work. An appended
+migration preserves every historical row ID and work interval. Identified work has one
+persisted high-water end across its contextual rows; crossing legacy and identified
+namespaces clips against the opposite namespace's retained device-wide end, snapshotted
+before writes. On rollback this can conservatively undercount parallel work until that
+end. History keeps its sharing/joining cutoff; live counters for allowed sessions include
+retained current-subscription credit before that cutoff too.
+The agents panel opened from a card's tray shows this credited work time for each
+session in agent-hours, with its project and folder, grouped by machine.
 
 The analytics show it over their period. The table tells, for each window, its
 subscription's active time, what the window spent per active hour, what share of its
@@ -777,10 +794,23 @@ above a card's tray or at the bottom of a panel, unless the owner chose a height
 gets shorter than its content, and grows past the chosen rows while its content needs
 more, back to them when it needs less, without the view changing. Both charts give a
 chosen height to their plot, never drawing it lower than they do by themselves, their
-heads, totals and legends whole. The list of agents can be shorter than its rows: it
+heads, totals and legends whole. The list of agents gathers them by project (one name
+across people, as agent activity counts it), machine or subscription, each viewer for
+themselves, or lists each agent: a group tells how many of its agents work, how long they
+have worked (each running agent's credited work, which the hub sends with it) and their
+last activity as a date and time, or now while any works; an unknown time is a dash.
+In a narrow grouped list, the default first line pairs the name with the agent count;
+the second pairs credited work on the left with last activity on the right, aligned
+with the line above.
+Machines and subscriptions are in the individual agents' details, opened by clicking
+the group. A folder stays under the project in the same table cell, wrapping long
+worktree names. Their default columns fit a wide dialog as a table with rows highlighted
+edge to edge; a narrow dialog uses an inset compact list. The dialog has no repeated
+count or work total above its rows; its toolbar holds only Back and list sorting when
+needed. The list can be shorter than its rows: it
 shows the most whole rows that fit, in its own order, and a last row saying how many
 more, which opens them all in a dialog; to know how many fit, it lays all its rows out
-unseen beside it, their running times standing still. Such a widget tells the grid
+unseen beside it, their times standing still. Such a widget tells the grid
 through a context of its own (`ui/components/sizing.ts`) the least it can show, what it
 needs whole and, as it lays itself out anew, how tall it shows, so the grid fills the
 rest of its rows before that paints; it reads how tall it is to be and when the grid gives

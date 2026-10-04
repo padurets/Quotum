@@ -5,7 +5,7 @@ import {mkdtempSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
-import {STEPS} from '../store/schema.js';
+import {STEPS,migrate} from '../store/schema.js';
 import {Store} from '../store/store.js';
 
 /**
@@ -48,4 +48,39 @@ test("a hub of 0.3 drops the sums of agents' work and keeps how they work from t
   const fresh = new Store(':memory:', upgraded);
   assert.equal(fresh.agentWorkSince(), fresh.historyStart(upgraded));
   fresh.close();
+});
+
+test('identity migration preserves exact legacy session IDs, keys and intervals', () => {
+  const file = path.join(mkdtempSync(path.join(tmpdir(), 'quotum-identity-schema-')), 'db.sqlite');
+  const old = new DatabaseSync(file);
+  for (const step of STEPS.slice(0, 7)) old.exec(step);
+  old.exec('PRAGMA user_version = 7');
+  old.exec("INSERT INTO agent_sessions VALUES (42, 'device', 'codex:1', 'terminal', 123, 'P', 'wt', 3), (97, 'device', 'codex:2', 'app', 456, '', '', 0)");
+  old.exec('INSERT INTO agent_work VALUES (42, 1000, 2000), (42, 3000, 4000), (97, 1500, 3500)');
+  const sessions = old.prepare('SELECT * FROM agent_sessions ORDER BY id').all();
+  const work = old.prepare('SELECT * FROM agent_work ORDER BY session_id, from_at').all();
+  old.close();
+  const store = new Store(file, 5000);
+  assert.deepEqual(store.db.prepare('SELECT id, device_id, source_id, origin, started_at, project, folder, ordinal FROM agent_sessions ORDER BY id').all(), sessions);
+  assert.deepEqual(store.db.prepare('SELECT * FROM agent_work ORDER BY session_id, from_at').all(), work);
+  assert.deepEqual(store.db.prepare('SELECT producer_id FROM agent_sessions').all().map(row => row.producer_id), [null, null]);
+  assert.match(String(store.db.prepare("EXPLAIN QUERY PLAN SELECT id FROM agent_sessions WHERE device_id='device' AND source_id='codex:1' AND started_at=123 AND origin='terminal' AND project='P' AND folder='wt' AND ordinal=3 AND producer_id IS NULL").get()!.detail), /agent_sessions_legacy_key/);
+  assert.match(String(store.db.prepare("EXPLAIN QUERY PLAN SELECT id FROM agent_sessions WHERE device_id='device' AND producer_id='abc' AND source_id='codex:1' AND origin='terminal' AND project='P' AND folder='wt'").get()!.detail), /agent_sessions_stable_key/);
+  store.close();
+});
+
+test('money storage upgrades the stable-session layout without changing its identities or work',()=>{
+  const db=new DatabaseSync(':memory:');
+  try {
+    for(const step of STEPS.slice(0,8))db.exec(step);
+    db.exec('PRAGMA user_version = 8');
+    db.exec("INSERT INTO agent_sessions VALUES (42, 'device', 'codex:1', 'terminal', 123, 'P', 'wt', 0, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')");
+    db.exec('INSERT INTO agent_work VALUES (42, 1000, 2000)');
+    const sessions=db.prepare('SELECT * FROM agent_sessions').all(),work=db.prepare('SELECT * FROM agent_work').all();
+    migrate(db,3000);
+    assert.deepEqual(db.prepare('SELECT * FROM agent_sessions').all(),sessions);
+    assert.deepEqual(db.prepare('SELECT * FROM agent_work').all(),work);
+    assert.equal(db.prepare('PRAGMA user_version').get()?.user_version,9);
+    for(const name of ['readings','meter_spans'])assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name));
+  }finally{db.close();}
 });

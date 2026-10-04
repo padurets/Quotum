@@ -15,10 +15,10 @@ test('the list of running agents is off until the owner turns it on', () => {
 });
 
 test('a table column hidden is kept per widget; showing every column again stores nothing', () => {
-  const view = withColumn(withColumn(EMPTY, AGENTS, 'machine', false), AGENTS, 'origin', false);
-  assert.deepEqual(view.columns, {agents: ['machine', 'origin']});
-  assert.deepEqual([columnShown(view, AGENTS, 'machine'), columnShown(view, AGENTS, 'state')], [false, false]);
-  assert.deepEqual(withColumn(withColumn(view, AGENTS, 'machine', true), AGENTS, 'origin', true).columns, {});
+  const view = withColumn(withColumn(EMPTY, AGENTS, 'machine', false), AGENTS, 'worked', false);
+  assert.deepEqual(view.columns, {agents: ['machine', 'worked']});
+  assert.deepEqual([columnShown(view, AGENTS, 'machine'), columnShown(view, AGENTS, 'running')], [false, false]);
+  assert.deepEqual(withColumn(withColumn(view, AGENTS, 'machine', true), AGENTS, 'worked', true).columns, {});
 });
 
 test("the plan its owner chose for a source, for the forecast's line of it: none by default, not the default chosen as it is, nor one switched off", () => {
@@ -83,13 +83,13 @@ test("the table's columns are on until the owner turns one off, but the share du
   assert.equal(columnShown(during, FORECAST, 'during'), true);
 });
 
-test('state is off by default; the owner explicitly shows it without reviving an old hidden column', () => {
-  assert.equal(columnShown(EMPTY, AGENTS, 'state'), false);
-  const old = {...EMPTY, columns: {agents: ['state']}};
-  assert.equal(columnShown(old, AGENTS, 'state'), false);
-  const shown = withColumn(old, AGENTS, 'state', true);
-  assert.equal(columnShown(shown, AGENTS, 'state'), true);
-  assert.deepEqual(shown.shownColumns, {agents: ['state']});
-  assert.deepEqual(withColumn(shown, AGENTS, 'state', false), old);
-  assert.deepEqual(withColumn(withColumn(EMPTY, AGENTS, 'state', true), AGENTS, 'state', true).shownColumns, {agents: ['state']});
+test('running time is off by default; the owner explicitly shows it without reviving an old hidden column', () => {
+  assert.equal(columnShown(EMPTY, AGENTS, 'running'), false);
+  const old = {...EMPTY, columns: {agents: ['running']}};
+  assert.equal(columnShown(old, AGENTS, 'running'), false);
+  const shown = withColumn(old, AGENTS, 'running', true);
+  assert.equal(columnShown(shown, AGENTS, 'running'), true);
+  assert.deepEqual(shown.shownColumns, {agents: ['running']});
+  assert.deepEqual(withColumn(shown, AGENTS, 'running', false), old);
+  assert.deepEqual(withColumn(withColumn(EMPTY, AGENTS, 'running', true), AGENTS, 'running', true).shownColumns, {agents: ['running']});
 });

@@ -262,7 +262,7 @@ export type Origin = 'terminal' | 'editor' | 'app';
  * project (a worktree, a folder inside it), in which folder, from `since` (before `start`
  * when it already ran then) until `until`, and when it works. Without a wave it waits.
  */
-export type Agent = {machine: string; origin: Origin; project: string | null; folder?: string; since: number; until?: number; works?: Wave};
+export type Agent = {legacy?: boolean; machine: string; origin: Origin; project: string | null; folder?: string; since: number; until?: number; works?: Wave};
 
 /** How a card looks on one board: its name, colour, width, whether it or some of its windows are hidden, its plan. */
 export type CardView = {name?: string; color?: string; width?: number; place?: Place; hidden?: boolean; windows?: string[]; plan?: WeeklyPlan | 'off'};
@@ -379,6 +379,11 @@ export type BoardCheck = Span &
      * it): the folders shown under it, by name, none where the folder is the project.
      */
     | {agentsOf: string; folders: (string | null)[]}
+    /**
+     * The list of running agents gathered by project: the group of `agentGroup` (as the person
+     * named it), how many agents it has, and whether the hub has credited them any work.
+     */
+    | {agentGroup: string; agents: number; worked?: boolean | null}
     /**
      * The activity widget over `range`, split by subscription (named by card id), project or
      * machine (by its name shown): every group and its own hours, to a tenth.
@@ -662,16 +667,23 @@ export function failuresAt(set: DemoSet, machine: Machine, start: number, t: num
   return failures.map(f => ({...f, observedAt: iso(start, t), detail: 'demo'}));
 }
 
+/** Synthetic process identity, assigned before presence or work filters in both seed and live reports. */
+export function sessionId(card: Card, index: number): string | null {
+  return card.agents![index].legacy ? null : createHash('sha256').update(JSON.stringify(['quotum/demo/session/v1', card.id, index])).digest('hex').slice(0, 32);
+}
+
 /** The agents a machine runs at `t`, as its agent reports them (spec: Reporting running agents). */
 export function sessionsAt(set: DemoSet, machine: Machine, start: number, t: number) {
   if (!awake(machine, t)) return [];
   return cards(set).flatMap(card =>
     (card.agents ?? [])
-      .filter(agent => agent.machine === machine.id && agent.since <= t && (agent.until === undefined || t < agent.until))
-      .map(agent => {
+      .map((agent, index) => ({agent, id: sessionId(card, index)}))
+      .filter(({agent}) => agent.machine === machine.id && agent.since <= t && (agent.until === undefined || t < agent.until))
+      .map(({agent, id}) => {
         const working = !!agent.works && isOn(agent.works, t);
         const last = agent.works ? lastOn(agent.works, t) : null;
         return {
+          sessionId: id,
           provider: card.provider,
           ...accountOf(card),
           origin: agent.origin,
