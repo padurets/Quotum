@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import {HistoryStore} from '../lib/history';
 import {cellsOf} from '../../server/domain/cells';
-import {CLOCK_TOLERANCE_MS, cellStart, type Chunk, type HistoryAnswer} from '../../server/domain/history';
+import {CLOCK_TOLERANCE_MS, cellStart, targetOf, type Chunk, type HistoryAnswer} from '../../server/domain/history';
 import {covered, type PlotBuffer} from '../lib/historyPlot';
 import {readout as readCell, type ForecastLine, type PlanLine, type ReadoutRow} from '../lib/readout';
 import type {PlotSeries} from '../lib/lines';
@@ -44,6 +44,11 @@ test('the actual chart does not carry a held value through unread history after 
   try {
     store.choose('1h', null); store.open('b'); store.hello('r'); store.snapshot(['s'], ['s w']);
     await flush(); await answer(pending());
+    // A fresh island splits the missing range into two batches. The first answer
+    // can then publish a real partial plot while its unknown bridge still waits.
+    const target = targetOf(H, now, 'island');
+    (store as unknown as {read(wanted: typeof target, from: number, to: number, role: 'visible'): void}).read(target, at('10:59'), at('11:00'), 'visible');
+    await answer(pending());
     const range = {from: at('10:40'), to: at('11:40')};
     store.pan({token: 1, length: H, ...range, direction: 0}); await flush(); await answer(pending());
     store.choose('1h', range); store.endPan(true); await flush();
