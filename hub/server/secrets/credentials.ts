@@ -65,14 +65,19 @@ export class Credentials {
       this.requireKey();
     }catch{throw new SecretError('credential_conflict');}
   }
-  private validate(connector:Connector,answer:ConnectorAnswer,options:Options,account?:string):ConnectorIdentity {
+  private validate(connector:Connector,answer:ConnectorAnswer,options:Options):ConnectorAnswer {
     const declared=connector.identityKind==='declared';
     if(declared ? answer.identityKind!=='declared'||answer.account!==null||answer.expiresAt!==null : answer.identityKind==='declared'||typeof answer.account!=='string'||!/^[0-9a-f]{24}$/.test(answer.account))throw new SecretError('connector_invalid_response');
     if(answer.abilities.some(a=>!connector.abilities.includes(a))||answer.expiresAt!==null&&(!Number.isSafeInteger(answer.expiresAt)||answer.expiresAt<0))throw new SecretError('connector_invalid_response');
     if(answer.retryAfterMs!==undefined&&(!Number.isSafeInteger(answer.retryAfterMs)||answer.retryAfterMs<0||answer.retryAfterMs>3_600_000))throw new SecretError('connector_invalid_response');
     if(answer.expiresAt!==null&&answer.expiresAt<=Date.now())throw new SecretError('credential_expired');
     if(answer.expiresAt===null&&(declared?options.allowUnknownExpiry:options.allowNoExpiry)!==true)throw new SecretError('credential_expiry_confirmation',declared?'unknown':'none');
-    return {...answer,account:declared?account??'':answer.account!};
+    return answer;
+  }
+  private resolve(answer:ConnectorAnswer,account:string|null):ConnectorIdentity {
+    if(answer.identityKind!=='declared')return answer;
+    if(typeof account!=='string'||!/^[0-9a-f]{24}$/.test(account))throw new SecretError('credential_account_mismatch');
+    return {...answer,account};
   }
   private target(owner:string,provider:string,secret:unknown,options:Options):{name:string;row:null}|{name:null;row:DeclaredAccount}|null {
     if(this.connector(provider).identityKind!=='declared') {
@@ -111,18 +116,19 @@ export class Credentials {
       const replay=this.replay(owner,provider,options.requestId,selector);if(replay)return replay;
       const target=this.target(owner,provider,secret,options),authority=this.authority();
       return this.secret(connector,secret,async bytes=>{
-        const identity=this.validate(connector,await connector.identify(bytes),options,target?.row?this.store.account(target.row.source_id)!:undefined);
+        const identity=this.validate(connector,await connector.identify(bytes),options);
         let source:string|null=null;
         return this.mutation(()=>{
           const replay=this.replay(owner,provider,options.requestId,selector);if(replay)return replay;
           this.currentAuthority(authority);
           if(target?.row&&!this.accounts.current(target.row))throw new SecretError('credential_conflict');
           const account=target?(target.row??this.accounts.add(owner,provider,target.name!,account=>this.store.source(provider as Provider,account,Date.now()))):null;
-          source=account?.source_id??this.store.source(provider as Provider,identity.account,Date.now());
+          source=account?.source_id??this.store.source(provider as Provider,identity.account!,Date.now());
           const record={id:randomUUID(),user_id:owner,provider};
           const row:CredentialRow={...record,...authority.key.seal(record,bytes),source_id:source,key_version:authority.epoch,hint:bytes.subarray(-4).toString('ascii'),abilities:JSON.stringify(identity.abilities),created_at:Date.now(),expires_at:identity.expiresAt,expiry_kind:account?'unknown':identity.expiresAt===null?'none':'at',last_used_at:null,last_error:null,unreadable:0};
           this.#repository.add(row);this.store.hold(source,owner,row.created_at);
-          if(identity.measurement)this.store.record(source,identity.measurement);
+          const resolved=this.resolve(identity,this.store.account(source));
+          if(resolved.measurement)this.store.record(source,resolved.measurement);
           if(options.requestId)this.db.prepare('INSERT OR REPLACE INTO meta VALUES (?,?)').run('credential-request:'+owner+':'+options.requestId,JSON.stringify({provider,id:row.id,at:row.created_at,...(selector===undefined?{}:{target:selector})}));
           return this.answer(row);
         },false,()=>{if(source)this.changed(source,owner);});
@@ -141,7 +147,7 @@ export class Credentials {
       const binding=declared?this.accounts.forSource(owner,row.provider,row.source_id??''):null;
       if(declared&&!binding)throw new SecretError('declared_account_not_found');
       return this.secret(connector,secret,async bytes=>{
-        const identity=this.validate(connector,await connector.identify(bytes),options,this.store.account(row.source_id!)!);
+        const identity=this.resolve(this.validate(connector,await connector.identify(bytes),options),this.store.account(row.source_id!));
         if(!row.source_id||this.store.account(row.source_id)!==identity.account)throw new SecretError('credential_account_mismatch');
         return this.mutation(()=>{
           this.currentAuthority(authority);
@@ -193,7 +199,7 @@ export class Credentials {
         try {
           const connector=this.connector(row.provider),authority=this.authority(),key=authority.key;
           if(row.expires_at!==null&&row.expires_at<=Date.now())throw new SecretError('credential_expired');
-          const result=this.validate(connector,await key.use(row,async bytes=>{decrypted=true;return connector.measure(bytes,{account:this.store.account(source)!,expiresAt:row.expires_at},signal);}),{allowNoExpiry:true,allowUnknownExpiry:true},this.store.account(source)!);
+          const result=this.resolve(this.validate(connector,await key.use(row,async bytes=>{decrypted=true;return connector.measure(bytes,{account:this.store.account(source)!,expiresAt:row.expires_at},signal);}),{allowNoExpiry:true,allowUnknownExpiry:true}),this.store.account(source));
           if(result.account!==this.store.account(source))throw new SecretError('credential_account_mismatch');
           if(!result.measurement)throw new SecretError('connector_invalid_response');
           const staleAfterMs=Math.min(86_400_000,Math.round(interval(result)*1.2)+60_000);
