@@ -301,6 +301,12 @@ async function measure(stand: Awaited<ReturnType<Demo['run']>>, cdp: Cdp) {
 async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:Cdp) {
   const owner=stand.people.get(people(stand.set)[0].id)!;
   say('checking money updates, partial inventory, pagination, selection and unchanged observations');
+  // The panning scenarios finish at 30d; this phase measures one-day cell updates.
+  await cdp.evaluate(`(async () => {
+    document.querySelector('.period .picker > button').click();
+    await new Promise(requestAnimationFrame);
+    document.querySelectorAll('.period .popover .popover-row')[4].click();
+  })()`);
   const record=await owner.post<Credential>('/api/credentials',{provider:'openrouter',secret:MONEY_KEY(1),allowNoExpiry:true});
   const source=record.sourceId!;
   const shownBy=Date.now()+SHOWN_WITHIN;
