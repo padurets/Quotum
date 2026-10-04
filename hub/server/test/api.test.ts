@@ -717,7 +717,7 @@ async function worked() {
   store.db.prepare('UPDATE members SET joined_at = ? WHERE board_id = ? AND user_id = ?').run(ago(2), team, bob);
   const device = (who: string) => (store.db.prepare('SELECT id FROM devices WHERE machine_id = ?').get(`${who}-laptop-0123456789`) as {id: string}).id;
   const work = (who: string, from: number, to: number, project: string, on = source) =>
-    store.creditWork(device(who), ago(from), ago(to), [{source: on, origin: 'terminal', startedAt: ago(from), project, folder: '', ordinal: 0}]);
+    store.creditWork(device(who), ago(from), ago(to), [{source: on, origin: 'terminal', startedAt: ago(from), project, folder: '', identity: {kind: 'legacy' as const, ordinal: 0}}]);
   work('alice', 6, 5.5, 'early');
   work('alice', 4, 3, 'quotum');
   // On her second subscription after the first came to the board, but before it did itself.
@@ -735,7 +735,7 @@ test('a recently ended frame gets late credited work at once', async () => {
   const to = Math.floor((Date.now() - minute) / minute) * minute;
   const read = () => readFrame(call, `board=${team}&from=${to - 15 * minute}&to=${to}`).then(r => r.body);
   const first = await read();
-  store.creditWork(device, to - 2 * minute, to, [{source, origin: 'terminal', startedAt: to - 2 * minute, project: 'quotum', folder: '', ordinal: 0}]);
+  store.creditWork(device, to - 2 * minute, to, [{source, origin: 'terminal', startedAt: to - 2 * minute, project: 'quotum', folder: '', identity: {kind: 'legacy' as const, ordinal: 0}}]);
   const credited = await read();
   assert.equal(credited.activity.activeMs - first.activity.activeMs, 2 * minute);
 });
@@ -907,6 +907,12 @@ test('agents report the coding agents running on their machines; the cards of th
   const codex = {provider: 'codex', account: 'a1b2c3d4e5f6a1b2c3d4e5f6', origin: 'terminal', project: 'quotum', startedAt: started, working: true};
   const unknown = {...codex, account: 'ffffffffffffffffffffffff'};
   const guessed = {provider: 'codex', origin: 'editor', startedAt: started, working: false};
+  for (const sessionId of ['', 'A'.repeat(32), 7, {}, 'a'.repeat(31)]) {
+    const invalid = await report([{...codex, sessionId}]);
+    assert.deepEqual([invalid.status, invalid.body], [400, {error: 'invalid_request', detail: 'sessionId'}]);
+  }
+  const duplicate = await report([{...codex, sessionId: 'a'.repeat(32)}, {...unknown, sessionId: 'a'.repeat(32)}]);
+  assert.deepEqual([duplicate.status, duplicate.body], [400, {error: 'invalid_request', detail: 'sessionId'}]);
   const answer = await report([codex, unknown, guessed]);
   assert.deepEqual([answer.status, answer.body], [200, {accepted: 2}], 'a subscription the hub does not know is left out');
   const shown = async () => {
@@ -915,9 +921,14 @@ test('agents report the coding agents running on their machines; the cards of th
   };
   const [first, second] = await shown();
   assert.deepEqual([first.origin, first.project, first.folder, first.working, first.device.name, first.startedAt], ['terminal', 'quotum', null, true, 'build-01', Date.parse(started)]);
+  assert.equal(first.workedMs, null, 'legacy time is unknown, not a guessed zero');
   assert.equal(second.lastWorkedAt, null, 'an older agent omits the date');
   assert.equal(second.origin, 'editor', 'without an account: the subscription this machine delivers');
   assert.deepEqual(Object.keys(first).sort(), ['device', 'folder', 'lastWorkedAt', 'origin', 'project', 'startedAt', 'workedMs', 'working'], 'nothing of how the hub tells sessions apart');
+  assert.equal((await report([{...codex, sessionId: 'a'.repeat(32)}])).status, 200);
+  const [identified] = await shown();
+  assert.equal(identified.workedMs, 0, 'valid ID starts with known zero, without guessed legacy credit');
+  assert.deepEqual(Object.keys(identified).sort(), Object.keys(first).sort(), 'producer identity never reaches the board');
   assert.equal((await report([])).status, 200);
   assert.deepEqual(await shown(), [], 'an empty list: none runs');
   const long = await report([{...codex, project: 'x'.repeat(300), folder: 'y'.repeat(300)}]);

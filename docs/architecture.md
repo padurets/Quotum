@@ -344,9 +344,21 @@ twice; active time is their union, overlaps counted once for whichever machines,
 people or projects are asked about. The corrections people make to project
 names apply when read, so they reach all the time kept. The database says since when
 this is kept (`agentWorkSince`): before it, how agents worked is not known. A board's
-live lists tell each running agent's credited work so far, found by the names it is
-credited under (sessions alike in all of it told apart by their place in the machine's
-list, working or not).
+live lists tell each identified running agent's retained credited work on its current
+subscription, summed across project, folder and origin contexts. The optional opaque
+producer identity hashes a persisted private installation salt, OS, provider and native
+process birth; wall clocks and context names do not tell identity. Linux and macOS use
+boot IDs with raw process birth clocks, while Windows attempts only a validated fixed
+96-byte process telemetry prefix and falls back when unavailable. Neither raw native
+metadata nor producer IDs appear on boards or in history. A legacy session has an
+unknown live counter, shown as a dash; known zero is distinct. Legacy history retains
+its working-only ordinals, with no guessed mapping to identified work. An appended
+migration preserves every historical row ID and work interval. Identified work has one
+persisted high-water end across its contextual rows; crossing legacy and identified
+namespaces clips against the opposite namespace's retained device-wide end, snapshotted
+before writes. On rollback this can conservatively undercount parallel work until that
+end. History keeps its sharing/joining cutoff; live counters for allowed sessions include
+retained current-subscription credit before that cutoff too.
 The agents panel opened from a card's tray shows this credited work time for each
 session in agent-hours, with its project and folder, grouped by machine.
 

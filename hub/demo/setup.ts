@@ -20,6 +20,7 @@ import {
   personOf,
   problems,
   sessionsAt,
+  sessionId,
   snapshot,
   sourceOf,
   workSince,
@@ -249,8 +250,9 @@ export function seedWork(store: Store, stand: Stand) {
       // Its agents, each with the names the hub files it under, read as the hub reads a list.
       const agents = cards(set).flatMap(card =>
         (card.agents ?? [])
-          .filter(agent => agent.machine === machine.id)
-          .map(agent => {
+          .map((agent, index) => ({agent, sessionId: sessionId(card, index)}))
+          .filter(({agent}) => agent.machine === machine.id)
+          .map(({agent, sessionId}) => {
             const [told] = parseSessions({
               version: 1,
               agent: Agent.VERSION,
@@ -258,26 +260,27 @@ export function seedWork(store: Store, stand: Stand) {
               sentAt: new Date(start).toISOString(),
               sessions: [{provider: card.provider, origin: agent.origin, project: agent.project, folder: agent.folder, startedAt: new Date(start + agent.since).toISOString(), working: true}],
             }).sessions;
-            return {agent, key: {source: stand.sources.get(card.id)!, origin: told.origin, startedAt: told.startedAt, project: told.project ?? '', folder: told.folder ?? ''}};
+            return {agent, sessionId, key: {source: stand.sources.get(card.id)!, origin: told.origin, startedAt: told.startedAt, project: told.project ?? '', folder: told.folder ?? ''}};
           }),
       );
       const open = new Map<string, {key: WorkKey; from: number; to: number}>();
       const credit = (stretch: {key: WorkKey; from: number; to: number}) => store.creditWork(device, start + stretch.from, start + stretch.to, [stretch.key]);
       for (let t = since; t < 0; t += MIN) {
-        // Agents alike in all of it are told apart by their place in the machine's list, working or not, as the hub tells them.
+        // Legacy agents alike in all of it keep their ordinal among the working ones, as the hub tells them.
         const alike = new Map<string, number>();
         const working = new Set<string>();
-        for (const {agent, key} of awake(machine, t) ? agents : []) {
+        for (const {agent, key, sessionId} of awake(machine, t) ? agents : []) {
           if (agent.since > t || (agent.until !== undefined && t >= agent.until)) continue;
+          if (!agent.works || !isOn(agent.works, t)) continue;
           const plain = JSON.stringify(key);
           const ordinal = alike.get(plain) ?? 0;
           alike.set(plain, ordinal + 1);
-          if (!agent.works || !isOn(agent.works, t)) continue;
-          const id = `${plain} ${ordinal}`;
+          const identity = sessionId ? {kind: 'stable' as const, sessionId} : {kind: 'legacy' as const, ordinal};
+          const id = JSON.stringify([key, identity]);
           working.add(id);
           const stretch = open.get(id);
           if (stretch) stretch.to = t + MIN;
-          else open.set(id, {key: {...key, ordinal}, from: t, to: t + MIN});
+          else open.set(id, {key: {...key, identity}, from: t, to: t + MIN});
         }
         for (const [id, stretch] of open) {
           if (working.has(id)) continue;

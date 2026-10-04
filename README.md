@@ -102,7 +102,9 @@ Codex         api                  idle     started 25m ago · editor
   Claude Code, Codex or Antigravity session spending the subscription, grouped by
   machine: filled while it works, outlined while idle; its project, its folder (a
   worktree, a folder inside the repository) and its credited work time in agent-hours
-  in the panel. Terminals, editors and the Codex app alike.
+  in the panel. Credit belongs to the current subscription and is unknown without a
+  reliable session ID; a dash keeps that distinct from known zero. Terminals, editors
+  and the Codex app alike.
 - **Free resets.** When a provider grants resets of the limits (Codex does now and
   then), the card shows how many you have and until when.
 - **A weekly spending plan.** By default you spend 30 / 25 / 15 / 15 / 10 / 5% on the

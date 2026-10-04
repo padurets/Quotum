@@ -258,3 +258,19 @@ test('refresh is an independent slice, restored by snapshots and removed with it
   assert.equal(gone.board!.refresh.s1, undefined);
   assert.equal(reduce(after, {type: 'board-open', id: 'another'}).board, null);
 });
+
+
+test('snapshot and session events normalize old or invalid credit before retaining references', () => {
+  for (const value of [undefined, null, -1, NaN, Infinity, '10', {}]) {
+    const supplied = {...session, workedMs: value} as unknown as typeof session;
+    const initial = run(hub({type: 'snapshot', data: snapshot({sessions: {s1: [supplied], s2: []}})}));
+    assert.equal(initial.board!.sessions.s1[0].workedMs, null);
+    const repeated = reduce(initial, hub({type: 'sessions', data: {id: 's1', sessions: [supplied]}}));
+    assert.equal(repeated, initial, 'normalized repeats retain the state');
+    const updated = reduce(initial, hub({type: 'sessions', data: {id: 's1', sessions: [{...session, workedMs: 0}]}}));
+    assert.equal(updated.board!.sessions.s1[0].workedMs, 0);
+    const bad = reduce(updated, hub({type: 'sessions', data: {id: 's1', sessions: [supplied]}}));
+    assert.equal(bad.board!.sessions.s1[0].workedMs, null);
+    assert.equal(bad.board!.cards, updated.board!.cards);
+  }
+});

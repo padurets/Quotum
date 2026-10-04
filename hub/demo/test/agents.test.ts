@@ -27,3 +27,21 @@ test('demo sessions omit last work while working and when no work was seen after
   assert.deepEqual(read(400).map(s => s.lastWorkedAt), [new Date(10_199).toISOString(), undefined, undefined, undefined]);
   assert.deepEqual(read(800), read(400));
 });
+
+test('synthetic IDs are assigned before presence and work filters, even for identical twins', () => {
+  const set: DemoSet = {id: 'identity', about: '', scene: '', entries: [{
+    kind: 'card', id: 'twins', provider: 'codex', plan: '', machines: ['machine'], history: 0, windows: [], expect: [],
+    agents: [
+      {machine: 'machine', origin: 'terminal', project: 'same', since: 0, until: 200, works: ALWAYS},
+      {machine: 'machine', origin: 'terminal', project: 'same', since: 0, works: {period: 1000, on: 100, phase: 0}},
+      {machine: 'machine', origin: 'terminal', project: 'old', since: 0, legacy: true},
+    ],
+  }]};
+  const read = (t: number) => sessionsAt(set, {kind: 'machine', id: 'machine', expect: []}, 10_000, t);
+  const [a, b, old] = read(0);
+  assert.notEqual(a.sessionId, b.sessionId);
+  assert.match(b.sessionId!, /^[0-9a-f]{32}$/);
+  assert.equal(read(400)[0].sessionId, b.sessionId, 'the survivor keeps its ID while idle and after a twin exits');
+  assert.equal(read(1000)[0].sessionId, b.sessionId, 'working again keeps its ID');
+  assert.equal(old.sessionId, null);
+});

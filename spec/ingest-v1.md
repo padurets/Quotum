@@ -340,6 +340,7 @@ of running agents for five minutes after its last request, then forgets it.
 | `project` | The project it works in, never a path: the name of the git repository its folder is in (for a worktree, of the repository it belongs to), else the name of the folder. Absent when the folder that names it (the repository's main folder, else the folder itself) is the home folder, above it or temporary. A repository is looked for in the folder and the folders above it, stopping before the home folder (neither it nor anything above it is looked at), and on macOS not in or through the folders the system guards (Desktop, Documents, Downloads, iCloud Drive, other volumes): there the project is the folder. Paths are checked as git writes them; a chain of links made by hand may still lead there. The hub counts time under this name, and boards show it. A longer name than 120 characters is cut, not refused. |
 | `folder` | The name of the folder it works in, when that is not `project` (a subfolder or a worktree), and the folder is not the home folder, above it or temporary. Boards show it under the project in the lists of running agents, so agents of one project stay apart; where the agent tells none and its person renamed the project, the name reported for the project is shown there instead. Cut like `project`. |
 | `startedAt` | When it started; a time ahead of the hub's is taken as now. |
+| `sessionId` | Optional opaque process identity: exactly 32 lower-case hex characters, unique across the report. Absent or null means legacy identity. Invalid types, malformed or duplicate IDs reject the whole report with `400 {"error":"invalid_request","detail":"sessionId"}`. It is scoped to the authenticated device, unchanged by clock correction. Older hubs ignore it. |
 | `working` | Whether it is working now (the agent's judgement: its processes spend CPU time), or idle. |
 | `lastWorkedAt` | Optional: when an idle session was last seen spending CPU like a working one. Absent while working or when unknown, including after the agent restarts or the clocks jump. The reference agent remembers the observation's wall time without recalculating it, and sends it only between `startedAt` and now. The hub corrects it for clock skew as it does `startedAt`, limits it to now and brings a time before `startedAt` up to `startedAt`; an invalid time is refused. |
 
@@ -368,6 +369,33 @@ since when and its project and folder names: each list counts until the next one
 most 200 seconds. How long agents worked, and how long any of them did, are worked out
 from that. The person whose machines they are can rename projects and merge them, which
 applies to all time kept.
+
+The reference agent derives `sessionId` from the first 16 bytes of SHA-256 over
+length-prefixed domain `quotum/session/v1`, a persisted private 128-bit installation
+salt, OS, provider and native process birth. Linux uses boot UUID, PID and raw process
+start ticks; macOS uses boot session UUID, PID and raw process-start absolute time.
+Windows attempts a dynamically resolved process telemetry query with one aligned,
+fixed 96-byte buffer, validating its header, returned length, PID and fixed fields
+through BootId. It follows no offsets or variable tails and never enlarges the buffer;
+an unsupported, denied or larger answer leaves the capability unavailable. Wall-clock
+process timestamps are never an identity substitute. The native token is checked
+around process metadata and folder reads. The salt is published before use under a
+separate nonblocking regular-file lock; corrupt, linked or pipe files and persistence
+failures leave identity unavailable. No raw native token, PID, boot metadata or salt
+leaves the machine. Changing working state, order, folder, project, origin, subscription
+or wall clock preserves the ID; another birth or boot gives a new one.
+
+Identified work uses separate contextual rows for each subscription, origin, project
+and folder, with a persisted high-water end across all contexts of that device and
+ID. Its live counter adds retained credit on the current subscription only; it never
+includes another subscription's work or guesses a match to unidentified history.
+Legacy work retains its original ordinal among working sessions with the same
+fingerprint; idle sessions consume no ordinal, while working identified sessions still
+consume the ordinal an older hub would assign them. A legacy live counter is unknown.
+On upgrade or downgrade with a clock rollback, each namespace clips new credit against
+a snapshot of the other namespace's retained device-wide end, taken before any writes.
+This conservatively may undercount parallel processes until that end, rather than
+crediting the same period twice. Existing work is never rewritten or reconstructed.
 
 ## Connecting with a one-time code
 
@@ -412,7 +440,9 @@ and the name of its project (the repository its folder is in, else the folder) a
 its folder when that differs (unless that is turned off too). The members of a board you
 are on where a subscription you measure is shown, whoever brought it, see these, as they
 see its limits, with each project under the name its person gave it, and with them the
-name of the machine each agent runs on.
+name of the machine each agent runs on. The agent also sends an optional opaque
+process ID to the hub's work ledger; board readers never receive it. Raw native birth
+metadata and the installation salt stay on the machine.
 
 What the hub keeps of plans: the plan name each subscription was reported with, from
 each moment it changed, as long as samples (90 days), and the one in effect for as long as
@@ -430,6 +460,11 @@ The members of a shared board see when and for how long your agents worked on a
 subscription you measure that is shown there, whoever brought it, as precisely as the hub
 credits it (not rounded to the minute), with how many of them worked, by project and by
 machine, from the later of when you joined the board and when the subscription came to
-it; you see all of it on your own board.
+it; you see all of it on your own board. This cutoff applies to history. For a running
+session the board is allowed to list, its live `workedMs` includes retained credited
+work on its current subscription across contexts, including before that history cutoff.
+Without reliable session identity it is null, not a guessed zero. The opaque producer
+ID is kept only in the hub's work ledger; no producer ID, raw native token, PID, boot
+metadata or salt appears in board state, history, errors or logs.
 
 The measuring-frequency preference is kept on the hub. It adds no information to agent traffic.

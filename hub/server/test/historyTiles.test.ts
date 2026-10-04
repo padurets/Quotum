@@ -49,7 +49,7 @@ test('measurements invalidate from their time, including a source that had no sa
 
 test('late work, hidden cards and renamed devices invalidate closed tiles, while opaque refs are stable', () => {
   const h = fixture(); h.sample(start, 20); h.read();
-  h.store.creditWork(h.device, start + M, start + 2 * M, [{source: h.source, origin: 'terminal', startedAt: start, project: 'P', folder: '', ordinal: 0}]);
+  h.store.creditWork(h.device, start + M, start + 2 * M, [{source: h.source, origin: 'terminal', startedAt: start, project: 'P', folder: '', identity: {kind: 'legacy' as const, ordinal: 0}}]);
   const [json] = h.read(); assert.equal(h.calls(), 2);
   const chunk = JSON.parse(json);
   const ref = chunk.activity.sessions[0][0];
@@ -114,7 +114,7 @@ test('compact JSON keeps exact numbers and every digit and escape inside names',
   h.sample(start, 20.12345, '300000');
   const name = '300000 "quoted"\\name\n120000';
   h.store.db.prepare('UPDATE devices SET label = ? WHERE id = ?').run(name, h.device);
-  h.store.creditWork(h.device, start, start + M, [{source: h.source, origin: 'terminal', startedAt: start, project: name, folder: '', ordinal: 0}]);
+  h.store.creditWork(h.device, start, start + M, [{source: h.source, origin: 'terminal', startedAt: start, project: name, folder: '', identity: {kind: 'legacy' as const, ordinal: 0}}]);
   const raw = h.store.cells(h.board, M, start, start + H, {now: start + 3 * H})[0];
   const [json] = h.read();
   const expected = {...raw, activity: {...raw.activity, sessions: raw.activity.sessions.map(([id, ...rest]) => [h.tiles.ref(h.board, id), ...rest])}};
@@ -127,7 +127,7 @@ test('compact JSON keeps exact numbers and every digit and escape inside names',
 
 test('a changed known work start cannot reuse activity or expose sessions before it', () => {
   const h = fixture();
-  h.store.creditWork(h.device, start, start + M, [{source: h.source, origin: 'terminal', startedAt: start, project: 'P', folder: '', ordinal: 0}]);
+  h.store.creditWork(h.device, start, start + M, [{source: h.source, origin: 'terminal', startedAt: start, project: 'P', folder: '', identity: {kind: 'legacy' as const, ordinal: 0}}]);
   assert.equal(JSON.parse(h.read()[0]).activity.sessions.length, 1);
   h.store.db.prepare("UPDATE meta SET value = ? WHERE key = 'agentWorkSince'").run(String(start + 2 * M));
   assert.deepEqual(JSON.parse(h.read()[0]).activity.sessions, []);
@@ -155,7 +155,7 @@ test('actual retention deletion invalidates closed tiles, while a no-op prune pr
 test('a later prune failure cannot preserve cached history after samples were already deleted', () => {
   const h = fixture(), day = 24 * H, now = start + 3 * H;
   h.sample(now - 91 * day, 80); h.sample(start, 0);
-  h.store.creditWork(h.device, now - 91 * day, now - 91 * day + M, [{source: h.source, origin: 'terminal', startedAt: start, project: 'P', folder: '', ordinal: 0}]);
+  h.store.creditWork(h.device, now - 91 * day, now - 91 * day + M, [{source: h.source, origin: 'terminal', startedAt: start, project: 'P', folder: '', identity: {kind: 'legacy' as const, ordinal: 0}}]);
   h.read(); assert.equal(h.calls(), 1);
   h.store.db.exec("CREATE TRIGGER fail_work_prune BEFORE DELETE ON agent_work BEGIN SELECT RAISE(FAIL, 'failed work prune'); END");
   assert.throws(() => h.store.prune(now), /failed work prune/);
@@ -166,7 +166,7 @@ test('a later prune failure cannot preserve cached history after samples were al
 
 test('work and event deletions also invalidate a held tile without changing its work key', () => {
   const h = fixture(), day = 24 * H, now = start + 3 * H;
-  const agent = {source: h.source, origin: 'terminal' as const, startedAt: start, project: 'P', folder: '', ordinal: 0};
+  const agent = {source: h.source, origin: 'terminal' as const, startedAt: start, project: 'P', folder: '', identity: {kind: 'legacy' as const, ordinal: 0}};
   h.store.creditWork(h.device, now - 91 * day, now - 91 * day + M, [agent]);
   h.store.creditWork(h.device, start, start + M, [agent]);
   const shown = h.store.shown(h.board, []), key = h.store.workKey(h.board, shown);

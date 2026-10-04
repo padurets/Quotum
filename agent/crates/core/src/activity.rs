@@ -38,10 +38,11 @@ const MIN_LOOK_MS: u128 = 1_000;
 const HOLD_MS: u128 = 60_000;
 
 /// A running client: a coding agent's session on this machine.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Session {
     pub provider: Provider,
     pub pid: u32,
+    pub(crate) native_birth: Option<Vec<u8>>,
     pub started_at: Millis,
     /// The project it works in: the repository its folder belongs to, else the folder itself.
     pub project: Option<String>,
@@ -74,13 +75,14 @@ impl Origin {
 }
 
 /// A process as the list of all of them tells it.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Proc {
     pub pid: u32,
     pub parent: u32,
     pub name: String,
     /// Its start and CPU time, when the list gives them at no extra cost (Linux).
     pub times: Option<(Millis, u64)>,
+    pub(crate) native_birth: Option<Vec<u8>>,
     /// A proven service invocation, otherwise unknown and eligible to be a session.
     pub role: Role,
 }
@@ -138,11 +140,21 @@ fn invocation_word(input: &mut impl Read, words: &[&[u8]]) -> Option<usize> {
 #[cfg(any(target_os = "linux", test))]
 fn with_role(mut before: Proc, role: Role, after: Option<Proc>) -> Option<Proc> {
     let after = after?;
-    if before.pid != after.pid || before.name != after.name || before.times.map(|t| t.0) != after.times.map(|t| t.0) {
+    if before.pid != after.pid
+        || before.name != after.name
+        || before.native_birth != after.native_birth
+        || (before.native_birth.is_none() && before.times.map(|t| t.0) != after.times.map(|t| t.0))
+    {
         return None;
     }
     before.role = role;
     Some(before)
+}
+
+fn cache_key(pid: u32, wall: Millis, native: Option<&[u8]>) -> (u32, Vec<u8>) {
+    let mut key = vec![u8::from(native.is_some())];
+    key.extend_from_slice(native.unwrap_or(&wall.to_be_bytes()));
+    (pid, key)
 }
 
 /// What the last look saw of a session.
@@ -172,9 +184,9 @@ pub struct Activity {
     /// Folders not to be looked into for a repository (macOS guards them).
     shielded: Vec<PathBuf>,
     /// Each session at the last look, by pid and start (pids are reused).
-    last: HashMap<(u32, Millis), Seen>,
+    last: HashMap<(u32, Vec<u8>), Seen>,
     /// Each session's folder at the last look, and where that placed it.
-    places: HashMap<(u32, Millis), (PathBuf, Place)>,
+    places: HashMap<(u32, Vec<u8>), (PathBuf, Place)>,
     /// Whether sessions are placed at all: with project names turned off, no folder is looked at.
     placing: bool,
 }
@@ -209,6 +221,7 @@ impl Activity {
         let times = |pid: u32| listed.get(&pid).copied().flatten().or_else(|| sys::times(pid));
         let mut seen = HashMap::new();
         let mut folders = Vec::new();
+        let listed_births: HashMap<u32, _> = procs.iter().map(|p| (p.pid, p.native_birth.clone())).collect();
         let mut sessions: Vec<Session> = sessions(&procs, std::process::id(), &sys::exe)
             .into_iter()
             // Other people's clients on a shared machine are theirs, and on their accounts.
@@ -218,21 +231,49 @@ impl Activity {
                 // system keeps that). A session of another kind it started and that ended
                 // shows up there too, for a minute: rare, since the one that started it is
                 // working on its result then.
+                let native_birth = listed_births.get(&pid).cloned().flatten();
+                if native_birth.is_some() && sys::birth(pid) != native_birth {
+                    return None;
+                }
                 let measured: Vec<Option<(Millis, u64)>> = tree.iter().map(|&p| times(p)).collect();
                 let (started_at, _) = (*measured.first()?)?;
                 let cpu: u64 = measured.iter().flatten().map(|&(_, cpu)| cpu).sum();
-                let key = (pid, started_at);
+                let key = cache_key(pid, started_at, native_birth.as_deref());
                 let next = judged(self.last.get(&key), cpu, now, wall, working_share(provider));
                 let working = next.working;
                 let last_worked = next.last_worked(started_at, wall);
-                seen.insert(key, next);
+                seen.insert(key.clone(), next);
                 folders.push((key, pid));
-                Some(Session { provider, pid, started_at, project: None, folder: None, working, last_worked, origin })
+                Some(Session {
+                    provider,
+                    pid,
+                    native_birth,
+                    started_at,
+                    project: None,
+                    folder: None,
+                    working,
+                    last_worked,
+                    origin,
+                })
             })
             .collect();
         for (session, Place { folder, project }) in sessions.iter_mut().zip(self.placed(folders, &sys::cwd)) {
             (session.folder, session.project) = (folder, project);
         }
+        // Recheck after times, role/origin and cwd: a PID reused during metadata reads
+        // contributes neither a session nor a cache entry on this look.
+        sessions.retain(|session| {
+            let valid = session.native_birth.as_ref().map_or_else(
+                || sys::times(session.pid).is_some_and(|times| times.0 == session.started_at),
+                |birth| sys::birth(session.pid).as_ref() == Some(birth),
+            );
+            if !valid {
+                let key = cache_key(session.pid, session.started_at, session.native_birth.as_deref());
+                seen.remove(&key);
+                self.places.remove(&key);
+            }
+            valid
+        });
         self.last = seen;
         sessions
     }
@@ -241,7 +282,7 @@ impl Activity {
     /// when not known) and where the last look placed them, which is kept for the next one:
     /// a session's folder is looked into once, and again when it changes. Not placing, no
     /// folder is read at all.
-    fn placed(&mut self, sessions: Vec<((u32, Millis), u32)>, cwd: &dyn Fn(u32) -> Option<PathBuf>) -> Vec<Place> {
+    fn placed(&mut self, sessions: Vec<((u32, Vec<u8>), u32)>, cwd: &dyn Fn(u32) -> Option<PathBuf>) -> Vec<Place> {
         if !self.placing {
             self.places.clear();
             return sessions.iter().map(|_| Place::default()).collect();
@@ -264,7 +305,7 @@ impl Activity {
                     }
                     Placing::Unknown => None,
                 };
-                kept.extend(entry.clone().map(|entry| (key, entry)));
+                kept.extend(entry.clone().map(|entry| (key.clone(), entry)));
                 entry.map(|(_, place)| place).unwrap_or_default()
             })
             .collect();
@@ -696,7 +737,14 @@ mod sys {
         let tick = ticks_per_second();
         let started = boot_time().map(|boot| boot * 1000 + (start * 1000 / tick) as Millis);
         let times = started.map(|at| (at, cpu * 1000 / tick));
-        Some(Proc { pid, parent: parent as u32, name: name.to_string(), times, role: Role::Unknown })
+        Some(Proc {
+            pid,
+            parent: parent as u32,
+            name: name.to_string(),
+            times,
+            native_birth: boot_id().map(|boot| crate::session_identity::birth(boot.as_bytes(), pid, start)),
+            role: Role::Unknown,
+        })
     }
 
     pub fn processes() -> Vec<Proc> {
@@ -723,6 +771,25 @@ mod sys {
 
     pub fn times(pid: u32) -> Option<(Millis, u64)> {
         stat(pid)?.times
+    }
+
+    pub fn birth(pid: u32) -> Option<Vec<u8>> {
+        stat(pid)?.native_birth
+    }
+
+    fn boot_id() -> Option<&'static str> {
+        static BOOT: OnceLock<Option<String>> = OnceLock::new();
+        BOOT.get_or_init(|| {
+            let boot = fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?;
+            let boot = boot.trim();
+            (boot.len() == 36
+                && boot
+                    .bytes()
+                    .enumerate()
+                    .all(|(i, b)| if [8, 13, 18, 23].contains(&i) { b == b'-' } else { b.is_ascii_hexdigit() }))
+            .then(|| boot.to_string())
+        })
+        .as_deref()
     }
 
     pub fn cwd(pid: u32) -> Option<PathBuf> {
@@ -782,6 +849,19 @@ mod sys {
         }
     }
 
+    fn process_name(pid: u32, bsd: &libc::proc_bsdinfo) -> String {
+        // pbi_name is the longer name; pbi_comm is cut at 16 bytes.
+        let raw = if bsd.pbi_name[0] != 0 { &bsd.pbi_name[..] } else { &bsd.pbi_comm[..] };
+        // SAFETY: both are NUL-terminated within their arrays (zeroed first).
+        let mut name = unsafe { CStr::from_ptr(raw.as_ptr()) }.to_string_lossy().into_owned();
+        // A name the file a link led to gave (a version, a platform): the path tells the client.
+        let linked = name.starts_with(|c: char| c.is_ascii_digit()) || name.starts_with("codex-");
+        if let Some(client) = linked.then(|| path(pid)).flatten().as_deref().and_then(super::client_by_path) {
+            name = client.to_string();
+        }
+        name
+    }
+
     pub fn processes() -> Vec<Proc> {
         // SAFETY: with no buffer the call returns how many pids there are; then it fills
         // at most the buffer's size in bytes.
@@ -793,22 +873,38 @@ mod sys {
             pids.truncate(filled.max(0) as usize);
             pids
         };
+        // SAFETY: getuid only reads this process's real user ID.
+        let own = unsafe { libc::getuid() };
         pids.into_iter()
             .filter(|&pid| pid > 0)
             .filter_map(|pid| {
                 let bsd: libc::proc_bsdinfo = info(pid as u32, libc::PROC_PIDTBSDINFO)?;
-                // pbi_name is the longer name; pbi_comm is cut at 16 bytes.
-                let raw = if bsd.pbi_name[0] != 0 { &bsd.pbi_name[..] } else { &bsd.pbi_comm[..] };
-                // SAFETY: both are NUL-terminated within their arrays (zeroed first).
-                let mut name = unsafe { CStr::from_ptr(raw.as_ptr()) }.to_string_lossy().into_owned();
-                // A name the file a link led to gave (a version, a platform): the path tells the client.
-                let linked = name.starts_with(|c: char| c.is_ascii_digit()) || name.starts_with("codex-");
-                if let Some(client) =
-                    linked.then(|| path(pid as u32)).flatten().as_deref().and_then(super::client_by_path)
-                {
-                    name = client.to_string();
+                let name = process_name(pid as u32, &bsd);
+                // A second native read belongs only to our candidate clients, not to
+                // every process on the machine. Re-read their names inside that token.
+                let native_birth =
+                    (super::provider_of(&name).is_some() && bsd.pbi_uid == own).then(|| birth(pid as u32)).flatten();
+                if native_birth.is_some() {
+                    let checked: libc::proc_bsdinfo = info(pid as u32, libc::PROC_PIDTBSDINFO)?;
+                    if bsd.pbi_ppid != checked.pbi_ppid
+                        || bsd.pbi_start_tvsec != checked.pbi_start_tvsec
+                        || bsd.pbi_start_tvusec != checked.pbi_start_tvusec
+                        || process_name(pid as u32, &checked) != name
+                    {
+                        return None;
+                    }
                 }
-                Some(Proc { pid: pid as u32, parent: bsd.pbi_ppid, name, times: None, role: Role::Unknown })
+                if native_birth.is_some() && birth(pid as u32) != native_birth {
+                    return None;
+                }
+                Some(Proc {
+                    pid: pid as u32,
+                    parent: bsd.pbi_ppid,
+                    name,
+                    times: None,
+                    native_birth,
+                    role: Role::Unknown,
+                })
             })
             .collect()
     }
@@ -827,6 +923,34 @@ mod sys {
         let total = usage.ri_user_time + usage.ri_system_time + usage.ri_child_user_time + usage.ri_child_system_time;
         let (numer, denom) = timebase();
         Some((started, (total as u128 * numer as u128 / denom as u128 / 1_000_000) as u64))
+    }
+
+    pub fn birth(pid: u32) -> Option<Vec<u8>> {
+        static BOOT: OnceLock<Option<Vec<u8>>> = OnceLock::new();
+        let boot = BOOT
+            .get_or_init(|| {
+                let mut bytes = [0u8; 64];
+                let mut length = bytes.len();
+                // SAFETY: fixed writable buffer and its byte length, a constant sysctl name.
+                let ok = unsafe {
+                    libc::sysctlbyname(
+                        c"kern.bootsessionuuid".as_ptr(),
+                        bytes.as_mut_ptr().cast(),
+                        &mut length,
+                        std::ptr::null_mut(),
+                        0,
+                    )
+                } == 0;
+                (ok && (36..=37).contains(&length)).then(|| bytes[..36].to_vec())
+            })
+            .as_ref()?;
+        // SAFETY: the versioned call fills only this plain fixed structure.
+        let usage = unsafe {
+            let mut usage: libc::rusage_info_v2 = mem::zeroed();
+            (libc::proc_pid_rusage(pid as c_int, libc::RUSAGE_INFO_V2, (&raw mut usage).cast()) == 0).then_some(usage)
+        }?;
+        (usage.ri_proc_start_abstime != 0)
+            .then(|| crate::session_identity::birth(boot, pid, usage.ri_proc_start_abstime))
     }
 
     /// Whether this user runs it.
@@ -908,8 +1032,11 @@ mod sys {
                 list.push(Proc {
                     pid: entry.th32ProcessID,
                     parent: entry.th32ParentProcessID,
-                    name,
+                    name: name.clone(),
                     times: None,
+                    native_birth: super::provider_of(&name)
+                        .filter(|_| mine(entry.th32ProcessID))
+                        .and_then(|_| named_birth(entry.th32ProcessID, &name)),
                     role: Role::Unknown,
                 });
                 more = Process32NextW(snapshot, &mut entry) != 0;
@@ -917,6 +1044,98 @@ mod sys {
             CloseHandle(snapshot);
         }
         list
+    }
+
+    fn named_birth(pid: u32, listed_name: &str) -> Option<Vec<u8>> {
+        use windows_sys::Win32::System::Threading::QueryFullProcessImageNameW;
+        let before = birth(pid)?;
+        // A process-list snapshot may be older than the PID's current occupant. Read
+        // only its executable name to confirm the snapshot's name belongs to this birth.
+        let matches = unsafe {
+            let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if process.is_null() {
+                return None;
+            }
+            let mut buffer = [0u16; 512];
+            let mut length = buffer.len() as u32;
+            let ok = QueryFullProcessImageNameW(process, 0, buffer.as_mut_ptr(), &mut length) != 0;
+            CloseHandle(process);
+            ok && std::path::Path::new(&String::from_utf16_lossy(&buffer[..length.min(512) as usize]))
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case(listed_name))
+        };
+        (matches && birth(pid).as_ref() == Some(&before)).then_some(before)
+    }
+
+    /// A bounded optional native identity capability. No telemetry offsets or tails
+    /// are interpreted; APIs demanding a larger buffer remain unsupported here.
+    pub fn birth(pid: u32) -> Option<Vec<u8>> {
+        use windows_sys::Win32::Foundation::HANDLE;
+        use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+        type Query = unsafe extern "system" fn(HANDLE, u32, *mut core::ffi::c_void, u32, *mut u32) -> i32;
+        #[repr(C, align(8))]
+        struct Header([u8; 96]);
+        // SAFETY: the loaded system DLL stays loaded; the export has NtQueryInformationProcess's
+        // ABI. The sole call owns its fixed aligned writable buffer and process handle.
+        unsafe {
+            let module = GetModuleHandleW(
+                c"ntdll.dll".to_bytes().iter().map(|&b| b as u16).chain([0]).collect::<Vec<_>>().as_ptr(),
+            );
+            if module.is_null() {
+                return None;
+            }
+            let address = GetProcAddress(module, c"NtQueryInformationProcess".as_ptr().cast())?;
+            let query: Query = mem::transmute(address);
+            let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if process.is_null() {
+                return None;
+            }
+            let mut header = Header([0; 96]);
+            let mut returned = 0;
+            let status = query(process, 64, header.0.as_mut_ptr().cast(), 96, &mut returned);
+            CloseHandle(process);
+            if status < 0 {
+                return None;
+            }
+            telemetry_birth(&header.0, returned, pid)
+        }
+    }
+
+    fn telemetry_birth(bytes: &[u8; 96], returned: u32, pid: u32) -> Option<Vec<u8>> {
+        let u32_at = |at| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+        let u64_at = |at| u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap());
+        let size = u32_at(0);
+        if !(64..=96).contains(&size) || returned < size || returned > 96 || u32_at(4) != pid {
+            return None;
+        }
+        let sequence = u64_at(40);
+        let start_key = u64_at(8);
+        if sequence == 0 || start_key == 0 {
+            return None;
+        }
+        let mut boot = u32_at(60).to_be_bytes().to_vec();
+        boot.extend_from_slice(&start_key.to_be_bytes());
+        Some(crate::session_identity::birth(&boot, pid, sequence))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        #[test]
+        fn bounded_telemetry_validates_prefix_without_chasing_tails() {
+            let mut bytes = [0u8; 96];
+            bytes[..4].copy_from_slice(&96u32.to_le_bytes());
+            bytes[4..8].copy_from_slice(&7u32.to_le_bytes());
+            bytes[8..16].copy_from_slice(&123u64.to_le_bytes());
+            bytes[40..48].copy_from_slice(&456u64.to_le_bytes());
+            assert!(telemetry_birth(&bytes, 96, 7).is_some());
+            for length in [0, 63, 95, 97, u32::MAX] {
+                assert!(telemetry_birth(&bytes, length, 7).is_none());
+            }
+            assert!(telemetry_birth(&bytes, 96, 8).is_none());
+            bytes[..4].copy_from_slice(&97u32.to_le_bytes());
+            assert!(telemetry_birth(&bytes, 96, 7).is_none());
+        }
     }
 
     /// Windows keeps no time of finished children: what a tool spent is counted while it runs.
@@ -973,6 +1192,9 @@ mod sys {
     pub fn times(_: u32) -> Option<(Millis, u64)> {
         None
     }
+    pub fn birth(_: u32) -> Option<Vec<u8>> {
+        None
+    }
     pub fn cwd(_: u32) -> Option<PathBuf> {
         None
     }
@@ -989,7 +1211,7 @@ mod tests {
     use super::*;
 
     fn p(pid: u32, parent: u32, name: &str) -> Proc {
-        Proc { pid, parent, name: name.into(), times: None, role: Role::Unknown }
+        Proc { pid, parent, name: name.into(), times: None, native_birth: None, role: Role::Unknown }
     }
 
     fn found(procs: &[Proc]) -> Vec<(Provider, u32, Vec<u32>)> {
@@ -1501,7 +1723,7 @@ mod tests {
         let look = |activity: &mut Activity, folders: Vec<((u32, Millis), Option<PathBuf>)>| {
             let dirs: HashMap<u32, PathBuf> =
                 folders.iter().filter_map(|(key, dir)| Some((key.0, dir.clone()?))).collect();
-            let sessions = folders.iter().map(|(key, _)| (*key, key.0)).collect();
+            let sessions = folders.iter().map(|(key, _)| (cache_key(key.0, key.1, None), key.0)).collect();
             let placed = activity.placed(sessions, &|pid| dirs.get(&pid).cloned());
             placed.iter().map(|p| (p.folder.clone(), p.project.clone())).collect::<Vec<_>>()
         };
@@ -1531,7 +1753,7 @@ mod tests {
         assert_eq!(look(&mut activity, vec![(other, None)]), vec![both(None, None)], "no folder told");
         // With project names turned off, no folder is read.
         activity.placing = false;
-        let placed = activity.placed(vec![(key, 7)], &|_| panic!("a folder read"));
+        let placed = activity.placed(vec![(cache_key(key.0, key.1, None), 7)], &|_| panic!("a folder read"));
         assert_eq!(
             placed.iter().map(|p| (p.folder.clone(), p.project.clone())).collect::<Vec<_>>(),
             vec![both(None, None)]
@@ -1690,6 +1912,39 @@ mod tests {
             let busy_at_jump = look(Some(&busy), 3_000, 30_000, jump);
             assert_eq!(busy_at_jump.busy_wall, Some(wall + 30_000 + jump), "new work already uses the corrected clock");
         }
+    }
+
+    #[test]
+    fn native_birth_of_own_process_is_stable_or_explicit_windows_fallback() {
+        let pid = std::process::id();
+        let before = sys::birth(pid);
+        let after = sys::birth(pid);
+        assert!(before == after, "native process birth changed during own-process probe");
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        assert!(before.is_some(), "own process must have a native boot and birth token");
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        eprintln!("Native boot and process birth: supported");
+        #[cfg(windows)]
+        eprintln!(
+            "Windows fixed 96-byte telemetry prefix: {}",
+            if before.is_some() { "supported" } else { "unavailable; sessionId omitted, live credit unknown" }
+        );
+    }
+
+    #[test]
+    fn native_cache_identity_ignores_wall_corrections_and_rejects_birth_reuse() {
+        let native = crate::session_identity::birth(b"boot", 7, 123);
+        assert_eq!(cache_key(7, 100, Some(&native)), cache_key(7, 200, Some(&native)));
+        assert_ne!(
+            cache_key(7, 100, Some(&native)),
+            cache_key(7, 100, Some(&crate::session_identity::birth(b"boot", 7, 124)))
+        );
+        assert_ne!(cache_key(7, 100, None), cache_key(7, 200, None));
+        let before = Proc { times: Some((100, 20)), native_birth: Some(native), ..p(7, 1, "codex") };
+        let shifted = Proc { times: Some((200, 30)), ..before.clone() };
+        assert!(with_role(before.clone(), Role::Service, Some(shifted)).is_some());
+        let reused = Proc { native_birth: Some(crate::session_identity::birth(b"boot", 7, 124)), ..before.clone() };
+        assert!(with_role(before, Role::Service, Some(reused)).is_none());
     }
 
     #[test]

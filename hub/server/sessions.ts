@@ -3,6 +3,7 @@ import type {Store, WorkKey} from './store/store.js';
 
 /** A running coding agent as its machine reported it, on the subscription it spends. */
 export type LiveSession = {
+  sessionId: string | null;
   device: {id: string; name: string};
   origin: Origin;
   project: string | null;
@@ -29,7 +30,7 @@ export type BoardSession = {
   startedAt: number;
   lastWorkedAt: number | null;
   working: boolean;
-  workedMs: number;
+  workedMs: number | null;
 };
 
 /** A machine's sessions, by the subscription they spend, as its agent last reported them, and when. */
@@ -49,8 +50,8 @@ export const CREDIT_MS = 200_000;
 /**
  * What each of a machine's sessions is credited under, by subscription, in the list's
  * order (Store.creditWork). Sessions alike in everything (started together by a script)
- * are told apart by their place among them, idle or not, so one that stops working does
- * not hand its time to its twin.
+ * retain the released working-only ordinal. Stable IDs use their own namespace; a
+ * working stable session still consumes the ordinal an older hub would assign it.
  */
 function keysOf(machine: Machine): Map<string, WorkKey[]> {
   const alike = new Map<string, number>();
@@ -62,8 +63,8 @@ function keysOf(machine: Machine): Map<string, WorkKey[]> {
         const key = {source, origin: session.origin, startedAt: session.sentStartedAt, project: session.project ?? '', folder: session.folder ?? ''};
         const id = JSON.stringify(key);
         const ordinal = alike.get(id) ?? 0;
-        alike.set(id, ordinal + 1);
-        return {...key, ordinal};
+        if (session.working) alike.set(id, ordinal + 1);
+        return {...key, identity: session.sessionId ? {kind: 'stable' as const, sessionId: session.sessionId} : {kind: 'legacy' as const, ordinal}};
       }),
     );
   }

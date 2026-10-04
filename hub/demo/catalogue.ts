@@ -346,6 +346,8 @@ const MAX_AGENTS: Agent[] = [
 ];
 
 /** Eleven, one more than a tray draws; within the first quarter of an hour one more starts and one stops. */
+MAX_AGENTS.find(agent => agent.project === 'mobile-app')!.legacy = true;
+
 const PRO_AGENTS: Agent[] = [
   {machine: 'laptop', origin: 'terminal', project: 'checkout', since: -2 * HOUR, until: 10 * MIN, works: shifts(1)},
   {machine: 'laptop', origin: 'terminal', project: 'hotfix-4821', since: 5 * MIN, works: ALWAYS},
@@ -372,6 +374,8 @@ const IOS_AGENTS: Agent[] = agents('mac-mini', [
   ['terminal', 'ios-app', -30 * MIN, shifts(0)],
   ['editor', 'ios-app', -2 * HOUR],
 ]);
+
+IOS_AGENTS.find(agent => agent.origin === 'editor')!.legacy = true;
 
 /** A narrow card with a full tray: reset news, free resets and ten agents on two machines. */
 const ON_CALL_AGENTS: Agent[] = [
@@ -480,6 +484,8 @@ const all: DemoSet = {
         // the hub credited them; infra has never worked.
         {agentGroup: 'quotum', agents: 3, worked: true},
         {agentGroup: 'infra', agents: 1, worked: false},
+        {agentGroup: 'mobile-app', agents: 1, worked: null},
+        {agentGroup: 'ios-app', agents: 2, worked: null, to: MIN},
         // Agent activity counts docs-site under the name Ana gave it.
         {activityOf: 'docs', by: 'project', range: '24h', hours: 2.4, from: 0, to: 0},
         {activityOf: 'docs-site', by: 'project', range: '24h', hours: null, from: 0, to: 0},

@@ -14,7 +14,8 @@ import {tell, type Touches} from '../touches.js';
 import {migrate} from './schema.js';
 
 /** A session credited with work (server/sessions.ts): its names as reported, '' for none. */
-export type WorkKey = {source: string; origin: Origin; startedAt: number; project: string; folder: string; ordinal: number};
+export type WorkContext = {source: string; origin: Origin; startedAt: number; project: string; folder: string};
+export type WorkKey = WorkContext & {identity: {kind: 'legacy'; ordinal: number} | {kind: 'stable'; sessionId: string}};
 
 /**
  * Whose work a board shows on each of its subscriptions but those of hidden cards: the
@@ -509,22 +510,39 @@ export class Store {
   creditWork(device: string, from: number, until: number, keys: WorkKey[]) {
     if (until <= from || !keys.length) return;
     const add = this.db.prepare(
-      'INSERT INTO agent_sessions (device_id, source_id, origin, started_at, project, folder, ordinal) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING',
+      'INSERT INTO agent_sessions (device_id, source_id, origin, started_at, project, folder, ordinal, producer_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING',
     );
-    const find = this.db.prepare(
-      'SELECT id FROM agent_sessions WHERE device_id = ? AND source_id = ? AND started_at = ? AND origin = ? AND project = ? AND folder = ? AND ordinal = ?',
+    const legacy = this.db.prepare(
+      'SELECT id FROM agent_sessions WHERE device_id = ? AND source_id = ? AND started_at = ? AND origin = ? AND project = ? AND folder = ? AND ordinal = ? AND producer_id IS NULL',
     );
-    // Stretches of a session never overlap, so its last one by start ends latest.
+    const stable = this.db.prepare(
+      'SELECT id FROM agent_sessions WHERE device_id = ? AND producer_id = ? AND source_id = ? AND origin = ? AND project = ? AND folder = ?',
+    );
+    // Each contextual row has non-overlapping stretches, so its last start ends latest.
     const latest = this.db.prepare('SELECT to_at AS at FROM agent_work WHERE session_id = ? ORDER BY from_at DESC LIMIT 1');
+    const highWater = this.db.prepare(
+      'SELECT max((SELECT to_at FROM agent_work WHERE session_id = s.id ORDER BY from_at DESC LIMIT 1)) AS at FROM agent_sessions s WHERE device_id = ? AND producer_id = ?',
+    );
+    const floors = this.db.prepare(
+      'SELECT producer_id IS NULL AS legacy, max((SELECT to_at FROM agent_work WHERE session_id = s.id ORDER BY from_at DESC LIMIT 1)) AS at FROM agent_sessions s WHERE device_id = ? GROUP BY producer_id IS NULL',
+    );
     const extend = this.db.prepare('UPDATE agent_work SET to_at = ? WHERE session_id = ? AND to_at = ?');
     const begin = this.db.prepare('INSERT INTO agent_work VALUES (?, ?, ?) ON CONFLICT (session_id, from_at) DO UPDATE SET to_at = max(to_at, excluded.to_at)');
     const credited = new Map<string, number>();
     this.db.exec('SAVEPOINT credit');
     try {
-      for (const {source, origin, startedAt, project, folder, ordinal} of keys) {
-        add.run(device, source, origin, startedAt, project, folder, ordinal);
-        const {id} = find.get(device, source, startedAt, origin, project, folder, ordinal) as {id: number};
-        const start = Math.max(from, (latest.get(id) as {at: number} | undefined)?.at ?? from);
+      // Snapshot before writes: mixed packets must not clip one namespace against the
+      // other namespace's parallel credit from this same call.
+      const opposite = new Map((floors.all(device) as {legacy: number; at: number | null}[]).map(row => [row.legacy, row.at ?? from]));
+      for (const {source, origin, startedAt, project, folder, identity} of keys) {
+        const producer = identity.kind === 'stable' ? identity.sessionId : null;
+        const ordinal = identity.kind === 'legacy' ? identity.ordinal : 0;
+        add.run(device, source, origin, startedAt, project, folder, ordinal, producer);
+        const {id} = (producer === null
+          ? legacy.get(device, source, startedAt, origin, project, folder, ordinal)
+          : stable.get(device, producer, source, origin, project, folder)) as {id: number};
+        const own = producer === null ? latest.get(id) : highWater.get(device, producer);
+        const start = Math.max(from, (own as {at: number | null} | undefined)?.at ?? from, opposite.get(producer === null ? 0 : 1) ?? from);
         if (until <= start) continue;
         if (!extend.run(until, id, start).changes) begin.run(id, start, until);
         credited.set(source, Math.min(credited.get(source) ?? start, start));
@@ -538,18 +556,14 @@ export class Store {
     for (const [source, start] of credited) tell(this.observer, o => o.history(source, start));
   }
 
-  /**
-   * How long each of a device's sessions `keys` worked, as credited so far and as long as
-   * its work is kept; 0 for one never credited. A key and a session's stretches are found
-   * by their indexes, so a board's live lists read this as they change.
-   */
-  worked(device: string, keys: WorkKey[]): number[] {
+  /** Retained credit of an identified session on its current subscription; legacy identity is unknown. */
+  worked(device: string, keys: WorkKey[]): (number | null)[] {
     if (!keys.length) return [];
     const read = this.db.prepare(
       'SELECT COALESCE(sum(w.to_at - w.from_at), 0) AS ms FROM agent_sessions s JOIN agent_work w ON w.session_id = s.id' +
-        ' WHERE s.device_id = ? AND s.source_id = ? AND s.started_at = ? AND s.origin = ? AND s.project = ? AND s.folder = ? AND s.ordinal = ?',
+        ' WHERE s.device_id = ? AND s.producer_id = ? AND s.source_id = ?',
     );
-    return keys.map(({source, origin, startedAt, project, folder, ordinal}) => (read.get(device, source, startedAt, origin, project, folder, ordinal) as {ms: number}).ms);
+    return keys.map(({source, identity}) => identity.kind === 'legacy' ? null : (read.get(device, identity.sessionId, source) as {ms: number}).ms);
   }
 
   /** Every stretch agents worked within [from, to), of the given subscriptions or all, projects named as their people corrected them. */

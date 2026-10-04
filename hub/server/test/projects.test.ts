@@ -52,7 +52,7 @@ async function hub() {
   /** A session on `device` working in `project` for `minutes` minutes, ending `ago` minutes before now. */
   const credit = (device: string, project: string, minutes: number, ago = 60) =>
     store.creditWork(device, now - (ago + minutes) * minute, now - ago * minute, [
-      {source: 'codex:1', origin: 'terminal', startedAt: now - ago * minute, project, folder: '', ordinal: 0},
+      {source: 'codex:1', origin: 'terminal', startedAt: now - ago * minute, project, folder: '', identity: {kind: 'legacy' as const, ordinal: 0}},
     ]);
   const projects = async (as: string) => (await call('GET', '/api/projects', {as})).body.projects;
   const name = (as: string, groups: string[], to: string) => call('POST', '/api/projects', {as, body: {groups, name: to}});

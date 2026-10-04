@@ -147,7 +147,7 @@ export function Agents({sessions, roomy = true}: {sessions: LiveSession[]; roomy
                 </span>
                 <span className="agents-age" title={t('agents.workedHint')}>
                   <span className="sr-only">{t('agents.worked')}: </span>
-                  {workHours(session.workedMs)}
+                  <WorkTime ms={session.workedMs} />
                 </span>
               </div>
             ))}
@@ -177,6 +177,13 @@ const projectName = (project: string | null) => project ?? t('agents.noProject')
 
 /** How a row is drawn: laid out unseen to be measured (`still`: nothing that moves on, nothing to press), its marks each in its card's colour. */
 type Context = {still: boolean; color: (source: AgentSource) => CSSProperties};
+
+/** Credited time is unknown without a reliable producer identity. */
+function WorkTime({ms, labeled = false}: {ms: number | null; labeled?: boolean}) {
+  if (ms === null) return <span title={t('agents.workedUnknown')} aria-label={t('agents.workedUnknown')}>—</span>;
+  const time = workHours(ms);
+  return <>{labeled ? t('agents.workedValue', {time}) : time}</>;
+}
 
 /** How many of a group's agents work, of how many, as a card's tray counts them, and a mark for each while they are few. */
 function Tally({group, color}: {group: AgentGroup; color: Context['color']}) {
@@ -222,7 +229,7 @@ const COLUMNS: Record<AgentColumn, {title: Key; hint?: Key; cell: (group: AgentG
   machine: {title: 'agents.machine', cell: group => dimensionName(group, 'machine')},
   subscription: {title: 'agents.subscription', cell: group => dimensionName(group, 'subscription')},
   agents: {title: 'agents.agents', cell: (group, {color}) => <Tally group={group} color={color} />},
-  worked: {title: 'agents.worked', hint: 'agents.workedHint', cell: group => workHours(group.workedMs)},
+  worked: {title: 'agents.worked', hint: 'agents.workedHint', cell: group => <WorkTime ms={group.workedMs} />},
   activity: {title: 'agents.lastActivity', hint: 'agents.lastActivityHint', cell: group => <LastActivity group={group} />},
   running: {title: 'agents.running', cell: (group, {still}) => (still ? stillSince(group.startedAt) : <Since from={group.startedAt} />)},
 };
@@ -378,7 +385,7 @@ function AgentsRows({
                   {details.map(column => (
                     <span key={column} title={fullOf(group, column)}>
                       <span className="sr-only">{t(COLUMNS[column].title)}: </span>
-                      {column === 'worked' ? t('agents.workedValue', {time: workHours(group.workedMs)}) : COLUMNS[column].cell(group, context)}
+                      {column === 'worked' ? <WorkTime ms={group.workedMs} labeled /> : COLUMNS[column].cell(group, context)}
                     </span>
                   ))}
                 </div>

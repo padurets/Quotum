@@ -84,6 +84,7 @@ jobs:
         run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
+      - run: cargo test --locked native_birth_of_own_process_is_stable_or_explicit_windows_fallback -- --nocapture
 
   # The installers run on people's machines straight from a download: they must at least
   # be sound as scripts (shellcheck is on the runner; pwsh parses without running).

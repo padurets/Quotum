@@ -322,3 +322,13 @@ test('an idle session may tell when it last worked, on the same corrected clock 
   for (const lastWorkedAt of ['never', 42, {}, false]) assert.throws(() => parseSessions(report({lastWorkedAt})), /lastWorkedAt/);
   store.close();
 });
+
+test('session IDs are exact opaque lowercase hex, unique even before source filtering', () => {
+  for (const sessionId of [undefined, null]) assert.equal(parseSessions(running([{sessionId}])).sessions[0].sessionId, null);
+  const sessionId = 'a'.repeat(32);
+  assert.equal(parseSessions(running([{sessionId}])).sessions[0].sessionId, sessionId);
+  for (const value of ['', 'A'.repeat(32), 'g'.repeat(32), 'a'.repeat(31), 'a'.repeat(33), ` ${sessionId}`, 7, {}, false]) {
+    assert.throws(() => parseSessions(running([{sessionId: value}])), (error: Invalid) => error.what === 'sessionId');
+  }
+  assert.throws(() => parseSessions(running([{sessionId}, {sessionId, account: 'f'.repeat(24)}])), (error: Invalid) => error.what === 'sessionId');
+});

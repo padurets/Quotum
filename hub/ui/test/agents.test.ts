@@ -114,8 +114,8 @@ test('every column sorts in both directions and equal values keep activity order
     ['subscription', row('first', {}, 'Alpha'), row('second', {}, 'Zulu')],
     ['machine', row('first', {device: {id: 'z', name: 'Alpha'}}), row('second', {device: {id: 'a', name: 'Zulu'}})],
     ['worked', row('less', {workedMs: 10}), row('more', {workedMs: 20})],
-    ['activity', row('working', {working: true}), row('recent', {lastWorkedAt: 300})], ['activity', row('recent', {lastWorkedAt: 300}), row('earlier', {lastWorkedAt: 200})],
-    ['activity', row('earlier', {lastWorkedAt: 200}), row('never')],
+    ['activity', row('recent', {lastWorkedAt: 300}), row('working', {working: true})], ['activity', row('earlier', {lastWorkedAt: 200}), row('recent', {lastWorkedAt: 300})],
+    ['activity', row('never'), row('earlier', {lastWorkedAt: 200})],
     ['running', row('shorter', {startedAt: 200}), row('longer', {startedAt: 10})],
   ];
   for (const locale of ['en', 'ru'] as const) {
@@ -171,7 +171,7 @@ test('layout follows the widget’s width and the owner’s columns at either si
   }
   assert.equal(agentsLayout(columnsOf('project').rest, 320), 'list');
   assert.equal(agentsLayout([], 320), 'table');
-  assert.equal(agentsLayout(columnsOf('project').rest, 640), 'table', 'the grouped overview fits a half-width widget');
+  assert.equal(agentsLayout(columnsOf('project').rest, 700), 'table', 'the grouped overview reserves room for all ten tally marks');
   const details = columnsOf('project', true).rest.filter(column => column !== 'running');
   assert.equal(agentsLayout(details, 758), 'table', 'default details fit the wide dialog, without an inset list fallback');
 });
@@ -198,4 +198,12 @@ test('a list made shorter than its agents shows the most whole rows that fit, in
   assert.deepEqual(fit(0, [10, 10]), {shown: 1, hidden: 1, min: 50, natural: 50});
   assert.deepEqual(fit(50, [10, 10]).shown, 2);
   assert.ok(fit(Infinity, Array(37).fill(64)).natural > fit(Infinity, Array(37).fill(64)).min, 'the least of a long list is not all of it');
+});
+
+
+test('unknown agent-hours propagate to groups and sort last in both directions', () => {
+  const groups = groupsOf([row('mixed', {workedMs: 50}), row('mixed', {workedMs: null}), row('known', {workedMs: 10}), row('zero', {workedMs: 0}), row('unknown', {workedMs: null})], 'project');
+  assert.equal(groups[0].workedMs, null);
+  assert.deepEqual(projects(sort(groups, 'worked')), ['zero', 'known', 'mixed', 'unknown']);
+  assert.deepEqual(projects(sort(groups, 'worked', true)), ['known', 'zero', 'mixed', 'unknown']);
 });
