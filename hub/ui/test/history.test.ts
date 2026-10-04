@@ -6,7 +6,7 @@ import {covered} from '../lib/historyPlot';
 import {HistoryTile} from '../lib/historyTiles';
 import {Preparations} from '../lib/prepare';
 import {ApiError} from '../lib/http';
-import {CLOCK_TOLERANCE_MS, cellStart, targetOf, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer} from '../../server/domain/history';
+import {CLOCK_TOLERANCE_MS, READ_CELLS, cellOf, cellStart, compose, targetOf, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer} from '../../server/domain/history';
 
 const M = 60_000;
 const H = 60 * M;
@@ -74,14 +74,14 @@ test('entering pan normalizes pending navigation to two roles and serialized til
   h.store.close();
 });
 
-test('a successful speculative response preserves the failed visible target retry', async () => {
+test('a failed foreground batch keeps its retry until the required cells succeed', async () => {
   const h = harness(); await h.start(); await h.reads[0].answer();
   h.store.pan({token: 1, length: 24 * H, from: NOW - 36 * H, to: NOW - 12 * H, direction: -1}); await flush();
-  const [visible, ahead] = pending(h);
+  const [visible] = pending(h);
   await visible.fail(new Error('offline'));
   assert.equal(h.timers.size, 1);
-  await ahead.answer();
-  assert.equal(h.timers.size, 1, 'an unrelated cached committed answer cannot clear this retry');
+  await flush();
+  assert.equal(h.timers.size, 1, 'a pump cannot clear this retry while cells remain missing');
   assert.ok(pending(h).every(r => r.from !== visible.from));
   await h.advance(14_999);
   assert.ok(pending(h).every(r => r.from !== visible.from));
@@ -90,7 +90,7 @@ test('a successful speculative response preserves the failed visible target retr
   h.store.close();
 });
 
-test('an expired committed pan range drops after a required partial read returns 400', async () => {
+test('an expired committed pan range drops after a required batch returns 400', async () => {
   const h = harness(); await h.start(); await h.reads[0].answer();
   const range = {from: NOW - 90 * 24 * H + H, to: NOW - 89 * 24 * H + H};
   h.store.pan({token: 1, length: 24 * H, ...range, direction: 0}); await flush();
@@ -99,7 +99,7 @@ test('an expired committed pan range drops after a required partial read returns
   const inherited = pending(h)[0];
   await inherited.fail(new ApiError(400, 'invalid_request'));
   const current = pending(h)[0];
-  assert.ok(current.to < range.to, 'the final batch contains only one tile');
+  assert.ok(tileOf(current.to - 1, current.cell) - tileOf(current.from, current.cell) < 8);
   await current.fail(new ApiError(400, 'invalid_request'));
   assert.equal(h.dropped(), 1);
   assert.equal(h.timers.size, 0);
@@ -195,20 +195,15 @@ test('pan prioritizes the latest visible cells, aborts abandoned interests and i
   h.store.endPan(false);
 });
 
-test('ahead failure sets no retry and cannot drop a range or block visible work', async () => {
+test('a fully cached gesture starts no speculative read, including after a quiet pause', async () => {
   const h = harness(); await h.start(); await h.reads[0].answer();
-  h.store.pan({token: 1, length: 24 * H, from: NOW - 24 * H, to: NOW, direction: -1}); await flush();
-  const ahead = pending(h)[0];
-  assert.ok(ahead);
-  await ahead.fail(new ApiError(400, 'invalid_request'));
-  assert.equal(h.dropped(), 0);
-  assert.equal(h.timers.size, 0);
   const count = h.reads.length;
+  h.store.pan({token: 1, length: 24 * H, from: NOW - 24 * H, to: NOW, direction: -1}); await flush();
   await h.advance(60_000);
   assert.equal(h.reads.length, count);
-  h.store.pan({token: 1, length: 24 * H, from: NOW - 48 * H, to: NOW - 24 * H, direction: -1}); await flush();
-  assert.ok(pending(h).some(r => r.from <= NOW - 48 * H));
-  h.store.endPan(false);
+  h.store.endPan(false); await flush();
+  assert.equal(h.reads.length, count);
+  h.store.close();
 });
 
 test('stopping a cold pan keeps its old exact answer until all final cells arrive', async () => {
@@ -737,5 +732,230 @@ test('history news during staging uses the last touched prefix while metadata ke
   for (const grid of h.internals.grids.values()) for (const tile of grid.values()) if (tile.readTo > touched) assert.ok((tile as unknown as {validTo: number}).validTo <= Math.max(tile.readFrom, touched));
   assert.equal((h.store as unknown as {metaAt: number}).metaAt, 0, 'merging time cannot replace the flight’s original clock anchor');
   assert.ok(pending(h).some(read => read.from <= touched && read.to > touched), 'the touched suffix remains required after publication');
+  h.store.close();
+});
+
+const cacheOf = (store: HistoryStore) => (store as unknown as {grids: Map<number, Map<number, HistoryTile>>}).grids;
+const freshCells = (store: HistoryStore, cell: number) => {
+  const cells = new Set<number>();
+  for (const tile of cacheOf(store).get(cell)?.values() ?? []) for (let at = tile.readFrom; at < tile.validTo; at += cell) cells.add(at);
+  return cells;
+};
+
+for (const length of [24 * H, 30 * 24 * H]) for (const sourceFuture of [0, 24 * H]) for (const latency of [0, 100, 400]) {
+  test(`half-width pan batches cold ${length / H}h, source future ${sourceFuture / H}h, latency ${latency}ms; cached return and repeat read nothing`, async () => {
+    const h = harness(); h.store.choose(length === 24 * H ? '24h' : '30d', null); await h.start(); await h.reads[0].answer();
+    const cell = h.reads[0].cell, seed = freshCells(h.store, cell), offset = h.reads.length;
+    let selected: {from: number; to: number} | null = null, clock = 0;
+    const frames: (() => void)[] = [], due = new Map<object, number>(), visited = new Set<number>();
+    const gesture = new Pan({now: h.now, commit: range => {selected = range; h.store.choose('24h', range);}, requestFrame: run => {frames.push(run); return run;}, cancelFrame: () => {}, setTimeout: () => null, clearTimeout: () => {}});
+    const history = Symbol('history'), activity = Symbol('activity');
+    gesture.register(history, () => ({end: selected?.to ?? NOW, future: selected ? 0 : 24 * H}));
+    gesture.register(activity, () => ({end: selected?.to ?? NOW, future: 0}));
+    const unsubscribe = followPan(h.store, gesture, () => selected);
+    const source = sourceFuture ? history : activity;
+    const token = gesture.begin({source, input: 'pointer', selected, length, now: NOW, historyStart: 0, span: length + sourceFuture, width: 1000})!;
+    const collect = () => {
+      const frame = gesture.get(); if (!frame) return;
+      const target = targetOf(length, NOW, 'plot', {...frame, to: Math.min(NOW, frame.to + frame.lookAhead)});
+      for (let k = target.k0; k <= target.k1; k++) visited.add(k * cell);
+    };
+    const answerDue = async (finish = false) => {
+      for (const r of pending(h)) if (!due.has(r)) due.set(r, clock + latency);
+      for (const r of [...pending(h)]) if (finish || due.get(r)! <= clock) await r.answer();
+    };
+    collect();
+    for (let n = 0; n < 30; n++) {
+      gesture.move(token, -1000 * .5 / 30); frames.shift()!(); collect(); await flush();
+      await answerDue(); clock += 25;
+      assert.ok(pending(h).length <= 2);
+    }
+    gesture.finish(token); await flush();
+    for (let n = 0; n < 20 && pending(h).length; n++) await answerDue(true);
+    assert.equal(pending(h).length, 0);
+    assert.equal(h.store.get().history?.range, `${selected!.from}-${selected!.to}`);
+    const attempts = h.reads.slice(offset);
+    assert.ok(attempts.length <= (sourceFuture ? 7 : 5), `${attempts.length} attempts`);
+    const requested = new Set<number>();
+    for (const r of attempts) {
+      assert.ok(tileOf(r.to - 1, cell) - tileOf(r.from, cell) < 8);
+      for (let at = r.from; at < r.to; at += cell) {
+        assert.ok(!seed.has(at), `fresh seed cell ${at} was reread`);
+        assert.ok(!requested.has(at), `fresh sequential cell ${at} was reread`);
+        requested.add(at);
+      }
+    }
+    assert.ok([...requested].filter(at => !visited.has(at)).length <= Math.min(60, Math.ceil(length / cell / 4)));
+    const count = h.reads.length;
+    for (const direction of [1, -1, 1, -1] as const) for (let n = 0; n <= 30; n++) {
+      const delta = (length + sourceFuture) * .5 * (direction === -1 ? n : 30 - n) / 30;
+      h.store.pan({token: 10, length, from: NOW - length - delta, to: Math.min(NOW, NOW - delta + 24 * H), direction}); await flush();
+    }
+    assert.equal(h.reads.length, count, 'warm return/repeat cannot sweep a cold adjacent period');
+    unsubscribe(); h.store.close();
+  });
+}
+
+test('one available contiguous prefix is read immediately without rereading its fresh suffix', async () => {
+  const h = harness(); await h.start(); await h.reads[0].answer();
+  const seed = freshCells(h.store, h.reads[0].cell), offset = h.reads.length;
+  const range = {from: NOW - 40 * H, to: NOW - 16 * H};
+  h.store.pan({token: 1, length: 24 * H, ...range, direction: 0}); await flush();
+  assert.equal(h.reads.length, offset + 1, 'a whole missing run starts before release');
+  const r = pending(h)[0];
+  assert.equal(r.to, Math.min(...seed));
+  assert.equal(r.from, cellStart(range.from, r.cell));
+  await r.answer();
+  assert.equal(h.reads.length, offset + 1);
+  h.store.choose('24h', range); h.store.endPan(true); await flush();
+  assert.equal(h.store.get().history?.range, `${range.from}-${range.to}`);
+  h.store.close();
+});
+
+for (const sourceFuture of [0, 24 * H]) test(`small 4% pan with source future ${sourceFuture / H}h uses at most two attempts`, async () => {
+  const h = harness(); await h.start(); await h.reads[0].answer();
+  const offset = h.reads.length;
+  for (let n = 1; n <= 30; n++) {
+    const delta = (24 * H + sourceFuture) * .04 * n / 30;
+    h.store.pan({token: 1, length: 24 * H, from: NOW - 24 * H - delta, to: NOW, direction: -1}); await flush();
+    for (const r of pending(h)) await r.answer();
+  }
+  const delta = (24 * H + sourceFuture) * .04;
+  h.store.choose('24h', {from: NOW - 24 * H - delta, to: NOW - delta}); h.store.endPan(true); await flush();
+  for (const r of pending(h)) await r.answer();
+  assert.ok(h.reads.length - offset <= 2);
+  h.store.close();
+});
+
+test('a coalesced custom 15min jump reads only its minimal within-tile bridge and retains the fresh suffix', async () => {
+  const h = harness(), base = tileStart(tileOf(NOW - 10 * H, M), M);
+  let selected = {from: base + 40 * M, to: base + 55 * M};
+  h.store.choose('24h', selected); await h.start(); await h.reads[0].answer();
+  const old = cacheOf(h.store).get(M)!.get(tileOf(base, M))!;
+  assert.equal(old.readFrom, base + 40 * M); assert.equal(old.validTo, base + 60 * M);
+  const offset = h.reads.length, frames: (() => void)[] = [];
+  const gesture = new Pan({now: h.now, commit: range => {selected = range!; h.store.choose('24h', range);}, requestFrame: run => {frames.push(run); return run;}, cancelFrame: () => {}, setTimeout: () => null, clearTimeout: () => {}});
+  const source = Symbol('chart'); gesture.register(source, () => ({end: selected.to, future: 0}));
+  const unsubscribe = followPan(h.store, gesture, () => selected);
+  const token = gesture.begin({source, input: 'pointer', selected, length: 15 * M, now: NOW, historyStart: 0, span: 15 * M, width: 1000})!;
+  gesture.move(token, -40 / 15 * 1000); frames.shift()!(); await flush();
+  assert.equal(h.reads.length, offset + 1);
+  const r = pending(h)[0];
+  assert.equal(r.to, base + 40 * M, '25 bridge cells connect to the held suffix');
+  assert.ok(r.from >= base - 4 * M && r.from <= base, 'only the four-cell optional allowance can precede the viewport');
+  await r.answer(); gesture.finish(token); await flush();
+  const tile = cacheOf(h.store).get(M)!.get(tileOf(base, M))!;
+  assert.equal(tile.readFrom, base); assert.equal(tile.readTo, base + 60 * M); assert.equal(tile.validTo, tile.readTo);
+  const count = h.reads.length;
+  for (const range of [{from: base + 40 * M, to: base + 55 * M}, {from: base, to: base + 15 * M}]) {
+    h.store.pan({token: 2, length: 15 * M, ...range, direction: 0}); await flush();
+    h.store.choose('24h', range); h.store.endPan(true); await flush();
+    assert.equal(h.store.get().history?.range, `${range.from}-${range.to}`);
+  }
+  assert.equal(h.reads.length, count, 'the retained suffix and connected prefix remain cached');
+  unsubscribe(); h.store.close();
+});
+
+test('a forward disjoint jump starts at the stale frontier without crossing the fresh prefix', async () => {
+  const h = harness(), base = tileStart(tileOf(NOW - 10 * H, M), M);
+  h.store.choose('24h', {from: base, to: base + 15 * M}); await h.start(); await h.reads[0].answer();
+  const tile = cacheOf(h.store).get(M)!.get(tileOf(base, M))!;
+  tile.readTo = base + 15 * M; tile.validTo = base + 10 * M;
+  const offset = h.reads.length;
+  h.store.pan({token: 1, length: 15 * M, from: base + 40 * M, to: base + 55 * M, direction: 1}); await flush();
+  assert.equal(h.reads.length, offset + 1);
+  const r = pending(h)[0]; assert.equal(r.from, base + 10 * M); assert.ok(r.to <= base + 59 * M);
+  await r.answer();
+  const next = cacheOf(h.store).get(M)!.get(tileOf(base, M))!;
+  assert.equal(next.readFrom, base); assert.equal(next.validTo, r.to);
+  h.store.close();
+});
+
+test('reversal and abort before delivery never refund unvisited optional cells', async () => {
+  const h = harness(); await h.start(); await h.reads[0].answer();
+  h.store.pan({token: 1, length: 24 * H, from: NOW - 25 * H, to: NOW - H, direction: -1}); await flush();
+  const old = pending(h)[0], internals = h.store as unknown as {optional: Set<number>};
+  const charged = new Set(internals.optional); assert.equal(charged.size, 60);
+  h.store.pan({token: 1, length: 24 * H, from: NOW - 24 * H, to: NOW, direction: 1}); await flush();
+  assert.ok(old.signal!.aborted); assert.deepEqual(internals.optional, charged);
+  await old.answer(); assert.deepEqual(internals.optional, charged, 'a discarded body cannot refund the buffer');
+  h.store.pan({token: 1, length: 24 * H, from: NOW - 72 * H, to: NOW - 48 * H, direction: -1}); await flush();
+  assert.deepEqual(internals.optional, charged, 'another miss cannot buy a new buffer after reversal');
+  assert.ok(pending(h)[0].from >= cellStart(NOW - 72 * H, old.cell));
+  h.store.close();
+});
+
+test('abandoning a multi-tile answer during staging releases every reservation without changing the retained frame', async () => {
+  const h = cooperativeHarness(); await h.start(); await h.reads[0].answer(); await h.finish();
+  const retained = h.store.get().history;
+  h.store.pan({token: 1, length: 24 * H, from: NOW - 48 * H, to: NOW - 24 * H, direction: -1}); await flush();
+  const read = pending(h)[0]; await read.answer(); h.tick();
+  assert.ok(h.internals.reservations.size > 1); assert.equal(h.internals.responses.size, 1);
+  assert.equal(h.store.get().history, retained);
+  h.store.pan({token: 1, length: 24 * H, from: NOW - 10 * H, to: NOW, direction: 1}); await flush();
+  assert.equal(h.internals.responses.size, 0); assert.equal(h.internals.reservations.size, 0);
+  await h.finish(); assert.equal(h.store.get().history, retained); h.store.close();
+});
+
+test('a late disjoint inherited slice is discarded whole and cannot manufacture known gap coverage', async () => {
+  const h = harness(), base = tileStart(tileOf(NOW - 10 * H, M), M);
+  const range = {from: base + 40 * M, to: base + 55 * M};
+  h.store.choose('24h', range); await h.start(); await h.reads[0].answer();
+  const target = targetOf(15 * M, NOW, 'old', {from: base, to: base + 15 * M});
+  (h.store as unknown as {read(wanted: typeof target, from: number, to: number, role: 'visible'): void}).read(target, base, base + 15 * M, 'visible');
+  const read = pending(h)[0]; await read.answer();
+  const tile = cacheOf(h.store).get(M)!.get(tileOf(base, M))!;
+  assert.equal(tile.readFrom, base + 40 * M); assert.equal(tile.validTo, base + 60 * M);
+  assert.ok(read.signal?.aborted); assert.equal(pending(h).length, 0);
+  h.store.close();
+});
+
+const richChunks = (from: number, to: number, cell: number): Chunk[] => {
+  const chunks: Chunk[] = [];
+  for (let a = from; a < to;) {
+    const b = Math.min(to, tileEnd(tileOf(a, cell), cell)), chunk = empty(a, b), count = (b - a) / cell;
+    chunk.series = Array.from({length: 12}, (_, source) => ({source: `s${source}`, window: 'w', hold: 3 * cell, open: 80,
+      cells: Array.from({length: count}, (_, i) => [i, 60 + ((a / cell + i) % 20), .125, cell, {o: 80, h: cell, w: [.062, .4 * cell, .031]}])}));
+    chunk.activity = {sessions: [['r0', 's0', 'P', 'd'], ['r1', 's1', 'P', 'd']], devices: {d: 'Device'}, cells: Array.from({length: count}, (_, i) => [i, .4 * cell, [[0, .3 * cell], [1, .3 * cell]], [['s', 's0', .3 * cell], ['s', 's1', .3 * cell], ['p', JSON.stringify('P'), .4 * cell], ['d', 'd', .4 * cell]]])};
+    for (let i = 0; i < count; i++) if ((a / cell + i) % 19 === 0) {chunk.resets.push(['s0', 'w', a + i * cell]); chunk.grants.push(['s1', a + i * cell, 2]);}
+    chunks.push(chunk); a = b;
+  }
+  return chunks;
+};
+
+for (const cell of READ_CELLS) test(`narrow pan cells preserve exact rich series, work, refs and events on grid ${cell / M}min`, async () => {
+  const length = cell * (cell === M ? 15 : 300);
+  assert.equal(cellOf(length), cell);
+  const h = harness(), base = tileStart(tileOf(NOW - 2 * length, cell), cell), origin = {from: base + 40 * cell, to: base + 40 * cell + length};
+  const windows = Array.from({length: 12}, (_, i) => `s${i} w`), known = {work: 0, sources: Object.fromEntries(windows.map(key => [key.split(' ')[0], 0]))};
+  const answer = async (r: typeof h.reads[number]) => r.answer({known, chunks: richChunks(r.from, r.to, cell)});
+  h.store.choose('24h', origin); await h.start(); h.store.setWindows(windows); await answer(h.reads[0]);
+  const range = {from: origin.from - 30 * cell, to: origin.to - 30 * cell}, seed = freshCells(h.store, cell), offset = h.reads.length;
+  h.store.pan({token: 1, length, ...range, direction: -1}); await flush();
+  for (let n = 0; n < 10 && pending(h).length; n++) for (const r of pending(h)) {
+    for (const at of Array.from({length: (r.to - r.from) / cell}, (_, i) => r.from + i * cell)) assert.ok(!seed.has(at));
+    await answer(r);
+  }
+  h.store.choose('24h', range); h.store.endPan(true); await flush();
+  for (const r of pending(h)) await answer(r);
+  assert.equal(h.reads.length, offset + 1, 'a connected prefix remains one batch');
+  const from = cellStart(range.from, cell), to = Math.ceil(range.to / cell) * cell, key = `${range.from}-${range.to}`;
+  const expected = compose(richChunks(from, to, cell), {now: NOW, historyStart: 0, known}, targetOf(length, NOW, key, range), new Set(windows));
+  assert.deepEqual(h.store.get().history, {...expected, board: 'b'});
+  h.store.close();
+});
+
+test('news in a connecting prefix never proves a stale bridge fresh, and a later suffix refresh starts at that frontier', async () => {
+  const h = harness(), base = tileStart(tileOf(NOW - 10 * H, M), M);
+  h.store.choose('24h', {from: base + 40 * M, to: base + 55 * M}); await h.start(); await h.reads[0].answer();
+  h.store.pan({token: 1, length: 15 * M, from: base, to: base + 15 * M, direction: -1}); await flush();
+  const prefix = pending(h)[0]; assert.equal(prefix.to, base + 40 * M);
+  h.store.news(base + 20 * M); await prefix.answer();
+  const tile = cacheOf(h.store).get(M)!.get(tileOf(base, M))!;
+  assert.equal(tile.readFrom, base); assert.equal(tile.readTo, base + 60 * M); assert.equal(tile.validTo, base + 20 * M);
+  h.store.pan({token: 1, length: 15 * M, from: base + 40 * M, to: base + 55 * M, direction: 0}); await flush();
+  const suffix = pending(h)[0]; assert.equal(suffix.from, base + 20 * M); assert.equal(suffix.to, base + 55 * M);
+  await suffix.answer();
+  assert.equal(cacheOf(h.store).get(M)!.get(tileOf(base, M))!.validTo, base + 55 * M);
   h.store.close();
 });
