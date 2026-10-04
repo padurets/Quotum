@@ -297,12 +297,21 @@ body.is-resizing-bottom-right, body.is-resizing-bottom-right * { cursor: nwse-re
 .switch::after { content: ''; position: absolute; top: 3px; left: 3px; width: 9px; height: 9px; border-radius: 50%; background: var(--text-3); transition: transform .15s, background .15s; }
 .switch.on { background: #7d84f54d; }
 .switch.on::after { transform: translateX(11px); background: var(--accent); }
-.popover-note { font-size: 11px; color: var(--text-4); padding: 8px 8px 4px; max-width: 232px; }
+.popover-note { margin: 0; font-size: 11px; color: var(--text-4); padding: 8px 8px 4px; max-width: 232px; }
+.popover-title + .popover-note { padding-top: 0; }
 .popover-note a { color: var(--text-3); }
 .popover-section { margin-top: 8px; border-top: 1px solid var(--hair); padding-top: 12px; }
 .popover-section:first-child { margin-top: 0; border-top: 0; padding-top: 4px; }
 .popover-pad { padding: 0 4px 4px; }
 .popover-pad .segmented button { flex: 1; }
+.key-page .popover-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.key-page.is-loading { pointer-events: none; }
+.key-page.is-loading .popover-row > span, .key-page.is-loading .popover-row > b, .key-page.is-loading .popover-title, .key-placeholder > span, .key-placeholder > b { position: relative; color: transparent; opacity: 1; }
+.key-page.is-loading .popover-row > span::after, .key-page.is-loading .popover-row > b::after, .key-page.is-loading .popover-title::after, .key-placeholder > span::after, .key-placeholder > b::after { content: ''; position: absolute; left: 8px; right: 28%; top: calc(50% - 3px); height: 6px; border-radius: 3px; background: var(--hair-2); }
+.key-page.is-loading .switch::after, .key-placeholder .switch::after { display: none; }
+.key-page.is-loading .switch { background: var(--hair-2); }
+.key-placeholder > b { width: 5ch; }
+.icon-button[aria-disabled=true] { opacity: .45; cursor: default; }
 .color-hues { display: flex; align-items: center; gap: 10px; padding: 2px 4px 0; }
 .color-hues .link-button { margin-left: auto; }
 .color-choice { width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; }

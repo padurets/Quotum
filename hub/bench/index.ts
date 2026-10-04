@@ -207,6 +207,11 @@ async function main() {
     say('checking native continuous wheel and Shift-drag at 24h and 30d, CPU ×4');
     const panned = await panning(cdp);
     problems.push(...panned.problems);
+    // The diagnostic needs the quota charts, before the money phase replaces them.
+    if (panned.problems.length) {
+      try {await profilePanning(cdp);}
+      catch (error) {say(`panning diagnostic failed: ${(error as Error).message}`);}
+    }
     const monetary=await moneyPhase(demo,stand,cdp);
     problems.push(...monetary.problems);
     const result = {
@@ -245,10 +250,6 @@ async function main() {
     };
     console.log(JSON.stringify(result, null, 2));
     if (problems.length) say(`over budget:\n- ${problems.join('\n- ')}`);
-    if (panned.problems.length) {
-      try {await profilePanning(cdp);}
-      catch (error) {say(`panning diagnostic failed: ${(error as Error).message}`);}
-    }
     await finish(problems.length ? 1 : 0);
   } catch (error) {
     if (finished) return;

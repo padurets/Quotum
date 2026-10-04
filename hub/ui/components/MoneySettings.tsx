@@ -9,7 +9,7 @@ import {MAX_METERS} from '../../server/domain/meterHistory';
 import {t} from '../i18n';
 import {ErrorLine} from './Kit';
 import {SwitchRow} from './Popover';
-import {KEYS_PER_PAGE,KeyPages} from './KeyPages';
+import {KEYS_PER_PAGE,KeyPages,KeyPageContent} from './KeyPages';
 import type {KeyPage} from '../lib/moneyKeys';
 
 /** Series are chosen in the chart's settings; the key table only reads measurements. */
@@ -18,30 +18,33 @@ export function MoneySettings({sources,hidden,series}:{sources:readonly Named[];
   const accounts=sources.filter(s=>!hidden.includes('source:'+s.id)&&s.meters?.some(m=>m.kind==='balance'&&m.unit===unit));
   const [sourceId,setSource]=useState<string|null>(()=>accounts.length===1?accounts[0].id:null);
   const [loaded,setPage]=useState<KeyPage|null>(null),[after,setAfter]=useState<string|undefined>(),[back,setBack]=useState<(string|undefined)[]>([]),[error,setError]=useState<unknown>(null),[changed,setChanged]=useState(false);
+  const [loading,setLoading]=useState(true);
   const selected=moneySelection(sources,hidden,prefs.money).selection?.ids??[];
   const source=sources.find(s=>s.id===sourceId);
   const inCard=source?.keysCount===source?.keys?.length&&!!source?.keys;
   const page:KeyPage|null=inCard?{keys:source!.keys!,meters:source!.meters??[],total:source!.keysCount!,inventory:source!.inventory,next:null}:loaded;
   useEffect(()=>{
     if(!sourceId||!board||inCard)return;
+    setLoading(true);
     let live=true;
     call<KeyPage>('GET',`/api/boards/${encodeURIComponent(board)}/sources/${encodeURIComponent(sourceId)}/keys?limit=${KEYS_PER_PAGE}${after?'&after='+encodeURIComponent(after):''}`)
-      .then(reply=>{if(live){setPage(reply);setError(null);}},failure=>{
+      .then(reply=>{if(live){setPage(reply);setError(null);setLoading(false);}},failure=>{
         if(!live)return;
-        if(failure instanceof ApiError&&failure.code==='keys_changed'){setPage(null);setChanged(true);setBack([]);setAfter(undefined);}else setError(failure);
+        setLoading(false);setPage(null);
+        if(failure instanceof ApiError&&failure.code==='keys_changed'){setChanged(true);setBack([]);setAfter(undefined);}else setError(failure);
       });
     return()=>{live=false;};
   },[board,sourceId,after,inCard]);
-  const choose=(id:string)=>{setSource(id);setPage(null);setAfter(undefined);setBack([]);setError(null);setChanged(false);};
+  const choose=(id:string)=>{setSource(id);setPage(null);setLoading(true);setAfter(undefined);setBack([]);setError(null);setChanged(false);};
   const has=(id:string,meter:string)=>selected.some(([s,m])=>s===id&&m===meter);
   const toggle=(id:string,meter:string,on:boolean)=>{
     const ids=on?[...selected,[id,meter] as [string,string]]:selected.filter(([s,m])=>s!==id||m!==meter);
     if(ids.length>MAX_METERS)return;
     setPrefs({money:{...prefs.money,removed:0,selected:{...prefs.money.selected,[unit]:ids}}});
   };
-  const row=(id:string,meter:string,label:string)=>{
+  const row=(id:string,meter:string,label:string,unavailable=false,value?:string)=>{
     const on=has(id,meter);
-    return <SwitchRow key={meter} on={on} disabled={!on&&selected.length>=MAX_METERS} onChange={next=>toggle(id,meter,next)}>{label}</SwitchRow>;
+    return <SwitchRow key={meter} on={on} value={value} disabled={!on&&(unavailable||selected.length>=MAX_METERS)} onChange={next=>toggle(id,meter,next)}>{label}</SwitchRow>;
   };
   const listed=new Set(page?.meters.map(m=>m.id)??[]);
   return <>
@@ -53,20 +56,26 @@ export function MoneySettings({sources,hidden,series}:{sources:readonly Named[];
       {row(source.id,'balance',t('money.balance'))}
       <ErrorLine error={error}/>
       {changed&&<p className="popover-note">{t('money.changed')}</p>}
-      {page?.inventory&&!page.inventory.complete&&<p className="popover-note">{t('money.inventoryPartial')}</p>}
-      <div>
-        {page?.keys.map(part=><div key={part.id} className="popover-section">
-          <div className="popover-title">{keyName(part)}</div>
-          {page.meters.filter(m=>m.unit===unit&&m.id.startsWith(`key:${part.id}:`)).map(m=>row(source.id,m.id,t(m.kind==='cap'?'money.cap':'money.usage')))}
+      {(page?.inventory??source.inventory)?.complete===false&&<p className="popover-note">{t('money.inventoryPartial')}</p>}
+      <KeyPageContent key={source.id} loading={!inCard&&loading} rows={Math.min(KEYS_PER_PAGE,source.keysCount??0)} series>
+        {page?.keys.map(part=><div key={part.id} className="popover-section key-slot">
+          <div className="popover-title" title={keyName(part)}>{keyName(part)}</div>
+          {(['usage','cap'] as const).map(kind=>{
+            const id=`key:${part.id}:${kind}`,meter=page.meters.find(m=>m.unit===unit&&m.id===id);
+            return row(source.id,id,t(kind==='cap'?'money.cap':'money.usage'),!meter,!meter&&kind==='cap'?t('money.noCap'):undefined);
+          })}
         </div>)}
+      </KeyPageContent>
+      <div>
         {selected.filter(([id,meter])=>id===source.id&&meter!=='balance'&&!listed.has(meter)).map(([id,meter])=>{
           const history=series.find(s=>s.sourceId===id&&s.meterId===meter);
           return row(id,meter,[history?.semantics?.label??meter,t(history?.kind==='cap'?'money.cap':'money.usage')].join(' — '));
         })}
       </div>
-      {(!!page?.next||back.length>0)&&<KeyPages page={back.length+1} pages={Math.ceil((page?.total??source?.keysCount??0)/KEYS_PER_PAGE)} previous={!!back.length} next={!!page?.next}
-        onPrevious={()=>{setPage(null);setAfter(back.at(-1));setBack(back.slice(0,-1));}}
-        onNext={()=>{setPage(null);setBack([...back,after]);setAfter(page!.next!);}}/>}
+      {((source.keysCount??0)>KEYS_PER_PAGE||!!page?.next||back.length>0)&&<KeyPages page={back.length+1} pages={Math.ceil((page?.total??source?.keysCount??0)/KEYS_PER_PAGE)} previous={!!back.length} next={!!page?.next}
+        loading={loading}
+        onPrevious={()=>{setLoading(true);setAfter(back.at(-1));setBack(back.slice(0,-1));}}
+        onNext={()=>{setLoading(true);setBack([...back,after]);setAfter(page!.next!);}}/>}
     </>:<>
       <div>{accounts.map(s=><div key={s.id} className="popover-section">
         <div className="popover-title">{s.title}</div>

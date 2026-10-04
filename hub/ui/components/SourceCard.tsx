@@ -315,7 +315,6 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
           <CardName source={source} arrange={arrange} />
         </>
       )}
-      <Frequency key={`${boardId}:${source.id}`} source={source} board={boardId} />
       {owner && source.windows.length > 1 && (
         <>
           <div className="popover-title popover-section">{t('source.show')}</div>
@@ -349,6 +348,7 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
           )}
         </div>
       )}
+      <Frequency key={`${boardId}:${source.id}`} source={source} board={boardId} />
       <div className={owner ? 'popover-section' : undefined}>
         <RefreshAction id={source.id} board={boardId} onAccepted={() => setOpen(false)} />
         {owner && <HideRow section={false} onHide={() => arrange.update(view => withHidden(view, cardId(source.id), true))}>{t('widget.hide')}</HideRow>}
