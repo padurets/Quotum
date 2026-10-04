@@ -558,6 +558,8 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 .plot-overlay { z-index: 3; }
 .plot-clip { position: absolute; top: 0; bottom: 0; overflow: hidden; }
 .plot-move { position: absolute; top: 0; height: 100%; }
+.plot-crop, .plot-unclip { position: absolute; inset: 0; }
+.plot-crop { overflow: hidden; }
 .plot-move > svg, .plot-overlay > svg { display: block; width: 100%; height: 100%; overflow: visible; }
 .chart-loading, .chart-empty { min-height: 220px; display: grid; place-items: center; color: var(--text-3); font-size: 13px; }
 .chart-empty { position: absolute; inset: 0; min-height: 0; pointer-events: none; }
@@ -623,7 +625,7 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 /* Keep the prepared strip's layers between gestures; the first input must not
    promote and rasterize the whole strip again. */
 .chart .plot-move { will-change: transform; }
-.chart .plot-clip.is-band { will-change: clip-path; }
+.chart .plot-crop, .chart .plot-unclip { will-change: transform; }
 .selection { fill: color-mix(in oklab, var(--accent) 14%, transparent); stroke: color-mix(in oklab, var(--accent) 50%, transparent); stroke-width: 1; }
 .tooltip {
   position: absolute; top: 8px; z-index: 4; pointer-events: none; width: max-content; min-width: 190px; max-width: min(360px, 100%); overflow: hidden;

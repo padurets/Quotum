@@ -45,21 +45,25 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
         history.pushState=(...args)=>{if(probe.feeding)probe.pushesDuring++;else probe.pushesAfter++;originalPush(...args);};
         probe.returnSnapshot=()=>({now:Date.now(),url:location.search,charts:charts.map((svg,i)=>{
           const left=i?48:40,box=svg.viewBox.baseVal.width,inner=box-left-12,r=svg.getBoundingClientRect(),scale=r.width/box;
-          const layer=svg.parentElement.querySelector(i?'.plot-clip.is-band > .plot-move':'.plot-move[data-plot-main]'),slides=layer.querySelector('.slides'),matrix=slides.getScreenCTM();
+          const layer=svg.parentElement.querySelector(i?'.plot-clip.is-band .plot-move':'.plot-move[data-plot-main]'),slides=layer.querySelector('.slides'),matrix=slides.getScreenCTM();
           const from=Number(svg.dataset.drawFrom),to=Number(svg.dataset.drawTo),span=Math.max(60000,to-from);
           const timeAt=x=>from+((x-matrix.e)/matrix.a-left)/inner*span;
           return {from,to,ready:svg.dataset.drawReady,panning:svg.classList.contains('is-panning'),visibleFrom:timeAt(r.left+left*scale),visibleTo:timeAt(r.right-12*scale),perMs:matrix.a*inner/span,panOrigin:svg.dataset.panOrigin,panScale:svg.dataset.panScale,matrix:{a:matrix.a,e:matrix.e}};
         })});
         const owner=root.parentElement,types=['wheel','pointerdown','pointermove','pointerup'];
+        const transforms=new Map();
+        const matrixOf=value=>{const key=value||'none';let matrix=transforms.get(key);if(!matrix){const raw=new DOMMatrix(key==='none'?undefined:key);matrix={a:raw.a,e:raw.e};transforms.set(key,matrix);if(transforms.size>64)transforms.delete(transforms.keys().next().value);}return matrix;};
         let gesture=null;
         const capturedInputs=new WeakMap();
         const capture=e=>{const delivered=performance.now(),at=e.timeStamp>1e12?e.timeStamp-performance.timeOrigin:e.timeStamp;capturedInputs.set(e,{at:Math.min(delivered,at),delivered});};
-        const owners=()=>[root.parentElement.querySelector('.plot-move[data-plot-main]'),charts[1].parentElement.querySelector('.plot-clip.is-band > .plot-move')];
+        const owners=()=>[root.parentElement.querySelector('.plot-move[data-plot-main]'),charts[1].parentElement.querySelector('.plot-clip.is-band .plot-move')];
         // Inline frozen matrices and the committed domain are enough during input;
         // no computed style or SVG layout read belongs in this moving-frame probe.
         const presentation=(svg,layer,i,at)=>{
-          const left=i?48:40,inner=views[i]-left-12,span=Number(svg.dataset.drawTo)-Number(svg.dataset.drawFrom),transform=layer.querySelector('.slides').style.transform,matrix=new DOMMatrix(transform&&transform!=='none'?transform:undefined),outer=new DOMMatrix(layer.style.transform&&layer.style.transform!=='none'?layer.style.transform:undefined);
-          return {x:scales[i]*(matrix.a*(left+(at-Number(svg.dataset.drawFrom))/span*inner)+matrix.e)+outer.e,perMs:scales[i]*matrix.a*inner/span};
+          const left=i?48:40,inner=views[i]-left-12,span=Number(svg.dataset.drawTo)-Number(svg.dataset.drawFrom),matrix=matrixOf(layer.querySelector('.slides').style.transform),outer=matrixOf(layer.style.transform);
+          const shown={x:scales[i]*(matrix.a*(left+(at-Number(svg.dataset.drawFrom))/span*inner)+matrix.e)+outer.e,perMs:scales[i]*matrix.a*inner/span};
+          if(i){let node=svg.parentElement.querySelector('.plot-clip.is-band'),a=1,b=0;if(node.style.visibility==='hidden')return{x:NaN,perMs:NaN};for(let n=0;n<4;n++,node=node.firstElementChild){const m=matrixOf(node.style.transform);b+=a*m.e;a*=m.a;}const origin=left*scales[i];return{x:origin+b+a*(shown.x-origin),perMs:a*shown.perMs};}
+          return shown;
         };
         const begin=(token,x)=>{const origin=Number(root.dataset.panOrigin),layers=owners();gesture={token,pixels:0,x,origin,shown:charts.map((svg,i)=>presentation(svg,layers[i],i,origin)),started:!!root.dataset.panEnd,scale:Number(root.dataset.panScale),baseline:Number(root.dataset.panBase||0)};};
         const input=e=>{
@@ -101,14 +105,14 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: nu
         const consume=(count,now)=>{for(const input of probe.pending.splice(0,count)){const ms=now-input.at;probe.latency.push(ms);probe.responses.push({ms,queued:input.delivered-input.at,processed:now-input.delivered,segment:input.segment,requests:probe.flights.size});}};
         const sample=(stamp,afterCallback=false)=>{
           if(!probe.running)return;
-          const now=performance.now(),demand=probe.pending.length,layers=[root.parentElement.querySelector('.plot-move[data-plot-main]'),charts[1].parentElement.querySelector('.plot-clip.is-band > .plot-move')],active=!!root.dataset.panEnd,folding=!active&&layers[0].querySelector('.slides').getAnimations().some(a=>a.playState==='running');
+          const now=performance.now(),demand=probe.pending.length,layers=[root.parentElement.querySelector('.plot-move[data-plot-main]'),charts[1].parentElement.querySelector('.plot-clip.is-band .plot-move')],active=!!root.dataset.panEnd,folding=!active&&layers[0].querySelector('.slides').getAnimations().some(a=>a.playState==='running');
           probe.sizeStable&&=charts.every((svg,i)=>svg.isConnected&&size(svg)===sizes[i]);
-          const matrices=layers.map((layer,i)=>{const transform=active?layer.style.transform:folding&&i===0?getComputedStyle(layer.querySelector('.slides')).transform:'none';const matrix=new DOMMatrix(transform&&transform!=='none'?transform:undefined);if(folding)matrix.e*=scales[i];return matrix;}),current=matrices.map(matrix=>matrix.e+':'+matrix.a);
+          const matrices=layers.map((layer,i)=>{const transform=active?layer.style.transform:folding&&i===0?getComputedStyle(layer.querySelector('.slides')).transform:'none',matrix=matrixOf(transform);return folding?{a:matrix.a,e:matrix.e*scales[i]}:matrix;}),current=matrices.map(matrix=>matrix.e+':'+matrix.a);
           const nextPhase=active?'pan':folding?'fold':'idle';
           // The wheel's intentional 200 ms rest is stationary, before the fold begins.
           if(nextPhase!==phase||active&&paintedToken!==root.dataset.panToken){probe.last=0;lastFrame=null;previous=nextPhase==='pan'?charts.map(svg=>(Number(svg.dataset.panBase||0))+':1'):current;phase=nextPhase;paintedToken=root.dataset.panToken;}
           const moved=current.map((value,i)=>value!==previous[i]);
-          if(active){probe.synchronized&&=charts.every((svg,i)=>{const shown=gesture?.shown[i],actual=presentation(svg,layers[i],i,gesture?.origin),delta=(Number(svg.dataset.panEnd)-Number(svg.dataset.panOrigin));return svg.dataset.panEnd===root.dataset.panEnd&&Math.abs(delta/Number(svg.dataset.panScale)+matrices[i].e-Number(svg.dataset.panBase||0))<.01&&shown&&Number.isFinite(actual.x)&&Math.abs(actual.perMs*Number(svg.dataset.panScale)-1)<1e-6&&Math.abs(actual.perMs/shown.perMs-1)<1e-6&&Math.abs(actual.x-(shown.x-delta*shown.perMs))<.1;})&&[...charts[1].parentElement.querySelectorAll('.plot-move')].filter(layer=>layer.querySelector('.activity-stack')).every(layer=>Math.abs(new DOMMatrix(layer.style.transform||undefined).e-matrices[1].e)<.01);moved.forEach((changed,i)=>{if(changed)probe.chartUpdates[i]++;});}
+          if(active){probe.synchronized&&=charts.every((svg,i)=>{const shown=gesture?.shown[i],actual=presentation(svg,layers[i],i,gesture?.origin),delta=(Number(svg.dataset.panEnd)-Number(svg.dataset.panOrigin));return svg.dataset.panEnd===root.dataset.panEnd&&Math.abs(delta/Number(svg.dataset.panScale)+matrices[i].e-Number(svg.dataset.panBase||0))<.01&&shown&&Number.isFinite(actual.x)&&Math.abs(actual.perMs*Number(svg.dataset.panScale)-1)<1e-6&&Math.abs(actual.perMs/shown.perMs-1)<1e-6&&Math.abs(actual.x-(shown.x-delta*shown.perMs))<.1;})&&[...charts[1].parentElement.querySelectorAll('.plot-move')].filter(layer=>layer.querySelector('.activity-stack')).every(layer=>Math.abs(matrixOf(layer.style.transform).e-matrices[1].e)<.01);moved.forEach((changed,i)=>{if(changed)probe.chartUpdates[i]++;});}
           // Each input reaches both plots. Activity has no future, so only the
           // remaining-share chart must move during the final future fold.
           if(active&&probe.synchronized&&(moved.every(Boolean)||afterCallback)){

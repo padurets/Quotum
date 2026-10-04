@@ -161,7 +161,7 @@ async function main() {
     await cdp.send('Emulation.setFocusEmulationEnabled', {enabled: true});
     const split = ana.cookie.indexOf('=');
     await cdp.send('Network.setCookie', {name: ana.cookie.slice(0, split), value: ana.cookie.slice(split + 1), url: address.base, httpOnly: true, sameSite: 'Lax'});
-    await cdp.send('Page.addScriptToEvaluateOnNewDocument', {source: probeScript()});
+    await cdp.send('Page.addScriptToEvaluateOnNewDocument', {source: `localStorage.setItem('quotum.locale','en');\n${probeScript()}`});
     await cdp.send('Page.navigate', {url: `${address.base}/`});
 
     const shownBy = Date.now() + SHOWN_MS;
