@@ -50,3 +50,19 @@ test('meter selection normalizes duplicates, stays bounded and rejects raw hashe
   assert.throws(()=>selectionOf([['s','https://secret.invalid']],'USD'));
   assert.throws(()=>selectionOf([['s','balance']],'usd'));
 });
+
+test('a kind or unit transition within one cell retains both identities and the confirmed delta',()=>{
+  for(const change of [{kind:'balance' as const},{unit:'requests' as const}]) {
+    const store=new Store(':memory:',1),source=store.source('openrouter','111111111111111111111111',1);
+    try {
+      record(store,source,1,[meter('m',1,'10000000')]);
+      record(store,source,10001,[meter('m',10001,'15000000')]);
+      record(store,source,20001,[meter('m',20001,'20000000',change)]);
+      const packed=store.meters.cells(selectionOf([[source,'m']],'USD'),0,60000,60000);
+      const counter=composeMeters([{from:0,meterSeries:packed}],60000,0,60000).find(s=>s.kind==='counter');
+      assert.equal(counter?.end,'15000000');assert.equal(counter.spent,'5000000');
+      assert.equal(counter.coveredMs,10000);
+      if('kind' in change)assert.deepEqual(packed.map(s=>s.kind),['counter','balance']);
+    }finally{store.close();}
+  }
+});

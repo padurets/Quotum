@@ -522,6 +522,9 @@ scope, label}` as it actually held before the chunk, or null.
 A meter cell is `[index, value, spentInternal, spentExceptional, coveredMs, extra?]`.
 Value is the historical amount, or remaining for a cap. The composed money frame also
 keeps exact known spending per point, so the spending view draws only located spending.
+Summaries distinguish missing coverage from zero spending: no covered interval gives
+an unknown amount, and a known subtotal with incomplete coverage is marked partial.
+Different kind or unit identities that occur inside one cell retain separate series.
 Extra may give `first`, `open`
 (including explicit null), `segment`, historical `semantics`, original exceptional
 `steps`, `topupInternal` and `topupSteps`. Amounts remain strings throughout packing.
@@ -671,3 +674,6 @@ Alternatively, `ids` is a JSON array of 1–50 opaque key ids, mutually exclusiv
 `after` and `limit`. It returns only those current keys and their meters in inventory
 order, with `next: null`. Enabled scales beyond the preview use this bounded read when
 their source changes; they never poll. Membership and source visibility still apply.
+Chart settings show current and selected archived keys through the same pages of at
+most ten keys. Selected current keys on other pages are not duplicated. An open page
+reloads after a successful source measurement.

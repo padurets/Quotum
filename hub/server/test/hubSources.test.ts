@@ -23,18 +23,45 @@ function harness() {
   const alice=directory.createUser('alice@fixture.example','Alice','unused',clock.now()),bob=directory.createUser('bob@fixture.example','Bob','unused',clock.now());
   const key=SecretKey.parse(Buffer.from(Buffer.alloc(32,7).toString('base64url'))),report=startSecrets(store.db,{current:key,previous:null,reset:null,storageAtStart:null,wasFileAtStart:false});
   let account='1'.repeat(24),expiry:number|null=clock.now()+86_400_000,usage='1000000',calls=0,late:((value:ConnectorIdentity)=>void)|null=null;
-  let delayed=false,revoked=false;
+  let delayed=false,revoked=false,retryAfterMs:number|undefined;
   const identity=():ConnectorIdentity=>{
     const at=clock.now()+1;
     const meter=(id:string,amount:string):Meter=>({id,amount,at,kind:'counter',unit:'USD',staleAfterMs:204_000,stale:false,limit:null,resetAt:null,minutes:null,scope:null,label:null});
-    return {account,abilities:['balance','usage'],expiresAt:expiry,measurement:{type:'meters',observedAt:at,staleAfterMs:204_000,meters:[meter('credits','50000000'),meter('usage',usage)],keys:[],inventoryComplete:true,inventoryError:null}};
+    return {account,abilities:['balance','usage'],expiresAt:expiry,retryAfterMs,measurement:{type:'meters',observedAt:at,staleAfterMs:204_000,meters:[meter('credits','50000000'),meter('usage',usage)],keys:[],inventoryComplete:retryAfterMs===undefined,inventoryError:retryAfterMs===undefined?null:'connector_status'}};
   };
   const connector:Connector={id:'openrouter',secretFormat:s=>s.length>=16,abilities:['balance','usage'],transport:new ConnectorTransport({host:'127.0.0.1',port:443,operations:{}}),map:()=>null,
     identify:async()=>identity(),measure:async()=>{calls++;if(revoked)throw new SecretError('credential_revoked');if(delayed)return new Promise(resolve=>{late=resolve;});return identity();}};
   const credentials=new Credentials(store,key,report,new Map([['openrouter',connector]])),sources=new HubSources(store,credentials,clock);
   const connect=(owner=alice.id,requestId?:string)=>credentials.create(owner,'openrouter','fixture-secret-key',{requestId,allowNoExpiry:true});
-  return {clock,store,directory,alice,bob,credentials,sources,connect,identity,get calls(){return calls;},delay:()=>{delayed=true;},finish:()=>{assert.ok(late);late(identity());delayed=false;},revoke:()=>{revoked=true;},setAccount:(id:string)=>{account=id;},setExpiry:(value:number|null)=>{expiry=value;},setUsage:(value:string)=>{usage=value;}};
+  return {clock,store,directory,alice,bob,credentials,sources,connect,identity,get calls(){return calls;},delay:()=>{delayed=true;},finish:()=>{assert.ok(late);late(identity());delayed=false;},revoke:()=>{revoked=true;},setAccount:(id:string)=>{account=id;},setExpiry:(value:number|null)=>{expiry=value;},setUsage:(value:string)=>{usage=value;},rateLimit:(ms:number)=>{retryAfterMs=ms;}};
 }
+
+test('a partial inventory retry delay survives a fixed cadence, manual refresh and frequency changes',async()=>{
+  const h=harness();try {
+    const source=(await h.connect()).sourceId!;
+    h.store.setMeasureInterval(source,60_000);h.setUsage('9000000');h.rateLimit(3_600_000);
+    h.clock.tick(1);h.sources.start();h.clock.tick();await settle();
+    const retryAt=h.clock.now()+3_600_000;
+    assert.equal(h.store.state(source).meters?.find(m=>m.id==='usage')?.amount,'9000000');
+    assert.equal(h.sources.cadence(source).value?.next,retryAt);
+    assert.deepEqual(h.sources.requestRefresh(source,h.clock.now()),{status:'too_soon',retryAt});
+    h.sources.frequencyChanged(source,h.clock.now());
+    assert.equal(h.sources.cadence(source).value?.next,retryAt);
+    h.clock.tick(60_000);await settle();assert.equal(h.calls,1);
+    h.clock.tick(3_540_000);await settle();assert.equal(h.calls,2);
+  }finally{h.sources.stop();h.store.close();}
+});
+
+test('a connector-completed partial round is committed without a competing poll timeout',async(t)=>{
+  const deadline=new AbortController();t.mock.method(AbortSignal,'timeout',()=>deadline.signal);
+  const h=harness();try {
+    const source=(await h.connect()).sourceId!;h.delay();h.clock.tick(1);h.sources.start();h.clock.tick();await settle();
+    deadline.abort();h.setUsage('9000000');h.rateLimit(120000);h.finish();await settle();
+    assert.equal(h.store.state(source).meters?.find(m=>m.id==='usage')?.amount,'9000000');
+    assert.equal(h.store.state(source).error,null);
+    assert.equal(h.store.state(source).inventory?.complete,false);
+  }finally{h.sources.stop();h.store.close();}
+});
 
 test('verified connections deduplicate an account, preserve holds until the last own key and keep replay tombstones',async()=>{
   const h=harness();try {

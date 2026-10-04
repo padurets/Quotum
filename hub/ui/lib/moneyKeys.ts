@@ -4,7 +4,7 @@ import type {KeyPart,Meter} from '../../server/domain/meters';
 import {call} from './http';
 import {keyShown} from './view';
 
-export type KeyPage={keys:KeyPart[];meters:Meter[];total:number;inventory:Card['inventory'];next:string|null};
+export type KeyPage={keys:KeyPart[];meters:Meter[];total:number;inventory:Card['inventory']|null;next:string|null};
 
 /** Only explicitly enabled scales beyond the default preview need another read. */
 export function useShownKeys(source:Card,view:View|undefined,board:string) {

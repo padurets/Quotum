@@ -57,7 +57,7 @@ export class HistoryTile {
 
   private *mergePrepared(chunk: Chunk, known: HistoryMeta['known']): Preparation<void> {
     this.hasMeters ||= chunk.meterSeries!==undefined;
-    this.meters.merge(chunk.from,chunk.to,chunk.meterSeries??[]);
+    yield* this.meters.mergePrepared(chunk.from,chunk.to,chunk.meterSeries??[]);
     const first = (chunk.from - this.from) / this.cell;
     const last = (chunk.to - this.from) / this.cell;
     for (const [key, s] of this.series) {
@@ -189,7 +189,7 @@ export class HistoryTile {
     for (const key in this.devices) {chunk.activity.devices[key] = this.devices[key]; yield;}
     for (const row of this.resets) {if (row[2] >= this.readFrom && row[2] < this.readTo) chunk.resets.push([...row]); yield;}
     for (const row of this.grants) {if (row[1] >= this.readFrom && row[1] < this.readTo) chunk.grants.push([...row]); yield;}
-    if(this.hasMeters)chunk.meterSeries=this.meters.chunk(this.readFrom,this.readTo);
+    if(this.hasMeters)chunk.meterSeries=yield* this.meters.chunkPrepared(this.readFrom,this.readTo);
     for (const s of this.series.values()) {
       if (plot) {
         const cells: Chunk['series'][number]['cells'] = [];

@@ -52,6 +52,40 @@ function harness(budget?: number, preparations?: Preparations) {
   return {store, reads, advance, start, now: () => now, dropped: () => dropped, timers, correctClock: (ms: number) => {now += ms;}};
 }
 
+test('a monetary pan exposes newly read points while keeping the complete table answer',async()=>{
+  const h=harness();h.store.setMeters({unit:'USD',ids:[['s','balance']]});await h.start();
+  const answer=async(read:typeof h.reads[number])=>{
+    const chunks:Chunk[]=[];
+    for(let from=read.from;from<read.to;){const to=Math.min(read.to,tileEnd(tileOf(from,read.cell),read.cell));
+      chunks.push({...empty(from,to),meterSeries:[{source:'s',meter:'balance',kind:'balance',unit:'USD',semantics:null,cells:Array.from({length:(to-from)/read.cell},(_,i)=>[i,'9007199254740993','0','0',read.cell])}]});from=to;}
+    await read.answer({chunks});
+  };
+  await answer(h.reads[0]);const complete=h.store.get().history;
+  const range={from:NOW-48*H,to:NOW-24*H};h.store.pan({token:1,length:24*H,...range,direction:-1});await flush();
+  for(let i=0;i<20&&pending(h).length;i++)for(const read of [...pending(h)])await answer(read);
+  const plot=h.store.getPlot()!;
+  assert.ok(plot.meterSeries?.[0].points.some(point=>point.at>=range.from&&point.at<range.to));
+  assert.equal(plot.meterSeries?.[0].end,'9007199254740993');
+  assert.equal(h.store.get().history,complete);
+  h.store.choose('24h',range);h.store.endPan(true);await flush();
+  assert.notEqual(h.store.get().history,complete);h.store.close();
+});
+
+test('separately bounded monetary responses cannot publish an over-budget assembled frame',async()=>{
+  const budget=50000,h=harness(budget);h.store.setMeters({unit:'USD',ids:[['s','balance']]});h.store.choose('30d',null);await h.start();
+  const sizes:number[]=[];
+  for(let i=0;i<30&&!h.store.get().error;i++) {
+    const read=pending(h)[0];assert.ok(read);
+    const to=Math.min(read.to,tileEnd(tileOf(read.from,read.cell),read.cell));
+    const chunk:Chunk={...empty(read.from,to),meterSeries:[{source:'s',meter:'balance',kind:'balance',unit:'USD',semantics:null,cells:Array.from({length:(to-read.from)/read.cell},(_,i)=>[i,'1','0','0',read.cell])}]};
+    sizes.push(JSON.stringify(chunk).length);await read.answer({chunks:[chunk]});
+  }
+  assert.ok(sizes.length>1&&Math.max(...sizes)<budget);
+  assert.equal(h.store.get().error,'history_limit');assert.equal(h.store.get().history,null);
+  assert.equal(h.store.getPlot(),null);assert.equal(h.store.estimatedBytes,0);
+  assert.equal(pending(h).length,0);h.store.close();
+});
+
 test('entering pan normalizes pending navigation to two roles and serialized tile writes', async () => {
   const h = harness(); await h.start(); await h.reads[0].answer();
   for (const hours of [12, 13, 14]) {

@@ -2,7 +2,8 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {money,capPercent,capStale,capChangesAt,accessTone,accessChangesAt} from '../lib/money';
 import {setLocale} from '../i18n';
-import {moneySelection,readMoney} from '../lib/moneySelection';
+import {archivedKeyGroups,moneySelection,readMoney} from '../lib/moneySelection';
+import {moneyTotal,type MeterHistory} from '../lib/moneyView';
 import type {Card} from '../lib/types';
 import type {Meter} from '../../server/domain/meters';
 import {keyShown,withKeyShown} from '../lib/view';
@@ -11,6 +12,17 @@ import {INITIAL,reduce,type Snapshot} from '../lib/board';
 
 const meter=(id:string,value='1'):Meter=>({id,amount:value,kind:'balance',unit:'USD',limit:null,at:1,stale:false,staleAfterMs:1000,resetAt:null,minutes:null,scope:null,label:null});
 const card=(id:string):Card=>({id,provider:'openrouter',plan:'',successAt:1,error:null,stale:false,windows:[],resets:null,owners:[],staleAfterMs:1000,measureIntervalMs:null,meters:[meter('balance'),...Array.from({length:10},(_,i)=>meter('key:'+i))]});
+test('unknown spending stays unknown, and a known subtotal identifies missing coverage',()=>{
+  const series:MeterHistory={sourceId:'s',meterId:'balance',kind:'balance',unit:'USD',semantics:null,start:null,end:'10',spent:'0',topup:'0',unlocated:[],topupUnlocated:[],coveredMs:0,points:[]};
+  assert.deepEqual(moneyTotal(series,0,86400000),{amount:null,unknown:true,partial:true});
+  assert.deepEqual(moneyTotal(series,0,86400000,true),{amount:null,unknown:true,partial:true});
+  assert.deepEqual(moneyTotal({...series,spent:'3000000',coveredMs:10800000},0,86400000),{amount:'3000000',unknown:false,partial:true});
+  assert.deepEqual(moneyTotal({...series,coveredMs:86400000},0,86400000),{amount:'0',unknown:false,partial:false});
+});
+test('a selected live key on another page is not archived, and archived scales share one key group',()=>{
+  const selected:[string,string][]=[['s','key:live:usage'],['s','key:gone:usage'],['s','key:gone:cap'],['other','key:else:cap']];
+  assert.deepEqual(archivedKeyGroups('s',selected,new Set(['live']),[]),[{id:'gone',label:'gone',usage:'key:gone:usage',cap:'key:gone:cap'}]);
+});
 test('access warnings begin exactly seven days before expiry, and expired access is critical',()=>{
   const now=Date.UTC(2026,9,4),expiry=now+8*86_400_000,warning=now+86_400_000;
   const access={expiresAt:expiry,error:null};

@@ -340,6 +340,7 @@ export class HistoryStore {
   private pump() {
     this.startResponses();
     if (!this.board || !this.ready || !this.run || this.historyLimit) return;
+    if(this.meters){this.evict();if(this.historyLimit)return;}
     const target = this.target();
     if (this.interest) {
       this.publishPlot();
@@ -648,7 +649,7 @@ export class HistoryStore {
   private failed(flight: Flight, error: unknown) {
     this.flights.delete(flight);
     if (flight.controller.signal.aborted || flight.epoch !== this.epoch) return;
-    if(error instanceof ApiError&&error.code==='history_limit') {this.historyLimit=true;this.shown=null;this.publish();return;}
+    if(error instanceof ApiError&&error.code==='history_limit') {this.limit();return;}
     if (this.interest) {
       const visible = this.plotTarget();
       const needed = flight.cell === visible.cell && this.bad(visible).some(at => at >= flight.from && at < flight.to);
@@ -667,6 +668,13 @@ export class HistoryStore {
     if (error instanceof ApiError && error.status === 400 && this.selected) return this.env.dropTimeRange();
     this.clear('retry');
     this.timers.set('retry', this.env.setTimeout(() => {this.clear('retry'); this.schedule();}, RETRY_MS));
+  }
+
+  private limit() {
+    this.historyLimit=true;
+    this.cancelProjection();this.abortFlights();
+    this.grids.clear();this.plotChunks.clear();this.strip=null;
+    this.shown=null;this.setPlot(null);this.clear('retry');this.publish();
   }
 
   private evict() {
@@ -688,6 +696,11 @@ export class HistoryStore {
       // This interest cannot retain its speculative coverage. Another response
       // must not restart it; movement or news can try a new interest instead.
       if (ahead && cell === ahead.cell && tile.readTo > tile.readFrom && tile.readTo > ahead.k0 * cell && tile.readFrom <= ahead.k1 * cell) this.aheadStopped = true;
+    }
+    if(this.meters&&bytes>this.budget) {
+      let visible=0;
+      for(const tile of this.grids.get(target.cell)?.values()??[])if(tile.readTo>tile.readFrom&&tile.to>target.k0*target.cell&&tile.from<=target.k1*target.cell)visible+=tile.bytes;
+      if(visible>this.budget)this.limit();
     }
   }
 

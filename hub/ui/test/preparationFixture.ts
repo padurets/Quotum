@@ -11,7 +11,7 @@ export function preparationFixture() {
   const useRef = (value: unknown) => slots[index++] ?? (slots[index - 1] = {current: value});
   const useState = (value: unknown) => {
     const at = index++;
-    if (!(at in slots)) slots[at] = value;
+    if (!(at in slots)) slots[at] = typeof value==='function'?value():value;
     return [slots[at], (next: unknown) => {slots[at] = typeof next === 'function' ? next(slots[at]) : next;}];
   };
   const useLayoutEffect = (effect: () => void | (() => void), deps?: readonly unknown[]) => {

@@ -540,12 +540,21 @@ historical cap semantics and original spending intervals stay separate from the 
 Float64 codec. A logical balance selection internally reads its two counters. Axes and
 arithmetic never combine units; money does not contribute percentage attention,
 forecast or quota notifications.
+Money cells are packed separately, with small header and interval leaves; unchanged
+cells share their byte buffers during private staging. Packing, decoding and composition
+yield between leaves and cells through the shared preparation scheduler. Monetary
+points also enter the progressive plot during a gesture while table totals retain the
+last complete answer. A monetary visible frame that cannot fit the existing 15 MiB
+tile estimate reports the history limit before publication, without dropping data.
 
 A hub polling service starts after readiness and stops before SQLite closes, with at
 most two concurrent jobs and one per source. It rechecks access versions and source
 generation before committing a result, so deletion and replacement discard late
 answers. Auto intervals stretch from two to fifteen minutes; existing fixed preferences
-also apply. Permanent access failures pause automatic retries. Refresh requires a
+also apply. OpenRouter bounds its whole round to sixty seconds; exhausting the
+inventory budget preserves successful account measurements. Lifecycle cancellation
+still discards the whole result. An inventory rate limit ends the traversal and its
+bounded Retry-After delays automatic and manual retries. Permanent access failures pause automatic retries. Refresh requires a
 source holding and shares a one-minute cooldown across boards. Owner source access is
 projected separately for each reader, outside the shared board cache.
 

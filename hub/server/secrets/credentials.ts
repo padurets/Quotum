@@ -55,6 +55,7 @@ export class Credentials {
   }
   private validate(connector:Connector,identity:ConnectorIdentity,allowNoExpiry?:boolean) {
     if(!/^[0-9a-f]{24}$/.test(identity.account)||identity.abilities.some(a=>!connector.abilities.includes(a))||identity.expiresAt!==null&&(!Number.isSafeInteger(identity.expiresAt)||identity.expiresAt<0))throw new SecretError('connector_invalid_response');
+    if(identity.retryAfterMs!==undefined&&(!Number.isSafeInteger(identity.retryAfterMs)||identity.retryAfterMs<0||identity.retryAfterMs>3_600_000))throw new SecretError('connector_invalid_response');
     if(identity.expiresAt!==null&&identity.expiresAt<=Date.now())throw new SecretError('credential_expired');
     if(identity.expiresAt===null&&allowNoExpiry!==true)throw new SecretError('credential_expiry_confirmation');
   }

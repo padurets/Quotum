@@ -27,8 +27,9 @@ const expiry=(value:unknown):number|null=>{
 };
 const safeName=(value:unknown,secret:Buffer):string|null=>{
   if(typeof value!=='string')return null;
-  if(value.includes(secret.toString('ascii'))||/sk-or-v1-[a-zA-Z0-9_-]+/i.test(value))return null;
-  return Array.from(value.replace(/[\u0000-\u001f\u007f-\u009f]/g,'').trim()).slice(0,120).join('')||null;
+  const normalized=value.replace(/[\u0000-\u001f\u007f-\u009f]/g,'').trim();
+  if(normalized.includes(secret.toString('ascii'))||/sk-or-v1-[a-zA-Z0-9_-]+/i.test(normalized))return null;
+  return Array.from(normalized).slice(0,120).join('')||null;
 };
 const base=(id:string,amount:string,at:number):Meter=>({id,kind:'counter',unit:'USD',amount,at,staleAfterMs:204_000,stale:false,limit:null,resetAt:null,minutes:null,scope:null,label:null});
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -65,7 +66,12 @@ export function openRouter(transport=new ConnectorTransport({host:'openrouter.ai
         if(found.account!==expected.account)throw new SecretError('credential_account_mismatch');
         const measurement=found.measurement!;
         const at=measurement.observedAt,workspaces:string[]=[],seenWorkspace=new Set<string>(),hashes=new Map<string,string>(),seenKeys=new Set<string>();
-        let complete=true,error:string|null=null,calls=2,keysCount=0;
+        let complete=true,error:string|null=null,calls=2,keysCount=0,retryAfterMs:number|undefined,halted=false;
+        const failed=(failure:unknown)=>{
+          complete=false;error=failure instanceof SecretError?failure.code:'connector_failed';
+          if(failure instanceof ConnectorStatus&&failure.status===429){halted=true;retryAfterMs=failure.retryAfterMs??120_000;}
+          if(controller.signal.aborted)halted=true;
+        };
         const request=async(op:string,query:Record<string,string>)=>{
           if(++calls>200||controller.signal.aborted)throw new SecretError('connector_round_limit');
           return transport.send(op,secret,query,controller.signal);
@@ -85,10 +91,11 @@ export function openRouter(transport=new ConnectorTransport({host:'openrouter.ai
             offset+=page.data.length;
             if(offset>total)throw new SecretError('connector_inventory_partial');
           }while(offset<total!);
-        }catch(failure){complete=false;error=failure instanceof SecretError?failure.code:'connector_failed';}
+        }catch(failure){failed(failure);}
         const traversals:(string|undefined)[]=workspaces.length?workspaces:[undefined];
         if(!workspaces.length)complete=false;
         for(const workspace of traversals) {
+          if(halted)break;
           try {
             let offset=0;
             while(true) {
@@ -132,9 +139,9 @@ export function openRouter(transport=new ConnectorTransport({host:'openrouter.ai
               offset+=page.data.length;
               if(page.data.length<100)break;
             }
-          }catch(failure){complete=false;error=failure instanceof SecretError?failure.code:'connector_failed';}
+          }catch(failure){failed(failure);}
         }
-        return {...found,measurement:{...measurement,inventoryComplete:complete,inventoryError:complete?null:error??'connector_inventory_partial'}};
+        return {...found,...(retryAfterMs===undefined?{}:{retryAfterMs}),measurement:{...measurement,inventoryComplete:complete,inventoryError:complete?null:error??'connector_inventory_partial'}};
       }catch(error){
         if(error instanceof ConnectorStatus&&error.status===401)throw new SecretError(expected.expiresAt!==null&&expected.expiresAt<=now()?'credential_expired':'credential_revoked');
         if(error instanceof ConnectorStatus&&error.status===403)throw new SecretError('credential_permission');

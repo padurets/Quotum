@@ -3,7 +3,7 @@ import type {ConnectorTransport} from './transport.js';
 import type {MeterMeasurement} from '../domain/meters.js';
 import {openRouter} from './openrouter.js';
 
-export type ConnectorIdentity = {account: string; abilities: CredentialAbility[]; expiresAt: number | null; measurement?: MeterMeasurement};
+export type ConnectorIdentity = {account: string; abilities: CredentialAbility[]; expiresAt: number | null; measurement?: MeterMeasurement; retryAfterMs?: number};
 
 export type Connector = {
   id: string;

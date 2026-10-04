@@ -7,7 +7,7 @@ import type {Store} from './store/store.js';
 import {tell,type Touches} from './touches.js';
 import {realClock,type Clock} from './events.js';
 
-type Job={generation:number;next:number|null;last:number|null;interval:number;failures:number;controller:AbortController|null;request:RefreshRequest|null;requestedAt:number|null};
+type Job={generation:number;next:number|null;last:number|null;retryAt:number;interval:number;failures:number;controller:AbortController|null;request:RefreshRequest|null;requestedAt:number|null};
 
 /** Hub authority has one job per source and never claims a device's duty. */
 export class HubSources {
@@ -29,7 +29,7 @@ export class HubSources {
     if(!this.credentials.sources().includes(source)){this.jobs.delete(source);this.arm();return;}
     if(providerOf(this.store.state(source).provider)?.measuredBy!=='hub')return;
     const now=this.clock.now();
-    this.jobs.set(source,{generation:(old?.generation??0)+1,next:Math.max(now,(old?.last??-Infinity)+60_000),last:old?.last??null,interval:120_000,failures:0,controller:null,request:null,requestedAt:old?.requestedAt??null});
+    this.jobs.set(source,{generation:(old?.generation??0)+1,next:Math.max(now,(old?.last??-Infinity)+60_000,old?.retryAt??0),last:old?.last??null,retryAt:old?.retryAt??0,interval:120_000,failures:0,controller:null,request:null,requestedAt:old?.requestedAt??null});
     this.arm();this.touch(source);
   }
   private touch(source:string){tell(this.observer,o=>o.touchSources([source]));}
@@ -53,7 +53,9 @@ export class HubSources {
     const valid=()=>this.running&&this.jobs.get(source)===job&&job.generation===generation&&!controller.signal.aborted;
     const before=JSON.stringify(this.store.state(source).meters?.map(m=>[m.id,m.amount,m.limit,m.resetAt]));
     try {
-      const result=await this.credentials.measure(source,AbortSignal.any([controller.signal,AbortSignal.timeout(60_000)]),valid,result=>{
+      // The connector bounds its round and may retain successful account data when
+      // inventory runs out of time. This signal cancels the source lifecycle only.
+      const result=await this.credentials.measure(source,controller.signal,valid,result=>{
         const after=JSON.stringify(result.measurement?.meters.map(m=>[m.id,m.amount,m.limit,m.resetAt]));
         return this.store.measureInterval(source)??(before===after?Math.min(job.interval*2,900_000):120_000);
       });
@@ -61,13 +63,15 @@ export class HubSources {
       const after=JSON.stringify(result.measurement?.meters.map(m=>[m.id,m.amount,m.limit,m.resetAt]));
       job.failures=0;job.interval=this.store.measureInterval(source)??(before===after?Math.min(job.interval*2,900_000):120_000);
       // Freshness belongs to the accepted observation; it is never extended after failure.
-      job.next=this.clock.now()+job.interval;
+      job.retryAt=this.clock.now()+(result.retryAfterMs??0);
+      job.next=Math.max(this.clock.now()+job.interval,job.retryAt);
       if(job.request){job.request.status='updated';job.request.finishedAt=this.clock.now();}
     }catch(error){
       if(!valid())return;
       const code=error instanceof SecretError?error.code:'credential_failed';
       this.store.fail(source,code);
-      job.failures++;job.next=permanentAccess(code)?null:this.clock.now()+Math.max(Math.min(120_000*2**Math.min(job.failures-1,3),900_000),error instanceof ConnectorStatus?error.retryAfterMs??0:0);
+      job.retryAt=this.clock.now()+(error instanceof ConnectorStatus?error.retryAfterMs??0:0);
+      job.failures++;job.next=permanentAccess(code)?null:Math.max(this.clock.now()+Math.min(120_000*2**Math.min(job.failures-1,3),900_000),job.retryAt);
       if(job.request){job.request.status='failed';job.request.finishedAt=this.clock.now();}
     }finally{
       this.active--;this.activeSources.delete(source);if(job.controller===controller)job.controller=null;
@@ -79,7 +83,7 @@ export class HubSources {
     return {value:job?.next===null||!job?null:{by:'hub',next:job.next,why:this.store.measureInterval(source)!==null?'fixed':job.interval===120_000?'changed':'idle'},changesAt:null};
   }
   refresh(source:string,now:number):{value:Refresh;changesAt:number|null} {
-    const job=this.jobs.get(source),availableAt=job?.requestedAt===null||job?.requestedAt===undefined?0:job.requestedAt+60_000;
+    const job=this.jobs.get(source),availableAt=Math.max(job?.retryAt??0,job?.requestedAt===null||job?.requestedAt===undefined?0:job.requestedAt+60_000);
     const request=job?.request&&job.request.finishedAt!==null&&now>=job.request.finishedAt+60_000?null:job?.request??null;
     const available=!!job&&this.credentials.refreshable(source,now);
     const ends=[available&&availableAt>now?availableAt:Infinity,request?.finishedAt!==null&&request?.finishedAt!==undefined?request.finishedAt+60_000:Infinity];
@@ -88,6 +92,7 @@ export class HubSources {
   requestRefresh(source:string,now:number):{status:'accepted'|'too_soon'|'unavailable';retryAt:number|null} {
     const job=this.jobs.get(source);if(!job||!this.credentials.refreshable(source,now))return {status:'unavailable',retryAt:null};
     if(job.request&&job.request.finishedAt===null)return {status:'accepted',retryAt:null};
+    if(now<job.retryAt)return {status:'too_soon',retryAt:job.retryAt};
     if(job.controller){
       job.requestedAt=now;job.request={requestedAt:now,notBefore:job.last??now,dispatchAt:job.last,deadline:now+300_000,status:'waiting',finishedAt:null};
       this.touch(source);return {status:'accepted',retryAt:null};
@@ -100,7 +105,7 @@ export class HubSources {
   frequencyChanged(source:string,now:number) {
     const job=this.jobs.get(source);if(!job||job.controller)return;
     const fixed=this.store.measureInterval(source);
-    if(job.next!==null)job.next=Math.max(now,(this.store.state(source).successAt??now)+(fixed??job.interval),(job.last??-Infinity)+60_000);
+    if(job.next!==null)job.next=Math.max(now,(this.store.state(source).successAt??now)+(fixed??job.interval),(job.last??-Infinity)+60_000,job.retryAt);
     this.arm();this.touch(source);
   }
 }

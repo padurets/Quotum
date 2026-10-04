@@ -1,5 +1,6 @@
 import {amount, isUnit, type Unit} from './amount.js';
 import {locatedIn, meterStep, plottedAmount, semanticsOf, type ExceptionalStep, type MeterKind, type MeterSemantics, type MeterSpan, type Reading} from './meters.js';
+import {drain, ordered, type Preparation} from './prepare.js';
 
 export const MAX_METERS = 32;
 export type MeterSelection = {unit: Unit; ids: [source: string, meter: string][]};
@@ -32,6 +33,19 @@ export function meterCells(group: MeterGroup, unit: Unit, from: number, to: numb
   const output: MeterSeriesCells[] = [];
   for (const kind of identities) {
     const matches = (r: Reading | undefined): r is Reading => !!r && r.kind === kind && r.unit === unit;
+    const spans:MeterSpan[]=[];
+    let spanIndex=0;
+    for(let i=0;i<group.readings.length;i++) {
+      const row=group.readings[i],until=group.readings[i+1]?.at??Infinity;
+      if(!matches(row))continue;
+      while(spanIndex<group.spans.length&&group.spans[spanIndex].to<=row.at)spanIndex++;
+      for(let n=spanIndex;n<group.spans.length&&group.spans[n].from<until;n++) {
+        const span=group.spans[n],start=Math.max(span.from,row.at),end=Math.min(span.to,until);
+        if(end<=start)continue;
+        const previous=spans.at(-1);
+        if(previous?.to===start)previous.to=end;else spans.push({...span,from:start,to:end});
+      }
+    }
     const before = predecessor(group.readings, from - 1);
     const initial = matches(before) ? semanticsOf(before) : null;
     const series: MeterSeriesCells = {source: group.source,meter: group.meter,kind: group.paired ? 'balance' : kind,unit,semantics: initial,cells: []};
@@ -64,7 +78,9 @@ export function meterCells(group: MeterGroup, unit: Unit, from: number, to: numb
     };
     for (let at=from,index=0;at<to;at+=cell,index++) {
       const end=Math.min(at+cell,to);
-      const last=predecessor(group.readings,end-1);
+      const closing=predecessor(group.readings,end-1);
+      let last=matches(closing)?closing:undefined;
+      if(!last)for(let i=group.readings.length-1;i>=0;i--){const row=group.readings[i];if(row.at<at)break;if(row.at<end&&matches(row)){last=row;break;}}
       if (!matches(last) || !fresh(group.spans,Math.max(at,last.at)) || kind==='cap' && last.resetAt!==null && last.resetAt<=at) continue;
       const pointAt=Math.max(at,last.at,group.paired ? predecessor(group.paired.readings,end-1)?.at??at : at);
       const value=valueOf(last,pointAt);
@@ -87,7 +103,7 @@ export function meterCells(group: MeterGroup, unit: Unit, from: number, to: numb
       if (exceptional.length) extra.steps=exceptional;
       if (topKnown.length) extra.topupInternal=sumSteps(topKnown);
       if (topExceptional.length) extra.topupSteps=topExceptional;
-      series.cells.push([index,value,sumSteps(known),sumSteps(exceptional),coverage(group.spans,at,end),extra]);
+      series.cells.push([index,value,sumSteps(known),sumSteps(exceptional),coverage(spans,at,end),extra]);
       previousValue=value;
     }
     if (series.cells.length) output.push(series);
@@ -98,8 +114,11 @@ const sumSteps = (steps: readonly ExceptionalStep[]) => steps.reduce((sum,s)=>su
 
 /** Whole cells and exceptional intervals compose identically, regardless of tile partition. */
 export function composeMeters(chunks: readonly {from:number;meterSeries?:MeterSeriesCells[]}[], cell:number, from:number,to:number): MeterHistory[] {
+  return drain(composeMetersPrepared(chunks,cell,from,to));
+}
+export function* composeMetersPrepared(chunks: readonly {from:number;meterSeries?:MeterSeriesCells[]}[], cell:number, from:number,to:number): Preparation<MeterHistory[]> {
   const groups=new Map<string,{series:MeterSeriesCells; cells:Map<number,{row:MeterCell;semantics:MeterSemantics|null}>}>();
-  for(const chunk of [...chunks].sort((a,b)=>a.from-b.from)) for(const series of chunk.meterSeries??[]) {
+  for(const chunk of yield* ordered(chunks,(a,b)=>a.from-b.from)) for(const series of chunk.meterSeries??[]) {
     const key=meterIdentity(series);
     let group=groups.get(key);
     if(!group)groups.set(key,(group={series,cells:new Map()}));
@@ -108,34 +127,41 @@ export function composeMeters(chunks: readonly {from:number;meterSeries?:MeterSe
       semantics=row[5]?.semantics??semantics;
       const at=chunk.from+row[0]*cell;
       if(at>=from && at<to)group.cells.set(at,{row,semantics});
+      yield;
     }
   }
-  return [...groups.values()].flatMap(({series,cells})=>{
-    const ordered=[...cells].sort((a,b)=>a[0]-b[0]);
-    if(!ordered.length)return [];
+  const result:MeterHistory[]=[];
+  for(const {series,cells} of groups.values()) {
+    const rows=yield* ordered(cells,(a,b)=>a[0]-b[0]);
+    if(!rows.length)continue;
     let spent=0n,topup=0n,coveredMs=0;
     const unlocated:ExceptionalStep[]=[],topupUnlocated:ExceptionalStep[]=[];
     const seen=new Set<string>();
-    const classify=(steps:ExceptionalStep[],top:boolean)=>{
+    const classify=function* (steps:ExceptionalStep[],top:boolean):Preparation<void> {
       for(const step of steps) {
         const key=JSON.stringify([top,step.from,step.to,step.evidence]);
-        if(seen.has(key))continue;seen.add(key);
-        if(locatedIn(step,from,to)){if(top)topup+=BigInt(step.amount);else spent+=BigInt(step.amount);}
-        else (top?topupUnlocated:unlocated).push(step);
+        if(!seen.has(key)) {
+          seen.add(key);
+          if(locatedIn(step,from,to)){if(top)topup+=BigInt(step.amount);else spent+=BigInt(step.amount);}
+          else (top?topupUnlocated:unlocated).push(step);
+        }
+        yield;
       }
     };
     let segment=0,previous=-Infinity,lastLocal=-1;
-    const points=ordered.map(([at,{row,semantics}])=>{
+    const points:MeterHistory['points']=[];
+    for(const [at,{row,semantics}] of rows) {
       const extra=row[5]??{};
       const previousSpent=spent;
       spent+=BigInt(row[2]);topup+=BigInt(extra.topupInternal??'0');coveredMs+=row[4];
-      classify(extra.steps??[],false);classify(extra.topupSteps??[],true);
+      yield* classify(extra.steps??[],false);yield* classify(extra.topupSteps??[],true);
       if(at!==previous+cell || (extra.segment??0)!==lastLocal)segment++;
       previous=at;lastLocal=extra.segment??0;
-      return {at,value:row[1],spent:(spent-previousSpent).toString(),segment,semantics,steps:extra.steps??[]};
-    });
-    const first=ordered[0][1].row,last=ordered.at(-1)![1];
+      points.push({at,value:row[1],spent:(spent-previousSpent).toString(),segment,semantics,steps:extra.steps??[]});yield;
+    }
+    const first=rows[0][1].row,last=rows.at(-1)![1];
     const start=first[5] && 'open' in first[5] ? first[5].open! : first[5]?.first??first[1];
-    return [{sourceId:series.source,meterId:series.meter,kind:series.kind,unit:series.unit,semantics:last.semantics,start,end:last.row[1],spent:spent.toString(),unlocated,topup:topup.toString(),topupUnlocated,coveredMs,points}];
-  });
+    result.push({sourceId:series.source,meterId:series.meter,kind:series.kind,unit:series.unit,semantics:last.semantics,start,end:last.row[1],spent:spent.toString(),unlocated,topup:topup.toString(),topupUnlocated,coveredMs,points});yield;
+  }
+  return result;
 }

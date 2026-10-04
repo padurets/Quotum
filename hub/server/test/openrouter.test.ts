@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {decodeOpenRouter,openRouter} from '../connectors/openrouter.js';
 import {ConnectorStatus,ConnectorTransport} from '../connectors/transport.js';
 import {SecretError} from '../secrets/crypto.js';
+import {Store} from '../store/store.js';
+import {publicSourceState} from '../projection.js';
 
 const now=Date.parse('2026-10-01T12:00:00Z');
 const secret=Buffer.from('sk-or-v1-'+'a'.repeat(64));
@@ -78,4 +80,55 @@ test('the decoder uses original decimal tokens and invalid precision fails only 
   assert.deepEqual(parsed.data,{total_credits:'9007199254740993',total_usage:'100001',usage:null,name:'kept text'});
   const status=new ConnectorStatus(429,'36000');assert.equal(status.retryAfterMs,3_600_000);
   assert.equal(new ConnectorStatus(429,secret.toString()).retryAfterMs,null);
+});
+
+test('normalizing a supplier name cannot reconstruct a management secret',async()=>{
+  const c=connector(op=>op==='keys'?{data:[key(1,{name:'sk\u0000-or-v1-'+'a'.repeat(64)}),key(2,{name:'ordinary\u0000 name'})]}:undefined);
+  const answer=await c.measure(secret,await c.identify(secret));
+  assert.equal(answer.measurement!.keys[0].name,null);
+  assert.equal(answer.measurement!.keys[1].name,'ordinary name');
+  assert.equal(JSON.stringify(answer).includes(secret.toString()),false);
+  const store=new Store(':memory:',now);
+  try {
+    const source=store.source('openrouter',answer.account,now);store.record(source,answer.measurement!);
+    assert.equal(JSON.stringify(publicSourceState(store.state(source))).includes(secret.toString()),false);
+    assert.equal(store.state(source).keys?.[0].name,null);
+  }finally{store.close();}
+});
+
+test('an inventory rate limit preserves counters and stops the traversal with its retry delay',async()=>{
+  for(const failAt of ['workspaces','keys']) {
+    const calls:string[]=[];
+    const c=connector(op=>{
+      calls.push(op);
+      if(op===failAt)throw new ConnectorStatus(429,'3600');
+      if(op==='workspaces')return {data:[{id:workspace},{id:'550e8400-e29b-41d4-a716-446655440001'}],total_count:2};
+    });
+    const id=await c.identify(secret);calls.length=0;
+    const answer=await c.measure(secret,id);
+    assert.equal(answer.retryAfterMs,3_600_000);
+    assert.equal(answer.measurement?.inventoryComplete,false);
+    assert.equal(answer.measurement?.meters.find(m=>m.id==='usage')?.amount,'37104969');
+    assert.deepEqual(calls,failAt==='keys'?['key','credits','workspaces','keys']:['key','credits','workspaces']);
+  }
+});
+
+test('the round deadline keeps successful counters without aborting the caller lifecycle',async(t)=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const caller=new AbortController(),transport=new ConnectorTransport({host:'127.0.0.1',port:443,operations:{}});
+  let inventory=false;
+  transport.send=async(op,_secret,_query,signal)=>{
+    if(op==='key')return current;
+    if(op==='credits')return {data:{total_credits:'50000000',total_usage:'9000000'}};
+    inventory=true;
+    return new Promise((_resolve,reject)=>signal!.addEventListener('abort',()=>reject(new SecretError('connector_cancelled')),{once:true}));
+  };
+  const c=openRouter(transport,()=>now),id=await c.identify(secret);
+  const pending=c.measure(secret,id,caller.signal);
+  for(let i=0;i<10&&!inventory;i++)await Promise.resolve();
+  assert.equal(inventory,true);t.mock.timers.tick(60_000);
+  const answer=await pending;
+  assert.equal(answer.measurement?.meters.find(m=>m.id==='usage')?.amount,'9000000');
+  assert.equal(answer.measurement?.inventoryComplete,false);
+  assert.equal(caller.signal.aborted,false);
 });

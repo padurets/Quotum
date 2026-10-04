@@ -1,6 +1,7 @@
 import {isUnit} from '../../server/domain/amount';
 import {MAX_METERS,selectionOf,type MeterSelection} from '../../server/domain/meterHistory';
 import type {Card} from './types';
+import type {MeterHistory} from './moneyView';
 
 export type MoneyPrefs={unit:string|null;view:'balance'|'spending';selected:Record<string,[string,string][]>;removed?:number};
 export const DEFAULT_MONEY:MoneyPrefs={unit:null,view:'balance',selected:{}};
@@ -22,4 +23,20 @@ export function moneySelection(cards:readonly Card[],hidden:readonly string[],se
   });
   const admitted=ids.filter(([source])=>visible.has(source));
   return {selection:selectionOf(admitted.slice(0,MAX_METERS),settings.unit),omitted:Math.max(0,admitted.length-MAX_METERS),removed:ids.length-admitted.length};
+}
+
+/** Membership is checked against the inventory, not against the visible page. */
+export function archivedKeyGroups(source:string,selected:readonly [string,string][],current:ReadonlySet<string>,history:readonly MeterHistory[]) {
+  const groups=new Map<string,{id:string;label:string;usage:string|null;cap:string|null}>();
+  for(const [owner,meter] of selected) {
+    if(owner!==source||meter==='balance')continue;
+    const key=meter.match(/^key:([^:]+):(usage|cap)$/),id=key?.[1]??meter;
+    if(current.has(id))continue;
+    const saved=history.find(s=>s.sourceId===source&&s.meterId===meter);
+    const kind=key?.[2]==='cap'||saved?.kind==='cap'?'cap':'usage';
+    let group=groups.get(id);
+    if(!group)groups.set(id,(group={id,label:saved?.semantics?.label??id,usage:null,cap:null}));
+    group[kind]=meter;
+  }
+  return [...groups.values()];
 }
