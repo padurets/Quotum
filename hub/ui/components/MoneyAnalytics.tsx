@@ -1,14 +1,14 @@
 import {useMemo,useRef} from 'react';
-import {useNamed,useServerView} from '../lib/board';
+import {useBoardId,useNamed,useServerView} from '../lib/board';
 import {useHistory,useHistoryBegins} from '../lib/history';
 import {usePrefs,setPrefs,setMuted} from '../lib/prefs';
 import {moneySelection} from '../lib/moneySelection';
 import {money} from '../lib/money';
 import {moneyIdentity,type MeterHistory} from '../lib/moneyView';
 import {colorOf,columnShown,withColumn,withHidden,HISTORY,FORECAST,type Arrange} from '../lib/view';
-import {frameOf,frameChangesAt,measuredTo,step} from '../lib/periods';
-import {useTimeRange,setTimeRange,goTo} from '../lib/timeRange';
-import {useClock,hubNow} from '../lib/clock';
+import {frameOf,frameChangesAt,measuredTo} from '../lib/periods';
+import {useTimeRange,setTimeRange} from '../lib/timeRange';
+import {useClock} from '../lib/clock';
 import {stamp} from '../lib/format';
 import type {Line} from '../lib/lines';
 import {t,useLocale} from '../i18n';
@@ -17,6 +17,7 @@ import {usePlot} from './sizing';
 import {Popover,SlidersIcon,HideRow,SwitchRow} from './Popover';
 import {Segmented} from './Kit';
 import {MoneySettings} from './MoneySettings';
+import {axisNavigation} from '../lib/axisNavigation';
 
 function nameOf(series:MeterHistory,title:string) {
   const detail=series.meterId==='balance'?'':series.semantics?.label??series.meterId;
@@ -31,7 +32,7 @@ function SelectionNotice() {
 const pointAt=(series:MeterHistory,at:number)=>series.points.filter(p=>p.at<=at).at(-1);
 
 export function MoneyHistory({arrange}:{arrange:Arrange}) {
-  const locale=useLocale(),{history,loading,error}=useHistory(),prefs=usePrefs(),sources=useNamed(arrange.view.names);
+  const board=useBoardId(),locale=useLocale(),{history,loading,error}=useHistory(),prefs=usePrefs(),sources=useNamed(arrange.view.names);
   const selected=useTimeRange(),start=useHistoryBegins(),panel=useRef<HTMLElement>(null),{plot,onBase}=usePlot(panel);
   const now=useClock(now=>frameChangesAt(selected,history?.cellMs??60_000,now));
   const frame=frameOf(selected,{range:prefs.range,horizon:prefs.horizon},now,start),measured=measuredTo(frame,history,selected,prefs.range);
@@ -48,6 +49,7 @@ export function MoneyHistory({arrange}:{arrange:Arrange}) {
     const card=sources.find(c=>c.id===s.sourceId),key=moneyIdentity(s),scaled=(value:string)=>Number(BigInt(value)-origin)/1_000_000;
     return {sourceId:s.sourceId,windowId:s.meterId,key,name:nameOf(s,card?.title??s.sourceId),provider:card?.provider??'',kind:'other',label:s.semantics?.label??null,minutes:null,color:colorOf(arrange.view,s.sourceId,card?.provider??''),dash:s.kind==='cap'?'7 5':'',current:scaled(s.end??'0'),consumed:0,coveredMs:s.coveredMs,remainingAtStart:s.start===null?null:scaled(s.start),remainingAtEnd:s.end===null?null:scaled(s.end),staleAfterMs:86_400_000,points:s.points.map(p=>[p.at,scaled(p.value),p.segment]),work:null};
   }),[history,prefs.muted,prefs.money.unit,prefs.money.view,sources,arrange.view,locale,origin]);
+  const baseNavigation=axisNavigation(board,selected,prefs),navigation={...baseNavigation,context:JSON.stringify([baseNavigation.context,prefs.money.unit,prefs.money.view])};
   const unit=prefs.money.unit??'USD',minY=-Number(pad)/1_000_000,maxY=Number(span+pad)/1_000_000;
   const axis={min:minY,max:maxY,ticks:Array.from({length:5},(_,i)=>minY+(maxY-minY)*i/4),label:t('money.value')+' ('+unit+')',rawValue:(key:string,at:number)=>{const series=entries.find(s=>moneyIdentity(s)===key);return series&&pointAt(series,at)?.value||'0';},formatTick:(value:number)=>money((origin+BigInt(Math.round(value*1_000_000))).toString(),unit).slice(0,-unit.length-1),formatValue:(key:string,_value:number,at:number)=>{const series=entries.find(s=>moneyIdentity(s)===key);return money(series&&pointAt(series,at)?.value,unit,true);},detail:(key:string,at:number)=>{
     const series=entries.find(s=>moneyIdentity(s)===key),point=series&&pointAt(series,at);
@@ -61,7 +63,7 @@ export function MoneyHistory({arrange}:{arrange:Arrange}) {
     </Popover></div>
     <SelectionNotice/>
     {error&&<p className="form-error">{t('money.historyLimit')}</p>}
-    <Chart lines={lines} axis={axis} stepped from={frame.from} now={measured} to={frame.to} cellMs={history?.cellMs??60_000} empty={!lines.length?t('money.unknown'):null} plot={plot} onBase={onBase} onSelect={setTimeRange} onStep={direction=>goTo(step(selected,prefs.range,direction,hubNow(),start))}/>
+    <Chart lines={lines} axis={axis} stepped from={frame.from} now={measured} to={frame.to} cellMs={history?.cellMs??60_000} empty={!lines.length?t('money.unknown'):null} plot={plot} onBase={onBase} onSelect={setTimeRange} navigation={navigation} live={frame.live} clock={now} modelContext={navigation.context}/>
     <div className="legend">{entries.map(s=>{const key=moneyIdentity(s),card=sources.find(c=>c.id===s.sourceId);return <button type="button" key={key} className="legend-item" aria-pressed={!prefs.muted[key]} onClick={()=>setMuted(key,!prefs.muted[key])}><svg width="18" height="6" aria-hidden="true"><line x1="1" x2="17" y1="3" y2="3" stroke={colorOf(arrange.view,s.sourceId,card?.provider??'')} strokeWidth="2.5" strokeDasharray={s.kind==='cap'?'7 5':undefined}/></svg><span>{nameOf(s,card?.title??s.sourceId)}</span><b>{money(s.end,s.unit)}</b></button>;})}</div>
   </section>;
 }

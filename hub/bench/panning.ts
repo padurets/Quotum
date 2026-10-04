@@ -1,0 +1,258 @@
+import type {Cdp} from './cdp.js';
+import {panningProblems, type PanReading} from './panningBudget.js';
+
+/** Native input against the real charts; the temporary layout brings both into view. */
+export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate'>, pace: (ms: number) => Promise<unknown> = ms => new Promise(resolve => setTimeout(resolve, ms))) {
+  const wait = (ms: number) => cdp.evaluate(`new Promise(resolve => setTimeout(resolve, ${ms}))`);
+  const key = (down: boolean, name: string, code: number) => cdp.send('Input.dispatchKeyEvent', {type: down ? 'keyDown' : 'keyUp', key: name, code: name === 'Shift' ? 'ShiftLeft' : name, windowsVirtualKeyCode: code, modifiers: down && name === 'Shift' ? 8 : 0});
+  const mouse = (type: string, x: number, y: number, modifiers = 0) => cdp.send('Input.dispatchMouseEvent', {type, x, y, modifiers, button: type === 'mouseMoved' && !modifiers ? 'none' : 'left', buttons: type === 'mousePressed' || type === 'mouseMoved' && modifiers ? 1 : 0, clickCount: type === 'mouseMoved' ? undefined : 1});
+  const click = async (selector: string, index = 0) => {
+    const point = await cdp.evaluate<{x: number; y: number}>(`(async () => {const until=Date.now()+5000;let element;while(!(element=document.querySelectorAll(${JSON.stringify(selector)})[${index}])){if(Date.now()>until)throw new Error('missing native input target: '+${JSON.stringify(selector)});await new Promise(r=>setTimeout(r,20));}if(!element.closest('.popover')){element.scrollIntoView({block:'center'});await new Promise(requestAnimationFrame);}const r=element.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+    await mouse('mouseMoved', point.x, point.y);
+    await mouse('mousePressed', point.x, point.y);
+    await mouse('mouseReleased', point.x, point.y);
+  };
+  const settled = () => cdp.evaluate(`(async()=>{const until=Date.now()+15000,p=new URLSearchParams(location.search),wanted=p.has('from')?p.get('from')+'-'+p.get('to'):JSON.parse(localStorage.getItem('quotum.prefs')||'{}').range||'24h';while(document.querySelector('.history.is-loading, .activity.is-loading') || document.querySelector('.chart > svg[data-pan-end], .chart > svg[data-draw-ready="false"], .chart > svg.is-panning')||document.querySelector('.forecast')?.dataset.historyRange!==wanted){if(Date.now()>until)throw new Error('charts and complete totals did not settle');await new Promise(r=>setTimeout(r,20));}await new Promise(r=>setTimeout(r,250));})()`);
+  const reports: PanReading[] = [];
+  const originalHorizon = await cdp.evaluate<string>(`JSON.parse(localStorage.getItem('quotum.prefs')||'{}').horizon||'auto'`);
+  let interception = false;
+  await cdp.send('Emulation.setDeviceMetricsOverride', {width: 1280, height: 900, deviceScaleFactor: 1, mobile: false});
+  await cdp.evaluate(`(() => {
+    const style=document.createElement('style'); style.id='quotum-pan-layout';
+    style.textContent='.widgets{display:flex!important;flex-direction:column!important}.widget{height:auto!important}.widget:not(:has(.history,.activity)){display:none!important}.widget:has(.history){order:1}.widget:has(.activity){order:2}.widget-body{height:auto!important}.widget-body>.panel{--fill:0px!important}.history .chart>svg{height:260px!important}.activity .chart>svg{height:180px!important}.legend{max-height:72px;overflow:auto}.activity .legend{max-height:40px}';
+    document.head.append(style); document.querySelector('.analytics-head')?.scrollIntoView();
+  })()`);
+  try {
+    // A manual horizon keeps the 30d source's full 1.25-width path inside retention.
+    await click('.history .panel-head .picker > button');
+    await click('.history .popover .segmented button', 1);
+    await key(true, 'Escape', 27); await key(false, 'Escape', 27);
+    for (const [period, index] of [['24h', 4], ['30d', 8]] as const) {
+      await click('.period .picker > button');
+      await click('.period .popover .popover-row', index);
+      await settled();
+      await cdp.evaluate(`(async () => {for(let i=0;i<3;i++){await new Promise(requestAnimationFrame);const r=document.querySelector('.history .chart>svg').getBoundingClientRect();scrollBy(0,r.top-140);}})()`);
+      const geometry = await cdp.evaluate<{x: number; y: number; width: number; series: number; charts: number}>(`(() => {
+        const svg=document.querySelector('.history .chart>svg'), r=svg.getBoundingClientRect();
+        const charts=[...document.querySelectorAll('.chart>svg')].filter(e=>{const b=e.getBoundingClientRect();return b.top>=0&&b.bottom<=innerHeight;}).length;
+        return {x:r.left+r.width*.5,y:r.top+80,width:r.width*(svg.viewBox.baseVal.width-52)/svg.viewBox.baseVal.width,series:svg.parentElement.querySelectorAll('.series[d]:not([d=""])').length,charts};
+      })()`);
+      await cdp.evaluate(`(() => {
+        const root=document.querySelector('.history .chart>svg');
+        const charts=[root,document.querySelector('.activity .chart>svg')],views=charts.map(svg=>svg.viewBox.baseVal.width),scales=charts.map((svg,i)=>svg.getBoundingClientRect().width/views[i]),size=svg=>svg.getAttribute('viewBox')+':'+svg.style.height,sizes=charts.map(size);
+        const probe=window.__quotumPan={frames:[],latency:[],responses:[],inputs:0,updated:0,chartUpdates:[0,0],synchronized:true,pending:[],last:0,pushesDuring:0,pushesAfter:0,forbiddenMutations:0,undimmed:getComputedStyle(root).opacity==='1',sizeStable:true,coldReads:0,peakFlights:0,maxTiles:0,duplicateReads:0,flights:new Map(),running:true,feeding:false,segment:'wheel',samples:[]};
+        const originalPush=history.pushState.bind(history);probe.originalPush=originalPush;
+        history.pushState=(...args)=>{if(probe.feeding)probe.pushesDuring++;else probe.pushesAfter++;originalPush(...args);};
+        probe.returnSnapshot=()=>({now:Date.now(),url:location.search,charts:charts.map((svg,i)=>{
+          const left=i?48:40,box=svg.viewBox.baseVal.width,inner=box-left-12,r=svg.getBoundingClientRect(),scale=r.width/box;
+          const layer=svg.parentElement.querySelector(i?'.plot-clip.is-band > .plot-move':'.plot-move[data-plot-main]'),slides=layer.querySelector('.slides'),matrix=slides.getScreenCTM();
+          const from=Number(svg.dataset.drawFrom),to=Number(svg.dataset.drawTo),span=Math.max(60000,to-from);
+          const timeAt=x=>from+((x-matrix.e)/matrix.a-left)/inner*span;
+          return {from,to,ready:svg.dataset.drawReady,panning:svg.classList.contains('is-panning'),visibleFrom:timeAt(r.left+left*scale),visibleTo:timeAt(r.right-12*scale),perMs:matrix.a*inner/span,panOrigin:svg.dataset.panOrigin,panScale:svg.dataset.panScale,matrix:{a:matrix.a,e:matrix.e}};
+        })});
+        const owner=root.parentElement,types=['wheel','pointerdown','pointermove','pointerup'];
+        let gesture=null;
+        const capturedInputs=new WeakMap();
+        const capture=e=>{const delivered=performance.now(),at=e.timeStamp>1e12?e.timeStamp-performance.timeOrigin:e.timeStamp;capturedInputs.set(e,{at:Math.min(delivered,at),delivered});};
+        const owners=()=>[root.parentElement.querySelector('.plot-move[data-plot-main]'),charts[1].parentElement.querySelector('.plot-clip.is-band > .plot-move')];
+        // Inline frozen matrices and the committed domain are enough during input;
+        // no computed style or SVG layout read belongs in this moving-frame probe.
+        const presentation=(svg,layer,i,at)=>{
+          const left=i?48:40,inner=views[i]-left-12,span=Number(svg.dataset.drawTo)-Number(svg.dataset.drawFrom),transform=layer.querySelector('.slides').style.transform,matrix=new DOMMatrix(transform&&transform!=='none'?transform:undefined),outer=new DOMMatrix(layer.style.transform&&layer.style.transform!=='none'?layer.style.transform:undefined);
+          return {x:scales[i]*(matrix.a*(left+(at-Number(svg.dataset.drawFrom))/span*inner)+matrix.e)+outer.e,perMs:scales[i]*matrix.a*inner/span};
+        };
+        const begin=(token,x)=>{const origin=Number(root.dataset.panOrigin),layers=owners();gesture={token,pixels:0,x,origin,shown:charts.map((svg,i)=>presentation(svg,layers[i],i,origin)),started:!!root.dataset.panEnd,scale:Number(root.dataset.panScale),baseline:Number(root.dataset.panBase||0)};};
+        const input=e=>{
+          const captured=capturedInputs.get(e);if(!captured)return;capturedInputs.delete(e);
+          const token=root.dataset.panToken;
+          // The native handler can finish an expired wheel transaction and
+          // begin another one in this event. Observe its resulting token.
+          if(e.type==='pointerdown'){if(!gesture||gesture.token!==token)begin(token,e.clientX);else gesture.x=e.clientX;return;}
+          if(e.type==='pointerup')return;
+          if(e.type==='wheel'){
+            if(!e.cancelable||(!e.deltaX&&!e.shiftKey))return;
+            if(!gesture||gesture.token!==token)begin(token);
+            const unit=[1,16,400][e.deltaMode]||1;
+            gesture.pixels-=(e.deltaX||(e.shiftKey?e.deltaY:0))*unit;
+            if(probe.returnInput){const trace=probe.returnInput;trace.pixels-=(e.deltaX||(e.shiftKey?e.deltaY:0))*unit;trace.events++;if(trace.tokens.at(-1)?.token!==token)trace.tokens.push({token,origin:Number(root.dataset.panOrigin),scale:Number(root.dataset.panScale),at:e.timeStamp,delivered:captured.delivered,pixels:trace.pixels});trace.last={at:e.timeStamp,delivered:captured.delivered};}
+          }else{
+            if(!e.buttons||!gesture)return;
+            gesture.pixels+=e.clientX-gesture.x;gesture.x=e.clientX;
+          }
+          probe.inputs++;
+          probe.pending.push({...captured,segment:probe.segment,pixels:gesture.pixels,gesture});
+        };
+        for(const type of types){owner.addEventListener(type,capture,true);window.addEventListener(type,input);}
+        const originalFetch=window.fetch.bind(window);probe.originalFetch=originalFetch;
+        window.fetch=async(...args)=>{
+          const url=new URL(String(args[0]),location.href);if(url.pathname!='/api/history')return originalFetch(...args);
+          const cell=Number(url.searchParams.get('cell')),from=Number(url.searchParams.get('from')),to=Number(url.searchParams.get('to')),tiles=Math.floor((to-1)/(cell*60))-Math.floor(from/(cell*60))+1;
+          for(const f of probe.flights.values())if(f.cell===cell&&f.from<to&&f.to>from)probe.duplicateReads++;
+          const id={},signal=args[1]?.signal,aborted=()=>probe.flights.delete(id);probe.flights.set(id,{cell,from,to});signal?.addEventListener('abort',aborted,{once:true});probe.peakFlights=Math.max(probe.peakFlights,probe.flights.size);probe.maxTiles=Math.max(probe.maxTiles,tiles);probe.coldReads++;
+          try {return await originalFetch(...args);}finally{probe.flights.delete(id);signal?.removeEventListener('abort',aborted);}
+        };
+        probe.observer=new MutationObserver(records=>{
+          if(!probe.running||!probe.feeding)return;
+          for(const record of records){const element=record.target.nodeType===1?record.target:record.target.parentElement,clock=element?.closest('[data-time]'),timeOnly=clock&&clock.getAttribute('data-time')!=='chart';if(element?.closest('.card,.topbar,.agents-panel,.forecast,.activity-totals')&&!timeOnly)probe.forbiddenMutations++;}
+        });probe.observer.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true});
+        const originalRAF=window.requestAnimationFrame||requestAnimationFrame;
+        const schedule=callback=>originalRAF.call(window,callback);
+        let previous=['0:1','0:1'],phase='idle',lastFrame=null,paintedToken=null;
+        const consume=(count,now)=>{for(const input of probe.pending.splice(0,count)){const ms=now-input.at;probe.latency.push(ms);probe.responses.push({ms,queued:input.delivered-input.at,processed:now-input.delivered,segment:input.segment,requests:probe.flights.size});}};
+        const sample=(stamp,afterCallback=false)=>{
+          if(!probe.running)return;
+          const now=performance.now(),demand=probe.pending.length,layers=[root.parentElement.querySelector('.plot-move[data-plot-main]'),charts[1].parentElement.querySelector('.plot-clip.is-band > .plot-move')],active=!!root.dataset.panEnd,folding=!active&&layers[0].querySelector('.slides').getAnimations().some(a=>a.playState==='running');
+          probe.sizeStable&&=charts.every((svg,i)=>svg.isConnected&&size(svg)===sizes[i]);
+          const matrices=layers.map((layer,i)=>{const transform=active?layer.style.transform:folding&&i===0?getComputedStyle(layer.querySelector('.slides')).transform:'none';const matrix=new DOMMatrix(transform&&transform!=='none'?transform:undefined);if(folding)matrix.e*=scales[i];return matrix;}),current=matrices.map(matrix=>matrix.e+':'+matrix.a);
+          const nextPhase=active?'pan':folding?'fold':'idle';
+          // The wheel's intentional 200 ms rest is stationary, before the fold begins.
+          if(nextPhase!==phase||active&&paintedToken!==root.dataset.panToken){probe.last=0;lastFrame=null;previous=nextPhase==='pan'?charts.map(svg=>(Number(svg.dataset.panBase||0))+':1'):current;phase=nextPhase;paintedToken=root.dataset.panToken;}
+          const moved=current.map((value,i)=>value!==previous[i]);
+          if(active){probe.synchronized&&=charts.every((svg,i)=>{const shown=gesture?.shown[i],actual=presentation(svg,layers[i],i,gesture?.origin),delta=(Number(svg.dataset.panEnd)-Number(svg.dataset.panOrigin));return svg.dataset.panEnd===root.dataset.panEnd&&Math.abs(delta/Number(svg.dataset.panScale)+matrices[i].e-Number(svg.dataset.panBase||0))<.01&&shown&&Number.isFinite(actual.x)&&Math.abs(actual.perMs*Number(svg.dataset.panScale)-1)<1e-6&&Math.abs(actual.perMs/shown.perMs-1)<1e-6&&Math.abs(actual.x-(shown.x-delta*shown.perMs))<.1;})&&[...charts[1].parentElement.querySelectorAll('.plot-move')].filter(layer=>layer.querySelector('.activity-stack')).every(layer=>Math.abs(new DOMMatrix(layer.style.transform||undefined).e-matrices[1].e)<.01);moved.forEach((changed,i)=>{if(changed)probe.chartUpdates[i]++;});}
+          // Each input reaches both plots. Activity has no future, so only the
+          // remaining-share chart must move during the final future fold.
+          if(active&&probe.synchronized&&(moved.every(Boolean)||afterCallback)){
+            // Coalesced input reaches its final position together. A newer event
+            // cannot be credited by the artwork of an earlier event.
+            let reached=-1;
+            for(let i=0;i<probe.pending.length;i++){const input=probe.pending[i];if(input.gesture===gesture&&Math.abs(input.gesture.baseline+input.pixels-matrices[0].e)<.1)reached=i;}
+            if(reached>=0)consume(reached+1,now);
+          }
+          if(active&&moved.every(Boolean)||folding&&moved[0]){
+            if(stamp!==lastFrame){probe.updated++;if(probe.last){const ms=now-probe.last;probe.frames.push(ms);probe.samples.push({ms,segment:folding?'fold':probe.segment,pending:demand,requests:probe.flights.size});}probe.last=now;lastFrame=stamp;}
+          }
+          if(!active&&!folding&&probe.pending.length&&charts.every(svg=>svg.dataset.drawReady==='true'&&!svg.classList.contains('is-panning'))){
+            // Release may commit the last coalesced input before its own RAF.
+            // Its effect is observable only after the final geometry and fold.
+            const ends=charts.map(svg=>Number(svg.parentElement.dataset.axisEnd)),selected=new URLSearchParams(location.search).has('to');
+            let reached=-1;
+            for(let i=0;i<probe.pending.length;i++){const input=probe.pending[i],g=input.gesture;const tolerance=selected?1.1:8*g.scale+1.1;if(g.started&&g.scale>0&&ends.every(end=>Math.abs(end-(g.origin-input.pixels*g.scale))<=tolerance))reached=i;}
+            if(reached>=0)consume(reached+1,now);
+          }
+          if(!active&&!folding)probe.last=0;
+          previous=current;probe.undimmed&&=charts.every(svg=>!svg.closest('.is-loading')&&(!svg.style.opacity||svg.style.opacity==='1'));
+        };
+        window.requestAnimationFrame=callback=>schedule(stamp=>{try{callback.call(window,stamp);}finally{if(probe.running&&probe.pending.length)sample(stamp,true);}});
+        const tick=stamp=>{
+          if(!probe.running)return;
+          if(!root.dataset.panEnd)sample(stamp);
+          // Input-free stationary frames carry no movement demand. A pending
+          // event keeps the interval open, so delayed work still fails budget.
+          if(root.dataset.panEnd&&!probe.pending.length&&lastFrame!==stamp)probe.last=0;
+          probe.raf=schedule(tick);
+        };
+        probe.cleanup=()=>{probe.running=false;cancelAnimationFrame(probe.raf);probe.observer.disconnect();for(const type of types){owner.removeEventListener(type,capture,true);window.removeEventListener(type,input);}window.requestAnimationFrame=originalRAF;window.fetch=originalFetch;history.pushState=originalPush;};
+        probe.raf=schedule(tick);
+      })()`);
+      await cdp.send('Emulation.setCPUThrottlingRate', {rate: 4});
+      // A delayed cold edge is part of the moving interval, including arrivals/rebuilds.
+      await cdp.send('Network.emulateNetworkConditions', {offline: false, latency: 400, downloadThroughput: -1, uploadThroughput: -1});
+      interception = true;
+      const wheel = (dx: number, shift = false) => cdp.send('Input.dispatchMouseEvent', {type: 'mouseWheel', x: geometry.x, y: geometry.y, deltaX: dx, deltaY: 0, modifiers: shift ? 8 : 0});
+      const sent: Promise<unknown>[] = [];
+      await cdp.evaluate('window.__quotumPan.feeding=true');
+      // The browser generates native wheel input without a CDP IPC per delta.
+      const scroll = (distance: number, reverse = 0) => cdp.send('Input.synthesizeScrollGesture', {x: geometry.x, y: geometry.y, xDistance: distance, xOverscroll: reverse, yDistance: 0, speed: 720, gestureSourceType: 'mouse', preventFling: true});
+      await scroll(geometry.width * 1.25, geometry.width * 1.25 / 3);
+      await cdp.evaluate('window.__quotumPan.feeding=false');
+      await wait(240);
+      await cdp.send('Network.emulateNetworkConditions', {offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1});
+      interception = false;
+      await settled();
+      // Shift-drag keeps capture when the pointer leaves the SVG, without extra inertia.
+      await cdp.evaluate(`window.__quotumPan.segment='drag'`);
+      await key(true, 'Shift', 16);
+      await mouse('mousePressed', geometry.x, geometry.y, 8);
+      await cdp.evaluate(`window.__quotumPan.undimmed&&=getComputedStyle(document.querySelector('.history .chart>svg')).opacity==='1'`);
+      await cdp.evaluate('window.__quotumPan.feeding=true');
+      sent.length = 0;
+      for (let i = 1; i <= 60; i++) {sent.push(mouse('mouseMoved', geometry.x + i * 12, geometry.y, 8)); await pace(16);}
+      await Promise.all(sent);
+      await cdp.evaluate('window.__quotumPan.feeding=false');
+      await mouse('mouseReleased', geometry.x + 720, geometry.y, 8);
+      await key(false, 'Shift', 16);
+      await settled();
+      // Native Shift deltaX returns to live, then Back/Forward restore complete gestures.
+      sent.length = 0;
+      await cdp.evaluate(`window.__quotumPan.segment='return'`);
+      const returnBefore = await cdp.evaluate<unknown>('window.__quotumPan.returnSnapshot()');
+      await cdp.evaluate('window.__quotumPan.returnInput={pixels:0,events:0,tokens:[]}');
+      await cdp.evaluate('window.__quotumPan.feeding=true');
+      const returnPixels = await cdp.evaluate<number>(`(() => {
+        const p=new URLSearchParams(location.search),from=Number(p.get('from')),to=Number(p.get('to'));
+        const svg=document.querySelector('.history .chart>svg'),width=svg.getBoundingClientRect().width,box=svg.viewBox.baseVal.width;
+        return (Date.now()-to)/(to-from)*(width*(box-52)/box);
+      })()`);
+      await scroll(-Math.max(0, returnPixels - 4));
+      await cdp.evaluate('window.__quotumPan.feeding=false');
+      await wait(240); await settled();
+      await cdp.evaluate('window.__quotumPan.returnAfter=window.__quotumPan.returnSnapshot()');
+      const report = await cdp.evaluate<PanReading>(`(() => {
+        const p=window.__quotumPan;p.cleanup();
+        const segments={};for(const segment of ['wheel','drag','return','fold']){const values=p.samples.filter(s=>s.segment===segment).map(s=>s.ms).sort((a,b)=>a-b);segments[segment]={count:values.length,p95:values[Math.ceil(values.length*.95)-1]??0,max:values.at(-1)??0};}
+        return {frames:p.frames,latency:p.latency,inputs:p.inputs,updated:p.updated,chartUpdates:p.chartUpdates,synchronized:p.synchronized,pushesDuring:p.pushesDuring,pushesAfter:p.pushesAfter,forbiddenMutations:p.forbiddenMutations,undimmed:p.undimmed,sizeStable:p.sizeStable,coldReads:p.coldReads,peakFlights:p.peakFlights,maxTiles:p.maxTiles,duplicateReads:p.duplicateReads,segments,outliers:p.samples.filter(s=>s.ms>50),responses:p.responses.filter(r=>r.ms>34)};
+      })()`);
+      report.period = period; report.series = geometry.series; report.charts = geometry.charts; report.rate = 4; report.expectedPushes = 3;
+      reports.push(report);
+      await cdp.send('Emulation.setCPUThrottlingRate', {rate: 1});
+      const live = await cdp.evaluate<boolean>(`!new URLSearchParams(location.search).has('from')`);
+      if (!live) {
+        const returned = await cdp.evaluate<unknown>('({after:window.__quotumPan.returnAfter,input:window.__quotumPan.returnInput})');
+        throw new Error(`${period} pan did not return to live: ${JSON.stringify({before: returnBefore, returnPixels, returned, report})}`);
+      }
+      await cdp.evaluate('window.__quotumPan.returnInput=null');
+      // Held Shift-wheel has the same uninterrupted scale as dragging, across rests.
+      await mouse('mouseMoved', geometry.x, geometry.y);
+      await key(true, 'Shift', 16);
+      await wait(30);
+      if (await cdp.evaluate<boolean>(`!!document.querySelector('.history .tooltip,.activity .tooltip,.activity-legend-tip.is-open')`)) throw new Error('holding Shift left a chart readout visible');
+      await wheel(-12, true); await wait(300);
+      const first = await cdp.evaluate<number>(`new DOMMatrix(document.querySelector('.history .plot-move[data-plot-main]').style.transform).e`);
+      if (!(await cdp.evaluate<boolean>(`!!document.querySelector('[data-pan-end]')&&!new URLSearchParams(location.search).has('from')`))) throw new Error('Shift-wheel committed before Shift was released');
+      await wheel(-12, true); await wait(240);
+      const second = await cdp.evaluate<number>(`new DOMMatrix(document.querySelector('.history .plot-move[data-plot-main]').style.transform).e`);
+      if (!Number.isFinite(first) || first <= 0 || Math.abs(second - 2 * first) > .01) throw new Error('Shift-wheel changed its scale during a pause');
+      await wheel(24, true); await wait(40);
+      await key(false, 'Shift', 16); await wait(240);
+      if (!(await cdp.evaluate<boolean>(`!document.querySelector('[data-pan-end]')&&!new URLSearchParams(location.search).has('from')`))) throw new Error('Shift-wheel return did not preserve live');
+      await cdp.evaluate(`history.back()`); await wait(300);
+      if (!(await cdp.evaluate<boolean>(`new URLSearchParams(location.search).has('from')`))) throw new Error('Back did not restore the whole previous gesture');
+      await cdp.evaluate(`history.forward()`); await wait(300);
+      if (!(await cdp.evaluate<boolean>(`!new URLSearchParams(location.search).has('from')`))) throw new Error('Forward did not restore live');
+      // A wheel does not blur a keyboard-focused legend. Its bubble must stay
+      // hidden through ordinary panning, a latched drag and their final fold.
+      const legendVisible = () => cdp.evaluate<boolean>(`[...document.querySelectorAll('.activity-legend-tip.is-open')].some(tip=>getComputedStyle(tip).display!=='none')`);
+      await key(true, 'Tab', 9); await key(false, 'Tab', 9);
+      await cdp.evaluate(`document.querySelector('.activity .legend-item').focus()`); await wait(40);
+      if (!(await legendVisible())) throw new Error('focused activity legend did not open its readout');
+      await wheel(-12); await wait(40);
+      if (await legendVisible()) throw new Error('horizontal wheel left a focused legend readout visible');
+      await wait(190);
+      if (await legendVisible()) throw new Error('a wheel fold left a focused legend readout visible');
+      await wait(260);
+      await cdp.evaluate(`history.back()`); await settled();
+      await key(true, 'Shift', 16); await mouse('mousePressed', geometry.x, geometry.y, 8);
+      await mouse('mouseMoved', geometry.x + 24, geometry.y, 8); await wait(40);
+      await key(false, 'Shift', 16);
+      if (await legendVisible()) throw new Error('releasing Shift reopened a readout during a latched drag');
+      await mouse('mouseReleased', geometry.x + 24, geometry.y); await wait(30);
+      if (await legendVisible()) throw new Error('a drag fold reopened a focused legend readout');
+      await wait(260);
+      await cdp.evaluate(`history.back()`); await settled();
+    }
+    return {reports, problems: reports.flatMap(panningProblems)};
+  } finally {
+    await cdp.send('Emulation.setCPUThrottlingRate', {rate: 1});
+    if (interception) await cdp.send('Network.emulateNetworkConditions', {offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1});
+    await cdp.evaluate(`(() => {window.__quotumPan?.cleanup();document.getElementById('quotum-pan-layout')?.remove();})()`);
+    try {
+      if (await cdp.evaluate<boolean>(`!document.querySelector('.history .popover')`)) await click('.history .panel-head .picker > button');
+      await click('.history .popover .segmented button', Math.max(0, ['auto', '1d', '3d', '7d'].indexOf(originalHorizon)));
+      await key(true, 'Escape', 27); await key(false, 'Escape', 27);
+    } catch {
+      // A failed setup retains its original error; the benchmark owns and closes its tab.
+      await cdp.evaluate(`(() => {const p=JSON.parse(localStorage.getItem('quotum.prefs')||'{}');p.horizon=${JSON.stringify(originalHorizon)};localStorage.setItem('quotum.prefs',JSON.stringify(p));})()`);
+    }
+    await cdp.send('Emulation.clearDeviceMetricsOverride');
+  }
+}

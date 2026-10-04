@@ -1,5 +1,6 @@
 import {meterIdentity, type MeterCell, type MeterSeriesCells} from '../../server/domain/meterHistory';
 import type {MeterSemantics} from '../../server/domain/meters';
+import type {Preparation} from './prepare';
 
 type StoredCell = {row: MeterCell; before: MeterSemantics | null; semantics: MeterSemantics | null};
 type Packed = {series: Omit<MeterSeriesCells,'cells'|'semantics'>; bytes: Uint8Array};
@@ -10,6 +11,11 @@ export class MeterTile {
   private readonly series=new Map<string,Packed>();
   constructor(private readonly from:number,private readonly cell:number) {}
   get bytes(){return [...this.series.values()].reduce((sum,s)=>sum+s.bytes.byteLength+256,0);}
+  *clonePrepared():Preparation<MeterTile> {
+    const copy=new MeterTile(this.from,this.cell);
+    for(const [key,packed] of this.series){copy.series.set(key,{...packed});yield;}
+    return copy;
+  }
   merge(from:number,to:number,series:readonly MeterSeriesCells[]) {
     const first=(from-this.from)/this.cell,last=(to-this.from)/this.cell;
     const rows=new Map<string,Map<number,StoredCell>>();

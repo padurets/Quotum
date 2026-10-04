@@ -2,6 +2,20 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {MeterTile} from '../lib/meterTiles';
 import {composeMeters, type MeterSeriesCells} from '../../server/domain/meterHistory';
+import {HistoryTile} from '../lib/historyTiles';
+import {drain} from '../lib/prepare';
+import type {Chunk} from '../../server/domain/history';
+
+test('staging a money update keeps the published exact tile unchanged',()=>{
+  const cell=60_000,known={work:0,sources:{s:0}},tile=new HistoryTile(0,cell);
+  const chunk=(value:string):Chunk=>({from:0,to:cell,series:[],activity:{sessions:[],devices:{},cells:[]},resets:[],grants:[],meterSeries:[{source:'s',meter:'usage',kind:'counter',unit:'USD',semantics:null,cells:[[0,value,'0','0',0]]}]});
+  tile.merge(chunk('9007199254740993'),known);
+  tile.readTo=cell;
+  const before=tile.chunk(known),staged=drain(tile.staged(chunk('9007199254740994'),known));
+  assert.deepEqual(tile.chunk(known),before);
+  assert.equal(staged.chunk(known).meterSeries![0].cells[0][1],'9007199254740994');
+  assert.ok(staged.bytes>0);
+});
 
 test('money tile packing preserves bigint values, original intervals, partial headers and replacement semantics',()=>{
   const before={limit:'10000000',resetAt:1_000_000,minutes:1440,scope:'monthly',label:'old'};

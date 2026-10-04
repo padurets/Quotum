@@ -675,6 +675,30 @@ test('a captured own leader exiting before a second observation completes cleanu
   } finally { fs.readFileSync = originalRead; syncBuiltinESMExports(); }
 });
 
+test('stop observes a transient kernel listener after its owned processes exit', async t => {
+  const {ctx, state} = await hubStand(t);
+  const prototype = Object.getPrototypeOf(createServer()), original = prototype.listen;
+  let injected = false, probes = 0;
+  prototype.listen = function (...args) {
+    if (args[0]?.port === state.port && !processOf(state.supervisor.pid) && !processOf(state.hub.pid)) {
+      probes++;
+      if (!injected) {
+        injected = true;
+        process.nextTick(() => this.emit('error', Object.assign(new Error('Socket still closing'), {code: 'EADDRINUSE'})));
+        return this;
+      }
+    }
+    return original.apply(this, args);
+  };
+  try {
+    await stop(ctx, true);
+    assert.equal(injected, true);
+    assert.ok(probes >= 2);
+    assert.equal(readJson(ctx.record), null);
+    assert.equal(await portFree(state.port), true);
+  } finally { prototype.listen = original; }
+});
+
 test('ESRCH between verified ownership and signal is rechecked as an exit', async t => {
   const {ctx, state} = await hubStand(t);
   const originalKill = process.kill;

@@ -3,9 +3,71 @@ import {test} from 'node:test';
 import type {Chunk} from '../../server/domain/history';
 import {compose, targetOf} from '../../server/domain/history';
 import {HistoryTile} from '../lib/historyTiles';
+import {plotOf} from '../lib/historyPlot';
+import {drain, type Preparation} from '../lib/prepare';
 
 const M = 60_000;
 const known = {work: 0, sources: {s: 0}};
+
+test('unchanged packed tile footprint reads do not iterate its committed series', () => {
+  const tile = new HistoryTile(0, M);
+  const input: Chunk = {from: 0, to: M, series: Array.from({length: 50}, (_, i) => ({source: 's', window: `w${i}`, hold: M, open: null, cells: [[0, 80, 0, 0]]})), activity: {sessions: [], devices: {}, cells: []}, resets: [], grants: []};
+  tile.merge(input, known);
+  const storage = tile as unknown as {series: Map<string, {values: Float64Array}>};
+  let visits = 0;
+  const original = storage.series.values.bind(storage.series);
+  storage.series.values = function* (): Generator<{values: Float64Array}, undefined, unknown> {for (const row of original()) {visits++; yield row;} return undefined;};
+  const expected = 248 + 1024 + 50 * (60 * 11 * 8 + 256);
+  for (let i = 0; i < 100; i++) assert.equal(tile.bytes, expected);
+  assert.equal(visits, 0, 'ready tile accounting must be constant work during panning');
+});
+
+test('packed footprint stays exact through dense growth, compaction, private COW yields and cancellation', () => {
+  type Storage = {activity: ArrayBuffer; series: Map<string, {values: Float64Array}>; sessions: unknown[]; groups: unknown[]; resets: unknown[]; grants: unknown[]};
+  const originalBytes = (tile: HistoryTile) => {
+    const stored = tile as unknown as Storage;
+    let bytes = stored.activity.byteLength + stored.sessions.length * 320 + stored.groups.length * 192 + (stored.resets.length + stored.grants.length) * 192 + 1024;
+    for (const [, row] of stored.series) bytes += row.values.byteLength + 256;
+    return bytes;
+  };
+  const dense = (count: number): Chunk => ({from: 0, to: 60 * M,
+    series: Array.from({length: count}, (_, i) => ({source: 's', window: `w${i}`, hold: M, open: null, cells: [[i % 60, 80, 0, 0]]})),
+    activity: {sessions: Array.from({length: count}, (_, i) => [`r${i}`, 's', `P${i}`, `d${i}`]), devices: {},
+      cells: Array.from({length: count}, (_, i) => [i % 60, M, [i], [['s', `s${i}`, M], ['p', `P${i}`, M], ['d', `d${i}`, M]]])},
+    resets: Array.from({length: count}, (_, i) => ['s', `w${i}`, i % 60 * M]), grants: Array.from({length: count}, (_, i) => ['s', i % 60 * M, i + 1]),
+  });
+  const tile = new HistoryTile(0, M); tile.readTo = 60 * M; tile.merge(dense(20), known);
+  const alias = tile.chunk(known), initial = tile.bytes;
+  assert.equal(initial, originalBytes(tile));
+  const prototype = HistoryTile.prototype as unknown as {mergePrepared(chunk: Chunk, supplied: typeof known): Preparation<void>};
+  const original = prototype.mergePrepared; let checks = 0;
+  const observed: {tile: HistoryTile | null} = {tile: null};
+  prototype.mergePrepared = function* (this: HistoryTile, chunk, supplied) {
+    observed.tile = this;
+    const work = original.call(this, chunk, supplied);
+    try {
+      for (;;) {
+        const next = work.next();
+        assert.equal(this.bytes, originalBytes(this), 'every observable private storage yield has a fresh exact estimate'); checks++;
+        if (next.done) return next.value;
+        yield;
+      }
+    } finally {work.return();}
+  };
+  try {
+    const grown = drain(tile.staged(dense(50), known));
+    assert.ok(checks > 100); assert.ok(grown.bytes > initial); assert.equal(grown.bytes, originalBytes(grown));
+    assert.equal(tile.bytes, initial); assert.deepEqual(tile.chunk(known), alias, 'staged growth leaves the committed alias and its footprint intact');
+    grown.merge(dense(2), known); assert.ok(grown.bytes < initial); assert.equal(grown.bytes, originalBytes(grown));
+    const empty: Chunk = {from: 0, to: 60 * M, series: [], activity: {sessions: [], devices: {}, cells: []}, resets: [], grants: []};
+    const cleared = drain(grown.staged(empty, known)); assert.equal(cleared.bytes, 248 + 1024); assert.equal(cleared.bytes, originalBytes(cleared));
+    const canceled = tile.staged(dense(55), known), before = checks;
+    while (checks < before + 100) canceled.next();
+    canceled.return(tile); assert.equal(tile.bytes, initial); assert.deepEqual(tile.chunk(known), alias);
+    assert.ok(observed.tile); assert.equal(observed.tile.bytes, originalBytes(observed.tile));
+  } finally {prototype.mergePrepared = original;}
+});
+
 function chunk(from: number, ref: string): Chunk {
   const project = `P${ref}`, device = `d${ref}`;
   return {
@@ -18,6 +80,24 @@ function chunk(from: number, ref: string): Chunk {
     resets: [], grants: [],
   };
 }
+
+test('plot extraction from packed cells preserves points, gaps, holds and activity through each readable cut', () => {
+  const tile = new HistoryTile(0, M);
+  const input = chunk(0, 'A');
+  input.to = 3 * M;
+  input.series[0].cells = [[0, 80, 1, M], [1, 70, 1, M, {g: 1, h: 2 * M}], [2, 60, 1, M]];
+  tile.merge(input, known);
+  const meta = {known, now: 3 * M, historyStart: 0};
+  for (let first = 0; first < 3; first++) for (let end = first + 1; end <= 3; end++) {
+    tile.readFrom = first * M; tile.readTo = end * M;
+    const target = targetOf(15 * M, 3 * M, 'plot', {from: tile.readFrom, to: tile.readTo});
+    const coverage = [[tile.readFrom, tile.readTo]] as [number, number][];
+    const full = plotOf([tile.chunk(known)], meta, target, coverage, new Set(['s wA']), 1, 1, 1);
+    const quick = plotOf([tile.chunk(known, true)], meta, target, coverage, new Set(['s wA']), 1, 1, 1);
+    assert.deepEqual(quick.series, full.series);
+    assert.deepEqual(quick.activityCells, full.activityCells);
+  }
+});
 
 test('replacing one cell compacts unused sessions, groups, devices and empty series', () => {
   const tile = new HistoryTile(0, M);

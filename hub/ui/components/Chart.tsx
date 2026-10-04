@@ -1,7 +1,7 @@
-import {Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties,type ReactNode} from 'react';
+import {Fragment, memo, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode} from 'react';
 import {clock, countdown, countdownChangesAt, num, shortDay, stamp} from '../lib/format';
 import {t, useLocale} from '../i18n';
-import type {Line} from '../lib/lines';
+import type {PlotBlock, PlotLine as Line} from '../lib/lines';
 import {useClock} from '../lib/clock';
 import {gapText, gapTone, readout as readCell, runOutPast, valueAt, type ForecastLine, type PlanLine} from '../lib/readout';
 import type {TimeRange} from '../lib/timeRange';
@@ -9,12 +9,18 @@ import {cellLabel, niceTicks} from '../lib/periods';
 import {coverOf, edgeOf} from '../lib/place';
 import {Tooltip, useTip} from './Tooltip';
 import {useTimeAxis} from './timeAxis';
+import {navigationKey, type AxisNavigation} from '../lib/axisNavigation';
+import {PlotLayer, PlotOverlay} from './PlotLayer';
+import {covered, type PlotBuffer} from '../lib/historyPlot';
+import {plotPathPrepared} from '../lib/plotPath';
+import {clipPrepared} from '../lib/forecast';
+import {usePrepared, usePreparationBasis} from './prepared';
 
 /**
  * A moment on the time axis: ahead, a known window reset or an announced extra one;
  * behind (`past`), something that happened to a source, such as an early reset.
  */
-export type Marker = {key: string; at: number; label: string; color: string; strong?: boolean; past?: boolean; detail?: string};
+export type Marker = {key: string; at: number; label: string; color: string; strong?: boolean; past?: boolean; detail?: string; until?: number};
 
 /** The mark of a past event: a small diamond centred at (x, y). */
 const diamond = (x: number, y: number, r = 4) => `M${x},${y - r}l${r},${r}l${-r},${r}l${-r},${-r}z`;
@@ -240,22 +246,31 @@ export const plotHeight = (width: number) => (width < 560 ? 220 : 300);
  * made taller, the plot is as tall as `plot` (CSS pixels), never lower than by itself;
  * it tells how tall that is (`onBase`, CSS pixels).
  */
-export function Chart({
-  lines,
-  plans = [],
-  forecasts = [],
-  markers = [],
-  from,
-  now,
-  to,
+const NO_PLANS: PlanLine[] = [];
+const NO_FORECASTS: ForecastLine[] = [];
+const NO_MARKERS: Marker[] = [];
+
+export const Chart = memo(function Chart({
+  lines: incomingLines,
+  plans: incomingPlans = NO_PLANS,
+  forecasts: incomingForecasts = NO_FORECASTS,
+  markers: incomingMarkers = NO_MARKERS,
+  from: desiredFrom,
+  now: desiredNow,
+  to: desiredTo,
   cellMs,
   empty,
   onSelect,
-  onStep,
   plot,
   onBase,
-  axis,
+  axis: valueAxis,
   stepped=false,
+  strip: incomingStrip = null,
+  prepared: incomingReady = true,
+  modelContext = '',
+  navigation,
+  live: desiredLive = true,
+  clock: currentClock = desiredNow,
 }: {
   lines: Line[];
   plans?: PlanLine[];
@@ -270,57 +285,126 @@ export function Chart({
   empty: string | null;
   /** A time range dragged across the chart, as in Grafana. */
   onSelect?: (range: TimeRange) => void;
-  /** A swipe sideways on a touchpad, or Shift with the wheel: back (-1) or forward (1) through time. */
-  onStep?: (direction: -1 | 1) => void;
   plot?: number;
   onBase?: (height: number) => void;
   axis?:{min:number;max:number;ticks:number[];label:string;formatTick:(value:number)=>string;formatValue:(key:string,value:number,at:number)=>string;rawValue?:(key:string,at:number)=>string;detail?:(key:string,at:number)=>ReactNode};
   stepped?:boolean;
+  strip?: PlotBuffer | null;
+  prepared?: boolean;
+  modelContext?: string;
+  navigation?: AxisNavigation;
+  live?: boolean;
+  clock?: number;
 }) {
-  const left = axis?76:40;
+  const left = valueAxis?76:40;
   const right = 12;
-  const {box, svg, width, scale, hover, drag, x, timeAt, clip, handlers} = useTimeAxis({from, to, end: now, cellMs, left, right, onSelect, onStep});
-
+  const axis = useTimeAxis({from: desiredFrom, to: desiredTo, end: desiredNow, cellMs, left, right, onSelect, ready: incomingReady, navigation});
+  const {box, svg, width, scale, drag, timeAt, handlers, panning} = axis;
   const base = plotHeight(width);
   const height = plot === undefined ? base : Math.max(base, plot / scale);
   useLayoutEffect(() => onBase?.(base * scale), [base, scale, onBase]);
-  const top = 12;
-  const bottom = 28;
-  /** A cell is drawn at its middle (the last, partial one at "now"). */
-  const bx = (cell: number) => x(Math.min(now, cell + cellMs / 2));
-  const y = (value: number) => top + (1 - (value-(axis?.min??0)) / ((axis?.max??100)-(axis?.min??0))) * (height - top - bottom);
-  const {ticks, daily} = niceTicks(from, to, width < 560 ? 4 : 7);
-
-  const paths = useMemo(
-    () =>
-      lines.map(line => {
-        const runs: [number, number][][] = [];
-        let segment = -1;
-        let previousX = -1;
-        for (const [at, remaining, group] of line.points) {
-          if (at + cellMs < from) continue;
-          // The answer on screen may be of another period while the next loads: what lies past the end is not drawn.
-          if (at > now) break;
-          const px = bx(at);
-          const py = y(remaining);
-          if (group !== segment) {
-            runs.push([]);
-            segment = group;
-          } else if (px - previousX < 0.5) continue;
-          runs.at(-1)!.push([px, py]);
-          previousX = px;
+  const top = 12, bottom = 28;
+  const inputs = [incomingLines, incomingPlans, incomingForecasts, incomingMarkers, incomingStrip, width, height, cellMs, modelContext, navigation && navigationKey(navigation), desiredLive, valueAxis, stepped];
+  const requested = usePreparationBasis({...axis.basis, end: axis.active && !incomingStrip ? axis.basis.end : desiredNow}, inputs, axis.active, incomingReady);
+  const blockPaths = useRef(new WeakMap<PlotBlock, {geometry: string; line: string; last: [number, number] | null}>());
+  const prepared = usePrepared(function* () {
+    const basis = {from: requested.from, to: requested.to, end: requested.end};
+    const span = Math.max(60_000, basis.to - basis.from);
+    const x = (at: number) => left + (at - basis.from) / span * (width - left - right);
+    const drawFrom = basis.from;
+    const drawNow = basis.end;
+    const bx = (at: number) => x(Math.min(drawNow, at + cellMs / 2));
+    const y = (value: number) => top + (1 - (value-(valueAxis?.min??0)) / ((valueAxis?.max??100)-(valueAxis?.min??0))) * (height - top - bottom);
+    const geometry = `${basis.from}:${basis.to}:${drawNow}:${width}:${height}:${cellMs}:${valueAxis?.min??0}:${valueAxis?.max??100}:${stepped}`;
+    const paths: {line: string; last: [number, number] | null; parts: {key: string; line: string}[] | null; latest: string | undefined}[] = [];
+    for (const line of incomingLines) {
+      let latest: string | undefined;
+      let lastAt:number|undefined;
+      for (const [at, remaining] of line.points) {if (at > drawNow) break; latest = `${at}:${remaining}`; lastAt=at; yield;}
+      if(lastAt!==undefined&&valueAxis?.rawValue)latest=`${lastAt}:${valueAxis.rawValue(line.key,lastAt)}`;
+      if (incomingStrip && line.blocks) {
+        let last: [number, number] | null = null;
+        const parts: {key: string; line: string}[] = [];
+        for (const {block, join} of line.blocks) {
+          let cached = blockPaths.current.get(block);
+          if (!cached || cached.geometry !== geometry) {
+            let segment = -1, previousX = -Infinity;
+            const runs: [number, number][][] = [];
+            let end: [number, number] | null = null;
+            for (const [at, remaining, group] of block.points) {
+              yield;
+              if (at > drawNow) break;
+              const px = bx(at), py = y(remaining);
+              if (group === segment && px - previousX < .5) continue;
+              if (group !== segment) runs.push([]);
+              runs.at(-1)!.push([px, py]); segment = group; previousX = px; end = [px, py];
+            }
+            cached = {geometry, line: yield* plotPathPrepared(runs,stepped), last: end};
+            blockPaths.current.set(block, cached);
+          }
+          const bridge = join && cached.line && last ? `M${last[0].toFixed(1)},${last[1].toFixed(1)}L${cached.line.slice(1)}` : cached.line;
+          if (cached.last) last = cached.last;
+          parts.push({key: `${block.from}:${block.to}`, line: bridge}); yield;
         }
-        const fixed = (value: number) => value.toFixed(1);
-        return {
-          line: runs.map(run => run.map(([px, py], i) => stepped&&i?`H${fixed(px)}V${fixed(py)}`:`${i ? 'L' : 'M'}${fixed(px)},${fixed(py)}`).join('')).join(''),
-          last: runs.at(-1)?.at(-1) ?? null,
-        };
-      }),
-    [lines, from, to, now, width, height, cellMs,axis,stepped],
-  );
+        paths.push({line: '', last, parts, latest});
+      } else {
+        const runs: [number, number][][] = [];
+        let segment = -1, previousX = -1;
+        for (const [at, remaining, group] of line.points) {
+          yield;
+          if (at + cellMs < (incomingStrip?.from ?? drawFrom)) continue;
+          if (at > drawNow) break;
+          const px = bx(at), py = y(remaining);
+          if (group !== segment) {runs.push([]); segment = group;}
+          else if (px - previousX < .5) continue;
+          runs.at(-1)!.push([px, py]); previousX = px;
+        }
+        paths.push({line: yield* plotPathPrepared(runs,stepped), last: runs.at(-1)?.at(-1) ?? null, parts: null, latest});
+      }
+    }
+    const forecasts = desiredLive ? incomingForecasts : NO_FORECASTS;
+    const markers: Marker[] = [];
+    for (const marker of incomingMarkers) {if (desiredLive || marker.past) markers.push(marker); yield;}
+    const planPaths: string[] = [], forecastPaths: string[] = [];
+    const futureFrom = incomingStrip?.from ?? basis.from - span / 2;
+    const futureTo = incomingStrip ? incomingStrip.to + Math.max(0, desiredTo - desiredNow) : basis.to + span / 2;
+    for (const plan of incomingPlans) {
+      let path = '';
+      for (const raw of plan.runs) {
+        const run = yield* clipPrepared(raw, futureFrom, futureTo);
+        for (let i = 0; i < run.length; i++) {const [at, value] = run[i]; path += `${i ? 'L' : 'M'}${x(at).toFixed(1)},${y(value).toFixed(1)}`; yield;}
+      }
+      planPaths.push(path);
+    }
+    for (const forecast of forecasts) {
+      let path = '';
+      const points = yield* clipPrepared(forecast.points, futureFrom, futureTo);
+      for (let i = 0; i < points.length; i++) {const [at, value] = points[i]; path += `${i ? 'L' : 'M'}${x(at).toFixed(1)},${y(value).toFixed(1)}`; yield;}
+      forecastPaths.push(path);
+    }
+    return {basis, valueAxis, lines: incomingLines, plans: incomingPlans, forecasts, markers, strip: incomingStrip, from: basis.from, now: drawNow, to: basis.to, paths, planPaths, forecastPaths};
+  }, [...inputs, requested.from, requested.to, requested.end], `${modelContext}:${width}:${height}:${cellMs}`, incomingReady);
+  const model = prepared.value;
+  const shownAxis=model?.valueAxis??valueAxis;
+  const basis = model?.basis ?? axis.basis;
+  const lines = model?.lines ?? [];
+  const planRows = (model?.plans ?? []).map((plan, index) => ({plan, path: model!.planPaths[index]})).filter(row => currentClock < (row.plan.until ?? Infinity));
+  const forecastRows = (desiredLive ? model?.forecasts ?? [] : []).map((forecast, index) => ({forecast, path: model!.forecastPaths[index]})).filter(row => currentClock < (row.forecast.until ?? Infinity));
+  const plans = planRows.map(row => row.plan), forecasts = forecastRows.map(row => row.forecast);
+  const markers = (model?.markers ?? []).filter(marker => currentClock < (marker.until ?? Infinity));
+  const strip = model?.strip ?? null, from = desiredFrom, now = desiredNow, to = desiredTo;
+  const paths = model?.paths ?? [], planPaths = planRows.map(row => row.path), forecastPaths = forecastRows.map(row => row.path);
+  const span = Math.max(60_000, basis.to - basis.from);
+  const x = (at: number) => left + (at - basis.from) / span * (width - left - right);
+  const y = (value: number) => top + (1 - (value-(shownAxis?.min??0)) / ((shownAxis?.max??100)-(shownAxis?.min??0))) * (height - top - bottom);
+  const bx = (at: number) => axis.screenX(Math.min(now, at + cellMs / 2));
+  const hover = incomingReady && prepared.ready && axis.hover !== null && (!strip || axis.hover > now || covered(strip.coverage, axis.hover, axis.hover + cellMs)) ? axis.hover : null;
+  const tickFrom = strip?.from ?? from, tickTo = strip?.to ?? to;
+  const {ticks, daily} = niceTicks(tickFrom, tickTo, (width < 560 ? 4 : 7) * (tickTo - tickFrom) / span);
+  useLayoutEffect(() => {axis.commitDrawing(basis, incomingReady && prepared.ready);});
 
   const none = {left: false, plan: false, gap: false, forecast: false};
-  const {rows, columns} = hover === null ? {rows: [], columns: none} : readCell(lines, plans, hover, cellMs, now, to, forecasts);
+  const {rows, columns} = hover === null ? {rows: [], columns: none} : readCell(lines, plans, hover, cellMs, now, to, forecasts, strip?.coverage);
   const columnCount = Object.values(columns).filter(Boolean).length;
   // A cell ahead of now where no line reads anything says only what happens in it.
   const grid = rows.length > 0 && columnCount > 0;
@@ -335,25 +419,25 @@ export function Chart({
   // Past the right edge: an announcement, then where windows run out, the soonest first, each
   // said there (`EdgeLabel`), how soon by the page's clock as the table says it.
   const beyond = [
-    ...markers.filter(m => m.strong && !m.past && m.at > to).map(m => ({key: m.key, label: m.label, at: m.at, time: stamp(m.at), color: undefined, runsOut: false})),
+    ...markers.filter(m => desiredLive && m.strong && !m.past && m.at > desiredTo).map(m => ({key: m.key, label: m.label, at: m.at, time: stamp(m.at), color: undefined, runsOut: false})),
     // Spaces drawn as one: a name typed with two in a row reads, and measures, as SVG draws it.
-    ...runOutPast(forecasts, to)
+    ...runOutPast(forecasts, desiredTo)
       .sort((a, b) => a.at - b.at)
       .map(f => ({key: `forecast-${f.key}`, label: f.name.replace(/\s+/g, ' '), at: f.at, time: t('forecast.runsOutAt', {time: stamp(f.at)}), color: f.color, runsOut: true})),
   ];
   // With the announcements inside the chart, as many as the plot has rows for, from the first
   // row by one edge of the plot to the last by the other; the rest are said together.
-  const announced = markers.filter(m => m.strong && !m.past && m.at <= to);
+  const announced = markers.filter(m => desiredLive && m.strong && !m.past && m.at <= desiredTo);
   const {shown: past, more} = edgeFit(announced.length, beyond, Math.floor((height - top - bottom - 26) / LABEL_STEP) + 1);
   /** A label past the right edge pointed at or tapped: the tooltip tells its time instead of the cell's values, or theirs. */
   const [edge, setEdge] = useState<{key: string; tapped: boolean} | null>(null);
-  const edgeMarkers = !edge ? [] : edge.key === MORE ? more : past.filter(m => m.key === edge.key);
+  const edgeMarkers = panning || !edge ? [] : edge.key === MORE ? more : past.filter(m => m.key === edge.key);
   const edgeKey = edgeMarkers.length ? edge!.key : null;
   // A label taken away under the pointer (a step to a range, which has no future) says nothing
   // of it: what it told is forgotten, so the tooltip reads the cells again.
   useEffect(() => {
-    if (edge && !edgeKey) setEdge(null);
-  }, [edge, edgeKey]);
+    if (edge && (!edgeKey || panning)) setEdge(null);
+  }, [edge, edgeKey, panning]);
   useEffect(() => {
     if (!edge?.tapped) return;
     const hide = () => setEdge(null);
@@ -410,7 +494,7 @@ export function Chart({
     stackTop,
   );
   // A cell ahead of now is read at its middle; the one holding now, at now.
-  const hoverX = hover === null ? 0 : hover > now ? x(Math.min(to, hover + cellMs / 2)) : bx(hover);
+  const hoverX = hover === null ? 0 : hover > now ? axis.screenX(Math.min(to, hover + cellMs / 2)) : bx(hover);
   // On a narrow chart it spans the chart's width under the plot; a marker's time stands over its label and does not rise.
   const narrow = width < 560;
   const {tip, style: tipStyle} = useTip(svg, {width, at: hoverX, narrow, rises: !edgeKey, bottom: height * scale});
@@ -441,10 +525,18 @@ export function Chart({
     addEventListener('scroll', scrolled, {passive: true});
     return () => removeEventListener('scroll', scrolled);
   }, [edgeShown]);
-  const bandWidth = Math.max(1, x(Math.min(to, (hover ?? 0) + cellMs)) - x(hover ?? 0));
+  const bandWidth = Math.max(1, axis.screenX(Math.min(to, (hover ?? 0) + cellMs)) - axis.screenX(hover ?? 0));
 
   return (
-    <div className="chart" ref={box}>
+    <div className="chart" ref={box} {...handlers}>
+      {to > now && (
+        <PlotLayer width={width} height={height} scale={scale} left={left} right={right} under>
+          <g className="future">
+            <rect x={x(now)} width={x(to) - x(now)} y={top} height={height - top - bottom} className="future-zone" />
+            <line x1={x(now)} x2={x(now)} y1={top} y2={height - bottom} className="now-line" />
+          </g>
+        </PlotLayer>
+      )}
       <svg
         ref={svg}
         viewBox={`0 0 ${width} ${height}`}
@@ -453,97 +545,90 @@ export function Chart({
         style={{height: `${height * scale}px`}}
         preserveAspectRatio="none"
         role="img"
-        aria-label={axis?.label??t('chart.label')}
+        aria-label={shownAxis?.label??t('chart.label')}
         className={onSelect ? 'is-selectable' : undefined}
-        {...handlers}
       >
-        <defs>
-          <clipPath id={clip}>
-            <rect x={left} y={0} width={width - left - right} height={height} />
-          </clipPath>
-        </defs>
-        <g>
-          <g className="slides">
-            {to > now && (
-              <g className="future">
-                <rect x={x(now)} width={x(to) - x(now)} y={top} height={height - top - bottom} className="future-zone" />
-                <line x1={x(now)} x2={x(now)} y1={top} y2={height - bottom} className="now-line" />
-              </g>
-            )}
-          </g>
-        </g>
-        {!axis&&<><line x1={left} x2={width - right} y1={y(30)} y2={y(30)} className="threshold warn" /><line x1={left} x2={width - right} y1={y(10)} y2={y(10)} className="threshold crit" /></>}
-        {(axis?.ticks??[0, 25, 50, 75, 100]).map(value => (
+        <desc>{t('chart.panHint')}</desc>
+
+        {!shownAxis&&<><line x1={left} x2={width - right} y1={y(30)} y2={y(30)} className="threshold warn" />
+        <line x1={left} x2={width - right} y1={y(10)} y2={y(10)} className="threshold crit" /></>}
+        {(shownAxis?.ticks??[0, 25, 50, 75, 100]).map(value => (
           <g key={value}>
             <line x1={left} x2={width - right} y1={y(value)} y2={y(value)} className={value === 0 ? 'axis-line' : 'grid'} />
             <text x={left - 8} y={y(value) + 4} textAnchor="end" className="tick">
-              {axis?axis.formatTick(value):`${value}%`}
+              {shownAxis?shownAxis.formatTick(value):`${value}%`}
             </text>
           </g>
         ))}
-        <g>
-          <g className="slides">
-            {ticks.map(tick => (
-              <text key={tick} x={x(tick)} y={height - 8} textAnchor="middle" className="tick">
-                {daily ? shortDay(tick) : clock(tick)}
-              </text>
-            ))}
+      </svg>
+      <PlotLayer width={width} height={height} scale={scale} left={left} right={right} main>
+        {ticks.map(tick => (
+          <text key={tick} x={x(tick)} y={height - 8} textAnchor="middle" className="tick">
+            {daily ? shortDay(tick) : clock(tick)}
+          </text>
+        ))}
+        {plans.map((plan, i) => (
+          <path
+            key={plan.key}
+            className="plan-line"
+            stroke={plan.color}
+            d={planPaths[i]}
+          />
+        ))}
+        {forecasts.map((forecast, i) => (
+          <path
+            key={forecast.key}
+            className="forecast-line"
+            stroke={forecast.color}
+            strokeDasharray={forecast.dash || undefined}
+            d={forecastPaths[i]}
+          />
+        ))}
+        {markers.map(marker => {
+          if (!desiredLive && !marker.past || marker.at > (marker.past ? strip?.to ?? desiredTo : desiredTo)) return null;
+          const mx = x(marker.at);
+          if (marker.past) {
+            return (
+              <g key={marker.key} className="marker is-event">
+                <line x1={mx} x2={mx} y1={top} y2={height - bottom} stroke={marker.color} />
+                <path d={diamond(mx, top)} fill={marker.color} />
+                <title>{[`${marker.label} · ${cellLabel(marker.at, 0)}`, marker.detail].filter(Boolean).join('\n')}</title>
+              </g>
+            );
+          }
+          return (
+            <g key={marker.key} className={`marker ${marker.strong ? 'is-strong' : ''}`}>
+              <line x1={mx} x2={mx} y1={top} y2={height - bottom} stroke={marker.strong ? undefined : marker.color} />
+              {!marker.strong && <circle cx={mx} cy={y(100)} r={3} fill={marker.color} />}
+              <title>{`${marker.label} · ${cellLabel(marker.at, 0)}`}</title>
+            </g>
+          );
+        })}
+        {lines.map((line, i) => (
+          <g key={line.key} data-series={`${line.sourceId} ${line.windowId}`} data-last={paths[i]?.latest} stroke={line.color} strokeDasharray={line.dash || undefined}>
+            {paths[i].parts?.map(part => <path key={part.key} d={part.line} className="series" />) ?? <path d={paths[i].line} className="series" />}
           </g>
-        </g>
-
+        ))}
+        {/* Announcements are read over the lines, each on its own backing. */}
+        {announced.map(marker => {
+          const mx = x(marker.at);
+          const nearRight = mx > width - right - 150;
+          const lx = nearRight ? mx - 6 : mx + 6;
+          return (
+            <MarkerLabel key={marker.key} x={lx} y={stackRows.get(marker.key) ?? labelY(lx, nearRight)} end={nearRight} fonts={fonts}>
+              {marker.label}
+            </MarkerLabel>
+          );
+        })}
+        {hover === null && lines.map((line, i) => paths[i].last ? (
+          <g key={`${line.key}-end`} className="line-end">
+            <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={7} fill={line.color} opacity={0.18} />
+            <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={3} fill={line.color} />
+          </g>
+        ) : null)}
+      </PlotLayer>
+      <PlotOverlay width={width} height={height}>
         <g>
-          <g className="slides">
-            {plans.map(plan => (
-              <path
-                key={plan.key}
-                className="plan-line"
-                stroke={plan.color}
-                d={plan.runs.map(run => run.map(([at, value], i) => `${i ? 'L' : 'M'}${x(at).toFixed(1)},${y(value).toFixed(1)}`).join('')).join('')}
-              />
-            ))}
-            {forecasts.map(forecast => (
-              <path
-                key={forecast.key}
-                className="forecast-line"
-                stroke={forecast.color}
-                strokeDasharray={forecast.dash || undefined}
-                d={forecast.points.map(([at, value], i) => `${i ? 'L' : 'M'}${x(at).toFixed(1)},${y(value).toFixed(1)}`).join('')}
-              />
-            ))}
-            {markers.map(marker => {
-              if (marker.at > to) return null;
-              const mx = x(marker.at);
-              if (marker.past) {
-                return (
-                  <g key={marker.key} className="marker is-event">
-                    <line x1={mx} x2={mx} y1={top} y2={height - bottom} stroke={marker.color} />
-                    <path d={diamond(mx, top)} fill={marker.color} />
-                    <title>{[`${marker.label} · ${cellLabel(marker.at, 0)}`, marker.detail].filter(Boolean).join('\n')}</title>
-                  </g>
-                );
-              }
-              return (
-                <g key={marker.key} className={`marker ${marker.strong ? 'is-strong' : ''}`}>
-                  <line x1={mx} x2={mx} y1={top} y2={height - bottom} stroke={marker.strong ? undefined : marker.color} />
-                  {!marker.strong && <circle cx={mx} cy={y(100)} r={3} fill={marker.color} />}
-                  <title>{`${marker.label} · ${cellLabel(marker.at, 0)}`}</title>
-                </g>
-              );
-            })}
-            {lines.map((line, i) => (
-              <path key={line.key} d={paths[i].line} data-series={`${line.sourceId} ${line.windowId}`} data-last={(()=>{const last=line.points.filter(p=>p[0]<=now).at(-1);return last?[last[0],axis?.rawValue?.(line.key,last[0])??last[1]].join(':'):undefined;})()} className="series" stroke={line.color} strokeDasharray={line.dash || undefined} />
-            ))}
-            {/* Announcements are read over the lines, each on its own backing. */}
-            {announced.map(marker => {
-              const mx = x(marker.at);
-              const nearRight = mx > width - right - 150;
-              const lx = nearRight ? mx - 6 : mx + 6;
-              return (
-                <MarkerLabel key={marker.key} x={lx} y={stackRows.get(marker.key) ?? labelY(lx, nearRight)} end={nearRight} fonts={fonts}>
-                  {marker.label}
-                </MarkerLabel>
-              );
-            })}
             {/* Beyond the visible future: at the right edge, with the distance, one under another. */}
             {past.map(label => (
               <EdgeLabel
@@ -557,7 +642,7 @@ export function Chart({
                 y={stackRows.get(label.key)!}
                 room={width - left - right - 6}
                 fonts={fonts}
-                onEdge={setEdge}
+                onEdge={panning ? () => {} : setEdge}
               />
             ))}
             {more.length > 0 && (
@@ -566,35 +651,25 @@ export function Chart({
                 y={stackRows.get(MORE)!}
                 end
                 fonts={fonts}
-                onTip={(shown, tapped) => setEdge(shown ? {key: MORE, tapped} : null)}
+                onTip={(shown, tapped) => !panning && setEdge(shown ? {key: MORE, tapped} : null)}
               >
                 {t('chart.more', {count: more.length})}
               </MarkerLabel>
             )}
-            {hover === null &&
-              lines.map((line, i) =>
-                paths[i].last ? (
-                  <g key={`${line.key}-end`} className="line-end">
-                    <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={7} fill={line.color} opacity={0.18} />
-                    <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={3} fill={line.color} />
-                  </g>
-                ) : null,
-              )}
-          </g>
         </g>
         {drag && (
           <rect x={Math.min(drag.start, drag.end)} width={Math.abs(drag.end - drag.start)} y={top} height={height - top - bottom} className="selection" />
         )}
         {hover !== null && (
           <g className="crosshair">
-            <rect x={x(hover)} width={bandWidth} y={top} height={height - top - bottom} className="hover-band" />
+            <rect x={axis.screenX(hover)} width={bandWidth} y={top} height={height - top - bottom} className="hover-band" />
             <line x1={hoverX} x2={hoverX} y1={top} y2={height - bottom} />
             {rows.map(row => row.value !== null && <circle key={row.line.key} cx={hoverX} cy={y(row.value)} r={4} fill={row.line.color} />)}
           </g>
         )}
-      </svg>
+      </PlotOverlay>
 
-      {edgeKey ? (
+      {edgeKey && !panning ? (
         <Tooltip tip={tip} className="is-edge" style={edgePlace.below ? {right: 0, top: `${(edgeRow + 11) * scale - edgePlace.by}px`, maxHeight: edgePlace.cut ?? undefined} : {right: 0, bottom: `calc(100% - ${(edgeRow - 18) * scale}px)`}}>
           {edgeMarkers.map(marker => (
             <Fragment key={marker.key}>
@@ -615,7 +690,7 @@ export function Chart({
               <div className="tooltip-grid" style={{gridTemplateColumns: `14px minmax(0, 1fr) repeat(${columnCount}, auto)`}}>
                 <span />
                 <span />
-                {columns.left && <span className="tooltip-head">{axis?.label??t('chart.left')}</span>}
+                {columns.left && <span className="tooltip-head">{shownAxis?.label??t('chart.left')}</span>}
                 {columns.plan && <span className="tooltip-head">{t('chart.plan')}</span>}
                 {columns.gap && <span className="tooltip-head">{t('chart.gap')}</span>}
                 {columns.forecast && <span className="tooltip-head">{t('chart.forecast')}</span>}
@@ -625,7 +700,7 @@ export function Chart({
                       <line x1="0" x2="14" y1="2" y2="2" stroke={row.line.color} strokeWidth="2" strokeDasharray={row.line.dash || undefined} />
                     </svg>
                     <span className="tooltip-name">{row.line.name}</span>
-                    {columns.left && <strong>{row.left !== null && (axis?axis.formatValue(row.line.key,row.left,hover!):`${num(row.left)}%`)}</strong>}
+                    {columns.left && <strong>{row.left !== null && (shownAxis?shownAxis.formatValue(row.line.key,row.left,hover!):`${num(row.left)}%`)}</strong>}
                     {columns.plan && <span className="tooltip-plan">{row.plan !== null && `${num(row.plan)}%`}</span>}
                     {columns.gap && <span className={`tooltip-gap ${row.gap !== null ? gapTone(row.gap) : ''}`}>{row.gap !== null && gapText(row.gap)}</span>}
                     {columns.forecast && <span className="tooltip-forecast">{row.forecast !== null && `${num(row.forecast)}%`}</span>}
@@ -633,7 +708,7 @@ export function Chart({
                 ))}
               </div>
             )}
-            {axis?.detail&&rows.map(row=><div className="tooltip-mark" key={'money:'+row.line.key}>{axis.detail!(row.line.key,hover!)}</div>)}
+            {shownAxis?.detail&&rows.map(row=><div className="tooltip-mark" key={'money:'+row.line.key}>{shownAxis.detail!(row.line.key,hover!)}</div>)}
             {grid && markerReadout.length > 0 && <div className="tooltip-sep" />}
             {markerReadout.map(marker => (
               <div className={`tooltip-mark ${marker.strong ? 'is-strong' : ''}`} key={marker.key}>
@@ -655,4 +730,4 @@ export function Chart({
       {!lines.length && empty && <div className="chart-empty">{empty}</div>}
     </div>
   );
-}
+});

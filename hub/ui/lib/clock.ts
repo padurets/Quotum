@@ -134,13 +134,18 @@ export const wakeDue = () => clock.wakeDue();
 /**
  * The hub's time as of this render, for a part that shows time; the part renders again at
  * the moment `changesAt` gives for that time (null: time no longer changes what it shows).
- * Rendered by its data at any other moment, it shows it with the time then.
+ * Rendered by its data at any other moment, it shows it with the time then. A
+ * preparation context keeps that timestamp through its own completion renders.
  */
-export function useClock(changesAt: (now: number) => number | null): number {
+export function useClock(changesAt: (now: number) => number | null, context?: readonly unknown[]): number {
   const [watch] = useState(() => clock.watch());
   const [subscribe] = useState(() => (listener: () => void) => clock.subscribe(watch, listener));
-  useSyncExternalStore(subscribe, () => watch.wakes);
-  const now = hubNow();
+  const wakes = useSyncExternalStore(subscribe, () => watch.wakes);
+  // A preparation completion is a render, not new time or data. Keep its intent
+  // clock until this watch wakes or its captured data/UI context changes.
+  const snapshot = useRef<{wakes: number; context: readonly unknown[]; now: number} | null>(null);
+  if (context && (!snapshot.current || snapshot.current.wakes !== wakes || snapshot.current.context.length !== context.length || context.some((value, i) => !Object.is(value, snapshot.current!.context[i])))) snapshot.current = {wakes, context: [...context], now: hubNow()};
+  const now = context ? snapshot.current!.now : hubNow();
   const latest = useRef(changesAt);
   latest.current = changesAt;
   useLayoutEffect(() => clock.due(watch, latest.current(now), now));
