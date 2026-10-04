@@ -616,7 +616,7 @@ export const en = {
   'local.devicesEmpty': 'This machine appears after its first measurement.',
   'local.onboardingTitle': 'Measuring this machine',
   'local.onboardingMeasuring': 'The first numbers appear within a minute. How the clients are doing is in the settings.',
-  'local.onboardingIdle': 'Every provider is off: turn on the ones you use in the settings.',
+  'local.onboardingIdle': 'Client measurements are off: turn on the clients you use in the settings.',
   'local.onboardingWaiting': 'Nothing is measured yet.',
   'local.openSettings': 'Settings',
 
@@ -639,7 +639,7 @@ export const en = {
   'measure.account': 'Account name',
   'measure.accountHint': 'Optional: tells two Antigravity subscriptions apart.',
   'measure.sessions': 'Show running agents',
-  'measure.idle': 'Every provider is off — nothing is measured.',
+  'measure.idle': 'Client measurements are off.',
   'measure.saveFailed': 'Could not save',
 
   'appSection.title': 'App',

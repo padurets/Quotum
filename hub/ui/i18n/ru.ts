@@ -611,7 +611,7 @@ export const ru = {
   'local.devicesEmpty': 'Эта машина появится после первого замера.',
   'local.onboardingTitle': 'Меряем эту машину',
   'local.onboardingMeasuring': 'Первые цифры появятся в течение минуты. Что с клиентами — в настройках.',
-  'local.onboardingIdle': 'Все провайдеры выключены: включите нужные в настройках.',
+  'local.onboardingIdle': 'Замеры клиентов выключены: включите нужные клиенты в настройках.',
   'local.onboardingWaiting': 'Пока ничего не измерено.',
   'local.openSettings': 'Настройки',
 
@@ -634,7 +634,7 @@ export const ru = {
   'measure.account': 'Имя аккаунта',
   'measure.accountHint': 'Необязательно: чтобы различать две подписки Antigravity.',
   'measure.sessions': 'Показывать запущенных агентов',
-  'measure.idle': 'Все провайдеры выключены — замеров нет.',
+  'measure.idle': 'Замеры клиентов выключены.',
   'measure.saveFailed': 'Не удалось сохранить',
 
   'appSection.title': 'Приложение',
