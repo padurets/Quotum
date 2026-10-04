@@ -146,6 +146,12 @@ async function main() {
     heard = await hear(address.base, ana.cookie, board);
 
     browser = options.cdp ? attachedChrome(options.cdp) : await launchChrome(chrome!, !process.env.CI);
+    if(process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE==='1'){
+      say('diagnostic native replay only; this does not run the canonical benchmark');
+      await diagnoseReversal(browser,address.base,ana.cookie,24);
+      say('diagnostic replay completed; canonical benchmark was not run');
+      await finish(0);return;
+    }
     tab = await openTab(browser);
     const {cdp} = tab;
     const requests = new Requests(cdp);
