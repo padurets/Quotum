@@ -9,7 +9,8 @@ import path from 'node:path';
  */
 export class Cdp {
   private next = 1;
-  private readonly waiting = new Map<number, {resolve: (value: never) => void; reject: (error: Error) => void; method: string}>();
+  private context = '';
+  private readonly waiting = new Map<number, {resolve: (value: never) => void; reject: (error: Error) => void; method: string; timer: ReturnType<typeof setTimeout>}>();
   private readonly listeners = new Map<string, ((params: never) => void)[]>();
 
   private constructor(private readonly socket: WebSocket) {
@@ -18,33 +19,42 @@ export class Cdp {
       if (message.id !== undefined) {
         const call = this.waiting.get(message.id);
         this.waiting.delete(message.id);
+        if (call) clearTimeout(call.timer);
         if (message.error) call?.reject(new Error(`${call.method}: ${message.error.message}`));
         else call?.resolve(message.result as never);
       } else if (message.method) {
         for (const listener of this.listeners.get(message.method) ?? []) listener(message.params as never);
       }
     });
-    socket.addEventListener('close', () => {
-      for (const call of this.waiting.values()) call.reject(new Error(`${call.method}: the browser closed the connection`));
-      this.waiting.clear();
-    });
+    socket.addEventListener('close', () => this.rejectWaiting());
   }
 
   static connect(url: string): Promise<Cdp> {
     return new Promise((resolve, reject) => {
       const socket = new WebSocket(url);
-      socket.addEventListener('open', () => resolve(new Cdp(socket)), {once: true});
-      socket.addEventListener('error', () => reject(new Error(`cannot reach the browser at ${url}`)), {once: true});
+      const timer = setTimeout(() => {socket.close(); reject(new Error('the browser did not open its DevTools connection in 30 s'));}, 30_000);
+      socket.addEventListener('open', () => {clearTimeout(timer); resolve(new Cdp(socket));}, {once: true});
+      socket.addEventListener('error', () => {clearTimeout(timer); reject(new Error(`cannot reach the browser at ${url}`));}, {once: true});
     });
   }
+
+  /** The current scenario boundary, without request parameters such as cookies. */
+  at(context: string) {this.context = context;}
 
   send<T = unknown>(method: string, params: object = {}): Promise<T> {
     // A browser gone meanwhile (it crashed, or was closed) answers nothing: said at once, not waited for.
     if (this.socket.readyState !== WebSocket.OPEN) return Promise.reject(new Error(`${method}: the browser closed the connection`));
     const id = this.next++;
     return new Promise<T>((resolve, reject) => {
-      this.waiting.set(id, {resolve: resolve as (value: never) => void, reject, method});
-      this.socket.send(JSON.stringify({id, method, params}));
+      const context = this.context;
+      // A page promise can stop advancing while its DevTools socket stays open.
+      const timer = setTimeout(() => {
+        this.waiting.delete(id);
+        reject(new Error(`${context ? `${context}: ` : ''}${method}: no browser response in 30 s`));
+      }, 30_000);
+      this.waiting.set(id, {resolve: resolve as (value: never) => void, reject, method, timer});
+      try {this.socket.send(JSON.stringify({id, method, params}));}
+      catch (error) {clearTimeout(timer); this.waiting.delete(id); reject(error);}
     });
   }
 
@@ -64,7 +74,13 @@ export class Cdp {
   }
 
   close() {
+    this.rejectWaiting();
     this.socket.close();
+  }
+
+  private rejectWaiting() {
+    for (const call of this.waiting.values()) {clearTimeout(call.timer); call.reject(new Error(`${call.method}: the browser closed the connection`));}
+    this.waiting.clear();
   }
 }
 
@@ -148,7 +164,7 @@ export const attachedChrome = (endpoint: string): Browser => ({endpoint: endpoin
 
 /** A new tab of the browser, and its connection. */
 export async function openTab(browser: Browser): Promise<{cdp: Cdp; close(): Promise<void>}> {
-  const response = await fetch(`${browser.endpoint}/json/new?about:blank`, {method: 'PUT'});
+  const response = await fetch(`${browser.endpoint}/json/new?about:blank`, {method: 'PUT', signal: AbortSignal.timeout(10_000)});
   if (!response.ok) throw new Error(`the browser at ${browser.endpoint} opened no tab: HTTP ${response.status}`);
   const tab = (await response.json()) as {id: string; webSocketDebuggerUrl: string};
   const cdp = await Cdp.connect(tab.webSocketDebuggerUrl);
@@ -156,7 +172,7 @@ export async function openTab(browser: Browser): Promise<{cdp: Cdp; close(): Pro
     cdp,
     async close() {
       cdp.close();
-      await fetch(`${browser.endpoint}/json/close/${tab.id}`).catch(() => undefined);
+      await fetch(`${browser.endpoint}/json/close/${tab.id}`, {signal: AbortSignal.timeout(5_000)}).catch(() => undefined);
     },
   };
 }

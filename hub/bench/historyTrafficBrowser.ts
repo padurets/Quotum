@@ -80,7 +80,8 @@ type TrafficProxy = {url: string; transfers: Transfer[]; phase(value: string, la
 
 async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string, name: string, length: number, future: number) {
   const tab = await openTab(browser), cdp = tab.cdp, bodies = new HistoryBodies(cdp);
-  const close = async () => {await cdp.evaluate('(()=>{const p=window.__historyTraffic;if(p){p.running=false;cancelAnimationFrame(p.raf);history.pushState=p.originalPush;}})()').catch(() => {}); await tab.close();};
+  cdp.at(`${name}/seed`);
+  const close = async () => {cdp.at(`${name}/cleanup`); await cdp.evaluate('(()=>{const p=window.__historyTraffic;if(p){p.running=false;cancelAnimationFrame(p.raf);history.pushState=p.originalPush;}})()').catch(() => {}); await tab.close();};
   try {
     const seedPhase = `${name}/seed`; bodies.phase = seedPhase; proxy.phase(seedPhase);
     await cdp.send('Network.enable'); await cdp.send('Page.enable'); await cdp.send('Performance.enable');
@@ -175,39 +176,62 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
   const reports = [];
   for (const length of [DAY, 30 * DAY]) for (const mode of ['before-headers', 'after-delivery', 'reversal'] as const) {
     const name = `browser/${length / DAY}d/${mode}`;
+    console.error(`bench: ${name}: opening seed page`);
     const {cdp, bodies, settled, geometry, seed, cell, close} = await historyPage(browser, proxy, cookie, name, length, DAY);
+    console.error(`bench: ${name}: seed page ready`);
     const phase = `${name}/gesture`, reads = () => bodies.reads.filter(r => r.phase === phase);
+    let stage = 'start';
+    const step = async <T>(value: string, run: () => Promise<T>) => {
+      stage = value; cdp.at(`${name}/${stage}`);
+      console.error(`bench: ${name}: ${stage}`);
+      return run();
+    };
     const until = async (predicate: () => boolean | Promise<boolean>) => {const end = Date.now() + 10_000; while (!await predicate()) {if (bodies.errors.length) throw bodies.errors[0]; if (Date.now() > end) throw new Error(`${name}: lifecycle boundary not reached`); await cdp.evaluate('new Promise(resolve=>setTimeout(resolve,10))');}};
     const key = (type: string, name: string, code: number, modifiers: number) => cdp.send('Input.dispatchKeyEvent', {type, key: name, code: name === 'Shift' ? 'ShiftLeft' : name, windowsVirtualKeyCode: code, modifiers});
     const wheel = (pixels: number) => cdp.send('Input.dispatchMouseEvent', {type: 'mouseWheel', x: geometry.x, y: geometry.y, deltaX: pixels, deltaY: 0, modifiers: 8});
     try {
       bodies.phase = phase; proxy.phase(phase, mode === 'after-delivery' ? 0 : 400);
-      await key('keyDown', 'Shift', 16, 8); await wheel(-geometry.width * .1);
-      await until(() => reads()[0]?.attemptId !== undefined && proxy.transfers.some(t => t.id === reads()[0].attemptId));
-      if (mode === 'after-delivery') await until(() => reads()[0]?.count?.complete === true);
+      await step('shift down', () => key('keyDown', 'Shift', 16, 8));
+      await step('first wheel', () => wheel(-geometry.width * .1));
+      await step('first request', () => until(() => reads()[0]?.attemptId !== undefined && proxy.transfers.some(t => t.id === reads()[0].attemptId)));
+      if (mode === 'after-delivery') await step('first delivery', () => until(() => reads()[0]?.count?.complete === true));
       if (mode === 'reversal') {
-        await wheel(geometry.width * .1);
-        await until(() => reads()[0]?.canceled === true);
-        await cdp.evaluate('new Promise(requestAnimationFrame)');
-        await wheel(-geometry.width * .1);
-        await until(() => reads().length >= 2 && reads().slice(1).some(r => r.count?.complete));
-        await key('keyUp', 'Shift', 16, 0); await settled();
+        await step('reverse wheel', () => wheel(geometry.width * .1));
+        await step('first cancellation', () => until(() => reads()[0]?.canceled === true));
+        await step('reversal frame', () => cdp.evaluate('new Promise(requestAnimationFrame)'));
+        await step('repeat wheel', () => wheel(-geometry.width * .1));
+        await step('repeat delivery', () => until(() => reads().length >= 2 && reads().slice(1).some(r => r.count?.complete)));
+        await step('shift up', () => key('keyUp', 'Shift', 16, 0));
+        await step('drawings settled', settled);
         assert.equal(reads()[0].from, reads()[1].from); assert.equal(reads()[0].to, reads()[1].to, 'a repeated range needs a new attempt identity');
       } else {
-        await key('keyDown', 'Escape', 27, 8); await key('keyUp', 'Escape', 27, 8); await key('keyUp', 'Shift', 16, 0); await settled();
+        await step('escape down', () => key('keyDown', 'Escape', 27, 8));
+        await step('escape up', () => key('keyUp', 'Escape', 27, 8));
+        await step('shift up', () => key('keyUp', 'Shift', 16, 0));
+        await step('drawings settled', settled);
       }
-      await proxy.settled(phase);
+      await step('proxy settled', () => proxy.settled(phase));
       const attempts = reads(); assert.ok(attempts.every(r => r.count?.id));
       const totals = bodyTotals(attempts.map(r => ({count: r.count!, transfer: transferFor(r.count!, proxy.transfers)})));
       for (const read of attempts) if (read.answer) stableHistory(read.answer, seed, cell);
-      const state = await cdp.evaluate<{tokens: string[]; poses: {end: number; origin: number}[]; pushes: number; selected: boolean; attempts: Record<string, {aborted: boolean}>}>('({tokens:__historyTraffic.tokens,poses:__historyTraffic.poses,pushes:__historyTraffic.pushes,selected:new URLSearchParams(location.search).has("from"),attempts:__quotumHistoryAttempts})');
+      const state = await step('read final state', () => cdp.evaluate<{tokens: string[]; poses: {end: number; origin: number}[]; pushes: number; selected: boolean; attempts: Record<string, {aborted: boolean}>}>('({tokens:__historyTraffic.tokens,poses:__historyTraffic.poses,pushes:__historyTraffic.pushes,selected:new URLSearchParams(location.search).has("from"),attempts:__quotumHistoryAttempts})'));
       assert.equal(state.tokens.length, 1); assert.ok(state.poses.some(p => p.end < p.origin));
       assert.equal(state.pushes, mode === 'reversal' ? 1 : 0); assert.equal(state.selected, mode === 'reversal');
       const aborted = attempts.filter(r => r.canceled || state.attempts[r.count!.id!]?.aborted).length;
       assert.ok(mode === 'after-delivery' || aborted > 0, 'cancel-before-delivery must exercise abort');
       const report = {name, attempted: attempts.length, completed: attempts.filter(r => r.count?.complete).length, failed: attempts.filter(r => !r.count?.complete && !r.canceled && !state.attempts[r.count!.id!]?.aborted).length, aborted, transportAbortedDelivered: attempts.filter(r => r.count?.complete && state.attempts[r.count!.id!]?.aborted).length, stagingDisposition: 'not-observed', ...totals, finalComplete: true, movement: {tokens: state.tokens.length, poses: state.poses.length, pushes: state.pushes}, requests: attempts.map(r => ({from: r.from, to: r.to, id: r.count!.id, canceled: r.canceled}))};
       reports.push(report); console.error(`bench: ${name}: ${report.attempted} attempts, ${aborted} aborted, ${totals.byteVerdict} body proof`);
-    } finally {await key('keyUp', 'Shift', 16, 0).catch(() => {}); await close();}
+    } catch (error) {
+      console.error(`bench: ${name}: failed at ${stage}; HTTP ${JSON.stringify({active: bodies.activeCount, pending: bodies.pending.size, reads: reads().map(r => ({from: r.from, to: r.to, canceled: r.canceled, complete: r.count?.complete}))})}`);
+      cdp.at(`${name}/failure state`);
+      const state = await cdp.evaluate('({visibility:document.visibilityState,ready:document.readyState,charts:[...document.querySelectorAll(".chart>svg")].map(svg=>({...svg.dataset})),selected:new URLSearchParams(location.search).has("from")})').catch(cause => String(cause));
+      console.error(`bench: ${name}: failure state ${JSON.stringify(state)}`);
+      throw error;
+    } finally {
+      cdp.at(`${name}/release shift`);
+      await key('keyUp', 'Shift', 16, 0).catch(() => {}); await close();
+      console.error(`bench: ${name}: page closed`);
+    }
   }
   return reports;
 }

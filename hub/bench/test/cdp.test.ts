@@ -33,6 +33,47 @@ test('a browser gone meanwhile answers nothing: a command is refused at once, no
   await assert.rejects(Promise.race([cdp.send('Performance.getMetrics'), waited]), /Performance.getMetrics: the browser closed the connection/);
 });
 
+/** Keeps the socket open even when a renderer promise never answers. */
+class Socket extends EventTarget {
+  readyState: number = WebSocket.OPEN;
+  readonly commands: {id: number; method: string}[] = [];
+  send(value: string) {this.commands.push(JSON.parse(value));}
+  answer(id: number, result: unknown) {this.dispatchEvent(new MessageEvent('message', {data: JSON.stringify({id, result})}));}
+  close() {this.readyState = WebSocket.CLOSED;}
+}
+const connection = (socket: Socket) => new (Cdp as unknown as new (socket: unknown) => Cdp)(socket);
+
+test('a silent open browser has a Node deadline even when the page RAF never advances', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const socket = new Socket(), cdp = connection(socket);
+  cdp.at('browser/1d/reversal/reversal frame');
+  const failed = assert.rejects(cdp.evaluate('new Promise(requestAnimationFrame)'), /browser\/1d\/reversal\/reversal frame: Runtime.evaluate: no browser response in 30 s/);
+  t.mock.timers.tick(30_000);
+  await failed; cdp.close();
+});
+
+test('completed and late CDP replies do not retain deadlines or settle another command', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const socket = new Socket(), cdp = connection(socket);
+  const first = cdp.send('Performance.getMetrics');
+  socket.answer(1, {metrics: []});
+  assert.deepEqual(await first, {metrics: []});
+  const failed = assert.rejects(cdp.send('Network.getResponseBody'), /Network.getResponseBody: no browser response/);
+  t.mock.timers.tick(30_000); await failed;
+  const next = cdp.send('Performance.getMetrics');
+  socket.answer(2, {body: 'late'});
+  socket.answer(3, {metrics: ['current']});
+  assert.deepEqual(await next, {metrics: ['current']});
+  t.mock.timers.tick(30_000); cdp.close();
+});
+
+test('closing CDP rejects pending commands even without a socket close event', async () => {
+  const cdp = connection(new Socket());
+  const first = assert.rejects(cdp.send('Input.dispatchKeyEvent'), /the browser closed the connection/);
+  const second = assert.rejects(cdp.evaluate('new Promise(requestAnimationFrame)'), /the browser closed the connection/);
+  cdp.close(); await Promise.all([first, second]);
+});
+
 test('history bytes are counted by path after reads finish, separately from other traffic', () => {
   const cdp = browser();
   const requests = new Requests(cdp as unknown as Cdp);
