@@ -53,6 +53,7 @@ export function useTimeAxis({
   right,
   onSelect,
   ready = true,
+  rawPointer = false,
   navigation = axisNavigation(null, timeRange(), prefs()),
 }: {
   from: number;
@@ -64,6 +65,7 @@ export function useTimeAxis({
   /** A time range dragged across the chart. */
   onSelect?: (range: TimeRange) => void;
   ready?: boolean;
+  rawPointer?:boolean;
   navigation?: AxisNavigation;
 }) {
   const box = useRef<HTMLDivElement>(null);
@@ -290,9 +292,9 @@ export function useTimeAxis({
   // After a step the pointer stands over another time: the chart reads that.
   useEffect(() => {
     const px = pointer.current;
-    if (!shifting && !panning && !folding && px !== null && px >= left && px <= width - right) {const raw=timeAt(px);setRawHover(raw);setHover(Math.floor(raw / cellMs) * cellMs);}
+    if (!shifting && !panning && !folding && px !== null && px >= left && px <= width - right) {const raw=timeAt(px);if(rawPointer)setRawHover(raw);setHover(Math.floor(raw / cellMs) * cellMs);}
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [from, to, cellMs, shifting, panning, folding]);
+  }, [from, to, cellMs, shifting, panning, folding, rawPointer]);
 
   const toChart = (event: PointerEvent<HTMLDivElement>) => {
     const rect = svg.current!.getBoundingClientRect();
@@ -314,7 +316,7 @@ export function useTimeAxis({
     if (held && Math.abs(px - held.px) > 8) cancelHold();
     if (drag) setDrag({...drag, end: Math.min(width - right, Math.max(left, px))});
     if (px < left || px > width - right) return setHover(null);
-    {const raw=timeAt(px);setRawHover(raw);setHover(Math.floor(raw / cellMs) * cellMs);}
+    {const raw=timeAt(px);if(rawPointer)setRawHover(raw);setHover(Math.floor(raw / cellMs) * cellMs);}
   };
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     const px = toChart(event);

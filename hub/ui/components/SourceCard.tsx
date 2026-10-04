@@ -474,7 +474,7 @@ function CardTray({source}: {source: Card}) {
   const sessions = useSessions(source.id);
   const resets = useResetsFor(source.provider);
   const access = useSourceAccess(source.id);
-  return <Tray resets={resets} news={<><BalanceMark source={source}/>{access&&<AccessMark id={source.id}/>}</>} current={!!source.resets?.available&&<FreeResets resets={source.resets}/>} sessions={sessions} />;
+  return <Tray resets={resets} news={source.balanceStatus||access?<><BalanceMark source={source}/>{access&&<AccessMark id={source.id}/>}</>:null} current={!!source.resets?.available&&<FreeResets resets={source.resets}/>} sessions={sessions} />;
 }
 
 /**

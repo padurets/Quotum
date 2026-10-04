@@ -298,7 +298,7 @@ export const Chart = memo(function Chart({
 }) {
   const left = valueAxis?76:40;
   const right = 12;
-  const axis = useTimeAxis({from: desiredFrom, to: desiredTo, end: desiredNow, cellMs, left, right, onSelect, ready: incomingReady, navigation});
+  const axis = useTimeAxis({from: desiredFrom, to: desiredTo, end: desiredNow, cellMs, left, right, onSelect, ready: incomingReady, navigation,rawPointer:incomingLines.some(line=>line.pointMode==='observation')});
   const {box, svg, width, scale, drag, timeAt, handlers, panning} = axis;
   const base = plotHeight(width);
   const height = plot === undefined ? base : Math.max(base, plot / scale);
