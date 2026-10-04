@@ -506,9 +506,12 @@ halfway values away from zero. They use signed 64-bit SQLite integers; totals us
 integer arithmetic and never combine units. A balance has no 100%.
 
 OpenRouter stores credits and lifetime usage counters; its balance is derived from
-the pair. A credit increase is a top-up, and a usage increase is spending. Initial
-counters are baselines. Counter corrections are not spending. Account calendar periods
-are UTC, with Monday starting the week. `spending` gives day/week/month summaries with
+the pair. A credit increase is a top-up, and a usage increase is spending.
+Key observations use the arrival time of their inventory page; account counters
+keep the time of their paired response. UTC cap resets and period totals use the
+key's own observation time, which can be later than the account observation.
+Initial counters are baselines. Counter corrections are not spending. Account calendar
+periods are UTC, with Monday starting the week. `spending` gives day/week/month summaries with
 `from`, `to` (the last account observation, or the current period start before its first
 observation), `amount` or null, `complete`, `knownFrom`, `uncertain` and `unlocated`.
 Completeness ends at that observation. Calendar spending remains available as data for

@@ -546,6 +546,9 @@ them), kept for 90 days.
 Hub-measured sources keep exact unit-valued meters separately from percentage
 windows. OpenRouter stores credits and lifetime usage; balance is their difference,
 spending is positive usage movement and a top-up is positive credits movement.
+The account pair keeps the time its response arrived. Each key page has its own
+observation time for counters, period totals and cap resets, even when a traversal
+crosses a UTC boundary. One atomic store write preserves those independent times.
 Readings use signed integer millionths, with sparse value/semantic changes and
 continuous observation spans. Unchanged heartbeats extend freshness without another
 reading. Retention keeps one predecessor to distinguish a late increase from a reset.

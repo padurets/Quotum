@@ -65,7 +65,7 @@ export function openRouter(transport=new ConnectorTransport({host:'openrouter.ai
         const found=await identity(secret,controller.signal);
         if(found.account!==expected.account)throw new SecretError('credential_account_mismatch');
         const measurement=found.measurement!;
-        const at=measurement.observedAt,workspaces:string[]=[],seenWorkspace=new Set<string>(),hashes=new Map<string,string>(),seenKeys=new Set<string>();
+        const workspaces:string[]=[],seenWorkspace=new Set<string>(),hashes=new Map<string,string>(),seenKeys=new Set<string>();
         let complete=true,error:string|null=null,calls=2,keysCount=0,retryAfterMs:number|undefined,halted=false;
         const failed=(failure:unknown)=>{
           complete=false;error=failure instanceof SecretError?failure.code:'connector_failed';
@@ -100,6 +100,7 @@ export function openRouter(transport=new ConnectorTransport({host:'openrouter.ai
             let offset=0;
             while(true) {
               const page=await request('keys',{offset:String(offset),include_disabled:'true',...(workspace?{workspace_id:workspace}:{})});
+              const keyAt=now();
               if(!object(page)||!Array.isArray(page.data)||page.data.length>100)throw new SecretError('connector_invalid_response');
               let progress=0;
               for(const raw of page.data) {
@@ -114,11 +115,11 @@ export function openRouter(transport=new ConnectorTransport({host:'openrouter.ai
                   }
                   hashes.set(id,raw.hash);
                   const name=safeName(raw.name,secret),expiresAt=expiry(raw.expires_at);
-                  const key:KeyPart={id,name,disabled:raw.disabled,expiresAt,includeByok:raw.include_byok_in_limit,at,staleAfterMs:204_000,presence:'observed',missCount:0,periods:{day:null,week:null,month:null}};
+                  const key:KeyPart={id,name,disabled:raw.disabled,expiresAt,includeByok:raw.include_byok_in_limit,at:keyAt,staleAfterMs:204_000,presence:'observed',missCount:0,periods:{day:null,week:null,month:null}};
                   for(const [period,field] of [['day','usage_daily'],['week','usage_weekly'],['month','usage_monthly']] as const) {
                     try{key.periods[period]=money(raw[field]);}catch{complete=false;error='connector_inventory_partial';}
                   }
-                  const usage={...base('key:'+id+':usage',money(raw.usage),at),label:name};
+                  const usage={...base('key:'+id+':usage',money(raw.usage),keyAt),label:name};
                   measurement.keys.push(key);measurement.meters.push(usage);
                   if(raw.limit===null)(measurement.uncapped??=[]).push(id);
                   if(raw.limit!==null) {
@@ -127,10 +128,10 @@ export function openRouter(transport=new ConnectorTransport({host:'openrouter.ai
                       if(typeof raw.limit_remaining!=='string'||!/^-(?:[1-9][0-9]*)$|^(?:0|[1-9][0-9]*)$/.test(raw.limit_remaining)||BigInt(raw.limit_remaining)>BigInt(limit))throw new SecretError('connector_invalid_response');
                       const reset=raw.limit_reset;
                       if(reset!==null&&!['daily','weekly','monthly'].includes(reset as string))throw new SecretError('connector_invalid_response');
-                      const p=utcPeriods(at),date=new Date(at);
+                      const p=utcPeriods(keyAt),date=new Date(keyAt);
                       const resetAt=reset==='daily'?p.day+86_400_000:reset==='weekly'?p.week+7*86_400_000:reset==='monthly'?Date.UTC(date.getUTCFullYear(),date.getUTCMonth()+1,1):null;
                       const beginning=reset==='daily'?p.day:reset==='weekly'?p.week:p.month;
-                      const cap:Meter={...base('key:'+id+':cap',(BigInt(limit)-BigInt(raw.limit_remaining)).toString(),at),kind:'cap',limit,resetAt,minutes:resetAt===null?null:(resetAt-beginning)/60_000,scope:reset===null?'lifetime':String(reset),label:name};
+                      const cap:Meter={...base('key:'+id+':cap',(BigInt(limit)-BigInt(raw.limit_remaining)).toString(),keyAt),kind:'cap',limit,resetAt,minutes:resetAt===null?null:(resetAt-beginning)/60_000,scope:reset===null?'lifetime':String(reset),label:name};
                       validateMeter(cap);measurement.meters.push(cap);
                     }catch{complete=false;error='connector_inventory_partial';}
                   }

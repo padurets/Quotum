@@ -15,10 +15,12 @@ export class MeterStore {
   record(source: string, previous: SourceState, measurement: MeterMeasurement): {state: SourceState; since: number} {
     const current = new Map((previous.meters ?? []).map(m => [m.id, {...m, stale: true}]));
     const ids = new Set<string>();
+    const keyTimes = new Map(measurement.keys.map(key => [key.id, key.at]));
     let since = measurement.observedAt;
     for (const meter of measurement.meters) {
       validateMeter(meter);
-      if (ids.has(meter.id) || meter.at !== measurement.observedAt) throw new Error('invalid_meter');
+      const key = keyMeter(meter.id);
+      if (ids.has(meter.id) || meter.at !== (key === null ? measurement.observedAt : keyTimes.get(key) ?? measurement.observedAt)) throw new Error('invalid_meter');
       ids.add(meter.id);
       const old = current.get(meter.id);
       if (old && old.at >= meter.at) continue;
@@ -36,7 +38,7 @@ export class MeterStore {
     const keys = new Map((previous.keys ?? []).map(k => [k.id, {...k}]));
     const observed = new Set<string>();
     for (const key of measurement.keys) {
-      if (!/^[0-9a-f]{12}$/.test(key.id) || observed.has(key.id)) throw new Error('invalid_key_part');
+      if (!/^[0-9a-f]{12}$/.test(key.id) || observed.has(key.id) || !Number.isSafeInteger(key.at) || key.at < 0) throw new Error('invalid_key_part');
       observed.add(key.id);
       keys.set(key.id, {...key, presence: 'observed', missCount: 0});
     }
@@ -47,7 +49,7 @@ export class MeterStore {
       if(!observed.has(key)||ids.has(id))throw new Error('invalid_key_part');
       current.delete(id);
       this.db.prepare('UPDATE meter_spans SET stale_after_ms=min(stale_after_ms,max(0,?-to_at-1)) WHERE source_id=? AND meter_id=? AND from_at=(SELECT max(from_at) FROM meter_spans WHERE source_id=? AND meter_id=?)')
-        .run(measurement.observedAt,source,id,source,id);
+        .run(keyTimes.get(key)!,source,id,source,id);
     }
     for (const [id, key] of keys) if (!observed.has(id)) {
       const missCount = key.missCount + (measurement.inventoryComplete ? 1 : 0);

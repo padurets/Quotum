@@ -4,7 +4,8 @@ import {decodeOpenRouter,openRouter} from '../connectors/openrouter.js';
 import {ConnectorStatus,ConnectorTransport} from '../connectors/transport.js';
 import {SecretError} from '../secrets/crypto.js';
 import {Store} from '../store/store.js';
-import {publicSourceState} from '../projection.js';
+import {Projection,publicSourceState} from '../projection.js';
+import {spending} from '../domain/meters.js';
 
 const now=Date.parse('2026-10-01T12:00:00Z');
 const secret=Buffer.from('sk-or-v1-'+'a'.repeat(64));
@@ -12,7 +13,7 @@ const workspace='550e8400-e29b-41d4-a716-446655440000';
 const current={data:{is_management_key:true,expires_at:'2026-10-02T12:00:00Z',organization_id:null,creator_user_id:'private-person',label:secret.toString()}};
 const key=(i:number,extra:object={})=>({hash:i.toString(16).padStart(64,'0'),name:'laptop-'+i,workspace_id:workspace,disabled:false,expires_at:null,limit:15,limit_remaining:15,limit_reset:'monthly',include_byok_in_limit:true,usage:7.370123456,usage_daily:0,usage_weekly:0,usage_monthly:0,byok_usage:20,label:secret.toString(),creator_user_id:'never-keep',...extra});
 type Read=(operation:string,query:Readonly<Record<string,string>>)=>unknown;
-function connector(read:Read=()=>undefined) {
+function connector(read:Read=()=>undefined,clock:()=>number=()=>now) {
   const transport=new ConnectorTransport({host:'127.0.0.1',port:443,operations:{}});
   transport.send=async(operation,bytes,query={})=>{
     assert.equal(bytes.toString(),secret.toString());
@@ -20,8 +21,43 @@ function connector(read:Read=()=>undefined) {
     const value=override??(operation==='key'?current:operation==='credits'?{data:{total_credits:50,total_usage:37.104969129}}:operation==='workspaces'?{data:[{id:workspace,name:'private-workspace',created_by:'never-keep'}],total_count:1}:{data:[key(1),key(2)]});
     return decodeOpenRouter(typeof value==='string'?value:JSON.stringify(value));
   };
-  return openRouter(transport,()=>now);
+  return openRouter(transport,clock);
 }
+
+for(const [scope,boundary,next,minutes] of [
+  ['daily','2026-10-02T00:00:00Z','2026-10-03T00:00:00Z',1440],
+  ['weekly','2026-10-05T00:00:00Z','2026-10-12T00:00:00Z',10080],
+  ['monthly','2026-11-01T00:00:00Z','2026-12-01T00:00:00Z',43200],
+] as const) test(`inventory observed after a ${scope} reset keeps its own time and the earlier account pair`,async()=>{
+  const edge=Date.parse(boundary),keyAt=edge+5000,previousAt=edge-15000;
+  let time=previousAt,crossing=false;
+  const c=connector(op=>{
+    if(op==='key')return {data:{...current.data,expires_at:null}};
+    if(op==='workspaces'&&crossing)time=keyAt;
+    if(op==='keys')return {data:[key(1,{usage:crossing?2:0,limit_remaining:crossing?13:15,limit_reset:scope,usage_daily:crossing?2:0,usage_weekly:crossing?2:0,usage_monthly:crossing?2:0})]};
+  },()=>time);
+  const identity=await c.identify(secret),store=new Store(':memory:',previousAt),source=store.source('openrouter',identity.account,previousAt);
+  try{
+    store.record(source,(await c.measure(secret,identity)).measurement!);
+    crossing=true;time=edge-5000;
+    const result=(await c.measure(secret,identity)).measurement!;
+    assert.equal(result.inventoryComplete,true);assert.equal(result.observedAt,edge-5000);
+    assert.ok(result.meters.filter(m=>m.id==='credits'||m.id==='usage').every(m=>m.at===edge-5000));
+    assert.ok(result.meters.filter(m=>m.id.startsWith('key:')).every(m=>m.at===keyAt));
+    store.record(source,result);
+    const state=store.state(source);
+    const projection=new Projection({store,ingest:{live:{of:()=>[],ofChangesAt:()=>null}}} as unknown as ConstructorParameters<typeof Projection>[0]);
+    const projected=projection.sourcePart({id:source,provider:'openrouter',account:identity.account,holders:[],sharedBy:null},new Map(),keyAt).value.card;
+    assert.equal(state.successAt,edge-5000);assert.equal(state.keys![0].at,keyAt);
+    const cap=projected.meters!.find(m=>m.kind==='cap')!;
+    assert.equal(cap.resetAt,Date.parse(next));assert.equal(cap.minutes,minutes);assert.equal(cap.stale,false);
+    assert.deepEqual(projected.keys![0].periods,{day:'2000000',week:'2000000',month:'2000000'});
+    const id='key:'+state.keys![0].id+':usage',rows=store.meters.readings(source,id,0,keyAt+1);
+    assert.equal(rows.at(-1)!.at,keyAt);assert.equal(rows.at(-1)!.previousAt,previousAt);
+    const oldDay=spending(rows,store.meters.spans(source,id,0,keyAt+1),edge-86400000,edge);
+    assert.equal(oldDay.amount,'0','a step across midnight is not known spending of the old day');
+  }finally{store.close();}
+});
 
 test('OpenRouter verifies management authority, stable organization identity and exact account credits',async()=>{
   const c=connector(),id=await c.identify(secret);
