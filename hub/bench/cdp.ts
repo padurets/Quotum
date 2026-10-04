@@ -1,4 +1,4 @@
-import {spawn, type ChildProcess} from 'node:child_process';
+import {spawn,execFile, type ChildProcess} from 'node:child_process';
 import {accessSync, constants, mkdtempSync, rmSync} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -121,7 +121,7 @@ export function findChrome(env: NodeJS.ProcessEnv): string | null {
 }
 
 /** A browser the benchmark drives: the DevTools endpoint (`http://host:port`) and how to let go of it. */
-export type Browser = {endpoint: string; close(): Promise<void>; diagnostics?(pids:number[]):Promise<unknown>};
+export type Browser = {endpoint: string; close(): Promise<void>; diagnostics?(pids:number[],candidate?:number):Promise<unknown>};
 
 /** Only a launched browser's descendants may expose native thread state. */
 export async function nativeProcesses(owner:number,pids:number[]){
@@ -170,9 +170,18 @@ export async function launchChrome(file: string, sandbox: boolean): Promise<Brow
   });
   return {
     endpoint,
-    async diagnostics(pids:number[]){
+    async diagnostics(pids:number[],candidate?:number){
       const processes=chrome.exitCode===null&&chrome.signalCode===null?await nativeProcesses(chrome.pid!,pids):[];
-      return {stderr:output,processes};
+      let stack:unknown;
+      if(process.env.QUOTUM_BENCH_NATIVE_STACKS==='1'&&processes.some(p=>p.pid===candidate)){
+        // Arguments, locals, init scripts and symbol downloads are deliberately excluded.
+        stack=await new Promise(resolve=>execFile('sudo',['-n','gdb','--batch','--nx',
+          '-iex','set auto-load off','-iex','set debuginfod enabled off',
+          '-iex','set print frame-arguments none','-iex','set print entry-values no',
+          '-p',String(candidate),'-ex','thread apply all bt 16','-ex','detach'],
+          {timeout:8000,killSignal:'SIGKILL',maxBuffer:65536},(error,stdout,stderr)=>resolve({candidate,error:error?.code,stdout:stdout.slice(-48000),stderr:stderr.slice(-4000)})));
+      }
+      return {stderr:output,processes,stack};
     },
     async close() {
       if (chrome.exitCode === null && chrome.signalCode === null) {

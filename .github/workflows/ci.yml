@@ -59,7 +59,8 @@ jobs:
           cache-dependency-path: hub/package-lock.json
       - run: npm ci
       - run: npm run build
-      - run: QUOTUM_BENCH_REVERSAL_PROBE=1 QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci
+      - run: command -v gdb || { sudo apt-get update -qq; sudo apt-get install -y gdb; }
+      - run: QUOTUM_BENCH_NATIVE_STACKS=1 QUOTUM_BENCH_REVERSAL_PROBE=1 QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci
 
   # On every system the agent ships for: its process handling differs between them.
   agent:
