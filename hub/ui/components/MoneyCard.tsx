@@ -46,6 +46,7 @@ export function KeyMetrics({part,meters,compact=false}:{part:KeyPart;meters:read
 }
 export function MoneyCard({source,board,view,compact=false}:{source:Card;board:string;view?:View;compact?:boolean}) {
   const balance=source.meters?.find(m=>m.id==='balance'),{keys,meters,error}=useShownKeys(source,view,board);
+  if(source.reportQuality!==undefined)return <BudgetCard source={source} compact={compact}/>;
   const unit=balance?.unit??'USD',formatted=money(balance?.amount,unit),amount=balance?.amount==null?formatted:formatted.slice(0,-unit.length-1);
   return <div className="money-body">
     <div className="money-balance" title={money(balance?.amount,unit,true)}><span>{t('money.accountBalance')}</span><span className="limit-value" data-money={balance?.amount}>{amount}{balance?.amount!=null&&<small>{unit}</small>}</span></div>
@@ -60,10 +61,30 @@ export function AccessMark({id}:{id:string}) {
   const tone=accessTone(access,now);
   if(tone===null)return null;
   const text=access.error?new ApiError(400,access.error):null;
-  const expiry=access.expiresAt===null?t('sources.noExpiry'):access.expiresAt<=now?t('money.expired'):t('money.expirySoon',{time:stamp(access.expiresAt)});
+  const expiry=access.expiryKnown===false?t('sources.unknownExpiry'):access.expiresAt===null?t('sources.noExpiry'):access.expiresAt<=now?t('money.expired'):t('money.expirySoon',{time:stamp(access.expiresAt)});
   const lead=text?messageOf(text):expiry;
   return <span data-time="access-expiry"><Popover label={lead} up align="left" triggerClass={`tray-pill access-mark${tone==='neutral'?'':` is-${tone}`}`} trigger={<>
     <svg className="tray-icon" viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><circle cx="8" cy="8" r="4"/><path d="m11 11 9 9m-5-5 3-3m-1 5 3-3"/></svg>
     {tone!=='crit'&&access.expiresAt!==null&&access.expiresAt>now&&access.expiresAt-now<=ACCESS_WARNING_MS&&<span>{countdown(access.expiresAt-now)}</span>}
   </>}><div className="tray-panel"><div className="tray-panel-head"><p className="tray-panel-lead">{lead}</p>{text&&<p className="tray-panel-when">{expiry}</p>}</div></div></Popover></span>;
+}
+
+function BudgetCard({source,compact}:{source:Card;compact:boolean}) {
+  const allowance=source.allowance,unit=allowance?.unit??'USD';
+  const remaining=allowance?.remaining??null,limit=allowance?.limit??null;
+  const percent=limit!==null&&BigInt(limit)>0n&&remaining!==null&&BigInt(remaining)<=BigInt(limit)?Number(BigInt(remaining)*10000n/BigInt(limit))/100:null;
+  const text=money(remaining,unit),value=remaining===null?text:text.slice(0,-unit.length-1);
+  const enforcement=allowance?.enforcement==='enforcing'?t('money.enforcing'):allowance?.enforcement==='inactive'?t('money.inactive'):t('money.enforcementUnknown');
+  const detail=[t('money.monthlyLimit'),money(limit,unit,true),enforcement,allowance?.overspend&&BigInt(allowance.overspend)>0n?t('money.overspend')+': '+money(allowance.overspend,unit,true):'',remaining===null?t('money.lastKnown'):''].filter(Boolean).join('\n');
+  if(compact)return <div className="money-body"><div className="limits money-limits"><div className="compact-limit is-money">
+    <div className="compact-window-name"><span title={detail}>{t('money.monthlyLimit')}</span></div>
+    <small className="compact-reset" title={detail}>{enforcement}</small>
+    <MeterBar remaining={percent} label={t('money.monthlyLimit')}/>
+    <strong className="limit-value" title={detail}>{value}{remaining!==null&&<small>{unit}</small>}</strong>
+  </div></div></div>;
+  return <div className="money-body"><div className="limits money-limits"><div className={compact?'compact-limit is-money':'limit money-limit'}>
+    <div className={compact?'compact-window-name':'limit-top'}><span className="limit-name" title={detail}>{t('money.allowance')}</span><span className="limit-value" title={detail}>{value}{remaining!==null&&<small>{unit}</small>}</span></div>
+    <MeterBar remaining={percent} label={t('money.monthlyLimit')}/>
+    <div className="limit-bottom"><span title={detail}>{limit===null?t('money.limitUnknown'):t('money.of',{amount:money(limit,unit)})}</span><span title={detail}>{enforcement}</span></div>
+  </div></div></div>;
 }

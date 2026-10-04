@@ -322,7 +322,11 @@ export const Chart = memo(function Chart({
       let lastAt:number|undefined;
       for (const [at, remaining] of line.points) {if (at > drawNow) break; latest = `${at}:${remaining}`; lastAt=at; yield;}
       if(lastAt!==undefined&&valueAxis?.rawValue)latest=`${lastAt}:${valueAxis.rawValue(line.key,lastAt)}`;
-      if (incomingStrip && line.blocks) {
+      if(line.intervals) {
+        let path='';
+        for(const interval of line.intervals){if(interval.from<drawNow&&interval.to>drawFrom)path+=`M${x(interval.from).toFixed(1)},${y(interval.value).toFixed(1)}L${x(interval.to).toFixed(1)},${y(interval.value).toFixed(1)}`;yield;}
+        paths.push({line:path,last:null,parts:null,latest});
+      } else if (incomingStrip && line.blocks) {
         let last: [number, number] | null = null;
         const parts: {key: string; line: string}[] = [];
         for (const {block, join} of line.blocks) {

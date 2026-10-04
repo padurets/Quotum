@@ -2,12 +2,15 @@
 import {pathToFileURL} from 'node:url';
 import path from 'node:path';
 import {MONEY_KEY} from './money.js';
+import {REPORT_KEY,REPORT_SCENES,reportFixture} from './reports.js';
 import {readFileSync} from 'node:fs';
 const root=path.resolve(process.cwd(),'dist','server');
 const load=(name:string)=>import(pathToFileURL(path.join(root,name)).href);
 const {connectors}=await load('connectors/registry.js') as typeof import('../server/connectors/registry.js');
 const {ConnectorTransport}=await load('connectors/transport.js') as typeof import('../server/connectors/transport.js');
 const {openRouter,decodeOpenRouter}=await load('connectors/openrouter.js') as typeof import('../server/connectors/openrouter.js');
+const {openAIPlatform,decodeOpenAI}=await load('connectors/openai.js') as typeof import('../server/connectors/openai.js');
+const {ConnectorStatus}=await load('connectors/transport.js') as typeof import('../server/connectors/transport.js');
 const {SecretError}=await load('secrets/crypto.js') as typeof import('../server/secrets/crypto.js');
 const workspace='550e8400-e29b-41d4-a716-446655440000';
 const secondWorkspace='550e8400-e29b-41d4-a716-446655440001';
@@ -40,4 +43,11 @@ transport.send=async(operation,secret,query={})=>{
   throw new SecretError('connector_destination_invalid');
 };
 (connectors as Map<string,import('../server/connectors/registry.js').Connector>).set('openrouter',openRouter(transport,()=>observed));
+const reportTransport=new ConnectorTransport({host:'127.0.0.1',port:443,operations:{}});
+reportTransport.send=async(operation,secret,query={})=>{
+  const index=REPORT_SCENES.findIndex((_,i)=>REPORT_KEY(i)===secret.toString('ascii'));if(index<0)throw new SecretError('credential_invalid');
+  if(operation==='limit'&&(index===4||index===5))throw new ConnectorStatus(index===4?403:404,null);
+  return {organization:'org-demo-reports-'+index,data:decodeOpenAI(JSON.stringify(reportFixture(index,operation,Number(query.start_time)*1000,Number(query.end_time)*1000,Date.now())))};
+};
+(connectors as Map<string,import('../server/connectors/registry.js').Connector>).set('openai_platform',openAIPlatform(reportTransport));
 await load('index.js');

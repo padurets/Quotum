@@ -29,7 +29,8 @@ export class HubSources {
     if(!this.credentials.sources().includes(source)){this.jobs.delete(source);this.arm();return;}
     if(providerOf(this.store.state(source).provider)?.measuredBy!=='hub')return;
     const now=this.clock.now();
-    this.jobs.set(source,{generation:(old?.generation??0)+1,next:Math.max(now,(old?.last??-Infinity)+60_000,old?.retryAt??0),last:old?.last??null,retryAt:old?.retryAt??0,interval:120_000,failures:0,controller:null,request:null,requestedAt:old?.requestedAt??null});
+    const retryAt=Math.max(old?.retryAt??0,this.credentials.retryNotBefore(source));
+    this.jobs.set(source,{generation:(old?.generation??0)+1,next:Math.max(now,(old?.last??-Infinity)+60_000,retryAt),last:old?.last??null,retryAt,interval:120_000,failures:0,controller:null,request:null,requestedAt:old?.requestedAt??null});
     this.arm();this.touch(source);
   }
   private touch(source:string){tell(this.observer,o=>o.touchSources([source]));}
@@ -37,7 +38,7 @@ export class HubSources {
     this.cancelTimer?.();this.cancelTimer=null;if(!this.running||this.active>=2)return;
     const next=Math.min(...[...this.jobs].filter(([s,j])=>!this.activeSources.has(s)&&!j.controller&&j.next!==null).map(([,j])=>j.next!));
     if(!Number.isFinite(next))return;
-    this.cancelTimer=this.clock.after(Math.max(0,next-this.clock.now()),()=>{this.cancelTimer=null;this.pump();});
+    this.cancelTimer=this.clock.after(Math.min(2_147_483_647,Math.max(0,next-this.clock.now())),()=>{this.cancelTimer=null;this.pump();});
   }
   private pump() {
     if(!this.running)return;
@@ -51,26 +52,27 @@ export class HubSources {
     if(job.request){job.request.status='waiting';job.request.dispatchAt=at;}
     this.touch(source);
     const valid=()=>this.running&&this.jobs.get(source)===job&&job.generation===generation&&!controller.signal.aborted;
-    const before=JSON.stringify(this.store.state(source).meters?.map(m=>[m.id,m.amount,m.limit,m.resetAt]));
+    const before=this.store.state(source).reportDigest??JSON.stringify(this.store.state(source).meters?.map(m=>[m.id,m.amount,m.limit,m.resetAt]));
     try {
       // The connector bounds its round and may retain successful account data when
       // inventory runs out of time. This signal cancels the source lifecycle only.
       const result=await this.credentials.measure(source,controller.signal,valid,result=>{
-        const after=JSON.stringify(result.measurement?.meters.map(m=>[m.id,m.amount,m.limit,m.resetAt]));
+        const after=result.measurement?.reportDigest??JSON.stringify(result.measurement?.meters.map(m=>[m.id,m.amount,m.limit,m.resetAt]));
         return this.store.measureInterval(source)??(before===after?Math.min(job.interval*2,900_000):120_000);
       });
       if(!valid())return;if(!result)throw new SecretError('connector_timeout');
-      const after=JSON.stringify(result.measurement?.meters.map(m=>[m.id,m.amount,m.limit,m.resetAt]));
-      job.failures=0;job.interval=this.store.measureInterval(source)??(before===after?Math.min(job.interval*2,900_000):120_000);
+      const after=result.measurement?.reportDigest??JSON.stringify(result.measurement?.meters.map(m=>[m.id,m.amount,m.limit,m.resetAt]));
+      const transient=result.attempt?.outcome==='transient';
+      job.failures=transient?job.failures+1:0;job.interval=this.store.measureInterval(source)??(before===after?Math.min(job.interval*2,900_000):120_000);
       // Freshness belongs to the accepted observation; it is never extended after failure.
-      job.retryAt=this.clock.now()+(result.retryAfterMs??0);
-      job.next=Math.max(this.clock.now()+job.interval,job.retryAt);
-      if(job.request){job.request.status='updated';job.request.finishedAt=this.clock.now();}
+      job.retryAt=Math.max(job.retryAt,this.credentials.retryNotBefore(source),this.clock.now()+(result.retryAfterMs??0));
+      job.next=Math.max(this.clock.now()+(transient?Math.min(120_000*2**Math.min(job.failures-1,3),900_000):job.interval),job.retryAt);
+      if(job.request){job.request.status=transient?'failed':result.measurement?.reports?.status==='partial'?'updated_partially':'updated';job.request.finishedAt=this.clock.now();}
     }catch(error){
       if(!valid())return;
       const code=error instanceof SecretError?error.code:'credential_failed';
       this.store.fail(source,code);
-      job.retryAt=this.clock.now()+(error instanceof ConnectorStatus?error.retryAfterMs??0:0);
+      job.retryAt=Math.max(job.retryAt,this.credentials.retryNotBefore(source),this.clock.now()+(error instanceof ConnectorStatus?error.retryAfterMs??0:0));
       job.failures++;job.next=permanentAccess(code)?null:Math.max(this.clock.now()+Math.min(120_000*2**Math.min(job.failures-1,3),900_000),job.retryAt);
       if(job.request){job.request.status='failed';job.request.finishedAt=this.clock.now();}
     }finally{

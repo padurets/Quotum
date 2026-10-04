@@ -2,8 +2,10 @@ import type {CredentialAbility} from '../store/credentials.js';
 import type {ConnectorTransport} from './transport.js';
 import type {MeterMeasurement} from '../domain/meters.js';
 import {openRouter} from './openrouter.js';
+import {openAIPlatform} from './openai.js';
+import type {SecretCode} from '../secrets/crypto.js';
 
-export type ConnectorIdentity = {account: string; abilities: CredentialAbility[]; expiresAt: number | null; measurement?: MeterMeasurement; retryAfterMs?: number};
+export type ConnectorIdentity = {account: string; abilities: CredentialAbility[]; expiresAt: number | null;expiryKnown?:boolean; measurement?: MeterMeasurement; retryAfterMs?: number;attempt?:{outcome:'ok'|'degraded'|'transient'|'access_lost';safeCode:SecretCode|null;retryNotBefore:number|null}};
 
 export type Connector = {
   id: string;
@@ -16,4 +18,4 @@ export type Connector = {
 };
 
 /** Production destinations are code-owned. Tests and demos inject their own adapters. */
-export const connectors: ReadonlyMap<string, Connector> = new Map([['openrouter',openRouter()]]);
+export const connectors: ReadonlyMap<string, Connector> = new Map([['openrouter',openRouter()],['openai_platform',openAIPlatform()]]);

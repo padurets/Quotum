@@ -1,4 +1,5 @@
 import {amount, isUnit, type Unit} from './amount.js';
+import type {ReportRead,MonthlyLimitRead} from './reports.js';
 
 export type MeterKind = 'counter' | 'balance' | 'cap';
 export type MeterSemantics = {limit: string | null; resetAt: number | null; minutes: number | null; scope: string | null; label: string | null};
@@ -9,7 +10,7 @@ export type KeyPart = {
   periods: {day: string | null; week: string | null; month: string | null};
 };
 /** Confirmed uncapped key IDs let partial rounds end a cap while retaining its history. */
-export type MeterMeasurement = {type: 'meters'; observedAt: number; staleAfterMs: number; meters: Meter[]; keys: KeyPart[]; inventoryComplete: boolean; inventoryError: string | null; uncapped?: string[]};
+export type MeterMeasurement = {type: 'meters'; observedAt: number; staleAfterMs: number; meters: Meter[]; keys: KeyPart[]; inventoryComplete: boolean; inventoryError: string | null; uncapped?: string[];reports?:ReportRead;reportDigest?:string;monthlyLimit?:MonthlyLimitRead};
 export type Reading = Omit<Meter, 'stale'> & {previousAt: number | null};
 export type MeterSpan = {from: number; to: number; staleAfterMs: number};
 export type ExceptionalStep = {from: number; to: number; amount: string; evidence: 'continuous' | 'gap' | 'estimate'};

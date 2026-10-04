@@ -74,7 +74,7 @@ export type Columns = {left: boolean; plan: boolean; gap: boolean; forecast: boo
 export function readout(lines: Line[], plans: PlanLine[], cell: number, cellMs: number, now: number, to: number, forecasts: ForecastLine[] = [], coverage?: Coverage): {rows: ReadoutRow[]; columns: Columns} {
   const at = Math.min(to, cell + cellMs / 2);
   const rows = lines.map(line => {
-    const value = valueIn(line.points, cell, now, Math.max(cellMs, line.staleAfterMs), coverage) ?? null;
+    const value = line.intervals?line.intervals.find(row=>row.from<=at&&row.to>at)?.value??null:valueIn(line.points, cell, now, Math.max(cellMs, line.staleAfterMs), coverage) ?? null;
     const runs = plans.find(plan => plan.lines.includes(line.key))?.runs;
     const planned = runs ? valueAt(runs, at) : undefined;
     const left = value === null ? null : Math.round(value);

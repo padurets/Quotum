@@ -2,6 +2,7 @@ import {decodeCellsPrepared, encodeCellsPrepared, TILE_CELLS, type Chunk, type D
 
 import {drain, type Preparation} from './prepare';
 import {MeterTile} from './meterTiles';
+import {ReportTile} from './reportTiles';
 
 const FIELDS = 11;
 const HEAD = 248; // 61 uint32 offsets, padded to a float64 boundary.
@@ -26,6 +27,8 @@ export class HistoryTile {
   private grants: Chunk['grants'] = [];
   private meters: MeterTile;
   private hasMeters=false;
+  private reports=new ReportTile();
+  private hasReports=false;
 
   constructor(readonly from: number, readonly cell: number) {
     this.readFrom = this.validTo = this.readTo = from;
@@ -35,7 +38,7 @@ export class HistoryTile {
   get to() {return this.from + TILE_CELLS * this.cell;}
 
   get bytes() {
-    return this.activity.byteLength + this.meters.bytes + this.seriesBytes + this.sessions.length * 320 + this.groups.length * 192 + (this.resets.length + this.grants.length) * 192 + 1024;
+    return this.activity.byteLength + this.meters.bytes + this.reports.bytes + this.seriesBytes + this.sessions.length * 320 + this.groups.length * 192 + (this.resets.length + this.grants.length) * 192 + 1024;
   }
 
   /** A private COW tile keeps every published buffer untouched until response commit. */
@@ -48,6 +51,7 @@ export class HistoryTile {
     for (const group of this.groups) {copy.groups.push(group); yield;}
     for (const key in this.devices) {copy.devices[key] = this.devices[key]; yield;}
     copy.hasMeters = this.hasMeters; copy.meters = yield* this.meters.clonePrepared();
+    copy.hasReports=this.hasReports;copy.reports=yield* this.reports.clonePrepared();
     copy.activity = this.activity; copy.resets = this.resets; copy.grants = this.grants;
     yield* copy.mergePrepared(chunk, known);
     return copy;
@@ -58,6 +62,8 @@ export class HistoryTile {
   private *mergePrepared(chunk: Chunk, known: HistoryMeta['known']): Preparation<void> {
     this.hasMeters ||= chunk.meterSeries!==undefined;
     yield* this.meters.mergePrepared(chunk.from,chunk.to,chunk.meterSeries??[]);
+    this.hasReports ||= chunk.reportSeries!==undefined;
+    yield* this.reports.mergePrepared(chunk.from,chunk.to,chunk.reportSeries??[]);
     const first = (chunk.from - this.from) / this.cell;
     const last = (chunk.to - this.from) / this.cell;
     for (const [key, s] of this.series) {
@@ -190,6 +196,7 @@ export class HistoryTile {
     for (const row of this.resets) {if (row[2] >= this.readFrom && row[2] < this.readTo) chunk.resets.push([...row]); yield;}
     for (const row of this.grants) {if (row[1] >= this.readFrom && row[1] < this.readTo) chunk.grants.push([...row]); yield;}
     if(this.hasMeters)chunk.meterSeries=yield* this.meters.chunkPrepared(this.readFrom,this.readTo);
+    if(this.hasReports)chunk.reportSeries=yield* this.reports.chunkPrepared(this.readFrom,this.readTo);
     for (const s of this.series.values()) {
       if (plot) {
         const cells: Chunk['series'][number]['cells'] = [];

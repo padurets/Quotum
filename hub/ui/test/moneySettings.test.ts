@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {preparationFixture} from './preparationFixture';
-import {archivedKeyGroups,moneySelection,readMoney} from '../lib/moneySelection';
+import {archivedKeyGroups,moneySelection,readMoney,chooseMoney} from '../lib/moneySelection';
 import {ApiError} from '../lib/http';
 import {keyName} from '../lib/money';
 import type {Named} from '../lib/board';
@@ -34,7 +34,7 @@ function fixture(selected:[string,string][]=[]) {
     if(name==='react/jsx-runtime')return {jsx:(type:unknown,props:Node['props'],key?:string)=>({type,props,key}),jsxs:(type:unknown,props:Node['props'],key?:string)=>({type,props,key}),Fragment:'fragment'};
     if(name.endsWith('/board'))return {useBoardId:()=> 'b'};
     if(name.endsWith('/http'))return {ApiError,call};
-    if(name.endsWith('/moneySelection'))return {moneySelection,archivedKeyGroups};
+    if(name.endsWith('/moneySelection'))return {moneySelection,archivedKeyGroups,chooseMoney};
     if(name.endsWith('/prefs'))return {usePrefs:()=>prefs,setPrefs:(patch:typeof prefs)=>{prefs=patch;}};
     if(name.endsWith('/money'))return {keyName};
     if(name.endsWith('/meterHistory'))return {MAX_METERS:32};

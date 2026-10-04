@@ -509,7 +509,7 @@ export const SourceCard = memo(function SourceCard({id, arrange, boardId, person
         {visible.map(w => (
           <Limit key={w.id} w={w} measuredAt={source.successAt} weekly={weekly} />
         ))}
-        {!source.windows.length && !source.meters?.length && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
+        {!source.windows.length && !source.meters?.length && source.reportQuality===undefined && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
         {!!source.windows.length && !visible.length && <AllHidden source={source} arrange={arrange} />}
       </div>
       <CardTray source={source} />

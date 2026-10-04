@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {money,capPercent,capStale,capChangesAt,accessTone,accessChangesAt} from '../lib/money';
 import {setLocale} from '../i18n';
-import {archivedKeyGroups,moneySelection,readMoney} from '../lib/moneySelection';
+import {archivedKeyGroups,moneySelection,readMoney,chooseMoney} from '../lib/moneySelection';
 import {moneyTotal,type MeterHistory} from '../lib/moneyView';
 import type {Card} from '../lib/types';
 import type {Meter} from '../../server/domain/meters';
@@ -83,4 +83,14 @@ test('source access is an independent private slice and disappears with its line
   const next=reduce(before,{type:'hub',event:{type:'sourceAccess',data:{one:own}}});
   assert.equal(next.board?.cards,before.board?.cards);assert.equal(next.boards,before.boards);assert.equal(next.board?.sourceAccess?.one,own);
   const gone=reduce(next,{type:'hub',event:{type:'lineup',data:{sources:[]}}});assert.deepEqual(gone.board?.sourceAccess,{});
+});
+
+test('reported-only sources default to Spending and mode choices preserve earlier explicit selections',()=>{
+  const reported={...card('report'),meters:[],reportQuality:[]};
+  const legacy=readMoney({unit:'USD',view:'balance',selected:{USD:[['one','balance']]}});
+  const spending=chooseMoney({...legacy,view:'spending'},'USD',[['report','costs']]);
+  assert.deepEqual(moneySelection([card('one'),reported],[],spending).selection?.ids,[['report','costs']]);
+  assert.deepEqual(moneySelection([card('one'),reported],[],{...spending,view:'balance'}).selection?.ids,[['one','balance']]);
+  assert.deepEqual(moneySelection([reported],[],readMoney({unit:'USD',view:'spending'})).selection?.ids,[['report','costs']]);
+  assert.deepEqual(moneySelection([reported],[],readMoney({unit:'USD',view:'balance'})).selection?.ids,[]);
 });

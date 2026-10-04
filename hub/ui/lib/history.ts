@@ -10,7 +10,7 @@ import type {Store} from './store';
 import {dropTimeRange, onTimeRange, timeRange, timeRangeKey, type TimeRange} from './timeRange';
 import type {History} from './types';
 import type {MeterSelection} from '../../server/domain/meterHistory';
-import {moneySelection} from './moneySelection';
+import {chooseMoney,moneyChoices,moneySelection} from './moneySelection';
 import {pan, type Pan} from './pan';
 import {plotPrepared, type Coverage, type PlotBuffer} from './historyPlot';
 
@@ -741,7 +741,7 @@ export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>)
     const board=state.board;
     if(board) {
       const settings=prefs().money,result=moneySelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view.hidden,settings);
-      if(result.removed&&settings.unit&&settings.selected[settings.unit])setPrefs({money:{...settings,removed:result.removed,selected:{...settings.selected,[settings.unit]:result.selection!.ids}}});
+      if(result.removed&&settings.unit&&moneyChoices(settings)[settings.unit])setPrefs({money:{...chooseMoney(settings,settings.unit,result.selection!.ids),removed:result.removed}});
       loader.setMeters(result.selection);
     }
   });

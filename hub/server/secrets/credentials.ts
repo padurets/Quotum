@@ -8,8 +8,8 @@ import {SecretError,secretCode, type SecretCode, type SecretKey} from './crypto.
 import {checkpoint, type SecretKeyReport} from './start.js';
 
 const DAY=86_400_000;
-export const permanentAccess = (code:string) => ['credential_expired','credential_revoked','credential_wrong_type','credential_permission','credential_account_mismatch','credential_unreadable','secret_key_missing','secret_key_mismatch','credential_provider_unknown'].includes(code);
-export type SourceAccess = {error:SecretCode|null;expiresAt:number|null;canRefresh:boolean;credentialIds:string[]};
+export const permanentAccess = (code:string) => ['credential_access_invalid','credential_identity_unavailable','credential_expired','credential_revoked','credential_wrong_type','credential_permission','credential_account_mismatch','credential_unreadable','secret_key_missing','secret_key_mismatch','credential_provider_unknown'].includes(code);
+export type SourceAccess = {error:SecretCode|null;expiresAt:number|null;expiryKnown?:boolean;canRefresh:boolean;credentialIds:string[]};
 type Options={allowNoExpiry?:boolean;requestId?:string};
 
 /** Trusted keys are write-only; raw errors stop inside this service. */
@@ -57,7 +57,9 @@ export class Credentials {
     if(!/^[0-9a-f]{24}$/.test(identity.account)||identity.abilities.some(a=>!connector.abilities.includes(a))||identity.expiresAt!==null&&(!Number.isSafeInteger(identity.expiresAt)||identity.expiresAt<0))throw new SecretError('connector_invalid_response');
     if(identity.retryAfterMs!==undefined&&(!Number.isSafeInteger(identity.retryAfterMs)||identity.retryAfterMs<0||identity.retryAfterMs>3_600_000))throw new SecretError('connector_invalid_response');
     if(identity.expiresAt!==null&&identity.expiresAt<=Date.now())throw new SecretError('credential_expired');
-    if(identity.expiresAt===null&&allowNoExpiry!==true)throw new SecretError('credential_expiry_confirmation');
+    if(identity.expiryKnown!==undefined&&typeof identity.expiryKnown!=='boolean')throw new SecretError('connector_invalid_response');
+    if(identity.attempt&&(!['ok','degraded','transient','access_lost'].includes(identity.attempt.outcome)||identity.attempt.safeCode!==null&&!secretCode(identity.attempt.safeCode)||identity.attempt.retryNotBefore!==null&&(!Number.isSafeInteger(identity.attempt.retryNotBefore)||identity.attempt.retryNotBefore<0)))throw new SecretError('connector_invalid_response');
+    if(identity.expiresAt===null&&allowNoExpiry!==true)throw new SecretError(identity.expiryKnown===false?'credential_expiry_unknown_confirmation':'credential_expiry_confirmation');
   }
   private changed(source:string,owner:string) {
     tell(this.observer,o=>{o.touchSources([source]);o.touchUser(owner);});
@@ -85,9 +87,10 @@ export class Credentials {
           const replay=this.replay(owner,provider,options.requestId);if(replay)return replay;
           source=this.store.source(provider as Provider,identity.account,Date.now());
           const record={id:randomUUID(),user_id:owner,provider};
-          const row:CredentialRow={...record,...key.seal(record,bytes),source_id:source,key_version:this.generation(),hint:bytes.subarray(-4).toString('ascii'),abilities:JSON.stringify(identity.abilities),created_at:Date.now(),expires_at:identity.expiresAt,last_used_at:null,last_error:null,unreadable:0};
+          const row:CredentialRow={...record,...key.seal(record,bytes),source_id:source,key_version:this.generation(),hint:bytes.subarray(-4).toString('ascii'),abilities:JSON.stringify(identity.abilities),created_at:Date.now(),expires_at:identity.expiresAt,expiry_known:identity.expiryKnown===false?0:1,last_used_at:null,last_error:null,unreadable:0};
           this.#repository.add(row);this.store.hold(source,owner,row.created_at);
           if(identity.measurement && (this.store.state(source).successAt??-Infinity)<identity.measurement.observedAt)this.store.record(source,identity.measurement);
+          this.disposition(source,row,identity);
           if(options.requestId)this.db.prepare('INSERT OR REPLACE INTO meta VALUES (?,?)').run('credential-request:'+owner+':'+options.requestId,JSON.stringify({provider,id:row.id,at:row.created_at}));
           return credentialAnswer(row);
         },false,()=>{if(source)this.changed(source,owner);});
@@ -103,8 +106,9 @@ export class Credentials {
         if(!row.source_id||this.store.account(row.source_id)!==identity.account)throw new SecretError('credential_account_mismatch');
         return this.mutation(()=>{
           if(!this.#repository.current(row)||!this.#repository.replace(owner,id,key.seal(row,bytes),this.generation(),bytes.subarray(-4).toString('ascii'),row))throw new SecretError('credential_conflict');
-          this.db.prepare('UPDATE credentials SET abilities=?,expires_at=?,last_used_at=NULL WHERE id=? AND user_id=?').run(JSON.stringify(identity.abilities),identity.expiresAt,id,owner);
+          this.db.prepare('UPDATE credentials SET abilities=?,expires_at=?,expiry_known=?,last_used_at=NULL WHERE id=? AND user_id=?').run(JSON.stringify(identity.abilities),identity.expiresAt,identity.expiryKnown===false?0:1,id,owner);
           if(identity.measurement&&(this.store.state(row.source_id!).successAt??-Infinity)<identity.measurement.observedAt)this.store.record(row.source_id!,identity.measurement);
+          this.disposition(row.source_id!,this.#repository.get(owner,id)!,identity);
           return credentialAnswer(this.#repository.get(owner,id)!);
         },true,()=>this.changed(row.source_id!,owner));
       });
@@ -129,10 +133,16 @@ export class Credentials {
       const healthy=rows.find(r=>!r.lastError&&!r.unreadable&&(r.expiresAt===null||r.expiresAt>now));
       const expiry=rows.map(r=>r.expiresAt).filter((at):at is number=>at!==null);
       const error:SecretCode|null=this.report.outcome==='missing'?'secret_key_missing':this.report.outcome==='mismatch'?'secret_key_mismatch':healthy?null:rows.some(r=>r.expiresAt!==null&&r.expiresAt<=now)?'credential_expired':secretCode(rows[0].lastError)??'credential_unreadable';
-      return {error,expiresAt:expiry.length?Math.min(...expiry):null,canRefresh:this.refreshable(source,now),credentialIds:rows.map(r=>r.id)};
+      return {error,expiresAt:expiry.length?Math.min(...expiry):null,expiryKnown:rows.every(r=>r.expiryKnown!==false),canRefresh:this.refreshable(source,now),credentialIds:rows.map(r=>r.id)};
     });
   }
   sources():string[]{return this.boundary(()=>[...new Set((this.db.prepare('SELECT source_id FROM credentials WHERE source_id IS NOT NULL').all() as {source_id:string}[]).map(r=>r.source_id))]);}
+  retryNotBefore(source:string):number {return Number(this.db.prepare('SELECT value FROM meta WHERE key=?').get('connector-retry:'+source)?.value??0);}
+  private disposition(source:string,row:CredentialRow,result:ConnectorIdentity) {
+    const attempt=result.attempt;if(!attempt)return;
+    if(attempt.retryNotBefore!==null)this.db.prepare('INSERT OR REPLACE INTO meta VALUES (?,?)').run('connector-retry:'+source,String(Math.max(this.retryNotBefore(source),attempt.retryNotBefore)));
+    if(attempt.outcome==='transient'||attempt.outcome==='access_lost')this.#repository.error(row.user_id,row.id,attempt.safeCode??'connector_failed',false,row);
+  }
   reconcile() {
     this.mutation(()=>{
       for(const row of this.db.prepare('SELECT h.source_id,h.user_id,s.provider FROM holders h JOIN sources s ON s.id=h.source_id WHERE NOT EXISTS (SELECT 1 FROM credentials c WHERE c.source_id=h.source_id AND c.user_id=h.user_id)').all() as {source_id:string;user_id:string;provider:string}[])
@@ -157,11 +167,13 @@ export class Credentials {
           result.measurement={...result.measurement,staleAfterMs,meters:result.measurement.meters.map(m=>({...m,staleAfterMs})),keys:result.measurement.keys.map(k=>({...k,staleAfterMs}))};
           const accepted=this.mutation(()=>{
             if(signal?.aborted||!valid()||!this.#repository.current(row)||!this.store.holds(row.user_id,source))return false;
-            this.#repository.used(row.user_id,row.id,row,result.abilities,result.expiresAt);
+            this.#repository.used(row.user_id,row.id,row,result.abilities,result.expiresAt,result.expiryKnown!==false);
             if((this.store.state(source).successAt??-Infinity)<result.measurement!.observedAt)this.store.record(source,result.measurement!);
+            this.disposition(source,row,result);
             return true;
           },false);
           if(accepted)tell(this.observer,o=>o.touchUser(row.user_id));
+          if(accepted&&result.attempt?.outcome==='access_lost'){failure=new SecretError(result.attempt.safeCode??'credential_access_invalid');continue;}
           return accepted?result:null;
         }catch(error){
           const safe=error instanceof SecretError?error:new SecretError('credential_failed');failure=safe;

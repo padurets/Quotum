@@ -6,11 +6,11 @@ export const CREDENTIAL_ABILITIES = ['balance', 'usage', 'manage_keys'] as const
 export type CredentialAbility = (typeof CREDENTIAL_ABILITIES)[number];
 export type CredentialRow = RecordIdentity & Sealed & {
   source_id: string | null; key_version: number; hint: string | null; abilities: string;
-  created_at: number; expires_at: number | null; last_used_at: number | null; last_error: string | null; unreadable: number;
+  created_at: number; expires_at: number | null;expiry_known?:number; last_used_at: number | null; last_error: string | null; unreadable: number;
 };
 export type Credential = {
   id: string; provider: string; sourceId: string | null; hint: string | null; abilities: CredentialAbility[];
-  createdAt: number; expiresAt: number | null; lastUsedAt: number | null; lastError: string | null; unreadable: boolean;
+  createdAt: number; expiresAt: number | null;expiryKnown?:boolean; lastUsedAt: number | null; lastError: string | null; unreadable: boolean;
 };
 
 /** Explicit owner projection; encrypted bytes never become an API or board payload. */
@@ -20,7 +20,7 @@ export function credentialAnswer(row: CredentialRow): Credential {
     const parsed: unknown = JSON.parse(row.abilities);
     if (Array.isArray(parsed)) abilities = CREDENTIAL_ABILITIES.filter(ability => parsed.includes(ability));
   } catch { /* A damaged metadata field grants no abilities. */ }
-  return {id: row.id, provider: row.provider, sourceId: row.source_id, hint: row.hint, abilities, createdAt: row.created_at, expiresAt: row.expires_at, lastUsedAt: row.last_used_at, lastError: secretCode(row.last_error), unreadable: !!row.unreadable};
+  return {id: row.id, provider: row.provider, sourceId: row.source_id, hint: row.hint, abilities, createdAt: row.created_at, expiresAt: row.expires_at,expiryKnown:row.expiry_known!==0, lastUsedAt: row.last_used_at, lastError: secretCode(row.last_error), unreadable: !!row.unreadable};
 }
 
 /** Only ciphertext reaches this repository. Ownership is in every mutation predicate. */
@@ -40,6 +40,7 @@ export class CredentialStore {
   }
   add(row: CredentialRow): void {
     this.db.prepare('INSERT INTO credentials (id, user_id, provider, source_id, cipher, nonce, key_version, hint, abilities, created_at, expires_at, last_used_at, last_error, unreadable) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(row.id, row.user_id, row.provider, row.source_id, row.cipher, row.nonce, row.key_version, row.hint, row.abilities, row.created_at, row.expires_at, row.last_used_at, row.last_error, row.unreadable);
+    this.db.prepare('UPDATE credentials SET expiry_known=? WHERE id=? AND user_id=?').run(row.expiry_known??1,row.id,row.user_id);
   }
   replace(owner: string, id: string, sealed: Sealed, generation: number, hint: string | null, previous?: Sealed): boolean {
     return this.db.prepare('UPDATE credentials SET cipher = ?, nonce = ?, key_version = ?, hint = ?, unreadable = 0, last_error = NULL WHERE user_id = ? AND id = ?'+(previous?' AND nonce=? AND cipher=?':''))
@@ -48,8 +49,9 @@ export class CredentialStore {
   remove(owner: string, id: string): void {
     this.db.prepare('DELETE FROM credentials WHERE user_id = ? AND id = ?').run(owner, id);
   }
-  used(owner: string, id: string, record: Sealed, abilities: readonly CredentialAbility[], expiresAt: number | null): void {
+  used(owner: string, id: string, record: Sealed, abilities: readonly CredentialAbility[], expiresAt: number | null,expiryKnown=true): void {
     this.db.prepare('UPDATE credentials SET abilities = ?, expires_at = ?, last_used_at = ?, last_error = NULL, unreadable = 0 WHERE user_id = ? AND id = ? AND nonce = ? AND cipher = ?').run(JSON.stringify(abilities), expiresAt, Date.now(), owner, id, record.nonce, record.cipher);
+    this.db.prepare('UPDATE credentials SET expiry_known=? WHERE user_id=? AND id=? AND nonce=? AND cipher=?').run(expiryKnown?1:0,owner,id,record.nonce,record.cipher);
   }
   error(owner: string, id: string, code: SecretCode, unreadable: boolean, record: Sealed): void {
     this.db.prepare('UPDATE credentials SET last_error = ?, unreadable = ? WHERE user_id = ? AND id = ? AND nonce = ? AND cipher = ?').run(code, unreadable ? 1 : 0, owner, id, record.nonce, record.cipher);

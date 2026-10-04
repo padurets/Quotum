@@ -276,7 +276,7 @@ export const useCard = (id: string) => usePage(s => s.board?.cards[id]);
 export const useSourceAccess=(id:string)=>usePage(s=>s.board?.sourceAccess?.[id]??null);
 const NO_ACCESS:Record<string,SourceAccess>={};
 export const useSourceAccesses=()=>usePage(s=>s.board?.sourceAccess??NO_ACCESS);
-export const useMoneyUnits=()=>usePage(s=>[...new Set(Object.values(s.board?.cards??{}).flatMap(c=>c.meters?.map(m=>m.unit)??[]))].sort(),shallowEqual);
+export const useMoneyUnits=()=>usePage(s=>[...new Set(Object.values(s.board?.cards??{}).flatMap(c=>[...(c.meters?.map(m=>m.unit)??[]),...(c.reportQuality?.map(q=>q.unit)??[]),...(c.reportQuality&&!c.reportQuality.length?['USD']:[])]))].sort(),shallowEqual);
 /** The cards of these sources, in their order; the same list while each card is. */
 export const useCards = (ids: string[]) => usePage(s => ids.flatMap(id => s.board?.cards[id] ?? []), shallowEqual);
 export const useSessions = (id: string) => usePage(s => s.board?.sessions[id] ?? NONE);

@@ -31,6 +31,20 @@ export function decimal(value: string): bigint {
   return result;
 }
 
+/** Aggregate a provider bucket before rounding, so sub-micro lines do not accumulate error. */
+export function sumDecimals(values:readonly string[]):bigint {
+  const parts=values.map(value=>{
+    if(value.length>128)throw new Error('invalid_amount');
+    const m=/^(-?)(0|[1-9][0-9]*)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]{1,3}))?$/.exec(value);
+    if(!m||Math.abs(Number(m[4]??0))>100)throw new Error('invalid_amount');
+    return {coefficient:BigInt(m[2]+(m[3]??''))*(m[1]?-1n:1n),scale:(m[3]?.length??0)-Number(m[4]??0)};
+  });
+  const scale=Math.max(6,...parts.map(p=>p.scale));
+  const total=parts.reduce((sum,p)=>sum+p.coefficient*10n**BigInt(scale-p.scale),0n),divisor=10n**BigInt(scale-6),absolute=total<0n?-total:total;
+  const rounded=(absolute/divisor+(absolute%divisor*2n>=divisor?1n:0n))*(total<0n?-1n:1n);
+  return amount(rounded.toString());
+}
+
 /** Totals may exceed one stored amount's range, but never cross units. */
 export function addAmounts(values: readonly {unit: Unit; amount: string}[]): {unit: Unit; amount: string} | null {
   if (!values.length) return null;

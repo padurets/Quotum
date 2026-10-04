@@ -587,6 +587,30 @@ projected separately for each reader, outside the shared board cache.
 Frequency saves publish the new preference during an active poll; its cadence is
 recomputed after that poll finishes.
 
+OpenAI Platform uses separate reported daily intervals, keyed by source, meter, currency
+and original bounds. An accepted reread replaces a changed value; an unchanged read
+updates only confirmation metadata. Decimal lines are summed exactly before rounding,
+and integer-cent monthly thresholds convert independently. Retained values and current
+revision-bound confirmations feed one classifier on the server and dashboard. Missing
+or empty reports remain unknown; subday ranges never distribute a day’s costs.
+
+The connector reads only fixed organization Costs and Spend Limit GET operations,
+with at most eight pages and 2048 cost results in a sixty-second round. It rereads the
+retained ninety-day window to reconcile older corrections. One validated organization
+response header per successful component proves access, using a case-preserving
+provider-domain pseudonym. Same-organization rotation preserves history; every holder
+proves its own access. The selected methods leave key expiry unknown. Cost and optional
+limit outcomes are independent. Partial data commits separately from attempt outcome,
+and supplier retry deadlines persist through refresh, replacement and restart.
+
+Reported values travel through the existing history tiles in small byte leaves, with
+original daily bounds and value revisions. Current confirmation is a source projection,
+so quality-only changes need no history read and cannot mark an old cached value fresh.
+Cards and compact show monthly allowance and enforcement; analytics show reported
+costs and UTC calendar summaries. A known allowance requires confirmed monthly coverage
+and a fresh same-currency limit. These measurements never enter quota forecasts or
+notifications.
+
 ## Trusted connector keys
 
 The hub has a write-only credential service, separate from password and machine-token

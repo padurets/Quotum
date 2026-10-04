@@ -163,6 +163,19 @@ export const STEPS = [
   CREATE INDEX meter_spans_by_end ON meter_spans (to_at);
   CREATE INDEX credentials_by_source ON credentials (source_id, created_at, id);
   `,
+  // 10 — replaceable daily reports and private expiry knowledge.
+  `
+  ALTER TABLE credentials ADD COLUMN expiry_known INTEGER NOT NULL DEFAULT 1;
+  CREATE TABLE reported_intervals (
+    source_id TEXT NOT NULL, meter_id TEXT NOT NULL, unit TEXT NOT NULL,
+    from_at INTEGER NOT NULL, to_at INTEGER NOT NULL, amount INTEGER NOT NULL,
+    observed_at INTEGER NOT NULL, revision INTEGER NOT NULL,
+    PRIMARY KEY (source_id,meter_id,unit,from_at,to_at)) WITHOUT ROWID;
+  CREATE INDEX reported_by_end ON reported_intervals (to_at);
+  CREATE TABLE reported_components (
+    source_id TEXT NOT NULL, meter_id TEXT NOT NULL, unit TEXT NOT NULL, payload TEXT NOT NULL,
+    PRIMARY KEY (source_id,meter_id,unit)) WITHOUT ROWID;
+  `,
 ];
 
 export const SCHEMA_VERSION = STEPS.length;

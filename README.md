@@ -9,7 +9,8 @@
 
 Quotum shows how much of your coding-agent subscriptions is left — Claude Code, Codex
 and Antigravity — on every machine you work on, in one place: for you alone or for a
-whole team. It also shows OpenRouter balances and API-key caps. You host it yourself;
+whole team. It also shows OpenRouter balances and API-key caps, and OpenAI Platform
+organization costs. You host it yourself;
 the agent never reads provider tokens, and the hub encrypts the management key you
 explicitly connect.
 
@@ -345,6 +346,34 @@ Only holders can refresh a hub-measured source. Replace or remove your saved acc
 the same panel; removing it does not revoke the provider key. Revoked or expired access
 preserves the last measurements. The compact panel displays money too; tray minimums
 and quota notifications continue to use percentage windows only.
+
+## Connecting OpenAI Platform
+
+Open **My connections → Connect → OpenAI Platform** and supply a dedicated
+[organization Admin key](https://platform.openai.com/settings/organization/admin-keys).
+A project key does not grant organization cost access. Quotum reads only the documented
+Costs and Spend Limit GET methods. The server operator can decrypt stored access;
+local desktop mode uses the app’s existing key protection. The selected methods do not
+report the key’s expiry, so saving it requires confirmation of an unknown deadline.
+
+The card and compact panel show the configured monthly limit, remaining allowance,
+any overspend and enforcement state. This allowance is a budget, not a prepaid balance
+or a promise that model requests will succeed. Inaccessible or unknown limits remain
+unknown, including a Spend Limit 404, while valid costs survive.
+
+Choose a currency and **Spending** in analytics for reported daily costs and UTC calendar
+summaries (weeks begin on Monday). Repeated reports replace the same day; late data and
+corrections update its history. Empty or missing reports are not treated as zero.
+Current-day reports are provisional. A range covering only part of a day retains that
+whole-day amount separately: Quotum does not invent hourly spending. Costs and limits
+have independent freshness; unconfirmed history stays visible as last known. A remaining
+allowance is known only with fresh, complete monthly coverage in the same currency.
+
+The fixed response organization proof binds the source independently of its key.
+Replacement for the same verified organization preserves history; another organization
+requires a separate connection. Each holder must independently prove access. Saved keys
+and raw organization identifiers are private. Sharing and holder-only refresh work as
+for other hub-measured sources; costs do not enter quota forecasts or notifications.
 
 ## Updating
 

@@ -12,6 +12,24 @@ import {TLS_CERT, TLS_KEY} from './fixtures/connector-tls.fixture.js';
 const CANARY = Buffer.from('CANARY_PRIVATE_TRANSPORT_0123456789');
 const fails = (code: string) => (error: unknown) => error instanceof SecretError && error.code === code && !error.message.includes(CANARY.toString());
 
+test('organization proof exposes one allowlisted header and cursor encoding remains operation-owned',async t=>{
+  let calls=0;
+  const server=httpsServer({key:TLS_KEY,cert:TLS_CERT},(req,res)=>{
+    calls++;
+    const query=new URL(req.url!,'https://fixture.example').searchParams;
+    assert.equal(query.get('page'),'cursor +/=');
+    res.writeHead(200,{'openai-organization':query.get('duplicate')==='yes'?['org-Fixture','org-Fixture']:'org-Fixture','x-private-supplier':CANARY.toString()});res.end('{"object":"page"}');
+  });server.listen(0,'127.0.0.1');await once(server,'listening');
+  const transport=new ConnectorTransport({host:'127.0.0.1',port:(server.address() as AddressInfo).port,operations:{costs:{path:'/costs',query:['page','duplicate'],cursor:'page'},ordinary:{path:'/ordinary',query:['page']}}},{ca:TLS_CERT,organizationProof:true});
+  t.after(()=>{transport.close();server.closeAllConnections();server.close();});
+  const reply=await transport.send('costs',CANARY,{page:'cursor +/='});
+  assert.deepEqual(reply,{data:{object:'page'},organization:'org-Fixture'});assert.equal(JSON.stringify(reply).includes(CANARY.toString()),false);
+  assert.deepEqual(await transport.send('costs',CANARY,{page:'cursor +/=',duplicate:'yes'}),{data:{object:'page'},organization:null});
+  const before=calls;
+  for(const page of ['cursor\ncontrol','x'.repeat(1025)])await assert.rejects(transport.send('costs',CANARY,{page}),fails('connector_destination_invalid'));
+  await assert.rejects(transport.send('ordinary',CANARY,{page:'cursor +/='}),fails('connector_destination_invalid'));assert.equal(calls,before);
+});
+
 test('connector uses only fixed HTTPS operations, validates TLS, refuses redirects, and bounds the exchange', async t => {
   let redirected = 0, sent = 0;
   const target = httpServer((_req, res) => { redirected++; res.end('unexpected'); });

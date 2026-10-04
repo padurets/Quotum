@@ -1,4 +1,5 @@
 import {Attention} from './attention.js';
+import {providerOf} from './domain/providers.js';
 import {STATUS_CODES} from 'node:http';
 import type {Socket} from 'node:net';
 import Fastify, {type FastifyReply, type FastifyRequest} from 'fastify';
@@ -185,6 +186,7 @@ export async function buildApp(hub: Hub) {
       try {meters=selectionOf(JSON.parse(request.query.meters??''),request.query.unit);} catch {return reply.code(400).send({error:'invalid_request'});}
       // A shared hidden source is not a history capability, even when its id is known.
       if (meters.ids.some(([source])=>!shown.has(source))) return reply.code(404).send({error:'not_found'});
+      if(meters.ids.some(([source,meter])=>meter==='costs'&&!(providerOf(store.state(source).provider)?.meterKinds as readonly string[]|undefined)?.includes('reported')))return reply.code(400).send({error:'invalid_request'});
     }
     let chunks: string[];
     try {chunks=history.read(board, cell, from, to, now, shown, meters);}

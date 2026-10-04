@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useState, type FormEvent} from 'react';
 import {stamp} from '../lib/format';
-import {PROVIDERS} from '../lib/providers';
+import {PROVIDERS,SOURCE_FORMS,type SourceProvider} from '../lib/providers';
 import {errorText} from '../lib/quota';
 import {call} from '../lib/http';
 import {logoOf} from './logos';
@@ -176,22 +176,22 @@ function ConnectDevice() {
 }
 
 export function ConnectionsDialog({start,onClose,local,userId,trustedKeys}:{start:ConnectionsStart;onClose:()=>void;local:boolean;userId:string;trustedKeys:Session['trustedKeys']}) {
-  const [kind,setKind]=useState<'device'|'openrouter'|null>(local&&start==='connect'?'openrouter':null);
-  const [open,setOpen]=useState(start==='connect'&&!local);
+  const [kind,setKind]=useState<'device'|SourceProvider|null>(null);
+  const [open,setOpen]=useState(start==='connect');
   const [replace,setReplace]=useState<Credential|null>(null);
   const back=()=>{setKind(null);setReplace(null);};
-  const choose=(next:'device'|'openrouter')=>{setOpen(false);setKind(next);};
-  const title=kind==='device'?t('connections.connectDevice'):kind==='openrouter'?t(replace?'sources.replace':'sources.connect'):t('machines.title');
+  const choose=(next:'device'|SourceProvider)=>{setOpen(false);setKind(next);};
+  const title=kind==='device'?t('connections.connectDevice'):kind?t(replace?'sources.replace':'sources.connect'):t('machines.title');
   return <Modal key={kind??'list'} title={title} onClose={onClose} wide={!kind}>
     {kind?<div className="dialog-form">
       <button type="button" className="link-button connection-back" onClick={back}>← {t('connections.back')}</button>
-      {kind==='device'?<ConnectDevice/>:<ConnectSource userId={userId} local={local} trustedKeys={trustedKeys} replace={replace} onClose={back}/>}
+      {kind==='device'?<ConnectDevice/>:<ConnectSource provider={kind} userId={userId} local={local} trustedKeys={trustedKeys} replace={replace} onClose={back}/>}
     </div>:<div className="dialog-body">
-      <div className="connections-toolbar">{local?<button className="button primary" onClick={()=>choose('openrouter')}>{t('admin.connect')}</button>:<Popover label={t('admin.connect')} trigger={t('admin.connect')} triggerClass="button primary" open={open} onOpenChange={setOpen} align="left">
-        <button className="popover-row" onClick={()=>choose('device')}><span>{t('connections.device')}</span></button>
-        <button className="popover-row" onClick={()=>choose('openrouter')}><span>OpenRouter</span></button>
-      </Popover>}</div>
-      <ul className="connections-list"><Devices local={local}/><ConnectedAccounts userId={userId} trustedKeys={trustedKeys} onReplace={record=>{setReplace(record);choose('openrouter');}}/></ul>
+      <div className="connections-toolbar"><Popover label={t('admin.connect')} trigger={t('admin.connect')} triggerClass="button primary" open={open} onOpenChange={setOpen} align="left">
+        {!local&&<button className="popover-row" onClick={()=>choose('device')}><span>{t('connections.device')}</span></button>}
+        {(Object.keys(SOURCE_FORMS) as SourceProvider[]).map(provider=><button key={provider} className="popover-row" onClick={()=>choose(provider)}><span>{PROVIDERS[provider].name}</span></button>)}
+      </Popover></div>
+      <ul className="connections-list"><Devices local={local}/><ConnectedAccounts userId={userId} trustedKeys={trustedKeys} onReplace={record=>{setReplace(record);choose(record.provider as SourceProvider);}}/></ul>
     </div>}
   </Modal>;
 }

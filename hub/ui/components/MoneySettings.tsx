@@ -1,7 +1,7 @@
 import {useEffect,useState} from 'react';
 import {useBoardId,type Named} from '../lib/board';
 import {ApiError,call} from '../lib/http';
-import {archivedKeyGroups,moneySelection} from '../lib/moneySelection';
+import {archivedKeyGroups,moneySelection,chooseMoney} from '../lib/moneySelection';
 import {usePrefs,setPrefs} from '../lib/prefs';
 import {keyName} from '../lib/money';
 import type {MeterHistory} from '../lib/moneyView';
@@ -52,7 +52,7 @@ export function MoneySettings({sources,hidden,series}:{sources:readonly Named[];
   const toggle=(id:string,meter:string,on:boolean)=>{
     const ids=on?[...selected,[id,meter] as [string,string]]:selected.filter(([s,m])=>s!==id||m!==meter);
     if(ids.length>MAX_METERS)return;
-    setPrefs({money:{...prefs.money,removed:0,selected:{...prefs.money.selected,[unit]:ids}}});
+    setPrefs({money:chooseMoney(prefs.money,unit,ids)});
   };
   const row=(id:string,meter:string,label:string,unavailable=false,value?:string)=>{
     const on=has(id,meter);
@@ -71,6 +71,7 @@ export function MoneySettings({sources,hidden,series}:{sources:readonly Named[];
   return <>
     <div className="popover-title popover-section">{t('source.show')}</div>
     <p className="popover-note">{selected.length} / {MAX_METERS}</p>
+    {sources.filter(s=>!hidden.includes('source:'+s.id)&&s.reportQuality!==undefined).map(s=><div key={s.id} className="popover-section"><div className="popover-title">{s.title}</div>{row(s.id,prefs.money.view==='spending'?'costs':'monthly',t(prefs.money.view==='spending'?'money.reported':'money.cap'),prefs.money.view==='balance'&&!s.meters?.some(m=>m.id==='monthly'&&m.unit===unit))}</div>)}
     {source?<>
       {accounts.length>1&&<button className="popover-row" onClick={()=>setSource(null)}><span>← {t('money.accounts')}</span></button>}
       <div className="popover-title">{source.title}</div>
@@ -105,6 +106,6 @@ export function MoneySettings({sources,hidden,series}:{sources:readonly Named[];
         {!s.keysCount&&selected.some(([id,m])=>id===s.id&&m!=='balance')&&<button className="popover-row" onClick={()=>choose(s.id)}><span>{t('money.selectedDetails')}</span><b>›</b></button>}
       </div>)}</div>
     </>}
-    <div className="popover-section"><button className="popover-row" onClick={()=>{const next={...prefs.money.selected};delete next[unit];setPrefs({money:{...prefs.money,selected:next}});}}>{t('money.resetSelection')}</button></div>
+    <div className="popover-section"><button className="popover-row" onClick={()=>setPrefs({money:chooseMoney(prefs.money,unit,null)})}>{t('money.resetSelection')}</button></div>
   </>;
 }

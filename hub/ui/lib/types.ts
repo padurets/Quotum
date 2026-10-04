@@ -2,6 +2,7 @@ export type {Refresh, RefreshRequest} from '../../server/domain/refresh';
 export {MEASURE_INTERVAL, type MeasureIntervalMs} from '../../server/domain/frequency';
 import type {MeasureIntervalMs} from '../../server/domain/frequency';
 import type {Meter,KeyPart,CalendarSpend} from '../../server/domain/meters';
+import type {ReportQuality,MonthlyLimit,ReportCalendar,Allowance} from '../../server/domain/reports';
 /** A window's length as the agent classifies it. */
 export type Kind = 'session' | 'weekly' | 'other';
 
@@ -45,6 +46,10 @@ export type Card = {
   keysCount?:number;
   inventory?:{complete:boolean;observed:number;missing:number;error:string|null};
   spending?:CalendarSpend;
+  reportQuality?:ReportQuality[];
+  monthlyLimit?:MonthlyLimit;
+  reportedSpending?:ReportCalendar[];
+  allowance?:Allowance|null;
 };
 
 /** When a source is measured next and why, while the hub sets the pace of the device measuring it; `next` may have passed. */

@@ -30,7 +30,7 @@ const Row = memo(function Row({id}: {id: string}) {
       </div>
       {sessions.length > 0 && <small className="compact-agents" title={t('desktop.total', {count: sessions.length})}>{working}</small>}
     </div>
-    {card.meters?.length?<MoneyCard source={card} board={board??''} view={view} compact/>:!windows.length&&<p className="compact-quality">{t('desktop.unavailable')}</p>}
+    {(card.meters?.length||card.reportQuality!==undefined)?<MoneyCard source={card} board={board??''} view={view} compact/>:!windows.length&&<p className="compact-quality">{t('desktop.unavailable')}</p>}
     {windows.map(w => <div className="compact-limit" key={w.id}>
       <div className="compact-window-name">
         <span title={windowName(w).replaceAll(' · ', '\n')}>{windowName(w).split(' · ').map((part, i) => <span key={i}>{part}</span>)}</span>

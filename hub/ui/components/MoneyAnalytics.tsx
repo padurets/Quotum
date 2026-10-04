@@ -1,4 +1,4 @@
-import {useMemo,useRef} from 'react';
+import {Fragment,useMemo,useRef} from 'react';
 import {useBoardId,useNamed,useServerView} from '../lib/board';
 import {useHistory,useHistoryBegins,useHistoryPlot} from '../lib/history';
 import {usePrefs,setPrefs,setMuted} from '../lib/prefs';
@@ -20,6 +20,8 @@ import {MoneySettings} from './MoneySettings';
 import {axisNavigation} from '../lib/axisNavigation';
 import {usePrepared} from './prepared';
 import {usePanning} from '../lib/pan';
+import {composeReportsPrepared,type ReportHistory} from '../../server/domain/reports';
+import {reportIdentity,ReportDetail,ReportRows} from './ReportedCosts';
 import {composeMetersPrepared} from '../../server/domain/meterHistory';
 
 function nameOf(series:MeterHistory,title:string) {
@@ -59,6 +61,8 @@ export function MoneyHistory({arrange}:{arrange:Arrange}) {
       visible.push(entry);
       for(const point of entry.points){const value=BigInt(point.value);if(low===null||value<low)low=value;if(high===null||value>high)high=value;yield;}
     }
+    const reports:ReportHistory[]=strip?.meterChunks?.some(c=>c.reportSeries?.length)?yield* composeReportsPrepared(strip.meterChunks,strip.from,strip.to):history?.reportSeries??[];
+    for(const series of reports)if(series.unit===unit&&!prefs.muted[reportIdentity(series)])for(const row of series.intervals){const value=BigInt(row.amount);if(low===null||value<low)low=value;if(high===null||value>high)high=value;yield;}
     const origin=low??0n,span=(high??origin)-origin||1_000_000n,pad=span/10n||1n,lines:Line[]=[];
     for(const series of visible) {
       const card=sources.find(c=>c.id===series.sourceId),scaled=(value:string)=>Number(BigInt(value)-origin)/1_000_000;
@@ -66,7 +70,13 @@ export function MoneyHistory({arrange}:{arrange:Arrange}) {
       for(const point of series.points){points.push([point.at,scaled(point.value),point.segment]);yield;}
       lines.push({sourceId:series.sourceId,windowId:series.meterId,key:moneyIdentity(series),name:nameOf(series,card?.title??series.sourceId),provider:card?.provider??'',kind:'other',label:series.semantics?.label??null,minutes:null,color:colorOf(arrange.view,series.sourceId,card?.provider??''),dash:series.kind==='cap'?'7 5':'',current:scaled(series.end??'0'),consumed:0,coveredMs:series.coveredMs,remainingAtStart:series.start===null?null:scaled(series.start),remainingAtEnd:series.end===null?null:scaled(series.end),staleAfterMs:86_400_000,points,work:null});yield;
     }
-    return {entries,lines,origin,span,pad,strip};
+    for(const series of reports) {
+      if(series.unit!==unit||prefs.muted[reportIdentity(series)])continue;
+      const card=sources.find(c=>c.id===series.sourceId),points:Line['points']=[],intervals:NonNullable<Line['intervals']>=[];
+      for(const row of series.intervals){const value=Number(BigInt(row.amount)-origin)/1_000_000;points.push([row.from,value,row.from]);intervals.push({from:row.from,to:row.to,value});yield;}
+      lines.push({sourceId:series.sourceId,windowId:series.meterId,key:reportIdentity(series),name:(card?.title??series.sourceId)+' — '+t('money.reported'),provider:card?.provider??'',kind:'other',label:null,minutes:null,color:colorOf(arrange.view,series.sourceId,card?.provider??''),dash:'',current:0,consumed:0,coveredMs:0,remainingAtStart:null,remainingAtEnd:null,staleAfterMs:86_400_000,points,intervals,work:null});yield;
+    }
+    return {entries,lines,reports,origin,span,pad,strip};
   },[history,strip,prefs.muted,unit,prefs.money.view,sources,arrange.view,locale],`${board}:${unit}`);
   const model=prepared.value,entries=model?.entries??[],lines=model?.lines??[];
   const baseNavigation=axisNavigation(board,selected,prefs),navigation={...baseNavigation,context:JSON.stringify([baseNavigation.context,unit,prefs.money.view])};
@@ -74,11 +84,13 @@ export function MoneyHistory({arrange}:{arrange:Arrange}) {
     const origin=model?.origin??0n,span=model?.span??1_000_000n,pad=model?.pad??1n;
     const min=-Number(pad)/1_000_000,max=Number(span+pad)/1_000_000;
     return {min,max,ticks:Array.from({length:5},(_,i)=>min+(max-min)*i/4),label:t('money.value')+' ('+unit+')',
-      rawValue:(key:string,at:number)=>{const series=entries.find(s=>moneyIdentity(s)===key);return series&&pointAt(series,at)?.value||'0';},
+      rawValue:(key:string,at:number)=>{const series=entries.find(s=>moneyIdentity(s)===key),report=model?.reports.find(s=>reportIdentity(s)===key);return (report?.intervals.find(r=>r.from<=at&&r.to>at)?.amount??(series&&pointAt(series,at)?.value))||'0';},
       formatTick:(value:number)=>money((origin+BigInt(Math.round(value*1_000_000))).toString(),unit).slice(0,-unit.length-1),
-      formatValue:(key:string,_value:number,at:number)=>{const series=entries.find(s=>moneyIdentity(s)===key);return money(series&&pointAt(series,at)?.value,unit,true);},
+      formatValue:(key:string,_value:number,at:number)=>{const series=entries.find(s=>moneyIdentity(s)===key),report=model?.reports.find(s=>reportIdentity(s)===key);return money(report?.intervals.find(r=>r.from<=at&&r.to>at)?.amount??(series&&pointAt(series,at)?.value),unit,true);},
       detail:(key:string,at:number)=>{
         const series=entries.find(s=>moneyIdentity(s)===key),point=series&&pointAt(series,at);
+        const report=model?.reports.find(s=>reportIdentity(s)===key),row=report?.intervals.find(r=>r.from<=at&&r.to>at);
+        if(report&&row)return <ReportDetail series={report} row={row}/>;
         return <>{point?.semantics?.limit!==null&&point?.semantics?.limit!==undefined&&<div>{t('money.limitTotal')}: {money(point.semantics.limit,unit,true)}{point.semantics.resetAt!==null&&<div>{stamp(point.semantics.resetAt)}</div>}</div>}{point?.steps.map(step=><div key={step.from+':'+step.to}>{t('money.unlocated')}: {money(step.amount,unit,true)}<div>{stamp(step.from)} — {stamp(step.to)}</div></div>)}</>;
       }};
   },[model,unit,locale]);
@@ -92,7 +104,7 @@ export function MoneyHistory({arrange}:{arrange:Arrange}) {
     <SelectionNotice/>
     {error&&<p className="form-error">{t('money.historyLimit')}</p>}
     <Chart lines={lines} axis={axis} stepped from={frame.from} now={strip?now:measured} to={frame.to} cellMs={strip?.cell??history?.cellMs??60_000} strip={model?.strip??null} prepared={prepared.ready&&(panning!==null||answered)} empty={!lines.length?t('money.unknown'):null} plot={plot} onBase={onBase} onSelect={setTimeRange} navigation={navigation} live={frame.live} clock={now} modelContext={JSON.stringify([board,unit])}/>
-    <div className="legend">{original.map(s=>{const key=moneyIdentity(s),card=sources.find(c=>c.id===s.sourceId),total=prefs.money.view==='spending'&&s.kind!=='cap'&&history?moneyTotal(s,history.since,history.to):null,value=total?total.amount:s.end;return <button type="button" key={key} className="legend-item" aria-pressed={!prefs.muted[key]} onClick={()=>setMuted(key,!prefs.muted[key])}><svg width="18" height="6" aria-hidden="true"><line x1="1" x2="17" y1="3" y2="3" stroke={colorOf(arrange.view,s.sourceId,card?.provider??'')} strokeWidth="2.5" strokeDasharray={s.kind==='cap'?'7 5':undefined}/></svg><span>{nameOf(s,card?.title??s.sourceId)}</span><b title={total?.unknown?t('money.unknown'):total?.partial?t('money.partial'):undefined}>{money(value,s.unit)}{total?.partial&&<small className="money-partial">*</small>}</b></button>;})}</div>
+    <div className="legend">{original.map(s=>{const key=moneyIdentity(s),card=sources.find(c=>c.id===s.sourceId),total=prefs.money.view==='spending'&&s.kind!=='cap'&&history?moneyTotal(s,history.since,history.to):null,value=total?total.amount:s.end;return <button type="button" key={key} className="legend-item" aria-pressed={!prefs.muted[key]} onClick={()=>setMuted(key,!prefs.muted[key])}><svg width="18" height="6" aria-hidden="true"><line x1="1" x2="17" y1="3" y2="3" stroke={colorOf(arrange.view,s.sourceId,card?.provider??'')} strokeWidth="2.5" strokeDasharray={s.kind==='cap'?'7 5':undefined}/></svg><span>{nameOf(s,card?.title??s.sourceId)}</span><b title={total?.unknown?t('money.unknown'):total?.partial?t('money.partial'):undefined}>{money(value,s.unit)}{total?.partial&&<small className="money-partial">*</small>}</b></button>;})}{history?.reportSeries?.filter(s=>s.unit===unit).map(s=><button type="button" key={reportIdentity(s)} className="legend-item" aria-pressed={!prefs.muted[reportIdentity(s)]} onClick={()=>setMuted(reportIdentity(s),!prefs.muted[reportIdentity(s)])}><svg width="18" height="6" aria-hidden="true"><line x1="1" x2="17" y1="3" y2="3" stroke={colorOf(arrange.view,s.sourceId,sources.find(c=>c.id===s.sourceId)?.provider??'')} strokeWidth="2.5"/></svg><span>{sources.find(c=>c.id===s.sourceId)?.title??s.sourceId}</span><b>{t('money.reported')}</b></button>)}</div>
   </section>;
 }
 export function MoneyTable({arrange}:{arrange:Arrange}) {
@@ -111,6 +123,6 @@ export function MoneyTable({arrange}:{arrange:Arrange}) {
       const topup=id==='topup',total=moneyTotal(s,history.since,history.to,topup),steps=topup?s.topupUnlocated:s.unlocated;
       const title=[total.unknown?t('money.unknown'):total.partial?t('money.partial'):'',...steps.map(p=>`${money(p.amount,s.unit,true)}\n${stamp(p.from)} — ${stamp(p.to)}`)].filter(Boolean).join('\n');
       return <td key={id} title={title}>{money(total.amount,s.unit)}{total.partial&&<small className="money-partial">*</small>}</td>;
-    })}</tr>)}</tbody></table></div>
+    })}</tr>)}{history?.reportSeries?.filter(s=>s.unit===prefs.money.unit).map(s=><Fragment key={reportIdentity(s)}><ReportRows series={s} from={history.since} to={history.to} columns={columns}/></Fragment>)}</tbody></table></div>
   </section>;
 }

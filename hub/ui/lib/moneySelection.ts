@@ -3,7 +3,7 @@ import {MAX_METERS,selectionOf,type MeterSelection} from '../../server/domain/me
 import type {Card} from './types';
 import type {MeterHistory} from './moneyView';
 
-export type MoneyPrefs={unit:string|null;view:'balance'|'spending';selected:Record<string,[string,string][]>;removed?:number};
+export type MoneyPrefs={unit:string|null;view:'balance'|'spending';selected:Record<string,[string,string][]>;modes?:Partial<Record<'balance'|'spending',Record<string,[string,string][]>>>;removed?:number};
 export const DEFAULT_MONEY:MoneyPrefs={unit:null,view:'balance',selected:{}};
 export function readMoney(value:unknown):MoneyPrefs {
   if(!value||typeof value!=='object')return DEFAULT_MONEY;
@@ -11,15 +11,22 @@ export function readMoney(value:unknown):MoneyPrefs {
   if(raw.selected&&typeof raw.selected==='object')for(const [unit,ids] of Object.entries(raw.selected)){
     try{selected[unit]=selectionOf(ids,unit).ids;}catch{/* Invalid saved selections grant no capabilities. */}
   }
-  return {unit:isUnit(raw.unit)?raw.unit:null,view:raw.view==='spending'?'spending':'balance',selected,...(Number.isSafeInteger(raw.removed)&&raw.removed!>0&&raw.removed!<=32?{removed:raw.removed}:{})};
+  const modes:MoneyPrefs['modes']={};
+  for(const view of ['balance','spending'] as const)if(raw.modes?.[view]&&typeof raw.modes[view]==='object'){
+    modes[view]={};for(const [unit,ids] of Object.entries(raw.modes[view]!))try{modes[view]![unit]=selectionOf(ids,unit).ids;}catch{/* Reject malformed saved choices. */}
+  }
+  return {unit:isUnit(raw.unit)?raw.unit:null,view:raw.view==='spending'?'spending':'balance',selected,modes,...(Number.isSafeInteger(raw.removed)&&raw.removed!>0&&raw.removed!<=32?{removed:raw.removed}:{})};
 }
 export function moneySelection(cards:readonly Card[],hidden:readonly string[],settings:MoneyPrefs):{selection:MeterSelection|undefined;omitted:number;removed:number} {
   if(!settings.unit)return {selection:undefined,omitted:0,removed:0};
   const shown=cards.filter(c=>!hidden.includes('source:'+c.id)),visible=new Set(shown.map(c=>c.id));
-  const explicit=settings.selected[settings.unit];
+  const explicit=moneyChoices(settings)[settings.unit];
   const ids=explicit??shown.flatMap(card=>{
     const balance=card.meters?.find(m=>m.kind==='balance'&&m.unit===settings.unit);
-    return balance?[[card.id,balance.id] as [string,string]]:[];
+    if(balance)return [[card.id,balance.id] as [string,string]];
+    if(settings.view==='spending'&&card.reportQuality&&(card.reportQuality.some(q=>q.unit===settings.unit)||settings.unit==='USD'&&!card.reportQuality.length))return [[card.id,'costs'] as [string,string]];
+    const cap=card.meters?.find(m=>m.kind==='cap'&&m.unit===settings.unit&&m.id==='monthly');
+    return settings.view==='balance'&&cap?[[card.id,cap.id] as [string,string]]:[];
   });
   const admitted=ids.filter(([source])=>visible.has(source));
   return {selection:selectionOf(admitted.slice(0,MAX_METERS),settings.unit),omitted:Math.max(0,admitted.length-MAX_METERS),removed:ids.length-admitted.length};
@@ -39,4 +46,10 @@ export function archivedKeyGroups(source:string,selected:readonly [string,string
     group[kind]=meter;
   }
   return [...groups.values()];
+}
+
+export const moneyChoices=(settings:MoneyPrefs)=>settings.modes?.[settings.view]??settings.selected;
+export function chooseMoney(settings:MoneyPrefs,unit:string,ids:[string,string][]|null):MoneyPrefs {
+  const choices={...moneyChoices(settings)};if(ids===null)delete choices[unit];else choices[unit]=ids;
+  return {...settings,removed:0,modes:{balance:{...settings.selected},spending:{...settings.selected},...settings.modes,[settings.view]:choices}};
 }

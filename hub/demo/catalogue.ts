@@ -31,6 +31,7 @@ import {
 /** Durable app settings, in `npm run demo:keys`; checking and reset busy are transient and tested. */
 export {KEY_STORAGE} from './key-storage.js';
 export {MONEY_SCENES} from './money.js';
+export {REPORT_SCENES} from './reports.js';
 
 /**
  * The catalogue of the demo board: every state the dashboard knows today, one entry each,

@@ -1,5 +1,6 @@
 import type {Provider} from './sources.js';
 import type {KeyPart, Meter, MeterMeasurement} from './meters.js';
+import type {ReportQuality,MonthlyLimit} from './reports.js';
 
 /** A window's length as the agent classifies it (spec: Window `kind`). */
 export type Kind = 'session' | 'weekly' | 'other';
@@ -56,6 +57,10 @@ export type SourceState = {
   meters?: Meter[];
   keys?: KeyPart[];
   inventory?: {complete: boolean; observed: number; missing: number; error: string | null};
+  reportQuality?:ReportQuality[];
+  reportAttemptedAt?:number;
+  reportDigest?:string;
+  monthlyLimit?:MonthlyLimit;
 };
 
 export type Edge = {

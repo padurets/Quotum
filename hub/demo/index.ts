@@ -12,6 +12,7 @@ import {Live, seedWork, setUp, type Stand} from './setup.js';
 import {accessOf} from './access.js';
 import {Trackers} from './trackers.js';
 import {seedMoney} from './money.js';
+import {seedReports} from './reports.js';
 import {Directory} from '../server/store/directory.js';
 
 /**
@@ -183,6 +184,7 @@ export class Demo {
     try {
       seedWork(store, stand);
       if(this.options.money!==false&&(set.id==='all'||set.id==='money'))await seedMoney(store,new Directory(store.db),stand);
+      if(this.options.money!==false&&(set.id==='all'||set.id==='money'))await seedReports(store,new Directory(store.db),stand);
     } finally {
       store.close();
     }
@@ -313,11 +315,16 @@ async function selfCheck(stand: Stand, trackers: Trackers) {
   for (let i = 0; i < 20 && !trackers.asked; i++) await new Promise(resolve => setTimeout(resolve, 100));
   if (!trackers.asked) throw new Stop(`The hub did not ask the stand-in reset trackers: dist is out of date, run npm run build.`);
   const first = people(stand.set)[0].id;
-  const overview = await stand.people.get(first)!.get<{historyStart: number}>(`/api/overview?board=${encodeURIComponent(stand.boards.get(first)!)}`);
-  const expected = stand.start + earliest(stand.set);
-  if (overview.historyStart !== expected) {
+  const before=Date.now();
+  const overview = await stand.people.get(first)!.get<{historyStart: number;sources:{reportQuality?:{confirmation:{from:number}[]}[]}[]}>(`/api/overview?board=${encodeURIComponent(stand.boards.get(first)!)}`);
+  const after=Date.now(),reports=overview.sources.flatMap(source=>source.reportQuality?.flatMap(q=>q.confirmation.map(row=>row.from))??[]);
+  const reported=Math.min(...reports),sampled=stand.start+earliest(stand.set);
+  // A crossing retained report keeps its original day but starts visible history at the cutoff.
+  const expected=Math.min(sampled,Math.max(reported,before-90*86400000));
+  const latest=Math.min(sampled,Math.max(reported,after-90*86400000));
+  if (overview.historyStart < expected || overview.historyStart > latest) {
     throw new Stop(
-      `The hub's history starts at ${new Date(overview.historyStart).toISOString()}, not at the first seeded measurement (${new Date(expected).toISOString()}): dist is out of date, run npm run build.`,
+      `The hub's history starts at ${new Date(overview.historyStart).toISOString()}, not within the seeded measurement range starting (${new Date(expected).toISOString()}): dist is out of date, run npm run build.`,
     );
   }
 }
