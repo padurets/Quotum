@@ -495,9 +495,11 @@ export const SourceCard = memo(function SourceCard({id, arrange, boardId, person
     <article className="card" data-card={id} style={{'--card-color': colorOf(arrange.view, source.id, source.provider)} as CSSProperties}>
       <div className="card-head">
         <CardMark source={source} />
-        <div className="card-title">
-          <h2 title={source.plan?title+"\n"+source.plan:title}>{title}</h2>
-          <span className="plan resource-type">{t(source.meters?'resource.budget':'resource.subscription')}</span>
+        <div className="card-heading">
+          <div className="card-title"><h2 title={title}>{title}</h2>
+            {source.plan&&<span className="plan">{source.plan.replace(/^Claude\s+/i,'')}</span>}
+          </div>
+          {(source.meters||providerOf(source.provider))&&<small className="resource-type">{t(source.meters||providerOf(source.provider)?.measuredBy==='hub'?'resource.budget':'resource.subscription')}</small>}
         </div>
         <SourceSettings key={boardId} source={source} title={title} arrange={arrange} boardId={boardId} takeOff={takeOff} />
       </div>

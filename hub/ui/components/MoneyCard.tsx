@@ -1,5 +1,5 @@
 import type {Card,View} from '../lib/types';
-import type {KeyPart,Meter,SpendSummary} from '../../server/domain/meters';
+import type {KeyPart,Meter} from '../../server/domain/meters';
 import {useSourceAccess} from '../lib/board';
 import {money,keyName,capLeft,capPercent,capStale,capChangesAt} from '../lib/money';
 import {stamp,countdown,duration,countdownChangesAt,earliest} from '../lib/format';
@@ -12,16 +12,6 @@ import {MeterBar} from './Meter';
 import {level} from '../lib/quota';
 import {useShownKeys} from '../lib/moneyKeys';
 
-function Summary({value,asOf}:{value:SpendSummary|undefined;asOf:number|null}) {
-  const detail=value?[
-    asOf===null?'':t('money.asOf',{time:stamp(asOf)}),
-    value.amount===null?t('money.unknown'):'',
-    !value.complete?t('money.partial'):'',
-    value.knownFrom===null?'':t('money.knownFrom',{time:stamp(value.knownFrom)}),
-    ...value.unlocated.map(s=>`${t('money.unlocated')}: ${money(s.amount,'USD',true)}\n${stamp(s.from)} — ${stamp(s.to)}`),
-  ].filter(Boolean).join('\n'):t('money.unknown');
-  return <span title={detail}>{money(value?.amount)}{value&&(!value.complete||value.uncertain)&&<small className="money-partial">*</small>}</span>;
-}
 function KeyStatus({part,cap}:{part:KeyPart;cap:Meter}) {
   const now=useClock(now=>earliest(part.expiresAt!==null&&part.expiresAt>now?part.expiresAt:null,capChangesAt(cap,now)));
   const stale=capStale(cap,now);
@@ -32,11 +22,11 @@ function CapReset({meter,short=false}:{meter:Meter;short?:boolean}) {
   return <span data-time="cap-reset" title={meter.resetAt===null?'':stamp(meter.resetAt)}>{meter.resetAt!==null&&meter.resetAt>now?short?countdown(meter.resetAt-now):t('limit.resetsIn',{time:duration(meter.resetAt-now)}):meter.resetAt!==null?t('money.partial'):''}</span>;
 }
 export function KeyMetrics({part,meters,compact=false}:{part:KeyPart;meters:readonly Meter[];compact?:boolean}) {
-  const usage=meters.find(m=>m.id===`key:${part.id}:usage`),cap=meters.find(m=>m.id===`key:${part.id}:cap`);
+  const cap=meters.find(m=>m.id===`key:${part.id}:cap`);
   if(!cap)return null;
   const percent=capPercent(cap),remaining=percent===null?null:100-percent;
   const left=money(capLeft(cap),cap.unit),value=left.slice(0,-cap.unit.length-1);
-  const detail=[t('money.usage')+': '+money(usage?.amount,cap.unit,true),t('money.month')+': '+money(part.periods.month,cap.unit,true),part.includeByok?t('money.byok'):''].filter(Boolean).join('\n');
+  const detail=[keyName(part),part.includeByok?t('money.byok'):''].filter(Boolean).join('\n');
   const stale=part.presence==='missing'||cap.stale;
   const bar=<MeterBar remaining={remaining} label={keyName(part)}/>;
   if(compact)return <div className={`compact-limit is-money${stale?' is-stale':''}`}>
@@ -56,10 +46,6 @@ export function MoneyCard({source,board,view,compact=false}:{source:Card;board:s
   const balance=source.meters?.find(m=>m.id==='balance'),{keys,meters,error}=useShownKeys(source,view,board);
   return <div className="money-body">
     <div className="money-balance" title={money(balance?.amount,balance?.unit,true)}><span>{t('money.balance')}</span><strong data-money={balance?.amount}>{money(balance?.amount,balance?.unit)}</strong></div>
-    {!compact&&<>
-      <div className="money-summaries">{(['day','week','month'] as const).map(period=><div key={period}><small>{t(`money.${period}`)}</small><Summary value={source.spending?.[period]} asOf={source.successAt}/></div>)}</div>
-      {source.successAt!==null&&<small className="money-data-time">{t('money.asOf',{time:stamp(source.successAt)})}</small>}
-    </>}
     <div className="limits">{keys.map(part=><KeyMetrics key={part.id} part={part} meters={meters} compact={compact}/>)}</div>
     <ErrorLine error={error}/>
   </div>;

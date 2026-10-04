@@ -185,7 +185,11 @@ the previous live stand available.
 
 Settings are in [.env.example](.env.example). `DEV_SET=showcase DEV_STILL=true make dev`
 uses the still showcase; `DEV_SET=activity` uses the activity set. `DEV_RESETS` selects
-a scene from `hub/demo/catalogue.ts`. `DEV_MODE=hub make dev` starts an ordinary hub on
+a scene from `hub/demo/catalogue.ts`. `DEV_SET=money DEV_STILL=true make dev` places subscriptions beside
+the monetary cases on Ana's personal board: balance and caps, large key inventory,
+revoked and expired access, a history gap, negative balance, zero cap and an unknown
+provider. The other catalogue cards remain available in the widget menu.
+`DEV_MODE=hub make dev` starts an ordinary hub on
 isolated persistent data with reset trackers disabled. No mode starts coding clients.
 To connect trusted sources in hub mode, set `QUOTUM_SECRET_KEY_FILE` in `.env` to a
 private file containing the encryption key described in the README. Relative paths

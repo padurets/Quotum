@@ -315,12 +315,12 @@ The key can create, edit and delete provider API keys; Quotum uses only fixed re
 operations. A server hub needs its separate encryption key configured, and its operator
 can decrypt saved access. See [SECURITY.md](SECURITY.md) for the protection and limits.
 
-Cards label their resource as **Subscription** or **Budget** beside the title.
-The budget card shows the credit balance and observed spending for the UTC day, week
-(starting Monday) and month through the last measurement, with its data time below.
-Its settings switch individual key-limit scales, including keys beyond the initial
-five-key preview. Enabled scales appear directly on the card, using the same segmented
-meters as subscriptions. Keys without a spending limit have no scale.
+The original plan label stays beside the title; a small second line identifies the
+resource as **Subscription** or **Budget**. The budget card shows only current state:
+its balance and enabled key-limit scales with their reset times. Its settings switch
+individual scales, including keys beyond the initial five-key preview. Scales use the
+same segmented meters as subscriptions; keys without a spending limit have no scale.
+Spending belongs to analytics.
 The chart's own settings select
 key usage and remaining limits for analytics. Choose **USD** in the
 shared analytics controls for the money chart and table. Account balances are selected
@@ -522,7 +522,8 @@ over plain HTTP/1.1, about five.
 - `npm run demo` in `hub/` (after `npm run build`): a live board on throwaway data with
   every state the dashboard knows that lasts on a working hub, no network or account
   needed; Ctrl+C stops it and leaves nothing behind. `npm run demo -- showcase` is the
-  board of the images above.
+  board of the images above. `npm run demo -- money --still` puts subscriptions beside
+  every monetary case on Ana's personal board.
 
 Project layout:
 

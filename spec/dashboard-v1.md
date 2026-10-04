@@ -472,7 +472,8 @@ counters are baselines. Counter corrections are not spending. Account calendar p
 are UTC, with Monday starting the week. `spending` gives day/week/month summaries with
 `from`, `to` (the last account observation, or the current period start before its first
 observation), `amount` or null, `complete`, `knownFrom`, `uncertain` and `unlocated`.
-Completeness ends at that observation, and the card and amount's tooltip name its data time.
+Completeness ends at that observation. Calendar spending remains available as data for
+analytics; source cards show current balances and enabled caps, without spending summaries.
 An unlocated step retains its original `{from, to, amount, evidence}`; evidence is
 `continuous`, `gap` or `estimate`. A continuous step crossing midnight may be known
 for the week and unlocated for the day. No spending is assigned a guessed time.

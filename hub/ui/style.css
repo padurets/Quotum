@@ -890,17 +890,14 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .money-balance { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
 .money-balance > span { color: var(--text-3); }
 .money-balance > strong { font-size: 1.65rem; font-variant-numeric: tabular-nums; }
-.money-summaries { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.money-summaries > div { display: flex; flex-direction: column; gap: 4px; font-variant-numeric: tabular-nums; }
-.money-summaries small { color: var(--text-3); font-size: .76rem; }
 .money-partial { margin-left: 4px; color: var(--text-3); }
 .money-limit .limit-top { flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
 .money-limit .limit-name { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .money-limit .limit-name small { display: block; color: var(--text-3); font-size: 11px; }
 .money-limit .limit-value { max-width: 100%; overflow-wrap: anywhere; }
 .money-limit .limit-bottom { flex-wrap: wrap; gap: 4px 12px; }
-.money-data-time { color: var(--text-3); font-size: 11.5px; }
-.resource-type { flex-shrink: 0; }
+.card-heading { flex: 1; min-width: 0; }
+.resource-type { display: block; margin-top: 2px; color: var(--text-3); font-size: 10.5px; line-height: 1.2; }
 .compact-limit.is-money { grid-template-columns: minmax(0, 1.5fr) 7.5ch minmax(36px, 1fr) auto; }
 .compact-limit.is-money > strong { max-width: 18ch; overflow-wrap: anywhere; }
 .is-stale { opacity: .6; }
@@ -908,7 +905,6 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .source-consent { display: flex; gap: 8px; align-items: flex-start; }
 .monetary-table th:not(:first-child), .monetary-table td:not(:first-child) { text-align: right; }
 .compact .money-balance > strong { font-size: 1.15rem; }
-@media (max-width: 480px) { .money-summaries { gap: 4px; font-size: .75rem; } }
 
 /* Connections use the same inset rows as other lists on glass. */
 .connections-toolbar { display: flex; justify-content: flex-end; }

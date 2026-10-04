@@ -1591,5 +1591,5 @@ const activity: DemoSet = {
   ],
 };
 
-const money:DemoSet={...showcase,id:'money',about:'OpenRouter balances, key caps, partial inventory and private access failures'};
+const money:DemoSet={...all,id:'money',about:'Subscriptions beside OpenRouter balances, key caps, partial inventory and private access failures'};
 export const SETS: DemoSet[] = [all, showcase, activity,money];

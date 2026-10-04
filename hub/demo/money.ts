@@ -23,13 +23,15 @@ const meter=(id:string,at:number,amount:string):Meter=>({id,kind:'counter',unit:
 /** Only synthetic measured data is seeded; no user access or provider is consulted. */
 export async function seedMoney(store:Store,directory:Directory,stand:Stand) {
   const owner=[...stand.people.values()][0],now=Date.now();
+  const accounts:string[]=[];
   if(!owner)return;
   for(let index=0;index<MONEY_SCENES.length;index++) {
     const scene=MONEY_SCENES[index];
     if(scene.id==='unknown') {
-      const source=store.source('future-provider' as Provider,'demo-neutral',now);store.hold(source,owner.id,now);continue;
+      const source=store.source('future-provider' as Provider,'demo-neutral',now);store.hold(source,owner.id,now);accounts.push(source);continue;
     }
     const source=store.source('openrouter',accountOfMoney(index),now);
+    accounts.push(source);
     const total=scene.id==='negative'?'10':'70',usage=scene.id==='negative'?'15':'33';
     const sample=(at:number,credits:string,spent:string,keysCount=2)=>{
       const keys:KeyPart[]=Array.from({length:keysCount},(_,k)=>({id:keyId(index*100+k+1),name:`${k%2?'workstation':'laptop'}-${k+1}`,disabled:k===1,expiresAt:null,includeByok:k===0,at,staleAfterMs:3*3_600_000,presence:'observed',missCount:0,periods:{day:'100000',week:'1000000',month:'3000000'}}));
@@ -47,5 +49,18 @@ export async function seedMoney(store:Store,directory:Directory,stand:Stand) {
     view.names[source]='OpenRouter '+scene.id;
     directory.saveView(personal.id,view,owner.id,now);
     for(const board of directory.boards(owner.id).filter(b=>!b.personal))store.share(board.id,source,owner.id,now);
+  }
+  if(stand.set.id==='money') {
+    const personal=directory.boards(owner.id).find(board=>board.personal)!;
+    const sources=store.sources(personal.id),view=directory.view(personal.id);
+    const native=['claude','codex','antigravity'].map(provider=>sources.find(source=>{
+      const state=store.state(source.id);return source.provider===provider&&!state.error&&state.windows.some(w=>w.kind==='session')&&state.windows.some(w=>w.kind==='weekly');
+    })?.id).filter((id):id is string=>!!id);
+    const order=[native[0],accounts[0],native[1],accounts[1],native[2],...accounts.slice(2)].filter((id):id is string=>!!id);
+    const selected=new Set(order);
+    view.hidden=sources.filter(source=>!selected.has(source.id)).map(source=>'source:'+source.id);
+    view.shown=[];view.windows=[];
+    for(const [index,id] of order.entries())view.layout.places['source:'+id]={x:index%2*3,y:index,w:3};
+    directory.saveView(personal.id,view,owner.id,now);
   }
 }
