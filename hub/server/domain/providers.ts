@@ -4,7 +4,7 @@ export const catalogue = [
   {id: 'codex', name: 'Codex', color: '#6897f0', logoAsset: 'codex', order: 1, measuredBy: 'client', meterKinds: ['window'], resets: true, clientId: 'codex'},
   {id: 'antigravity', name: 'Antigravity', color: '#d271b3', logoAsset: 'antigravity', order: 2, measuredBy: 'client', meterKinds: ['window'], resets: false, clientId: 'antigravity'},
   {id: 'openrouter', name: 'OpenRouter', color: '#c8ff00', logoAsset: 'openrouter', order: 3, measuredBy: 'hub', meterKinds: ['counter', 'balance', 'cap'], resets: false, connectorId: 'openrouter'},
-  {id:'openai_platform',name:'OpenAI Platform',color:'#71c8ae',logoAsset:'codex',order:4,measuredBy:'hub',meterKinds:['reported','cap'],resets:false,connectorId:'openai_platform'},
+  {id:'openai_platform',name:'OpenAI Platform',color:'#71c8ae',logoAsset:'openai',order:4,measuredBy:'hub',meterKinds:['reported','cap'],resets:false,connectorId:'openai_platform'},
 ] as const;
 
 export type Provider = (typeof catalogue)[number]['id'];

@@ -117,7 +117,7 @@ export function MoneyTable({arrange}:{arrange:Arrange}) {
     </Popover>}</div><SelectionNotice/>
     {history&&<p className="drawer-note">{t('money.interval',{from:stamp(history.since),to:stamp(history.to)})}</p>}
     {error&&<p className="form-error">{t('money.historyLimit')}</p>}
-    <div className="table-wrap"><table className="monetary-table"><thead><tr><th>{t('money.key')}</th>{columns.map(([id,label])=><th key={id}>{t(label)}</th>)}</tr></thead><tbody>{history?.meterSeries?.filter(s=>s.unit===prefs.money.unit).map(s=><tr key={moneyIdentity(s)}><td>{nameOf(s,sources.find(c=>c.id===s.sourceId)?.title??s.sourceId)}</td>{columns.map(([id])=>{
+    <div className="table-wrap"><table className="monetary-table"><thead><tr><th>{t('money.sourceOrKey')}</th>{columns.map(([id,label])=><th key={id}>{t(label)}</th>)}</tr></thead><tbody>{history?.meterSeries?.filter(s=>s.unit===prefs.money.unit).map(s=><tr key={moneyIdentity(s)}><td>{nameOf(s,sources.find(c=>c.id===s.sourceId)?.title??s.sourceId)}</td>{columns.map(([id])=>{
       if(id==='value')return <td key={id} title={money(s.end,s.unit,true)}>{money(s.end,s.unit)}</td>;
       if(id==='spending'&&s.kind==='cap'||id==='topup'&&s.kind!=='balance')return <td key={id}>—</td>;
       const topup=id==='topup',total=moneyTotal(s,history.since,history.to,topup),steps=topup?s.topupUnlocated:s.unlocated;

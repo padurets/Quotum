@@ -122,3 +122,11 @@ test('a malformed repeated day preserves its prior value and carries a transient
   const c=adapter(op=>op==='costs'?{object:'page',data:[bucket(0),malformed],has_more:false,next_page:null}:limit);
   try{const result=await c.identify(secret);assert.equal(result.measurement!.reports!.intervals.length,0);assert.equal(result.attempt!.outcome,'transient');assert.equal(result.attempt!.safeCode,'connector_invalid_response');}finally{c.transport.close();}
 });
+
+test('a monthly organization allowance cannot use a single-currency subtotal of mixed costs',()=>{
+  const store=new Store(':memory:',start),source=store.source('openai_platform','a'.repeat(24),start),at=start+43200000;
+  try{const m=measurement(at,[[0,'5000000']]);m.reports!.intervals.push({...m.reports!.intervals[0],unit:'CNY',amount:'7000000'});store.record(source,m);
+    const calendar=store.reports.calendar(source,at);assert.deepEqual(calendar.map(c=>[c.unit,c.month.amount]),[['CNY','7000000'],['USD','5000000']]);
+    const allowance=reportAllowance(calendar,store.state(source).monthlyLimit,at);assert.equal(allowance?.limit,'100000000');assert.equal(allowance?.remaining,null);assert.equal(store.state(source).meters?.some(m=>m.id==='monthly'),false);
+  }finally{store.close();}
+});

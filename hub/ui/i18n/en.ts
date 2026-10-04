@@ -774,4 +774,6 @@ export const en = {
   "money.wholeDay": "Whole-day report; spending within the selected part is unknown",
   "money.utcPeriods": "Calendar costs in UTC; weeks start on Monday",
   "money.today": "Day",
+  "money.sourceOrKey": "Source / key",
+  "money.currencyMismatch": "Costs and limit use different currencies.",
 } satisfies Record<string, Message>;

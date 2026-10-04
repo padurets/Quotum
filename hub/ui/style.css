@@ -950,6 +950,8 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .money-limit:has(.cap-stale), .compact-limit.is-money:has(.cap-stale) { opacity: .6; }
 .source-consent { display: flex; gap: 8px; align-items: flex-start; }
 .monetary-table th:not(:first-child), .monetary-table td:not(:first-child) { text-align: right; }
+.report-name small { color: var(--text-3); }
+.report-periods { display: flex; flex-wrap: wrap; gap: 6px 24px; color: var(--text-2); }
 .compact .money-balance .limit-value { font-size: 1.15rem; }
 .compact .money-body .limit-value small { font-size: 11px; }
 .compact .money-limits:not(:empty) { padding-top: 8px; margin-top: 0; }

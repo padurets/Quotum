@@ -46,7 +46,8 @@ export function reportAllowance(calendar:readonly ReportCalendar[],limit:Monthly
   if(!limit?.value)return null;
   const month=calendar.find(c=>c.unit===limit.value!.unit)?.month;
   const stale=limit.status!=='ok'||limit.valueAt===null||now>limit.valueAt+limit.staleAfterMs;
-  const remaining=!stale&&month?.confirmed&&month.amount!==null?(BigInt(limit.value.amount)-BigInt(month.amount)).toString():null;
+  const sameCurrency=calendar.every(c=>c.unit===limit.value!.unit||c.month.amount===null);
+  const remaining=!stale&&sameCurrency&&month?.confirmed&&month.amount!==null?(BigInt(limit.value.amount)-BigInt(month.amount)).toString():null;
   return {unit:limit.value.unit,limit:limit.value.amount,remaining,overspend:remaining===null?null:BigInt(remaining)<0n?(-BigInt(remaining)).toString():'0',enforcement:stale?'unknown':limit.value.enforcement,stale};
 }
 /** Duplicate original days across tiles are one report, with the latest accepted revision. */

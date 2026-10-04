@@ -769,4 +769,6 @@ export const ru = {
   "money.wholeDay": "Отчёт за целый день; расход внутри выбранной части неизвестен",
   "money.utcPeriods": "Календарные расходы в UTC; неделя начинается в понедельник",
   "money.today": "День",
+  "money.sourceOrKey": "Источник / ключ",
+  "money.currencyMismatch": "Расходы и лимит указаны в разных валютах.",
 } satisfies Catalog;

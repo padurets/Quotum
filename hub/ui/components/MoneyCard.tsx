@@ -75,15 +75,19 @@ function BudgetCard({source,compact}:{source:Card;compact:boolean}) {
   const percent=limit!==null&&BigInt(limit)>0n&&remaining!==null&&BigInt(remaining)<=BigInt(limit)?Number(BigInt(remaining)*10000n/BigInt(limit))/100:null;
   const text=money(remaining,unit),value=remaining===null?text:text.slice(0,-unit.length-1);
   const enforcement=allowance?.enforcement==='enforcing'?t('money.enforcing'):allowance?.enforcement==='inactive'?t('money.inactive'):t('money.enforcementUnknown');
-  const detail=[t('money.monthlyLimit'),money(limit,unit,true),enforcement,allowance?.overspend&&BigInt(allowance.overspend)>0n?t('money.overspend')+': '+money(allowance.overspend,unit,true):'',remaining===null?t('money.lastKnown'):''].filter(Boolean).join('\n');
+  const calendar=source.reportedSpending??[],month=calendar.find(c=>c.unit===unit)?.month;
+  const reason=calendar.some(c=>c.unit!==unit&&c.month.amount!==null)?t('money.currencyMismatch'):allowance?.stale?t('money.stale'):allowance&&remaining===null&&!month?.confirmed?t('money.lastKnown'):'';
+  const trouble=source.monthlyLimit?.status==='unavailable'||allowance?.stale;
+  const mark=trouble?<small className="key-status cap-stale" role="img" aria-label={t('money.limitUnknown')} title={t('money.limitUnknown')}/>:null;
+  const detail=[t('money.monthlyLimit'),money(limit,unit,true),enforcement,allowance?.overspend&&BigInt(allowance.overspend)>0n?t('money.overspend')+': '+money(allowance.overspend,unit,true):'',reason].filter(Boolean).join('\n');
   if(compact)return <div className="money-body"><div className="limits money-limits"><div className="compact-limit is-money">
-    <div className="compact-window-name"><span title={detail}>{t('money.monthlyLimit')}</span></div>
+    <div className="compact-window-name"><span title={detail}>{t('money.monthlyLimit')}{mark}</span></div>
     <small className="compact-reset" title={detail}>{enforcement}</small>
     <MeterBar remaining={percent} label={t('money.monthlyLimit')}/>
     <strong className="limit-value" title={detail}>{value}{remaining!==null&&<small>{unit}</small>}</strong>
   </div></div></div>;
-  return <div className="money-body"><div className="limits money-limits"><div className={compact?'compact-limit is-money':'limit money-limit'}>
-    <div className={compact?'compact-window-name':'limit-top'}><span className="limit-name" title={detail}>{t('money.allowance')}</span><span className="limit-value" title={detail}>{value}{remaining!==null&&<small>{unit}</small>}</span></div>
+  return <div className="money-body"><div className="limits money-limits"><div className="limit money-limit">
+    <div className="limit-top"><span className="limit-name" title={detail}>{t('money.allowance')}{mark}</span><span className="limit-value" title={detail}>{value}{remaining!==null&&<small>{unit}</small>}</span></div>
     <MeterBar remaining={percent} label={t('money.monthlyLimit')}/>
     <div className="limit-bottom"><span title={detail}>{limit===null?t('money.limitUnknown'):t('money.of',{amount:money(limit,unit)})}</span><span title={detail}>{enforcement}</span></div>
   </div></div></div>;
