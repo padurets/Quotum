@@ -23,6 +23,9 @@ and returning to live. Moving-frame intervals must stay within 34 ms at p95 and 
 at p99; input to an actually updated chart frame must stay within 34 ms at p95. Empty
 callbacks and missing samples fail. The previous idle, measurement, work and native
 frequency-focus checks retain their budgets. No browser means the check was not run.
+The owned headless browser uses one raster worker: concurrent software raster jobs
+in Chrome 154 can leave a tile unfinished and deadlock an input frame's commit.
+An attached CDP browser retains its own launch settings.
 The observer credits input after its coalesced position reaches the actual data layers
 in the production RAF. Stationary input-free gaps are excluded; delayed pending input
 remains measurable. A last input committed on release waits for the final geometry and

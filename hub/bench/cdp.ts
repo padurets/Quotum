@@ -88,6 +88,9 @@ export class Cdp {
 /** Flags that make a headless tab behave as a visible one in front: no throttled timers, no extras that ask the network. */
 const FLAGS = [
   '--headless=new',
+  // Parallel software raster jobs can strand a pending tile in Chrome 154,
+  // leaving the next input frame blocked in LayerTreeHost's commit wait.
+  '--num-raster-threads=1',
   '--no-first-run',
   '--no-default-browser-check',
   '--disable-background-networking',

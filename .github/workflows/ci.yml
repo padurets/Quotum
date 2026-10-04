@@ -59,35 +59,7 @@ jobs:
           cache-dependency-path: hub/package-lock.json
       - run: npm ci
       - run: npm run build
-      - run: command -v gdb || { sudo apt-get update -qq; sudo apt-get install -y gdb; }
-      - run: QUOTUM_BENCH_NATIVE_STACKS=1 QUOTUM_BENCH_REVERSAL_PROBE=1 QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci
-
-  native-diagnostic:
-    if: github.ref_name == 'feat/2-openrouter' || github.head_ref == 'feat/2-openrouter'
-    runs-on: ubuntu-latest
-    timeout-minutes: 6
-    defaults:
-      run:
-        working-directory: hub
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: hub/package-lock.json
-      - run: npm ci
-      - run: npm run build
-      - run: command -v gdb || { sudo apt-get update -qq; sudo apt-get install -y gdb; }
-      - name: Load symbols for the runner's Chrome
-        run: |
-          chrome=$(command -v google-chrome)
-          version=$("$chrome" --product-version)
-          echo "Chrome $version"
-          curl --fail --location --silent --show-error "https://edgedl.me.gvt1.com/chrome/linux/symbols/google-chrome-debug-info-linux64-$version.zip" -o "$RUNNER_TEMP/chrome-debug.zip"
-          unzip -q "$RUNNER_TEMP/chrome-debug.zip" debug-info/chrome.debug -d "$RUNNER_TEMP/chrome-debug"
-          sudo ln -s "$RUNNER_TEMP/chrome-debug/debug-info/chrome.debug" "$(dirname "$(readlink -f "$chrome")")/chrome.debug"
-      - run: QUOTUM_BENCH_DIAGNOSE_NATIVE=1 QUOTUM_BENCH_NATIVE_STACKS=1 QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci
+      - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci
 
   # On every system the agent ships for: its process handling differs between them.
   agent:
