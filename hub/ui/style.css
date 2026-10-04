@@ -620,9 +620,10 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 .chart:has(> svg.is-selectable) { cursor: crosshair; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
 .chart:has(> svg.is-grabbable) { cursor: grab; }
 .chart:has(> svg.is-grabbing) { cursor: grabbing; }
-/* SVG content is rasterized again only when it changes, not for each translation. */
-.chart:has(> svg.is-panning) .plot-move { will-change: transform; }
-.chart:has(> svg.is-panning) .plot-clip.is-band { will-change: clip-path; }
+/* Keep the prepared strip's layers between gestures; the first input must not
+   promote and rasterize the whole strip again. */
+.chart .plot-move { will-change: transform; }
+.chart .plot-clip.is-band { will-change: clip-path; }
 .selection { fill: color-mix(in oklab, var(--accent) 14%, transparent); stroke: color-mix(in oklab, var(--accent) 50%, transparent); stroke-width: 1; }
 .tooltip {
   position: absolute; top: 8px; z-index: 4; pointer-events: none; width: max-content; min-width: 190px; max-width: min(360px, 100%); overflow: hidden;

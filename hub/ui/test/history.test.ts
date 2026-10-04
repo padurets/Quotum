@@ -7,7 +7,7 @@ import {HistoryTile} from '../lib/historyTiles';
 import {Preparations} from '../lib/prepare';
 import {ApiError} from '../lib/http';
 import {composeMeters} from '../../server/domain/meterHistory';
-import {CLOCK_TOLERANCE_MS, READ_CELLS, cellOf, cellStart, compose, targetOf, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer} from '../../server/domain/history';
+import {CLOCK_TOLERANCE_MS, READ_CELLS, cellOf, cellStart, compose, targetOf, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer, type HistoryBasis} from '../../server/domain/history';
 
 const M = 60_000;
 const H = 60 * M;
@@ -20,12 +20,12 @@ function harness(budget?: number, preparations?: Preparations) {
   let elapsed = 0;
   let dropped = 0;
   const timers = new Map<unknown, {at: number; run: () => void}>();
-  const reads: {board: string; cell: number; from: number; to: number; signal?: AbortSignal; settled: boolean; answer(patch?: Partial<HistoryAnswer>): Promise<void>; fail(error: unknown): Promise<void>}[] = [];
+  const reads: {board: string; cell: number; from: number; to: number; signal?: AbortSignal; metadata?: HistoryBasis; settled: boolean; answer(patch?: Partial<HistoryAnswer>): Promise<void>; fail(error: unknown): Promise<void>}[] = [];
   const store = new HistoryStore({
     now: () => now,
     preparations,
     elapsedNow: () => elapsed,
-    read: (board, cell, from, to, signal) => new Promise((resolve, reject) => reads.push({board, cell, from, to, signal, settled: false,
+    read: (board, cell, from, to, signal, _meters, metadata) => new Promise((resolve, reject) => reads.push({board, cell, from, to, signal, metadata, settled: false,
       async answer(patch = {}) {
         this.settled = true;
         const end = Math.min(to, cellStart((patch.now ?? now) + CLOCK_TOLERANCE_MS, cell) + cell);
@@ -52,6 +52,27 @@ function harness(budget?: number, preparations?: Preparations) {
   const start = async () => {store.open('b'); store.hello('run'); store.snapshot(['s'], ['s w']); await flush();};
   return {store, reads, advance, start, now: () => now, dropped: () => dropped, timers, correctClock: (ms: number) => {now += ms;}};
 }
+
+test('each history flight captures metadata without crossing boards or hub restarts', async () => {
+  const h = harness(); await h.start();
+  assert.equal(h.reads[0].metadata, undefined);
+  await h.reads[0].answer({meta: 'first'});
+  h.store.news(NOW); await flush();
+  const prior = h.reads.at(-1)!;
+  assert.equal(prior.metadata?.meta, 'first'); assert.equal(prior.metadata?.run, 'run');
+  h.store.hello('restarted'); h.store.snapshot(['s'], ['s w']); await flush();
+  const restarted = h.reads.at(-1)!;
+  assert.equal(restarted.metadata, undefined, 'the old receipt cannot be relabelled with a new run');
+  await restarted.answer({run: 'restarted', meta: 'second'});
+  h.store.news(NOW); await flush();
+  assert.equal(h.reads.at(-1)!.metadata?.meta, 'second');
+  h.store.open('other'); h.store.hello('other-run'); h.store.snapshot(['s'], ['s w']); await flush();
+  assert.equal(h.reads.at(-1)!.board, 'other'); assert.equal(h.reads.at(-1)!.metadata, undefined);
+  await prior.answer({meta: 'late'});
+  assert.equal(prior.metadata?.meta, 'first', 'the old flight keeps its captured basis');
+  assert.equal(h.store.get().history, null, 'a late reply cannot restore the previous board');
+  h.store.close();
+});
 
 test('a monetary pan exposes newly read points while keeping the complete table answer',async()=>{
   const h=harness();h.store.setMeters({unit:'USD',ids:[['s','balance']]});await h.start();
@@ -912,9 +933,39 @@ test('a forward disjoint jump starts at the stale frontier without crossing the 
   h.store.close();
 });
 
+test('prefetch keeps broad batches across every initial tile alignment in either direction', async () => {
+  const length = 24 * H, cell = cellOf(length);
+  for (let offset = 0; offset < 60; offset++) for (const direction of [-1, 1] as const) {
+    const h = harness(); h.correctClock(offset * cell);
+    const origin = {from: h.now() - 72 * H, to: h.now() - 48 * H};
+    h.store.choose('24h', origin); await h.start(); await h.reads[0].answer();
+    const seed = freshCells(h.store, cell), requested = new Set<number>();
+    for (let n = 1; n <= 30; n++) {
+      const delta = direction * length * n / 30;
+      const from = origin.from + delta, to = origin.to + delta;
+      h.store.pan({token: 1, length, from, to, direction}); await flush();
+      for (const read of [...pending(h)]) {
+        assert.ok(read.to - read.from >= 60 * cell, 'rounding must not turn the next miss into another small request');
+        for (let at = read.from; at < read.to; at += cell) {
+          assert.ok(!seed.has(at) && !requested.has(at), 'a tile edge never rereads a fresh cell');
+          requested.add(at);
+        }
+        await read.answer();
+      }
+      assert.ok(covered(h.store.getPlot()!.coverage, cellStart(from, cell), Math.ceil(to / cell) * cell));
+      const optional = (h.store as unknown as {optional: Set<number>}).optional;
+      assert.ok(optional.size <= 60);
+      assert.ok([...optional].every(at => requested.has(at)), 'trimmed cells consume no allowance');
+    }
+    assert.ok(h.reads.length - 1 <= 5);
+    h.store.close();
+  }
+});
+
 test('reversal and abort before delivery never refund unvisited optional cells', async () => {
   const h = harness(); await h.start(); await h.reads[0].answer();
-  h.store.pan({token: 1, length: 24 * H, from: NOW - 25 * H, to: NOW - H, direction: -1}); await flush();
+  const cell = cellOf(24 * H), from = tileStart(tileOf(NOW - 25 * H, cell), cell);
+  h.store.pan({token: 1, length: 24 * H, from, to: from + 24 * H, direction: -1}); await flush();
   const old = pending(h)[0], internals = h.store as unknown as {optional: Set<number>};
   const charged = new Set(internals.optional); assert.equal(charged.size, 60);
   h.store.pan({token: 1, length: 24 * H, from: NOW - 24 * H, to: NOW, direction: 1}); await flush();
