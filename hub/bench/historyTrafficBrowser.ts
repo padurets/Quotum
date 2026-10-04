@@ -242,8 +242,8 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
 }
 
 /** An instrumented replay diagnoses an earlier failure and never replaces its verdict. */
-export async function diagnoseReversal(browser:Browser,upstream:string,cookie:string){
+export async function diagnoseReversal(browser:Browser,upstream:string,cookie:string,repeats=1){
   const proxy=await historyProxy(upstream);
-  try{await browserCancellationTraffic(browser,proxy,cookie,true);}
+  try{for(let take=0;take<repeats;take++){console.error(`reversal diagnostic replay ${take+1}/${repeats}`);await browserCancellationTraffic(browser,proxy,cookie,true);}}
   finally{await proxy.close();}
 }

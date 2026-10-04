@@ -228,6 +228,7 @@ async function main() {
       throw error;
     }
     problems.push(...traffic.problems);
+    if(process.env.QUOTUM_BENCH_REVERSAL_PROBE==='1')await diagnoseReversal(browser,address.base,ana.cookie,12);
     const monetary=await moneyPhase(demo,stand,cdp);
     problems.push(...monetary.problems);
     const result = {
