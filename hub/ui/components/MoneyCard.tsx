@@ -32,9 +32,9 @@ export function KeyMetrics({part,meters,compact=false}:{part:KeyPart;meters:read
   const stale=part.presence==='missing'||cap.stale;
   const bar=<MeterBar remaining={remaining} label={keyName(part)}/>;
   if(compact)return <div className={`compact-limit is-money${stale?' is-stale':''}`}>
-    <div className="compact-window-name"><span title={detail}><span>{keyName(part)}</span><KeyStatus part={part} cap={cap}/></span></div>
+    <div className="compact-window-name"><span title={detail}><span>{keyName(part)}<KeyStatus part={part} cap={cap}/></span></span></div>
     <small className="compact-reset"><CapReset meter={cap} short/></small>
-    {bar}<strong title={money(capLeft(cap),cap.unit,true)}>{left}</strong>
+    {bar}<strong className="limit-value" title={money(capLeft(cap),cap.unit,true)}>{value}<small>{cap.unit}</small></strong>
   </div>;
   return <div className={`limit money-limit${stale?' is-stale':''}`}>
     <div className="limit-top"><span className="limit-name" title={detail}>{keyName(part)}<KeyStatus part={part} cap={cap}/></span>
