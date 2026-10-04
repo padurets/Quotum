@@ -741,8 +741,11 @@ chosen height to their plot, never drawing it lower than they do by themselves, 
 heads, totals and legends whole. The list of agents gathers them by project (one name
 across people, as agent activity counts it), machine or subscription, each viewer for
 themselves, or lists each agent: a group tells how many of its agents work, how long they
-have worked (each running agent's credited work, which the hub sends with it) and when
-one last did, and opens its agents in a dialog. The list can be shorter than its rows: it
+have worked (each running agent's credited work, which the hub sends with it) and their
+last activity as a date and time, or now while any works; an unknown time is a dash.
+Machines and subscriptions are in the individual agents' details, opened by clicking
+the group. Their default columns fit a wide dialog as a table with rows highlighted
+edge to edge; a narrow dialog uses an inset compact list. The list can be shorter than its rows: it
 shows the most whole rows that fit, in its own order, and a last row saying how many
 more, which opens them all in a dialog; to know how many fit, it lays all its rows out
 unseen beside it, their times standing still. Such a widget tells the grid

@@ -33,7 +33,7 @@ export type Dimension = (typeof DIMENSIONS)[number];
 /** What the list gathers its agents by, each viewer for themselves: a dimension, or nothing (a row per agent). */
 export const AGENTS_BY = [...DIMENSIONS, 'none'] as const;
 export type AgentsBy = (typeof AGENTS_BY)[number];
-export const AGENT_COLUMNS = [...DIMENSIONS, 'agents', 'worked', 'activity', 'lastwork', 'running'] as const;
+export const AGENT_COLUMNS = [...DIMENSIONS, 'agents', 'worked', 'activity', 'running'] as const;
 export type AgentColumn = (typeof AGENT_COLUMNS)[number];
 export type AgentsSort = {column: AgentColumn; descending: boolean} | null;
 
@@ -43,9 +43,8 @@ export const readAgentsBy = (value: unknown): AgentsBy => (AGENTS_BY.includes(va
 /**
  * Agents that share what the list gathers them by, as one row: in activity order, how
  * many work, how long they have worked together (each counted, as agent-hours are), when
- * one last worked and since when the oldest runs, and the projects, machines and
- * subscriptions among them, each once in the order of its most active agent. With
- * nothing to gather by, a row is one agent.
+ * one last worked and since when the oldest runs. With nothing to gather by, a row is
+ * one agent.
  */
 export type AgentGroup = {
   key: string;
@@ -57,12 +56,7 @@ export type AgentGroup = {
   /** When one of its agents was last seen working, the working ones aside; null when none was. */
   lastWorkedAt: number | null;
   startedAt: number;
-  projects: (string | null)[];
-  machines: {id: string; name: string}[];
-  sources: AgentSource[];
 };
-
-const once = <T>(items: T[], id: (item: T) => string) => [...new Map(items.map(item => [id(item), item])).values()];
 
 function groupOf(key: string, name: string | null, rows: AgentRow[]): AgentGroup {
   const seen = rows.flatMap(row => (row.session.lastWorkedAt === null ? [] : [row.session.lastWorkedAt]));
@@ -74,9 +68,6 @@ function groupOf(key: string, name: string | null, rows: AgentRow[]): AgentGroup
     workedMs: rows.reduce((sum, row) => sum + row.session.workedMs, 0),
     lastWorkedAt: seen.length ? Math.max(...seen) : null,
     startedAt: Math.min(...rows.map(row => row.session.startedAt)),
-    projects: once(rows.map(row => row.session.project), project => JSON.stringify(project)),
-    machines: once(rows.map(row => row.session.device), device => device.id),
-    sources: once(rows.map(row => row.source), source => source.id),
   };
 }
 
@@ -104,13 +95,13 @@ export function groupsOf(rows: AgentRow[], by: AgentsBy): AgentGroup[] {
 /**
  * The columns of the list gathered `by` (`inGroup`: the agents of one of its groups, in a
  * dialog), before the owner hides any: the first names a row, always there; the rest
- * follow. A group tells how many agents it has and the dimensions it is not gathered by;
- * an agent, its machine and subscription, the one its group already names left out, and
- * how long it has run.
+ * follow. A group tells how many agents it has, their worked time and last activity;
+ * an agent also tells its machine and subscription, the one its group already names
+ * left out, and how long it has run.
  */
 export function columnsOf(by: AgentsBy, inGroup = false): {name: Dimension; rest: AgentColumn[]} {
-  if (by === 'none' || inGroup) return {name: 'project', rest: ['worked', 'activity', 'lastwork', ...(['machine', 'subscription'] as const).filter(column => column !== by), 'running']};
-  return {name: by, rest: ['agents', 'worked', 'activity', 'lastwork', ...DIMENSIONS.filter(column => column !== by)]};
+  if (by === 'none' || inGroup) return {name: 'project', rest: ['worked', 'activity', ...(['machine', 'subscription'] as const).filter(column => column !== by), 'running']};
+  return {name: by, rest: ['agents', 'worked', 'activity']};
 }
 
 /** Working now, idle since known work, then never seen working; newest first in each group. */
@@ -167,9 +158,9 @@ const compare = (a: number, b: number) => (a === b ? 0 : a < b ? -1 : 1);
 
 /**
  * Groups (in activity order, as `groupsOf` gives them) sorted by a column shown, else as
- * they are; equal ones keep activity order. A dimension sorts by the names it lists, the
- * agents by how many, the time worked by how long, activity and when one last worked the
- * most recent first, how long one has run the shortest first. No project always comes last.
+ * they are; equal ones keep activity order. A dimension sorts by its name (shared by
+ * every agent of a group), the agents by how many, the time worked by how long, activity
+ * the most recent first, how long one has run the shortest first. No project always comes last.
  */
 export function sortedGroups(groups: AgentGroup[], sort: AgentsSort, columns: readonly AgentColumn[]): AgentGroup[] {
   const active = visibleAgentsSort(sort, columns);
@@ -177,19 +168,18 @@ export function sortedGroups(groups: AgentGroup[], sort: AgentsSort, columns: re
   const {column, descending} = active;
   const at = new Map(groups.map((group, i) => [group, i]));
   const text = (a: string, b: string) => a.localeCompare(b, formatLocale());
-  const names = (group: AgentGroup) =>
-    (column === 'project' ? group.projects.filter(project => project !== null)
-      : column === 'machine' ? group.machines.map(machine => machine.name)
-      : group.sources.map(source => sourceLabel(source))).join(', ');
-  const nameless = (group: AgentGroup) => column === 'project' && group.projects.every(project => project === null);
+  const name = ({rows: [row]}: AgentGroup) =>
+    column === 'project' ? row.session.project ?? ''
+      : column === 'machine' ? row.session.device.name : sourceLabel(row.source);
+  const nameless = (group: AgentGroup) => column === 'project' && group.name === null;
   return [...groups].sort((a, b) => {
     const activity = at.get(a)! - at.get(b)!;
     if (nameless(a) || nameless(b)) return Number(nameless(a)) - Number(nameless(b)) || activity;
     const order = column === 'agents' ? a.rows.length - b.rows.length || a.working - b.working
       : column === 'worked' ? a.workedMs - b.workedMs
-      : column === 'activity' || column === 'lastwork' ? compare(recency(b), recency(a))
+      : column === 'activity' ? compare(recency(b), recency(a))
       : column === 'running' ? b.startedAt - a.startedAt
-      : text(names(a), names(b));
+      : text(name(a), name(b));
     return (descending ? -order : order) || activity;
   });
 }
@@ -197,7 +187,7 @@ export function sortedGroups(groups: AgentGroup[], sort: AgentsSort, columns: re
 /** The first column, whatever it names: room for a name to read. */
 export const NAME_WIDTH = 180;
 /** Room for the widest heading in either language and a readable, possibly shortened value. */
-export const AGENT_WIDTHS: Record<AgentColumn, number> = {project: 150, machine: 132, subscription: 148, agents: 116, worked: 120, activity: 116, lastwork: 156, running: 120};
+export const AGENT_WIDTHS: Record<AgentColumn, number> = {project: 150, machine: 116, subscription: 132, agents: 116, worked: 120, activity: 210, running: 120};
 /** A table where the name and the columns after it (`columns`) fit `width`, else a list. */
 export function agentsLayout(columns: readonly AgentColumn[], width: number): 'table' | 'list' {
   return columns.reduce((sum, column) => sum + AGENT_WIDTHS[column], NAME_WIDTH) <= width ? 'table' : 'list';

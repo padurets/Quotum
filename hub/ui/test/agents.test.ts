@@ -91,23 +91,21 @@ test('agents gather by project, machine or subscription in the order of their mo
     {working: 1, workedMs: 45, lastWorkedAt: 450, startedAt: 50, agents: 3},
     'the working one aside, the latest seen working',
   );
-  assert.deepEqual(quotum.machines.map(m => m.name), ['server', 'laptop']);
-  assert.deepEqual(quotum.sources.map(s => s.id), ['Claude', 'Codex'], 'each once, in the order of its most active agent');
   assert.equal(none.lastWorkedAt, null);
-  assert.deepEqual(groupsOf(rows, 'machine').map(g => [g.name, g.rows.length, g.projects]), [['server', 1, ['quotum']], ['laptop', 4, ['billing', 'quotum', null]]]);
+  assert.deepEqual(groupsOf(rows, 'machine').map(g => [g.name, g.rows.length]), [['server', 1], ['laptop', 4]]);
   assert.deepEqual(groupsOf(rows, 'subscription').map(g => [g.name, g.rows.length]), [['Claude', 2], ['Codex', 3]]);
   assert.deepEqual(groupsOf(rows, 'none').map(g => g.rows.length), [1, 1, 1, 1, 1], 'nothing to gather by: a row per agent');
   assert.deepEqual(groupsOf([row('null'), row(null)], 'project').map(g => g.name), ['null', null], 'a project named null is not none');
 });
 
-test('a group names the dimensions it is not gathered by; an agent, those its group does not name', () => {
-  assert.deepEqual(columnsOf('project'), {name: 'project', rest: ['agents', 'worked', 'activity', 'lastwork', 'machine', 'subscription']});
-  assert.deepEqual(columnsOf('machine'), {name: 'machine', rest: ['agents', 'worked', 'activity', 'lastwork', 'project', 'subscription']});
-  assert.deepEqual(columnsOf('subscription'), {name: 'subscription', rest: ['agents', 'worked', 'activity', 'lastwork', 'project', 'machine']});
-  assert.deepEqual(columnsOf('none'), {name: 'project', rest: ['worked', 'activity', 'lastwork', 'machine', 'subscription', 'running']});
+test('groups show counts and work; machines and subscriptions belong to individual agents', () => {
+  assert.deepEqual(columnsOf('project'), {name: 'project', rest: ['agents', 'worked', 'activity']});
+  assert.deepEqual(columnsOf('machine'), {name: 'machine', rest: ['agents', 'worked', 'activity']});
+  assert.deepEqual(columnsOf('subscription'), {name: 'subscription', rest: ['agents', 'worked', 'activity']});
+  assert.deepEqual(columnsOf('none'), {name: 'project', rest: ['worked', 'activity', 'machine', 'subscription', 'running']});
   assert.deepEqual(columnsOf('project', true), columnsOf('none'));
-  assert.deepEqual(columnsOf('machine', true).rest, ['worked', 'activity', 'lastwork', 'subscription', 'running']);
-  assert.deepEqual(columnsOf('subscription', true).rest, ['worked', 'activity', 'lastwork', 'machine', 'running']);
+  assert.deepEqual(columnsOf('machine', true).rest, ['worked', 'activity', 'subscription', 'running']);
+  assert.deepEqual(columnsOf('subscription', true).rest, ['worked', 'activity', 'machine', 'running']);
 });
 
 test('every column sorts in both directions and equal values keep activity order', () => {
@@ -118,7 +116,6 @@ test('every column sorts in both directions and equal values keep activity order
     ['worked', row('less', {workedMs: 10}), row('more', {workedMs: 20})],
     ['activity', row('working', {working: true}), row('recent', {lastWorkedAt: 300})], ['activity', row('recent', {lastWorkedAt: 300}), row('earlier', {lastWorkedAt: 200})],
     ['activity', row('earlier', {lastWorkedAt: 200}), row('never')],
-    ['lastwork', row('working', {working: true}), row('recent', {lastWorkedAt: 300})], ['lastwork', row('recent', {lastWorkedAt: 300}), row('never')],
     ['running', row('shorter', {startedAt: 200}), row('longer', {startedAt: 10})],
   ];
   for (const locale of ['en', 'ru'] as const) {
@@ -144,9 +141,9 @@ test('no project stays last, a hidden sort column keeps activity order, and noth
   for (const descending of [false, true]) assert.deepEqual(projects(sort(groups, 'project', descending)), ['z', null]);
   assert.deepEqual(sort(groups, 'worked', true, ['project']), groups);
   assert.equal(sortedGroups(groups, null, AGENT_COLUMNS), groups);
-  // A machine's group lists its projects: one of no project only sorts last, one with any named project by its names.
-  const byMachine = groupsOf([row(null, {device: {id: 'a', name: 'a'}}), row('b', {device: {id: 'b', name: 'b'}}), row(null, {device: {id: 'b', name: 'b'}})], 'machine');
-  assert.deepEqual(sort(byMachine, 'project', true).map(g => g.name), ['b', 'a']);
+  const grouped = groupsOf([row('z'), row('a')], 'project');
+  const {name, rest} = columnsOf('project');
+  assert.deepEqual(sort(grouped, 'machine', true, [name, ...rest]), grouped, 'a detail-only column never sorts the overview');
 });
 
 test('headers cycle through both directions and activity; the narrow menu has its own reset', () => {
@@ -160,7 +157,7 @@ test('headers cycle through both directions and activity; the narrow menu has it
 
 test('saved choices accept only a known column and a boolean direction, and a known way to gather', () => {
   for (const column of AGENT_COLUMNS) for (const descending of [false, true]) assert.deepEqual(readAgentsSort({column, descending}), {column, descending});
-  for (const value of [null, undefined, 'project', [], {}, {column: 'state', descending: true}, {column: 'project'}, {column: 'project', descending: 1}]) assert.equal(readAgentsSort(value), null);
+  for (const value of [null, undefined, 'project', [], {}, {column: 'state', descending: true}, {column: 'lastwork', descending: true}, {column: 'project'}, {column: 'project', descending: 1}]) assert.equal(readAgentsSort(value), null);
   for (const by of ['project', 'machine', 'subscription', 'none'] as const) assert.equal(readAgentsBy(by), by);
   for (const value of [null, undefined, 'device', 1, {}]) assert.equal(readAgentsBy(value), 'project');
 });
@@ -174,6 +171,9 @@ test('layout follows the widget’s width and the owner’s columns at either si
   }
   assert.equal(agentsLayout(columnsOf('project').rest, 320), 'list');
   assert.equal(agentsLayout([], 320), 'table');
+  assert.equal(agentsLayout(columnsOf('project').rest, 640), 'table', 'the grouped overview fits a half-width widget');
+  const details = columnsOf('project', true).rest.filter(column => column !== 'running');
+  assert.equal(agentsLayout(details, 758), 'table', 'default details fit the wide dialog, without an inset list fallback');
 });
 
 test('a list made shorter than its agents shows the most whole rows that fit, in its order, and says how many more', () => {

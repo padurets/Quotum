@@ -136,8 +136,9 @@ Codex         api                  idle     started 25m ago · editor
   can turn them off.
 - **Boards made of widgets** (a card per subscription, agent activity, the chart, the
   table, and a list of the running agents to turn on, gathered by project, machine or
-  subscription, each group with how many of its agents work, their agent-hours and when
-  one last worked, its agents a click away), like a dashboard in Grafana:
+  subscription, each group with how many of its agents work, their agent-hours and the
+  date and time of their last activity, or now while any works; individual agents with
+  their machines and subscriptions a click away), like a dashboard in Grafana:
   the cards show what is left now, the analytics under them share one set of filters.
   The owner places them on a six-column grid by dragging their heads, and resizes them
   to a third, a half, two thirds or the whole width. Each fills only the rows its content

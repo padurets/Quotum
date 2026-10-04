@@ -25,13 +25,13 @@ import {
   type AgentsSort,
   type Dimension,
 } from '../lib/agents';
-import {ago, stamp, workHours} from '../lib/format';
+import {stamp, workHours} from '../lib/format';
 import {useLineup, useSessionsOf, useTitles} from '../lib/board';
 import {setPrefs, usePrefs} from '../lib/prefs';
 import {hubNow} from '../lib/clock';
 import {t, useLocale, type Key} from '../i18n';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
-import {Ago, Since} from './Time';
+import {Since} from './Time';
 import {Modal} from './Kit';
 import {fillOf, pixels, useSizing} from './sizing';
 
@@ -191,56 +191,38 @@ function Tally({group, color}: {group: AgentGroup; color: Context['color']}) {
   );
 }
 
-/** When a group last worked: now while one of its agents does, else how long ago one did, when in full on hover. */
-function Recent({group, still}: {group: AgentGroup; still: boolean}) {
+/** Last observed work: now while any agent works, its time when known, otherwise a dash. */
+function LastActivity({group}: {group: AgentGroup}) {
   if (group.working) return <>{t('agents.now')}</>;
   if (group.lastWorkedAt === null)
     return (
-      <span title={t('agents.neverWorked')}>
+      <span title={t('agents.activityUnknown')}>
         <span aria-hidden="true">—</span>
-        <span className="sr-only">{t('agents.neverWorked')}</span>
-      </span>
-    );
-  return <span title={stamp(group.lastWorkedAt)}>{still ? ago(group.lastWorkedAt, hubNow()) : <Ago at={group.lastWorkedAt} />}</span>;
-}
-
-/**
- * When a group last worked, as a time in full: now while one of its agents works, a dash
- * when none was seen working. Beside how long ago (`Recent`), for the reader who wants
- * the moment itself; a time that reads the same whenever it is read.
- */
-function LastWork({group}: {group: AgentGroup}) {
-  if (group.working) return <>{t('agents.now')}</>;
-  if (group.lastWorkedAt === null)
-    return (
-      <span title={t('agents.neverWorked')}>
-        <span aria-hidden="true">—</span>
-        <span className="sr-only">{t('agents.neverWorked')}</span>
+        <span className="sr-only">{t('agents.activityUnknown')}</span>
       </span>
     );
   return <>{stamp(group.lastWorkedAt)}</>;
 }
 
-/** The names a dimension lists of a group, each once, in the order of its most active agent. */
-const namesOf = (group: AgentGroup, column: Dimension) =>
-  column === 'project' ? group.projects.map(projectName) : column === 'machine' ? group.machines.map(machine => machine.name) : group.sources.map(source => sourceLabel(source));
+/** A dimension shown in a row: shared by the group, or belonging to its one agent. */
+const dimensionName = ({rows: [row]}: AgentGroup, column: Dimension) =>
+  column === 'project' ? projectName(row.session.project) : column === 'machine' ? row.session.device.name : sourceLabel(row.source);
 
 const isDimension = (column: AgentColumn): column is Dimension => (DIMENSIONS as readonly AgentColumn[]).includes(column);
 
 /** Every column of the list: its heading, its hint where the heading needs one, and what it says of a group (an agent's row being a group of one). */
 const COLUMNS: Record<AgentColumn, {title: Key; hint?: Key; cell: (group: AgentGroup, context: Context) => ReactNode}> = {
-  project: {title: 'agents.project', cell: group => namesOf(group, 'project').join(', ')},
-  machine: {title: 'agents.machine', cell: group => namesOf(group, 'machine').join(', ')},
-  subscription: {title: 'agents.subscription', cell: group => namesOf(group, 'subscription').join(', ')},
+  project: {title: 'agents.project', cell: group => dimensionName(group, 'project')},
+  machine: {title: 'agents.machine', cell: group => dimensionName(group, 'machine')},
+  subscription: {title: 'agents.subscription', cell: group => dimensionName(group, 'subscription')},
   agents: {title: 'agents.agents', cell: (group, {color}) => <Tally group={group} color={color} />},
   worked: {title: 'agents.worked', hint: 'agents.workedHint', cell: group => workHours(group.workedMs)},
-  activity: {title: 'agents.recent', cell: (group, {still}) => <Recent group={group} still={still} />},
-  lastwork: {title: 'agents.lastWork', cell: group => <LastWork group={group} />},
+  activity: {title: 'agents.lastActivity', hint: 'agents.lastActivityHint', cell: group => <LastActivity group={group} />},
   running: {title: 'agents.running', cell: (group, {still}) => (still ? stillSince(group.startedAt) : <Since from={group.startedAt} />)},
 };
 
-/** A cut list of names in full on hover, each on a line of its own. */
-const fullOf = (group: AgentGroup, column: AgentColumn) => (isDimension(column) ? namesOf(group, column).join('\n') : undefined);
+/** A cut name in full on hover. */
+const fullOf = (group: AgentGroup, column: AgentColumn) => (isDimension(column) ? dimensionName(group, column) : undefined);
 
 const SortIcon = () => (
   <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
@@ -581,7 +563,8 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
   const measured = ordered.length >= 2;
   const count = manual && measured ? Math.min(fit ?? ordered.length, ordered.length) : ordered.length;
   // Who may change what: every viewer how the list gathers, the owner its columns and whether it shows.
-  const toggles = single ? columnsOf('none').rest : [...new Set([...columnsOf(agentsBy).rest, ...columnsOf(agentsBy, true).rest])];
+  const toggles = columnsOf(agentsBy).rest;
+  const detailToggles = single ? [] : columnsOf(agentsBy, true).rest.filter(column => !toggles.includes(column));
 
   const measure = useRef(() => {});
   measure.current = () => {
@@ -667,6 +650,16 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
                     </SwitchRow>
                   ))}
                 </div>
+                {detailToggles.length > 0 && (
+                  <div className="popover-section">
+                    <div className="popover-title">{t('agents.detailsColumns')}</div>
+                    {detailToggles.map(column => (
+                      <SwitchRow key={column} on={columnShown(view, AGENTS, column)} onChange={on => arrange.update(view => withColumn(view, AGENTS, column, on))}>
+                        {t(COLUMNS[column].title)}
+                      </SwitchRow>
+                    ))}
+                  </div>
+                )}
                 <HideRow onHide={() => arrange.update(view => withHidden(view, AGENTS, true))}>{t('widget.hide')}</HideRow>
               </>
             )}

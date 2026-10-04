@@ -489,10 +489,11 @@ const all: DemoSet = {
         {activityEmpty: 'knownFrom', range: {from: -13 * DAY, to: -11 * DAY}, from: 0, to: 0},
       ],
       look: [
-        'The list of agents gathers them by project, by activity: quotum is one row of three agents on the laptop, its marks in the colours of Max and Pro, with their agent-hours, when one last worked (now while one works) and both subscriptions; a click opens its three agents, each with its folder, where it runs, the time it worked and when',
-        'infra has never worked: its activity is a dash, which says so on hover',
+        'The list of agents gathers them by project, by activity: quotum is one row of three agents, its marks in the colours of Max and Pro, with their agent-hours and last activity (a date and time, or now while one works); a click opens its three agents, each with its folder, where it runs, machine, subscription, the time it worked and last activity',
+        'infra has no known activity time: its last activity is a dash, explained on hover',
         'The list\'s settings, for every viewer, group it by machine or subscription, or put each agent on a row of its own; the owner also picks its columns, how long each agent has run among them, off at first',
         'The table of agents in a dialog has a way back to all the groups when it was opened from them, and none when opened from a row',
+        'At the wide dialog width, default agent details form a table whose rows highlight from edge to edge; on a narrow screen they form an inset list',
         'The list of agents is 32 rows tall: the first projects that fit whole, then "N more projects", which opens them all in a dialog, in the same order and columns, sorted there as in the widget',
         'Agent activity and the chart are taller than they draw themselves: the room goes to the plot, the totals, heads and legends stay whole',
         'The table is 30 rows tall: room under it on a wide screen; on a narrow one, where it is a list, it is as tall as its rows',
