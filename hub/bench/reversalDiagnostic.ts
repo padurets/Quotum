@@ -44,7 +44,7 @@ export async function observeReversal(page:Cdp,browser:Browser,profileBeforeInpu
       finally{independent?.close();}
     }
     const renderers=Array.isArray(after)?after.filter(p=>p.type==='renderer').sort((a,b)=>(b.cpuTime-(before.find(p=>p.id===b.id)?.cpuTime??b.cpuTime))-(a.cpuTime-(before.find(p=>p.id===a.id)?.cpuTime??a.cpuTime))):[];
-    const native=renderers.length&&browser.diagnostics?await bounded('native process state',browser.diagnostics(renderers.map(p=>p.id),renderers[0].id),10000).catch(error=>String(error)):undefined;
+    const native=renderers.length&&browser.diagnostics?await bounded('native process state',browser.diagnostics(renderers.map(p=>p.id),renderers[0].id),25000).catch(error=>String(error)):undefined;
     const activation=profileBeforeInput?'before input':await enable().then(()=> 'after stall',error=>String(error));
     const pausedEvent=new Promise<void>(resolve=>{pauseNotify=resolve;});
     const pause=await bounded('pause page',page.send('Debugger.pause')).then(()=> 'answered',error=>String(error));

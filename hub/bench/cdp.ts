@@ -175,11 +175,11 @@ export async function launchChrome(file: string, sandbox: boolean): Promise<Brow
       let stack:unknown;
       if(process.env.QUOTUM_BENCH_NATIVE_STACKS==='1'&&processes.some(p=>p.pid===candidate)){
         // Arguments, locals, init scripts and symbol downloads are deliberately excluded.
-        stack=await new Promise(resolve=>execFile('sudo',['-n','gdb','--batch','--nx',
+        stack=await new Promise(resolve=>execFile('sudo',['-n','gdb','--readnever','--batch','--nx',
           '-iex','set auto-load off','-iex','set debuginfod enabled off',
           '-iex','set print frame-arguments none','-iex','set print entry-values no',
           '-p',String(candidate),'-ex','thread apply all bt 16','-ex','detach'],
-          {timeout:8000,killSignal:'SIGKILL',maxBuffer:65536},(error,stdout,stderr)=>resolve({candidate,error:error?.code,stdout:stdout.slice(-48000),stderr:stderr.slice(-4000)})));
+          {timeout:20000,killSignal:'SIGKILL',maxBuffer:262144},(error,stdout,stderr)=>resolve({candidate,error:error?.code,stdout:stdout.slice(-48000),stderr:stderr.slice(-4000)})));
       }
       return {stderr:output,processes,stack};
     },

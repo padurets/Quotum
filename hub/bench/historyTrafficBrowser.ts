@@ -192,7 +192,7 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
     const step = async <T>(value: string, run: () => Promise<T>) => {
       stage = value; cdp.at(`${name}/${stage}`);
       console.error(`bench: ${name}: ${stage}`);
-      return run();
+      return diagnostic && observer ? observer.watch(value, run) : run();
     };
     const until = async (predicate: () => boolean | Promise<boolean>) => {const end = Date.now() + 10_000; while (!await predicate()) {if (bodies.errors.length) throw bodies.errors[0]; if (Date.now() > end) throw new Error(`${name}: lifecycle boundary not reached`); await cdp.evaluate('new Promise(resolve=>setTimeout(resolve,10))');}};
     const key = (type: string, name: string, code: number, modifiers: number) => cdp.send('Input.dispatchKeyEvent', {type, key: name, code: name === 'Shift' ? 'ShiftLeft' : name, windowsVirtualKeyCode: code, modifiers});
@@ -209,7 +209,7 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
         await step('reverse wheel', () => wheel(geometry.width * .1));
         await step('first cancellation', () => until(() => reads()[0]?.canceled === true));
         await step('reversal frame', () => cdp.evaluate('new Promise(requestAnimationFrame)'));
-        await step('repeat wheel', () => observer?observer.watch('repeat wheel',()=>wheel(-geometry.width * .1)):wheel(-geometry.width * .1));
+        await step('repeat wheel', () => !diagnostic&&observer?observer.watch('repeat wheel',()=>wheel(-geometry.width * .1)):wheel(-geometry.width * .1));
         await step('repeat delivery', () => until(() => reads().length >= 2 && reads().slice(1).some(r => r.count?.complete)));
         await step('shift up', () => key('keyUp', 'Shift', 16, 0));
         await step('drawings settled', settled);
