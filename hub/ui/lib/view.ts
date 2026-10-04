@@ -44,11 +44,11 @@ export const withHidden = (view: View, id: string, hidden: boolean): View =>
     : {...view, hidden: hidden ? [...new Set([...view.hidden, id])] : view.hidden.filter(other => other !== id)};
 
 /**
- * Columns off until the owner turns them on: the agents' state, which their marks already
- * tell; the table's share of spending during work, which does not fit a widget as wide as
+ * Columns off until the owner turns them on: how long each agent has run, which tells less
+ * than when it last worked and how long it worked; the table's share of spending during work, which does not fit a widget as wide as
  * the board beside the rest, nor do agent-hours (see FORECAST_WIDTHS).
  */
-const OFF_BY_DEFAULT_COLUMNS: Record<string, string[]> = {[AGENTS]: ['state'], [FORECAST]: ['during', 'agenthours']};
+const OFF_BY_DEFAULT_COLUMNS: Record<string, string[]> = {[AGENTS]: ['running'], [FORECAST]: ['during', 'agenthours']};
 const columnOffByDefault = (widget: string, column: string) => OFF_BY_DEFAULT_COLUMNS[widget]?.includes(column) ?? false;
 
 /** Whether a column of a widget's table is shown. */

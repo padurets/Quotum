@@ -343,7 +343,10 @@ out when read (`domain/work.ts`): agent-hours add each stretch up, two agents co
 twice; active time is their union, overlaps counted once for whichever machines,
 people or projects are asked about. The corrections people make to project
 names apply when read, so they reach all the time kept. The database says since when
-this is kept (`agentWorkSince`): before it, how agents worked is not known.
+this is kept (`agentWorkSince`): before it, how agents worked is not known. A board's
+live lists tell each running agent's credited work so far, found by the names it is
+credited under (sessions alike in all of it told apart by their place in the machine's
+list, working or not).
 
 The analytics show it over their period. The table tells, for each window, its
 subscription's active time, what the window spent per active hour, what share of its
@@ -735,10 +738,14 @@ above a card's tray or at the bottom of a panel, unless the owner chose a height
 gets shorter than its content, and grows past the chosen rows while its content needs
 more, back to them when it needs less, without the view changing. Both charts give a
 chosen height to their plot, never drawing it lower than they do by themselves, their
-heads, totals and legends whole. The list of agents can be shorter than its rows: it
+heads, totals and legends whole. The list of agents gathers them by project (one name
+across people, as agent activity counts it), machine or subscription, each viewer for
+themselves, or lists each agent: a group tells how many of its agents work, how long they
+have worked (each running agent's credited work, which the hub sends with it) and when
+one last did, and opens its agents in a dialog. The list can be shorter than its rows: it
 shows the most whole rows that fit, in its own order, and a last row saying how many
 more, which opens them all in a dialog; to know how many fit, it lays all its rows out
-unseen beside it, their running times standing still. Such a widget tells the grid
+unseen beside it, their times standing still. Such a widget tells the grid
 through a context of its own (`ui/components/sizing.ts`) the least it can show, what it
 needs whole and, as it lays itself out anew, how tall it shows, so the grid fills the
 rest of its rows before that paints; it reads how tall it is to be and when the grid gives

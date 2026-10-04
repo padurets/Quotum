@@ -4,38 +4,45 @@ import {sourceLabel} from '../lib/quota';
 import {AGENTS, colorOf, columnShown, withColumn, withHidden, type Arrange} from '../lib/view';
 import {
   AGENT_WIDTHS,
+  AGENTS_BY,
+  DIMENSIONS,
   agentRows,
   agentsFit,
   agentsLayout,
+  columnsOf,
   drawn,
   folderOf,
+  groupsOf,
   machinesOf,
   nextAgentsSort,
   since,
-  sortedRows,
+  sortedGroups,
   visibleAgentsSort,
   type AgentColumn,
-  type AgentRow,
+  type AgentGroup,
+  type AgentsBy,
   type AgentSource,
   type AgentsSort,
+  type Dimension,
 } from '../lib/agents';
+import {ago, stamp, workHours} from '../lib/format';
 import {useLineup, useSessionsOf, useTitles} from '../lib/board';
 import {setPrefs, usePrefs} from '../lib/prefs';
 import {hubNow} from '../lib/clock';
 import {t, useLocale, type Key} from '../i18n';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
-import {Since} from './Time';
+import {Ago, Since} from './Time';
 import {Modal} from './Kit';
 import {fillOf, pixels, useSizing} from './sizing';
 
 /**
  * One session: filled with the card's colour while it works, outlined while idle; a
  * window of an editor or the app that is only open is outlined with a dash, so it does
- * not read as a forgotten session.
+ * not read as a forgotten session. Among marks of several cards, each has its own (`style`).
  */
-function Mark({session}: {session: LiveSession}) {
+function Mark({session, style}: {session: LiveSession; style?: CSSProperties}) {
   const quiet = !session.working && session.origin !== 'terminal';
-  return <i className={`agent ${session.working ? 'is-working' : ''} ${quiet ? 'is-quiet' : ''}`} aria-hidden="true" />;
+  return <i className={`agent ${session.working ? 'is-working' : ''} ${quiet ? 'is-quiet' : ''}`} style={style} aria-hidden="true" />;
 }
 
 /** What a session is doing, as the legend names its mark. */
@@ -159,15 +166,81 @@ export function Agents({sessions, roomy = true}: {sessions: LiveSession[]; roomy
 /** A running time laid out only to be measured: as wide as it reads now, and never moving on. */
 const stillSince = (from: number, className?: string) => <span className={className}>{since(hubNow() - from)}</span>;
 
-/** The table's columns after the project, each one the owner can hide to make the widget narrow. */
-const COLUMNS: {id: AgentColumn; title: Key; cell: (row: AgentRow, still?: boolean) => ReactNode}[] = [
-  {id: 'state', title: 'agents.state', cell: ({session}) => stateOf(session)},
-  {id: 'subscription', title: 'agents.subscription', cell: ({source}) => sourceLabel(source)},
-  {id: 'machine', title: 'agents.machine', cell: ({session}) => session.device.name},
-  {id: 'origin', title: 'agents.origin', cell: ({session}) => <Origin origin={session.origin} />},
-  {id: 'running', title: 'agents.running', cell: ({session}, still) => (still ? stillSince(session.startedAt) : <Since from={session.startedAt} />)},
-];
-type Column = (typeof COLUMNS)[number];
+/** A project as the list names it: agents of none are a group of their own. */
+const projectName = (project: string | null) => project ?? t('agents.noProject');
+
+/** How a row is drawn: laid out unseen to be measured (`still`: nothing that moves on, nothing to press), its marks each in its card's colour. */
+type Context = {still: boolean; color: (source: AgentSource) => CSSProperties};
+
+/** How many of a group's agents work, of how many, as a card's tray counts them, and a mark for each while they are few. */
+function Tally({group, color}: {group: AgentGroup; color: Context['color']}) {
+  return (
+    <span className="agents-tally">
+      <span className="agents-count" aria-hidden="true">
+        <b>{group.working}</b>/{group.rows.length}
+      </span>
+      {drawn(group.rows) && (
+        <span className="agents-marks" aria-hidden="true">
+          {group.rows.map((row, i) => (
+            <Mark key={i} session={row.session} style={color(row.source)} />
+          ))}
+        </span>
+      )}
+      <span className="sr-only">{t('agents.machineSummary', {working: group.working, count: group.rows.length})}</span>
+    </span>
+  );
+}
+
+/** When a group last worked: now while one of its agents does, else how long ago one did, when in full on hover. */
+function Recent({group, still}: {group: AgentGroup; still: boolean}) {
+  if (group.working) return <>{t('agents.now')}</>;
+  if (group.lastWorkedAt === null)
+    return (
+      <span title={t('agents.neverWorked')}>
+        <span aria-hidden="true">—</span>
+        <span className="sr-only">{t('agents.neverWorked')}</span>
+      </span>
+    );
+  return <span title={stamp(group.lastWorkedAt)}>{still ? ago(group.lastWorkedAt, hubNow()) : <Ago at={group.lastWorkedAt} />}</span>;
+}
+
+/**
+ * When a group last worked, as a time in full: now while one of its agents works, a dash
+ * when none was seen working. Beside how long ago (`Recent`), for the reader who wants
+ * the moment itself; a time that reads the same whenever it is read.
+ */
+function LastWork({group}: {group: AgentGroup}) {
+  if (group.working) return <>{t('agents.now')}</>;
+  if (group.lastWorkedAt === null)
+    return (
+      <span title={t('agents.neverWorked')}>
+        <span aria-hidden="true">—</span>
+        <span className="sr-only">{t('agents.neverWorked')}</span>
+      </span>
+    );
+  return <>{stamp(group.lastWorkedAt)}</>;
+}
+
+/** The names a dimension lists of a group, each once, in the order of its most active agent. */
+const namesOf = (group: AgentGroup, column: Dimension) =>
+  column === 'project' ? group.projects.map(projectName) : column === 'machine' ? group.machines.map(machine => machine.name) : group.sources.map(source => sourceLabel(source));
+
+const isDimension = (column: AgentColumn): column is Dimension => (DIMENSIONS as readonly AgentColumn[]).includes(column);
+
+/** Every column of the list: its heading, its hint where the heading needs one, and what it says of a group (an agent's row being a group of one). */
+const COLUMNS: Record<AgentColumn, {title: Key; hint?: Key; cell: (group: AgentGroup, context: Context) => ReactNode}> = {
+  project: {title: 'agents.project', cell: group => namesOf(group, 'project').join(', ')},
+  machine: {title: 'agents.machine', cell: group => namesOf(group, 'machine').join(', ')},
+  subscription: {title: 'agents.subscription', cell: group => namesOf(group, 'subscription').join(', ')},
+  agents: {title: 'agents.agents', cell: (group, {color}) => <Tally group={group} color={color} />},
+  worked: {title: 'agents.worked', hint: 'agents.workedHint', cell: group => workHours(group.workedMs)},
+  activity: {title: 'agents.recent', cell: (group, {still}) => <Recent group={group} still={still} />},
+  lastwork: {title: 'agents.lastWork', cell: group => <LastWork group={group} />},
+  running: {title: 'agents.running', cell: (group, {still}) => (still ? stillSince(group.startedAt) : <Since from={group.startedAt} />)},
+};
+
+/** A cut list of names in full on hover, each on a line of its own. */
+const fullOf = (group: AgentGroup, column: AgentColumn) => (isDimension(column) ? namesOf(group, column).join('\n') : undefined);
 
 const SortIcon = () => (
   <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
@@ -198,99 +271,147 @@ function SortMenu({active, headers, sortBy}: Sorting) {
 
 /**
  * Whether the agents read as a table or a compact list: a table where the chosen columns
- * fit the width of the widget or the dialog they are in (`box` is inside it), decided
- * before they are first drawn, and again as it is resized: before that paints too where
- * the board gives the widget another width (`width`, its key of the board's sizing).
+ * after the name fit the width of the widget or the dialog they are in (`box` is inside
+ * it), decided before they are first drawn, and again as it is resized: before that paints
+ * too where the board gives the widget another width (`width`, its key of the board's sizing).
  */
-function useAgentsLayout(box: RefObject<HTMLElement | null>, shown: readonly AgentColumn[], width?: string) {
+function useAgentsLayout(box: RefObject<HTMLElement | null>, columns: readonly AgentColumn[], width?: string) {
   const [layout, setLayout] = useState<'table' | 'list'>('list');
+  const key = columns.join();
   useLayoutEffect(() => {
     // The table runs edge to edge of the widget or the dialog: as wide as it is inside its border.
     const element = box.current!.closest<HTMLElement>('.dialog, .panel')!;
+    const chosen = key ? (key.split(',') as AgentColumn[]) : [];
     const fit = () => {
-      const next = agentsLayout(shown, element.clientWidth);
+      const next = agentsLayout(chosen, element.clientWidth);
       setLayout(before => (before === next ? before : next));
     };
     const observer = new ResizeObserver(fit);
     observer.observe(element);
     fit();
     return () => observer.disconnect();
-  }, [box, shown, width]);
+  }, [box, key, width]);
   return layout;
 }
 
+/** The last row of a list made shorter than its rows: how many more there are, of what it gathers. */
+const MORE: Record<AgentsBy, Key> = {project: 'agents.moreProjects', machine: 'agents.moreMachines', subscription: 'agents.moreSubscriptions', none: 'agents.more'};
+
 /**
- * Agents as a table or a compact list, in the order given, with the columns given: in the
- * widget, all of them in its dialog, and, unseen, laid out to be measured (`still`: no
- * running time that moves on, nothing to press or find). `more`, when some are left out,
- * is a last row that says how many and opens the rest (`onMore`). `body` is the list's or
- * the table's rows, that last one included.
+ * Rows of the list as a table or a compact list, in the order given, with the columns
+ * given after the name (`name`, the dimension it shows): a group's name opens its agents
+ * (`onOpen`), and a row of one agent (`single`) shows its mark, where it runs, its project
+ * and its folder instead. In the widget, all of them in its dialog, and, unseen, laid out to
+ * be measured (`still`). `more`, when some are left out, is a last row that says how many
+ * and opens the rest (`onMore`). `body` is the list's or the table's rows, that last one included.
  */
 function AgentsRows({
-  rows,
+  groups,
+  name,
   columns,
+  single,
+  by,
   layout,
   color,
   sorting,
   more = 0,
   onMore,
+  onOpen,
   still = false,
   body,
 }: {
-  rows: AgentRow[];
-  columns: Column[];
+  groups: AgentGroup[];
+  name: Dimension;
+  columns: AgentColumn[];
+  single: boolean;
+  /** What the rows gather, as the row saying how many more names it. */
+  by: AgentsBy;
   layout: 'table' | 'list';
-  color: (row: AgentRow) => CSSProperties;
+  color: Context['color'];
   /** The table's headers, which sort it; the rows measured have none. */
   sorting?: Sorting;
   more?: number;
   onMore?: () => void;
+  onOpen?: (key: string) => void;
   still?: boolean;
   body?: RefObject<HTMLElement | null>;
 }) {
-  const has = (id: AgentColumn) => id === 'project' || columns.some(column => column.id === id);
+  const context: Context = {still, color};
   const rest = more > 0 && (
     <button type="button" className="agents-more-button" data-agents-more={still ? undefined : ''} tabIndex={still ? -1 : undefined} onClick={onMore}>
-      {t('agents.more', {count: more})}
+      {t(MORE[single ? 'none' : by], {count: more})}
     </button>
   );
-  if (layout === 'list')
+  const open = (group: AgentGroup) => (single || still || !onOpen ? undefined : () => onOpen(group.key));
+  const rowClass = (group: AgentGroup) => `${group.working ? 'is-working' : ''} ${single || still || !onOpen ? '' : 'is-group'}`;
+  // A row of one agent takes its card's colour, for its mark; a group's marks each take their own.
+  const rowStyle = (group: AgentGroup) => (single ? color(group.rows[0].source) : undefined);
+  const groupName = (group: AgentGroup) => (name === 'project' ? projectName(group.name) : (group.name ?? ''));
+  const opener = (group: AgentGroup) => (
+    <button
+      type="button"
+      className="agents-open"
+      data-agents-group={still ? undefined : group.key}
+      tabIndex={still || !onOpen ? -1 : undefined}
+      title={`${groupName(group)}\n${t('agents.openGroup')}`}
+    >
+      {groupName(group)}
+    </button>
+  );
+
+  if (layout === 'list') {
+    // What a row tells on its first line beside its name: a group, how many of its agents work; an agent, when it last worked.
+    const lead: AgentColumn = single ? 'activity' : 'agents';
+    const details = columns.filter(column => column !== lead);
     return (
       <ul className="agents-compact agents-rows" ref={body as RefObject<HTMLUListElement | null>}>
-        {rows.map((row, i) => (
-          <li key={i} className={row.session.working ? 'is-working' : ''} style={color(row)}>
-            <div className="agents-compact-main">
-              <Mark session={row.session} />
-              {has('origin') && <Origin origin={row.session.origin} />}
-              <span className="agents-project" title={placeOf(row.session)}>
-                <span>{row.session.project ?? t('agents.noProject')}</span>
-                {folderOf(row.session) && <small>{folderOf(row.session)}</small>}
-                {!has('state') && <span className="sr-only">, {stateOf(row.session)}</span>}
-              </span>
-              {has('running') && (still ? stillSince(row.session.startedAt, 'agents-age') : <Since className="agents-age" from={row.session.startedAt} />)}
-            </div>
-            {columns.some(column => ['machine', 'subscription', 'state'].includes(column.id)) && (
-              <div className="agents-compact-details">
-                {columns.filter(column => ['machine', 'subscription', 'state'].includes(column.id)).map(column => (
-                  <span key={column.id}><span className="sr-only">{t(column.title)}: </span>{column.cell(row, still)}</span>
-                ))}
+        {groups.map(group => {
+          const session = group.rows[0].session;
+          return (
+            <li key={group.key} className={rowClass(group)} style={rowStyle(group)} onClick={open(group)}>
+              <div className="agents-compact-main">
+                {single ? (
+                  <>
+                    <Mark session={session} />
+                    <Origin origin={session.origin} />
+                    <span className="agents-project" title={placeOf(session)}>
+                      <span>{projectName(session.project)}</span>
+                      {folderOf(session) && <small>{folderOf(session)}</small>}
+                      <span className="sr-only">, {stateOf(session)}</span>
+                    </span>
+                  </>
+                ) : (
+                  <span className="agents-project">{opener(group)}</span>
+                )}
+                {columns.includes(lead) && <span className="agents-age">{COLUMNS[lead].cell(group, context)}</span>}
               </div>
-            )}
-          </li>
-        ))}
+              {details.length > 0 && (
+                <div className="agents-compact-details">
+                  {details.map(column => (
+                    <span key={column} title={fullOf(group, column)}>
+                      <span className="sr-only">{t(COLUMNS[column].title)}: </span>
+                      {column === 'worked' ? t('agents.workedValue', {time: workHours(group.workedMs)}) : COLUMNS[column].cell(group, context)}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </li>
+          );
+        })}
         {rest && <li key="more" className="agents-more">{rest}</li>}
       </ul>
     );
+  }
   const direction = sorting?.active?.descending ? 'descending' : 'ascending';
   return (
     <div className="table-wrap agents-rows">
       <table>
-        <colgroup><col />{columns.map(column => <col key={column.id} style={{width: AGENT_WIDTHS[column.id]}} />)}</colgroup>
+        <colgroup><col />{columns.map(column => <col key={column} style={{width: AGENT_WIDTHS[column]}} />)}</colgroup>
         {sorting && (
           <thead>
             <tr>
               {sorting.headers.map(column => (
-                <th scope="col" key={column.id} aria-sort={sorting.active?.column === column.id ? direction : undefined}>
+                <th scope="col" key={column.id} aria-sort={sorting.active?.column === column.id ? direction : undefined} title={COLUMNS[column.id].hint && t(COLUMNS[column.id].hint!)}>
                   <button type="button" onClick={() => sorting.sortBy(column.id)}>
                     {t(column.title)}<span className="agents-sort-arrow" aria-hidden="true">{sorting.active?.column === column.id ? sorting.active.descending ? '↓' : '↑' : ''}</span>
                   </button>
@@ -300,19 +421,27 @@ function AgentsRows({
           </thead>
         )}
         <tbody ref={body as RefObject<HTMLTableSectionElement | null>}>
-          {rows.map((row, i) => (
-            <tr key={i} className={row.session.working ? 'is-working' : ''} style={color(row)}>
-              <td title={placeOf(row.session)}>
-                <Mark session={row.session} />
-                {row.session.project ?? t('agents.noProject')}
-                {folderOf(row.session) && <small className="agents-folder">{folderOf(row.session)}</small>}
-                {!has('state') && <span className="sr-only">, {stateOf(row.session)}</span>}
-              </td>
-              {columns.map(column => (
-                <td key={column.id} title={column.id === 'machine' ? row.session.device.name : column.id === 'subscription' ? sourceLabel(row.source) : undefined}>{column.cell(row, still)}</td>
-              ))}
-            </tr>
-          ))}
+          {groups.map(group => {
+            const session = group.rows[0].session;
+            return (
+              <tr key={group.key} className={rowClass(group)} style={rowStyle(group)} onClick={open(group)}>
+                {single ? (
+                  <td title={placeOf(session)}>
+                    <Mark session={session} />
+                    <Origin origin={session.origin} />
+                    {projectName(session.project)}
+                    {folderOf(session) && <small className="agents-folder">{folderOf(session)}</small>}
+                    <span className="sr-only">, {stateOf(session)}</span>
+                  </td>
+                ) : (
+                  <td>{opener(group)}</td>
+                )}
+                {columns.map(column => (
+                  <td key={column} title={fullOf(group, column)}>{COLUMNS[column].cell(group, context)}</td>
+                ))}
+              </tr>
+            );
+          })}
           {rest && (
             <tr key="more" className="agents-more">
               <td colSpan={columns.length + 1}>{rest}</td>
@@ -324,57 +453,87 @@ function AgentsRows({
   );
 }
 
+/** The columns the list shows, gathered as it is (`inGroup`: the agents of one of its groups): the name, and those after it the owner has not hidden. */
+type Arrangement = (inGroup: boolean) => {name: Dimension; columns: AgentColumn[]};
+
 /**
- * All the agents of the widget in a dialog: the rows it reads, in its order and with its
- * columns, as they change. A table where they fit its width, otherwise a list with the
- * sorting in a menu, as the widget has.
+ * The list in a dialog, as it changes: all its groups, in the widget's order and with its
+ * columns, or the agents of one of them (`initial`, else one chosen here), with a way
+ * back to all where it came from them. A table where they fit its width, otherwise a list
+ * with the sorting in a menu, as the widget has.
  */
 function AgentsDialog({
-  rows,
-  columns,
-  shown,
-  sorting,
+  groups,
+  by,
+  arrangement,
+  agentsSort,
+  sortBy,
   color,
   empty,
+  initial,
   onClose,
   restore,
 }: {
-  rows: AgentRow[];
-  columns: Column[];
-  shown: readonly AgentColumn[];
-  sorting: Sorting;
-  color: (row: AgentRow) => CSSProperties;
+  groups: AgentGroup[];
+  by: AgentsBy;
+  arrangement: Arrangement;
+  agentsSort: AgentsSort;
+  sortBy: (active: AgentsSort, column: AgentColumn, cycle?: boolean) => void;
+  color: Context['color'];
   empty: 'none' | 'noneShown' | null;
+  initial: string | null;
   onClose: () => void;
   restore: () => HTMLElement | null;
 }) {
   const box = useRef<HTMLDivElement>(null);
-  const layout = useAgentsLayout(box, shown);
-  const working = rows.filter(row => row.session.working).length;
-  // A control that goes (a sort with its column or its form, or with the last agent) leaves the focus in the dialog, after any render.
+  const [chosen, setChosen] = useState(initial);
+  // A group whose agents have all gone leaves its dialog with all the others.
+  const group = by === 'none' || chosen === null ? null : (groups.find(g => g.key === chosen) ?? null);
+  const {name, columns} = arrangement(group !== null);
+  const layout = useAgentsLayout(box, columns);
+  const shown = [name, ...columns];
+  const active = visibleAgentsSort(agentsSort, shown);
+  const ordered = sortedGroups(group ? groupsOf(group.rows, 'none') : groups, active, shown);
+  const sorting: Sorting = {active, headers: shown.map(id => ({id, title: COLUMNS[id].title})), sortBy: (column, cycle) => sortBy(active, column, cycle)};
+  const agents = group ? group.rows : groups.flatMap(g => g.rows);
+  const working = agents.filter(row => row.session.working).length;
+  const title = group ? (by === 'project' ? projectName(group.name) : (group.name ?? '')) : t('agents.title');
+  // A control that goes (a sort with its column or its form, a group left, or with the last agent) leaves the focus in the dialog, after any render.
   useLayoutEffect(() => {
     if (document.activeElement === document.body) box.current?.closest<HTMLElement>('.dialog')?.focus();
   });
   return (
-    <Modal title={t('agents.title')} wide onClose={onClose} restore={restore}>
+    <Modal title={title} wide onClose={onClose} restore={restore}>
       <div className="agents-dialog" ref={box}>
         <div className="agents-dialog-head">
-          {rows.length > 0 && <span className="panel-note">{t('agents.machineSummary', {working, count: rows.length})}</span>}
-          {layout === 'list' && rows.length > 0 && <SortMenu {...sorting} />}
+          {group && initial === null && (
+            <button type="button" className="text-button agents-back" onClick={() => setChosen(null)}>
+              <span aria-hidden="true">←</span> {t('agents.allGroups')}
+            </button>
+          )}
+          {agents.length > 0 && <span className="panel-note">{t('agents.machineSummary', {working, count: agents.length})}</span>}
+          {group && <span className="panel-note">{t('agents.workedValue', {time: workHours(group.workedMs)})}</span>}
+          {layout === 'list' && agents.length > 0 && <SortMenu {...sorting} />}
         </div>
-        {empty ? <p className="panel-empty">{t(`agents.${empty}`)}</p> : <AgentsRows rows={rows} columns={columns} layout={layout} color={color} sorting={sorting} />}
+        {empty ? (
+          <p className="panel-empty">{t(`agents.${empty}`)}</p>
+        ) : (
+          <AgentsRows groups={ordered} name={name} columns={columns} single={group !== null || by === 'none'} by={by} layout={layout} color={color} sorting={sorting} onOpen={setChosen} />
+        )}
       </div>
     </Modal>
   );
 }
 
 /**
- * Running agents as a table where the chosen columns fit, otherwise a compact list. It
- * reads the agents of every source of the board and their names, not their cards: a new
- * measurement does not render it. How long each has run is a part of its own. In a widget
- * made shorter than its agents it shows the first of them that fit whole and a last row
- * saying how many more, which opens them all in a dialog; it tells the board what it needs
- * (`useSizing`), measuring all its rows unseen beside the ones it shows.
+ * Running agents gathered by project (or machine, subscription, or not at all: each
+ * viewer's choice), as a table where the chosen columns fit, otherwise a compact list: a
+ * group tells how many of its agents work, how long they have worked and when one last did,
+ * and opens its agents in a dialog. It reads the agents of every source of the board and
+ * their names, not their cards: a new measurement does not render it. What shows time is
+ * a part of its own. In a widget made shorter than its rows it shows the first of them that
+ * fit whole and a last row saying how many more, which opens them all in a dialog; it tells
+ * the board what it needs (`useSizing`), measuring all its rows unseen beside the ones it shows.
  */
 export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrange}) {
   useLocale();
@@ -385,31 +544,44 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
     () => lineup.flatMap((id, i): AgentSource[] => (titles[id] ? [{id, provider: titles[id].provider, title: titles[id].title, sessions: sessions[i]}] : [])),
     [lineup, sessions, titles],
   );
-  const {agentsSort} = usePrefs();
+  const {agentsSort, agentsBy} = usePrefs();
   const sizing = useSizing();
   const manual = sizing?.manual ?? false;
   const panel = useRef<HTMLElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const live = useRef<HTMLElement>(null);
   const unseen = useRef<HTMLElement>(null);
-  const [open, setOpen] = useState(false);
-  /** How many of the agents fit a height chosen for the widget, as last measured. */
+  /** The dialog, open on all the groups or on one; and the group whose row opened it, to go back to. */
+  const [open, setOpen] = useState<{group: string | null} | null>(null);
+  const opener = useRef<string | null>(null);
+  /** How many of the rows fit a height chosen for the widget, as last measured. */
   const [fit, setFit] = useState<number | null>(null);
   // Only what the board shows: a subscription whose card is hidden is left out here too.
   const {rows, empty} = agentRows(sources, arrange.view);
   const working = rows.filter(row => row.session.working).length;
-  const columns = useMemo(() => COLUMNS.filter(column => columnShown(arrange.view, AGENTS, column.id)), [arrange.view]);
-  const shown = useMemo(() => ['project' as const, ...columns.map(column => column.id)], [columns]);
-  const layout = useAgentsLayout(panel, shown, sizing?.width);
+  const groups = groupsOf(rows, agentsBy);
+  const view = arrange.view;
+  const arrangement = useCallback<Arrangement>(
+    inGroup => {
+      const {name, rest} = columnsOf(agentsBy, inGroup);
+      return {name, columns: rest.filter(column => columnShown(view, AGENTS, column))};
+    },
+    [agentsBy, view],
+  );
+  const {name, columns} = arrangement(false);
+  const layout = useAgentsLayout(panel, columns, sizing?.width);
+  const shown = [name, ...columns];
   const active = visibleAgentsSort(agentsSort, shown);
-  const ordered = sortedRows(rows, active, shown);
-  const headers = [{id: 'project' as const, title: 'agents.project' as const}, ...columns];
-  const color = (row: AgentRow) => ({'--card-color': colorOf(arrange.view, row.source.id, row.source.provider)} as CSSProperties);
-  const sortBy = (column: AgentColumn, cycle = true) => setPrefs({agentsSort: nextAgentsSort(active, column, cycle)});
-  const sorting = {active, headers, sortBy};
-  // With two agents or more a row may say how many more there are: it is measured unseen, and in a chosen height every row with it.
+  const ordered = sortedGroups(groups, active, shown);
+  const color = useCallback((source: AgentSource) => ({'--card-color': colorOf(view, source.id, source.provider)}) as CSSProperties, [view]);
+  const sortBy = useCallback((from: AgentsSort, column: AgentColumn, cycle = true) => setPrefs({agentsSort: nextAgentsSort(from, column, cycle)}), []);
+  const sorting: Sorting = {active, headers: shown.map(id => ({id, title: COLUMNS[id].title})), sortBy: (column, cycle) => sortBy(active, column, cycle)};
+  const single = agentsBy === 'none';
+  // With two rows or more a row may say how many more there are: it is measured unseen, and in a chosen height every row with it.
   const measured = ordered.length >= 2;
   const count = manual && measured ? Math.min(fit ?? ordered.length, ordered.length) : ordered.length;
+  // Who may change what: every viewer how the list gathers, the owner its columns and whether it shows.
+  const toggles = single ? columnsOf('none').rest : [...new Set([...columnsOf(agentsBy).rest, ...columnsOf(agentsBy, true).rest])];
 
   const measure = useRef(() => {});
   measure.current = () => {
@@ -452,9 +624,21 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
   }, []);
   const report = sizing?.report;
   useLayoutEffect(() => () => report?.(null), [report]);
-  const close = useCallback(() => setOpen(false), []);
+  const close = useCallback(() => setOpen(null), []);
+  const openGroup = useCallback((key: string) => {
+    opener.current = key;
+    setOpen({group: key});
+  }, []);
+  const openAll = () => {
+    opener.current = null;
+    setOpen({group: null});
+  };
   // The row that opened the dialog may be gone when it closes, or drawn anew as a list or a table: then the one there is now, or the title.
-  const restore = useCallback(() => panel.current?.querySelector<HTMLElement>('[data-agents-more]') ?? heading.current, []);
+  const restore = useCallback(() => {
+    const root = panel.current;
+    const row = opener.current === null ? null : root?.querySelector<HTMLElement>(`[data-agents-group="${CSS.escape(opener.current)}"]`);
+    return row ?? root?.querySelector<HTMLElement>('[data-agents-more]') ?? heading.current;
+  }, []);
 
   return (
     <section ref={panel} className="panel agents-panel" aria-label={t('agents.title')}>
@@ -463,30 +647,69 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
         {rows.length > 0 && <span className="panel-note">{t('agents.machineSummary', {working, count: rows.length})}</span>}
         <div className="agents-controls">
           {layout === 'list' && <SortMenu {...sorting} />}
-          {arrange.owner && (
-            <Popover label={t('agents.settings')} icon={<SlidersIcon />}>
-              <div className="popover-title">{t('agents.columns')}</div>
-              {COLUMNS.map(column => (
-                <SwitchRow key={column.id} on={shown.includes(column.id)} onChange={on => arrange.update(view => withColumn(view, AGENTS, column.id, on))}>
-                  {t(column.title)}
-                </SwitchRow>
+          <Popover label={t('agents.settings')} icon={<SlidersIcon />}>
+            <div className="popover-section">
+              <div className="popover-title">{t('agents.groupBy')}</div>
+              {AGENTS_BY.map(by => (
+                <button type="button" className="popover-row" key={by} aria-pressed={agentsBy === by} onClick={() => setPrefs({agentsBy: by})}>
+                  <span>{t(by === 'none' ? 'agents.byNone' : COLUMNS[by].title)}</span>
+                  <b aria-hidden="true">{agentsBy === by ? '✓' : ''}</b>
+                </button>
               ))}
-              <HideRow onHide={() => arrange.update(view => withHidden(view, AGENTS, true))}>{t('widget.hide')}</HideRow>
-            </Popover>
-          )}
+            </div>
+            {arrange.owner && (
+              <>
+                <div className="popover-section">
+                  <div className="popover-title">{t('agents.columns')}</div>
+                  {toggles.map(column => (
+                    <SwitchRow key={column} on={columnShown(view, AGENTS, column)} onChange={on => arrange.update(view => withColumn(view, AGENTS, column, on))}>
+                      {t(COLUMNS[column].title)}
+                    </SwitchRow>
+                  ))}
+                </div>
+                <HideRow onHide={() => arrange.update(view => withHidden(view, AGENTS, true))}>{t('widget.hide')}</HideRow>
+              </>
+            )}
+          </Popover>
         </div>
       </div>
       {empty ? (
         <p className="panel-empty">{t(`agents.${empty}`)}</p>
       ) : (
-        <AgentsRows rows={ordered.slice(0, count)} columns={columns} layout={layout} color={color} sorting={sorting} more={ordered.length - count} onMore={() => setOpen(true)} body={live} />
+        <AgentsRows
+          groups={ordered.slice(0, count)}
+          name={name}
+          columns={columns}
+          single={single}
+          by={agentsBy}
+          layout={layout}
+          color={color}
+          sorting={sorting}
+          more={ordered.length - count}
+          onMore={openAll}
+          onOpen={openGroup}
+          body={live}
+        />
       )}
       {measured && (
         <div className="agents-measure" aria-hidden="true" inert>
-          <AgentsRows rows={manual ? ordered : []} columns={columns} layout={layout} color={color} more={ordered.length - 1} still body={unseen} />
+          <AgentsRows groups={manual ? ordered : []} name={name} columns={columns} single={single} by={agentsBy} layout={layout} color={color} more={ordered.length - 1} still body={unseen} />
         </div>
       )}
-      {open && <AgentsDialog rows={ordered} columns={columns} shown={shown} sorting={sorting} color={color} empty={empty} onClose={close} restore={restore} />}
+      {open && (
+        <AgentsDialog
+          groups={ordered}
+          by={agentsBy}
+          arrangement={arrangement}
+          agentsSort={agentsSort}
+          sortBy={sortBy}
+          color={color}
+          empty={empty}
+          initial={open.group}
+          onClose={close}
+          restore={restore}
+        />
+      )}
     </section>
   );
 });

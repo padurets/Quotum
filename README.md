@@ -135,14 +135,16 @@ Codex         api                  idle     started 25m ago · editor
   and [Claude Resets](https://claude-resets.com), with a link to the source. You
   can turn them off.
 - **Boards made of widgets** (a card per subscription, agent activity, the chart, the
-  table, and a list of every running agent to turn on), like a dashboard in Grafana:
+  table, and a list of the running agents to turn on, gathered by project, machine or
+  subscription, each group with how many of its agents work, their agent-hours and when
+  one last worked, its agents a click away), like a dashboard in Grafana:
   the cards show what is left now, the analytics under them share one set of filters.
   The owner places them on a six-column grid by dragging their heads, and resizes them
   to a third, a half, two thirds or the whole width. Each fills only the rows its content
   needs, so cards stack beside a tall list, unless the owner drags its bottom edge (or
   a bottom corner) to make it taller, or the list of agents shorter: the charts grow
   with it, a card never gets shorter than its content, and a shorter list ends with how
-  many more agents run, which opens them all. Either side edge changes the width. A
+  many more rows it has, which opens them all. Either side edge changes the width. A
   double click on the bottom edge or a bottom corner, or Enter or Space on the bottom
   edge, gives a widget back the height of its content. The owner names the cards,
   hides the ones they don't need (the data keeps coming) and sets the plans; everyone on

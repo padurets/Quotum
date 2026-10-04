@@ -59,6 +59,8 @@ export type LiveSession = {
   startedAt: number;
   lastWorkedAt: number | null;
   working: boolean;
+  /** How long it has worked, as its machine's lists credited it so far. */
+  workedMs: number;
 };
 
 /**

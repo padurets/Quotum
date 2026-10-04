@@ -380,6 +380,11 @@ export type BoardCheck = Span &
      */
     | {agentsOf: string; folders: (string | null)[]}
     /**
+     * The list of running agents gathered by project: the group of `agentGroup` (as the person
+     * named it), how many agents it has, and whether the hub has credited them any work.
+     */
+    | {agentGroup: string; agents: number; worked?: boolean}
+    /**
      * The activity widget over `range`, split by subscription (named by card id), project or
      * machine (by its name shown): every group and its own hours, to a tenth.
      */

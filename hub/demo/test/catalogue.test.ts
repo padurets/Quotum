@@ -17,7 +17,7 @@ import {Directory} from '../../server/store/directory.js';
 import {Store} from '../../server/store/store.js';
 import type {ResetEvent, ResetProvider} from '../../server/domain/resets.js';
 import {setLocale} from '../../ui/i18n/index.js';
-import {agentRows, byActivity, drawn, folderOf, machinesOf} from '../../ui/lib/agents.js';
+import {agentRows, byActivity, drawn, folderOf, groupsOf, machinesOf} from '../../ui/lib/agents.js';
 import {LIVE_COLUMNS, announcedOf, forecastLayout, planCell, spentOf} from '../../ui/lib/forecast.js';
 import {dashOf, lineWork, workNotes} from '../../ui/lib/work.js';
 import {activityEmpty} from '../../ui/lib/activity.js';
@@ -265,9 +265,14 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
       return {activityKnownFrom: activity.known ? activity.known.from - stand.start : null, range};
     }
     // A widget hidden on the board shows none of its codes.
-    if (('rows' in check || 'agentsOf' in check) && isHidden(overview.view, AGENTS)) return `the table of running agents is hidden on the board ${entry.id}`;
+    if (('rows' in check || 'agentsOf' in check || 'agentGroup' in check) && isHidden(overview.view, AGENTS)) return `the table of running agents is hidden on the board ${entry.id}`;
     if ('weeklySeries' in check && isHidden(overview.view, HISTORY)) return `the chart is hidden on the board ${entry.id}`;
     const {rows, empty} = agentRows(overview.sources, overview.view);
+    if ('agentGroup' in check) {
+      const {agentGroup} = check as {agentGroup: string};
+      const group = groupsOf(rows, 'project').find(g => g.name === agentGroup);
+      return {agentGroup, agents: group?.rows.length ?? 0, worked: (group?.workedMs ?? 0) > 0};
+    }
     if ('agentsOf' in check) {
       const {agentsOf} = check as {agentsOf: string};
       const folders = rows.filter(row => row.session.project === agentsOf).map(row => folderOf(row.session));
