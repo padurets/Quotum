@@ -915,7 +915,9 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .money-partial { margin-left: 4px; color: var(--text-3); }
 .money-limit .limit-top { flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
 .money-limit .limit-name { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.money-limit .limit-name small { display: block; color: var(--text-3); font-size: 11px; }
+.key-status { display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--warn); vertical-align: middle; }
+.key-status.is-inactive { background: var(--text-3); }
+.key-status[aria-hidden="true"] { visibility: hidden; }
 .money-limit .limit-value { max-width: 100%; overflow-wrap: anywhere; }
 .money-limit .limit-bottom { flex-wrap: wrap; gap: 4px 12px; }
 .card-heading { flex: 1; min-width: 0; }

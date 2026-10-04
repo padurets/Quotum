@@ -24,7 +24,8 @@ accounts. This document explains how the parts work and why they are built this 
 - **hub/** — the dashboard service: Node 24, Fastify, the SQLite built into Node, a
   React UI. It decides which device measures which subscription, stores measurements,
   applies the rules (what counts as spending, what is a reset, what is a gap) and
-  serves the dashboard. It never talks to providers itself.
+  serves the dashboard. Hub-measured providers, such as OpenRouter, use its read-only
+  connectors and encrypted credentials; subscription measurements come from agents.
 - **spec/** — the contracts: the [ingest format](../spec/ingest-v1.md) between the two
   (anything that speaks it can deliver to a hub), and the
   [dashboard's events](../spec/dashboard-v1.md) between the hub and its page.

@@ -15,7 +15,9 @@ import {useShownKeys} from '../lib/moneyKeys';
 function KeyStatus({part,cap}:{part:KeyPart;cap:Meter}) {
   const now=useClock(now=>earliest(part.expiresAt!==null&&part.expiresAt>now?part.expiresAt:null,capChangesAt(cap,now)));
   const stale=capStale(cap,now);
-  return <small data-time="key-status" className={stale?'cap-stale':undefined}>{part.disabled||part.expiresAt!==null&&part.expiresAt<=now?t('money.inactive'):part.presence==='missing'?t('money.missing'):stale?t('money.stale'):''}</small>;
+  const inactive=part.disabled||part.expiresAt!==null&&part.expiresAt<=now;
+  const status=inactive?t('money.inactive'):part.presence==='missing'?t('money.missing'):stale?t('money.stale'):'';
+  return <small data-time="key-status" className={`key-status${stale?' cap-stale':''}${inactive?' is-inactive':''}`} role="img" title={status} aria-label={status||undefined} aria-hidden={!status}/>;
 }
 function CapReset({meter,short=false}:{meter:Meter;short?:boolean}) {
   const now=useClock(now=>meter.resetAt===null?null:countdownChangesAt(meter.resetAt,now));
