@@ -61,7 +61,7 @@ export function ConnectionRow({name,icon,detail,status,actions}:{name:string;ico
 export function ConnectedAccounts({userId,trustedKeys,onReplace}:{userId:string;trustedKeys:Session['trustedKeys'];onReplace:(record:Credential)=>void}) {
   const [list,setList]=useState<Credential[]|null>(null),[error,setError]=useState<unknown>(null),[removing,setRemoving]=useState<Credential|null>(null);
   const generation=useRef(0),titles=useTitles();
-  const read=async()=>{const own=++generation.current;try{const reply=await call<{credentials:Credential[]}>('GET','/api/credentials');if(generation.current===own)setList(reply.credentials);}catch(failure){if(generation.current===own)setError(failure);}};
+  const read=async()=>{const own=++generation.current;try{const reply=await call<{credentials:Credential[]}>('GET','/api/credentials');if(generation.current===own){setList(reply.credentials);setError(null);}}catch(failure){if(generation.current===own)setError(failure);}};
   useEffect(()=>{void read();return()=>{generation.current++;};},[userId]);
   useEffect(()=>page.listen(event=>{if(event.type==='hub'&&event.event.type==='sourceAccess')void read();}),[userId]);
   const available=trustedKeys?.available===true;
