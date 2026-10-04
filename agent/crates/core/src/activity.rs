@@ -1118,26 +1118,6 @@ mod sys {
         Some(crate::session_identity::birth(&boot, pid, sequence))
     }
 
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        #[test]
-        fn bounded_telemetry_validates_prefix_without_chasing_tails() {
-            let mut bytes = [0u8; 96];
-            bytes[..4].copy_from_slice(&96u32.to_le_bytes());
-            bytes[4..8].copy_from_slice(&7u32.to_le_bytes());
-            bytes[8..16].copy_from_slice(&123u64.to_le_bytes());
-            bytes[40..48].copy_from_slice(&456u64.to_le_bytes());
-            assert!(telemetry_birth(&bytes, 96, 7).is_some());
-            for length in [0, 63, 95, 97, u32::MAX] {
-                assert!(telemetry_birth(&bytes, length, 7).is_none());
-            }
-            assert!(telemetry_birth(&bytes, 96, 8).is_none());
-            bytes[..4].copy_from_slice(&97u32.to_le_bytes());
-            assert!(telemetry_birth(&bytes, 96, 7).is_none());
-        }
-    }
-
     /// Windows keeps no time of finished children: what a tool spent is counted while it runs.
     pub fn times(pid: u32) -> Option<(Millis, u64)> {
         let as_100ns = |t: FILETIME| (t.dwHighDateTime as u64) << 32 | t.dwLowDateTime as u64;
@@ -1176,6 +1156,26 @@ mod sys {
             (unsafe { ProcessIdToSessionId(pid, &mut id) } != 0).then_some(id)
         };
         session(pid).is_some_and(|id| Some(id) == session(std::process::id()))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        #[test]
+        fn bounded_telemetry_validates_prefix_without_chasing_tails() {
+            let mut bytes = [0u8; 96];
+            bytes[..4].copy_from_slice(&96u32.to_le_bytes());
+            bytes[4..8].copy_from_slice(&7u32.to_le_bytes());
+            bytes[8..16].copy_from_slice(&123u64.to_le_bytes());
+            bytes[40..48].copy_from_slice(&456u64.to_le_bytes());
+            assert!(telemetry_birth(&bytes, 96, 7).is_some());
+            for length in [0, 63, 95, 97, u32::MAX] {
+                assert!(telemetry_birth(&bytes, length, 7).is_none());
+            }
+            assert!(telemetry_birth(&bytes, 96, 8).is_none());
+            bytes[..4].copy_from_slice(&97u32.to_le_bytes());
+            assert!(telemetry_birth(&bytes, 96, 7).is_none());
+        }
     }
 }
 
