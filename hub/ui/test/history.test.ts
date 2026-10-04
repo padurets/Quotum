@@ -980,3 +980,43 @@ test('a failed owner that became visible keeps the foreground retry even before 
   assert.equal(h.timers.size, 1);
   h.store.close();
 });
+
+test('a seven-day look-ahead reads a long visible miss in capped batches and never sweeps beyond its fixed buffer', async () => {
+  const h = harness(); await h.start(); await h.reads[0].answer();
+  const offset = h.reads.length, from = NOW - 5 * 24 * H;
+  h.store.pan({token: 1, length: 24 * H, from, to: NOW, direction: -1}); await flush();
+  assert.ok(pending(h).length, 'reading starts during movement');
+  for (let n = 0; n < 20 && pending(h).length; n++) for (const r of pending(h)) {
+    assert.ok(tileOf(r.to - 1, r.cell) - tileOf(r.from, r.cell) < 8);
+    await r.answer();
+  }
+  assert.equal(pending(h).length, 0);
+  const reads = h.reads.slice(offset), cell = reads[0].cell;
+  assert.ok(reads.length > 1, 'the visible run itself exceeds eight tiles');
+  assert.ok(Math.min(...reads.map(r => r.from)) >= cellStart(from, cell) - 60 * cell);
+  assert.ok(covered(h.store.getPlot()!.coverage, cellStart(from, cell), cellStart(NOW, cell)));
+  const count = h.reads.length;
+  h.store.pan({token: 1, length: 24 * H, from, to: NOW, direction: -1}); await flush();
+  assert.equal(h.reads.length, count, 'arrival cannot restart a distant sweep');
+  const range = {from, to: from + 24 * H}; h.store.choose('24h', range); h.store.endPan(true); await flush();
+  assert.equal(h.store.get().history?.range, `${range.from}-${range.to}`); assert.equal(h.reads.length, count);
+  h.store.close();
+});
+
+test('a custom 31-day range keeps its grid and exact accounting through a pan and cached return', async () => {
+  const length = 31 * 24 * H, h = harness(), origin = {from: NOW - length, to: NOW};
+  h.store.choose('30d', origin); await h.start(); await h.reads[0].answer();
+  assert.equal(h.store.get().history?.cellMs, cellOf(length));
+  const offset = h.reads.length, range = {from: origin.from - length / 2, to: origin.to - length / 2};
+  h.store.pan({token: 1, length, ...range, direction: -1}); await flush();
+  for (let n = 0; n < 20 && pending(h).length; n++) for (const r of pending(h)) {
+    assert.equal(r.cell, cellOf(length)); assert.ok(tileOf(r.to - 1, r.cell) - tileOf(r.from, r.cell) < 8); await r.answer();
+  }
+  h.store.choose('30d', range); h.store.endPan(true); await flush();
+  const target = targetOf(length, NOW, `${range.from}-${range.to}`, range);
+  assert.deepEqual(h.store.get().history, {...compose([empty(target.k0 * target.cell, (target.k1 + 1) * target.cell)], {now: NOW, historyStart: 0, known: {work: 0, sources: {s: 0}}}, target, new Set(['s w'])), board: 'b'});
+  assert.ok(h.reads.length > offset); const count = h.reads.length;
+  h.store.pan({token: 2, length, ...origin, direction: 1}); await flush();
+  h.store.choose('30d', origin); h.store.endPan(true); await flush(); assert.equal(h.reads.length, count);
+  h.store.close();
+});

@@ -1,7 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
-import {historyBody, historyProxy, type Transfer} from '../historyProxy';
+import {brotliCompressSync, constants} from 'node:zlib';
+import {historyBody, historyProxy, type BodyCount, type Transfer} from '../historyProxy';
 import {HistoryCutChanged, bodyBounds, bodyTotals, stableHistory, trafficProblems} from '../historyTrafficBudget';
 
 const transfer: Transfer = {id: '1', phase: 'cold', cell: 1, from: 0, to: 60, started: 0, sent: true, finished: true, aborted: false, decoded: 100, encoded: 40};
@@ -107,4 +108,22 @@ test('native history gestures use CDP integer speed while retaining the requeste
     assert.equal(gesture.xDistance, distance); assert.equal(gesture.gestureSourceType, 'mouse'); assert.equal(gesture.preventFling, true);
   }
   assert.throws(() => historyScroll({x: 0, y: 0, width: NaN}, .5, 10));
+});
+
+test('an actual partial Brotli delivery counts payload bytes and retains the full fixture upper bound', async () => {
+  const decoded = Buffer.from(JSON.stringify({run: 'r', values: Array.from({length: 300}, (_, i) => i)}));
+  const encoded = brotliCompressSync(decoded, {params: {[constants.BROTLI_PARAM_QUALITY]: 4, [constants.BROTLI_PARAM_MODE]: constants.BROTLI_MODE_TEXT, [constants.BROTLI_PARAM_LGWIN]: 22}});
+  const controller = new AbortController(); let counted: BodyCount | undefined;
+  const upstream = createServer((_req, res) => {
+    res.writeHead(200, {'content-encoding': 'br', 'content-length': encoded.length}); res.write(encoded.subarray(0, 12));
+    const timer = setTimeout(() => controller.abort(), 30); res.once('close', () => clearTimeout(timer));
+  });
+  await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+  try {
+    const url = `http://127.0.0.1:${(upstream.address() as {port: number}).port}/api/history`;
+    await assert.rejects(historyBody(url, '', controller.signal, count => {counted = count;}));
+    assert.equal(counted!.complete, false); assert.equal(counted!.lower, 12, 'only the delivered compressed prefix is known');
+    const bounds = bodyBounds(counted!, {...transfer, decoded: decoded.length, encoded: encoded.length, finished: false, aborted: true});
+    assert.equal(bounds.lower, 12); assert.equal(bounds.upper, encoded.length); assert.equal(bounds.unknown, 1);
+  } finally {controller.abort(); upstream.closeAllConnections(); await new Promise<void>(resolve => upstream.close(() => resolve()));}
 });
