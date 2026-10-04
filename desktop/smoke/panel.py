@@ -135,6 +135,18 @@ def check_panel(bus, item, child, root, env):
     def activate():
         bus.call_sync(item, '/StatusNotifierItem', 'org.kde.StatusNotifierItem', 'Activate', GLib.Variant('(ii)', (600, 440)), None, Gio.DBusCallFlags.NONE, 3000, None)
 
+    def main_revision():
+        log = root / 'app/logs/hub.log'
+        matches = re.findall(r'app: main window request (\d+)', log.read_text()) if log.exists() else []
+        return int(matches[-1]) if matches else 0
+
+    def open_main():
+        revision = main_revision()
+        subprocess.run([child.args[0]], env=env, timeout=5, check=True)
+        # A second process exits after writing to the socket, before the controller
+        # necessarily accepts it. The next tray action must follow acceptance.
+        wait(lambda: main_revision() > revision)
+
     try:
         for cancel in [False, True]:
             activate()
@@ -176,13 +188,13 @@ def check_panel(bus, item, child, root, env):
         wait(lambda: engine() is None)
         # Reopening main was accepted first, but its browser is paused. A newer
         # tray request must remain foreground when both queued heads are drained.
-        subprocess.run([child.args[0]], env=env, timeout=5, check=True)
+        open_main()
         pid = wait(engine)
         board = wait(lambda: next((w for w in visible(pid) if not w.override), None))
         x.XSelectInput(display, board.id, 1 << 21)  # FocusChangeMask
         os.kill(pid, signal.SIGSTOP)
         try:
-            subprocess.run([child.args[0]], env=env, timeout=5, check=True)
+            open_main()
             activate()
             loader = wait(lambda: visible(child.pid))
             wait(lambda: focused_inside(loader[0].id))

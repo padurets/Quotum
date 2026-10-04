@@ -323,6 +323,7 @@ pub fn main(shell: &Arc<Shell>) {
     dispatch(shell.clone(), move |panel, shell| {
         let _opening = opening;
         let ticket = accept(shell, Role::Main, None, false, None);
+        shell.hub_log.line(&format!("app: main window request {}", ticket.revision));
         panel.hide();
         open_at(shell, ticket);
     });
