@@ -321,6 +321,9 @@ its balance and enabled key-limit scales with their reset times. Its settings sw
 individual scales, including keys beyond the initial five-key preview. Scales use the
 same segmented meters as subscriptions; keys without a spending limit have no scale.
 Spending belongs to analytics.
+Settings show at most ten keys per page. Access turns amber seven days before expiry;
+expired, revoked or forbidden access is red. Working keys without expiry have no expiry
+mark. Temporary read failures are amber.
 The chart's own settings select
 key usage and remaining limits for analytics. Choose **USD** in the
 shared analytics controls for the money chart and table. Account balances are selected

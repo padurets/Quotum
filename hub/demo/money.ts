@@ -14,6 +14,7 @@ export const MONEY_SCENES=[
   {id:'gap',expect:['unlocated-spend','retained-baseline'],about:'first increase after a gap longer than retention'},
   {id:'negative',expect:['negative-balance','zero-cap'],about:'negative wallet and a closed key limit'},
   {id:'unknown',expect:['neutral-provider'],about:'unknown provider with no percentage capability'},
+  {id:'no-expiry',expect:['private-no-expiry'],about:'working management access without an expiry or a warning'},
 ] as const;
 export const MONEY_KEY=(index=0)=>'sk-or-v1-'+(index+1).toString(16).padStart(64,'0');
 export const accountOfMoney=(index:number)=>createHash('sha256').update('quotum/account/v1\nopenrouter\ndemo-money-'+index).digest('hex').slice(0,24);

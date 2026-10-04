@@ -12,6 +12,7 @@ const {SecretError}=await load('secrets/crypto.js') as typeof import('../server/
 const workspace='550e8400-e29b-41d4-a716-446655440000';
 const secondWorkspace='550e8400-e29b-41d4-a716-446655440001';
 const expiry=new Date(Date.now()+86_400_000).toISOString();
+const distantExpiry=new Date(Date.now()+14*86_400_000).toISOString();
 let observed=Date.now();
 const transport=new ConnectorTransport({host:'127.0.0.1',port:443,operations:{}});
 const identified=new Map<number,number>();
@@ -26,7 +27,7 @@ transport.send=async(operation,secret,query={})=>{
     const count=(identified.get(index)??0)+1;identified.set(index,count);
     if(index===2&&count>1)throw new SecretError('credential_revoked');
     if(index===3&&count>1)throw new SecretError('credential_expired');
-    return {data:{is_management_key:true,expires_at:index===7?null:expiry,organization_id:null,creator_user_id:'demo-money-'+index}};
+    return {data:{is_management_key:true,expires_at:index===7?null:index===0?distantExpiry:expiry,organization_id:null,creator_user_id:'demo-money-'+index}};
   }
   if(operation==='credits')return decodeOpenRouter(JSON.stringify({data:{total_credits:control?.credits??(index===5?10:70),total_usage:control?.usage??(index===5?15:33)}}));
   if(operation==='workspaces')return {data:[{id:workspace},...(index===1?[{id:secondWorkspace}]:[])],total_count:index===1?2:1};

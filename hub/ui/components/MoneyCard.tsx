@@ -1,7 +1,7 @@
 import type {Card,View} from '../lib/types';
 import type {KeyPart,Meter} from '../../server/domain/meters';
 import {useSourceAccess} from '../lib/board';
-import {money,keyName,capLeft,capPercent,capStale,capChangesAt} from '../lib/money';
+import {money,keyName,capLeft,capPercent,capStale,capChangesAt,accessTone,accessChangesAt,ACCESS_WARNING_MS} from '../lib/money';
 import {stamp,countdown,duration,countdownChangesAt,earliest} from '../lib/format';
 import {useClock} from '../lib/clock';
 import {t} from '../i18n';
@@ -55,14 +55,15 @@ export function MoneyCard({source,board,view,compact=false}:{source:Card;board:s
 }
 export function AccessMark({id}:{id:string}) {
   const access=useSourceAccess(id);
-  const now=useClock(now=>access?.expiresAt==null?null:earliest(access.expiresAt>now?access.expiresAt:null,access.expiresAt-7*86_400_000>now?access.expiresAt-7*86_400_000:null,access.expiresAt>now&&access.expiresAt-now<=7*86_400_000?countdownChangesAt(access.expiresAt,now):null));
+  const now=useClock(now=>accessChangesAt(access,now));
   if(!access)return null;
+  const tone=accessTone(access,now);
+  if(tone===null)return null;
   const text=access.error?new ApiError(400,access.error):null;
   const expiry=access.expiresAt===null?t('sources.noExpiry'):access.expiresAt<=now?t('money.expired'):t('money.expirySoon',{time:stamp(access.expiresAt)});
-  const warn=!!access.error||access.expiresAt===null||access.expiresAt-now<=7*86_400_000;
   const lead=text?messageOf(text):expiry;
-  return <span data-time="access-expiry"><Popover label={lead} up align="left" triggerClass={`tray-pill access-mark${warn?' is-warn':''}`} trigger={<>
+  return <span data-time="access-expiry"><Popover label={lead} up align="left" triggerClass={`tray-pill access-mark${tone==='neutral'?'':` is-${tone}`}`} trigger={<>
     <svg className="tray-icon" viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><circle cx="8" cy="8" r="4"/><path d="m11 11 9 9m-5-5 3-3m-1 5 3-3"/></svg>
-    {access.expiresAt!==null&&access.expiresAt>now&&access.expiresAt-now<=7*86_400_000&&<span>{countdown(access.expiresAt-now)}</span>}
+    {tone!=='crit'&&access.expiresAt!==null&&access.expiresAt>now&&access.expiresAt-now<=ACCESS_WARNING_MS&&<span>{countdown(access.expiresAt-now)}</span>}
   </>}><div className="tray-panel"><div className="tray-panel-head"><p className="tray-panel-lead">{lead}</p>{text&&<p className="tray-panel-when">{expiry}</p>}</div></div></Popover></span>;
 }

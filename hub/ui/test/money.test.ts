@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {money,capPercent,capStale,capChangesAt} from '../lib/money';
+import {money,capPercent,capStale,capChangesAt,accessTone,accessChangesAt} from '../lib/money';
 import {setLocale} from '../i18n';
 import {moneySelection,readMoney} from '../lib/moneySelection';
 import type {Card} from '../lib/types';
@@ -11,6 +11,32 @@ import {INITIAL,reduce,type Snapshot} from '../lib/board';
 
 const meter=(id:string,value='1'):Meter=>({id,amount:value,kind:'balance',unit:'USD',limit:null,at:1,stale:false,staleAfterMs:1000,resetAt:null,minutes:null,scope:null,label:null});
 const card=(id:string):Card=>({id,provider:'openrouter',plan:'',successAt:1,error:null,stale:false,windows:[],resets:null,owners:[],staleAfterMs:1000,measureIntervalMs:null,meters:[meter('balance'),...Array.from({length:10},(_,i)=>meter('key:'+i))]});
+test('access warnings begin exactly seven days before expiry, and expired access is critical',()=>{
+  const now=Date.UTC(2026,9,4),expiry=now+8*86_400_000,warning=now+86_400_000;
+  const access={expiresAt:expiry,error:null};
+  assert.equal(accessTone(access,warning-1),'neutral');
+  assert.equal(accessChangesAt(access,warning-1),warning);
+  assert.equal(accessTone(access,warning),'warn');
+  const changed=accessChangesAt(access,warning)!;
+  assert.ok(changed>warning&&changed<=expiry);
+  assert.equal(accessTone(access,expiry-1),'warn');
+  assert.equal(accessChangesAt(access,expiry-1),expiry);
+  assert.equal(accessTone(access,expiry),'crit');
+  assert.equal(accessChangesAt(access,expiry),null);
+});
+test('working access without expiry has no news, while revoked access and temporary failures remain visible',()=>{
+  const now=1000,access={expiresAt:null,error:null};
+  assert.equal(accessTone(access,now),null);
+  assert.equal(accessChangesAt(access,now),null);
+  assert.equal(accessChangesAt(null,now),null);
+  assert.equal(accessChangesAt(undefined,now),null);
+  for(const error of ['credential_revoked','credential_expired','credential_permission'] as const)assert.equal(accessTone({...access,error},now),'crit');
+  assert.equal(accessTone({...access,error:'connector_timeout'},now),'warn');
+  assert.equal(accessChangesAt({...access,error:'connector_timeout'},now),null);
+  const revoked={expiresAt:now+60_000,error:'credential_revoked' as const};
+  assert.equal(accessTone(revoked,now),'crit');
+  assert.equal(accessChangesAt(revoked,now),revoked.expiresAt);
+});
 test('a selected cap stays fresh until its own deadline or earlier reset',()=>{
   const cap={...meter('cap'),at:100,staleAfterMs:1000,resetAt:800};
   assert.equal(capChangesAt(cap,100),800);assert.equal(capStale(cap,799),false);assert.equal(capStale(cap,800),true);assert.equal(capChangesAt(cap,800),null);
