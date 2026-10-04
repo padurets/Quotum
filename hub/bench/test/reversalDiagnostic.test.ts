@@ -34,7 +34,7 @@ test('the original stalled page is diagnosed without pre-enabling V8 and a recov
   }};
   const observer=await observeReversal(page as unknown as Cdp,attachedChrome('http://fixture.invalid'),false);
   assert.equal(commands.length,0,'the canonical input must start before any V8 diagnostics');
-  const failed=assert.rejects(observer.watch('repeat wheel',()=>input),/response required diagnostic intervention/);
+  const failed=assert.rejects(observer.watch('repeat wheel',()=>input),/response arrived after diagnostic intervention/);
   t.mock.timers.tick(5000);await failed;await observer.close();
   assert.ok(commands.includes('Debugger.pause'));
   assert.ok(messages.some(message=>String(message).includes('"activation":"after stall"')));

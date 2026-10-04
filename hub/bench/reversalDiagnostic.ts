@@ -57,7 +57,7 @@ export async function observeReversal(page:Cdp,browser:Browser,profileBeforeInpu
       const timer=setTimeout(()=>{capture=sample(label).catch(error=>{console.error('reversal diagnostic failed: '+String(error));});},5000);
       try{
         const result=await run();
-        if(capture)throw new Error(label+': response required diagnostic intervention');
+        if(capture)throw new Error(label+': response arrived after diagnostic intervention');
         return result;
       }finally{clearTimeout(timer);if(capture)await capture;}
     },
