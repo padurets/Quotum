@@ -28,7 +28,7 @@ export function MoneySettings({sources,hidden,series}:{sources:readonly Named[];
     call<KeyPage>('GET',`/api/boards/${encodeURIComponent(board)}/sources/${encodeURIComponent(sourceId)}/keys?limit=50${after?'&after='+encodeURIComponent(after):''}`)
       .then(reply=>{if(live){setPage(reply);setError(null);}},failure=>{
         if(!live)return;
-        if(failure instanceof ApiError&&failure.code==='keys_changed'){setChanged(true);setBack([]);setAfter(undefined);}else setError(failure);
+        if(failure instanceof ApiError&&failure.code==='keys_changed'){setPage(null);setChanged(true);setBack([]);setAfter(undefined);}else setError(failure);
       });
     return()=>{live=false;};
   },[board,sourceId,after,inCard]);
@@ -64,9 +64,9 @@ export function MoneySettings({sources,hidden,series}:{sources:readonly Named[];
           return row(id,meter,[history?.semantics?.label??meter,t(history?.kind==='cap'?'money.cap':'money.usage')].join(' — '));
         })}
       </div>
-      {(!!page?.next||back.length>0)&&<KeyPages page={back.length+1} pages={Math.ceil((page?.total??0)/50)} previous={!!back.length} next={!!page?.next}
-        onPrevious={()=>{setAfter(back.at(-1));setBack(back.slice(0,-1));}}
-        onNext={()=>{setBack([...back,after]);setAfter(page!.next!);}}/>}
+      {(!!page?.next||back.length>0)&&<KeyPages page={back.length+1} pages={Math.ceil((page?.total??source?.keysCount??0)/50)} previous={!!back.length} next={!!page?.next}
+        onPrevious={()=>{setPage(null);setAfter(back.at(-1));setBack(back.slice(0,-1));}}
+        onNext={()=>{setPage(null);setBack([...back,after]);setAfter(page!.next!);}}/>}
     </>:<>
       <div className="popover-scroll">{accounts.map(s=><div key={s.id} className="popover-section">
         <div className="popover-title">{s.title}</div>

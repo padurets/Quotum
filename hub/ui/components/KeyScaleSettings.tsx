@@ -21,7 +21,7 @@ export function KeyScaleSettings({source,board,arrange}:{source:Card;board:strin
     call<KeyPage>('GET',`/api/boards/${encodeURIComponent(board)}/sources/${encodeURIComponent(source.id)}/keys?limit=50${after?'&after='+encodeURIComponent(after):''}`)
       .then(reply=>{if(live){setPage(reply);setError(null);}},failure=>{
         if(!live)return;
-        if(failure instanceof ApiError&&failure.code==='keys_changed'){setChanged(true);setBack([]);setAfter(undefined);}
+        if(failure instanceof ApiError&&failure.code==='keys_changed'){setPage(null);setChanged(true);setBack([]);setAfter(undefined);}
         else setError(failure);
       });
     return()=>{live=false;};
@@ -37,8 +37,8 @@ export function KeyScaleSettings({source,board,arrange}:{source:Card;board:strin
         onChange={on=>arrange.update(view=>withKeyShown(view,source.id,part.id,on))}
         value={cap?money(capLeft(cap)):t('money.noCap')}>{keyName(part)}</SwitchRow>;
     })}</div>
-    {(!!page?.next||back.length>0)&&<KeyPages page={back.length+1} pages={Math.ceil((page?.total??0)/50)} previous={!!back.length} next={!!page?.next}
-      onPrevious={()=>{setAfter(back.at(-1));setBack(back.slice(0,-1));}}
-      onNext={()=>{setBack([...back,after]);setAfter(page!.next!);}}/>}
+    {(!!page?.next||back.length>0)&&<KeyPages page={back.length+1} pages={Math.ceil((page?.total??source?.keysCount??0)/50)} previous={!!back.length} next={!!page?.next}
+      onPrevious={()=>{setPage(null);setAfter(back.at(-1));setBack(back.slice(0,-1));}}
+      onNext={()=>{setPage(null);setBack([...back,after]);setAfter(page!.next!);}}/>}
   </>;
 }
