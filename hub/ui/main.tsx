@@ -298,14 +298,14 @@ function App() {
   if (session.local) {
     if (!session.user) return <OpenInApp compact={path === '/compact'} />;
     if (path === '/compact') return <Compact live={live} />;
-    return <Dashboard user={session.user} trustedKeys={session.trustedKeys} local refresh={refresh} onSignedOut={() => void refresh()} />;
+    return <Dashboard key={session.user.id} user={session.user} trustedKeys={session.trustedKeys} local refresh={refresh} onSignedOut={() => void refresh()} />;
   }
   if (path === '/compact' && session.user) return <Compact live={live} />;
   if (path === '/device') return <DevicePage session={session} onSession={signedIn} />;
   const invite = path.match(/^\/invite\/([\w-]+)$/);
   if (invite) return <InvitePage secret={invite[1]} session={session} onSession={signedIn} onJoined={id => (rememberBoard(id), void refresh())} />;
   if (!session.user) return <AuthScreen session={session} onSignedIn={signedIn} />;
-  return <Dashboard user={session.user} trustedKeys={session.trustedKeys} local={false} refresh={refresh} onSignedOut={() => void refresh()} />;
+  return <Dashboard key={session.user.id} user={session.user} trustedKeys={session.trustedKeys} local={false} refresh={refresh} onSignedOut={() => void refresh()} />;
 }
 
 createRoot(document.getElementById('root')!).render(<App />);
