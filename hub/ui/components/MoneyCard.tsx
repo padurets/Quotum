@@ -22,7 +22,9 @@ function KeyStatus({part,cap}:{part:KeyPart;cap:Meter}) {
 }
 export function CapReset({meter,short=false}:{meter:Meter;short?:boolean}) {
   const now=useClock(now=>meter.resetAt===null?null:countdownChangesAt(meter.resetAt,now));
-  return <span data-time="cap-reset" title={meter.resetAt===null?t('limit.resetUnknown'):stamp(meter.resetAt)}>{meter.resetAt!==null&&meter.resetAt>now?short?countdown(meter.resetAt-now):t('limit.resetsIn',{time:duration(meter.resetAt-now)}):meter.resetAt!==null?t('limit.resetPassed'):t('limit.resetUnknown')}</span>;
+  const unknown=meter.resetAt===null&&meter.scope!=='lifetime';
+  const text=meter.resetAt===null?unknown?short?'—':t('limit.resetUnknown'):'' :meter.resetAt>now?short?countdown(meter.resetAt-now):t('limit.resetsIn',{time:duration(meter.resetAt-now)}):t('limit.resetPassed');
+  return <span data-time="cap-reset" title={unknown?t('limit.resetUnknown'):meter.resetAt!==null?stamp(meter.resetAt):''}>{text}</span>;
 }
 /** Independent caps share the subscription scale, regardless of how they are measured. */
 export function CapMetrics({cap,name,detail=name,status,stale=false,compact=false,showPercent=false}:{cap:Meter|undefined;name:string;detail?:string;status?:import('react').ReactNode;stale?:boolean;compact?:boolean;showPercent?:boolean}) {

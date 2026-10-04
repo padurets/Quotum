@@ -7,7 +7,7 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
-import type {QuotaCard as QuotaComponent} from '../components/MoneyCard';
+import type {QuotaCard as QuotaComponent,CapReset as ResetComponent} from '../components/MoneyCard';
 import * as money from '../lib/money';
 import * as format from '../lib/format';
 import * as quota from '../lib/quota';
@@ -29,7 +29,7 @@ const result=mapZai(decodeZai(JSON.stringify({code:200,success:true,data:{level:
   {type:'CREDIT_LIMIT',unit:3,number:5,usage:2000,currentValue:800},
   {type:'CREDIT_LIMIT',unit:6,number:1,usage:10000,currentValue:2000},
 ]}})),now);
-const context={exports:{} as {QuotaCard:typeof QuotaComponent},React,require:(name:string)=>{
+const context={exports:{} as {QuotaCard:typeof QuotaComponent;CapReset:typeof ResetComponent},React,require:(name:string)=>{
   if(name==='react/jsx-runtime')return jsxRuntime;
   if(name.endsWith('/meters'))return {QUOTA_IDS};
   if(name.endsWith('/money'))return money;
@@ -53,6 +53,7 @@ test('card and compact show the same independent credit quotas, never a monetary
         for(const amount of language==='en'?['1,200','8,000']:['1 200','8 000'])assert.ok(html.includes(amount),html);
         assert.ok(!html.includes('USD')&&!html.includes('account-balance')&&!html.includes('credits:zai'));
         assert.ok(html.includes(language==='en'?'reset time unknown':'время сброса неизвестно'));
+        assert.equal(html.includes(language==='en'?'>reset time unknown</span>':'>время сброса неизвестно</span>'),!compact,'compact keeps the full explanation in its tooltip');
         assert.ok(html.includes('60%')&&html.includes('80%'));
         assert.ok(html.includes(language==='en'?'credits':'кр.'));
         assert.equal((html.match(/class="meter"/g)??[]).length,2);
@@ -61,6 +62,11 @@ test('card and compact show the same independent credit quotas, never a monetary
     const missing=renderToStaticMarkup(createElement(QuotaCard,{source:{...card,meters:[card.meters![0]]}}));
     assert.equal((missing.match(/class="limit money-limit/g)??[]).length,2,'absence keeps the same two quota rows');
   }finally{setLocale('en');}
+});
+
+test('an explicitly lifetime cap keeps its confirmed absence of a reset',()=>{
+  const html=renderToStaticMarkup(createElement(context.exports.CapReset,{meter:{...card.meters![0],scope:'lifetime'},short:true}));
+  assert.ok(!html.includes('reset time unknown')&&!html.includes('—'));
 });
 
 test('credit selection defaults to both caps without adding them or manufacturing spending',()=>{
