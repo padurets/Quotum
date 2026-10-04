@@ -2,7 +2,7 @@ import {useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type R
 import {coverOf, placeOf, roomOf, shiftOf, sideOf} from '../lib/place';
 
 /** Keep a bubble inside the viewport; with an anchor, stay wholly on one side of its button. */
-export function useBubble(active: boolean, anchor?: RefObject<HTMLElement | null>) {
+export function useBubble(active: boolean, anchor?: RefObject<HTMLElement | null>, container?: HTMLElement | null) {
   const tip = useRef<HTMLSpanElement>(null);
   const place = () => {
     const element = tip.current;
@@ -23,6 +23,15 @@ export function useBubble(active: boolean, anchor?: RefObject<HTMLElement | null
       if (cap !== null) {
         element.style.maxHeight = `${cap}px`;
         element.style.overflow = 'auto';
+      }
+      if (container) {
+        // A scrolling legend clips its descendants; its panel owns the bubble.
+        const origin = container.getBoundingClientRect();
+        const height = element.getBoundingClientRect().height;
+        element.style.left = `${button.left - origin.left - container.clientLeft}px`;
+        element.style.top = `${(up ? button.top - height - 6 : button.bottom + 6) - origin.top - container.clientTop}px`;
+        element.style.bottom = 'auto';
+        anchor.current.parentElement?.setAttribute('data-bubble-side', up ? 'up' : 'down');
       }
       const rect = element.getBoundingClientRect();
       element.style.translate = `${shiftOf(rect.left, rect.right, document.documentElement.clientWidth)}px 0`;

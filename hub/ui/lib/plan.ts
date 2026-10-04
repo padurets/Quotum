@@ -1,3 +1,4 @@
+import {drain, type Preparation} from './prepare';
 import type {Win} from './types';
 
 const DAY = 86_400_000;
@@ -141,7 +142,7 @@ export function planChangesAt(w: Win, measuredAt: number | null, now: number, pl
  * Past the reset the next week is assumed to start right away, and the line jumps back
  * to 100%. Returns runs of [time, remaining]; a new run starts at every reset.
  */
-export function weeklyPlanLine(resetAt: number, from: number, to: number, plan: WeeklyPlan = DEFAULT_PLAN): [number, number][][] {
+export function* weeklyPlanLinePrepared(resetAt: number, from: number, to: number, plan: WeeklyPlan = DEFAULT_PLAN): Preparation<[number, number][][]> {
   const week = WEEK_MINUTES * 60_000;
   const runs: [number, number][][] = [];
   for (let start = resetAt - week; start < to; start += week) {
@@ -151,11 +152,12 @@ export function weeklyPlanLine(resetAt: number, from: number, to: number, plan: 
     const run: [number, number][] = [];
     const push = (t: number) => run.push([t, weeklyPlanRemaining(t - start, plan)]);
     // Plan corners (day boundaries) must be exact; in between the plan is linear.
-    const corners = Array.from({length: PLAN_DAYS + 1}, (_, day) => start + day * DAY).filter(t => t > begin && t < end);
     push(begin);
-    for (const corner of corners) push(corner);
+    for (let day = 0; day <= PLAN_DAYS; day++) {const at = start + day * DAY; if (at > begin && at < end) push(at); yield;}
     push(end - (end === start + week ? 1 : 0));
     runs.push(run);
   }
   return runs;
 }
+
+export function weeklyPlanLine(...args: Parameters<typeof weeklyPlanLinePrepared>): [number, number][][] {return drain(weeklyPlanLinePrepared(...args));}

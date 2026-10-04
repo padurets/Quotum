@@ -1,4 +1,6 @@
-import {decodeCells, encodeCells, TILE_CELLS, type Chunk, type DecodedCell, type HistoryMeta} from '../../server/domain/history';
+import {decodeCellsPrepared, encodeCellsPrepared, TILE_CELLS, type Chunk, type DecodedCell, type HistoryMeta} from '../../server/domain/history';
+
+import {drain, type Preparation} from './prepare';
 
 const FIELDS = 11;
 const HEAD = 248; // 61 uint32 offsets, padded to a float64 boundary.
@@ -14,6 +16,7 @@ export class HistoryTile {
   writeSeq = 0;
   shownAt = 0;
   private readonly series = new Map<string, PackedSeries>();
+  private seriesBytes = 0;
   private sessions: Session[] = [];
   private groups: Group[] = [];
   private readonly devices: Record<string, string> = {};
@@ -28,13 +31,34 @@ export class HistoryTile {
   get to() {return this.from + TILE_CELLS * this.cell;}
 
   get bytes() {
-    return this.activity.byteLength + [...this.series.values()].reduce((sum, s) => sum + s.values.byteLength + 256, 0) + this.sessions.length * 320 + this.groups.length * 192 + (this.resets.length + this.grants.length) * 192 + 1024;
+    return this.activity.byteLength + this.seriesBytes + this.sessions.length * 320 + this.groups.length * 192 + (this.resets.length + this.grants.length) * 192 + 1024;
   }
 
-  merge(chunk: Chunk, known: HistoryMeta['known']) {
+  /** A private COW tile keeps every published buffer untouched until response commit. */
+  *staged(chunk: Chunk, known: HistoryMeta['known']): Preparation<HistoryTile> {
+    const copy = new HistoryTile(this.from, this.cell);
+    copy.readFrom = this.readFrom; copy.readTo = this.readTo; copy.validTo = this.validTo;
+    copy.writeSeq = this.writeSeq; copy.shownAt = this.shownAt;
+    for (const [key, series] of this.series) {copy.series.set(key, series); copy.seriesBytes += series.values.byteLength + 256; yield;}
+    for (const session of this.sessions) {copy.sessions.push(session); yield;}
+    for (const group of this.groups) {copy.groups.push(group); yield;}
+    for (const key in this.devices) {copy.devices[key] = this.devices[key]; yield;}
+    copy.activity = this.activity; copy.resets = this.resets; copy.grants = this.grants;
+    yield* copy.mergePrepared(chunk, known);
+    return copy;
+  }
+
+  merge(chunk: Chunk, known: HistoryMeta['known']) {drain(this.mergePrepared(chunk, known));}
+
+  private *mergePrepared(chunk: Chunk, known: HistoryMeta['known']): Preparation<void> {
     const first = (chunk.from - this.from) / this.cell;
     const last = (chunk.to - this.from) / this.cell;
-    for (const s of this.series.values()) s.values.fill(NaN, first * FIELDS, last * FIELDS);
+    for (const [key, s] of this.series) {
+      const values = new Float64Array(s.values.length);
+      for (let i = 0; i < values.length; i += FIELDS) {values.set(s.values.subarray(i, i + FIELDS), i); yield;}
+      for (let i = first; i < last; i++) {values.fill(NaN, i * FIELDS, (i + 1) * FIELDS); yield;}
+      this.series.set(key, {...s, values});
+    }
     for (const s of chunk.series) {
       const key = `${s.source} ${s.window}`;
       let packed = this.series.get(key);
@@ -42,54 +66,71 @@ export class HistoryTile {
         const values = new Float64Array(TILE_CELLS * FIELDS);
         values.fill(NaN);
         this.series.set(key, (packed = {source: s.source, window: s.window, values}));
+        this.seriesBytes += values.byteLength + 256;
       }
       const since = Math.max(known.work, known.sources[s.source] ?? Infinity);
-      for (const v of decodeCells(s, chunk.from, this.cell, since)) {
+      for (const v of yield* decodeCellsPrepared(s, chunk.from, this.cell, since)) {
+        yield;
         const i = (v.at - this.from) / this.cell * FIELDS;
         packed.values.set([v.low, v.first, v.last, v.open ?? NaN, +v.gap, v.hold, v.spent, v.covered, ...v.work], i);
       }
     }
     for (const [key, s] of this.series) {
       let kept = false;
-      for (let i = 0; i < s.values.length; i += FIELDS) if (!Number.isNaN(s.values[i])) {kept = true; break;}
-      if (!kept) this.series.delete(key);
+      for (let i = 0; i < s.values.length; i += FIELDS) {yield; if (!Number.isNaN(s.values[i])) {kept = true; break;}}
+      if (!kept) {this.series.delete(key); this.seriesBytes -= s.values.byteLength + 256;}
     }
-    const rows = this.activityRows();
-    const translated = chunk.activity.sessions.map(session => {
-      let index = this.sessions.findIndex(s => s[0] === session[0]);
-      if (index < 0) index = this.sessions.push(session) - 1;
-      else this.sessions[index] = session;
-      return index;
-    });
-    Object.assign(this.devices, chunk.activity.devices);
+    const rows = yield* this.activityRowsPrepared();
+    const translated: number[] = [];
+    const sessionIndexes = new Map<string, number>();
+    for (let i = 0; i < this.sessions.length; i++) {sessionIndexes.set(this.sessions[i][0], i); yield;}
+    for (const session of chunk.activity.sessions) {
+      let index = sessionIndexes.get(session[0]);
+      const snapshot: Session = [...session];
+      if (index === undefined) {index = this.sessions.push(snapshot) - 1; sessionIndexes.set(session[0], index);}
+      else this.sessions[index] = snapshot;
+      translated.push(index); yield;
+    }
+    for (const key in chunk.activity.devices) {this.devices[key] = chunk.activity.devices[key]; yield;}
+    const groupIndexes = new Map<string, number>();
+    for (let i = 0; i < this.groups.length; i++) {groupIndexes.set(JSON.stringify(this.groups[i]), i); yield;}
     for (let i = first; i < last; i++) rows[i] = [];
     for (const [i, active, members, groups] of chunk.activity.cells) {
       const row = [active, members.length];
       for (const member of members) {
+        yield;
         const [index, ms] = typeof member === 'number' ? [member, active] : member;
         row.push(translated[index], ms);
       }
       row.push(groups.length);
       for (const [dim, key, ms] of groups) {
-        let index = this.groups.findIndex(g => g[0] === dim && g[1] === key);
-        if (index < 0) index = this.groups.push([dim, key]) - 1;
+        yield;
+        const id = JSON.stringify([dim, key]);
+        let index = groupIndexes.get(id);
+        if (index === undefined) {index = this.groups.push([dim, key]) - 1; groupIndexes.set(id, index);}
         row.push(index, ms);
       }
       rows[first + i] = row;
     }
-    this.compact(rows);
-    this.activity = new ArrayBuffer(HEAD + rows.reduce((sum, row) => sum + row.length, 0) * 8);
+    yield* this.compact(rows);
+    let size = 0;
+    for (const row of rows) {size += row.length; yield;}
+    this.activity = new ArrayBuffer(HEAD + size * 8);
     const offsets = new Uint32Array(this.activity, 0, 61);
     const values = new Float64Array(this.activity, HEAD);
     let at = 0;
-    rows.forEach((row, i) => {offsets[i] = at; values.set(row, at); at += row.length;});
+    for (let i = 0; i < rows.length; i++) {offsets[i] = at; for (const value of rows[i]) {values[at++] = value; yield;}}
     offsets[60] = at;
-    this.resets = [...this.resets.filter(([, , at]) => at < chunk.from || at >= chunk.to), ...chunk.resets];
-    this.grants = [...this.grants.filter(([, at]) => at < chunk.from || at >= chunk.to), ...chunk.grants];
+    const resets: Chunk['resets'] = [], grants: Chunk['grants'] = [];
+    for (const row of this.resets) {if (row[2] < chunk.from || row[2] >= chunk.to) resets.push(row); yield;}
+    for (const row of chunk.resets) {resets.push([...row]); yield;}
+    for (const row of this.grants) {if (row[1] < chunk.from || row[1] >= chunk.to) grants.push(row); yield;}
+    for (const row of chunk.grants) {grants.push([...row]); yield;}
+    this.resets = resets; this.grants = grants;
   }
 
   /** References in all retained rows survive, including a suffix not yet read in this epoch. */
-  private compact(rows: number[][]) {
+  private *compact(rows: number[][]): Preparation<void> {
     const sessions: Session[] = [], groups: Group[] = [];
     const sessionIndexes = new Map<number, number>(), groupIndexes = new Map<number, number>();
     const devices = new Set<string>();
@@ -97,6 +138,7 @@ export class HistoryTile {
       if (!row.length) continue;
       let at = 2;
       for (let n = 0; n < row[1]; n++, at += 2) {
+        yield;
         const old = row[at];
         if (!sessionIndexes.has(old)) {
           sessionIndexes.set(old, sessions.length);
@@ -107,6 +149,7 @@ export class HistoryTile {
       }
       const count = row[at++];
       for (let n = 0; n < count; n++, at += 2) {
+        yield;
         const old = row[at];
         if (!groupIndexes.has(old)) {
           groupIndexes.set(old, groups.length);
@@ -118,40 +161,62 @@ export class HistoryTile {
       }
     }
     this.sessions = sessions; this.groups = groups;
-    for (const device of Object.keys(this.devices)) if (!devices.has(device)) delete this.devices[device];
+    for (const device in this.devices) {if (!devices.has(device)) delete this.devices[device]; yield;}
   }
 
-  private activityRows(): number[][] {
+  private *activityRowsPrepared(): Preparation<number[][]> {
     const offsets = new Uint32Array(this.activity, 0, 61);
     const values = new Float64Array(this.activity, HEAD);
-    return Array.from({length: 60}, (_, i) => Array.from(values.subarray(offsets[i], offsets[i + 1])));
+    const rows: number[][] = [];
+    for (let i = 0; i < 60; i++) {const row: number[] = []; for (let j = offsets[i]; j < offsets[i + 1]; j++) {row.push(values[j]); yield;} rows.push(row);}
+    return rows;
   }
 
   /** Only the read interval is materialized; old epoch data stays held until replaced. */
-  chunk(known: HistoryMeta['known']): Chunk {
+  chunk(known: HistoryMeta['known'], plot = false): Chunk {return drain(this.chunkPrepared(known, plot));}
+
+  *chunkPrepared(known: HistoryMeta['known'], plot = false): Preparation<Chunk> {
     const first = (this.readFrom - this.from) / this.cell;
-    const chunk: Chunk = {from: this.readFrom, to: this.readTo, series: [], activity: {sessions: this.sessions, devices: this.devices, cells: []}, resets: this.resets.filter(([, , at]) => at >= this.readFrom && at < this.readTo), grants: this.grants.filter(([, at]) => at >= this.readFrom && at < this.readTo)};
+    const chunk: Chunk = {from: this.readFrom, to: this.readTo, series: [], activity: {sessions: [], devices: {}, cells: []}, resets: [], grants: []};
+    for (const session of this.sessions) {chunk.activity.sessions.push([...session]); yield;}
+    for (const key in this.devices) {chunk.activity.devices[key] = this.devices[key]; yield;}
+    for (const row of this.resets) {if (row[2] >= this.readFrom && row[2] < this.readTo) chunk.resets.push([...row]); yield;}
+    for (const row of this.grants) {if (row[1] >= this.readFrom && row[1] < this.readTo) chunk.grants.push([...row]); yield;}
     for (const s of this.series.values()) {
+      if (plot) {
+        const cells: Chunk['series'][number]['cells'] = [];
+        for (let i = first; this.from + i * this.cell < this.readTo; i++) {
+          yield;
+          const at = i * FIELDS;
+          if (Number.isNaN(s.values[at])) continue;
+          cells.push([i - first, s.values[at], 0, 0, {g: s.values[at + 4] ? 1 : undefined, h: s.values[at + 5]}]);
+        }
+        if (cells.length) chunk.series.push({source: s.source, window: s.window, hold: 0, open: null, cells});
+        continue;
+      }
       const cells: DecodedCell[] = [];
       for (let i = first; this.from + i * this.cell < this.readTo; i++) {
+          yield;
         const at = i * FIELDS;
         if (Number.isNaN(s.values[at])) continue;
         const v = s.values.subarray(at, at + FIELDS);
         cells.push({at: this.from + i * this.cell, low: v[0], first: v[1], last: v[2], open: Number.isNaN(v[3]) ? null : v[3], gap: !!v[4], hold: v[5], spent: v[6], covered: v[7], work: [v[8], v[9], v[10]]});
       }
-      if (cells.length) chunk.series.push(encodeCells(s.source, s.window, this.readFrom, this.cell, Math.max(known.work, known.sources[s.source] ?? Infinity), cells));
+      if (cells.length) chunk.series.push(yield* encodeCellsPrepared(s.source, s.window, this.readFrom, this.cell, Math.max(known.work, known.sources[s.source] ?? Infinity), cells));
     }
-    this.activityRows().forEach((row, i) => {
-      if (!row.length || i < first || this.from + i * this.cell >= this.readTo) return;
+    const rows = yield* this.activityRowsPrepared();
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row.length || i < first || this.from + i * this.cell >= this.readTo) continue;
       const [active, count] = row;
       const members: Chunk['activity']['cells'][number][2] = [];
       let at = 2;
-      for (let n = 0; n < count; n++, at += 2) members.push(row[at + 1] === active ? row[at] : [row[at], row[at + 1]]);
+      for (let n = 0; n < count; n++, at += 2) {members.push(row[at + 1] === active ? row[at] : [row[at], row[at + 1]]); yield;}
       const groupCount = row[at++];
       const groups: Chunk['activity']['cells'][number][3] = [];
-      for (let n = 0; n < groupCount; n++, at += 2) groups.push([...this.groups[row[at]], row[at + 1]]);
+      for (let n = 0; n < groupCount; n++, at += 2) {groups.push([...this.groups[row[at]], row[at + 1]]); yield;}
       chunk.activity.cells.push([i - first, active, members, groups]);
-    });
+    }
     return chunk;
   }
 }

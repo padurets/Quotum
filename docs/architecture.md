@@ -790,10 +790,85 @@ Both charts, the remaining shares and agent activity, read and move along time a
 (`ui/components/timeAxis.ts`), each with its legend under it. A time range selected on
 either becomes the analytics' period; it lives in the page's
 address (`?from=&to=`), so a reload keeps it, Back undoes it and a link to it can be shared on the board.
-‹ and › beside the period, a swipe sideways on a touchpad or Shift with the wheel over a chart move the
-analytics by half their length, one step a gesture: back, to a range in the past held in
-the address like a dragged one, no further than the history kept; forward, up to now,
-where the chosen period comes back. The chart moves to the new period at once, drawing
+‹ and › beside the period move the analytics by half their length: back, to a range in
+the past held in the address like a dragged one; forward, up to now, where the chosen
+period comes back. A horizontal touchpad swipe, Shift with the wheel, or Shift with a
+mouse or pen drag moves both charts continuously. A page-local transaction captures
+each chart's scale in CSS pixels and applies the same time delta on animation frames;
+plain dragging still selects a range and touch retains its hold-to-select gesture.
+Prepared SVG artwork moves in composited HTML surfaces behind a stationary clip;
+the axes and readouts stay in place. The chart container owns pointer capture and
+wheel input, projected through its fixed SVG viewport, including labels in another
+surface. Surface geometry and painters become visible only after their DOM commits.
+The future moves with the strip during the gesture, then folds away over 160 ms on
+release in the past, or unfolds on returning to live. Reduced motion skips this final
+transition. Release within eight source pixels of now restores the chosen live preset.
+One changed gesture creates one address entry; cancellation or returning to the exact
+origin creates none. A horizontal wheel ends after a 200 ms pause. Shift-wheel keeps
+one captured scale across pauses and ends when Shift is released, like a held drag;
+a pointer can continue that transaction. Neither adds inertia. Holding Shift hides
+chart and activity-legend readouts even before movement starts. The plot and legend
+keep their height through the gesture, final fold and resulting range; extra legend
+entries scroll inside. Ordinary range navigation or a layout/language change measures
+them again. Changing the time frame by hand therefore cannot resize the chart.
+An answered activity frame without work keeps its time axis and legend viewport;
+its empty message sits inside the plot, which still accepts the next gesture.
+
+While panning, the history store keeps the previous complete answer for the table,
+activity totals and legend numbers. A separate bounded plot buffer decodes the same
+tiles without computing frame totals. Known parts stay undimmed, lines break across
+unread cells, and an activity stack appears only when every contributing whole cell is
+read. A stationary HTML inset clips the long activity band to whole bars without
+laying out that SVG again. Two short edge bars in their own SVG are recomputed when
+the draft crosses a cell; moving within a cell only translates the prepared artwork
+and updates its clip. The final 160 ms fold stays inside SVG to preserve stroke widths.
+A temporary shared registry keeps plot and
+legend colors and dashes consistent, adding new groups with a pending total. Visible
+missing cells take priority over one adjacent frame of read-ahead, with at most one
+visible and one speculative request, eight tiles each. Writes to the same tile are
+serialized, obsolete requests are aborted and speculative errors cannot drop the
+selection. The existing 15 MiB tile estimate protects the visible frame. On release,
+speculation stops and exact totals switch only after the final frame is complete.
+Numeric preparation runs outside React rendering through one cancellable MessageChannel
+scheduler. Its shared generators yield between small cell, session, group, event and point
+operations. UI slices target one millisecond and check the deadline after at most sixteen
+generator advances; server and synchronous readers drain those same generators. Each owner
+keeps only its latest job. Tile responses use private COW staging and publish their
+tiles, read bounds and metadata together. At most two responses are admitted for
+processing, including raw answers waiting for a tile reservation; ordinary HTTP
+scheduling remains separate. Flights and reservations remain owned until commit or
+discard. Completed projections pin the current tile entry and its write sequence.
+
+Each chart replaces one typed drawing model whole after preparation, then publishes
+its geometry and painters after the DOM commits. Input keeps the displayed model and
+its composed SVG matrix and CSS offset until that handoff. Finishing a gesture commits
+the address immediately and presents its last pending delta on RAF; the final pose
+stays held until the matching drawing model is ready. The SVG fold and CSS offset
+reset then start from the same displayed coordinates. A new gesture samples that
+actual presentation, including an interrupted fold, separately from its URL origin.
+Partial plots continue to publish during the gesture. Its final drawing readiness
+also requires the complete history answer for the requested range, so a partial
+strip cannot start the fold before that answer replaces it.
+User navigation owns the requested projection separately from drawing readiness.
+Back, a preset or a horizon change retires an older held pose and its pending RAF or
+fold; both charts immediately place their retained data in the requested projection.
+Ready data keeps that projection when it replaces the borrowed model. Borrowed data
+keeps its own coverage and time domain, so future points are clipped rather than
+clamped into an edge and a requested past frame shows no old future labels.
+Ordinary clock movement reprojects the ready drawing without preparing its unchanged
+numeric series again. Its bounded overscan rebases in slices only when the requested
+frame crosses the cached margin. Future outlines are clipped to that drawing extent;
+their full facts remain available for readouts and later navigation. The drawing
+keeps the data cutoff it was prepared with; the current
+frame supplies the future boundary, readouts and expiry of forecasts, plans and reset
+markers. Forecast availability stays independent of its display switch. Child drawing
+jobs wait for their input model to be ready, so a clock wake cannot publish intermediate
+geometry built from stale parent data. Stationary hover overlays use the same composed
+coordinates as the displayed artwork.
+If a speculative response is evicted to fit that budget, its interest stops reading
+ahead until movement or history news changes what is needed.
+
+For ordinary discrete navigation the chart moves to the new period at once, drawing
 the answer it has until the next frame is assembled. A run of quick steps reads its
 first and last missing parts. Tiles are kept across frames on the same grid, so a return
 or switching 12h and 24h asks nothing once both have been seen. A new lineup or work

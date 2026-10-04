@@ -527,7 +527,7 @@ export type Scene = {kind: 'scene'; id: string; codex: (at: (t: number) => strin
 export type Entry = Card | Machine | Person | Board | Scene;
 
 /** A board to open: its people, cards, machines and boards, and the reset scene it starts with. */
-export type DemoSet = {id: string; about: string; scene: string; entries: Entry[]};
+export type DemoSet = {id: string; about: string; scene: string; entries: Entry[]; workHistoryMs?: number};
 
 // ---------- what machines send ----------
 
@@ -608,7 +608,7 @@ export const earliest = (set: DemoSet) => Math.min(...cards(set).flatMap(card =>
 export const WORK_SINCE = -10 * DAY;
 
 /** Since when a set's hub knows how agents worked: ten days back, or where its history begins when that is later. */
-export const workSince = (set: DemoSet) => Math.max(WORK_SINCE, earliest(set));
+export const workSince = (set: DemoSet) => Math.max(set.workHistoryMs === undefined ? WORK_SINCE : -set.workHistoryMs, earliest(set));
 
 const iso = (start: number, t: number) => new Date(start + t).toISOString();
 

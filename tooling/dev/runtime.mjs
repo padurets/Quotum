@@ -153,6 +153,10 @@ export async function stop(ctx, final = false) {
     }
     if ((await waitOwnedMembers(state, until)).length) throw new Error('Owned process group did not stop; reservation retained.');
   }
+  // The kernel can retain a listening socket briefly after its last process exits.
+  // A new listener is never signaled; its busy port still excludes later allocation.
+  const releasedBy = Date.now() + 1000;
+  while (state.supervisor && Date.now() < releasedBy && !(await portFree(state.port))) await sleep(10);
   removeData(ctx, state, final);
   if (final) rmSync(ctx.record);
   else saveJson(ctx.record, {...state, status: 'stopped', supervisor: null, hub: null, access: {status: 'backend stopped; publication retained'}});

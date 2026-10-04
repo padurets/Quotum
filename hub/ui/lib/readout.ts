@@ -1,8 +1,9 @@
-import {valueIn, type Line} from './lines';
+import {valueIn, type PlotLine as Line} from './lines';
+import type {Coverage} from './historyPlot';
 import {PLAN_TOLERANCE} from './plan';
 
 /** The spending plan of one weekly window, drawn as a faint dotted line in its colour; `lines` are the keys of the lines it plans. */
-export type PlanLine = {key: string; lines: string[]; color: string; runs: [number, number][][]};
+export type PlanLine = {key: string; lines: string[]; color: string; runs: [number, number][][]; until?: number};
 
 /**
  * Where a window leads, drawn from its last value in its line's colour and dash; `key` and
@@ -10,7 +11,7 @@ export type PlanLine = {key: string; lines: string[]; color: string; runs: [numb
  * zero (past the right edge, the chart says so there, and stretches to it within reach)
  * and `at` the moment the table says, which the words there tell.
  */
-export type ForecastLine = {key: string; name: string; color: string; dash: string; points: [number, number][]; zero: number | null; at: number | null};
+export type ForecastLine = {key: string; name: string; color: string; dash: string; points: [number, number][]; zero: number | null; at: number | null; until?: number};
 
 /**
  * Where the chart stretches to on `auto` for its forecasts: the last zero of a line within
@@ -70,10 +71,10 @@ export type Columns = {left: boolean; plan: boolean; gap: boolean; forecast: boo
  * a line has no value of its own: its plan, and where its pace leads until its window
  * runs out, each a column only where the cell reads one.
  */
-export function readout(lines: Line[], plans: PlanLine[], cell: number, cellMs: number, now: number, to: number, forecasts: ForecastLine[] = []): {rows: ReadoutRow[]; columns: Columns} {
+export function readout(lines: Line[], plans: PlanLine[], cell: number, cellMs: number, now: number, to: number, forecasts: ForecastLine[] = [], coverage?: Coverage): {rows: ReadoutRow[]; columns: Columns} {
   const at = Math.min(to, cell + cellMs / 2);
   const rows = lines.map(line => {
-    const value = valueIn(line.points, cell, now, Math.max(cellMs, line.staleAfterMs)) ?? null;
+    const value = valueIn(line.points, cell, now, Math.max(cellMs, line.staleAfterMs), coverage) ?? null;
     const runs = plans.find(plan => plan.lines.includes(line.key))?.runs;
     const planned = runs ? valueAt(runs, at) : undefined;
     const left = value === null ? null : Math.round(value);

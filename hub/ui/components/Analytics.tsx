@@ -1,11 +1,12 @@
-import {useRef, useState} from 'react';
+import {useRef, useState, useSyncExternalStore} from 'react';
 import type {Kind} from '../lib/types';
 import {setPrefs, usePrefs} from '../lib/prefs';
 import {PERIODS, periodLabel, periodOf, step, stepChangesAt} from '../lib/periods';
-import {goTo, setTimeRange, timeRangeLabel, useTimeRange} from '../lib/timeRange';
+import {goTo, setTimeRange, timeRangeLabel, useTimeRange, type TimeRange} from '../lib/timeRange';
 import {hubNow, useClock} from '../lib/clock';
 import {useHistoryBegins} from '../lib/history';
-import {t} from '../i18n';
+import {t, useLocale} from '../i18n';
+import {pan} from '../lib/pan';
 import {Segmented} from './Kit';
 import {Popover} from './Popover';
 
@@ -36,6 +37,18 @@ const ChevronIcon = () => (
   </svg>
 );
 
+/** Subscribe to the words shown, so unchanged dates do not interrupt strip preparation. */
+function PeriodName({selected, range}: {selected: TimeRange | null; range: string}) {
+  const locale = useLocale();
+  const caption = useRef<{frame: ReturnType<typeof pan.get>; locale: typeof locale; label: string | null} | null>(null);
+  const preview = useSyncExternalStore(pan.subscribe, () => {
+    const frame = pan.get();
+    if (!caption.current || caption.current.frame !== frame || caption.current.locale !== locale) caption.current = {frame, locale, label: frame ? timeRangeLabel(frame) : null};
+    return caption.current.label;
+  }, () => null);
+  return <span>{preview ?? (selected ? timeRangeLabel(selected) : periodLabel(periodOf(range)))}</span>;
+}
+
 /**
  * The period of the analytics (agent activity, the chart and the table): one of a list,
  * ending now, or a time range in the past, dragged across a chart or stepped back to with
@@ -54,6 +67,7 @@ function PeriodSwitch({historyStart}: {historyStart: number}) {
   // A choice closes the list, or takes away the range's own button: focus goes to the list's button.
   const refocus = () => requestAnimationFrame(() => group.current?.querySelector<HTMLButtonElement>('.picker > button')?.focus());
   const choose = (id: string) => {
+    pan.cancel();
     setOpen(false);
     if (selected) setTimeRange(null);
     setPrefs({range: id});
@@ -64,6 +78,7 @@ function PeriodSwitch({historyStart}: {historyStart: number}) {
   // An arrow that has taken the chart as far as it goes turns off, and focus would fall to
   // the page: it goes to the list's button instead.
   const go = (direction: -1 | 1) => {
+    pan.cancel();
     const at = hubNow();
     const next = step(selected, range, direction, at, historyStart);
     goTo(next);
@@ -77,7 +92,7 @@ function PeriodSwitch({historyStart}: {historyStart: number}) {
         onOpenChange={setOpen}
         trigger={
           <span className="period-name">
-            <span>{selected ? timeRangeLabel(selected) : periodLabel(periodOf(range))}</span>
+            <PeriodName selected={selected} range={range} />
             <ChevronIcon />
           </span>
         }
@@ -112,6 +127,7 @@ function PeriodSwitch({historyStart}: {historyStart: number}) {
           aria-label={t('history.rangeClear')}
           title={t('history.rangeClear')}
           onClick={() => {
+            pan.cancel();
             setTimeRange(null);
             refocus();
           }}

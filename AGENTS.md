@@ -53,6 +53,15 @@ analytics. Run it when you change the dashboard and have Chrome (`QUOTUM_CHROME`
 on `PATH`, or `--cdp` to one already running); CI fails over budget. After the readings,
 it also checks consecutive measuring-frequency saves with native arrow keys and fails
 if saving loses focus.
+Native horizontal wheel and Shift-drag scenarios then move both charts at 24h and 30d
+with at least twelve real series and CPU throttled fourfold, including an unread edge,
+strip rebuilding, reversal and return to live. Moving-frame p95/p99 must stay within
+34/50 ms and input-to-updated-frame p95 within 34 ms; callbacks without actual chart
+movement cannot pass. Existing idle, measurement and work budgets remain unchanged.
+Input is credited after the production RAF reaches its coalesced position on the real
+data layers. Input-free pauses are excluded from moving intervals; pending input keeps
+delayed work measurable. The final geometry must commit before an unpainted last input
+can be credited. These are RAF proxies; physical presentation is checked separately.
 
 `npm start` in `hub/` serves the built dashboard on `127.0.0.1:8080` (a new hub prints
 the setup code of the first account to its log). `npm run demo` in `hub/` serves it on

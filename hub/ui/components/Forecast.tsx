@@ -22,7 +22,7 @@ import {lineWork, workLeftChangesAt, workText, type WorkColumn} from '../lib/wor
 import {FORECAST, chosenPlanOf, columnShown, planOf, withColumn, withHidden, type Arrange} from '../lib/view';
 import {linesOf, type Line} from '../lib/lines';
 import {usePrefs} from '../lib/prefs';
-import {ofTimeRange} from '../lib/timeRange';
+import {answeredRangeLabel, ofTimeRange} from '../lib/timeRange';
 import {useForecastsOf, useLineup, useNamed, useResetNews} from '../lib/board';
 import {hubNow, useClock} from '../lib/clock';
 import {useHistory} from '../lib/history';
@@ -211,9 +211,9 @@ export const Forecast = memo(function Forecast({arrange}: {arrange: Arrange}) {
   const details = columns.filter(column => column !== lead);
 
   return (
-    <section ref={panel} className={`panel forecast ${loading ? 'is-loading' : ''}`} aria-label={t('forecast.title')} aria-busy={loading}>
+    <section ref={panel} className={`panel forecast ${loading ? 'is-loading' : ''}`} aria-label={t('forecast.title')} aria-busy={loading} data-history-range={history?.range}>
       <div className="panel-head">
-        <h2>{t('forecast.title')}</h2>
+        <div><h2>{t('forecast.title')}</h2>{history && <span className="answered-range">{t('history.answeredRange', {range: answeredRangeLabel(history)})}</span>}</div>
         {arrange.owner && (
           <Popover label={t('forecast.settings')} icon={<SlidersIcon />}>
             <div className="popover-title">{t('table.columns')}</div>

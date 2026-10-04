@@ -1,3 +1,4 @@
+import {drain, type Preparation} from './prepare';
 import type {ForecastBasis, SeriesForecast, Win} from './types';
 import type {Line} from './lines';
 import type {Resets} from './resets';
@@ -87,9 +88,16 @@ const perDay = (value: number) => {
 export const lineOf = (ahead: SeriesForecast): [number, number][] =>
   ahead.points && ahead.anchor ? ahead.points.map(([minutes, left]): [number, number] => [ahead.anchor!.at + minutes * MINUTE, left]) : [];
 
+function* linePrepared(ahead: SeriesForecast): Preparation<[number, number][]> {
+  const result: [number, number][] = [];
+  if (ahead.points && ahead.anchor) for (const [minutes, left] of ahead.points) {result.push([ahead.anchor.at + minutes * MINUTE, left]); yield;}
+  return result;
+}
+
 /** Value of a line at `at`, within it. */
-function valueAt(points: [number, number][], at: number): number {
+function* valuePrepared(points: [number, number][], at: number): Preparation<number> {
   for (let i = 1; i < points.length; i++) {
+    yield;
     const [t0, v0] = points[i - 1];
     const [t1, v1] = points[i];
     if (at <= t1) return t1 === t0 ? v1 : v0 + ((v1 - v0) * (at - t0)) / (t1 - t0);
@@ -98,8 +106,9 @@ function valueAt(points: [number, number][], at: number): number {
 }
 
 /** The first moment a line reaches zero, or null when it lasts until its end. */
-function zeroOf(points: [number, number][]): number | null {
+function* zeroPrepared(points: [number, number][]): Preparation<number | null> {
   for (let i = 1; i < points.length; i++) {
+    yield;
     const [t0, v0] = points[i - 1];
     const [t1, v1] = points[i];
     if (v1 <= 0) return v0 <= 0 ? t0 : t0 + ((t1 - t0) * v0) / (v0 - v1);
@@ -114,12 +123,13 @@ function zeroOf(points: [number, number][]): number | null {
  * below what the card says. Its zero is the moved line's; the moment the table says stays
  * the hub's.
  */
-export function weeklyLine(ahead: SeriesForecast, left: number, measuredAt: number | null): {points: [number, number][]; zero: number | null} {
-  const points = lineOf(ahead);
+export function* weeklyLinePrepared(ahead: SeriesForecast, left: number, measuredAt: number | null): Preparation<{points: [number, number][]; zero: number | null}> {
+  const points = yield* linePrepared(ahead);
   if (!points.length || measuredAt === null || measuredAt <= points[0][0] || measuredAt >= points.at(-1)![0]) return {points, zero: ahead.zero};
-  const by = left - valueAt(points, measuredAt);
-  const moved: [number, number][] = [[measuredAt, left], ...points.filter(([t]) => t > measuredAt).map(([t, value]): [number, number] => [t, value + by])];
-  return {points: moved, zero: zeroOf(moved)};
+  const by = left - (yield* valuePrepared(points, measuredAt));
+  const moved: [number, number][] = [[measuredAt, left]];
+  for (const [t, value] of points) {if (t > measuredAt) moved.push([t, value + by]); yield;}
+  return {points: moved, zero: yield* zeroPrepared(moved)};
 }
 
 /** Louder than a warning only when nothing may bring the limit back first: never in a series' first day, with free resets to use, or before an announced reset. */
@@ -324,7 +334,7 @@ export function outlookText(said: Outlook, live: Win | undefined, ahead: SeriesF
  * longer says where the window leads and the line is drawn no more. Null for a window
  * without a forecast.
  */
-export function forecastLine(
+export function* forecastLinePrepared(
   live: Win | undefined,
   measuredAt: number | null,
   now: number,
@@ -332,27 +342,31 @@ export function forecastLine(
   context: Context,
   from: number,
   to: number,
-): {points: [number, number][]; zero: number | null; at: number | null; until: number} | null {
+): Preparation<{points: [number, number][]; zero: number | null; at: number | null; until: number} | null> {
   const said = outlook(live, measuredAt, now, ahead, context);
   if (said.key !== 'runsOut' && said.key !== 'pace' && said.key !== 'left') return null;
-  const weekly = live!.kind === 'weekly' ? weeklyLine(ahead!, live!.remaining, measuredAt) : null;
+  const weekly = live!.kind === 'weekly' ? yield* weeklyLinePrepared(ahead!, live!.remaining, measuredAt) : null;
   const whole = weekly ? weekly.points : session(live as Win & {resetAt: number; minutes: number}, measuredAt!, now).points!;
   if (!whole.length) return null;
-  const zero = weekly ? weekly.zero : zeroOf(whole);
+  const zero = weekly ? weekly.zero : yield* zeroPrepared(whole);
   const end = Math.min(zero ?? live!.resetAt!, live!.resetAt!);
-  const points = whole.filter(([t]) => t < end).concat([[end, Math.max(0, valueAt(whole, end))]]);
+  const points: [number, number][] = [];
+  for (const point of whole) {if (point[0] < end) points.push(point); yield;}
+  points.push([end, Math.max(0, yield* valuePrepared(whole, end))]);
   const runsOut = said.key === 'runsOut' && zero !== null;
   // Drawn until the reset, or the moment the table says it runs out if sooner (a five-hour line, until it reaches zero).
   const until = Math.min(live!.resetAt!, said.key === 'runsOut' ? said.at : weekly ? Infinity : end);
-  return {points: clip(points, from, to), zero: runsOut ? zero : null, at: runsOut ? said.at : null, until};
+  return {points: yield* clipPrepared(points, from, to), zero: runsOut ? zero : null, at: runsOut ? said.at : null, until};
 }
 
 /** A line of [time, value] cut to [from, to], with its ends where it crosses them. */
-export function clip(points: [number, number][], from: number, to: number): [number, number][] {
+export function* clipPrepared(points: [number, number][], from: number, to: number): Preparation<[number, number][]> {
   if (!points.length || points[0][0] > to || points.at(-1)![0] < from) return [];
   const [begin, end] = [Math.max(from, points[0][0]), Math.min(to, points.at(-1)![0])];
-  const edge = (t: number): [number, number] => [t, valueAt(points, t)];
-  return [edge(begin), ...points.filter(([t]) => t > begin && t < end), edge(end)];
+  const result: [number, number][] = [[begin, yield* valuePrepared(points, begin)]];
+  for (const point of points) {if (point[0] > begin && point[0] < end) result.push(point); yield;}
+  result.push([end, yield* valuePrepared(points, end)]);
+  return result;
 }
 
 /** What a line spent over the period: points, nothing while measured (`unused`), or unknown. */
@@ -418,3 +432,9 @@ export const FORECAST_EDGES = 2 * (22 - 10);
 export function forecastLayout(columns: readonly ForecastColumn[], width: number): 'table' | 'list' {
   return columns.reduce((sum, column) => sum + FORECAST_WIDTHS[column], FORECAST_WIDTHS.limit + FORECAST_EDGES) <= width ? 'table' : 'list';
 }
+
+function valueAt(...args: Parameters<typeof valuePrepared>): number {return drain(valuePrepared(...args));}
+function zeroOf(...args: Parameters<typeof zeroPrepared>): number | null {return drain(zeroPrepared(...args));}
+export function weeklyLine(...args: Parameters<typeof weeklyLinePrepared>): {points: [number, number][]; zero: number | null} {return drain(weeklyLinePrepared(...args));}
+export function forecastLine(...args: Parameters<typeof forecastLinePrepared>) {return drain(forecastLinePrepared(...args));}
+export function clip(...args: Parameters<typeof clipPrepared>): [number, number][] {return drain(clipPrepared(...args));}

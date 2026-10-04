@@ -17,6 +17,8 @@ const TIMERS = [
   'lib/live.ts',
   'lib/clock.ts',
   'lib/history.ts',
+  // Ending a wheel transaction after its last input; no idle timer.
+  'lib/pan.ts',
   'lib/session.ts',
   'lib/view.ts',
   // A "copied" mark.
