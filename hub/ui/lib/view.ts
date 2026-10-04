@@ -9,8 +9,8 @@ export const HISTORY = 'history';
 export const FORECAST = 'forecast';
 export const ACTIVITY = 'activity';
 export const AGENTS = 'agents';
-import {cardId, isWindowHidden} from '../../server/domain/presentation';
-export {cardId, isWindowHidden};
+import {cardId, windowKey} from '../../server/domain/presentation';
+export {cardId, isWindowHidden, keyShown} from '../../server/domain/presentation';
 
 /**
  * The analytics' widgets in the order a board has them until its owner moves them: how
@@ -81,6 +81,12 @@ export const withWindowHidden = (view: View, key: string, hidden: boolean): View
   ...view,
   windows: hidden ? [...new Set([...view.windows, key])] : view.windows.filter(other => other !== key),
 });
+
+/** Explicit key choices survive changes in the source's bounded default preview. */
+export const withKeyShown = (view:View,source:string,id:string,on:boolean):View => {
+  const key=windowKey(source,`key:${id}`);
+  return {...withWindowHidden(view,key,!on),shown:on?[...new Set([...view.shown,key])]:view.shown.filter(other=>other!==key)};
+};
 
 /** The weekly plan set for one source: the board's if valid, otherwise the default. */
 export const weeklyPlanOf = (view: View, sourceId: string): WeeklyPlan => {

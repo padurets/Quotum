@@ -20,9 +20,9 @@ export type View = {
   /** Card names the board's owner gave, by source id, instead of the automatic one. */
   names: Record<string, string>;
   hidden: string[];
-  /** Widgets off until the owner turns them on (the list of running agents), turned on. */
+  /** Widgets off by default and explicitly enabled key scales beyond the card preview. */
   shown: string[];
-  /** Hidden windows (`source/window`) and card key previews (`source/key:opaque-id`). */
+  /** Hidden windows (`source/window`) and card key scales (`source/key:opaque-id`). */
   windows: string[];
   plans: Record<string, number[]>;
   /** Source ids whose plan is switched off on this board. */

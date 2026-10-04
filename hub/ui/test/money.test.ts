@@ -1,14 +1,32 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {money,capPercent} from '../lib/money';
+import {money,capPercent,capStale,capChangesAt} from '../lib/money';
 import {setLocale} from '../i18n';
 import {moneySelection,readMoney} from '../lib/moneySelection';
 import type {Card} from '../lib/types';
 import type {Meter} from '../../server/domain/meters';
+import {keyShown,withKeyShown} from '../lib/view';
+import {parseView,EMPTY_VIEW} from '../../server/domain/view';
 import {INITIAL,reduce,type Snapshot} from '../lib/board';
 
 const meter=(id:string,value='1'):Meter=>({id,amount:value,kind:'balance',unit:'USD',limit:null,at:1,stale:false,staleAfterMs:1000,resetAt:null,minutes:null,scope:null,label:null});
 const card=(id:string):Card=>({id,provider:'openrouter',plan:'',successAt:1,error:null,stale:false,windows:[],resets:null,owners:[],staleAfterMs:1000,measureIntervalMs:null,meters:[meter('balance'),...Array.from({length:10},(_,i)=>meter('key:'+i))]});
+test('a selected cap stays fresh until its own deadline or earlier reset',()=>{
+  const cap={...meter('cap'),at:100,staleAfterMs:1000,resetAt:800};
+  assert.equal(capChangesAt(cap,100),800);assert.equal(capStale(cap,799),false);assert.equal(capStale(cap,800),true);assert.equal(capChangesAt(cap,800),null);
+  const lifetime={...cap,resetAt:null};assert.equal(capChangesAt(lifetime,1100),1101);assert.equal(capStale(lifetime,1100),false);assert.equal(capStale(lifetime,1101),true);
+});
+test('explicit card scales outside the bounded preview survive saving, reload and preview changes',()=>{
+  const preview=[{id:'first'}],source='openrouter:fixture';
+  assert.equal(keyShown(EMPTY_VIEW,source,'first',preview),true);
+  assert.equal(keyShown(EMPTY_VIEW,source,'sixth',preview),false);
+  const saved=parseView(withKeyShown(EMPTY_VIEW,source,'sixth',true))!;
+  assert.equal(keyShown(saved,source,'sixth',preview),true);
+  const enabled=withKeyShown(saved,source,'first',true);
+  assert.equal(keyShown(enabled,source,'first',[]),true);
+  assert.equal(keyShown(withKeyShown(enabled,source,'first',false),source,'first',preview),false);
+  assert.equal(keyShown(withKeyShown(saved,source,'sixth',false),source,'sixth',preview),false);
+});
 test('money display preserves micro-spending, negatives and integers beyond Number precision in both locales',()=>{
   for(const locale of ['en','ru'] as const){setLocale(locale);assert.match(money('1'),/0[.,]000001 USD/);assert.match(money('-1'),/−0[.,]000001/);assert.match(money('0'),/0[.,]00/);assert.ok(money('9007199254740993','USD',true).endsWith('740993 USD'));assert.match(money('999999'),/1[.,]00/);}
   assert.equal(capPercent({...meter('cap','1'),kind:'cap',limit:'0'}),null);setLocale('en');

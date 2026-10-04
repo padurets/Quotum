@@ -80,7 +80,7 @@ export type View = {
   /** Names the board's owner gave cards, by source id. */
   names: Record<string, string>;
   hidden: string[];
-  /** Widgets off until the owner turns them on (the list of running agents), turned on. */
+  /** Widgets off by default and explicitly enabled key scales beyond the card preview. */
   shown: string[];
   /** `windowKey`s of windows hidden from cards and the chart. */
   windows: string[];

@@ -545,7 +545,7 @@ export const en = {
   'projects.empty': 'No projects yet: they appear once agents have worked on your machines.',
   'admin.members': 'Members',
 
-  'devices.empty': 'No machines yet. Connect the first one on the “Connect” tab.',
+  'devices.empty': 'No devices yet. Choose “Connect” to add the first one.',
   'devices.device': 'Device',
   'devices.agents': 'Agents',
   'devices.seen': 'Last seen',
@@ -657,7 +657,7 @@ export const en = {
   "connections.connected": "Connected",
   "connections.type": "Connection type",
   "connections.device": "Device",
-  "sources.connect": "Connect a source",
+  "sources.connect": "Connect OpenRouter",
   "sources.replace": "Replace access",
   "sources.remove": "Remove saved access",
   "sources.removeText": "This removes the saved access from Quotum. The last own access also removes your holding and orphan shares. Revoke the provider key separately on OpenRouter.",
@@ -722,4 +722,15 @@ export const en = {
   "api.connector_timeout": "OpenRouter did not answer in time.",
   "api.connector_invalid_response": "OpenRouter returned an unsupported response.",
 
+  "connections.actions": "Actions for {name}",
+  "connections.expires": "Access until {time}",
+  "connections.rename": "Rename",
+  "connections.connectDevice": "Connect a device",
+  "connections.back": "Back to connections",
+  "projects.manage": "Manage projects",
+  "resource.subscription": "Subscription",
+  "resource.budget": "Budget",
+  "money.of": "of {amount}",
+  "money.noCap": "No spending limit",
+  "money.stale": "Measurements stale",
 } satisfies Record<string, Message>;

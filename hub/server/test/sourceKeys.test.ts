@@ -26,6 +26,15 @@ test('members page safe keys but cannot refresh, while cursors bind source and i
   const get=(after?:string)=>app.inject({method:'GET',url:base+'/keys?limit=50'+(after?'&after='+encodeURIComponent(after):''),headers:{cookie:cookies.get(bob.id)}});
   const first=(await get()).json();assert.equal(first.keys.length,50);assert.equal(first.total,57);assert.ok(first.next);
   const second=(await get(first.next)).json();assert.equal(second.keys.length,7);assert.equal(second.next,null);assert.equal(JSON.stringify(second).includes('credentialIds'),false);
+  const select=(ids:unknown,extra='')=>app.inject({method:'GET',url:base+'/keys?ids='+encodeURIComponent(JSON.stringify(ids))+extra,headers:{cookie:cookies.get(bob.id)}});
+  const selected=await select([keys[56].id,keys[0].id,keys[56].id]);assert.equal(selected.statusCode,200);
+  assert.deepEqual(selected.json().keys.map((k:KeyPart)=>k.id),[keys[0].id,keys[56].id]);
+  assert.equal(selected.json().meters.length,2);assert.equal(selected.json().next,null);assert.equal(selected.json().total,57);
+  assert.equal(JSON.stringify(selected.json()).includes('credentialIds'),false);
+  for(const ids of [[],Array(51).fill(keys[0].id),[1],['x'.repeat(121)],{}])assert.equal((await select(ids)).statusCode,400);
+  assert.equal((await select([keys[0].id],'&limit=50')).statusCode,400);
+  assert.equal((await select([keys[0].id],'&after='+encodeURIComponent(first.next))).statusCode,400);
+  assert.equal((await app.inject({method:'GET',url:base+'/keys?ids='+encodeURIComponent(JSON.stringify([keys[56].id]))})).statusCode,401);
   const refresh=await app.inject({method:'POST',url:base+'/refresh',headers:{cookie:cookies.get(bob.id),origin:'http://localhost'}});assert.equal(refresh.statusCode,403);assert.equal(refresh.json().error,'refresh_forbidden');
   record(now+1,keys.map((k,i)=>i? k:{...k,name:'changed'}));assert.equal((await get(first.next)).statusCode,409);
   const bad=await get(first.next+'wrong');assert.equal(bad.statusCode,400);

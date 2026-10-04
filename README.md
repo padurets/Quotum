@@ -199,7 +199,7 @@ day, not a script thrown together over a weekend. In practice that meant:
   the board and when the subscription came to it (on their own board, all of it). The hub
   keeps when each agent worked, with its machine, project and folder names, for 90 days,
   and the names you give your projects until you undo them; you see and correct your
-  projects in *My machines*. The full list is in the [spec](spec/ingest-v1.md#privacy).
+  projects through *Agent activity → Settings → Manage projects*. The full list is in the [spec](spec/ingest-v1.md#privacy).
 - **The numbers mean what they say.** Only a real increase inside one reset window
   counts as spending. Resets, corrections and gaps in the data never show up as
   consumption. The agent says when its next measurement is due, so a sparse series isn't
@@ -275,7 +275,7 @@ have your system start `quotum run`, the same in the foreground (a systemd user
 service, launchd, Windows autostart). With npx, put `npx` before every command.
 
 **Many machines at once** (images, VMs, containers): create a machine token in the
-dashboard (*My machines → Connect*) and start every machine with it. Each one joins as
+dashboard (*My connections → Connect → Device*) and start every machine with it. Each one joins as
 yours by itself:
 
 ```sh
@@ -291,7 +291,7 @@ QUOTUM_HUB_URL=https://quotum.example.com QUOTUM_HUB_TOKEN=qt_m_… quotum start
 ```
 
 A machine token is one person's: every teammate creates their own. Machines are named
-in *My machines*, so an image doesn't need a name per copy.
+in *My connections*, so an image doesn't need a name per copy.
 
 **Sharing with a team.** Create a shared board, invite people with a link, and share
 your subscriptions with it (*People and subscriptions → Subscriptions*). You can take
@@ -315,10 +315,13 @@ The key can create, edit and delete provider API keys; Quotum uses only fixed re
 operations. A server hub needs its separate encryption key configured, and its operator
 can decrypt saved access. See [SECURITY.md](SECURITY.md) for the protection and limits.
 
-The card shows the credit balance, observed spending for the UTC day, week (starting
-Monday) and month through the last measurement, whose time appears in the amount's
-tooltip, and a preview of five keys. The card's settings switch each key's display.
-**All keys** pages through the full measurement table. The chart's own settings select
+Cards label their resource as **Subscription** or **Budget** beside the title.
+The budget card shows the credit balance and observed spending for the UTC day, week
+(starting Monday) and month through the last measurement, with its data time below.
+Its settings switch individual key-limit scales, including keys beyond the initial
+five-key preview. Enabled scales appear directly on the card, using the same segmented
+meters as subscriptions. Keys without a spending limit have no scale.
+The chart's own settings select
 key usage and remaining limits for analytics. Choose **USD** in the
 shared analytics controls for the money chart and table. Account balances are selected
 by default; at most 32 logical series are drawn, with visible overflow. The chart uses

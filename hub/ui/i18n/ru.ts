@@ -540,7 +540,7 @@ export const ru = {
   'projects.empty': 'Проектов пока нет: они появятся, когда агенты поработают на ваших машинах.',
   'admin.members': 'Участники',
 
-  'devices.empty': 'Машин пока нет. Подключите первую на вкладке «Подключить».',
+  'devices.empty': 'Устройств пока нет. Нажмите «Подключить», чтобы добавить первое.',
   'devices.device': 'Устройство',
   'devices.agents': 'Агенты',
   'devices.seen': 'На связи',
@@ -652,7 +652,7 @@ export const ru = {
   "connections.connected": "Подключённые",
   "connections.type": "Тип подключения",
   "connections.device": "Устройство",
-  "sources.connect": "Подключить источник",
+  "sources.connect": "Подключить OpenRouter",
   "sources.replace": "Заменить доступ",
   "sources.remove": "Удалить сохранённый доступ",
   "sources.removeText": "Это удалит сохранённый доступ из Quotum. Последний ваш доступ также уберёт источник с личной доски и общих досок, где его больше никто не держит. Отзовите ключ отдельно на OpenRouter.",
@@ -717,4 +717,15 @@ export const ru = {
   "api.connector_timeout": "OpenRouter не ответил вовремя.",
   "api.connector_invalid_response": "OpenRouter вернул ответ неподдерживаемого формата.",
 
+  "connections.actions": "Действия: {name}",
+  "connections.expires": "Доступ до {time}",
+  "connections.rename": "Переименовать",
+  "connections.connectDevice": "Подключить устройство",
+  "connections.back": "Назад к подключениям",
+  "projects.manage": "Управлять проектами",
+  "resource.subscription": "Подписка",
+  "resource.budget": "Бюджет",
+  "money.of": "из {amount}",
+  "money.noCap": "Без лимита расходов",
+  "money.stale": "Данные устарели",
 } satisfies Catalog;

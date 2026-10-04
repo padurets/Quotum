@@ -602,10 +602,12 @@ and its limits.
   signs up without an invitation but with its setup code: a new hub prints one to its
   log, so only whoever started it can claim it. After that, signing up needs an invite
   link unless the hub is open (`QUOTUM_SIGNUP=open`).
-- **Devices** are running agents, and each belongs to a person. The *Machines* dialog
+- **Devices** are running agents, and each belongs to a person. The *My connections* dialog
   shows a person's devices, what each delivers and the last failure of each client
-  there (not logged in, too old…); the person names them there. Its *Projects* tab
-  lists the projects their agents worked on, with the machines and when they last did:
+  there (not logged in, too old…); the person names them there. The same list contains
+  their provider accounts, and its Connect menu opens a device or provider form directly.
+  *Agent activity → Settings → Manage projects* lists the projects their agents worked
+  on, with the machines and when they last did:
   the person renames them and merges several into one, which applies everywhere they are
   shown and to all the time kept (only on their own machines), and gives a reported name
   back its own to undo it. How long agents worked is not shown there. A device connects in

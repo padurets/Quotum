@@ -6,12 +6,13 @@ import {cadenceChangesAt, cadenceOf, dotChangesAt, dotOf, errorText, level, prob
 import {t, useLocale} from '../i18n';
 import {DEFAULT_PLAN, isValidPlan, planAt, planChangesAt, planNote, planTotal, type WeeklyPlan} from '../lib/plan';
 import {logoOf} from './logos';
+import {MeterBar} from './Meter';
+import {KeyScaleSettings} from './KeyScaleSettings';
 import {MoneyCard,AccessMark} from './MoneyCard';
 import {cardId, colorOf, isWindowHidden, planOf, weeklyPlanOf, withColor, withHidden, withName, withPlan, withPlanned, withWindowHidden, type Arrange} from '../lib/view';
 import {CARD_COLORS, MIDDLE_STEP, PROVIDERS} from '../lib/providers';
 import {call} from '../lib/http';
 import {useCadence, useCard, useConnection, useMine, useRefresh, useResetsFor, useSessions, useSourceAccess, useTitle} from '../lib/board';
-import {keyName, money, capLeft} from '../lib/money';
 import {providerOf} from '../../server/domain/providers';
 import {useClock} from '../lib/clock';
 import {FreeResets} from './ResetMarks';
@@ -75,12 +76,7 @@ export function ResetLine({w, short = false}: {w: Win; short?: boolean}) {
 
 /** The same remaining-quota meter in a card and in the tray's compact rows. */
 export function LimitMeter({w, children}: {w: Win; children?: ReactNode}) {
-  return (
-    <div className="meter" role="progressbar" aria-label={windowName(w).replaceAll(' · ', '\n')} aria-valuenow={Math.round(w.remaining)} aria-valuemin={0} aria-valuemax={100}>
-      <span className="meter-track"><i className={`fill fill-${level(w.remaining)}`} style={{width: `${Math.max(w.remaining, 1)}%`}} /></span>
-      {children}
-    </div>
-  );
+  return <MeterBar remaining={w.remaining} label={windowName(w).replaceAll(' · ', '\n')}>{children}</MeterBar>;
 }
 
 function Limit({w, measuredAt, weekly}: {w: Win; measuredAt: number | null; weekly: WeeklyPlan | null}) {
@@ -333,17 +329,7 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
           })}
         </>
       )}
-      {owner && !!source.keys?.length && (
-        <>
-          <div className="popover-title popover-section">{t('source.show')}</div>
-          {source.keys.map(part => {
-            const key = windowKey(source.id, `key:${part.id}`);
-            const cap = source.meters?.find(m => m.id === `key:${part.id}:cap`);
-            const usage = source.meters?.find(m => m.id === `key:${part.id}:usage`);
-            return <SwitchRow key={part.id} on={!hidden.has(key)} onChange={on => arrange.update(view => withWindowHidden(view, key, !on))} value={money(cap ? capLeft(cap) : usage?.amount)}>{keyName(part)}</SwitchRow>;
-          })}
-        </>
-      )}
+      {owner && !!source.keysCount && open && <KeyScaleSettings source={source} board={boardId} arrange={arrange}/>}
       {owner && (
         <>
           <div className="popover-title popover-section">{t('source.color')}</div>
@@ -507,8 +493,8 @@ export const SourceCard = memo(function SourceCard({id, arrange, boardId, person
       <div className="card-head">
         <CardMark source={source} />
         <div className="card-title">
-          <h2>{title}</h2>
-          {source.plan && <span className="plan">{source.plan.replace(/^Claude\s+/i, '')}</span>}
+          <h2 title={source.plan?title+"\n"+source.plan:title}>{title}</h2>
+          <span className="plan resource-type">{t(source.meters?'resource.budget':'resource.subscription')}</span>
         </div>
         <SourceSettings key={boardId} source={source} title={title} arrange={arrange} boardId={boardId} takeOff={takeOff} />
       </div>

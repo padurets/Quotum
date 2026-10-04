@@ -1,15 +1,16 @@
-import {useEffect,useState} from 'react';
 import type {Card,View} from '../lib/types';
 import type {KeyPart,Meter,SpendSummary} from '../../server/domain/meters';
 import {useSourceAccess} from '../lib/board';
-import {money,keyName,capLeft,capPercent} from '../lib/money';
-import {isWindowHidden} from '../lib/view';
-import {stamp,countdown,countdownChangesAt,earliest} from '../lib/format';
+import {money,keyName,capLeft,capPercent,capStale,capChangesAt} from '../lib/money';
+import {stamp,countdown,duration,countdownChangesAt,earliest} from '../lib/format';
 import {useClock} from '../lib/clock';
 import {t} from '../i18n';
-import {ApiError,call,messageOf} from '../lib/http';
-import {Modal,ErrorLine} from './Kit';
+import {ApiError,messageOf} from '../lib/http';
+import {ErrorLine} from './Kit';
 import {Popover} from './Popover';
+import {MeterBar} from './Meter';
+import {level} from '../lib/quota';
+import {useShownKeys} from '../lib/moneyKeys';
 
 function Summary({value,asOf}:{value:SpendSummary|undefined;asOf:number|null}) {
   const detail=value?[
@@ -21,65 +22,46 @@ function Summary({value,asOf}:{value:SpendSummary|undefined;asOf:number|null}) {
   ].filter(Boolean).join('\n'):t('money.unknown');
   return <span title={detail}>{money(value?.amount)}{value&&(!value.complete||value.uncertain)&&<small className="money-partial">*</small>}</span>;
 }
-function KeyStatus({part}:{part:KeyPart}) {
-  const now=useClock(now=>part.expiresAt!==null&&part.expiresAt>now?part.expiresAt:null);
-  return <small data-time="key-status">{part.disabled||part.expiresAt!==null&&part.expiresAt<=now?t('money.inactive'):part.presence==='missing'?t('money.missing'):''}</small>;
+function KeyStatus({part,cap}:{part:KeyPart;cap:Meter}) {
+  const now=useClock(now=>earliest(part.expiresAt!==null&&part.expiresAt>now?part.expiresAt:null,capChangesAt(cap,now)));
+  const stale=capStale(cap,now);
+  return <small data-time="key-status" className={stale?'cap-stale':undefined}>{part.disabled||part.expiresAt!==null&&part.expiresAt<=now?t('money.inactive'):part.presence==='missing'?t('money.missing'):stale?t('money.stale'):''}</small>;
 }
-function CapReset({meter}:{meter:Meter}) {
+function CapReset({meter,short=false}:{meter:Meter;short?:boolean}) {
   const now=useClock(now=>meter.resetAt===null?null:countdownChangesAt(meter.resetAt,now));
-  return <small data-time="cap-reset" title={meter.resetAt===null?'':stamp(meter.resetAt)}>{meter.resetAt!==null&&meter.resetAt>now?countdown(meter.resetAt-now):meter.resetAt!==null?t('money.partial'):''}</small>;
+  return <span data-time="cap-reset" title={meter.resetAt===null?'':stamp(meter.resetAt)}>{meter.resetAt!==null&&meter.resetAt>now?short?countdown(meter.resetAt-now):t('limit.resetsIn',{time:duration(meter.resetAt-now)}):meter.resetAt!==null?t('money.partial'):''}</span>;
 }
-export function KeyMetrics({part,meters}:{part:KeyPart;meters:readonly Meter[]}) {
+export function KeyMetrics({part,meters,compact=false}:{part:KeyPart;meters:readonly Meter[];compact?:boolean}) {
   const usage=meters.find(m=>m.id===`key:${part.id}:usage`),cap=meters.find(m=>m.id===`key:${part.id}:cap`);
-  const percent=cap?capPercent(cap):null;
-  return <div className={`money-key${part.presence==='missing'||usage?.stale?' is-stale':''}`}>
-    <div className="money-key-head"><strong>{keyName(part)}</strong><KeyStatus part={part}/></div>
-    <div className="money-key-values"><span title={money(usage?.amount,'USD',true)}>{t('money.usage')}: {money(usage?.amount)}</span><span title={[t('money.day'),money(part.periods.day),t('money.week'),money(part.periods.week)].join('\n')}>{t('money.month')}: {money(part.periods.month)}</span></div>
-    {cap&&<div className={`money-cap${cap.stale?' is-stale':''}`} title={part.includeByok?t('money.byok'):undefined}>
-      <span title={money(capLeft(cap),cap.unit,true)}>{money(capLeft(cap),cap.unit)} / {money(cap.limit,cap.unit)}</span>
-      {percent===null?<small>{t('money.exhausted')}</small>:<div className="meter" role="progressbar" aria-label={keyName(part)} aria-valuemin={0} aria-valuemax={100} aria-valuenow={100-percent}><span className="meter-track"><i className={`fill fill-${100-percent<=10?'crit':100-percent<=30?'warn':'ok'}`} style={{width:`${100-percent}%`}}/></span></div>}
-      <CapReset meter={cap}/>
-    </div>}
+  if(!cap)return null;
+  const percent=capPercent(cap),remaining=percent===null?null:100-percent;
+  const left=money(capLeft(cap),cap.unit),value=left.slice(0,-cap.unit.length-1);
+  const detail=[t('money.usage')+': '+money(usage?.amount,cap.unit,true),t('money.month')+': '+money(part.periods.month,cap.unit,true),part.includeByok?t('money.byok'):''].filter(Boolean).join('\n');
+  const stale=part.presence==='missing'||cap.stale;
+  const bar=<MeterBar remaining={remaining} label={keyName(part)}/>;
+  if(compact)return <div className={`compact-limit is-money${stale?' is-stale':''}`}>
+    <div className="compact-window-name"><span title={detail}><span>{keyName(part)}</span><KeyStatus part={part} cap={cap}/></span></div>
+    <small className="compact-reset"><CapReset meter={cap} short/></small>
+    {bar}<strong title={money(capLeft(cap),cap.unit,true)}>{left}</strong>
+  </div>;
+  return <div className={`limit money-limit${stale?' is-stale':''}`}>
+    <div className="limit-top"><span className="limit-name" title={detail}>{keyName(part)}<KeyStatus part={part} cap={cap}/></span>
+      <span className={`limit-value v-${remaining===null?'ok':level(remaining)}`} title={money(capLeft(cap),cap.unit,true)}>{value}<small>{cap.unit}</small></span>
+    </div>
+    {bar}
+    <div className="limit-bottom"><span title={money(cap.limit,cap.unit,true)}>{t('money.of',{amount:money(cap.limit,cap.unit)})}</span>{remaining===null?<span>{t('money.exhausted')}</span>:<CapReset meter={cap}/>}</div>
   </div>;
 }
-export type KeyPage={keys:KeyPart[];meters:Meter[];total:number;inventory:Card['inventory'];next:string|null};
-function AllKeys({source,board,onClose}:{source:Card;board:string;onClose:()=>void}) {
-  const [page,setPage]=useState<KeyPage|null>(null),[after,setAfter]=useState<string|undefined>(),[back,setBack]=useState<(string|undefined)[]>([]),[error,setError]=useState<unknown>(null),[changed,setChanged]=useState(false);
-  useEffect(()=>{
-    let live=true;
-    call<KeyPage>('GET',`/api/boards/${encodeURIComponent(board)}/sources/${encodeURIComponent(source.id)}/keys?limit=50${after?'&after='+encodeURIComponent(after):''}`)
-      .then(reply=>{if(live){setPage(reply);setError(null);}},failure=>{if(!live)return;if(failure instanceof ApiError&&failure.code==='keys_changed'){setChanged(true);setBack([]);setAfter(undefined);}else setError(failure);});
-    return()=>{live=false;};
-  },[board,source.id,after]);
-  return <Modal title={t('money.keys',{count:source.keysCount??0})} onClose={onClose} wide>
-    {changed&&<p className="drawer-note">{t('money.changed')}</p>}
-    <ErrorLine error={error}/>
-    {page?.inventory&&<p className="drawer-note">{page.inventory.complete?t('money.inventory',{count:page.inventory.observed}):t('money.inventoryPartial')}</p>}
-    <div className="table-wrap"><table className="admin-table source-keys-table"><thead><tr><th>{t('money.key')}</th><th>{t('money.usage')}</th><th>{t('money.month')}</th><th>{t('money.cap')}</th><th>{t('money.reset')}</th></tr></thead><tbody>{page?.keys.map(part=>{
-      const usage=page.meters.find(m=>m.id===`key:${part.id}:usage`),cap=page.meters.find(m=>m.id===`key:${part.id}:cap`);
-      return <tr key={part.id} className={part.presence==='missing'||usage?.stale?'is-stale':undefined}>
-        <td><b>{keyName(part)}</b><KeyStatus part={part}/>{part.includeByok&&<small>{t('money.byok')}</small>}</td>
-        <td title={money(usage?.amount,'USD',true)}>{money(usage?.amount)}</td>
-        <td title={money(part.periods.month,'USD',true)}>{money(part.periods.month)}</td>
-        <td title={cap?`${money(capLeft(cap),cap.unit,true)} / ${money(cap.limit,cap.unit,true)}`:undefined}>{cap?`${money(capLeft(cap),cap.unit)} / ${money(cap.limit,cap.unit)}`:'—'}</td>
-        <td>{cap&&<CapReset meter={cap}/>}</td>
-      </tr>;
-    })}</tbody></table></div>
-    {(!!page?.next||back.length>0)&&<div className="button-row"><button className="button" disabled={!back.length} onClick={()=>{setAfter(back.at(-1));setBack(back.slice(0,-1));}}>{t('money.previous')}</button><button className="button" disabled={!page?.next} onClick={()=>{setBack([...back,after]);setAfter(page!.next!);}}>{t('money.next')}</button></div>}
-  </Modal>;
-}
 export function MoneyCard({source,board,view,compact=false}:{source:Card;board:string;view?:View;compact?:boolean}) {
-  const [all,setAll]=useState(false),balance=source.meters?.find(m=>m.id==='balance');
+  const balance=source.meters?.find(m=>m.id==='balance'),{keys,meters,error}=useShownKeys(source,view,board);
   return <div className="money-body">
     <div className="money-balance" title={money(balance?.amount,balance?.unit,true)}><span>{t('money.balance')}</span><strong data-money={balance?.amount}>{money(balance?.amount,balance?.unit)}</strong></div>
     {!compact&&<>
       <div className="money-summaries">{(['day','week','month'] as const).map(period=><div key={period}><small>{t(`money.${period}`)}</small><Summary value={source.spending?.[period]} asOf={source.successAt}/></div>)}</div>
-      <div className="money-preview">{source.keys?.filter(part=>!view||!isWindowHidden(view,source.id,`key:${part.id}`)).map(part=><KeyMetrics key={part.id} part={part} meters={source.meters??[]}/>)}</div>
-      {!!source.keysCount&&<button className="link-button" type="button" onClick={()=>setAll(true)}>{t('money.keys',{count:source.keysCount})}</button>}
-      {source.inventory&&!source.inventory.complete&&<small className="drawer-note">{t('money.inventoryPartial')}</small>}
+      {source.successAt!==null&&<small className="money-data-time">{t('money.asOf',{time:stamp(source.successAt)})}</small>}
     </>}
-    {compact&&source.keys?.filter(k=>(!view||!isWindowHidden(view,source.id,`key:${k.id}`))&&source.meters?.some(m=>m.id===`key:${k.id}:cap`)).slice(0,2).map(part=><KeyMetrics key={part.id} part={part} meters={source.meters??[]}/>)}
-    {all&&<AllKeys source={source} board={board} onClose={()=>setAll(false)}/>}
+    <div className="limits">{keys.map(part=><KeyMetrics key={part.id} part={part} meters={meters} compact={compact}/>)}</div>
+    <ErrorLine error={error}/>
   </div>;
 }
 export function AccessMark({id}:{id:string}) {

@@ -9,7 +9,7 @@ import {MAX_METERS} from '../../server/domain/meterHistory';
 import {t} from '../i18n';
 import {ErrorLine} from './Kit';
 import {SwitchRow} from './Popover';
-import type {KeyPage} from './MoneyCard';
+import type {KeyPage} from '../lib/moneyKeys';
 
 /** Series are chosen in the chart's settings; the key table only reads measurements. */
 export function MoneySettings({sources,hidden,series}:{sources:readonly Named[];hidden:readonly string[];series:readonly MeterHistory[]}) {

@@ -14,6 +14,7 @@ import {t, useLocale, type Key} from '../i18n';
 import {Segmented} from './Kit';
 import {HideRow, Popover, SlidersIcon} from './Popover';
 import {Tooltip, useBubble, useTip} from './Tooltip';
+import {ProjectsDialog} from './Machines';
 import {useTimeAxis} from './timeAxis';
 import {usePlot} from './sizing';
 
@@ -30,16 +31,21 @@ function groupName(group: ActivityGroup, by: ActivityDimension, titles: Record<s
 /** The widget's own settings, as the chart has its own: what its stacks are split by, and (for the board's owner) hiding it. */
 function ActivitySettings({arrange}: {arrange: Arrange}) {
   const {activityBy} = usePrefs();
+  const [projects,setProjects]=useState(false),[open,setOpen]=useState(false);
   return (
-    <Popover label={t('activity.settings')} icon={<SlidersIcon />}>
+    <>
+    <Popover label={t('activity.settings')} icon={<SlidersIcon />} open={open} onOpenChange={setOpen}>
       <div className="popover-section">
         <div className="popover-title">{t('activity.by')}</div>
         <div className="popover-pad">
           <Segmented value={activityBy} onChange={next => setPrefs({activityBy: next})} options={ACTIVITY_BY.map(key => [key, t(LABELS[key])])} label={t('activity.by')} />
         </div>
       </div>
+      <div className="popover-section"><button className="popover-row" onClick={()=>{setOpen(false);setProjects(true);}}><span>{t('projects.manage')}</span></button></div>
       {arrange.owner && <HideRow onHide={() => arrange.update(view => withHidden(view, ACTIVITY, true))}>{t('widget.hide')}</HideRow>}
     </Popover>
+    {projects&&<ProjectsDialog onClose={()=>setProjects(false)}/>}
+    </>
   );
 }
 

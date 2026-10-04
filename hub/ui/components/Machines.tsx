@@ -5,14 +5,16 @@ import {merging, renaming, restoring, shown, timeless, type ProjectGroup, type P
 import {errorText} from '../lib/quota';
 import {call} from '../lib/http';
 import {logoOf} from './logos';
-import {CopyField, ErrorLine, Field, Modal, Segmented} from './Kit';
+import {CopyField, ErrorLine, Field, Modal} from './Kit';
 import {Popover} from './Popover';
 import {rich, t} from '../i18n';
 import {Ago} from './Time';
-import {ConnectedAccounts,ConnectSource} from './Connections';
+import {ConnectedAccounts,ConnectSource,ConnectionRow} from './Connections';
 import type {Session} from '../lib/session';
 
-export type MachinesTab = 'devices' | 'projects' | 'connect';
+import type {Credential} from '../../server/store/credentials';
+
+export type ConnectionsStart = 'list' | 'connect';
 
 type Device = {
   id: string;
@@ -131,26 +133,10 @@ function InlineName({
   );
 }
 
-/** A device's name, renamed in place; an empty name gives back the one the machine reports. */
-function DeviceName({device, onRenamed}: {device: Device; onRenamed: () => void}) {
-  return (
-    <InlineName
-      name={device.name}
-      label={t('devices.nameLabel')}
-      renameLabel={t('devices.rename', {name: device.name})}
-      placeholder={device.reported}
-      maxLength={80}
-      save={async name => {
-        await call('POST', `/api/devices/${encodeURIComponent(device.id)}`, {name});
-        onRenamed();
-      }}
-    />
-  );
-}
-
 /** The reader's devices; on the desktop app's board, its one machine, which cannot be disconnected (it is the app's own agent). */
 function Devices({local}: {local: boolean}) {
   const [devices, setDevices] = useState<Device[] | null>(null);
+  const [renaming,setRenaming]=useState<Device|null>(null),[name,setName]=useState('');
   const [error, setError] = useState<unknown>(null);
   const load = useCallback(() => {
     call<Device[]>('GET', '/api/devices').then(setDevices, setError);
@@ -168,48 +154,23 @@ function Devices({local}: {local: boolean}) {
     }
   };
 
-  if (!devices) return <ErrorLine error={error} />;
-  if (!devices.length) return <p className="admin-empty">{t(local ? 'local.devicesEmpty' : 'devices.empty')}</p>;
-  return (
-    <div className="table-wrap">
-      <ErrorLine error={error} />
-      <table className="admin-table">
-        <thead>
-          <tr>
-            <th>{t('devices.device')}</th>
-            <th>{t('devices.agents')}</th>
-            <th>{t('devices.seen')}</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          {devices.map(device => (
-            <tr key={device.id}>
-              <td>
-                <DeviceName device={device} onRenamed={load} />
-                <small>
-                  {device.name !== device.reported && `${device.reported} · `}
-                  {device.os}
-                  {!local && ` · ${t(device.via === 'code' ? 'devices.viaCode' : 'devices.viaToken')}`}
-                </small>
-              </td>
-              <td>
-                <Agents device={device} />
-              </td>
-              <td title={device.lastSeenAt ? stamp(device.lastSeenAt) : undefined}>{device.lastSeenAt ? <Ago at={device.lastSeenAt} /> : '—'}</td>
-              <td>
-                {!local && (
-                  <button type="button" className="link-button danger" onClick={() => revoke(device)}>
-                    {t('devices.revoke')}
-                  </button>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
+  const rename = async(event:FormEvent) => {
+    event.preventDefault();if(!renaming)return;
+    try {await call('POST',`/api/devices/${encodeURIComponent(renaming.id)}`,{name:name.trim()});setRenaming(null);load();}catch(failure){setError(failure);}
+  };
+  return <>
+    {error&&<li><ErrorLine error={error}/></li>}
+    {devices?.length===0&&<li className="admin-empty">{t(local?'local.devicesEmpty':'devices.empty')}</li>}
+    {devices?.map(device=><ConnectionRow key={device.id} name={device.name}
+      icon={<svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true"><rect x="2" y="3" width="12" height="8" rx="1.5"/><path d="M5.5 13.5h5M8 11v2.5"/></svg>}
+      detail={<><span>{device.os}</span><span className="connection-detail"><Agents device={device}/></span></>}
+      status={<span title={device.lastSeenAt?stamp(device.lastSeenAt):undefined}>{device.lastSeenAt?<Ago at={device.lastSeenAt}/>:t('connect.unused')}</span>}
+      actions={<><button className="popover-row" onClick={()=>{setError(null);setName(device.name);setRenaming(device);}}><span>{t('connections.rename')}</span></button>{!local&&<button className="popover-row danger" onClick={()=>void revoke(device)}><span>{t('devices.revoke')}</span></button>}</>}
+    />)}
+    {renaming&&<Modal title={t('devices.rename',{name:renaming.name})} onClose={()=>setRenaming(null)}>
+      <form className="dialog-form" onSubmit={rename}><Field label={t('devices.nameLabel')} value={name} maxLength={80} placeholder={renaming.reported} autoFocus onChange={e=>setName(e.target.value)}/><ErrorLine error={error}/><div className="button-row"><button className="button" type="button" onClick={()=>setRenaming(null)}>{t('common.cancel')}</button><button className="button primary">{t('boards.save')}</button></div></form>
+    </Modal>}
+  </>;
 }
 
 /**
@@ -405,15 +366,10 @@ function ConnectDevice() {
   };
 
   return (
-    <div className="connect">
-      <section className="connect-way">
-        <h3>{t('connect.codeTitle')}</h3>
+    <div className="dialog-form">
         <p>{t('connect.codeText')}</p>
         <CopyField value={`npx quotum connect ${origin()}`} />
-      </section>
-
-      <section className="connect-way">
-        <h3>{t('connect.tokenTitle')}</h3>
+      <details className="connection-tokens"><summary>{t('connect.tokenTitle')}</summary><div className="dialog-form">
         <p>{t('connect.tokenText')}</p>
         {created ? (
           <div className="token-created">
@@ -447,47 +403,33 @@ function ConnectDevice() {
             ))}
           </ul>
         )}
-      </section>
+      </div></details>
     </div>
   );
 }
 
-/**
- * The reader's devices and connected accounts, their projects, and one place to connect
- * more. The desktop app connects provider accounts while its own agent measures its device.
- */
-export function MachinesDialog({
-  tab,
-  onTab,
-  onClose,
-  local,
-  userId,
-  trustedKeys,
-}: {
-  tab: MachinesTab;
-  onTab: (tab: MachinesTab) => void;
-  onClose: () => void;
-  local: boolean;
-  userId: string;
-  trustedKeys: Session['trustedKeys'];
-}) {
-  const [kind,setKind]=useState<'device'|'openrouter'>(local?'openrouter':'device');
-  const tabs: [MachinesTab, string][] = [
-    ['devices', t('connections.connected')],
-    ['projects', t('admin.projects')],
-    ['connect', t('admin.connect')],
-  ];
-  return (
-    <Modal title={t('machines.title')} onClose={onClose} wide>
-      <Segmented label={t('admin.sections')} options={tabs} value={tab} onChange={onTab} />
-      <div className="dialog-body">
-        {tab === 'devices' && <><section className="connect-way"><h3>{t('admin.devices')}</h3><Devices local={local} /></section><ConnectedAccounts userId={userId} local={local} trustedKeys={trustedKeys}/></>}
-        {tab === 'projects' && <Projects />}
-        {tab === 'connect' && <>
-          {!local&&<Segmented label={t('connections.type')} value={kind} onChange={setKind} options={[["device",t('connections.device')],["openrouter","OpenRouter"]]}/>}
-          {!local&&kind==='device'?<ConnectDevice/>:<ConnectSource userId={userId} local={local} trustedKeys={trustedKeys} onClose={onClose}/>}
-        </>}
-      </div>
-    </Modal>
-  );
+/** Connections belong to the person; projects are managed from agent activity. */
+export function ProjectsDialog({onClose}:{onClose:()=>void}) {
+  return <Modal title={t('admin.projects')} onClose={onClose} wide><div className="dialog-body"><Projects/></div></Modal>;
+}
+
+export function ConnectionsDialog({start,onClose,local,userId,trustedKeys}:{start:ConnectionsStart;onClose:()=>void;local:boolean;userId:string;trustedKeys:Session['trustedKeys']}) {
+  const [kind,setKind]=useState<'device'|'openrouter'|null>(local&&start==='connect'?'openrouter':null);
+  const [open,setOpen]=useState(start==='connect'&&!local);
+  const [replace,setReplace]=useState<Credential|null>(null);
+  const back=()=>{setKind(null);setReplace(null);};
+  const choose=(next:'device'|'openrouter')=>{setOpen(false);setKind(next);};
+  const title=kind==='device'?t('connections.connectDevice'):kind==='openrouter'?t(replace?'sources.replace':'sources.connect'):t('machines.title');
+  return <Modal key={kind??'list'} title={title} onClose={onClose} wide={!kind}>
+    {kind?<div className="dialog-form">
+      <button type="button" className="link-button connection-back" onClick={back}>← {t('connections.back')}</button>
+      {kind==='device'?<ConnectDevice/>:<ConnectSource userId={userId} local={local} trustedKeys={trustedKeys} replace={replace} onClose={back}/>}
+    </div>:<div className="dialog-body">
+      <div className="connections-toolbar">{local?<button className="button primary" onClick={()=>choose('openrouter')}>{t('admin.connect')}</button>:<Popover label={t('admin.connect')} trigger={t('admin.connect')} triggerClass="button primary" open={open} onOpenChange={setOpen} align="left">
+        <button className="popover-row" onClick={()=>choose('device')}><span>{t('connections.device')}</span></button>
+        <button className="popover-row" onClick={()=>choose('openrouter')}><span>OpenRouter</span></button>
+      </Popover>}</div>
+      <ul className="connections-list"><Devices local={local}/><ConnectedAccounts userId={userId} trustedKeys={trustedKeys} onReplace={record=>{setReplace(record);choose('openrouter');}}/></ul>
+    </div>}
+  </Modal>;
 }

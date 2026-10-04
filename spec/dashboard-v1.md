@@ -449,10 +449,13 @@ its person; over the hub's, of its person if they have one, else it is refused w
 
 ## Exact meters and hub connections
 
-Card key previews use the existing view's `windows` visibility list with
-`<source id>/key:<opaque key id>` entries. The card's switches also apply to compact.
-The full key table remains readable, and chart series are chosen in that chart's own
-settings; key-table paging never changes the chart selection.
+Card key scales use the existing view's `windows` visibility list with
+`<source id>/key:<opaque key id>` entries. The default preview stays visible unless
+hidden; `shown` holds explicitly enabled scales beyond it, using the same entry format.
+An explicit enabled choice survives changes in preview ordering. The card's switches
+also apply to compact. Card settings page through key-scale switches; there is no
+key-table dialog. Chart series are chosen independently in the chart's own settings.
+Both resource types use the same segmented meter; balances have no percentage meter.
 
 A hub-measured card may also carry `meters`, `keys` (a preview of at most five),
 `keysCount`, `inventory` and `spending`. A meter is `{id, kind, unit, amount, limit,
@@ -469,7 +472,7 @@ counters are baselines. Counter corrections are not spending. Account calendar p
 are UTC, with Monday starting the week. `spending` gives day/week/month summaries with
 `from`, `to` (the last account observation, or the current period start before its first
 observation), `amount` or null, `complete`, `knownFrom`, `uncertain` and `unlocated`.
-Completeness ends at that observation, and the amount's tooltip names its data time.
+Completeness ends at that observation, and the card and amount's tooltip name its data time.
 An unlocated step retains its original `{from, to, amount, evidence}`; evidence is
 `continuous`, `gap` or `estimate`. A continuous step crossing midnight may be known
 for the week and unlocated for the day. No spending is assigned a guessed time.
@@ -636,3 +639,8 @@ counts retained current keys and does not promise supplier completeness. A curso
 bound to source, ordering revision and this hub run. A changed ordering returns
 `409 keys_changed`; a forged or mismatched cursor returns `400 invalid_request`.
 No credential records enter this endpoint.
+
+Alternatively, `ids` is a JSON array of 1–50 opaque key ids, mutually exclusive with
+`after` and `limit`. It returns only those current keys and their meters in inventory
+order, with `next: null`. Enabled scales beyond the preview use this bounded read when
+their source changes; they never poll. Membership and source visibility still apply.
