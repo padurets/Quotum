@@ -80,6 +80,7 @@ export function meterCells(group: MeterGroup, unit: Unit, from: number, to: numb
     if(kind==='cap')for(let i=0;i<group.readings.length;i++) {
       const row=group.readings[i];if(!matches(row))continue;
       for(const span of group.spans) {
+        if(span.to<row.at&&span.from<row.at)continue;
         const start=Math.max(row.at,span.from),end=Math.min(group.readings[i+1]?.at??Infinity,span.to+span.staleAfterMs+1,span.holdUntil??Infinity,row.resetAt??Infinity);
         if(end>start)admitted.push({from:start,to:end,row,segment:span.from});
       }
@@ -90,11 +91,13 @@ export function meterCells(group: MeterGroup, unit: Unit, from: number, to: numb
         const intervals=admitted.filter(s=>s.from<end&&s.to>at);
         if(!intervals.length)continue;
         // A coarse cell cannot assert one value across incompatible quota periods.
-        const first=intervals[0];
-        if(intervals.some((s,i)=>!sameCap(s.row,first.row)||i>0&&intervals[i-1].to<s.from))continue;
-        const knownFrom=Math.max(at,first.from),knownUntil=Math.min(end,intervals.at(-1)!.to);
-        const nextSemantics=semanticsOf(first.row),value=plottedAmount(first.row);
-        const extra:MeterCellExtra={knownFrom,knownUntil,segment:first.segment,open:knownFrom===at?value:null};
+        const last=intervals.at(-1)!;
+        if(intervals.some((s,i)=>!sameCapSemantics(s.row,last.row)||i>0&&intervals[i-1].to<s.from))continue;
+        let first=intervals.length-1;
+        while(first>0&&intervals[first-1].row.amount===last.row.amount)first--;
+        const knownFrom=Math.max(at,intervals[first].from),knownUntil=Math.min(end,last.to);
+        const nextSemantics=semanticsOf(last.row),value=plottedAmount(last.row);
+        const extra:MeterCellExtra={knownFrom,knownUntil,segment:last.segment,open:knownFrom===at?value:null};
         if(JSON.stringify(nextSemantics)!==JSON.stringify(semantics))extra.semantics=nextSemantics;
         semantics=nextSemantics;
         series.cells.push([index,value,'0','0',coverage(group.spans,knownFrom,knownUntil),extra]);
@@ -132,7 +135,7 @@ export function meterCells(group: MeterGroup, unit: Unit, from: number, to: numb
   }
   return output;
 }
-const sameCap=(a:Reading,b:Reading)=>a.amount===b.amount&&JSON.stringify(semanticsOf(a))===JSON.stringify(semanticsOf(b));
+const sameCapSemantics=(a:Reading,b:Reading)=>JSON.stringify(semanticsOf(a))===JSON.stringify(semanticsOf(b));
 const sumSteps = (steps: readonly ExceptionalStep[]) => steps.reduce((sum,s)=>sum+BigInt(s.amount),0n).toString();
 
 /** Whole cells and exceptional intervals compose identically, regardless of tile partition. */

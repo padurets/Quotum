@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {Store} from '../store/store.js';
-import {composeMeters, selectionOf, type MeterSeriesCells} from '../domain/meterHistory.js';
+import {composeMeters, meterCells, selectionOf, type MeterSeriesCells} from '../domain/meterHistory.js';
 import type {Meter} from '../domain/meters.js';
 
 const meter=(id:string,at:number,amount:string,extra:Partial<Meter>={}):Meter=>({id,kind:'counter',unit:'USD',amount,at,staleAfterMs:300_000,stale:false,limit:null,resetAt:null,minutes:null,scope:null,label:null,...extra});
@@ -31,6 +31,19 @@ test('cap history carries its actual historical remaining and limit after the cu
   assert.equal(result.points.some(p=>p.at===60_000),false,'a coalesced cell across different allowances is unknown');
   assert.equal(result.spent,'0');
   store.close();
+});
+
+test('a cap changing usage within one period keeps the last value only inside its own interval',()=>{
+  const readings=[meter('quota:credit:5h',0,'800000000',{kind:'cap',unit:'credits:zai',limit:'2000000000',resetAt:null,minutes:300,scope:'five_hour'}),meter('quota:credit:5h',30000,'900000000',{kind:'cap',unit:'credits:zai',limit:'2000000000',resetAt:null,minutes:300,scope:'five_hour'})].map(r=>({...r,previousAt:null}));
+  const cells=meterCells({source:'zai:fixture',meter:'quota:credit:5h',readings,spans:[{from:0,to:30000,staleAfterMs:204000}]},'credits:zai',0,60000,60000)[0].cells;
+  assert.equal(cells.length,1);assert.equal(cells[0][1],'1100000000');
+  assert.equal(cells[0][5]!.knownFrom,30000);assert.equal(cells[0][5]!.knownUntil,60000);
+});
+
+test('a cap cannot borrow the freshness of a preceding different meter identity',()=>{
+  const readings=[meter('changing',0,'1000000'),meter('changing',30000,'1000000',{kind:'cap',unit:'credits:zai',limit:'2000000',minutes:300,scope:'five_hour'})].map(r=>({...r,previousAt:null}));
+  const spans=[{from:0,to:0,staleAfterMs:300000},{from:30000,to:30000,staleAfterMs:60000}];
+  assert.deepEqual(meterCells({source:'fixture',meter:'changing',readings,spans},'credits:zai',120000,180000,60000),[]);
 });
 
 test('exceptional intervals survive cell and chunk partition and re-reading without double counting',()=>{
