@@ -62,7 +62,8 @@ export async function moneyView(cdp: Cdp, source: string, cappedSource: string, 
       button.click();
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       const series = document.querySelector('[data-series="${source} balance"]');
-      if (!series?.getAttribute('d')) throw new Error('money line disappeared');
+      const paths = series?.matches('path') ? [series] : Array.from(series?.querySelectorAll('path.series') || []);
+      if (!paths.some(path => path.getAttribute('d'))) throw new Error('money line disappeared');
       const box = series.getBBox(), height = series.ownerSVGElement.viewBox.baseVal.height;
       if (box.y < 0 || box.y + box.height > height) throw new Error('switching money view left the line outside its new scale');
     })()`);
