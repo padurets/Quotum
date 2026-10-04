@@ -204,6 +204,7 @@ async function main() {
     say('checking native continuous wheel and Shift-drag at 24h and 30d, CPU ×4');
     const panned = await panning(cdp);
     problems.push(...panned.problems);
+    say(`native panning: ${JSON.stringify({reports: panned.reports.map(report => ({period: report.period, frameP95Ms: round(percentile(report.frames, .95)), frameP99Ms: round(percentile(report.frames, .99)), inputP95Ms: round(percentile(report.latency, .95))})), problems: panned.problems})}`);
     say('checking controlled pan traffic over fixed Brotli HTTP, separately from native performance');
     const current = await ana.get<Snapshot>(`/api/overview?board=${encodeURIComponent(board)}`);
     const traffic = await historyTraffic(address.base, ana.cookie, board, current.sources.flatMap(source => source.windows.map(window => `${source.id} ${window.id}`)), browser);

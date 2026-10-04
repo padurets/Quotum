@@ -33,7 +33,7 @@ test('the owned proxy measures a real fixed-codec HTTP body without changing JSO
   } finally {await proxy.close(); await new Promise<void>(resolve => upstream.close(() => resolve()));}
 });
 
-import {HistoryBodies} from '../historyTrafficBrowser';
+import {HistoryBodies, historyScroll} from '../historyTrafficBrowser';
 import {readUnion} from '../historyTrafficBudget';
 
 test('the reference union respects fresh holes and the eight-tile API limit', () => {
@@ -96,4 +96,15 @@ test('a cutoff crossing is a retryable invalid cohort, while changed known metad
   stableHistory({...seed, now: 10_000}, seed, 60_000);
   assert.throws(() => stableHistory({...seed, now: 31_000}, seed, 60_000), HistoryCutChanged);
   assert.throws(() => stableHistory({...seed, known: {work: 1, sources: {s: 0}}}, seed, 60_000), error => !(error instanceof HistoryCutChanged));
+});
+
+test('native history gestures use CDP integer speed while retaining the requested movement and cadence', () => {
+  for (const fraction of [.5, .04]) {
+    const geometry = {x: 250, y: 200, width: 1001}, distance = geometry.width * fraction;
+    const gesture = historyScroll(geometry, fraction, distance);
+    assert.ok(Number.isInteger(gesture.speed));
+    assert.ok(Math.abs(distance / gesture.speed - .75) < .01);
+    assert.equal(gesture.xDistance, distance); assert.equal(gesture.gestureSourceType, 'mouse'); assert.equal(gesture.preventFling, true);
+  }
+  assert.throws(() => historyScroll({x: 0, y: 0, width: NaN}, .5, 10));
 });

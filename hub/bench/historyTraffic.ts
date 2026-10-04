@@ -115,9 +115,10 @@ export async function historyTraffic(upstream: string, cookie: string, board: st
           assert.equal(attempts.length, warmStart, 'warm return and repeat must start zero GETs');
           const report = {name, attempts: attempts.filter(r => r.phase.endsWith('/cold')).length, maxAttempts: fraction === .04 ? 2 : future ? 7 : 5, ...totals, referenceDecoded, referenceEncoded, ratios: fraction === .5, warmAttempts: attempts.length - warmStart, bridgeCells: bridges.size, optionalUnvisitedCells: [...requested].filter(at => !visited.has(at) && !bridges.has(at)).length, peakFlights, freshOverlap, ownershipOverlap, series: final.series.length, range: final.range, requests: attempts.filter(r => r.phase.endsWith('/cold'))};
           reports.push(report); problems.push(...trafficProblems(report)); unsubscribe();
+          console.error(`bench: ${name}: ${report.attempts} GETs, ${report.warmAttempts} warm GETs, decoded ratio ${report.decoded === null ? 'unknown' : report.decoded / referenceDecoded}, encoded ratio ${report.encodedUpper === null ? 'unknown' : report.encodedUpper / referenceEncoded}`);
           break;
         } catch (error) {
-          if (!(error instanceof HistoryCutChanged) || take === 3) throw error;
+          if (!(error instanceof HistoryCutChanged) || take === 3) throw new Error(`${name}: ${String(error)}`, {cause: error});
           invalidated.push({name, reason: error.message, attempts, bodies});
         } finally {store.close(); await Promise.allSettled([...pending]);}
       }

@@ -44,6 +44,12 @@ export class HistoryBodies {
   }
 }
 
+/** CDP's speed is an integer; keep the named cold gesture near 750 ms. */
+export function historyScroll(geometry: {x: number; y: number; width: number}, fraction: number, distance: number) {
+  if (![geometry.x, geometry.y, geometry.width, fraction, distance].every(Number.isFinite) || geometry.width <= 0 || fraction <= 0) throw new Error('invalid history gesture geometry');
+  return {x: geometry.x, y: geometry.y, xDistance: distance, yDistance: 0, speed: Math.max(1, Math.round(geometry.width * fraction / .75)), gestureSourceType: 'mouse', preventFling: true};
+}
+
 /** Separate tabs use the fixed-codec proxy; this never changes the native perf route. */
 export async function browserHistoryTraffic(browser: Browser, proxy: {url: string; transfers: Transfer[]; phase(value: string, latency?: number): void}, cookie: string, board: string) {
   const reports = [], invalidated = [], problems: string[] = [];
@@ -55,7 +61,7 @@ export async function browserHistoryTraffic(browser: Browser, proxy: {url: strin
         await cdp.send('Network.enable'); await cdp.send('Page.enable'); await cdp.send('Performance.enable');
         await cdp.send('Emulation.setDeviceMetricsOverride', {width: 1280, height: 900, deviceScaleFactor: 1, mobile: false});
         const split = cookie.indexOf('='); await cdp.send('Network.setCookie', {name: cookie.slice(0, split), value: cookie.slice(split + 1), url: proxy.url, httpOnly: true, sameSite: 'Lax'});
-        await cdp.send('Page.addScriptToEvaluateOnNewDocument', {source: `localStorage.setItem('quotum.prefs',JSON.stringify({range:${JSON.stringify(length === DAY ? '24h' : '30d')},horizon:'1d',lang:'en'}));`});
+        await cdp.send('Page.addScriptToEvaluateOnNewDocument', {source: `localStorage.setItem('quotum.locale','en');localStorage.setItem('quotum.prefs',JSON.stringify({range:${JSON.stringify(length === DAY ? '24h' : '30d')},horizon:'1d'}));`});
         await cdp.send('Page.navigate', {url: proxy.url});
         const settled = async () => {
           const deadline = Date.now() + 20_000;
@@ -83,7 +89,7 @@ export async function browserHistoryTraffic(browser: Browser, proxy: {url: strin
           const frame=()=>{if(!p.running)return;if(root.dataset.panEnd){const token=root.dataset.panToken;if(p.tokens.at(-1)!==token)p.tokens.push(token);const end=Number(root.dataset.panEnd),origin=Number(root.dataset.panOrigin);if(p.poses.at(-1)?.end!==end)p.poses.push({end,origin});}p.raf=requestAnimationFrame(frame);};p.raf=requestAnimationFrame(frame);
         })()`);
         const phase = `${name}/cold`; bodies.phase = phase; proxy.phase(phase, latency);
-        const scroll = (distance: number) => cdp.send('Input.synthesizeScrollGesture', {x: geometry.x, y: geometry.y, xDistance: distance, yDistance: 0, speed: Math.max(1, geometry.width * fraction / .75), gestureSourceType: 'mouse', preventFling: true});
+        const scroll = (distance: number) => cdp.send('Input.synthesizeScrollGesture', historyScroll(geometry, fraction, distance));
         await scroll(geometry.width * fraction); await settled();
         const pose = await cdp.evaluate<{tokens: string[]; poses: {end: number; origin: number}[]; pushes: number; from: number; to: number}>('({tokens:__historyTraffic.tokens,poses:__historyTraffic.poses,pushes:__historyTraffic.pushes,from:Number(new URLSearchParams(location.search).get("from")),to:Number(new URLSearchParams(location.search).get("to"))})');
         assert.equal(pose.tokens.length, 1); assert.equal(pose.pushes, 1); assert.ok(pose.poses.length > 1 && pose.from > 0);
@@ -113,9 +119,10 @@ export async function browserHistoryTraffic(browser: Browser, proxy: {url: strin
         const metrics = await cdp.send<{metrics: {name: string; value: number}[]}>('Performance.getMetrics');
         const report = {name, attempts: cold.length, maxAttempts: fraction === .04 ? 2 : future ? 7 : 5, ...totals, referenceDecoded, referenceEncoded, ratios: fraction === .5, warmAttempts: warm.length, optionalUnvisitedCells: optional.length, series: geometry.series, movement: {tokens: pose.tokens.length, samples: pose.poses.length, pushes: pose.pushes, from: pose.from, to: pose.to}, heapBytes: metrics.metrics.find(m => m.name === 'JSHeapUsedSize')?.value};
         reports.push(report); problems.push(...trafficProblems(report));
+        console.error(`bench: ${name}: ${cold.length} GETs, ${warm.length} warm GETs, decoded ratio ${report.decoded === null ? 'unknown' : report.decoded / referenceDecoded}, encoded ratio ${report.encodedUpper === null ? 'unknown' : report.encodedUpper / referenceEncoded}`);
         break;
       } catch (error) {
-        if (!(error instanceof HistoryCutChanged) || take === 3) throw error;
+        if (!(error instanceof HistoryCutChanged) || take === 3) throw new Error(`${name}: ${String(error)}`, {cause: error});
         invalidated.push({name, reason: error.message, reads: bodies.reads.map(read => ({phase: read.phase, from: read.from, to: read.to, count: read.count}))});
       } finally {await cdp.evaluate('(()=>{const p=window.__historyTraffic;if(p){p.running=false;cancelAnimationFrame(p.raf);history.pushState=p.originalPush;}})()').catch(() => {}); await tab.close();}
     }
