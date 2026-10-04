@@ -538,6 +538,20 @@ export class Store {
     for (const [source, start] of credited) tell(this.observer, o => o.history(source, start));
   }
 
+  /**
+   * How long each of a device's sessions `keys` worked, as credited so far and as long as
+   * its work is kept; 0 for one never credited. A key and a session's stretches are found
+   * by their indexes, so a board's live lists read this as they change.
+   */
+  worked(device: string, keys: WorkKey[]): number[] {
+    if (!keys.length) return [];
+    const read = this.db.prepare(
+      'SELECT COALESCE(sum(w.to_at - w.from_at), 0) AS ms FROM agent_sessions s JOIN agent_work w ON w.session_id = s.id' +
+        ' WHERE s.device_id = ? AND s.source_id = ? AND s.started_at = ? AND s.origin = ? AND s.project = ? AND s.folder = ? AND s.ordinal = ?',
+    );
+    return keys.map(({source, origin, startedAt, project, folder, ordinal}) => (read.get(device, source, startedAt, origin, project, folder, ordinal) as {ms: number}).ms);
+  }
+
   /** Every stretch agents worked within [from, to), of the given subscriptions or all, projects named as their people corrected them. */
   agentWork(from: number, to: number, sources?: string[]): Stretch[] {
     // A month of a busy board is tens of thousands of rows, read as arrays: half the time of objects. The

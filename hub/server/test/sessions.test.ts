@@ -360,3 +360,25 @@ test("a board shows the sessions of those on it who measure the subscription, ea
   assert.deepEqual(live.of('codex:1', [ann, bob], start).map(s => s.device.id), [server]);
   store.close();
 });
+
+test('a board tells how long each running agent has worked, as its lists credited it, twins each their own', () => {
+  const {store, live, ann, laptop} = setup();
+  const quotum = session(laptop, {project: 'quotum'});
+  const docs = session(laptop, {project: 'docs', working: false});
+  const worked = (at: number) => live.of('codex:1', [ann], at).map(s => [s.project, s.workedMs / minute]);
+  live.report(laptop, ann, [quotum, docs], start);
+  assert.deepEqual(worked(start), [['quotum', 0], ['docs', 0]], 'nothing credited before a second list');
+  live.report(laptop, ann, [quotum, docs], start + 2 * minute);
+  assert.deepEqual(worked(start + 2 * minute), [['quotum', 2], ['docs', 0]]);
+  // Two agents alike in everything work for a minute, then the first rests while the second goes on.
+  const twin = session(laptop, {project: 'twin'});
+  const resting = {...twin, working: false};
+  live.report(laptop, ann, [twin, twin], start + 3 * minute);
+  live.report(laptop, ann, [resting, twin], start + 4 * minute);
+  live.report(laptop, ann, [resting, twin], start + 6 * minute);
+  assert.deepEqual(worked(start + 6 * minute), [['twin', 1], ['twin', 3]], 'the one still working keeps its time apart');
+  // Over again, the time it worked before is still its own.
+  live.report(laptop, ann, [quotum, docs], start + 7 * minute);
+  assert.deepEqual(worked(start + 7 * minute), [['quotum', 3], ['docs', 0]]);
+  store.close();
+});

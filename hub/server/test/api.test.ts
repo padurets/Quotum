@@ -917,7 +917,7 @@ test('agents report the coding agents running on their machines; the cards of th
   assert.deepEqual([first.origin, first.project, first.folder, first.working, first.device.name, first.startedAt], ['terminal', 'quotum', null, true, 'build-01', Date.parse(started)]);
   assert.equal(second.lastWorkedAt, null, 'an older agent omits the date');
   assert.equal(second.origin, 'editor', 'without an account: the subscription this machine delivers');
-  assert.deepEqual(Object.keys(first).sort(), ['device', 'folder', 'lastWorkedAt', 'origin', 'project', 'startedAt', 'working'], 'nothing of how the hub tells sessions apart');
+  assert.deepEqual(Object.keys(first).sort(), ['device', 'folder', 'lastWorkedAt', 'origin', 'project', 'startedAt', 'workedMs', 'working'], 'nothing of how the hub tells sessions apart');
   assert.equal((await report([])).status, 200);
   assert.deepEqual(await shown(), [], 'an empty list: none runs');
   const long = await report([{...codex, project: 'x'.repeat(300), folder: 'y'.repeat(300)}]);

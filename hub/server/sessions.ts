@@ -19,7 +19,7 @@ export type LiveSession = {
  * A running coding agent as a board shows it, on the card of the subscription it spends:
  * its project as its person named it («My machines» → «Projects»), and its folder where
  * that is another (a worktree, a folder inside the repository), so agents of one project
- * stay apart.
+ * stay apart; and how long it has worked, as credited by its machine's lists so far.
  */
 export type BoardSession = {
   device: {id: string; name: string};
@@ -29,6 +29,7 @@ export type BoardSession = {
   startedAt: number;
   lastWorkedAt: number | null;
   working: boolean;
+  workedMs: number;
 };
 
 /** A machine's sessions, by the subscription they spend, as its agent last reported them, and when. */
@@ -44,6 +45,30 @@ export const KEEP_MS = 5 * 60_000;
  * that measurement can stretch a gap past this; the few seconds over are not counted.
  */
 export const CREDIT_MS = 200_000;
+
+/**
+ * What each of a machine's sessions is credited under, by subscription, in the list's
+ * order (Store.creditWork). Sessions alike in everything (started together by a script)
+ * are told apart by their place among them, idle or not, so one that stops working does
+ * not hand its time to its twin.
+ */
+function keysOf(machine: Machine): Map<string, WorkKey[]> {
+  const alike = new Map<string, number>();
+  const keys = new Map<string, WorkKey[]>();
+  for (const [source, sessions] of machine.sources) {
+    keys.set(
+      source,
+      sessions.map(session => {
+        const key = {source, origin: session.origin, startedAt: session.sentStartedAt, project: session.project ?? '', folder: session.folder ?? ''};
+        const id = JSON.stringify(key);
+        const ordinal = alike.get(id) ?? 0;
+        alike.set(id, ordinal + 1);
+        return {...key, ordinal};
+      }),
+    );
+  }
+  return keys;
+}
 
 /**
  * The coding agents running on people's machines right now (spec: Reporting running
@@ -89,19 +114,22 @@ export class Sessions {
 
   /**
    * The sessions running on a subscription on the machines of `people` (those on the
-   * board read who measure it, whoever brought it there), by machine name and then by age.
+   * board read who measure it, whoever brought it there), by machine name and then by age,
+   * each with how long it has worked as credited so far: up to its machine's latest list.
    */
   of(source: string, people: string[], now: number): BoardSession[] {
     const found: BoardSession[] = [];
-    for (const machine of this.machines.values()) {
+    for (const [id, machine] of this.machines) {
       if (now - machine.at > KEEP_MS || !people.includes(machine.user)) continue;
       const sessions = machine.sources.get(source) ?? [];
-      const names = sessions.length ? this.store.projectNames(machine.user) : new Map<string, string>();
-      for (const {device, origin, project, folder, startedAt, lastWorkedAt, working} of sessions) {
+      if (!sessions.length) continue;
+      const names = this.store.projectNames(machine.user);
+      const worked = this.store.worked(id, keysOf(machine).get(source)!);
+      sessions.forEach(({device, origin, project, folder, startedAt, lastWorkedAt, working}, i) => {
         const shown = project === null ? null : (names.get(project) ?? project);
         // The agent leaves out a folder that is its project; renamed, that name tells the folder.
-        found.push({device, origin, project: shown, folder: folder ?? (shown !== project ? project : null), startedAt, lastWorkedAt, working});
-      }
+        found.push({device, origin, project: shown, folder: folder ?? (shown !== project ? project : null), startedAt, lastWorkedAt, working, workedMs: worked[i]});
+      });
     }
     return found.sort((a, b) => a.device.name.localeCompare(b.device.name) || a.device.id.localeCompare(b.device.id) || a.startedAt - b.startedAt);
   }
@@ -133,19 +161,8 @@ export class Sessions {
   private credit(device: string, machine: Machine, until: number) {
     const from = machine.at;
     if (until <= from) return;
-    const keys: WorkKey[] = [];
-    // Sessions alike in everything (started together by a script) are told apart by their place among them.
-    const alike = new Map<string, number>();
-    for (const [source, sessions] of machine.sources) {
-      for (const session of sessions) {
-        if (!session.working) continue;
-        const key = {source, origin: session.origin, startedAt: session.sentStartedAt, project: session.project ?? '', folder: session.folder ?? ''};
-        const id = JSON.stringify(key);
-        const ordinal = alike.get(id) ?? 0;
-        alike.set(id, ordinal + 1);
-        keys.push({...key, ordinal});
-      }
-    }
-    this.store.creditWork(device, from, until, keys);
+    const keys = keysOf(machine);
+    const working = [...machine.sources].flatMap(([source, sessions]) => sessions.flatMap((session, i) => (session.working ? [keys.get(source)![i]] : [])));
+    this.store.creditWork(device, from, until, working);
   }
 }

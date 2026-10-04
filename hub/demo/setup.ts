@@ -246,10 +246,10 @@ export function seedWork(store: Store, stand: Stand) {
     }
     for (const machine of machines(set)) {
       const device = (db.prepare('SELECT id FROM devices WHERE user_id = ? AND machine_id = ?').get(stand.people.get(personOf(set, machine))!.id, machineInfo(machine).id) as {id: string}).id;
-      // Its agents that ever work, each with the names the hub files it under, read as the hub reads a list.
+      // Its agents, each with the names the hub files it under, read as the hub reads a list.
       const agents = cards(set).flatMap(card =>
         (card.agents ?? [])
-          .filter(agent => agent.machine === machine.id && agent.works)
+          .filter(agent => agent.machine === machine.id)
           .map(agent => {
             const [told] = parseSessions({
               version: 1,
@@ -264,14 +264,15 @@ export function seedWork(store: Store, stand: Stand) {
       const open = new Map<string, {key: WorkKey; from: number; to: number}>();
       const credit = (stretch: {key: WorkKey; from: number; to: number}) => store.creditWork(device, start + stretch.from, start + stretch.to, [stretch.key]);
       for (let t = since; t < 0; t += MIN) {
-        // Agents alike in all of it are told apart by their place among those working, as the hub tells them.
+        // Agents alike in all of it are told apart by their place in the machine's list, working or not, as the hub tells them.
         const alike = new Map<string, number>();
         const working = new Set<string>();
         for (const {agent, key} of awake(machine, t) ? agents : []) {
-          if (agent.since > t || (agent.until !== undefined && t >= agent.until) || !isOn(agent.works!, t)) continue;
+          if (agent.since > t || (agent.until !== undefined && t >= agent.until)) continue;
           const plain = JSON.stringify(key);
           const ordinal = alike.get(plain) ?? 0;
           alike.set(plain, ordinal + 1);
+          if (!agent.works || !isOn(agent.works, t)) continue;
           const id = `${plain} ${ordinal}`;
           working.add(id);
           const stretch = open.get(id);
