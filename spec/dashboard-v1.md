@@ -334,7 +334,7 @@ range wholly beyond its current grid cut returns to the chosen period.
 The page keeps tiles of its open board with a bounded memory budget, preserving its
 current frame. Cold reading starts at the frame's first cell; whole inner tiles remain
 cacheable. The page tracks each tile's read interval, so its omitted head stays unknown.
-Entering that head fills the tile once for subsequent frames. A `history` event makes
+Ordinary discrete navigation fills that head once for subsequent frames. A `history` event makes
 cells from `since` stale and reads only what the frame needs. Reconnect, a changed lineup or `since: 0` makes all
 tiles stale. Answers of another `run` are discarded. The shown frame stays undimmed
 while its own cells refresh; an ordinary change of period keeps the previous one dimmed
@@ -342,9 +342,16 @@ until all of its cells have been read. Continuous panning has a separate partial
 read cells stay visible, unread intervals are empty, and an activity bar is drawn only
 when all its contributing whole cells have been read. The previous complete answer
 continues to supply the table and totals until the final range is complete. Panning
-prioritizes visible missing cells and reads at most one adjacent frame in its direction,
-with at most two requests and eight tiles per request; speculative reading ends with
-the gesture. Cells beyond the hub's cut remain known empty until news arrives. Time
+reads contiguous missing or stale cells immediately, from the nearest unread edge,
+with at most two flights and eight tiles per request. It never crosses fresh cells
+or a tile owned by another flight. A visible miss may extend that same batch by
+min(60, ceil(history length / cell / 4)) nearby whole cells in its direction. No
+miss means no new speculative read. Unvisited optional cells remain charged after
+cancellation or reversal. A disjoint jump within a held tile reads only the minimum
+unknown or stale bridge needed to preserve its connected read interval and fresh
+prefix. That bridge is separate from the optional buffer and smaller than one tile;
+an empty tile has no bridge. Final range completion uses the same batches without
+a buffer, and purely speculative work ends with the gesture. Cells beyond the hub's cut remain known empty until news arrives. Time
 alone never reads history. Numerical projection and response staging run in cancellable
 slices. Tile data and read boundaries publish atomically for a complete response;
 waiting raw answers share the two-owner processing bound. The graphs keep their

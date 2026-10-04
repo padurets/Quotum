@@ -343,6 +343,27 @@ focus in the card's menu and fails otherwise. It needs Chrome:
 one already running. CI runs it on every push; run it when you change the dashboard
 and have Chrome.
 
+The same run checks pan traffic separately from the native frame budget, using the
+dense 75-day fixture and both charts at 24h and 30d. Controlled production-loader
+replays and native browser gestures use 0, 100 and 400 ms answer delays. Cached
+return and repeat must start no history GETs; half-width movements allow at most
+seven attempts from the history chart and five from activity, and a 4% movement
+allows two. Seed and independent reference reads are excluded. A benchmark-owned
+loopback proxy uses fixed Brotli settings (quality 4, text mode, window 22), without
+adding production compression. Decoded JSON may reach 1.5 times, and encoded body
+bytes twice, the reference for the exact missing union and permitted buffer or
+within-tile bridge. The report separates complete bodies, partial byte bounds and
+unknown transfers; headers are never counted as body bytes. Independent whole-cell
+composition also checks series, activity and events. Each history attempt gets its
+fixture identity before HTTP starts, so aborts before response headers cannot borrow
+another attempt's byte proof. Separate real HTTP and native Shift-wheel cohorts
+exercise cancellation before headers, after delivery and reversal with a repeated
+query. Controlled production staging also verifies a delivered answer discarded
+before publication; native transport observations do not infer staging disposition.
+Reports retain attempted/completed/failed/aborted counts and uncertain body bounds.
+Proxy sockets and traffic tabs
+close before the benchmark stops its own demo.
+
 ## Pull requests
 
 - **One task, one pull request.** A pull request takes one issue (or one fix) to `main`

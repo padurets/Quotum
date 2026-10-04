@@ -1,5 +1,5 @@
 import {useSyncExternalStore} from 'react';
-import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, cellStart, composePrepared, targetOf, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer, type HistoryMeta, type Target} from '../../server/domain/history';
+import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, TILE_CELLS, cellStart, composePrepared, targetOf, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer, type HistoryMeta, type Target} from '../../server/domain/history';
 import {page, useHistoryStart, type PageEvent, type PageState} from './board';
 import {hubNow} from './clock';
 import {HistoryTile} from './historyTiles';
@@ -19,8 +19,6 @@ import {prepare, preparations, type Preparation, type Preparations} from './prep
 const SETTLE_MS = 300;
 const RETRY_MS = 15_000;
 const STORED_BYTES = 15 * 1024 * 1024;
-// A pan merges one tile per flight so input never waits behind a whole frame's decode.
-const PAN_READ_TILES = 1;
 
 export type HistoryEnv = {
   read(board: string, cell: number, from: number, to: number, signal?: AbortSignal, meters?: MeterSelection): Promise<HistoryAnswer>;
@@ -68,6 +66,11 @@ export class HistoryStore {
   private state: Shown = {history: null, loading: false};
   private historyLimit=false;
   private interest: PlotInterest | null = null;
+  private panReads = false;
+  private cohort = '';
+  // Only unvisited optional cells live here; aborting transport does not refund them.
+  private readonly optional = new Set<number>();
+  private inheritedExtra = false;
   private plotPending = false;
   private plot: PlotBuffer | null = null;
   private strip: Target | null = null;
@@ -114,6 +117,9 @@ export class HistoryStore {
     this.grids.clear();
     this.abortFlights();
     this.interest = null;
+    this.panReads = false;
+    this.cohort = '';
+    this.optional.clear();
     this.plotPending = false;
     this.strip = null;
     this.plotChunks.clear();
@@ -188,6 +194,7 @@ export class HistoryStore {
     this.period = period;
     this.historyLimit=false;
     this.selected = selected;
+    if (!this.interest) this.panReads = false;
     this.needsCompose = true;
     this.reconsiderResponses();
     this.clear('retry');
@@ -208,10 +215,18 @@ export class HistoryStore {
   pan(interest: PlotInterest) {
     const previous = this.interest;
     this.interest = interest;
-    this.reconsiderResponses();
+    this.panReads = true;
     this.plotPending = true;
     const next = this.plotTarget();
     const cell = next.cell;
+    const cohort = `${interest.token}:${this.epoch}:${cell}`;
+    if (this.cohort !== cohort) {
+      this.cohort = cohort;
+      this.optional.clear();
+      this.inheritedExtra = [...this.flights].some(f => f.cell === cell && (f.from < next.k0 * cell || f.to > (next.k1 + 1) * cell));
+    }
+    for (const at of this.optional) if (at >= next.k0 * cell && at <= next.k1 * cell) this.optional.delete(at);
+    this.reconsiderResponses();
     if (!previous || previous.token !== interest.token || previous.direction !== interest.direction || Math.floor(previous.from / cell) !== next.k0 || Math.ceil(previous.to / cell) - 1 !== next.k1) {
       this.aheadStopped = false;
       this.clear('settle');
@@ -223,8 +238,15 @@ export class HistoryStore {
 
   endPan(commit: boolean) {
     this.interest = null;
+    this.panReads = commit;
+    this.cohort = '';
+    this.optional.clear();
     this.reconsiderResponses();
-    for (const flight of [...this.flights]) if (flight.role === 'ahead') this.abort(flight);
+    const target = this.target();
+    for (const flight of [...this.flights]) {
+      if (flight.epoch !== this.epoch || flight.cell !== target.cell || flight.to <= target.k0 * target.cell || flight.from > target.k1 * target.cell) this.abort(flight);
+      else flight.role = 'visible';
+    }
     if (!commit) {
       this.plotPending = false;
       this.strip = null;
@@ -241,6 +263,9 @@ export class HistoryStore {
   private invalidate() {
     this.cancelProjection();
     this.epoch++;
+    this.cohort = this.interest ? `${this.interest.token}:${this.epoch}:${this.plotTarget().cell}` : '';
+    this.optional.clear();
+    this.inheritedExtra = false;
     this.cutTo = null;
     this.metaAt = null;
     this.clear('retry');
@@ -330,12 +355,13 @@ export class HistoryStore {
     }
     if (this.needsCompose && this.meta && this.full(target)) this.prepareCompose(target);
     if (this.plotPending) this.publishPlot();
-    if (this.plotPending) {
+    if (this.panReads) {
       for (const flight of [...this.flights]) {
         if (flight.cell !== target.cell || flight.to <= target.k0 * target.cell || flight.from > target.k1 * target.cell) this.abort(flight);
         else flight.role = 'visible';
       }
       this.readMissing(target, 'visible');
+      if (!this.bad(target).length && !this.flights.size) this.panReads = false;
       return;
     }
     if (this.timers.has('settle') || this.timers.has('retry')) return;
@@ -431,18 +457,25 @@ export class HistoryStore {
 
   private aheadTarget(visible: Target): Target {
     const direction = this.interest!.direction;
+    const cells = this.bufferCells(visible);
     const ahead = {...visible,
-      k0: direction < 0 ? visible.k0 - Math.ceil(visible.length / visible.cell) : visible.k1 + 1,
-      k1: direction < 0 ? visible.k0 - 1 : visible.k1 + Math.ceil(visible.length / visible.cell)};
+      k0: direction < 0 ? visible.k0 - cells : visible.k1 + 1,
+      k1: direction < 0 ? visible.k0 - 1 : visible.k1 + cells};
     ahead.k0 = Math.max(ahead.k0, Math.floor(Math.max(this.meta?.historyStart ?? 0, this.env.now() - 90 * 86_400_000 + 3_600_000) / ahead.cell));
     ahead.k1 = Math.min(ahead.k1, Math.floor((Math.max(this.env.now(), this.meta?.now ?? 0) + CLOCK_TOLERANCE_MS) / ahead.cell));
     return ahead;
   }
 
+  private bufferCells(target: Target) {return Math.min(TILE_CELLS, Math.ceil(target.length / target.cell / 4));}
+
+  private optionalOverlap(flight: Flight, visible: Target) {
+    if (!this.interest?.direction || this.aheadStopped || flight.cell !== visible.cell) return false;
+    const ahead = this.aheadTarget(visible);
+    return [...this.optional].some(at => at >= ahead.k0 * ahead.cell && at <= ahead.k1 * ahead.cell && at >= flight.from && at < flight.to);
+  }
+
   private pumpPan() {
     const visible = this.plotTarget();
-    const direction = this.interest!.direction;
-    const ahead = this.aheadTarget(visible);
     const overlaps = (f: Flight, t: Target) => f.cell === t.cell && f.to > t.k0 * t.cell && f.from <= t.k1 * t.cell;
     const flights = [...this.flights].sort((a, b) => {
       const span = (f: Flight) => f.cell === visible.cell ? Math.max(0, Math.min(f.to, (visible.k1 + 1) * visible.cell) - Math.max(f.from, visible.k0 * visible.cell)) : 0;
@@ -454,11 +487,10 @@ export class HistoryStore {
       const sameTile = (f: Flight) => f.cell === flight.cell && tileOf(f.from, f.cell) <= tileOf(flight.to - 1, flight.cell) && tileOf(flight.from, flight.cell) <= tileOf(f.to - 1, f.cell);
       // Ordinary navigation can have more pending reads. Entering pan gives those
       // reads the same slots and tile ownership as reads started by the gesture.
-      if (flight.epoch !== this.epoch || (!overlaps(flight, visible) && (!direction || !overlaps(flight, ahead))) || kept.some(f => f.role === role || sameTile(f))) this.abort(flight);
+      if (flight.epoch !== this.epoch || (!overlaps(flight, visible) && !this.optionalOverlap(flight, visible)) || kept.some(f => f.role === role || sameTile(f))) this.abort(flight);
       else {flight.role = role; kept.push(flight);}
     }
     this.readMissing(visible, 'visible');
-    if (direction && !this.aheadStopped && this.estimatedBytes < this.budget) this.readMissing(ahead, 'ahead');
   }
 
   private readMissing(target: Target, role: Flight['role']) {
@@ -467,18 +499,41 @@ export class HistoryStore {
     const bad = this.bad(target);
     // Serialize writes to a tile, including disjoint slices: writeSeq belongs to a tile.
     const blocked = (at: number) => [...this.flights].some(f => f.cell === target.cell && tileOf(at, target.cell) >= tileOf(f.from, f.cell) && tileOf(at, target.cell) <= tileOf(f.to - 1, f.cell));
+    const backwards = this.interest?.direction === -1;
+    if (backwards) bad.reverse();
     const at = bad.find(at => !blocked(at));
     if (at === undefined) return;
-    const first = this.tile(at, target.cell);
-    const from = first.readTo === first.readFrom ? at : at < first.readFrom ? first.from : first.validTo;
-    let last = at;
-    const maxTiles = this.plotPending ? PAN_READ_TILES : MAX_READ_TILES;
+    let from = at, to = at + target.cell, last = at;
     for (const next of bad) {
-      if (next <= at) continue;
-      if (next > last + target.cell || tileOf(next, target.cell) - tileOf(from, target.cell) >= maxTiles || blocked(next)) break;
+      if (backwards ? next >= at : next <= at) continue;
+      if (Math.abs(next - last) !== target.cell || Math.abs(tileOf(next, target.cell) - tileOf(at, target.cell)) >= MAX_READ_TILES || blocked(next)) break;
+      from = Math.min(from, next); to = Math.max(to, next + target.cell);
       last = next;
     }
-    const to = Math.min(tileEnd(tileOf(last, target.cell), target.cell), cellStart(Math.max(this.env.now(), this.meta?.now ?? 0), target.cell) + 2 * target.cell);
+    const first = this.tile(from, target.cell), end = this.tile(to - target.cell, target.cell);
+    // A skipped part of a held tile must connect to its existing fresh prefix.
+    // Empty tiles have no unseen head to fill, and fresh cells are never crossed.
+    if (first.readTo > first.readFrom && from >= first.readFrom) from = Math.min(from, first.validTo);
+    if (end.readTo > end.readFrom && to < end.readFrom) to = end.readFrom;
+    if (this.interest?.direction && !this.aheadStopped && !this.inheritedExtra && this.estimatedBytes < this.budget) {
+      const direction = this.interest.direction;
+      const buffer = this.bufferCells(target);
+      const lower = Math.floor(Math.max(this.meta?.historyStart ?? 0, this.env.now() - 90 * 86_400_000 + 3_600_000) / target.cell) * target.cell;
+      const upper = this.cutTo ?? (Math.floor((Math.max(this.env.now(), this.meta?.now ?? 0) + CLOCK_TOLERANCE_MS) / target.cell) + 1) * target.cell;
+      for (let n = 0; n < buffer; n++) {
+        const extra = direction < 0 ? from - target.cell : to;
+        if (extra < lower || extra >= upper || blocked(extra) || tileOf(Math.max(to, extra + target.cell) - 1, target.cell) - tileOf(Math.min(from, extra), target.cell) >= MAX_READ_TILES) break;
+        const tile = this.grids.get(target.cell)?.get(tileOf(extra, target.cell));
+        if (tile && tile.readTo > tile.readFrom && (extra >= tile.readFrom && extra < tile.validTo || Math.min(tile.to, Math.max(to, extra + target.cell)) < tile.readFrom || Math.max(tile.from, Math.min(from, extra)) > tile.readTo)) break;
+        // A large foreground run may end before the viewport edge. Its extension
+        // is still necessary; only cells outside that viewport consume the buffer.
+        if (extra < target.k0 * target.cell || extra > target.k1 * target.cell) {
+          if (!this.optional.has(extra) && this.optional.size >= buffer) break;
+          this.optional.add(extra);
+        }
+        from = Math.min(from, extra); to = Math.max(to, extra + target.cell);
+      }
+    }
     if (to > from) this.read(target, from, to, role);
   }
 
@@ -500,10 +555,7 @@ export class HistoryStore {
     if (flight.controller.signal.aborted || flight.epoch !== this.epoch) return -1;
     const target = this.interest ? this.plotTarget() : this.target();
     if (flight.cell === target.cell && flight.to > target.k0 * target.cell && flight.from <= target.k1 * target.cell) return 2;
-    if (this.interest?.direction) {
-      const ahead = this.aheadTarget(target);
-      if (!this.aheadStopped && flight.cell === ahead.cell && flight.to > ahead.k0 * ahead.cell && flight.from <= ahead.k1 * ahead.cell) return 1;
-    }
+    if (this.optionalOverlap(flight, target)) return 1;
     return 0;
   }
 
@@ -529,10 +581,16 @@ export class HistoryStore {
   private startResponses() {
     for (const [flight, response] of this.responses) {
       if (response.started || response.keys.some(key => this.reservations.has(key))) continue;
+      // A late inherited slice cannot create a bounding interval across an unread
+      // gap. Discard the whole answer and let the planner connect the current base.
+      if (response.answer.chunks.some(chunk => {
+        const base = this.tile(chunk.from, flight.cell);
+        return base.writeSeq <= flight.seq && base.readTo > base.readFrom && (chunk.to < base.readFrom || chunk.from > base.readTo);
+      })) {this.abort(flight); this.schedule(); continue;}
       for (const key of response.keys) this.reservations.set(key, flight);
       response.started = true;
-      const pins = new Map<HistoryTile, {seq: number; staged: HistoryTile; chunks: Chunk[]}>();
-      const valid = () => this.responses.get(flight) === response && this.flights.has(flight) && !flight.controller.signal.aborted && flight.epoch === this.epoch && response.answer.run === this.run && response.keys.every(key => this.reservations.get(key) === flight) && [...pins].every(([base, pin]) => this.grids.get(base.cell)?.get(tileOf(base.from, base.cell)) === base && base.writeSeq === pin.seq);
+      const pins = new Map<HistoryTile, {seq: number; from: number; to: number; staged: HistoryTile; chunks: Chunk[]}>();
+      const valid = () => this.responses.get(flight) === response && this.flights.has(flight) && !flight.controller.signal.aborted && flight.epoch === this.epoch && response.answer.run === this.run && response.keys.every(key => this.reservations.get(key) === flight) && [...pins].every(([base, pin]) => this.grids.get(base.cell)?.get(tileOf(base.from, base.cell)) === base && base.writeSeq === pin.seq && base.readFrom === pin.from && base.readTo === pin.to);
       const work = function* (store: HistoryStore): Preparation<void> {
         let completed = false;
         try {
@@ -540,7 +598,7 @@ export class HistoryStore {
           const base = store.tile(chunk.from, flight.cell);
           if (base.writeSeq > flight.seq) continue;
           let pin = pins.get(base);
-          if (!pin) {pin = {seq: base.writeSeq, staged: base, chunks: []}; pins.set(base, pin);}
+          if (!pin) {pin = {seq: base.writeSeq, from: base.readFrom, to: base.readTo, staged: base, chunks: []}; pins.set(base, pin);}
           pin.staged = yield* pin.staged.staged(chunk, response.answer.known);
           pin.chunks.push(chunk); yield;
         }
@@ -593,7 +651,7 @@ export class HistoryStore {
     if(error instanceof ApiError&&error.code==='history_limit') {this.historyLimit=true;this.shown=null;this.publish();return;}
     if (this.interest) {
       const visible = this.plotTarget();
-      const needed = flight.role === 'visible' && flight.cell === visible.cell && this.bad(visible).some(at => at >= flight.from && at < flight.to);
+      const needed = flight.cell === visible.cell && this.bad(visible).some(at => at >= flight.from && at < flight.to);
       if (needed) this.timers.set('retry', this.env.setTimeout(() => {this.clear('retry'); this.schedule();}, RETRY_MS));
       else this.aheadStopped = true;
       this.schedule();

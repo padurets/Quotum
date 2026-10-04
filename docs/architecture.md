@@ -857,8 +857,16 @@ the draft crosses a cell; moving within a cell only translates the prepared artw
 and updates its clip. The final 160 ms fold stays inside SVG to preserve stroke widths.
 A temporary shared registry keeps plot and
 legend colors and dashes consistent, adding new groups with a pending total. Visible
-missing cells take priority over one adjacent frame of read-ahead, with at most one
-visible and one speculative request, eight tiles each. Writes to the same tile are
+missing cells are read immediately in contiguous batches of at most eight tiles.
+The nearest unread edge comes first, without crossing fresh cells or another tile
+owner. Only a visible miss can add a nearby buffer in the direction of movement:
+min(60, ceil(history length / cell / 4)) whole cells. A cached trajectory starts no
+new requests. Unvisited optional cells remain charged to that gesture after an
+abort or reversal; entering them restores the allowance. A disjoint jump inside a
+held tile also reads the minimum unknown or stale bridge to its retained interval,
+without rereading its fresh component. Empty tiles have no head to fill. At most
+one foreground and one purely speculative flight share the two slots; the final
+range uses the same batching without a buffer. Writes to the same tile are
 serialized, obsolete requests are aborted and speculative errors cannot drop the
 selection. The existing 15 MiB tile estimate protects the visible frame. On release,
 speculation stops and exact totals switch only after the final frame is complete.

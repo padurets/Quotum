@@ -20,6 +20,7 @@ import {frequencyKeys, moneyView} from './controls.js';
 import {panning} from './panning.js';
 import {panningSet} from './fixture.js';
 import {profilePanning} from './panningProfile.js';
+import {historyTraffic} from './historyTraffic.js';
 
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
@@ -207,11 +208,16 @@ async function main() {
     say('checking native continuous wheel and Shift-drag at 24h and 30d, CPU ×4');
     const panned = await panning(cdp);
     problems.push(...panned.problems);
+    say(`native panning: ${JSON.stringify({reports: panned.reports.map(report => ({period: report.period, frameP95Ms: round(percentile(report.frames, .95)), frameP99Ms: round(percentile(report.frames, .99)), inputP95Ms: round(percentile(report.latency, .95))})), problems: panned.problems})}`);
     // The diagnostic needs the quota charts, before the money phase replaces them.
     if (panned.problems.length) {
       try {await profilePanning(cdp);}
       catch (error) {say(`panning diagnostic failed: ${(error as Error).message}`);}
     }
+    say('checking controlled pan traffic over fixed Brotli HTTP, separately from native performance');
+    const current = await ana.get<Snapshot>(`/api/overview?board=${encodeURIComponent(board)}`);
+    const traffic = await historyTraffic(address.base, ana.cookie, board, current.sources.flatMap(source => source.windows.map(window => `${source.id} ${window.id}`)), browser);
+    problems.push(...traffic.problems);
     const monetary=await moneyPhase(demo,stand,cdp);
     problems.push(...monetary.problems);
     const result = {
@@ -242,6 +248,7 @@ async function main() {
       },
       work: worked.reports,
       money:monetary,
+      historyTraffic: traffic,
       panning: panned.reports.map(report => ({...report,
         frames: {count: report.frames.length, p95Ms: round(percentile(report.frames, .95)), p99Ms: round(percentile(report.frames, .99))},
         latency: {count: report.latency.length, p95Ms: round(percentile(report.latency, .95))},
