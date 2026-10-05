@@ -69,6 +69,17 @@ test('an explicitly lifetime cap keeps its confirmed absence of a reset',()=>{
   assert.ok(!html.includes('reset time unknown')&&!html.includes('—'));
 });
 
+test('a passed reset time waits for evidence instead of asserting that the window reset',()=>{
+  try {
+    for(const language of ['en','ru'] as const) {
+      setLocale(language);
+      const html=renderToStaticMarkup(createElement(context.exports.CapReset,{meter:{...card.meters![0],resetAt:now-1},short:false}));
+      assert.ok(html.includes(language==='en'?'reset time passed, waiting for a measurement':'время сброса прошло, ждём замер'));
+      assert.ok(!html.includes(language==='en'?'window reset':'окно сброшено'));
+    }
+  }finally{setLocale('en');}
+});
+
 test('credit selection defaults to both caps without adding them or manufacturing spending',()=>{
   const selected=moneySelection([card],[],{...DEFAULT_MONEY,unit:'credits:zai'});
   assert.deepEqual(selected.selection?.ids.map(([,id])=>id),['quota:credit:5h','quota:credit:week']);
@@ -87,6 +98,9 @@ test('cap readout requires its own fetched cell and exclusive producer bounds',(
     assert.equal(readout([line],[],at,60000,900000,900000).rows[0].value,null);
   }
   assert.equal(readout([line],[],120000,60000,900000,900000).rows[0].value,1200);
+  for(const [from,to,hover,value] of [[120000,150000,150000,null],[150000,180000,160000,1200],[150000,180000,140000,null]] as const) {
+    assert.equal(readout([{...line,capCells:[{at:120000,from,to,value:1200}]}],[],120000,60000,900000,900000,[],undefined,hover).rows[0].value,value);
+  }
   assert.equal(meterPointIn({...series,points:series.points.map(p=>({...p,knownUntil:150000}))},150000,60000),undefined);
   assert.equal(meterPointIn({...series,points:series.points.map(p=>({...p,knownFrom:undefined,knownUntil:undefined}))},120000,60000),undefined,'legacy cells do not grant carry-forward');
 });
@@ -99,4 +113,42 @@ test('the actual chart caps geometry starts and ends at producer bounds without 
   const js=ts.transpileModule('function* draw(){'+code+'}\nfor(const _ of draw()){}',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
   runInNewContext(js,context);
   assert.equal(context.paths[0].line,'M30.0,60.0L120.0,60.0M180.0,50.0L204.0,50.0');
+});
+
+test('actual pointer and chart tooltip retain time inside a cap cell through readout and formatting',()=>{
+  const axisSource=readFileSync(new URL('../components/timeAxis.ts',import.meta.url),'utf8');
+  const input=axisSource.slice(axisSource.indexOf('  const timeAt = '),axisSource.indexOf('  const onPointerDown = '));
+  let pointed:number|null=null;
+  const pointer={from:0,to:60000,width:60000,left:0,right:0,cellMs:60000,precise:true,visualGeometry:()=>({from:0,to:60000}),
+    setHover:(at:number|null)=>{pointed=at;},useEffect:()=>{},pointer:{current:null},panPointer:{current:null},
+    svg:{current:{getBoundingClientRect:()=>({left:0,width:60000})}},panning:null,folding:false,shifting:false,drag:null,holding:{current:null},
+    move:null as unknown as (event:{clientX:number;pointerId:number;pointerType:string})=>void};
+  runInNewContext(ts.transpileModule(input+'\nglobalThis.move=onPointerMove;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,pointer);
+  pointer.move({clientX:55000,pointerId:1,pointerType:'mouse'});
+  assert.equal(pointed,55000);
+  pointer.precise=false;pointer.move({clientX:55000,pointerId:1,pointerType:'mouse'});
+  assert.equal(pointed,0,'ordinary quota charts retain cell-based updates');
+
+  const chart=readFileSync(new URL('../components/Chart.tsx',import.meta.url),'utf8');
+  const head=chart.slice(chart.indexOf('  const model = '),chart.indexOf('  const columnCount = '));
+  const value=chart.split('\n').find(line=>line.includes('{columns.left && <strong>'))!.trim().slice(1,-1);
+  const position=chart.split('\n').find(line=>line.startsWith('  const hoverX = '))!;
+  for(const [from,until,expected] of [[0,45000,null],[30000,60000,1200]] as const) {
+    const row={...card.meters![0],amount:'800000000',at:from,resetAt:null,previousAt:null};
+    const series=composeMeters([{from:0,meterSeries:meterCells({source:card.id,meter:row.id,readings:[row],spans:[{from,to:from,staleAfterMs:204000,holdUntil:until}]},row.unit,0,60000,60000)}],60000,0,60000)[0];
+    const line={key:'cap',points:[],staleAfterMs:86400000,capCells:series.points.map(p=>({at:p.at,from:p.knownFrom!,to:p.knownUntil!,value:Number(p.value)/1e6}))};
+    const formatted:number[]=[];
+    const fixture={React,prepared:{ready:true,value:{basis:{from:0,to:60000},lines:[line],plans:[],forecasts:[],markers:[],paths:[],strip:null}},
+      valueAxis:{formatValue:(_key:string,_value:number,at:number)=>{formatted.push(at);return meterPointIn(series,at,60000)?.value;}},
+      currentClock:60000,desiredFrom:0,desiredNow:60000,desiredTo:60000,desiredLive:true,incomingReady:true,cellMs:60000,
+      width:60000,left:0,right:0,height:220,top:12,bottom:28,axis:{hover:0,hoverAt:55000,screenX:(at:number)=>at,commitDrawing:()=>{}},
+      useLayoutEffect:()=>{},niceTicks:()=>({ticks:[],daily:false}),readCell:readout,
+      present:null as unknown as ()=>{value:number|null;element:React.ReactNode;x:number}};
+    runInNewContext(ts.transpileModule(`function present(){${head}\n${position}\nconst row=rows[0];return {value:row.value,element:${value},x:hoverX};}\nglobalThis.present=present;`,{compilerOptions:{target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.React}}).outputText,fixture);
+    const result=fixture.present();
+    assert.equal(result.value,expected);assert.equal(result.x,55000);
+    const html=renderToStaticMarkup(result.element);
+    assert.equal(html,expected===null?'<strong></strong>':'<strong>1200000000</strong>');
+    assert.deepEqual(formatted,expected===null?[]:[55000]);
+  }
 });

@@ -232,7 +232,7 @@ export const ru = {
 
   'limit.paceHint': 'По плану сейчас должно остаться {value}%',
   'limit.resetsIn': 'сброс через {time}',
-  'limit.resetPassed': 'окно сброшено, ждём замер',
+  'limit.resetPassed': 'время сброса прошло, ждём замер',
   'limit.resetUnknown': 'время сброса неизвестно',
   'limit.ahead': 'опережает план · {value}%',
   'limit.aheadHint': 'Расход опережает план: лимит может закончиться раньше конца плана',

@@ -71,10 +71,10 @@ export type Columns = {left: boolean; plan: boolean; gap: boolean; forecast: boo
  * a line has no value of its own: its plan, and where its pace leads until its window
  * runs out, each a column only where the cell reads one.
  */
-export function readout(lines: Line[], plans: PlanLine[], cell: number, cellMs: number, now: number, to: number, forecasts: ForecastLine[] = [], coverage?: Coverage): {rows: ReadoutRow[]; columns: Columns} {
+export function readout(lines: Line[], plans: PlanLine[], cell: number, cellMs: number, now: number, to: number, forecasts: ForecastLine[] = [], coverage?: Coverage, pointedAt = cell): {rows: ReadoutRow[]; columns: Columns} {
   const at = Math.min(to, cell + cellMs / 2);
   const rows = lines.map(line => {
-    const value = (line.capCells?line.capCells.find(p=>p.at===cell&&cell>=p.from&&cell<p.to)?.value:valueIn(line.points, cell, now, Math.max(cellMs, line.staleAfterMs), coverage)) ?? null;
+    const value = (line.capCells?line.capCells.find(p=>p.at===cell&&pointedAt>=p.from&&pointedAt<p.to)?.value:valueIn(line.points, cell, now, Math.max(cellMs, line.staleAfterMs), coverage)) ?? null;
     const runs = plans.find(plan => plan.lines.includes(line.key))?.runs;
     const planned = runs ? valueAt(runs, at) : undefined;
     const left = value === null ? null : Math.round(value);

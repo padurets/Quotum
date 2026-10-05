@@ -77,18 +77,24 @@ export function meterCells(group: MeterGroup, unit: Unit, from: number, to: numb
       return (amount(credits.amount)-amount(r.amount)).toString();
     };
     const admitted:{from:number;to:number;row:Reading;segment:number}[]=[];
+    let capSpanIndex=0,admittedIndex=0,coverageIndex=0;
     if(kind==='cap')for(let i=0;i<group.readings.length;i++) {
       const row=group.readings[i];if(!matches(row))continue;
-      for(const span of group.spans) {
-        if(span.to<row.at&&span.from<row.at)continue;
-        const start=Math.max(row.at,span.from),end=Math.min(group.readings[i+1]?.at??Infinity,span.to+span.staleAfterMs+1,span.holdUntil??Infinity,row.resetAt??Infinity);
+      // Ordered spans meet each reading only where its value can still apply.
+      while(capSpanIndex<group.spans.length&&group.spans[capSpanIndex].to<row.at)capSpanIndex++;
+      const until=group.readings[i+1]?.at??Infinity;
+      for(let n=capSpanIndex;n<group.spans.length&&group.spans[n].from<until;n++) {
+        const span=group.spans[n];
+        const start=Math.max(row.at,span.from),end=Math.min(until,span.to+span.staleAfterMs+1,span.holdUntil??Infinity,row.resetAt??Infinity);
         if(end>start)admitted.push({from:start,to:end,row,segment:span.from});
       }
     }
     for (let at=from,index=0;at<to;at+=cell,index++) {
       const end=Math.min(at+cell,to);
       if(kind==='cap') {
-        const intervals=admitted.filter(s=>s.from<end&&s.to>at);
+        while(admittedIndex<admitted.length&&admitted[admittedIndex].to<=at)admittedIndex++;
+        const intervals:typeof admitted=[];
+        for(let n=admittedIndex;n<admitted.length&&admitted[n].from<end;n++)if(admitted[n].to>at)intervals.push(admitted[n]);
         if(!intervals.length)continue;
         // A coarse cell cannot assert one value across incompatible quota periods.
         const last=intervals.at(-1)!;
@@ -100,7 +106,10 @@ export function meterCells(group: MeterGroup, unit: Unit, from: number, to: numb
         const extra:MeterCellExtra={knownFrom,knownUntil,segment:last.segment,open:knownFrom===at?value:null};
         if(JSON.stringify(nextSemantics)!==JSON.stringify(semantics))extra.semantics=nextSemantics;
         semantics=nextSemantics;
-        series.cells.push([index,value,'0','0',coverage(group.spans,knownFrom,knownUntil),extra]);
+        while(coverageIndex<group.spans.length&&group.spans[coverageIndex].to<=knownFrom)coverageIndex++;
+        let coveredMs=0;
+        for(let n=coverageIndex;n<group.spans.length&&group.spans[n].from<knownUntil;n++)coveredMs+=Math.max(0,Math.min(knownUntil,group.spans[n].to)-Math.max(knownFrom,group.spans[n].from));
+        series.cells.push([index,value,'0','0',coveredMs,extra]);
         previousValue=value;continue;
       }
       const closing=predecessor(group.readings,end-1);

@@ -28,8 +28,8 @@ Access without expiry requires explicit consent. z.ai personal quota access uses
 same encryption boundary with a dedicated ordinary API key, which may also permit
 model requests; Quotum calls only its fixed quota GET. Its unknown expiry has separate
 consent. Account identity is owner-declared: replacement requires explicit same-account
-confirmation and cannot verify it through the quota interface. Revoke the key at OpenRouter when
-it is no longer needed. Key names and measured spending are shared board data;
+confirmation and cannot verify it through the quota interface. Revoke the key with its
+provider when it is no longer needed. Key names and measured spending are shared board data;
 management secrets, raw creator ids, masked labels and raw key hashes are not.
 
 On a server, configure `QUOTUM_SECRET_KEY` or `QUOTUM_SECRET_KEY_FILE`; without it,

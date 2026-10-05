@@ -46,6 +46,22 @@ test('a cap cannot borrow the freshness of a preceding different meter identity'
   assert.deepEqual(meterCells({source:'fixture',meter:'changing',readings,spans},'credits:zai',120000,180000,60000),[]);
 });
 
+test('a long sequence of cap recoveries preserves hard gaps without a readings-by-spans scan',()=>{
+  const count=4000,interval=240000;
+  let examined=0;
+  const readings=Array.from({length:count},(_,i)=>({...meter('quota:credit:5h',i*interval,String(i*1000),{kind:'cap',unit:'credits:zai',limit:'2000000000',minutes:300,scope:'five_hour'}),previousAt:null}));
+  const spans=readings.map(row=>({from:row.at,get to(){examined++;return row.at;},staleAfterMs:204000,holdUntil:row.at+120000}));
+  const series=meterCells({source:'zai:fixture',meter:'quota:credit:5h',readings,spans},'credits:zai',0,count*interval,60000)[0];
+  assert.equal(series.cells.length,count*2);
+  for(let i=0;i<count;i++) {
+    assert.equal(series.cells[i*2][0],i*4);
+    assert.equal(series.cells[i*2+1][0],i*4+1);
+    assert.equal(series.cells[i*2+1][5]?.knownUntil,i*interval+120000);
+    assert.equal(series.cells[i*2+1][1],String(2000000000-i*1000));
+  }
+  assert.ok(examined<count*60,`${examined} span endpoints examined for ${count} readings`);
+});
+
 test('exceptional intervals survive cell and chunk partition and re-reading without double counting',()=>{
   const semantics={limit:null,resetAt:null,minutes:null,scope:null,label:null};
   const series:MeterSeriesCells={source:'s',meter:'usage',kind:'counter',unit:'USD',semantics,cells:[[1,'5','0','5',60_000,{segment:1,steps:[{from:1,to:60_001,amount:'3',evidence:'continuous'},{from:-100_000,to:60_002,amount:'2',evidence:'gap'}]}]]};

@@ -237,7 +237,7 @@ export const en = {
 
   'limit.paceHint': 'By the plan, {value}% should be left now',
   'limit.resetsIn': 'resets in {time}',
-  'limit.resetPassed': 'window reset, waiting for a measurement',
+  'limit.resetPassed': 'reset time passed, waiting for a measurement',
   'limit.resetUnknown': 'reset time unknown',
   'limit.ahead': 'ahead of plan · {value}%',
   'limit.aheadHint': 'Spending faster than planned: the limit may run out before the plan ends',
