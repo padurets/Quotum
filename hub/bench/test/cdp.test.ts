@@ -156,7 +156,8 @@ const versionReply = (socket = 'ws://127.0.0.1:32123/devtools/browser/fixture') 
   new Response(JSON.stringify({Browser: 'Chrome/fixture', webSocketDebuggerUrl: socket}));
 const asChild = (child: StartingChrome) => child as unknown as ChildProcess;
 const turnsUntil = async (ready: () => boolean) => {
-  for (let i = 0; !ready() && i < 1000; i++) await new Promise<void>(resolve => setImmediate(resolve));
+  const until = performance.now() + 5_000;
+  while (!ready() && performance.now() < until) await new Promise<void>(resolve => setImmediate(resolve));
   assert.ok(ready(), 'the controlled startup reached its expected phase');
 };
 
@@ -320,7 +321,9 @@ test('a redirect cannot leave the published DevTools port or grant readiness thr
   await new Promise<void>(resolve => other.listen(0, '127.0.0.1', resolve));
   const otherPort = (other.address() as {port: number}).port;
   const first = createServer((_req, res) => {
-    firstHits++; res.writeHead(302, {Location: 'http://127.0.0.1:' + otherPort + '/json/version'}); res.end();
+    firstHits++;
+    // I/O progress has no fixed relationship to how many immediate callbacks ran.
+    setTimeout(() => {res.writeHead(302, {Location: 'http://127.0.0.1:' + otherPort + '/json/version'}); res.end();}, 75);
   });
   await new Promise<void>(resolve => first.listen(0, '127.0.0.1', resolve));
   firstPort = (first.address() as {port: number}).port;
