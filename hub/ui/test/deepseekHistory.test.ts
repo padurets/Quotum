@@ -4,6 +4,16 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {Store} from '../../server/store/store';
+import {Directory} from '../../server/store/directory';
+import {config} from '../../server/config';
+import {buildApp} from '../../server/api';
+import {Ingest} from '../../server/ingest';
+import {Duty} from '../../server/duty';
+import {Cadence} from '../../server/cadence';
+import {Pairing} from '../../server/pairing';
+import {ResetFeed} from '../../server/resets';
+import {Setup} from '../../server/setup';
+import {newSecret} from '../../server/domain/auth';
 import {deepSeekMeasurement} from '../../server/connectors/deepseek';
 import {composeMeters,composeMetersPrepared} from '../../server/domain/meterHistory';
 import {MeterTile} from '../lib/meterTiles';
@@ -19,6 +29,26 @@ import type {Card} from '../lib/types';
 import type {Line} from '../lib/lines';
 
 const answer=(amount='110')=>({is_available:true,balance_infos:[{currency:'CNY',total_balance:amount,granted_balance:'10',topped_up_balance:'100'}]});
+
+test('a continuous opening value survives a partial retention cell through HTTP and packing',async t=>{
+  const store=new Store(':memory:',1),directory=new Directory(store.db),M=60_000,cutoff=60_010;
+  const now=cutoff+config.retention.sampleDays*86_400_000;t.mock.method(Date,'now',()=>now);
+  const owner=directory.createUser('prefix@fixture.example','Fixture','unused',1),board=directory.boards(owner.id)[0].id;
+  const source=store.source('deepseek','1'.repeat(24),1);store.hold(source,owner.id,1);
+  for(const [at,total] of [[1,'110'],[60_001,'110'],[65_000,'110'],[90_000,'100'],[110_000,'100']] as const)store.record(source,deepSeekMeasurement(answer(total),at));
+  store.prune(now);
+  const app=await buildApp({store,directory,ingest:new Ingest(store,directory,new Duty(),new Cadence()),pairing:new Pairing(directory),resets:new ResetFeed(undefined,()=>{}),setup:new Setup(false,null),local:null});
+  t.after(async()=>{await app.close();store.close();});
+  const token=newSecret('qt_s');directory.createSession(token,owner.id,now,60_000);
+  const response=await app.inject({method:'GET',url:'/api/history?board='+board+'&cell='+M+'&from=60000&to=120000&unit=CNY&meters='+encodeURIComponent(JSON.stringify([[source,'balance:CNY']])),headers:{cookie:'quotum_session='+token}});
+  assert.equal(response.statusCode,200);
+  const chunks=response.json().chunks,tile=new MeterTile(60_000,M);
+  for(const chunk of chunks)tile.merge(chunk.from,chunk.to,chunk.meterSeries);
+  const history=composeMeters([{from:60_000,meterSeries:tile.chunk(60_000,120_000)}],M,60_000,120_000)[0];
+  assert.equal(moneyPointAt(history,cutoff-1),undefined);assert.equal(moneyPointAt(history,75_000)?.value,'110000000');
+  assert.equal(moneyPointAt(history,90_000)?.value,'100000000');assert.equal(moneyPointAt(history,120_000),undefined);
+  assert.equal(history.coveredMs,49_990);assert.equal(history.start,null);
+});
 
 test('actual ledger, packed cells, money preparation, chart geometry and raw readout retain holes and recovery anchors',()=>{
   const store=new Store(':memory:',1);try {

@@ -19,8 +19,6 @@ import {ResetFeed} from '../resets.js';
 import {newSecret} from '../domain/auth.js';
 import {measurementFingerprint} from '../hubSources.js';
 import {HistoryTiles} from '../history.js';
-import {MeterTile} from '../../ui/lib/meterTiles.js';
-import {moneyPointAt} from '../../ui/lib/moneyView.js';
 
 const tuple=(currency='CNY',total='110.00',granted='10.00',topup='100.00')=>({currency,total_balance:total,granted_balance:granted,topped_up_balance:topup});
 const payload=(rows:unknown[]=[tuple()],available=true)=>({is_available:available,balance_infos:rows});
@@ -134,27 +132,6 @@ test('history clips a retained observation at retention without moving its actua
   assert.equal(history.points[0].at,cutoff);assert.equal(history.points[0].validUntil,120_000);assert.equal(history.coveredMs,0);
   assert.equal(history.spent,null);assert.equal(history.topup,null);
   assert.deepEqual(h.store.meters.spans(source,'balance:USD',0,120_000),[{from:60_001,to:60_001,staleAfterMs:204_000}]);
-});
-
-test('a continuous opening value survives a partial retention cell through HTTP and packing',async t=>{
-  const h=harness(),M=60_000,cutoff=60_010;
-  const {config}=await import('../config.js'),now=cutoff+config.retention.sampleDays*86_400_000;
-  t.mock.method(Date,'now',()=>now);
-  const source=h.store.source('deepseek','1'.repeat(24),1),board=h.directory.boards(h.alice.id)[0].id;
-  h.store.hold(source,h.alice.id,1);
-  for(const [at,total] of [[1,'110'],[60_001,'110'],[65_000,'110'],[90_000,'100'],[110_000,'100']] as const)h.store.record(source,deepSeekMeasurement(payload([tuple('USD',total)]),at));
-  h.store.prune(now);
-  const app=await buildApp({store:h.store,directory:h.directory,ingest:new Ingest(h.store,h.directory,new Duty(),new Cadence()),pairing:new Pairing(h.directory),resets:new ResetFeed(undefined,()=>{}),setup:new Setup(false,null),local:null});
-  t.after(async()=>{await app.close();h.close();});
-  const token=newSecret('qt_s');h.directory.createSession(token,h.alice.id,now,60_000);
-  const response=await app.inject({method:'GET',url:'/api/history?board='+board+'&cell='+M+'&from=60000&to=120000&unit=USD&meters='+encodeURIComponent(JSON.stringify([[source,'balance:USD']])),headers:{cookie:'quotum_session='+token}});
-  assert.equal(response.statusCode,200);
-  const chunks=response.json().chunks,tile=new MeterTile(60_000,M);
-  for(const chunk of chunks)tile.merge(chunk.from,chunk.to,chunk.meterSeries);
-  const history=composeMeters([{from:60_000,meterSeries:tile.chunk(60_000,120_000)}],M,60_000,120_000)[0];
-  assert.equal(moneyPointAt(history,cutoff-1),undefined);assert.equal(moneyPointAt(history,75_000)?.value,'110000000');
-  assert.equal(moneyPointAt(history,90_000)?.value,'100000000');assert.equal(moneyPointAt(history,120_000),undefined);
-  assert.equal(history.coveredMs,49_990);assert.equal(history.start,null);
 });
 
 test('empty-account KEK replacement and ABA resets reject pending creation and stale loaded keys before GET',async()=>{
