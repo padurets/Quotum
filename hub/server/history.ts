@@ -1,6 +1,6 @@
 import {createHmac, randomBytes} from 'node:crypto';
 import {config} from './config.js';
-import {tileEnd, tileOf, tileStart, type Chunk} from './domain/history.js';
+import {tileEnd, tileOf, tileStart, type Chunk, type HistoryBasis} from './domain/history.js';
 import type {Shown, Store} from './store/store.js';
 import type {MeterSelection} from './domain/meterHistory.js';
 
@@ -26,6 +26,10 @@ export class HistoryTiles {
   private retentionRevision = 0;
 
   constructor(private readonly store: Store, private readonly budget = 32 * 1024 * 1024) {}
+
+  metadata(board: string, value: Omit<HistoryBasis, 'now' | 'meta'>) {
+    return createHmac('sha256', this.key).update(`meta:${board}:${JSON.stringify(value)}`).digest('base64url');
+  }
 
   ref(board: string, session: number) {
     return createHmac('sha256', this.key).update(`${board}:${session}`).digest('base64url').slice(0, 8);

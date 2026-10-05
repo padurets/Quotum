@@ -29,7 +29,11 @@ test('the actual activity edge painter retains full and partial bars when a sele
     return {getAttribute: (name: string) => attributes.get(name) ?? null, setAttribute: (name: string, value: string) => attributes.set(name, value)};
   };
   const mask = {current: element()}, paths = groups.map(() => element());
-  const bandClip = {current: {style: {left: '0px', right: '0px', clipPath: ''}, firstElementChild: {style: {left: '0px', width: '24px'}}}};
+  const moving = {style: {left: '0px', width: '24px'}};
+  const counter = {style: {transform: ''}, firstElementChild: moving};
+  const endClip = {style: {transform: ''}, firstElementChild: counter};
+  const startClip = {style: {transform: ''}, firstElementChild: endClip};
+  const bandClip = {current: {style: {left: '0px', right: '0px', visibility: ''}, firstElementChild: startClip}};
   let committedPaints = 0;
   const committed = () => {committedPaints++;};
   const edges = {current: {querySelectorAll: () => paths}}, edgePaint = {current: committed};
@@ -44,18 +48,17 @@ test('the actual activity edge painter retains full and partial bars when a sele
   assert.equal(committedPaints, 1);
   assert.equal(mask.current.getAttribute('width'), null);
   commits[0]();
-  const inset = bandClip.current.style.clipPath.match(/^inset\(0 ([\d.]+)px 0 ([\d.]+)px\)$/)!;
-  assert.ok(24 - Number(inset[1]) - Number(inset[2]) > 0, 'the HTML band clip retains complete bars');
+  assert.equal(bandClip.current.style.visibility, '', 'the HTML band clip retains complete bars');
   assert.equal(mask.current.getAttribute('width'), null, 'continuous motion does not change the SVG mask');
-  assert.equal(bandClip.current.firstElementChild.style.width, '24px', 'narrowing the clip cannot resize its artwork');
+  assert.equal(moving.style.width, '24px', 'narrowing the clip cannot resize its artwork');
   assert.equal(expected.agentMs, DAY * 7 / 10);
   for (const bar of [expected.cells[0], expected.cells.at(-1)!]) {
     assert.ok(paths.some(path => path.getAttribute('d')?.includes(`,${y(bar[2]).toFixed(1)}H`)), 'partial edges have the complete answer’s whole-cell quantities');
   }
   pan.move(token, M / DAY * 1000); frames.shift()!(); edgePaint.current();
-  const beforeClip = bandClip.current.style.clipPath, beforePaths = paths.map(path => path.getAttribute('d'));
+  const beforeClip = startClip.style.transform, beforePaths = paths.map(path => path.getAttribute('d'));
   pan.move(token, M / DAY * 1000); frames.shift()!(); edgePaint.current();
-  assert.notEqual(bandClip.current.style.clipPath, beforeClip, 'the full-bar boundary follows movement within the same cell geometry');
+  assert.notEqual(startClip.style.transform, beforeClip, 'the full-bar boundary follows movement within the same cell geometry');
   assert.deepEqual(paths.map(path => path.getAttribute('d')), beforePaths, 'moving within the same cells does not rebuild edge quantities');
   pan.cancel();
 });

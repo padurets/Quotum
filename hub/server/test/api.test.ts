@@ -664,6 +664,37 @@ test('history validates cell edges, supported grids, retention, tile count and a
   ]) assert.equal((await read(query)).status, 400, query);
 });
 
+test('history metadata reuse is opt-in and cannot bypass board access or a changed visible scope', async t => {
+  const h = await hub();
+  t.after(async () => {await h.app.close(); h.store.close();});
+  const board = await h.person('alice'), cell = 60_000, now = Date.now();
+  const from = Math.floor((now - 3_600_000) / cell) * cell;
+  const {created_by: user} = h.store.db.prepare('SELECT created_by FROM boards WHERE id = ?').get(board) as {created_by: string};
+  const source = h.store.source('codex', 'metadata', from); h.store.hold(source, user, from);
+  const read = (suffix = '', as = 'alice', selected = board) => h.call('GET', `/api/history?board=${selected}&cell=${cell}&from=${from}&to=${from + cell}${suffix}`, {as});
+  const legacy = await read(); assert.equal(legacy.status, 200); assert.equal(legacy.body.meta, undefined);
+  const first = await read('&meta='); assert.equal(first.status, 200); assert.match(first.body.meta, /^[\w-]{43}$/);
+  assert.ok(first.body.known.sources[source] !== undefined);
+  const suffix = `&meta=${first.body.meta}`;
+  const next = await read(suffix);
+  assert.equal(next.status, 200); assert.equal(next.body.meta, first.body.meta);
+  assert.equal(next.body.known, undefined); assert.equal(next.body.historyStart, undefined);
+  assert.deepEqual(next.body.chunks, first.body.chunks); assert.ok(next.body.now >= first.body.now);
+  assert.equal((await read(suffix, 'anonymous')).status, 401);
+  const team = (await h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Team'}})).body.id;
+  const invite = (await h.call('POST', `/api/boards/${team}/invites`, {as: 'alice'})).body.url.split('/invite/')[1];
+  await h.person('bob', invite);
+  assert.equal((await read(suffix, 'bob')).status, 404);
+  const other = await read(suffix, 'alice', team);
+  assert.ok(other.body.known); assert.notEqual(other.body.meta, first.body.meta);
+  await h.call('POST', `/api/boards/${board}/view`, {as: 'alice', body: {...EMPTY, hidden: [`source:${source}`]}});
+  const hidden = await read(suffix);
+  assert.equal(hidden.status, 200); assert.notEqual(hidden.body.meta, first.body.meta);
+  assert.equal(hidden.body.known.sources[source], undefined);
+  assert.equal((await read('&meta=invalid')).status, 400);
+  assert.ok((await read('&meta=' + 'x'.repeat(43))).body.known, 'an unknown valid token returns complete metadata');
+});
+
 /** A frame reader, like the page: the hub supplies cells and the cards supply windows. */
 async function readFrame(call: Awaited<ReturnType<typeof hub>>['call'], query: string, as = 'alice') {
   const params = new URLSearchParams(query);
