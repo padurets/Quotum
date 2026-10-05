@@ -79,17 +79,22 @@ export class Credentials {
     if(typeof account!=='string'||!/^[0-9a-f]{24}$/.test(account))throw new SecretError('credential_account_mismatch');
     return {...answer,account};
   }
-  private target(owner:string,provider:string,secret:unknown,options:Options):{name:string;row:null}|{name:null;row:DeclaredAccount}|null {
+  private accountTarget(secret:unknown,target:unknown):AccountTarget {
+    if(!target||typeof target!=='object'||Array.isArray(target))throw new SecretError('credential_invalid');
+    const input=target as Record<string,unknown>;
+    if(input.kind==='new'&&Object.keys(input).every(k=>['kind','name'].includes(k)))return {kind:'new',name:accountName(input.name,secret)};
+    if(input.kind!=='existing'||!Object.keys(input).every(k=>['kind','id'].includes(k))||typeof input.id!=='string'||!UUID.test(input.id))throw new SecretError('credential_invalid');
+    return {kind:'existing',id:input.id};
+  }
+  private target(owner:string,provider:string,selected:AccountTarget|null,options:Options):{name:string;row:null}|{name:null;row:DeclaredAccount}|null {
     if(this.connector(provider).identityKind!=='declared') {
       if(options.account!==undefined||options.confirmSameAccount!==undefined||options.allowUnknownExpiry!==undefined)throw new SecretError('credential_invalid');return null;
     }
     if(options.allowNoExpiry!==undefined)throw new SecretError('credential_invalid');
-    const target=options.account;
-    if(!target||typeof target!=='object'||Array.isArray(target))throw new SecretError('credential_invalid');
-    if(target.kind==='new'&&Object.keys(target).every(k=>['kind','name'].includes(k)))return {name:accountName(target.name,secret),row:null};
-    if(target.kind!=='existing'||!Object.keys(target).every(k=>['kind','id'].includes(k))||typeof target.id!=='string'||!UUID.test(target.id))throw new SecretError('credential_invalid');
+    if(!selected)throw new SecretError('credential_invalid');
+    if(selected.kind==='new')return {name:selected.name,row:null};
     if(options.confirmSameAccount!==true)throw new SecretError('credential_account_confirmation');
-    return {name:null,row:this.accounts.get(owner,provider,target.id)};
+    return {name:null,row:this.accounts.get(owner,provider,selected.id)};
   }
   private answer(row:CredentialRow):Credential {return this.#repository.answer(row.user_id,row.id)!;}
   listAccounts(owner:string,provider:string,limit?:number,after?:string){return this.boundary(()=>this.accounts.list(owner,provider,limit,after));}
@@ -112,11 +117,10 @@ export class Credentials {
     return this.boundaryAsync(async()=>{
       const connector=this.connector(provider);
       // Replay is checked before a dormant account's lifecycle permission.
-      const selected=options.account?.kind==='new'?{kind:'new',name:accountName(options.account.name,secret)}
-        :options.account?.kind==='existing'&&Object.keys(options.account).every(k=>['kind','id'].includes(k))?{kind:'existing',id:options.account.id}:options.account;
-      const selector=connector.identityKind==='declared'?JSON.stringify(selected):undefined;
+      const selected=connector.identityKind==='declared'?this.accountTarget(secret,options.account):null;
+      const selector=selected?JSON.stringify(selected):undefined;
       const replay=this.replay(owner,provider,options.requestId,selector);if(replay)return replay;
-      const target=this.target(owner,provider,secret,options),authority=this.authority();
+      const target=this.target(owner,provider,selected,options),authority=this.authority();
       return this.secret(connector,secret,async bytes=>{
         const identity=this.validate(connector,await connector.identify(bytes),options);
         let source:string|null=null;

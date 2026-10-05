@@ -1,6 +1,17 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {freshness, PULSE_FOR, seriesName} from '../lib/quota';
+import {freshness, problemOf, PULSE_FOR, seriesName} from '../lib/quota';
+import {setLocale,t} from '../i18n';
+
+test('card problems distinguish connector errors from failures of a coding client',()=>{
+  for(const locale of ['en','ru'] as const) {
+    setLocale(locale);
+    for(const code of ['connector_failed','connector_timeout','connector_invalid_response'])assert.equal(problemOf({error:code}),t('api.'+code));
+    assert.equal(problemOf({error:'failed'}),t('error.failed'));
+    assert.equal(problemOf({error:'waiting'}),null);
+  }
+  setLocale('en');
+});
 
 test('a card’s dot is fresh for half a minute, then fades to grey over five', () => {
   assert.equal(freshness(0), 1);

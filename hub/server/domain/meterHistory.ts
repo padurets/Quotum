@@ -6,7 +6,7 @@ export const MAX_METERS = 32;
 export type MeterSelection = {unit: Unit; ids: [source: string, meter: string][]};
 export type Accounting = {spending:'counter'|'unavailable';topups:'counter'|'unavailable'};
 export type MonetaryPolicy = {accounting?:Accounting;role?:'total'|'granted'|'toppedUp';pointMode?:'cell'|'observation'};
-export type MeterCellExtra = {pointOffsetMs?:number;validUntil?:number;first?: string; open?: string | null; segment?: number; semantics?: MeterSemantics; steps?: ExceptionalStep[]; topupInternal?: string; topupSteps?: ExceptionalStep[]};
+export type MeterCellExtra = {pointOffsetMs?:number;openOffsetMs?:number;validUntil?:number;first?: string; open?: string | null; segment?: number; semantics?: MeterSemantics; steps?: ExceptionalStep[]; topupInternal?: string; topupSteps?: ExceptionalStep[]};
 export type MeterCell = [index: number, value: string, spentInternal: string|null, spentExceptional: string|null, coveredMs: number, extra?: MeterCellExtra];
 export type MeterSeriesCells = MonetaryPolicy & {source: string; meter: string; kind: MeterKind; unit: Unit; semantics: MeterSemantics | null; cells: MeterCell[]};
 export type MeterHistory = MonetaryPolicy & {sourceId: string; meterId: string; kind: MeterKind; unit: Unit; semantics: MeterSemantics | null; start: string | null; end: string | null; spent: string|null; unlocated: ExceptionalStep[]; topup: string|null; topupUnlocated: ExceptionalStep[]; coveredMs: number; points: {at: number; value: string; spent:string|null;validUntil?:number;segment: number; semantics: MeterSemantics | null; steps: ExceptionalStep[]}[]};
@@ -128,9 +128,9 @@ function observationCells(group:MeterGroup,unit:Unit,from:number,to:number,cell:
     if(!last||last.unit!==unit)continue;
     const pointAt=Math.max(at,span.from,last.at,retainedFrom),validUntil=Math.min(end,availableUntil(span));
     if(pointAt>=validUntil)continue;
-    const first=predecessor(group.readings,at-1);
-    const open=at>=retainedFrom&&span.from<=at&&first&&first.unit===unit?plottedAmount(first):null;
-    const extra:MeterCellExtra={segment:span.from,open,...(pointAt===at?{}:{pointOffsetMs:pointAt-at}),...(validUntil===end?{}:{validUntil})};
+    const openAt=Math.max(at,retainedFrom),first=predecessor(group.readings,openAt);
+    const open=span.from<=openAt&&first&&first.unit===unit?plottedAmount(first):null;
+    const extra:MeterCellExtra={segment:span.from,open,...(open!==null&&openAt>at?{openOffsetMs:openAt-at}:{}),...(pointAt===at?{}:{pointOffsetMs:pointAt-at}),...(validUntil===end?{}:{validUntil})};
     const next=semanticsOf(last);
     if(JSON.stringify(next)!==JSON.stringify(semantics))extra.semantics=next;
     semantics=next;
@@ -195,11 +195,12 @@ export function* composeMetersPrepared(chunks: readonly {from:number;meterSeries
       previous=at;lastLocal=extra.segment??0;
       const observation=series.pointMode==='observation',pointAt=at+(observation?extra.pointOffsetMs??0:0);
       const validUntil=observation?extra.validUntil??at+cell:undefined;
-      if(observation&&pointAt>at&&extra.open!=null)points.push({at,value:extra.open,spent:null,segment,semantics,steps:[],validUntil:pointAt});
+      const openAt=at+(observation?extra.openOffsetMs??0:0);
+      if(observation&&pointAt>openAt&&extra.open!=null)points.push({at:openAt,value:extra.open,spent:null,segment,semantics,steps:[],validUntil:pointAt});
       points.push({at:pointAt,...(observation?{validUntil}:{}),value:row[1],spent:series.accounting?.spending==='unavailable'?null:(spent-previousSpent).toString(),segment,semantics,steps:series.accounting?.spending==='unavailable'?[]:extra.steps??[]});yield;
     }
     const first=rows[0][1].row,last=rows.at(-1)![1];
-    const start=first[5] && 'open' in first[5] ? first[5].open! : first[5]?.first??first[1];
+    const start=first[5] && 'open' in first[5] ? (first[5].openOffsetMs??0)>0?null:first[5].open! : first[5]?.first??first[1];
     result.push({...policyOf(series),sourceId:series.source,meterId:series.meter,kind:series.kind,unit:series.unit,semantics:last.semantics,start,end:last.row[1],spent:series.accounting?.spending==='unavailable'?null:spent.toString(),unlocated,topup:series.accounting?.topups==='unavailable'?null:topup.toString(),topupUnlocated,coveredMs,points});yield;
   }
   return result;

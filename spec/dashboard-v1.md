@@ -568,8 +568,11 @@ The actual point time is grid time plus offset. Normalized observation points al
 materialize a deadline. An accepted missing currency closes its availability at that
 observation, and a same-value recovery starts another segment at its actual time.
 An ordinary change in a continuous span can emit a separate confirmed opening prefix
-from the grid edge to the primary point; a first or recovered sample cannot. Deadlines
-never exceed the fixed grid cell end, so later heartbeats cannot extend finished cells.
+from the grid edge to the primary point; a first or recovered sample cannot.
+The prefix may start at retention instead, with `openOffsetMs` relative to the grid
+edge (omitted means zero); its exclusive end is the primary point. A clipped prefix
+does not establish the value at the unretained grid edge.
+Deadlines never exceed the fixed grid cell end, so later heartbeats cannot extend finished cells.
 The existing chart draws these actual anchors and reads raw pointer time; deadline
 endpoints are not samples. OpenRouter and percentage series retain cell placement.
 Observation points and coverage stay within retention even in its first partial cell;

@@ -41,8 +41,8 @@ export const seriesName = (source: {provider: string; title?: string}, w: {kind:
 
 /** What a source's error code means, in the reader's language. */
 export function errorText(code: string) {
-  const key = `error.${code}`;
-  return t(known(key) ? key : 'error.failed');
+  const connector=code.startsWith('connector_'),key=`${connector?'api':'error'}.${code}`;
+  return t(known(key)?key:connector?'api.unknown':'error.failed');
 }
 
 export const problemOf = (source: Pick<Card, 'error'>) => (source.error && source.error !== 'waiting' ? errorText(source.error) : null);

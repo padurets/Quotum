@@ -579,6 +579,8 @@ is geometry, never a measurement. Subscription and OpenRouter series retain thei
 cell midpoint and snapped readout. No value carries into an unconfirmed next cell.
 Retention keeps original heartbeat endpoints as evidence while bounding observation
 points and coverage to the retained interval, including a cell crossing its edge.
+An opening prefix has its own offset after clipping, so known values survive from
+retention up to the primary observation without backfilling its unretained edge.
 
 Money history uses the same bounded tiles, cache and page loader. Its exact strings,
 historical cap semantics and original spending intervals stay separate from the window

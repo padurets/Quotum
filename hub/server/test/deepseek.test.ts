@@ -19,6 +19,8 @@ import {ResetFeed} from '../resets.js';
 import {newSecret} from '../domain/auth.js';
 import {measurementFingerprint} from '../hubSources.js';
 import {HistoryTiles} from '../history.js';
+import {MeterTile} from '../../ui/lib/meterTiles.js';
+import {moneyPointAt} from '../../ui/lib/moneyView.js';
 
 const tuple=(currency='CNY',total='110.00',granted='10.00',topup='100.00')=>({currency,total_balance:total,granted_balance:granted,topped_up_balance:topup});
 const payload=(rows:unknown[]=[tuple()],available=true)=>({is_available:available,balance_infos:rows});
@@ -134,6 +136,27 @@ test('history clips a retained observation at retention without moving its actua
   assert.deepEqual(h.store.meters.spans(source,'balance:USD',0,120_000),[{from:60_001,to:60_001,staleAfterMs:204_000}]);
 });
 
+test('a continuous opening value survives a partial retention cell through HTTP and packing',async t=>{
+  const h=harness(),M=60_000,cutoff=60_010;
+  const {config}=await import('../config.js'),now=cutoff+config.retention.sampleDays*86_400_000;
+  t.mock.method(Date,'now',()=>now);
+  const source=h.store.source('deepseek','1'.repeat(24),1),board=h.directory.boards(h.alice.id)[0].id;
+  h.store.hold(source,h.alice.id,1);
+  for(const [at,total] of [[1,'110'],[60_001,'110'],[65_000,'110'],[90_000,'100'],[110_000,'100']] as const)h.store.record(source,deepSeekMeasurement(payload([tuple('USD',total)]),at));
+  h.store.prune(now);
+  const app=await buildApp({store:h.store,directory:h.directory,ingest:new Ingest(h.store,h.directory,new Duty(),new Cadence()),pairing:new Pairing(h.directory),resets:new ResetFeed(undefined,()=>{}),setup:new Setup(false,null),local:null});
+  t.after(async()=>{await app.close();h.close();});
+  const token=newSecret('qt_s');h.directory.createSession(token,h.alice.id,now,60_000);
+  const response=await app.inject({method:'GET',url:'/api/history?board='+board+'&cell='+M+'&from=60000&to=120000&unit=USD&meters='+encodeURIComponent(JSON.stringify([[source,'balance:USD']])),headers:{cookie:'quotum_session='+token}});
+  assert.equal(response.statusCode,200);
+  const chunks=response.json().chunks,tile=new MeterTile(60_000,M);
+  for(const chunk of chunks)tile.merge(chunk.from,chunk.to,chunk.meterSeries);
+  const history=composeMeters([{from:60_000,meterSeries:tile.chunk(60_000,120_000)}],M,60_000,120_000)[0];
+  assert.equal(moneyPointAt(history,cutoff-1),undefined);assert.equal(moneyPointAt(history,75_000)?.value,'110000000');
+  assert.equal(moneyPointAt(history,90_000)?.value,'100000000');assert.equal(moneyPointAt(history,120_000),undefined);
+  assert.equal(history.coveredMs,49_990);assert.equal(history.start,null);
+});
+
 test('empty-account KEK replacement and ABA resets reject pending creation and stale loaded keys before GET',async()=>{
   const h=harness();try {
     h.delay();const pending=h.create();const b=key(8);
@@ -201,10 +224,15 @@ test('owner routes keep declared identity and expiry private, shared refresh is 
   t.after(async()=>{await app.close();h.close();});
   const cookies=new Map<string,string>();for(const user of [h.alice,h.bob]){const token=newSecret('qt_s');h.directory.createSession(token,user.id,now,60_000);cookies.set(user.id,'quotum_session='+token);}
   const call=(method:'POST'|'GET'|'DELETE',url:string,body?:object,owner=h.alice.id)=>app.inject({method,url,payload:body,headers:{cookie:cookies.get(owner),origin:'http://localhost'}});
-  const input={provider:'deepseek',secret:'sk-'+ 'a'.repeat(32),account:{kind:'new',name:'PRIVATE_PERSONAL'}};
+  const input={provider:'deepseek',secret:'sk-'+ 'a'.repeat(32),account:{kind:'new',name:'PRIVATE_PERSONAL'},requestId:'44444444-4444-4444-8444-444444444444'};
   const consent=await call('POST','/api/credentials',input);assert.equal(consent.statusCode,409);assert.deepEqual(consent.json(),{error:'credential_expiry_confirmation',expiresAt:null,expiryKind:'unknown'});
   const created=await call('POST','/api/credentials',{...input,allowUnknownExpiry:true});assert.equal(created.statusCode,201);const dto=created.json();
   assert.ok(dto.accountId);assert.equal(dto.expiryKind,'unknown');
+  const reads=h.calls;
+  for(const requestId of [input.requestId,'55555555-5555-4555-8555-555555555555']) {
+    const malformed=await call('POST','/api/credentials',{...input,requestId,account:{...input.account,id:dto.accountId},allowUnknownExpiry:true});
+    assert.equal(malformed.statusCode,400);assert.equal(malformed.json().error,'credential_invalid');assert.equal(h.calls,reads);
+  }
   assert.deepEqual((await call('GET','/api/source-accounts?provider=deepseek',undefined,h.bob.id)).json().accounts,[]);
   const foreign=await call('POST','/api/credentials',{...input,account:{kind:'existing',id:dto.accountId},confirmSameAccount:true,allowUnknownExpiry:true},h.bob.id);assert.equal(foreign.statusCode,404);
   assert.equal((await call('POST','/api/credentials/'+dto.id,{secret:input.secret,sourceId:dto.sourceId,confirmSameAccount:true,allowUnknownExpiry:true})).statusCode,400);
