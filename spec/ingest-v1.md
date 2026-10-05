@@ -445,7 +445,11 @@ command line. Unknown or initially unreadable roles prove no boundary; previousl
 proven boundaries can survive unreadable metadata for the same process birth. These
 metadata and caches stay on the machine. macOS and Windows currently have no invocation
 role or shared process-session detector; their existing process observations remain
-eligible. No new wire fields or provider content are needed for this accounting.
+eligible. Exhausting the bounded invocation read and unavailable executable metadata
+are unavailable evidence, not proof of a new authority. Previously observed process
+ownership changes invalidate incompatible CPU deltas and working holds; snapshot-proven
+measurement ancestry remains excluded through a later metadata gap. No new wire fields
+or provider content are needed for this accounting.
 
 What is sent: the pseudonym of each account, the plan name, percentages and reset times
 of the windows, free resets and when each expires, the client's version, the machine's random id, its name

@@ -121,8 +121,12 @@ byte of a runtime. No option values, process environments or conversation files 
 read; no command line is retained or sent. Process birth and executable file identity
 are checked around these reads and every CPU contributor. Unknown or initially
 unreadable roles prove no boundary. A previously proven boundary survives temporarily
-unreadable metadata and reparenting for that process birth; a confirmed invocation or
-executable change invalidates its placement authority. A reused PID inherits no state.
+unreadable metadata and reparenting for that process birth; exhausting the invocation
+read bound or losing executable metadata does not prove a replacement. A confirmed
+invocation or executable change invalidates placement authority. Current shared roots
+are boundaries for every descendant on the same look, and an initially proven ancestor
+can still deny ownership or measurement eligibility if its later validation fails.
+A reused PID inherits no state.
 
 The OS also gives CPU of finished children, without telling which branch earned it.
 For every ancestor of a proven excluded branch, across wrappers and other-provider
@@ -131,7 +135,11 @@ The restriction survives branch exit, reparenting and same-birth exec. Its own C
 live owned tools still count; clean trees retain their finished-tool accounting. The
 conservative cost is that a short owned tool entirely between looks can be missed at
 an affected ancestor. Changing the accounting basis discards incompatible deltas and
-working holds rather than turning a lifetime-counter jump into work.
+working holds rather than turning a lifetime-counter jump into work. Accounting owner
+and authority transitions of observed births also reset affected sessions, even when
+an ancestor was already marked unsafe. New owned tools retain their first observed CPU.
+Unsafe births continue to mark validated physical ancestors after the original service
+has gone, including an ancestor whose metadata becomes readable later.
 
 macOS and Windows currently have no invocation-role or process-session detector for
 these shared branches; their existing process observation remains the fallback, not

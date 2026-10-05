@@ -436,6 +436,7 @@ fn an_excluded_branch_exiting_during_validation_cannot_leak_reaped_cpu() {
 #[test]
 fn a_replaced_executable_cannot_keep_an_unreadable_old_role() {
     let mut rows = vec![proc(41, 1, "codex", Role::Runtime)];
+    rows[0].image = Some((1, 1));
     let mut a = activity();
     let start = Instant::now();
     sample(&mut a, &rows, start, 0);
@@ -473,4 +474,295 @@ fn an_unreadable_service_does_not_lose_its_proven_boundary() {
             assert_eq!(session(&sessions, 10).working, Some(false));
         }
     }
+}
+
+#[test]
+fn missing_image_preserves_a_proven_shared_runtime() {
+    let mut rows = rows();
+    rows.retain(|p| p.pid != 11);
+    rows[1].parent = 10;
+    rows[1].sid = Some(12);
+    rows[1].image = Some((1, 1));
+    let mut a = activity();
+    let start = Instant::now();
+    sample(&mut a, &rows, start, 0);
+    sample(&mut a, &rows, start, 15);
+    rows[1].image = None;
+    rows[1].role = Role::Unavailable;
+    cpu(&mut rows, 13, 1500, 0);
+    let sessions = sample(&mut a, &rows, start, 30);
+    assert_eq!(session(&sessions, 10).working, Some(false));
+    assert_eq!(session(&sessions, 12).project, None);
+    rows[1].image = Some((1, 1));
+    let sessions = sample(&mut a, &rows, start, 45);
+    assert_eq!(session(&sessions, 12).project, None, "recovering the same image does not prove exec");
+}
+
+#[test]
+fn service_authority_change_does_not_credit_historical_cpu() {
+    let mut rows = vec![proc(10, 1, "codex", Role::Unknown), proc(11, 10, "codex", Role::Service)];
+    cpu(&mut rows, 11, 5000, 0);
+    let mut a = activity();
+    let start = Instant::now();
+    sample(&mut a, &rows, start, 0);
+    assert_eq!(session(&sample(&mut a, &rows, start, 15), 10).working, Some(false));
+    rows[1].role = Role::Unknown;
+    assert_ne!(session(&sample(&mut a, &rows, start, 30), 10).working, Some(true));
+    assert_eq!(session(&sample(&mut a, &rows, start, 45), 10).working, Some(false));
+}
+
+#[test]
+fn a_second_boundary_resets_hold_even_when_the_root_was_already_unsafe() {
+    let mut rows = vec![
+        proc(10, 1, "codex", Role::Unknown),
+        proc(11, 10, "codex", Role::Service),
+        proc(21, 10, "codex", Role::Unknown),
+        proc(22, 21, "bash", Role::Unknown),
+    ];
+    let mut a = activity();
+    let start = Instant::now();
+    sample(&mut a, &rows, start, 0);
+    cpu(&mut rows, 22, 1500, 0);
+    assert_eq!(session(&sample(&mut a, &rows, start, 15), 10).working, Some(true));
+    rows[2].role = Role::Service;
+    assert_ne!(session(&sample(&mut a, &rows, start, 30), 10).working, Some(true));
+    assert_eq!(session(&sample(&mut a, &rows, start, 45), 10).working, Some(false));
+}
+
+#[test]
+fn unsafe_reaping_reaches_an_ancestor_that_recovers_after_boundary_exit() {
+    let mut rows = vec![
+        proc(20, 1, "codex", Role::Unknown),
+        proc(10, 20, "claude", Role::Unknown),
+        proc(11, 10, "codex", Role::Service),
+    ];
+    let mut a = activity();
+    let start = Instant::now();
+    a.observe(&rows, 900, start, WALL, &|p| (p.pid != 20).then(|| p.clone()), &|_| None, &|_| None, &|_| true);
+    rows.pop();
+    cpu(&mut rows, 10, 0, 5000);
+    sample(&mut a, &rows, start, 15);
+    sample(&mut a, &rows, start, 30);
+    rows.retain(|p| p.pid == 20);
+    cpu(&mut rows, 20, 0, 5000);
+    assert_eq!(session(&sample(&mut a, &rows, start, 45), 20).working, Some(false));
+}
+
+#[test]
+fn validation_gaps_cannot_restore_snapshot_proven_measurement_sessions() {
+    let rows = [
+        proc(900, 1, "quotum", Role::Unknown),
+        proc(901, 900, "sh", Role::Unknown),
+        proc(902, 901, "codex", Role::Service),
+        proc(903, 902, "codex", Role::Runtime),
+    ];
+    let mut a = activity();
+    let sessions = a.observe(
+        &rows,
+        900,
+        Instant::now(),
+        WALL,
+        &|p| (p.pid != 901).then(|| p.clone()),
+        &|_| panic!("a measurement must not be placed"),
+        &|_| None,
+        &|_| true,
+    );
+    assert!(sessions.is_empty());
+}
+
+#[test]
+fn a_snapshot_service_boundary_keeps_its_identity_valid_child_unplaced() {
+    let mut rows = vec![
+        proc(10, 1, "codex", Role::Unknown),
+        proc(11, 10, "codex", Role::Service),
+        proc(12, 11, "codex", Role::Unknown),
+    ];
+    let mut a = activity();
+    let start = Instant::now();
+    for secs in [0, 15] {
+        cpu(&mut rows, 12, secs * 100, 0);
+        let sessions = a.observe(
+            &rows,
+            900,
+            start + Duration::from_secs(secs),
+            WALL + secs as Millis * 1000,
+            &|p| (p.pid != 11).then(|| p.clone()),
+            &|_| Some("/fixture-home/project-a".into()),
+            &|_| None,
+            &|_| true,
+        );
+        assert_eq!(session(&sessions, 12).project, None);
+        if secs == 15 {
+            assert_eq!(session(&sessions, 12).working, Some(true));
+        }
+    }
+}
+
+#[test]
+fn a_new_orphan_runtime_boundary_applies_to_descendants_in_the_same_look() {
+    let sample = |a: &mut Activity, rows: &[Proc], start: Instant, secs: u64| {
+        a.observe(
+            rows,
+            900,
+            start + Duration::from_secs(secs),
+            WALL + secs as Millis * 1000,
+            &|p| Some(p.clone()),
+            &|_| Some("/fixture-home/project-a".into()),
+            &|_| None,
+            &|_| true,
+        )
+    };
+    let mut rows = vec![proc(12, 1, "codex", Role::Unknown), proc(13, 12, "claude", Role::Unknown)];
+    let mut a = activity();
+    let start = Instant::now();
+    sample(&mut a, &rows, start, 0);
+    cpu(&mut rows, 13, 1500, 0);
+    assert_eq!(session(&sample(&mut a, &rows, start, 15), 13).working, Some(true));
+    rows[0].role = Role::Runtime;
+    let sessions = sample(&mut a, &rows, start, 30);
+    assert_eq!(session(&sessions, 13).project, None);
+    assert_ne!(session(&sessions, 13).working, Some(true), "incompatible hold is reset immediately");
+}
+
+#[test]
+fn an_executable_prefix_limit_is_unavailable_rather_than_a_role_change() {
+    use std::io::Cursor;
+    let bytes = [vec![b'x'; 2048], b"\0app-server\0--listen\0value\0".to_vec()].concat();
+    let mut input = Cursor::new(bytes);
+    assert_eq!(codex_role(&mut input), Role::Unavailable);
+    assert_eq!(input.position(), 2048);
+}
+
+#[test]
+fn newly_spawned_owned_tools_keep_their_first_interval_cpu() {
+    let mut rows = vec![proc(10, 1, "codex", Role::Unknown)];
+    let mut a = activity();
+    let start = Instant::now();
+    sample(&mut a, &rows, start, 0);
+    let mut tool = proc(14, 10, "bash", Role::Unknown);
+    tool.times.as_mut().unwrap().started = WALL + 5000;
+    rows.push(tool);
+    cpu(&mut rows, 14, 1500, 0);
+    assert_eq!(session(&sample(&mut a, &rows, start, 15), 10).working, Some(true));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_unreadable_executable_is_not_a_replaced_process() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::{Command, Stdio};
+    struct StandIn {
+        child: std::process::Child,
+        dir: PathBuf,
+    }
+    impl Drop for StandIn {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+            fs::remove_dir_all(&self.dir).unwrap();
+        }
+    }
+    let dir = std::env::temp_dir().join(format!("quotum-image-{}-{}", std::process::id(), crate::model::now_ms()));
+    fs::create_dir(&dir).unwrap();
+    let source = dir.join("role.c");
+    let program = dir.join("role-process");
+    fs::write(&source, include_str!("../../tests/fixtures/role_process.c")).unwrap();
+    assert!(Command::new("cc").arg(&source).arg("-o").arg(&program).status().unwrap().success());
+    let mut stand = StandIn {
+        child: Command::new(program)
+            .args(["app-server", "--listen", "synthetic"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap(),
+        dir,
+    };
+    let mut output = BufReader::new(stand.child.stdout.take().unwrap());
+    let mut line = String::new();
+    output.read_line(&mut line).unwrap();
+    assert_eq!(line, "ready\n");
+    let pid = stand.child.id();
+    let listed = sys::processes().into_iter().find(|p| p.pid == pid).unwrap();
+    assert_eq!(listed.role, Role::Runtime, "the production Codex-specific reader sees this stand-in");
+    assert!(listed.image.is_some());
+    stand.child.stdin.as_mut().unwrap().write_all(b"d\n").unwrap();
+    line.clear();
+    output.read_line(&mut line).unwrap();
+    assert_eq!(line, "denied\n");
+    let denied = sys::processes().into_iter().find(|p| p.pid == pid).unwrap();
+    assert!(denied.native_birth == listed.native_birth, "denied metadata does not change birth");
+    assert_eq!(denied.role, Role::Runtime);
+    assert_eq!(denied.image, None);
+    assert_eq!(fs::metadata(format!("/proc/{pid}/exe")).unwrap_err().kind(), std::io::ErrorKind::PermissionDenied);
+    assert!(sys::verified(&denied).is_some());
+    stand.child.stdin.as_mut().unwrap().write_all(b"r\n").unwrap();
+    line.clear();
+    output.read_line(&mut line).unwrap();
+    assert_eq!(line, "restored\n");
+    let restored = sys::processes().into_iter().find(|p| p.pid == pid).unwrap();
+    assert!(restored.image == listed.image && restored.native_birth == listed.native_birth);
+}
+
+#[test]
+fn recovered_image_and_bounded_role_read_do_not_revoke_shared_provenance() {
+    let mut rows = vec![proc(41, 1, "codex", Role::Runtime)];
+    let mut a = activity();
+    let start = Instant::now();
+    sample(&mut a, &rows, start, 0);
+    // First availability of image metadata is no proof of executable replacement.
+    rows[0].image = Some((1, 1));
+    rows[0].parent = 40;
+    rows.push(proc(40, 1, "code", Role::Unknown));
+    let bytes = [vec![b'x'; 2048], b"\0app-server\0--listen\0".to_vec()].concat();
+    rows[0].role = codex_role(bytes.as_slice());
+    assert_eq!(session(&sample(&mut a, &rows, start, 15), 41).project, None);
+}
+
+#[test]
+fn a_positive_snapshot_role_supersedes_old_cache_when_later_reads_fail() {
+    for initial in [Role::Service, Role::Runtime] {
+        let mut rows = vec![proc(41, 1, "codex", initial)];
+        rows[0].image = Some((1, 1));
+        let mut a = activity();
+        let start = Instant::now();
+        sample(&mut a, &rows, start, 0);
+        rows[0].role = if initial == Role::Service { Role::Runtime } else { Role::Unknown };
+        let sessions = a.observe(
+            &rows,
+            900,
+            start + Duration::from_secs(15),
+            WALL + 15_000,
+            &|p| Some(Proc { role: Role::Unavailable, ..p.clone() }),
+            &|_| Some("/fixture-home/project-a".into()),
+            &|_| None,
+            &|_| true,
+        );
+        let current = session(&sessions, 41);
+        assert_eq!(
+            current.project.is_none(),
+            initial == Role::Service,
+            "current positive metadata wins over the previous observation's role"
+        );
+    }
+}
+
+#[test]
+fn a_newer_positive_role_change_supersedes_the_original_shared_snapshot() {
+    let rows = vec![proc(41, 1, "codex", Role::Runtime)];
+    let mut a = activity();
+    let sessions = a.observe(
+        &rows,
+        900,
+        Instant::now(),
+        WALL,
+        &|p| Some(Proc { role: Role::Unknown, ..p.clone() }),
+        &|_| Some("/fixture-home/project-a".into()),
+        &|_| None,
+        &|_| true,
+    );
+    assert_eq!(
+        session(&sessions, 41).project.as_deref(),
+        Some("project-a"),
+        "a positive newer classification invalidates the old runtime authority"
+    );
 }

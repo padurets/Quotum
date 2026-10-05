@@ -141,7 +141,7 @@ fn codex_role(mut input: impl Read) -> Role {
         }
     }
     if !ended {
-        return Role::Unknown;
+        return Role::Unavailable;
     }
     match invocation_word(&mut input, &[b"app-server\0"]) {
         Ok(Some(0)) => (),
@@ -232,11 +232,17 @@ struct Lifetime {
 
 #[derive(PartialEq, Eq)]
 struct Basis {
-    name: String,
-    image: Option<(u64, u64)>,
-    role: Role,
     shared: bool,
     unsafe_processes: Vec<ProcessKey>,
+}
+
+/// The accounting owner of a birth on one look, including excluded processes.
+struct Scope {
+    owner: Option<ProcessKey>,
+    name: String,
+    provider: Option<Provider>,
+    image: Option<(u64, u64)>,
+    role: Role,
 }
 
 /// Looks at the running clients again and again; working or idle is told by the CPU time
@@ -257,6 +263,7 @@ pub struct Activity {
     lifetimes: HashMap<ProcessKey, Lifetime>,
     /// Changing ownership invalidates a delta and hold computed from the old tree.
     bases: HashMap<ProcessKey, Basis>,
+    scopes: HashMap<ProcessKey, Scope>,
 }
 
 impl Activity {
@@ -287,6 +294,7 @@ impl Activity {
             placing,
             lifetimes: HashMap::new(),
             bases: HashMap::new(),
+            scopes: HashMap::new(),
         }
     }
 
@@ -342,26 +350,34 @@ impl Activity {
             // A reused PID proves the older birth ended; absence alone proves nothing.
             self.lifetimes.retain(|old, _| old.0 != p.pid || *old == key);
             let lifetime = self.lifetimes.entry(key).or_default();
-            if lifetime.name != p.name || lifetime.image != p.image {
+            let replaced_image = lifetime.image.zip(p.image).is_some_and(|(before, after)| before != after);
+            if lifetime.name != p.name || replaced_image {
                 lifetime.shared = false;
                 lifetime.role = None;
             }
-            if p.role != Role::Unavailable && lifetime.role != Some(p.role) {
-                lifetime.shared = false;
-            }
             lifetime.name = p.name.clone();
-            lifetime.image = p.image;
+            // Missing file metadata is not proof of exec, nor a replacement for the
+            // last known image. A later readable different inode is positive evidence.
+            if p.image.is_some() {
+                lifetime.image = p.image;
+            }
             if p.role == Role::Unavailable {
                 // The OS snapshot already bracketed this role read with birth checks.
                 // Losing a later read does not revoke its proven boundary.
                 let listed_role = by_pid.get(&p.pid).filter(|listed| listed.same_process(p)).map(|p| p.role);
-                p.role = lifetime.role.or(listed_role).unwrap_or(Role::Unknown);
+                p.role = listed_role
+                    .filter(|role| *role != Role::Unavailable)
+                    .or(lifetime.role)
+                    .unwrap_or(Role::Unavailable);
             }
             if p.role != Role::Unavailable {
+                if lifetime.role != Some(p.role) {
+                    lifetime.shared = false;
+                }
                 lifetime.role = Some(p.role);
             }
         }
-        let shared: HashSet<_> = validated
+        let mut shared: HashSet<_> = validated
             .iter()
             .filter_map(|p| {
                 let key = p.key()?;
@@ -376,7 +392,34 @@ impl Activity {
             before.same_process(&after).then_some(path)
         };
         let planned = sessions_with(procs, own, &checked_exe, &shared);
-        let found = sessions_with(&validated, own, &checked_exe, &shared);
+        // The original graph proves measurement ancestry even if an intermediate
+        // parent becomes unreadable during the additional identity checks.
+        let measuring: HashSet<_> = procs
+            .iter()
+            .filter(|p| {
+                p.pid == own
+                    || is_quotum(&p.name)
+                    || ancestors(p.pid, &by_pid)
+                        .iter()
+                        .any(|pid| *pid == own || by_pid.get(pid).is_some_and(|p| is_quotum(&p.name)))
+            })
+            .map(|p| p.pid)
+            .collect();
+        // Preserve an initially proven shared boundary for identity-valid roots.
+        // Losing its parent metadata does not grant inherited cwd authority.
+        for f in planned.iter().filter(|f| f.shared) {
+            if validated.iter().any(|p| {
+                p.pid == f.pid
+                    && by_pid[&p.pid].same_process(p)
+                    && (by_pid[&p.pid].role == Role::Unavailable || by_pid[&p.pid].role == p.role)
+            }) {
+                shared.insert(f.pid);
+            }
+        }
+        let found: Vec<_> = sessions_with(&validated, own, &checked_exe, &shared)
+            .into_iter()
+            .filter(|f| !measuring.contains(&f.pid))
+            .collect();
         let original = by_pid;
         let by_pid: HashMap<_, _> = validated.iter().map(|p| (p.pid, p)).collect();
         let incomplete: HashSet<_> =
@@ -402,6 +445,12 @@ impl Activity {
             .filter(|p| p.role == Role::Service)
             .map(|p| p.pid)
             .chain(found.iter().filter(|f| f.shared).map(|f| f.pid))
+            .chain(
+                validated
+                    .iter()
+                    .filter(|p| p.key().is_some_and(|key| self.lifetimes.get(&key).is_some_and(|l| l.reaped_unsafe)))
+                    .map(|p| p.pid),
+            )
             .collect();
         for &pid in &barriers {
             for ancestor in ancestors(pid, &by_pid) {
@@ -415,6 +464,38 @@ impl Activity {
                 if let Some(key) = by_pid[&f.pid].key() {
                     self.lifetimes.entry(key).or_default().shared = true;
                 }
+            }
+        }
+        let mut scopes: HashMap<_, _> = validated
+            .iter()
+            .filter_map(|p| {
+                let key = p.key()?;
+                let image = self.lifetimes.get(&key).and_then(|l| l.image);
+                Some((
+                    key,
+                    Scope { owner: None, name: p.name.clone(), provider: provider_of(&p.name), image, role: p.role },
+                ))
+            })
+            .collect();
+        for f in found.iter().filter(|f| mine(f.pid)) {
+            let Some(owner) = by_pid[&f.pid].key() else { continue };
+            for pid in f.tree.iter().filter(|&&pid| mine(pid)) {
+                if let Some(scope) = by_pid[pid].key().and_then(|key| scopes.get_mut(&key)) {
+                    scope.owner = Some(owner.clone());
+                }
+            }
+        }
+        let mut changed = HashSet::new();
+        for (key, scope) in &scopes {
+            let Some(before) = self.scopes.get(key) else { continue };
+            let changed_authority = (before.provider.is_some() || scope.provider.is_some())
+                && (before.name != scope.name
+                    || before.provider != scope.provider
+                    || before.image.zip(scope.image).is_some_and(|(a, b)| a != b)
+                    || (scope.role != Role::Unavailable && before.role != scope.role));
+            if before.owner != scope.owner || changed_authority {
+                changed.extend(before.owner.clone());
+                changed.extend(scope.owner.clone());
             }
         }
         let mut seen = HashMap::new();
@@ -453,14 +534,11 @@ impl Activity {
                 }
             }
             unsafe_processes.sort();
-            let basis = Basis {
-                name: root.name.clone(),
-                image: root.image,
-                role: root.role,
-                shared: f.shared,
-                unsafe_processes,
-            };
-            let before = self.last.get(&key).filter(|_| self.bases.get(&key) == Some(&basis) && complete);
+            let basis = Basis { shared: f.shared, unsafe_processes };
+            let before = self
+                .last
+                .get(&key)
+                .filter(|_| self.bases.get(&key) == Some(&basis) && complete && !changed.contains(&key));
             let next = judged(before, cpu, now, wall, working_share(f.provider));
             let started_at = root.times.unwrap().started;
             let working = if complete { next.working } else { None };
@@ -506,6 +584,7 @@ impl Activity {
         });
         self.last = seen;
         self.bases = bases;
+        self.scopes = scopes;
         self.lifetimes.retain(|key, l| {
             by_pid.get(&key.0).is_none_or(|p| p.key().as_ref() == Some(key))
                 && (l.shared || l.reaped_unsafe || by_pid.contains_key(&key.0))
@@ -646,32 +725,45 @@ fn sessions_with(procs: &[Proc], own: u32, exe: &dyn Fn(u32) -> Option<String>, 
     for p in procs {
         children.entry(p.parent).or_default().push(p.pid);
     }
-    let boundary = |p: &Proc| {
-        p.role == Role::Service
-            || shared.contains(&p.pid)
-            || (p.role == Role::Runtime && {
-                let above = ancestors(p.pid, &by_pid);
-                let owner = above.iter().filter_map(|pid| by_pid.get(pid)).find(|p| provider_of(&p.name).is_some());
-                owner.is_some_and(|owner| p.sid.zip(owner.sid).is_some_and(|(a, b)| a != b))
-            })
-    };
+    let mut boundaries: HashSet<u32> =
+        procs.iter().filter(|p| p.role == Role::Service).map(|p| p.pid).chain(shared.iter().copied()).collect();
+    for p in procs.iter().filter(|p| p.role == Role::Runtime) {
+        let above = ancestors(p.pid, &by_pid);
+        let owner = above.iter().filter_map(|pid| by_pid.get(pid)).find(|p| provider_of(&p.name).is_some());
+        if owner.is_some_and(|owner| p.sid.zip(owner.sid).is_some_and(|(a, b)| a != b)) {
+            boundaries.insert(p.pid);
+        }
+    }
     let client = |p: &Proc| (p.role != Role::Service).then(|| provider_of(&p.name)).flatten();
     let mut found = HashMap::new();
-    for p in procs {
-        let Some(provider) = client(p) else { continue };
-        let above: Vec<&Proc> = ancestors(p.pid, &by_pid).iter().filter_map(|pid| by_pid.get(pid).copied()).collect();
-        // Measurement exclusion crosses every boundary, unlike ownership folding.
-        if p.pid == own || is_quotum(&p.name) || above.iter().any(|p| p.pid == own || is_quotum(&p.name)) {
-            continue;
+    // Newly found unowned/shared roots are barriers in this very observation,
+    // including for other-provider descendants. Each pass only adds a boundary.
+    loop {
+        found.clear();
+        let mut added = false;
+        for p in procs {
+            let Some(provider) = client(p) else { continue };
+            let ancestry = ancestors(p.pid, &by_pid);
+            let above: Vec<&Proc> = ancestry.iter().filter_map(|pid| by_pid.get(pid).copied()).collect();
+            if p.pid == own || is_quotum(&p.name) || ancestry.contains(&own) || above.iter().any(|p| is_quotum(&p.name))
+            {
+                continue;
+            }
+            let separated = boundaries.contains(&p.pid) || above.iter().any(|p| boundaries.contains(&p.pid));
+            let owner = above.iter().take_while(|p| !boundaries.contains(&p.pid)).find_map(|p| client(p));
+            if !boundaries.contains(&p.pid) && owner == Some(provider) {
+                continue;
+            }
+            let origin = origin(&above, exe);
+            let shared = separated || (p.role == Role::Runtime && owner.is_none() && origin == Origin::Terminal);
+            if shared {
+                added |= boundaries.insert(p.pid);
+            }
+            found.insert(p.pid, (provider, origin, shared));
         }
-        let separated = boundary(p) || above.iter().any(|p| boundary(p));
-        let owner = above.iter().take_while(|p| !boundary(p)).find_map(|p| client(p));
-        if !boundary(p) && owner == Some(provider) {
-            continue;
+        if !added {
+            break;
         }
-        let origin = origin(&above, exe);
-        let shared = separated || (p.role == Role::Runtime && owner.is_none() && origin == Origin::Terminal);
-        found.insert(p.pid, (provider, origin, shared));
     }
     let mut list: Vec<_> = found
         .iter()
@@ -680,7 +772,7 @@ fn sessions_with(procs: &[Proc], own: u32, exe: &dyn Fn(u32) -> Option<String>, 
             let mut at = 0;
             while at < tree.len() && tree.len() < 4096 {
                 for &child in children.get(&tree[at]).into_iter().flatten() {
-                    if !found.contains_key(&child) && !boundary(by_pid[&child]) && tree.len() < 4096 {
+                    if !found.contains_key(&child) && !boundaries.contains(&child) && tree.len() < 4096 {
                         tree.push(child);
                     }
                 }
@@ -1678,7 +1770,7 @@ mod tests {
             assert_eq!(found(&[proc]), vec![(Provider::Codex, 10, vec![10])]);
         }
         let long = vec![b'x'; 2048];
-        assert_eq!(codex_role(long.as_slice()), Role::Unknown);
+        assert_eq!(codex_role(long.as_slice()), Role::Unavailable);
     }
 
     #[test]
@@ -1693,7 +1785,7 @@ mod tests {
         assert_eq!(codex_role(&mut input), Role::Unknown);
         assert_eq!(input.position(), b"codex\0p".len() as u64);
         let mut input = Cursor::new(vec![b'x'; 4096]);
-        assert_eq!(codex_role(&mut input), Role::Unknown);
+        assert_eq!(codex_role(&mut input), Role::Unavailable);
         assert_eq!(input.position(), 2048);
         struct Denied;
         impl Read for Denied {
@@ -2112,6 +2204,7 @@ mod tests {
             placing: true,
             lifetimes: HashMap::new(),
             bases: HashMap::new(),
+            scopes: HashMap::new(),
         };
         let (key, other) = ((7, 1), (8, 1));
         let worktree = both(Some("wt"), Some("quotum"));
