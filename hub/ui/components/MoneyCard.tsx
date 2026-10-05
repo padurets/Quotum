@@ -31,15 +31,16 @@ export function CapMetrics({cap,name,detail=name,status,compact=false,showPercen
   const percent=cap?capPercent(cap):null,remaining=percent===null?null:100-percent;
   const value=cap?amountText(capLeft(cap),cap.unit):'—',unit=cap?amountUnitLabel(cap.unit):'';
   const percentText=showPercent&&remaining!==null?<small className="limit-share">{Math.round(remaining)}%</small>:null;
+  const label=<span className="cap-label"><span>{name}</span>{status}</span>;
   const bar=<MeterBar remaining={cap?remaining:null} label={name}/>;
   const reset=cap?<CapReset meter={cap} short={compact}/>:<span>{t('money.stale')}</span>;
   if(compact)return <div className="compact-limit is-money">
-    <div className="compact-window-name"><span title={detail}><span className="cap-label"><span>{name}</span>{status}</span>{percentText}</span></div>
+    <div className="compact-window-name"><span title={detail}>{label}{percentText}</span></div>
     <small className="compact-reset">{reset}</small>{bar}
     <strong className="limit-value" title={cap?money(capLeft(cap),cap.unit,true):undefined}>{value}<small>{unit}</small></strong>
   </div>;
   return <div className="limit money-limit">
-    <div className="limit-top"><span className="limit-name" title={detail}>{name}{percentText}{status}</span>
+    <div className="limit-top"><span className="limit-name" title={detail}>{label}{percentText}</span>
       <span className={`limit-value v-${remaining===null?'ok':level(remaining)}`} title={cap?money(capLeft(cap),cap.unit,true):undefined}>{value}<small>{unit}</small></span>
     </div>{bar}
     <div className="limit-bottom"><span>{cap?t('money.of',{amount:money(cap.limit,cap.unit)}):t('quota.unavailable')}</span>{cap&&remaining===null?<span>{t('money.exhausted')}</span>:reset}</div>
