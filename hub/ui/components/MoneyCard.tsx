@@ -56,7 +56,7 @@ export function QuotaCard({source,compact=false}:{source:Card;compact?:boolean})
 export function QuotaMark({source}:{source:Card}) {
   if(!source.quota||source.quota.complete)return null;
   const text=messageOf(new ApiError(400,'connector_quota_'+(source.quota.generation?'partial':source.quota.issue)));
-  return <Popover label={text} up align="left" triggerClass="tray-pill is-warn" trigger={<span>!</span>}><div className="tray-panel"><p className="tray-panel-lead">{text}</p><p>{t('quota.budgetOnly')}</p></div></Popover>;
+  return <Popover label={text} up align="left" triggerClass="tray-pill is-warn" trigger={<svg className="tray-icon" viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="m12 3 10 18H2Z"/><path d="M12 9v5m0 3h.01"/></svg>}><div className="tray-panel"><p className="tray-panel-lead">{text}</p><p>{t('quota.budgetOnly')}</p></div></Popover>;
 }
 export function MoneyCard({source,board,view,compact=false}:{source:Card;board:string;view?:View;compact?:boolean}) {
   const balance=source.meters?.find(m=>m.id==='balance'),{keys,meters,error}=useShownKeys(source,view,board);
