@@ -1,7 +1,7 @@
 import {activity} from './activityReference.js';
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {cellOf, compose, decodeCells, encodeCells, targetOf, tileOf, type Chunk, type DecodedCell} from '../domain/history.js';
+import {cellOf, compose, decodeCells, encodeCells, expandHistory, targetOf, tileOf, type Chunk, type DecodedCell} from '../domain/history.js';
 import {cellsOf, workFrom, type CellSamples} from '../domain/cells.js';
 import {edge} from '../domain/quota.js';
 import {barOf, overlap, union, type Stretch} from '../domain/work.js';
@@ -11,6 +11,15 @@ const meta = {now: 120 * M, historyStart: 0, known: {work: 0, sources: {s: 0}}};
 const windows = new Set(['s w']);
 const empty = (from: number, to: number): Chunk => ({from, to, series: [], activity: {sessions: [], devices: {}, cells: []}, resets: [], grants: []});
 const value = (at: number, low: number, extra: Partial<DecodedCell> = {}): DecodedCell => ({at, low, first: low, last: low, open: low + 1, gap: false, hold: 5 * M, spent: 1, covered: M, work: [1, 0, 0], ...extra});
+
+test('compact history uses the requesting flight metadata and refuses another revision or run', () => {
+  const prior = {...meta, run: 'first', meta: 'old'};
+  const compact = {now: meta.now + M, run: prior.run, meta: prior.meta, chunks: [empty(0, M)]};
+  assert.deepEqual(expandHistory(compact, prior), {...compact, historyStart: prior.historyStart, known: prior.known});
+  for (const invalid of [undefined, {...prior, meta: 'new'}, {...prior, run: 'restarted'}, {...prior, meta: undefined}]) assert.throws(() => expandHistory(compact, invalid), /metadata mismatch/);
+  const full = {...meta, run: 'restarted', chunks: []};
+  assert.equal(expandHistory(full, prior), full, 'legacy and changed full metadata replace the prior basis');
+});
 
 test('a target keeps its left cell, admits fast clocks and shares the grid between periods', () => {
   assert.equal(cellOf(6 * 60 * M), M);

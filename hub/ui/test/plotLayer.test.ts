@@ -19,12 +19,19 @@ test('the moving artwork keeps its SVG projection inside a stationary CSS clip',
 
 test('changing a whole-bar clip preserves its origin and SVG dimensions', () => {
   const moving = {style: {left: '-35px', width: '350px', height: '100%', transform: 'translateX(-20px)'}};
-  const frame = {style: {left: '35px', right: '10.5px', clipPath: ''}, firstElementChild: moving} as unknown as HTMLDivElement;
+  const counter = {style: {transform: ''}, firstElementChild: moving};
+  const end = {style: {transform: ''}, firstElementChild: counter};
+  const start = {style: {transform: ''}, firstElementChild: end};
+  const frame = {style: {left: '35px', right: '10.5px', visibility: ''}, firstElementChild: start} as unknown as HTMLDivElement;
   for (const [from, to] of [[35, 339.5], [67.5, 301.25], [-10, 400], [300, 250], [400, 500]]) {
     clipPlot(frame, from, to, 350);
-    const values = frame.style.clipPath.match(/^inset\(0 ([\d.]+)px 0 ([\d.]+)px\)$/);
-    const a = values ? Number(values[2]) : 0, b = 304.5 - (values ? Number(values[1]) : 0);
+    const shift = (node: typeof counter | typeof start | typeof end) => Number(node.style.transform.match(/^translateX\(([-.\d]+)px\)$/)?.[1] ?? 0);
+    const a = shift(start), b = frame.style.visibility === 'hidden' ? a : 304.5 + a + shift(end);
     assert.ok(a >= 0 && b >= a && b <= 304.5);
+    const fromEdge = Math.max(0, Math.min(304.5, from - 35)), toEdge = Math.max(fromEdge, Math.min(304.5, to - 35));
+    assert.equal(frame.style.visibility === 'hidden', toEdge === fromEdge);
+    if (toEdge > fromEdge) assert.deepEqual([a, b], [fromEdge, toEdge], 'the visible intersection is exactly the requested whole-bar interval');
+    for (const point of [-100, 0, 99.5, 350]) assert.ok(Math.abs(a + shift(end) + shift(counter) + point - point) < 1e-10, 'the clip changes without scaling or shifting its artwork');
     assert.equal(frame.style.left, '35px', 'the clip does not lay out its ancestors again');
     assert.equal(frame.style.right, '10.5px');
     assert.equal(35 + parseFloat(moving.style.left), 0, 'source coordinates remain in the chart’s fixed projection');
