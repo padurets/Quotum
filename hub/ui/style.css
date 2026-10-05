@@ -942,6 +942,9 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .money-limit .limit-top { flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
 .money-limit .limit-name { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .key-status { display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--warn); vertical-align: middle; }
+.compact-window-name .cap-label { display: flex; align-items: center; overflow: visible; }
+.compact-window-name .cap-label > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.compact-window-name .cap-label .key-status { flex-shrink: 0; }
 .key-status.is-inactive { background: var(--text-3); }
 .key-status[aria-hidden="true"] { visibility: hidden; }
 .money-limit .limit-value { max-width: 100%; overflow-wrap: anywhere; }

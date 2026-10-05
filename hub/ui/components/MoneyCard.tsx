@@ -34,7 +34,7 @@ export function CapMetrics({cap,name,detail=name,status,compact=false,showPercen
   const bar=<MeterBar remaining={cap?remaining:null} label={name}/>;
   const reset=cap?<CapReset meter={cap} short={compact}/>:<span>{t('money.stale')}</span>;
   if(compact)return <div className="compact-limit is-money">
-    <div className="compact-window-name"><span title={detail}>{name}{percentText}{status}</span></div>
+    <div className="compact-window-name"><span title={detail}><span className="cap-label"><span>{name}</span>{status}</span>{percentText}</span></div>
     <small className="compact-reset">{reset}</small>{bar}
     <strong className="limit-value" title={cap?money(capLeft(cap),cap.unit,true):undefined}>{value}<small>{unit}</small></strong>
   </div>;
