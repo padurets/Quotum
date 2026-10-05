@@ -221,6 +221,12 @@ impl Seen {
 
 type ProcessKey = (u32, Vec<u8>);
 
+#[derive(Clone)]
+struct Parent {
+    key: ProcessKey,
+    observed: bool,
+}
+
 #[derive(Default)]
 struct Lifetime {
     name: String,
@@ -228,7 +234,7 @@ struct Lifetime {
     role: Option<Role>,
     shared: bool,
     reaped_unsafe: bool,
-    parent: Option<ProcessKey>,
+    parent: Option<Parent>,
 }
 
 #[derive(PartialEq, Eq)]
@@ -250,6 +256,7 @@ struct Counters {
     total: u64,
     subjects: HashMap<ProcessKey, u64>,
     assignments: HashMap<ProcessKey, ProcessKey>,
+    pending: HashMap<ProcessKey, u64>,
 }
 
 /// The accounting owner of a birth on one look, including excluded processes.
@@ -343,6 +350,14 @@ impl Activity {
         self.pending_unsafe.retain(|old| old.0 != p.pid || *old == key);
         let lifetime = self.lifetimes.entry(key).or_default();
         let replaced_image = lifetime.image.zip(p.image).is_some_and(|(before, after)| before != after);
+        let changed_role = p.role != Role::Unavailable && lifetime.role != Some(p.role);
+        if (lifetime.name != p.name || replaced_image || changed_role)
+            && (lifetime.shared || lifetime.role == Some(Role::Service))
+        {
+            // Becoming eligible does not make delayed child CPU from the old
+            // excluded invocation safe. Its own and new live CPU still count.
+            lifetime.reaped_unsafe = true;
+        }
         if lifetime.name != p.name || replaced_image {
             lifetime.shared = false;
             lifetime.role = None;
@@ -362,9 +377,16 @@ impl Activity {
         }
     }
 
-    fn remember_parents(&mut self, procs: &[Proc]) -> HashMap<ProcessKey, Option<ProcessKey>> {
+    fn remember_parents(&mut self, procs: &[Proc]) -> HashMap<ProcessKey, Option<Parent>> {
         let listed: HashMap<_, _> = procs.iter().filter_map(|p| Some((p.pid, p.key()?))).collect();
         let known: HashMap<_, _> = self.lifetimes.keys().map(|key| (key.0, key.clone())).collect();
+        for lifetime in self.lifetimes.values_mut() {
+            if let Some(parent) = &mut lifetime.parent {
+                // Seeing that same birth again proves it survived the metadata
+                // gap, including when the child's own metadata is now missing.
+                parent.observed |= listed.get(&parent.key.0) == Some(&parent.key);
+            }
+        }
         let mut parents: HashMap<_, _> =
             self.lifetimes.iter().map(|(key, l)| (key.clone(), l.parent.clone())).collect();
         for p in procs {
@@ -375,9 +397,10 @@ impl Activity {
             let parent = lifetime
                 .parent
                 .as_ref()
-                .filter(|key| key.0 == p.parent)
+                .filter(|parent| parent.observed && parent.key.0 == p.parent)
                 .cloned()
-                .or_else(|| listed.get(&p.parent).or_else(|| known.get(&p.parent)).cloned());
+                .or_else(|| listed.get(&p.parent).cloned().map(|key| Parent { key, observed: true }))
+                .or_else(|| known.get(&p.parent).cloned().map(|key| Parent { key, observed: false }));
             lifetime.parent = parent.clone();
             parents.insert(key, parent);
         }
@@ -546,6 +569,7 @@ impl Activity {
             planned.iter().filter(|f| f.tree.iter().any(|pid| !by_pid.contains_key(pid))).map(|f| f.pid).collect();
         // A boundary proven in the initial snapshot may already have exited or exec'd
         // by validation. Its old branch can still be reaped into validated ancestors.
+        let validated_births: HashSet<_> = validated.iter().filter_map(Proc::key).collect();
         let unsafe_sources: HashSet<_> = procs
             .iter()
             .chain(validated.iter())
@@ -554,7 +578,7 @@ impl Activity {
             .chain(planned.iter().filter(|f| f.authority == Authority::Shared).filter_map(|f| original[&f.pid].key()))
             .chain(found.iter().filter(|f| f.authority == Authority::Shared).filter_map(|f| by_pid[&f.pid].key()))
             .chain(self.lifetimes.iter().filter(|(_, l)| l.reaped_unsafe).map(|(key, _)| key.clone()))
-            .chain(self.pending_unsafe.iter().cloned())
+            .chain(self.pending_unsafe.iter().filter(|key| validated_births.contains(*key)).cloned())
             .collect();
         for source in unsafe_sources {
             // Each edge pins both births. An absent ancestor or source can still
@@ -562,9 +586,14 @@ impl Activity {
             for parents in [&listed_parents, &validated_parents] {
                 let mut visited = HashSet::from([source.clone()]);
                 let mut parent = parents.get(&source).cloned().flatten();
-                while let Some(key) = parent.filter(|key| visited.len() < 65 && visited.insert(key.clone())) {
-                    self.pending_unsafe.insert(key.clone());
-                    parent = parents.get(&key).cloned().flatten();
+                while let Some(edge) = parent.filter(|edge| visited.len() < 65 && visited.insert(edge.key.clone())) {
+                    self.pending_unsafe.insert(edge.key.clone());
+                    if !edge.observed {
+                        // A cached PID supplies a conditional target only. It
+                        // cannot prove the rest of that old birth's ancestry.
+                        break;
+                    }
+                    parent = parents.get(&edge.key).cloned().flatten();
                 }
             }
         }
@@ -671,15 +700,29 @@ impl Activity {
             if before.is_none() {
                 counter = Counters::default();
             }
-            for (subject, cpu) in &subjects {
-                counter.total =
-                    counter.total.saturating_add(cpu.saturating_sub(*counter.subjects.get(subject).unwrap_or(&0)));
+            let too_soon = before.is_some_and(|before| now.duration_since(before.at).as_millis() < MIN_LOOK_MS);
+            if too_soon {
+                // judged keeps the previous sample on a short look. Keep its
+                // references too, while retaining observed CPU until judgement.
+                for (subject, cpu) in subjects {
+                    let pending = counter.pending.entry(subject).or_default();
+                    *pending = (*pending).max(cpu);
+                }
+            } else {
+                for (subject, cpu) in counter.pending.drain() {
+                    let current = subjects.entry(subject).or_default();
+                    *current = (*current).max(cpu);
+                }
+                for (subject, cpu) in &subjects {
+                    counter.total =
+                        counter.total.saturating_add(cpu.saturating_sub(*counter.subjects.get(subject).unwrap_or(&0)));
+                }
+                counter.subjects.extend(subjects);
             }
             // Remember absent subjects until their birth ends, so a temporary
             // omission cannot count their lifetime CPU a second time on return.
-            counter.subjects.extend(subjects);
             counter.assignments.extend(assignments);
-            counter.subjects.retain(|key, _| self.lifetimes.contains_key(key));
+            counter.subjects.retain(|key, _| self.lifetimes.contains_key(key) || counter.pending.contains_key(key));
             counter.assignments.retain(|key, _| self.lifetimes.contains_key(key));
             let next = judged(before, counter.total, now, wall, working_share(f.provider));
             let started_at = root.times.unwrap().started;

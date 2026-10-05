@@ -456,11 +456,15 @@ This also applies to a first snapshot's proof before successful additional valid
 Initially missing non-init ancestry leaves ownership unproven without requiring an
 earlier cache entry. Observed parent links pin both births; pending ancestor evidence
 survives the source's absence and never transfers just by matching a reused PID.
+Conditional cached-parent targets require birth confirmation before further ancestry
+propagation. A formerly excluded process that becomes eligible still discards its
+ambiguous delayed child CPU for that same birth.
 Raw-proven ownership changes invalidate incompatible working holds before additional
 validation, while newer validated evidence supersedes the initial snapshot.
 At affected roots, retiring an observed owned subtree cannot cancel sampled self or
 live CPU increases; clean subtrees retain their live-plus-reaped accounting. These
-local counters and pending ancestor evidence are not transmitted.
+local counters and pending ancestor evidence are not transmitted. Samples shorter
+than the judgement interval retain observed CPU without advancing its references.
 
 What is sent: the pseudonym of each account, the plan name, percentages and reset times
 of the windows, free resets and when each expires, the client's version, the machine's random id, its name

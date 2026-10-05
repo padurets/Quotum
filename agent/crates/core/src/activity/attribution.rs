@@ -1157,3 +1157,158 @@ fn a_proven_private_owner_does_not_require_its_outer_host_metadata() {
         }
     }
 }
+
+#[test]
+fn a_new_child_never_confirms_a_missing_parents_cached_old_birth() {
+    let mut rows = vec![proc(30, 1, "codex", Role::Unknown), proc(20, 30, "claude", Role::Unknown)];
+    let mut a = activity();
+    let start = Instant::now();
+    sample(&mut a, &rows, start, 0);
+    sample(&mut a, &rows, start, 15);
+    // Old20 exits and30 waits it. A replacement20 belongs to init and starts a
+    // new10 plus a Service. Replacement20 is unreadable on their first look.
+    rows.pop();
+    cpu(&mut rows, 30, 0, 1500);
+    rows.push(proc(10, 20, "claude", Role::Unknown));
+    rows.push(proc(11, 10, "codex", Role::Service));
+    cpu(&mut rows, 11, 1500, 0);
+    let current = sample(&mut a, &rows, start, 30);
+    assert_eq!(session(&current, 30).working, Some(true), "PID alone cannot taint the unrelated old ancestor");
+    let mut replacement = proc(20, 1, "codex", Role::Unknown);
+    replacement.native_birth = Some(vec![99]);
+    rows.push(replacement);
+    sample(&mut a, &rows, start, 45);
+    // The new parent is now positively observed with its new child; it really
+    // has the excluded branch and must ignore its eventual reaping.
+    rows.retain(|p| ![10, 11].contains(&p.pid));
+    cpu(&mut rows, 20, 0, 1500);
+    assert_eq!(session(&sample(&mut a, &rows, start, 60), 20).working, Some(false));
+}
+
+#[test]
+fn a_former_service_cannot_return_its_old_child_cpu_after_becoming_eligible() {
+    for service in [false, true] {
+        let mut rows = vec![
+            proc(10, 1, "codex", Role::Unknown),
+            proc(11, 10, "codex", if service { Role::Service } else { Role::Unknown }),
+        ];
+        let mut a = activity();
+        let start = Instant::now();
+        sample(&mut a, &rows, start, 0);
+        // The service can exec into an ordinary eligible client while a tool
+        // from its earlier excluded invocation is already an unreaped zombie.
+        rows[1].role = Role::Unknown;
+        sample(&mut a, &rows, start, 15);
+        cpu(&mut rows, 11, 0, 1500);
+        assert_eq!(session(&sample(&mut a, &rows, start, 30), 10).working, Some(!service));
+        rows.push(proc(14, 11, "bash", Role::Unknown));
+        cpu(&mut rows, 14, 1500, 0);
+        assert_eq!(
+            session(&sample(&mut a, &rows, start, 45), 10).working,
+            Some(true),
+            "new live owned CPU still counts"
+        );
+    }
+}
+
+#[test]
+fn a_short_partial_snapshot_gap_never_replays_unchanged_cpu() {
+    for unsafe_root in [false, true] {
+        let mut rows = vec![
+            proc(10, 1, "codex", Role::Unknown),
+            proc(14, 10, "bash", Role::Unknown),
+            proc(15, 14, "bash", Role::Unknown),
+        ];
+        if unsafe_root {
+            rows.push(proc(11, 10, "codex", Role::Service));
+        }
+        cpu(&mut rows, 15, 10000, 0);
+        let mut a = activity();
+        let start = Instant::now();
+        for ms in [0, 500, 1500] {
+            let listed: Vec<_> = rows.iter().filter(|p| ms != 500 || p.pid != 15).cloned().collect();
+            let sessions = a.observe(
+                &listed,
+                900,
+                start + Duration::from_millis(ms),
+                WALL + ms as Millis,
+                &|p| Some(p.clone()),
+                &|_| None,
+                &|_| None,
+                &|_| true,
+            );
+            if ms == 1500 {
+                assert_eq!(session(&sessions, 10).working, Some(false));
+            }
+        }
+    }
+}
+
+#[test]
+fn short_looks_keep_observed_owned_cpu_until_the_next_judgement() {
+    let mut rows = vec![proc(10, 1, "codex", Role::Unknown), proc(11, 10, "codex", Role::Service)];
+    let mut a = activity();
+    let start = Instant::now();
+    sample(&mut a, &rows, start, 0);
+    let mut tool = proc(14, 10, "bash", Role::Unknown);
+    tool.times.as_mut().unwrap().started = WALL + 100;
+    rows.push(tool);
+    cpu(&mut rows, 14, 100, 0);
+    let read = |a: &mut Activity, rows: &[Proc], ms| {
+        a.observe(
+            rows,
+            900,
+            start + Duration::from_millis(ms),
+            WALL + ms as Millis,
+            &|p| Some(p.clone()),
+            &|_| None,
+            &|_| None,
+            &|_| true,
+        )
+    };
+    assert_eq!(session(&read(&mut a, &rows, 500), 10).working, None);
+    rows.pop();
+    cpu(&mut rows, 10, 0, 100);
+    assert_eq!(
+        session(&read(&mut a, &rows, 1500), 10).working,
+        Some(true),
+        "the observed live CPU is retained, without guessing the reap"
+    );
+}
+
+#[test]
+fn short_look_retirement_keeps_the_old_reference_until_cpu_is_judged() {
+    let mut rows = vec![
+        proc(10, 1, "codex", Role::Unknown),
+        proc(11, 10, "codex", Role::Service),
+        proc(14, 10, "bash", Role::Unknown),
+    ];
+    cpu(&mut rows, 14, 10000, 0);
+    let mut a = activity();
+    let start = Instant::now();
+    sample(&mut a, &rows, start, 0);
+    let read = |a: &mut Activity, rows: &[Proc], ms| {
+        a.observe(
+            rows,
+            900,
+            start + Duration::from_millis(ms),
+            WALL + ms as Millis,
+            &|p| Some(p.clone()),
+            &|_| None,
+            &|_| None,
+            &|_| true,
+        )
+    };
+    cpu(&mut rows, 14, 10010, 0);
+    read(&mut a, &rows, 500);
+    rows.pop();
+    let mut replacement = proc(14, 1, "codex", Role::Unknown);
+    replacement.native_birth = Some(vec![99]);
+    rows.push(replacement);
+    read(&mut a, &rows, 750);
+    assert_eq!(
+        session(&read(&mut a, &rows, 1500), 10).working,
+        Some(false),
+        "only the observed ten new milliseconds count"
+    );
+}

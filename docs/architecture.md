@@ -135,24 +135,29 @@ is proved. An initially known unsafe branch also retains pending birth-specific 
 evidence until that same ancestor can be validated. This includes a first snapshot's
 proof when its additional validation fails, and a retained unsafe birth whose current
 validation is unavailable. Observed parent links pin both process births, so pending
-ancestor evidence survives the later absence of the source too. Raw-proven authority
-changes invalidate old ownership and working holds even before successful additional
-validation; newer validated evidence supersedes them. A reused PID inherits no state.
+ancestor evidence survives the later absence of the source too. A cached parent PID
+supplies only a conditional target until its birth is confirmed; it cannot prove that
+old birth's other ancestors. Raw-proven authority changes invalidate old ownership
+and working holds even before successful additional validation; newer validated
+evidence supersedes them. A reused PID inherits no state.
 
 The OS also gives CPU of finished children, without telling which branch earned it.
 For every ancestor of a proven excluded branch, across wrappers and other-provider
 session roots, this reaped CPU is ignored for that ancestor's remaining process birth.
-The restriction survives branch exit, reparenting and same-birth exec. Its own CPU and
-live owned tools still count; clean trees retain their finished-tool accounting. The
-conservative cost is that a short owned tool entirely between looks can be missed at
-an affected ancestor. Changing the accounting basis discards incompatible deltas and
+The restriction survives branch exit, reparenting and same-birth exec. A previously
+excluded process that becomes eligible also keeps its delayed child CPU excluded.
+Its own CPU and live owned tools still count; clean trees retain their finished-tool
+accounting. The conservative cost is that a short owned tool entirely between looks
+can be missed at an affected ancestor. Changing the accounting basis discards incompatible deltas and
 working holds rather than turning a lifetime-counter jump into work. Accounting owner
 and authority transitions of observed births also reset affected sessions, even when
 an ancestor was already marked unsafe. New owned tools retain their first observed CPU.
 Unsafe births count their own CPU separately from clean owned subtrees. Each clean
 subtree keeps its live-plus-reaped counter; sampled increases accumulate without
 subtracting retired subtrees, so an observed tool's exit cannot hide new self or live
-CPU. Regrouping observed contributors discards incompatible deltas and holds. Unsafe
+CPU. Short looks retain their sampled CPU while keeping references at the last full
+judgement, so a brief metadata gap cannot replay an unchanged counter. Regrouping
+observed contributors discards incompatible deltas and holds. Unsafe
 births continue to mark physical ancestors after the original service has gone,
 including an ancestor whose metadata becomes readable later.
 
