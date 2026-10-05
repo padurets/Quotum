@@ -1022,3 +1022,138 @@ fn clean_subtree_reaping_is_a_transfer_even_below_an_unsafe_root() {
         "a clean subtree still counts short finished tools"
     );
 }
+
+#[test]
+fn first_missing_owner_is_uncertain_before_any_cache_exists() {
+    for owner in ["codex", "code", "ChatGPT", "node"] {
+        let mut rows = vec![
+            proc(40, 1, owner, Role::Unknown),
+            proc(41, 40, "codex", Role::Runtime),
+            proc(42, 41, "bash", Role::Unknown),
+        ];
+        let mut a = activity();
+        let start = Instant::now();
+        for secs in [0, 15, 30] {
+            if secs == 30 {
+                cpu(&mut rows, 42, 1500, 0);
+            }
+            let listed: Vec<_> = rows.iter().filter(|p| secs != 0 || p.pid != 40).cloned().collect();
+            let sessions = a.observe(
+                &listed,
+                900,
+                start + Duration::from_secs(secs),
+                WALL + secs as Millis * 1000,
+                &|p| Some(p.clone()),
+                &|_| Some("/fixture-home/project-a".into()),
+                &|_| Some("/opt/.vscode-server/bin/node".into()),
+                &|_| true,
+            );
+            let root = session(&sessions, if secs != 0 && owner == "codex" { 40 } else { 41 });
+            assert_eq!(root.project.as_deref(), if secs == 0 { None } else { Some("project-a") });
+            if secs == 30 {
+                assert_eq!(root.working, Some(true));
+            }
+        }
+    }
+}
+
+#[test]
+fn a_raw_second_leaf_boundary_resets_hold_even_when_validation_fails() {
+    for available in [false, true] {
+        let mut rows = vec![
+            proc(10, 1, "codex", Role::Unknown),
+            proc(11, 10, "codex", Role::Service),
+            proc(21, 10, "codex", Role::Unknown),
+        ];
+        let mut a = activity();
+        let start = Instant::now();
+        sample(&mut a, &rows, start, 0);
+        cpu(&mut rows, 21, 1500, 0);
+        assert_eq!(session(&sample(&mut a, &rows, start, 15), 10).working, Some(true));
+        rows[2].role = Role::Service;
+        let cutoff = a.observe(
+            &rows,
+            900,
+            start + Duration::from_secs(30),
+            WALL + 30000,
+            &|p| (available || p.pid != 21).then(|| p.clone()),
+            &|_| None,
+            &|_| None,
+            &|_| true,
+        );
+        assert_ne!(session(&cutoff, 10).working, Some(true));
+        rows.pop();
+        cpu(&mut rows, 10, 0, 1500);
+        assert_eq!(session(&sample(&mut a, &rows, start, 45), 10).working, Some(false));
+        assert_eq!(session(&sample(&mut a, &rows, start, 60), 10).working, Some(false));
+    }
+}
+
+#[test]
+fn known_unsafe_parentage_survives_missing_ancestors_and_then_the_source() {
+    for wrapper in [false, true] {
+        for reused in [false, true] {
+            let mut rows = vec![
+                proc(20, 1, "codex", Role::Unknown),
+                proc(10, if wrapper { 15 } else { 20 }, "claude", Role::Unknown),
+            ];
+            if wrapper {
+                rows.push(proc(15, 20, "bash", Role::Unknown));
+            }
+            let mut a = activity();
+            let start = Instant::now();
+            sample(&mut a, &rows, start, 0);
+            sample(&mut a, &rows, start, 15);
+            rows.push(proc(11, 10, "codex", Role::Service));
+            cpu(&mut rows, 11, 1500, 0);
+            let gap: Vec<_> = rows.iter().filter(|p| ![20, 15].contains(&p.pid)).cloned().collect();
+            sample(&mut a, &gap, start, 30);
+            // A waits the service, exits and remains unreaped/unreadable; a
+            // wrapper waits A too before the outer root becomes readable.
+            rows.retain(|p| ![10, 11, 15].contains(&p.pid));
+            if reused {
+                rows[0].native_birth = Some(vec![99]);
+            }
+            sample(&mut a, &rows, start, 45);
+            cpu(&mut rows, 20, 0, 1500);
+            assert_eq!(
+                session(&sample(&mut a, &rows, start, 60), 20).working,
+                Some(reused),
+                "replacement birth inherits no pending evidence"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_proven_private_owner_does_not_require_its_outer_host_metadata() {
+    for owner in ["codex", "code", "ChatGPT", "node"] {
+        let mut rows = vec![
+            proc(40, 777, owner, Role::Unknown),
+            proc(41, 40, "codex", Role::Runtime),
+            proc(42, 41, "bash", Role::Unknown),
+        ];
+        let mut a = activity();
+        let start = Instant::now();
+        for secs in [0, 15] {
+            if secs == 15 {
+                cpu(&mut rows, 42, 1500, 0);
+            }
+            let sessions = a.observe(
+                &rows,
+                900,
+                start + Duration::from_secs(secs),
+                WALL + secs as Millis * 1000,
+                &|p| Some(p.clone()),
+                &|_| Some("/fixture-home/project-a".into()),
+                &|_| Some("/opt/.vscode-server/bin/node".into()),
+                &|_| true,
+            );
+            let root = session(&sessions, if owner == "codex" { 40 } else { 41 });
+            assert_eq!(root.project.as_deref(), Some("project-a"));
+            if secs == 15 {
+                assert_eq!(root.working, Some(true));
+            }
+        }
+    }
+}

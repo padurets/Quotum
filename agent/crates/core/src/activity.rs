@@ -228,6 +228,7 @@ struct Lifetime {
     role: Option<Role>,
     shared: bool,
     reaped_unsafe: bool,
+    parent: Option<ProcessKey>,
 }
 
 #[derive(PartialEq, Eq)]
@@ -361,6 +362,52 @@ impl Activity {
         }
     }
 
+    fn remember_parents(&mut self, procs: &[Proc]) -> HashMap<ProcessKey, Option<ProcessKey>> {
+        let listed: HashMap<_, _> = procs.iter().filter_map(|p| Some((p.pid, p.key()?))).collect();
+        let known: HashMap<_, _> = self.lifetimes.keys().map(|key| (key.0, key.clone())).collect();
+        let mut parents: HashMap<_, _> =
+            self.lifetimes.iter().map(|(key, l)| (key.clone(), l.parent.clone())).collect();
+        for p in procs {
+            let Some(key) = p.key() else { continue };
+            let Some(lifetime) = self.lifetimes.get_mut(&key) else { continue };
+            // An unchanged parent PID does not prove adoption by a replacement
+            // birth at that PID. Keep the edge pinned until parentage changes.
+            let parent = lifetime
+                .parent
+                .as_ref()
+                .filter(|key| key.0 == p.parent)
+                .cloned()
+                .or_else(|| listed.get(&p.parent).or_else(|| known.get(&p.parent)).cloned());
+            lifetime.parent = parent.clone();
+            parents.insert(key, parent);
+        }
+        parents
+    }
+
+    fn scopes_of(&self, procs: &[Proc], found: &[Found], mine: &dyn Fn(u32) -> bool) -> HashMap<ProcessKey, Scope> {
+        let by_pid: HashMap<_, _> = procs.iter().map(|p| (p.pid, p)).collect();
+        let mut scopes: HashMap<_, _> = procs
+            .iter()
+            .filter_map(|p| {
+                let key = p.key()?;
+                let image = self.lifetimes.get(&key)?.image;
+                Some((
+                    key,
+                    Scope { owner: None, name: p.name.clone(), provider: provider_of(&p.name), image, role: p.role },
+                ))
+            })
+            .collect();
+        for f in found.iter().filter(|f| mine(f.pid)) {
+            let Some(owner) = by_pid[&f.pid].key() else { continue };
+            for pid in f.tree.iter().filter(|&&pid| mine(pid)) {
+                if let Some(scope) = by_pid[pid].key().and_then(|key| scopes.get_mut(&key)) {
+                    scope.owner = Some(owner.clone());
+                }
+            }
+        }
+        scopes
+    }
+
     /// The production sampling path with process metadata supplied by the OS or stand-ins.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn observe(
@@ -407,9 +454,11 @@ impl Activity {
         for p in listed.iter_mut().filter(|p| relevant.contains(&p.pid)) {
             self.remember_process(p);
         }
+        let listed_parents = self.remember_parents(&listed);
         for p in &mut validated {
             self.remember_process(p);
         }
+        let validated_parents = self.remember_parents(&validated);
         let procs = listed.as_slice();
         let by_pid: HashMap<_, _> = procs.iter().map(|p| (p.pid, p)).collect();
         let mut shared: HashSet<_> = validated
@@ -437,12 +486,22 @@ impl Activity {
             .iter()
             .filter(|p| p.role == Role::Runtime || validated.iter().any(|q| q.pid == p.pid && q.role == Role::Runtime))
             .filter(|p| {
-                ancestors(p.pid, &by_pid).iter().any(|pid| {
-                    (!available.contains(pid)
-                        && (by_pid.contains_key(pid) || self.lifetimes.keys().any(|key| key.0 == *pid)))
-                        || by_pid.get(pid).is_some_and(|p| remote_node(&p.name))
-                            && paths.get(pid).is_none_or(Option::is_none)
-                })
+                for pid in ancestors(p.pid, &by_pid) {
+                    if !available.contains(&pid) {
+                        // A missing non-init parent is incomplete ancestry even
+                        // on the first look, before any cache exists.
+                        return by_pid.contains_key(&pid) || pid != 1;
+                    }
+                    let parent = by_pid[&pid];
+                    if remote_node(&parent.name) && paths.get(&pid).is_none_or(Option::is_none) {
+                        return true;
+                    }
+                    if provider_of(&parent.name).is_some() || origin(&[parent], &checked_exe) != Origin::Terminal {
+                        // Hosts above a proven owner cannot revoke its authority.
+                        return false;
+                    }
+                }
+                false
             })
             .map(|p| p.pid)
             .collect();
@@ -487,48 +546,31 @@ impl Activity {
             planned.iter().filter(|f| f.tree.iter().any(|pid| !by_pid.contains_key(pid))).map(|f| f.pid).collect();
         // A boundary proven in the initial snapshot may already have exited or exec'd
         // by validation. Its old branch can still be reaped into validated ancestors.
-        let unsafe_sources: Vec<_> = procs
+        let unsafe_sources: HashSet<_> = procs
             .iter()
-            .filter(|p| {
-                p.role == Role::Service
-                    || p.key().is_some_and(|key| {
-                        self.pending_unsafe.contains(&key) || self.lifetimes.get(&key).is_some_and(|l| l.reaped_unsafe)
-                    })
-            })
-            .map(|p| p.pid)
-            .chain(planned.iter().filter(|f| f.authority == Authority::Shared).map(|f| f.pid))
+            .chain(validated.iter())
+            .filter(|p| p.role == Role::Service)
+            .filter_map(Proc::key)
+            .chain(planned.iter().filter(|f| f.authority == Authority::Shared).filter_map(|f| original[&f.pid].key()))
+            .chain(found.iter().filter(|f| f.authority == Authority::Shared).filter_map(|f| by_pid[&f.pid].key()))
+            .chain(self.lifetimes.iter().filter(|(_, l)| l.reaped_unsafe).map(|(key, _)| key.clone()))
+            .chain(self.pending_unsafe.iter().cloned())
             .collect();
-        for pid in unsafe_sources {
-            for ancestor in ancestors(pid, &original) {
-                if let Some(key) = original.get(&ancestor).and_then(|p| p.key()) {
-                    // The snapshot pins the fact to this birth. Apply it only when
-                    // that same birth is validated, including after a metadata gap.
-                    self.pending_unsafe.insert(key);
+        for source in unsafe_sources {
+            // Each edge pins both births. An absent ancestor or source can still
+            // carry a previously proven branch, without tainting a reused PID.
+            for parents in [&listed_parents, &validated_parents] {
+                let mut visited = HashSet::from([source.clone()]);
+                let mut parent = parents.get(&source).cloned().flatten();
+                while let Some(key) = parent.filter(|key| visited.len() < 65 && visited.insert(key.clone())) {
+                    self.pending_unsafe.insert(key.clone());
+                    parent = parents.get(&key).cloned().flatten();
                 }
             }
         }
         for p in &validated {
             if let Some(key) = p.key().filter(|key| self.pending_unsafe.remove(key)) {
                 self.lifetimes.entry(key).or_default().reaped_unsafe = true;
-            }
-        }
-        let barriers: HashSet<_> = validated
-            .iter()
-            .filter(|p| p.role == Role::Service)
-            .map(|p| p.pid)
-            .chain(found.iter().filter(|f| f.authority == Authority::Shared).map(|f| f.pid))
-            .chain(
-                validated
-                    .iter()
-                    .filter(|p| p.key().is_some_and(|key| self.lifetimes.get(&key).is_some_and(|l| l.reaped_unsafe)))
-                    .map(|p| p.pid),
-            )
-            .collect();
-        for &pid in &barriers {
-            for ancestor in ancestors(pid, &by_pid) {
-                if let Some(key) = by_pid.get(&ancestor).and_then(|p| p.key()) {
-                    self.lifetimes.entry(key).or_default().reaped_unsafe = true;
-                }
             }
         }
         for f in &found {
@@ -538,25 +580,11 @@ impl Activity {
                 }
             }
         }
-        let mut scopes: HashMap<_, _> = validated
-            .iter()
-            .filter_map(|p| {
-                let key = p.key()?;
-                let image = self.lifetimes.get(&key).and_then(|l| l.image);
-                Some((
-                    key,
-                    Scope { owner: None, name: p.name.clone(), provider: provider_of(&p.name), image, role: p.role },
-                ))
-            })
-            .collect();
-        for f in found.iter().filter(|f| mine(f.pid)) {
-            let Some(owner) = by_pid[&f.pid].key() else { continue };
-            for pid in f.tree.iter().filter(|&&pid| mine(pid)) {
-                if let Some(scope) = by_pid[pid].key().and_then(|key| scopes.get_mut(&key)) {
-                    scope.owner = Some(owner.clone());
-                }
-            }
-        }
+        // A raw-proven authority change already invalidates old ownership and
+        // HOLD, even if that process exits before additional validation. Newer
+        // validated scopes supersede those earlier facts for the same birth.
+        let mut scopes = self.scopes_of(procs, &planned, mine);
+        scopes.extend(self.scopes_of(&validated, &found, mine));
         let mut changed = HashSet::new();
         for (key, scope) in &scopes {
             let Some(before) = self.scopes.get(key) else { continue };

@@ -126,13 +126,18 @@ read bound or losing executable metadata does not prove a replacement. A confirm
 invocation or executable change invalidates placement authority. Current shared roots
 are boundaries for every descendant on the same look, and an initially proven ancestor
 can still deny ownership or measurement eligibility if its later validation fails.
-Temporary missing owner metadata leaves placement unproven for that observation; it
-does not make a private runtime permanently shared. Confirmed role, image and accounting
+Temporary missing owner metadata leaves placement unproven for that observation,
+including the first look without a cache. An absent non-init parent is incomplete
+ancestry, not proof of an orphan. It does not make a private runtime permanently shared.
+Confirmed role, image and accounting
 scope remain tied to the observed birth across snapshot gaps, until exit or replacement
 is proved. An initially known unsafe branch also retains pending birth-specific ancestor
 evidence until that same ancestor can be validated. This includes a first snapshot's
 proof when its additional validation fails, and a retained unsafe birth whose current
-validation is unavailable. A reused PID inherits no state.
+validation is unavailable. Observed parent links pin both process births, so pending
+ancestor evidence survives the later absence of the source too. Raw-proven authority
+changes invalidate old ownership and working holds even before successful additional
+validation; newer validated evidence supersedes them. A reused PID inherits no state.
 
 The OS also gives CPU of finished children, without telling which branch earned it.
 For every ancestor of a proven excluded branch, across wrappers and other-provider

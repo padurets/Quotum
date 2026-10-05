@@ -453,6 +453,11 @@ or provider content are needed for this accounting. Temporarily unavailable owne
 metadata leaves placement unproven rather than establishing a permanent shared branch;
 birth-scoped boundary and accounting facts survive an unconfirmed snapshot absence.
 This also applies to a first snapshot's proof before successful additional validation.
+Initially missing non-init ancestry leaves ownership unproven without requiring an
+earlier cache entry. Observed parent links pin both births; pending ancestor evidence
+survives the source's absence and never transfers just by matching a reused PID.
+Raw-proven ownership changes invalidate incompatible working holds before additional
+validation, while newer validated evidence supersedes the initial snapshot.
 At affected roots, retiring an observed owned subtree cannot cancel sampled self or
 live CPU increases; clean subtrees retain their live-plus-reaped accounting. These
 local counters and pending ancestor evidence are not transmitted.
