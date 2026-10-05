@@ -13,12 +13,12 @@ import {MeterBar} from './Meter';
 import {level} from '../lib/quota';
 import {useShownKeys} from '../lib/moneyKeys';
 
-function KeyStatus({part,cap}:{part:KeyPart;cap:Meter}) {
-  const now=useClock(now=>earliest(part.expiresAt!==null&&part.expiresAt>now?part.expiresAt:null,capChangesAt(cap,now)));
-  const stale=capStale(cap,now);
-  const inactive=part.disabled||part.expiresAt!==null&&part.expiresAt<=now;
-  const status=inactive?t('money.inactive'):part.presence==='missing'?t('money.missing'):stale?t('money.stale'):'';
-  return <small data-time="key-status" className={`key-status${stale?' cap-stale':''}${inactive?' is-inactive':''}`} role="img" title={status} aria-label={status||undefined} aria-hidden={!status}/>;
+function CapStatus({part,cap}:{part?:KeyPart;cap?:Meter}) {
+  const now=useClock(now=>earliest(part?.expiresAt!=null&&part.expiresAt>now?part.expiresAt:null,cap?capChangesAt(cap,now):null));
+  const inactive=!!part&&(part.disabled||part.expiresAt!==null&&part.expiresAt<=now);
+  const status=inactive?t('money.inactive'):part?.presence==='missing'?t('money.missing'):!cap?t('quota.unavailable'):capStale(cap,now)?t('money.stale'):'';
+  const detail=status&&cap?`${status}\n${stamp(cap.at)}`:status;
+  return <small data-time="key-status" className={`key-status${inactive?' is-inactive':''}`} role="img" title={detail} aria-label={detail||undefined} aria-hidden={!status}/>;
 }
 export function CapReset({meter,short=false}:{meter:Meter;short?:boolean}) {
   const now=useClock(now=>meter.resetAt===null?null:countdownChangesAt(meter.resetAt,now));
@@ -27,19 +27,18 @@ export function CapReset({meter,short=false}:{meter:Meter;short?:boolean}) {
   return <span data-time="cap-reset" title={unknown?t('limit.resetUnknown'):meter.resetAt!==null?stamp(meter.resetAt):''}>{text}</span>;
 }
 /** Independent caps share the subscription scale, regardless of how they are measured. */
-export function CapMetrics({cap,name,detail=name,status,stale=false,compact=false,showPercent=false}:{cap:Meter|undefined;name:string;detail?:string;status?:import('react').ReactNode;stale?:boolean;compact?:boolean;showPercent?:boolean}) {
-  const now=useClock(now=>cap?capChangesAt(cap,now):null);
-  const old=stale||!cap||capStale(cap,now),percent=cap?capPercent(cap):null,remaining=percent===null?null:100-percent;
+export function CapMetrics({cap,name,detail=name,status,compact=false,showPercent=false}:{cap:Meter|undefined;name:string;detail?:string;status?:import('react').ReactNode;compact?:boolean;showPercent?:boolean}) {
+  const percent=cap?capPercent(cap):null,remaining=percent===null?null:100-percent;
   const value=cap?amountText(capLeft(cap),cap.unit):'—',unit=cap?amountUnitLabel(cap.unit):'';
   const percentText=showPercent&&remaining!==null?<small className="limit-share">{Math.round(remaining)}%</small>:null;
   const bar=<MeterBar remaining={cap?remaining:null} label={name}/>;
   const reset=cap?<CapReset meter={cap} short={compact}/>:<span>{t('money.stale')}</span>;
-  if(compact)return <div data-time="cap-status" className={`compact-limit is-money${old?' is-stale':''}`}>
+  if(compact)return <div className="compact-limit is-money">
     <div className="compact-window-name"><span title={detail}>{name}{percentText}{status}</span></div>
     <small className="compact-reset">{reset}</small>{bar}
     <strong className="limit-value" title={cap?money(capLeft(cap),cap.unit,true):undefined}>{value}<small>{unit}</small></strong>
   </div>;
-  return <div data-time="cap-status" className={`limit money-limit${old?' is-stale':''}`}>
+  return <div className="limit money-limit">
     <div className="limit-top"><span className="limit-name" title={detail}>{name}{percentText}{status}</span>
       <span className={`limit-value v-${remaining===null?'ok':level(remaining)}`} title={cap?money(capLeft(cap),cap.unit,true):undefined}>{value}<small>{unit}</small></span>
     </div>{bar}
@@ -48,10 +47,10 @@ export function CapMetrics({cap,name,detail=name,status,stale=false,compact=fals
 }
 export function KeyMetrics({part,meters,compact=false}:{part:KeyPart;meters:readonly Meter[];compact?:boolean}) {
   const cap=meters.find(m=>m.id===`key:${part.id}:cap`);if(!cap)return null;
-  return <CapMetrics cap={cap} name={keyName(part)} detail={[keyName(part),part.includeByok?t('money.byok'):''].filter(Boolean).join('\n')} status={<KeyStatus part={part} cap={cap}/>} stale={part.presence==='missing'} compact={compact}/>;
+  return <CapMetrics cap={cap} name={keyName(part)} detail={[keyName(part),part.includeByok?t('money.byok'):''].filter(Boolean).join('\n')} status={<CapStatus part={part} cap={cap}/>} compact={compact}/>;
 }
 export function QuotaCard({source,compact=false}:{source:Card;compact?:boolean}) {
-  return <>{QUOTA_IDS.map(id=><CapMetrics key={id} cap={source.meters?.find(m=>m.id===id)} name={capName({id,scope:null,label:null})} showPercent compact={compact}/>)}</>;
+  return <>{QUOTA_IDS.map(id=>{const cap=source.meters?.find(m=>m.id===id);return <CapMetrics key={id} cap={cap} name={capName({id,scope:null,label:null})} status={<CapStatus cap={cap}/>} showPercent compact={compact}/>;})}</>;
 }
 export function QuotaMark({source}:{source:Card}) {
   if(!source.quota||source.quota.complete)return null;

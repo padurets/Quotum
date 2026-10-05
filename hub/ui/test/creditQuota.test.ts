@@ -7,7 +7,7 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
-import type {QuotaCard as QuotaComponent,CapReset as ResetComponent} from '../components/MoneyCard';
+import type {QuotaCard as QuotaComponent,CapReset as ResetComponent,KeyMetrics as KeyComponent} from '../components/MoneyCard';
 import * as money from '../lib/money';
 import * as format from '../lib/format';
 import * as quota from '../lib/quota';
@@ -29,7 +29,7 @@ const result=mapZai(decodeZai(JSON.stringify({code:200,success:true,data:{level:
   {type:'CREDIT_LIMIT',unit:3,number:5,usage:2000,currentValue:800},
   {type:'CREDIT_LIMIT',unit:6,number:1,usage:10000,currentValue:2000},
 ]}})),now);
-const context={exports:{} as {QuotaCard:typeof QuotaComponent;CapReset:typeof ResetComponent},React,require:(name:string)=>{
+const context={exports:{} as {QuotaCard:typeof QuotaComponent;CapReset:typeof ResetComponent;KeyMetrics:typeof KeyComponent},React,require:(name:string)=>{
   if(name==='react/jsx-runtime')return jsxRuntime;
   if(name.endsWith('/meters'))return {QUOTA_IDS};
   if(name.endsWith('/money'))return money;
@@ -67,6 +67,36 @@ test('card and compact show the same independent credit quotas, never a monetary
 test('an explicitly lifetime cap keeps its confirmed absence of a reset',()=>{
   const html=renderToStaticMarkup(createElement(context.exports.CapReset,{meter:{...card.meters![0],scope:'lifetime'},short:true}));
   assert.ok(!html.includes('reset time unknown')&&!html.includes('—'));
+});
+
+test('each quota uses the shared cap status dot without dimming its retained value',()=>{
+  try {
+    for(const language of ['en','ru'] as const)for(const compact of [false,true]) {
+      setLocale(language);
+      for(const cap of [{...card.meters![0],stale:true},{...card.meters![0],at:now-204001},{...card.meters![0],resetAt:now}]) {
+        const html=renderToStaticMarkup(createElement(QuotaCard,{source:{...card,meters:[cap,card.meters![1]]},compact}));
+        const dots=[...html.matchAll(/<small data-time="key-status"[^>]*>/g)].map(m=>m[0]);
+        assert.equal(dots.length,2);
+        assert.ok(dots[0].includes('aria-hidden="false"')&&dots[0].includes(t('money.stale')));
+        assert.ok(dots[1].includes('aria-hidden="true"'),'the fresh weekly cap keeps its own status');
+        assert.ok(html.includes(language==='en'?'1,200':'1 200'),'the last confirmed remaining amount is kept');
+        assert.ok(!html.includes('is-stale')&&!html.includes('cap-stale'));
+      }
+      const missing=renderToStaticMarkup(createElement(QuotaCard,{source:{...card,meters:[card.meters![1]]},compact}));
+      assert.ok(missing.includes(t('quota.unavailable')));
+    }
+  }finally{setLocale('en');}
+});
+
+test('OpenRouter cap dots retain missing and inactive key states without row dimming',()=>{
+  const id='111111111111',cap={...card.meters![0],id:`key:${id}:cap`,unit:'USD' as const,stale:true};
+  const part={id,name:'Laptop',disabled:false,expiresAt:null,includeByok:false,at:now,staleAfterMs:204000,presence:'missing' as const,missCount:1,periods:{day:null,week:null,month:null}};
+  for(const compact of [false,true]) {
+    const missing=renderToStaticMarkup(createElement(context.exports.KeyMetrics,{part,meters:[cap],compact}));
+    assert.ok(missing.includes(t('money.missing'))&&!missing.includes('is-stale')&&!missing.includes('cap-stale'));
+    const inactive=renderToStaticMarkup(createElement(context.exports.KeyMetrics,{part:{...part,disabled:true},meters:[cap],compact}));
+    assert.ok(inactive.includes('is-inactive')&&inactive.includes(t('money.inactive')));
+  }
 });
 
 test('a passed reset time waits for evidence instead of asserting that the window reset',()=>{

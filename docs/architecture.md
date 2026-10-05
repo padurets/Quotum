@@ -568,6 +568,11 @@ survive partial replies and optional invalid reset fields; missing amounts never
 become zero. The fixed raw-Authorization GET is the provider-published usage plugin
 interface, not a versioned quota OpenAPI schema. No model request is needed.
 
+Subscription caps and OpenRouter key caps share a status dot beside each limit name.
+Missing or stale measurements keep their last confirmed values at full opacity; the
+dot explains the status and shows the last observation time. Key inactivity keeps its
+distinct dot state. Freshness clocks update these small marks, not the whole limit row.
+
 Accepted quota outcomes persist completeness and observation time independently from
 last success. Authenticated missing quotas hard-close `meter_spans.hold_until` in the
 same transaction as accepted neighboring readings. Recovery opens a new span, even
