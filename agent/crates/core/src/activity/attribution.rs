@@ -1312,3 +1312,46 @@ fn short_look_retirement_keeps_the_old_reference_until_cpu_is_judged() {
         "only the observed ten new milliseconds count"
     );
 }
+
+#[test]
+fn first_raw_shared_proof_keeps_reaping_unsafe_after_newer_eligibility() {
+    for prior_shared in [false, true] {
+        let mut rows = vec![proc(10, 1, "codex", Role::Unknown)];
+        let mut a = activity();
+        let start = Instant::now();
+        sample(&mut a, &rows, start, 0);
+        let mut runtime = proc(12, 10, "codex", Role::Runtime);
+        runtime.sid = Some(12);
+        rows.push(runtime);
+        if prior_shared {
+            sample(&mut a, &rows, start, 15);
+        }
+        let cutoff = a.observe(
+            &rows,
+            900,
+            start + Duration::from_secs(30),
+            WALL + 30000,
+            &|p| {
+                let mut q = p.clone();
+                if q.pid == 12 {
+                    q.role = Role::Unknown;
+                }
+                Some(q)
+            },
+            &|_| None,
+            &|_| None,
+            &|_| true,
+        );
+        assert_eq!(session(&cutoff, 10).working, None);
+        rows[1].role = Role::Unknown;
+        assert_eq!(session(&sample(&mut a, &rows, start, 45), 10).working, Some(false));
+        cpu(&mut rows, 12, 0, 1500);
+        assert_eq!(session(&sample(&mut a, &rows, start, 60), 10).working, Some(false));
+        cpu(&mut rows, 12, 500, 1500);
+        assert_eq!(
+            session(&sample(&mut a, &rows, start, 75), 10).working,
+            Some(true),
+            "new eligible own CPU remains measured"
+        );
+    }
+}

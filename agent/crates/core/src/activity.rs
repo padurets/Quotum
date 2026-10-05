@@ -553,6 +553,11 @@ impl Activity {
             if let Some(lifetime) = by_pid[&f.pid].key().and_then(|key| self.lifetimes.get_mut(&key)) {
                 if validated.iter().find(|p| p.pid == f.pid).is_none_or(compatible) {
                     lifetime.shared = true;
+                } else {
+                    // Newer authority can make this birth eligible before its
+                    // first Shared cache entry. The excluded invocation's child
+                    // CPU is still ambiguous when reaped later by that birth.
+                    lifetime.reaped_unsafe = true;
                 }
             }
             if validated.iter().any(compatible) {

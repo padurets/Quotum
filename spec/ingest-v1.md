@@ -458,7 +458,11 @@ earlier cache entry. Observed parent links pin both births; pending ancestor evi
 survives the source's absence and never transfers just by matching a reused PID.
 Conditional cached-parent targets require birth confirmation before further ancestry
 propagation. A formerly excluded process that becomes eligible still discards its
-ambiguous delayed child CPU for that same birth.
+ambiguous delayed child CPU for that same birth, including a first raw Shared proof
+superseded by newer validation before cache publication. Historical ancestry cannot
+be reconstructed if the ancestor's birth was never available before the source
+disappeared; a PPID alone does not authorize transferring unsafe state to a first-seen
+birth, whose fallback can still show activity from delayed child CPU.
 Raw-proven ownership changes invalidate incompatible working holds before additional
 validation, while newer validated evidence supersedes the initial snapshot.
 At affected roots, retiring an observed owned subtree cannot cancel sampled self or

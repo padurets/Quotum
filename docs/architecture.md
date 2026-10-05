@@ -140,12 +140,17 @@ supplies only a conditional target until its birth is confirmed; it cannot prove
 old birth's other ancestors. Raw-proven authority changes invalidate old ownership
 and working holds even before successful additional validation; newer validated
 evidence supersedes them. A reused PID inherits no state.
+These guarantees require observed or conditional birth links. If an ancestor's birth
+was never available before the excluded source disappeared, its later child CPU
+cannot be safely linked by PPID alone; the existing fallback can still show work for
+that first-seen client. Completely unavailable metadata is a detector capability limit.
 
 The OS also gives CPU of finished children, without telling which branch earned it.
 For every ancestor of a proven excluded branch, across wrappers and other-provider
 session roots, this reaped CPU is ignored for that ancestor's remaining process birth.
 The restriction survives branch exit, reparenting and same-birth exec. A previously
-excluded process that becomes eligible also keeps its delayed child CPU excluded.
+excluded process that becomes eligible also keeps its delayed child CPU excluded,
+including when the first raw Shared proof is superseded before its cache is committed.
 Its own CPU and live owned tools still count; clean trees retain their finished-tool
 accounting. The conservative cost is that a short owned tool entirely between looks
 can be missed at an affected ancestor. Changing the accounting basis discards incompatible deltas and
