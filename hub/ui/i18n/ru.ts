@@ -764,7 +764,7 @@ export const ru = {
   "money.total": "Доступный остаток",
   "money.granted": "Выданные средства",
   "money.toppedUp": "Пополненные средства",
-  "money.breakdown": "Состав баланса",
+  "money.breakdown": "Состав остатка",
   "money.noBalance": "Нет данных о балансе",
   "money.balanceUnavailable": "DeepSeek сообщает, что средств для API недостаточно.",
   "money.balancePartial": "Часть данных баланса отсутствует. Последние корректные значения сохранены как устаревшие.",

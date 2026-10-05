@@ -934,6 +934,7 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .money-balance > span:first-child { color: var(--text-3); }
 .money-balance .link-button { font-size: inherit; }
 .money-balance .picker { margin-left: 0; }
+.money-balance-values { display: grid; gap: 6px; min-width: 0; max-width: 100%; margin-left: auto; text-align: right; }
 .money-balance .limit-value { max-width: 100%; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .money-limits:not(:empty) { border-top: 1px solid var(--hair); padding-top: 16px; margin-top: 4px; }
 .money-partial { margin-left: 4px; color: var(--text-3); }
@@ -982,6 +983,8 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
   .connection-mobile-status { display: block; }
 }
 
-.money-breakdown {display:grid;gap:4px;padding:4px 0;font-size:12px;color:var(--muted);}
-.money-breakdown > div {display:flex;gap:12px;justify-content:space-between;flex-wrap:wrap;}
+.money-breakdown { display: grid; gap: 12px; padding: 4px 0; font-size: 12px; color: var(--text-2); }
+.money-breakdown > section { display: grid; gap: 4px; }
+.money-breakdown > section > div { display: flex; gap: 12px; justify-content: space-between; flex-wrap: wrap; }
+.money-breakdown-total { padding-bottom: 4px; color: var(--text); }
 .money-body .is-stale {opacity:.6;}

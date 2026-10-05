@@ -596,6 +596,16 @@ without renewing numerical freshness. `balanceStatus.at` is the accepted waterma
 Currency totals never include their components again, and units never share an axis.
 Connecting a source preserves `unit: null` subscription analytics until currency selection.
 
+Budget presentation separates current funds, scoped allowances, accounting over a
+period and balance composition. Dashboard and compact cards project the same catalogue
+roles into one Available balance section with independent currency values, followed by
+selected catalogue-supported key caps. Composition is grouped by currency in the
+balance disclosure. Counters, reported period totals and BYOK are accounting evidence,
+not additional funds or automatic card rows. Key properties and inventory quality
+describe access and measurement reliability. Each observation retains its own unit,
+scope, time and quality; absent, stale, unsupported and confirmed zero remain distinct.
+No new event or stored amount is required by this presentation.
+
 A frame that cannot fit losslessly in the history budget returns `413 history_limit`.
 
 DeepSeek connections use owner-only `POST /api/credentials` with

@@ -1,7 +1,7 @@
 import type {Card,View} from '../lib/types';
-import type {KeyPart,Meter} from '../../server/domain/meters';
+import type {Meter} from '../../server/domain/meters';
 import {useSourceAccess} from '../lib/board';
-import {balanceGroups,balanceRoleLabel,money,keyName,capLeft,capPercent,capStale,capChangesAt,accessTone,accessChangesAt,ACCESS_WARNING_MS} from '../lib/money';
+import {budgetView,balanceRoleLabel,money,keyName,capLeft,capPercent,capStale,capChangesAt,accessTone,accessChangesAt,ACCESS_WARNING_MS,type BudgetLimit} from '../lib/money';
 import {stamp,countdown,duration,countdownChangesAt,earliest} from '../lib/format';
 import {useClock} from '../lib/clock';
 import {t} from '../i18n';
@@ -12,7 +12,7 @@ import {MeterBar} from './Meter';
 import {level} from '../lib/quota';
 import {useShownKeys} from '../lib/moneyKeys';
 
-function KeyStatus({part,cap}:{part:KeyPart;cap:Meter}) {
+function KeyStatus({part,cap}:{part:BudgetLimit['part'];cap:Meter}) {
   const now=useClock(now=>earliest(part.expiresAt!==null&&part.expiresAt>now?part.expiresAt:null,capChangesAt(cap,now)));
   const stale=capStale(cap,now);
   const inactive=part.disabled||part.expiresAt!==null&&part.expiresAt<=now;
@@ -23,9 +23,8 @@ function CapReset({meter,short=false}:{meter:Meter;short?:boolean}) {
   const now=useClock(now=>meter.resetAt===null?null:countdownChangesAt(meter.resetAt,now));
   return <span data-time="cap-reset" title={meter.resetAt===null?'':stamp(meter.resetAt)}>{meter.resetAt!==null&&meter.resetAt>now?short?countdown(meter.resetAt-now):t('limit.resetsIn',{time:duration(meter.resetAt-now)}):meter.resetAt!==null?t('money.partial'):''}</span>;
 }
-export function KeyMetrics({part,meters,compact=false}:{part:KeyPart;meters:readonly Meter[];compact?:boolean}) {
-  const cap=meters.find(m=>m.id===`key:${part.id}:cap`);
-  if(!cap)return null;
+function KeyMetrics({limit,compact=false}:{limit:BudgetLimit;compact?:boolean}) {
+  const {part,meter:cap}=limit;
   const percent=capPercent(cap),remaining=percent===null?null:100-percent;
   const left=money(capLeft(cap),cap.unit),value=left.slice(0,-cap.unit.length-1);
   const detail=[keyName(part),part.includeByok?t('money.byok'):''].filter(Boolean).join('\n');
@@ -45,17 +44,22 @@ export function KeyMetrics({part,meters,compact=false}:{part:KeyPart;meters:read
   </div>;
 }
 export function MoneyCard({source,board,view,compact=false}:{source:Card;board:string;view?:View;compact?:boolean}) {
-  const groups=balanceGroups(source),{keys,meters,error}=useShownKeys(source,view,board);
+  const {keys,meters,error}=useShownKeys(source,view,board);
+  const {remaining,limits}=budgetView(source,keys,meters),groups=remaining.values;
+  const composition=groups.filter(group=>group.components.length);
+  const breakdown=<div className="money-breakdown">{composition.map(({total,components})=><section key={total.id}>
+    <div className={`money-breakdown-total${total.stale?' is-stale':''}`} title={[money(total.amount,total.unit,true),stamp(total.at),total.stale?t('money.stale'):''].filter(Boolean).join('\n')}><strong>{total.unit}</strong><span>{money(total.amount,total.unit)}</span></div>
+    {components.map(({meter,role})=><div key={meter.id} className={meter.stale?'is-stale':''} title={[money(meter.amount,meter.unit,true),stamp(meter.at),meter.stale?t('money.stale'):''].filter(Boolean).join('\n')}><span>{balanceRoleLabel(role)}</span><span>{money(meter.amount,meter.unit)}</span></div>)}
+  </section>)}</div>;
   return <div className="money-body">
-    {!groups.length&&<div className="money-balance">{t(source.balanceStatus?'money.noBalance':'money.unknown')}</div>}
-    {groups.map(({total,components})=>{
-      const formatted=money(total.amount,total.unit),amount=formatted.slice(0,-total.unit.length-1);
-      const breakdown=<div className="money-breakdown">{components.map(({meter,role})=><div key={meter.id} className={meter.stale?'is-stale':''} title={[money(meter.amount,meter.unit,true),stamp(meter.at),meter.stale?t('money.stale'):''].filter(Boolean).join('\n')}><span>{balanceRoleLabel(role)}</span><span>{money(meter.amount,meter.unit)}</span></div>)}</div>;
-      return <div key={total.id} className={total.stale?'is-stale':''}>
-        <div className="money-balance" title={[money(total.amount,total.unit,true),stamp(total.at),total.stale?t('money.stale'):''].filter(Boolean).join('\n')}><span>{components.length?<Popover label={t('money.breakdown')} trigger={t('money.accountBalance')} triggerClass="link-button" up>{breakdown}</Popover>:t('money.accountBalance')}</span><span className="limit-value" data-money={total.amount}>{amount}<small>{total.unit}</small></span></div>
-      </div>;
-    })}
-    <div className="limits money-limits">{keys.map(part=><KeyMetrics key={part.id} part={part} meters={meters} compact={compact}/>)}</div>
+    <div className="money-balance">
+      <span>{composition.length?<Popover label={t('money.breakdown')} trigger={t('money.accountBalance')} triggerClass="link-button" up>{breakdown}</Popover>:t('money.accountBalance')}</span>
+      <div className="money-balance-values">{!groups.length?<span className="limit-value" title={t('money.noBalance')}>—</span>:groups.map(({total})=>{
+        const formatted=money(total.amount,total.unit),amount=formatted.slice(0,-total.unit.length-1);
+        return <span key={total.id} className={`limit-value${total.stale?' is-stale':''}`} data-money={total.amount} title={[money(total.amount,total.unit,true),stamp(total.at),total.stale?t('money.stale'):''].filter(Boolean).join('\n')}>{amount}<small>{total.unit}</small></span>;
+      })}</div>
+    </div>
+    <div className="limits money-limits">{limits.map(limit=><KeyMetrics key={limit.scope.id} limit={limit} compact={compact}/>)}</div>
     <ErrorLine error={error}/>
   </div>;
 }

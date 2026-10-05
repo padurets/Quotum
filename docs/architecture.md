@@ -579,8 +579,18 @@ observation/freshness. Accepted empty or partial replies retain missing numerica
 values as stale and persist an exclusive interruption on their observation spans.
 A same-value return starts a new span without inventing a changed reading. Accepted
 status time is the watermark even when numerical success is older.
-Both money cards show available balance prominently. DeepSeek's composition opens
-from that label in a shared Popover; it has no key-cap scales or spending summary.
+Budget cards and the compact panel use one typed presentation of current funds and
+selected allowances. A single Available balance section contains separate totals for
+each observed currency. Composition opens from that label in a shared Popover, grouped
+by currency. Key allowances appear separately, with their own scope, limit and reset;
+they do not add to account funds. Only catalogue-supported caps have scales. Lifetime
+credits never supply a wallet's percentage denominator. DeepSeek has no key-cap scales
+or spending summary. Each value keeps its own observation time and stale state.
+Additional observations have explicit purposes: balance components explain current
+funds, counters and reported period totals support analytics, BYOK retains a separate
+accounting basis, and key properties and inventory quality describe access and
+measurement reliability. New API fields do not automatically add card rows. The safe
+context archive is independent of this presentation.
 
 Observation-mode money cells retain their actual sample offset, segment and exclusive
 validity, bounded by their fixed grid cell and span interruption/TTL. Composition can

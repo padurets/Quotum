@@ -1,4 +1,4 @@
-import {monetaryOf,balanceDescriptor} from '../../server/domain/providers';
+import {monetaryOf,providerOf} from '../../server/domain/providers';
 import type {Card} from './types';
 import {t} from '../i18n';
 import type {Meter,KeyPart} from '../../server/domain/meters';
@@ -51,11 +51,34 @@ export function accessChangesAt(access:Access|null|undefined,now:number):number|
 }
 
 export function balanceGroups(source:Pick<Card,'provider'|'meters'>) {
-  return (monetaryOf(source.provider)?.balances??[]).filter(d=>d.role==='total').flatMap(d=>{
-    const total=source.meters?.find(m=>m.id===d.meterId&&m.unit===d.unit);
+  const descriptors=monetaryOf(source.provider)?.balances??[];
+  return descriptors.filter(d=>d.role==='total').flatMap(d=>{
+    const total=source.meters?.find(m=>m.id===d.meterId&&m.unit===d.unit&&m.kind==='balance');
     if(!total)return [];
-    const components=(source.meters??[]).flatMap(m=>{const role=balanceDescriptor(source.provider,m.id)?.role;return m.unit===d.unit&&role&&role!=='total'?[{meter:m,role}]:[];});
+    const components=descriptors.flatMap(part=>{
+      if(part.unit!==d.unit||part.role==='total')return [];
+      const meter=source.meters?.find(m=>m.id===part.meterId&&m.unit===part.unit&&m.kind==='balance');
+      return meter?[{meter,role:part.role}]:[];
+    });
     return [{total,components}];
   });
+}
+type BudgetKey=Pick<KeyPart,'id'|'name'|'disabled'|'expiresAt'|'includeByok'|'presence'>;
+export type BudgetLimit={scope:{kind:'key';id:string};part:BudgetKey;meter:Meter};
+export type BudgetView={
+  remaining:{kind:'funds';values:ReturnType<typeof balanceGroups>};
+  limits:BudgetLimit[];
+};
+
+/** Cards show current funds and selected allowances; accounting stays in analytics. */
+export function budgetView(source:Pick<Card,'provider'|'meters'>,keys:readonly KeyPart[]=[],meters:readonly Meter[]=source.meters??[]):BudgetView {
+  const byId=new Map(meters.map(m=>[m.id,m]));
+  const caps=providerOf(source.provider)?.meterKinds.some(kind=>kind==='cap');
+  const limits=caps?keys.flatMap(part=>{
+    const meter=byId.get(`key:${part.id}:cap`);
+    const {id,name,disabled,expiresAt,includeByok,presence}=part;
+    return meter?.kind==='cap'&&meter.limit!==null?[{scope:{kind:'key' as const,id},part:{id,name,disabled,expiresAt,includeByok,presence},meter}]:[];
+  }):[];
+  return {remaining:{kind:'funds',values:balanceGroups(source)},limits};
 }
 export const balanceRoleLabel=(role:'total'|'granted'|'toppedUp')=>t(`money.${role}`);
