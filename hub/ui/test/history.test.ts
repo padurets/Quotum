@@ -946,6 +946,10 @@ test('prefetch keeps broad batches across every initial tile alignment in either
       h.store.pan({token: 1, length, from, to, direction}); await flush();
       for (const read of [...pending(h)]) {
         assert.ok(read.to - read.from >= 60 * cell, 'rounding must not turn the next miss into another small request');
+        if (offset === 0 && direction === 1 && n === 4) {
+          assert.equal(tileOf(read.to - 1, cell), tileOf(read.from, cell),
+            'the optional tail fits in one tile without repeating its metadata');
+        }
         for (let at = read.from; at < read.to; at += cell) {
           assert.ok(!seed.has(at) && !requested.has(at), 'a tile edge never rereads a fresh cell');
           requested.add(at);
