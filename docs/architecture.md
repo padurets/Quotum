@@ -906,9 +906,10 @@ activity totals and legend numbers. A separate bounded plot buffer decodes the s
 tiles without computing frame totals. Known parts stay undimmed, lines break across
 unread cells, and an activity stack appears only when every contributing whole cell is
 read. Two translated HTML clips intersect at the whole-bar edges of the long activity
-band; a counter-translation keeps its artwork in place. Moving the clips uses the
-compositor without laying out or repainting that SVG. Two short edge bars in their own
-SVG are recomputed when the draft crosses a cell; moving within a cell only translates the prepared artwork
+band; a counter-translation keeps its artwork in place. The clip boundaries use
+compositor transforms while the SVG's coordinate system stays unchanged. Two short
+edge bars in their own SVG are recomputed when the draft crosses a cell; moving within
+a cell only translates the prepared artwork
 and updates its clip. The final 160 ms fold stays inside SVG to preserve stroke widths.
 A temporary shared registry keeps plot and
 legend colors and dashes consistent, adding new groups with a pending total. Visible

@@ -351,6 +351,12 @@ focus in the card's menu and fails otherwise. It needs Chrome:
 one already running. CI runs it on every push; run it when you change the dashboard
 and have Chrome.
 
+The completed measurement phase's React/DOM observer is disconnected before native
+panning. Panning keeps its own movement and mutation checks; resetting the measurement
+probe resumes full observation for money updates. Money-view controls wait for a
+populated, committed drawing and stable layout before switching, then require the
+line to remain present and inside its scale on every frame until the new view commits.
+
 The same run checks pan traffic separately from the native frame budget, using the
 dense 75-day fixture and both charts at 24h and 30d. Controlled production-loader
 replays and native browser gestures use 0, 100 and 400 ms answer delays. Cached
