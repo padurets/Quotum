@@ -66,7 +66,7 @@ export function openRouter(transport=new ConnectorTransport({host:'openrouter.ai
         if(found.account!==expected.account)throw new SecretError('credential_account_mismatch');
         const measurement=found.measurement!;
         const workspaces:string[]=[],seenWorkspace=new Set<string>(),hashes=new Map<string,string>(),seenKeys=new Set<string>();
-        let complete=true,error:string|null=null,calls=2,keysCount=0,retryAfterMs:number|undefined,halted=false;
+        let complete=true,error:string|null=null,calls=2,keysCount=0,retryAfterMs:number|undefined,halted=false,inventoryAt=measurement.observedAt;
         const failed=(failure:unknown)=>{
           complete=false;error=failure instanceof SecretError?failure.code:'connector_failed';
           if(failure instanceof ConnectorStatus&&failure.status===429){halted=true;retryAfterMs=failure.retryAfterMs??120_000;}
@@ -101,6 +101,7 @@ export function openRouter(transport=new ConnectorTransport({host:'openrouter.ai
             while(true) {
               const page=await request('keys',{offset:String(offset),include_disabled:'true',...(workspace?{workspace_id:workspace}:{})});
               const keyAt=now();
+              inventoryAt=keyAt;
               if(!object(page)||!Array.isArray(page.data)||page.data.length>100)throw new SecretError('connector_invalid_response');
               let progress=0;
               for(const raw of page.data) {
@@ -116,6 +117,14 @@ export function openRouter(transport=new ConnectorTransport({host:'openrouter.ai
                   hashes.set(id,raw.hash);
                   const name=safeName(raw.name,secret),expiresAt=expiry(raw.expires_at);
                   const key:KeyPart={id,name,disabled:raw.disabled,expiresAt,includeByok:raw.include_byok_in_limit,at:keyAt,staleAfterMs:204_000,presence:'observed',missCount:0,periods:{day:null,week:null,month:null}};
+                  key.byokUsage={total:null,day:null,week:null,month:null};
+                  for(const [period,field] of [['total','byok_usage'],['day','byok_usage_daily'],['week','byok_usage_weekly'],['month','byok_usage_monthly']] as const) {
+                    if(raw[field]!==undefined&&raw[field]!==null)try{key.byokUsage[period]=money(raw[field]);}catch{complete=false;error='connector_inventory_partial';}
+                  }
+                  for(const [field,property] of [['created_at','createdAt'],['updated_at','updatedAt']] as const) {
+                    key[property]=null;
+                    if(raw[field]!==undefined&&raw[field]!==null)try{key[property]=expiry(raw[field]);}catch{complete=false;error='connector_inventory_partial';}
+                  }
                   for(const [period,field] of [['day','usage_daily'],['week','usage_weekly'],['month','usage_monthly']] as const) {
                     try{key.periods[period]=money(raw[field]);}catch{complete=false;error='connector_inventory_partial';}
                   }
@@ -143,7 +152,7 @@ export function openRouter(transport=new ConnectorTransport({host:'openrouter.ai
             }
           }catch(failure){failed(failure);}
         }
-        return {...found,...(retryAfterMs===undefined?{}:{retryAfterMs}),measurement:{...measurement,inventoryComplete:complete,inventoryError:complete?null:error??'connector_inventory_partial'}};
+        return {...found,...(retryAfterMs===undefined?{}:{retryAfterMs}),measurement:{...measurement,inventoryAt,inventoryComplete:complete,inventoryError:complete?null:error??'connector_inventory_partial'}};
       }catch(error){
         if(error instanceof ConnectorStatus&&error.status===401)throw new SecretError(expected.expiresAt!==null&&expected.expiresAt<=now()?'credential_expired':'credential_revoked');
         if(error instanceof ConnectorStatus&&error.status===403)throw new SecretError('credential_permission');

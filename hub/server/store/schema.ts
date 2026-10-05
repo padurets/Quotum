@@ -180,6 +180,14 @@ export const STEPS = [
         WHERE user_id=OLD.user_id AND provider=OLD.provider AND source_id=OLD.source_id;
     END;
   `,
+  // 11 — sparse histories of safe provider context beside the exact money ledger.
+  `
+  CREATE TABLE meter_contexts (
+    source_id TEXT NOT NULL, item TEXT NOT NULL, from_at INTEGER NOT NULL, to_at INTEGER NOT NULL,
+    stale_after_ms INTEGER NOT NULL, payload TEXT NOT NULL,
+    PRIMARY KEY (source_id,item,from_at)) WITHOUT ROWID;
+  CREATE INDEX meter_contexts_by_end ON meter_contexts (to_at);
+  `,
 ];
 
 export const SCHEMA_VERSION = STEPS.length;

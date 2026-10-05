@@ -10,9 +10,11 @@ export type KeyPart = {
   id: string; name: string | null; disabled: boolean; expiresAt: number | null; includeByok: boolean;
   at: number; staleAfterMs: number; presence: 'observed' | 'missing'; missCount: number;
   periods: {day: string | null; week: string | null; month: string | null};
+  byokUsage?: {total:string|null;day:string|null;week:string|null;month:string|null};
+  createdAt?:number|null; updatedAt?:number|null;
 };
 /** Confirmed uncapped key IDs let partial rounds end a cap while retaining its history. */
-export type MeterMeasurement = {type: 'meters'; observedAt: number; staleAfterMs: number; meters: Meter[]; keys: KeyPart[]; inventoryComplete: boolean; inventoryError: string | null; uncapped?: string[]; balanceStatus?:BalanceStatus};
+export type MeterMeasurement = {type: 'meters'; observedAt: number; staleAfterMs: number; meters: Meter[]; keys: KeyPart[]; inventoryComplete: boolean; inventoryError: string | null; inventoryAt?:number; uncapped?: string[]; balanceStatus?:BalanceStatus};
 export type Reading = Omit<Meter, 'stale'> & {previousAt: number | null};
 export type MeterSpan = {from: number; to: number; staleAfterMs: number;interruptedAt?:number};
 export type ExceptionalStep = {from: number; to: number; amount: string; evidence: 'continuous' | 'gap' | 'estimate'};

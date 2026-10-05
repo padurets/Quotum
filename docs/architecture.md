@@ -552,6 +552,17 @@ crosses a UTC boundary. One atomic store write preserves those independent times
 Readings use signed integer millionths, with sparse value/semantic changes and
 continuous observation spans. Unchanged heartbeats extend freshness without another
 reading. Retention keeps one predecessor to distinguish a late increase from a reset.
+Safe provider context has its own sparse history alongside that ledger: DeepSeek funds
+availability, inventory completeness and observed key identities, and each key's
+properties, reported period usage, BYOK usage and supplier dates. Exact amounts stay
+as millionth strings; period totals retain their UTC day/week/month anchors and key
+page observation time. Unchanged context extends its observed span; changed context
+starts another. It is saved in the same transaction as numbers and state, independently
+of what the card displays. An upgrade seeds the last known safe values with their
+original timestamps. Retention keeps crossing spans and the latest baseline; it never
+makes a stale baseline fresh. Raw responses, credential data and supplier identifiers
+are not archived. Future budget analytics can read these records without inventing
+spending or retroactively reconstructing overwritten period totals.
 A missing key is stale after one successful traversal and archived after two successive
 successful misses; partial traversals never confirm absence, and history is retained.
 A valid null limit explicitly ends the current cap, including in a partial round.
@@ -568,6 +579,8 @@ observation/freshness. Accepted empty or partial replies retain missing numerica
 values as stale and persist an exclusive interruption on their observation spans.
 A same-value return starts a new span without inventing a changed reading. Accepted
 status time is the watermark even when numerical success is older.
+Both money cards show available balance prominently. DeepSeek's composition opens
+from that label in a shared Popover; it has no key-cap scales or spending summary.
 
 Observation-mode money cells retain their actual sample offset, segment and exclusive
 validity, bounded by their fixed grid cell and span interruption/TTL. Composition can

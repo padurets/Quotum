@@ -3,6 +3,7 @@ import {balanceDescriptor,monetaryOf} from '../domain/providers.js';
 import {amount} from '../domain/amount.js';
 import {balanceStatusOf,calendarSpending,spending,utcPeriods, sameMeter, validateMeter, type Meter, type MeterMeasurement, type MeterSpan, type Reading} from '../domain/meters.js';
 import type {SourceState} from '../domain/quota.js';
+import {MeterContexts} from './meterContexts.js';
 import {meterCells, type MeterGroup, type MeterSelection, type MeterSeriesCells} from '../domain/meterHistory.js';
 
 type ReadingRow = {meter_id: string; at: bigint; previous_at: bigint | null; kind: Meter['kind']; unit: string; amount: bigint; limit_amount: bigint | null; reset_at: bigint | null; minutes: bigint | null; scope: string | null; label: string | null; stale_after_ms: bigint};
@@ -11,7 +12,8 @@ const keyMeter = (id: string) => /^key:([0-9a-f]{12}):(?:usage|cap)$/.exec(id)?.
 
 /** The source state and sparse exact ledger share their caller's savepoint. */
 export class MeterStore {
-  constructor(private readonly db: DatabaseSync) {}
+  readonly contexts:MeterContexts;
+  constructor(private readonly db: DatabaseSync) {this.contexts=new MeterContexts(db);this.contexts.seed();}
 
   record(source: string, previous: SourceState, measurement: MeterMeasurement): {state: SourceState; since: number|null} {
     const current = new Map((previous.meters ?? []).map(m => [m.id, {...m, stale: true}]));
@@ -65,6 +67,7 @@ export class MeterStore {
     }
     const accountSuccess = previous.provider === 'openrouter' ? ids.has('credits') && ids.has('usage') : measurement.meters.some(m => !keyMeter(m.id));
     const balanceStatus=balanceStatusOf(previous.provider,previous.meters??[],measurement);
+    this.contexts.observe(source,previous.provider,measurement,balanceStatus);
     const state: SourceState = {
       ...previous, windows: [], resets: null,
       successAt: accountSuccess ? measurement.observedAt : previous.successAt,
@@ -116,6 +119,7 @@ export class MeterStore {
   }
 
   prune(cutoff: number): boolean {
+    this.contexts.prune(cutoff);
     let changed = this.db.prepare('DELETE FROM readings WHERE at<? AND at<(SELECT max(at) FROM readings r WHERE r.source_id=readings.source_id AND r.meter_id=readings.meter_id AND r.at<?)').run(cutoff, cutoff).changes > 0;
     // The last endpoint is evidence of an unchanged observation, even after the
     // current meter has been archived and its changed reading is much older.

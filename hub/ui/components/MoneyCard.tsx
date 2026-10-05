@@ -52,8 +52,7 @@ export function MoneyCard({source,board,view,compact=false}:{source:Card;board:s
       const formatted=money(total.amount,total.unit),amount=formatted.slice(0,-total.unit.length-1);
       const breakdown=<div className="money-breakdown">{components.map(({meter,role})=><div key={meter.id} className={meter.stale?'is-stale':''} title={[money(meter.amount,meter.unit,true),stamp(meter.at),meter.stale?t('money.stale'):''].filter(Boolean).join('\n')}><span>{balanceRoleLabel(role)}</span><span>{money(meter.amount,meter.unit)}</span></div>)}</div>;
       return <div key={total.id} className={total.stale?'is-stale':''}>
-        <div className="money-balance" title={[money(total.amount,total.unit,true),stamp(total.at),total.stale?t('money.stale'):''].filter(Boolean).join('\n')}><span>{compact&&components.length?<Popover label={t('money.breakdown')} trigger={t('money.accountBalance')} triggerClass="link-button" up>{breakdown}</Popover>:t('money.accountBalance')}</span><span className="limit-value" data-money={total.amount}>{amount}<small>{total.unit}</small></span></div>
-        {!compact&&breakdown}
+        <div className="money-balance" title={[money(total.amount,total.unit,true),stamp(total.at),total.stale?t('money.stale'):''].filter(Boolean).join('\n')}><span>{components.length?<Popover label={t('money.breakdown')} trigger={t('money.accountBalance')} triggerClass="link-button" up>{breakdown}</Popover>:t('money.accountBalance')}</span><span className="limit-value" data-money={total.amount}>{amount}<small>{total.unit}</small></span></div>
       </div>;
     })}
     <div className="limits money-limits">{keys.map(part=><KeyMetrics key={part.id} part={part} meters={meters} compact={compact}/>)}</div>

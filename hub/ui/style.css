@@ -932,6 +932,7 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .money-body { display: grid; gap: 12px; min-width: 0; }
 .money-balance { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px 12px; }
 .money-balance > span:first-child { color: var(--text-3); }
+.money-balance .link-button { font-size: inherit; }
 .money-balance .limit-value { max-width: 100%; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .money-limits:not(:empty) { border-top: 1px solid var(--hair); padding-top: 16px; margin-top: 4px; }
 .money-partial { margin-left: 4px; color: var(--text-3); }

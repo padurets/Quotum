@@ -323,8 +323,11 @@ Quotum uses only the fixed [balance read](https://api-docs.deepseek.com/api/get-
 Key expiry is unknown and saving it requires an explicit acknowledgement. Server and
 desktop modes use the same encrypted credential protection described in [SECURITY.md](SECURITY.md).
 
-The card and compact panel show each available currency separately, with total,
-granted and topped-up balances. Choose **CNY** or **USD** explicitly in analytics;
+The card and compact panel show **Available balance** for each currency, using the
+same layout as OpenRouter without unsupported scales. Click the balance label for
+its granted and topped-up breakdown. All reported balances, funds status and safe
+provider context are retained for later budget analysis, within the history retention
+period. Choose **CNY** or **USD** explicitly in analytics;
 connecting an account keeps your existing subscription view. Totals are selected by
 default; components can be added in the chart's settings. The total is not added to its
 components, and currencies are never converted or summed. Spending and top-up events

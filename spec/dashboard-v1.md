@@ -525,6 +525,10 @@ for the week and unlocated for the day. No spending is assigned a guessed time.
 
 Key parts contain an opaque id, name, disabled/expiry/BYOK scope metadata, observation
 and freshness, `presence` and `missCount`, and current provider day/week/month usage.
+They may also carry `createdAt`, `updatedAt` and `byokUsage: {total, day, week, month}`.
+Dates are supplier timestamps or null; BYOK amounts are exact millionth strings or
+null when unavailable. Current period projections clear out-of-period BYOK totals in
+the same way as ordinary usage totals. BYOK values do not alter wallet spending.
 A key missing from one successful traversal remains stale; two successive successful
 missing traversals archive it. Partial traversals do not confirm absence. A reappearance
 restores the same id and history. Inventory completeness describes a bounded traversal,
@@ -533,6 +537,10 @@ A confirmed unlimited key loses its current cap even during a partial traversal;
 an invalid cap remains unknown and preserves the last cap as stale. Historical readings
 survive removal. The last confirmed observation also survives archival and retention,
 so a returning key's spending interval begins at that observation.
+Safe provider context and reported period totals are retained in sparse internal
+history with their own observation times and UTC period anchors. This storage does
+not add board events or a new history capability. No raw response, raw key hash,
+creator/workspace id, connection label or credential enters that archive.
 
 `GET /api/history` additionally accepts `unit` and `meters`: a JSON array of at most
 32 logical `[sourceId, meterId]` pairs, sorted and deduplicated. Sources must be visible
