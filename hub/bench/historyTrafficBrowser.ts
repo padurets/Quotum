@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
-import {cellStart, type HistoryAnswer} from '../server/domain/history';
+import {cellStart, expandHistory, type HistoryAnswer, type HistoryBasis, type HistoryReply} from '../server/domain/history';
 import {openTab, type Browser, type Cdp} from './cdp';
 import {HistoryCutChanged, bodyTotals, readUnion, stableHistory, trafficProblems, transferFor} from './historyTrafficBudget';
 import {HISTORY_ATTEMPT_HEADER, historyBody, historyProxy, type BodyCount, type Transfer} from './historyProxy';
 import {observeReversal} from './reversalDiagnostic';
 
 const DAY = 86_400_000;
-type Read = {id: string; phase: string; from: number; to: number; cell: number; lower: number; coding?: string; length?: number; attemptId?: string; transferId?: string; canceled?: boolean; count?: BodyCount; answer?: Pick<HistoryAnswer, 'run' | 'now' | 'known'>; chunks?: [number, number][]};
+type Read = {id: string; phase: string; from: number; to: number; cell: number; lower: number; before: Promise<unknown[]>; coding?: string; length?: number; attemptId?: string; transferId?: string; canceled?: boolean; count?: BodyCount; answer?: Pick<HistoryAnswer, 'run' | 'now' | 'known'>; chunks?: [number, number][]};
 const lowerHeaders = (headers: Record<string, string>) => Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
 let pageSerial = 0;
 
@@ -34,11 +34,12 @@ export class HistoryBodies {
   readonly pending = new Set<Promise<unknown>>();
   readonly errors: unknown[] = [];
   private readonly active = new Map<string, Read>();
+  private readonly metadata = new Map<string, HistoryBasis>();
   get activeCount() {return this.active.size;}
   constructor(cdp: Pick<Cdp, 'on' | 'send'>) {
     cdp.on<{requestId: string; request: {url: string; headers?: Record<string, string>}}>('Network.requestWillBeSent', event => {
       const url = new URL(event.request.url); if (url.pathname !== '/api/history') return;
-      const read: Read = {id: event.requestId, phase: this.phase, from: Number(url.searchParams.get('from')), to: Number(url.searchParams.get('to')), cell: Number(url.searchParams.get('cell')), lower: 0, attemptId: lowerHeaders(event.request.headers ?? {})[HISTORY_ATTEMPT_HEADER]};
+      const read: Read = {id: event.requestId, phase: this.phase, from: Number(url.searchParams.get('from')), to: Number(url.searchParams.get('to')), cell: Number(url.searchParams.get('cell')), lower: 0, before: Promise.all([...this.pending]), attemptId: lowerHeaders(event.request.headers ?? {})[HISTORY_ATTEMPT_HEADER]};
       this.active.set(read.id, read); this.reads.push(read);
     });
     cdp.on<{requestId: string; headers: Record<string, string>}>('Network.requestWillBeSentExtraInfo', event => {
@@ -55,9 +56,14 @@ export class HistoryBodies {
     cdp.on<{requestId: string; encodedDataLength: number}>('Network.dataReceived', event => {const read = this.active.get(event.requestId); if (read) read.lower += event.encodedDataLength;});
     cdp.on<{requestId: string}>('Network.loadingFinished', event => {
       const read = this.active.get(event.requestId); if (!read) return; this.active.delete(read.id);
-      const work = cdp.send<{body: string; base64Encoded: boolean}>('Network.getResponseBody', {requestId: read.id}).then(result => {
+      const work = cdp.send<{body: string; base64Encoded: boolean}>('Network.getResponseBody', {requestId: read.id}).then(async result => {
         const decoded = result.base64Encoded ? Buffer.from(result.body, 'base64') : Buffer.from(result.body);
-        const answer = JSON.parse(decoded.toString()) as HistoryAnswer;
+        // DevTools can finish fetching an earlier full body after the page has
+        // already used its metadata to start this request. Count the raw body.
+        await read.before;
+        const reply = JSON.parse(decoded.toString()) as HistoryReply;
+        const answer = expandHistory(reply, this.metadata.get(reply.meta ?? ''));
+        if (answer.meta) this.metadata.set(answer.meta, {run: answer.run, now: answer.now, historyStart: answer.historyStart, known: answer.known, meta: answer.meta});
         read.answer = {run: answer.run, now: answer.now, known: answer.known}; read.chunks = answer.chunks.map(chunk => [chunk.from, chunk.to]);
         read.count = {complete: true, decoded: decoded.length, lower: read.length ?? NaN, upper: read.length, length: read.length, coding: read.coding, id: read.attemptId ?? read.transferId, responseId: read.transferId};
       }).catch(error => {this.errors.push(error); read.count = {complete: false, lower: read.lower, upper: read.length, length: read.length, coding: read.coding, id: read.attemptId ?? read.transferId, responseId: read.transferId};});

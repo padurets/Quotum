@@ -161,7 +161,7 @@ async function main() {
     await cdp.send('Emulation.setFocusEmulationEnabled', {enabled: true});
     const split = ana.cookie.indexOf('=');
     await cdp.send('Network.setCookie', {name: ana.cookie.slice(0, split), value: ana.cookie.slice(split + 1), url: address.base, httpOnly: true, sameSite: 'Lax'});
-    await cdp.send('Page.addScriptToEvaluateOnNewDocument', {source: probeScript()});
+    await cdp.send('Page.addScriptToEvaluateOnNewDocument', {source: `localStorage.setItem('quotum.locale','en');\n${probeScript()}`});
     await cdp.send('Page.navigate', {url: `${address.base}/`});
 
     const shownBy = Date.now() + SHOWN_MS;
@@ -213,6 +213,9 @@ async function main() {
     // The readings above are frozen: keyboard checks do not enter the performance budget.
     say('checking consecutive frequency saves with native arrow keys');
     await frequencyKeys(cdp);
+    // Panning has its own movement and mutation probe. Traversing React and the
+    // DOM for the finished measurement phase would add unrelated work to every frame.
+    await cdp.evaluate('__quotumBench.pause()');
     say('checking native continuous wheel and Shift-drag at 24h and 30d, CPU ×4');
     const panned = await panning(cdp);
     problems.push(...panned.problems);

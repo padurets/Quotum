@@ -30,6 +30,18 @@ function fixture(budget?: number) {
   return {store, directory, user, board, device, source, tiles, sample, read, calls: () => calls};
 }
 
+test('metadata tokens bind the board, run and complete visible metadata to this hub instance', () => {
+  const h = fixture();
+  const value = {run: 'run', historyStart: start, known: {work: start, sources: {[h.source]: start}}};
+  const token = h.tiles.metadata(h.board, value);
+  assert.match(token, /^[\w-]{43}$/);
+  assert.equal(h.tiles.metadata(h.board, structuredClone(value)), token);
+  assert.notEqual(h.tiles.metadata('other', value), token);
+  assert.notEqual(new HistoryTiles(h.store).metadata(h.board, value), token);
+  for (const changed of [{...value, run: 'restart'}, {...value, historyStart: start + 1}, {...value, known: {...value.known, work: start + 1}}, {...value, known: {...value.known, sources: {}}}]) assert.notEqual(h.tiles.metadata(h.board, changed), token);
+  h.store.close();
+});
+
 test('closed tiles hit without recounting, open and retention-edge tiles always count', () => {
   const h = fixture(); h.sample(start, 20);
   assert.deepEqual(h.read(), h.read()); assert.equal(h.calls(), 1);

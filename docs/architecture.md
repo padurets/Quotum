@@ -937,7 +937,10 @@ mouse or pen drag moves both charts continuously. A page-local transaction captu
 each chart's scale in CSS pixels and applies the same time delta on animation frames;
 plain dragging still selects a range and touch retains its hold-to-select gesture.
 Prepared SVG artwork moves in composited HTML surfaces behind a stationary clip;
-the axes and readouts stay in place. The chart container owns pointer capture and
+the axes and readouts stay in place. The surfaces keep their compositor hints between
+gestures, avoiding repeated promotion and rasterization on the first input. Label
+backgrounds retain their measured offsets when only their anchor moves. The chart
+container owns pointer capture and
 wheel input, projected through its fixed SVG viewport, including labels in another
 surface. Surface geometry and painters become visible only after their DOM commits.
 The future moves with the strip during the gesture, then folds away over 160 ms on
@@ -958,17 +961,22 @@ While panning, the history store keeps the previous complete answer for the tabl
 activity totals and legend numbers. A separate bounded plot buffer decodes the same
 tiles without computing frame totals. Known parts stay undimmed, lines break across
 unread cells, and an activity stack appears only when every contributing whole cell is
-read. A stationary HTML inset clips the long activity band to whole bars without
-laying out that SVG again. Two short edge bars in their own SVG are recomputed when
-the draft crosses a cell; moving within a cell only translates the prepared artwork
+read. Two translated HTML clips intersect at the whole-bar edges of the long activity
+band; a counter-translation keeps its artwork in place. The clip boundaries use
+compositor transforms while the SVG's coordinate system stays unchanged. Two short
+edge bars in their own SVG are recomputed when the draft crosses a cell; moving within
+a cell only translates the prepared artwork
 and updates its clip. The final 160 ms fold stays inside SVG to preserve stroke widths.
 A temporary shared registry keeps plot and
 legend colors and dashes consistent, adding new groups with a pending total. Visible
 missing cells are read immediately in contiguous batches of at most eight tiles.
 The nearest unread edge comes first, without crossing fresh cells or another tile
 owner. Only a visible miss can add a nearby buffer in the direction of movement:
-min(60, ceil(history length / cell / 4)) whole cells. A cached trajectory starts no
-new requests. Unvisited optional cells remain charged to that gesture after an
+min(60, ceil(history length / cell / 4)) whole cells. That optional extension stops
+at a tile edge when the required cells and at least one tile of cells still fit, so
+adjacent responses do not split the same tile and repeat its metadata. Cells trimmed
+before dispatch consume no allowance. A cached trajectory starts no new requests.
+Unvisited optional cells remain charged to that gesture after an
 abort or reversal; entering them restores the allowance. A disjoint jump inside a
 held tile also reads the minimum unknown or stale bridge to its retained interval,
 without rereading its fresh component. Empty tiles have no head to fill. At most
@@ -977,6 +985,11 @@ range uses the same batching without a buffer. Writes to the same tile are
 serialized, obsolete requests are aborted and speculative errors cannot drop the
 selection. The existing 15 MiB tile estimate protects the visible frame. On release,
 speculation stops and exact totals switch only after the final frame is complete.
+The history transport reuses unchanged `historyStart` and `known` through an opaque
+metadata token scoped to the board and hub instance. Each flight keeps the metadata
+it offered, so out-of-order replies cannot borrow a newer or another board's values.
+The server still checks access and computes the current scope on every read; older
+readers continue to receive complete metadata.
 Numeric preparation runs outside React rendering through one cancellable MessageChannel
 scheduler. Its shared generators yield between small cell, session, group, event and point
 operations. UI slices target one millisecond and check the deadline after at most sixteen
