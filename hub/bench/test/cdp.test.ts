@@ -1,6 +1,12 @@
-import {test} from 'node:test';
+import {test,type TestContext} from 'node:test';
 import assert from 'node:assert/strict';
-import {attachedChrome, Cdp, openTab,nativeProcesses} from '../cdp.js';
+import {attachedChrome, Cdp, openTab,nativeProcesses,launchedChrome} from '../cdp.js';
+import {EventEmitter} from 'node:events';
+import {PassThrough} from 'node:stream';
+import {mkdtempSync,writeFileSync,existsSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import type {ChildProcess} from 'node:child_process';
 import {Requests} from '../index.js';
 
 /** Stands in for what the benchmark hears of the browser: events by name, emitted by the test. */
@@ -112,4 +118,133 @@ test('history bytes are counted by path after reads finish, separately from othe
   cdp.emit('Network.loadingFinished', {requestId: 'history', encodedDataLength: 2345});
   assert.equal(requests.historyPending, 0);
   assert.equal(requests.bytesByPath['/api/history'], 2345);
+});
+
+/** No installed browser: an owned child and the DevTools reply are controlled independently. */
+class StartingChrome extends EventEmitter {
+  pid: number | undefined = 999999999;
+  stdout = new PassThrough();
+  stderr = new PassThrough();
+  exitCode: number | null = null;
+  signalCode: NodeJS.Signals | null = null;
+  kills: NodeJS.Signals[] = [];
+  ignoreTerm = false;
+  kill(signal: NodeJS.Signals = 'SIGTERM') {
+    this.kills.push(signal);
+    if (signal !== 'SIGTERM' || !this.ignoreTerm) this.leave(null, signal);
+    return true;
+  }
+  leave(code: number | null, signal: NodeJS.Signals | null = null) {
+    this.exitCode = code; this.signalCode = signal; this.emit('exit', code, signal); this.emit('close', code, signal);
+  }
+}
+const startingProfile = (t: TestContext) => {
+  const profile = mkdtempSync(path.join(tmpdir(), 'quotum-test-chrome-'));
+  t.after(() => rmSync(profile, {recursive: true, force: true}));
+  t.mock.method(console, 'error', () => {});
+  return profile;
+};
+const publishPort = (profile: string, value = '32123\n/devtools/browser/fixture\n') =>
+  writeFileSync(path.join(profile, 'DevToolsActivePort'), value);
+const versionReply = (socket = 'ws://127.0.0.1:32123/devtools/browser/fixture') =>
+  new Response(JSON.stringify({Browser: 'Chrome/fixture', webSocketDebuggerUrl: socket}));
+const asChild = (child: StartingChrome) => child as unknown as ChildProcess;
+const turnsUntil = async (ready: () => boolean) => {
+  for (let i = 0; !ready() && i < 1000; i++) await new Promise<void>(resolve => setImmediate(resolve));
+  assert.ok(ready(), 'the controlled startup reached its expected phase');
+};
+
+test('a silent browser is ready through its owned port file and actual DevTools response', async t => {
+  const profile = startingProfile(t), child = new StartingChrome();
+  publishPort(profile);
+  const calls: string[] = [];
+  t.mock.method(globalThis, 'fetch', async (url: string) => {calls.push(url); return versionReply();});
+  const browser = await launchedChrome(asChild(child), profile);
+  assert.equal(browser.endpoint, 'http://127.0.0.1:32123');
+  assert.deepEqual(calls, ['http://127.0.0.1:32123/json/version']);
+  assert.ok(existsSync(profile));
+  await browser.close(); await browser.close();
+  assert.deepEqual(child.kills, ['SIGTERM']); assert.equal(existsSync(profile), false);
+});
+
+test('a stderr announcement without an owned port file cannot turn a startup timeout into readiness', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const profile = startingProfile(t), child = new StartingChrome();
+  const calls: string[] = [];
+  t.mock.method(globalThis, 'fetch', async (url: string) => {calls.push(url); return versionReply();});
+  const failed = assert.rejects(launchedChrome(asChild(child), profile), /DevTools was not ready in 20 s/);
+  child.stderr.write('DevTools listening on ws://127.0.0.1:32123/devtools/browser/fixture\n');
+  t.mock.timers.tick(20_000); await failed;
+  assert.deepEqual(calls, []); assert.deepEqual(child.kills, ['SIGTERM']);
+  assert.equal(existsSync(profile), false);
+});
+
+test('an invalid port file never sends a request outside the owned loopback endpoint', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const profile = startingProfile(t), child = new StartingChrome();
+  publishPort(profile, '65536\n/devtools/browser/fixture\n');
+  let requests = 0;
+  t.mock.method(globalThis, 'fetch', async () => {requests++; return versionReply();});
+  const failed = assert.rejects(launchedChrome(asChild(child), profile), /DevTools was not ready/);
+  t.mock.timers.tick(20_000); await failed;
+  assert.equal(requests, 0); assert.equal(existsSync(profile), false);
+});
+
+test('a wrong browser reply cannot satisfy readiness for the published browser', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const profile = startingProfile(t), child = new StartingChrome(); publishPort(profile);
+  let requests = 0;
+  t.mock.method(globalThis, 'fetch', async () => {requests++; return versionReply('ws://other.invalid:32123/devtools/browser/fixture');});
+  const failed = assert.rejects(launchedChrome(asChild(child), profile), /DevTools was not ready/);
+  await turnsUntil(() => requests === 1); await new Promise<void>(resolve => setImmediate(resolve));
+  t.mock.timers.tick(20_000); await failed;
+  assert.deepEqual(child.kills, ['SIGTERM']); assert.equal(existsSync(profile), false);
+});
+
+test('a silent HTTP probe is aborted at the same startup deadline and the owned child is reaped', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const profile = startingProfile(t), child = new StartingChrome(); publishPort(profile);
+  let signal: AbortSignal | undefined;
+  t.mock.method(globalThis, 'fetch', async (_url: string, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
+    signal = init.signal!;
+    signal.addEventListener('abort', () => reject(new Error('aborted')), {once: true});
+  }));
+  const failed = assert.rejects(launchedChrome(asChild(child), profile), /DevTools was not ready/);
+  await turnsUntil(() => Boolean(signal)); t.mock.timers.tick(20_000); await failed;
+  assert.equal(signal?.aborted, true); assert.deepEqual(child.kills, ['SIGTERM']);
+  assert.equal(existsSync(profile), false);
+});
+
+test('early exit and spawn errors clean the profile without waiting for the startup deadline', async t => {
+  for (const mode of ['exit', 'error']) {
+    const profile = startingProfile(t), child = new StartingChrome();
+    if (mode === 'error') child.pid = undefined;
+    const failed = assert.rejects(launchedChrome(asChild(child), profile), mode === 'exit' ? /exited before DevTools/ : /could not start: ENOENT/);
+    if (mode === 'exit') child.leave(7); else child.emit('error', new Error('ENOENT'));
+    await failed; assert.deepEqual(child.kills, []); assert.equal(existsSync(profile), false);
+  }
+});
+
+test('a startup timeout escalates an owned child that ignores termination and removes its profile', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const profile = startingProfile(t), child = new StartingChrome(); child.ignoreTerm = true;
+  const failed = assert.rejects(launchedChrome(asChild(child), profile), /DevTools was not ready/);
+  t.mock.timers.tick(20_000); await turnsUntil(() => child.kills.length === 1);
+  assert.ok(existsSync(profile)); t.mock.timers.tick(5_000); await failed;
+  assert.deepEqual(child.kills, ['SIGTERM', 'SIGKILL']); assert.equal(existsSync(profile), false);
+});
+
+test('closing an exclusively owned process group also stops workers after the browser exits', async t => {
+  const profile = startingProfile(t), child = new StartingChrome(); publishPort(profile);
+  t.mock.method(globalThis, 'fetch', async () => versionReply());
+  const signals: {pid: number; signal: NodeJS.Signals}[] = [];
+  t.mock.method(process, 'kill', (pid: number, signal: NodeJS.Signals) => {
+    signals.push({pid, signal});
+    if (signal === 'SIGTERM') child.leave(0);
+    return true;
+  });
+  const browser = await launchedChrome(asChild(child), profile, true);
+  await browser.close(); await browser.close();
+  assert.deepEqual(signals, [{pid: -child.pid!, signal: 'SIGTERM'}, {pid: -child.pid!, signal: 'SIGKILL'}]);
+  assert.deepEqual(child.kills, []); assert.equal(existsSync(profile), false);
 });

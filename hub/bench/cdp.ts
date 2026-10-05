@@ -149,28 +149,132 @@ export async function nativeProcesses(owner:number,pids:number[]){
   return processes;
 }
 
+/** Startup has no CDP process list yet; follow only this owned browser's native children. */
+async function startupProcesses(owner: number) {
+  const pids = [owner];
+  for (let i = 0; i < pids.length && i < 32; i++) {
+    const children = await readFile('/proc/' + pids[i] + '/task/' + pids[i] + '/children', 'utf8').catch(() => '');
+    for (const value of children.trim().split(/\s+/)) {
+      const pid = Number(value);
+      if (pid > 1 && !pids.includes(pid) && pids.length < 32) pids.push(pid);
+    }
+  }
+  return nativeProcesses(owner, pids);
+}
+
 /** Starts a headless Chrome of its own, with a throwaway profile; `sandbox: false` where the system forbids it (CI). */
 export async function launchChrome(file: string, sandbox: boolean): Promise<Browser> {
   const profile = mkdtempSync(path.join(os.tmpdir(), 'quotum-bench-chrome-'));
   const chrome: ChildProcess = spawn(file, [...FLAGS, ...(sandbox ? [] : ['--no-sandbox']), '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], {
-    stdio: ['ignore', 'ignore', 'pipe'],
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: process.platform !== 'win32',
   });
+  return launchedChrome(chrome, profile, process.platform !== 'win32');
+}
+
+/** Owns startup and cleanup even when Chrome never publishes a usable DevTools endpoint. */
+export async function launchedChrome(chrome: ChildProcess, profile: string, ownsGroup = false): Promise<Browser> {
+  const started = performance.now();
   let output = '';
-  const endpoint = await new Promise<string>((resolve, reject) => {
-    const late = setTimeout(() => reject(new Error(`Chrome did not start in 20 s:\n${output}`)), 20_000);
-    chrome.stderr!.on('data', chunk => {
-      output = (output + chunk.toString()).slice(-4_000);
-      const found = output.match(/DevTools listening on ws:\/\/([^/\s]+)\//);
-      if (found) {
-        clearTimeout(late);
-        resolve(`http://${found[1]}`);
-      }
+  let stdout = '', portState = 'not observed', httpState = 'not attempted';
+  let exit: {code: number | null; signal: NodeJS.Signals | null} | null = null;
+  let spawnError: Error | null = null;
+  let isClosed = false;
+  let fail = (_error: Error) => {};
+  const closed = new Promise<void>(resolve => {
+    chrome.once('close', () => {isClosed = true; resolve();});
+    chrome.once('exit', (code, signal) => {
+      exit = {code, signal};
+      fail(new Error('Chrome exited before DevTools was ready: ' + JSON.stringify(exit)));
     });
-    chrome.once('exit', code => {
-      clearTimeout(late);
-      reject(new Error(`Chrome exited (${code}) before it listened:\n${output}`));
+    chrome.once('error', error => {
+      spawnError = error;
+      if (!chrome.pid) resolve();
+      fail(new Error('Chrome could not start: ' + error.message));
     });
   });
+  chrome.stderr?.on('data', chunk => {output = (output + chunk.toString()).slice(-4_000);});
+  chrome.stdout?.on('data', chunk => {stdout = (stdout + chunk.toString()).slice(-4_000);});
+  const kill = (signal: NodeJS.Signals) => {
+    if (ownsGroup && chrome.pid) {
+      try {process.kill(-chrome.pid, signal);}
+      catch (error) {if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;}
+    } else chrome.kill(signal);
+  };
+  let stopping: Promise<void> | undefined;
+  const stop = () => stopping ??= (async () => {
+    if (chrome.pid) {
+      if (ownsGroup || !isClosed) kill('SIGTERM');
+      if (!isClosed) {
+        const hard = setTimeout(() => kill('SIGKILL'), 5_000);
+        await closed; clearTimeout(hard);
+      }
+      // Workers can outlive the browser and close their inherited output pipes.
+      if (ownsGroup) kill('SIGKILL');
+    }
+    rmSync(profile, {recursive: true, force: true, maxRetries: 5});
+  })();
+  const state = async () => ({
+    elapsedMs: Math.round(performance.now() - started), pid: chrome.pid, exit,
+    spawnError: spawnError?.message, activePort: portState, http: httpState,
+    stdout, stderr: output,
+    native: process.platform === 'linux' && chrome.pid && !exit
+      ? await startupProcesses(chrome.pid) : null,
+  });
+  let endpoint: string;
+  try {
+    endpoint = await new Promise<string>((resolve, reject) => {
+      let settled = false, poll: ReturnType<typeof setTimeout> | undefined;
+      let request: AbortController | undefined;
+      const finish = (error: Error | null, value?: string) => {
+        if (settled) return;
+        settled = true; clearTimeout(late); clearTimeout(poll); request?.abort();
+        if (error) reject(error); else resolve(value!);
+      };
+      fail = error => finish(error);
+      const late = setTimeout(() => finish(new Error('Chrome DevTools was not ready in 20 s')), 20_000);
+      const inspect = async () => {
+        try {
+          // ChromeDriver also discovers a random debugging port through this owned profile.
+          const text = await readFile(path.join(profile, 'DevToolsActivePort'), 'utf8');
+          if (settled) return;
+          const match = /^(\d{1,5})\r?\n(\/devtools\/browser\/[a-zA-Z0-9-]+)\r?\n?$/.exec(text);
+          const port = Number(match?.[1]);
+          if (!match || port < 1 || port > 65535) {portState = 'invalid'; return;}
+          portState = 'port ' + port;
+          const candidate = 'http://127.0.0.1:' + port;
+          request = new AbortController();
+          const bound = setTimeout(() => request?.abort(), 1_000);
+          try {
+            const response = await fetch(candidate + '/json/version', {signal: request.signal});
+            httpState = 'HTTP ' + response.status;
+            if (!response.ok || settled) return;
+            const version = await response.json() as {Browser?: string; webSocketDebuggerUrl?: string};
+            if (settled) return;
+            const socket = new URL(version.webSocketDebuggerUrl ?? '');
+            if (socket.protocol !== 'ws:' || socket.port !== String(port)
+              || !['127.0.0.1', 'localhost', '[::1]'].includes(socket.hostname)
+              || socket.pathname !== match[2]) {httpState = 'mismatched browser endpoint'; return;}
+            console.error('bench: Chrome ready ' + JSON.stringify({
+              elapsedMs: Math.round(performance.now() - started), browser: version.Browser,
+              announced: /DevTools listening on/.test(output),
+            }));
+            finish(null, candidate);
+          } finally {clearTimeout(bound);}
+        } catch (error) {
+          if (!settled) httpState = (error as Error).message.slice(0, 200);
+        } finally {
+          if (!settled) poll = setTimeout(() => {void inspect();}, 100);
+        }
+      };
+      void inspect();
+    });
+  } catch (error) {
+    const detail = await state();
+    console.error('bench: Chrome startup ' + JSON.stringify(detail));
+    await stop();
+    throw new Error((error as Error).message + '\n' + JSON.stringify(detail));
+  }
   return {
     endpoint,
     async diagnostics(pids:number[],candidate?:number){
@@ -186,16 +290,7 @@ export async function launchChrome(file: string, sandbox: boolean): Promise<Brow
       }
       return {stderr:output,processes,stack};
     },
-    async close() {
-      if (chrome.exitCode === null && chrome.signalCode === null) {
-        const exited = new Promise(resolve => chrome.once('exit', resolve));
-        chrome.kill('SIGTERM');
-        const hard = setTimeout(() => chrome.kill('SIGKILL'), 5_000);
-        await exited;
-        clearTimeout(hard);
-      }
-      rmSync(profile, {recursive: true, force: true, maxRetries: 5});
-    },
+    close: stop,
   };
 }
 

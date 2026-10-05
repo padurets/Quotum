@@ -59,6 +59,8 @@ jobs:
           cache-dependency-path: hub/package-lock.json
       - run: npm ci
       - run: npm run build
+      - name: Browser version
+        run: google-chrome --version
       - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci
 
   # On every system the agent ships for: its process handling differs between them.
