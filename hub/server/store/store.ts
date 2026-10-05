@@ -457,7 +457,7 @@ export class Store {
       .all(JSON.stringify(sources.map(s => s.id)), from, to) as {source_id: string; at: number; detail: string}[];
     for (const event of grants) chunks[tileOf(event.at, cellMs) - tileOf(from, cellMs)].grants.push([event.source_id, event.at, Number(event.detail)]);
     if (meters) {
-      const groups=this.meters.groups(meters,from,to);
+      const groups=this.meters.groups(meters,from,to).map(group=>({...group,retainedFrom:now-config.retention.sampleDays*86_400_000}));
       for (const chunk of chunks) chunk.meterSeries = this.meters.cells(meters,chunk.from,chunk.to,cellMs,groups);
     }
     return chunks;

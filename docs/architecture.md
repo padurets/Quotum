@@ -577,6 +577,8 @@ the whole selected interval, including an empty response. The existing chart use
 actual observation anchors and raw pointer time for these series. A deadline endpoint
 is geometry, never a measurement. Subscription and OpenRouter series retain their
 cell midpoint and snapped readout. No value carries into an unconfirmed next cell.
+Retention keeps original heartbeat endpoints as evidence while bounding observation
+points and coverage to the retained interval, including a cell crossing its edge.
 
 Money history uses the same bounded tiles, cache and page loader. Its exact strings,
 historical cap semantics and original spending intervals stay separate from the window

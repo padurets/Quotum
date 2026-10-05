@@ -572,6 +572,8 @@ from the grid edge to the primary point; a first or recovered sample cannot. Dea
 never exceed the fixed grid cell end, so later heartbeats cannot extend finished cells.
 The existing chart draws these actual anchors and reads raw pointer time; deadline
 endpoints are not samples. OpenRouter and percentage series retain cell placement.
+Observation points and coverage stay within retention even in its first partial cell;
+older heartbeat endpoints remain internal evidence.
 Replacing a selected interval with empty series removes its old packed rows too.
 
 DeepSeek cards may carry `balanceStatus: {isAvailable, at, staleAfterMs, partial, issues}`.

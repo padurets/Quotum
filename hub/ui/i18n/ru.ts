@@ -732,9 +732,9 @@ export const ru = {
   "api.secret_key_mismatch": "Ключ шифрования хаба не подходит к сохранённым доступам.",
   "api.refresh_forbidden": "Обновить источник может только его держатель.",
   "api.keys_changed": "Список ключей изменился. Откройте первую страницу заново.",
-  "api.connector_failed": "Не удалось связаться с OpenRouter.",
-  "api.connector_timeout": "OpenRouter не ответил вовремя.",
-  "api.connector_invalid_response": "OpenRouter вернул ответ неподдерживаемого формата.",
+  "api.connector_failed": "Не удалось связаться с провайдером.",
+  "api.connector_timeout": "Провайдер не ответил вовремя.",
+  "api.connector_invalid_response": "Провайдер вернул ответ неподдерживаемого формата.",
 
   "connections.actions": "Действия: {name}",
   "connections.expires": "Доступ до {time}",

@@ -16,6 +16,9 @@ function SourceKeyForm({provider,replace,local,trustedKeys,onClose,onSaved}:{pro
   const declared=provider==='deepseek';
   const [name,setName]=useState(''),[account,setAccount]=useState('new'),[same,setSame]=useState(false);
   const [accounts,setAccounts]=useState<{id:string;name:string;connected:boolean}[]>([]),[next,setNext]=useState<string|null>(null),[after,setAfter]=useState<string|undefined>(),[back,setBack]=useState<(string|undefined)[]>([]);
+  const [loadedAfter,setLoadedAfter]=useState<string|null|undefined>(null);
+  const accountsReady=!!replace||!declared||loadedAfter===after;
+  const validAccount=account==='new'||accountsReady&&accounts.some(a=>a.id===account);
   const request=useRef(crypto.randomUUID()),generation=useRef(0);
   const close=useRef(onClose);close.current=onClose;
   const storage=useApp()?.secretKey,available=trustedKeys?.available===true;
@@ -25,12 +28,12 @@ function SourceKeyForm({provider,replace,local,trustedKeys,onClose,onSaved}:{pro
     if(!declared||replace)return;
     let live=true;
     call<{accounts:{id:string;name:string;connected:boolean}[];next:string|null}>('GET','/api/source-accounts?provider=deepseek&limit=10'+(after?'&after='+encodeURIComponent(after):''))
-      .then(reply=>{if(live){setAccounts(reply.accounts);setNext(reply.next);}},failure=>{if(live)setError(failure);});
+      .then(reply=>{if(live){setAccounts(reply.accounts);setNext(reply.next);setLoadedAfter(after);setAccount('new');setSame(false);}},failure=>{if(live)setError(failure);});
     return()=>{live=false;};
   },[declared,replace,after]);
   const changed=()=>{request.current=crypto.randomUUID();setSame(false);setError(null);};
   const save=async(event:FormEvent)=>{
-    event.preventDefault();if(!available||busy||(declared?!consent||(!!replace||account!=='new')&&!same:confirmation&&!consent))return;
+    event.preventDefault();if(!available||busy||(declared?!validAccount||!consent||(!!replace||account!=='new')&&!same:confirmation&&!consent))return;
     const own=generation.current;setBusy(true);setError(null);
     try {
       await call('POST',replace?'/api/credentials/'+replace.id:'/api/credentials',{...(replace?{}:{provider,requestId:request.current,...(declared?{account:account==='new'?{kind:'new',name}:{kind:'existing',id:account}}:{})}),secret,...(declared?{allowUnknownExpiry:consent,confirmSameAccount:same}:{allowNoExpiry:consent})},25_000);
@@ -49,10 +52,10 @@ function SourceKeyForm({provider,replace,local,trustedKeys,onClose,onSaved}:{pro
       {declared&&<>
         <p className="drawer-note">{t('sources.declaredIdentity')}</p>
         {!replace&&<>
-          <label className="field"><span>{t('sources.account')}</span><select value={account} disabled={busy||!available} onChange={e=>{setAccount(e.target.value);changed();}}>
-            <option value="new">{t('sources.newAccount')}</option>{accounts.map(a=><option key={a.id} value={a.id}>{a.name}{a.connected?'':` (${t('sources.disconnected')})`}</option>)}
+          <label className="field"><span>{t('sources.account')}</span><select value={validAccount?account:'new'} disabled={busy||!available||!accountsReady} onChange={e=>{setAccount(e.target.value);changed();}}>
+            <option value="new">{t('sources.newAccount')}</option>{accountsReady&&accounts.map(a=><option key={a.id} value={a.id}>{a.name}{a.connected?'':` (${t('sources.disconnected')})`}</option>)}
           </select></label>
-          {(back.length>0||next)&&<div className="button-row"><button type="button" className="button" disabled={busy||!back.length} onClick={()=>{setAfter(back.at(-1));setBack(back.slice(0,-1));setAccount('new');changed();}}>{t('sources.backAccounts')}</button><button type="button" className="button" disabled={busy||!next} onClick={()=>{setBack([...back,after]);setAfter(next!);setAccount('new');changed();}}>{t('sources.moreAccounts')}</button></div>}
+          {(back.length>0||next)&&<div className="button-row"><button type="button" className="button" disabled={busy||!accountsReady||!back.length} onClick={()=>{setAfter(back.at(-1));setBack(back.slice(0,-1));setAccount('new');changed();}}>{t('sources.backAccounts')}</button><button type="button" className="button" disabled={busy||!accountsReady||!next} onClick={()=>{setBack([...back,after]);setAfter(next!);setAccount('new');changed();}}>{t('sources.moreAccounts')}</button></div>}
           {account==='new'&&<Field label={t('sources.accountName')} value={name} maxLength={240} required disabled={busy||!available} onChange={e=>{setName(e.target.value);changed();}}/>}
         </>}
         {(replace||account!=='new')&&<label className="source-consent"><input type="checkbox" checked={same} disabled={busy||!available} onChange={e=>setSame(e.target.checked)}/>{t('sources.sameAccount',{name:replace?.accountName??accounts.find(a=>a.id===account)?.name??''})}</label>}
@@ -60,7 +63,7 @@ function SourceKeyForm({provider,replace,local,trustedKeys,onClose,onSaved}:{pro
       <Field type="password" label={t(declared?'sources.apiKey':'sources.key')} value={secret} autoFocus autoComplete="new-password" spellCheck={false} required disabled={!available||busy} data-1p-ignore="" data-lpignore="true" onChange={e=>{setSecret(e.target.value);changed();setConfirmation(false);setConsent(false);}} />
       {(declared||confirmation)&&<label className="source-consent"><input type="checkbox" checked={consent} onChange={e=>setConsent(e.target.checked)} />{t(declared?'sources.unknownExpiryConsent':'sources.noExpiryConsent')}</label>}
       <ErrorLine error={error} />
-      <div className="button-row"><button type="button" className="button" onClick={onClose}>{t('common.cancel')}</button><button className="button primary" disabled={!available||busy||!secret||(declared?!consent||(!!replace||account!=='new')&&!same:confirmation&&!consent)}>{replace?t('sources.replace'):t('sources.connectProvider',{provider:PROVIDERS[provider]?.name??provider})}</button></div>
+      <div className="button-row"><button type="button" className="button" onClick={onClose}>{t('common.cancel')}</button><button className="button primary" disabled={!available||busy||!secret||(declared?!validAccount||!consent||(!!replace||account!=='new')&&!same:confirmation&&!consent)}>{replace?t('sources.replace'):t('sources.connectProvider',{provider:PROVIDERS[provider]?.name??provider})}</button></div>
     </form>;
 }
 

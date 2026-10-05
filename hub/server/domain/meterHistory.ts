@@ -10,7 +10,7 @@ export type MeterCellExtra = {pointOffsetMs?:number;validUntil?:number;first?: s
 export type MeterCell = [index: number, value: string, spentInternal: string|null, spentExceptional: string|null, coveredMs: number, extra?: MeterCellExtra];
 export type MeterSeriesCells = MonetaryPolicy & {source: string; meter: string; kind: MeterKind; unit: Unit; semantics: MeterSemantics | null; cells: MeterCell[]};
 export type MeterHistory = MonetaryPolicy & {sourceId: string; meterId: string; kind: MeterKind; unit: Unit; semantics: MeterSemantics | null; start: string | null; end: string | null; spent: string|null; unlocated: ExceptionalStep[]; topup: string|null; topupUnlocated: ExceptionalStep[]; coveredMs: number; points: {at: number; value: string; spent:string|null;validUntil?:number;segment: number; semantics: MeterSemantics | null; steps: ExceptionalStep[]}[]};
-export type MeterGroup = MonetaryPolicy & {source: string; meter: string; readings: Reading[]; spans: MeterSpan[]; paired?: {readings: Reading[]; spans: MeterSpan[]}};
+export type MeterGroup = MonetaryPolicy & {source: string; meter: string; readings: Reading[]; spans: MeterSpan[]; retainedFrom?:number; paired?: {readings: Reading[]; spans: MeterSpan[]}};
 
 export function selectionOf(raw: unknown, unit: unknown): MeterSelection {
   if (!Array.isArray(raw) || !isUnit(unit) || raw.length > MAX_METERS) throw new Error('invalid_meter_selection');
@@ -118,6 +118,7 @@ const availableUntil=(span:MeterSpan)=>Math.min(span.interruptedAt??Infinity,spa
 /** Observation anchors and exclusive deadlines preserve accepted holes on the fixed grid. */
 function observationCells(group:MeterGroup,unit:Unit,from:number,to:number,cell:number):MeterSeriesCells[] {
   const series:MeterSeriesCells={...policyOf(group),source:group.source,meter:group.meter,kind:'balance',unit,semantics:null,cells:[]};
+  const retainedFrom=group.retainedFrom??from;
   let semantics:MeterSemantics|null=null;
   for(let at=from,index=0;at<to;at+=cell,index++) {
     const end=at+cell;
@@ -125,15 +126,15 @@ function observationCells(group:MeterGroup,unit:Unit,from:number,to:number,cell:
     if(!span)continue;
     const last=predecessor(group.readings,Math.min(end,availableUntil(span))-1);
     if(!last||last.unit!==unit)continue;
-    const pointAt=Math.max(at,span.from,last.at),validUntil=Math.min(end,availableUntil(span));
+    const pointAt=Math.max(at,span.from,last.at,retainedFrom),validUntil=Math.min(end,availableUntil(span));
     if(pointAt>=validUntil)continue;
     const first=predecessor(group.readings,at-1);
-    const open=span.from<=at&&first&&first.unit===unit?plottedAmount(first):null;
+    const open=at>=retainedFrom&&span.from<=at&&first&&first.unit===unit?plottedAmount(first):null;
     const extra:MeterCellExtra={segment:span.from,open,...(pointAt===at?{}:{pointOffsetMs:pointAt-at}),...(validUntil===end?{}:{validUntil})};
     const next=semanticsOf(last);
     if(JSON.stringify(next)!==JSON.stringify(semantics))extra.semantics=next;
     semantics=next;
-    series.cells.push([index,plottedAmount(last),null,null,coverage(group.spans,at,end),extra]);
+    series.cells.push([index,plottedAmount(last),null,null,coverage(group.spans,Math.max(at,retainedFrom),end),extra]);
   }
   return series.cells.length?[series]:[];
 }

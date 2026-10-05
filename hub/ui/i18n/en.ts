@@ -737,9 +737,9 @@ export const en = {
   "api.secret_key_mismatch": "The hub encryption key does not match its saved accesses.",
   "api.refresh_forbidden": "Only a source holder can refresh it.",
   "api.keys_changed": "The key list changed. Open the first page again.",
-  "api.connector_failed": "OpenRouter could not be reached.",
-  "api.connector_timeout": "OpenRouter did not answer in time.",
-  "api.connector_invalid_response": "OpenRouter returned an unsupported response.",
+  "api.connector_failed": "The provider could not be reached.",
+  "api.connector_timeout": "The provider did not answer in time.",
+  "api.connector_invalid_response": "The provider returned an unsupported response.",
 
   "connections.actions": "Actions for {name}",
   "connections.expires": "Access until {time}",

@@ -112,7 +112,9 @@ export class Credentials {
     return this.boundaryAsync(async()=>{
       const connector=this.connector(provider);
       // Replay is checked before a dormant account's lifecycle permission.
-      const selector=connector.identityKind==='declared'?JSON.stringify(options.account?.kind==='new'?{kind:'new',name:accountName(options.account.name,secret)}:options.account):undefined;
+      const selected=options.account?.kind==='new'?{kind:'new',name:accountName(options.account.name,secret)}
+        :options.account?.kind==='existing'&&Object.keys(options.account).every(k=>['kind','id'].includes(k))?{kind:'existing',id:options.account.id}:options.account;
+      const selector=connector.identityKind==='declared'?JSON.stringify(selected):undefined;
       const replay=this.replay(owner,provider,options.requestId,selector);if(replay)return replay;
       const target=this.target(owner,provider,secret,options),authority=this.authority();
       return this.secret(connector,secret,async bytes=>{

@@ -103,6 +103,37 @@ test('withdrawal invalidates pending existing creates, while explicit reconnect 
   }finally{h.close();}
 });
 
+test('declared account creation replay compares identity rather than JSON property order',async()=>{
+  const h=harness();try {
+    const account=await h.create(),requestId='11111111-1111-4111-8111-111111111111',secret='sk-'+ 'b'.repeat(32);
+    const options={account:{kind:'existing' as const,id:account.accountId!},confirmSameAccount:true,allowUnknownExpiry:true,requestId};
+    const first=await h.credentials.create(h.alice.id,'deepseek',secret,options),calls=h.calls;
+    const replay=await h.credentials.create(h.alice.id,'deepseek',secret,{...options,account:{id:account.accountId!,kind:'existing'}});
+    assert.equal(replay.id,first.id);assert.equal(replay.replayed,true);assert.equal(h.calls,calls);
+    const other=await h.create(h.alice.id,'Work');
+    await assert.rejects(h.credentials.create(h.alice.id,'deepseek',secret,{...options,account:{kind:'existing',id:other.accountId!}}),/credential_conflict/);
+    h.credentials.remove(h.alice.id,first.id);
+    await assert.rejects(h.credentials.create(h.alice.id,'deepseek',secret,{...options,account:{id:account.accountId!,kind:'existing'}}),/credential_not_found/);
+  }finally{h.close();}
+});
+
+test('history clips a retained observation at retention without moving its actual heartbeat',async t=>{
+  const h=harness(),M=60_000,cutoff=60_010;
+  const {config}=await import('../config.js'),now=cutoff+config.retention.sampleDays*86_400_000;
+  t.mock.method(Date,'now',()=>now);
+  const source=h.store.source('deepseek','1'.repeat(24),1),board=h.directory.boards(h.alice.id)[0].id;
+  h.store.hold(source,h.alice.id,1);h.store.record(source,deepSeekMeasurement(payload([tuple('USD')]),60_001));h.store.prune(now);
+  const app=await buildApp({store:h.store,directory:h.directory,ingest:new Ingest(h.store,h.directory,new Duty(),new Cadence()),pairing:new Pairing(h.directory),resets:new ResetFeed(undefined,()=>{}),setup:new Setup(false,null),local:null});
+  t.after(async()=>{await app.close();h.close();});
+  const token=newSecret('qt_s');h.directory.createSession(token,h.alice.id,now,60_000);
+  const response=await app.inject({method:'GET',url:'/api/history?board='+board+'&cell='+M+'&from=60000&to=120000&unit=USD&meters='+encodeURIComponent(JSON.stringify([[source,'balance:USD']])),headers:{cookie:'quotum_session='+token}});
+  assert.equal(response.statusCode,200);
+  const history=composeMeters(response.json().chunks,M,60_000,120_000)[0];
+  assert.equal(history.points[0].at,cutoff);assert.equal(history.points[0].validUntil,120_000);assert.equal(history.coveredMs,0);
+  assert.equal(history.spent,null);assert.equal(history.topup,null);
+  assert.deepEqual(h.store.meters.spans(source,'balance:USD',0,120_000),[{from:60_001,to:60_001,staleAfterMs:204_000}]);
+});
+
 test('empty-account KEK replacement and ABA resets reject pending creation and stale loaded keys before GET',async()=>{
   const h=harness();try {
     h.delay();const pending=h.create();const b=key(8);
