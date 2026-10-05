@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 import {attachedChrome, Cdp, openTab,nativeProcesses,launchedChrome} from '../cdp.js';
 import {EventEmitter} from 'node:events';
 import {PassThrough} from 'node:stream';
-import {mkdtempSync,writeFileSync,existsSync,rmSync} from 'node:fs';
+import {mkdtempSync,writeFileSync,readFileSync,existsSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
-import type {ChildProcess} from 'node:child_process';
+import {spawn,type ChildProcess} from 'node:child_process';
+import {createServer} from 'node:http';
+import {fileURLToPath} from 'node:url';
 import {Requests} from '../index.js';
 
 /** Stands in for what the benchmark hears of the browser: events by name, emitted by the test. */
@@ -129,13 +131,17 @@ class StartingChrome extends EventEmitter {
   signalCode: NodeJS.Signals | null = null;
   kills: NodeJS.Signals[] = [];
   ignoreTerm = false;
+  ignoreKill = false;
+  closePipes = true;
+  unref() {return this;}
   kill(signal: NodeJS.Signals = 'SIGTERM') {
     this.kills.push(signal);
-    if (signal !== 'SIGTERM' || !this.ignoreTerm) this.leave(null, signal);
+    if ((signal === 'SIGTERM' && !this.ignoreTerm) || (signal === 'SIGKILL' && !this.ignoreKill)) this.leave(null, signal);
     return true;
   }
   leave(code: number | null, signal: NodeJS.Signals | null = null) {
-    this.exitCode = code; this.signalCode = signal; this.emit('exit', code, signal); this.emit('close', code, signal);
+    this.exitCode = code; this.signalCode = signal; this.emit('exit', code, signal);
+    if (this.closePipes) this.emit('close', code, signal);
   }
 }
 const startingProfile = (t: TestContext) => {
@@ -184,10 +190,15 @@ test('an invalid port file never sends a request outside the owned loopback endp
   const profile = startingProfile(t), child = new StartingChrome();
   publishPort(profile, '65536\n/devtools/browser/fixture\n');
   let requests = 0;
+  const states: string[] = [];
+  t.mock.method(console, 'error', (message: string) => {states.push(message);});
   t.mock.method(globalThis, 'fetch', async () => {requests++; return versionReply();});
   const failed = assert.rejects(launchedChrome(asChild(child), profile), /DevTools was not ready/);
-  t.mock.timers.tick(20_000); await failed;
-  assert.equal(requests, 0); assert.equal(existsSync(profile), false);
+  try {
+    await turnsUntil(() => requests > 0 || states.some(value => value.includes('"activePort":"invalid"')));
+    assert.equal(requests, 0); assert.ok(states.some(value => value.includes('"activePort":"invalid"')));
+  } finally {t.mock.timers.tick(20_000); await failed;}
+  assert.equal(existsSync(profile), false);
 });
 
 test('a wrong browser reply cannot satisfy readiness for the published browser', async t => {
@@ -248,3 +259,125 @@ test('closing an exclusively owned process group also stops workers after the br
   assert.deepEqual(signals, [{pid: -child.pid!, signal: 'SIGTERM'}, {pid: -child.pid!, signal: 'SIGKILL'}]);
   assert.deepEqual(child.kills, []); assert.equal(existsSync(profile), false);
 });
+
+test('exited owners do not wait for pipes retained by an escaped descendant', async t => {
+  const profile = startingProfile(t), child = new StartingChrome(); child.closePipes = false;
+  const pending = launchedChrome(asChild(child), profile);
+  const failed = assert.rejects(pending, /exited before DevTools/);
+  child.leave(7); await failed;
+  assert.equal(child.stdout.destroyed, true); assert.equal(child.stderr.destroyed, true);
+  assert.equal(existsSync(profile), false);
+});
+
+test('unreaped owners produce a bounded cleanup failure instead of hiding the startup failure', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const profile = startingProfile(t), child = new StartingChrome();
+  child.ignoreTerm = true; child.ignoreKill = true;
+  const failed = assert.rejects(launchedChrome(asChild(child), profile), error =>
+    /DevTools was not ready/.test(String(error)) && /did not exit after termination and kill/.test(String(error)));
+  t.mock.timers.tick(20_000); await turnsUntil(() => child.kills.length === 1);
+  t.mock.timers.tick(7_000); await failed;
+  assert.deepEqual(child.kills, ['SIGTERM', 'SIGKILL']);
+  assert.equal(child.stdout.destroyed, true); assert.equal(child.stderr.destroyed, true);
+  assert.ok(existsSync(profile), 'a still-running owner must not lose its profile');
+});
+
+test('cancelling pending startup aborts its request and reaps its owner before settling', async t => {
+  const profile = startingProfile(t), child = new StartingChrome(); publishPort(profile);
+  const controller = new AbortController();
+  let request: AbortSignal | undefined;
+  t.mock.method(globalThis, 'fetch', async (_url: string, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
+    request = init.signal!;
+    request.addEventListener('abort', () => reject(new Error('aborted')), {once: true});
+  }));
+  const failed = assert.rejects(launchedChrome(asChild(child), profile, false, controller.signal), /startup cancelled/);
+  await turnsUntil(() => Boolean(request)); controller.abort(); await failed;
+  assert.equal(request?.aborted, true); assert.deepEqual(child.kills, ['SIGTERM']);
+  assert.equal(existsSync(profile), false);
+});
+
+test('a cancellation after readiness keeps ownership with the returned browser', async t => {
+  const profile = startingProfile(t), child = new StartingChrome(); publishPort(profile);
+  const controller = new AbortController();
+  t.mock.method(globalThis, 'fetch', async () => versionReply());
+  const browser = await launchedChrome(asChild(child), profile, false, controller.signal);
+  controller.abort(); assert.deepEqual(child.kills, []); assert.ok(existsSync(profile));
+  await browser.close(); assert.deepEqual(child.kills, ['SIGTERM']); assert.equal(existsSync(profile), false);
+});
+
+test('a redirect cannot leave the published DevTools port or grant readiness through its body', async t => {
+  const profile = startingProfile(t), child = new StartingChrome(), controller = new AbortController();
+  let firstHits = 0, otherHits = 0;
+  let firstPort = 0;
+  const other = createServer((_req, res) => {
+    otherHits++; res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({webSocketDebuggerUrl: 'ws://127.0.0.1:' + firstPort + '/devtools/browser/fixture'}));
+  });
+  await new Promise<void>(resolve => other.listen(0, '127.0.0.1', resolve));
+  const otherPort = (other.address() as {port: number}).port;
+  const first = createServer((_req, res) => {
+    firstHits++; res.writeHead(302, {Location: 'http://127.0.0.1:' + otherPort + '/json/version'}); res.end();
+  });
+  await new Promise<void>(resolve => first.listen(0, '127.0.0.1', resolve));
+  firstPort = (first.address() as {port: number}).port;
+  t.after(async () => {
+    first.closeAllConnections(); other.closeAllConnections();
+    await Promise.all([new Promise<void>(resolve => first.close(() => resolve())), new Promise<void>(resolve => other.close(() => resolve()))]);
+  });
+  publishPort(profile, firstPort + '\n/devtools/browser/fixture\n');
+  const messages: string[] = [];
+  t.mock.method(console, 'error', (message: string) => {messages.push(message);});
+  let received: Awaited<ReturnType<typeof launchedChrome>> | undefined;
+  const settling = launchedChrome(asChild(child), profile, false, controller.signal).then(value => {received = value; return null;}, error => error as Error);
+  try {
+    await turnsUntil(() => otherHits > 0 || messages.some(value => value.startsWith('bench: Chrome probe ')));
+    assert.equal(firstHits, 1); assert.equal(otherHits, 0); assert.equal(received, undefined);
+  } finally {
+    controller.abort(); const error = await settling;
+    await received?.close();
+    assert.match(String(error), /startup cancelled/);
+  }
+  assert.equal(existsSync(profile), false);
+});
+
+test('interrupting the actual entry point during startup reaps its detached browser and removes its profile',
+  {skip: process.platform === 'win32'}, async t => {
+    const root = mkdtempSync(path.join(tmpdir(), 'quotum-test-bench-signal-'));
+    const recordFile = path.join(root, 'started.json'), executable = path.join(root, 'chrome');
+    writeFileSync(executable, '#!/usr/bin/env node\n'
+      + "const fs=require('node:fs');\n"
+      + "const profile=process.argv.find(value=>value.startsWith('--user-data-dir=')).slice('--user-data-dir='.length);\n"
+      + "fs.writeFileSync(process.env.QUOTUM_BENCH_TEST_RECORD,JSON.stringify({pid:process.pid,profile}));\n"
+      + "process.on('SIGTERM',()=>process.exit(0));setInterval(()=>{},1000);\n", {mode: 0o755});
+    const env = {...process.env};
+    for (const key of Object.keys(env)) if (key.startsWith('QUOTUM_')) delete env[key];
+    env.QUOTUM_CHROME = executable; env.QUOTUM_BENCH_TEST_RECORD = recordFile; env.CI = '1';
+    const bench = spawn(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('./fixtures/starting-bench.mjs', import.meta.url))], {
+      cwd: new URL('../../', import.meta.url), env, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let output = '', owned: {pid: number; profile: string} | undefined;
+    bench.stdout.on('data', value => {output += value;}); bench.stderr.on('data', value => {output += value;});
+    const exited = new Promise<{code: number | null; signal: NodeJS.Signals | null}>(resolve =>
+      bench.once('exit', (code, signal) => resolve({code, signal})));
+    const signal = (pid: number) => {try {process.kill(-pid, 'SIGKILL');} catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+    }};
+    t.after(async () => {
+      if (!owned && existsSync(recordFile)) owned = JSON.parse(readFileSync(recordFile, 'utf8'));
+      if (owned) {signal(owned.pid); rmSync(owned.profile, {recursive: true, force: true});}
+      if (bench.exitCode === null && bench.signalCode === null) {signal(bench.pid!); await exited;}
+      rmSync(root, {recursive: true, force: true});
+    });
+    const startedBy = Date.now() + 5_000;
+    while (!existsSync(recordFile) && Date.now() < startedBy) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.ok(existsSync(recordFile), output);
+    owned = JSON.parse(readFileSync(recordFile, 'utf8'));
+    process.kill(-bench.pid!, 'SIGINT');
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    const result = await Promise.race([exited, new Promise<never>((_resolve, reject) => {
+      deadline = setTimeout(() => reject(new Error('benchmark cancellation did not finish\n' + output)), 9_000);
+    })]).finally(() => clearTimeout(deadline));
+    assert.equal(result.code, 1, output);
+    assert.throws(() => process.kill(owned!.pid, 0), {code: 'ESRCH'});
+    assert.equal(existsSync(owned!.profile), false, output);
+  });

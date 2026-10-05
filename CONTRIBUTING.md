@@ -31,7 +31,11 @@ The owned browser is ready when its throwaway profile publishes a valid
 seconds. A stderr announcement alone does not establish readiness. Failed startup
 reports its stage, output and owned native state, then stops its process group and
 removes the profile; it never retries or substitutes a passing measurement. CI also
-records the browser version. Attached browsers keep their lifecycle with their owner.
+records the browser version. Startup cancellation keeps ownership until its child is
+reaped. Cleanup waits at most seven seconds for termination and kill, closes its own
+output pipes, and reports failure if the process cannot be reaped; it retains that
+process's profile. DevTools discovery follows no redirects. Attached browsers keep
+their lifecycle with their owner.
 The observer credits input after its coalesced position reaches the actual data layers
 in the production RAF. Stationary input-free gaps are excluded; delayed pending input
 remains measurable. A last input committed on release waits for the final geometry and

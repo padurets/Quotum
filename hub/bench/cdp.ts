@@ -163,28 +163,27 @@ async function startupProcesses(owner: number) {
 }
 
 /** Starts a headless Chrome of its own, with a throwaway profile; `sandbox: false` where the system forbids it (CI). */
-export async function launchChrome(file: string, sandbox: boolean): Promise<Browser> {
+export async function launchChrome(file: string, sandbox: boolean, signal?: AbortSignal): Promise<Browser> {
+  if (signal?.aborted) throw new Error('Chrome startup cancelled');
   const profile = mkdtempSync(path.join(os.tmpdir(), 'quotum-bench-chrome-'));
   const chrome: ChildProcess = spawn(file, [...FLAGS, ...(sandbox ? [] : ['--no-sandbox']), '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], {
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: process.platform !== 'win32',
   });
-  return launchedChrome(chrome, profile, process.platform !== 'win32');
+  return launchedChrome(chrome, profile, process.platform !== 'win32', signal);
 }
 
 /** Owns startup and cleanup even when Chrome never publishes a usable DevTools endpoint. */
-export async function launchedChrome(chrome: ChildProcess, profile: string, ownsGroup = false): Promise<Browser> {
+export async function launchedChrome(chrome: ChildProcess, profile: string, ownsGroup = false, signal?: AbortSignal): Promise<Browser> {
   const started = performance.now();
   let output = '';
   let stdout = '', portState = 'not observed', httpState = 'not attempted';
   let exit: {code: number | null; signal: NodeJS.Signals | null} | null = null;
   let spawnError: Error | null = null;
-  let isClosed = false;
   let fail = (_error: Error) => {};
-  const closed = new Promise<void>(resolve => {
-    chrome.once('close', () => {isClosed = true; resolve();});
+  const reaped = new Promise<void>(resolve => {
     chrome.once('exit', (code, signal) => {
-      exit = {code, signal};
+      exit = {code, signal}; resolve();
       fail(new Error('Chrome exited before DevTools was ready: ' + JSON.stringify(exit)));
     });
     chrome.once('error', error => {
@@ -203,17 +202,37 @@ export async function launchedChrome(chrome: ChildProcess, profile: string, owns
   };
   let stopping: Promise<void> | undefined;
   const stop = () => stopping ??= (async () => {
-    if (chrome.pid) {
-      if (ownsGroup || !isClosed) kill('SIGTERM');
-      if (!isClosed) {
-        const hard = setTimeout(() => kill('SIGKILL'), 5_000);
-        await closed; clearTimeout(hard);
+    try {
+      if (chrome.pid) {
+        if (ownsGroup || !exit) kill('SIGTERM');
+        if (!exit) {
+          const hard = setTimeout(() => kill('SIGKILL'), 5_000);
+          let deadline: ReturnType<typeof setTimeout> | undefined;
+          try {
+            await Promise.race([reaped, new Promise<never>((_resolve, reject) => {
+              deadline = setTimeout(() => reject(new Error('Chrome did not exit after termination and kill')), 7_000);
+            })]);
+          } finally {clearTimeout(hard); clearTimeout(deadline);}
+        }
+        // Workers may close their output pipes before they exit.
+        if (ownsGroup) kill('SIGKILL');
       }
-      // Workers can outlive the browser and close their inherited output pipes.
-      if (ownsGroup) kill('SIGKILL');
+    } finally {
+      // An escaped descendant can retain these pipes after the owned process is reaped.
+      chrome.stdout?.destroy(); chrome.stderr?.destroy(); chrome.unref();
+      if (exit || !chrome.pid) rmSync(profile, {recursive: true, force: true, maxRetries: 5});
     }
-    rmSync(profile, {recursive: true, force: true, maxRetries: 5});
   })();
+  const portObserved = (value: string) => {
+    if (portState === value) return;
+    portState = value;
+    console.error('bench: Chrome port ' + JSON.stringify({elapsedMs: Math.round(performance.now() - started), activePort: value}));
+  };
+  const httpObserved = (value: string) => {
+    if (httpState === value) return;
+    httpState = value;
+    console.error('bench: Chrome probe ' + JSON.stringify({elapsedMs: Math.round(performance.now() - started), http: value}));
+  };
   const state = async () => ({
     elapsedMs: Math.round(performance.now() - started), pid: chrome.pid, exit,
     spawnError: spawnError?.message, activePort: portState, http: httpState,
@@ -226,13 +245,18 @@ export async function launchedChrome(chrome: ChildProcess, profile: string, owns
     endpoint = await new Promise<string>((resolve, reject) => {
       let settled = false, poll: ReturnType<typeof setTimeout> | undefined;
       let request: AbortController | undefined;
+      let cancelled: (() => void) | undefined;
       const finish = (error: Error | null, value?: string) => {
         if (settled) return;
         settled = true; clearTimeout(late); clearTimeout(poll); request?.abort();
+        if (cancelled) signal?.removeEventListener('abort', cancelled);
         if (error) reject(error); else resolve(value!);
       };
       fail = error => finish(error);
       const late = setTimeout(() => finish(new Error('Chrome DevTools was not ready in 20 s')), 20_000);
+      cancelled = () => finish(new Error('Chrome startup cancelled'));
+      signal?.addEventListener('abort', cancelled, {once: true});
+      if (signal?.aborted) {cancelled(); return;}
       const inspect = async () => {
         try {
           // ChromeDriver also discovers a random debugging port through this owned profile.
@@ -240,21 +264,21 @@ export async function launchedChrome(chrome: ChildProcess, profile: string, owns
           if (settled) return;
           const match = /^(\d{1,5})\r?\n(\/devtools\/browser\/[a-zA-Z0-9-]+)\r?\n?$/.exec(text);
           const port = Number(match?.[1]);
-          if (!match || port < 1 || port > 65535) {portState = 'invalid'; return;}
-          portState = 'port ' + port;
+          if (!match || port < 1 || port > 65535) {portObserved('invalid'); return;}
+          portObserved('port ' + port);
           const candidate = 'http://127.0.0.1:' + port;
           request = new AbortController();
           const bound = setTimeout(() => request?.abort(), 1_000);
           try {
-            const response = await fetch(candidate + '/json/version', {signal: request.signal});
-            httpState = 'HTTP ' + response.status;
+            const response = await fetch(candidate + '/json/version', {signal: request.signal, redirect: 'error'});
+            httpObserved('HTTP ' + response.status);
             if (!response.ok || settled) return;
             const version = await response.json() as {Browser?: string; webSocketDebuggerUrl?: string};
             if (settled) return;
             const socket = new URL(version.webSocketDebuggerUrl ?? '');
             if (socket.protocol !== 'ws:' || socket.port !== String(port)
               || !['127.0.0.1', 'localhost', '[::1]'].includes(socket.hostname)
-              || socket.pathname !== match[2]) {httpState = 'mismatched browser endpoint'; return;}
+              || socket.pathname !== match[2]) {httpObserved('mismatched browser endpoint'); return;}
             console.error('bench: Chrome ready ' + JSON.stringify({
               elapsedMs: Math.round(performance.now() - started), browser: version.Browser,
               announced: /DevTools listening on/.test(output),
@@ -262,7 +286,7 @@ export async function launchedChrome(chrome: ChildProcess, profile: string, owns
             finish(null, candidate);
           } finally {clearTimeout(bound);}
         } catch (error) {
-          if (!settled) httpState = (error as Error).message.slice(0, 200);
+          if (!settled) httpObserved((error as Error).message.slice(0, 200));
         } finally {
           if (!settled) poll = setTimeout(() => {void inspect();}, 100);
         }
@@ -272,8 +296,9 @@ export async function launchedChrome(chrome: ChildProcess, profile: string, owns
   } catch (error) {
     const detail = await state();
     console.error('bench: Chrome startup ' + JSON.stringify(detail));
-    await stop();
-    throw new Error((error as Error).message + '\n' + JSON.stringify(detail));
+    let cleanupError: string | undefined;
+    try {await stop();} catch (error) {cleanupError = (error as Error).message;}
+    throw new Error((error as Error).message + '\n' + JSON.stringify({...detail, cleanupError}));
   }
   return {
     endpoint,
