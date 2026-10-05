@@ -210,7 +210,7 @@ mod tests {
         assert!(at.elapsed() < Duration::from_secs(1));
         assert!(!path.exists());
         drop(lock);
-        assert!(salt(&stand.0).is_some());
+        assert_eq!(reusable(&stand.0).len(), 32);
     }
 
     #[test]
@@ -261,7 +261,7 @@ mod tests {
         assert_eq!(unsafe { libc::waitpid(child, std::ptr::null_mut(), 0) }, child);
         assert!(busy.is_none());
         assert!(elapsed < Duration::from_secs(1));
-        assert!(salt(&stand.0).is_some());
+        assert_eq!(reusable(&stand.0).len(), 32);
     }
 
     #[cfg(unix)]
