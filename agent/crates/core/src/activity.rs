@@ -264,6 +264,7 @@ pub struct Activity {
     /// Changing ownership invalidates a delta and hold computed from the old tree.
     bases: HashMap<ProcessKey, Basis>,
     scopes: HashMap<ProcessKey, Scope>,
+    pending_unsafe: HashSet<ProcessKey>,
 }
 
 impl Activity {
@@ -295,6 +296,7 @@ impl Activity {
             lifetimes: HashMap::new(),
             bases: HashMap::new(),
             scopes: HashMap::new(),
+            pending_unsafe: HashSet::new(),
         }
     }
 
@@ -302,7 +304,16 @@ impl Activity {
         let now = Instant::now();
         let wall = crate::model::now_ms();
         let procs = sys::processes();
-        self.lifetimes.retain(|(pid, _), _| !sys::gone(*pid));
+        let gone: HashSet<_> = self
+            .lifetimes
+            .keys()
+            .chain(self.pending_unsafe.iter())
+            .filter(|(pid, _)| sys::gone(*pid))
+            .cloned()
+            .collect();
+        self.lifetimes.retain(|key, _| !gone.contains(key));
+        self.scopes.retain(|key, _| !gone.contains(key));
+        self.pending_unsafe.retain(|key| !gone.contains(key));
         self.observe(&procs, std::process::id(), now, wall, &sys::verified, &sys::cwd, &sys::exe, &sys::mine)
     }
 
@@ -349,6 +360,8 @@ impl Activity {
             let Some(key) = p.key() else { continue };
             // A reused PID proves the older birth ended; absence alone proves nothing.
             self.lifetimes.retain(|old, _| old.0 != p.pid || *old == key);
+            self.scopes.retain(|old, _| old.0 != p.pid || *old == key);
+            self.pending_unsafe.retain(|old| old.0 != p.pid || *old == key);
             let lifetime = self.lifetimes.entry(key).or_default();
             let replaced_image = lifetime.image.zip(p.image).is_some_and(|(before, after)| before != after);
             if lifetime.name != p.name || replaced_image {
@@ -384,14 +397,34 @@ impl Activity {
                 self.lifetimes.get(&key)?.shared.then_some(p.pid)
             })
             .collect();
-        let checked_exe = |pid| {
-            let listed = validated.iter().find(|p| p.pid == pid)?;
-            let before = read(listed)?;
-            let path = exe(pid)?;
-            let after = read(&before)?;
-            before.same_process(&after).then_some(path)
-        };
-        let planned = sessions_with(procs, own, &checked_exe, &shared);
+        // Read each possible remote editor path once, on a checked birth. Missing
+        // host information is unknown ownership, not evidence of a shared runtime.
+        let mut paths = HashMap::new();
+        for p in procs.iter().filter(|p| remote_node(&p.name)) {
+            let path = validated.iter().find(|q| q.pid == p.pid).and_then(|listed| {
+                let before = read(listed)?;
+                let path = exe(p.pid)?;
+                let after = read(&before)?;
+                before.same_process(&after).then_some(path)
+            });
+            paths.insert(p.pid, path);
+        }
+        let checked_exe = |pid| paths.get(&pid).cloned().flatten();
+        let available: HashSet<_> = validated.iter().map(|p| p.pid).collect();
+        let unproven: HashSet<_> = procs
+            .iter()
+            .filter(|p| p.role == Role::Runtime || validated.iter().any(|q| q.pid == p.pid && q.role == Role::Runtime))
+            .filter(|p| {
+                ancestors(p.pid, &by_pid).iter().any(|pid| {
+                    by_pid.contains_key(pid)
+                        && (!available.contains(pid)
+                            || by_pid.get(pid).is_some_and(|p| remote_node(&p.name))
+                                && paths.get(pid).is_none_or(Option::is_none))
+                })
+            })
+            .map(|p| p.pid)
+            .collect();
+        let planned = sessions_with(procs, own, &checked_exe, &shared, &unproven);
         // The original graph proves measurement ancestry even if an intermediate
         // parent becomes unreadable during the additional identity checks.
         let measuring: HashSet<_> = procs
@@ -407,7 +440,7 @@ impl Activity {
             .collect();
         // Preserve an initially proven shared boundary for identity-valid roots.
         // Losing its parent metadata does not grant inherited cwd authority.
-        for f in planned.iter().filter(|f| f.shared) {
+        for f in planned.iter().filter(|f| f.authority == Authority::Shared) {
             if validated.iter().any(|p| {
                 p.pid == f.pid
                     && by_pid[&p.pid].same_process(p)
@@ -416,7 +449,7 @@ impl Activity {
                 shared.insert(f.pid);
             }
         }
-        let found: Vec<_> = sessions_with(&validated, own, &checked_exe, &shared)
+        let found: Vec<_> = sessions_with(&validated, own, &checked_exe, &shared, &unproven)
             .into_iter()
             .filter(|f| !measuring.contains(&f.pid))
             .collect();
@@ -430,21 +463,26 @@ impl Activity {
             .iter()
             .filter(|p| p.role == Role::Service)
             .map(|p| p.pid)
-            .chain(planned.iter().filter(|f| f.shared).map(|f| f.pid))
+            .chain(planned.iter().filter(|f| f.authority == Authority::Shared).map(|f| f.pid))
         {
             for ancestor in ancestors(pid, &original) {
-                if let Some(p) = by_pid.get(&ancestor).filter(|p| original[&ancestor].same_process(p)) {
-                    if let Some(key) = p.key() {
-                        self.lifetimes.entry(key).or_default().reaped_unsafe = true;
-                    }
+                if let Some(key) = original.get(&ancestor).and_then(|p| p.key()) {
+                    // The snapshot pins the fact to this birth. Apply it only when
+                    // that same birth is validated, including after a metadata gap.
+                    self.pending_unsafe.insert(key);
                 }
+            }
+        }
+        for p in &validated {
+            if let Some(key) = p.key().filter(|key| self.pending_unsafe.remove(key)) {
+                self.lifetimes.entry(key).or_default().reaped_unsafe = true;
             }
         }
         let barriers: HashSet<_> = validated
             .iter()
             .filter(|p| p.role == Role::Service)
             .map(|p| p.pid)
-            .chain(found.iter().filter(|f| f.shared).map(|f| f.pid))
+            .chain(found.iter().filter(|f| f.authority == Authority::Shared).map(|f| f.pid))
             .chain(
                 validated
                     .iter()
@@ -460,7 +498,7 @@ impl Activity {
             }
         }
         for f in &found {
-            if f.shared {
+            if f.authority == Authority::Shared {
                 if let Some(key) = by_pid[&f.pid].key() {
                     self.lifetimes.entry(key).or_default().shared = true;
                 }
@@ -534,7 +572,7 @@ impl Activity {
                 }
             }
             unsafe_processes.sort();
-            let basis = Basis { shared: f.shared, unsafe_processes };
+            let basis = Basis { shared: f.authority != Authority::Owned, unsafe_processes };
             let before = self
                 .last
                 .get(&key)
@@ -547,7 +585,7 @@ impl Activity {
                 seen.insert(key.clone(), next);
                 bases.insert(key.clone(), basis);
             }
-            if f.shared {
+            if f.authority != Authority::Owned {
                 self.places.remove(&key);
             } else {
                 folders.push((key.clone(), f.pid));
@@ -584,11 +622,9 @@ impl Activity {
         });
         self.last = seen;
         self.bases = bases;
-        self.scopes = scopes;
-        self.lifetimes.retain(|key, l| {
-            by_pid.get(&key.0).is_none_or(|p| p.key().as_ref() == Some(key))
-                && (l.shared || l.reaped_unsafe || by_pid.contains_key(&key.0))
-        });
+        // Missing metadata never proves a birth ended. Positive replacement is
+        // pruned above; the OS exit check in look prunes finished births.
+        self.scopes.extend(scopes);
         result
     }
 
@@ -716,10 +752,16 @@ fn ancestors(pid: u32, by_pid: &HashMap<u32, &Proc>) -> Vec<u32> {
 }
 
 pub fn sessions(procs: &[Proc], own: u32, exe: &dyn Fn(u32) -> Option<String>) -> Vec<Found> {
-    sessions_with(procs, own, exe, &HashSet::new())
+    sessions_with(procs, own, exe, &HashSet::new(), &HashSet::new())
 }
 
-fn sessions_with(procs: &[Proc], own: u32, exe: &dyn Fn(u32) -> Option<String>, shared: &HashSet<u32>) -> Vec<Found> {
+fn sessions_with(
+    procs: &[Proc],
+    own: u32,
+    exe: &dyn Fn(u32) -> Option<String>,
+    shared: &HashSet<u32>,
+    unproven: &HashSet<u32>,
+) -> Vec<Found> {
     let by_pid: HashMap<u32, &Proc> = procs.iter().map(|p| (p.pid, p)).collect();
     let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
     for p in procs {
@@ -736,6 +778,7 @@ fn sessions_with(procs: &[Proc], own: u32, exe: &dyn Fn(u32) -> Option<String>, 
     }
     let client = |p: &Proc| (p.role != Role::Service).then(|| provider_of(&p.name)).flatten();
     let mut found = HashMap::new();
+    let mut uncertain = unproven.clone();
     // Newly found unowned/shared roots are barriers in this very observation,
     // including for other-provider descendants. Each pass only adds a boundary.
     loop {
@@ -750,16 +793,30 @@ fn sessions_with(procs: &[Proc], own: u32, exe: &dyn Fn(u32) -> Option<String>, 
                 continue;
             }
             let separated = boundaries.contains(&p.pid) || above.iter().any(|p| boundaries.contains(&p.pid));
-            let owner = above.iter().take_while(|p| !boundaries.contains(&p.pid)).find_map(|p| client(p));
-            if !boundaries.contains(&p.pid) && owner == Some(provider) {
+            let incomplete = uncertain.contains(&p.pid) || above.iter().any(|p| uncertain.contains(&p.pid));
+            let owner = above
+                .iter()
+                .take_while(|p| !boundaries.contains(&p.pid) && !uncertain.contains(&p.pid))
+                .find_map(|p| client(p));
+            if !separated && !incomplete && owner == Some(provider) {
                 continue;
             }
             let origin = origin(&above, exe);
-            let shared = separated || (p.role == Role::Runtime && owner.is_none() && origin == Origin::Terminal);
-            if shared {
-                added |= boundaries.insert(p.pid);
+            let authority = if separated {
+                Authority::Shared
+            } else if incomplete {
+                Authority::Unproven
+            } else if p.role == Role::Runtime && owner.is_none() && origin == Origin::Terminal {
+                Authority::Shared
+            } else {
+                Authority::Owned
+            };
+            match authority {
+                Authority::Shared => added |= boundaries.insert(p.pid),
+                Authority::Unproven => added |= uncertain.insert(p.pid),
+                Authority::Owned => (),
             }
-            found.insert(p.pid, (provider, origin, shared));
+            found.insert(p.pid, (provider, origin, authority));
         }
         if !added {
             break;
@@ -767,18 +824,22 @@ fn sessions_with(procs: &[Proc], own: u32, exe: &dyn Fn(u32) -> Option<String>, 
     }
     let mut list: Vec<_> = found
         .iter()
-        .map(|(&pid, &(provider, origin, shared))| {
+        .map(|(&pid, &(provider, origin, authority))| {
             let mut tree = vec![pid];
             let mut at = 0;
             while at < tree.len() && tree.len() < 4096 {
                 for &child in children.get(&tree[at]).into_iter().flatten() {
-                    if !found.contains_key(&child) && !boundaries.contains(&child) && tree.len() < 4096 {
+                    if !found.contains_key(&child)
+                        && !boundaries.contains(&child)
+                        && !uncertain.contains(&child)
+                        && tree.len() < 4096
+                    {
                         tree.push(child);
                     }
                 }
                 at += 1;
             }
-            Found { provider, pid, origin, tree, shared }
+            Found { provider, pid, origin, tree, authority }
         })
         .collect();
     list.sort_by_key(|f| (f.provider, f.pid));
@@ -792,7 +853,18 @@ pub struct Found {
     pub pid: u32,
     pub origin: Origin,
     pub tree: Vec<u32>,
-    pub shared: bool,
+    pub authority: Authority,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Authority {
+    Owned,
+    Unproven,
+    Shared,
+}
+
+fn remote_node(name: &str) -> bool {
+    ["node", "mainthread"].contains(&name.strip_suffix(".exe").unwrap_or(name).to_ascii_lowercase().as_str())
 }
 
 /// Where a client runs, from the programs above it: an editor, the desktop app of its
@@ -2205,6 +2277,7 @@ mod tests {
             lifetimes: HashMap::new(),
             bases: HashMap::new(),
             scopes: HashMap::new(),
+            pending_unsafe: HashSet::new(),
         };
         let (key, other) = ((7, 1), (8, 1));
         let worktree = both(Some("wt"), Some("quotum"));

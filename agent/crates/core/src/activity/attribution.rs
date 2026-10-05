@@ -105,7 +105,7 @@ fn runtime_role_and_a_distinct_sid_together_separate_the_branch() {
     rows.iter_mut().find(|p| p.pid == 12).unwrap().sid = Some(12);
     let found = sessions(&rows, 900, &|_| None);
     assert_eq!(found.iter().find(|f| f.pid == 10).unwrap().tree, vec![10]);
-    assert!(found.iter().find(|f| f.pid == 12).unwrap().shared);
+    assert_eq!(found.iter().find(|f| f.pid == 12).unwrap().authority, Authority::Shared);
 }
 
 #[test]
@@ -765,4 +765,103 @@ fn a_newer_positive_role_change_supersedes_the_original_shared_snapshot() {
         Some("project-a"),
         "a positive newer classification invalidates the old runtime authority"
     );
+}
+
+#[test]
+fn a_leaf_service_keeps_its_role_after_missing_validation() {
+    let mut rows = vec![proc(10, 1, "codex", Role::Unknown), proc(11, 10, "codex", Role::Service)];
+    let mut a = activity();
+    let start = Instant::now();
+    sample(&mut a, &rows, start, 0);
+    sample(&mut a, &rows, start, 15);
+    a.observe(
+        &rows,
+        900,
+        start + Duration::from_secs(30),
+        WALL + 30000,
+        &|p| (p.pid != 11).then(|| p.clone()),
+        &|_| None,
+        &|_| None,
+        &|_| true,
+    );
+    rows[1].role = Role::Unavailable;
+    sample(&mut a, &rows, start, 45);
+    cpu(&mut rows, 11, 1500, 0);
+    assert_eq!(session(&sample(&mut a, &rows, start, 60), 10).working, Some(false));
+}
+
+#[test]
+fn excluded_birth_scope_survives_a_snapshot_gap_and_same_birth_exec() {
+    let mut rows = vec![proc(10, 1, "codex", Role::Unknown), proc(11, 10, "codex", Role::Service)];
+    rows[1].image = Some((1, 1));
+    cpu(&mut rows, 11, 5000, 0);
+    let mut a = activity();
+    let start = Instant::now();
+    sample(&mut a, &rows, start, 0);
+    sample(&mut a, &rows[..1], start, 15);
+    rows[1].role = Role::Unknown;
+    rows[1].image = Some((2, 2));
+    assert_ne!(session(&sample(&mut a, &rows, start, 30), 10).working, Some(true));
+}
+
+#[test]
+fn private_runtime_recovers_from_an_unreadable_owner() {
+    for owner_name in ["codex", "code", "ChatGPT", "node"] {
+        let mut rows = vec![
+            proc(40, 1, owner_name, Role::Unknown),
+            proc(41, 40, "codex", Role::Runtime),
+            proc(42, 41, "bash", Role::Unknown),
+        ];
+        let mut a = activity();
+        let start = Instant::now();
+        for secs in [0, 15, 30, 45] {
+            if secs == 45 {
+                cpu(&mut rows, 42, 1500, 0);
+            }
+            let sessions = a.observe(
+                &rows,
+                900,
+                start + Duration::from_secs(secs),
+                WALL + secs as Millis * 1000,
+                &|p| (!(secs == 15 && owner_name != "node" && p.pid == 40)).then(|| p.clone()),
+                &|_| Some("/fixture-home/project-a".into()),
+                &|_| (secs != 15).then(|| "/opt/.vscode-server/bin/node".into()),
+                &|_| true,
+            );
+            if secs >= 30 {
+                let root = session(&sessions, if owner_name == "codex" { 40 } else { 41 });
+                assert_eq!(root.project.as_deref(), Some("project-a"), "private owner {owner_name} recovered");
+                if secs == 45 {
+                    assert_eq!(root.working, Some(true));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn first_service_observation_survives_an_ancestor_validation_gap() {
+    for gap in [false, true] {
+        let mut rows = vec![proc(10, 1, "codex", Role::Unknown)];
+        cpu(&mut rows, 10, 0, 5000);
+        let mut a = activity();
+        let start = Instant::now();
+        sample(&mut a, &rows, start, 0);
+        sample(&mut a, &rows, start, 15);
+        rows.push(proc(11, 10, "codex", Role::Service));
+        a.observe(
+            &rows,
+            900,
+            start + Duration::from_secs(30),
+            WALL + 30000,
+            &|p| (!(gap && p.pid == 10)).then(|| p.clone()),
+            &|_| None,
+            &|_| None,
+            &|_| true,
+        );
+        rows.pop();
+        sample(&mut a, &rows, start, 45);
+        cpu(&mut rows, 10, 0, 6500);
+        assert_eq!(session(&sample(&mut a, &rows, start, 60), 10).working, Some(false));
+    }
 }

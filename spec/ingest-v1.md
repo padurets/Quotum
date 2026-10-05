@@ -449,7 +449,9 @@ eligible. Exhausting the bounded invocation read and unavailable executable meta
 are unavailable evidence, not proof of a new authority. Previously observed process
 ownership changes invalidate incompatible CPU deltas and working holds; snapshot-proven
 measurement ancestry remains excluded through a later metadata gap. No new wire fields
-or provider content are needed for this accounting.
+or provider content are needed for this accounting. Temporarily unavailable ownership
+metadata leaves placement unproven rather than establishing a permanent shared branch;
+birth-scoped boundary and accounting facts survive an unconfirmed snapshot absence.
 
 What is sent: the pseudonym of each account, the plan name, percentages and reset times
 of the windows, free resets and when each expires, the client's version, the machine's random id, its name
