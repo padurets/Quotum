@@ -1,5 +1,5 @@
 import {useSyncExternalStore} from 'react';
-import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, TILE_CELLS, cellStart, composePrepared, targetOf, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer, type HistoryMeta, type Target} from '../../server/domain/history';
+import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, TILE_CELLS, cellStart, composePrepared, expandHistory, targetOf, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer, type HistoryBasis, type HistoryReply, type Target} from '../../server/domain/history';
 import {page, useHistoryStart, type PageEvent, type PageState} from './board';
 import {hubNow} from './clock';
 import {HistoryTile} from './historyTiles';
@@ -21,7 +21,7 @@ const RETRY_MS = 15_000;
 const STORED_BYTES = 15 * 1024 * 1024;
 
 export type HistoryEnv = {
-  read(board: string, cell: number, from: number, to: number, signal?: AbortSignal, meters?: MeterSelection): Promise<HistoryAnswer>;
+  read(board: string, cell: number, from: number, to: number, signal?: AbortSignal, meters?: MeterSelection, meta?: HistoryBasis): Promise<HistoryAnswer>;
   now(): number;
   /** Elapsed time stays independent of corrections to the estimated hub clock. */
   elapsedNow?(): number;
@@ -53,7 +53,7 @@ export class HistoryStore {
   private period = '24h';
   private selected: TimeRange | null = null;
   private shown: History | null = null;
-  private meta: HistoryMeta | null = null;
+  private meta: HistoryBasis | null = null;
   private metaAt: number | null = null;
   private cutTo: number | null = null;
   private readonly grids = new Map<number, Map<number, HistoryTile>>();
@@ -520,6 +520,9 @@ export class HistoryStore {
     if (this.interest?.direction && !this.aheadStopped && !this.inheritedExtra && this.estimatedBytes < this.budget) {
       const direction = this.interest.direction;
       const buffer = this.bufferCells(target);
+      const requiredFrom = Math.min(from, target.k0 * target.cell);
+      const requiredTo = Math.max(to, (target.k1 + 1) * target.cell);
+      const added: number[] = [];
       const lower = Math.floor(Math.max(this.meta?.historyStart ?? 0, this.env.now() - 90 * 86_400_000 + 3_600_000) / target.cell) * target.cell;
       const upper = this.cutTo ?? (Math.floor((Math.max(this.env.now(), this.meta?.now ?? 0) + CLOCK_TOLERANCE_MS) / target.cell) + 1) * target.cell;
       for (let n = 0; n < buffer; n++) {
@@ -531,10 +534,22 @@ export class HistoryStore {
         // is still necessary; only cells outside that viewport consume the buffer.
         if (extra < target.k0 * target.cell || extra > target.k1 * target.cell) {
           if (!this.optional.has(extra) && this.optional.size >= buffer) break;
-          this.optional.add(extra);
+          if (!this.optional.has(extra)) {this.optional.add(extra); added.push(extra);}
         }
         from = Math.min(from, extra); to = Math.max(to, extra + target.cell);
       }
+      // Stop the optional tail at a tile edge without shrinking below one tile.
+      // Splitting the same tile across replies repeats its series and activity metadata.
+      const span = target.cell * TILE_CELLS;
+      if (direction < 0) {
+        const aligned = Math.ceil(from / span) * span;
+        if (aligned <= requiredFrom && to - aligned >= span) from = aligned;
+      } else {
+        const aligned = Math.floor(to / span) * span;
+        if (aligned >= requiredTo && aligned - from >= span) to = aligned;
+      }
+      // These cells were never requested. Earlier attempts retain their charges.
+      for (const extra of added) if (extra < from || extra >= to) this.optional.delete(extra);
     }
     if (to > from) this.read(target, from, to, role);
   }
@@ -542,7 +557,8 @@ export class HistoryStore {
   private read(target: Target, from: number, to: number, role: Flight['role']) {
     const flight: Flight = {seq: ++this.seq, epoch: this.epoch, target: target.key, newsSeq: this.newsSeq, cell: target.cell, from, to, touched: Infinity, startedAt: this.elapsedNow(), controller: new AbortController(), role};
     this.flights.add(flight);
-    this.env.read(this.board!, target.cell, from, to, flight.controller.signal, this.meters).then(answer => this.merge(flight, answer), error => this.failed(flight, error));
+    const meta = this.meta?.run === this.run ? this.meta : undefined;
+    this.env.read(this.board!, target.cell, from, to, flight.controller.signal, this.meters, meta).then(answer => this.merge(flight, answer), error => this.failed(flight, error));
   }
 
   private abort(flight: Flight) {this.preparations?.cancel(flight); this.responses.delete(flight); for (const [key, owner] of this.reservations) if (owner === flight) this.reservations.delete(key); this.flights.delete(flight); flight.controller.abort();}
@@ -632,7 +648,7 @@ export class HistoryStore {
         const answer = response.answer;
         if (flight.seq > this.metaSeq) {
           this.metaSeq = flight.seq;
-          this.meta = {now: answer.now, historyStart: answer.historyStart, known: answer.known};
+          this.meta = {run: answer.run, now: answer.now, historyStart: answer.historyStart, known: answer.known, ...(answer.meta ? {meta: answer.meta} : {})};
           this.metaAt = flight.startedAt;
           const to = answer.chunks.at(-1)?.to;
           if (flight.newsSeq === this.newsSeq && to !== undefined && to > answer.now + CLOCK_TOLERANCE_MS) this.cutTo = Math.min(this.cutTo ?? to, to);
@@ -718,7 +734,7 @@ export class HistoryStore {
 
 const keyOf = (lineup: string[]) => JSON.stringify([...lineup].sort());
 export const loader = new HistoryStore({
-  read: (board, cell, from, to, signal, meters) => call<HistoryAnswer>('GET', `/api/history?board=${encodeURIComponent(board)}&cell=${cell}&from=${from}&to=${to}${meters ? '&unit='+encodeURIComponent(meters.unit)+'&meters='+encodeURIComponent(JSON.stringify(meters.ids)) : ''}`, undefined, 12_000, signal),
+  read: (board, cell, from, to, signal, meters, meta) => call<HistoryReply>('GET', `/api/history?board=${encodeURIComponent(board)}&cell=${cell}&from=${from}&to=${to}&meta=${encodeURIComponent(meta?.meta ?? '')}${meters ? '&unit='+encodeURIComponent(meters.unit)+'&meters='+encodeURIComponent(JSON.stringify(meters.ids)) : ''}`, undefined, 12_000, signal).then(reply => expandHistory(reply, meta)),
   now: hubNow,
   setTimeout: (run, ms) => setTimeout(run, ms),
   clearTimeout: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),

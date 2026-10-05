@@ -332,6 +332,11 @@ the tilted board beneath its title. Preserve the typography, proportions and bac
 when replacing the underlying screenshots, and compress the PNGs with pngquant.
 Use only the demo’s synthetic accounts and machines.
 
+Refresh `docs/openrouter.png` and `docs/openrouter.ru.png` from
+`npm run demo -- money --still` too. Show a healthy wallet's balance and capped keys
+beside a subscription, with the same viewport, crop and browser-window frame in both
+languages.
+
 `npm run bench` (after `npm run build`) uses a still demo whose agents repeat their
 lists without working, opens Ana's board in headless Chrome and checks the budget in
 `hub/bench/budget.ts`. During warmup no `history` may arrive. For two minutes (five
@@ -347,6 +352,12 @@ focus in the card's menu and fails otherwise. It needs Chrome:
 `QUOTUM_CHROME`, `google-chrome` or `chromium` on `PATH`, or `--cdp http://host:port` to
 one already running. CI runs it on every push; run it when you change the dashboard
 and have Chrome.
+
+The completed measurement phase's React/DOM observer is disconnected before native
+panning. Panning keeps its own movement and mutation checks; resetting the measurement
+probe resumes full observation for money updates. Money-view controls wait for a
+populated, committed drawing and stable layout before switching, then require the
+line to remain present and inside its scale on every frame until the new view commits.
 
 The same run checks pan traffic separately from the native frame budget, using the
 dense 75-day fixture and both charts at 24h and 30d. Controlled production-loader

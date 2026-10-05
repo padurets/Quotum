@@ -89,9 +89,10 @@ export type Reading = {
 };
 
 /**
- * Installs the probe as `window.__quotumBench`: `reset()`, `read()`, and for one card at a
+ * Installs the probe as `window.__quotumBench`: `reset()`, `pause()`, `read()`, and for one card at a
  * time `forgetCards()` and `cardChanged(id)`. Runs in the page, before React loads, with
- * `rendered` and `nodeOf` passed in.
+ * `rendered` and `nodeOf` passed in. Pausing disconnects measurement instrumentation;
+ * resetting begins a fresh, fully observed phase.
  */
 export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf}, selector: string) {
   type Element = {
@@ -103,14 +104,16 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
   };
   const page = globalThis as unknown as {
     __REACT_DEVTOOLS_GLOBAL_HOOK__: object;
-    __quotumBench: {reset(): void; read(): Reading; forgetCards(): void; cardChanged(id: string): number | null; seriesChanged(key: string, last: string): number | null};
+    __quotumBench: {reset(): void; pause(): void; read(): Reading; forgetCards(): void; cardChanged(id: string): number | null; seriesChanged(key: string, last: string): number | null};
     MutationObserver: new (callback: (records: {target: {nodeType: number; parentElement: Element | null}}[]) => void) => {
       observe(target: unknown, options: object): void;
+      disconnect(): void;
     };
     document: {body: unknown; readyState: string; addEventListener(type: string, listener: () => void): void};
     performance: {now(): number; timeOrigin: number};
   };
   const clock = page.performance;
+  let recording = true;
   let instrumentMs = 0;
   let commits = 0;
   let renders = new Map<Element | null, number>();
@@ -157,6 +160,7 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
     onCommitFiberUnmount: () => {},
     onPostCommitFiberRoot: () => {},
     onCommitFiberRoot(_renderer: number, root: {current: Fiber}) {
+      if (!recording) return;
       const began = clock.now();
       try {
         commits++;
@@ -167,33 +171,36 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
     },
   };
 
-  const observe = () =>
-    new page.MutationObserver(records => {
-      const began = clock.now();
-      const nodes = new Set<Element | null>();
-      const at = clock.timeOrigin + clock.now();
-      for (const record of records) {
-        const element = record.target.nodeType === 1 ? (record.target as unknown as Element) : record.target.parentElement;
-        nodes.add(element ? element.closest(selector) : null);
-        const series = element?.closest('[data-series]');
-        if (series) {
-          const key = `${series.getAttribute('data-series')}\n${series.getAttribute('data-last')}`;
-          seriesChanged[key] ??= at;
-        }
+  const observer = new page.MutationObserver(records => {
+    if (!recording) return;
+    const began = clock.now();
+    const nodes = new Set<Element | null>();
+    const at = clock.timeOrigin + clock.now();
+    for (const record of records) {
+      const element = record.target.nodeType === 1 ? (record.target as unknown as Element) : record.target.parentElement;
+      nodes.add(element ? element.closest(selector) : null);
+      const series = element?.closest('[data-series]');
+      if (series) {
+        const key = `${series.getAttribute('data-series')}\n${series.getAttribute('data-last')}`;
+        seriesChanged[key] ??= at;
       }
-      bump(mutations, nodes);
-      for (const node of nodes) {
-        if (!node || node.hasAttribute('data-time')) continue;
-        const card = node.closest('[data-card]')?.getAttribute('data-card');
-        if (card && !(card in cardChanged)) cardChanged[card] = at;
-      }
-      instrumentMs += clock.now() - began;
-    }).observe(page.document.body, {subtree: true, childList: true, attributes: true, characterData: true});
+    }
+    bump(mutations, nodes);
+    for (const node of nodes) {
+      if (!node || node.hasAttribute('data-time')) continue;
+      const card = node.closest('[data-card]')?.getAttribute('data-card');
+      if (card && !(card in cardChanged)) cardChanged[card] = at;
+    }
+    instrumentMs += clock.now() - began;
+  });
+  const observe = () => {if (recording && page.document.body) observer.observe(page.document.body, {subtree: true, childList: true, attributes: true, characterData: true});};
   if (page.document.body) observe();
   else page.document.addEventListener('DOMContentLoaded', observe);
 
   page.__quotumBench = {
     reset() {
+      recording = true;
+      observe();
       instrumentMs = 0;
       commits = 0;
       renders = new Map();
@@ -201,6 +208,7 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
       cardChanged = {};
       seriesChanged = {};
     },
+    pause() {recording = false; observer.disconnect();},
     read: () => ({instrumentMs, commits, renders: listed(renders), mutations: listed(mutations), cardChanged}),
     forgetCards() {
       cardChanged = {};

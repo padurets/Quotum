@@ -85,6 +85,7 @@ test("a component's work is counted in the part of the page its first element is
 /** Runs the probe as the browser gets it, in a context of its own with a stand-in DOM. */
 function page() {
   let observer: ((records: {target: unknown}[]) => void) | undefined;
+  let observing = false;
   const context: Record<string, unknown> = {
     performance,
     document: {body: {}, readyState: 'complete', addEventListener() {}},
@@ -92,16 +93,34 @@ function page() {
       constructor(callback: (records: {target: unknown}[]) => void) {
         observer = callback;
       }
-      observe() {}
+      observe() {observing = true;}
+      disconnect() {observing = false;}
     },
   };
   vm.runInNewContext(probeScript(), context);
   const hook = context.__REACT_DEVTOOLS_GLOBAL_HOOK__ as {supportsFiber: boolean; onCommitFiberRoot(id: number, root: {current: Fiber}): void};
-  const probed = context.__quotumBench as {reset(): void; read(): Reading; seriesChanged(key: string, last: string): number | null; forgetCards(): void};
+  const probed = context.__quotumBench as {reset(): void; pause(): void; read(): Reading; seriesChanged(key: string, last: string): number | null; forgetCards(): void};
   // What the page answers comes over as JSON, as Runtime.evaluate returns it.
-  const bench = {reset: () => probed.reset(), read: (): Reading => JSON.parse(JSON.stringify(probed.read())), seriesChanged: (key: string, last: string) => probed.seriesChanged(key, last), forget: () => probed.forgetCards()};
-  return {hook, bench, mutate: (...targets: unknown[]) => observer!(targets.map(target => ({target})))};
+  const bench = {reset: () => probed.reset(), pause: () => probed.pause(), read: (): Reading => JSON.parse(JSON.stringify(probed.read())), seriesChanged: (key: string, last: string) => probed.seriesChanged(key, last), forget: () => probed.forgetCards()};
+  return {hook, bench, observing: () => observing, mutate: (...targets: unknown[]) => observer!(targets.map(target => ({target})))};
 }
+
+test('a finished measurement probe disconnects and reset resumes complete counting', () => {
+  const {hook, bench, mutate, observing} = page();
+  const card = el('article', null, {'data-card': 's1'}, 'card');
+  const root = fiber(ROOT, {children: [fiber(FUNCTION, {children: [fiber(HOST, {stateNode: card})]})]});
+  hook.onCommitFiberRoot(1, {current: root}); mutate(card);
+  const before = bench.read();
+  bench.pause(); assert.equal(observing(), false);
+  hook.onCommitFiberRoot(1, {current: root}); mutate(card);
+  assert.deepEqual(bench.read(), before, 'even a late callback cannot resume the finished phase');
+  bench.reset(); assert.equal(observing(), true);
+  assert.equal(bench.read().commits, 0);
+  hook.onCommitFiberRoot(1, {current: root}); mutate(card);
+  const resumed = bench.read();
+  assert.equal(resumed.commits, 1); assert.equal(resumed.renders[0].count, 1); assert.equal(resumed.mutations[0].count, 1);
+  assert.deepEqual(Object.keys(resumed.cardChanged), ['s1']);
+});
 
 test('the probe, sent as text, counts a part of the page once per commit however many components rendered in it', () => {
   const {hook, bench} = page();

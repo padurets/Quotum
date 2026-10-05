@@ -127,7 +127,7 @@ function MarkerLabel({
 }) {
   const text = useRef<SVGTextElement>(null);
   const whole = useRef<SVGTextElement>(null);
-  const [box, setBox] = useState<{x: number; width: number} | null>(null);
+  const [box, setBox] = useState<{offset: number; width: number} | null>(null);
   // How many characters of the name it keeps, for the text, room and fonts it was measured
   // with (`input`): a fit found for anything else is not used, and the text shows whole.
   const input = shorten ? `${children}|${shorten.room}|${fonts}` : '';
@@ -163,8 +163,12 @@ function MarkerLabel({
   }, [input]);
   useLayoutEffect(() => {
     const measured = text.current?.getBBox();
-    if (measured) setBox({x: measured.x, width: measured.width});
-  }, [x, y, end, shown, fonts]);
+    if (measured) {
+      const offset = measured.x - x, width = measured.width;
+      setBox(box => box?.offset === offset && box.width === width ? box : {offset, width});
+    }
+    // The glyph bounds move with their anchor; only their text or font needs measuring.
+  }, [end, shown, fonts, !!color]);
   return (
     <g
       className={`marker-label ${onTip ? 'is-pointed' : ''} ${color ? 'is-forecast' : ''}`}
@@ -173,7 +177,7 @@ function MarkerLabel({
       onPointerLeave={onTip && (event => event.pointerType !== 'touch' && onTip(false, false))}
       onPointerUp={onTip && (event => event.pointerType === 'touch' && onTip(true, true))}
     >
-      {box && <rect x={box.x - 6} y={y - 13} width={box.width + 12} height={19} rx={5} />}
+      {box && <rect x={x + box.offset - 6} y={y - 13} width={box.width + 12} height={19} rx={5} />}
       <text ref={text} x={x} y={y} textAnchor={end ? 'end' : 'start'}>
         {shown}
       </text>
