@@ -6,7 +6,7 @@ import {setLocale,t} from '../i18n';
 test('card problems distinguish connector errors from failures of a coding client',()=>{
   for(const locale of ['en','ru'] as const) {
     setLocale(locale);
-    for(const code of ['connector_failed','connector_timeout','connector_invalid_response'])assert.equal(problemOf({error:code}),t('api.'+code));
+    for(const code of ['connector_failed','connector_timeout','connector_invalid_response'] as const)assert.equal(problemOf({error:code}),t(`api.${code}`));
     assert.equal(problemOf({error:'failed'}),t('error.failed'));
     assert.equal(problemOf({error:'waiting'}),null);
   }
