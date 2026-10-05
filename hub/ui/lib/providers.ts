@@ -40,7 +40,7 @@ export const DASHES = ['', '7 5', '2 4', '10 3 2 3'];
 export const CATEGORY_COLORS = ['#67cfe3', '#cd93ff', '#75a322', '#0593bf', '#97854b', '#3f8f7f', '#eab0d1'];
 
 export const SOURCE_FORMS={
-  openrouter:{rights:'sources.rights',key:'sources.key',settings:'https://openrouter.ai/settings/keys'},
-  openai_platform:{rights:'sources.openaiRights',key:'sources.adminKey',settings:'https://platform.openai.com/settings/organization/admin-keys'},
+  openrouter:{rights:'sources.rights',key:'sources.key',expiryAdvice:'sources.expiryAdvice',settings:'https://openrouter.ai/settings/keys'},
+  openai_platform:{rights:'sources.openaiRights',key:'sources.adminKey',expiryAdvice:'sources.openaiExpiryAdvice',settings:'https://platform.openai.com/settings/organization/admin-keys'},
 } as const;
 export type SourceProvider=keyof typeof SOURCE_FORMS;

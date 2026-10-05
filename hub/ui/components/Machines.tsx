@@ -181,7 +181,7 @@ export function ConnectionsDialog({start,onClose,local,userId,trustedKeys}:{star
   const [replace,setReplace]=useState<Credential|null>(null);
   const back=()=>{setKind(null);setReplace(null);};
   const choose=(next:'device'|SourceProvider)=>{setOpen(false);setKind(next);};
-  const title=kind==='device'?t('connections.connectDevice'):kind?t(replace?'sources.replace':'sources.connect'):t('machines.title');
+  const title=kind==='device'?t('connections.connectDevice'):kind?t(replace?'sources.replace':'sources.connect',{provider:PROVIDERS[kind].name}):t('machines.title');
   return <Modal key={kind??'list'} title={title} onClose={onClose} wide={!kind}>
     {kind?<div className="dialog-form">
       <button type="button" className="link-button connection-back" onClick={back}>← {t('connections.back')}</button>

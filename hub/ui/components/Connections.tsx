@@ -32,14 +32,14 @@ function SourceKeyForm({provider,replace,local,trustedKeys,onClose,onSaved}:{pro
   };
   return <form className="dialog-form" onSubmit={save}>
       <p className="dialog-text">{t(info.rights)}</p>
-      <p className="dialog-text">{t('sources.expiryAdvice')}</p>
-      <a href={info.settings} target="_blank" rel="noreferrer">{t('sources.providerSettings')}</a>
+      <p className="dialog-text">{t(info.expiryAdvice)}</p>
+      <a href={info.settings} target="_blank" rel="noreferrer">{t('sources.providerSettings',{provider:PROVIDERS[provider].name})}</a>
       <p className="drawer-note">{local?storageNote:t('trustedKeys.operator')}</p>
       {!available&&<p className="drawer-note">{t(trustedKeys?.reason==='secret_key_mismatch'?'trustedKeys.serverMismatch':'trustedKeys.serverMissing')}</p>}
       <Field type="password" label={t(info.key)} value={secret} autoFocus autoComplete="new-password" spellCheck={false} required disabled={!available} data-1p-ignore="" data-lpignore="true" onChange={e=>{setSecret(e.target.value);request.current=crypto.randomUUID();setConfirmation(false);setConsent(false);setError(null);}} />
       {confirmation&&<label className="source-consent"><input type="checkbox" checked={consent} onChange={e=>setConsent(e.target.checked)} />{t(provider==='openai_platform'?'sources.unknownExpiryConsent':'sources.noExpiryConsent')}</label>}
       <ErrorLine error={error} />
-      <div className="button-row"><button type="button" className="button" onClick={onClose}>{t('common.cancel')}</button><button className="button primary" disabled={!available||busy||!secret||confirmation&&!consent}>{t(replace?'sources.replace':'sources.connect')}</button></div>
+      <div className="button-row"><button type="button" className="button" onClick={onClose}>{t('common.cancel')}</button><button className="button primary" disabled={!available||busy||!secret||confirmation&&!consent}>{t(replace?'sources.replace':'sources.connect',{provider:PROVIDERS[provider].name})}</button></div>
     </form>;
 }
 
@@ -77,6 +77,6 @@ export function ConnectedAccounts({userId,trustedKeys,onReplace}:{userId:string;
       status={record.lastError?<ErrorLine error={new ApiError(400,record.lastError)}/>:<span>{record.expiryKnown===false?t('sources.unknownExpiry'):record.expiresAt===null?t('sources.noExpiry'):t('connections.expires',{time:stamp(record.expiresAt)})}</span>}
       actions={<><button type="button" className="popover-row" disabled={!available} onClick={()=>onReplace(record)}><span>{t('sources.replace')}</span></button><button type="button" className="popover-row danger" onClick={()=>setRemoving(record)}><span>{t('sources.remove')}</span></button></>}
     />)}
-    {removing&&<Modal title={t('sources.remove')} onClose={()=>setRemoving(null)}><p className="dialog-text">{t('sources.removeText')}</p><div className="button-row"><button className="button" onClick={()=>setRemoving(null)}>{t('common.cancel')}</button><button className="button danger" onClick={()=>void remove()}>{t('sources.remove')}</button></div></Modal>}
+    {removing&&<Modal title={t('sources.remove')} onClose={()=>setRemoving(null)}><p className="dialog-text">{t('sources.removeText',{provider:PROVIDERS[removing.provider]?.name??removing.provider})}</p><div className="button-row"><button className="button" onClick={()=>setRemoving(null)}>{t('common.cancel')}</button><button className="button danger" onClick={()=>void remove()}>{t('sources.remove')}</button></div></Modal>}
   </>;
 }
