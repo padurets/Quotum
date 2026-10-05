@@ -163,6 +163,8 @@ and platform smoke checks still apply.
 - A card tells how its measurements go in the logo's dot and its news in marks on the
   left of its tray, with the details in a tooltip or a panel, never in a line of its own; neither
   changes a card's height.
+- A scale with its own status dot stays at full opacity, including stale or missing
+  readings. Explain the status in the dot's tooltip.
 - Devices and provider accounts connect through My connections. Account settings hold
   profile and app settings. A widget's display switches live in its own settings;
   measurement tables do not change chart selections.
