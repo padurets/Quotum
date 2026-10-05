@@ -273,11 +273,15 @@ test('unreaped owners produce a bounded cleanup failure instead of hiding the st
   t.mock.timers.enable({apis: ['setTimeout']});
   const profile = startingProfile(t), child = new StartingChrome();
   child.ignoreTerm = true; child.ignoreKill = true;
+  const messages: string[] = [];
+  t.mock.method(console, 'error', (message: string) => {messages.push(message);});
   const failed = assert.rejects(launchedChrome(asChild(child), profile), error =>
     /DevTools was not ready/.test(String(error)) && /did not exit after termination and kill/.test(String(error)));
   t.mock.timers.tick(20_000); await turnsUntil(() => child.kills.length === 1);
   t.mock.timers.tick(7_000); await failed;
   assert.deepEqual(child.kills, ['SIGTERM', 'SIGKILL']);
+  assert.ok(messages.some(value => value.startsWith('bench: Chrome cleanup failed ')
+    && value.includes('did not exit after termination and kill')));
   assert.equal(child.stdout.destroyed, true); assert.equal(child.stderr.destroyed, true);
   assert.ok(existsSync(profile), 'a still-running owner must not lose its profile');
 });

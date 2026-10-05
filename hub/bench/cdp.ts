@@ -297,7 +297,10 @@ export async function launchedChrome(chrome: ChildProcess, profile: string, owns
     const detail = await state();
     console.error('bench: Chrome startup ' + JSON.stringify(detail));
     let cleanupError: string | undefined;
-    try {await stop();} catch (error) {cleanupError = (error as Error).message;}
+    try {await stop();} catch (error) {
+      cleanupError = (error as Error).message;
+      console.error('bench: Chrome cleanup failed ' + JSON.stringify({pid: chrome.pid, error: cleanupError}));
+    }
     throw new Error((error as Error).message + '\n' + JSON.stringify({...detail, cleanupError}));
   }
   return {
