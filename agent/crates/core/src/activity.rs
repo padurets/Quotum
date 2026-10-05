@@ -236,6 +236,21 @@ struct Basis {
     unsafe_processes: Vec<ProcessKey>,
 }
 
+impl Basis {
+    fn continues(&self, before: &Self) -> bool {
+        self.shared == before.shared && self.unsafe_processes.iter().all(|key| before.unsafe_processes.contains(key))
+    }
+}
+
+/// Unsafe births count their own CPU separately; each clean subtree keeps its
+/// live-plus-reaped total. Retiring a subtree must not cancel another one's CPU.
+#[derive(Default)]
+struct Counters {
+    total: u64,
+    subjects: HashMap<ProcessKey, u64>,
+    assignments: HashMap<ProcessKey, ProcessKey>,
+}
+
 /// The accounting owner of a birth on one look, including excluded processes.
 struct Scope {
     owner: Option<ProcessKey>,
@@ -265,6 +280,7 @@ pub struct Activity {
     bases: HashMap<ProcessKey, Basis>,
     scopes: HashMap<ProcessKey, Scope>,
     pending_unsafe: HashSet<ProcessKey>,
+    counters: HashMap<ProcessKey, Counters>,
 }
 
 impl Activity {
@@ -297,6 +313,7 @@ impl Activity {
             bases: HashMap::new(),
             scopes: HashMap::new(),
             pending_unsafe: HashSet::new(),
+            counters: HashMap::new(),
         }
     }
 
@@ -315,6 +332,33 @@ impl Activity {
         self.scopes.retain(|key, _| !gone.contains(key));
         self.pending_unsafe.retain(|key| !gone.contains(key));
         self.observe(&procs, std::process::id(), now, wall, &sys::verified, &sys::cwd, &sys::exe, &sys::mine)
+    }
+
+    fn remember_process(&mut self, p: &mut Proc) {
+        let Some(key) = p.key() else { return };
+        // A reused PID proves the older birth ended; absence alone proves nothing.
+        self.lifetimes.retain(|old, _| old.0 != p.pid || *old == key);
+        self.scopes.retain(|old, _| old.0 != p.pid || *old == key);
+        self.pending_unsafe.retain(|old| old.0 != p.pid || *old == key);
+        let lifetime = self.lifetimes.entry(key).or_default();
+        let replaced_image = lifetime.image.zip(p.image).is_some_and(|(before, after)| before != after);
+        if lifetime.name != p.name || replaced_image {
+            lifetime.shared = false;
+            lifetime.role = None;
+        }
+        lifetime.name = p.name.clone();
+        // Unreadable metadata does not establish exec or revoke a proven role.
+        if p.image.is_some() {
+            lifetime.image = p.image;
+        }
+        if p.role == Role::Unavailable {
+            p.role = lifetime.role.unwrap_or(Role::Unavailable);
+        } else {
+            if lifetime.role != Some(p.role) {
+                lifetime.shared = false;
+            }
+            lifetime.role = Some(p.role);
+        }
     }
 
     /// The production sampling path with process metadata supplied by the OS or stand-ins.
@@ -356,40 +400,18 @@ impl Activity {
             at += 1;
         }
         let mut validated: Vec<_> = procs.iter().filter(|p| relevant.contains(&p.pid)).filter_map(read).collect();
-        for p in &mut validated {
-            let Some(key) = p.key() else { continue };
-            // A reused PID proves the older birth ended; absence alone proves nothing.
-            self.lifetimes.retain(|old, _| old.0 != p.pid || *old == key);
-            self.scopes.retain(|old, _| old.0 != p.pid || *old == key);
-            self.pending_unsafe.retain(|old| old.0 != p.pid || *old == key);
-            let lifetime = self.lifetimes.entry(key).or_default();
-            let replaced_image = lifetime.image.zip(p.image).is_some_and(|(before, after)| before != after);
-            if lifetime.name != p.name || replaced_image {
-                lifetime.shared = false;
-                lifetime.role = None;
-            }
-            lifetime.name = p.name.clone();
-            // Missing file metadata is not proof of exec, nor a replacement for the
-            // last known image. A later readable different inode is positive evidence.
-            if p.image.is_some() {
-                lifetime.image = p.image;
-            }
-            if p.role == Role::Unavailable {
-                // The OS snapshot already bracketed this role read with birth checks.
-                // Losing a later read does not revoke its proven boundary.
-                let listed_role = by_pid.get(&p.pid).filter(|listed| listed.same_process(p)).map(|p| p.role);
-                p.role = listed_role
-                    .filter(|role| *role != Role::Unavailable)
-                    .or(lifetime.role)
-                    .unwrap_or(Role::Unavailable);
-            }
-            if p.role != Role::Unavailable {
-                if lifetime.role != Some(p.role) {
-                    lifetime.shared = false;
-                }
-                lifetime.role = Some(p.role);
-            }
+        // The OS snapshot already brackets positive role evidence with birth reads.
+        // Preserve it even when the very first additional validation fails. Newer
+        // validated evidence then supersedes it, without crossing a process birth.
+        let mut listed = procs.to_vec();
+        for p in listed.iter_mut().filter(|p| relevant.contains(&p.pid)) {
+            self.remember_process(p);
         }
+        for p in &mut validated {
+            self.remember_process(p);
+        }
+        let procs = listed.as_slice();
+        let by_pid: HashMap<_, _> = procs.iter().map(|p| (p.pid, p)).collect();
         let mut shared: HashSet<_> = validated
             .iter()
             .filter_map(|p| {
@@ -416,10 +438,10 @@ impl Activity {
             .filter(|p| p.role == Role::Runtime || validated.iter().any(|q| q.pid == p.pid && q.role == Role::Runtime))
             .filter(|p| {
                 ancestors(p.pid, &by_pid).iter().any(|pid| {
-                    by_pid.contains_key(pid)
-                        && (!available.contains(pid)
-                            || by_pid.get(pid).is_some_and(|p| remote_node(&p.name))
-                                && paths.get(pid).is_none_or(Option::is_none))
+                    (!available.contains(pid)
+                        && (by_pid.contains_key(pid) || self.lifetimes.keys().any(|key| key.0 == *pid)))
+                        || by_pid.get(pid).is_some_and(|p| remote_node(&p.name))
+                            && paths.get(pid).is_none_or(Option::is_none)
                 })
             })
             .map(|p| p.pid)
@@ -441,11 +463,17 @@ impl Activity {
         // Preserve an initially proven shared boundary for identity-valid roots.
         // Losing its parent metadata does not grant inherited cwd authority.
         for f in planned.iter().filter(|f| f.authority == Authority::Shared) {
-            if validated.iter().any(|p| {
+            let compatible = |p: &Proc| {
                 p.pid == f.pid
                     && by_pid[&p.pid].same_process(p)
                     && (by_pid[&p.pid].role == Role::Unavailable || by_pid[&p.pid].role == p.role)
-            }) {
+            };
+            if let Some(lifetime) = by_pid[&f.pid].key().and_then(|key| self.lifetimes.get_mut(&key)) {
+                if validated.iter().find(|p| p.pid == f.pid).is_none_or(compatible) {
+                    lifetime.shared = true;
+                }
+            }
+            if validated.iter().any(compatible) {
                 shared.insert(f.pid);
             }
         }
@@ -459,12 +487,18 @@ impl Activity {
             planned.iter().filter(|f| f.tree.iter().any(|pid| !by_pid.contains_key(pid))).map(|f| f.pid).collect();
         // A boundary proven in the initial snapshot may already have exited or exec'd
         // by validation. Its old branch can still be reaped into validated ancestors.
-        for pid in procs
+        let unsafe_sources: Vec<_> = procs
             .iter()
-            .filter(|p| p.role == Role::Service)
+            .filter(|p| {
+                p.role == Role::Service
+                    || p.key().is_some_and(|key| {
+                        self.pending_unsafe.contains(&key) || self.lifetimes.get(&key).is_some_and(|l| l.reaped_unsafe)
+                    })
+            })
             .map(|p| p.pid)
             .chain(planned.iter().filter(|f| f.authority == Authority::Shared).map(|f| f.pid))
-        {
+            .collect();
+        for pid in unsafe_sources {
             for ancestor in ancestors(pid, &original) {
                 if let Some(key) = original.get(&ancestor).and_then(|p| p.key()) {
                     // The snapshot pins the fact to this birth. Apply it only when
@@ -538,12 +572,14 @@ impl Activity {
         }
         let mut seen = HashMap::new();
         let mut bases = HashMap::new();
+        let mut counters = HashMap::new();
         let mut folders = Vec::new();
         let mut result = Vec::new();
         for f in found.into_iter().filter(|f| mine(f.pid)) {
             let root = by_pid[&f.pid];
             let Some(key) = root.key() else { continue };
-            let mut cpu = 0u64;
+            let mut subjects: HashMap<ProcessKey, u64> = HashMap::new();
+            let mut assignments = HashMap::new();
             let mut unsafe_processes = Vec::new();
             // Recheck every contributor, not only the root. A failed read is no busy evidence.
             let mut complete = !incomplete.contains(&f.pid);
@@ -564,26 +600,67 @@ impl Activity {
                 };
                 let unsafe_reaped =
                     p.key().is_some_and(|key| self.lifetimes.get(&key).is_some_and(|l| l.reaped_unsafe));
-                cpu = cpu.saturating_add(times.own);
+                let mut subject = p;
                 if unsafe_reaped {
                     unsafe_processes.extend(p.key());
                 } else {
-                    cpu = cpu.saturating_add(times.reaped);
+                    // Reaping inside a clean subtree only transfers its CPU from
+                    // a live child to its parent. Keep that sum as one counter.
+                    for ancestor in ancestors(p.pid, &by_pid) {
+                        if !f.tree.contains(&ancestor) || !mine(ancestor) {
+                            break;
+                        }
+                        let above = by_pid[&ancestor];
+                        if above.key().is_some_and(|key| self.lifetimes.get(&key).is_some_and(|l| l.reaped_unsafe)) {
+                            break;
+                        }
+                        subject = above;
+                    }
                 }
+                let Some(subject) = subject.key() else {
+                    complete = false;
+                    continue;
+                };
+                let counter = subjects.entry(subject.clone()).or_default();
+                *counter = counter.saturating_add(times.own);
+                if !unsafe_reaped {
+                    *counter = counter.saturating_add(times.reaped);
+                }
+                assignments.extend(p.key().map(|key| (key, subject)));
             }
             unsafe_processes.sort();
             let basis = Basis { shared: f.authority != Authority::Owned, unsafe_processes };
-            let before = self
-                .last
-                .get(&key)
-                .filter(|_| self.bases.get(&key) == Some(&basis) && complete && !changed.contains(&key));
-            let next = judged(before, cpu, now, wall, working_share(f.provider));
+            let mut counter = self.counters.remove(&key).unwrap_or_default();
+            let regrouped = assignments
+                .iter()
+                .any(|(key, subject)| counter.assignments.get(key).is_some_and(|before| before != subject));
+            let before = self.last.get(&key).filter(|_| {
+                self.bases.get(&key).is_some_and(|before| basis.continues(before))
+                    && complete
+                    && !changed.contains(&key)
+                    && !regrouped
+            });
+            if before.is_none() {
+                counter = Counters::default();
+            }
+            for (subject, cpu) in &subjects {
+                counter.total =
+                    counter.total.saturating_add(cpu.saturating_sub(*counter.subjects.get(subject).unwrap_or(&0)));
+            }
+            // Remember absent subjects until their birth ends, so a temporary
+            // omission cannot count their lifetime CPU a second time on return.
+            counter.subjects.extend(subjects);
+            counter.assignments.extend(assignments);
+            counter.subjects.retain(|key, _| self.lifetimes.contains_key(key));
+            counter.assignments.retain(|key, _| self.lifetimes.contains_key(key));
+            let next = judged(before, counter.total, now, wall, working_share(f.provider));
             let started_at = root.times.unwrap().started;
             let working = if complete { next.working } else { None };
             let last_worked = next.last_worked(started_at, wall);
             if complete {
                 seen.insert(key.clone(), next);
                 bases.insert(key.clone(), basis);
+                counters.insert(key.clone(), counter);
             }
             if f.authority != Authority::Owned {
                 self.places.remove(&key);
@@ -612,6 +689,7 @@ impl Activity {
                 if let Some(key) = root.key() {
                     seen.remove(&key);
                     bases.remove(&key);
+                    counters.remove(&key);
                     self.places.remove(&key);
                 }
             } else if let Some(place) = places.get(&session.pid) {
@@ -622,6 +700,7 @@ impl Activity {
         });
         self.last = seen;
         self.bases = bases;
+        self.counters = counters;
         // Missing metadata never proves a birth ended. Positive replacement is
         // pruned above; the OS exit check in look prunes finished births.
         self.scopes.extend(scopes);
@@ -2278,6 +2357,7 @@ mod tests {
             bases: HashMap::new(),
             scopes: HashMap::new(),
             pending_unsafe: HashSet::new(),
+            counters: HashMap::new(),
         };
         let (key, other) = ((7, 1), (8, 1));
         let worktree = both(Some("wt"), Some("quotum"));

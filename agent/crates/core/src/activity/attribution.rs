@@ -865,3 +865,160 @@ fn first_service_observation_survives_an_ancestor_validation_gap() {
         assert_eq!(session(&sample(&mut a, &rows, start, 60), 10).working, Some(false));
     }
 }
+
+#[test]
+fn private_runtime_recovers_when_the_owner_is_missing_from_the_snapshot() {
+    for owner in ["codex", "code", "ChatGPT", "node"] {
+        let mut rows = vec![
+            proc(40, 1, owner, Role::Unknown),
+            proc(41, 40, "codex", Role::Runtime),
+            proc(42, 41, "bash", Role::Unknown),
+        ];
+        let mut a = activity();
+        let start = Instant::now();
+        for secs in [0, 15, 30, 45] {
+            if secs == 45 {
+                cpu(&mut rows, 42, 1500, 0);
+            }
+            let listed: Vec<_> = rows.iter().filter(|p| secs != 15 || p.pid != 40).cloned().collect();
+            let sessions = a.observe(
+                &listed,
+                900,
+                start + Duration::from_secs(secs),
+                WALL + secs as Millis * 1000,
+                &|p| Some(p.clone()),
+                &|_| Some("/fixture-home/project-a".into()),
+                &|_| Some("/opt/.vscode-server/bin/node".into()),
+                &|_| true,
+            );
+            if secs >= 30 {
+                let root = session(&sessions, if owner == "codex" { 40 } else { 41 });
+                assert_eq!(root.project.as_deref(), Some("project-a"), "restored owner {owner}");
+                if secs == 45 {
+                    assert_eq!(root.working, Some(true));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn first_snapshot_role_proof_survives_failed_additional_validation() {
+    for role in [Role::Service, Role::Runtime] {
+        let mut rows = vec![
+            proc(10, 1, "codex", Role::Unknown),
+            proc(11, if role == Role::Service { 10 } else { 1 }, "codex", role),
+        ];
+        let mut a = activity();
+        let start = Instant::now();
+        a.observe(
+            &rows,
+            900,
+            start,
+            WALL,
+            &|p| (p.pid != 11).then(|| p.clone()),
+            &|_| Some("/fixture-home/project-a".into()),
+            &|_| None,
+            &|_| true,
+        );
+        rows[1].role = Role::Unavailable;
+        if role == Role::Runtime {
+            rows[1].parent = 40;
+            rows.push(proc(40, 1, "code", Role::Unknown));
+        }
+        sample(&mut a, &rows, start, 15);
+        cpu(&mut rows, 11, 1500, 0);
+        let sessions = sample(&mut a, &rows, start, 30);
+        assert_eq!(session(&sessions, 10).working, Some(false));
+        if role == Role::Service {
+            assert!(!sessions.iter().any(|s| s.pid == 11));
+        } else {
+            assert_eq!(session(&sessions, 11).project, None);
+            assert_eq!(session(&sessions, 11).working, Some(true));
+        }
+    }
+}
+
+#[test]
+fn a_retained_unsafe_birth_propagates_through_the_raw_graph() {
+    for readable in [false, true] {
+        let mut rows = vec![proc(20, 1, "codex", Role::Unknown), proc(10, 20, "claude", Role::Unknown)];
+        let mut a = activity();
+        let start = Instant::now();
+        sample(&mut a, &rows, start, 0);
+        sample(&mut a, &rows, start, 15);
+        rows.push(proc(11, 10, "codex", Role::Service));
+        cpu(&mut rows, 11, 1500, 0);
+        let gap: Vec<_> = rows.iter().filter(|p| p.pid != 20).cloned().collect();
+        sample(&mut a, &gap, start, 30);
+        rows.pop();
+        cpu(&mut rows, 10, 0, 1500);
+        a.observe(
+            &rows,
+            900,
+            start + Duration::from_secs(45),
+            WALL + 45000,
+            &|p| (readable || p.pid != 10).then(|| p.clone()),
+            &|_| None,
+            &|_| None,
+            &|_| true,
+        );
+        rows.retain(|p| p.pid != 10);
+        cpu(&mut rows, 20, 0, 1500);
+        assert_eq!(session(&sample(&mut a, &rows, start, 60), 20).working, Some(false));
+    }
+}
+
+#[test]
+fn retiring_an_owned_tool_never_cancels_known_self_or_live_cpu() {
+    for unsafe_root in [false, true] {
+        for new_live in [false, true] {
+            let mut rows = vec![proc(10, 1, "codex", Role::Unknown), proc(14, 10, "bash", Role::Unknown)];
+            cpu(&mut rows, 14, 10000, 0);
+            if unsafe_root {
+                rows.push(proc(11, 10, "codex", Role::Service));
+            }
+            let mut a = activity();
+            let start = Instant::now();
+            sample(&mut a, &rows, start, 0);
+            assert_eq!(session(&sample(&mut a, &rows, start, 15), 10).working, Some(false));
+            rows.retain(|p| p.pid != 14);
+            cpu(&mut rows, 10, if new_live { 0 } else { 500 }, 10000);
+            if new_live {
+                let mut tool = proc(15, 10, "bash", Role::Unknown);
+                tool.times.as_mut().unwrap().started = WALL + 20000;
+                rows.push(tool);
+                cpu(&mut rows, 15, 1500, 0);
+            }
+            assert_eq!(session(&sample(&mut a, &rows, start, 30), 10).working, Some(true));
+        }
+    }
+}
+
+#[test]
+fn clean_subtree_reaping_is_a_transfer_even_below_an_unsafe_root() {
+    let mut rows = vec![
+        proc(10, 1, "codex", Role::Unknown),
+        proc(11, 10, "codex", Role::Service),
+        proc(14, 10, "bash", Role::Unknown),
+        proc(15, 14, "bash", Role::Unknown),
+    ];
+    cpu(&mut rows, 15, 10000, 0);
+    let mut a = activity();
+    let start = Instant::now();
+    sample(&mut a, &rows, start, 0);
+    assert_eq!(session(&sample(&mut a, &rows, start, 15), 10).working, Some(false));
+    rows.pop();
+    cpu(&mut rows, 14, 0, 10000);
+    assert_eq!(
+        session(&sample(&mut a, &rows, start, 30), 10).working,
+        Some(false),
+        "waiting the observed child supplies no new CPU"
+    );
+    cpu(&mut rows, 14, 0, 11500);
+    assert_eq!(
+        session(&sample(&mut a, &rows, start, 45), 10).working,
+        Some(true),
+        "a clean subtree still counts short finished tools"
+    );
+}

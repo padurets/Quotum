@@ -130,7 +130,9 @@ Temporary missing owner metadata leaves placement unproven for that observation;
 does not make a private runtime permanently shared. Confirmed role, image and accounting
 scope remain tied to the observed birth across snapshot gaps, until exit or replacement
 is proved. An initially known unsafe branch also retains pending birth-specific ancestor
-evidence until that same ancestor can be validated. A reused PID inherits no state.
+evidence until that same ancestor can be validated. This includes a first snapshot's
+proof when its additional validation fails, and a retained unsafe birth whose current
+validation is unavailable. A reused PID inherits no state.
 
 The OS also gives CPU of finished children, without telling which branch earned it.
 For every ancestor of a proven excluded branch, across wrappers and other-provider
@@ -142,8 +144,12 @@ an affected ancestor. Changing the accounting basis discards incompatible deltas
 working holds rather than turning a lifetime-counter jump into work. Accounting owner
 and authority transitions of observed births also reset affected sessions, even when
 an ancestor was already marked unsafe. New owned tools retain their first observed CPU.
-Unsafe births continue to mark validated physical ancestors after the original service
-has gone, including an ancestor whose metadata becomes readable later.
+Unsafe births count their own CPU separately from clean owned subtrees. Each clean
+subtree keeps its live-plus-reaped counter; sampled increases accumulate without
+subtracting retired subtrees, so an observed tool's exit cannot hide new self or live
+CPU. Regrouping observed contributors discards incompatible deltas and holds. Unsafe
+births continue to mark physical ancestors after the original service has gone,
+including an ancestor whose metadata becomes readable later.
 
 macOS and Windows currently have no invocation-role or process-session detector for
 these shared branches; their existing process observation remains the fallback, not

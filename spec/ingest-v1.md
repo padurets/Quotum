@@ -452,6 +452,10 @@ measurement ancestry remains excluded through a later metadata gap. No new wire 
 or provider content are needed for this accounting. Temporarily unavailable ownership
 metadata leaves placement unproven rather than establishing a permanent shared branch;
 birth-scoped boundary and accounting facts survive an unconfirmed snapshot absence.
+This also applies to a first snapshot's proof before successful additional validation.
+At affected roots, retiring an observed owned subtree cannot cancel sampled self or
+live CPU increases; clean subtrees retain their live-plus-reaped accounting. These
+local counters and pending ancestor evidence are not transmitted.
 
 What is sent: the pseudonym of each account, the plan name, percentages and reset times
 of the windows, free resets and when each expires, the client's version, the machine's random id, its name
