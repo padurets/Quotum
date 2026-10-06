@@ -3,8 +3,8 @@ import {useBoardId,useNamed,useServerView} from '../lib/board';
 import {useHistory,useHistoryBegins,useHistoryPlot} from '../lib/history';
 import {usePrefs,setPrefs,setMuted} from '../lib/prefs';
 import {moneySelection} from '../lib/moneySelection';
-import {money} from '../lib/money';
-import {moneyIdentity,moneyTotal,type MeterHistory} from '../lib/moneyView';
+import {money,amountText,unitLabel,capName} from '../lib/money';
+import {meterPointIn,moneyIdentity,moneyTotal,type MeterHistory} from '../lib/moneyView';
 import {colorOf,columnShown,withColumn,withHidden,HISTORY,FORECAST,type Arrange} from '../lib/view';
 import {frameOf,frameChangesAt,measuredTo} from '../lib/periods';
 import {useTimeRange,setTimeRange,timeRangeKey} from '../lib/timeRange';
@@ -23,7 +23,7 @@ import {usePanning} from '../lib/pan';
 import {composeMetersPrepared} from '../../server/domain/meterHistory';
 
 function nameOf(series:MeterHistory,title:string) {
-  const detail=series.meterId==='balance'?'':series.semantics?.label??series.meterId;
+  const detail=series.meterId==='balance'?'':series.kind==='cap'?capName({id:series.meterId,scope:series.semantics?.scope??null,label:series.semantics?.label??null}):series.semantics?.label??series.meterId;
   return [title,detail,series.kind==='cap'?t('money.cap'):series.meterId==='balance'?'':t('money.usage')].filter(Boolean).join(' — ');
 }
 function SelectionNotice() {
@@ -32,7 +32,7 @@ function SelectionNotice() {
   const removed=result.removed||(prefs.money.removed??0);
   return <>{result.omitted>0&&<p className="drawer-note">{t('money.limit',{count:result.omitted})}</p>}{removed>0&&<p className="drawer-note">{t('money.removed',{count:removed})}</p>}</>;
 }
-const pointAt=(series:MeterHistory,at:number)=>series.points.filter(p=>p.at<=at).at(-1);
+const pointAt=meterPointIn;
 
 export function MoneyHistory({arrange}:{arrange:Arrange}) {
   const board=useBoardId(),locale=useLocale(),{history,loading,error}=useHistory(),prefs=usePrefs(),sources=useNamed(arrange.view.names);
@@ -64,7 +64,7 @@ export function MoneyHistory({arrange}:{arrange:Arrange}) {
       const card=sources.find(c=>c.id===series.sourceId),scaled=(value:string)=>Number(BigInt(value)-origin)/1_000_000;
       const points:Line['points']=[];
       for(const point of series.points){points.push([point.at,scaled(point.value),point.segment]);yield;}
-      lines.push({sourceId:series.sourceId,windowId:series.meterId,key:moneyIdentity(series),name:nameOf(series,card?.title??series.sourceId),provider:card?.provider??'',kind:'other',label:series.semantics?.label??null,minutes:null,color:colorOf(arrange.view,series.sourceId,card?.provider??''),dash:series.kind==='cap'?'7 5':'',current:scaled(series.end??'0'),consumed:0,coveredMs:series.coveredMs,remainingAtStart:series.start===null?null:scaled(series.start),remainingAtEnd:series.end===null?null:scaled(series.end),staleAfterMs:86_400_000,points,work:null});yield;
+      lines.push({sourceId:series.sourceId,windowId:series.meterId,key:moneyIdentity(series),name:nameOf(series,card?.title??series.sourceId),provider:card?.provider??'',kind:'other',label:series.semantics?.label??null,minutes:null,color:colorOf(arrange.view,series.sourceId,card?.provider??''),dash:series.kind==='cap'?'7 5':'',current:scaled(series.end??'0'),consumed:0,coveredMs:series.coveredMs,remainingAtStart:series.start===null?null:scaled(series.start),remainingAtEnd:series.end===null?null:scaled(series.end),staleAfterMs:86_400_000,points,work:null,...(series.kind==='cap'?{capCells:series.points.flatMap(p=>p.knownFrom!==undefined&&p.knownUntil!==undefined?[{at:p.at,from:p.knownFrom,to:p.knownUntil,value:scaled(p.value)}]:[])}:{})});yield;
     }
     return {entries,lines,origin,span,pad,strip};
   },[history,strip,prefs.muted,unit,prefs.money.view,sources,arrange.view,locale],`${board}:${unit}`);
@@ -73,18 +73,18 @@ export function MoneyHistory({arrange}:{arrange:Arrange}) {
   const axis=useMemo(()=>{
     const origin=model?.origin??0n,span=model?.span??1_000_000n,pad=model?.pad??1n;
     const min=-Number(pad)/1_000_000,max=Number(span+pad)/1_000_000;
-    return {min,max,ticks:Array.from({length:5},(_,i)=>min+(max-min)*i/4),label:t('money.value')+' ('+unit+')',
-      rawValue:(key:string,at:number)=>{const series=entries.find(s=>moneyIdentity(s)===key);return series&&pointAt(series,at)?.value||'0';},
-      formatTick:(value:number)=>money((origin+BigInt(Math.round(value*1_000_000))).toString(),unit).slice(0,-unit.length-1),
-      formatValue:(key:string,_value:number,at:number)=>{const series=entries.find(s=>moneyIdentity(s)===key);return money(series&&pointAt(series,at)?.value,unit,true);},
+    return {min,max,ticks:Array.from({length:5},(_,i)=>min+(max-min)*i/4),label:t('money.value')+' ('+unitLabel(unit)+')',
+      rawValue:(key:string,at:number)=>{const series=entries.find(s=>moneyIdentity(s)===key);return series&&pointAt(series,at,strip?.cell??history?.cellMs??60_000)?.value||'—';},
+      formatTick:(value:number)=>amountText((origin+BigInt(Math.round(value*1_000_000))).toString(),unit),
+      formatValue:(key:string,_value:number,at:number)=>{const series=entries.find(s=>moneyIdentity(s)===key);return money(series&&pointAt(series,at,strip?.cell??history?.cellMs??60_000)?.value,unit,true);},
       detail:(key:string,at:number)=>{
-        const series=entries.find(s=>moneyIdentity(s)===key),point=series&&pointAt(series,at);
+        const series=entries.find(s=>moneyIdentity(s)===key),point=series&&pointAt(series,at,strip?.cell??history?.cellMs??60_000);
         return <>{point?.semantics?.limit!==null&&point?.semantics?.limit!==undefined&&<div>{t('money.limitTotal')}: {money(point.semantics.limit,unit,true)}{point.semantics.resetAt!==null&&<div>{stamp(point.semantics.resetAt)}</div>}</div>}{point?.steps.map(step=><div key={step.from+':'+step.to}>{t('money.unlocated')}: {money(step.amount,unit,true)}<div>{stamp(step.from)} — {stamp(step.to)}</div></div>)}</>;
       }};
-  },[model,unit,locale]);
+  },[model,unit,locale,history?.cellMs,strip?.cell]);
   const answered=history?.range===(selected?timeRangeKey(selected):prefs.range);
   return <section className={`panel history${loading?' is-loading':''}`} data-widget={HISTORY} ref={panel}>
-    <div className="panel-head"><h2>{t(prefs.money.view==='spending'?'money.spending':'money.balance')} ({unit})</h2><Popover label={t('history.settings')} icon={<SlidersIcon/>}>
+    <div className="panel-head"><h2>{t(prefs.money.view==='spending'?'money.spending':'money.balance')} ({unitLabel(unit)})</h2><Popover label={t('history.settings')} icon={<SlidersIcon/>}>
       <div className="popover-pad"><Segmented value={prefs.money.view} onChange={view=>setPrefs({money:{...prefs.money,view}})} options={[["balance",t('money.balance')],["spending",t('money.spending')]]} label={t('money.value')}/></div>
       <MoneySettings sources={sources} hidden={arrange.view.hidden} series={original}/>
       {arrange.owner&&<HideRow onHide={()=>arrange.update(v=>({...v,hidden:[...v.hidden,HISTORY]}))}>{t('widget.hide')}</HideRow>}
@@ -99,7 +99,7 @@ export function MoneyTable({arrange}:{arrange:Arrange}) {
   useLocale();const {history,error}=useHistory(),sources=useNamed(arrange.view.names),prefs=usePrefs();
   const columns=([['value','money.value'],['spending','money.spending'],['topup','money.topup']] as const).filter(([id])=>columnShown(arrange.view,FORECAST,id));
   return <section className="panel forecast" data-widget={FORECAST}>
-    <div className="panel-head"><h2>{t('money.spending')} ({prefs.money.unit})</h2>{arrange.owner&&<Popover label={t('forecast.settings')} icon={<SlidersIcon/>}>
+    <div className="panel-head"><h2>{t('money.spending')} ({unitLabel(prefs.money.unit??'')})</h2>{arrange.owner&&<Popover label={t('forecast.settings')} icon={<SlidersIcon/>}>
       {([['value','money.value'],['spending','money.spending'],['topup','money.topup']] as const).map(([id,label])=><SwitchRow key={id} on={columnShown(arrange.view,FORECAST,id)} onChange={on=>arrange.update(view=>withColumn(view,FORECAST,id,on))}>{t(label)}</SwitchRow>)}
       <HideRow onHide={()=>arrange.update(view=>withHidden(view,FORECAST,true))}>{t('widget.hide')}</HideRow>
     </Popover>}</div><SelectionNotice/>

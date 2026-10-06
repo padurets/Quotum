@@ -7,6 +7,13 @@ import type {Store} from './store/store.js';
 import {tell,type Touches} from './touches.js';
 import {realClock,type Clock} from './events.js';
 
+const content=(state:{meters?:{id:string;amount:string;limit:string|null;resetAt:number|null}[];quota?:{generation:string|null;complete:boolean;issue:string|null};plan?:string})=>JSON.stringify([state.meters?.map(m=>[m.id,m.amount,m.limit,m.resetAt]),state.quota?[state.quota.generation,state.quota.complete,state.quota.issue]:null,state.plan??'']);
+const resultContent=(result:import('./connectors/registry.js').ConnectorIdentity,state:Parameters<typeof content>[0])=>{
+  if(!result.quotaObservation)return content({meters:result.measurement?.meters});
+  const meters=new Map(state.meters?.map(m=>[m.id,m]));
+  for(const meter of result.measurement?.meters??[])meters.set(meter.id,meter);
+  return content({meters:[...meters.values()],quota:result.quotaObservation.quota,plan:result.quotaObservation.plan});
+};
 type Job={generation:number;next:number|null;last:number|null;retryAt:number;interval:number;failures:number;controller:AbortController|null;request:RefreshRequest|null;requestedAt:number|null};
 
 /** Hub authority has one job per source and never claims a device's duty. */
@@ -51,21 +58,21 @@ export class HubSources {
     if(job.request){job.request.status='waiting';job.request.dispatchAt=at;}
     this.touch(source);
     const valid=()=>this.running&&this.jobs.get(source)===job&&job.generation===generation&&!controller.signal.aborted;
-    const before=JSON.stringify(this.store.state(source).meters?.map(m=>[m.id,m.amount,m.limit,m.resetAt]));
+    const before=content(this.store.state(source));
     try {
       // The connector bounds its round and may retain successful account data when
       // inventory runs out of time. This signal cancels the source lifecycle only.
       const result=await this.credentials.measure(source,controller.signal,valid,result=>{
-        const after=JSON.stringify(result.measurement?.meters.map(m=>[m.id,m.amount,m.limit,m.resetAt]));
+        const after=resultContent(result,this.store.state(source));
         return this.store.measureInterval(source)??(before===after?Math.min(job.interval*2,900_000):120_000);
       });
       if(!valid())return;if(!result)throw new SecretError('connector_timeout');
-      const after=JSON.stringify(result.measurement?.meters.map(m=>[m.id,m.amount,m.limit,m.resetAt]));
-      job.failures=0;job.interval=this.store.measureInterval(source)??(before===after?Math.min(job.interval*2,900_000):120_000);
+      const after=resultContent(result,this.store.state(source));
+      if(result.quotaObservation&&!result.measurement)job.failures++;else job.failures=0;job.interval=this.store.measureInterval(source)??(!result.measurement?Math.min(120_000*2**Math.min(job.failures-1,3),900_000):before===after?Math.min(job.interval*2,900_000):120_000);
       // Freshness belongs to the accepted observation; it is never extended after failure.
       job.retryAt=this.clock.now()+(result.retryAfterMs??0);
       job.next=Math.max(this.clock.now()+job.interval,job.retryAt);
-      if(job.request){job.request.status='updated';job.request.finishedAt=this.clock.now();}
+      if(job.request){job.request.status=result.measurement?'updated':'failed';job.request.finishedAt=this.clock.now();}
     }catch(error){
       if(!valid())return;
       const code=error instanceof SecretError?error.code:'credential_failed';

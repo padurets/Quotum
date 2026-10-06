@@ -9,9 +9,13 @@ export type KeyPart = {
   periods: {day: string | null; week: string | null; month: string | null};
 };
 /** Confirmed uncapped key IDs let partial rounds end a cap while retaining its history. */
-export type MeterMeasurement = {type: 'meters'; observedAt: number; staleAfterMs: number; meters: Meter[]; keys: KeyPart[]; inventoryComplete: boolean; inventoryError: string | null; uncapped?: string[]};
+export type QuotaIssue = 'empty' | 'unsupported' | 'invalid' | 'missing';
+export type QuotaStatus = {observedAt: number; generation: 'credit' | null; complete: boolean; issue: QuotaIssue | null};
+export type QuotaObservation = {observedAt: number; receivedIds: string[]; quota: QuotaStatus; plan: string};
+export const QUOTA_IDS = ['quota:credit:5h', 'quota:credit:week'] as const;
+export type MeterMeasurement = {type: 'meters'; observedAt: number; staleAfterMs: number; meters: Meter[]; keys: KeyPart[]; inventoryComplete: boolean; inventoryError: string | null; uncapped?: string[]; quota?: QuotaStatus; plan?: string};
 export type Reading = Omit<Meter, 'stale'> & {previousAt: number | null};
-export type MeterSpan = {from: number; to: number; staleAfterMs: number};
+export type MeterSpan = {from: number; to: number; staleAfterMs: number; holdUntil?: number | null};
 export type ExceptionalStep = {from: number; to: number; amount: string; evidence: 'continuous' | 'gap' | 'estimate'};
 export type SpendSummary = {from: number; to: number; amount: string | null; complete: boolean; knownFrom: number | null; uncertain: boolean; unlocated: ExceptionalStep[]};
 export type CalendarSpend = {day: SpendSummary; week: SpendSummary; month: SpendSummary};

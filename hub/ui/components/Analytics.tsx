@@ -1,5 +1,6 @@
 import {useRef, useState, useSyncExternalStore} from 'react';
 import type {Kind} from '../lib/types';
+import {unitLabel} from '../lib/money';
 import {useMoneyUnits} from '../lib/board';
 import {setPrefs, usePrefs} from '../lib/prefs';
 import {PERIODS, periodLabel, periodOf, step, stepChangesAt} from '../lib/periods';
@@ -21,7 +22,7 @@ function KindSwitch({value, onChange}: {value: string; onChange: (kind: string) 
       options={[
         ['weekly', t('history.weekly')],
         ['session', t('history.session')],
-        ...units.map(unit=>[unit,unit] as [string,string]),
+        ...units.map(unit=>[unit,unitLabel(unit)] as [string,string]),
       ]}
       label={t('history.kind')}
     />

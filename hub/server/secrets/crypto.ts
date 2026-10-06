@@ -6,6 +6,8 @@ export const SECRET_CODE = Object.freeze({
   METADATA_INVALID: 'secret_key_metadata_invalid', RESET_INVALID: 'secret_key_reset_invalid', RESET_CONFLICT: 'secret_key_reset_conflict', START_FAILED: 'secret_key_start_failed', CHECKPOINT_PENDING: 'secret_key_checkpoint_pending', MISSING: 'secret_key_missing', MISMATCH: 'secret_key_mismatch',
   CREDENTIAL_INVALID: 'credential_invalid', CREDENTIAL_NOT_FOUND: 'credential_not_found', CREDENTIAL_PROVIDER_UNKNOWN: 'credential_provider_unknown', CREDENTIAL_FAILED: 'credential_failed', CREDENTIAL_UNREADABLE: 'credential_unreadable', CREDENTIAL_CLEANUP_PENDING: 'credential_cleanup_pending',
   CREDENTIAL_EXPIRED: 'credential_expired', CREDENTIAL_REVOKED: 'credential_revoked', CREDENTIAL_WRONG_TYPE: 'credential_wrong_type', CREDENTIAL_PERMISSION: 'credential_permission', CREDENTIAL_ACCOUNT_MISMATCH: 'credential_account_mismatch', CREDENTIAL_EXPIRY_CONFIRMATION: 'credential_expiry_confirmation', CREDENTIAL_CONFLICT: 'credential_conflict',
+  AUTH_REJECTED: 'credential_auth_rejected', ACCOUNT_CONFIRMATION: 'credential_account_confirmation',
+  QUOTA_EMPTY: 'connector_quota_empty', QUOTA_UNSUPPORTED: 'connector_quota_unsupported', QUOTA_INVALID: 'connector_quota_invalid', QUOTA_PARTIAL: 'connector_quota_partial',
   INVENTORY_PARTIAL: 'connector_inventory_partial', ROUND_LIMIT: 'connector_round_limit',
   DESTINATION_INVALID: 'connector_destination_invalid', CANCELLED: 'connector_cancelled', REDIRECT: 'connector_redirect', STATUS: 'connector_status', RESPONSE_TOO_LARGE: 'connector_response_too_large', INVALID_RESPONSE: 'connector_invalid_response', CONNECTOR_FAILED: 'connector_failed', TIMEOUT: 'connector_timeout',
 } as const);
@@ -16,7 +18,7 @@ export const secretCode = (value: unknown): SecretCode | null => codes.has(value
 /** Only fixed codes may cross the boundary around keys. Never attach a raw cause. */
 export class SecretError extends Error {
   readonly code: SecretCode;
-  constructor(code: SecretCode) {
+  constructor(code: SecretCode, readonly expiryKind?: 'none' | 'unknown') {
     const safe = secretCode(code) ?? SECRET_CODE.CREDENTIAL_FAILED;
     super(safe);
     this.code = safe;

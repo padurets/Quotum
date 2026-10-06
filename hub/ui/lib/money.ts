@@ -1,19 +1,24 @@
 import type {Meter,KeyPart} from '../../server/domain/meters';
 import type {SourceAccess} from '../../server/secrets/credentials';
 import {countdownChangesAt} from './format';
-import {formatLocale} from '../i18n';
+import {formatLocale, t} from '../i18n';
+
+export const unitLabel=(unit:string)=>unit==='credits:zai'?t('quota.zaiCredits'):unit;
+export const amountUnitLabel=(unit:string)=>unit==='credits:zai'?t('quota.credits'):unitLabel(unit);
+export const capName=(meter:Pick<Meter,'id'|'scope'|'label'>)=>meter.id==='quota:credit:5h'?t('kind.title.session'):meter.id==='quota:credit:week'?t('kind.title.weekly'):meter.label??meter.id;
+export const amountText=(value:string|null|undefined,unit:string,exact=false)=>{const formatted=money(value,unit,exact);return value==null?formatted:formatted.slice(0,-amountUnitLabel(unit).length-1);};
 
 /** Display rounding never feeds the ledger, including values above Number precision. */
 export function money(value:string|null|undefined,unit='USD',exact=false):string {
   if(value==null)return '—';
   const raw=BigInt(value),negative=raw<0n,absolute=negative?-raw:raw;
-  const digits=exact||absolute>0n&&absolute<10_000n?6:2;
+  const digits=exact||unit.startsWith('credits:')||absolute>0n&&absolute<10_000n?6:2;
   const divisor=10n**BigInt(6-digits),rounded=(absolute+divisor/2n)/divisor,scale=10n**BigInt(digits);
   const whole=new Intl.NumberFormat(formatLocale(),{maximumFractionDigits:0}).format(rounded/scale);
   const separator=new Intl.NumberFormat(formatLocale()).formatToParts(1.1).find(p=>p.type==='decimal')?.value??'.';
   let fraction=(rounded%scale).toString().padStart(digits,'0');
   if(digits===6&&!exact)fraction=fraction.replace(/0+$/,'');
-  return `${negative?'−':''}${whole}${fraction?separator+fraction:''} ${unit}`;
+  return `${negative?'−':''}${whole}${fraction?separator+fraction:''} ${amountUnitLabel(unit)}`;
 }
 export const keyName=(key:Pick<KeyPart,'id'|'name'>)=>key.name??key.id;
 export const capLeft=(meter:Meter)=>(BigInt(meter.limit!)-BigInt(meter.amount)).toString();

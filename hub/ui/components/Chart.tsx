@@ -302,7 +302,7 @@ export const Chart = memo(function Chart({
 }) {
   const left = valueAxis?76:40;
   const right = 12;
-  const axis = useTimeAxis({from: desiredFrom, to: desiredTo, end: desiredNow, cellMs, left, right, onSelect, ready: incomingReady, navigation});
+  const axis = useTimeAxis({from: desiredFrom, to: desiredTo, end: desiredNow, cellMs, left, right, onSelect, ready: incomingReady, precise: incomingLines.some(line=>!!line.capCells), navigation});
   const {box, svg, width, scale, drag, timeAt, handlers, panning} = axis;
   const base = plotHeight(width);
   const height = plot === undefined ? base : Math.max(base, plot / scale);
@@ -326,7 +326,18 @@ export const Chart = memo(function Chart({
       let lastAt:number|undefined;
       for (const [at, remaining] of line.points) {if (at > drawNow) break; latest = `${at}:${remaining}`; lastAt=at; yield;}
       if(lastAt!==undefined&&valueAxis?.rawValue)latest=`${lastAt}:${valueAxis.rawValue(line.key,lastAt)}`;
-      if (incomingStrip && line.blocks) {
+      if(line.capCells) {
+        let path='',last:[number,number]|null=null;
+        for(const cell of line.capCells) {
+          yield;
+          const start=Math.max(cell.from,incomingStrip?.from??drawFrom),end=Math.min(cell.to,drawNow);
+          if(end<=start)continue;
+          const py=y(cell.value);
+          path+=`M${x(start).toFixed(1)},${py.toFixed(1)}L${x(end).toFixed(1)},${py.toFixed(1)}`;
+          last=[x(end),py];
+        }
+        paths.push({line:path,last,parts:null,latest});
+      } else if (incomingStrip && line.blocks) {
         let last: [number, number] | null = null;
         const parts: {key: string; line: string}[] = [];
         for (const {block, join} of line.blocks) {
@@ -403,12 +414,13 @@ export const Chart = memo(function Chart({
   const y = (value: number) => top + (1 - (value-(shownAxis?.min??0)) / ((shownAxis?.max??100)-(shownAxis?.min??0))) * (height - top - bottom);
   const bx = (at: number) => axis.screenX(Math.min(now, at + cellMs / 2));
   const hover = incomingReady && prepared.ready && axis.hover !== null && (!strip || axis.hover > now || covered(strip.coverage, axis.hover, axis.hover + cellMs)) ? axis.hover : null;
+  const pointedAt = axis.hoverAt ?? hover;
   const tickFrom = strip?.from ?? from, tickTo = strip?.to ?? to;
   const {ticks, daily} = niceTicks(tickFrom, tickTo, (width < 560 ? 4 : 7) * (tickTo - tickFrom) / span);
   useLayoutEffect(() => {axis.commitDrawing(basis, incomingReady && prepared.ready);});
 
   const none = {left: false, plan: false, gap: false, forecast: false};
-  const {rows, columns} = hover === null ? {rows: [], columns: none} : readCell(lines, plans, hover, cellMs, now, to, forecasts, strip?.coverage);
+  const {rows, columns} = hover === null ? {rows: [], columns: none} : readCell(lines, plans, hover, cellMs, now, to, forecasts, strip?.coverage, pointedAt!);
   const columnCount = Object.values(columns).filter(Boolean).length;
   // A cell ahead of now where no line reads anything says only what happens in it.
   const grid = rows.length > 0 && columnCount > 0;
@@ -497,8 +509,8 @@ export const Chart = memo(function Chart({
     stackTop ? top + 18 : height - bottom - 8,
     stackTop,
   );
-  // A cell ahead of now is read at its middle; the one holding now, at now.
-  const hoverX = hover === null ? 0 : hover > now ? axis.screenX(Math.min(to, hover + cellMs / 2)) : bx(hover);
+  // Caps read at the pointer. Other cells read at their middle, up to now.
+  const hoverX = hover === null ? 0 : lines.some(line=>!!line.capCells) ? axis.screenX(pointedAt!) : hover > now ? axis.screenX(Math.min(to, hover + cellMs / 2)) : bx(hover);
   // On a narrow chart it spans the chart's width under the plot; a marker's time stands over its label and does not rise.
   const narrow = width < 560;
   const {tip, style: tipStyle} = useTip(svg, {width, at: hoverX, narrow, rises: !edgeKey, bottom: height * scale});
@@ -704,7 +716,7 @@ export const Chart = memo(function Chart({
                       <line x1="0" x2="14" y1="2" y2="2" stroke={row.line.color} strokeWidth="2" strokeDasharray={row.line.dash || undefined} />
                     </svg>
                     <span className="tooltip-name">{row.line.name}</span>
-                    {columns.left && <strong>{row.left !== null && (shownAxis?shownAxis.formatValue(row.line.key,row.left,hover!):`${num(row.left)}%`)}</strong>}
+                    {columns.left && <strong>{row.left !== null && (shownAxis?shownAxis.formatValue(row.line.key,row.left,pointedAt!):`${num(row.left)}%`)}</strong>}
                     {columns.plan && <span className="tooltip-plan">{row.plan !== null && `${num(row.plan)}%`}</span>}
                     {columns.gap && <span className={`tooltip-gap ${row.gap !== null ? gapTone(row.gap) : ''}`}>{row.gap !== null && gapText(row.gap)}</span>}
                     {columns.forecast && <span className="tooltip-forecast">{row.forecast !== null && `${num(row.forecast)}%`}</span>}
@@ -712,7 +724,7 @@ export const Chart = memo(function Chart({
                 ))}
               </div>
             )}
-            {shownAxis?.detail&&rows.map(row=><div className="tooltip-mark" key={'money:'+row.line.key}>{shownAxis.detail!(row.line.key,hover!)}</div>)}
+            {shownAxis?.detail&&rows.map(row=><div className="tooltip-mark" key={'money:'+row.line.key}>{shownAxis.detail!(row.line.key,pointedAt!)}</div>)}
             {grid && markerReadout.length > 0 && <div className="tooltip-sep" />}
             {markerReadout.map(marker => (
               <div className={`tooltip-mark ${marker.strong ? 'is-strong' : ''}`} key={marker.key}>

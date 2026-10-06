@@ -30,6 +30,7 @@ import {
 } from './model.js';
 /** Durable app settings, in `npm run demo:keys`; checking and reset busy are transient and tested. */
 export {KEY_STORAGE} from './key-storage.js';
+export {QUOTA_SCENES} from './quotas.js';
 export {MONEY_SCENES} from './money.js';
 
 /**
@@ -1615,4 +1616,5 @@ const activity: DemoSet = {
 };
 
 const money:DemoSet={...all,id:'money',about:'Subscriptions beside OpenRouter balances, key caps, partial inventory and private access failures'};
-export const SETS: DemoSet[] = [all, showcase, activity,money];
+const quotas:DemoSet={...all,id:'quotas',about:'Personal z.ai subscription quotas in credits, unknown resets and partial readings'};
+export const SETS: DemoSet[] = [all, showcase, activity,money,quotas];

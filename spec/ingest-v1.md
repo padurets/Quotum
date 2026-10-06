@@ -82,7 +82,7 @@ more than 30 seconds in the future after that makes the batch invalid.
 One successful measurement of one provider account on one machine.
 
 The hub's catalogue distinguishes client-measured providers from hub-measured ones.
-`openrouter` is hub-measured. In snapshots, failures and sessions, the hub drops each
+`openrouter` and `zai` are hub-measured. In snapshots, failures and sessions, the hub drops each
 object naming it before reading its other fields. Such an element creates no source,
 holding, device association, duty, failure or history and contributes to none of the
 response counts. Valid client elements of the same request are accepted normally.
@@ -224,9 +224,9 @@ while.
 
 ### Following the hub's pace
 
-A check-in element naming `openrouter` keeps its place in the answer, without checking
+A check-in element naming `openrouter` or `zai` keeps its place in the answer, without checking
 its account or activity fields. With either paced or legacy check-in, it receives
-`{provider: "openrouter", measure: false, onDuty: false, askInMs: 86400000, until}`,
+`{provider, measure: false, onDuty: false, askInMs: 86400000, until}`,
 where `until` is the hub's current time plus one day. It creates no holding or duty.
 
 With `"paced": true` the hub also decides when the device on duty measures, from what it

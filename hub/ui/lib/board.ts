@@ -7,6 +7,8 @@ import type {Board} from './session';
 import {createStore, sameJson, shallowEqual, useSelect} from './store';
 import type {Card, LiveSession, Pace, Refresh, SourceForecast, View} from './types';
 import type {SourceAccess} from '../../server/secrets/credentials';
+import {providerOf} from '../../server/domain/providers';
+import {quotaPeriods} from './subscription';
 
 /**
  * The page's state, and the one way it changes: events. What the hub pushes
@@ -269,14 +271,17 @@ export const useHistoryStart = () => usePage(s => s.board?.historyStart ?? null)
 export const useVisibleLimits = () => usePage(s => {
   const b = s.board;
   if (!b) return NONE;
-  return b.lineup.filter(id => !b.view.hidden.includes(`source:${id}`) && (!b.cards[id]?.windows.length || b.cards[id].windows.some(w => !b.view.windows.includes(`${id}/${w.id}`))));
+  return b.lineup.filter(id => {
+    const card=b.cards[id],periods=card?quotaPeriods(card):[];
+    return !b.view.hidden.includes(`source:${id}`)&&(!periods.length||periods.some(w=>!b.view.windows.includes(`${id}/${w.id}`)));
+  });
 }, shallowEqual);
 export const useLineup = () => usePage(s => s.board?.lineup ?? NONE);
 export const useCard = (id: string) => usePage(s => s.board?.cards[id]);
 export const useSourceAccess=(id:string)=>usePage(s=>s.board?.sourceAccess?.[id]??null);
 const NO_ACCESS:Record<string,SourceAccess>={};
 export const useSourceAccesses=()=>usePage(s=>s.board?.sourceAccess??NO_ACCESS);
-export const useMoneyUnits=()=>usePage(s=>[...new Set(Object.values(s.board?.cards??{}).flatMap(c=>c.meters?.map(m=>m.unit)??[]))].sort(),shallowEqual);
+export const useMoneyUnits=()=>usePage(s=>[...new Set(Object.values(s.board?.cards??{}).filter(c=>providerOf(c.provider)?.funding==='wallet').flatMap(c=>c.meters?.map(m=>m.unit)??[]))].sort(),shallowEqual);
 /** The cards of these sources, in their order; the same list while each card is. */
 export const useCards = (ids: string[]) => usePage(s => ids.flatMap(id => s.board?.cards[id] ?? []), shallowEqual);
 export const useSessions = (id: string) => usePage(s => s.board?.sessions[id] ?? NONE);

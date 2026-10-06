@@ -1,48 +1,70 @@
+import {QUOTA_IDS} from '../../server/domain/meters';
 import type {Card,View} from '../lib/types';
 import type {KeyPart,Meter} from '../../server/domain/meters';
 import {useSourceAccess} from '../lib/board';
-import {money,keyName,capLeft,capPercent,capStale,capChangesAt,accessTone,accessChangesAt,ACCESS_WARNING_MS} from '../lib/money';
+import {money,amountText,amountUnitLabel,capName,keyName,capLeft,capPercent,capStale,capChangesAt,accessTone,accessChangesAt,ACCESS_WARNING_MS} from '../lib/money';
 import {stamp,countdown,duration,countdownChangesAt,earliest} from '../lib/format';
 import {useClock} from '../lib/clock';
 import {t} from '../i18n';
 import {ApiError,messageOf} from '../lib/http';
 import {ErrorLine} from './Kit';
 import {Popover} from './Popover';
-import {MeterBar} from './Meter';
-import {level} from '../lib/quota';
+import {MeterBar,PercentLimit,ResetText} from './Meter';
+import {level,resetLineChangesAt} from '../lib/quota';
 import {useShownKeys} from '../lib/moneyKeys';
 
-function KeyStatus({part,cap}:{part:KeyPart;cap:Meter}) {
-  const now=useClock(now=>earliest(part.expiresAt!==null&&part.expiresAt>now?part.expiresAt:null,capChangesAt(cap,now)));
-  const stale=capStale(cap,now);
-  const inactive=part.disabled||part.expiresAt!==null&&part.expiresAt<=now;
-  const status=inactive?t('money.inactive'):part.presence==='missing'?t('money.missing'):stale?t('money.stale'):'';
-  return <small data-time="key-status" className={`key-status${stale?' cap-stale':''}${inactive?' is-inactive':''}`} role="img" title={status} aria-label={status||undefined} aria-hidden={!status}/>;
+function CapStatus({part,cap}:{part?:KeyPart;cap?:Meter}) {
+  const now=useClock(now=>earliest(part?.expiresAt!=null&&part.expiresAt>now?part.expiresAt:null,cap?capChangesAt(cap,now):null));
+  const inactive=!!part&&(part.disabled||part.expiresAt!==null&&part.expiresAt<=now);
+  const status=inactive?t('money.inactive'):part?.presence==='missing'?t('money.missing'):!cap?t('quota.unavailable'):capStale(cap,now)?t('money.stale'):'';
+  const detail=status&&cap?`${status}\n${stamp(cap.at)}`:status;
+  return <small data-time="key-status" className={`key-status${inactive?' is-inactive':''}`} role="img" title={detail} aria-label={detail||undefined} aria-hidden={!status}/>;
 }
-function CapReset({meter,short=false}:{meter:Meter;short?:boolean}) {
+export function CapReset({meter,short=false}:{meter:Meter;short?:boolean}) {
   const now=useClock(now=>meter.resetAt===null?null:countdownChangesAt(meter.resetAt,now));
-  return <span data-time="cap-reset" title={meter.resetAt===null?'':stamp(meter.resetAt)}>{meter.resetAt!==null&&meter.resetAt>now?short?countdown(meter.resetAt-now):t('limit.resetsIn',{time:duration(meter.resetAt-now)}):meter.resetAt!==null?t('money.partial'):''}</span>;
+  const unknown=meter.resetAt===null&&meter.scope!=='lifetime';
+  const text=meter.resetAt===null?unknown?short?'—':t('limit.resetUnknown'):'' :meter.resetAt>now?short?countdown(meter.resetAt-now):t('limit.resetsIn',{time:duration(meter.resetAt-now)}):t('limit.resetPassed');
+  return <span data-time="cap-reset" title={unknown?t('limit.resetUnknown'):meter.resetAt!==null?stamp(meter.resetAt):''}>{text}</span>;
+}
+/** Monetary caps keep their amounts around the shared segmented meter. */
+export function CapMetrics({cap,name,detail=name,status,compact=false}:{cap:Meter|undefined;name:string;detail?:string;status?:import('react').ReactNode;compact?:boolean}) {
+  const percent=cap?capPercent(cap):null,remaining=percent===null?null:100-percent;
+  const value=cap?amountText(capLeft(cap),cap.unit):'—',unit=cap?amountUnitLabel(cap.unit):'';
+  const label=<span className="cap-label"><span>{name}</span>{status}</span>;
+  const bar=<MeterBar remaining={cap?remaining:null} label={name}/>;
+  const reset=cap?<CapReset meter={cap} short={compact}/>:<span>{t('money.stale')}</span>;
+  if(compact)return <div className="compact-limit is-money">
+    <div className="compact-window-name"><span title={detail}>{label}</span></div>
+    <small className="compact-reset">{reset}</small>{bar}
+    <strong className="limit-value" title={cap?money(capLeft(cap),cap.unit,true):undefined}>{value}<small>{unit}</small></strong>
+  </div>;
+  return <div className="limit money-limit">
+    <div className="limit-top"><span className="limit-name" title={detail}>{label}</span>
+      <span className={`limit-value v-${remaining===null?'ok':level(remaining)}`} title={cap?money(capLeft(cap),cap.unit,true):undefined}>{value}<small>{unit}</small></span>
+    </div>{bar}
+    <div className="limit-bottom"><span>{cap?t('money.of',{amount:money(cap.limit,cap.unit)}):t('quota.unavailable')}</span>{cap&&remaining===null?<span>{t('money.exhausted')}</span>:reset}</div>
+  </div>;
 }
 export function KeyMetrics({part,meters,compact=false}:{part:KeyPart;meters:readonly Meter[];compact?:boolean}) {
-  const cap=meters.find(m=>m.id===`key:${part.id}:cap`);
-  if(!cap)return null;
-  const percent=capPercent(cap),remaining=percent===null?null:100-percent;
-  const left=money(capLeft(cap),cap.unit),value=left.slice(0,-cap.unit.length-1);
-  const detail=[keyName(part),part.includeByok?t('money.byok'):''].filter(Boolean).join('\n');
-  const stale=part.presence==='missing'||cap.stale;
-  const bar=<MeterBar remaining={remaining} label={keyName(part)}/>;
-  if(compact)return <div className={`compact-limit is-money${stale?' is-stale':''}`}>
-    <div className="compact-window-name"><span title={detail}><span>{keyName(part)}<KeyStatus part={part} cap={cap}/></span></span></div>
-    <small className="compact-reset"><CapReset meter={cap} short/></small>
-    {bar}<strong className="limit-value" title={money(capLeft(cap),cap.unit,true)}>{value}<small>{cap.unit}</small></strong>
-  </div>;
-  return <div className={`limit money-limit${stale?' is-stale':''}`}>
-    <div className="limit-top"><span className="limit-name" title={detail}>{keyName(part)}<KeyStatus part={part} cap={cap}/></span>
-      <span className={`limit-value v-${remaining===null?'ok':level(remaining)}`} title={money(capLeft(cap),cap.unit,true)}>{value}<small>{cap.unit}</small></span>
-    </div>
-    {bar}
-    <div className="limit-bottom"><span title={money(cap.limit,cap.unit,true)}>{t('money.of',{amount:money(cap.limit,cap.unit)})}</span>{remaining===null?<span>{t('money.exhausted')}</span>:<CapReset meter={cap}/>}</div>
-  </div>;
+  const cap=meters.find(m=>m.id===`key:${part.id}:cap`);if(!cap)return null;
+  return <CapMetrics cap={cap} name={keyName(part)} detail={[keyName(part),part.includeByok?t('money.byok'):''].filter(Boolean).join('\n')} status={<CapStatus part={part} cap={cap}/>} compact={compact}/>;
+}
+export function QuotaCard({source,ids=QUOTA_IDS,compact=false}:{source:Card;ids?:readonly string[];compact?:boolean}) {
+  return <>{ids.map(id=>{
+    const cap=source.meters?.find(m=>m.id===id),used=cap?capPercent(cap):null;
+    const detail=cap?`${money(capLeft(cap),cap.unit,true)}\n${t('money.of',{amount:money(cap.limit,cap.unit,true)})}\n${cap.resetAt===null?t('limit.resetUnknown'):stamp(cap.resetAt)}${used===null?`\n${t('money.exhausted')}`:''}`:t('quota.unavailable');
+    return <PercentLimit key={id} name={capName({id,scope:null,label:null})} remaining={used===null?null:100-used}
+      valueTitle={detail} status={<CapStatus cap={cap}/>} reset={<QuotaReset resetAt={cap?.resetAt??null} short={compact}/>} compact={compact}/>;
+  })}</>;
+}
+function QuotaReset({resetAt,short}:{resetAt:number|null;short:boolean}) {
+  const now=useClock(now=>resetLineChangesAt({resetAt},now));
+  return <ResetText resetAt={resetAt} now={now} short={short}/>;
+}
+export function QuotaMark({source}:{source:Card}) {
+  if(!source.quota||source.quota.complete)return null;
+  const text=messageOf(new ApiError(400,'connector_quota_'+(source.quota.generation?'partial':source.quota.issue)));
+  return <Popover label={text} up align="left" triggerClass="tray-pill is-warn" trigger={<svg className="tray-icon" viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="m12 3 10 18H2Z"/><path d="M12 9v5m0 3h.01"/></svg>}><div className="tray-panel"><p className="tray-panel-lead">{text}</p><p>{t('quota.budgetOnly')}</p></div></Popover>;
 }
 export function MoneyCard({source,board,view,compact=false}:{source:Card;board:string;view?:View;compact?:boolean}) {
   const balance=source.meters?.find(m=>m.id==='balance'),{keys,meters,error}=useShownKeys(source,view,board);
@@ -60,7 +82,7 @@ export function AccessMark({id}:{id:string}) {
   const tone=accessTone(access,now);
   if(tone===null)return null;
   const text=access.error?new ApiError(400,access.error):null;
-  const expiry=access.expiresAt===null?t('sources.noExpiry'):access.expiresAt<=now?t('money.expired'):t('money.expirySoon',{time:stamp(access.expiresAt)});
+  const expiry=access.expiryKind==='unknown'?t('sources.unknownExpiry'):access.expiresAt===null?t('sources.noExpiry'):access.expiresAt<=now?t('money.expired'):t('money.expirySoon',{time:stamp(access.expiresAt)});
   const lead=text?messageOf(text):expiry;
   return <span data-time="access-expiry"><Popover label={lead} up align="left" triggerClass={`tray-pill access-mark${tone==='neutral'?'':` is-${tone}`}`} trigger={<>
     <svg className="tray-icon" viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><circle cx="8" cy="8" r="4"/><path d="m11 11 9 9m-5-5 3-3m-1 5 3-3"/></svg>
