@@ -24,8 +24,20 @@ write-only path: AES-256-GCM encryption before database writes, with its encrypt
 (KEK) outside the database and data directory. OpenRouter uses this path for a
 dedicated management key. That key can create, edit and delete provider keys; Quotum
 uses only fixed GET operations for identity, credits, workspaces and key measurements.
-Access without expiry requires explicit consent. Revoke the key at OpenRouter when
-it is no longer needed. Key names and measured spending are shared board data;
+DeepSeek uses the same protection for a dedicated API key and only
+`GET https://api.deepseek.com/user/balance`. That key may also authorize model requests;
+Quotum never exercises those rights. The endpoint reports neither identity nor expiry:
+its owner declares a private account identity and explicitly acknowledges unknown
+expiry. Same-account replacement is a human declaration the provider API cannot verify.
+Private account labels and credential details remain owner-only. Access without expiry
+or with unknown expiry requires its own explicit consent. Revoke keys with their
+provider when no longer needed. Key names and measured spending are shared board data;
+Access without expiry requires explicit consent. z.ai personal quota access uses the
+same encryption boundary with a dedicated ordinary API key, which may also permit
+model requests; Quotum calls only its fixed quota GET. Its unknown expiry has separate
+consent. Account identity is owner-declared: replacement requires explicit same-account
+confirmation and cannot verify it through the quota interface. Revoke the key with its
+provider when it is no longer needed. Key names and measured spending are shared board data;
 management secrets, raw creator ids, masked labels and raw key hashes are not.
 
 On a server, configure `QUOTUM_SECRET_KEY` or `QUOTUM_SECRET_KEY_FILE`; without it,

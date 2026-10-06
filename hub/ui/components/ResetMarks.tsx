@@ -1,9 +1,15 @@
 import {countdown, countdownChangesAt, earliest, stamp} from '../lib/format';
-import {freeResetExpiry, resetLabel, resetLabelChangesAt, type ResetLabel, type ResetStatus} from '../lib/resets';
+import {
+  freeResetExpiry,
+  resetLabel,
+  resetLabelChangesAt,
+  type ResetLabel,
+  type ResetStatus,
+} from '../lib/resets';
 import type {FreeResets as Free} from '../lib/types';
 import {useClock} from '../lib/clock';
 import {rich, t} from '../i18n';
-import {Popover} from './Popover';
+import {StatusMark} from './StatusMark';
 
 /**
  * One shape for each kind of news, so the marks differ without their colour: an announced
@@ -35,13 +41,21 @@ function headline(label: ResetLabel, now: number): {what: string; detail: string
   switch (label.key) {
     case 'in':
     case 'bankedIn':
-      return {what: t(`reset.${label.key}`, {time: countdown(label.at - now)}), detail: '', when: stamp(label.at)};
+      return {
+        what: t(`reset.${label.key}`, {time: countdown(label.at - now)}),
+        detail: '',
+        when: stamp(label.at),
+      };
     case 'announced':
       return {what: t('reset.announced'), detail: '', when: ''};
     case 'awaiting':
       return {what: t('reset.awaiting'), detail: '', when: stamp(label.at)};
     case 'possible':
-      return {what: t('reset.possible'), detail: label.chance !== null ? `${label.chance}%` : '', when: label.at !== null ? t('reset.until', {time: stamp(label.at)}) : ''};
+      return {
+        what: t('reset.possible'),
+        detail: label.chance !== null ? `${label.chance}%` : '',
+        when: label.at !== null ? t('reset.until', {time: stamp(label.at)}) : '',
+      };
     case 'done':
       return {what: t('reset.done'), detail: label.scope, when: stamp(label.event.at)};
     case 'policy':
@@ -50,11 +64,13 @@ function headline(label: ResetLabel, now: number): {what: string; detail: string
 }
 
 /** The same in plain text, for the mark's name and tooltip: a line each. */
-const nameOf = ({what, detail, when}: ReturnType<typeof headline>) => [detail ? `${what} (${detail})` : what, when].filter(Boolean).join('\n');
+const nameOf = ({what, detail, when}: ReturnType<typeof headline>) =>
+  [detail ? `${what} (${detail})` : what, when].filter(Boolean).join('\n');
 
 /** Only numbers make it onto the mark: how soon an announced reset comes, or how likely a possible one is. */
 function markText(label: ResetLabel, now: number) {
-  if (label.key === 'in' || label.key === 'bankedIn') return t('reset.mark', {time: countdown(label.at - now)});
+  if (label.key === 'in' || label.key === 'bankedIn')
+    return t('reset.mark', {time: countdown(label.at - now)});
   if (label.key === 'possible' && label.chance !== null) return `${label.chance}%`;
   return null;
 }
@@ -74,9 +90,12 @@ const host = (url: string) => {
  * data it is: the trackers are credited wherever their data is shown.
  */
 export function ResetNews({status}: {status: ResetStatus}) {
-  const now = useClock(now => {
+  const now = useClock((now) => {
     const label = resetLabel(status, now);
-    return earliest(resetLabelChangesAt(status, now), label?.key === 'in' || label?.key === 'bankedIn' ? countdownChangesAt(label.at, now) : null);
+    return earliest(
+      resetLabelChangesAt(status, now),
+      label?.key === 'in' || label?.key === 'bankedIn' ? countdownChangesAt(label.at, now) : null,
+    );
   });
   const label = resetLabel(status, now);
   return label && <ResetMark label={label} credit={status.credit} now={now} />;
@@ -85,13 +104,12 @@ export function ResetNews({status}: {status: ResetStatus}) {
 function ResetMark({label, credit, now}: {label: ResetLabel; credit: ResetStatus['credit']; now: number}) {
   const head = headline(label, now);
   const text = markText(label, now);
-  const hint = label.tone === 'accent' ? t('reset.hintScheduled') : label.key === 'possible' ? t('reset.hintWatch') : '';
+  const hint =
+    label.tone === 'accent' ? t('reset.hintScheduled') : label.key === 'possible' ? t('reset.hintWatch') : '';
   return (
-    <Popover
+    <StatusMark
       label={nameOf(head)}
-      triggerClass={`tray-pill reset-mark is-${label.tone}`}
-      up
-      align="left"
+      className={`reset-mark is-${label.tone}`}
       trigger={
         <>
           <NewsIcon label={label} />
@@ -99,40 +117,38 @@ function ResetMark({label, credit, now}: {label: ResetLabel; credit: ResetStatus
         </>
       }
     >
-      <div className="tray-panel">
-        <div className="tray-panel-head">
-          <p className="tray-panel-lead">
-            {head.what}
-            {head.detail && <span className="tray-panel-tag">{head.detail}</span>}
-          </p>
-          {head.when && <p className="tray-panel-when">{head.when}</p>}
-        </div>
-        {hint && <p>{hint}</p>}
-        {label.event.text && <p className="tray-panel-quote">{label.event.text}</p>}
-        <p className="tray-panel-links">
-          {label.link && (
-            <span>
-              {rich('reset.source', {
-                link: (
-                  <a href={label.link} target="_blank" rel="noopener noreferrer">
-                    {host(label.link)}
-                  </a>
-                ),
-              })}
-            </span>
-          )}
+      <div className="tray-panel-head">
+        <p className="tray-panel-lead">
+          {head.what}
+          {head.detail && <span className="tray-panel-tag">{head.detail}</span>}
+        </p>
+        {head.when && <p className="tray-panel-when">{head.when}</p>}
+      </div>
+      {hint && <p>{hint}</p>}
+      {label.event.text && <p className="tray-panel-quote">{label.event.text}</p>}
+      <p className="tray-panel-links">
+        {label.link && (
           <span>
-            {rich('reset.credit', {
-              name: (
-                <a href={credit.url} target="_blank" rel="noopener noreferrer">
-                  {credit.name}
+            {rich('reset.source', {
+              link: (
+                <a href={label.link} target="_blank" rel="noopener noreferrer">
+                  {host(label.link)}
                 </a>
               ),
             })}
           </span>
-        </p>
-      </div>
-    </Popover>
+        )}
+        <span>
+          {rich('reset.credit', {
+            name: (
+              <a href={credit.url} target="_blank" rel="noopener noreferrer">
+                {credit.name}
+              </a>
+            ),
+          })}
+        </span>
+      </p>
+    </StatusMark>
   );
 }
 
@@ -153,14 +169,21 @@ export function FreeResets({resets}: {resets: Free}) {
   const groups = freeResetExpiry(resets);
   const label = [
     count,
-    ...groups.map(g => (g.expiresAt !== null ? t('card.freeResetsBy', {count: g.count, date: stamp(g.expiresAt)}) : t('card.freeResetsNoDate', {count: g.count}))),
+    ...groups.map((g) =>
+      g.expiresAt !== null
+        ? t('card.freeResetsBy', {count: g.count, date: stamp(g.expiresAt)})
+        : t('card.freeResetsNoDate', {count: g.count}),
+    ),
   ].join('\n');
-  const rows = groups.map(g => ({key: String(g.expiresAt), when: g.expiresAt !== null ? stamp(g.expiresAt) : t('card.freeResetsNever'), count: g.count}));
+  const rows = groups.map((g) => ({
+    key: String(g.expiresAt),
+    when: g.expiresAt !== null ? stamp(g.expiresAt) : t('card.freeResetsNever'),
+    count: g.count,
+  }));
   return (
-    <Popover
+    <StatusMark
       label={label}
-      triggerClass="tray-pill"
-      up
+      align="right"
       trigger={
         <>
           <TicketIcon />
@@ -168,23 +191,21 @@ export function FreeResets({resets}: {resets: Free}) {
         </>
       }
     >
-      <div className="tray-panel">
-        <div className="tray-panel-head">
-          <p className="tray-panel-lead">{count}</p>
-        </div>
-        <dl className="tray-panel-table">
-          <div className="tray-panel-table-head" aria-hidden="true">
-            <span>{t('card.freeResetsExpires')}</span>
-            <span>{t('card.freeResetsCount')}</span>
-          </div>
-          {rows.map(row => (
-            <div key={row.key}>
-              <dt>{row.when}</dt>
-              <dd>{row.count}</dd>
-            </div>
-          ))}
-        </dl>
+      <div className="tray-panel-head">
+        <p className="tray-panel-lead">{count}</p>
       </div>
-    </Popover>
+      <dl className="tray-panel-table">
+        <div className="tray-panel-table-head" aria-hidden="true">
+          <span>{t('card.freeResetsExpires')}</span>
+          <span>{t('card.freeResetsCount')}</span>
+        </div>
+        {rows.map((row) => (
+          <div key={row.key}>
+            <dt>{row.when}</dt>
+            <dd>{row.count}</dd>
+          </div>
+        ))}
+      </dl>
+    </StatusMark>
   );
 }

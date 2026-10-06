@@ -1,5 +1,8 @@
+import {DEFAULT_CURRENCY} from '../../server/domain/currency';
+import {useCurrencyContext} from '../lib/board';
 import {useRef, useState, useSyncExternalStore} from 'react';
 import type {Kind} from '../lib/types';
+import {unitLabel} from '../lib/money';
 import {useMoneyUnits} from '../lib/board';
 import {setPrefs, usePrefs} from '../lib/prefs';
 import {PERIODS, periodLabel, periodOf, step, stepChangesAt} from '../lib/periods';
@@ -13,7 +16,7 @@ import {Popover} from './Popover';
 
 /** Weekly or 5-hour windows. */
 function KindSwitch({value, onChange}: {value: string; onChange: (kind: string) => void}) {
-  const units=useMoneyUnits();
+  const units=useMoneyUnits(),context=useCurrencyContext();
   return (
     <Segmented
       value={value}
@@ -21,7 +24,7 @@ function KindSwitch({value, onChange}: {value: string; onChange: (kind: string) 
       options={[
         ['weekly', t('history.weekly')],
         ['session', t('history.session')],
-        ...units.map(unit=>[unit,unit] as [string,string]),
+        ...units.map(unit=>[unit,unit===DEFAULT_CURRENCY?context.target.symbol:unitLabel(unit)] as [string,string]),
       ]}
       label={t('history.kind')}
     />

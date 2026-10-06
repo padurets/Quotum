@@ -8,7 +8,7 @@ const cellMs = 5 * minute;
 const now = 1_800_000_000_000;
 const cell = now - 60 * minute;
 
-const line = (key: string, points: [number, number, number][]) => ({key, points, staleAfterMs: 10 * minute}) as Line;
+const line = (key: string, points: [number, number, number][]) => ({key,points,staleAfterMs:10*minute,sourceId:key,windowId:key,name:key,provider:'codex',kind:'weekly',label:null,minutes:null,color:'',dash:'',current:0,consumed:0,coveredMs:0,remainingAtStart:null,remainingAtEnd:null,work:null}) as Line;
 const plan = (lines: string[], value: number): PlanLine => ({key: lines[0], lines, color: '', runs: [[[now - 120 * minute, value], [now, value]]]});
 
 test('a row for every line, in the legend’s order, empty where a line has nothing in the cell', () => {

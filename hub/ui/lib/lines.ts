@@ -10,10 +10,11 @@ import {covered, type Coverage} from './historyPlot';
 
 /** A series of the history as the chart and the table show it: named, coloured, with its value now. */
 export type PlotBlock = {from: number; to: number; gap: boolean; points: readonly [at: number, remaining: number, segment: number, hold: number][]};
-export type PlotSeries = Pick<HistorySeries, 'sourceId' | 'windowId' | 'points' | 'staleAfterMs'> & {blocks?: {block: PlotBlock; join: boolean}[]};
-type LineName = Pick<Win, 'kind' | 'label' | 'minutes'> & {provider: string; key: string; name: string; color: string; dash: string; current: number};
+export type CapCell = {at:number;from:number;to:number;value:number};
+export type PlotSeries = Pick<HistorySeries, 'sourceId' | 'windowId' | 'points' | 'staleAfterMs'> & {pointMode?:'cell'|'observation';capCells?:readonly CapCell[]} & {blocks?: {block: PlotBlock; join: boolean}[]};
+type LineName = Pick<Win, 'kind' | 'label' | 'minutes'> & {provider: string; key: string; name: string; color: string; dash: string; current: number|null};
 export type PlotLine = PlotSeries & LineName;
-export type Line = HistorySeries & LineName;
+export type Line = HistorySeries & LineName & {pointMode?:'cell'|'observation';capCells?:readonly CapCell[]};
 
 /**
  * The board's series of one kind of window that have data in the period. Only what the
@@ -60,7 +61,7 @@ export function* linesPrepared<T extends PlotSeries>(history: {series: readonly 
  * a short period, and a value holds until the next one; the last one, only as long as it
  * is fresh (`holdMs`), as a gap between two would be.
  */
-export function valueIn(points: Line['points'], cell: number, now: number, holdMs: number, coverage?: Coverage): number | undefined {
+export function valueIn(points: Line['points'], cell: number, now: number, holdMs: number, coverage?: Coverage,pointMode?:'cell'|'observation'): number | undefined {
   if (cell > now) return undefined;
   let low = 0;
   let high = points.length - 1;
@@ -73,9 +74,10 @@ export function valueIn(points: Line['points'], cell: number, now: number, holdM
     } else high = middle - 1;
   }
   if (found < 0) return undefined;
-  const [at, value, segment] = points[found];
+  const [at, value, segment,validUntil] = points[found];
   // An unread interval may contain a newer measurement or a break in this line.
   if (coverage && !covered(coverage, at, cell + 1)) return undefined;
+  if(pointMode==='observation')return Number.isSafeInteger(validUntil)&&cell<validUntil!?value:undefined;
   const next = points[found + 1];
   if (at === cell) return value;
   return next ? (next[2] === segment ? value : undefined) : cell - at <= holdMs ? value : undefined;

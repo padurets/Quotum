@@ -70,6 +70,22 @@ test('OpenRouter verifies management authority, stable organization identity and
   await assert.rejects(connector(op=>op==='key'?{data:{...current.data,is_management_key:false,is_provisioning_key:true}}:undefined).identify(secret),/credential_wrong_type/);
 });
 
+test('reported BYOK totals and key dates remain exact data without changing wallet accounting',async()=>{
+  const c=connector(op=>op==='keys'?JSON.stringify({data:[key(1,{byok_usage_daily:.1000005,byok_usage_weekly:2,byok_usage_monthly:null,created_at:'2025-08-24T10:30:00Z',updated_at:'2025-08-24T15:45:00Z'})]}).replace('"byok_usage":20','"byok_usage":9007199254.740993'):undefined);
+  const result=await c.measure(secret,await c.identify(secret)),part=result.measurement!.keys[0];
+  assert.deepEqual(part.byokUsage,{total:'9007199254740993',day:'100001',week:'2000000',month:null});
+  assert.equal(part.createdAt,Date.parse('2025-08-24T10:30:00Z'));assert.equal(part.updatedAt,Date.parse('2025-08-24T15:45:00Z'));
+  assert.equal(result.measurement!.meters.find(m=>m.id==='usage')?.amount,'37104969');
+  const store=new Store(':memory:',now);
+  try {
+    const source=store.source('openrouter',result.account,now);store.record(source,result.measurement!);
+    const saved=store.meters.contexts.history(source,'key:'+part.id,now,now+1)[0].value;
+    assert.equal(saved.type,'key');if(saved.type!=='key')throw new Error('wrong context');
+    assert.deepEqual(saved.byokUsage,part.byokUsage);assert.equal(saved.createdAt,part.createdAt);
+    for(const value of [secret.toString(),'private-person','private-workspace',key(1).hash])assert.equal(JSON.stringify(saved).includes(value),false);
+  }finally{store.close();}
+});
+
 test('a monthly key cap uses authoritative remainder rather than lifetime usage and scrubs supplier echoes',async()=>{
   const c=connector(op=>op==='keys'?{data:[key(1,{name:secret.toString().toUpperCase()}),key(2,{limit:0,limit_remaining:0}),key(3,{limit:10,limit_remaining:-1,disabled:true})]}:undefined);
   const id=await c.identify(secret),answer=await c.measure(secret,id);

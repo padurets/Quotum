@@ -42,6 +42,6 @@ export function sourceKeyRoutes(app:FastifyInstance,hub:Hub,guards:Guards) {
     const meters=(state.meters??[]).filter(m=>m.id.startsWith('key:')&&ids.has(m.id.split(':')[1])).map(m=>({...m,stale:m.stale||now>m.at+m.staleAfterMs||m.kind==='cap'&&m.resetAt!==null&&m.resetAt<=now}));
     let next:string|null=null;
     if(!selected&&start+page.length<keys.length){const body=Buffer.from(JSON.stringify({source,revision,id:page.at(-1)!.id})).toString('base64url');next=body+'.'+sign(body).toString('base64url');}
-    return {keys:page.map(k=>({...k,periods:{day:utcPeriods(k.at).day===utcPeriods(now).day?k.periods.day:null,week:utcPeriods(k.at).week===utcPeriods(now).week?k.periods.week:null,month:utcPeriods(k.at).month===utcPeriods(now).month?k.periods.month:null}})),meters,total:keys.length,inventory:state.inventory??null,next};
+    return {keys:page.map(k=>{const at=utcPeriods(k.at),current=utcPeriods(now);return {...k,periods:{day:at.day===current.day?k.periods.day:null,week:at.week===current.week?k.periods.week:null,month:at.month===current.month?k.periods.month:null},...(k.byokUsage?{byokUsage:{total:k.byokUsage.total,day:at.day===current.day?k.byokUsage.day:null,week:at.week===current.week?k.byokUsage.week:null,month:at.month===current.month?k.byokUsage.month:null}}:{})};}),meters,total:keys.length,inventory:state.inventory??null,next};
   });
 }

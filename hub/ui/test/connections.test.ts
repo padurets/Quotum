@@ -14,27 +14,75 @@ const nodes=(value:unknown):Node[]=>Array.isArray(value)?value.flatMap(nodes):va
 const flush=async()=>{for(let i=0;i<10;i++)await Promise.resolve();};
 
 function fixture(initialOwner='u'){
-  const hooks=preparationFixture(),errorLine={},reads:{resolve:(value:unknown)=>void;reject:(error:Error)=>void}[]=[];
+  const hooks=preparationFixture(),errorLine={},field={},reads:{resolve:(value:unknown)=>void;reject:(error:Error)=>void}[]=[];
+  const calls:{method:string;url:string;body:unknown}[]=[];
   const cleanups=new Set<()=>void>(),modal={};let userId=initialOwner;
   let notify:(event:unknown)=>void=()=>{};
-  const context={exports:{} as {ConnectedAccounts:(props:unknown)=>Node},require:(name:string)=>{
+  const context={crypto,window:{addEventListener:()=>{},removeEventListener:()=>{}},exports:{} as {ConnectedAccounts:(props:unknown)=>Node;ConnectSource:(props:unknown)=>Node},require:(name:string)=>{
     if(name==='react')return {useState:hooks.useState,useRef:hooks.useRef,useEffect:(effect:()=>void|(()=>void),deps:unknown[])=>hooks.useLayoutEffect(()=>{const cleanup=effect();if(!cleanup)return;cleanups.add(cleanup);return()=>{cleanups.delete(cleanup);cleanup();};},deps)};
     if(name==='react/jsx-runtime')return {jsx:(type:unknown,props:Node['props'])=>({type,props}),jsxs:(type:unknown,props:Node['props'])=>({type,props}),Fragment:'fragment'};
-    if(name.endsWith('/http'))return {ApiError,call:()=>new Promise((resolve,reject)=>reads.push({resolve,reject}))};
-    if(name.endsWith('/board'))return {useTitles:()=>({}),page:{listen:(listener:typeof notify)=>{notify=listener;return()=>{};}}};
-    if(name.endsWith('/providers'))return {PROVIDERS:{openrouter:{name:'OpenRouter'}}};
+    if(name.endsWith('/http'))return {ApiError,call:(method:string,url:string,body:unknown)=>{calls.push({method,url,body});return new Promise((resolve,reject)=>reads.push({resolve,reject}));}};
+    if(name.endsWith('/board'))return {useApp:()=>null,useTitles:()=>({}),page:{listen:(listener:typeof notify)=>{notify=listener;return()=>{};}}};
+    if(name.endsWith('/providers'))return {PROVIDERS:{openrouter:{name:'OpenRouter'},deepseek:{name:'DeepSeek'},zai:{name:'z.ai'}}};
     if(name.endsWith('/i18n'))return {t:(key:string)=>key};
     if(name.endsWith('/format'))return {stamp:()=>''};
-    if(name==='./Kit')return {ErrorLine:errorLine,Modal:modal};
+    if(name==='./Kit')return {Field:field,ErrorLine:errorLine,Modal:modal};
     if(name==='./Popover')return {};
     if(name==='./logos')return {logoOf:()=>''};
     throw new Error(name);
   }};
   runInNewContext(ts.transpileModule(readFileSync(new URL('../components/Connections.tsx',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
   const render=()=>{hooks.begin();const tree=context.exports.ConnectedAccounts({userId,trustedKeys:{available:true},onReplace:()=>{}});hooks.commit();return nodes(tree);};
+  const form=(provider='deepseek',replace:unknown=null)=>{hooks.begin();const node=context.exports.ConnectSource({provider,userId,replace,local:false,trustedKeys:{available:true},onClose:()=>{}}),tree=(node.type as (props:unknown)=>Node)(node.props);hooks.commit();return nodes(tree);};
   const reply={credentials:[{id:'c',provider:'openrouter',sourceId:null,hint:'abcd',lastError:null,expiresAt:null}]};
-  return {reads,reply,render,event:()=>notify({type:'hub',event:{type:'sourceAccess'}}),errors:()=>render().filter(n=>n.type===errorLine),rows:()=>render().filter(n=>typeof n.type==='function'&&n.props.name==='OpenRouter'),owner:(next:string)=>{userId=next;},unmount:()=>{for(const cleanup of cleanups)cleanup();cleanups.clear();},removing:()=>render().some(n=>n.type===modal)};
+  return {reads,calls,reply,render,form,field,event:()=>notify({type:'hub',event:{type:'sourceAccess'}}),errors:()=>render().filter(n=>n.type===errorLine),rows:()=>render().filter(n=>typeof n.type==='function'&&n.props.name==='OpenRouter'),owner:(next:string)=>{userId=next;},unmount:()=>{for(const cleanup of cleanups)cleanup();cleanups.clear();},removing:()=>render().some(n=>n.type===modal)};
 }
+
+test('the connection form keeps paging accounts and their attestations in the current page',async()=>{
+  const f=fixture(),first='11111111-1111-4111-8111-111111111111',second='22222222-2222-4222-8222-222222222222';
+  const select=()=>f.form().find(n=>n.type==='select')!;
+  const button=(key:string)=>f.form().find(n=>n.type==='button'&&n.props.children===key)!;
+  const change=(node:Node,value:string|boolean)=>(node.props.onChange as (event:unknown)=>void)({target:{value,checked:value}});
+  f.form();f.reads[0].resolve({accounts:[{id:first,name:'Personal',connected:true}],next:first});await flush();
+  const oldSelector=select();(button('sources.moreAccounts').props.onClick as ()=>void)();f.form();
+  assert.equal(select().props.disabled,true,'old page must not remain interactive while the new page loads');
+  assert.equal(button('sources.moreAccounts').props.disabled,true);assert.equal(button('sources.backAccounts').props.disabled,true);
+  // An obsolete selection callback must not make a hidden account submittable either.
+  change(oldSelector,first);change(f.form().find(n=>n.type===f.field&&n.props.type==='password')!,'synthetic-key');
+  const checks=()=>f.form().filter(n=>n.type==='input'&&n.props.type==='checkbox');
+  change(checks()[0],true);change(checks()[1],true);
+  await (f.form().find(n=>n.type==='form')!.props.onSubmit as (event:unknown)=>Promise<void>)({preventDefault:()=>{}});
+  assert.equal(f.calls.filter(c=>c.method==='POST').length,0,'a hidden account cannot be submitted');
+  f.reads[1].resolve({accounts:[{id:second,name:'Work',connected:false}],next:null});await flush();
+  assert.equal(select().props.value,'new');assert.equal(checks().length,1,'old same-account attestation is withdrawn');
+  change(select(),second);change(checks()[0],true);
+  const saving=(f.form().find(n=>n.type==='form')!.props.onSubmit as (event:unknown)=>Promise<void>)({preventDefault:()=>{}});
+  const post=f.calls.find(c=>c.method==='POST');assert.ok(post);
+  assert.deepEqual(JSON.parse(JSON.stringify((post.body as {account:unknown}).account)),{kind:'existing',id:second});
+  assert.equal((post.body as {sameAccount:boolean}).sameAccount,true);
+  f.reads[2].resolve({});await saving;
+  f.unmount();
+});
+
+for(const provider of ['deepseek','zai'])test(`${provider} replacement submits the shared same-account attestation and withdraws it on key changes`,async()=>{
+  const f=fixture(),record={id:'credential',provider,accountName:'Personal'};
+  const form=()=>f.form(provider,record),submit=()=> (form().find(n=>n.type==='form')!.props.onSubmit as (e:unknown)=>Promise<void>)({preventDefault:()=>{}});
+  const change=(node:Node,value:string|boolean)=>(node.props.onChange as (e:unknown)=>void)({target:{value,checked:value}});
+  const secret=()=>form().find(n=>n.type===f.field&&n.props.type==='password')!;
+  const checks=()=>form().filter(n=>n.type==='input'&&n.props.type==='checkbox');
+  form();change(secret(),'synthetic-first-key');await submit();assert.equal(f.calls.length,0);
+  for(const checkbox of checks())change(checkbox,true);
+  if(provider==='zai') {
+    const confirmation=submit();f.reads[0].reject(new ApiError(409,'credential_expiry_confirmation'));await confirmation;await flush();
+    assert.equal(checks().length,2);for(const checkbox of checks())change(checkbox,true);
+  }
+  const saving=submit(),post=f.calls.at(-1)!;
+  assert.equal(post.url,'/api/credentials/credential');
+  assert.deepEqual(JSON.parse(JSON.stringify(post.body)),{secret:'synthetic-first-key',sameAccount:true,allowUnknownExpiry:true});
+  f.reads.at(-1)!.resolve({});await saving;
+  const count=f.calls.length;change(secret(),'synthetic-second-key');await submit();assert.equal(f.calls.length,count,'a new key needs a new same-account confirmation');
+  f.unmount();
+});
 
 test('a recovered owner credential list clears the earlier network error',async()=>{
   const f=fixture();f.render();f.reads[0].reject(new Error('offline'));await flush();
