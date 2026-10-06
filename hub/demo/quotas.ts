@@ -8,7 +8,7 @@ import {decodeZai,mapZai,zai} from '../server/connectors/zai.js';
 /** Stable quota states; confirmations and replacement races are held by tests. */
 export const QUOTA_SCENES=[
   {id:'zero',expect:['credit-zero','reset-unknown'],about:'real zero usage with reported credit allowances'},
-  {id:'used',expect:['credit-40-20','independent-caps'],about:'five-hour and weekly quota remaining as percentages with exact credit details'},
+  {id:'used',expect:['credit-40-20','independent-caps'],about:'five-hour and weekly percentages in the shared subscription card, chart and table, with exact credit details'},
   {id:'near',expect:['credit-critical'],about:'a subscription near its quota limit'},
   {id:'exhausted',expect:['credit-exhausted'],about:'usage exceeding a reported allowance'},
   {id:'closed',expect:['credit-closed'],about:'zero allowance without a percentage'},

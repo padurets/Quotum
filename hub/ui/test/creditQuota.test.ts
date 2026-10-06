@@ -16,7 +16,8 @@ import {QUOTA_IDS} from '../../server/domain/meters';
 import {t} from '../i18n';
 import {readout} from '../lib/readout';
 import {meterPointIn,moneyTotal} from '../lib/moneyView';
-import {moneySelection,DEFAULT_MONEY} from '../lib/moneySelection';
+import {subscriptionSelection} from '../lib/subscription';
+import {EMPTY_VIEW} from '../../server/domain/view';
 import {setLocale} from '../i18n';
 import {mapZai,decodeZai} from '../../server/connectors/zai';
 import {meterCells,composeMeters} from '../../server/domain/meterHistory';
@@ -117,9 +118,9 @@ test('a passed reset time waits for evidence instead of asserting that the windo
   }finally{setLocale('en');}
 });
 
-test('credit selection defaults to both caps without adding them or manufacturing spending',()=>{
-  const selected=moneySelection([card],[],{...DEFAULT_MONEY,unit:'credits:zai'});
-  assert.deepEqual(selected.selection?.ids.map(([,id])=>id),['quota:credit:5h','quota:credit:week']);
+test('ordinary subscription history selects both caps without manufacturing spending',()=>{
+  const selected=subscriptionSelection([card],EMPTY_VIEW);
+  assert.deepEqual(selected?.ids.map(([,id])=>id),['quota:credit:5h','quota:credit:week']);
   const row={...card.meters![0],previousAt:null};
   const series=composeMeters([{from:now,meterSeries:meterCells({source:card.id,meter:row.id,readings:[row],spans:[{from:now,to:now,staleAfterMs:204000}]},row.unit,now,now+600000,60000)}],60000,now,now+600000)[0];
   assert.equal(moneyTotal(series,now,now+600000).amount,null);

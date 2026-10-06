@@ -41,7 +41,7 @@ export function MoneyHistory({arrange}:{arrange:Arrange}) {
   const now=useClock(now=>frameChangesAt(selected,history?.cellMs??60_000,now));
   const frame=frameOf(selected,{range:prefs.range,horizon:prefs.horizon},now,start),measured=measuredTo(frame,history,selected,prefs.range);
   const original=history?.meterSeries?.filter(s=>s.unit===prefs.money.unit)??[];
-  const unit=prefs.money.unit??'USD',creditMode=unit.startsWith('credits:');
+  const unit=prefs.money.unit??'USD';
   const prepared=usePrepared(function* () {
     const entries:MeterHistory[]=[],visible:MeterHistory[]=[];
     let low:bigint|null=null,high:bigint|null=null;
@@ -73,7 +73,7 @@ export function MoneyHistory({arrange}:{arrange:Arrange}) {
   const axis=useMemo(()=>{
     const origin=model?.origin??0n,span=model?.span??1_000_000n,pad=model?.pad??1n;
     const min=-Number(pad)/1_000_000,max=Number(span+pad)/1_000_000;
-    return {min,max,ticks:Array.from({length:5},(_,i)=>min+(max-min)*i/4),label:t(creditMode?'quota.remaining':'money.value')+' ('+unitLabel(unit)+')',
+    return {min,max,ticks:Array.from({length:5},(_,i)=>min+(max-min)*i/4),label:t('money.value')+' ('+unitLabel(unit)+')',
       rawValue:(key:string,at:number)=>{const series=entries.find(s=>moneyIdentity(s)===key);return series&&pointAt(series,at,strip?.cell??history?.cellMs??60_000)?.value||'—';},
       formatTick:(value:number)=>amountText((origin+BigInt(Math.round(value*1_000_000))).toString(),unit),
       formatValue:(key:string,_value:number,at:number)=>{const series=entries.find(s=>moneyIdentity(s)===key);return money(series&&pointAt(series,at,strip?.cell??history?.cellMs??60_000)?.value,unit,true);},
@@ -84,8 +84,8 @@ export function MoneyHistory({arrange}:{arrange:Arrange}) {
   },[model,unit,locale,history?.cellMs,strip?.cell]);
   const answered=history?.range===(selected?timeRangeKey(selected):prefs.range);
   return <section className={`panel history${loading?' is-loading':''}`} data-widget={HISTORY} ref={panel}>
-    <div className="panel-head"><h2>{t(creditMode?'quota.remaining':prefs.money.view==='spending'?'money.spending':'money.balance')} ({unitLabel(unit)})</h2><Popover label={t('history.settings')} icon={<SlidersIcon/>}>
-      {!creditMode&&<div className="popover-pad"><Segmented value={prefs.money.view} onChange={view=>setPrefs({money:{...prefs.money,view}})} options={[["balance",t('money.balance')],["spending",t('money.spending')]]} label={t('money.value')}/></div>}
+    <div className="panel-head"><h2>{t(prefs.money.view==='spending'?'money.spending':'money.balance')} ({unitLabel(unit)})</h2><Popover label={t('history.settings')} icon={<SlidersIcon/>}>
+      <div className="popover-pad"><Segmented value={prefs.money.view} onChange={view=>setPrefs({money:{...prefs.money,view}})} options={[["balance",t('money.balance')],["spending",t('money.spending')]]} label={t('money.value')}/></div>
       <MoneySettings sources={sources} hidden={arrange.view.hidden} series={original}/>
       {arrange.owner&&<HideRow onHide={()=>arrange.update(v=>({...v,hidden:[...v.hidden,HISTORY]}))}>{t('widget.hide')}</HideRow>}
     </Popover></div>
@@ -97,21 +97,20 @@ export function MoneyHistory({arrange}:{arrange:Arrange}) {
 }
 export function MoneyTable({arrange}:{arrange:Arrange}) {
   useLocale();const {history,error}=useHistory(),sources=useNamed(arrange.view.names),prefs=usePrefs();
-  const creditMode=prefs.money.unit?.startsWith('credits:');
-  const columns=([['value','money.value'],['spending','money.spending'],['topup','money.topup']] as const).filter(([id])=>(!creditMode||id==='value')&&columnShown(arrange.view,FORECAST,id));
+  const columns=([['value','money.value'],['spending','money.spending'],['topup','money.topup']] as const).filter(([id])=>columnShown(arrange.view,FORECAST,id));
   return <section className="panel forecast" data-widget={FORECAST}>
-    <div className="panel-head"><h2>{t(creditMode?'quota.measurements':'money.spending')} ({unitLabel(prefs.money.unit??'')})</h2>{arrange.owner&&<Popover label={t('forecast.settings')} icon={<SlidersIcon/>}>
-      {([['value','money.value'],['spending','money.spending'],['topup','money.topup']] as const).filter(([id])=>!creditMode||id==='value').map(([id,label])=><SwitchRow key={id} on={columnShown(arrange.view,FORECAST,id)} onChange={on=>arrange.update(view=>withColumn(view,FORECAST,id,on))}>{t(label)}</SwitchRow>)}
+    <div className="panel-head"><h2>{t('money.spending')} ({unitLabel(prefs.money.unit??'')})</h2>{arrange.owner&&<Popover label={t('forecast.settings')} icon={<SlidersIcon/>}>
+      {([['value','money.value'],['spending','money.spending'],['topup','money.topup']] as const).map(([id,label])=><SwitchRow key={id} on={columnShown(arrange.view,FORECAST,id)} onChange={on=>arrange.update(view=>withColumn(view,FORECAST,id,on))}>{t(label)}</SwitchRow>)}
       <HideRow onHide={()=>arrange.update(view=>withHidden(view,FORECAST,true))}>{t('widget.hide')}</HideRow>
     </Popover>}</div><SelectionNotice/>
     {history&&<p className="drawer-note">{t('money.interval',{from:stamp(history.since),to:stamp(history.to)})}</p>}
     {error&&<p className="form-error">{t('money.historyLimit')}</p>}
-    <div className="table-wrap"><table className="monetary-table"><thead><tr><th>{t(creditMode?'quota.remaining':'money.key')}</th>{columns.map(([id,label])=><th key={id}>{t(label)}</th>)}{creditMode&&<><th>{t('money.limitTotal')}</th><th>{t('money.reset')}</th></>}</tr></thead><tbody>{history?.meterSeries?.filter(s=>s.unit===prefs.money.unit).map(s=><tr key={moneyIdentity(s)}><td>{nameOf(s,sources.find(c=>c.id===s.sourceId)?.title??s.sourceId)}</td>{columns.map(([id])=>{
+    <div className="table-wrap"><table className="monetary-table"><thead><tr><th>{t('money.key')}</th>{columns.map(([id,label])=><th key={id}>{t(label)}</th>)}</tr></thead><tbody>{history?.meterSeries?.filter(s=>s.unit===prefs.money.unit).map(s=><tr key={moneyIdentity(s)}><td>{nameOf(s,sources.find(c=>c.id===s.sourceId)?.title??s.sourceId)}</td>{columns.map(([id])=>{
       if(id==='value')return <td key={id} title={money(s.end,s.unit,true)}>{money(s.end,s.unit)}</td>;
       if(id==='spending'&&s.kind==='cap'||id==='topup'&&s.kind!=='balance')return <td key={id}>—</td>;
       const topup=id==='topup',total=moneyTotal(s,history.since,history.to,topup),steps=topup?s.topupUnlocated:s.unlocated;
       const title=[total.unknown?t('money.unknown'):total.partial?t('money.partial'):'',...steps.map(p=>`${money(p.amount,s.unit,true)}\n${stamp(p.from)} — ${stamp(p.to)}`)].filter(Boolean).join('\n');
       return <td key={id} title={title}>{money(total.amount,s.unit)}{total.partial&&<small className="money-partial">*</small>}</td>;
-    })}{creditMode&&<><td>{money(s.points.at(-1)?.semantics?.limit,s.unit)}</td><td>{s.points.at(-1)?.semantics?.resetAt?stamp(s.points.at(-1)!.semantics!.resetAt!):t('limit.resetUnknown')}</td></>}</tr>)}</tbody></table></div>
+    })}</tr>)}</tbody></table></div>
   </section>;
 }

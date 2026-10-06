@@ -168,6 +168,10 @@ and platform smoke checks still apply.
 - Subscription cards and compact rows share the percentage-limit layout and period
   names. Provider-specific amounts and allowances belong in value details; the
   provider's storage unit does not define a separate card layout.
+- Subscription analytics share the same period switches, percentage chart and table,
+  including hub-measured caps. Convert a historical cap with its own reported allowance
+  and observation bounds; never reinterpret it using the current allowance or invent
+  spending, forecasts or agent-work attribution.
 - Devices and provider accounts connect through My connections. Account settings hold
   profile and app settings. A widget's display switches live in its own settings;
   measurement tables do not change chart selections.

@@ -371,10 +371,13 @@ interface has no versioned quota OpenAPI schema. Invalid or missing readings ret
 last valid values without refreshing them. An allowance does not guarantee model
 availability or concurrency.
 
-Choose **z.ai credits** in analytics for the existing chart and measurement table.
-Both quotas are selected by default; they overlap and are never added, converted to
-money, forecast or used for native quota notifications. Gaps and expired readings
-stay unknown in history. Only source holders may refresh or change frequency.
+Both quotas also appear in the ordinary subscription chart and measurement table:
+choose **5 hours** or **Weekly**, alongside the other subscriptions. The chart's legend,
+source colours, time range and period visibility are shared. Historical percentages
+use the allowance reported at each measurement. The quotas overlap and are never
+added or converted to money. Forecasts, agent-work attribution and native quota
+notifications are unavailable for this provider. Gaps and expired readings stay
+unknown in history. Only source holders may refresh or change frequency.
 
 Every new connection creates a separate source local to its owner. Replacing a key
 requires confirmation that it belongs to the same account and preserves history;

@@ -3,7 +3,7 @@ import {useBoardId,type Named} from '../lib/board';
 import {ApiError,call} from '../lib/http';
 import {archivedKeyGroups,moneySelection} from '../lib/moneySelection';
 import {usePrefs,setPrefs} from '../lib/prefs';
-import {capName,keyName} from '../lib/money';
+import {keyName} from '../lib/money';
 import type {MeterHistory} from '../lib/moneyView';
 import {MAX_METERS} from '../../server/domain/meterHistory';
 import {t} from '../i18n';
@@ -109,22 +109,4 @@ export function KeyMoneySettings({sources,hidden,series}:{sources:readonly Named
   </>;
 }
 
-export function MoneySettings(props:Parameters<typeof KeyMoneySettings>[0]) {
-  const prefs=usePrefs(),unit=prefs.money.unit;
-  if(!unit?.startsWith('credits:'))return <KeyMoneySettings {...props}/>;
-  return <QuotaSettings {...props}/>;
-}
-function QuotaSettings({sources,hidden}:Parameters<typeof KeyMoneySettings>[0]) {
-  const prefs=usePrefs(),unit=prefs.money.unit!;
-  const selected=moneySelection(sources,hidden,prefs.money).selection?.ids??[];
-  const toggle=(id:string,meter:string,on:boolean)=>{
-    const ids=on?[...selected,[id,meter] as [string,string]]:selected.filter(([s,m])=>s!==id||m!==meter);
-    if(ids.length>MAX_METERS)return;
-    setPrefs({money:{...prefs.money,removed:0,selected:{...prefs.money.selected,[unit]:ids}}});
-  };
-  return <><div className="popover-title">{t('source.show')}</div><p className="popover-note">{selected.length} / {MAX_METERS}</p>
-    {sources.filter(s=>!hidden.includes('source:'+s.id)&&s.meters?.some(m=>m.unit===unit)).map(source=><div key={source.id} className="popover-section"><div className="popover-title">{source.title}</div>
-      {source.meters?.filter(m=>m.kind==='cap'&&m.unit===unit).map(m=>{const on=selected.some(([s,id])=>s===source.id&&id===m.id);return <SwitchRow key={m.id} on={on} disabled={!on&&selected.length>=MAX_METERS} onChange={on=>toggle(source.id,m.id,on)}>{capName(m)}</SwitchRow>;})}
-    </div>)}
-    <p className="popover-note">{t('quota.budgetOnly')}</p></>;
-}
+export const MoneySettings=KeyMoneySettings;

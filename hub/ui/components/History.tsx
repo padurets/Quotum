@@ -10,7 +10,8 @@ import {MoneyHistory} from './MoneyAnalytics';
 import {setTimeRange, timeRangeKey, useTimeRange} from '../lib/timeRange';
 import {frameChangesAt, frameOf, measuredTo} from '../lib/periods';
 import {HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
-import {chartEventsPrepared, chartResetsPrepared, linesPrepared, type PlotLine} from '../lib/lines';
+import {chartEventsPrepared, chartResetsPrepared, type PlotLine} from '../lib/lines';
+import {subscriptionLinesPrepared,subscriptionPlotLinesPrepared,subscriptionOverflow} from '../lib/subscription';
 import {lineRegistry} from '../lib/plotRegistry';
 import {Chart, type Marker} from './Chart';
 import {chartMoments, type ForecastLine, type PlanLine} from '../lib/readout';
@@ -90,6 +91,7 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
   const news = useResetNews();
   const prefs = usePrefs();
   const {view} = arrange;
+  const omitted=subscriptionOverflow(sources,view);
   // Series names and markers are text: they are rebuilt when the language changes.
   const locale = useLocale();
   // The chart moves to the period asked for at once, drawing the answer it has until the
@@ -121,20 +123,20 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
   const from = frame.from;
   const measured = measuredTo(frame, history, selected, prefs.range);
   const prepared = usePrepared(function* () {
-    const answered = yield* linesPrepared(history, sources, view, prefs.kind);
+    const answered = yield* subscriptionLinesPrepared(history, sources, view, prefs.kind);
     let lines: PlotLine[] = answered;
     let nextRegistry: typeof registry.current = null;
     if (strip) {
       const previous = registry.current?.token === strip.token ? registry.current : {token: strip.token, seed: answered, lines: answered};
       const eligibleSeed = previous.seed.filter(line => answered.some(current => current.key === line.key));
-      lines = lineRegistry(eligibleSeed, previous.lines, yield* linesPrepared(strip, sources, view, prefs.kind));
+      lines = lineRegistry(eligibleSeed, previous.lines, yield* subscriptionPlotLinesPrepared(strip, sources, view, prefs.kind));
       nextRegistry = {token: strip.token, seed: previous.seed, lines};
     }
     const visible: PlotLine[] = [];
     for (const line of lines) {if (!prefs.muted[line.key]) visible.push(line); yield;}
     const scheduled = visible.some(line => line.provider === 'codex') ? (futureCodex?.scheduled?.scheduledFor ?? null) : null;
     const announced = frame.live ? scheduled : null;
-    const planAvailable = prefs.kind === 'weekly' && visible.some(line => planOf(view, line.sourceId) !== null);
+    const planAvailable = prefs.kind === 'weekly' && visible.some(line => !line.capCells&&planOf(view, line.sourceId) !== null);
     const planShown = planAvailable && prefs.showPlan;
     const ahead: {line: PlotLine; drawn: NonNullable<ReturnType<typeof forecastLinePrepared> extends Generator<void, infer R, void> ? R : never>}[] = [];
     for (const line of visible) {
@@ -156,10 +158,11 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
     for (const line of visible) {
       yield;
       const source = sources.find(s => s.id === line.sourceId), live = source?.windows.find(w => w.id === line.windowId);
-      if (!live?.resetAt || live.resetAt <= measured || !started(live, source?.successAt ?? null)) continue;
-      const key = `${line.sourceId}@${Math.round(live.resetAt / 60_000)}`;
+      const resetAt=line.capCells?source?.meters?.find(m=>m.id===line.windowId)?.resetAt:live?.resetAt;
+      if (!resetAt || resetAt <= measured || !line.capCells&&(!live||!started(live,source?.successAt??null))) continue;
+      const key = `${line.sourceId}@${Math.round(resetAt / 60_000)}`;
       if (seen.has(key)) continue;
-      seen.add(key); markers.push({key, at: live.resetAt, until: live.resetAt, label: t('chart.reset', {source: source ? sourceLabel(source) : line.provider}), color: line.color});
+      seen.add(key); markers.push({key, at: resetAt, until: resetAt, label: t('chart.reset', {source: source ? sourceLabel(source) : line.provider}), color: line.color});
     }
     for (const {event, lines: shown} of yield* chartEventsPrepared(strip?.events ?? history?.events ?? [], visible, strip?.from ?? from)) {
       const source = sources.find(s => s.id === event.sourceId), name = source ? sourceLabel(source) : shown[0].provider;
@@ -198,6 +201,7 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
         <HistorySettings arrange={arrange} planAvailable={model?.planAvailable ?? false} forecastAvailable={frame.live && (currentHints?.forecast ?? false)} horizonNote={frame.live && !model?.planShown && !model?.forecastShown} />
       </div>
 
+      {omitted>0&&<p className="drawer-note">{t('history.quotaOverflow',{count:omitted})}</p>}
       <Chart
           lines={model?.visible ?? []}
           plans={model?.plans}
@@ -232,7 +236,7 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
               <line x1="1" x2="17" y1="3" y2="3" stroke={line.color} strokeWidth="2.5" strokeLinecap="round" strokeDasharray={line.dash || undefined} />
             </svg>
             <span>{line.name}</span>
-            <b>{num(line.current)}%</b>
+            <b>{line.current===null?'—':`${num(line.current)}%`}</b>
           </button>
         ))}
         {!lines.length && <span className="legend-empty">{t('history.noLines')}</span>}

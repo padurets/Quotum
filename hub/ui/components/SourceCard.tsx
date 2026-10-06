@@ -22,6 +22,7 @@ import {RefreshAction} from './RefreshAction';
 import {refreshChangesAt, refreshPending, refreshText} from '../lib/refresh';
 import {ErrorLine, Segmented} from './Kit';
 import {useBubble} from './Tooltip';
+import {quotaPeriods,quotaRemaining} from '../lib/subscription';
 
 /** Where the plan expects the limit to be now: a mark on its meter, in whole percent, moved when that changes. */
 function PlanMark({w, measuredAt, weekly}: {w: Win; measuredAt: number | null; weekly: WeeklyPlan | null}) {
@@ -273,6 +274,7 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
   const hasWeekly = source.windows.some(w => w.kind === 'weekly');
   const planned = planOf(arrange.view, source.id) !== null;
   const owner = arrange.owner;
+  const periods=quotaPeriods(source);
 
   const unshare = async () => {
     setError(null);
@@ -291,13 +293,14 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
           <CardName source={source} arrange={arrange} />
         </>
       )}
-      {owner && source.windows.length > 1 && (
+      {owner && periods.length > 1 && (
         <>
           <div className="popover-title popover-section">{t('source.show')}</div>
-          {source.windows.map(w => {
+          {periods.map(w => {
             const key = windowKey(source.id, w.id);
+            const remaining=quotaRemaining(source,w.id);
             return (
-              <SwitchRow key={w.id} on={!hidden.has(key)} onChange={on => arrange.update(view => withWindowHidden(view, key, !on))} value={`${num(w.remaining)}%`}>
+              <SwitchRow key={w.id} on={!hidden.has(key)} onChange={on => arrange.update(view => withWindowHidden(view, key, !on))} value={remaining===null?'—':`${num(remaining)}%`}>
                 {windowName(w)}
               </SwitchRow>
             );
@@ -347,7 +350,7 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
  * the measurements go on, and lets the board's owner bring them back in one go.
  */
 function AllHidden({source, arrange}: {source: Card; arrange: Arrange}) {
-  const showAll = () => arrange.update(view => source.windows.reduce((next, w) => withWindowHidden(next, windowKey(source.id, w.id), false), view));
+  const showAll = () => arrange.update(view => quotaPeriods(source).reduce((next, w) => withWindowHidden(next, windowKey(source.id, w.id), false), view));
   return (
     <div className="card-empty">
       <EyeOffIcon />
@@ -467,6 +470,7 @@ export const SourceCard = memo(function SourceCard({id, arrange, boardId, person
   const mine = useMine(id);
   if (!source) return null;
   const visible = source.windows.filter(w => !isWindowHidden(arrange.view, source.id, w.id));
+  const periods=quotaPeriods(source),shownPeriods=periods.filter(w=>!isWindowHidden(arrange.view,source.id,w.id));
   const weekly = planOf(arrange.view, source.id);
   const takeOff = !personal && (arrange.owner || mine);
   const caps=hasSubscriptionCaps(source.provider);
@@ -485,12 +489,12 @@ export const SourceCard = memo(function SourceCard({id, arrange, boardId, person
       </div>
 
       <div className="limits">
-        {caps?<QuotaCard source={source}/>:source.meters&&<MoneyCard source={source} board={boardId} view={arrange.view}/>}
+        {caps?<QuotaCard source={source} ids={shownPeriods.map(w=>w.id)}/>:source.meters&&<MoneyCard source={source} board={boardId} view={arrange.view}/>}
         {visible.map(w => (
           <Limit key={w.id} w={w} measuredAt={source.successAt} weekly={weekly} />
         ))}
         {!caps && !source.windows.length && !source.meters?.length && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
-        {!!source.windows.length && !visible.length && <AllHidden source={source} arrange={arrange} />}
+        {!!periods.length && !shownPeriods.length && <AllHidden source={source} arrange={arrange} />}
       </div>
       <CardTray source={source} />
     </article>

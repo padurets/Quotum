@@ -49,8 +49,8 @@ export function KeyMetrics({part,meters,compact=false}:{part:KeyPart;meters:read
   const cap=meters.find(m=>m.id===`key:${part.id}:cap`);if(!cap)return null;
   return <CapMetrics cap={cap} name={keyName(part)} detail={[keyName(part),part.includeByok?t('money.byok'):''].filter(Boolean).join('\n')} status={<CapStatus part={part} cap={cap}/>} compact={compact}/>;
 }
-export function QuotaCard({source,compact=false}:{source:Card;compact?:boolean}) {
-  return <>{QUOTA_IDS.map(id=>{
+export function QuotaCard({source,ids=QUOTA_IDS,compact=false}:{source:Card;ids?:readonly string[];compact?:boolean}) {
+  return <>{ids.map(id=>{
     const cap=source.meters?.find(m=>m.id===id),used=cap?capPercent(cap):null;
     const detail=cap?`${money(capLeft(cap),cap.unit,true)}\n${t('money.of',{amount:money(cap.limit,cap.unit,true)})}\n${cap.resetAt===null?t('limit.resetUnknown'):stamp(cap.resetAt)}${used===null?`\n${t('money.exhausted')}`:''}`:t('quota.unavailable');
     return <PercentLimit key={id} name={capName({id,scope:null,label:null})} remaining={used===null?null:100-used}

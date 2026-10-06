@@ -12,7 +12,7 @@ import {covered, type Coverage} from './historyPlot';
 export type PlotBlock = {from: number; to: number; gap: boolean; points: readonly [at: number, remaining: number, segment: number, hold: number][]};
 export type CapCell = {at:number;from:number;to:number;value:number};
 export type PlotSeries = Pick<HistorySeries, 'sourceId' | 'windowId' | 'points' | 'staleAfterMs'> & {capCells?: readonly CapCell[];blocks?: {block: PlotBlock; join: boolean}[]};
-type LineName = Pick<Win, 'kind' | 'label' | 'minutes'> & {provider: string; key: string; name: string; color: string; dash: string; current: number};
+type LineName = Pick<Win, 'kind' | 'label' | 'minutes'> & {provider: string; key: string; name: string; color: string; dash: string; current: number|null};
 export type PlotLine = PlotSeries & LineName;
 export type Line = HistorySeries & LineName & {capCells?: readonly CapCell[]};
 

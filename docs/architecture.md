@@ -573,6 +573,15 @@ Subscription cards and compact rows use the same percentage-limit component as
 client-measured subscriptions. Exact credit amounts and allowances stay in value
 tooltips, and period names come from the shared subscription labels. Stored meter
 units and historical cap semantics remain unchanged.
+Subscription analytics project these caps into the ordinary five-hour and weekly
+percentage series, alongside client-measured windows. The page's history loader
+requests both cap periods with native window history; switching period does not
+create a separate credit mode or request. Each historical percentage uses that cell's
+own allowance and exclusive observation bounds. Source order, colours, legend keys,
+period visibility, time navigation and measurement-table rows are shared. Unknown
+allowances and unobserved intervals remain unknown. Cap-only sources have no native
+quota spending, plans, forecasts or agent-work attribution; those table cells are
+unavailable rather than zero.
 Missing or stale measurements keep their last confirmed values at full opacity; the
 dot explains the status and shows the last observation time. Key inactivity keeps its
 distinct dot state. Freshness clocks update these small marks, not the whole limit row.
