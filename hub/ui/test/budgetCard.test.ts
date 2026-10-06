@@ -58,3 +58,11 @@ test('an actual balance remains the current resource when cost reports are also 
   assert.ok(view.text.includes('13.00'));
   assert.ok(!view.text.includes('100.00'));
 });
+
+for(const locale of ['en','ru'] as const)test(`${locale} compact unknown enforcement uses a short control status, not an analytics error`,()=>{
+  setLocale(locale);
+  const view=render({...source,monthlyLimit:{...source.monthlyLimit!,status:'unavailable',value:null,valueAt:null}},true);
+  assert.ok(view.text.includes(t('money.enforcementUnknownShort')));
+  assert.ok(!view.text.includes(t('money.unknown')));
+  assert.ok(!view.text.includes(t('money.enforcementUnknown')));
+});

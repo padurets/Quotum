@@ -75,7 +75,7 @@ function MonthlyLimitStatus({source,short=false}:{source:Card;short?:boolean}) {
   const stale=monthlyLimitStale(limit,now);
   const enforcement=stale?'unknown':limit!.value!.enforcement;
   const text=t(enforcement==='enforcing'?'money.enforcing':enforcement==='inactive'?'money.inactive':'money.enforcementUnknown');
-  const shown=short?t(enforcement==='enforcing'?'money.enforcingShort':enforcement==='inactive'?'money.inactive':'money.unknown'):text;
+  const shown=short?t(enforcement==='enforcing'?'money.enforcingShort':enforcement==='inactive'?'money.inactive':'money.enforcementUnknownShort'):text;
   return <span data-time="monthly-limit-status" title={stale?t('money.limitUnknown'):text}>
     {stale&&<small className="key-status cap-stale" role="img" aria-label={t('money.limitUnknown')}/>}{shown}
   </span>;
