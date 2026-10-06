@@ -169,6 +169,25 @@ and platform smoke checks still apply.
 - Devices and provider accounts connect through My connections. Account settings hold
   profile and app settings. A widget's display switches live in its own settings;
   measurement tables do not change chart selections.
+- **Budget widgets share one semantic presentation.** Dashboard and compact use the
+  same budget view and renderer: one Available balance, supported scoped allowances
+  separately, and balance composition in the existing disclosure. Accounting totals
+  belong in analytics. Never add card rows just because a provider returns more fields;
+  each extra field needs a defined purpose, while safe financial observations are saved
+  at capture for later analytics. Only reported caps have scales, and lifetime credits
+  never become a wallet's percentage denominator. Totals, components and currency
+  representations are never added without evidence that they are independent funds.
+  Unknown, unsupported, stale and confirmed zero remain distinct.
+- **Currency behavior belongs to the shared money layer.** Provider adapters capture
+  native facts; shared services own rate integrations, cache, exact conversion and
+  provenance. Widgets consume common presentation and formatting instead of choosing
+  provider-specific currencies or fetching rates. USD is the current display policy.
+  When adding currency settings, put the user's display currency and personal currency
+  definitions in one user-scoped registry and preference used by every monetary widget.
+  Keep public reference rates separate from private user rates. Preserve original
+  amounts and recorded conversion provenance; changing a display preference must not
+  rewrite provider history or turn exchange movements into spending. Percentage quotas
+  and non-monetary counters keep their own units.
 - **Times.** Say when as `stamp` in `hub/ui/lib/format.ts` does: "26 September 14:00",
   never "today" or "tomorrow", never seconds; under a heading that already gives the day,
   the time alone. Where how soon or how long ago matters more, and room is short (a mark,

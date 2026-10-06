@@ -609,6 +609,14 @@ reference date must precede the observation and be less than seven days old. Fai
 use a still-valid cached quote and retry on later measurements after five minutes.
 There is no currency preference or rate poller.
 
+This centralizes the existing USD integration; it does not yet provide user-defined
+currencies or a user-selected display currency. The currency domain accepts three-letter
+codes and ECB snapshots. The service, card projection and budget selection still select
+USD explicitly. There is no user-scoped currency registry, private rate namespace or
+persisted display preference; the chart's unit selection only selects native or already
+valued series. These boundaries distinguish the implemented integration from a complete
+user-configurable currency system.
+
 `money_valuations` retains each changed USD estimate separately from native `readings`,
 including the exact original amount, meter, currency and observation time, and its
 immutable quote ID. Derived IDs are `fx:USD:<native meter ID>`; they are absent from the
