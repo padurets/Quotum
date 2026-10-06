@@ -2,13 +2,14 @@ import type {Chunk} from '../domain/history.js';
 import type {MeterSemantics} from '../domain/meters.js';
 import type {MeterObservation} from '../domain/meterHistory.js';
 import type {CurrencyStore} from '../store/currencies.js';
-import {convertBy,type Conversion} from '../domain/currency.js';
+import {convertBy,isCurrency,type Conversion} from '../domain/currency.js';
 
 /** Transform the already-accounted native cells; FX changes never become spending. */
 export function displayHistory(chunks:readonly Chunk[],currencies:CurrencyStore,owner:string,target:string,cell:number,nativeAt?:(source:string,meter:string,until:number)=>number|null):Chunk[] {
   const from=Math.min(...chunks.map(c=>c.from)),to=Math.max(...chunks.map(c=>c.to??c.from+((c.meterSeries??[]).reduce((n,s)=>Math.max(n,...s.cells.map(r=>r[0]+1)),0))*cell));
   const bindings=currencies.history(owner,target,from,to);
   const result=chunks.map(chunk=>({...chunk,meterSeries:chunk.meterSeries?.map(series=>{
+    if(!isCurrency(series.unit))return series;
     let semantics=series.semantics,previousMetadata='null';
     type Presented={amount:string;metadata:MeterSemantics|null;encoded:string;convert:(amount:string)=>string};
     const views=new Map<MeterSemantics|null,Map<string,Presented>>();

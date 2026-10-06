@@ -199,6 +199,8 @@ test('HTTP subscription history preserves native windows alongside caps while wa
     const ordinary=await call();assert.equal(ordinary.statusCode,200);
     const nativeRows=ordinary.json().chunks.flatMap((c:{series:unknown[]})=>c.series);assert.equal(nativeRows.length,1);
     const mixed=await call({unit:'credits:zai',ids:[[connected.sourceId!,'quota:credit:5h'],[connected.sourceId!,'quota:credit:week']]});assert.equal(mixed.statusCode,200);
+    const display=await app.inject({method:'GET',url:url+'&unit=credits%3Azai&currency=USD&meters='+encodeURIComponent(JSON.stringify([[connected.sourceId!,'quota:credit:5h'],[connected.sourceId!,'quota:credit:week']])),headers:{cookie:'quotum_session='+token}});
+    assert.equal(display.statusCode,200);assert.deepEqual(display.json().chunks,mixed.json().chunks,'display currency does not rename, convert or discard credit quota history');
     const chunks=mixed.json().chunks;
     assert.deepEqual(chunks.flatMap((c:{series:unknown[]})=>c.series),nativeRows,'selecting subscription caps cannot remove other subscriptions');
     assert.deepEqual(chunks.flatMap((c:{meterSeries:{meter:string}[]})=>c.meterSeries).map((s:{meter:string})=>s.meter).sort(),['quota:credit:5h','quota:credit:week']);
