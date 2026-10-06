@@ -114,10 +114,11 @@ export function MoneyCard({source,board,view,compact=false}:{source:Card;board:s
   </section>)}</div>;
   return <div className="money-body">
     <div className="money-balance">
-      <span>{composition.length?<Popover label={t('money.breakdown')} trigger={t('money.accountBalance')} triggerClass="link-button" up>{breakdown}</Popover>:t('money.accountBalance')}</span>
+      <span>{t('money.accountBalance')}</span>
       <div className="money-balance-values">{!groups.length?<span className="limit-value" title={displayUnavailable?t('money.noDisplayBalance',{currency:context.target.symbol}):t('money.noBalance')}>—<small>{context.target.symbol}</small></span>:groups.map(({total,approximate})=>{
         const formatted=money(total.amount,total.unit,false,context),symbol=currencySymbol(total.unit,context),amount=formatted.slice(0,-symbol.length-1);
-        return <span key={total.id} className={`limit-value${total.stale?' is-stale':''}`} data-money={total.amount} title={[money(total.amount,total.unit,true,context),stamp(total.at),approximate?conversion:'',total.stale?t('money.stale'):''].filter(Boolean).join('\n')}>{approximate?'≈ ':''}{amount}<small>{symbol}</small></span>;
+        const value=<span key={total.id} className={`limit-value${total.stale?' is-stale':''}`} data-money={total.amount} title={[money(total.amount,total.unit,true,context),stamp(total.at),approximate?conversion:'',total.stale?t('money.stale'):''].filter(Boolean).join('\n')}>{approximate?'≈ ':''}{amount}<small>{symbol}</small></span>;
+        return composition.length?<Popover key={total.id} label={t('money.breakdown')} trigger={value} triggerClass="money-balance-trigger" up>{breakdown}</Popover>:value;
       })}</div>
     </div>
     <div className="limits money-limits">{limits.map(limit=><BudgetKeyMetrics key={limit.scope.id} limit={limit} context={context} compact={compact}/>)}</div>
