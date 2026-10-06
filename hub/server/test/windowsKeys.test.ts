@@ -98,7 +98,7 @@ test('a Windows registry writer survives its Node parent and abandoned mutexes a
       assert.equal(parsed.status,0);assert.equal(parsed.stdout.trim(),'[]');
     }
     // A detached helper deliberately exercises an orphan; Windows may otherwise kill its parent's job.
-    const parentScript="import {spawn} from 'node:child_process';const child=spawn("+JSON.stringify(executable)+","+JSON.stringify(args(a.file))+",{stdio:['pipe','ignore','ignore'],windowsHide:true,detached:true});process.send({pid:child.pid});process.stdin.pipe(child.stdin);";
+    const parentScript="import {spawn} from 'node:child_process';const child=spawn("+JSON.stringify(executable)+","+JSON.stringify(args(a.file))+",{stdio:['pipe','pipe','pipe'],windowsHide:true,detached:true});child.stdout.resume();child.stderr.resume();process.send({pid:child.pid});process.stdin.pipe(child.stdin);";
     const parent=spawn(process.execPath,['--input-type=module','-e',parentScript],{stdio:['pipe','ignore','ignore','ipc']});
     let helperPid:number|undefined;parent.on('message',message=>{helperPid=(message as {pid:number}).pid;});
     let reader:ReturnType<typeof spawn>|undefined;
@@ -109,7 +109,7 @@ test('a Windows registry writer survives its Node parent and abandoned mutexes a
       const result=new Promise<number|null>((resolve,reject)=>{reader!.on('error',reject);reader!.on('close',resolve);});
       await sendFrame(reader.stdin!,second.input);
       // Compile both helpers before starting either production deadline.
-      await until(()=>!!helperPid&&existsSync(a.compiled)&&existsSync(b.compiled)||existsSync(a.diagnostic)||existsSync(b.diagnostic)||reader!.exitCode!==null);
+      await until(()=>!!helperPid&&existsSync(a.compiled)&&existsSync(b.compiled)||existsSync(a.diagnostic)||existsSync(b.diagnostic)||reader!.exitCode!==null||parent.exitCode!==null);
       assert.equal(existsSync(a.compiled)&&existsSync(b.compiled),true);
       writeFileSync(a.start,'continue');await until(()=>existsSync(a.ready));
       if(orphan) {parent.kill();await until(()=>parent.exitCode!==null||parent.signalCode!==null);process.kill(helperPid!,0);}
