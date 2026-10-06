@@ -2,7 +2,7 @@
 import childProcess, {execFileSync,type ChildProcess} from 'node:child_process';
 import {syncBuiltinESMExports} from 'node:module';
 import {createServer} from 'node:net';
-import {readFile,writeFile} from 'node:fs/promises';
+import {readFile,writeFile,readdir} from 'node:fs/promises';
 import {rmSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {pathToFileURL} from 'node:url';
@@ -23,7 +23,7 @@ const baseline=await import(pathToFileURL(path.resolve(baselineFile)).href) as {
 const chrome=findChrome(process.env);
 if(!chrome)throw new Error('The runner must already have Chrome');
 const original=childProcess.spawn;
-type Native={pid:number;birth:string;ppid:number;pgrp:number;session:number;nice:number;state:string};
+type Native={pid:number;birth:string;name:string;ppid:number;pgrp:number;session:number;nice:number;state:string};
 type Owned={child:ChildProcess;profile:string;detached:boolean;label:string;known:Map<number,Native>};
 const owned:Owned[]=[];
 let label='setup';
@@ -55,7 +55,15 @@ const stat=async(pid:number):Promise<Native|null>=>{
   const value=await readFile('/proc/'+pid+'/stat','utf8').catch(()=> '');
   if(!value)return null;
   const fields=value.slice(value.lastIndexOf(')')+2).trim().split(/\s+/);
-  return {pid,birth:fields[19],state:fields[0],ppid:Number(fields[1]),pgrp:Number(fields[2]),session:Number(fields[3]),nice:Number(fields[16])};
+  return {pid,birth:fields[19],name:value.slice(value.indexOf('(')+1,value.lastIndexOf(')')),state:fields[0],ppid:Number(fields[1]),pgrp:Number(fields[2]),session:Number(fields[3]),nice:Number(fields[16])};
+};
+const inventory=async()=>{
+  const rows:Native[]=[];
+  for(const value of await readdir('/proc'))if(/^\d+$/.test(value)){
+    const current=await stat(Number(value));
+    if(current&&/^chrome|^google-chrome/.test(current.name)&&current.state!=='Z')rows.push(current);
+  }
+  return rows;
 };
 const native=async(pid:number)=>{
   const value=await stat(pid);
@@ -63,6 +71,7 @@ const native=async(pid:number)=>{
   return {...value,autogroup:group.trim()};
 };
 const snapshot=async(record:Owned)=>{
+  if(record.child.exitCode!==null||record.child.signalCode!==null)return;
   const root=await stat(record.child.pid!);if(!root)return;
   const previous=record.known.get(root.pid);if(previous&&previous.birth!==root.birth)throw new Error('Owned root PID was replaced');
   record.known.set(root.pid,root);
@@ -109,7 +118,8 @@ try{
     const variant=result.sequence[i];label=i+':'+variant;
     let tab:Awaited<ReturnType<typeof openTab>>|undefined;
     const started=performance.now(),before=owned.length;
-    const run:Record<string,unknown>={index:i,variant,startedAt:new Date().toISOString(),observed:[]};runs.push(run);await save();
+    const beforeInventory=await inventory();
+    const run:Record<string,unknown>={index:i,variant,startedAt:new Date().toISOString(),observed:[],beforeInventory};runs.push(run);await save();
     let watch:ReturnType<typeof setInterval>|undefined,watching:Promise<void>|undefined;
     try{
       watch=setInterval(()=>{const record=owned.at(-1);if(record?.label===label&&!watching){watching=snapshot(record).catch(error=>{run.trackingError=String(error);}).finally(()=>{watching=undefined;});}},50);
@@ -140,16 +150,22 @@ try{
       console.log(JSON.stringify({index:i,variant,launchMs:run.launchMs,process:run.process,problems:outcome.problems,reports:outcome.reports.map(report=>({period:report.period,frameP95Ms:percentile(report.frames,.95),frameP99Ms:percentile(report.frames,.99),inputP95Ms:percentile(report.latency,.95)}))}));
     }catch(error){run.error=String(error);console.error(JSON.stringify({index:i,variant,error:String(error)}));await save();}
     finally{
-      clearInterval(watch);await watching;
-      for(const record of owned.slice(before))await snapshot(record);
-      if(tab)await bounded(tab.close(),10000).catch(error=>{run.tabCleanupError=String(error);});
-      if(active)await bounded(active.close(),10000).catch(error=>{run.browserCleanupError=String(error);});active=undefined;
-      for(const record of owned.slice(before)){await emergency(record);run.owned=[...record.known.values()];}
-      await save();
+      try{
+        clearInterval(watch);await watching;
+        for(const record of owned.slice(before))await snapshot(record);
+        if(tab)await bounded(tab.close(),10000).catch(error=>{run.tabCleanupError=String(error);});
+        if(active)await bounded(active.close(),10000).catch(error=>{run.browserCleanupError=String(error);});active=undefined;
+        for(const record of owned.slice(before)){await emergency(record);run.owned=[...record.known.values()];}
+        run.afterInventory=await inventory();
+        const leftovers=(run.afterInventory as Native[]).filter(current=>!beforeInventory.some(old=>old.pid===current.pid&&old.birth===current.birth));
+        if(leftovers.length){run.contaminated=true;run.untrackedChrome=leftovers;}
+      }catch(error){run.cleanupError=String(error);run.contaminated=true;}
+      finally{await save();}
     }
+    if(run.contaminated)throw new Error('Later trials would be contaminated; preserved all readings without an absence claim');
   }
 }finally{
   if(active)await bounded(active.close(),10000).catch(()=>undefined);
-  for(const record of owned)await emergency(record);
-  await demo.stop();await save();childProcess.spawn=original;syncBuiltinESMExports();
+  try{for(const record of owned)await emergency(record);}
+  finally{await demo.stop();await save();childProcess.spawn=original;syncBuiltinESMExports();}
 }
