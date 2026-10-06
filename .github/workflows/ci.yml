@@ -11,6 +11,41 @@ permissions:
   contents: read
 
 jobs:
+  # Temporary PR-specific diagnostic; its results do not replace the canonical gate.
+  launcher-comparison:
+    if: github.event_name == 'pull_request' && github.event.pull_request.number == 100
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: hub
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npm run build
+      - name: Freeze baseline and show environment
+        run: |
+          git show 025d8e5277a4e8074dc0a9d7f27db78476c20d5f:hub/bench/cdp.ts > "$RUNNER_TEMP/baseline-cdp.ts"
+          google-chrome --version
+          node --version
+          cat /proc/sys/kernel/sched_autogroup_enabled
+      - name: Paired main and branch launchers
+        env:
+          QUOTUM_COMPARE_BASE_SHA: 025d8e5277a4e8074dc0a9d7f27db78476c20d5f
+          QUOTUM_COMPARE_HEAD_SHA: efdd138641df6e52f364d30ac7c53f7cfb7b985c
+        run: QUOTUM_COMPARE_BASELINE="$RUNNER_TEMP/baseline-cdp.ts" QUOTUM_CHROME="$(command -v google-chrome)" node --import tsx bench/compareLaunch.ts
+      - name: Preserve all diagnostic readings
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: launcher-comparison
+          path: hub/compare-launch.json
+
   dev-tooling:
     runs-on: ubuntu-latest
     timeout-minutes: 5
