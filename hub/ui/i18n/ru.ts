@@ -763,6 +763,7 @@ export const ru = {
   "money.allowance": "Остаток лимита",
   "money.overspend": "Превышение лимита",
   "money.enforcing": "Применяется",
+  "money.enforcingShort": "Активен",
   "money.enforcementUnknown": "Применение неизвестно",
   "money.limitUnknown": "Месячный лимит недоступен",
   "money.reported": "Расходы по отчётам",

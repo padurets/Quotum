@@ -69,14 +69,15 @@ export function AccessMark({id}:{id:string}) {
   </>}><div className="tray-panel"><div className="tray-panel-head"><p className="tray-panel-lead">{lead}</p>{text&&<p className="tray-panel-when">{expiry}</p>}</div></div></Popover></span>;
 }
 
-function MonthlyLimitStatus({source}:{source:Card}) {
+function MonthlyLimitStatus({source,short=false}:{source:Card;short?:boolean}) {
   const limit=source.monthlyLimit;
   const now=useClock(now=>monthlyLimitChangesAt(limit,now));
   const stale=monthlyLimitStale(limit,now);
   const enforcement=stale?'unknown':limit!.value!.enforcement;
   const text=t(enforcement==='enforcing'?'money.enforcing':enforcement==='inactive'?'money.inactive':'money.enforcementUnknown');
+  const shown=short?t(enforcement==='enforcing'?'money.enforcingShort':enforcement==='inactive'?'money.inactive':'money.unknown'):text;
   return <span data-time="monthly-limit-status" title={stale?t('money.limitUnknown'):text}>
-    {stale&&<small className="key-status cap-stale" role="img" aria-label={t('money.limitUnknown')}/>}{text}
+    {stale&&<small className="key-status cap-stale" role="img" aria-label={t('money.limitUnknown')}/>}{shown}
   </span>;
 }
 
@@ -87,7 +88,7 @@ function BudgetCard({source,compact}:{source:Card;compact:boolean}) {
   const detail=t('money.configuredLimitHint');
   if(compact)return <div className="money-body"><div className="limits money-limits"><div className="compact-limit is-money">
     <div className="compact-window-name"><span title={detail}>{t('money.configuredMonthlyLimit')}</span></div>
-    <small className="compact-reset"><MonthlyLimitStatus source={source}/></small>
+    <small className="compact-reset"><MonthlyLimitStatus source={source} short/></small>
     <strong className="limit-value" title={detail}>{value}{limit&&<small>{unit}</small>}</strong>
   </div></div></div>;
   return <div className="money-body"><div className="limits money-limits"><div className="limit money-limit">

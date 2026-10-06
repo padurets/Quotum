@@ -35,7 +35,7 @@ for(const locale of ['en','ru'] as const)for(const compact of [false,true])test(
   assert.ok(!view.text.includes(locale==='en'?'70.00':'70,00'));
   assert.ok(!view.text.includes(t('money.accountBalance')));
   assert.equal(view.nodes.filter(node=>node.type==='meter-bar').length,0);
-  assert.ok(view.text.includes(t('money.enforcing')));
+  assert.ok(view.text.includes(t(compact?'money.enforcingShort':'money.enforcing')));
 });
 
 test('failed and aged limit reads preserve the threshold without claiming active enforcement',()=>{

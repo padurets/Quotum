@@ -768,6 +768,7 @@ export const en = {
   "money.allowance": "Remaining allowance",
   "money.overspend": "Over the limit",
   "money.enforcing": "Enforcing",
+  "money.enforcingShort": "Active",
   "money.enforcementUnknown": "Enforcement unknown",
   "money.limitUnknown": "Monthly limit unavailable",
   "money.reported": "Reported costs",

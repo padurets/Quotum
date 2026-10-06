@@ -609,7 +609,7 @@ so quality-only changes need no history read and cannot mark an old cached value
 Cards and compact show the configured monthly threshold and its current enforcement
 state, independently of cost coverage. A spending constraint has no balance percentage
 scale and is not selected as an account balance. Analytics show reported costs and UTC
-calendar summaries. The source projection retains a derived allowance only with
+calendar summaries. The source projection derives remaining allowance only from
 confirmed monthly coverage and a fresh same-currency limit; it does not infer prepaid
 credits. These measurements never enter quota forecasts or notifications.
 
