@@ -139,9 +139,9 @@ function Offline() {
 }
 
 /** Global navigation and the person's menu stay available on settings pages too. */
-export function Header({boards, board, onBoard, user, onAccount, onSignedOut, local}: {
+export function Header({boards, board, onBoard, user, onAccount, onSignedOut, local, actions}: {
   boards: Board[]; board: Board | null; onBoard: (id: string) => void;
-  user: User; onAccount: () => void; onSignedOut: () => void; local: boolean;
+  user: User; onAccount: () => void; onSignedOut: () => void; local: boolean; actions?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -153,6 +153,7 @@ export function Header({boards, board, onBoard, user, onAccount, onSignedOut, lo
     <Brand href="/" />
     {!local && <BoardSwitcher boards={boards} board={board} onSelect={onBoard} />}
     <div className="status">
+      {actions}
       {local ? <button className="icon-button" aria-label={t('header.settings')} onClick={onAccount}><GearIcon /></button> :
         <Popover label={t('account.open')} triggerClass="avatar-button" trigger={<span className="avatar">{user.name.slice(0, 1).toUpperCase()}</span>} open={open} onOpenChange={setOpen}>
           <div className="popover-title">{user.name}<small className="account-email">{user.email}</small></div>
@@ -165,20 +166,17 @@ export function Header({boards, board, onBoard, user, onAccount, onSignedOut, lo
 }
 
 /** These actions always name the current board; personal management has its own pages. */
-export function BoardToolbar({board, refresh, owner, editing, onEdit, onAdd, onSettings}: {
+export function BoardActions({board, refresh, owner, editing, onEdit, add, onSettings}: {
   board: Board | null; refresh: ReactNode; owner: boolean; editing: boolean;
-  onEdit: () => void; onAdd: () => void; onSettings: ((section: 'general' | 'members') => void) | null;
+  onEdit: () => void; add: ReactNode; onSettings: ((section: 'general' | 'members') => void) | null;
 }) {
   const [open, setOpen] = useState(false);
-  return <div className="board-toolbar"><div className="board-toolbar-inner">
-    <div className="board-heading"><h1>{board ? boardTitle(board) : '—'}</h1><span>{t(board?.personal ? 'boards.personal' : 'boards.shared')}</span></div>
-    <div className="board-actions"><Offline />{refresh}
-      <button className="button primary" onClick={onAdd}>{t('add.title')}</button>
-      {owner && <button className={`button ${editing ? 'is-active' : ''}`} aria-pressed={editing} onClick={onEdit}>{t(editing ? 'layout.done' : 'layout.edit')}</button>}
-      {onSettings && <Popover label={t('boardSettings.title')} triggerClass="icon-button" trigger={<GearIcon />} open={open} onOpenChange={setOpen}>
+  return <div className="board-actions" role="group" aria-label={board ? boardTitle(board) : undefined}><Offline />{refresh}
+      {add}
+      {owner && <button className={`icon-button ${editing ? 'is-editing' : ''}`} aria-pressed={editing} aria-label={t(editing ? 'layout.done' : 'layout.edit')} title={t(editing ? 'layout.done' : 'layout.edit')} onClick={onEdit}><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">{editing ? <path d="m3 8 3.5 3.5L13 4" /> : <path d="m10.5 3.5 2 2M3 13l.6-2.6L11 3a1.4 1.4 0 0 1 2 2l-7.4 7.4z" />}</svg></button>}
+      {onSettings && <Popover label={t('boardSettings.title')} icon={<GearIcon />} open={open} onOpenChange={setOpen}>
         <button className="popover-row" onClick={() => {setOpen(false); onSettings('general');}}><span>{t('boardSettings.title')}</span></button>
         {!board?.personal && <button className="popover-row" onClick={() => {setOpen(false); onSettings('members');}}><span>{t('admin.members')}</span></button>}
       </Popover>}
-    </div>
-  </div></div>;
+  </div>;
 }

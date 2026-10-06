@@ -71,7 +71,7 @@ export const en = {
   "connections.lastSuccess": "Last successful measurement",
   "connections.boards": "Boards using this data",
   "connections.hidden": "Card hidden",
-  "prototype.notice": "Interactive prototype. Provider replies and device discovery are synthetic. Cards and board updates use the real application. Transaction recovery and automatic key storage are not yet integrated.",
+  "prototype.notice": "Prototype with synthetic provider responses and devices.",
   "prototype.examples": "Use a synthetic example key",
   "prototype.noExpiry": "Balance, no expiry",
   "prototype.partial": "Partial key inventory",

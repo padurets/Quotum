@@ -14,7 +14,7 @@ import {startLive} from './lib/live';
 import {UNAUTHORIZED} from './lib/http';
 import {t, useLocale} from './i18n';
 import {Compact} from './components/Compact';
-import {Header, BoardToolbar} from './components/Header';
+import {Header, BoardActions} from './components/Header';
 import {Settings} from './components/Settings';
 import {WidgetAdd} from './components/WidgetAdd';
 import {RefreshAll} from './components/RefreshAll';
@@ -175,12 +175,12 @@ function Dashboard({
 
   return (
     <>
-      <Header boards={boards} board={board} onBoard={selectBoard} user={user} onAccount={openSettings} onSignedOut={onSignedOut} local={local} />
-      {active ? <>
-      <BoardToolbar board={board} owner={arrange.owner} editing={editing} onEdit={() => setEditing(on => !on)}
-        onAdd={() => board && setAdding(board)}
+      <Header boards={boards} board={board} onBoard={selectBoard} user={user} onAccount={openSettings} onSignedOut={onSignedOut} local={local}
+        actions={active && <BoardActions board={board} owner={arrange.owner} editing={editing} onEdit={() => setEditing(on => !on)}
+        add={board && <WidgetAdd key={boardId} board={board} local={local} trustedKeys={trustedKeys} open={adding?.id === boardId} onOpenChange={open => setAdding(open ? board : null)} />}
         onSettings={local ? null : section => navigate(settingsHref('/boards/' + boardId + '/settings/' + section, boardId))}
-        refresh={meta && <RefreshAll key={boardId} board={boardId} ids={lineup.filter(id => !isHidden(arrange.view, cardId(id)))} />} />
+        refresh={meta && <RefreshAll key={boardId} board={boardId} ids={lineup.filter(id => !isHidden(arrange.view, cardId(id)))} />} />} />
+      {active ? <>
       <main>
         {local && <AgentBanner />}
         {!meta ? (
@@ -236,7 +236,6 @@ function Dashboard({
         )}
       </main>
       </> : <Settings user={user} board={board} boards={boards} local={local} trustedKeys={trustedKeys} refresh={refresh} onAppState={setAppState} />}
-      {adding && <WidgetAdd key={adding.id} board={adding} local={local} trustedKeys={trustedKeys} onClose={() => setAdding(null)} />}
       {local && <TakeOver onState={setAppState} />}
     </>
   );

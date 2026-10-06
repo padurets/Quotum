@@ -10,6 +10,7 @@ import {stamp} from '../lib/format';
 import type {Credential} from '../../server/store/credentials';
 import {Modal, Field, ErrorLine} from './Kit';
 import {logoOf} from './logos';
+import {Popover} from './Popover';
 import {ConnectDevice, type Device} from './Machines';
 
 type Candidate = {id: string; provider: string; label: string; origin: 'own' | 'shared'; onBoard: boolean; visible: boolean; action: 'add' | 'show' | 'present' | 'forbidden'};
@@ -130,7 +131,7 @@ function DeviceAdd({board, demo, onClose}: {board: Board; demo: boolean; onClose
   </div>;
 }
 
-export function WidgetAdd({board, local, trustedKeys, onClose, initialSourceId}: {initialSourceId?: string; board: Board; local: boolean; trustedKeys: Session['trustedKeys']; onClose: () => void}) {
+function WidgetCatalogue({board, local, trustedKeys, onClose, initialSourceId}: {initialSourceId?: string; board: Board; local: boolean; trustedKeys: Session['trustedKeys']; onClose: () => void}) {
   const [catalogue, setCatalogue] = useState<Catalogue | null>(null), [error, setError] = useState<unknown>(null), [search, setSearch] = useState('');
   const [page, setPage] = useState<'catalogue' | 'openrouter' | 'device'>('catalogue');
   const [candidate, setCandidate] = useState<Candidate | null>(null);
@@ -143,7 +144,8 @@ export function WidgetAdd({board, local, trustedKeys, onClose, initialSourceId}:
   useEffect(() => {const initial = catalogue?.sources.find(item => item.id === initialSourceId); if (initial && ['add', 'show'].includes(initial.action)) setCandidate(initial);}, [catalogue, initialSourceId]);
   const sources = catalogue?.sources.filter(source => (source.label + ' ' + source.provider).toLowerCase().includes(search.toLowerCase())) ?? [];
   const complete = addition.operation?.state === 'complete';
-  return <Modal title={page === 'openrouter' ? t('sources.connect') : page === 'device' ? t('connections.connectDevice') : t('add.title')} onClose={onClose} wide={page === 'catalogue'}>
+  return <div className="widget-catalogue">
+    <div className="catalogue-heading"><h3>{page === 'openrouter' ? t('sources.connect') : page === 'device' ? t('connections.connectDevice') : t('add.title')}</h3><button className="icon-button" aria-label={t('common.close')} title={t('common.close')} onClick={onClose}><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="m4 4 8 8m0-8-8 8" /></svg></button></div>
     {page !== 'catalogue' && <button className="link-button connection-back" onClick={() => setPage('catalogue')}>← {t('add.title')}</button>}
     {page === 'openrouter' ? <KeyForm board={board} personal={false} demo={catalogue?.demo} available={trustedKeys?.available === true} onClose={onClose} /> :
       page === 'device' ? <DeviceAdd board={board} demo={!!catalogue?.demo} onClose={onClose} /> :
@@ -162,7 +164,17 @@ export function WidgetAdd({board, local, trustedKeys, onClose, initialSourceId}:
         <div className="catalogue-group"><h3>{t('analytics.title')}</h3>{catalogue.widgets.map(widget => <div className="catalogue-row" key={widget.id}><span className="catalogue-symbol" aria-hidden="true">▥</span><span className="catalogue-name"><b>{t(LABELS[widget.id])}</b></span><button className="button" disabled={addition.busy || widget.action === 'present' || widget.action === 'forbidden'} onClick={() => void addition.submit(board.id, {kind: 'widget', widgetId: widget.id})}>{t(widget.action === 'present' ? 'add.present' : widget.action === 'forbidden' ? 'add.ownerOnly' : 'add.action')}</button></div>)}</div>
         <div className="catalogue-group"><h3>{t('add.connectNew')}</h3>{catalogue.connectors.map(connector => <button className="popover-row catalogue-connect" key={connector.id} onClick={() => setPage('openrouter')}><img src={logoOf(connector.id)} alt="" /><span>{connector.name}</span><span aria-hidden="true">→</span></button>)}{!local && <button className="popover-row catalogue-connect" onClick={() => setPage('device')}><span>{t('connections.connectDevice')}</span><span aria-hidden="true">→</span></button>}</div></>}
       </div>}
-  </Modal>;
+  </div>;
+}
+
+export function WidgetAdd({board, local, trustedKeys, open, onOpenChange, initialSourceId, trigger}: {
+  board: Board; local: boolean; trustedKeys: Session['trustedKeys']; open: boolean;
+  onOpenChange: (open: boolean) => void; initialSourceId?: string; trigger?: string;
+}) {
+  return <Popover label={t('add.title')} icon={<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>}
+    trigger={trigger} triggerClass={trigger ? 'button' : undefined} open={open} onOpenChange={onOpenChange} width={420}>
+    {open && <WidgetCatalogue key={board.id} board={board} local={local} trustedKeys={trustedKeys} initialSourceId={initialSourceId} onClose={() => onOpenChange(false)} />}
+  </Popover>;
 }
 
 type ConnectionDetails = Credential & {label: string; lastSuccessAt: number | null; placements: (Board & {visible: boolean})[]};
@@ -189,9 +201,9 @@ export function ConnectionsPage({userId, boards, trustedKeys}: {userId: string; 
       <dl className="connection-facts"><dt>{t('connections.expiry')}</dt><dd>{connection.expiresAt === null ? t('sources.noExpiry') : stamp(connection.expiresAt)}</dd><dt>{t('connections.lastSuccess')}</dt><dd>{connection.lastSuccessAt ? stamp(connection.lastSuccessAt) : '—'}</dd><dt>{t('connections.boards')}</dt><dd>{connection.placements.map(placement => <span className="placement-tag" key={placement.id}>{boardTitle(placement)}{!placement.visible && <small>{t('connections.hidden')}</small>}</span>)}</dd></dl>
       <div className="button-row is-start"><button className="button" onClick={() => {setSelectedSource(connection.sourceId ?? undefined); setChoosing(true);}}>{t('add.toBoard')}</button><button className="button" onClick={() => {setReplace(connection); setConnecting(true);}}>{t('sources.replace')}</button><button className="link-button danger" onClick={() => setRemove(connection)}>{t('sources.remove')}</button></div>
     </article>)}
-    {connecting && <Modal title={t(replace ? 'sources.replace' : 'sources.connect')} onClose={() => setConnecting(false)}><KeyForm board={boards.find(board => board.personal) ?? null} personal replace={replace} demo={demo} available={trustedKeys?.available === true} onClose={() => setConnecting(false)} onSaved={() => void read()} onAddToBoard={sourceId => {setConnecting(false); setSelectedSource(sourceId); setChoosing(true);}} /></Modal>}
-    {choosing && <Modal title={t('add.toBoard')} onClose={() => setChoosing(false)}><p className="dialog-text">{t('add.chooseBoard')}</p>{boards.map(board => <button className="popover-row" key={board.id} onClick={() => {setChoosing(false); setAdding(board);}}><span>{boardTitle(board)}</span></button>)}</Modal>}
-    {adding && <WidgetAdd board={adding} initialSourceId={selectedSource} local={false} trustedKeys={trustedKeys} onClose={() => {setAdding(null); void read();}} />}
+    {connecting && <section className="connection-editor"><h3>{t(replace ? 'sources.replace' : 'sources.connect')}</h3><KeyForm board={boards.find(board => board.personal) ?? null} personal replace={replace} demo={demo} available={trustedKeys?.available === true} onClose={() => setConnecting(false)} onSaved={() => void read()} onAddToBoard={sourceId => {setConnecting(false); setSelectedSource(sourceId); setChoosing(true);}} /></section>}
+    {choosing && <section className="connection-editor"><h3>{t('add.toBoard')}</h3><p className="dialog-text">{t('add.chooseBoard')}</p>{boards.map(board => <button className="popover-row" key={board.id} onClick={() => {setChoosing(false); setAdding(board);}}><span>{boardTitle(board)}</span></button>)}<button className="link-button" onClick={() => setChoosing(false)}>{t('common.cancel')}</button></section>}
+    {adding && <WidgetAdd board={adding} initialSourceId={selectedSource} local={false} trustedKeys={trustedKeys} open onOpenChange={open => {if (!open) {setAdding(null); void read();}}} trigger={boardTitle(adding)} />}
     {remove && <Modal title={t('sources.remove')} onClose={() => setRemove(null)}><p className="dialog-text">{t('sources.removeText')}</p><p className="dialog-text">{t('add.disconnectEffect')}</p><ErrorLine error={error} /><div className="button-row"><button className="button" onClick={() => setRemove(null)}>{t('common.cancel')}</button><button className="button danger" onClick={() => void disconnect()}>{t('sources.remove')}</button></div></Modal>}
   </div>;
 }

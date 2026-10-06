@@ -101,7 +101,7 @@ export function coverAt(bars: Bar[], y: number, panel: boolean) {
 
 /** The page's bars that may stick at the top of the window, as they lie over each other: the top bar over the analytics' head. */
 export function barsOf() {
-  return [...document.querySelectorAll<HTMLElement>('.topbar, .board-toolbar, .analytics-head')];
+  return [...document.querySelectorAll<HTMLElement>('.topbar, .analytics-head')];
 }
 
 /**
