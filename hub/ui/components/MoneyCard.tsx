@@ -9,8 +9,8 @@ import {t} from '../i18n';
 import {ApiError,messageOf} from '../lib/http';
 import {ErrorLine} from './Kit';
 import {Popover} from './Popover';
-import {MeterBar} from './Meter';
-import {level} from '../lib/quota';
+import {MeterBar,PercentLimit,ResetText} from './Meter';
+import {level,resetLineChangesAt} from '../lib/quota';
 import {useShownKeys} from '../lib/moneyKeys';
 
 function CapStatus({part,cap}:{part?:KeyPart;cap?:Meter}) {
@@ -26,21 +26,20 @@ export function CapReset({meter,short=false}:{meter:Meter;short?:boolean}) {
   const text=meter.resetAt===null?unknown?short?'—':t('limit.resetUnknown'):'' :meter.resetAt>now?short?countdown(meter.resetAt-now):t('limit.resetsIn',{time:duration(meter.resetAt-now)}):t('limit.resetPassed');
   return <span data-time="cap-reset" title={unknown?t('limit.resetUnknown'):meter.resetAt!==null?stamp(meter.resetAt):''}>{text}</span>;
 }
-/** Independent caps share the subscription scale, regardless of how they are measured. */
-export function CapMetrics({cap,name,detail=name,status,compact=false,showPercent=false}:{cap:Meter|undefined;name:string;detail?:string;status?:import('react').ReactNode;compact?:boolean;showPercent?:boolean}) {
+/** Monetary caps keep their amounts around the shared segmented meter. */
+export function CapMetrics({cap,name,detail=name,status,compact=false}:{cap:Meter|undefined;name:string;detail?:string;status?:import('react').ReactNode;compact?:boolean}) {
   const percent=cap?capPercent(cap):null,remaining=percent===null?null:100-percent;
   const value=cap?amountText(capLeft(cap),cap.unit):'—',unit=cap?amountUnitLabel(cap.unit):'';
-  const percentText=showPercent&&remaining!==null?<small className="limit-share">{Math.round(remaining)}%</small>:null;
   const label=<span className="cap-label"><span>{name}</span>{status}</span>;
   const bar=<MeterBar remaining={cap?remaining:null} label={name}/>;
   const reset=cap?<CapReset meter={cap} short={compact}/>:<span>{t('money.stale')}</span>;
   if(compact)return <div className="compact-limit is-money">
-    <div className="compact-window-name"><span title={detail}>{label}{percentText}</span></div>
+    <div className="compact-window-name"><span title={detail}>{label}</span></div>
     <small className="compact-reset">{reset}</small>{bar}
     <strong className="limit-value" title={cap?money(capLeft(cap),cap.unit,true):undefined}>{value}<small>{unit}</small></strong>
   </div>;
   return <div className="limit money-limit">
-    <div className="limit-top"><span className="limit-name" title={detail}>{label}{percentText}</span>
+    <div className="limit-top"><span className="limit-name" title={detail}>{label}</span>
       <span className={`limit-value v-${remaining===null?'ok':level(remaining)}`} title={cap?money(capLeft(cap),cap.unit,true):undefined}>{value}<small>{unit}</small></span>
     </div>{bar}
     <div className="limit-bottom"><span>{cap?t('money.of',{amount:money(cap.limit,cap.unit)}):t('quota.unavailable')}</span>{cap&&remaining===null?<span>{t('money.exhausted')}</span>:reset}</div>
@@ -51,7 +50,16 @@ export function KeyMetrics({part,meters,compact=false}:{part:KeyPart;meters:read
   return <CapMetrics cap={cap} name={keyName(part)} detail={[keyName(part),part.includeByok?t('money.byok'):''].filter(Boolean).join('\n')} status={<CapStatus part={part} cap={cap}/>} compact={compact}/>;
 }
 export function QuotaCard({source,compact=false}:{source:Card;compact?:boolean}) {
-  return <>{QUOTA_IDS.map(id=>{const cap=source.meters?.find(m=>m.id===id);return <CapMetrics key={id} cap={cap} name={capName({id,scope:null,label:null})} status={<CapStatus cap={cap}/>} showPercent compact={compact}/>;})}</>;
+  return <>{QUOTA_IDS.map(id=>{
+    const cap=source.meters?.find(m=>m.id===id),used=cap?capPercent(cap):null;
+    const detail=cap?`${money(capLeft(cap),cap.unit,true)}\n${t('money.of',{amount:money(cap.limit,cap.unit,true)})}\n${cap.resetAt===null?t('limit.resetUnknown'):stamp(cap.resetAt)}${used===null?`\n${t('money.exhausted')}`:''}`:t('quota.unavailable');
+    return <PercentLimit key={id} name={capName({id,scope:null,label:null})} remaining={used===null?null:100-used}
+      valueTitle={detail} status={<CapStatus cap={cap}/>} reset={<QuotaReset resetAt={cap?.resetAt??null} short={compact}/>} compact={compact}/>;
+  })}</>;
+}
+function QuotaReset({resetAt,short}:{resetAt:number|null;short:boolean}) {
+  const now=useClock(now=>resetLineChangesAt({resetAt},now));
+  return <ResetText resetAt={resetAt} now={now} short={short}/>;
 }
 export function QuotaMark({source}:{source:Card}) {
   if(!source.quota||source.quota.complete)return null;

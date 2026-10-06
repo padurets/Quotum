@@ -165,6 +165,9 @@ and platform smoke checks still apply.
   changes a card's height.
 - A scale with its own status dot stays at full opacity, including stale or missing
   readings. Explain the status in the dot's tooltip.
+- Subscription cards and compact rows share the percentage-limit layout and period
+  names. Provider-specific amounts and allowances belong in value details; the
+  provider's storage unit does not define a separate card layout.
 - Devices and provider accounts connect through My connections. Account settings hold
   profile and app settings. A widget's display switches live in its own settings;
   measurement tables do not change chart selections.

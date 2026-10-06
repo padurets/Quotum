@@ -1,16 +1,16 @@
 import {memo, useEffect, useRef, useState, type CSSProperties, type ReactNode} from 'react';
 import type {Card, Win} from '../lib/types';
 import {MEASURE_INTERVAL, windowKey, type MeasureIntervalMs} from '../lib/types';
-import {countdown, countdownChangesAt, duration, earliest, num, stamp} from '../lib/format';
-import {cadenceChangesAt, cadenceOf, dotChangesAt, dotOf, errorText, level, problemOf, resetLine, resetLineChangesAt, windowName} from '../lib/quota';
+import {countdown, countdownChangesAt, earliest, num, stamp} from '../lib/format';
+import {cadenceChangesAt, cadenceOf, dotChangesAt, dotOf, errorText, problemOf, resetLineChangesAt, windowName} from '../lib/quota';
 import {t, useLocale} from '../i18n';
 import {DEFAULT_PLAN, isValidPlan, planAt, planChangesAt, planNote, planTotal, type WeeklyPlan} from '../lib/plan';
 import {logoOf} from './logos';
-import {MeterBar} from './Meter';
+import {MeterBar,PercentLimit,ResetText} from './Meter';
 import {KeyScaleSettings} from './KeyScaleSettings';
 import {MoneyCard,QuotaCard,QuotaMark,AccessMark} from './MoneyCard';
 import {cardId, colorOf, isWindowHidden, planOf, weeklyPlanOf, withColor, withHidden, withName, withPlan, withPlanned, withWindowHidden, type Arrange} from '../lib/view';
-import {CARD_COLORS, MIDDLE_STEP, PROVIDERS} from '../lib/providers';
+import {CARD_COLORS, MIDDLE_STEP, PROVIDERS,hasSubscriptionCaps} from '../lib/providers';
 import {call} from '../lib/http';
 import {useCadence, useCard, useConnection, useMine, useRefresh, useResetsFor, useSessions, useSourceAccess, useTitle} from '../lib/board';
 import {providerOf} from '../../server/domain/providers';
@@ -63,15 +63,7 @@ function PlanNote({w, measuredAt, weekly}: {w: Win; measuredAt: number | null; w
 /** When the limit resets: in how long, that the time has passed, or that it is not known. */
 export function ResetLine({w, short = false}: {w: Win; short?: boolean}) {
   const now = useClock(now => resetLineChangesAt(w, now));
-  const reset = resetLine(w, now);
-  if (short && reset.key !== 'resetsIn') return null;
-  const text = reset.key === 'resetsIn' ? t('limit.resetsIn', {time: duration(reset.inMs)}) : t(`limit.${reset.key}`);
-  const date = w.resetAt ? stamp(w.resetAt) : '';
-  return (
-    <span data-time="reset" title={short ? [text, date].filter(Boolean).join('\n') : date} aria-label={short ? text : undefined}>
-      {short && reset.key === 'resetsIn' ? duration(reset.inMs) : text}
-    </span>
-  );
+  return <ResetText resetAt={w.resetAt} now={now} short={short}/>;
 }
 
 /** The same remaining-quota meter in a card and in the tray's compact rows. */
@@ -80,25 +72,9 @@ export function LimitMeter({w, children}: {w: Win; children?: ReactNode}) {
 }
 
 function Limit({w, measuredAt, weekly}: {w: Win; measuredAt: number | null; weekly: WeeklyPlan | null}) {
-  const state = level(w.remaining);
-  return (
-    <div className="limit">
-      <div className="limit-top">
-        <span className="limit-name">{windowName(w)}</span>
-        <span className={`limit-value v-${state}`}>
-          {num(w.remaining)}
-          <small>%</small>
-        </span>
-      </div>
-      <LimitMeter w={w}>
-        <PlanMark w={w} measuredAt={measuredAt} weekly={weekly} />
-      </LimitMeter>
-      <div className="limit-bottom">
-        <ResetLine w={w} />
-        <PlanNote w={w} measuredAt={measuredAt} weekly={weekly} />
-      </div>
-    </div>
-  );
+  return <PercentLimit name={windowName(w)} remaining={w.remaining}
+    reset={<ResetLine w={w}/>} note={<PlanNote w={w} measuredAt={measuredAt} weekly={weekly}/>}
+  ><PlanMark w={w} measuredAt={measuredAt} weekly={weekly}/></PercentLimit>;
 }
 
 /**
@@ -493,6 +469,7 @@ export const SourceCard = memo(function SourceCard({id, arrange, boardId, person
   const visible = source.windows.filter(w => !isWindowHidden(arrange.view, source.id, w.id));
   const weekly = planOf(arrange.view, source.id);
   const takeOff = !personal && (arrange.owner || mine);
+  const caps=hasSubscriptionCaps(source.provider);
 
   return (
     <article className="card" data-card={id} style={{'--card-color': colorOf(arrange.view, source.id, source.provider)} as CSSProperties}>
@@ -508,11 +485,11 @@ export const SourceCard = memo(function SourceCard({id, arrange, boardId, person
       </div>
 
       <div className="limits">
-        {source.provider==='zai'?<QuotaCard source={source}/>:source.meters&&<MoneyCard source={source} board={boardId} view={arrange.view}/>}
+        {caps?<QuotaCard source={source}/>:source.meters&&<MoneyCard source={source} board={boardId} view={arrange.view}/>}
         {visible.map(w => (
           <Limit key={w.id} w={w} measuredAt={source.successAt} weekly={weekly} />
         ))}
-        {source.provider!=='zai' && !source.windows.length && !source.meters?.length && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
+        {!caps && !source.windows.length && !source.meters?.length && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
         {!!source.windows.length && !visible.length && <AllHidden source={source} arrange={arrange} />}
       </div>
       <CardTray source={source} />

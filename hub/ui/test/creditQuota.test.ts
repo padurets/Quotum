@@ -11,7 +11,7 @@ import type {QuotaCard as QuotaComponent,CapReset as ResetComponent,KeyMetrics a
 import * as money from '../lib/money';
 import * as format from '../lib/format';
 import * as quota from '../lib/quota';
-import {MeterBar} from '../components/Meter';
+import {MeterBar,PercentLimit,ResetText} from '../components/Meter';
 import {QUOTA_IDS} from '../../server/domain/meters';
 import {t} from '../i18n';
 import {readout} from '../lib/readout';
@@ -36,7 +36,7 @@ const context={exports:{} as {QuotaCard:typeof QuotaComponent;CapReset:typeof Re
   if(name.endsWith('/format'))return format;
   if(name.endsWith('/clock'))return {useClock:()=>now};
   if(name.endsWith('/i18n'))return {t};
-  if(name==='./Meter')return {MeterBar};
+  if(name==='./Meter')return {MeterBar,PercentLimit,ResetText};
   if(name.endsWith('/quota'))return quota;
   return {};
 }};
@@ -44,23 +44,29 @@ runInNewContext(ts.transpileModule(readFileSync(new URL('../components/MoneyCard
 const QuotaCard=context.exports.QuotaCard;
 const card:Card={id:'zai:fixture',provider:'zai',plan:'lite',windows:[],resets:null,owners:[],error:null,successAt:now,stale:false,staleAfterMs:204000,measureIntervalMs:null,meters:result.measurement!.meters,quota:result.quotaObservation!.quota};
 
-test('card and compact show the same independent credit quotas, never a monetary balance',()=>{
+const visibleText=(html:string)=>html.replace(/<[^>]*>/g,'');
+test('card and compact use the standard percentage hierarchy and shared period names',()=>{
   try {
     for(const language of ['en','ru'] as const) {
       setLocale(language);
       for(const compact of [false,true]) {
         const html=renderToStaticMarkup(createElement(QuotaCard,{source:card,compact}));
-        for(const amount of language==='en'?['1,200','8,000']:['1 200','8 000'])assert.ok(html.includes(amount),html);
+        const visible=visibleText(html);
+        for(const amount of language==='en'?['1,200','8,000']:['1 200','8 000'])assert.ok(html.includes(amount),'exact credits remain in value details');
+        assert.ok(!visible.includes(t('quota.credits'))&&!visible.includes(t('money.of',{amount:''})),visible);
         assert.ok(!html.includes('USD')&&!html.includes('account-balance')&&!html.includes('credits:zai'));
         assert.ok(html.includes(language==='en'?'reset time unknown':'время сброса неизвестно'));
         assert.equal(html.includes(language==='en'?'>reset time unknown</span>':'>время сброса неизвестно</span>'),!compact,'compact keeps the full explanation in its tooltip');
-        assert.ok(html.includes('60%')&&html.includes('80%'));
-        assert.ok(html.includes(language==='en'?'credits':'кр.'));
+        assert.ok(visible.includes('60%')&&visible.includes('80%'));
+        assert.ok(visible.includes(t('kind.title.session'))&&visible.includes(t('kind.title.weekly')));
+        assert.ok(!html.includes('limit-share')&&!html.includes('money-limit')&&!html.includes('is-money'));
+        const values=[...html.matchAll(compact?/<strong class="v-[^"]+"[^>]*>(.*?)<\/strong>/g:/<span class="limit-value v-[^"]+"[^>]*>(.*?)<\/span>/g)].map(match=>visibleText(match[1]));
+        assert.deepEqual(values,['60%','80%'],'remaining percent is the sole primary value');
         assert.equal((html.match(/class="meter"/g)??[]).length,2);
       }
     }
     const missing=renderToStaticMarkup(createElement(QuotaCard,{source:{...card,meters:[card.meters![0]]}}));
-    assert.equal((missing.match(/class="limit money-limit/g)??[]).length,2,'absence keeps the same two quota rows');
+    assert.equal((missing.match(/class="limit"/g)??[]).length,2,'absence keeps the same two quota rows');
   }finally{setLocale('en');}
 });
 
@@ -79,7 +85,8 @@ test('each quota uses the shared cap status dot without dimming its retained val
         assert.equal(dots.length,2);
         assert.ok(dots[0].includes('aria-hidden="false"')&&dots[0].includes(t('money.stale')));
         assert.ok(dots[1].includes('aria-hidden="true"'),'the fresh weekly cap keeps its own status');
-        assert.ok(html.includes(language==='en'?'1,200':'1 200'),'the last confirmed remaining amount is kept');
+        assert.ok(visibleText(html).includes('60%'),'the last confirmed remaining percentage is kept');
+        assert.ok(html.includes(language==='en'?'1,200':'1 200'),'exact retained credits are available in details');
         assert.ok(!html.includes('is-stale')&&!html.includes('cap-stale'));
       }
       const missing=renderToStaticMarkup(createElement(QuotaCard,{source:{...card,meters:[card.meters![1]]},compact}));

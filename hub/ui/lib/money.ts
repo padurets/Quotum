@@ -5,7 +5,7 @@ import {formatLocale, t} from '../i18n';
 
 export const unitLabel=(unit:string)=>unit==='credits:zai'?t('quota.zaiCredits'):unit;
 export const amountUnitLabel=(unit:string)=>unit==='credits:zai'?t('quota.credits'):unitLabel(unit);
-export const capName=(meter:Pick<Meter,'id'|'scope'|'label'>)=>meter.id==='quota:credit:5h'?t('quota.fiveHour'):meter.id==='quota:credit:week'?t('quota.weekly'):meter.label??meter.id;
+export const capName=(meter:Pick<Meter,'id'|'scope'|'label'>)=>meter.id==='quota:credit:5h'?t('kind.title.session'):meter.id==='quota:credit:week'?t('kind.title.weekly'):meter.label??meter.id;
 export const amountText=(value:string|null|undefined,unit:string,exact=false)=>{const formatted=money(value,unit,exact);return value==null?formatted:formatted.slice(0,-amountUnitLabel(unit).length-1);};
 
 /** Display rounding never feeds the ledger, including values above Number precision. */

@@ -754,8 +754,6 @@ export const en = {
   "money.stale": "Measurements stale",
   "quota.credits": "credits",
   "quota.zaiCredits": "z.ai credits",
-  "quota.fiveHour": "5-hour",
-  "quota.weekly": "Weekly",
   "quota.unavailable": "Quota unavailable",
   "quota.remaining": "Remaining quota",
   "quota.measurements": "Quota measurements",

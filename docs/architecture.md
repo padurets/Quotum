@@ -569,6 +569,10 @@ become zero. The fixed raw-Authorization GET is the provider-published usage plu
 interface, not a versioned quota OpenAPI schema. No model request is needed.
 
 Subscription caps and OpenRouter key caps share a status dot beside each limit name.
+Subscription cards and compact rows use the same percentage-limit component as
+client-measured subscriptions. Exact credit amounts and allowances stay in value
+tooltips, and period names come from the shared subscription labels. Stored meter
+units and historical cap semantics remain unchanged.
 Missing or stale measurements keep their last confirmed values at full opacity; the
 dot explains the status and shows the last observation time. Key inactivity keeps its
 distinct dot state. Freshness clocks update these small marks, not the whole limit row.

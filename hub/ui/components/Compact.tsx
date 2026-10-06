@@ -4,12 +4,13 @@ import {useApp, useBoardId, useCard, useConnection, useVisibleLimits, useServerV
 import {app, inApp} from '../lib/app';
 import {cardId, isHidden, isWindowHidden} from '../lib/view';
 import {ordered} from '../lib/grid';
-import {level, windowName} from '../lib/quota';
-import {num} from '../lib/format';
+import {windowName} from '../lib/quota';
 import {t, useLocale} from '../i18n';
-import {CardMark, LimitMeter, ResetLine} from './SourceCard';
+import {CardMark, ResetLine} from './SourceCard';
+import {PercentLimit} from './Meter';
 import {MoneyCard,QuotaCard} from './MoneyCard';
 import {providerOf} from '../../server/domain/providers';
+import {hasSubscriptionCaps} from '../lib/providers';
 import type {startLive} from '../lib/live';
 
 const Row = memo(function Row({id}: {id: string}) {
@@ -30,15 +31,8 @@ const Row = memo(function Row({id}: {id: string}) {
       </div>
       {sessions.length > 0 && <small className="compact-agents" title={t('desktop.total', {count: sessions.length})}>{working}</small>}
     </div>
-    {card.provider==='zai'?<QuotaCard source={card} compact/>:card.meters?.length?<MoneyCard source={card} board={board??''} view={view} compact/>:!windows.length&&<p className="compact-quality">{t('desktop.unavailable')}</p>}
-    {windows.map(w => <div className="compact-limit" key={w.id}>
-      <div className="compact-window-name">
-        <span title={windowName(w).replaceAll(' · ', '\n')}>{windowName(w).split(' · ').map((part, i) => <span key={i}>{part}</span>)}</span>
-      </div>
-      <small className="compact-reset"><ResetLine w={w} short /></small>
-      <LimitMeter w={w} />
-      <strong className={`v-${level(w.remaining)}`}>{num(w.remaining)}%</strong>
-    </div>)}
+    {hasSubscriptionCaps(card.provider)?<QuotaCard source={card} compact/>:card.meters?.length?<MoneyCard source={card} board={board??''} view={view} compact/>:!windows.length&&<p className="compact-quality">{t('desktop.unavailable')}</p>}
+    {windows.map(w => <PercentLimit key={w.id} name={windowName(w)} remaining={w.remaining} reset={<ResetLine w={w} short/>} compact/>)}
   </section>;
 });
 

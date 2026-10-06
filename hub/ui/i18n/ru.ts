@@ -749,8 +749,6 @@ export const ru = {
   "money.stale": "Данные устарели",
   "quota.credits": "кр.",
   "quota.zaiCredits": "Кредиты z.ai",
-  "quota.fiveHour": "Пять часов",
-  "quota.weekly": "Неделя",
   "quota.unavailable": "Квота недоступна",
   "quota.remaining": "Остаток квоты",
   "quota.measurements": "Измерения квот",

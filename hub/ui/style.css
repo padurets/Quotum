@@ -65,7 +65,6 @@ body::after {
 }
 button { font: inherit; color: inherit; cursor: pointer; }
 :focus-visible { outline: 1.5px solid var(--accent); outline-offset: 2px; }
-.limit-share { margin-inline-start: .65rem; color: var(--muted); font-size: .8em; }
 .limit-value, .legend-item b, td, .tooltip-row strong { font-variant-numeric: tabular-nums; }
 
 /* ---------- header ---------- */
@@ -942,7 +941,6 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .money-partial { margin-left: 4px; color: var(--text-3); }
 .money-limit .limit-top { flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
 .money-limit .limit-name { display: flex; align-items: center; flex: 1; min-width: 0; }
-.money-limit .limit-share { flex-shrink: 0; }
 .key-status { display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--warn); vertical-align: middle; }
 .cap-label { display: flex; align-items: center; min-width: 0; }
 .cap-label > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

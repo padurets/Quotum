@@ -362,7 +362,9 @@ Server operators can decrypt saved access; desktop protection uses the app's tru
 key storage. Removing access does not revoke the provider key.
 
 The **Subscription** card and compact panel show independent five-hour and weekly
-remaining quotas in credits, their reported allowances and supplied reset times.
+remaining quotas as percentages, using the same rows and period labels as other
+subscriptions. Exact credits and reported allowances are available in the value's
+tooltip; supplied reset times appear below the scale.
 Unknown resets stay unknown. Current credit-generation plans are supported; legacy
 prompt/token/MCP and unknown formats stay unavailable. This provider-published plugin
 interface has no versioned quota OpenAPI schema. Invalid or missing readings retain
