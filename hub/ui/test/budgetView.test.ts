@@ -95,7 +95,7 @@ test('CNY-only cards use a dated USD estimate with the same renderer',()=>{
     const markup=renderToStaticMarkup(createElement(MoneyCard,{source,board:'',compact}));
     assert.equal((markup.match(/data-money=/g)??[]).length,1);assert.match(markup,/data-money="15714286"/);assert.ok(markup.includes('≈ '));assert.ok(markup.includes('ECB'));
   }
-  const later={...source,meters:source.meters.map(m=>m.id==='balance:CNY'?{...m,amount:'142000000',at:at+1000}:m.id.startsWith('converted:')?{...m,stale:true}:m)};
+  const later={...source,meters:source.meters!.map(m=>m.id==='balance:CNY'?{...m,amount:'142000000',at:at+1000}:m.id.startsWith('converted:')?{...m,stale:true}:m)};
   const stale=renderToStaticMarkup(createElement(MoneyCard,{source:later,board:''}));
   assert.ok(!stale.includes('142.000000 CNY'));assert.match(stale,/is-stale" data-money="15714286"/);
 });
