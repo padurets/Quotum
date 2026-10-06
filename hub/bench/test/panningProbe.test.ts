@@ -14,6 +14,10 @@ function fixture() {
   const schedule = (callback: (stamp: number) => void) => {callbacks.push(callback); return callbacks.length;};
   const layer = (data = false) => {const slides = {style: {transform: 'none'}, getAnimations: () => []}; return {style: {transform: 'none'}, slides, querySelector: (selector: string) => selector === '.activity-stack' ? data ? {} : null : slides};};
   const historyLayer = layer(), activityLayer = layer(true), activityTicks = layer(), activityEdge = layer(true);
+  const restoreClip = {style: {transform: 'none'}, firstElementChild: activityLayer};
+  const endClip = {style: {transform: 'none'}, firstElementChild: restoreClip};
+  const startClip = {style: {transform: 'none'}, firstElementChild: endClip};
+  const activityClip = {style: {transform: 'none', visibility: ''}, firstElementChild: startClip};
   const hiddenHistory = layer(), hiddenActivity = layer();
   const svg = (slides: ReturnType<typeof layer>) => ({
     isConnected: true, dataset: {drawReady: 'true', drawFrom: '0', drawTo: slides === historyLayer ? '424' : '720'} as Record<string, string>, style: {height: '200px'},
@@ -22,7 +26,7 @@ function fixture() {
     getBoundingClientRect: () => ({width: 450}), viewBox: {baseVal: {width: 900}},
     parentElement: {
       dataset: {axisEnd: '0'},
-      querySelector: (selector: string) => slides === historyLayer ? historyLayer : selector === '.plot-clip.is-band > .plot-move' ? activityLayer : activityTicks,
+      querySelector: (selector: string) => slides === historyLayer ? historyLayer : selector === '.plot-clip.is-band' ? activityClip : selector === '.plot-clip.is-band .plot-move' ? activityLayer : activityTicks,
       querySelectorAll: () => slides === historyLayer ? [historyLayer] : [activityTicks, activityLayer, activityEdge],
       addEventListener: (name: string, fn: (event: object) => void) => listeners.set(name, fn), removeEventListener: () => {},
     },
@@ -36,7 +40,7 @@ function fixture() {
     history: {pushState: () => {}}, getComputedStyle: () => ({opacity: '1', transform: 'none'}),
     requestAnimationFrame: schedule, cancelAnimationFrame: () => {},
     MutationObserver: class {observe() {} disconnect() {}},
-    DOMMatrix: class {a: number; e: number; constructor(value: string | undefined) {this.a = Number(value?.match(/scaleX\(([-.\d]+)\)/)?.[1] ?? 1);this.e = Number(value?.match(/translateX\(([-.\d]+)px\)/)?.[1] ?? 0);}},
+    DOMMatrix: class {a: number; e: number; constructor(value: string | undefined) {this.a = Number(value?.match(/scaleX\(([-.\d]+)\)/)?.[1] ?? 1);this.e = Number(value?.match(/translateX\(([-.\d]+)px\)/)?.[1] ?? 0);if(value?.startsWith('scaleX'))this.e*=this.a;}},
     window: {fetch: async () => ({}), requestAnimationFrame: schedule, addEventListener: (type: string, callback: (event: object) => void) => bubble.set(type, callback), removeEventListener: () => {}},
   };
   runInNewContext(probe, context);
@@ -57,8 +61,26 @@ function fixture() {
   };
   const frame = (at: number) => {time = at; return callbacks.splice(0);};
   const runFrame = (at: number) => frame(at).forEach(callback => callback(at));
-  return {reading, wheel, update, frame, runFrame, requestFrame: context.window.requestAnimationFrame, context, historySvg, activitySvg, historyLayer, activityLayer};
+  return {reading, wheel, update, frame, runFrame, requestFrame: context.window.requestAnimationFrame, context, historySvg, activitySvg, historyLayer, activityLayer, activityClip};
 }
+
+test('the probe includes clipping transforms and rejects a missing inverse on the real data layer', () => {
+  for (const correct of [true, false]) {
+    const f = fixture(); f.wheel(0, 0);
+    f.activityClip.firstElementChild.style.transform = 'translateX(5px)';
+    f.activityClip.firstElementChild.firstElementChild.style.transform = 'translateX(-12px)';
+    f.activityClip.firstElementChild.firstElementChild.firstElementChild.style.transform = correct ? 'translateX(7px)' : 'none';
+    f.requestFrame(() => f.update(1, 16.7)); f.runFrame(16.7);
+    assert.equal(f.reading.synchronized, correct);
+    assert.equal(f.reading.latency.length, correct ? 1 : 0);
+  }
+});
+
+test('a hidden activity band cannot be credited as moving data', () => {
+  const f = fixture(); f.wheel(0, 0); f.activityClip.style.visibility = 'hidden';
+  f.requestFrame(() => f.update(1, 16.7)); f.runFrame(16.7);
+  assert.equal(f.reading.synchronized, false); assert.equal(f.reading.latency.length, 0);
+});
 
 function run(moves: boolean, synchronized: boolean, proportional = true, historyMoves = true, edgeMoves = true): PanReading {
   const f = fixture();
@@ -155,7 +177,7 @@ test('a nonzero HTML baseline is retained on restart without crediting a model s
   f.historySvg.dataset.panBase = '23'; f.activitySvg.dataset.panBase = '13';
   f.historyLayer.style.transform = 'translateX(23px)'; f.activityLayer.style.transform = 'translateX(13px)';
   f.wheel(0, 0);
-  f.requestFrame(() => {f.update(1, 16.7); f.historySvg.dataset.panEnd = '12'; f.historySvg.parentElement.querySelector('').style.transform = 'translateX(11px)'; f.activitySvg.parentElement.querySelector('.plot-clip.is-band > .plot-move').style.transform = 'translateX(6px)'; f.activitySvg.parentElement.querySelectorAll().forEach(layer => {layer.style.transform = 'translateX(6px)';});});
+  f.requestFrame(() => {f.update(1, 16.7); f.historySvg.dataset.panEnd = '12'; f.historySvg.parentElement.querySelector('').style.transform = 'translateX(11px)'; f.activitySvg.parentElement.querySelector('.plot-clip.is-band .plot-move').style.transform = 'translateX(6px)'; f.activitySvg.parentElement.querySelectorAll().forEach(layer => {layer.style.transform = 'translateX(6px)';});});
   f.runFrame(16.7);
   assert.equal(f.reading.latency.length, 1);
   assert.equal(f.reading.pending.length, 0);

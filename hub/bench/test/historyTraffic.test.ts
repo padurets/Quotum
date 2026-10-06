@@ -37,6 +37,26 @@ test('the owned proxy measures a real fixed-codec HTTP body without changing JSO
 import {HistoryBodies, historyScroll} from '../historyTrafficBrowser';
 import {readUnion} from '../historyTrafficBudget';
 
+test('the browser observer expands late metadata while counting only each actual response body', async () => {
+  const listeners = new Map<string, (event: never) => void>();
+  const full = {run: 'r', now: 1, historyStart: 0, meta: 'tag', known: {work: 0, sources: {s: 0}}, chunks: [{from: 0, to: 60}]};
+  const compact = {run: 'r', now: 2, meta: 'tag', chunks: [{from: 60, to: 120}]};
+  let finishFirst!: (value: {body: string; base64Encoded: boolean}) => void;
+  const cdp = {on: <T>(name: string, fn: (event: T) => void) => listeners.set(name, fn as (event: never) => void),
+    send: <T>(_method: string, params: object) => ((params as {requestId: string}).requestId === 'first' ? new Promise<{body: string; base64Encoded: boolean}>(resolve => {finishFirst = resolve;}) : Promise.resolve({body: JSON.stringify(compact), base64Encoded: false})) as Promise<T>};
+  const observer = new HistoryBodies(cdp);
+  const emit = (name: string, event: object) => listeners.get(name)?.(event as never);
+  const start = (id: string) => emit('Network.requestWillBeSent', {requestId: id, request: {url: 'http://localhost/api/history?cell=1&from=0&to=60'}});
+  start('first'); emit('Network.loadingFinished', {requestId: 'first'});
+  start('second'); emit('Network.loadingFinished', {requestId: 'second'});
+  finishFirst({body: JSON.stringify(full), base64Encoded: false});
+  await Promise.all([...observer.pending]);
+  assert.deepEqual(observer.errors, []);
+  assert.deepEqual(observer.reads[1].answer, {run: 'r', now: 2, known: full.known});
+  assert.equal(observer.reads[1].count?.decoded, Buffer.byteLength(JSON.stringify(compact)));
+  assert.ok(observer.reads[1].count!.decoded! < Buffer.byteLength(JSON.stringify({...compact, known: full.known, historyStart: 0})));
+});
+
 test('the reference union respects fresh holes and the eight-tile API limit', () => {
   assert.deepEqual(readUnion(new Set([0, 1, 3, 4]), 1), [[0, 2], [3, 5]]);
   assert.deepEqual(readUnion(new Set(Array.from({length: 481}, (_, i) => i)), 1), [[0, 480], [480, 481]]);

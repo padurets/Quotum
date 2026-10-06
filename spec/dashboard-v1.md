@@ -246,9 +246,20 @@ retention period. The hub credits machines that went quiet before reading the ce
   run: string, // this start of the hub, the same as hello.epoch
   historyStart: number,
   known: {work: number, sources: Record<string, number>},
+  meta?: string, // opaque metadata token, only when the request opts in
   chunks: Chunk[]
 }
 ```
+
+An optional `meta` query parameter opts into metadata reuse. Its value is empty on
+the first read, or the 43-character base64url token from a previous full answer.
+The token binds `run`, `historyStart` and `known` to this board and this hub instance.
+If it matches the current metadata, the reply omits `historyStart` and `known` and
+still sends `now`, `run`, `meta` and all requested chunks. Otherwise it returns full
+metadata and its new token. A reader expands a compact reply from the metadata
+captured when that request started, requiring both its token and `run` to match;
+it never borrows a later reply's metadata. Requests without `meta` keep the full
+answer shape, and a full answer is accepted without a token.
 
 `known.work` is when the hub began keeping work. `known.sources` gives when each shown
 subscription came to the board; hidden cards are absent. The chunks cover the cut
@@ -361,8 +372,11 @@ continues to supply the table and totals until the final range is complete. Pann
 reads contiguous missing or stale cells immediately, from the nearest unread edge,
 with at most two flights and eight tiles per request. It never crosses fresh cells
 or a tile owned by another flight. A visible miss may extend that same batch by
-min(60, ceil(history length / cell / 4)) nearby whole cells in its direction. No
-miss means no new speculative read. Unvisited optional cells remain charged after
+min(60, ceil(history length / cell / 4)) nearby whole cells in its direction. The
+optional extension stops at a tile edge when that keeps every required cell and at
+least one tile of cells, avoiding repeated metadata for fragments of the same tile.
+Only dispatched cells consume the optional allowance. No miss means no new speculative
+read. Unvisited optional cells remain charged after
 cancellation or reversal. A disjoint jump within a held tile reads only the minimum
 unknown or stale bridge needed to preserve its connected read interval and fresh
 prefix. That bridge is separate from the optional buffer and smaller than one tile;
@@ -742,6 +756,9 @@ machine. Its opaque eight-character reference is stable only within one board an
 start of the hub, derived with a fresh secret key; it reveals neither database session
 ids nor how many sessions other boards have. These are coding-agent sessions, separate
 from sign-in sessions. A restart changes the references and `run` together.
+Metadata tokens are scoped to the board, hub instance and exact visible metadata.
+They grant no access: every history request checks board membership and visibility
+before deciding whether it may omit unchanged metadata.
 The joining and sharing cutoff applies to history. For a running session the board is
 allowed to list, its live `workedMs` includes retained credited work on its current
 subscription across contexts, including before that history cutoff. Without reliable

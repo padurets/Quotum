@@ -117,8 +117,9 @@ Codex         api                  idle     started 25m ago · editor
   flat over the hours its subscription usually spends nothing) and the next resets, as
   far as you choose; behind, it marks when limits came back early and when free resets
   were granted. Drag across it to zoom into a burst of work (on a phone, hold a finger
-  on it first); ‹ and ›, or a swipe sideways, move it back and forth through time by
-  half its length. The open page keeps the history it has read and fetches only missing
+  on it first). ‹ and › move it by half its length; a horizontal touchpad swipe,
+  Shift with the wheel, or Shift-drag moves both charts continuously through time.
+  The open page keeps the history it has read and fetches only missing
   or changed parts as measurements and agent work arrive.
 - **A table with two forecasts:** what the period spent, each subscription's active time
   and what an active hour costs; turned on, agent-hours (each agent counted separately)
@@ -211,10 +212,11 @@ day, not a script thrown together over a weekend. In practice that meant:
   consumption. The agent says when its next measurement is due, so a sparse series isn't
   mistaken for a gap.
 - **Few moving parts.** The agent has nine direct dependencies. The hub is Fastify and
-  the SQLite built into Node, and the UI is plain React with about 163 KB of gzipped
-  JavaScript. There is no telemetry; the only requests the hub makes on its own are to
-  the two reset trackers (or the mirror you name), every ten minutes, and
-  `QUOTUM_RESETS=off` turns them off.
+  the SQLite built into Node, and the UI is plain React with about 199 KB of gzipped
+  JavaScript. There is no telemetry. The hub reads the two reset trackers (or the
+  mirror you name) every ten minutes; `QUOTUM_RESETS=off` turns that off. When you
+  connect OpenRouter, it also reads that account's balance and key limits through
+  fixed HTTPS requests using the management key you supplied.
 - **Written down and tested.** The protocol between the agent and the hub is a spec
   ([spec/ingest-v1.md](spec/ingest-v1.md)). Tests cover the spending rules,
   resets, duty, scheduling, permissions, sharing, device pairing, the clients' answers and the
@@ -382,6 +384,8 @@ the same panel; removing it does not revoke the provider key. Revoked or expired
 preserves the last measurements. The compact panel displays money too; tray minimums
 and quota notifications continue to use percentage windows only.
 
+![OpenRouter balances and API-key limits](docs/openrouter.png)
+
 ## Updating
 
 Before replacing the hub, stop it and back up its data directory (the Docker volume
@@ -397,6 +401,12 @@ history remains on the chart.
 Upgrading from 0.4 preserves subscription measurements, agent-work history, boards and
 settings. Board layouts saved before the widget grid are converted when opened. Reload
 open dashboard tabs after upgrading so the page and hub use the same history contract.
+
+Upgrading from 0.5 also preserves subscription measurements, agent-work history, boards
+and settings. Subscription measuring needs no new configuration. To connect OpenRouter
+on a server hub, configure its separate encryption key as described in
+[deploy/README.md](deploy/README.md); back it up separately from the data directory.
+The desktop app manages its encryption key as described in [SECURITY.md](SECURITY.md).
 
 On each machine, run `quotum update`, then restart the background agent with
 `quotum stop` and `quotum start` (or restart its service). With npm, use the latest
@@ -428,8 +438,8 @@ commit in their names. To build it yourself, see [CONTRIBUTING.md](CONTRIBUTING.
   Windows profile as the installed app; nothing is stored beside the executable.
   The portable version needs [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)
   already installed (the setup.exe installs it when needed).
-- **Linux** (x64): the system package includes Chromium and works alongside the
-  system's `nodejs`. On Debian 12, Ubuntu 22.04 or newer use `sudo apt install
+- **Linux** (x64): the packages include Chromium and Node.js. On Debian 12,
+  Ubuntu 22.04 or newer use `sudo apt install
   ./quotum-desktop-<…>.deb`; on Fedora use `sudo dnf install ./quotum-desktop-<…>.rpm`.
   Elsewhere, make the AppImage executable (`chmod +x`) and run it; GTK3 and NSS must
   be available on the system. If FUSE is unavailable,
@@ -483,12 +493,14 @@ notification preferences and language belong to the app.
   `%LOCALAPPDATA%\com.padurets.quotum` or `~/.local/share/com.padurets.quotum`.
   The logs are in `%LOCALAPPDATA%\com.padurets.quotum\logs` on Windows and
   `~/.cache/com.padurets.quotum/logs` on Linux.
-- **What leaves the machine:** nothing but the reset announcements the board reads from
-  Codex Resets and Claude Resets, as every hub does (`QUOTUM_RESETS=off` in the app's
-  environment turns that off). Its hub listens on `127.0.0.1` alone, behind a key only
-  the window gets.
+- **Network access:** the app reads reset announcements from Codex Resets and Claude
+  Resets, as every hub does (`QUOTUM_RESETS=off` in the app's environment turns that
+  off). If you connect OpenRouter, its hub also reads your account through fixed HTTPS
+  requests with the management key you supplied. The local hub listens on `127.0.0.1`
+  alone, behind a key only the app's windows get; it does not send measurements to a
+  server hub.
 - **Size:** Linux packages carry both Chromium for the window and Node.js for the hub.
-  Windows uses the system WebView2: about 26 MiB for setup.exe or 38 MiB for the ZIP.
+  Windows uses the system WebView2: about 27 MiB for setup.exe or 39 MiB for the ZIP.
   In a Windows 11 VM with five subscriptions, idle working set across the app, Node
   and WebView2 was about 342 MiB with the window open and 47 MiB after closing it;
   CPU was 0.76% and 0.24% of one core over 30 seconds. Memory varies with history,
@@ -539,6 +551,8 @@ agent running in the background keeps its version until it is started again.
 | `QUOTUM_PUBLIC_URL` | taken from the request | The address shown to agents and used in invite links |
 | `QUOTUM_TRUST_PROXY` | — | Believe a proxy about the client's address and protocol: `true`, a number of hops, or addresses and CIDR ranges |
 | `QUOTUM_DATA_DIR` | `hub/data` (image: `/data`) | Where the SQLite database lives |
+| `QUOTUM_SECRET_KEY`, `QUOTUM_SECRET_KEY_FILE` | — | Encryption key for trusted connector credentials: 32 random bytes as unpadded base64url, or a protected file outside the data directory containing it. Set one input only; see [server deployment](deploy/README.md) |
+| `QUOTUM_SECRET_KEY_PREVIOUS`, `QUOTUM_SECRET_KEY_PREVIOUS_FILE` | — | Matching previous encryption key during rotation. Set one previous input only; back up keys separately and retain the old key for its matching backups |
 | `QUOTUM_SETUP_CODE` | random, printed at start | The code the first account needs while the hub has none |
 | `QUOTUM_SIGNUP` | `invite` | `open` lets anyone sign up; otherwise only the first person and people with an invite |
 | `QUOTUM_RESETS` | on | `off` stops polling the community reset trackers |
@@ -606,11 +620,11 @@ Add the hashes of any new database layout steps to `RELEASED` in
 Refresh the README screenshots in both languages from the demo board, check the upgrade
 instructions and prepare the release notes outside the repository.
 
-For example, to prepare 0.5.0 on that branch:
+For example, to prepare 0.6.0 on that branch:
 
 ```sh
-(cd hub && npm version 0.5.0 --no-git-tag-version)
-# agent/Cargo.toml and desktop/Cargo.toml: version = "0.5.0"
+(cd hub && npm version 0.6.0 --no-git-tag-version)
+# agent/Cargo.toml and desktop/Cargo.toml: version = "0.6.0"
 (cd agent && cargo metadata --format-version 1 >/dev/null)
 (cd desktop && cargo metadata --format-version 1 >/dev/null)
 ```
@@ -624,8 +638,8 @@ commit to tag. Only after the maintainer approves that specific release:
 git fetch origin
 git switch main
 git pull --ff-only origin main
-git tag -a v0.5.0 -F /path/to/release-notes.md --cleanup=verbatim
-git push origin v0.5.0
+git tag -a v0.6.0 -F /path/to/release-notes.md --cleanup=verbatim
+git push origin v0.6.0
 ```
 
 [release.yml](.github/workflows/release.yml) refuses a tag that is not annotated or

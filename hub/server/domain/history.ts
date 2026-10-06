@@ -50,8 +50,17 @@ export type Chunk<Ref = string> = {
   resets: [string, string, number][];
   grants: [string, number, number][];
 };
-export type HistoryMeta = {now: number; historyStart: number; known: {work: number; sources: Record<string, number>}};
+export type HistoryMeta = {now: number; historyStart: number; known: {work: number; sources: Record<string, number>}; meta?: string};
 export type HistoryAnswer = HistoryMeta & {run: string; chunks: Chunk[]};
+export type HistoryBasis = HistoryMeta & {run: string};
+export type HistoryReply = HistoryAnswer | {now: number; run: string; meta: string; chunks: Chunk[]};
+
+/** A compact reply can borrow only the metadata captured by its own request. */
+export function expandHistory(reply: HistoryReply, prior?: HistoryBasis): HistoryAnswer {
+  if ('known' in reply) return reply;
+  if (!prior?.meta || reply.meta !== prior.meta || reply.run !== prior.run) throw new Error('history metadata mismatch');
+  return {...reply, historyStart: prior.historyStart, known: prior.known};
+}
 export type SourceEvent =
   | {sourceId: string; at: number; kind: 'early_reset'; windows: string[]}
   | {sourceId: string; at: number; kind: 'resets_granted'; count: number};

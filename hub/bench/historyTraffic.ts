@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {cellStart, compose, targetOf, tileOf, type Chunk, type HistoryAnswer} from '../server/domain/history';
+import {cellStart, compose, expandHistory, targetOf, tileOf, type Chunk, type HistoryAnswer, type HistoryReply} from '../server/domain/history';
 import {followPan, HistoryStore} from '../ui/lib/history';
 import {Pan} from '../ui/lib/pan';
 import type {HistoryTile} from '../ui/lib/historyTiles';
@@ -30,7 +30,7 @@ export async function historyTraffic(upstream: string, cookie: string, board: st
         let interest: {from: number; to: number} | null = null, freshOverlap = 0, ownershipOverlap = 0;
         const pending = new Set<Promise<unknown>>();
         const store = new HistoryStore({now: () => anchor, preparations: null,
-          read: (_board, cell, from, to, signal) => {
+          read: (_board, cell, from, to, signal, _meters, meta) => {
             const readPhase = phase; attempts.push({from, to, cell, phase: readPhase});
             if (readPhase.endsWith('/cold')) {
               const tiles = gridsOf(store).get(cell);
@@ -51,7 +51,7 @@ export async function historyTraffic(upstream: string, cookie: string, board: st
               }
             }
             inFlight++; peakFlights = Math.max(peakFlights, inFlight);
-            const result = historyBody(`${proxy.url}/api/history?board=${encodeURIComponent(board)}&cell=${cell}&from=${from}&to=${to}`, cookie, signal, count => bodies.push({phase: readPhase, count, from, to})).then(value => {latest = value as HistoryAnswer; return latest;});
+            const result = historyBody(`${proxy.url}/api/history?board=${encodeURIComponent(board)}&cell=${cell}&from=${from}&to=${to}&meta=${encodeURIComponent(meta?.meta ?? '')}`, cookie, signal, count => bodies.push({phase: readPhase, count, from, to})).then(value => {latest = expandHistory(value as HistoryReply, meta); return latest;});
             pending.add(result);
             void result.then(() => {pending.delete(result); inFlight--;}, () => {pending.delete(result); inFlight--;});
             return result;

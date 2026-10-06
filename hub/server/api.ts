@@ -167,7 +167,7 @@ export async function buildApp(hub: Hub) {
     return snapshot;
   });
 
-  app.get<{Querystring: {cell?: string; from?: string; to?: string; board?: string; meters?: string; unit?: string;currency?:string}}>('/api/history', (request, reply) => {
+  app.get<{Querystring: {cell?: string; from?: string; to?: string; board?: string; meters?: string; unit?: string; currency?:string; meta?:string}}>('/api/history', (request, reply) => {
     const access = guards.board(request, reply, request.query.board);
     if (!access) return reply;
     const now = Date.now();
@@ -177,6 +177,7 @@ export async function buildApp(hub: Hub) {
     const cell = number(request.query.cell);
     const from = number(request.query.from);
     const askedTo = number(request.query.to);
+    if (request.query.meta !== undefined && !/^(?:[A-Za-z0-9_-]{43})?$/.test(request.query.meta)) return reply.code(400).send({error: 'invalid_request'});
     if (!READ_CELLS.includes(cell) || !Number.isFinite(from) || !Number.isFinite(askedTo) || from % cell || (askedTo <= now && askedTo % cell)) return reply.code(400).send({error: 'invalid_request'});
     const to = Math.min(Math.ceil(askedTo / cell) * cell, cellStart(now + CLOCK_TOLERANCE_MS, cell) + cell);
     const oldest = tileStart(tileOf(now - config.retention.sampleDays * 86_400_000, cell), cell);
@@ -206,7 +207,10 @@ export async function buildApp(hub: Hub) {
       chunks=transformed.map(chunk=>JSON.stringify(chunk));
       if(chunks.reduce((sum,json)=>sum+Buffer.byteLength(json),0)>16*1024*1024)return reply.code(413).send({error:'history_limit'});
     }
-    const meta = JSON.stringify({now, run: events.epoch, historyStart: store.historyStart(now), known: store.historyKnown(shown)});
+    const basis = {run: events.epoch, historyStart: store.historyStart(now), known: store.historyKnown(shown)};
+    const tag = request.query.meta === undefined ? undefined : history.metadata(board, basis);
+    const meta = JSON.stringify(tag && request.query.meta === tag ? {now, run: events.epoch, meta: tag} : {now, ...basis, ...(tag ? {meta: tag} : {})});
+
     return reply.type('application/json').send(`${meta.slice(0, -1)},"chunks":[${chunks.join(',')}]}`);
   });
 
