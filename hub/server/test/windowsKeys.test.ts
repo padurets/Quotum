@@ -66,7 +66,7 @@ function sendFrame(pipe:Writable,input:Buffer) {
 function pausedScript(root:string,name:string,point:'write'|'flush'|'wait'|'reader') {
   let script=readFileSync(new URL('../secrets/windows.ps1',import.meta.url),'utf8');
   const ready=path.join(root,name+'-ready'),gate=path.join(root,name+'-gate'),acquired=path.join(root,name+'-acquired');
-  const compiled=path.join(root,name+'-compiled'),start=path.join(root,name+'-start'),finished=path.join(root,name+'-finished'),status=path.join(root,name+'-status');
+  const compiled=path.join(root,name+'-compiled'),start=path.join(root,name+'-start'),finished=path.join(root,name+'-finished'),status=path.join(root,name+'-status'),diagnostic=path.join(root,name+'-diagnostic');
   const before=point==='flush'?'if(RegFlushKey(leaf)!=0)throw new Exception();':point==='write'?'if(RegSetValueEx(leaf,"CurrentKey",0,3,candidate,43)!=0)':'var waited=WaitForSingleObject(mutex,8000);';
   assert.equal(script.split(before).length,2);
   const barrier='File.WriteAllText('+JSON.stringify(ready)+',"ready");'+(point!=='reader'?'while(!File.Exists('+JSON.stringify(gate)+')){if(watch.ElapsedMilliseconds>=8500)throw new Exception();System.Threading.Thread.Sleep(10);}':'');
@@ -75,9 +75,12 @@ function pausedScript(root:string,name:string,point:'write'|'flush'|'wait'|'read
   assert.equal(script.split('output.Write(header,0,header.Length);').length,2);
   script=script.replace('output.Write(header,0,header.Length);','File.WriteAllText('+JSON.stringify(status)+',status.ToString());output.Write(header,0,header.Length);');
   const literal=(value:string)=>"'"+value.replaceAll("'","''")+"'";
+  script=script.replace("  Add-Type -TypeDefinition @'","  $stage = 'compile'\n  Add-Type -TypeDefinition @'");
   assert.equal(script.split('[QuotumManagedKey]::Run()').length,2);
-  script=script.replace('[QuotumManagedKey]::Run()', '[IO.File]::WriteAllText('+literal(compiled)+",'ready'); $wait = [Diagnostics.Stopwatch]::StartNew(); while (-not [IO.File]::Exists("+literal(start)+')) { if ($wait.ElapsedMilliseconds -ge 15000) { throw }; Start-Sleep -Milliseconds 10 }; [QuotumManagedKey]::Run(); [IO.File]::WriteAllText('+literal(finished)+",'done')");
-  const file=path.join(root,name+'.ps1');writeFileSync(file,script);return {file,ready,gate,acquired,compiled,start,finished,status};
+  script=script.replace('[QuotumManagedKey]::Run()', "$stage = 'compiled'; [IO.File]::WriteAllText("+literal(compiled)+",'ready'); $wait = [Diagnostics.Stopwatch]::StartNew(); while (-not [IO.File]::Exists("+literal(start)+")) { if ($wait.ElapsedMilliseconds -ge 15000) { throw }; Start-Sleep -Milliseconds 10 }; $stage = 'run'; [QuotumManagedKey]::Run(); [IO.File]::WriteAllText("+literal(finished)+",'done')");
+  const caught='} catch {\n  try { $out';assert.equal(script.split(caught).length,2);
+  script=script.replace(caught,"} catch {\n  $safe = @{stage=$stage; type=$_.Exception.GetType().Name; line=$_.InvocationInfo.ScriptLineNumber; codes=@([regex]::Matches($_.Exception.Message,'\\bCS[0-9]{4}\\b') | ForEach-Object { $_.Value })} | ConvertTo-Json -Compress\n  [IO.File]::WriteAllText("+literal(diagnostic)+",$safe)\n  try { $out");
+  const file=path.join(root,name+'.ps1');writeFileSync(file,script);return {file,ready,gate,acquired,compiled,start,finished,status,diagnostic};
 }
 
 test('a Windows registry writer survives its Node parent and abandoned mutexes are recovered',{...windows,timeout:120_000},async t=>{
@@ -89,6 +92,11 @@ test('a Windows registry writer survives its Node parent and abandoned mutexes a
     const orphan=death.startsWith('parent'),reverse=death==='parent-before-acquire';
     const id=randomUUID(),a=pausedScript(root,death+'-writer',reverse?'wait':death==='helper-after-write'?'flush':'write'),b=pausedScript(root,death+'-reader','reader');
     const first=frame(id,17),second=frame(id,29);
+    for(const script of [a.file,b.file]) {
+      const parser="$tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile('"+script.replaceAll("'","''")+"',[ref]$tokens,[ref]$errors) | Out-Null; ConvertTo-Json -Compress -InputObject @($errors | ForEach-Object { @{id=$_.ErrorId; line=$_.Extent.StartLineNumber} })";
+      const parsed=spawnSync(executable,['-NoLogo','-NoProfile','-NonInteractive','-Command',parser],{encoding:'utf8',timeout:10_000,windowsHide:true});
+      assert.equal(parsed.status,0);assert.equal(parsed.stdout.trim(),'[]');
+    }
     // A detached helper deliberately exercises an orphan; Windows may otherwise kill its parent's job.
     const parentScript="import {spawn} from 'node:child_process';const child=spawn("+JSON.stringify(executable)+","+JSON.stringify(args(a.file))+",{stdio:['pipe','ignore','ignore'],windowsHide:true,detached:true});process.send({pid:child.pid});process.stdin.pipe(child.stdin);";
     const parent=spawn(process.execPath,['--input-type=module','-e',parentScript],{stdio:['pipe','ignore','ignore','ipc']});
@@ -101,7 +109,8 @@ test('a Windows registry writer survives its Node parent and abandoned mutexes a
       const result=new Promise<number|null>((resolve,reject)=>{reader!.on('error',reject);reader!.on('close',resolve);});
       await sendFrame(reader.stdin!,second.input);
       // Compile both helpers before starting either production deadline.
-      await until(()=>!!helperPid&&existsSync(a.compiled)&&existsSync(b.compiled));
+      await until(()=>!!helperPid&&existsSync(a.compiled)&&existsSync(b.compiled)||existsSync(a.diagnostic)||existsSync(b.diagnostic)||reader!.exitCode!==null);
+      assert.equal(existsSync(a.compiled)&&existsSync(b.compiled),true);
       writeFileSync(a.start,'continue');await until(()=>existsSync(a.ready));
       if(orphan) {parent.kill();await until(()=>parent.exitCode!==null||parent.signalCode!==null);process.kill(helperPid!,0);}
       writeFileSync(b.start,'continue');
@@ -118,6 +127,9 @@ test('a Windows registry writer survives its Node parent and abandoned mutexes a
       if(reverse)writeFileSync(a.gate,'continue');
       if(orphan) {await until(()=>existsSync(a.finished));assert.equal(readFileSync(a.status,'utf8'),'0');}
       assert.equal(managedRegistry(id,false).fingerprint,fingerprint);
+    } catch(error) {
+      const snapshot=(script:ReturnType<typeof pausedScript>)=>({compiled:existsSync(script.compiled),ready:existsSync(script.ready),acquired:existsSync(script.acquired),finished:existsSync(script.finished),status:existsSync(script.status)?readFileSync(script.status,'utf8'):null,diagnostic:existsSync(script.diagnostic)?JSON.parse(readFileSync(script.diagnostic,'utf8')):null});
+      t.diagnostic(JSON.stringify({death,a:snapshot(a),b:snapshot(b),parentExit:parent.exitCode,readerExit:reader?.exitCode}));throw error;
     } finally {
       if(reader?.exitCode===null)reader.kill();
       if(helperPid) {try{process.kill(helperPid);}catch{}}
