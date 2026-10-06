@@ -108,8 +108,10 @@ $info.RedirectStandardInput = $true
 $info.RedirectStandardOutput = $true
 $info.RedirectStandardError = $true
 $child = [System.Diagnostics.Process]::Start($info)
-[Console]::Out.WriteLine($child.Id)
-[Console]::Out.Flush()
+$pidBytes = [Text.Encoding]::ASCII.GetBytes($child.Id.ToString() + [char]10)
+$pidOutput = [Console]::OpenStandardOutput()
+$pidOutput.Write($pidBytes,0,$pidBytes.Length)
+$pidOutput.Flush()
 $inputStream = [Console]::OpenStandardInput()
 $frame = New-Object byte[] 84
 $count = 0
@@ -124,7 +126,7 @@ $child.WaitForExit()
 `;
     const parentFile=path.join(root,death+'-parent.ps1');writeFileSync(parentFile,parentScript);
     const parent=spawn(executable,args(parentFile),{stdio:['pipe','pipe','ignore'],windowsHide:true});
-    let helperPid:number|undefined,pidText='';parent.stdout!.on('data',bytes=>{pidText+=String(bytes);if(/^\d+\r?\n$/.test(pidText))helperPid=Number(pidText.trim());});
+    let helperPid:number|undefined,pidText='';parent.stdout!.on('data',bytes=>{pidText+=String(bytes);const found=pidText.match(/^\s*(\d+)[\r\n]+$/);if(found)helperPid=Number(found[1]);});
     let reader:ReturnType<typeof spawn>|undefined;
     try {
       await sendFrame(parent.stdin!,first.input);
@@ -134,7 +136,7 @@ $child.WaitForExit()
       await sendFrame(reader.stdin!,second.input);
       // Compile both helpers before starting either production deadline.
       await until(()=>!!helperPid&&existsSync(a.compiled)&&existsSync(b.compiled)||existsSync(a.diagnostic)||existsSync(b.diagnostic)||reader!.exitCode!==null||parent.exitCode!==null);
-      assert.equal(existsSync(a.compiled)&&existsSync(b.compiled),true);
+      assert.equal(!!helperPid&&existsSync(a.compiled)&&existsSync(b.compiled),true);
       writeFileSync(a.start,'continue');await until(()=>existsSync(a.ready));
       if(orphan) {parent.kill();await until(()=>parent.exitCode!==null||parent.signalCode!==null);process.kill(helperPid!,0);}
       writeFileSync(b.start,'continue');
@@ -153,7 +155,7 @@ $child.WaitForExit()
       assert.equal(managedRegistry(id,false).fingerprint,fingerprint);
     } catch(error) {
       const snapshot=(script:ReturnType<typeof pausedScript>)=>({compiled:existsSync(script.compiled),ready:existsSync(script.ready),acquired:existsSync(script.acquired),finished:existsSync(script.finished),status:existsSync(script.status)?readFileSync(script.status,'utf8'):null,diagnostic:existsSync(script.diagnostic)?JSON.parse(readFileSync(script.diagnostic,'utf8')):null});
-      t.diagnostic(JSON.stringify({death,a:snapshot(a),b:snapshot(b),parentExit:parent.exitCode,readerExit:reader?.exitCode}));throw error;
+      t.diagnostic(JSON.stringify({death,a:snapshot(a),b:snapshot(b),parentExit:parent.exitCode,readerExit:reader?.exitCode,helperPidReceived:!!helperPid,pidBytes:Buffer.byteLength(pidText)}));throw error;
     } finally {
       if(reader?.exitCode===null)reader.kill();
       if(helperPid) {try{process.kill(helperPid);}catch{}}
