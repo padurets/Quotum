@@ -1,7 +1,7 @@
 import type {DatabaseSync} from 'node:sqlite';
 import {newId, secretHash} from '../domain/auth.js';
 import {EMPTY_VIEW, type View} from '../domain/view.js';
-import {tell, type Touches} from '../touches.js';
+import {tell, transaction, type Touches} from '../touches.js';
 
 export type User = {id: string; email: string; name: string; createdAt: number};
 export type Board = {id: string; name: string; personal: boolean; role: 'owner' | 'member'};
@@ -87,16 +87,7 @@ export class Directory {
 
   /** Runs `work` as one write transaction of the hub's database, which the store shares; inside one already, as part of it. */
   transaction<T>(work: () => T): T {
-    if (this.db.isTransaction) return work();
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      const result = work();
-      this.db.exec('COMMIT');
-      return result;
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
+    return transaction(this.db, work);
   }
 
   // ---------- users and sessions ----------
@@ -113,6 +104,7 @@ export class Directory {
       this.db.prepare('INSERT INTO users VALUES (?, ?, ?, ?, ?)').run(id, email, name, passwordHash, now);
       this.db.prepare('INSERT INTO boards VALUES (?, ?, 1, ?, ?)').run(board, '', id, now);
       this.db.prepare('INSERT INTO members VALUES (?, ?, ?, ?)').run(board, id, 'owner', now);
+      this.saveView(board, {...EMPTY_VIEW, hidden: ['activity', 'history', 'forecast']}, id, now);
       return this.user(id)!;
     });
   }
@@ -182,8 +174,22 @@ export class Directory {
   }
 
   saveView(boardId: string, view: View, by: string, now: number) {
-    this.db.prepare('INSERT OR REPLACE INTO views VALUES (?, ?, ?, ?)').run(boardId, JSON.stringify(view), by, now);
-    tell(this.observer, o => o.touchBoards([boardId]));
+    return this.transaction(() => {
+      const revision = this.viewRevision(boardId);
+      if (JSON.stringify(this.view(boardId)) === JSON.stringify(view)) return revision;
+      if (!Number.isSafeInteger(revision + 1)) throw new Error('View revision exhausted');
+      this.db.prepare('INSERT INTO views (board_id, payload, updated_by, updated_at, revision) VALUES (?, ?, ?, ?, ?) ON CONFLICT(board_id) DO UPDATE SET payload=excluded.payload, updated_by=excluded.updated_by, updated_at=excluded.updated_at, revision=excluded.revision').run(boardId, JSON.stringify(view), by, now, revision + 1);
+      tell(this.observer, o => o.touchBoards([boardId]));
+      return revision + 1;
+    });
+  }
+
+  viewRevision(boardId: string): number {
+    return (this.db.prepare('SELECT revision FROM views WHERE board_id=?').get(boardId) as {revision: number} | undefined)?.revision ?? 0;
+  }
+
+  connectionsRevision(userId: string): number {
+    return (this.db.prepare('SELECT revision FROM account_revisions WHERE user_id=?').get(userId) as {revision: number} | undefined)?.revision ?? 0;
   }
 
   // ---------- boards, members, invites ----------
@@ -248,6 +254,7 @@ export class Directory {
     this.transaction(() => {
       this.db.prepare('INSERT INTO boards VALUES (?, ?, 0, ?, ?)').run(id, name, userId, now);
       this.db.prepare('INSERT INTO members VALUES (?, ?, ?, ?)').run(id, userId, 'owner', now);
+      this.saveView(id, {...EMPTY_VIEW, hidden: ['activity', 'history', 'forecast']}, userId, now);
     });
     tell(this.observer, o => o.touchUser(userId));
     return {id, name, personal: false, role: 'owner'};
@@ -291,6 +298,7 @@ export class Directory {
   createToken(secret: string, hint: string, userId: string, name: string, now: number): Token {
     const id = newId();
     this.db.prepare('INSERT INTO tokens VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)').run(id, userId, name, secretHash(secret), hint, now);
+    tell(this.observer, o => o.touchUser(userId));
     return {id, userId, name, hint, createdAt: now, lastUsedAt: null};
   }
 
@@ -321,6 +329,7 @@ export class Directory {
     return this.transaction(() => {
       const changed = this.db.prepare('UPDATE tokens SET revoked_at = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL').run(now, id, userId).changes;
       if (changed) this.db.prepare('UPDATE devices SET revoked_at = ? WHERE token_id = ? AND revoked_at IS NULL').run(now, id);
+      if (changed) tell(this.observer, o => o.touchUser(userId));
       return changed > 0;
     });
   }
@@ -360,18 +369,24 @@ export class Directory {
             ' revoked_at = NULL, last_seen_at = ? WHERE id = ?',
         )
         .run(input.machine.name, input.machine.os, input.machine.arch, input.agent, input.tokenId, hashed, now, existing.id);
+      tell(this.observer, o => o.touchUser(input.userId));
       return this.deviceById(existing.id)!;
     }
     const id = newId();
     this.db
       .prepare('INSERT INTO devices VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, NULL)')
       .run(id, input.userId, input.machine.id, input.machine.name, input.machine.os, input.machine.arch, input.agent, input.tokenId, hashed, now, now);
+    tell(this.observer, o => o.touchUser(input.userId));
     return this.deviceById(id)!;
   }
 
   /** Whether the device can still deliver, including revocation of its machine token. */
   deviceLive(id: string): boolean {
     return !!this.db.prepare('SELECT id FROM devices WHERE id = ? AND revoked_at IS NULL').get(id);
+  }
+
+  bindOnboardingDevice(codeId: string, userId: string, deviceId: string) {
+    this.db.prepare("UPDATE device_onboarding SET device_id=? WHERE code_id=? AND user_id=? AND status='ready' AND expires_at>?").run(deviceId, codeId, userId, Date.now());
   }
 
   deviceById(id: string): Device | null {
@@ -396,7 +411,9 @@ export class Directory {
   }
 
   revokeDevice(userId: string, id: string, now: number): boolean {
-    return this.db.prepare('UPDATE devices SET revoked_at = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL').run(now, id, userId).changes > 0;
+    const changed = this.db.prepare('UPDATE devices SET revoked_at = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL').run(now, id, userId).changes > 0;
+    if (changed) tell(this.observer, o => o.touchUser(userId));
+    return changed;
   }
 
   /** Forgets sessions, invites and device codes that expired a day ago or earlier. */

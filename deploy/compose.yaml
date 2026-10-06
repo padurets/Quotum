@@ -11,6 +11,7 @@ services:
       QUOTUM_TRUST_PROXY: "true"
     volumes:
       - quotum:/data
+      - quotum-keys:/keys
 
   caddy:
     image: caddy:2-alpine
@@ -24,4 +25,5 @@ services:
 
 volumes:
   quotum:
+  quotum-keys:
   caddy:

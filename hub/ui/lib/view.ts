@@ -1,5 +1,5 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {call} from './http';
+import {ApiError, call} from './http';
 import {DEFAULT_PLAN, isValidPlan, type WeeklyPlan} from './plan';
 import {type View} from './types';
 import {FALLBACK_COLOR, PROVIDERS} from './providers';
@@ -38,10 +38,12 @@ const SAVE_AFTER = 600;
 
 export const isHidden = (view: View, id: string) => (isOffByDefault(id) ? !view.shown.includes(id) : view.hidden.includes(id));
 
-export const withHidden = (view: View, id: string, hidden: boolean): View =>
-  isOffByDefault(id)
+export const withHidden = (view: View, id: string, hidden: boolean): View => ({
+  ...(isOffByDefault(id)
     ? {...view, shown: hidden ? view.shown.filter(other => other !== id) : [...new Set([...view.shown, id])]}
-    : {...view, hidden: hidden ? [...new Set([...view.hidden, id])] : view.hidden.filter(other => other !== id)};
+    : {...view, hidden: hidden ? [...new Set([...view.hidden, id])] : view.hidden.filter(other => other !== id)}),
+  enabledWhenEmpty: hidden ? (view.enabledWhenEmpty ?? []).filter(other => other !== id) : view.enabledWhenEmpty ?? [],
+});
 
 /**
  * Columns off until the owner turns them on: how long each agent has run, which tells less
@@ -72,7 +74,7 @@ export const withColumn = (view: View, widget: string, column: string, shown: bo
  * widgets, or a way to bring them back when every one of them is hidden.
  */
 export function boardState(sources: {id: string}[], view: View): 'onboarding' | 'widgets' | 'allHidden' {
-  if (!sources.length) return 'onboarding';
+  if (!sources.length) return (view.enabledWhenEmpty ?? []).some(id => !isHidden(view, id)) ? 'widgets' : 'onboarding';
   const widgets = [...sources.map(source => cardId(source.id)), AGENTS, ...ANALYTICS];
   return widgets.every(id => isHidden(view, id)) ? 'allHidden' : 'widgets';
 }
@@ -134,63 +136,85 @@ const same = (a: View, b: View) => JSON.stringify(a) === JSON.stringify(b);
 
 export type Arrange = {
   view: View;
-  /** Only the board's owner arranges it; everyone else sees it this way. */
   owner: boolean;
   update: (change: (view: View) => View) => void;
+  error?: unknown;
 };
 
-/**
- * The board's view. The owner's changes show at once and are saved shortly after; the
- * change stays on screen until the hub tells the view it saved (a `view` event), so what
- * it tells in between does not undo it. A save that fails puts the board's own view back.
- */
-export function useView(board: string, told: View | null, owner: boolean): Arrange {
-  const server = told ?? EMPTY;
-  /** The owner's latest change; `saved` is how the hub stored it, once it has. */
-  const [draft, setDraft] = useState<{board: string; view: View; saved: View | null} | null>(null);
-  const pending = useRef<{board: string; view: View} | null>(null);
+type PendingView = {view: View; revision: number};
+type SavingView = {server: View; revision: number; draft?: View; pending?: PendingView; flight?: Promise<void>; error?: unknown};
+const flushers = new Set<(board: string) => Promise<void>>();
+/** Add waits for this person's pending layout before changing the same board. */
+export async function flushView(board: string) {for (const flush of flushers) await flush(board);}
+
+/** The shell owns serialized saves per board; a conflict returns the authoritative view. */
+export function useView(board: string, told: View | null, owner: boolean, revision = 0): Arrange {
+  const entries = useRef(new Map<string, SavingView>());
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const view = draft?.board === board ? draft.view : server;
-
-  useEffect(() => {
-    if (draft && (draft.board !== board || (draft.saved && same(draft.saved, server)))) setDraft(null);
-  }, [draft, board, server]);
-
-  const update = useCallback(
-    (change: (view: View) => View) => {
-      const next = {board, view: change(pending.current?.board === board ? pending.current.view : view)};
-      pending.current = next;
-      setDraft({...next, saved: null});
-      clearTimeout(timer.current);
-      timer.current = setTimeout(async () => {
-        const saving = pending.current!;
-        pending.current = null;
-        try {
-          const saved = await call<View>('POST', `/api/boards/${encodeURIComponent(saving.board)}/view`, saving.view);
-          setDraft(current => (current?.view === saving.view ? {...current, saved} : current));
-        } catch {
-          setDraft(current => (current?.view === saving.view ? null : current));
+  const alive = useRef(true);
+  const [, render] = useState(0);
+  const redraw = () => {if (alive.current) render(value => value + 1);};
+  let entry = entries.current.get(board);
+  if (!entry) {entry = {server: told ?? EMPTY, revision}; entries.current.set(board, entry);}
+  else if (told && revision >= entry.revision) {
+    entry.server = told; entry.revision = revision;
+    if (!entry.pending && !entry.flight && entry.draft && same(entry.draft, told)) entry.draft = undefined;
+  }
+  const view = entry.draft ?? entry.server;
+  const flush = useCallback(async (id: string): Promise<void> => {
+    const state = entries.current.get(id); if (!state) return;
+    if (state.flight) {await state.flight; if (state.pending) await flush(id); return;}
+    const pending = state.pending;
+    if (!pending) return;
+    state.pending = undefined;
+    state.flight = (async () => {
+      try {
+        const saved = await call<{view: View; revision: number}>('POST', '/api/boards/' + encodeURIComponent(id) + '/view', pending.view, 12_000, undefined, {'If-Match': '"' + pending.revision + '"'});
+        // Only our serial successor can use this revision; an external edit stays authoritative.
+        if (state.revision <= saved.revision) {
+          state.server = saved.view; state.revision = saved.revision;
+          if (state.pending) state.pending.revision = saved.revision;
         }
-      }, SAVE_AFTER);
-    },
-    [board, view],
-  );
-
-  // Leaving the page with a change not sent yet: send it on the way out.
-  useEffect(() => {
-    const flush = () => {
-      if (!pending.current) return;
-      const {board, view} = pending.current;
-      void fetch(`/api/boards/${encodeURIComponent(board)}/view`, {
-        method: 'POST',
-        keepalive: true,
-        headers: {'content-type': 'application/json'},
-        body: JSON.stringify(view),
-      }).catch(() => {});
-    };
-    window.addEventListener('pagehide', flush);
-    return () => window.removeEventListener('pagehide', flush);
+        if (!state.pending) state.draft = undefined;
+      } catch (error) {
+        state.error = error; state.pending = undefined; state.draft = undefined;
+        if (error instanceof ApiError && error.code === 'view_conflict') {
+          const latest = error.data as {view?: View; revision?: number};
+          if (latest.view && latest.revision !== undefined && latest.revision >= state.revision) {state.server = latest.view; state.revision = latest.revision;}
+        }
+        throw error;
+      } finally {state.flight = undefined; redraw();}
+    })();
+    await state.flight;
+    if (state.pending) await flush(id);
   }, []);
-
-  return useMemo(() => ({view, owner, update}), [view, owner, update]);
+  useEffect(() => {
+    alive.current = true; flushers.add(flush);
+    const leaving = () => {
+      for (const [id, state] of entries.current) {
+        if (!state.pending || state.flight) continue;
+        const pending = state.pending; state.pending = undefined;
+        void fetch('/api/boards/' + encodeURIComponent(id) + '/view', {
+          method: 'POST', keepalive: true,
+          headers: {'content-type': 'application/json', 'If-Match': '"' + pending.revision + '"'},
+          body: JSON.stringify(pending.view),
+        }).catch(() => {});
+      }
+    };
+    window.addEventListener('pagehide', leaving);
+    return () => {alive.current = false; flushers.delete(flush); clearTimeout(timer.current); window.removeEventListener('pagehide', leaving);};
+  }, [flush]);
+  const previous = useRef(board);
+  useEffect(() => {
+    if (previous.current !== board) {void flush(previous.current).catch(() => {}); previous.current = board;}
+  }, [board, flush]);
+  const update = useCallback((change: (view: View) => View) => {
+    const state = entries.current.get(board)!;
+    const next = change(state.draft ?? state.server);
+    state.error = undefined; state.draft = next;
+    state.pending = {view: next, revision: state.pending?.revision ?? state.revision};
+    redraw(); clearTimeout(timer.current);
+    timer.current = setTimeout(() => {void flush(board).catch(() => {});}, SAVE_AFTER);
+  }, [board, flush]);
+  return useMemo(() => ({view, owner, update, error: entry.error}), [view, owner, update, entry.error]);
 }

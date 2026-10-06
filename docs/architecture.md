@@ -596,7 +596,7 @@ tests inject their own adapter. Each credential belongs to its person and can be
 created, replaced, listed or removed only by that person's session. Create and replacement
 identify the account outside SQLite, then commit encrypted access and its verified
 source holding atomically. A replacement cannot change the account. No-expiry access
-requires explicit consent. Creation retries can use an owner-scoped UUID for 24 hours;
+is admitted in one informed submit. Creation retries can use an owner-scoped UUID for 24 hours;
 a deletion leaves its replay tombstone. Deleting the last own access releases that
 person's holding, preserving others and history. Missing or broken access preserves
 last measurements and a neutral shared failure, with details only for its owner. Mutations require
@@ -604,6 +604,17 @@ an explicit same-site Origin before parsing, accept only a connector's strict pr
 ASCII key format, and are limited to ten attempts a minute per person and address.
 Replies contain only the safe record details, including a last-four hint; neither the
 key nor encrypted bytes go to the dashboard's events or shared boards.
+
+Without explicit inputs a new server creates a durable key in separate storage:
+`/keys/current.key` on a distinct persistent container mount, a private POSIX sibling
+of the canonical data directory, or a private nonvolatile HKCU branch on Windows.
+POSIX publication uses an exclusive temporary file, file fsync, a no-replace hard
+link, and directory/parent-entry barriers, repeated when admitting an existing key.
+Windows reserves a durable nonsecret UUID, then a packaged bounded helper owns a
+global native mutex through private registry query/write, flush and read-back. The
+resolver runs under the same SQLite transaction as the key check; an established
+missing or mismatched store is never regenerated, including an empty credential set.
+The desktop's native controller remains the authority in local mode.
 
 `QUOTUM_SECRET_KEY` supplies 32 random bytes as canonical unpadded base64url (43
 characters); `QUOTUM_SECRET_KEY_FILE` instead reads those characters, optionally
@@ -641,10 +652,10 @@ and its limits.
   signs up without an invitation but with its setup code: a new hub prints one to its
   log, so only whoever started it can claim it. After that, signing up needs an invite
   link unless the hub is open (`QUOTUM_SIGNUP=open`).
-- **Devices** are running agents, and each belongs to a person. The *My connections* dialog
+- **Devices** are running agents, and each belongs to a person. The *Settings → Devices* page
   shows a person's devices, what each delivers and the last failure of each client
   there (not logged in, too old…); the person names them there. The same list contains
-  their provider accounts, and its Connect menu opens a device or provider form directly.
+  their devices. Provider accounts have their own *My connections* page.
   *Agent activity → Settings → Manage projects* lists the projects their agents worked
   on, with the machines and when they last did:
   the person renames them and merges several into one, which applies everywhere they are
@@ -866,7 +877,14 @@ separate limit on the number of places: new visible neighbours can get their pla
 without removing the ids kept by old views.
 The board's view comes with its events; the owner's changes show at once and are saved
 about half a second later, one request per burst (a drag, typing a plan), and stay on
-screen until the hub tells the view it saved. What
+screen until the hub tells the view it saved. Saves carry `If-Match` with the persistent
+view revision and are serialized per board by the authenticated shell. A stale save
+returns the current view and a visible conflict; it never silently reapplies an old
+full document over an Add or another window's edit. Add flushes this shell's pending
+save first, then patches only its requested visibility inside its transaction.
+New boards start with analytics hidden. `enabledWhenEmpty` permits only the standard
+widgets explicitly added to an empty board; old views retain their previous defaults.
+What
 is only about how one person looks (the analytics' period and window type, the chart's
 horizon, lines and groups switched off in either chart's legend, whether it draws the plan and the forecast, what agent activity is stacked by, reset announcements, the lock on the widgets,
 the agents table's sort order, the chosen board and language) stays in their browser.

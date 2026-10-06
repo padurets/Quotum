@@ -5,6 +5,7 @@ import {page, useConnection} from '../lib/board';
 import {useClock} from '../lib/clock';
 import {Brand, ErrorLine, Field, Modal} from './Kit';
 import {Popover} from './Popover';
+import {LockIcon} from './Widgets';
 import {t} from '../i18n';
 
 /** The connection lost this long (by the hub's clock) is said in the header. */
@@ -166,14 +167,14 @@ export function Header({boards, board, onBoard, user, onAccount, onSignedOut, lo
 }
 
 /** These actions always name the current board; personal management has its own pages. */
-export function BoardActions({board, refresh, owner, editing, onEdit, add, onSettings}: {
-  board: Board | null; refresh: ReactNode; owner: boolean; editing: boolean;
-  onEdit: () => void; add: ReactNode; onSettings: ((section: 'general' | 'members') => void) | null;
+export function BoardActions({board, refresh, owner, locked, onLock, add, onSettings}: {
+  board: Board | null; refresh: ReactNode; owner: boolean; locked: boolean;
+  onLock: () => void; add: ReactNode; onSettings: ((section: 'general' | 'members') => void) | null;
 }) {
   const [open, setOpen] = useState(false);
   return <div className="board-actions" role="group" aria-label={board ? boardTitle(board) : undefined}><Offline />{refresh}
       {add}
-      {owner && <button className={`icon-button ${editing ? 'is-editing' : ''}`} aria-pressed={editing} aria-label={t(editing ? 'layout.done' : 'layout.edit')} title={t(editing ? 'layout.done' : 'layout.edit')} onClick={onEdit}><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">{editing ? <path d="m3 8 3.5 3.5L13 4" /> : <path d="m10.5 3.5 2 2M3 13l.6-2.6L11 3a1.4 1.4 0 0 1 2 2l-7.4 7.4z" />}</svg></button>}
+      {owner && <button className="icon-button" aria-pressed={locked} aria-label={t(locked ? 'widgets.unlock' : 'widgets.lock')} title={t(locked ? 'widgets.unlock' : 'widgets.lock')} onClick={onLock}><LockIcon open={!locked} /></button>}
       {onSettings && <Popover label={t('boardSettings.title')} icon={<GearIcon />} open={open} onOpenChange={setOpen}>
         <button className="popover-row" onClick={() => {setOpen(false); onSettings('general');}}><span>{t('boardSettings.title')}</span></button>
         {!board?.personal && <button className="popover-row" onClick={() => {setOpen(false); onSettings('members');}}><span>{t('admin.members')}</span></button>}

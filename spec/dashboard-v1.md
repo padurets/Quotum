@@ -68,6 +68,78 @@ is the effective permitted time, respecting the device minimum. Stale data can s
 have a next measurement and reason. A frequency write reaches all boards that show the
 source through the existing events, without polling or changing the agent protocol.
 
+## Adding widgets and saving views
+
+`GET /api/boards/:board/catalogue` requires membership. It returns the board,
+`viewRevision`, `connectionsRevision`, registered connectors, and only sources and
+standard widgets this reader can add or show. Sources are the reader's holdings and
+data already provided to this board; another member's private sources are absent.
+Visible and forbidden entries are omitted. Members may add or show their own cards;
+only the board owner may show another member's hidden card or add a standard widget.
+
+`POST /api/additions` reserves an owner-scoped UUID `requestId`, a frozen `boardId`
+(null for personal connection or replacement), and one item:
+`{kind:"sources", sourceIds:[...]}`, `{kind:"widget", widgetId}`,
+`{kind:"connection", provider}`, or `{kind:"replace", credentialId}`.
+Source selections contain one to 100 unique IDs. Standard widgets are `agents`,
+`activity`, `history`, `forecast`. Replacement is personal; the server captures its
+provider, source and access revision. Reusing a request ID with another destination or
+selection returns `409 addition_conflict`. No secret goes into reservation or storage.
+
+`POST /api/additions/:id/run` accepts only an optional `secret`. Provider verification
+happens outside SQLite, with a 25-second deadline. Before committing the hub checks
+the original session, membership, holdings, operation generation and replacement
+revision again. Encrypted access, source, holding, initial measurement, sharing,
+visibility and the complete receipt commit in one transaction. An own existing account
+reuses its access; new key bytes never implicitly replace its saved key. Source batches
+are all-or-nothing. Personal connection does not change a shared board or an existing
+hidden card. No-expiry access is admitted without another checkbox or submit.
+
+`GET /api/additions/:id` is owner-only; another owner's ID and an unknown ID both give
+`404 addition_not_found`. `GET /api/additions?limit=20&before=<cursor>` discovers the
+owner's recent unfinished and terminal receipts, with a maximum page size of 50 and
+30-day retention. An optional UUID `requestId` looks up that owner's reservation.
+Results include immutable safe items, timestamps, state, source IDs, optional own
+credential ID and access revision, and current disposition per source or widget.
+They never include a secret, ciphertext, raw supplier identity or inaccessible board
+labels. States are `ready`, `verifying`, `needs_input`, `complete`, `failed`, `expired`.
+Reservations expire after 24 hours, with at most 20 unfinished actions per owner.
+
+Verification leases last 30 seconds across process restart. An expired lease becomes
+`needs_input` and increments the generation; its late callback cannot commit. A key
+not saved before interruption must be entered again. A completed operation returns its
+receipt without verification or side effects, even after later hide, unshare, replacement
+or removal. Replacement cleanup may report `credential_cleanup_pending` on a complete
+receipt; this does not mean the replacement failed. The legacy replacement endpoint
+accepts optional `requestId` and returns its operation ID for recovery.
+
+Mutations require an explicit same-site Origin before parsing and owner authentication,
+with 32-KiB bodies and ten key-verification attempts per minute per user and address.
+Status and reservation have a separate bounded request limit. Credentials cannot be
+submitted in a query. Closed panels do not poll or read catalogue/history data.
+
+`POST /api/boards/:board/view` remains owner-only and accepts a full View with a
+64-KiB body limit. It requires `If-Match: "<revision>"`: missing is `428
+view_reload_required`, malformed is `400 invalid_request`, stale is `409 view_conflict`
+with the authorized current `{view, revision}`. Success returns `{view, revision}`.
+Semantic changes increment revision; no-op saves do not. New snapshot and view events
+carry that revision. Older responses cannot replace newer state. The page serializes
+its own saves and flushes a pending save before Add; a conflict is shown, never silently
+reapplied. `enabledWhenEmpty` contains only standard widgets explicitly enabled on an
+empty board; hiding removes the entry. New boards begin with analytics hidden; older
+saved and absent views preserve their defaults and retained widget options.
+
+`POST /api/device-onboarding {requestId, boardId}` reserves a private device intent.
+The existing token-create and code-approval routes accept optional `onboardingId`;
+code redemption binds the exact device atomically. Ordinary CLI confirmation stays a
+personal action. The owner may instead explicitly select an existing device.
+`POST /api/device-onboarding/:id/selection {requestId, deviceId, sourceIds}` freezes
+only a delivered subset of that live own device and links the same addition receipt.
+Publishing that subset and completing the intent commit together. Neither later accounts
+nor other devices become shared. Owner GET/list routes permit recovery for 30 days;
+unfinished intents expire after 24 hours. Codes, tokens and provider secrets are absent
+from these projections. Local desktop does not expose device onboarding.
+
 ## Frames
 
 Each event is `event: <type>`, `data: <JSON>` and an empty line. There is no `id:`: the
@@ -85,9 +157,10 @@ change as it was.
 | `event` | `data` | When |
 |---|---|---|
 | `hello` | `{epoch, now, client, heartbeatMs}` | First. `epoch`: when this start of the hub began, base 36. `now`: the hub's clock. `client`: the path of the page's entry script the hub serves (`/assets/index-<hash>.js`), null without a build. `heartbeatMs`: 25000. |
-| `snapshot` | `{providers, sourceAccess, board, view, historyStart, sources, sessions, cadence, refresh, forecast, mine, boards, resets}` | Second: the board for this reader. |
+| `snapshot` | `{providers, sourceAccess, board, view, viewRevision, connectionsRevision, historyStart, sources, sessions, cadence, refresh, forecast, mine, boards, resets}` | Second: the board for this reader. |
 | `board` | `{board: {id, name, personal}}` | The board was renamed. |
-| `view` | `{view}` | The board's view was saved. |
+| `view` | `{view, revision}` | The board's view was saved. The monotonic revision belongs to this board. |
+| `connections` | `{revision}` | Only this reader's connection structure or access health changed; no private IDs or labels. Successful measurements and unchanged device heartbeats do not increment it. |
 | `lineup` | `{sources: string[]}` | The board's sources, in order, changed. |
 | `card` | a card | A source's state changed. |
 | `sessions` | `{id, sessions}` | The agents running on a source, on the machines of its people on this board, changed. |

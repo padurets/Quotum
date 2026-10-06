@@ -24,12 +24,15 @@ import {credentialRoutes} from './routes/credentials.js';
 import {Credentials, startSecrets, type SecretInputs} from './secrets/index.js';
 import type {HubSources} from './hubSources.js';
 import {sourceKeyRoutes} from './routes/sourceKeys.js';
+import {BoardAdditions} from './additions.js';
+import {additionRoutes} from './routes/additions.js';
+import {DeviceOnboarding} from './deviceOnboarding.js';
 
 /**
  * `local`: the desktop app's hub, with the key its window enters with (see local.ts); null
  * on a server. `events`: what open dashboards hear, made here when not given.
  */
-export type Hub = {store: Store; directory: Directory; resets: ResetFeed; ingest: Ingest; pairing: Pairing; setup: Setup; local: {key: string} | null; events?: Events; credentials?: Credentials; hubSources?:HubSources; secretSnapshot?: Pick<SecretInputs, 'storageAtStart' | 'wasFileAtStart'>};
+export type Hub = {store: Store; directory: Directory; resets: ResetFeed; ingest: Ingest; pairing: Pairing; setup: Setup; local: {key: string} | null; events?: Events; credentials?: Credentials; additions?:BoardAdditions; deviceOnboarding?:DeviceOnboarding; hubSources?:HubSources; secretSnapshot?: Pick<SecretInputs, 'storageAtStart' | 'wasFileAtStart'>};
 
 /** Route helpers shared by the route modules. */
 export type Guards = {
@@ -81,6 +84,9 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
   hub = {...hub, credentials: hub.credentials ?? new Credentials(hub.store, null, startSecrets(hub.store.db, {current: null, previous: null, reset: null, storageAtStart: null, wasFileAtStart: false}))};
   const {store, directory} = hub;
   const projection = new Projection(hub);
+  const additions = new BoardAdditions(store, directory, hub.credentials!);
+  hub.additions = additions;
+  hub.deviceOnboarding = new DeviceOnboarding(store, directory, additions);
   const {requestTimeoutMs, checkMs} = config.http;
   const app = Fastify({
     logger: false,
@@ -210,11 +216,11 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
   eventRoutes(app, directory, events, guards, !!hub.local);
   accountRoutes(app, hub, guards);
   sourceKeyRoutes(app,hub,guards);
-  await app.register(async scope => credentialRoutes(scope, hub.credentials!, guards));
+  await extend?.(app, hub, guards);
+  await app.register(async scope => credentialRoutes(scope, hub.credentials!, guards, additions, directory));
+  await app.register(async scope => additionRoutes(scope, hub, guards, additions));
   agentRoutes(app, hub);
   if (hub.local) localRoutes(app, hub, hub.local.key);
-
-  await extend?.(app, hub, guards);
 
   await app.register(staticFiles, {root: config.clientRoot, index: 'index.html'});
   // Client-side pages (/device, /invite/…) are served by the same single-page client.

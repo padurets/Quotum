@@ -18,6 +18,7 @@ import {PROJECT_NAME_CHARS} from '../domain/projects.js';
 import {validFrequency} from '../domain/frequency.js';
 import {providerOf} from '../domain/providers.js';
 import {currentUser, Limiter, publicOrigin, sessionSecret, setSession} from '../session.js';
+import {AdditionError} from '../additions.js';
 
 type Body = Record<string, unknown>;
 const str = (value: unknown) => (typeof value === 'string' ? value : '');
@@ -54,7 +55,7 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
     const available = ['created', 'ok', 'rotated'].includes(outcome);
     return {
       user, boards: user ? directory.boards(user.id) : [], signup: {first, open: !local && (first || config.auth.signup === 'open')}, local: !!local,
-      ...(user ? {trustedKeys: {available, reason: available ? null : outcome === 'mismatch' ? 'secret_key_mismatch' : 'secret_key_missing'}} : {}),
+      ...(user ? {trustedKeys: {available, reason: available ? null : hub.credentials!.report.reason ?? (outcome === 'mismatch' ? 'secret_key_mismatch' : 'secret_key_missing')}} : {}),
       ...(user && local ? {secretKey: {outcome, storageAtStart: hub.secretSnapshot?.storageAtStart ?? null, wasFileAtStart: hub.secretSnapshot?.wasFileAtStart ?? false}} : {}),
     };
   };
@@ -290,8 +291,14 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
     if (!isOwner(access.board)) return forbidden(reply);
     const view = parseView(request.body);
     if (!view) return reply.code(400).send({error: 'invalid_request'});
-    directory.saveView(access.board.id, view, access.user.id, Date.now());
-    return view;
+    const match = request.headers['if-match'];
+    if (match === undefined) return reply.code(428).send({error: 'view_reload_required'});
+    if (typeof match !== 'string' || !/^"(?:0|[1-9][0-9]*)"$/.test(match) || !Number.isSafeInteger(Number(match.slice(1, -1)))) return reply.code(400).send({error: 'invalid_request'});
+    return directory.transaction(() => {
+      const revision = directory.viewRevision(access.board.id);
+      if (revision !== Number(match.slice(1, -1))) return reply.code(409).send({error: 'view_conflict', view: directory.view(access.board.id), revision});
+      return {view, revision: directory.saveView(access.board.id, view, access.user.id, Date.now())};
+    });
   });
 
   // ---------- sharing ----------
@@ -441,10 +448,21 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
       // A token without a name is shown under a default one in the reader's language.
       const name = str(request.body?.name).trim();
       if (name && !validName(name)) return reply.code(400).send({error: 'invalid_name'});
-      const secret = newSecret('qt_m');
-      const {userId, ...token} = directory.createToken(secret, secretHint(secret), user.id, name, Date.now());
-      // The secret is shown once; only its hash is kept.
-      return {...token, secret};
+      try {
+        return directory.transaction(() => {
+          const secret = newSecret('qt_m');
+          const {userId, ...token} = directory.createToken(secret, secretHint(secret), user.id, name, Date.now());
+          if (request.body?.onboardingId !== undefined) {
+            if (typeof request.body.onboardingId !== 'string') throw new AdditionError('addition_invalid');
+            hub.deviceOnboarding!.bindToken(user.id, request.body.onboardingId, token.id);
+          }
+          // The secret is shown once; only its hash is kept.
+          return {...token, secret};
+        });
+      } catch (error) {
+        if (error instanceof AdditionError) return reply.code(400).send({error: error.code});
+        throw error;
+      }
     });
 
     app.delete<{Params: {token: string}}>('/api/tokens/:token', (request, reply) => {
@@ -473,8 +491,21 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
       const decision = (request.params as {decision: string}).decision;
       if (decision !== 'approve' && decision !== 'deny') return notFound(reply);
       if (!lookups.allow(`user:${user.id}`)) return reply.code(429).send({error: 'too_many_attempts'});
-      const ok = pairing.decide(request.body?.code, decision === 'approve', user.id);
-      return ok ? {ok: true} : reply.code(400).send({error: 'invalid_code'});
+      try {
+        const ok = directory.transaction(() => {
+          const pending = pairing.pending(request.body?.code);
+          if (!pending) return false;
+          if (request.body?.onboardingId !== undefined) {
+            if (decision !== 'approve' || typeof request.body.onboardingId !== 'string') throw new AdditionError('addition_invalid');
+            hub.deviceOnboarding!.bindCode(user.id, request.body.onboardingId, pending.id);
+          }
+          return pairing.decide(request.body?.code, decision === 'approve', user.id);
+        });
+        return ok ? {ok: true} : reply.code(400).send({error: 'invalid_code'});
+      } catch (error) {
+        if (error instanceof AdditionError) return reply.code(400).send({error: error.code});
+        throw error;
+      }
     });
   }
 }

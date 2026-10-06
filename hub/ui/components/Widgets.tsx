@@ -12,9 +12,7 @@ import {
   type ReactNode,
 } from 'react';
 import {t} from '../i18n';
-import {Popover, SwitchRow} from './Popover';
 import {pixels, same, SizingContext, type Report, type Size} from './sizing';
-import {isOffByDefault} from '../lib/view';
 import {
   cellOf,
   edgeScroll,
@@ -652,64 +650,10 @@ export function Widgets({
   );
 }
 
-const LayoutIcon = () => (
-  <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
-    <rect x="2" y="2" width="5" height="5" rx="1.2" />
-    <rect x="9" y="2" width="5" height="5" rx="1.2" />
-    <rect x="2" y="9" width="12" height="5" rx="1.2" />
-  </svg>
-);
 
-const LockIcon = ({open = false}: {open?: boolean}) => (
+export const LockIcon = ({open = false}: {open?: boolean}) => (
   <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
     <rect x="3" y="7" width="10" height="7" rx="1.6" />
     <path d={open ? 'M5.5 7V5a2.5 2.5 0 0 1 4.9-.7' : 'M5.5 7V5a2.5 2.5 0 0 1 5 0v2'} />
   </svg>
 );
-
-/**
- * Which widgets the board shows, and whether they stay in place: locked, they have no
- * handles to move or resize them, so a pointer passing over the board catches nothing.
- * The owner brings hidden widgets back here, found by group: the cards, the lists of
- * the current state, the analytics.
- */
-export function WidgetsMenu({
-  groups,
-  hidden,
-  locked,
-  onShow,
-  onLock,
-}: {
-  groups: {title: string; widgets: {id: string; name: string}[]}[];
-  hidden: string[];
-  locked: boolean;
-  onShow: (id: string, shown: boolean) => void;
-  onLock: (locked: boolean) => void;
-}) {
-  // Widgets off by default are not missing from the board: only what the owner hid is counted.
-  const count = groups.flatMap(group => group.widgets).filter(widget => hidden.includes(widget.id) && !isOffByDefault(widget.id)).length;
-  return (
-    // One icon whether locked or not: the button opens the same menu, and a changing icon
-    // reads as another button. Whether it is locked is in its name and in the menu.
-    <Popover label={t(locked ? 'widgets.titleLocked' : 'widgets.title')} icon={<LayoutIcon />} badge={count}>
-      <div className="popover-title">{t('widgets.title')}</div>
-      <SwitchRow className="is-lock" on={locked} onChange={onLock}>
-        <LockIcon open={!locked} />
-        {t('widgets.lock')}
-      </SwitchRow>
-      {groups
-        .filter(group => group.widgets.length)
-        .map(group => (
-          <div role="group" aria-label={group.title} key={group.title}>
-            <div className="popover-sep" />
-            <div className="popover-title is-group">{group.title}</div>
-            {group.widgets.map(widget => (
-              <SwitchRow key={widget.id} on={!hidden.includes(widget.id)} onChange={on => onShow(widget.id, on)}>
-                {widget.name}
-              </SwitchRow>
-            ))}
-          </div>
-        ))}
-    </Popover>
-  );
-}

@@ -24,12 +24,18 @@ write-only path: AES-256-GCM encryption before database writes, with its encrypt
 (KEK) outside the database and data directory. OpenRouter uses this path for a
 dedicated management key. That key can create, edit and delete provider keys; Quotum
 uses only fixed GET operations for identity, credits, workspaces and key measurements.
-Access without expiry requires explicit consent. Revoke the key at OpenRouter when
+Access without expiry is accepted in the same informed connection action. Revoke the key at OpenRouter when
 it is no longer needed. Key names and measured spending are shared board data;
 management secrets, raw creator ids, masked labels and raw key hashes are not.
 
-On a server, configure `QUOTUM_SECRET_KEY` or `QUOTUM_SECRET_KEY_FILE`; without it,
-ordinary subscriptions still work, but connecting with a trusted key is unavailable.
+On a new server, Quotum creates a key outside its data directory. Docker requires a
+separate persistent `/keys` mount; the standard commands use a named key volume.
+POSIX standalone uses a private sibling directory; Windows standalone uses a private
+nonvolatile HKCU registry branch bound to a stable instance UUID in SQLite. A lost,
+damaged or mismatched established store never causes automatic replacement or deletion
+of credentials. Ordinary subscriptions remain available when key storage is unavailable.
+Explicit `QUOTUM_SECRET_KEY` or `QUOTUM_SECRET_KEY_FILE` inputs keep precedence and
+their rotation behavior. See [server deployment](deploy/README.md) for backup and recovery.
 The app chooses its system password store when it can use one, and a private file
 outside its data directory only when the store is known to be unavailable on first
 use. A locked, denied or inconclusive store leaves it waiting; it does not prove that
@@ -38,6 +44,7 @@ a key was lost.
 | KEK storage | Protection and limits |
 |---|---|
 | Server environment or separate secret file | Keep the KEK out of database and volume backups. The hub operator can decrypt the credentials. |
+| Managed server directory, separate Docker key volume or private HKCU branch | A data-only backup omits the KEK. Back up the key store separately; a combined host or profile backup can reveal credentials. File modes or registry DACLs protect against other ordinary OS users, not the same user or administrator. |
 | Windows Credential Manager or Linux Secret Service | Protection is the same as for other passwords in that store. It depends on the store's protection, often the login password; Quotum does not know that password. |
 | Private file | File permissions protect against other ordinary OS users. A home or profile backup containing this file and the database can reveal the saved credentials. |
 

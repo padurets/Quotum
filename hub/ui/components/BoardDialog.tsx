@@ -1,13 +1,11 @@
 import {useCallback, useEffect, useState} from 'react';
 import {PROVIDERS} from '../lib/providers';
 import {call} from '../lib/http';
-import {boardTitle, type Board} from '../lib/session';
+import type {Board} from '../lib/session';
 import {useTitles} from '../lib/board';
 import {logoOf} from './logos';
-import {CopyField, ErrorLine, Modal, Segmented} from './Kit';
+import {CopyField, ErrorLine} from './Kit';
 import {t} from '../i18n';
-
-export type BoardTab = 'shares' | 'members';
 
 type Shares = {
   shared: {source: string; provider: string; sharedBy: string; mine: boolean}[];
@@ -146,38 +144,5 @@ export function MembersTab({board, userId}: {board: Board; userId: string}) {
       )}
       <ErrorLine error={error} />
     </div>
-  );
-}
-
-/** A shared board's people and what they share with it. */
-export function BoardDialog({
-  board,
-  userId,
-  tab,
-  onTab,
-  onClose,
-}: {
-  board: Board;
-  userId: string;
-  tab: BoardTab;
-  onTab: (tab: BoardTab) => void;
-  onClose: () => void;
-}) {
-  return (
-    <Modal title={boardTitle(board)} onClose={onClose} wide>
-      <Segmented
-        label={t('admin.sections')}
-        options={[
-          ['shares', t('shares.title')],
-          ['members', t('admin.members')],
-        ]}
-        value={tab}
-        onChange={onTab}
-      />
-      <div className="dialog-body">
-        {tab === 'shares' && <SharesTab board={board} />}
-        {tab === 'members' && <MembersTab board={board} userId={userId} />}
-      </div>
-    </Modal>
   );
 }

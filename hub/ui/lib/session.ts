@@ -10,7 +10,7 @@ export type Board = {id: string; name: string; personal: boolean; role: 'owner' 
 /** `local`: the desktop app's hub, one person who never signs in (see lib/app.ts). */
 export type Session = {
   user: User | null; boards: Board[]; signup: {first: boolean; open: boolean}; local: boolean;
-  trustedKeys?: {available: boolean; reason: 'secret_key_missing' | 'secret_key_mismatch' | null};
+  trustedKeys?: {available: boolean; reason: 'secret_key_missing' | 'secret_key_mismatch' | 'secret_key_storage_missing' | 'secret_key_storage_invalid' | 'secret_key_storage_unavailable' | null};
   secretKey?: {outcome: 'created' | 'ok' | 'rotated' | 'mismatch' | 'missing'; storageAtStart: 'keystore' | 'file' | 'waiting' | 'missing' | null; wasFileAtStart: boolean};
 };
 

@@ -38,11 +38,11 @@ export type Card = SourceState & {owners: string[]; stale: boolean; measureInter
 /** When a source is measured next and why, while its holder follows the hub's pace. */
 export type Cadence = {by?:'hub';next: number; why: Why} | null;
 
-export type BoardPart = {board: {id: string; name: string; personal: boolean}; view: View; lineup: string[]};
+export type BoardPart = {board: {id: string; name: string; personal: boolean}; view: View; viewRevision: number; lineup: string[]};
 export type SourcePart = {card: Card; sessions: BoardSession[]; cadence: Cadence; refresh: Refresh};
 /** Where the recent pace of a source's weekly windows leads, by window id (server/forecasts.ts). */
 export type ForecastPart = Record<string, WindowForecast>;
-export type ReaderPart = {mine: string[]; boards: Board[]};
+export type ReaderPart = {mine: string[]; boards: Board[]; connectionsRevision: number};
 export type HubPart = {resets: Partial<Record<ResetProvider, ResetStatus>>; trackers: TrackerHealth[]; past: Record<string, Announcement[]>};
 
 /** The whole board for one reader at once (spec: `snapshot`). */
@@ -83,7 +83,7 @@ export class Projection {
   boardPart(board: string, lineup = this.lineup(board)): BoardPart | null {
     const found = this.hub.directory.board(board);
     if (!found) return null;
-    return {board: found, view: this.hub.directory.view(board), lineup: lineup.map(s => s.id)};
+    return {board: found, view: this.hub.directory.view(board), viewRevision: this.hub.directory.viewRevision(board), lineup: lineup.map(s => s.id)};
   }
 
   /**
@@ -209,6 +209,7 @@ export class Projection {
       sourceAccess:this.sourceAccess(user,lineup,now),
       board: part.board,
       view: part.view,
+      viewRevision: part.viewRevision,
       historyStart: this.hub.store.historyStart(now),
       sources: sources.map(s => s.card),
       sessions: Object.fromEntries(lineup.map((s, i) => [s.id, sources[i].sessions])),
@@ -217,6 +218,7 @@ export class Projection {
       forecast: Object.fromEntries(lineup.map(s => [s.id, this.forecastPart(s.id, now).value])),
       mine: this.mine(user, lineup),
       boards: this.boards(user),
+      connectionsRevision: this.hub.directory.connectionsRevision(user),
       resets: this.hubPart(now).value,
     };
   }

@@ -5,11 +5,8 @@ import {setPrefs, usePrefs} from '../lib/prefs';
 import type {TrackerHealth} from '../lib/resets';
 import type {User} from '../lib/session';
 import {known, rich, t} from '../i18n';
-import {ErrorLine, Field, LanguageSelect, Modal} from './Kit';
+import {ErrorLine, Field, LanguageSelect} from './Kit';
 import {SwitchRow} from './Popover';
-import {AppSection, Measuring} from './Desktop';
-import {inApp, settingsSections, type AppState} from '../lib/app';
-import {useApp} from '../lib/board';
 
 type Status = {busy?: boolean; done?: boolean; error?: unknown};
 
@@ -177,64 +174,5 @@ export function Browser({title}: {title: string}) {
         </p>
       </div>
     </section>
-  );
-}
-
-const SignOutIcon = () => (
-  <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-    <path d="M6 2.5H3.5a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1H6M10.5 11l3-3-3-3M13.5 8H6" />
-  </svg>
-);
-
-/**
- * The person's own things, in a panel on the side: who is signed in (and signing out),
- * profile, password, this browser's settings. The desktop app's board has no account:
- * its panel is the settings of measuring and of the app, then how the board looks.
- */
-export function AccountPanel({
-  user,
-  onChanged,
-  onSignedOut,
-  onClose,
-  local,
-  onAppState,
-}: {
-  user: User;
-  onChanged: () => Promise<void>;
-  onSignedOut: () => void;
-  onClose: () => void;
-  local: boolean;
-  /** The app's state as its commands answer it (lib/app.ts). */
-  onAppState: (state: AppState) => void;
-}) {
-  const appState = useApp();
-  const signOut = async () => {
-    await call('POST', '/api/auth/logout').catch(() => {});
-    onSignedOut();
-  };
-  const sections = settingsSections(local, inApp());
-  return (
-    <Modal title={t(local ? 'settings.title' : 'account.title')} onClose={onClose} side>
-      {sections.includes('account') && (
-        <>
-          <div className="account-card">
-            <span className="avatar is-large">{user.name.slice(0, 1).toUpperCase()}</span>
-            <div>
-              <b>{user.name}</b>
-              <span>{user.email}</span>
-            </div>
-            <button type="button" className="sign-out" onClick={signOut}>
-              <SignOutIcon />
-              {t('account.signOut')}
-            </button>
-          </div>
-          <Profile user={user} onChanged={onChanged} />
-          <Password />
-        </>
-      )}
-      {sections.includes('measuring') && appState && <Measuring state={appState} onState={onAppState} />}
-      {sections.includes('app') && appState && <AppSection state={appState} onState={onAppState} />}
-      <Browser title={t(local ? 'settings.view' : 'account.browser')} />
-    </Modal>
   );
 }

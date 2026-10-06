@@ -26,6 +26,8 @@ export type Snapshot = {
   sourceAccess?:Record<string,SourceAccess>;
   board: BoardMeta;
   view: View;
+  viewRevision?: number;
+  connectionsRevision?: number;
   historyStart: number;
   sources: Card[];
   sessions: Record<string, LiveSession[]>;
@@ -42,7 +44,8 @@ export type HubEvent =
   | {type: 'hello'; data: {epoch: string}}
   | {type: 'snapshot'; data: Snapshot}
   | {type: 'board'; data: {board: BoardMeta}}
-  | {type: 'view'; data: {view: View}}
+  | {type: 'view'; data: {view: View; revision?: number}}
+  | {type: 'connections'; data: {revision: number}}
   | {type: 'lineup'; data: {sources: string[]}}
   | {type: 'card'; data: Card}
   | {type: 'sessions'; data: {id: string; sessions: LiveSession[]}}
@@ -62,6 +65,8 @@ export type BoardState = {
   id: string;
   meta: BoardMeta;
   view: View;
+  viewRevision?: number;
+  connectionsRevision?: number;
   historyStart: number;
   lineup: string[];
   cards: Record<string, Card>;
@@ -137,7 +142,9 @@ function snapshot(state: PageState, data: Snapshot): PageState {
   const board: BoardState = {
     id: data.board.id,
     meta: keep(old?.meta, data.board),
-    view: keep(old?.view, data.view),
+    view: old && (old.viewRevision ?? 0) > (data.viewRevision ?? 0) ? old.view : keep(old?.view, data.view),
+    viewRevision: Math.max(old?.viewRevision ?? 0, data.viewRevision ?? 0),
+    connectionsRevision: Math.max(old?.connectionsRevision ?? 0, data.connectionsRevision ?? 0),
     historyStart: data.historyStart,
     lineup: keep(
       old?.lineup,
@@ -179,7 +186,13 @@ function hub(state: PageState, event: HubEvent): PageState {
     case 'board':
       return patch(state, board => (sameJson(board.meta, event.data.board) ? board : {...board, meta: event.data.board}));
     case 'view':
-      return patch(state, board => (sameJson(board.view, event.data.view) ? board : {...board, view: event.data.view}));
+      return patch(state, board => {
+        const revision = event.data.revision ?? 0;
+        if (revision < (board.viewRevision ?? 0) || revision === (board.viewRevision ?? 0) && sameJson(board.view, event.data.view)) return board;
+        return {...board, view: event.data.view, viewRevision: revision};
+      });
+    case 'connections':
+      return patch(state, board => event.data.revision <= (board.connectionsRevision ?? 0) ? board : {...board, connectionsRevision: event.data.revision});
     case 'lineup':
       return patch(state, board => {
         const lineup = keep(board.lineup, event.data.sources);
@@ -264,6 +277,8 @@ export const useBoardMeta = (board: string) => usePage(s => metaOf(s, board));
 /** The reader's role on the open board: their own, from their list of boards. */
 export const useRole = () => usePage(s => s.boards?.find(b => b.id === s.board?.id)?.role ?? null);
 export const useServerView = () => usePage(s => s.board?.view ?? null);
+export const useViewRevision = () => usePage(s => s.board?.viewRevision ?? 0);
+export const useConnectionsRevision = () => usePage(s => s.board?.connectionsRevision ?? 0);
 export const useHistoryStart = () => usePage(s => s.board?.historyStart ?? null);
 /** Membership only: changing a figure never re-renders the compact list itself. */
 export const useVisibleLimits = () => usePage(s => {

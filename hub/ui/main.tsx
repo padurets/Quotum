@@ -3,12 +3,13 @@ import {createRoot} from 'react-dom/client';
 import '@fontsource-variable/geist';
 import '@fontsource-variable/geist-mono';
 import './style.css';
+import {setPrefs, usePrefs} from './lib/prefs';
 import {showBoard} from './lib/timeRange';
 import {navigate, settingsHref, usePath} from './lib/router';
 import {boardTitle, rememberBoard, rereadSession, useBoard, useSession, type Board, type Session, type User} from './lib/session';
 import {ACTIVITY, AGENTS, ANALYTICS, boardState, cardId, FORECAST, HISTORY, isHidden, useView} from './lib/view';
 import {legacyLayout, withArranged} from './lib/grid';
-import {page, useBoardId, useBoardMeta, useBoards, useLineup, useRole, useServerView, useTitles} from './lib/board';
+import {page, useBoardId, useBoardMeta, useBoards, useLineup, useRole, useServerView, useTitles, useViewRevision} from './lib/board';
 import {heardHub, hubNow, wakeDue} from './lib/clock';
 import {startLive} from './lib/live';
 import {UNAUTHORIZED} from './lib/http';
@@ -18,7 +19,7 @@ import {Header, BoardActions} from './components/Header';
 import {Settings} from './components/Settings';
 import {WidgetAdd} from './components/WidgetAdd';
 import {RefreshAll} from './components/RefreshAll';
-import {SERVICE} from './components/Kit';
+import {ErrorLine, SERVICE} from './components/Kit';
 import {SourceCard} from './components/SourceCard';
 import {AgentsPanel} from './components/Agents';
 import {History} from './components/History';
@@ -95,10 +96,9 @@ function Dashboard({
     const areas = {cards: [...lineup.map(cardId), AGENTS], analytics: ANALYTICS};
     return legacyLayout(serverView, areas, [...areas.cards, ...areas.analytics].filter(id => isHidden(serverView, id)));
   }, [serverView, lineup]);
-  const arrange = useView(useBoardId() ?? '', translated, role === 'owner');
+  const arrange = useView(useBoardId() ?? '', translated, role === 'owner', useViewRevision());
   const titles = useTitles(arrange.view.names);
-  const [editing, setEditing] = useState(false);
-  useEffect(() => setEditing(false), [boardId, active]);
+  const prefs = usePrefs();
   const [adding, setAdding] = useState<Board | null>(null);
   useEffect(() => setAdding(null), [boardId, active]);
   const openSettings = () => navigate(settingsHref('/settings', boardId));
@@ -159,8 +159,7 @@ function Dashboard({
   // filters, are the analytics. Each area is arranged on its own grid, and on its own.
   const cardWidgets = [...cards.values()];
   const panelWidgets = ANALYTICS.map(id => panels.get(id)!);
-  // The prototype's empty-widget marker lives in demo views until the final contract is integrated.
-  const shownOf = (list: Widget[]) => list.filter(widget => !isHidden(arrange.view, widget.id) && (lineup.length > 0 || arrange.view.shown.includes('empty:' + widget.id)));
+  const shownOf = (list: Widget[]) => list.filter(widget => !isHidden(arrange.view, widget.id) && (lineup.length > 0 || arrange.view.enabledWhenEmpty?.includes(widget.id)));
   const shownCards = shownOf(cardWidgets);
   const shownPanels = shownOf(panelWidgets);
   const grid = (list: Widget[], area: string) => (
@@ -168,7 +167,7 @@ function Dashboard({
       key={`${boardId}/${area}`}
       widgets={list}
       layout={arrange.view.layout}
-      movable={arrange.owner && editing}
+      movable={arrange.owner && !prefs.locked}
       onPlaces={(places, height) => arrange.update(view => withArranged(view, places, height))}
     />
   );
@@ -176,12 +175,13 @@ function Dashboard({
   return (
     <>
       <Header boards={boards} board={board} onBoard={selectBoard} user={user} onAccount={openSettings} onSignedOut={onSignedOut} local={local}
-        actions={active && <BoardActions board={board} owner={arrange.owner} editing={editing} onEdit={() => setEditing(on => !on)}
+        actions={active && <BoardActions board={board} owner={arrange.owner} locked={prefs.locked} onLock={() => setPrefs({locked: !prefs.locked})}
         add={board && <WidgetAdd key={boardId} board={board} local={local} trustedKeys={trustedKeys} open={adding?.id === boardId} onOpenChange={open => setAdding(open ? board : null)} />}
         onSettings={local ? null : section => navigate(settingsHref('/boards/' + boardId + '/settings/' + section, boardId))}
         refresh={meta && <RefreshAll key={boardId} board={boardId} ids={lineup.filter(id => !isHidden(arrange.view, cardId(id)))} />} />} />
       {active ? <>
       <main>
+        <ErrorLine error={arrange.error} />
         {local && <AgentBanner />}
         {!meta ? (
           <div className="widgets" aria-hidden="true">

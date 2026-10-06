@@ -33,6 +33,7 @@ export type View = {
   columns: Record<string, string[]>;
   /** Columns off by default that the owner turned on, by widget id. */
   shownColumns: Record<string, string[]>;
+  enabledWhenEmpty?: string[];
 };
 
 export const EMPTY_VIEW: View = {
@@ -46,6 +47,7 @@ export const EMPTY_VIEW: View = {
   colors: {},
   columns: {},
   shownColumns: {},
+  enabledWhenEmpty: [],
 };
 
 const COLUMNS = 6;
@@ -108,7 +110,8 @@ export function parseView(body: unknown): View | null {
   const colors = byId(input.colors, isColor);
   const columns = byId(input.columns, isColumns);
   const shownColumns = byId(input.shownColumns, isColumns);
-  if (!layout || !hidden || !shown || !windows || !names || !plans || !unplanned || !colors || !columns || !shownColumns) return null;
+  const enabledWhenEmpty = ids(input.enabledWhenEmpty ?? [], 4);
+  if (!layout || !hidden || !shown || !windows || !names || !plans || !unplanned || !colors || !columns || !shownColumns || !enabledWhenEmpty || enabledWhenEmpty.some(id => !['agents', 'activity', 'history', 'forecast'].includes(id))) return null;
   const uniqueColumns = (map: Record<string, string[]>) => Object.fromEntries(Object.entries(map).map(([id, list]) => [id, [...new Set(list)]]));
-  return {layout, names, hidden, shown, windows, plans, unplanned, colors, columns: uniqueColumns(columns), shownColumns: uniqueColumns(shownColumns)};
+  return {layout, names, hidden, shown, windows, plans, unplanned, colors, columns: uniqueColumns(columns), shownColumns: uniqueColumns(shownColumns), enabledWhenEmpty};
 }

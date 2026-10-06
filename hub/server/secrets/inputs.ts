@@ -4,7 +4,7 @@ import {SecretError, SecretKey} from './crypto.js';
 
 export type ResetIntent = {from: string | null; to: string};
 export type StorageAtStart = 'keystore' | 'file' | 'waiting' | 'missing';
-export type SecretInputs = {current: SecretKey | null; previous: SecretKey | null; reset: ResetIntent | null; storageAtStart: StorageAtStart | null; wasFileAtStart: boolean};
+export type SecretInputs = {current: SecretKey | null; previous: SecretKey | null; reset: ResetIntent | null; storageAtStart: StorageAtStart | null; wasFileAtStart: boolean; managed?: {dataDir:string; directory?:string; container:boolean}};
 
 const fingerprint = (text: string) => /^[0-9a-f]{16}$/.test(text);
 export function resetIntent(from: string, to: string): ResetIntent {
@@ -38,7 +38,8 @@ export function readInputs(env: Record<string, string | undefined>, dataDir: str
     }
     const state = local ? env.QUOTUM_SECRET_KEY_STATE : undefined;
     if (state !== undefined && !['keystore', 'keystore_was_file', 'file', 'waiting', 'missing'].includes(state)) throw new SecretError('secret_key_configuration_invalid');
-    return {current, previous, reset, storageAtStart: state === 'keystore_was_file' ? 'keystore' : (state as StorageAtStart | undefined) ?? null, wasFileAtStart: state === 'keystore_was_file' || state === 'file'};
+    return {current, previous, reset, storageAtStart: state === 'keystore_was_file' ? 'keystore' : (state as StorageAtStart | undefined) ?? null, wasFileAtStart: state === 'keystore_was_file' || state === 'file',
+      ...(!local&&!current?{managed:{dataDir,directory:env.QUOTUM_SECRET_DIR,container:env.QUOTUM_MANAGED_CONTAINER==='1'}}:{})};
   } finally {
     for (const name of Object.keys(env)) if ((process.platform === 'win32' ? name.toUpperCase() : name).startsWith('QUOTUM_SECRET_KEY')) delete env[name];
     // Node 24 supports this; the pinned Node type declarations predate it.

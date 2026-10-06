@@ -7,10 +7,12 @@ export type CredentialAbility = (typeof CREDENTIAL_ABILITIES)[number];
 export type CredentialRow = RecordIdentity & Sealed & {
   source_id: string | null; key_version: number; hint: string | null; abilities: string;
   created_at: number; expires_at: number | null; last_used_at: number | null; last_error: string | null; unreadable: number;
+  access_revision?: number;
 };
 export type Credential = {
   id: string; provider: string; sourceId: string | null; hint: string | null; abilities: CredentialAbility[];
   createdAt: number; expiresAt: number | null; lastUsedAt: number | null; lastError: string | null; unreadable: boolean;
+  revision: number;
 };
 
 /** Explicit owner projection; encrypted bytes never become an API or board payload. */
@@ -20,7 +22,7 @@ export function credentialAnswer(row: CredentialRow): Credential {
     const parsed: unknown = JSON.parse(row.abilities);
     if (Array.isArray(parsed)) abilities = CREDENTIAL_ABILITIES.filter(ability => parsed.includes(ability));
   } catch { /* A damaged metadata field grants no abilities. */ }
-  return {id: row.id, provider: row.provider, sourceId: row.source_id, hint: row.hint, abilities, createdAt: row.created_at, expiresAt: row.expires_at, lastUsedAt: row.last_used_at, lastError: secretCode(row.last_error), unreadable: !!row.unreadable};
+  return {id: row.id, provider: row.provider, sourceId: row.source_id, hint: row.hint, abilities, createdAt: row.created_at, expiresAt: row.expires_at, lastUsedAt: row.last_used_at, lastError: secretCode(row.last_error), unreadable: !!row.unreadable, revision: row.access_revision ?? 0};
 }
 
 /** Only ciphertext reaches this repository. Ownership is in every mutation predicate. */
@@ -42,7 +44,7 @@ export class CredentialStore {
     this.db.prepare('INSERT INTO credentials (id, user_id, provider, source_id, cipher, nonce, key_version, hint, abilities, created_at, expires_at, last_used_at, last_error, unreadable) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(row.id, row.user_id, row.provider, row.source_id, row.cipher, row.nonce, row.key_version, row.hint, row.abilities, row.created_at, row.expires_at, row.last_used_at, row.last_error, row.unreadable);
   }
   replace(owner: string, id: string, sealed: Sealed, generation: number, hint: string | null, previous?: Sealed): boolean {
-    return this.db.prepare('UPDATE credentials SET cipher = ?, nonce = ?, key_version = ?, hint = ?, unreadable = 0, last_error = NULL WHERE user_id = ? AND id = ?'+(previous?' AND nonce=? AND cipher=?':''))
+    return this.db.prepare('UPDATE credentials SET cipher = ?, nonce = ?, key_version = ?, hint = ?, unreadable = 0, last_error = NULL, access_revision=access_revision+1 WHERE user_id = ? AND id = ? AND access_revision<9007199254740991'+(previous?' AND nonce=? AND cipher=?':''))
       .run(sealed.cipher, sealed.nonce, generation, hint, owner, id,...(previous?[previous.nonce,previous.cipher]:[])).changes !== 0;
   }
   remove(owner: string, id: string): void {

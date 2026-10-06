@@ -3,7 +3,7 @@ import {MONEY_KEY} from './money.js';
 
 /** No OpenRouter credential, holding, share or card exists before the user's submit. */
 export const ONBOARDING: DemoSet = {
-  id: 'onboarding', about: 'Interactive board and account prototype, with unconnected OpenRouter and two people', scene: 'quiet',
+  id: 'onboarding', about: 'Board and account onboarding, with unconnected OpenRouter and two people', scene: 'quiet',
   entries: [
     {kind: 'person', id: 'ana', name: 'Ana', expect: [{state: 'widgets'}]},
     {kind: 'person', id: 'boris', name: 'Boris', expect: [{state: 'widgets'}]},

@@ -22,7 +22,7 @@ or account to set up. For several machines or a team, run the hub and agent belo
 
 ```sh
 # The hub; `docker logs quotum` shows the setup code of the first account
-docker run -d --name quotum -p 8080:8080 -v quotum:/data ghcr.io/padurets/quotum-hub
+docker run -d --name quotum -p 8080:8080 -v quotum:/data -v quotum-keys:/keys ghcr.io/padurets/quotum-hub
 
 # On every machine: confirm the code in the browser, then keep measuring in the background
 npx quotum connect http://<the hub>:8080
@@ -240,7 +240,7 @@ are still ahead ([roadmap](#roadmap)).
 **1. Start the hub.**
 
 ```sh
-docker run -d --name quotum --restart unless-stopped -p 8080:8080 -v quotum:/data ghcr.io/padurets/quotum-hub
+docker run -d --name quotum --restart unless-stopped -p 8080:8080 -v quotum:/data -v quotum-keys:/keys ghcr.io/padurets/quotum-hub
 docker logs quotum            # shows the setup code for the first account
 ```
 
@@ -283,7 +283,7 @@ have your system start `quotum run`, the same in the foreground (a systemd user
 service, launchd, Windows autostart). With npx, put `npx` before every command.
 
 **Many machines at once** (images, VMs, containers): create a machine token in the
-dashboard (*My connections → Connect → Device*) and start every machine with it. Each one joins as
+dashboard (*Settings → Devices → Connect*) and start every machine with it. Each one joins as
 yours by itself:
 
 ```sh
@@ -299,7 +299,7 @@ QUOTUM_HUB_URL=https://quotum.example.com QUOTUM_HUB_TOKEN=qt_m_… quotum start
 ```
 
 A machine token is one person's: every teammate creates their own. Machines are named
-in *My connections*, so an image doesn't need a name per copy.
+in *Settings → Devices*, so an image doesn't need a name per copy.
 
 **Sharing with a team.** Create a shared board, invite people with a link, and share
 your subscriptions with it (*People and subscriptions → Subscriptions*). You can take
@@ -315,13 +315,24 @@ licences) and as a bare binary (`quotum-cli-<platform>`, what the installers and
 
 ## Connecting OpenRouter
 
-Open **My connections**, choose **Connect**, then **OpenRouter**.
+On the chosen board, open **Add widget** (the plus in the header), then **OpenRouter**.
 Create a dedicated OpenRouter management key in
-[OpenRouter key settings](https://openrouter.ai/settings/keys), give it an expiry and
-paste it into the password field. A key without expiry needs an explicit confirmation.
+[OpenRouter management-key settings](https://openrouter.ai/settings/management-keys)
+and paste it into the password field. **Connect and add** verifies it, saves your access
+and shows its balance on that board in one action. Keys without expiry are supported
+without a second confirmation. On a shared board, the form explains which data its
+members will see before you submit.
 The key can create, edit and delete provider API keys; Quotum uses only fixed read
-operations. A server hub needs its separate encryption key configured, and its operator
+operations. A new server creates its encryption key in separate persistent storage, and its operator
 can decrypt saved access. See [SECURITY.md](SECURITY.md) for the protection and limits.
+
+The avatar opens full settings pages for your profile, connections, devices, projects
+and interface. Board settings belong to the selected board. Add lists only absent or
+hidden widgets you may add; the lock switches between free arrangement and a locked
+layout. Connecting from **Settings → My connections** keeps access personal until you
+explicitly choose a board. Existing access is reused; replacing its key is a separate
+action. **Recent additions and recovery** finds saved results after a lost response or
+reload, without duplicating access or restoring a later hidden or removed card.
 
 The original plan label stays beside the title; a small second line identifies the
 resource as **Subscription** or **Budget**. The budget card shows only current state:
@@ -344,7 +355,7 @@ Before the first baseline, history is unknown. Partial history and spending obse
 after a gap retain their uncertainty and original interval. Key names and monetary
 measurements are shared with board members, while saved access details stay private.
 Only holders can refresh a hub-measured source. Replace or remove your saved access in
-the same panel; removing it does not revoke the provider key. Revoked or expired access
+**Settings → My connections**; removing it does not revoke the provider key. Revoked or expired access
 preserves the last measurements. The compact panel displays money too; tray minimums
 and quota notifications continue to use percentage windows only.
 
@@ -515,7 +526,8 @@ agent running in the background keeps its version until it is started again.
 | `QUOTUM_PUBLIC_URL` | taken from the request | The address shown to agents and used in invite links |
 | `QUOTUM_TRUST_PROXY` | — | Believe a proxy about the client's address and protocol: `true`, a number of hops, or addresses and CIDR ranges |
 | `QUOTUM_DATA_DIR` | `hub/data` (image: `/data`) | Where the SQLite database lives |
-| `QUOTUM_SECRET_KEY`, `QUOTUM_SECRET_KEY_FILE` | — | Encryption key for trusted connector credentials: 32 random bytes as unpadded base64url, or a protected file outside the data directory containing it. Set one input only; see [server deployment](deploy/README.md) |
+| `QUOTUM_SECRET_KEY`, `QUOTUM_SECRET_KEY_FILE` | automatic separate storage | Optional explicit encryption key: 32 random bytes as unpadded base64url, or a protected file outside the data directory. Set one input only; explicit inputs override automatic storage. See [server deployment](deploy/README.md) |
+| `QUOTUM_SECRET_DIR` | POSIX: sibling of the real data directory with `.keys`; image: `/keys` | Optional separate persistent key directory, outside data. Not used with an explicit key. Windows standalone uses private HKCU registry storage instead and rejects this option in automatic mode |
 | `QUOTUM_SECRET_KEY_PREVIOUS`, `QUOTUM_SECRET_KEY_PREVIOUS_FILE` | — | Matching previous encryption key during rotation. Set one previous input only; back up keys separately and retain the old key for its matching backups |
 | `QUOTUM_SETUP_CODE` | random, printed at start | The code the first account needs while the hub has none |
 | `QUOTUM_SIGNUP` | `invite` | `open` lets anyone sign up; otherwise only the first person and people with an invite |

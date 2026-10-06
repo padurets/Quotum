@@ -165,6 +165,7 @@ async function hub(options: Partial<EventsOptions> = {}, clock?: Clock) {
       url,
       payload: options.body,
       headers: {
+        ...(method==='POST'&&url.endsWith('/view')?{'If-Match':'"'+directory.viewRevision(url.split('/')[3])+'"'}:{}),
         ...(options.as && cookies.get(options.as) ? {cookie: cookies.get(options.as)!} : {}),
         ...(options.token ? {authorization: `Bearer ${options.token}`} : {}),
         ...options.headers,
@@ -283,6 +284,20 @@ test('private credential failures and metadata never reach shared overview, SSE,
   }
 });
 
+test('private connection discovery reaches every window of its owner, without reaching another member', async t => {
+  const h=await hub();t.after(()=>h.app.close());
+  const personal=await h.person('alice'),team=(await h.call('POST','/api/boards',{as:'alice',body:{name:'Team'}})).body.id;
+  await h.person('bob',await h.invite('alice',team));
+  const one=await reading(h,'alice',personal),two=await reading(h,'alice',team),other=await reading(h,'bob',team);
+  t.after(()=>{one.close();two.close();other.close();});
+  await h.token('alice');
+  const frames=await Promise.all([one.within(),two.within(),other.within()]);
+  assert.equal(frames[0].filter(frame=>frame.type==='connections').length,1);
+  assert.equal(frames[1].filter(frame=>frame.type==='connections').length,1);
+  assert.equal(frames[2].filter(frame=>frame.type==='connections').length,0);
+  assert.deepEqual(Object.keys(frames[0].find(frame=>frame.type==='connections')!.data),['revision']);
+});
+
 test('a height the owner chose reaches every reader: in the view event of one already reading, in the snapshot of one who comes later', async t => {
   const h = await hub();
   t.after(() => (letGo(), h.app.close()));
@@ -293,7 +308,7 @@ test('a height the owner chose reaches every reader: in the view event of one al
   t.after(bob.close);
   const layout = {columns: 6, places: {history: {x: 0, y: 0, w: 6, h: 12}, agents: {x: 0, y: 12, w: 3}}};
   const saved = await h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {layout}});
-  assert.deepEqual(saved.body.layout, layout);
+  assert.deepEqual(saved.body.view.layout, layout);
   const told = (await bob.within()).filter(e => e.type === 'view');
   assert.deepEqual(told.map(e => e.data.view.layout), [layout]);
   const later = await reading(h, 'bob', team);
@@ -1093,8 +1108,8 @@ test('every change a reader sees is told: what each request touches reaches the 
     ['a board made', () => h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Solo'}}), ['boards'], ['boards'], []],
     ['a name changed', () => h.call('POST', '/api/account', {as: 'alice', body: {name: 'Alicia'}}), ['card'], ['card'], []],
     ['a source taken off', () => h.call('DELETE', `/api/boards/${team}/shares/${source}`, {as: 'alice'}), [], ['lineup', 'mine'], []],
-    ['a device renamed', () => h.call('POST', `/api/devices/${devices[0].id}`, {as: 'alice', body: {name: 'Book'}}), [], [], []],
-    ['a device disconnected', () => h.call('DELETE', `/api/devices/${devices[0].id}`, {as: 'alice'}), ['lineup', 'mine'], [], []],
+    ['a device renamed', () => h.call('POST', `/api/devices/${devices[0].id}`, {as: 'alice', body: {name: 'Book'}}), ['connections'], [], []],
+    ['a device disconnected', () => h.call('DELETE', `/api/devices/${devices[0].id}`, {as: 'alice'}), ['lineup', 'mine', 'connections'], [], []],
   ];
   for (const [what, act, onOwn, onShared, onBobs] of rows) {
     const done = await act();
@@ -1184,11 +1199,11 @@ test('what each change of data touches reaches the boards it shows on: people jo
       'a subscription measured for the first time',
       () => h.measure(desk, Date.now() - MIN, {account: 'c0c0c0c0c0c0c0c0c0c0c0c0', device: 'box'}),
       // Sent whole as it comes; the page reads its history for the new lineup, all of it.
-      ['card', 'sessions', 'cadence', 'refresh', 'forecast', 'lineup', 'mine', 'history'],
+      ['card', 'sessions', 'cadence', 'refresh', 'forecast', 'lineup', 'mine', 'connections', 'history'],
       [],
       [],
     ],
-    ['the machine that told of agents is disconnected', () => h.call('DELETE', `/api/devices/${laptop}`, {as: 'alice'}), ['sessions', 'refresh'], [], []],
+    ['the machine that told of agents is disconnected', () => h.call('DELETE', `/api/devices/${laptop}`, {as: 'alice'}), ['sessions', 'refresh', 'connections'], [], []],
     ['a machine tells of its agents', () => agents('desk', [session]), ['sessions'], [], []],
     ['and then of none', () => agents('desk', []), ['sessions'], [], []],
     ['the trackers asked', () => h.resets.round(), ['resets'], ['resets'], ['resets']],

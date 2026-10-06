@@ -5,7 +5,7 @@ import {mkdtempSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
-import {STEPS,migrate} from '../store/schema.js';
+import {STEPS,migrate,SCHEMA_VERSION} from '../store/schema.js';
 import {Store} from '../store/store.js';
 
 /**
@@ -83,7 +83,7 @@ test('money storage upgrades the stable-session layout without changing its iden
     migrate(db,3000);
     assert.deepEqual(db.prepare('SELECT * FROM agent_sessions').all(),sessions);
     assert.deepEqual(db.prepare('SELECT * FROM agent_work').all(),work);
-    assert.equal(db.prepare('PRAGMA user_version').get()?.user_version,9);
+    assert.equal(db.prepare('PRAGMA user_version').get()?.user_version,SCHEMA_VERSION);
     for(const name of ['readings','meter_spans'])assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name));
   }finally{db.close();}
 });

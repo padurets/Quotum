@@ -23,13 +23,30 @@ export type Touches = {
 };
 
 /** Tells the observer, if there is one; its trouble is logged and never undoes the change told of. */
+let pending: (() => void)[] | null = null;
+
+/** Synchronous database work publishes its changes only after the outer commit. */
+export function transaction<T>(db: import('node:sqlite').DatabaseSync, work: () => T): T {
+  if (db.isTransaction) return work();
+  db.exec('BEGIN IMMEDIATE');
+  const previous = pending, changes: (() => void)[] = [];
+  pending = changes;
+  let result: T;
+  try {result = work(); db.exec('COMMIT');}
+  catch (error) {db.exec('ROLLBACK'); throw error;}
+  finally {pending = previous;}
+  for (const change of changes) afterCommit(change);
+  return result;
+}
+
+export function afterCommit(work: () => void) {
+  if (pending) {pending.push(work); return;}
+  try {work();} catch (error) {trouble(error);}
+}
+
 export function tell(observer: Touches | null, touch: (observer: Touches) => void) {
   if (!observer) return;
-  try {
-    touch(observer);
-  } catch (error) {
-    trouble(error);
-  }
+  afterCommit(() => touch(observer));
 }
 
 /** Logs trouble with the events of open dashboards, which never takes the hub down. */

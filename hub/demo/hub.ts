@@ -3,7 +3,7 @@ import {pathToFileURL} from 'node:url';
 import path from 'node:path';
 import {MONEY_KEY} from './money.js';
 import {readFileSync} from 'node:fs';
-import {prototypeAdditions} from './additions.js';
+import {demoAdditionControls} from './additions.js';
 process.umask(0o077);
 (process.report as typeof process.report & {excludeEnv: boolean}).excludeEnv = true;
 const root=path.resolve(process.cwd(),'dist','server');
@@ -45,4 +45,4 @@ transport.send=async(operation,secret,query={})=>{
 };
 (connectors as Map<string,import('../server/connectors/registry.js').Connector>).set('openrouter',openRouter(transport,()=>observed));
 const {runHub}=await load('main.js') as typeof import('../server/main.js');
-await runHub(prototypeAdditions(connectors));
+await runHub(demoAdditionControls);

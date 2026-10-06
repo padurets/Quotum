@@ -17,7 +17,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.server.json && tsc -p tsconfig.app.json && vite build",
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.server.json && node -e \"require('node:fs').copyFileSync('server/secrets/windows.ps1','dist/server/secrets/windows.ps1')\" && tsc -p tsconfig.app.json && vite build",
     "typecheck": "tsc -p tsconfig.test.json && tsc -p tsconfig.app.json && tsc -p tsconfig.ui-test.json && tsc -p tsconfig.demo.json && tsc -p tsconfig.demo-ui.json",
     "test": "tsc -p tsconfig.server.json && tsx --test server/test/*.test.ts ui/test/*.test.ts demo/test/*.test.ts bench/test/*.test.ts",
     "start": "node dist/server/index.js",
