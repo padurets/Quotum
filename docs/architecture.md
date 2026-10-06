@@ -1,8 +1,9 @@
 # Architecture
 
-Quotum shows the subscription limits of coding agents (Claude Code, Codex, Antigravity)
-on one page: for one person on one machine, or for a team across many machines and
-accounts. This document explains how the parts work and why they are built this way.
+Quotum shows coding-agent subscriptions (Claude Code, Codex, Antigravity and z.ai)
+and OpenRouter budgets on one page: for one person on one machine, or for a team
+across many machines and accounts. This document explains how the parts work and why
+they are built this way.
 
 ## Parts
 
@@ -24,8 +25,9 @@ accounts. This document explains how the parts work and why they are built this 
 - **hub/** — the dashboard service: Node 24, Fastify, the SQLite built into Node, a
   React UI. It decides which device measures which subscription, stores measurements,
   applies the rules (what counts as spending, what is a reset, what is a gap) and
-  serves the dashboard. Hub-measured providers, such as OpenRouter, use its read-only
-  connectors and encrypted credentials; subscription measurements come from agents.
+  serves the dashboard. The hub measures z.ai subscriptions and OpenRouter budgets
+  through its read-only connectors and encrypted credentials. Agents deliver the
+  client-measured subscriptions.
 - **spec/** — the contracts: the [ingest format](../spec/ingest-v1.md) between the two
   (anything that speaks it can deliver to a hub), and the
   [dashboard's events](../spec/dashboard-v1.md) between the hub and its page.
@@ -51,8 +53,9 @@ is one implementation of them.
 
 ## Measuring
 
-Each provider has an adapter that asks the agent's own client, never the provider's
-endpoints:
+The agent's adapters ask each coding agent's own client, never provider endpoints.
+The hub's read-only connectors measure z.ai subscriptions and OpenRouter budgets
+directly. These are the client interfaces used by the agent:
 
 | Provider | Interface | Notes |
 |---|---|---|

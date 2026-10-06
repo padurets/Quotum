@@ -372,7 +372,7 @@ last valid values without refreshing them. An allowance does not guarantee model
 availability or concurrency.
 
 Both quotas also appear in the ordinary subscription chart and measurement table:
-choose **5 hours** or **Weekly**, alongside the other subscriptions. The chart's legend,
+choose **5-hour** or **Weekly**, alongside the other subscriptions. The chart's legend,
 source colours, time range and period visibility are shared. Historical percentages
 use the allowance reported at each measurement. The quotas overlap and are never
 added or converted to money. Forecasts, agent-work attribution and native quota
