@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {navigate, onLocation, settingsHref} from '../lib/router';
+import {navigate, onLocation, selectedBoard, settingsHref} from '../lib/router';
 import {onTimeRange, showBoard, timeRange} from '../lib/timeRange';
 
 test('Back restores its own board and range after settings instead of rewriting the URL', () => {
@@ -20,6 +20,7 @@ test('Back restores its own board and range after settings instead of rewriting 
     assert.equal(url.pathname, '/settings/connections');
     assert.equal(url.searchParams.get('board'), 'A');
     assert.deepEqual(timeRange(), {from: 1800000000000, to: 1800003600000});
+    assert.equal(selectedBoard(), 'A');
     navigate('/?board=B&from=1800007200000&to=1800010800000'); showBoard('B');
     history.pushState(null, '', '/?board=A&from=1800000000000&to=1800003600000');
     events.dispatchEvent(new Event('popstate'));

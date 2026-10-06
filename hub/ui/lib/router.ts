@@ -24,7 +24,16 @@ export function useLocation() {
   return useSyncExternalStore(onLocation, address, address);
 }
 
-export function usePath() { return useLocation().split('?')[0]; }
+const pathname = () => typeof location === 'undefined' ? '/' : location.pathname;
+export function usePath() { return useSyncExternalStore(onLocation, pathname, pathname); }
+
+/** Board controls do not render again when only the charts' range changes. */
+export function selectedBoard() {
+  if (typeof location === 'undefined') return null;
+  return location.pathname.match(/^\/boards\/([^/?]+)\/settings(?:[/?]|$)/)?.[1]
+    ?? new URLSearchParams(location.search).get('board');
+}
+export function useSelectedBoard() { return useSyncExternalStore(onLocation, selectedBoard, selectedBoard); }
 
 /** Settings keep the board and its range as a return address, never as connect consent. */
 export function settingsHref(path: string, boardId?: string) {

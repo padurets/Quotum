@@ -60,9 +60,9 @@ export function prototypeAdditions(registry: ReadonlyMap<string, Connector>): Ex
         const now = Date.now(), tokenSecret = newSecret('qt_m');
         const token = directory.createToken(tokenSecret, 'demo', user.id, 'Prototype device', now);
         const machine = {id: 'prototype-' + user.id, name: 'Prototype laptop', os: 'linux', arch: 'x86_64'};
-        const device = hub.ingest.accept({kind: 'token', token}, {version: 1, agent: '0.6.0', machine, sentAt: new Date(now).toISOString(), snapshots: [
-          {provider: 'codex', account: 'c'.repeat(24), observedAt: new Date(now).toISOString(), staleAfterMs: 3_600_000, plan: 'plus', windows: [{id: 'weekly', kind: 'weekly', used: 18, minutes: 10080, resetsAt: new Date(now + 3 * 86_400_000).toISOString()}]},
-          {provider: 'claude', account: 'd'.repeat(24), observedAt: new Date(now).toISOString(), staleAfterMs: 3_600_000, plan: 'Claude Pro', windows: [{id: 'weekly', kind: 'weekly', used: 32, minutes: 10080, resetsAt: new Date(now + 5 * 86_400_000).toISOString()}]},
+        const device = hub.ingest.accept({kind: 'token', token}, {version: 1, agent: '0.6.0', machine, sentAt: new Date(now).toISOString(), failures: [], snapshots: [
+          {provider: 'codex', account: 'c'.repeat(24), observedAt: new Date(now).toISOString(), staleAfterMs: 3_600_000, via: 'prototype', plan: 'plus', windows: [{id: 'weekly', kind: 'weekly', usedPercent: 18, minutes: 10080, resetsAt: new Date(now + 3 * 86_400_000).toISOString()}]},
+          {provider: 'claude', account: 'd'.repeat(24), observedAt: new Date(now).toISOString(), staleAfterMs: 3_600_000, via: 'prototype', plan: 'Claude Pro', windows: [{id: 'weekly', kind: 'weekly', usedPercent: 32, minutes: 10080, resetsAt: new Date(now + 5 * 86_400_000).toISOString()}]},
         ]}, now).device;
         return {deviceId: device.id};
       });
@@ -130,6 +130,8 @@ export function prototypeAdditions(registry: ReadonlyMap<string, Connector>): Ex
               const connector = provider && registry.get(provider), secret = request.body?.secret;
               if (!connector || typeof secret !== 'string' || !connector.secretFormat(secret)) {operation.state = 'needs_input'; operation.error = 'credential_invalid'; return;}
               const bytes = Buffer.from(secret, 'ascii');
+              // Only the prototype verification pauses; ordinary demo measurements keep their cadence.
+              await new Promise(resolve => setTimeout(resolve, 700));
               const identity = await connector.identify(bytes).finally(() => bytes.fill(0));
               if (identity.expiresAt !== null && identity.expiresAt <= Date.now()) {operation.state = 'needs_input'; operation.error = 'credential_expired'; return;}
               // Verify authority again after provider I/O. No demo shortcut grants board rights.

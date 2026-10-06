@@ -106,3 +106,17 @@ test('members add only their sources; an empty analytic does not expose the othe
   assert.equal((await h.call('POST', '/api/additions/' + memberWidget.id + '/run', {}, h.member.id)).json().state, 'needs_input');
   assert.deepEqual(h.directory.view(h.board.id).shown, ['empty:history']);
 });
+
+test('synthetic device discovery provides nothing until its selected source is added', async t => {
+  const h = await harness(); t.after(h.close);
+  const response = await h.call('POST', '/api/prototype/device', {}, h.member.id);
+  assert.equal(response.statusCode, 200);
+  const device = h.directory.deviceById(response.json().deviceId)!;
+  assert.equal(device.userId, h.member.id);
+  const sources = h.store.held(h.member.id);
+  assert.equal(sources.length, 2);
+  assert.equal(h.store.sources(h.board.id).length, 0);
+  const selection = await h.reserve({kind: 'sources', sourceIds: [sources[0].id]}, h.member.id);
+  assert.equal((await h.call('POST', '/api/additions/' + selection.id + '/run', {}, h.member.id)).json().state, 'complete');
+  assert.deepEqual(h.store.sources(h.board.id).map(source => source.id), [sources[0].id]);
+});

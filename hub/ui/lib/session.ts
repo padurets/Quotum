@@ -3,7 +3,7 @@ import {t} from '../i18n';
 import {page, useBoards} from './board';
 import {call, UNAUTHORIZED} from './http';
 import {SessionReader} from './sessionReader';
-import {navigate, useLocation} from './router';
+import {navigate, useSelectedBoard} from './router';
 
 export type User = {id: string; email: string; name: string};
 export type Board = {id: string; name: string; personal: boolean; role: 'owner' | 'member'};
@@ -101,9 +101,7 @@ function remembered(): string | null {
  */
 export function useBoard(): [Board | null, (id: string) => void] {
   const boards = useBoards();
-  const address = useLocation();
-  const pathBoard = address.match(/^\/boards\/([^/?]+)\/settings(?:[/?]|$)/)?.[1];
-  const id = pathBoard ?? new URLSearchParams(address.split('?')[1] ?? '').get('board') ?? remembered();
+  const id = useSelectedBoard() ?? remembered();
   const board = boards?.find(b => b.id === id) ?? boards?.[0] ?? null;
   const select = useCallback((next: string) => {
     rememberBoard(next);

@@ -23,7 +23,6 @@ transport.send=async(operation,secret,query={})=>{
   const index=Array.from({length:11},(_,i)=>MONEY_KEY(i)).indexOf(secret.toString('ascii'));
   if(index<0||index===10)throw new SecretError('credential_invalid');
   if(index===9)throw new SecretError('connector_timeout');
-  if(operation==='key')await new Promise(resolve=>setTimeout(resolve,700));
   type Control={credits?:number;usage?:number;at?:number};
   let control:Control|null=null;
   if(index===1)try{control=JSON.parse(readFileSync(path.join(process.env.QUOTUM_DATA_DIR!,'money-control.json'),'utf8')) as Control;}catch{/* The ordinary demo has no benchmark control. */}
