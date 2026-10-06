@@ -5,7 +5,6 @@ import {boardTitle, type Board} from '../lib/session';
 import {useTitles} from '../lib/board';
 import {logoOf} from './logos';
 import {CopyField, ErrorLine, Modal, Segmented} from './Kit';
-import {SwitchRow} from './Popover';
 import {t} from '../i18n';
 
 export type BoardTab = 'shares' | 'members';
@@ -24,7 +23,7 @@ const Logo = ({provider}: {provider: string}) => <img className="share-logo" src
  * their own devices measure; the board's owner, or whoever shared a card, takes it off.
  * The board shows the change when the hub tells it.
  */
-function SharesTab({board}: {board: Board}) {
+export function SharesTab({board}: {board: Board}) {
   const titles = useTitles();
   const [shares, setShares] = useState<Shares | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -70,30 +69,12 @@ function SharesTab({board}: {board: Board}) {
           <p>{t('shares.none')}</p>
         )}
       </section>
-      <section className="connect-way">
-        <h3>{t('shares.mine')}</h3>
-        <p>{t('shares.mineText')}</p>
-        {shares.mine.length ? (
-          <div className="share-switches">
-            {shares.mine.map(s => (
-              <SwitchRow key={s.source} on={s.shared} onChange={on => change(s.source, on)} value={s.devices.join(', ') || undefined}>
-                <span className="share-name">
-                  <Logo provider={s.provider} />
-                  {providerName(s.provider)}
-                </span>
-              </SwitchRow>
-            ))}
-          </div>
-        ) : (
-          <p className="admin-empty">{t('shares.mineEmpty')}</p>
-        )}
-      </section>
       <ErrorLine error={error} />
     </div>
   );
 }
 
-function MembersTab({board, userId}: {board: Board; userId: string}) {
+export function MembersTab({board, userId}: {board: Board; userId: string}) {
   const [members, setMembers] = useState<Member[]>([]);
   const [invite, setInvite] = useState<string | null>(null);
   const [reset, setReset] = useState(false);

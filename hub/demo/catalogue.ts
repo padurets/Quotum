@@ -1,3 +1,4 @@
+import {ONBOARDING} from './onboarding.js';
 import {MEASURE_INTERVAL} from '../server/domain/frequency.js';
 import {
   agentsWork,
@@ -1615,4 +1616,4 @@ const activity: DemoSet = {
 };
 
 const money:DemoSet={...all,id:'money',about:'Subscriptions beside OpenRouter balances, key caps, partial inventory and private access failures'};
-export const SETS: DemoSet[] = [all, showcase, activity,money];
+export const SETS: DemoSet[] = [all, showcase, activity, money, ONBOARDING];

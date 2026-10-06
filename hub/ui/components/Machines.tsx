@@ -15,7 +15,7 @@ import type {Credential} from '../../server/store/credentials';
 
 export type ConnectionsStart = 'list' | 'connect';
 
-type Device = {
+export type Device = {
   id: string;
   /** The name given on the hub, else the one the machine reports. */
   name: string;
@@ -53,7 +53,7 @@ function Agents({device}: {device: Device}) {
 }
 
 /** The reader's devices; on the desktop app's board, its one machine, which cannot be disconnected (it is the app's own agent). */
-function Devices({local}: {local: boolean}) {
+export function Devices({local}: {local: boolean}) {
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [renaming,setRenaming]=useState<Device|null>(null),[name,setName]=useState('');
   const [error, setError] = useState<unknown>(null);
@@ -92,7 +92,7 @@ function Devices({local}: {local: boolean}) {
   </>;
 }
 
-function ConnectDevice() {
+export function ConnectDevice() {
   const [tokens, setTokens] = useState<Token[]>([]);
   const [name, setName] = useState('');
   const [created, setCreated] = useState<{secret: string; name: string} | null>(null);

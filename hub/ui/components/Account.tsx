@@ -21,7 +21,7 @@ const blank = {autoComplete: 'off', 'data-1p-ignore': '', 'data-lpignore': 'true
 const blankPassword = {...blank, autoComplete: 'new-password'};
 
 /** Name and email; a new email needs the current password. */
-function Profile({user, onChanged}: {user: User; onChanged: () => Promise<void>}) {
+export function Profile({user, onChanged}: {user: User; onChanged: () => Promise<void>}) {
   const [name, setName] = useState(user.name);
   const [email, setEmail] = useState(user.email);
   const [password, setPassword] = useState('');
@@ -70,7 +70,7 @@ function Profile({user, onChanged}: {user: User; onChanged: () => Promise<void>}
 }
 
 /** A new password; every other session of the person ends with the old one. */
-function Password() {
+export function Password() {
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const [status, setStatus] = useState<Status>({});
@@ -146,7 +146,7 @@ function Trackers() {
 }
 
 /** What this browser (or the app's window) keeps for itself: the language and reset announcements. */
-function Browser({title}: {title: string}) {
+export function Browser({title}: {title: string}) {
   const prefs = usePrefs();
   return (
     <section className="drawer-section">

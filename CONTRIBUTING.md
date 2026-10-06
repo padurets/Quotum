@@ -205,6 +205,17 @@ a scene from `hub/demo/catalogue.ts`. `DEV_SET=money DEV_STILL=true make dev` pl
 the monetary cases on Ana's personal board: balance and caps, large key inventory,
 revoked and expired access, a history gap, negative balance, zero cap and an unknown
 provider. The other catalogue cards remain available in the widget menu.
+`DEV_SET=onboarding DEV_STILL=true make dev` opens the interactive board and account
+prototype. Ana owns *Studio* and *New board*; Boris is a member of both. OpenRouter
+starts unconnected. *Add widget* offers synthetic keys for a balance without expiry,
+partial inventory, invalid or expired access and temporary failure, plus a lost-reply
+control. The device journey can generate a synthetic device report and lets the user
+select specific sources. Cards, history and board events use the application's own
+implementation. The operation adapter is demo-only: receipts are held in memory and
+connection creation precedes placement. It does not demonstrate the final atomic
+operation, restart recovery or automatic encryption-key storage. No real provider or
+client is contacted. Use `make info` for the actual address and synthetic sign-in.
+
 `DEV_MODE=hub make dev` starts an ordinary hub on
 isolated persistent data with reset trackers disabled. No mode starts coding clients.
 To connect trusted sources in hub mode, set `QUOTUM_SECRET_KEY_FILE` in `.env` to a

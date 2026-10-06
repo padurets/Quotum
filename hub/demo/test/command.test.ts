@@ -4,6 +4,7 @@ import {addressOf, parseArgs} from '../index.js';
 
 test('the command takes a set and a reset scene, and refuses anything else with the lists', () => {
   assert.deepEqual([parseArgs([]).set.id, parseArgs([]).scene], ['all', 'announced']);
+  assert.deepEqual([parseArgs(['onboarding', '--still']).set.id, parseArgs(['onboarding']).scene], ['onboarding', 'quiet']);
   assert.deepEqual([parseArgs(['showcase']).set.id, parseArgs(['showcase']).scene], ['showcase', 'showcase'], 'a set starts with its own scene');
   assert.deepEqual([parseArgs(['--resets', 'timeout']).set.id, parseArgs(['--resets', 'timeout']).scene], ['all', 'timeout']);
   assert.throws(() => parseArgs(['nope']), /Unknown set "nope"[\s\S]*sets: +all/);

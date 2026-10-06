@@ -2,4 +2,5 @@
 process.umask(0o077);
 // The pinned Node type declarations do not include this report flag.
 (process.report as typeof process.report & {excludeEnv: boolean}).excludeEnv = true;
-await import('./main.js');
+const {runHub} = await import('./main.js');
+await runHub();

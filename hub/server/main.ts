@@ -4,7 +4,7 @@ import path from 'node:path';
 import {config} from './config.js';
 import {Store} from './store/store.js';
 import {ResetFeed} from './resets.js';
-import {buildApp} from './api.js';
+import {buildApp, type ExtendHub} from './api.js';
 import {Ingest} from './ingest.js';
 import {Duty} from './duty.js';
 import {Cadence} from './cadence.js';
@@ -26,7 +26,7 @@ function sayAndExit(event: object, code: number): Promise<never> {
   });
 }
 
-async function main() {
+async function main(extend?: ExtendHub) {
   const local = config.local;
 
   mkdirSync(config.dataDir, {recursive: true, mode: 0o700});
@@ -53,7 +53,7 @@ async function main() {
   const ingest = new Ingest(store, directory, new Duty(), new Cadence());
   const credentials=new Credentials(store,inputs.current,secretKey);
   const hubSources=new HubSources(store,credentials);
-  const app = await buildApp({store, directory, resets, ingest, pairing: new Pairing(directory), setup, local: local && {key: local.key}, credentials,hubSources, secretSnapshot: {storageAtStart: inputs.storageAtStart, wasFileAtStart: inputs.wasFileAtStart}});
+  const app = await buildApp({store, directory, resets, ingest, pairing: new Pairing(directory), setup, local: local && {key: local.key}, credentials,hubSources, secretSnapshot: {storageAtStart: inputs.storageAtStart, wasFileAtStart: inputs.wasFileAtStart}}, extend);
 
   let closing = false;
   let pruning: ReturnType<typeof setInterval> | undefined;
@@ -123,8 +123,10 @@ async function main() {
 }
 
 // Crypto, SQLite and input errors must never echo a key, path, raw message or cause.
-try {
-  await main();
-} catch (error) {
-  await sayAndExit({event: 'error', code: error instanceof SecretError ? error.code : 'hub_start_failed'}, 1);
+export async function runHub(extend?: ExtendHub) {
+  try {
+    await main(extend);
+  } catch (error) {
+    await sayAndExit({event: 'error', code: error instanceof SecretError ? error.code : 'hub_start_failed'}, 1);
+  }
 }

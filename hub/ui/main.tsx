@@ -1,21 +1,22 @@
-import {useCallback, useEffect, useMemo, useState} from 'react';
+import {useEffect, useMemo, useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import '@fontsource-variable/geist';
 import '@fontsource-variable/geist-mono';
 import './style.css';
-import {setPrefs, usePrefs} from './lib/prefs';
 import {showBoard} from './lib/timeRange';
-import {usePath} from './lib/router';
+import {navigate, settingsHref, usePath} from './lib/router';
 import {boardTitle, rememberBoard, rereadSession, useBoard, useSession, type Board, type Session, type User} from './lib/session';
-import {ACTIVITY, AGENTS, ANALYTICS, boardState, cardId, FORECAST, HISTORY, isHidden, useView, withHidden} from './lib/view';
-import {legacyLayout, ordered, withArranged} from './lib/grid';
+import {ACTIVITY, AGENTS, ANALYTICS, boardState, cardId, FORECAST, HISTORY, isHidden, useView} from './lib/view';
+import {legacyLayout, withArranged} from './lib/grid';
 import {page, useBoardId, useBoardMeta, useBoards, useLineup, useRole, useServerView, useTitles} from './lib/board';
 import {heardHub, hubNow, wakeDue} from './lib/clock';
 import {startLive} from './lib/live';
 import {UNAUTHORIZED} from './lib/http';
 import {t, useLocale} from './i18n';
 import {Compact} from './components/Compact';
-import {Header} from './components/Header';
+import {Header, BoardToolbar} from './components/Header';
+import {Settings} from './components/Settings';
+import {WidgetAdd} from './components/WidgetAdd';
 import {RefreshAll} from './components/RefreshAll';
 import {SERVICE} from './components/Kit';
 import {SourceCard} from './components/SourceCard';
@@ -24,13 +25,10 @@ import {History} from './components/History';
 import {Forecast} from './components/Forecast';
 import {Activity} from './components/Activity';
 import {AnalyticsHead} from './components/Analytics';
-import {Widgets, WidgetsMenu, type Widget} from './components/Widgets';
-import {AccountPanel} from './components/Account';
+import {Widgets, type Widget} from './components/Widgets';
 import {AuthScreen} from './components/AuthScreen';
 import {DevicePage} from './components/DevicePage';
 import {InvitePage} from './components/InvitePage';
-import {ConnectionsDialog, type ConnectionsStart} from './components/Machines';
-import {BoardDialog, type BoardTab} from './components/BoardDialog';
 import {AgentBanner, LocalOnboarding, OpenInApp, QuitButton, TakeOver} from './components/Desktop';
 import {app, appLocale, followApp, inApp, type AppState} from './lib/app';
 
@@ -75,12 +73,15 @@ function Dashboard({
   refresh: () => Promise<void>;
   onSignedOut: () => void;
 }) {
+  const path = usePath();
+  const active = path === '/' || path === '/local';
   const boards = useBoards() ?? NO_BOARDS;
   const [board, selectBoard] = useBoard();
   const boardId = board?.id ?? '';
   useEffect(() => {
-    if (boardId) live.open(boardId);
-  }, [boardId]);
+    if (boardId && active) live.open(boardId);
+    else live.close();
+  }, [boardId, active]);
   useEffect(() => () => live.close(), []);
 
   // The board as the hub told it: nothing of it until its snapshot came. Each widget reads
@@ -96,11 +97,11 @@ function Dashboard({
   }, [serverView, lineup]);
   const arrange = useView(useBoardId() ?? '', translated, role === 'owner');
   const titles = useTitles(arrange.view.names);
-  const prefs = usePrefs();
-  const [machines, setMachines] = useState<ConnectionsStart | null>(null);
-  const [people, setPeople] = useState<BoardTab | null>(null);
-  const [account, setAccount] = useState(false);
-  const closeMachines = useCallback(() => setMachines(null), []);
+  const [editing, setEditing] = useState(false);
+  useEffect(() => setEditing(false), [boardId, active]);
+  const [adding, setAdding] = useState<Board | null>(null);
+  useEffect(() => setAdding(null), [boardId, active]);
+  const openSettings = () => navigate(settingsHref('/settings', boardId));
 
   const state = meta ? boardState(lineup.map(id => ({id})), arrange.view) : null;
   const empty = state === 'onboarding';
@@ -158,9 +159,8 @@ function Dashboard({
   // filters, are the analytics. Each area is arranged on its own grid, and on its own.
   const cardWidgets = [...cards.values()];
   const panelWidgets = ANALYTICS.map(id => panels.get(id)!);
-  const menuOrder = (list: Widget[]) => ordered(arrange.view.layout, list.map(w => w.id)).map(item => list.find(w => w.id === item.id)!);
-  const widgets = [...menuOrder(cardWidgets), ...menuOrder(panelWidgets)];
-  const shownOf = (list: Widget[]) => list.filter(widget => !isHidden(arrange.view, widget.id));
+  // The prototype's empty-widget marker lives in demo views until the final contract is integrated.
+  const shownOf = (list: Widget[]) => list.filter(widget => !isHidden(arrange.view, widget.id) && (lineup.length > 0 || arrange.view.shown.includes('empty:' + widget.id)));
   const shownCards = shownOf(cardWidgets);
   const shownPanels = shownOf(panelWidgets);
   const grid = (list: Widget[], area: string) => (
@@ -168,39 +168,19 @@ function Dashboard({
       key={`${boardId}/${area}`}
       widgets={list}
       layout={arrange.view.layout}
-      movable={arrange.owner && !prefs.locked}
+      movable={arrange.owner && editing}
       onPlaces={(places, height) => arrange.update(view => withArranged(view, places, height))}
     />
   );
 
   return (
     <>
-      <Header
-        boards={boards}
-        board={board}
-        onBoard={selectBoard}
-        refresh={meta && <RefreshAll key={boardId} board={boardId} ids={lineup.filter(id => !isHidden(arrange.view, cardId(id)))} />}
-        widgets={
-          arrange.owner && meta && !empty ? (
-            <WidgetsMenu
-              groups={[
-                {title: t('widgets.groupCards'), widgets: widgets.filter(widget => widget.id !== AGENTS && cards.has(widget.id))},
-                {title: t('widgets.groupNow'), widgets: widgets.filter(widget => widget.id === AGENTS)},
-                {title: t('analytics.title'), widgets: widgets.filter(widget => panels.has(widget.id))},
-              ]}
-              hidden={widgets.filter(widget => isHidden(arrange.view, widget.id)).map(widget => widget.id)}
-              locked={prefs.locked}
-              onShow={(id, on) => arrange.update(view => withHidden(view, id, !on))}
-              onLock={locked => setPrefs({locked})}
-            />
-          ) : null
-        }
-        onDevices={() => setMachines('list')}
-        onPeople={!local && board && !board.personal ? () => setPeople('shares') : null}
-        user={user}
-        onAccount={() => setAccount(true)}
-        local={local}
-      />
+      <Header boards={boards} board={board} onBoard={selectBoard} user={user} onAccount={openSettings} onSignedOut={onSignedOut} local={local} />
+      {active ? <>
+      <BoardToolbar board={board} owner={arrange.owner} editing={editing} onEdit={() => setEditing(on => !on)}
+        onAdd={() => board && setAdding(board)}
+        onSettings={local ? null : section => navigate(settingsHref('/boards/' + boardId + '/settings/' + section, boardId))}
+        refresh={meta && <RefreshAll key={boardId} board={boardId} ids={lineup.filter(id => !isHidden(arrange.view, cardId(id)))} />} />
       <main>
         {local && <AgentBanner />}
         {!meta ? (
@@ -209,32 +189,32 @@ function Dashboard({
               <div key={i} className="card is-loading" />
             ))}
           </div>
-        ) : empty && local ? (
-          <LocalOnboarding onSettings={() => setAccount(true)} onConnect={()=>setMachines('connect')} />
-        ) : empty && board?.personal ? (
+        ) : empty && !shownCards.length && !shownPanels.length && local ? (
+          <LocalOnboarding onSettings={openSettings} onConnect={() => board && setAdding(board)} />
+        ) : empty && !shownCards.length && !shownPanels.length && board?.personal ? (
           <section className="panel onboarding">
             <h2>{t('onboarding.title')}</h2>
             <p>{t('onboarding.text')}</p>
-            <button type="button" className="button primary" onClick={() => setMachines('connect')}>
+            <button type="button" className="button primary" onClick={() => board && setAdding(board)}>
               {t('onboarding.connect')}
             </button>
           </section>
-        ) : empty ? (
+        ) : empty && !shownCards.length && !shownPanels.length ? (
           <section className="panel onboarding">
             <h2>{t('onboarding.sharedTitle')}</h2>
             <p>{t('onboarding.sharedText')}</p>
             <div className="button-row is-start">
-              <button type="button" className="button primary" onClick={() => setPeople('shares')}>
-                {t('onboarding.share')}
+              <button type="button" className="button primary" onClick={() => board && setAdding(board)}>
+                {t('add.title')}
               </button>
               {board?.role === 'owner' && (
-                <button type="button" className="button" onClick={() => setPeople('members')}>
+                <button type="button" className="button" onClick={() => navigate(settingsHref('/boards/' + boardId + '/settings/members', boardId))}>
                   {t('onboarding.invite')}
                 </button>
               )}
             </div>
           </section>
-        ) : state === 'widgets' ? (
+        ) : state === 'widgets' || shownCards.length > 0 || shownPanels.length > 0 ? (
           <>
             {shownCards.length > 0 && grid(shownCards, 'cards')}
             {shownPanels.length > 0 && (
@@ -248,27 +228,15 @@ function Dashboard({
           <section className="panel onboarding">
             <h2>{t('widgets.allHidden')}</h2>
             {arrange.owner && (
-              <button type="button" className="button" onClick={() => arrange.update(view => ({...view, hidden: []}))}>
-                {t('widgets.showAll')}
+              <button type="button" className="button" onClick={() => board && setAdding(board)}>
+                {t('add.title')}
               </button>
             )}
           </section>
         )}
       </main>
-      {machines && <ConnectionsDialog start={machines} onClose={closeMachines} local={local} userId={user.id} trustedKeys={trustedKeys} />}
-      {people && board && !board.personal && (
-        <BoardDialog board={board} userId={user.id} tab={people} onTab={setPeople} onClose={() => setPeople(null)} />
-      )}
-      {account && (
-        <AccountPanel
-          user={user}
-          onChanged={refresh}
-          onSignedOut={onSignedOut}
-          onClose={() => setAccount(false)}
-          local={local}
-          onAppState={setAppState}
-        />
-      )}
+      </> : <Settings user={user} board={board} boards={boards} local={local} trustedKeys={trustedKeys} refresh={refresh} onAppState={setAppState} />}
+      {adding && <WidgetAdd key={adding.id} board={adding} local={local} trustedKeys={trustedKeys} onClose={() => setAdding(null)} />}
       {local && <TakeOver onState={setAppState} />}
     </>
   );

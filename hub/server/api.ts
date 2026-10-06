@@ -1,7 +1,7 @@
 import {Attention} from './attention.js';
 import {STATUS_CODES} from 'node:http';
 import type {Socket} from 'node:net';
-import Fastify, {type FastifyReply, type FastifyRequest} from 'fastify';
+import Fastify, {type FastifyInstance, type FastifyReply, type FastifyRequest} from 'fastify';
 import staticFiles from '@fastify/static';
 import {config, serviceName, version} from './config.js';
 import type {Ingest} from './ingest.js';
@@ -36,6 +36,9 @@ export type Guards = {
   user(request: FastifyRequest, reply: FastifyReply): User | null;
   board(request: FastifyRequest, reply: FastifyReply, boardId: string | undefined): {user: User; board: Board} | null;
 };
+
+/** Explicit composition for synthetic demo routes; ordinary startup supplies none. */
+export type ExtendHub = (app: FastifyInstance, hub: Hub, guards: Guards) => void | Promise<void>;
 
 /** Errors of the framework itself (malformed JSON, a body too large…) in the hub's `{error}` shape. */
 function errorCode(status: number, path: string): string {
@@ -74,7 +77,7 @@ function clientError(error: NodeJS.ErrnoException, socket: Socket & {_httpMessag
  * The desktop app's hub (`local`) has one person who never signs in: the window enters
  * at `/local`, and what is about accounts, sharing and connecting is not there.
  */
-export async function buildApp(hub: Hub) {
+export async function buildApp(hub: Hub, extend?: ExtendHub) {
   hub = {...hub, credentials: hub.credentials ?? new Credentials(hub.store, null, startSecrets(hub.store.db, {current: null, previous: null, reset: null, storageAtStart: null, wasFileAtStart: false}))};
   const {store, directory} = hub;
   const projection = new Projection(hub);
@@ -210,6 +213,8 @@ export async function buildApp(hub: Hub) {
   await app.register(async scope => credentialRoutes(scope, hub.credentials!, guards));
   agentRoutes(app, hub);
   if (hub.local) localRoutes(app, hub, hub.local.key);
+
+  await extend?.(app, hub, guards);
 
   await app.register(staticFiles, {root: config.clientRoot, index: 'index.html'});
   // Client-side pages (/device, /invite/…) are served by the same single-page client.
