@@ -14,14 +14,14 @@ const nodes=(value:unknown):Node[]=>Array.isArray(value)?value.flatMap(nodes):va
 const flush=async()=>{for(let i=0;i<10;i++)await Promise.resolve();};
 
 function fixture(initialOwner='u',local=false,boards:Session['boards']=[]){
-  const hooks=preparationFixture(),errorLine={},reads:{resolve:(value:unknown)=>void;reject:(error:Error)=>void}[]=[];
+  const hooks=preparationFixture(),errorLine={},reads:{url:string;body:unknown;resolve:(value:unknown)=>void;reject:(error:Error)=>void}[]=[];
   const cleanups=new Set<()=>void>(),modal={};let userId=initialOwner;
   const memo=(read:()=>unknown,deps:unknown[])=>{const box=hooks.useRef(undefined) as {current?:{deps:unknown[];value:unknown}};if(!box.current||deps.some((value,i)=>!Object.is(value,box.current!.deps[i])))box.current={deps,value:read()};return box.current.value;};
   let scopeActive=true;
   const context={exports:{} as {ConnectionsPage:(props:unknown)=>Node;KeyForm:(props:unknown)=>Node;useAddition:()=>{submit:(board:string,item:unknown,secret?:string)=>Promise<void>}},crypto:{randomUUID:()=> 'request'},AbortController,require:(name:string)=>{
     if(name==='react')return {createContext:()=>({}),useContext:()=>()=>scopeActive,useState:hooks.useState,useRef:hooks.useRef,useCallback:(fn:unknown,deps:unknown[])=>memo(()=>fn,deps),useEffect:(effect:()=>void|(()=>void),deps:unknown[])=>hooks.useLayoutEffect(()=>{const cleanup=effect();if(!cleanup)return;cleanups.add(cleanup);return()=>{cleanups.delete(cleanup);cleanup();};},deps)};
     if(name==='react/jsx-runtime')return {jsx:(type:unknown,props:Node['props'])=>({type,props}),jsxs:(type:unknown,props:Node['props'])=>({type,props}),Fragment:'fragment'};
-    if(name.endsWith('/http'))return {ApiError,call:()=>new Promise((resolve,reject)=>reads.push({resolve,reject}))};
+    if(name.endsWith('/http'))return {ApiError,call:(_method:string,url:string,body:unknown)=>new Promise((resolve,reject)=>reads.push({url,body,resolve,reject}))};
     if(name.endsWith('/board'))return {};
     if(name.endsWith('/view'))return {flushView:async()=>{}};
     if(name.endsWith('/router'))return {};
@@ -56,6 +56,16 @@ test('recovered replacement displays cleanup warnings and preserves later replac
   assert.equal(rendered.some(node=>node.type==='h3'&&node.props.children==='add.keyChanged'),true);
   assert.equal(rendered.some(node=>node.type===f.errorLine&&(node.props.error as ApiError)?.code==='credential_cleanup_pending'),true);
   assert.equal(rendered.some(node=>node.type==='h3'&&node.props.children==='add.replaced'),false);
+});
+
+test('committed replacement retries only its cleanup receipt without another key or reservation',async()=>{
+  const f=fixture(),operation={id:'receipt',boardId:null,item:{kind:'replace',credentialId:'c'},createdAt:1,state:'complete',warning:'credential_cleanup_pending',current:{credential:{exists:true,revisionMatches:true}},result:{sourceIds:['s']}};
+  const props={board:{id:'personal',name:'Personal',personal:true,role:'owner'},personal:true,available:true,onClose:()=>{},initialOperation:operation};
+  f.keyForm(props);const action=f.keyForm(props).find(node=>node.type==='button'&&node.props.children==='add.retryCleanup')!;
+  (action.props.onClick as ()=>void)();await flush();
+  assert.equal(f.reads.length,1);assert.equal(f.reads[0].url,'/api/additions/receipt/run');assert.equal(Object.keys(f.reads[0].body as object).length,0);
+  f.reads[0].resolve({...operation,warning:undefined});await flush();
+  assert.equal(f.keyForm(props).some(node=>node.type==='button'&&node.props.children==='add.retryCleanup'),false);
 });
 
 test('closing an addition form after submit still runs its reserved action in the same owner scope',async()=>{

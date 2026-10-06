@@ -65,15 +65,18 @@ test('an existing key repeats durability barriers before committing metadata',po
 test('mount admission rejects same-volume and nested bind aliases, but accepts distinct volume roots on one device',()=>{
   const common='1 0 0:1 / / rw - overlay overlay rw\n';
   const volumes=mountsOf(common+'2 1 8:1 /volumes/data /data rw - ext4 disk rw\n3 1 8:1 /volumes/keys /keys rw - ext4 disk rw');
-  separateMount('/data/db','/keys',volumes);
+  separateMount('/data/db','/keys',volumes,{data:'2',keys:'3'});
   for(const root of ['/volumes/data','/volumes/data/keys']) {
     const aliases=mountsOf(common+'2 1 8:1 /volumes/data /data rw - ext4 disk rw\n3 1 8:1 '+root+' /keys rw - ext4 disk rw');
-    assert.throws(()=>separateMount('/data/db','/keys',aliases),/secret_key_storage_unavailable/);
+    assert.throws(()=>separateMount('/data/db','/keys',aliases,{data:'2',keys:'3'}),/secret_key_storage_unavailable/);
   }
-  assert.throws(()=>separateMount('/data','/keys',mountsOf(common)),/secret_key_storage_unavailable/);
+  assert.throws(()=>separateMount('/data','/keys',mountsOf(common),{data:'1',keys:'1'}),/secret_key_storage_unavailable/);
   const stacked=mountsOf(common+'2 1 8:1 /volumes/data /data rw - ext4 disk rw\n3 1 8:1 /volumes/keys /keys rw - ext4 disk rw\n4 3 8:1 /volumes/data /keys rw - ext4 disk rw');
-  assert.throws(()=>separateMount('/data/db','/keys',stacked),/secret_key_storage_unavailable/);
-  assert.throws(()=>separateMount('/data/db','/keys',[...stacked].reverse()),/secret_key_storage_unavailable/);
+  assert.throws(()=>separateMount('/data/db','/keys',stacked,{data:'2',keys:'4'}),/secret_key_storage_unavailable/);
+  assert.throws(()=>separateMount('/data/db','/keys',[...stacked].reverse(),{data:'2',keys:'4'}),/secret_key_storage_unavailable/);
+  const hiddenChild=mountsOf(common+'2 1 8:1 /volumes/lower /data rw - ext4 disk rw\n3 2 8:1 /volumes/child /data/db rw - ext4 disk rw\n4 2 8:1 /volumes/data /data rw - ext4 disk rw\n5 1 8:1 /volumes/data /keys rw - ext4 disk rw');
+  assert.throws(()=>separateMount('/data/db','/keys',hiddenChild,{data:'4',keys:'5'}),/secret_key_storage_unavailable/);
+  assert.throws(()=>separateMount('/data/db','/keys',volumes,{data:'missing',keys:'3'}),/secret_key_storage_unavailable/);
   assert.equal(mountsOf('2 1 8:1 /volume\\040one /keys rw - ext4 disk rw')[0].root,'/volume one');
 });
 

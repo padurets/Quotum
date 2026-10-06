@@ -140,6 +140,8 @@ function KeyForm({board, replace, personal, demo, available, onClose, onSaved, o
       const changed = current && (!current.exists || !current.revisionMatches);
       return <div className="addition-complete" role="status"><h3>{t(changed ? 'add.keyChanged' : 'add.replaced')}</h3><p>{t(changed ? 'add.keyChangedText' : 'add.replacePreserved')}</p>
         {addition.operation.warning && <ErrorLine error={new ApiError(503, addition.operation.warning)} />}
+        <ErrorLine error={addition.error} />
+        {addition.operation.warning && <button className="button" disabled={addition.busy} onClick={() => void addition.submit(null, addition.operation!.item)}>{t('add.retryCleanup')}</button>}
         <button className="button" onClick={onClose}>{t('common.close')}</button></div>;
     }
     return <><Completion operation={addition.operation} board={board} personal={personal} onClose={onClose} />{personal && onAddToBoard && <div className="button-row"><button className="button" onClick={() => onAddToBoard(addition.operation!.result!.sourceIds[0])}>{t('add.toBoard')}</button></div>}</>;

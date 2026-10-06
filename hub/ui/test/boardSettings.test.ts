@@ -25,10 +25,16 @@ test('a definite loss of board access clears the settings snapshot and refreshes
   }};
   runInNewContext(ts.transpileModule(readFileSync(new URL('../components/BoardDialog.tsx',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
   const render=()=>{hooks.begin();const tree=context.exports.SharesTab({board:{id:'shared',name:'Shared',role:'member',personal:false}});hooks.commit();return nodes(tree);};
-  render();reads[0].resolve({shared:[{source:'source',provider:'openrouter',sharedBy:'Alice Private',mine:true}],mine:[]});await flush();
+  const snapshot={shared:[{source:'source',provider:'openrouter',sharedBy:'Alice Private',mine:true},{source:'other',provider:'openrouter',sharedBy:'Alice Private',mine:true}],mine:[]};
+  render();reads[0].resolve(snapshot);await flush();
   assert.equal(render().some(node=>node.props.children==='Alice Private'),true);
   const remove=render().find(node=>node.type==='button'&&node.props.children==='shares.remove')!;(remove.props.onClick as ()=>void)();
-  reads[1].reject(new ApiError(404,'board_not_found'));await flush();
+  reads[1].resolve({ok:true});await flush();
+  assert.equal(reads.length,3,'successful unshare started a refresh');
+  (render().find(node=>node.type==='button'&&node.props.children==='shares.remove')!.props.onClick as ()=>void)();
+  reads[3].reject(new ApiError(404,'board_not_found'));await flush();
   assert.equal(render().some(node=>node.props.children==='Alice Private'),false);assert.equal(render().some(node=>node.type==='button'),false);
   assert.equal(refreshes,1);
+  reads[2].resolve(snapshot);await flush();
+  assert.equal(render().some(node=>node.props.children==='Alice Private'),false,'a late pre-revocation snapshot cannot resurrect private rows');
 });

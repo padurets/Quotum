@@ -3,27 +3,42 @@ import {closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSy
 import path from 'node:path';
 import {SecretError, SecretKey} from './crypto.js';
 
-type Mount = {device: string; root: string; at: string};
+type Mount = {id: string; device: string; root: string; at: string};
 const within = (parent: string, child: string) => {const relative=path.relative(parent,child);return !relative||relative!=='..'&&!relative.startsWith('..'+path.sep)&&!path.isAbsolute(relative);};
 const decoded = (value: string) => value.replace(/\\([0-7]{3})/g,(_,octal:string)=>String.fromCharCode(parseInt(octal,8)));
 export function mountsOf(text: string): Mount[] {
   return text.trim().split('\n').map(line=>{
     const fields=line.split(' '),split=fields.indexOf('-');
     if(split<6||fields.length<split+4||!/^\d+:\d+$/.test(fields[2]))throw new SecretError('secret_key_storage_unavailable');
-    return {device:fields[2],root:decoded(fields[3]),at:decoded(fields[4])};
+    return {id:fields[0],device:fields[2],root:decoded(fields[3]),at:decoded(fields[4])};
   });
 }
 /** Mount roots, rather than device numbers alone, distinguish named volumes on one filesystem. */
-export function separateMount(data: string, keys: string, mounts: Mount[]) {
-  const mapping=(location:string)=>{
-    const candidates=mounts.filter(mount=>within(mount.at,location)).sort((a,b)=>b.at.length-a.at.length);
-    if(candidates.length>1&&candidates[0].at===candidates[1].at)throw new SecretError('secret_key_storage_unavailable');
-    return candidates[0];
-  };
-  const dataMount=mapping(data),keyMount=mapping(keys);
+export function separateMount(data: string, keys: string, mounts: Mount[], opened: {data: string; keys: string}) {
+  const identified=(id:string)=>{const found=mounts.filter(mount=>mount.id===id);if(found.length!==1)throw new SecretError('secret_key_storage_unavailable');return found[0];};
+  const dataMount=identified(opened.data),keyMount=identified(opened.keys);
   if(!dataMount||!keyMount||keyMount.at!==keys||dataMount.at===keyMount.at)throw new SecretError('secret_key_storage_unavailable');
+  if(!within(dataMount.at,data)||!within(keyMount.at,keys))throw new SecretError('secret_key_storage_unavailable');
   const backing=path.resolve(keyMount.root,path.relative(keyMount.at,keys));
   if(dataMount.device===keyMount.device&&within(dataMount.root,backing))throw new SecretError('secret_key_storage_unavailable');
+}
+
+function containerMount(data: string, keys: string) {
+  const dataFd=openSync(data,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);
+  let keysFd:number|undefined;
+  try {
+    keysFd=openSync(keys,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);
+    const mountId=(fd:number)=>{
+      const id=readFileSync('/proc/self/fdinfo/'+fd,'utf8').match(/^mnt_id:\s*(\d+)\s*$/m)?.[1];
+      if(!id)throw new SecretError('secret_key_storage_unavailable');return id;
+    };
+    // Opened directories identify the visible mounts, including overmounts hiding older children.
+    separateMount(data,keys,mountsOf(readFileSync('/proc/self/mountinfo','utf8')),{data:mountId(dataFd),keys:mountId(keysFd)});
+    for(const [fd,name] of [[dataFd,data],[keysFd,keys]] as const) {
+      const held=fstatSync(fd),named=lstatSync(name);
+      if(held.dev!==named.dev||held.ino!==named.ino)throw new SecretError('secret_key_storage_unavailable');
+    }
+  } finally {closeSync(dataFd);if(keysFd!==undefined)closeSync(keysFd);}
 }
 
 function secureParents(location: string) {
@@ -75,7 +90,7 @@ export function managedFile(dataDir: string, configured: string | undefined, cle
     if(!configured&&container||configured!==undefined&&!configured||within(data,directory))throw new SecretError('secret_key_storage_unavailable');
     let parent=path.dirname(directory);while(!exists(parent))parent=path.dirname(parent);
     secureParents(parent);
-    if(container)separateMount(data,directory,mountsOf(readFileSync('/proc/self/mountinfo','utf8')));
+    if(container)containerMount(data,directory);
     if(!exists(directory)&&!clean)throw new SecretError('secret_key_storage_missing');
     directoryAt(directory);secureParents(directory);
     const real=realpathSync(directory),dataStat=lstatSync(data),keyStat=lstatSync(real);

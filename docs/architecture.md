@@ -610,6 +610,8 @@ Without explicit inputs a new server creates a durable key in separate storage:
 of the canonical data directory, or a private nonvolatile HKCU branch on Windows.
 POSIX publication uses an exclusive temporary file, file fsync, a no-replace hard
 link, and directory/parent-entry barriers, repeated when admitting an existing key.
+Linux container storage identifies the opened directories by their kernel `mnt_id`
+and compares the actual backing mount roots, including stacked and hidden mounts.
 Windows reserves a durable nonsecret UUID, then a packaged bounded helper owns a
 global native mutex through private registry query/write, flush and read-back. The
 resolver runs under the same SQLite transaction as the key check; an established

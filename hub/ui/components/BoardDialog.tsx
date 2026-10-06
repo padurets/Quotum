@@ -27,7 +27,7 @@ export function SharesTab({board}: {board: Board}) {
   const [error, setError] = useState<unknown>(null);
   const generation = useRef(0);
   const failed = (failure: unknown) => {
-    if (failure instanceof ApiError && [401, 403, 404].includes(failure.status)) {setShares(null); rereadSession();}
+    if (failure instanceof ApiError && [401, 403, 404].includes(failure.status)) {generation.current++; setShares(null); rereadSession();}
     setError(failure);
   };
   const load = useCallback(() => {
