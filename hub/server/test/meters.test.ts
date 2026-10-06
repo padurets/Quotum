@@ -127,7 +127,7 @@ test('a sparse heartbeat reserves the WAL writer before reading its span',()=>{
   const prepare=store.db.prepare.bind(store.db);let attempted=false,peerWrote=false;
   store.db.prepare=(sql:string)=>{
     const statement=prepare(sql);
-    if(sql.startsWith('SELECT from_at,to_at,stale_after_ms,interrupted_at FROM meter_spans')) {
+    if(sql.startsWith('SELECT from_at,to_at,stale_after_ms,interrupted_at,hold_until FROM meter_spans')) {
       const get=statement.get.bind(statement);
       statement.get=(...args)=>{
         const result=Reflect.apply(get,statement,args);

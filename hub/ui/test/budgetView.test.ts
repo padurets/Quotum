@@ -12,6 +12,7 @@ import {budgetView} from '../lib/money';
 import {setLocale,t} from '../i18n';
 import type {Card} from '../lib/types';
 import type {KeyPart,Meter} from '../../server/domain/meters';
+import * as meterDomain from '../../server/domain/meters';
 import {deepSeekMeasurement} from '../../server/connectors/deepseek';
 import * as currency from '../../server/domain/currency';
 import {defaultCurrencyContext} from '../../server/domain/currency';
@@ -29,6 +30,7 @@ const dual=()=>card('deepseek',[
 const fixture={exports:{} as {MoneyCard:(props:{source:Card;board:string;compact?:boolean})=>ReturnType<typeof createElement>},require:(name:string)=>{
   if(name==='react/jsx-runtime')return jsx;
   if(name==='../../server/domain/currency')return currency;
+  if(name==='../../server/domain/meters')return meterDomain;
   if(name==='../lib/money')return money;
   if(name==='../lib/format')return format;
   if(name==='../i18n')return {t};

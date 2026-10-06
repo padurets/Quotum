@@ -33,7 +33,7 @@ export function importLegacyCurrencies(db:DatabaseSync,currencies:CurrencyStore)
       for(const {row,nativeId,native,quote} of proven) {
         const id=conversionId(nativeId,'USD'),semantics={limit:native.limit_amount?.toString()??null,resetAt:native.reset_at===null?null:Number(native.reset_at),minutes:native.minutes===null?null:Number(native.minutes),scope:native.scope,label:native.label};
         db.prepare('INSERT OR IGNORE INTO money_valuations VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run(row.source_id,id,Number(row.at),row.previous_at===null?null:Number(row.previous_at),nativeId,'CNY',native.amount.toString(),'USD',row.amount.toString(),quote.id,JSON.stringify(semantics),Number(row.stale_after_ms));
-        db.prepare('INSERT OR IGNORE INTO meter_spans SELECT source_id,?,from_at,to_at,stale_after_ms,interrupted_at FROM meter_spans WHERE source_id=? AND meter_id=?').run(id,row.source_id,row.meter_id);
+        db.prepare('INSERT OR IGNORE INTO meter_spans(source_id,meter_id,from_at,to_at,stale_after_ms,interrupted_at) SELECT source_id,?,from_at,to_at,stale_after_ms,interrupted_at FROM meter_spans WHERE source_id=? AND meter_id=?').run(id,row.source_id,row.meter_id);
       }
     }
     db.prepare("INSERT INTO meta VALUES ('legacyCurrencyImport','1')").run();

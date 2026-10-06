@@ -130,7 +130,7 @@ test('polling updates known expiry metadata without confusing it with unknown ex
   const h=harness();try {
     h.setExpiry(null);const record=await h.connect(),source=record.sourceId!;assert.equal(record.expiryKind,'none');
     h.setExpiry(h.clock.now()+90_000);h.clock.tick(1);await h.credentials.measure(source);
-    assert.equal(h.credentials.list(h.alice.id)[0].expiryKind,'at');assert.equal(h.credentials.access(h.alice.id,source)?.expiryKind,'at');
+    assert.equal(h.credentials.list(h.alice.id)[0].expiryKind,'dated');assert.equal(h.credentials.access(h.alice.id,source)?.expiryKind,'dated');
     h.setExpiry(null);h.clock.tick(1);await h.credentials.measure(source);
     assert.equal(h.credentials.list(h.alice.id)[0].expiryKind,'none');assert.equal(h.credentials.access(h.alice.id,source)?.expiryKind,'none');
   }finally{h.sources.stop();h.store.close();}

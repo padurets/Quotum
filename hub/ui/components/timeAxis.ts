@@ -36,6 +36,7 @@ export function slideOf(before: {from: number; end: number}, after: {from: numbe
  * same way: the width it is drawn at (never under 280, with `scale` CSS pixels to a unit),
  * where a moment stands across the plot between `left` and `right` (`x`) and the reverse
  * (`timeAt`), and the cell under the pointer (`hover`, its start), read anew after a step.
+ * A precise readout also keeps `hoverAt`, the pointer's time inside that cell.
  * A mouse or a pen drags a range across it at once, as in Grafana; a finger sliding along
  * it reads its cells, and held still for a moment starts a range instead. A swipe sideways
  * on a touchpad, Shift with the wheel, or Shift-drag pans both charts through one shared
@@ -54,6 +55,7 @@ export function useTimeAxis({
   onSelect,
   ready = true,
   rawPointer = false,
+  precise = rawPointer,
   navigation = axisNavigation(null, timeRange(), prefs()),
 }: {
   from: number;
@@ -66,6 +68,8 @@ export function useTimeAxis({
   onSelect?: (range: TimeRange) => void;
   ready?: boolean;
   rawPointer?:boolean;
+  /** Cap bounds can start or end inside a grid cell. */
+  precise?: boolean;
   navigation?: AxisNavigation;
 }) {
   const box = useRef<HTMLDivElement>(null);
@@ -73,7 +77,6 @@ export function useTimeAxis({
   const [width, setWidth] = useState(900);
   const [scale, setScale] = useState(1);
   const [hover, setHover] = useState<number | null>(null);
-  const [rawHover,setRawHover]=useState<number|null>(null);
   const [folding, setFolding] = useState(false);
   const [, present] = useState(0);
   const foldTicket = useRef(0);
@@ -289,12 +292,13 @@ export function useTimeAxis({
   const drawX = (at: number) => left + ((at - basis.from) / span) * (width - left - right);
   const x = (at: number) => drawX(Math.min(basis.to, Math.max(basis.from, at)));
   const timeAt = (px: number) => {const visual = visualGeometry(); return visual.from + ((px - left) / (width - left - right)) * (visual.to - visual.from);};
+  const readPointer = (px: number) => {const at=timeAt(px);setHover(precise?at:Math.floor(at/cellMs)*cellMs);};
   // After a step the pointer stands over another time: the chart reads that.
   useEffect(() => {
     const px = pointer.current;
-    if (!shifting && !panning && !folding && px !== null && px >= left && px <= width - right) {const raw=timeAt(px);if(rawPointer)setRawHover(raw);setHover(Math.floor(raw / cellMs) * cellMs);}
+    if (!shifting && !panning && !folding && px !== null && px >= left && px <= width - right) readPointer(px);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [from, to, cellMs, shifting, panning, folding, rawPointer]);
+  }, [from, to, cellMs, shifting, panning, folding, precise]);
 
   const toChart = (event: PointerEvent<HTMLDivElement>) => {
     const rect = svg.current!.getBoundingClientRect();
@@ -316,7 +320,7 @@ export function useTimeAxis({
     if (held && Math.abs(px - held.px) > 8) cancelHold();
     if (drag) setDrag({...drag, end: Math.min(width - right, Math.max(left, px))});
     if (px < left || px > width - right) return setHover(null);
-    {const raw=timeAt(px);if(rawPointer)setRawHover(raw);setHover(Math.floor(raw / cellMs) * cellMs);}
+    readPointer(px);
   };
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     const px = toChart(event);
@@ -473,5 +477,5 @@ export function useTimeAxis({
     animateProjection(visual, wanted.current.projection, SLIDE_MS, false);
   };
 
-  return {box, svg, width, scale, commitDrawing, visualGeometry, screenX: (at: number) => {if (animations.current.size) {const visible = visualGeometry(); return left + (at - visible.from) / (visible.to - visible.from) * (width - left - right);} const base = drawing.current; return pose.current.a * (left + (at - base.from) / Math.max(60_000, base.to - base.from) * (width - left - right)) + pose.current.b + pose.current.offset / scale;}, get held() {return finished.current !== null;}, rawHover, hover: shifting || panning || folding || finished.current !== null ? null : hover, drag, x, drawX, timeAt, clip, handlers, basis, active: panning !== null, panning: shifting || panning !== null || folding || finished.current !== null};
+  return {box, svg, width, scale, commitDrawing, visualGeometry, screenX: (at: number) => {if (animations.current.size) {const visible = visualGeometry(); return left + (at - visible.from) / (visible.to - visible.from) * (width - left - right);} const base = drawing.current; return pose.current.a * (left + (at - base.from) / Math.max(60_000, base.to - base.from) * (width - left - right)) + pose.current.b + pose.current.offset / scale;}, get held() {return finished.current !== null;}, hover: shifting || panning || folding || finished.current !== null || hover === null ? null : Math.floor(hover / cellMs) * cellMs, hoverAt: hover,rawHover: hover, drag, x, drawX, timeAt, clip, handlers, basis, active: panning !== null, panning: shifting || panning !== null || folding || finished.current !== null};
 }

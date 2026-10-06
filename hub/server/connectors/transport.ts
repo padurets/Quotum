@@ -1,7 +1,7 @@
 import {Agent, request} from 'node:https';
 import {SecretError, type SecretCode} from '../secrets/crypto.js';
 
-export type Destination = {host: string; port: number; operations: Readonly<Record<string, {path: string; query?: readonly string[]}>>};
+export type Destination = {host: string; port: number; auth?: 'bearer' | 'raw'; operations: Readonly<Record<string, {path: string; query?: readonly string[]}>>};
 export class ConnectorStatus extends SecretError {
   readonly status: number | null;
   readonly retryAfterMs: number | null;
@@ -20,7 +20,7 @@ export class ConnectorTransport {
     if (!/^[a-z0-9.-]+$/.test(destination.host) || destination.host !== destination.host.toLowerCase() || !Number.isInteger(destination.port) || destination.port < 1 || destination.port > 65535 || Object.values(destination.operations).some(op => !/^\/[A-Za-z0-9/_-]*$/.test(op.path))) throw new SecretError('connector_destination_invalid');
     // An explicit agent has no global proxy settings, including Node's environment proxy.
     this.#agent = new Agent({rejectUnauthorized: true, ...(options.ca ? {ca: options.ca} : {})});
-    this.destination = Object.freeze({host: destination.host, port: destination.port, operations: Object.freeze(Object.fromEntries(Object.entries(destination.operations).map(([name, op]) => [name, Object.freeze({path: op.path, ...(op.query ? {query: Object.freeze([...op.query])} : {})})])))});
+    this.destination = Object.freeze({host: destination.host, port: destination.port, auth: destination.auth, operations: Object.freeze(Object.fromEntries(Object.entries(destination.operations).map(([name, op]) => [name, Object.freeze({path: op.path, ...(op.query ? {query: Object.freeze([...op.query])} : {})})])))});
     this.timeoutMs = options.timeoutMs ?? 10_000;
     this.maxBytes = options.maxBytes ?? 1024 * 1024;
     this.decode=options.decode??JSON.parse;
@@ -45,7 +45,7 @@ export class ConnectorTransport {
         if (code) reject(code instanceof SecretError ? code : new SecretError(code)); else resolve(value);
       };
       const cancel = () => { finish('connector_cancelled'); req.destroy(); };
-      const req = request({protocol: 'https:', hostname: this.destination.host, port: this.destination.port, path: spec.path + (search ? '?' + search : ''), method: 'GET', agent: this.#agent, rejectUnauthorized: true, headers: {authorization: `Bearer ${secret.toString('ascii')}`, accept: 'application/json'}}, response => {
+      const req = request({protocol: 'https:', hostname: this.destination.host, port: this.destination.port, path: spec.path + (search ? '?' + search : ''), method: 'GET', agent: this.#agent, rejectUnauthorized: true, headers: {authorization: `${this.destination.auth === 'raw' ? '' : 'Bearer '}${secret.toString('ascii')}`, accept: 'application/json'}}, response => {
         const status = response.statusCode ?? 0;
         if (status >= 300 && status < 400) { finish('connector_redirect'); response.destroy(); return; }
         if (status < 200 || status >= 300) { finish(new ConnectorStatus(status,response.headers['retry-after'])); response.destroy(); return; }

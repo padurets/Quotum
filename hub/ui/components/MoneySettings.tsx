@@ -15,7 +15,7 @@ import {KEYS_PER_PAGE,KeyPages,KeyPageContent} from './KeyPages';
 import type {KeyPage} from '../lib/moneyKeys';
 
 /** Series are chosen in the chart's settings; the key table only reads measurements. */
-export function MoneySettings({sources,hidden,series}:{sources:readonly Named[];hidden:readonly string[];series:readonly MeterHistory[]}) {
+export function KeyMoneySettings({sources,hidden,series}:{sources:readonly Named[];hidden:readonly string[];series:readonly MeterHistory[]}) {
   const context=useCurrencyContext(),board=useBoardId(),prefs=usePrefs(),unit=prefs.money.unit??DEFAULT_CURRENCY;
   const accounts=sources.filter(s=>!hidden.includes('source:'+s.id)&&(unit===DEFAULT_CURRENCY?!!referenceBalance(s,context.target.id!==DEFAULT_CURRENCY):s.meters?.some(m=>m.kind==='balance'&&m.unit===unit)));
   const [sourceId,setSource]=useState<string|null>(()=>accounts.length===1?accounts[0].id:null);
@@ -111,3 +111,5 @@ export function MoneySettings({sources,hidden,series}:{sources:readonly Named[];
     <div className="popover-section"><button className="popover-row" onClick={()=>{const next={...prefs.money.selected};delete next[unit];setPrefs({money:{...prefs.money,selected:next}});}}>{t('money.resetSelection')}</button></div>
   </>;
 }
+
+export const MoneySettings=KeyMoneySettings;

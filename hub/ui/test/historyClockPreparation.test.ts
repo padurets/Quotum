@@ -21,7 +21,7 @@ test('the actual History producer retains data on clock wakes and keeps forecast
     prefs: {kind: 'weekly', muted: {}, showPlan: false, showForecast: false, horizon: 'auto'}, locale: 'en',
     futureSources: [] as unknown[], futureForecasts: {}, futureLineup: [], futureNews: null, futureCodex: null, futureView: {},
     navigation: {context: 'b', range: '24h'}, navigationKey, registry: {current: null}, context: null,
-    linesPrepared: function* () {calculations++; yield; return [line];}, planOf: () => null, announcedOf: () => null, started: () => true,
+    subscriptionLinesPrepared: function* () {calculations++; yield; return [line];}, planOf: () => null, announcedOf: () => null, started: () => true,
     forecastLinePrepared: function* () {yield; return {zero: 2 * H, until: H + 2 * minute, points: [[H, 60], [2 * H, 0]], at: 2 * H};},
     chartEventsPrepared, chartResetsPrepared, chartMoments, historyProjection, past: {}, PROVIDERS: {}, t: () => '', sourceLabel: () => '',
     draw: null as unknown as () => Result,

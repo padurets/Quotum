@@ -20,7 +20,8 @@ import {
 import {planChangesAt} from '../lib/plan';
 import {lineWork, workLeftChangesAt, workText, type WorkColumn} from '../lib/work';
 import {FORECAST, chosenPlanOf, columnShown, planOf, withColumn, withHidden, type Arrange} from '../lib/view';
-import {linesOf, type Line} from '../lib/lines';
+import {type Line} from '../lib/lines';
+import {subscriptionLinesOf,subscriptionOverflow} from '../lib/subscription';
 import {usePrefs,usePref} from '../lib/prefs';
 import {MoneyTable} from './MoneyAnalytics';
 import {answeredRangeLabel, ofTimeRange} from '../lib/timeRange';
@@ -89,18 +90,19 @@ const shown = (key: string, cell: Cell | TimedCell, render: (cell: Cell, time?: 
  * parts of their own.
  */
 const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange}) {
-  const {history, loading} = useHistory();
+  const {history, loading,error} = useHistory();
   const sources = useNamed(arrange.view.names);
   const lineup = useLineup();
   const forecasts = useForecastsOf(lineup);
   const news = useResetNews();
   const {view} = arrange;
+  const omitted=subscriptionOverflow(sources,view);
   const {kind} = usePrefs();
   const selected = ofTimeRange(history);
   const range = !!selected;
   // Window names are text: they are rebuilt when the language changes.
   const locale = useLocale();
-  const lines = useMemo(() => linesOf(history, sources, view, kind), [history, sources, view.windows, view.hidden, view.colors, kind, locale]);
+  const lines = useMemo(() => subscriptionLinesOf(history, sources, view, kind), [history, sources, view.windows, view.hidden, view.colors, kind, locale]);
   const modeColumns = range ? RANGE_COLUMNS : LIVE_COLUMNS;
   const columns = useMemo(() => modeColumns.filter(column => columnShown(view, FORECAST, column)), [modeColumns, view]);
   const panel = useRef<HTMLElement>(null);
@@ -126,6 +128,11 @@ const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange
     const measuredAt = source?.successAt ?? null;
     const resetAt = live?.resetAt ?? null;
     const edge = (value: number | null): Cell => (value === null ? {content: '—'} : {content: `${num(value)}%`, className: `v-${level(value)}`});
+    if(line.capCells) {
+      const cells=Object.fromEntries(Object.keys(HEADINGS).map(key=>[key,{content:'—'}])) as Record<ForecastColumn,Cell>;
+      cells.now=edge(line.current);cells.start=edge(line.remainingAtStart);cells.end=edge(line.remainingAtEnd);
+      return cells;
+    }
     // Of the cells about work, only the hours left move with time (below); the rest read the same at any moment.
     const work = lineWork(line, range, resetAt, hubNow());
     const perWork = work && 'value' in work.perwork ? work.perwork.value : null;
@@ -157,7 +164,7 @@ const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange
     const chosen = chosenPlanOf(view, line.sourceId);
     return {
       ...workCells,
-      now: {content: `${num(line.current)}%`, className: `v-${level(line.current)}`},
+      now: edge(line.current),
       plan: {
         time: 'plan',
         changesAt: now => (live ? planChangesAt(live, measuredAt, now, weekly) : null),
@@ -227,7 +234,9 @@ const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange
           </Popover>
         )}
       </div>
-      {!history ? (
+      {omitted>0&&<p className="drawer-note">{t('history.quotaOverflow',{count:omitted})}</p>}
+      {error&&<p className="form-error">{t('money.historyLimit')}</p>}
+      {!history ? error?null:(
         <div className="panel-loading">{t('history.loading')}</div>
       ) : !lines.length ? (
         <p className="panel-empty">{t('forecast.empty')}</p>

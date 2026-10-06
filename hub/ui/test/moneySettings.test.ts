@@ -33,7 +33,7 @@ function fixture(selected:[string,string][]=[],budget?:{source:Named;context:Cur
     const ids=query.get('ids'),from=Number(query.get('after')??0),keys=ids?all.filter(k=>(JSON.parse(ids) as string[]).includes(k.id)):all.slice(from,from+10);
     return {keys,meters:keys.flatMap(k=>[meter(`key:${k.id}:usage`),...(revision===1?[meter(`key:${k.id}:cap`)]:[])]),total:20,inventory:null,next:ids||from===10?null:'10'};
   };
-  const context={exports:{} as {MoneySettings:(props:{sources:Named[];hidden:string[];series:[]})=>Node},require:(name:string)=>{
+  const context={exports:{} as {KeyMoneySettings:(props:{sources:Named[];hidden:string[];series:[]})=>Node},require:(name:string)=>{
     if(name==='react')return {useState:hooks.useState,useEffect:hooks.useLayoutEffect};
     if(name==='react/jsx-runtime')return {jsx:(type:unknown,props:Node['props'],key?:string)=>({type,props,key}),jsxs:(type:unknown,props:Node['props'],key?:string)=>({type,props,key}),Fragment:'fragment'};
     if(name.endsWith('/board'))return {useBoardId:()=> 'b',useCurrencyContext:()=>budget?.context??defaultCurrencyContext};
@@ -52,7 +52,7 @@ function fixture(selected:[string,string][]=[],budget?:{source:Named;context:Cur
   }};
   runInNewContext(ts.transpileModule(readFileSync(new URL('../components/MoneySettings.tsx',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
   let tree:Node;
-  const render=()=>{hooks.begin();tree=context.exports.MoneySettings({sources:[source],hidden:[],series:[]});hooks.commit();return nodes(tree);};
+  const render=()=>{hooks.begin();tree=context.exports.KeyMoneySettings({sources:[source],hidden:[],series:[]});hooks.commit();return nodes(tree);};
   const settle=async()=>{render();await flush();return render();};
   const pager=()=>nodes(tree).find(n=>n.type===pages)!.props as {page:number;pages:number;next:boolean;previous:boolean;loading:boolean;onNext:()=>void;onPrevious:()=>void};
   const slots=()=>nodes(tree).filter(n=>typeof n.props.className==='string'&&n.props.className.includes('key-slot'));

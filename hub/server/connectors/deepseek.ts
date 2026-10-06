@@ -33,7 +33,7 @@ export function deepSeek(transport=new ConnectorTransport({host:'api.deepseek.co
   const read=async(secret:Buffer,signal?:AbortSignal):Promise<ConnectorAnswer>=>{
     try {
       const answer=await transport.send('balance',secret,{},signal);
-      return {identityKind:'declared',account:null,abilities:['balance'],expiresAt:null,measurement:deepSeekMeasurement(answer,now())};
+      return {identityOrigin:'declared',expiryKind:'unknown',abilities:['balance'],expiresAt:null,measurement:deepSeekMeasurement(answer,now())};
     }catch(error) {
       if(error instanceof ConnectorStatus) {
         if(error.status===401)throw new SecretError('credential_rejected');
@@ -43,5 +43,5 @@ export function deepSeek(transport=new ConnectorTransport({host:'api.deepseek.co
       throw error;
     }
   };
-  return {id:'deepseek',identityKind:'declared',secretFormat:value=>/^sk-[A-Za-z0-9_-]{16,256}$/.test(value),abilities:['balance'],transport,map:()=>null,identify:read,measure:(secret,_expected,signal)=>read(secret,signal)};
+  return {id:'deepseek',identityOrigin:'declared',declaredAccounts:true,secretFormat:value=>/^sk-[A-Za-z0-9_-]{16,256}$/.test(value),abilities:['balance'],transport,map:()=>null,identify:read,measure:(secret,_expected,signal)=>read(secret,signal)};
 }

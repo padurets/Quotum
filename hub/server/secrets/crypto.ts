@@ -7,6 +7,8 @@ export const SECRET_CODE = Object.freeze({
   CREDENTIAL_INVALID: 'credential_invalid', CREDENTIAL_NOT_FOUND: 'credential_not_found', CREDENTIAL_PROVIDER_UNKNOWN: 'credential_provider_unknown', CREDENTIAL_FAILED: 'credential_failed', CREDENTIAL_UNREADABLE: 'credential_unreadable', CREDENTIAL_CLEANUP_PENDING: 'credential_cleanup_pending',
   CREDENTIAL_EXPIRED: 'credential_expired', CREDENTIAL_REVOKED: 'credential_revoked', CREDENTIAL_WRONG_TYPE: 'credential_wrong_type', CREDENTIAL_PERMISSION: 'credential_permission', CREDENTIAL_ACCOUNT_MISMATCH: 'credential_account_mismatch', CREDENTIAL_EXPIRY_CONFIRMATION: 'credential_expiry_confirmation', CREDENTIAL_CONFLICT: 'credential_conflict',
   CREDENTIAL_REJECTED: 'credential_rejected', ACCOUNT_CONFIRMATION: 'credential_account_confirmation', ACCOUNT_NOT_FOUND: 'declared_account_not_found', ACCOUNT_NAME_CONFLICT: 'declared_account_name_conflict', BALANCE_UNAVAILABLE: 'connector_balance_unavailable',
+  AUTH_REJECTED: 'credential_auth_rejected',
+  QUOTA_EMPTY: 'connector_quota_empty', QUOTA_UNSUPPORTED: 'connector_quota_unsupported', QUOTA_INVALID: 'connector_quota_invalid', QUOTA_PARTIAL: 'connector_quota_partial',
   INVENTORY_PARTIAL: 'connector_inventory_partial', ROUND_LIMIT: 'connector_round_limit',
   DESTINATION_INVALID: 'connector_destination_invalid', CANCELLED: 'connector_cancelled', REDIRECT: 'connector_redirect', STATUS: 'connector_status', RESPONSE_TOO_LARGE: 'connector_response_too_large', INVALID_RESPONSE: 'connector_invalid_response', CONNECTOR_FAILED: 'connector_failed', TIMEOUT: 'connector_timeout',
 } as const);

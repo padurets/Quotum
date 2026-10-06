@@ -1,7 +1,7 @@
 import type {DatabaseSync} from 'node:sqlite';
 import {balanceDescriptor,monetaryOf} from '../domain/providers.js';
 import {amount} from '../domain/amount.js';
-import {balanceStatusOf,calendarSpending,spending,utcPeriods, sameMeter, validateMeter, type Meter, type MeterMeasurement, type MeterSpan, type Reading} from '../domain/meters.js';
+import {balanceStatusOf,calendarSpending,spending,utcPeriods, sameMeter, validateMeter, type Meter, type MeterMeasurement, type MeterSpan, type Reading, type QuotaObservation, QUOTA_IDS} from '../domain/meters.js';
 import type {SourceState} from '../domain/quota.js';
 import {MeterContexts} from './meterContexts.js';
 import {meterCells, type MeterGroup, type MeterSelection, type MeterSeriesCells} from '../domain/meterHistory.js';
@@ -34,12 +34,12 @@ export class MeterStore {
       ids.add(meter.id);
       const old = current.get(meter.id);
       if (old && old.at >= meter.at) continue;
-      const last = this.db.prepare('SELECT from_at,to_at,stale_after_ms,interrupted_at FROM meter_spans WHERE source_id=? AND meter_id=? ORDER BY from_at DESC LIMIT 1').get(source, meter.id) as {from_at: number; to_at: number; stale_after_ms: number; interrupted_at:number|null} | undefined;
+      const last = this.db.prepare('SELECT from_at,to_at,stale_after_ms,interrupted_at,hold_until FROM meter_spans WHERE source_id=? AND meter_id=? ORDER BY from_at DESC LIMIT 1').get(source, meter.id) as {from_at: number; to_at: number; stale_after_ms: number; interrupted_at:number|null;hold_until:number|null} | undefined;
       if (!old || !sameMeter(old, meter)) {
         this.db.prepare('INSERT INTO readings (source_id,meter_id,at,previous_at,kind,unit,amount,limit_amount,reset_at,minutes,scope,label,stale_after_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
           .run(source, meter.id, meter.at, old?.at ?? last?.to_at ?? null, meter.kind, meter.unit, amount(meter.amount), meter.limit === null ? null : amount(meter.limit), meter.resetAt, meter.minutes, meter.scope, meter.label, meter.staleAfterMs);
       }
-      if (last && last.interrupted_at===null && old && meter.at - last.to_at <= last.stale_after_ms && old.kind === meter.kind && old.unit === meter.unit) {
+      if (last && last.interrupted_at===null && last.hold_until===null && old && meter.at - last.to_at <= last.stale_after_ms && old.kind === meter.kind && old.unit === meter.unit) {
         this.db.prepare('UPDATE meter_spans SET to_at=?,stale_after_ms=? WHERE source_id=? AND meter_id=? AND from_at=?').run(meter.at, meter.staleAfterMs, source, meter.id, last.from_at);
       } else this.db.prepare('INSERT INTO meter_spans (source_id,meter_id,from_at,to_at,stale_after_ms) VALUES (?,?,?,?,?)').run(source, meter.id, meter.at, meter.at, meter.staleAfterMs);
       since = Math.min(since, last?.interrupted_at==null?old?.at??meter.at:meter.at);
@@ -73,15 +73,29 @@ export class MeterStore {
     this.contexts.observe(source,previous.provider,measurement,balanceStatus);
     const state: SourceState = {
       ...previous, windows: [], resets: null,
+      ...(measurement.plan !== undefined ? {plan: measurement.plan} : {}),
+      ...(measurement.quota ? {quota: measurement.quota} : {}),
       successAt: accountSuccess ? measurement.observedAt : previous.successAt,
       staleAfterMs: accountSuccess ? measurement.staleAfterMs : previous.staleAfterMs,
       error: accountSuccess||balanceStatus ? null : previous.error,
       ...(balanceStatus?{balanceStatus}:{}),
       meters: [...current.values()], keys: [...keys.values()].sort((a,b) => (a.name ?? '').localeCompare(b.name ?? '') || a.id.localeCompare(b.id)),
-      inventory: {complete: measurement.inventoryComplete, observed: observed.size, missing: [...keys.values()].filter(k => k.presence === 'missing').length, error: measurement.inventoryError},
+      ...(measurement.quota ? {} : {inventory: {complete: measurement.inventoryComplete, observed: observed.size, missing: [...keys.values()].filter(k => k.presence === 'missing').length, error: measurement.inventoryError}}),
     };
     this.db.prepare('INSERT OR REPLACE INTO state VALUES (?,?)').run(source, JSON.stringify(state));
     return {state, since:Number.isFinite(since)?since:null};
+  }
+
+  observeQuota(source:string,previous:SourceState,observation:QuotaObservation): {state:SourceState;since:number} {
+    const at=observation.observedAt;
+    if(!Number.isSafeInteger(at)||at<0||observation.quota.observedAt!==at||new Set(observation.receivedIds).size!==observation.receivedIds.length||observation.receivedIds.some(id=>!QUOTA_IDS.includes(id as typeof QUOTA_IDS[number])))throw new Error('invalid_quota_observation');
+    const received=new Set(observation.receivedIds);
+    for(const id of QUOTA_IDS)if(!received.has(id)) {
+      this.db.prepare('UPDATE meter_spans SET hold_until=min(coalesce(hold_until,?),?) WHERE source_id=? AND meter_id=? AND from_at=(SELECT max(from_at) FROM meter_spans WHERE source_id=? AND meter_id=?)').run(at,at,source,id,source,id);
+    }
+    const state:SourceState={...previous,plan:observation.plan,quota:observation.quota,meters:(previous.meters??[]).map(m=>received.has(m.id)?m:{...m,stale:true}),error:received.size?null:'connector_quota_'+observation.quota.issue};
+    this.db.prepare('INSERT OR REPLACE INTO state VALUES (?,?)').run(source,JSON.stringify(state));
+    return {state,since:at};
   }
 
   /** Include one predecessor even when it predates retention: it is evidence, not a plotted point. */
@@ -92,8 +106,8 @@ export class MeterStore {
   }
 
   spans(source: string, meter: string, from: number, to: number): MeterSpan[] {
-    const rows = this.db.prepare('SELECT from_at,to_at,stale_after_ms,interrupted_at FROM meter_spans WHERE source_id=? AND meter_id=? AND min(coalesce(interrupted_at,9223372036854775807),to_at+stale_after_ms+1)>? AND from_at<=? ORDER BY from_at').all(source, meter, from, to) as {from_at: number; to_at: number; stale_after_ms: number; interrupted_at:number|null}[];
-    return rows.map(r => ({from: r.from_at, to: r.to_at, staleAfterMs: r.stale_after_ms,...(r.interrupted_at===null?{}:{interruptedAt:r.interrupted_at})}));
+    const rows = this.db.prepare('SELECT from_at,to_at,stale_after_ms,interrupted_at,hold_until FROM meter_spans WHERE source_id=? AND meter_id=? AND min(coalesce(interrupted_at,9223372036854775807),coalesce(hold_until,9223372036854775807),to_at+stale_after_ms+1)>? AND from_at<=? ORDER BY from_at').all(source, meter, from, to) as {from_at: number; to_at: number; stale_after_ms: number; interrupted_at:number|null;hold_until:number|null}[];
+    return rows.map(r => ({from: r.from_at, to: r.to_at, staleAfterMs: r.stale_after_ms,...(r.hold_until===null?{}:{holdUntil:r.hold_until}),...(r.interrupted_at===null?{}:{interruptedAt:r.interrupted_at})}));
   }
 
   calendar(source: string, now: number, asOf=now) {
@@ -129,7 +143,7 @@ export class MeterStore {
     changed = this.currencies.prune(cutoff) || changed;
     // The last endpoint is evidence of an unchanged observation, even after the
     // current meter has been archived and its changed reading is much older.
-    changed = this.db.prepare('DELETE FROM meter_spans WHERE min(coalesce(interrupted_at,9223372036854775807),to_at+stale_after_ms+1)<=? AND from_at<(SELECT max(from_at) FROM meter_spans s WHERE s.source_id=meter_spans.source_id AND s.meter_id=meter_spans.meter_id)').run(cutoff).changes > 0 || changed;
+    changed = this.db.prepare('DELETE FROM meter_spans WHERE min(coalesce(interrupted_at,9223372036854775807),coalesce(hold_until,9223372036854775807),to_at+stale_after_ms+1)<=? AND from_at<(SELECT max(from_at) FROM meter_spans s WHERE s.source_id=meter_spans.source_id AND s.meter_id=meter_spans.meter_id)').run(cutoff).changes > 0 || changed;
     // Preserve a crossing span's continuity without making its old head visible.
     changed = this.db.prepare('UPDATE meter_spans SET from_at=? WHERE from_at<? AND to_at>=?').run(cutoff, cutoff, cutoff).changes > 0 || changed;
     return changed;

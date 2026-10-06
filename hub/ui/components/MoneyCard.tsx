@@ -1,16 +1,17 @@
+import {QUOTA_IDS} from '../../server/domain/meters';
 import type {Card,View} from '../lib/types';
-import type {Meter} from '../../server/domain/meters';
+import type {KeyPart,Meter} from '../../server/domain/meters';
 import {currencySymbol,type CurrencyContext} from '../../server/domain/currency';
 import {useSourceAccess,useCurrencyContext} from '../lib/board';
-import {budgetView,balanceGroups,balanceRoleLabel,money,keyName,capLeft,capPercent,capStale,capChangesAt,accessTone,accessChangesAt,ACCESS_WARNING_MS,type BudgetLimit} from '../lib/money';
+import {amountText,amountUnitLabel,capName,budgetView,balanceGroups,balanceRoleLabel,money,keyName,capLeft,capPercent,capStale,capChangesAt,accessTone,accessChangesAt,ACCESS_WARNING_MS,type BudgetLimit} from '../lib/money';
 import {stamp,day,countdown,duration,countdownChangesAt,earliest} from '../lib/format';
 import {useClock} from '../lib/clock';
 import {t} from '../i18n';
 import {ApiError,messageOf} from '../lib/http';
 import {ErrorLine} from './Kit';
 import {Popover} from './Popover';
-import {MeterBar} from './Meter';
-import {level} from '../lib/quota';
+import {MeterBar,PercentLimit,ResetText} from './Meter';
+import {level,resetLineChangesAt} from '../lib/quota';
 import {useShownKeys} from '../lib/moneyKeys';
 
 function KeyStatus({part,cap}:{part:BudgetLimit['part'];cap:Meter}) {
@@ -20,11 +21,39 @@ function KeyStatus({part,cap}:{part:BudgetLimit['part'];cap:Meter}) {
   const status=inactive?t('money.inactive'):part.presence==='missing'?t('money.missing'):stale?t('money.stale'):'';
   return <small data-time="key-status" className={`key-status${stale?' cap-stale':''}${inactive?' is-inactive':''}`} role="img" title={status} aria-label={status||undefined} aria-hidden={!status}/>;
 }
-function CapReset({meter,short=false}:{meter:Meter;short?:boolean}) {
-  const now=useClock(now=>meter.resetAt===null?null:countdownChangesAt(meter.resetAt,now));
-  return <span data-time="cap-reset" title={meter.resetAt===null?'':stamp(meter.resetAt)}>{meter.resetAt!==null&&meter.resetAt>now?short?countdown(meter.resetAt-now):t('limit.resetsIn',{time:duration(meter.resetAt-now)}):meter.resetAt!==null?t('money.partial'):''}</span>;
+function CapStatus({part,cap}:{part?:KeyPart;cap?:Meter}) {
+  const now=useClock(now=>earliest(part?.expiresAt!=null&&part.expiresAt>now?part.expiresAt:null,cap?capChangesAt(cap,now):null));
+  const inactive=!!part&&(part.disabled||part.expiresAt!==null&&part.expiresAt<=now);
+  const status=inactive?t('money.inactive'):part?.presence==='missing'?t('money.missing'):!cap?t('quota.unavailable'):capStale(cap,now)?t('money.stale'):'';
+  const detail=status&&cap?`${status}\n${stamp(cap.at)}`:status;
+  return <small data-time="key-status" className={`key-status${inactive?' is-inactive':''}`} role="img" title={detail} aria-label={detail||undefined} aria-hidden={!status}/>;
 }
-function KeyMetrics({limit,context,compact=false}:{limit:BudgetLimit;context:CurrencyContext;compact?:boolean}) {
+export function CapReset({meter,short=false}:{meter:Meter;short?:boolean}) {
+  const now=useClock(now=>meter.resetAt===null?null:countdownChangesAt(meter.resetAt,now));
+  const unknown=meter.resetAt===null&&meter.scope!=='lifetime';
+  const text=meter.resetAt===null?unknown?short?'—':t('limit.resetUnknown'):'' :meter.resetAt>now?short?countdown(meter.resetAt-now):t('limit.resetsIn',{time:duration(meter.resetAt-now)}):t('limit.resetPassed');
+  return <span data-time="cap-reset" title={unknown?t('limit.resetUnknown'):meter.resetAt!==null?stamp(meter.resetAt):''}>{text}</span>;
+}
+/** Monetary caps keep their amounts around the shared segmented meter. */
+export function CapMetrics({cap,name,detail=name,status,compact=false}:{cap:Meter|undefined;name:string;detail?:string;status?:import('react').ReactNode;compact?:boolean}) {
+  const percent=cap?capPercent(cap):null,remaining=percent===null?null:100-percent;
+  const value=cap?amountText(capLeft(cap),cap.unit):'—',unit=cap?amountUnitLabel(cap.unit):'';
+  const label=<span className="cap-label"><span>{name}</span>{status}</span>;
+  const bar=<MeterBar remaining={cap?remaining:null} label={name}/>;
+  const reset=cap?<CapReset meter={cap} short={compact}/>:<span>{t('money.stale')}</span>;
+  if(compact)return <div className="compact-limit is-money">
+    <div className="compact-window-name"><span title={detail}>{label}</span></div>
+    <small className="compact-reset">{reset}</small>{bar}
+    <strong className="limit-value" title={cap?money(capLeft(cap),cap.unit,true):undefined}>{value}<small>{unit}</small></strong>
+  </div>;
+  return <div className="limit money-limit">
+    <div className="limit-top"><span className="limit-name" title={detail}>{label}</span>
+      <span className={`limit-value v-${remaining===null?'ok':level(remaining)}`} title={cap?money(capLeft(cap),cap.unit,true):undefined}>{value}<small>{unit}</small></span>
+    </div>{bar}
+    <div className="limit-bottom"><span>{cap?t('money.of',{amount:money(cap.limit,cap.unit)}):t('quota.unavailable')}</span>{cap&&remaining===null?<span>{t('money.exhausted')}</span>:reset}</div>
+  </div>;
+}
+function BudgetKeyMetrics({limit,context,compact=false}:{limit:BudgetLimit;context:CurrencyContext;compact?:boolean}) {
   const {part,meter:cap}=limit;
   const percent=capPercent(limit.native),remaining=percent===null?null:100-percent;
   const symbol=limit.unavailable?context.target.symbol:currencySymbol(cap.unit,context);
@@ -44,6 +73,27 @@ function KeyMetrics({limit,context,compact=false}:{limit:BudgetLimit;context:Cur
     {bar}
     <div className="limit-bottom"><span title={limit.unavailable?'':money(cap.limit,cap.unit,true,context)}>{t('money.of',{amount:limit.unavailable?'— '+symbol:money(cap.limit,cap.unit,false,context)})}</span>{remaining===null?<span>{t('money.exhausted')}</span>:<CapReset meter={cap}/>}</div>
   </div>;
+}
+export function KeyMetrics({part,meters,compact=false}:{part:KeyPart;meters:readonly Meter[];compact?:boolean}) {
+  const cap=meters.find(m=>m.id===`key:${part.id}:cap`);if(!cap)return null;
+  return <CapMetrics cap={cap} name={keyName(part)} detail={[keyName(part),part.includeByok?t('money.byok'):''].filter(Boolean).join('\n')} status={<CapStatus part={part} cap={cap}/>} compact={compact}/>;
+}
+export function QuotaCard({source,ids=QUOTA_IDS,compact=false}:{source:Card;ids?:readonly string[];compact?:boolean}) {
+  return <>{ids.map(id=>{
+    const cap=source.meters?.find(m=>m.id===id),used=cap?capPercent(cap):null;
+    const detail=cap?`${money(capLeft(cap),cap.unit,true)}\n${t('money.of',{amount:money(cap.limit,cap.unit,true)})}\n${cap.resetAt===null?t('limit.resetUnknown'):stamp(cap.resetAt)}${used===null?`\n${t('money.exhausted')}`:''}`:t('quota.unavailable');
+    return <PercentLimit key={id} name={capName({id,scope:null,label:null})} remaining={used===null?null:100-used}
+      valueTitle={detail} status={<CapStatus cap={cap}/>} reset={<QuotaReset resetAt={cap?.resetAt??null} short={compact}/>} compact={compact}/>;
+  })}</>;
+}
+function QuotaReset({resetAt,short}:{resetAt:number|null;short:boolean}) {
+  const now=useClock(now=>resetLineChangesAt({resetAt},now));
+  return <ResetText resetAt={resetAt} now={now} short={short}/>;
+}
+export function QuotaMark({source}:{source:Card}) {
+  if(!source.quota||source.quota.complete)return null;
+  const text=messageOf(new ApiError(400,'connector_quota_'+(source.quota.generation?'partial':source.quota.issue)));
+  return <Popover label={text} up align="left" triggerClass="tray-pill is-warn" trigger={<svg className="tray-icon" viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="m12 3 10 18H2Z"/><path d="M12 9v5m0 3h.01"/></svg>}><div className="tray-panel"><p className="tray-panel-lead">{text}</p><p>{t('quota.budgetOnly')}</p></div></Popover>;
 }
 export function MoneyCard({source,board,view,compact=false}:{source:Card;board:string;view?:View;compact?:boolean}) {
   const context=useCurrencyContext(source.id);
@@ -70,7 +120,7 @@ export function MoneyCard({source,board,view,compact=false}:{source:Card;board:s
         return <span key={total.id} className={`limit-value${total.stale?' is-stale':''}`} data-money={total.amount} title={[money(total.amount,total.unit,true,context),stamp(total.at),approximate?conversion:'',total.stale?t('money.stale'):''].filter(Boolean).join('\n')}>{approximate?'≈ ':''}{amount}<small>{symbol}</small></span>;
       })}</div>
     </div>
-    <div className="limits money-limits">{limits.map(limit=><KeyMetrics key={limit.scope.id} limit={limit} context={context} compact={compact}/>)}</div>
+    <div className="limits money-limits">{limits.map(limit=><BudgetKeyMetrics key={limit.scope.id} limit={limit} context={context} compact={compact}/>)}</div>
     <ErrorLine error={error}/>
   </div>;
 }

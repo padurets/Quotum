@@ -1,8 +1,9 @@
 # Architecture
 
-Quotum shows the subscription limits of coding agents (Claude Code, Codex, Antigravity)
-on one page: for one person on one machine, or for a team across many machines and
-accounts. This document explains how the parts work and why they are built this way.
+Quotum shows coding-agent subscriptions (Claude Code, Codex, Antigravity and z.ai)
+and OpenRouter budgets on one page: for one person on one machine, or for a team
+across many machines and accounts. This document explains how the parts work and why
+they are built this way.
 
 ## Parts
 
@@ -24,8 +25,9 @@ accounts. This document explains how the parts work and why they are built this 
 - **hub/** — the dashboard service: Node 24, Fastify, the SQLite built into Node, a
   React UI. It decides which device measures which subscription, stores measurements,
   applies the rules (what counts as spending, what is a reset, what is a gap) and
-  serves the dashboard. Hub-measured providers, such as OpenRouter, use its read-only
-  connectors and encrypted credentials; subscription measurements come from agents.
+  serves the dashboard. The hub measures z.ai subscriptions and OpenRouter budgets
+  through its read-only connectors and encrypted credentials. Agents deliver the
+  client-measured subscriptions.
 - **spec/** — the contracts: the [ingest format](../spec/ingest-v1.md) between the two
   (anything that speaks it can deliver to a hub), and the
   [dashboard's events](../spec/dashboard-v1.md) between the hub and its page.
@@ -51,8 +53,9 @@ is one implementation of them.
 
 ## Measuring
 
-Each provider has an adapter that asks the agent's own client, never the provider's
-endpoints:
+The agent's adapters ask each coding agent's own client, never provider endpoints.
+The hub's read-only connectors measure z.ai subscriptions and OpenRouter budgets
+directly. These are the client interfaces used by the agent:
 
 | Provider | Interface | Notes |
 |---|---|---|
@@ -678,6 +681,48 @@ retention up to the primary observation without backfilling its unretained edge.
 Its own semantics preserve the quote and original amount independently of the
 primary point, through packing and reader conversion across chunk boundaries.
 
+Personal Global z.ai Coding Plan quotas are hub-measured subscription caps in
+`credits:zai`, separate from monetary counters. The adapter supports only the observed
+`CREDIT_LIMIT` tuples `(unit=3, number=5)` and `(unit=6, number=1)`; allowance and usage
+come from original JSON numeric tokens, quantized once to integer millionths. Legacy
+prompt/token/MCP and unknown quota shapes remain unsupported. Valid neighboring caps
+survive partial replies and optional invalid reset fields; missing amounts never
+become zero. The fixed raw-Authorization GET is the provider-published usage plugin
+interface, not a versioned quota OpenAPI schema. No model request is needed.
+
+Subscription caps and OpenRouter key caps share a status dot beside each limit name.
+Subscription cards and compact rows use the same percentage-limit component as
+client-measured subscriptions. Exact credit amounts and allowances stay in value
+tooltips, and period names come from the shared subscription labels. Stored meter
+units and historical cap semantics remain unchanged.
+Subscription analytics project these caps into the ordinary five-hour and weekly
+percentage series, alongside client-measured windows. The page's history loader
+requests both cap periods with native window history; switching period does not
+create a separate credit mode or request.
+Server history retains native window series when the selection includes a
+subscription source, using the provider catalogue's funding type. Wallet-only
+selections retain the money-mode optimization that skips native window reads.
+Each historical percentage uses that cell's own allowance and exclusive observation
+bounds. Source order, colours, legend keys,
+period visibility, time navigation and measurement-table rows are shared. Unknown
+allowances and unobserved intervals remain unknown. Cap-only sources have no native
+quota spending, plans, forecasts or agent-work attribution; those table cells are
+unavailable rather than zero.
+The shared chart and table explain a bounded-history refusal using the same message
+as monetary analytics, without leaving a loading or empty-selection message.
+Missing or stale measurements keep their last confirmed values at full opacity; the
+dot explains the status and shows the last observation time. Key inactivity keeps its
+distinct dot state. Freshness clocks update these small marks, not the whole limit row.
+
+Accepted quota outcomes persist completeness and observation time independently from
+last success. Authenticated missing quotas hard-close `meter_spans.hold_until` in the
+same transaction as accepted neighboring readings. Recovery opens a new span, even
+inside the previous freshness deadline. No-valid replies create no reading or
+heartbeat. Historical cap cells carry their own exclusive `knownFrom`/`knownUntil`
+bounds through packing, composition, chart geometry and readout; no value crosses an
+omission, reset, missing cell or freshness deadline. A coarse cell with incompatible
+segments remains unknown. Cap usage is neither a spending counter nor a top-up.
+
 Money history uses the same bounded tiles, cache and page loader. Its exact strings,
 historical cap semantics and original spending intervals stay separate from the window
 Float64 codec. A logical balance selection internally reads its two counters. Axes and
@@ -730,6 +775,17 @@ an explicit same-site Origin before parsing, accept only a connector's strict pr
 ASCII key format, and are limited to ten attempts a minute per person and address.
 Replies contain only the safe record details, including a last-four hint; neither the
 key nor encrypted bytes go to the dashboard's events or shared boards.
+
+z.ai does not supply account identity or key expiry. Its connector declares authenticated
+access without an account pseudonym; the credential service creates a random,
+owner-local logical account and stores `source_identity` provenance atomically with
+the encrypted credential and holding. New connections never merge by key or plan.
+Explicit same-account replacement keeps that source and history, with the API's
+identity-verification limitation explained in My connections. Unknown expiry requires
+its own consent and remains distinct from a known deadline or confirmed absence of
+one. z.ai HTTP and envelope authentication rejections have a neutral private code;
+shared credential failures remain `unmeasured`. Ordinary z.ai keys may permit model
+requests, though Quotum calls only the fixed quota GET.
 
 `QUOTUM_SECRET_KEY` supplies 32 random bytes as canonical unpadded base64url (43
 characters); `QUOTUM_SECRET_KEY_FILE` instead reads those characters, optionally

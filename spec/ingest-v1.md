@@ -82,8 +82,8 @@ more than 30 seconds in the future after that makes the batch invalid.
 One successful measurement of one provider account on one machine.
 
 The hub's catalogue distinguishes client-measured providers from hub-measured ones.
-`openrouter` and `deepseek` are hub-measured. In snapshots, failures and sessions, the hub drops each
-object naming either before reading its other fields. Such an element creates no source,
+`openrouter`, `deepseek` and `zai` are hub-measured. In snapshots, failures and sessions, the hub drops each
+object naming one of them before reading its other fields. Such an element creates no source,
 holding, device association, duty, failure or history and contributes to none of the
 response counts. Valid client elements of the same request are accepted normally.
 The envelope, array limits, object shape and unknown-provider checks remain strict.
@@ -224,7 +224,7 @@ while.
 
 ### Following the hub's pace
 
-A check-in element naming `openrouter` or `deepseek` keeps its place in the answer, without checking
+A check-in element naming `openrouter`, `deepseek` or `zai` keeps its place in the answer, without checking
 its account or activity fields. With either paced or legacy check-in, it receives
 `{provider: "openrouter", measure: false, onDuty: false, askInMs: 86400000, until}`,
 with the named provider preserved; `until` is the hub's current time plus one day. It creates no holding or duty.

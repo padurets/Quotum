@@ -1,4 +1,5 @@
 import type {DatabaseSync} from 'node:sqlite';
+import {adoptDeclaredLayout} from './legacyDeclared.js';
 
 /**
  * The database layout. Each version is one step applied in order; a database records
@@ -163,15 +164,24 @@ export const STEPS = [
   CREATE INDEX meter_spans_by_end ON meter_spans (to_at);
   CREATE INDEX credentials_by_source ON credentials (source_id, created_at, id);
   `,
-  // 10 — declared accounts, truthful expiry and accepted observation interruptions.
+  // 10 — declared account provenance, unknown key expiry and hard quota history bounds.
+  `
+  CREATE TABLE source_identity (
+    source_id TEXT PRIMARY KEY REFERENCES sources(id), kind TEXT NOT NULL CHECK (kind IN ('supplier','declared')),
+    owner_id TEXT REFERENCES users(id), CHECK ((kind='declared' AND owner_id IS NOT NULL) OR (kind='supplier' AND owner_id IS NULL)));
+  INSERT INTO source_identity (source_id,kind,owner_id) SELECT id,'supplier',NULL FROM sources WHERE provider='openrouter';
+  ALTER TABLE credentials ADD COLUMN expiry_kind TEXT NOT NULL DEFAULT 'none' CHECK (expiry_kind IN ('dated','none','unknown'));
+  UPDATE credentials SET expiry_kind='dated' WHERE expires_at IS NOT NULL;
+  ALTER TABLE meter_spans ADD COLUMN hold_until INTEGER;
+  `,
+
+  // 11 — declared accounts, truthful expiry and accepted observation interruptions.
   `
   CREATE TABLE declared_accounts (
     id TEXT PRIMARY KEY, user_id TEXT NOT NULL, provider TEXT NOT NULL, source_id TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL, name_key TEXT NOT NULL, created_at INTEGER NOT NULL,
     lifecycle_revision INTEGER NOT NULL DEFAULT 0 CHECK(typeof(lifecycle_revision)='integer' AND lifecycle_revision>=0), UNIQUE(user_id,provider,name_key));
   CREATE INDEX declared_accounts_by_owner ON declared_accounts (user_id,provider,id);
-  ALTER TABLE credentials ADD COLUMN expiry_kind TEXT NOT NULL DEFAULT 'none' CHECK(expiry_kind IN ('at','none','unknown'));
-  UPDATE credentials SET expiry_kind='at' WHERE expires_at IS NOT NULL;
   ALTER TABLE meter_spans ADD COLUMN interrupted_at INTEGER;
   CREATE TRIGGER declared_account_withdrawn AFTER DELETE ON credentials
     WHEN NOT EXISTS (SELECT 1 FROM credentials WHERE user_id=OLD.user_id AND source_id=OLD.source_id)
@@ -180,7 +190,7 @@ export const STEPS = [
         WHERE user_id=OLD.user_id AND provider=OLD.provider AND source_id=OLD.source_id;
     END;
   `,
-  // 11 — sparse histories of safe provider context beside the exact money ledger.
+  // 12 — sparse histories of safe provider context beside the exact money ledger.
   `
   CREATE TABLE meter_contexts (
     source_id TEXT NOT NULL, item TEXT NOT NULL, from_at INTEGER NOT NULL, to_at INTEGER NOT NULL,
@@ -188,7 +198,7 @@ export const STEPS = [
     PRIMARY KEY (source_id,item,from_at)) WITHOUT ROWID;
   CREATE INDEX meter_contexts_by_end ON meter_contexts (to_at);
   `,
-  // 12 — shared exchange-rate data and separate monetary valuations.
+  // 13 — shared exchange-rate data and separate monetary valuations.
   `
   CREATE TABLE exchange_rates (
     id TEXT PRIMARY KEY, source TEXT NOT NULL, reference_date INTEGER NOT NULL,
@@ -210,7 +220,7 @@ export const STEPS = [
     '$.balanceStatus.partial',json(CASE WHEN EXISTS(SELECT 1 FROM json_each(state.payload,'$.balanceStatus.issues') WHERE value<>'rate_unavailable') THEN 'true' ELSE 'false' END))
     WHERE json_type(payload,'$.balanceStatus.issues')='array';
   `,
-  // 13 — private currency definitions, display preferences and immutable rate bindings.
+  // 14 — private currency definitions, display preferences and immutable rate bindings.
   `
   CREATE TABLE currency_definitions (
     id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL, symbol TEXT NOT NULL,
@@ -223,7 +233,7 @@ export const STEPS = [
     observation_at INTEGER NOT NULL, through_at INTEGER NOT NULL, anchor TEXT NOT NULL, steps TEXT NOT NULL,
     PRIMARY KEY(owner_id,source_id,from_currency,target_currency,observation_at,anchor)) WITHOUT ROWID;
   `,
-  // 14 — preserve the initial nominal quote without retaining every zero-date revision.
+  // 15 — preserve the initial nominal quote without retaining every zero-date revision.
   `
   ALTER TABLE currency_definitions ADD COLUMN initial_quote_id TEXT;
   UPDATE currency_definitions SET initial_quote_id=(SELECT q.id FROM exchange_rates q
@@ -247,7 +257,7 @@ export function migrate(db: DatabaseSync, now: number) {
   if (current === SCHEMA_VERSION) return;
   db.exec('BEGIN IMMEDIATE');
   try {
-    for (const step of STEPS.slice(current)) db.exec(step);
+    for (const step of STEPS.slice(adoptDeclaredLayout(db,current))) db.exec(step);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.prepare('INSERT OR IGNORE INTO meta VALUES (?, ?)').run('historyStart', String(now));
     // Before this, how agents worked is not known (the sums of layout 2 are gone), rather than none worked.

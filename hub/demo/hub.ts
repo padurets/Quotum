@@ -2,6 +2,7 @@
 import {pathToFileURL} from 'node:url';
 import path from 'node:path';
 import {DEEPSEEK_SCENES,DEEPSEEK_KEY,deepSeekPayload,demoRates} from './deepseek.js';
+import {QUOTA_KEY,QUOTA_SCENES,quotaFixture} from './quotas.js';
 import {MONEY_KEY} from './money.js';
 import {readFileSync} from 'node:fs';
 const root=path.resolve(process.cwd(),'dist','server');
@@ -63,4 +64,15 @@ deepTransport.send=async(operation,secret)=>{
 (connectors as Map<string,import('../server/connectors/registry.js').Connector>).set('deepseek',deepSeek(deepTransport,()=>deepObserved));
 const {rateSources}=await load('currencies/ecb.js') as typeof import('../server/currencies/ecb.js');
 (rateSources as Map<string,import('../server/currencies/ecb.js').RatesReader>).set('ecb',async()=>demoRates(Date.now()));
+const {zai,decodeZai}=await load('connectors/zai.js') as typeof import('../server/connectors/zai.js');
+const quotaTransport=new ConnectorTransport({host:'127.0.0.1',port:443,operations:{}}),quotaStart=Date.now();
+quotaTransport.send=async(_operation,secret)=>{
+  const index=QUOTA_SCENES.findIndex((_,i)=>QUOTA_KEY(i)===secret.toString('ascii'));
+  if(index<0)throw new SecretError('credential_auth_rejected');
+  const count=(identified.get(100+index)??0)+1;identified.set(100+index,count);
+  if(index===10&&count>1)throw new SecretError('credential_auth_rejected');
+  if(index===11&&count>1)throw new SecretError('credential_unreadable');
+  return decodeZai(JSON.stringify(quotaFixture(index,quotaStart)));
+};
+(connectors as Map<string,import('../server/connectors/registry.js').Connector>).set('zai',zai(quotaTransport));
 await load('index.js');

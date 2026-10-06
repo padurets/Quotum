@@ -45,7 +45,7 @@ export function errorText(code: string) {
   return t(known(key)?key:connector?'api.unknown':'error.failed');
 }
 
-export const problemOf = (source: Pick<Card, 'error'>) => (source.error && source.error !== 'waiting' ? errorText(source.error) : null);
+export const problemOf = (source: Pick<Card, 'error'|'quota'>) => (source.error && source.error !== 'waiting' ? errorText(source.error) : source.quota&&!source.quota.complete?errorText('connector_quota_partial'):null);
 
 /** A measurement this recent is news: the card's dot pulses. */
 export const PULSE_FOR = 30_000;
@@ -61,7 +61,7 @@ export type Dot = {warn: true} | {warn: false; pulsing: boolean; fresh: number};
  * The dot by a card's logo: trouble (numbers gone stale, a failure) in its own colour;
  * otherwise from the age of the numbers, pulsing while they are news, then fading (`freshness`).
  */
-export function dotOf(source: Pick<Card, 'stale' | 'error' | 'successAt'>, now: number): Dot {
+export function dotOf(source: Pick<Card, 'stale' | 'error' | 'successAt' | 'quota'>, now: number): Dot {
   if (source.stale || problemOf(source)) return {warn: true};
   const age = source.successAt === null ? Infinity : now - source.successAt;
   return {warn: false, pulsing: age < PULSE_FOR, fresh: freshness(age)};
@@ -73,7 +73,7 @@ export const SOON = 15_000;
 export type Cadence = {when: 'nextIn' | 'nextSoon'; next: number; why: CadenceWhy};
 
 /** A card with the pace the hub sets for it. */
-export type Paced = Pick<Card, 'stale' | 'error' | 'successAt'> & {cadence: Pace};
+export type Paced = Pick<Card, 'stale' | 'error' | 'successAt' | 'quota'> & {cadence: Pace};
 
 /**
  * When the next measurement comes and why, for the dot's tooltip: while the hub sets the
@@ -86,7 +86,7 @@ export function cadenceOf(source: Paced, now: number): Cadence | null {
 }
 
 /** When the dot looks otherwise: it stops pulsing, or fades a step. Trouble does not pass with time: the hub says when it does. */
-export function dotChangesAt(source: Pick<Card, 'stale' | 'error' | 'successAt'>, now: number): number | null {
+export function dotChangesAt(source: Pick<Card, 'stale' | 'error' | 'successAt' | 'quota'>, now: number): number | null {
   if (source.stale || problemOf(source) || source.successAt === null) return null;
   const age = now - source.successAt;
   if (age < PULSE_FOR) return source.successAt + PULSE_FOR;

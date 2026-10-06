@@ -1,16 +1,16 @@
 import {memo, useEffect, useRef, useState, type CSSProperties, type ReactNode} from 'react';
 import type {Card, Win} from '../lib/types';
 import {MEASURE_INTERVAL, windowKey, type MeasureIntervalMs} from '../lib/types';
-import {countdown, countdownChangesAt, duration, earliest, num, stamp} from '../lib/format';
-import {cadenceChangesAt, cadenceOf, dotChangesAt, dotOf, errorText, level, problemOf, resetLine, resetLineChangesAt, windowName} from '../lib/quota';
+import {countdown, countdownChangesAt, earliest, num, stamp} from '../lib/format';
+import {cadenceChangesAt, cadenceOf, dotChangesAt, dotOf, errorText, problemOf, resetLineChangesAt, windowName} from '../lib/quota';
 import {t, useLocale} from '../i18n';
 import {DEFAULT_PLAN, isValidPlan, planAt, planChangesAt, planNote, planTotal, type WeeklyPlan} from '../lib/plan';
 import {logoOf} from './logos';
-import {MeterBar} from './Meter';
+import {MeterBar,PercentLimit,ResetText} from './Meter';
 import {KeyScaleSettings} from './KeyScaleSettings';
-import {MoneyCard,AccessMark,BalanceMark} from './MoneyCard';
+import {MoneyCard,QuotaCard,QuotaMark,AccessMark,BalanceMark} from './MoneyCard';
 import {cardId, colorOf, isWindowHidden, planOf, weeklyPlanOf, withColor, withHidden, withName, withPlan, withPlanned, withWindowHidden, type Arrange} from '../lib/view';
-import {CARD_COLORS, MIDDLE_STEP, PROVIDERS} from '../lib/providers';
+import {CARD_COLORS, MIDDLE_STEP, PROVIDERS,hasSubscriptionCaps} from '../lib/providers';
 import {call} from '../lib/http';
 import {useCadence, useCard, useConnection, useMine, useRefresh, useResetsFor, useSessions, useSourceAccess, useTitle} from '../lib/board';
 import {providerOf} from '../../server/domain/providers';
@@ -22,6 +22,7 @@ import {RefreshAction} from './RefreshAction';
 import {refreshChangesAt, refreshPending, refreshText} from '../lib/refresh';
 import {ErrorLine, Segmented} from './Kit';
 import {useBubble} from './Tooltip';
+import {quotaPeriods,quotaRemaining} from '../lib/subscription';
 
 /** Where the plan expects the limit to be now: a mark on its meter, in whole percent, moved when that changes. */
 function PlanMark({w, measuredAt, weekly}: {w: Win; measuredAt: number | null; weekly: WeeklyPlan | null}) {
@@ -63,15 +64,7 @@ function PlanNote({w, measuredAt, weekly}: {w: Win; measuredAt: number | null; w
 /** When the limit resets: in how long, that the time has passed, or that it is not known. */
 export function ResetLine({w, short = false}: {w: Win; short?: boolean}) {
   const now = useClock(now => resetLineChangesAt(w, now));
-  const reset = resetLine(w, now);
-  if (short && reset.key !== 'resetsIn') return null;
-  const text = reset.key === 'resetsIn' ? t('limit.resetsIn', {time: duration(reset.inMs)}) : t(`limit.${reset.key}`);
-  const date = w.resetAt ? stamp(w.resetAt) : '';
-  return (
-    <span data-time="reset" title={short ? [text, date].filter(Boolean).join('\n') : date} aria-label={short ? text : undefined}>
-      {short && reset.key === 'resetsIn' ? duration(reset.inMs) : text}
-    </span>
-  );
+  return <ResetText resetAt={w.resetAt} now={now} short={short}/>;
 }
 
 /** The same remaining-quota meter in a card and in the tray's compact rows. */
@@ -80,25 +73,9 @@ export function LimitMeter({w, children}: {w: Win; children?: ReactNode}) {
 }
 
 function Limit({w, measuredAt, weekly}: {w: Win; measuredAt: number | null; weekly: WeeklyPlan | null}) {
-  const state = level(w.remaining);
-  return (
-    <div className="limit">
-      <div className="limit-top">
-        <span className="limit-name">{windowName(w)}</span>
-        <span className={`limit-value v-${state}`}>
-          {num(w.remaining)}
-          <small>%</small>
-        </span>
-      </div>
-      <LimitMeter w={w}>
-        <PlanMark w={w} measuredAt={measuredAt} weekly={weekly} />
-      </LimitMeter>
-      <div className="limit-bottom">
-        <ResetLine w={w} />
-        <PlanNote w={w} measuredAt={measuredAt} weekly={weekly} />
-      </div>
-    </div>
-  );
+  return <PercentLimit name={windowName(w)} remaining={w.remaining}
+    reset={<ResetLine w={w}/>} note={<PlanNote w={w} measuredAt={measuredAt} weekly={weekly}/>}
+  ><PlanMark w={w} measuredAt={measuredAt} weekly={weekly}/></PercentLimit>;
 }
 
 /**
@@ -297,6 +274,7 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
   const hasWeekly = source.windows.some(w => w.kind === 'weekly');
   const planned = planOf(arrange.view, source.id) !== null;
   const owner = arrange.owner;
+  const periods=quotaPeriods(source);
 
   const unshare = async () => {
     setError(null);
@@ -315,13 +293,14 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
           <CardName source={source} arrange={arrange} />
         </>
       )}
-      {owner && source.windows.length > 1 && (
+      {owner && periods.length > 1 && (
         <>
           <div className="popover-title popover-section">{t('source.show')}</div>
-          {source.windows.map(w => {
+          {periods.map(w => {
             const key = windowKey(source.id, w.id);
+            const remaining=quotaRemaining(source,w.id);
             return (
-              <SwitchRow key={w.id} on={!hidden.has(key)} onChange={on => arrange.update(view => withWindowHidden(view, key, !on))} value={`${num(w.remaining)}%`}>
+              <SwitchRow key={w.id} on={!hidden.has(key)} onChange={on => arrange.update(view => withWindowHidden(view, key, !on))} value={remaining===null?'—':`${num(remaining)}%`}>
                 {windowName(w)}
               </SwitchRow>
             );
@@ -371,7 +350,7 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
  * the measurements go on, and lets the board's owner bring them back in one go.
  */
 function AllHidden({source, arrange}: {source: Card; arrange: Arrange}) {
-  const showAll = () => arrange.update(view => source.windows.reduce((next, w) => withWindowHidden(next, windowKey(source.id, w.id), false), view));
+  const showAll = () => arrange.update(view => quotaPeriods(source).reduce((next, w) => withWindowHidden(next, windowKey(source.id, w.id), false), view));
   return (
     <div className="card-empty">
       <EyeOffIcon />
@@ -474,7 +453,10 @@ function CardTray({source}: {source: Card}) {
   const sessions = useSessions(source.id);
   const resets = useResetsFor(source.provider);
   const access = useSourceAccess(source.id);
-  return <Tray resets={resets} news={source.balanceStatus||access?<><BalanceMark source={source}/>{access&&<AccessMark id={source.id}/>}</>:null} current={!!source.resets?.available&&<FreeResets resets={source.resets}/>} sessions={sessions} />;
+  const quotaIssue=source.quota&&!source.quota.complete;
+  const news=source.balanceStatus||access||quotaIssue?<><BalanceMark source={source}/>{access&&<AccessMark id={source.id}/>}
+    {quotaIssue&&<QuotaMark source={source}/>}</>:null;
+  return <Tray resets={resets} news={news} current={!!source.resets?.available&&<FreeResets resets={source.resets}/>} sessions={sessions} />;
 }
 
 /**
@@ -488,8 +470,10 @@ export const SourceCard = memo(function SourceCard({id, arrange, boardId, person
   const mine = useMine(id);
   if (!source) return null;
   const visible = source.windows.filter(w => !isWindowHidden(arrange.view, source.id, w.id));
+  const periods=quotaPeriods(source),shownPeriods=periods.filter(w=>!isWindowHidden(arrange.view,source.id,w.id));
   const weekly = planOf(arrange.view, source.id);
   const takeOff = !personal && (arrange.owner || mine);
+  const caps=hasSubscriptionCaps(source.provider);
 
   return (
     <article className="card" data-card={id} style={{'--card-color': colorOf(arrange.view, source.id, source.provider)} as CSSProperties}>
@@ -499,18 +483,18 @@ export const SourceCard = memo(function SourceCard({id, arrange, boardId, person
           <div className="card-title"><h2 title={title}>{title}</h2>
             {source.plan&&<span className="plan">{source.plan.replace(/^Claude\s+/i,'')}</span>}
           </div>
-          {(source.meters||providerOf(source.provider))&&<small className="resource-type">{t(source.meters||providerOf(source.provider)?.measuredBy==='hub'?'resource.budget':'resource.subscription')}</small>}
+          {(source.meters||providerOf(source.provider))&&<small className="resource-type">{t(providerOf(source.provider)?.funding==='wallet'?'resource.budget':'resource.subscription')}</small>}
         </div>
         <SourceSettings key={boardId} source={source} title={title} arrange={arrange} boardId={boardId} takeOff={takeOff} />
       </div>
 
       <div className="limits">
-        {source.meters&&<MoneyCard source={source} board={boardId} view={arrange.view}/>}
+        {caps?<QuotaCard source={source} ids={shownPeriods.map(w=>w.id)}/>:source.meters&&<MoneyCard source={source} board={boardId} view={arrange.view}/>}
         {visible.map(w => (
           <Limit key={w.id} w={w} measuredAt={source.successAt} weekly={weekly} />
         ))}
-        {!source.windows.length && !source.meters && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
-        {!!source.windows.length && !visible.length && <AllHidden source={source} arrange={arrange} />}
+        {!caps && !source.windows.length && !source.meters && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
+        {!!periods.length && !shownPeriods.length && <AllHidden source={source} arrange={arrange} />}
       </div>
       <CardTray source={source} />
     </article>

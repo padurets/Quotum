@@ -12,6 +12,7 @@ import {Live, seedWork, setUp, type Stand} from './setup.js';
 import {accessOf} from './access.js';
 import {Trackers} from './trackers.js';
 import {seedDeepSeek} from './deepseek.js';
+import {seedQuotas} from './quotas.js';
 import {seedMoney} from './money.js';
 import {Directory} from '../server/store/directory.js';
 
@@ -184,6 +185,7 @@ export class Demo {
     try {
       seedWork(store, stand);
       if(this.options.money!==false&&(set.id==='all'||set.id==='money')){await seedMoney(store,new Directory(store.db),stand);await seedDeepSeek(store,new Directory(store.db),stand);}
+      if(this.options.money!==false&&(set.id==='all'||set.id==='quotas'))await seedQuotas(store,new Directory(store.db),stand);
     } finally {
       store.close();
     }

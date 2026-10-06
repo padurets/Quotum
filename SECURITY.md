@@ -32,6 +32,12 @@ expiry. Same-account replacement is a human declaration the provider API cannot 
 Private account labels and credential details remain owner-only. Access without expiry
 or with unknown expiry requires its own explicit consent. Revoke keys with their
 provider when no longer needed. Key names and measured spending are shared board data;
+Access without expiry requires explicit consent. z.ai personal quota access uses the
+same encryption boundary with a dedicated ordinary API key, which may also permit
+model requests; Quotum calls only its fixed quota GET. Its unknown expiry has separate
+consent. Account identity is owner-declared: replacement requires explicit same-account
+confirmation and cannot verify it through the quota interface. Revoke the key with its
+provider when it is no longer needed. Key names and measured spending are shared board data;
 management secrets, raw creator ids, masked labels and raw key hashes are not.
 
 On a server, configure `QUOTUM_SECRET_KEY` or `QUOTUM_SECRET_KEY_FILE`; without it,

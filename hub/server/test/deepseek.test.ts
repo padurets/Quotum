@@ -48,9 +48,9 @@ test('the real adapter uses only balance reads and maps safe access, funds and t
   const transport=new ConnectorTransport({host:'127.0.0.1',port:443,operations:{balance:{path:'/balance'}}}),adapter=deepSeek(transport,()=>1),secret=Buffer.from('sk-'+ 'a'.repeat(32));
   try {
     transport.send=async operation=>{assert.equal(operation,'balance');return {...payload(),private:secret.toString()};};
-    const found=await adapter.identify(secret);assert.equal(found.identityKind,'declared');assert.equal(found.account,null);assert.equal(found.expiresAt,null);assert.deepEqual(found.abilities,['balance']);
+    const found=await adapter.identify(secret);assert.equal(found.identityOrigin,'declared');assert.equal(found.account,undefined);assert.equal(found.expiresAt,null);assert.deepEqual(found.abilities,['balance']);
     assert.equal(JSON.stringify(found).includes(secret.toString()),false);
-    assert.equal((await adapter.measure(secret,{account:'1'.repeat(24),expiresAt:null})).account,null,'the supplier does not fabricate an expected identity');
+    assert.equal((await adapter.measure(secret,{account:'1'.repeat(24),expiresAt:null})).account,undefined,'the supplier does not fabricate an expected identity');
     for(const [status,code] of [[401,'credential_rejected'],[403,'credential_permission'],[402,'connector_balance_unavailable'],[429,'connector_status'],[500,'connector_status']] as const) {
       transport.send=async()=>{throw new ConnectorStatus(status,'2');};await assert.rejects(adapter.identify(secret),error=>error instanceof Error&&error.message===code);
     }
@@ -64,9 +64,9 @@ function harness() {
   const store=new Store(':memory:',1),directory=new Directory(store.db),alice=directory.createUser('a@fixture.example','Alice','unused',1),bob=directory.createUser('b@fixture.example','Bob','unused',1),k=key(7);
   const report=startSecrets(store.db,inputs(k));
   let at=1,calls=0,rows:unknown[]=[tuple()],finish:((answer:ConnectorAnswer)=>void)|null=null,delay=false;
-  const answer=():ConnectorAnswer=>({identityKind:'declared',account:null,abilities:['balance'],expiresAt:null,measurement:deepSeekMeasurement(payload(rows),at++)});
+  const answer=():ConnectorAnswer=>({identityOrigin:'declared',expiryKind:'unknown',abilities:['balance'],expiresAt:null,measurement:deepSeekMeasurement(payload(rows),at++)});
   const read=async()=>{calls++;if(delay)return new Promise<ConnectorAnswer>(resolve=>{finish=resolve;});return answer();};
-  const connector:Connector={id:'deepseek',identityKind:'declared',secretFormat:s=>/^sk-[a-z0-9]{16,256}$/.test(s),abilities:['balance'],transport:new ConnectorTransport({host:'127.0.0.1',port:443,operations:{}}),map:()=>null,identify:read,measure:read};
+  const connector:Connector={id:'deepseek',identityOrigin:'declared',declaredAccounts:true,secretFormat:s=>/^sk-[a-z0-9]{16,256}$/.test(s),abilities:['balance'],transport:new ConnectorTransport({host:'127.0.0.1',port:443,operations:{}}),map:()=>null,identify:read,measure:read};
   const registry=new Map([['deepseek',connector]]),credentials=new Credentials(store,k,report,registry);
   const create=(owner=alice.id,name='Personal')=>credentials.create(owner,'deepseek','sk-'+ 'a'.repeat(32),{account:{kind:'new',name},allowUnknownExpiry:true});
   return {store,directory,alice,bob,k,registry,credentials,create,get calls(){return calls;},delay:()=>{delay=true;},finish:()=>{assert.ok(finish);delay=false;finish(answer());},set:(value:unknown[],time:number)=>{rows=value;at=time;},close:()=>{connector.transport.close();store.close();}};

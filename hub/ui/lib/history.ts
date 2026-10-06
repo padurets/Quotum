@@ -11,6 +11,7 @@ import {dropTimeRange, onTimeRange, timeRange, timeRangeKey, type TimeRange} fro
 import type {History} from './types';
 import type {MeterSelection} from '../../server/domain/meterHistory';
 import {moneySelection} from './moneySelection';
+import {subscriptionSelection} from './subscription';
 import {pan, type Pan} from './pan';
 import {plotPrepared, type Coverage, type PlotBuffer} from './historyPlot';
 
@@ -758,7 +759,7 @@ export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>)
     if(board) {
       const settings=prefs().money,result=moneySelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view.hidden,settings,board.currencies);
       if(result.removed&&settings.unit&&settings.selected[settings.unit])setPrefs({money:{...settings,removed:result.removed,selected:{...settings.selected,[settings.unit]:result.selection!.ids}}});
-      loader.setMeters(result.selection);
+      loader.setMeters(settings.unit?result.selection:subscriptionSelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view));
     }
   });
 }
@@ -789,7 +790,7 @@ if (typeof window !== 'undefined') {
   const chosen = () => {
     loader.choose(prefs().range, timeRange());
     const board=page.get().board;
-    if(board)loader.setMeters(moneySelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view.hidden,prefs().money,board.currencies).selection);
+    if(board)loader.setMeters(prefs().money.unit?moneySelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view.hidden,prefs().money,board.currencies).selection:subscriptionSelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view));
   };
   onPrefs(chosen);
   onTimeRange(chosen);

@@ -193,7 +193,7 @@ export function ConnectionsDialog({start,onClose,local,userId,trustedKeys}:{star
     </div>:<div className="dialog-body">
       <div className="connections-toolbar"><Popover label={t('admin.connect')} trigger={t('admin.connect')} triggerClass="button primary" open={open} onOpenChange={setOpen} align="left">
         {!local&&<button className="popover-row" onClick={()=>choose('device')}><span>{t('connections.device')}</span></button>}
-        {accountProviders.map(provider=><button key={provider.id} className="popover-row" onClick={()=>choose(provider.id)}><span>{provider.name}</span></button>)}
+        {accountProviders.map(provider=><button key={provider.id} className="popover-row" onClick={()=>choose(provider.id)}><span>{provider.id==='zai'?t('sources.zaiPersonal'):provider.name}</span></button>)}
       </Popover></div>
       <ul className="connections-list"><Devices local={local}/><ConnectedAccounts userId={userId} trustedKeys={trustedKeys} onReplace={record=>{const provider=accountProviders.find(p=>p.id===record.provider);if(provider){setReplace(record);choose(provider.id);}}}/></ul>
     </div>}

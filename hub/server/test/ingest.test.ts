@@ -111,7 +111,7 @@ test('a malformed batch is refused whole', () => {
 });
 
 test('hub providers are dropped before their fields are parsed, without claiming a source', () => {
- for(const provider of ['openrouter','deepseek']) {
+ for(const provider of ['openrouter','deepseek','zai']) {
   const {store, ingest, token, board} = setup();
   const hub = {provider, account: 'invalid', observedAt: 'invalid', windows: false, active: 'invalid', error: {secret: 'ignored'}};
   const body = {...batch([snapshot(start, 5)]), snapshots: [snapshot(start, 5), hub], failures: [hub]};

@@ -13,7 +13,8 @@ import {logoOf} from './logos';
 function SourceKeyForm({provider,replace,local,trustedKeys,onClose,onSaved}:{provider:string;replace:Credential|null;local:boolean;trustedKeys:Session['trustedKeys'];onClose:()=>void;onSaved:()=>void}) {
   const [secret,setSecret]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState<unknown>(null);
   const [confirmation,setConfirmation]=useState(false),[consent,setConsent]=useState(false);
-  const declared=provider==='deepseek';
+  const declared=provider==='deepseek',quota=provider==='zai';
+  const [sameAccount,setSameAccount]=useState(false);
   const [name,setName]=useState(''),[account,setAccount]=useState('new'),[same,setSame]=useState(false);
   const [accounts,setAccounts]=useState<{id:string;name:string;connected:boolean}[]>([]),[next,setNext]=useState<string|null>(null),[after,setAfter]=useState<string|undefined>(),[back,setBack]=useState<(string|undefined)[]>([]);
   const [loadedAfter,setLoadedAfter]=useState<string|null|undefined>(null);
@@ -31,12 +32,12 @@ function SourceKeyForm({provider,replace,local,trustedKeys,onClose,onSaved}:{pro
       .then(reply=>{if(live){setAccounts(reply.accounts);setNext(reply.next);setLoadedAfter(after);setAccount('new');setSame(false);}},failure=>{if(live)setError(failure);});
     return()=>{live=false;};
   },[declared,replace,after]);
-  const changed=()=>{request.current=crypto.randomUUID();setSame(false);setError(null);};
+  const changed=()=>{request.current=crypto.randomUUID();setSame(false);setSameAccount(false);setError(null);};
   const save=async(event:FormEvent)=>{
-    event.preventDefault();if(!available||busy||(declared?!validAccount||!consent||(!!replace||account!=='new')&&!same:confirmation&&!consent))return;
+    event.preventDefault();if(!available||busy||quota&&!!replace&&!sameAccount||(declared?!validAccount||!consent||(!!replace||account!=='new')&&!same:confirmation&&!consent))return;
     const own=generation.current;setBusy(true);setError(null);
     try {
-      await call('POST',replace?'/api/credentials/'+replace.id:'/api/credentials',{...(replace?{}:{provider,requestId:request.current,...(declared?{account:account==='new'?{kind:'new',name}:{kind:'existing',id:account}}:{})}),secret,...(declared?{allowUnknownExpiry:consent,confirmSameAccount:same}:{allowNoExpiry:consent})},25_000);
+      await call('POST',replace?'/api/credentials/'+replace.id:'/api/credentials',{...(replace?{}:{provider,requestId:request.current,...(declared?{account:account==='new'?{kind:'new',name}:{kind:'existing',id:account}}:{})}),secret,...(declared?{allowUnknownExpiry:consent,confirmSameAccount:same}:quota?{allowUnknownExpiry:consent,...(replace?{sameAccount}:{})}:{allowNoExpiry:consent})},25_000);
       if(generation.current!==own)return;setSecret('');onSaved();
     }catch(failure){
       if(generation.current!==own)return;
@@ -44,9 +45,9 @@ function SourceKeyForm({provider,replace,local,trustedKeys,onClose,onSaved}:{pro
     }finally{if(generation.current===own)setBusy(false);}
   };
   return <form className="dialog-form" onSubmit={save}>
-      <p className="dialog-text">{t(declared?'sources.deepseekRights':'sources.rights')}</p>
-      <p className="dialog-text">{t(declared?'sources.deepseekAdvice':'sources.expiryAdvice')}</p>
-      <a href={declared?'https://platform.deepseek.com/api_keys':'https://openrouter.ai/settings/keys'} target="_blank" rel="noreferrer">{t(declared?'sources.deepseekSettings':'sources.providerSettings')}</a>
+      <p className="dialog-text">{t(declared?'sources.deepseekRights':quota?'sources.zaiRights':'sources.rights')}</p>
+      <p className="dialog-text">{t(declared?'sources.deepseekAdvice':quota?'sources.zaiAdvice':'sources.expiryAdvice')}</p>
+      <a href={declared?'https://platform.deepseek.com/api_keys':quota?'https://z.ai/manage-apikey/apikey-list':'https://openrouter.ai/settings/keys'} target="_blank" rel="noreferrer">{t(declared?'sources.deepseekSettings':quota?'sources.zaiSettings':'sources.providerSettings')}</a>
       <p className="drawer-note">{local?storageNote:t('trustedKeys.operator')}</p>
       {!available&&<p className="drawer-note">{t(trustedKeys?.reason==='secret_key_mismatch'?'trustedKeys.serverMismatch':'trustedKeys.serverMissing')}</p>}
       {declared&&<>
@@ -60,10 +61,11 @@ function SourceKeyForm({provider,replace,local,trustedKeys,onClose,onSaved}:{pro
         </>}
         {(replace||account!=='new')&&<label className="source-consent"><input type="checkbox" checked={same} disabled={busy||!available} onChange={e=>setSame(e.target.checked)}/>{t('sources.sameAccount',{name:replace?.accountName??accounts.find(a=>a.id===account)?.name??''})}</label>}
       </>}
-      <Field type="password" label={t(declared?'sources.apiKey':'sources.key')} value={secret} autoFocus autoComplete="new-password" spellCheck={false} required disabled={!available||busy} data-1p-ignore="" data-lpignore="true" onChange={e=>{setSecret(e.target.value);changed();setConfirmation(false);setConsent(false);}} />
-      {(declared||confirmation)&&<label className="source-consent"><input type="checkbox" checked={consent} onChange={e=>setConsent(e.target.checked)} />{t(declared?'sources.unknownExpiryConsent':'sources.noExpiryConsent')}</label>}
+      <Field type="password" label={t(declared||quota?'sources.apiKey':'sources.key')} value={secret} autoFocus autoComplete="new-password" spellCheck={false} required disabled={!available||busy} data-1p-ignore="" data-lpignore="true" onChange={e=>{setSecret(e.target.value);changed();setConfirmation(false);setConsent(false);}} />
+      {quota&&replace&&<><p className="drawer-note">{t('sources.declaredAccount')}</p><label className="source-consent"><input type="checkbox" checked={sameAccount} disabled={busy||!available} onChange={e=>setSameAccount(e.target.checked)}/>{t('sources.sameAccountConsent')}</label><p className="drawer-note">{t('sources.otherAccount')}</p></>}
+      {(declared||confirmation)&&<label className="source-consent"><input type="checkbox" checked={consent} onChange={e=>setConsent(e.target.checked)} />{t(declared||quota?'sources.unknownExpiryConsent':'sources.noExpiryConsent')}</label>}
       <ErrorLine error={error} />
-      <div className="button-row"><button type="button" className="button" onClick={onClose}>{t('common.cancel')}</button><button className="button primary" disabled={!available||busy||!secret||(declared?!validAccount||!consent||(!!replace||account!=='new')&&!same:confirmation&&!consent)}>{replace?t('sources.replace'):t('sources.connectProvider',{provider:PROVIDERS[provider]?.name??provider})}</button></div>
+      <div className="button-row"><button type="button" className="button" onClick={onClose}>{t('common.cancel')}</button><button className="button primary" disabled={!available||busy||!secret||quota&&!!replace&&!sameAccount||(declared?!validAccount||!consent||(!!replace||account!=='new')&&!same:confirmation&&!consent)}>{replace?t('sources.replace'):t('sources.connectProvider',{provider:PROVIDERS[provider]?.name??provider})}</button></div>
     </form>;
 }
 
@@ -101,6 +103,6 @@ export function ConnectedAccounts({userId,trustedKeys,onReplace}:{userId:string;
       status={record.lastError?<ErrorLine error={new ApiError(400,record.lastError)}/>:<span>{record.expiryKind==='unknown'?t('sources.unknownExpiry'):record.expiresAt===null?t('sources.noExpiry'):t('connections.expires',{time:stamp(record.expiresAt)})}</span>}
       actions={<><button type="button" className="popover-row" disabled={!available} onClick={()=>onReplace(record)}><span>{t('sources.replace')}</span></button><button type="button" className="popover-row danger" onClick={()=>setRemoving(record)}><span>{t('sources.remove')}</span></button></>}
     />)}
-    {removing&&<Modal title={t('sources.remove')} onClose={()=>setRemoving(null)}><p className="dialog-text">{t('sources.removeText')}</p><div className="button-row"><button className="button" onClick={()=>setRemoving(null)}>{t('common.cancel')}</button><button className="button danger" onClick={()=>void remove()}>{t('sources.remove')}</button></div></Modal>}
+    {removing&&<Modal title={t('sources.remove')} onClose={()=>setRemoving(null)}><p className="dialog-text">{t('sources.removeTextGeneric')}</p><div className="button-row"><button className="button" onClick={()=>setRemoving(null)}>{t('common.cancel')}</button><button className="button danger" onClick={()=>void remove()}>{t('sources.remove')}</button></div></Modal>}
   </>;
 }

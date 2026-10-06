@@ -12,6 +12,7 @@ import type {Stretch} from '../domain/work.js';
 import {members, projectGroups, type ProjectGroup} from '../domain/projects.js';
 import {tell, type Touches} from '../touches.js';
 import {migrate} from './schema.js';
+import type {QuotaObservation, MeterMeasurement} from '../domain/meters.js';
 import {MeterStore} from './meters.js';
 import type {MeterSelection} from '../domain/meterHistory.js';
 import {DEFAULT_CURRENCY} from '../domain/currency.js';
@@ -332,6 +333,25 @@ export class Store {
    * detail: its name) from each moment it was reported otherwise, the first one included:
    * a forecast's history begins anew after a change (domain/forecast.ts, `planSince`).
    */
+  quotaObservation(id:string,observation:QuotaObservation,measurement?:MeterMeasurement) {
+    this.db.exec('SAVEPOINT quota_observation');
+    let accepted=false,since=observation.observedAt;
+    try {
+      this.db.prepare('UPDATE state SET payload=payload WHERE source_id=?').run(id);
+      const previous=this.state(id);
+      if(observation.observedAt>(previous.quota?.observedAt??-Infinity)) {
+        if(measurement&&(measurement.observedAt!==observation.observedAt||JSON.stringify(measurement.meters.map(m=>m.id).sort())!==JSON.stringify([...observation.receivedIds].sort())))throw new Error('invalid_quota_observation');
+        if(!measurement&&observation.receivedIds.length)throw new Error('invalid_quota_observation');
+        const result=this.meters.observeQuota(id,previous,observation);
+        if(measurement)since=Math.min(since,this.meters.record(id,result.state,measurement).since??since);
+        accepted=true;
+      }
+      this.db.exec('RELEASE quota_observation');
+    }catch(error){this.db.exec('ROLLBACK TO quota_observation');this.db.exec('RELEASE quota_observation');throw error;}
+    if(accepted)tell(this.observer,o=>{o.touchSources([id]);o.history(id,since);});
+    return accepted;
+  }
+
   record(id: string, measurement: Measurement) {
     const previous = this.state(id);
     if ('meters' in measurement) {
@@ -441,6 +461,8 @@ export class Store {
   /** Complete cells of every measured window, read once through a run of missing tiles. */
   cells(board: string, cellMs: number, from: number, to: number, {now = Date.now(), shown = this.shown(board, []), meters}: {now?: number; shown?: Shown; meters?: MeterSelection} = {}): Chunk<number>[] {
     const sources = this.sources(board);
+    // Subscription caps accompany native windows; wallet selections retain their cheaper read.
+    const withWindows=!meters||meters.ids.some(([id])=>sources.some(source=>source.id===id&&providerOf(source.provider)?.funding==='subscription'));
     // Skip through window names on the primary key; testing time inside the recursive
     // step would scan the source's whole retained history for every missing name.
     const windows = this.db.prepare(
@@ -454,7 +476,7 @@ export class Store {
     );
     read.setReturnArrays(true);
     const groups: CellSamples[] = [];
-    for (const {id} of meters?[]:sources) for (const {w} of windows.all(id, id, id, from, to) as {w: string}[]) {
+    for (const {id} of withWindows?sources:[]) for (const {w} of windows.all(id, id, id, from, to) as {w: string}[]) {
       const rows = read.all(id, w, to, from, id, w, from) as unknown as [number, number, number | null, number][];
       groups.push({source: id, window: w, samples: rows.map(([at, used, resetAt, staleAfterMs]) => ({at, used, resetAt, staleAfterMs}))});
     }
