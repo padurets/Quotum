@@ -129,18 +129,19 @@ $child.WaitForExit()
     let helperPid:number|undefined,pidText='';parent.stdout!.on('data',bytes=>{pidText+=String(bytes);const found=pidText.match(/^\s*(\d+)[\r\n]+$/);if(found)helperPid=Number(found[1]);});
     let reader:ReturnType<typeof spawn>|undefined;
     try {
-      await sendFrame(parent.stdin!,first.input);
+      // Windows may finish a stdin write only when the helper reads, after its startup gate opens.
+      const firstWrite=sendFrame(parent.stdin!,first.input);void firstWrite.catch(()=>{});
       reader=spawn(executable,args(b.file),{stdio:['pipe','pipe','ignore'],windowsHide:true});
       let output=Buffer.alloc(0);reader.stdout!.on('data',bytes=>{output=Buffer.concat([output,bytes]);});
       const result=new Promise<number|null>((resolve,reject)=>{reader!.on('error',reject);reader!.on('close',resolve);});
-      await sendFrame(reader.stdin!,second.input);
+      const secondWrite=sendFrame(reader.stdin!,second.input);void secondWrite.catch(()=>{});
       // Compile both helpers before starting either production deadline.
       await until(()=>!!helperPid&&existsSync(a.compiled)&&existsSync(b.compiled)||existsSync(a.diagnostic)||existsSync(b.diagnostic)||reader!.exitCode!==null||parent.exitCode!==null);
       assert.equal(!!helperPid&&existsSync(a.compiled)&&existsSync(b.compiled),true);
-      writeFileSync(a.start,'continue');await until(()=>existsSync(a.ready));
+      writeFileSync(a.start,'continue');await until(()=>existsSync(a.ready));await firstWrite;
       if(orphan) {parent.kill();await until(()=>parent.exitCode!==null||parent.signalCode!==null);process.kill(helperPid!,0);}
       writeFileSync(b.start,'continue');
-      await until(()=>existsSync(b.ready));
+      await until(()=>existsSync(b.ready));await secondWrite;
       if(!reverse) {
         assert.equal(existsSync(b.acquired),false);
         if(!orphan)process.kill(helperPid!);else writeFileSync(a.gate,'continue');
