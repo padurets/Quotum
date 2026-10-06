@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto';
 import type {DatabaseSync} from 'node:sqlite';
-import {conversionId,conversionOrigin,convertMoney,exchangeRatesOf,ratesCover,type ExchangeRates,type RateSnapshot,type Conversion} from '../domain/currency.js';
+import {conversionId,convertMoney,exchangeRatesOf,ratesCover,type ExchangeRates,type RateSnapshot,type Conversion} from '../domain/currency.js';
 import {semanticsOf,validateMeter,type Meter,type Reading,type MeterSpan} from '../domain/meters.js';
 
 type ValueRow={at:number;previous_at:number|null;native_id:string;native_unit:string;native_amount:string;unit:string;amount:string;quote_id:string;semantics:string;stale_after_ms:number};
@@ -67,9 +67,9 @@ export class CurrencyStore {
   spans(source:string,id:string,to:number):MeterSpan[] {
     return (this.db.prepare('SELECT from_at,to_at,stale_after_ms,interrupted_at FROM meter_spans WHERE source_id=? AND meter_id=? AND from_at<=?').all(source,id,to) as {from_at:number;to_at:number;stale_after_ms:number;interrupted_at:number|null}[]).map(r=>({from:r.from_at,to:r.to_at,staleAfterMs:r.stale_after_ms,...(r.interrupted_at===null?{}:{interruptedAt:r.interrupted_at})}));
   }
-  nativeId(id:string):string|null{return conversionOrigin(id)?.meter??null;}
   prune(cutoff:number) {
-    this.db.prepare('DELETE FROM money_valuations WHERE at<? AND at<(SELECT max(at) FROM money_valuations v WHERE v.source_id=money_valuations.source_id AND v.meter_id=money_valuations.meter_id AND v.at<?)').run(cutoff,cutoff);
+    const changed=this.db.prepare('DELETE FROM money_valuations WHERE at<? AND at<(SELECT max(at) FROM money_valuations v WHERE v.source_id=money_valuations.source_id AND v.meter_id=money_valuations.meter_id AND v.at<?)').run(cutoff,cutoff).changes>0;
     this.db.prepare('DELETE FROM exchange_rates WHERE reference_date<? AND id NOT IN(SELECT quote_id FROM money_valuations) AND reference_date<(SELECT max(reference_date) FROM exchange_rates)').run(cutoff);
+    return changed;
   }
 }

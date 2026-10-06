@@ -9,6 +9,10 @@ import {convertMoney,conversionId,type ExchangeRates} from '../domain/currency.j
 import {parseEcb,ecbReader} from '../currencies/ecb.js';
 import {Currencies} from '../currencies/service.js';
 import {Store} from '../store/store.js';
+import {Directory} from '../store/directory.js';
+import {Credentials} from '../secrets/credentials.js';
+import {SecretKey} from '../secrets/crypto.js';
+import {startSecrets} from '../secrets/start.js';
 import {composeMeters} from '../domain/meterHistory.js';
 import type {Meter} from '../domain/meters.js';
 
@@ -123,4 +127,32 @@ test('a native USD arrival ends derived availability without another rate reques
     assert.equal(calls,1);assert.equal(store.currencies.spans(id,conversionId('balance:CNY','USD'),at+1001)[0].interruptedAt,at+1000);
     assert.equal(store.currencies.project(id,store.state(id).meters![0],'USD',at+1000)?.stale,true);
   }finally{await service.stop();store.close();}
+});
+
+test('retention keeps the last valuation predecessor and every quote referenced by retained history',()=>{
+  const store=new Store(':memory:',at);try {
+    const id=store.source('deepseek','1'.repeat(24),at),quote=store.currencies.save(rates());
+    for(const [offset,value] of [[0,'1000000'],[1000,'2000000'],[2000,'3000000']] as const)store.currencies.record(id,{...native('CNY',value),at:at+offset},'USD',quote);
+    assert.equal(store.currencies.prune(at+500),false);
+    assert.equal(store.currencies.prune(at+2500),true);
+    const values=store.currencies.readings(id,conversionId('wallet','USD'),0,at+3000);assert.equal(values.length,1);assert.equal(values[0].conversion?.rate.id,quote.id);assert.ok(store.currencies.get(quote.id));
+  }finally{store.close();}
+});
+
+test('the ordinary credential path commits native capture and clears provider buffers before its scheduled reference read',async()=>{
+  const store=new Store(':memory:',at),directory=new Directory(store.db),owner=directory.createUser('fx@example.com','Owner','fixture-password',at);
+  const key=SecretKey.parse(Buffer.from(Buffer.alloc(32,7).toString('base64url'))),report=startSecrets(store.db,{current:key,previous:null,reset:null,storageAtStart:null,wasFileAtStart:false});
+  const transport=new ConnectorTransport({host:'127.0.0.1',port:443,operations:{}});let captured:Buffer|undefined,reads=0;
+  transport.send=async(_operation,bytes)=>{captured=bytes;return {is_available:true,balance_infos:[row()]};};
+  const credentials=new Credentials(store,key,report,new Map([['deepseek',deepSeek(transport,()=>at)]]));
+  const service=new Currencies(store,async signal=>{
+    reads++;assert.ok(signal instanceof AbortSignal);assert.ok(captured?.every(byte=>byte===0));
+    assert.equal(store.db.prepare("SELECT count(*) n FROM readings WHERE meter_id='balance:CNY'").get()?.n,1);
+    return rates();
+  },()=>at);service.start();
+  try {
+    const created=await credentials.create(owner.id,'deepseek','sk-'+'a'.repeat(32),{account:{kind:'new',name:'Personal'},allowUnknownExpiry:true});
+    assert.equal(reads,0);await new Promise<void>(resolve=>setImmediate(resolve));await service.update(created.sourceId!);
+    assert.equal(reads,1);assert.equal(store.currencies.project(created.sourceId!,store.state(created.sourceId!).meters![0],'USD',at)?.amount,'15714286');
+  }finally{await service.stop();transport.close();store.close();}
 });

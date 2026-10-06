@@ -7,7 +7,7 @@ export function importLegacyCurrencies(db:DatabaseSync,currencies:CurrencyStore)
   if(db.prepare("SELECT 1 FROM meta WHERE key='legacyCurrencyImport'").get())return;
   db.exec('SAVEPOINT legacy_currency_import');
   try {
-    const contexts=db.prepare("SELECT source_id,from_at,payload FROM meter_contexts WHERE item='usdRate'").all() as {source_id:string;from_at:number;payload:string}[];
+    const contexts=db.prepare("SELECT source_id,from_at,payload FROM meter_contexts WHERE item='usdRate' ORDER BY from_at").all() as {source_id:string;from_at:number;payload:string}[];
     const quotes=contexts.flatMap(row=>{
       try {
         const old=JSON.parse(row.payload) as {date:number;usdPerEur:string;cnyPerEur:string;at?:number};
