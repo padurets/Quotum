@@ -83,7 +83,7 @@ function pausedScript(root:string,name:string,point:'write'|'flush'|'wait'|'read
   const file=path.join(root,name+'.ps1');writeFileSync(file,script);return {file,ready,gate,acquired,compiled,start,finished,status,diagnostic};
 }
 
-test('a Windows registry writer survives its Node parent and abandoned mutexes are recovered',{...windows,timeout:120_000},async t=>{
+test('a Windows registry writer survives its launcher and abandoned mutexes are recovered',{...windows,timeout:120_000},async t=>{
   const root=mkdtempSync(path.join(tmpdir(),'quotum-registry-lifetime-'));
   const executable=path.join(process.env.SystemRoot!,'System32','WindowsPowerShell','v1.0','powershell.exe');
   const args=(script:string)=>['-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',script];
@@ -97,11 +97,34 @@ test('a Windows registry writer survives its Node parent and abandoned mutexes a
       const parsed=spawnSync(executable,['-NoLogo','-NoProfile','-NonInteractive','-Command',parser],{encoding:'utf8',timeout:10_000,windowsHide:true});
       assert.equal(parsed.status,0);assert.equal(parsed.stdout.trim(),'[]');
     }
-    // A detached helper deliberately exercises an orphan; Windows may otherwise kill its parent's job.
-    const parentScript="import {spawn} from 'node:child_process';const child=spawn("+JSON.stringify(executable)+","+JSON.stringify(args(a.file))+",{stdio:['pipe','pipe','pipe'],detached:true});const alive=setInterval(()=>{},1000);let head=Buffer.alloc(0),stderr='';child.stdout.on('data',b=>{if(head.length<5)head=Buffer.concat([head,b]).subarray(0,5);});child.stderr.on('data',b=>{stderr=(stderr+String(b)).slice(0,4096);});child.on('close',(code,signal)=>{process.send({closed:code,signal,frameStatus:head.length===5&&head.subarray(0,4).toString()==='QKR1'?head[4]:null,stderrTypes:['PSInvalidOperationException','InvalidOperationException','PipelineStoppedException'].filter(x=>stderr.includes(x)),stderrBytes:stderr.length});clearInterval(alive);});process.send({pid:child.pid});process.stdin.pipe(child.stdin);";
-    const parentFile=path.join(root,death+'-parent.mjs');writeFileSync(parentFile,parentScript);
-    const parent=spawn(process.execPath,[parentFile],{stdio:['pipe','ignore','ignore','ipc']});
-    let helperPid:number|undefined,helperExit:unknown;parent.on('message',message=>{const value=message as {pid?:number};if(value.pid)helperPid=value.pid;else helperExit=message;});
+    // A .NET launcher keeps the console without Node's per-parent child job, so its death leaves a real orphan.
+    const literal=(value:string)=>"'"+value.replaceAll("'","''")+"'";
+    const parentScript=`$ErrorActionPreference = 'Stop'
+$info = New-Object System.Diagnostics.ProcessStartInfo
+$info.FileName = ${literal(executable)}
+$info.Arguments = ${literal('-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+a.file+'"')}
+$info.UseShellExecute = $false
+$info.RedirectStandardInput = $true
+$info.RedirectStandardOutput = $true
+$info.RedirectStandardError = $true
+$child = [System.Diagnostics.Process]::Start($info)
+[Console]::Out.WriteLine($child.Id)
+[Console]::Out.Flush()
+$inputStream = [Console]::OpenStandardInput()
+$frame = New-Object byte[] 84
+$count = 0
+while ($count -lt 84) { $n = $inputStream.Read($frame,$count,84-$count); if ($n -eq 0) { throw }; $count += $n }
+$child.StandardInput.BaseStream.Write($frame,0,84)
+$child.StandardInput.BaseStream.Flush()
+[Array]::Clear($frame,0,84)
+$child.StandardInput.Close()
+$output = $child.StandardOutput.ReadToEndAsync()
+$errors = $child.StandardError.ReadToEndAsync()
+$child.WaitForExit()
+`;
+    const parentFile=path.join(root,death+'-parent.ps1');writeFileSync(parentFile,parentScript);
+    const parent=spawn(executable,args(parentFile),{stdio:['pipe','pipe','ignore'],windowsHide:true});
+    let helperPid:number|undefined,pidText='';parent.stdout!.on('data',bytes=>{pidText+=String(bytes);if(/^\d+\r?\n$/.test(pidText))helperPid=Number(pidText.trim());});
     let reader:ReturnType<typeof spawn>|undefined;
     try {
       await sendFrame(parent.stdin!,first.input);
@@ -130,7 +153,7 @@ test('a Windows registry writer survives its Node parent and abandoned mutexes a
       assert.equal(managedRegistry(id,false).fingerprint,fingerprint);
     } catch(error) {
       const snapshot=(script:ReturnType<typeof pausedScript>)=>({compiled:existsSync(script.compiled),ready:existsSync(script.ready),acquired:existsSync(script.acquired),finished:existsSync(script.finished),status:existsSync(script.status)?readFileSync(script.status,'utf8'):null,diagnostic:existsSync(script.diagnostic)?JSON.parse(readFileSync(script.diagnostic,'utf8')):null});
-      t.diagnostic(JSON.stringify({death,a:snapshot(a),b:snapshot(b),parentExit:parent.exitCode,readerExit:reader?.exitCode,helperExit}));throw error;
+      t.diagnostic(JSON.stringify({death,a:snapshot(a),b:snapshot(b),parentExit:parent.exitCode,readerExit:reader?.exitCode}));throw error;
     } finally {
       if(reader?.exitCode===null)reader.kill();
       if(helperPid) {try{process.kill(helperPid);}catch{}}
