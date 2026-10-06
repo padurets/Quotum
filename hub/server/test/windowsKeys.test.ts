@@ -64,7 +64,7 @@ function sendFrame(pipe:Writable,input:Buffer) {
 
 // Instrument a disposable copy of the actual helper, without giving production a test switch.
 function pausedScript(root:string,name:string,point:'write'|'flush'|'wait'|'reader') {
-  let script=readFileSync(new URL('../secrets/windows.ps1',import.meta.url),'utf8');
+  let script=readFileSync(new URL('../secrets/windows.ps1',import.meta.url),'utf8').replaceAll('\r\n','\n');
   const ready=path.join(root,name+'-ready'),gate=path.join(root,name+'-gate'),acquired=path.join(root,name+'-acquired');
   const compiled=path.join(root,name+'-compiled'),start=path.join(root,name+'-start'),finished=path.join(root,name+'-finished'),status=path.join(root,name+'-status'),diagnostic=path.join(root,name+'-diagnostic');
   const before=point==='flush'?'if(RegFlushKey(leaf)!=0)throw new Exception();':point==='write'?'if(RegSetValueEx(leaf,"CurrentKey",0,3,candidate,43)!=0)':'var waited=WaitForSingleObject(mutex,8000);';
