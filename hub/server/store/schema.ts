@@ -188,6 +188,28 @@ export const STEPS = [
     PRIMARY KEY (source_id,item,from_at)) WITHOUT ROWID;
   CREATE INDEX meter_contexts_by_end ON meter_contexts (to_at);
   `,
+  // 12 — shared exchange-rate data and separate monetary valuations.
+  `
+  CREATE TABLE exchange_rates (
+    id TEXT PRIMARY KEY, source TEXT NOT NULL, reference_date INTEGER NOT NULL,
+    fetched_at INTEGER NOT NULL, payload TEXT NOT NULL);
+  CREATE INDEX exchange_rates_by_date ON exchange_rates(reference_date);
+  CREATE TABLE money_valuations (
+    source_id TEXT NOT NULL, meter_id TEXT NOT NULL, at INTEGER NOT NULL, previous_at INTEGER,
+    native_id TEXT NOT NULL, native_unit TEXT NOT NULL, native_amount TEXT NOT NULL,
+    unit TEXT NOT NULL, amount TEXT NOT NULL, quote_id TEXT NOT NULL, semantics TEXT NOT NULL,
+    stale_after_ms INTEGER NOT NULL, PRIMARY KEY(source_id,meter_id,at)) WITHOUT ROWID;
+  CREATE INDEX money_valuations_by_time ON money_valuations(at);
+  -- Preserve old derived history, while current provider state contains only reported facts.
+  UPDATE state SET payload=json_set(json_remove(payload,'$.usdRate'),'$.meters',json(
+    (SELECT coalesce(json_group_array(json(value)),'[]') FROM json_each(state.payload,'$.meters')
+     WHERE json_extract(value,'$.id') NOT LIKE 'converted:%')))
+    WHERE json_type(payload,'$.meters')='array';
+  UPDATE state SET payload=json_set(payload,'$.balanceStatus.issues',json(
+    (SELECT coalesce(json_group_array(value),'[]') FROM json_each(state.payload,'$.balanceStatus.issues') WHERE value<>'rate_unavailable')),
+    '$.balanceStatus.partial',json(CASE WHEN EXISTS(SELECT 1 FROM json_each(state.payload,'$.balanceStatus.issues') WHERE value<>'rate_unavailable') THEN 'true' ELSE 'false' END))
+    WHERE json_type(payload,'$.balanceStatus.issues')='array';
+  `,
 ];
 
 export const SCHEMA_VERSION = STEPS.length;

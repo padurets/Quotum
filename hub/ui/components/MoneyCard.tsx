@@ -46,11 +46,11 @@ function KeyMetrics({limit,compact=false}:{limit:BudgetLimit;compact?:boolean}) 
 export function MoneyCard({source,board,view,compact=false}:{source:Card;board:string;view?:View;compact?:boolean}) {
   const {keys,meters,error}=useShownKeys(source,view,board);
   const {remaining,limits}=budgetView(source,keys,meters),groups=remaining.values;
-  const composition=groups.filter(group=>group.components.length);
-  const converted=source.usdRate&&source.meters?.find(m=>m.id==='balance:CNY');
-  const quoted=source.usdRate&&new Date(source.usdRate.date);
+  const composition=groups.filter(group=>group.components.length||group.approximate);
+  const proof=groups[0]?.total.conversion;
+  const quoted=proof&&new Date(proof.rate.date);
   const quoteDate=quoted?day(new Date(quoted.getUTCFullYear(),quoted.getUTCMonth(),quoted.getUTCDate()).getTime()):'';
-  const conversion=converted&&quoted?converted.at===groups[0]?.total.at?t('money.usdEstimate',{amount:money(converted.amount,'CNY',true),date:quoteDate}):t('money.usdEstimateRate',{date:quoteDate}):'';
+  const conversion=proof?t('money.currencyEstimate',{amount:money(proof.original.amount,proof.original.unit,true),source:proof.rate.source.toUpperCase(),date:quoteDate}):'';
   const breakdown=<div className="money-breakdown">{composition.map(({total,components,approximate})=><section key={total.id}>
     <div className={`money-breakdown-total${total.stale?' is-stale':''}`} title={[money(total.amount,total.unit,true),stamp(total.at),total.stale?t('money.stale'):''].filter(Boolean).join('\n')}><strong>{total.unit}</strong><span>{approximate?'≈ ':''}{money(total.amount,total.unit)}</span></div>
     {components.map(({meter,role})=><div key={meter.id} className={meter.stale?'is-stale':''} title={[money(meter.amount,meter.unit,true),stamp(meter.at),meter.stale?t('money.stale'):''].filter(Boolean).join('\n')}><span>{balanceRoleLabel(role)}</span><span>{approximate?'≈ ':''}{money(meter.amount,meter.unit)}</span></div>)}
@@ -59,7 +59,7 @@ export function MoneyCard({source,board,view,compact=false}:{source:Card;board:s
   return <div className="money-body">
     <div className="money-balance">
       <span>{composition.length?<Popover label={t('money.breakdown')} trigger={t('money.accountBalance')} triggerClass="link-button" up>{breakdown}</Popover>:t('money.accountBalance')}</span>
-      <div className="money-balance-values">{!groups.length?<span className="limit-value" title={t(source.balanceStatus?.issues.includes('rate_unavailable')?'money.noUsdRate':'money.noBalance')}>—<small>USD</small></span>:groups.map(({total,approximate})=>{
+      <div className="money-balance-values">{!groups.length?<span className="limit-value" title={t(source.currencyUnavailable?'money.noUsdBalance':'money.noBalance')}>—<small>USD</small></span>:groups.map(({total,approximate})=>{
         const formatted=money(total.amount,total.unit),amount=formatted.slice(0,-total.unit.length-1);
         return <span key={total.id} className={`limit-value${total.stale?' is-stale':''}`} data-money={total.amount} title={[money(total.amount,total.unit,true),stamp(total.at),approximate?conversion:'',total.stale?t('money.stale'):''].filter(Boolean).join('\n')}>{approximate?'≈ ':''}{amount}<small>{total.unit}</small></span>;
       })}</div>
@@ -72,8 +72,8 @@ export function MoneyCard({source,board,view,compact=false}:{source:Card;board:s
 export function BalanceMark({source}:{source:Card}) {
   const status=source.balanceStatus;
   const now=useClock(now=>status&&now<=status.at+status.staleAfterMs?status.at+status.staleAfterMs+1:null);
-  if(!status||status.isAvailable&&!status.partial)return null;
-  const lines=[...(!status.isAvailable?[t('money.balanceUnavailable')]:[]),...(status.issues.includes('rate_unavailable')?[t('money.noUsdRate')]:[]),...(status.issues.includes('empty_balances')?[t('money.noBalance')]:status.partial&&status.issues.some(i=>i!=='rate_unavailable')?[t('money.balancePartial')]:[]),stamp(status.at),...(now>status.at+status.staleAfterMs?[t('money.stale')]:[])];
+  if(!source.currencyUnavailable&&(!status||status.isAvailable&&!status.partial))return null;
+  const lines=[...(source.currencyUnavailable?[t('money.noUsdBalance')]:[]),...(status&&!status.isAvailable?[t('money.balanceUnavailable')]:[]),...(status?.issues.includes('empty_balances')?[t('money.noBalance')]:status?.partial?[t('money.balancePartial')]:[]),...(status?[stamp(status.at),...(now>status.at+status.staleAfterMs?[t('money.stale')]:[])]:[])];
   return <span data-time="balance-status"><Popover label={lines.join('\n')} up align="left" triggerClass="tray-pill" trigger={<span aria-hidden="true">!</span>}><div className="tray-panel"><div className="tray-panel-head">{lines.map((line,i)=><p key={i} className={i?'tray-panel-when':'tray-panel-lead'}>{line}</p>)}</div></div></Popover></span>;
 }
 

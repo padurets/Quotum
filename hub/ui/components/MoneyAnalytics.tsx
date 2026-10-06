@@ -23,7 +23,7 @@ import {usePanning} from '../lib/pan';
 import {composeMetersPrepared} from '../../server/domain/meterHistory';
 
 function nameOf(series:MeterHistory,title:string) {
-  if(series.role)return [title,t(`money.${series.role}`),series.semantics?.label].filter(Boolean).join(' — ');
+  if(series.role)return [title,t(`money.${series.role}`),series.semantics?.conversion?`≈ ${series.semantics.conversion.original.unit} → ${series.unit} (${series.semantics.conversion.rate.source.toUpperCase()})`:series.semantics?.label].filter(Boolean).join(' — ');
   const detail=series.meterId==='balance'?'':series.semantics?.label??series.meterId;
   return [title,detail,series.kind==='cap'?t('money.cap'):series.meterId==='balance'?'':t('money.usage')].filter(Boolean).join(' — ');
 }

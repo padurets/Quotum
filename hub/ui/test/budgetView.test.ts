@@ -13,7 +13,7 @@ import {setLocale,t} from '../i18n';
 import type {Card} from '../lib/types';
 import type {KeyPart,Meter} from '../../server/domain/meters';
 import {deepSeekMeasurement} from '../../server/connectors/deepseek';
-import {deepSeekUsd} from '../../server/connectors/deepseekUsd';
+import {Store} from '../../server/store/store';
 
 const meter=(id:string,amount='0',unit:Meter['unit']='USD'):Meter=>({id,amount,unit,kind:'balance',limit:null,at:1,staleAfterMs:1000,stale:false,resetAt:null,minutes:null,scope:null,label:null});
 const key=(id:string):KeyPart=>({id,name:id,disabled:false,expiresAt:null,includeByok:false,at:1,staleAfterMs:1000,presence:'observed',missCount:0,periods:{day:'999000000',week:null,month:null},byokUsage:{total:'888000000',day:null,week:null,month:null}});
@@ -89,13 +89,20 @@ test('both card surfaces render one native USD value without CNY or permanent co
 });
 
 test('CNY-only cards use a dated USD estimate with the same renderer',()=>{
-  const at=Date.UTC(2026,9,5),measured=deepSeekUsd(deepSeekMeasurement({is_available:true,balance_infos:[{currency:'CNY',total_balance:'110',granted_balance:'10',topped_up_balance:'100'}]},at),{date:at,at,usdPerEur:'1000000',cnyPerEur:'7000000'});
-  const source={...card('deepseek',measured.meters),usdRate:measured.usdRate};
+  const at=Date.UTC(2026,9,5),store=new Store(':memory:',at);
+  const measured=deepSeekMeasurement({is_available:true,balance_infos:[{currency:'CNY',total_balance:'110',granted_balance:'10',topped_up_balance:'100'}]},at);
+  const id=store.source('deepseek','1'.repeat(24),at);store.record(id,measured);
+  const quote=store.currencies.save({source:'ecb',base:'EUR',date:at,fetchedAt:at,rates:{EUR:'1000000',USD:'1000000',CNY:'7000000'}});
+  for(const native of measured.meters)store.currencies.record(id,native,'USD',quote);
+  const source=card('deepseek',[...measured.meters,...measured.meters.flatMap(m=>store.currencies.project(id,m,'USD',at)??[])]);store.close();
   for(const compact of [false,true]){
     const markup=renderToStaticMarkup(createElement(MoneyCard,{source,board:'',compact}));
     assert.equal((markup.match(/data-money=/g)??[]).length,1);assert.match(markup,/data-money="15714286"/);assert.ok(markup.includes('≈ '));assert.ok(markup.includes('ECB'));
   }
-  const later={...source,meters:source.meters!.map(m=>m.id==='balance:CNY'?{...m,amount:'142000000',at:at+1000}:m.id.startsWith('converted:')?{...m,stale:true}:m)};
+  const totalOnly={...source,meters:source.meters!.filter(m=>m.id==='balance:CNY'||m.conversion?.original.meterId==='balance:CNY')};
+  const disclosure=renderToStaticMarkup(createElement(MoneyCard,{source:totalOnly,board:''}));
+  assert.equal((disclosure.match(/aria-expanded="false"/g)??[]).length,1);assert.ok(disclosure.includes('ECB'));
+  const later={...source,meters:source.meters!.map(m=>m.id==='balance:CNY'?{...m,amount:'142000000',at:at+1000}:m.conversion?{...m,stale:true}:m)};
   const stale=renderToStaticMarkup(createElement(MoneyCard,{source:later,board:''}));
   assert.ok(!stale.includes('142.000000 CNY'));assert.match(stale,/is-stale" data-money="15714286"/);
 });

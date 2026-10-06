@@ -15,6 +15,8 @@ import {migrate} from './schema.js';
 import {MeterStore} from './meters.js';
 import type {MeterSelection} from '../domain/meterHistory.js';
 import {providerOf} from '../domain/providers.js';
+import {CurrencyStore} from './currencies.js';
+import {importLegacyCurrencies} from './legacyCurrencies.js';
 
 /** A session credited with work (server/sessions.ts): its names as reported, '' for none. */
 export type WorkContext = {source: string; origin: Origin; startedAt: number; project: string; folder: string};
@@ -62,6 +64,8 @@ export type BoardSource = Source & {holders: string[]; sharedBy: string | null};
 export class Store {
   readonly db: DatabaseSync;
   readonly meters: MeterStore;
+  readonly currencies:CurrencyStore;
+  private monetaryRecords=new Set<(source:string)=>void>();
   /** When this database was made. */
   private readonly created: number;
   private observer: Touches | null = null;
@@ -70,7 +74,9 @@ export class Store {
   constructor(file: string, now = Date.now()) {
     this.db = new DatabaseSync(file);
     migrate(this.db, now);
-    this.meters = new MeterStore(this.db);
+    this.currencies=new CurrencyStore(this.db);
+    importLegacyCurrencies(this.db,this.currencies);
+    this.meters = new MeterStore(this.db,this.currencies);
     this.created = Number((this.db.prepare("SELECT value FROM meta WHERE key = 'historyStart'").get() as {value: string}).value);
   }
 
@@ -91,6 +97,8 @@ export class Store {
   setObserver(observer: Touches) {
     this.observer = observer;
   }
+  onMonetaryRecord(listener:(source:string)=>void){this.monetaryRecords.add(listener);return()=>{this.monetaryRecords.delete(listener);};}
+  currencyChanged(source:string,since:number){tell(this.observer,o=>{o.touchSources([source]);o.history(source,since);});}
 
   /** The boards a source shows on: the personal boards of its holders and the boards it is shared with. */
   boardsOf(source: string): string[] {
@@ -336,6 +344,7 @@ export class Store {
       }
       tell(this.observer, o => o.touchSources([id]));
       if(since!==null)tell(this.observer, o => o.history(id, since!));
+      for(const listener of this.monetaryRecords)listener(id);
       return;
     }
     const {provider} = previous;

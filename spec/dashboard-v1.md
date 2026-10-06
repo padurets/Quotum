@@ -589,7 +589,7 @@ Replacing a selected interval with empty series removes its old packed rows too.
 
 DeepSeek cards may carry `balanceStatus: {isAvailable, at, staleAfterMs, partial, issues}`.
 Issues are only `currency_invalid`, `currency_unknown`, `currency_duplicate`,
-`currency_missing`, `empty_balances` and `rate_unavailable`. The boolean is a supplier funds status, separate
+`currency_missing` and `empty_balances`. The boolean is a supplier funds status, separate
 from authentication. Each currency's three exact strings are an atomic tuple; partial
 updates retain absent tuples as stale. Valid empty reads clear current request errors
 without renewing numerical freshness. `balanceStatus.at` is the accepted watermark.
@@ -604,19 +604,36 @@ balance disclosure. Counters, reported period totals and BYOK are accounting evi
 not additional funds or automatic card rows. Key properties and inventory quality
 describe access and measurement reliability. Each observation retains its own unit,
 scope, time and quality; absent, stale, unsupported and confirmed zero remain distinct.
-For CNY-only observations the connector retains original meters and writes separately
-identified `converted:balance:USD`, `converted:granted:USD` and
-`converted:topped_up:USD` estimates. Their standard balance semantics use the label
-`≈ CNY → USD (ECB)` and scope `ecb:YYYY-MM-DD`, the reference date. Existing history
-packing preserves these semantics and balance-only accounting. Native USD remains the
-default when both native and converted readings are retained; they are never added.
-Cards may also carry `usdRate: {date, at, usdPerEur, cnyPerEur}`: UTC reference date,
-quote acquisition time and positive exact millionth quote strings. This safe metadata
-is retained atomically with amounts in the existing provider context archive. It contains
-no account or credential information. Missing rate data never turns retained CNY into
-USD zero. Existing events carry these additive fields; no currency settings or native
-bridge command is added. Previously selected CNY presentation becomes USD; the original
-CNY history remains available through the measurement API.
+The hub's shared currency integration keeps native provider meters unchanged. When
+there is no native USD total and exactly one supported foreign total family, it records
+separate valuations identified as `fx:USD:<native meter ID>`. Derived meters are not
+provider catalogue capabilities. Cards and historical meter semantics may carry:
+
+```ts
+conversion?: {
+  original: {meterId: string; amount: string; unit: string; at: number};
+  rate: {
+    id: string; source: 'ecb'; base: string; date: number; fetchedAt: number;
+    from: string; to: string;
+  };
+};
+```
+
+Amounts and positive rate quotes are exact integer-millionth strings. `rate.date`
+is the UTC reference day; `fetchedAt` is acquisition time. `from` and `to` are quotes
+against the same `base`. Each estimate links to an immutable shared rate snapshot and
+keeps native financial scope and label. Packed cells preserve this structured metadata
+and observation anchors. Converted series have spending and top-up accounting
+`unavailable`; currency movements never become usage. Native USD is preferred even
+when retained as stale, and totals, components and different currencies are never
+summed. A card may carry `currencyUnavailable: true` when a fresh foreign total lacks
+a current USD valuation; this does not alter provider `balanceStatus` or key health.
+
+Native observations commit before currency-service reads. Quotes have no credential or
+account inputs. Failure retains original measurements and leaves USD unknown or stale,
+never zero. Existing events carry these additive fields; no currency settings or native
+bridge command is added. Original foreign-currency history stays available through the
+measurement API, and existing development-layout converted history is retained.
 
 A frame that cannot fit losslessly in the history budget returns `413 history_limit`.
 

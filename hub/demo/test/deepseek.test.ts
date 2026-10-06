@@ -1,8 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {DEEPSEEK_SCENES,deepSeekPayload,demoUsdRate} from '../deepseek.js';
+import {DEEPSEEK_SCENES,deepSeekPayload,demoRates} from '../deepseek.js';
 import {deepSeekMeasurement} from '../../server/connectors/deepseek.js';
-import {deepSeekUsd} from '../../server/connectors/deepseekUsd.js';
 import {Store} from '../../server/store/store.js';
 import {composeMeters} from '../../server/domain/meterHistory.js';
 import {balanceGroups} from '../../ui/lib/money.js';
@@ -13,13 +12,13 @@ test('every durable DeepSeek catalogue code is backed by actual parsed and retai
   for(const scene of DEEPSEEK_SCENES) {
     const store=new Store(':memory:',1);try {
       const id=store.source('deepseek','1'.repeat(24),1);
-      const record=(at:number,answer:unknown)=>store.record(id,deepSeekUsd(deepSeekMeasurement(answer,at),demoUsdRate(at)));
+      const record=(at:number,answer:unknown)=>{const measured=deepSeekMeasurement(answer,at);store.record(id,measured);const quote=store.currencies.save(demoRates(at));if(!measured.meters.some(m=>m.unit==='USD'))for(const native of measured.meters)store.currencies.record(id,native,'USD',quote);};
       record(1,deepSeekPayload(scene.id,true));
       if(scene.id==='recovery') {
         record(60_010,{is_available:true,balance_infos:[]});record(60_020,deepSeekPayload(scene.id));
       }else record(60_001,deepSeekPayload(scene.id));
       if(scene.id==='stale'||scene.id==='rejected')store.fail(id,scene.id==='stale'?'connector_failed':'credential_rejected');
-      const state=store.state(id),card:Card={...state,stale:false,owners:[],measureIntervalMs:null},groups=balanceGroups(card),seen=new Set<string>();
+      const state=store.state(id),derived=(state.meters??[]).flatMap(m=>m.unit==='USD'?[]:store.currencies.project(id,m,'USD',60_001)??[]),card:Card={...state,meters:[...(state.meters??[]),...derived],stale:false,owners:[],measureIntervalMs:null},groups=balanceGroups(card),seen=new Set<string>();
       for(const group of groups){seen.add(group.total.unit);if(group.components.length===2)seen.add('components');if(group.total.amount==='110000000')seen.add('total-110');if(group.total.amount==='0')seen.add('zero');if(BigInt(group.total.amount)>0n)seen.add('positive');}
       if(groups.length===2)seen.add('separate-currencies');
       if(groups.some(g=>g.approximate&&g.total.unit==='USD'))seen.add('usd-estimate');

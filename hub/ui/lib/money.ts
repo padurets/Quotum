@@ -51,16 +51,19 @@ export function accessChangesAt(access:Access|null|undefined,now:number):number|
 }
 
 export function balanceGroups(source:Pick<Card,'provider'|'meters'>) {
-  const descriptors=monetaryOf(source.provider)?.balances??[];
+  const descriptors=monetaryOf(source.provider)?.balances??[],meters=source.meters??[];
   return descriptors.filter(d=>d.role==='total').flatMap(d=>{
-    const total=source.meters?.find(m=>m.id===d.meterId&&m.unit===d.unit&&m.kind==='balance');
-    if(!total)return [];
-    const components=descriptors.flatMap(part=>{
-      if(part.unit!==d.unit||part.role==='total'||('approximate' in part)!==('approximate' in d))return [];
-      const meter=source.meters?.find(m=>m.id===part.meterId&&m.unit===part.unit&&m.kind==='balance');
-      return meter?[{meter,role:part.role}]:[];
+    const totals=meters.filter(m=>m.kind==='balance'&&(m.id===d.meterId&&m.unit===d.unit&&!m.conversion||m.conversion?.original.meterId===d.meterId));
+    return totals.map(total=>{
+      const components=descriptors.flatMap(part=>{
+        if(part.unit!==d.unit||part.role==='total')return [];
+        const meter=meters.find(m=>m.kind==='balance'&&(total.conversion
+          ?m.unit===total.unit&&m.conversion?.original.meterId===part.meterId&&m.conversion.rate.id===total.conversion.rate.id
+          :m.id===part.meterId&&m.unit===part.unit&&!m.conversion));
+        return meter?[{meter,role:part.role}]:[];
+      });
+      return {total,components,approximate:!!total.conversion};
     });
-    return [{total,components,approximate:'approximate' in d}];
   });
 }
 export function usdBalance(source:Pick<Card,'provider'|'meters'>) {

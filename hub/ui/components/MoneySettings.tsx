@@ -3,8 +3,8 @@ import {useBoardId,type Named} from '../lib/board';
 import {ApiError,call} from '../lib/http';
 import {archivedKeyGroups,moneySelection} from '../lib/moneySelection';
 import {usePrefs,setPrefs} from '../lib/prefs';
-import {balanceDescriptor,monetaryOf} from '../../server/domain/providers';
-import {balanceRoleLabel,keyName} from '../lib/money';
+import {balanceDescriptor} from '../../server/domain/providers';
+import {balanceGroups,balanceRoleLabel,keyName} from '../lib/money';
 import type {MeterHistory} from '../lib/moneyView';
 import {MAX_METERS} from '../../server/domain/meterHistory';
 import {t} from '../i18n';
@@ -69,7 +69,7 @@ export function MoneySettings({sources,hidden,series}:{sources:readonly Named[];
   const total=(page?.total??source?.keysCount??0)+archived.length;
   const busy=!inCard&&loading;
   useEffect(()=>{if(archivePage>extraPages)setArchivePage(extraPages);},[archivePage,extraPages]);
-  const balances=(s:Named)=>(monetaryOf(s.provider)?.balances??[]).filter(d=>d.unit===unit).map(d=>row(s.id,d.meterId,('approximate' in d?'≈ ':'')+balanceRoleLabel(d.role),!s.meters?.some(m=>m.id===d.meterId)));
+  const balances=(s:Named)=>balanceGroups(s).filter(g=>g.total.unit===unit).flatMap(g=>[{meter:g.total,role:'total' as const},...g.components].map(({meter,role})=>row(s.id,meter.id,(meter.conversion?'≈ ':'')+balanceRoleLabel(role),false)));
   return <>
     <div className="popover-title popover-section">{t('source.show')}</div>
     <p className="popover-note">{selected.length} / {MAX_METERS}</p>

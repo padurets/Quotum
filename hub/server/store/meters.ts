@@ -1,10 +1,12 @@
 import type {DatabaseSync} from 'node:sqlite';
 import {balanceDescriptor,monetaryOf} from '../domain/providers.js';
 import {amount} from '../domain/amount.js';
-import {balanceStatusOf,calendarSpending,spending,utcPeriods, sameMeter, validateMeter,usdRateOf, type Meter, type MeterMeasurement, type MeterSpan, type Reading} from '../domain/meters.js';
+import {balanceStatusOf,calendarSpending,spending,utcPeriods, sameMeter, validateMeter, type Meter, type MeterMeasurement, type MeterSpan, type Reading} from '../domain/meters.js';
 import type {SourceState} from '../domain/quota.js';
 import {MeterContexts} from './meterContexts.js';
 import {meterCells, type MeterGroup, type MeterSelection, type MeterSeriesCells} from '../domain/meterHistory.js';
+import type {CurrencyStore} from './currencies.js';
+import {conversionOrigin} from '../domain/currency.js';
 
 type ReadingRow = {meter_id: string; at: bigint; previous_at: bigint | null; kind: Meter['kind']; unit: string; amount: bigint; limit_amount: bigint | null; reset_at: bigint | null; minutes: bigint | null; scope: string | null; label: string | null; stale_after_ms: bigint};
 const numberOf = (value: bigint | null) => value === null ? null : Number(value);
@@ -13,10 +15,9 @@ const keyMeter = (id: string) => /^key:([0-9a-f]{12}):(?:usage|cap)$/.exec(id)?.
 /** The source state and sparse exact ledger share their caller's savepoint. */
 export class MeterStore {
   readonly contexts:MeterContexts;
-  constructor(private readonly db: DatabaseSync) {this.contexts=new MeterContexts(db);this.contexts.seed();}
+  constructor(private readonly db: DatabaseSync,private readonly currencies:CurrencyStore) {this.contexts=new MeterContexts(db);this.contexts.seed();}
 
   record(source: string, previous: SourceState, measurement: MeterMeasurement): {state: SourceState; since: number|null} {
-    if(measurement.usdRate)measurement={...measurement,usdRate:usdRateOf(measurement.usdRate)};
     const current = new Map((previous.meters ?? []).map(m => [m.id, {...m, stale: true}]));
     const ids = new Set<string>();
     const keyTimes = new Map(measurement.keys.map(key => [key.id, key.at]));
@@ -27,6 +28,7 @@ export class MeterStore {
     }
     for (const meter of measurement.meters) {
       validateMeter(meter);
+      if(meter.conversion)throw new Error('derived_provider_measurement');
       const key = keyMeter(meter.id);
       if (ids.has(meter.id) || meter.at !== (key === null ? measurement.observedAt : keyTimes.get(key) ?? measurement.observedAt)) throw new Error('invalid_meter');
       ids.add(meter.id);
@@ -75,7 +77,6 @@ export class MeterStore {
       staleAfterMs: accountSuccess ? measurement.staleAfterMs : previous.staleAfterMs,
       error: accountSuccess||balanceStatus ? null : previous.error,
       ...(balanceStatus?{balanceStatus}:{}),
-      ...(measurement.usdRate?{usdRate:measurement.usdRate}:{}),
       meters: [...current.values()], keys: [...keys.values()].sort((a,b) => (a.name ?? '').localeCompare(b.name ?? '') || a.id.localeCompare(b.id)),
       inventory: {complete: measurement.inventoryComplete, observed: observed.size, missing: [...keys.values()].filter(k => k.presence === 'missing').length, error: measurement.inventoryError},
     };
@@ -109,6 +110,8 @@ export class MeterStore {
       const provider=this.db.prepare('SELECT provider FROM sources WHERE id=?').get(source)?.provider;
       const policy=monetaryOf(String(provider));
       const descriptor=balanceDescriptor(String(provider),meter);
+      const conversion=conversionOrigin(meter);
+      if(conversion){const native=balanceDescriptor(String(provider),conversion.meter);return {source,meter,accounting:{spending:'unavailable',topups:'unavailable'},...(native?{role:native.role}:{}),pointMode:'observation',readings:this.currencies.readings(source,meter,from,to),spans:this.currencies.spans(source,meter,to)};}
       const group = {source,meter,...(policy?{accounting:{spending:policy.spending,topups:policy.topups},...(descriptor?{role:descriptor.role}:{}),...(policy.spending==='unavailable'?{pointMode:'observation' as const}:{})}:{accounting:{spending:'unavailable' as const,topups:'unavailable' as const}}),readings:this.readings(source,usage,from,to),spans:this.spans(source,usage,0,to)};
       if (meter !== 'balance') return group;
       if (provider !== 'openrouter') return {...group,readings:this.readings(source,meter,from,to),spans:this.spans(source,meter,0,to)};
@@ -122,6 +125,7 @@ export class MeterStore {
 
   prune(cutoff: number): boolean {
     this.contexts.prune(cutoff);
+    this.currencies.prune(cutoff);
     let changed = this.db.prepare('DELETE FROM readings WHERE at<? AND at<(SELECT max(at) FROM readings r WHERE r.source_id=readings.source_id AND r.meter_id=readings.meter_id AND r.at<?)').run(cutoff, cutoff).changes > 0;
     // The last endpoint is evidence of an unchanged observation, even after the
     // current meter has been archived and its changed reading is much older.

@@ -1,15 +1,11 @@
 import {balanceDescriptor} from './providers.js';
 import {amount, isUnit, type Unit} from './amount.js';
+import type {Conversion} from './currency.js';
 
-export type BalanceIssue = 'currency_invalid'|'currency_unknown'|'currency_duplicate'|'currency_missing'|'empty_balances'|'rate_unavailable';
-export type UsdRate={date:number;at:number;usdPerEur:string;cnyPerEur:string};
-export function usdRateOf(rate:UsdRate):UsdRate {
-  if(!Number.isSafeInteger(rate.date)||rate.date<0||rate.date%86_400_000!==0||!Number.isSafeInteger(rate.at)||rate.at<rate.date||rate.at-rate.date>=7*86_400_000||amount(rate.usdPerEur)<=0n||amount(rate.cnyPerEur)<=0n)throw new Error('invalid_rate');
-  return {date:rate.date,at:rate.at,usdPerEur:amount(rate.usdPerEur).toString(),cnyPerEur:amount(rate.cnyPerEur).toString()};
-}
+export type BalanceIssue = 'currency_invalid'|'currency_unknown'|'currency_duplicate'|'currency_missing'|'empty_balances';
 export type BalanceStatus = {isAvailable:boolean;at:number;staleAfterMs:number;partial:boolean;issues:BalanceIssue[]};
 export type MeterKind = 'counter' | 'balance' | 'cap';
-export type MeterSemantics = {limit: string | null; resetAt: number | null; minutes: number | null; scope: string | null; label: string | null};
+export type MeterSemantics = {limit: string | null; resetAt: number | null; minutes: number | null; scope: string | null; label: string | null;conversion?:Conversion};
 export type Meter = MeterSemantics & {id: string; kind: MeterKind; unit: Unit; amount: string; at: number; staleAfterMs: number; stale: boolean};
 export type KeyPart = {
   id: string; name: string | null; disabled: boolean; expiresAt: number | null; includeByok: boolean;
@@ -19,7 +15,7 @@ export type KeyPart = {
   createdAt?:number|null; updatedAt?:number|null;
 };
 /** Confirmed uncapped key IDs let partial rounds end a cap while retaining its history. */
-export type MeterMeasurement = {type: 'meters'; observedAt: number; staleAfterMs: number; meters: Meter[]; keys: KeyPart[]; inventoryComplete: boolean; inventoryError: string | null; inventoryAt?:number; uncapped?: string[]; balanceStatus?:BalanceStatus;usdRate?:UsdRate};
+export type MeterMeasurement = {type: 'meters'; observedAt: number; staleAfterMs: number; meters: Meter[]; keys: KeyPart[]; inventoryComplete: boolean; inventoryError: string | null; inventoryAt?:number; uncapped?: string[]; balanceStatus?:BalanceStatus};
 export type Reading = Omit<Meter, 'stale'> & {previousAt: number | null};
 export type MeterSpan = {from: number; to: number; staleAfterMs: number;interruptedAt?:number};
 export type ExceptionalStep = {from: number; to: number; amount: string; evidence: 'continuous' | 'gap' | 'estimate'};
@@ -35,7 +31,7 @@ export function validateMeter(meter: Meter): void {
   if (meter.resetAt !== null && (!Number.isSafeInteger(meter.resetAt) || meter.resetAt < 0) || meter.minutes !== null && (!Number.isSafeInteger(meter.minutes) || meter.minutes <= 0)) throw new Error('invalid_meter');
 }
 
-export const semanticsOf = (m: MeterSemantics): MeterSemantics => ({limit: m.limit, resetAt: m.resetAt, minutes: m.minutes, scope: m.scope, label: m.label});
+export const semanticsOf = (m: MeterSemantics): MeterSemantics => ({limit: m.limit, resetAt: m.resetAt, minutes: m.minutes, scope: m.scope, label: m.label,...(m.conversion?{conversion:m.conversion}:{})});
 export const sameMeter = (a: Meter, b: Meter) => a.kind === b.kind && a.unit === b.unit && a.amount === b.amount && JSON.stringify(semanticsOf(a)) === JSON.stringify(semanticsOf(b));
 export const plottedAmount = (m: Pick<Meter, 'kind' | 'amount' | 'limit'>) => m.kind === 'cap' ? (amount(m.limit!) - amount(m.amount)).toString() : m.amount;
 
@@ -81,7 +77,7 @@ export function calendarSpending(readings: readonly Reading[], spans: readonly M
 export function balanceStatusOf(provider:string,previous:readonly Meter[],measurement:MeterMeasurement):BalanceStatus|undefined {
   const status=measurement.balanceStatus;if(!status)return undefined;
   const accepted=new Set(measurement.meters.map(m=>m.id));
-  const missing=previous.some(m=>{const d=balanceDescriptor(provider,m.id);return d&&!('approximate' in d)&&!accepted.has(m.id);});
+  const missing=previous.some(m=>balanceDescriptor(provider,m.id)&&!accepted.has(m.id));
   const issues=[...new Set([...status.issues,...(missing?['currency_missing' as const]:[])])].sort();
   return {...status,partial:issues.length>0,issues};
 }

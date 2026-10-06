@@ -1,6 +1,6 @@
 import {level, sameWindow, type AttentionState, type Candidate} from './domain/attention.js';
 import {sourceHidden, isWindowHidden, titled} from './domain/presentation.js';
-import {catalogue, monetaryOf, providerOf} from './domain/providers.js';
+import {balanceDescriptor, catalogue, monetaryOf, providerOf} from './domain/providers.js';
 import {utcPeriods,type CalendarSpend} from './domain/meters.js';
 import type {Credentials,SourceAccess} from './secrets/credentials.js';
 import type {HubSources} from './hubSources.js';
@@ -33,7 +33,7 @@ import type {Announcement, BoardSource, Store} from './store/store.js';
 export type Timed<T> = {value: T; changesAt: number | null};
 
 /** A source as a card shows it: its state, whose it is on this board, and whether its numbers are too old. */
-export type Card = SourceState & {owners: string[]; stale: boolean; measureIntervalMs: MeasureIntervalMs;spending?:CalendarSpend|null;keysCount?:number};
+export type Card = SourceState & {owners: string[]; stale: boolean; measureIntervalMs: MeasureIntervalMs;spending?:CalendarSpend|null;keysCount?:number;currencyUnavailable?:boolean};
 
 /** When a source is measured next and why, while its holder follows the hub's pace. */
 export type Cadence = {by?:'hub';next: number; why: Why} | null;
@@ -68,7 +68,7 @@ const DAY = 86_400_000;
 /** Credential failures are private even to other members of a source's shared board. */
 export function publicSourceState(state: SourceState): SourceState {
   const error = state.error?.startsWith('secret_key_') || state.error?.startsWith('credential_') ? 'unmeasured' : state.error;
-  return {id: state.id, provider: state.provider, plan: state.plan, successAt: state.successAt, error, windows: state.windows, staleAfterMs: state.staleAfterMs, resets: state.resets,...(state.balanceStatus?{balanceStatus:{isAvailable:state.balanceStatus.isAvailable,at:state.balanceStatus.at,staleAfterMs:state.balanceStatus.staleAfterMs,partial:state.balanceStatus.partial,issues:state.balanceStatus.issues}}:{}),...(state.usdRate?{usdRate:{date:state.usdRate.date,at:state.usdRate.at,usdPerEur:state.usdRate.usdPerEur,cnyPerEur:state.usdRate.cnyPerEur}}:{}),...(state.meters?{meters:state.meters,keys:state.keys,inventory:state.inventory}:{})};
+  return {id: state.id, provider: state.provider, plan: state.plan, successAt: state.successAt, error, windows: state.windows, staleAfterMs: state.staleAfterMs, resets: state.resets,...(state.balanceStatus?{balanceStatus:{isAvailable:state.balanceStatus.isAvailable,at:state.balanceStatus.at,staleAfterMs:state.balanceStatus.staleAfterMs,partial:state.balanceStatus.partial,issues:state.balanceStatus.issues}}:{}),...(state.meters?{meters:state.meters,keys:state.keys,inventory:state.inventory}:{})};
 }
 
 export class Projection {
@@ -112,6 +112,10 @@ export class Projection {
       card.meters=card.meters.filter(m=>!m.id.startsWith('key:')||preview.has(m.id.split(':')[1])).map(m=>({...m,stale:m.stale||now>m.at+m.staleAfterMs||m.kind==='cap'&&m.resetAt!==null&&m.resetAt<=now}));
       const credits=card.meters.find(m=>m.id==='credits'),usage=card.meters.find(m=>m.id==='usage');
       if(credits&&usage&&credits.unit===usage.unit)card.meters.push({...usage,id:'balance',kind:'balance',amount:(BigInt(credits.amount)-BigInt(usage.amount)).toString(),stale:credits.stale||usage.stale});
+      const originals=card.meters.filter(m=>m.kind==='balance'&&m.unit!=='USD'&&balanceDescriptor(card.provider,m.id));
+      for(const native of originals){const value=store.currencies.project(source.id,native,'USD',now);if(value)card.meters.push(value);}
+      const nativeUsd=card.meters.some(m=>m.unit==='USD'&&!m.conversion&&balanceDescriptor(card.provider,m.id)?.role==='total');
+      if(!nativeUsd&&originals.some(m=>!m.stale&&balanceDescriptor(card.provider,m.id)?.role==='total'&&!card.meters!.some(v=>v.conversion?.original.meterId===m.id&&!v.stale)))card.currencyUnavailable=true;
       card.spending=monetaryOf(card.provider)?.spending==='counter'?store.meters.calendar(source.id,now,state.successAt??utcPeriods(now).day):null;
     }
     const people = source.holders.filter(id => members.has(id));

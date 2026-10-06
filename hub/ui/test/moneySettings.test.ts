@@ -7,7 +7,7 @@ import {preparationFixture} from './preparationFixture';
 import {archivedKeyGroups,moneySelection,readMoney} from '../lib/moneySelection';
 import {ApiError} from '../lib/http';
 import * as providers from '../../server/domain/providers';
-import {balanceRoleLabel,keyName} from '../lib/money';
+import {balanceGroups,balanceRoleLabel,keyName} from '../lib/money';
 import type {Named} from '../lib/board';
 import type {KeyPage} from '../lib/moneyKeys';
 import type {Meter} from '../../server/domain/meters';
@@ -37,7 +37,7 @@ function fixture(selected:[string,string][]=[]) {
     if(name.endsWith('/http'))return {ApiError,call};
     if(name.endsWith('/moneySelection'))return {moneySelection,archivedKeyGroups};
     if(name.endsWith('/prefs'))return {usePrefs:()=>prefs,setPrefs:(patch:typeof prefs)=>{prefs=patch;}};
-    if(name.endsWith('/money'))return {keyName,balanceRoleLabel};
+    if(name.endsWith('/money'))return {keyName,balanceRoleLabel,balanceGroups};
     if(name.endsWith('/providers'))return providers;
     if(name.endsWith('/meterHistory'))return {MAX_METERS:32};
     if(name.endsWith('/i18n'))return {t:(key:string)=>key};

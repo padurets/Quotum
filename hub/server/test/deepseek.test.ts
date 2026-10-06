@@ -45,7 +45,7 @@ test('DeepSeek allowlists exact atomic currency groups, truthful zero, empty and
 });
 
 test('the real adapter uses only balance reads and maps safe access, funds and transport outcomes',async()=>{
-  const transport=new ConnectorTransport({host:'127.0.0.1',port:443,operations:{balance:{path:'/balance'}}}),adapter=deepSeek(transport,()=>1,async()=>({date:0,at:1,usdPerEur:'1000000',cnyPerEur:'7000000'})),secret=Buffer.from('sk-'+ 'a'.repeat(32));
+  const transport=new ConnectorTransport({host:'127.0.0.1',port:443,operations:{balance:{path:'/balance'}}}),adapter=deepSeek(transport,()=>1),secret=Buffer.from('sk-'+ 'a'.repeat(32));
   try {
     transport.send=async operation=>{assert.equal(operation,'balance');return {...payload(),private:secret.toString()};};
     const found=await adapter.identify(secret);assert.equal(found.identityKind,'declared');assert.equal(found.account,null);assert.equal(found.expiresAt,null);assert.deepEqual(found.abilities,['balance']);

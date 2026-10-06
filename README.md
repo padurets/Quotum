@@ -325,12 +325,13 @@ desktop modes use the same encrypted credential protection described in [SECURIT
 
 The card and compact panel use the same budget layout as OpenRouter: one
 **Available balance** in USD, followed by any supported limits. DeepSeek has no limit
-scales. Reported USD takes precedence. When only CNY is reported, the connector uses
+scales. Reported USD takes precedence. When only CNY is reported, the shared hub currency service uses
 the [ECB daily reference rates](https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html)
 to record a separate USD estimate, marked **≈**. Click the balance label for its
 granted and topped-up composition; an estimate also gives its original CNY amount
-and rate date. Rate reads contain no credentials or account information. Without a
-usable rate, the CNY observation is retained and USD stays unknown or stale.
+and rate date. Native observations are saved before a rate read; the shared, persisted
+rate cache contains no credentials or account information. Historical estimates keep
+their original rate. Without a usable rate, CNY is retained and USD stays unknown or stale.
 All original balances, estimates, rate provenance, funds status and safe provider
 context are retained within the history retention period. Choose **USD** in analytics;
 connecting an account keeps your existing subscription view. Totals are selected by

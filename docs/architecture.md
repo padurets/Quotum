@@ -561,8 +561,8 @@ starts another. It is saved in the same transaction as numbers and state, indepe
 of what the card displays. An upgrade seeds the last known safe values with their
 original timestamps. Retention keeps crossing spans and the latest baseline; it never
 makes a stale baseline fresh. Raw responses, credential data and supplier identifiers
-are not archived. DeepSeek's CNY-to-USD estimates also retain their reference date,
-acquisition time and exact USD/EUR and CNY/EUR quotes in that context history.
+are not archived. Exchange rates and derived monetary values have their own shared
+archive, separate from provider facts.
 Future budget analytics can read these records without inventing
 spending or retroactively reconstructing overwritten period totals.
 A missing key is stale after one successful traversal and archived after two successive
@@ -594,17 +594,36 @@ accounting basis, and key properties and inventory quality describe access and
 measurement reliability. New API fields do not automatically add card rows. The safe
 context archive is independent of this presentation.
 
-Only DeepSeek's CNY-only response needs conversion. Its connector reads the fixed ECB
-daily XML endpoint without credentials, rejects redirects and bounds time and bytes.
-Positive dated reference quotes are cached for twelve hours and must be less than
-seven days old. Existing source polls refresh them; there is no rate poller or currency
-preference. BigInt rational arithmetic records rounded millionths under separate
-`converted:*:USD` balance IDs, preserving the original CNY meters. Existing readings,
-spans, context history and retention keep both and their provenance without a new
-schema step. Converted semantics identify the estimate and rate date; cards show ≈,
-and history labels identify the estimate. A failed rate read retains valid CNY and
-interrupts a missing USD estimate without fabricating zero or spending. Analytics
-offers USD for money while preserving subscription selection and non-currency units.
+Currency conversion is a hub integration, independent of provider adapters. Adapters
+capture only native observations. The money transaction commits those observations
+before the shared `Currencies` service requests reference data; conversion failures
+cannot change provider authentication or discard a successful measurement. Native USD
+needs no rate request. The service selects one supported foreign total family when no
+native USD exists, never sums currencies or guesses between multiple foreign totals.
+The shared currency domain uses exact BigInt ratios for arbitrary supported currency
+pairs. Today the configured rate-source adapter is the fixed, credential-free ECB daily
+XML endpoint, with bounded bytes, timeout and no redirects. All returned currency quotes
+are stored once per immutable snapshot in `exchange_rates`, shared across accounts and
+restored after restart. Measurements trigger lazy refresh after twelve hours; a usable
+reference date must precede the observation and be less than seven days old. Failures
+use a still-valid cached quote and retry on later measurements after five minutes.
+There is no currency preference or rate poller.
+
+`money_valuations` retains each changed USD estimate separately from native `readings`,
+including the exact original amount, meter, currency and observation time, and its
+immutable quote ID. Derived IDs are `fx:USD:<native meter ID>`; they are absent from the
+provider catalogue. Existing observation spans and retention preserve availability,
+including hard gaps. Projections and packed history carry a structured `conversion`
+with original measurement and rate provenance; financial scope and label keep their
+original meaning. The UI uses that metadata for ≈ and the disclosure of the original
+amount, rate source and reference date. Historical values use their recorded quote,
+never today's rate. Exchange movements do not become spending or top-up events.
+Without a usable quote, native observations remain saved and USD is unknown or stale;
+`currencyUnavailable` is a presentation condition separate from provider funds status.
+The additive database upgrade preserves development-layout estimates and imports those
+whose archived quote and native amount prove their conversion; unproven legacy history
+is retained without manufacturing provenance. Analytics offers USD for money while
+preserving subscription selection and non-currency units.
 
 Observation-mode money cells retain their actual sample offset, segment and exclusive
 validity, bounded by their fixed grid cell and span interruption/TTL. Composition can

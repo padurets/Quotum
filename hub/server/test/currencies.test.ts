@@ -1,0 +1,126 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtempSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {deepSeek,deepSeekMeasurement} from '../connectors/deepseek.js';
+import {ConnectorTransport} from '../connectors/transport.js';
+import {convertMoney,conversionId,type ExchangeRates} from '../domain/currency.js';
+import {parseEcb,ecbReader} from '../currencies/ecb.js';
+import {Currencies} from '../currencies/service.js';
+import {Store} from '../store/store.js';
+import {composeMeters} from '../domain/meterHistory.js';
+import type {Meter} from '../domain/meters.js';
+
+const DAY=86_400_000,date=Date.UTC(2026,9,5),at=date+12*3_600_000;
+const xml=(day='2026-10-05',usd='1',cny='7')=>`<Cube><Cube time='${day}'><Cube currency='USD' rate='${usd}'/><Cube currency='CNY' rate='${cny}'/><Cube currency='GBP' rate='0.8'/></Cube></Cube>`;
+const rates=()=>parseEcb(xml(),at);
+const row=(currency='CNY',total='110')=>({currency,total_balance:total,granted_balance:'10',topped_up_balance:'100'});
+const measurement=(time=at,rows=[row()])=>deepSeekMeasurement({is_available:true,balance_infos:rows},time);
+const native=(unit:string,amount='110000000'):Meter=>({id:'wallet',unit,amount,kind:'balance',at,staleAfterMs:60_000,stale:false,limit:null,resetAt:null,minutes:null,scope:'wallet-scope',label:'Wallet'});
+
+test('currency arithmetic handles arbitrary pairs, exact signs, zero and values above Number precision',()=>{
+  const quote=rates();
+  assert.equal(convertMoney(native('CNY'),'USD',quote)?.amount,'15714286');
+  assert.equal(convertMoney(native('CNY','-110000000'),'USD',quote)?.amount,'-15714286');
+  assert.equal(convertMoney(native('CNY','0'),'USD',quote)?.amount,'0');
+  assert.equal(convertMoney(native('EUR'),'USD',quote)?.amount,'110000000');
+  assert.equal(convertMoney(native('GBP'),'USD',quote)?.amount,'137500000');
+  assert.equal(convertMoney(native('USD'),'GBP',quote)?.amount,'88000000');
+  assert.equal(convertMoney(native('EUR','9007199254740993'),'USD',{...quote,rates:{...quote.rates,USD:'500000'}})?.amount,'4503599627370497');
+  assert.equal(convertMoney(native('JPY'),'USD',quote),null);assert.equal(convertMoney(native('tokens'),'USD',quote),null);
+  assert.deepEqual(convertMoney(native('USD'),'USD',{...quote,rates:{}}),{amount:'110000000',unit:'USD'});
+});
+
+test('the public source validates dated quotes and bounds its fixed credential-free transport',async()=>{
+  for(const invalid of [xml('2026-10-06'),xml('2026-09-20'),xml('2026-02-30'),xml('2026-10-05','0'),xml().replace('</Cube>',"<Cube currency='USD' rate='2'/></Cube>"),'x'.repeat(65_537)])assert.throws(()=>parseEcb(invalid,at));
+  const read=ecbReader(async(input,options)=>{
+    assert.equal(input,'https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml');assert.equal(options?.redirect,'error');assert.ok(options?.signal);
+    assert.deepEqual(options?.headers,{Accept:'application/xml'});return new Response(xml(),{headers:{'Content-Type':'application/xml'}});
+  },()=>at);
+  assert.deepEqual(await read(new AbortController().signal),rates());
+  await assert.rejects(ecbReader(async()=>new Response('bad',{status:503}),()=>at)(new AbortController().signal));
+  await assert.rejects(ecbReader(async()=>new Response('x'.repeat(65_537),{headers:{'Content-Type':'application/xml'}}),()=>at)(new AbortController().signal));
+});
+
+test('DeepSeek captures native observations without a currency service or any derived fields',async()=>{
+  const transport=new ConnectorTransport({host:'127.0.0.1',port:443,operations:{}}),secret=Buffer.from('sk-'+'a'.repeat(32));
+  transport.send=async(operation,token)=>{assert.equal(operation,'balance');assert.equal(token,secret);return {is_available:true,balance_infos:[row()]};};
+  try {const adapter=deepSeek(transport,()=>at),reply=await adapter.identify(secret);assert.equal(reply.measurement?.meters.length,3);assert.ok(reply.measurement?.meters.every(m=>m.unit==='CNY'&&!m.conversion));assert.ok(!JSON.stringify(reply).includes('usdRate'));}finally{transport.close();}
+});
+
+test('provider capture commits before a blocked currency read; accounts share one persisted quote and survive offline restart',async()=>{
+  const dir=mkdtempSync(join(tmpdir(),'quotum-currencies-')),file=join(dir,'hub.sqlite');let store=new Store(file,at),calls=0;
+  let release!:(value:ExchangeRates)=>void;const pending=new Promise<ExchangeRates>(resolve=>{release=resolve;});
+  let service=new Currencies(store,async()=>{calls++;return pending;},()=>at);service.start();
+  try {
+    const a=store.source('deepseek','1'.repeat(24),at),b=store.source('deepseek','2'.repeat(24),at);
+    store.record(a,measurement());store.record(b,measurement());
+    const first=service.update(a),second=service.update(b);
+    assert.equal(store.state(a).meters?.length,3);assert.equal(store.meters.readings(a,'balance:CNY',0,at+1)[0].amount,'110000000');assert.equal(calls,1);
+    release(rates());await Promise.all([first,second]);
+    assert.equal(store.db.prepare('SELECT count(*) n FROM exchange_rates').get()?.n,1);
+    assert.equal(store.currencies.project(a,store.state(a).meters![0],'USD',at)?.conversion?.rate.id,store.currencies.project(b,store.state(b).meters![0],'USD',at)?.conversion?.rate.id);
+    await service.stop();store.close();store=new Store(file,at+1000);
+    service=new Currencies(store,async()=>{throw new Error('must use persisted cache');},()=>at+1000);service.start();
+    store.record(a,measurement(at+1000));await service.update(a);
+    assert.equal(store.currencies.project(a,store.state(a).meters![0],'USD',at+1000)?.amount,'15714286');
+  }finally{await service.stop();store.close();rmSync(dir,{recursive:true,force:true});}
+});
+
+test('native USD is independent of reference availability; rate failures leave provider facts and key health unchanged',async()=>{
+  const store=new Store(':memory:',at);let calls=0;const service=new Currencies(store,async()=>{calls++;throw new Error('SECRET_CANARY');},()=>at);service.start();
+  try {
+    const usd=store.source('deepseek','1'.repeat(24),at),cny=store.source('deepseek','2'.repeat(24),at);
+    store.record(usd,measurement(at,[row(),row('USD','37')]));await service.update(usd);assert.equal(calls,0);
+    store.record(cny,measurement());const original=store.state(cny);await service.update(cny);
+    assert.deepEqual(store.state(cny),original);assert.equal(store.state(cny).error,null);assert.equal(store.state(cny).balanceStatus?.partial,false);assert.equal(calls,1);
+    await service.update(cny);assert.equal(calls,1);assert.equal(store.db.prepare('SELECT count(*) n FROM money_valuations').get()?.n,0);
+    assert.ok(!JSON.stringify(store.state(cny)).includes('SECRET_CANARY'));
+  }finally{await service.stop();store.close();}
+});
+
+test('a late rate reply cannot restore missing provider balances or recreate a removed source',async()=>{
+  const store=new Store(':memory:',at);let release!:(value:ExchangeRates)=>void;const service=new Currencies(store,()=>new Promise(resolve=>{release=resolve;}),()=>at);service.start();
+  try {
+    const id=store.source('deepseek','1'.repeat(24),at);store.record(id,measurement());const update=service.update(id);
+    store.record(id,measurement(at+1,[]));release(rates());await update;
+    assert.equal(store.db.prepare('SELECT count(*) n FROM money_valuations').get()?.n,0);assert.ok(store.state(id).meters?.every(m=>m.stale));
+    store.db.prepare('DELETE FROM sources WHERE id=?').run(id);await service.update(id);assert.equal(store.db.prepare('SELECT 1 FROM sources WHERE id=?').get(id),undefined);
+  }finally{await service.stop();store.close();}
+});
+
+test('shared valuations preserve original scope and immutable historical provenance without turning exchange movements into spending',()=>{
+  const store=new Store(':memory:',at);try {
+    const id=store.source('deepseek','1'.repeat(24),at),first=measurement();store.record(id,first);
+    const q1=store.currencies.save(rates());for(const m of first.meters)store.currencies.record(id,m,'USD',q1);
+    const nextAt=at+DAY,next=measurement(nextAt),q2=store.currencies.save(parseEcb(xml('2026-10-06','2','7'),nextAt));store.record(id,next);for(const m of next.meters)store.currencies.record(id,m,'USD',q2);
+    const rows=store.currencies.readings(id,conversionId('balance:CNY','USD'),0,nextAt+1);assert.equal(rows.length,2);assert.deepEqual(rows.map(r=>r.conversion?.rate.id),[q1.id,q2.id]);assert.equal(rows[0].scope,first.meters[0].scope);assert.equal(rows[0].label,first.meters[0].label);
+    const history=composeMeters([{from:at,meterSeries:store.meters.cells({unit:'USD',ids:[[id,conversionId('balance:CNY','USD')]]},at,nextAt+60_000,60_000)}],60_000,at,nextAt+60_000)[0];
+    assert.equal(history.spent,null);assert.equal(history.topup,null);assert.equal(history.semantics?.conversion?.rate.id,q2.id);assert.ok(history.points.some(p=>p.semantics?.conversion?.rate.id===q1.id));
+    store.currencies.save({...rates(),fetchedAt:nextAt});assert.equal(store.currencies.get(q1.id)?.fetchedAt,at);
+    store.record(id,measurement(nextAt+120_000,[]));store.currencies.interrupt(id,'balance:CNY','USD',nextAt+120_000);
+    assert.equal(store.currencies.project(id,store.state(id).meters![0],'USD',nextAt+120_000)?.stale,true);
+  }finally{store.close();}
+});
+
+test('the valuation store reuses the same quote across providers and currencies without provider-specific fields',()=>{
+  const store=new Store(':memory:',at);try {
+    const a=store.source('deepseek','1'.repeat(24),at),b=store.source('openrouter','2'.repeat(24),at),quote=store.currencies.save(rates());
+    const cny=native('CNY'),gbp=native('GBP');store.currencies.record(a,cny,'USD',quote);store.currencies.record(b,gbp,'USD',quote);
+    const first=store.currencies.project(a,cny,'USD',at)!,second=store.currencies.project(b,gbp,'USD',at)!;
+    assert.equal(first.conversion?.rate.id,second.conversion?.rate.id);assert.equal(second.amount,'137500000');assert.equal(second.scope,'wallet-scope');assert.equal(second.label,'Wallet');
+    assert.equal(second.conversion?.original.unit,'GBP');assert.ok(!JSON.stringify(second).includes('cnyPerEur'));
+    assert.equal(store.db.prepare('SELECT count(*) n FROM exchange_rates').get()?.n,1);
+  }finally{store.close();}
+});
+
+test('a native USD arrival ends derived availability without another rate request',async()=>{
+  const store=new Store(':memory:',at);let calls=0;const service=new Currencies(store,async()=>{calls++;return rates();},()=>at);service.start();
+  try {
+    const id=store.source('deepseek','1'.repeat(24),at);store.record(id,measurement());await service.update(id);
+    store.record(id,measurement(at+1000,[row(),row('USD','37')]));await service.update(id);
+    assert.equal(calls,1);assert.equal(store.currencies.spans(id,conversionId('balance:CNY','USD'),at+1001)[0].interruptedAt,at+1000);
+    assert.equal(store.currencies.project(id,store.state(id).meters![0],'USD',at+1000)?.stale,true);
+  }finally{await service.stop();store.close();}
+});

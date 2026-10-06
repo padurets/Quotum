@@ -7,7 +7,6 @@ export const catalogue = [
   {id:'deepseek',name:'DeepSeek',color:'#4d6bfe',logoAsset:'deepseek',order:4,measuredBy:'hub',meterKinds:['balance'],resets:false,connectorId:'deepseek',monetary:{spending:'unavailable',topups:'unavailable',balances:[
     {meterId:'balance:CNY',unit:'CNY',role:'total'},{meterId:'granted:CNY',unit:'CNY',role:'granted'},{meterId:'topped_up:CNY',unit:'CNY',role:'toppedUp'},
     {meterId:'balance:USD',unit:'USD',role:'total'},{meterId:'granted:USD',unit:'USD',role:'granted'},{meterId:'topped_up:USD',unit:'USD',role:'toppedUp'},
-    {meterId:'converted:balance:USD',unit:'USD',role:'total',approximate:true},{meterId:'converted:granted:USD',unit:'USD',role:'granted',approximate:true},{meterId:'converted:topped_up:USD',unit:'USD',role:'toppedUp',approximate:true},
   ]}},
 ] as const;
 

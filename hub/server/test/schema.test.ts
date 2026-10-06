@@ -84,3 +84,27 @@ test('money storage upgrades the stable-session layout without changing its iden
     for(const name of ['readings','meter_spans','meter_contexts'])assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name));
   }finally{db.close();}
 });
+
+test('the shared currency upgrade preserves native state and legacy history and imports only proven estimates',()=>{
+  const file=path.join(mkdtempSync(path.join(tmpdir(),'quotum-currency-upgrade-')),'db.sqlite'),at=Date.UTC(2026,9,5)+1000,date=at-1000;
+  const old=new DatabaseSync(file);for(const step of STEPS.slice(0,11))old.exec(step);old.exec('PRAGMA user_version = 11');
+  old.prepare("INSERT INTO meta VALUES ('historyStart',?)").run(String(at));
+  old.prepare("INSERT INTO sources(id,provider,account,created_at) VALUES ('s','deepseek','a',0)").run();
+  const native={id:'balance:CNY',unit:'CNY',amount:'110000000',kind:'balance' as const,limit:null,resetAt:null,minutes:null,scope:'wallet',label:'Original',at,staleAfterMs:60_000,stale:false};
+  const derived={...native,id:'converted:balance:USD',unit:'USD',amount:'15714286',scope:'ecb:2026-10-05',label:'≈ CNY → USD (ECB)'};
+  const rate={date,at,usdPerEur:'1000000',cnyPerEur:'7000000'};
+  old.prepare('INSERT INTO state VALUES (?,?)').run('s',JSON.stringify({id:'s',provider:'deepseek',plan:'',successAt:at,error:null,windows:[],resets:null,staleAfterMs:60_000,meters:[native,derived],usdRate:rate,balanceStatus:{isAvailable:true,at,staleAfterMs:60_000,partial:true,issues:['rate_unavailable']}}));
+  for(const meter of [native,derived]){
+    old.prepare('INSERT INTO readings VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run('s',meter.id,at,null,meter.kind,meter.unit,BigInt(meter.amount),null,null,null,meter.scope,meter.label,60_000);
+    old.prepare('INSERT INTO meter_spans VALUES (?,?,?,?,?,?)').run('s',meter.id,at,at,60_000,at+10_000);
+  }
+  old.prepare('INSERT INTO meter_contexts VALUES (?,?,?,?,?,?)').run('s','usdRate',at,at,60_000,JSON.stringify({type:'usdRate',date,usdPerEur:rate.usdPerEur,cnyPerEur:rate.cnyPerEur}));
+  old.close();const store=new Store(file,at);
+  try {
+    assert.deepEqual(store.state('s').meters,[native]);assert.equal(store.state('s').balanceStatus?.partial,false);assert.ok(!JSON.stringify(store.state('s')).includes('usdRate'));
+    const valued=store.currencies.project('s',native,'USD',at)!;assert.equal(valued.amount,'15714286');assert.equal(valued.scope,'wallet');assert.equal(valued.label,'Original');assert.equal(valued.conversion?.original.amount,'110000000');assert.equal(valued.conversion?.rate.fetchedAt,at);
+    assert.equal(store.currencies.spans('s','fx:USD:balance:CNY',at+10000)[0].interruptedAt,at+10000);
+    assert.equal(store.meters.readings('s','converted:balance:USD',0,at+1)[0].amount,'15714286');
+    assert.equal(store.db.prepare('SELECT count(*) n FROM exchange_rates').get()?.n,1);
+  }finally{store.close();}
+});
