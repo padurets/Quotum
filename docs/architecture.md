@@ -587,7 +587,7 @@ status time is the watermark even when numerical success is older.
 Budget cards and the compact panel use one typed presentation of current funds and
 selected allowances. A single Available balance section uses the reader's display currency. Native reference currency takes
 precedence over separate converted observations; the two are never summed. Composition
-opens from that label in a shared Popover. Key allowances appear separately, with their own scope, limit and reset;
+opens from the balance amount in a shared Popover. Key allowances appear separately, with their own scope, limit and reset;
 they do not add to account funds. Only catalogue-supported caps have scales. Lifetime
 credits never supply a wallet's percentage denominator. DeepSeek has no key-cap scales
 or spending summary. Each value keeps its own observation time and stale state.
