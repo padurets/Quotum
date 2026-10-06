@@ -634,6 +634,8 @@ Unused private rate versions follow the same retention policy as public referenc
 The initial nominal definition, a predecessor for each rate pair, and every quote
 needed by retained assignments remain. Bindings serving a retained native predecessor
 survive even when the binding itself ends before retention.
+The definition pins its initial quote explicitly; later zero-date versions are ordinary
+retained rate updates, rather than additional permanent definitions.
 
 Reader snapshots and the private `currencies` event carry one target definition and
 source-specific bindings. Personal definitions and rates never enter shared card or
@@ -655,6 +657,11 @@ Each authorized history read loads binding ranges by source and unit once, conve
 cells in memory, and commits sparse new assignments after transformation. Effective
 quote intervals cache successful and missing paths, while the bridge index avoids
 comparing every pair of historical versions. Converted semantics stay sparse too.
+The reader loads the requested binding interval and its predecessors, with stable
+indexes for starts, endpoints and anchors. A native heartbeat need not change the
+amount to introduce a new valuation: its assigned price has its own point on the
+timeline. Multiple admitted valuations retain their individual timestamps through
+clipping and packing, without creating spending or rewriting native observations.
 
 Observation-mode money cells retain their actual sample offset, segment and exclusive
 validity, bounded by their fixed grid cell and span interruption/TTL. Composition can

@@ -597,6 +597,10 @@ does not establish the value at the unretained grid edge.
 When its semantics differ from the primary point, `openSemantics` preserves the
 opening value's own financial metadata and conversion provenance. It is read and
 converted independently, including when it is the first cell of a requested chunk.
+Reader conversion follows its recorded valuation timeline even when the native amount
+is unchanged. More than two admitted points in a cell use `observations: [{at, value,
+validUntil, semantics?}]`, with absolute times and exact strings. Missing point semantics
+inherit the cell's primary semantics. Packing retains each point independently.
 Deadlines never exceed the fixed grid cell end, so later heartbeats cannot extend finished cells.
 The existing chart draws these actual anchors and reads raw pointer time; deadline
 endpoints are not samples. OpenRouter and percentage series retain cell placement.

@@ -15,6 +15,7 @@ import {SecretKey} from '../secrets/crypto.js';
 import {startSecrets} from '../secrets/start.js';
 import {composeMeters} from '../domain/meterHistory.js';
 import type {Meter} from '../domain/meters.js';
+import {CurrencyBindings,type BindingRange} from '../store/currencyBindings.js';
 
 const DAY=86_400_000,date=Date.UTC(2026,9,5),at=date+12*3_600_000;
 const xml=(day='2026-10-05',usd='1',cny='7')=>`<Cube><Cube time='${day}'><Cube currency='USD' rate='${usd}'/><Cube currency='CNY' rate='${cny}'/><Cube currency='GBP' rate='0.8'/></Cube></Cube>`;
@@ -44,6 +45,27 @@ test('retention removes unused private revisions while retaining nominal and pin
     assert.ok(store.currencies.get(initial[0].id,owner.id));assert.ok(store.currencies.get(pinned[0].id,owner.id));
     assert.deepEqual(store.currencies.binding(owner.id,'USD',target.id,500),pinned);
   }finally{store.close();}
+});
+
+test('zero-date updates cannot bypass retention or replace the initial nominal reference',()=>{
+  const store=new Store(':memory:',at),directory=new Directory(store.db),owner=directory.createUser('nominal@example.com','Owner','fixture',at);
+  try {
+    const target=store.currencies.create(owner.id,{name:'Points',symbol:'PT',fractionDigits:2},'USD','2000000',1);
+    const initial=store.db.prepare('SELECT initial_quote_id id FROM currency_definitions WHERE id=?').get(target.id)!.id as string;
+    for(let version=1;version<=1000;version++)store.currencies.setRate(owner.id,target.id,'USD',String(2000000+version),0,version+1);
+    store.currencies.prune(at);
+    assert.equal(store.db.prepare('SELECT count(*) n FROM exchange_rates WHERE owner_id=?').get(owner.id)?.n,2);
+    assert.equal(store.currencies.get(initial,owner.id)?.rates[target.id],'2000000');
+  }finally{store.close();}
+});
+
+test('a warmed binding index does not reread its archive for each history cell',()=>{
+  let reads=0;
+  const rows:BindingRange[]=Array.from({length:1000},(_,index)=>({get observation_at(){reads++;return index*60000;},through_at:index*60000+50000,anchor:'',steps:'[]'}));
+  const binder=new CurrencyBindings('EUR',()=>rows,()=>null,()=>{throw new Error('read-only range');});
+  binder.observationAt('source','USD',60000);reads=0;
+  for(let index=0;index<480;index++)assert.notEqual(binder.observationAt('source','USD',(index+1)*60000),null);
+  assert.ok(reads<10000,`${reads} archive reads`);
 });
 
 test('currency arithmetic handles arbitrary pairs, exact signs, zero and values above Number precision',()=>{

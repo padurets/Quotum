@@ -32,9 +32,10 @@ export class CurrencyStore {
     if(!owner||!this.db.prepare('SELECT 1 FROM users WHERE id=?').get(owner)||!this.definition(owner,base)||! /^[A-Z]{3}$/.test(base)||this.definitions(owner).length>64)throw new Error('invalid_currency');
     const definition=currencyDefinitionOf({...input,id:'personal:'+randomBytes(12).toString('hex')});
     this.db.exec('SAVEPOINT personal_currency');
-    try {this.db.prepare('INSERT INTO currency_definitions VALUES (?,?,?,?,?,NULL)').run(definition.id,owner,definition.name,definition.symbol,definition.fractionDigits);
+    try {this.db.prepare('INSERT INTO currency_definitions(id,owner_id,name,symbol,fraction_digits,archived_at) VALUES (?,?,?,?,?,NULL)').run(definition.id,owner,definition.name,definition.symbol,definition.fractionDigits);
       // A declared fixed unit has a timeless initial ratio; later versions are dated.
-      this.save({source:'manual',base,date:0,fetchedAt:at,validUntil:null,rates:{[base]:'1000000',[definition.id]:rate}},owner);
+      const initial=this.save({source:'manual',base,date:0,fetchedAt:at,validUntil:null,rates:{[base]:'1000000',[definition.id]:rate}},owner);
+      this.db.prepare('UPDATE currency_definitions SET initial_quote_id=? WHERE id=?').run(initial.id,definition.id);
       this.db.exec('RELEASE personal_currency');
     }catch(error){this.db.exec('ROLLBACK TO personal_currency');this.db.exec('RELEASE personal_currency');throw error;}
     this.onChange?.(owner);return definition;
@@ -73,11 +74,15 @@ export class CurrencyStore {
     if(cached.paths.size>=1024)cached.paths.delete(cached.paths.keys().next().value!);
     cached.paths.set(key,path);return path;
   }
-  history(owner:string,target:string):CurrencyBindings {
+  history(owner:string,target:string,from=0,to=Number.MAX_SAFE_INTEGER):CurrencyBindings {
     this.definition(owner,target);
-    const load=this.db.prepare('SELECT observation_at,through_at,anchor,steps FROM currency_bindings WHERE owner_id=? AND source_id=? AND from_currency=? AND target_currency=? ORDER BY observation_at');
+    const load=this.db.prepare(`SELECT observation_at,through_at,anchor,steps FROM currency_bindings
+      WHERE owner_id=? AND source_id=? AND from_currency=? AND target_currency=? AND observation_at<?
+        AND (through_at>=? OR observation_at IN(SELECT max(observation_at) FROM currency_bindings
+          WHERE owner_id=? AND source_id=? AND from_currency=? AND target_currency=? AND observation_at<? GROUP BY anchor))
+      ORDER BY observation_at`);
     const save=this.db.prepare('INSERT INTO currency_bindings VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(owner_id,source_id,from_currency,target_currency,observation_at,anchor) DO UPDATE SET through_at=max(currency_bindings.through_at,excluded.through_at)');
-    return new CurrencyBindings(target,(source,unit)=>load.all(owner,source,unit,target) as BindingRange[],(unit,at,anchor)=>this.path(owner,unit,target,at,anchor),(source,unit,row)=>{save.run(owner,source,unit,target,row.observation_at,row.through_at,row.anchor,row.steps);});
+    return new CurrencyBindings(target,(source,unit)=>load.all(owner,source,unit,target,to,from,owner,source,unit,target,from) as BindingRange[],(unit,at,anchor)=>this.path(owner,unit,target,at,anchor),(source,unit,row)=>{save.run(owner,source,unit,target,row.observation_at,row.through_at,row.anchor,row.steps);});
   }
   context(owner:string,inputs:Record<string,{unit:string;at:number;anchor?:string|null}[]>={}):CurrencyContext {
     const target=this.preference(owner),definitions=this.definitions(owner);if(!definitions.some(d=>d.id===target.id))definitions.push(target);
@@ -190,7 +195,7 @@ export class CurrencyStore {
           ORDER BY q.reference_date DESC,q.fetched_at DESC,q.id DESC) AS position
         FROM exchange_rates q,json_each(q.payload,'$.rates') unit WHERE q.reference_date<?)
       DELETE FROM exchange_rates WHERE reference_date<?
-        AND NOT(owner_id<>'' AND reference_date=0)
+        AND id NOT IN(SELECT initial_quote_id FROM currency_definitions WHERE initial_quote_id IS NOT NULL)
         AND id NOT IN(SELECT id FROM predecessors WHERE position=1)
         AND id NOT IN(SELECT quote_id FROM money_valuations)
         AND NOT EXISTS(SELECT 1 FROM currency_bindings b,json_each(b.steps) s WHERE json_extract(s.value,'$.id')=exchange_rates.id)

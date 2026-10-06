@@ -9,17 +9,17 @@ const encoder=new TextEncoder(),decoder=new TextDecoder();
 
 /** Each JSON leaf is small; interval arrays never become one synchronous JSON operation. */
 function* pack(cell:StoredCell):Preparation<Uint8Array> {
-  const {steps=[],topupSteps=[],...extra}=cell.row[5]??{};
-  const head={...cell,row:[...cell.row.slice(0,5),extra],steps:steps.length,topupSteps:topupSteps.length};
+  const {steps=[],topupSteps=[],observations,...extra}=cell.row[5]??{};
+  const head={...cell,row:[...cell.row.slice(0,5),extra],steps:steps.length,topupSteps:topupSteps.length,...(observations?{observations:observations.length}:{})};
   const parts:Uint8Array[]=[encoder.encode(JSON.stringify(head))];
   let length=4+parts[0].byteLength;yield;
-  for(const values of [steps,topupSteps])for(const step of values){const bytes=encoder.encode(JSON.stringify(step));parts.push(bytes);length+=4+bytes.byteLength;yield;}
+  for(const values of [steps,topupSteps,observations??[]])for(const step of values){const bytes=encoder.encode(JSON.stringify(step));parts.push(bytes);length+=4+bytes.byteLength;yield;}
   const result=new Uint8Array(length),view=new DataView(result.buffer);
   let at=0;
   for(const bytes of parts){view.setUint32(at,bytes.byteLength);result.set(bytes,at+4);at+=4+bytes.byteLength;yield;}
   return result;
 }
-const header=(bytes:Uint8Array):StoredCell&{steps:number;topupSteps:number}=>JSON.parse(decoder.decode(bytes.subarray(4,4+new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength).getUint32(0))));
+const header=(bytes:Uint8Array):StoredCell&{steps:number;topupSteps:number;observations?:number}=>JSON.parse(decoder.decode(bytes.subarray(4,4+new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength).getUint32(0))));
 function* unpack(bytes:Uint8Array):Preparation<StoredCell> {
   const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength),head=header(bytes);
   let at=4+view.getUint32(0);yield;
@@ -29,6 +29,11 @@ function* unpack(bytes:Uint8Array):Preparation<StoredCell> {
     const steps:ExceptionalStep[]=[];
     for(let i=0;i<count;i++){const size=view.getUint32(at);steps.push(JSON.parse(decoder.decode(bytes.subarray(at+4,at+4+size))));at+=4+size;yield;}
     extra[name]=steps;
+  }
+  if(head.observations!==undefined) {
+    const observations:NonNullable<typeof extra.observations>=[];
+    for(let i=0;i<head.observations;i++){const size=view.getUint32(at);observations.push(JSON.parse(decoder.decode(bytes.subarray(at+4,at+4+size))));at+=4+size;yield;}
+    extra.observations=observations;
   }
   return {row:[head.row[0],head.row[1],head.row[2],head.row[3],head.row[4],extra],before:head.before,semantics:head.semantics};
 }

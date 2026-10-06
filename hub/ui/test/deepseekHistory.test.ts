@@ -31,6 +31,30 @@ import type {Line} from '../lib/lines';
 
 const answer=(amount='110')=>({is_available:true,balance_infos:[{currency:'CNY',total_balance:amount,granted_balance:'10',topped_up_balance:'100'}]});
 
+test('reader valuations keep unchanged native amounts on their assigned timelines through retention and packing',async t=>{
+  const store=new Store(':memory:',1),directory=new Directory(store.db),owner=directory.createUser('timeline@fixture.example','Fixture','unused',1),board=directory.boards(owner.id)[0].id;
+  const source=store.source('deepseek','4'.repeat(24),1);store.hold(source,owner.id,1);
+  const target=store.currencies.create(owner.id,{name:'Points',symbol:'PT',fractionDigits:2},'USD','2000000',1);store.currencies.select(owner.id,target.id);
+  const observe=(at:number)=>{store.record(source,deepSeekMeasurement({is_available:true,balance_infos:[{currency:'USD',total_balance:'100',granted_balance:'0',topped_up_balance:'100'}]},at));store.currencies.context(owner.id,{[source]:store.state(source).meters!.map(m=>({unit:m.unit,at:m.at}))});};
+  observe(50000);store.currencies.setRate(owner.id,target.id,'USD','3000000',70000,70000);observe(80000);store.currencies.setRate(owner.id,target.id,'USD','4000000',90000,90000);observe(100000);
+  let now=120000;t.mock.method(Date,'now',()=>now);
+  const app=await buildApp({store,directory,ingest:new Ingest(store,directory,new Duty(),new Cadence()),pairing:new Pairing(directory),resets:new ResetFeed(undefined,()=>{}),setup:new Setup(false,null),local:null});
+  t.after(async()=>{await app.close();store.close();});
+  for(const retained of [false,true]) {
+    if(retained){now=60010+config.retention.sampleDays*86400000;store.prune(now);}
+    const token=newSecret('qt_s');directory.createSession(token,owner.id,now,60000);
+    for(const from of retained?[60000]:[0,60000]) {
+      const response=await app.inject({method:'GET',url:'/api/history?board='+board+'&cell=60000&from='+from+'&to=120000&unit=USD&meters='+encodeURIComponent(JSON.stringify([[source,'balance:USD']]))+'&currency='+encodeURIComponent(target.id),headers:{cookie:'quotum_session='+token}});assert.equal(response.statusCode,200);
+      const tile=new MeterTile(0,60000);for(const chunk of response.json().chunks)tile.merge(chunk.from,chunk.to,chunk.meterSeries);
+      const series=composeMeters([{from:60000,meterSeries:tile.chunk(60000,120000)}],60000,60000,120000)[0];
+      assert.equal(moneyPointAt(series,75000)?.value,'200000000');assert.equal(moneyPointAt(series,85000)?.value,'300000000');assert.equal(moneyPointAt(series,105000)?.value,'400000000');
+      assert.equal(moneyPointAt(series,85000)?.semantics?.conversion?.original.at,80000);
+      if(retained)assert.equal(moneyPointAt(series,60009),undefined);
+      assert.equal(series.spent,null);assert.equal(series.topup,null);
+    }
+  }
+});
+
 test('FX openings preserve their own quote through HTTP, reader conversion and packed chunk boundaries',async t=>{
   const store=new Store(':memory:',1),directory=new Directory(store.db),owner=directory.createUser('opening@fixture.example','Fixture','unused',1),board=directory.boards(owner.id)[0].id;
   const source=store.source('deepseek','2'.repeat(24),1);store.hold(source,owner.id,1);store.currencies.select(owner.id,'CNY');

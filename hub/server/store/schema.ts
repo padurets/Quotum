@@ -223,6 +223,14 @@ export const STEPS = [
     observation_at INTEGER NOT NULL, through_at INTEGER NOT NULL, anchor TEXT NOT NULL, steps TEXT NOT NULL,
     PRIMARY KEY(owner_id,source_id,from_currency,target_currency,observation_at,anchor)) WITHOUT ROWID;
   `,
+  // 14 — preserve the initial nominal quote without retaining every zero-date revision.
+  `
+  ALTER TABLE currency_definitions ADD COLUMN initial_quote_id TEXT;
+  UPDATE currency_definitions SET initial_quote_id=(SELECT q.id FROM exchange_rates q
+    WHERE q.owner_id=currency_definitions.owner_id AND q.source='manual' AND q.reference_date=0
+      AND json_type(q.payload,'$.rates."'||currency_definitions.id||'"') IS NOT NULL
+    ORDER BY q.fetched_at,q.rowid LIMIT 1);
+  `,
 ];
 
 export const SCHEMA_VERSION = STEPS.length;

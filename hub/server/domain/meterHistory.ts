@@ -6,7 +6,8 @@ export const MAX_METERS = 32;
 export type MeterSelection = {unit: Unit; displayCurrency?:string;displayRevision?:string;nativeCurrencies?:boolean; ids: [source: string, meter: string][]};
 export type Accounting = {spending:'counter'|'unavailable';topups:'counter'|'unavailable'};
 export type MonetaryPolicy = {accounting?:Accounting;role?:'total'|'granted'|'toppedUp';pointMode?:'cell'|'observation'};
-export type MeterCellExtra = {pointOffsetMs?:number;openOffsetMs?:number;openSemantics?:MeterSemantics;validUntil?:number;first?: string; open?: string | null; segment?: number; semantics?: MeterSemantics; steps?: ExceptionalStep[]; topupInternal?: string; topupSteps?: ExceptionalStep[]};
+export type MeterObservation={at:number;value:string;validUntil:number;semantics?:MeterSemantics|null};
+export type MeterCellExtra = {observations?:MeterObservation[];pointOffsetMs?:number;openOffsetMs?:number;openSemantics?:MeterSemantics;validUntil?:number;first?: string; open?: string | null; segment?: number; semantics?: MeterSemantics; steps?: ExceptionalStep[]; topupInternal?: string; topupSteps?: ExceptionalStep[]};
 export type MeterCell = [index: number, value: string, spentInternal: string|null, spentExceptional: string|null, coveredMs: number, extra?: MeterCellExtra];
 export type MeterSeriesCells = MonetaryPolicy & {source: string; meter: string; kind: MeterKind; unit: Unit; semantics: MeterSemantics | null; cells: MeterCell[]};
 export type MeterHistory = MonetaryPolicy & {sourceId: string; meterId: string; kind: MeterKind; unit: Unit; semantics: MeterSemantics | null; start: string | null; end: string | null; spent: string|null; unlocated: ExceptionalStep[]; topup: string|null; topupUnlocated: ExceptionalStep[]; coveredMs: number; points: {at: number; value: string; spent:string|null;validUntil?:number;segment: number; semantics: MeterSemantics | null; steps: ExceptionalStep[]}[]};
@@ -194,6 +195,10 @@ export function* composeMetersPrepared(chunks: readonly {from:number;meterSeries
       }
       if(at!==previous+cell || (extra.segment??0)!==lastLocal)segment++;
       previous=at;lastLocal=extra.segment??0;
+      if(series.pointMode==='observation'&&extra.observations) {
+        for(const point of extra.observations){points.push({...point,semantics:point.semantics===undefined?semantics:point.semantics,spent:null,segment,steps:[]});yield;}
+        continue;
+      }
       const observation=series.pointMode==='observation',pointAt=at+(observation?extra.pointOffsetMs??0:0);
       const validUntil=observation?extra.validUntil??at+cell:undefined;
       const openAt=at+(observation?extra.openOffsetMs??0:0);
