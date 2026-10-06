@@ -12,7 +12,7 @@ export function accountName(value:unknown,secret:unknown):string {
   if(!name||Array.from(name).length>120||/[\u0000-\u001f\u007f-\u009f]/.test(name)||/sk-[A-Za-z0-9_-]{16,}/i.test(name)||typeof secret==='string'&&secret.length>0&&name.includes(secret))throw new SecretError('credential_invalid');
   return name;
 }
-export const declaredPseudonym=(owner:string,provider:string,id:string)=>sha256('quotum/account/declared/v1\n'+provider+'\n'+owner+'\n'+id).slice(0,24);
+export const declaredPseudonym=(owner:string,provider:string,id:string)=>sha256('quotum/declared-account/v1\n'+owner+'\n'+provider+'\n'+id).slice(0,24);
 
 /** Private identities survive withdrawal; their existence grants no holding. */
 export class SourceAccounts {

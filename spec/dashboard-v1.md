@@ -738,9 +738,9 @@ A frame that cannot fit losslessly in the history budget returns `413 history_li
 
 DeepSeek connections use owner-only `POST /api/credentials` with
 `{provider: "deepseek", secret, account: {kind: "new", name} | {kind: "existing", id},
-confirmSameAccount?, allowUnknownExpiry?, requestId?}`. Existing account selection
-requires `confirmSameAccount: true` before provider work. Replacement accepts only
-`{secret, confirmSameAccount: true, allowUnknownExpiry?}`. Its API cannot verify the
+sameAccount?, allowUnknownExpiry?, requestId?}`. Existing account selection
+requires `sameAccount: true` before provider work. Replacement accepts only
+`{secret, sameAccount: true, allowUnknownExpiry?}`. Its API cannot verify the
 owner's identity declaration. Account names are normalized private labels, unique
 per owner/provider, independent of immutable UUIDs and keys. A new account creates a
 new source; last-key removal preserves identity and retained history for reconnection.

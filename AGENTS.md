@@ -98,6 +98,13 @@ and platform smoke checks still apply.
   projections, errors or logs. Connectors use only their fixed HTTPS transport;
   provider clients inherit no `QUOTUM_*` variables. Never log a raw crypto or keyring
   error, whose contents may include secret bytes.
+- **Identity follows its evidence.** Supplier identity uses the provider's stable
+  account pseudonym and keeps mismatch checks on replacement and polling. Declared
+  identity uses the shared owner/provider/logical-UUID generator, never a key, name,
+  plan or balance. All declared replacements require `sameAccount` before provider
+  work; named account selection adds no second identity or consent mechanism. Reuse
+  persisted source bindings without recomputing their identity. Private account labels
+  and owner IDs never enter shared projections.
 - **The provider catalogue defines authority.** Known hub-measured providers are
   dropped from agent snapshots, failures and sessions before their other fields are
   parsed. Check-in replies preserve those elements' positions and tell the agent to

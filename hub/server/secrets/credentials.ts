@@ -1,8 +1,8 @@
-import {createHash,randomUUID} from 'node:crypto';
+import {randomUUID} from 'node:crypto';
 import {connectors, type Connector, type ConnectorIdentity, type ConnectorAnswer} from '../connectors/index.js';
 import {CredentialStore, type Credential, type CredentialRow} from '../store/credentials.js';
 import type {Store} from '../store/store.js';
-import {SourceAccounts,accountName,UUID,type AccountTarget,type DeclaredAccount} from '../store/sourceAccounts.js';
+import {SourceAccounts,accountName,declaredPseudonym,UUID,type AccountTarget,type DeclaredAccount} from '../store/sourceAccounts.js';
 import {providerOf, type Provider} from '../domain/providers.js';
 import {tell, type Touches} from '../touches.js';
 import {SecretError,secretCode, type SecretCode, type SecretKey} from './crypto.js';
@@ -11,7 +11,7 @@ import {checkpoint, type SecretKeyReport} from './start.js';
 const DAY=86_400_000;
 export const permanentAccess = (code:string) => ['credential_rejected','credential_auth_rejected','credential_expired','credential_revoked','credential_wrong_type','credential_permission','credential_account_mismatch','credential_unreadable','secret_key_missing','secret_key_mismatch','secret_key_metadata_invalid','credential_provider_unknown'].includes(code);
 export type SourceAccess = {error:SecretCode|null;expiresAt:number|null;expiryKind?:import('../connectors/registry.js').ExpiryKind;canRefresh:boolean;credentialIds:string[]};
-export type CredentialOptions={allowNoExpiry?:boolean;allowUnknownExpiry?:boolean;confirmSameAccount?:boolean;sameAccount?:boolean;requestId?:string;account?:AccountTarget};
+export type CredentialOptions={allowNoExpiry?:boolean;allowUnknownExpiry?:boolean;sameAccount?:boolean;requestId?:string;account?:AccountTarget};
 type Options=CredentialOptions;
 
 /** Trusted keys are write-only; raw errors stop inside this service. */
@@ -78,14 +78,11 @@ export class Credentials {
     return {...answer,expiryKind:expiry};
   }
   private options(connector:Connector,options:Options,replacing:boolean) {
-    if(connector.declaredAccounts) {
-      if(options.allowNoExpiry!==undefined||options.sameAccount!==undefined)throw new SecretError('credential_invalid');
-      if(replacing&&options.confirmSameAccount!==true)throw new SecretError('credential_account_confirmation');
-    }else if(connector.identityOrigin==='declared') {
-      if(options.allowNoExpiry!==undefined||options.account!==undefined||options.confirmSameAccount!==undefined)throw new SecretError('credential_invalid');
+    if(connector.identityOrigin==='declared') {
+      if(options.allowNoExpiry!==undefined||!connector.declaredAccounts&&options.account!==undefined)throw new SecretError('credential_invalid');
       if(replacing&&options.sameAccount!==true)throw new SecretError('credential_account_confirmation');
-      if(!replacing&&options.sameAccount!==undefined)throw new SecretError('credential_invalid');
-    }else if(options.account!==undefined||options.confirmSameAccount!==undefined||options.sameAccount!==undefined||options.allowUnknownExpiry!==undefined)throw new SecretError('credential_invalid');
+      if(!replacing&&!connector.declaredAccounts&&options.sameAccount!==undefined)throw new SecretError('credential_invalid');
+    }else if(options.account!==undefined||options.sameAccount!==undefined||options.allowUnknownExpiry!==undefined)throw new SecretError('credential_invalid');
   }
   private accept(source:string,result:ConnectorIdentity) {
     if(result.quotaObservation)this.store.quotaObservation(source,result.quotaObservation,result.measurement);
@@ -100,12 +97,12 @@ export class Credentials {
   }
   private target(owner:string,provider:string,selected:AccountTarget|null,options:Options):{name:string;row:null}|{name:null;row:DeclaredAccount}|null {
     if(!this.connector(provider).declaredAccounts) {
-      if(options.account!==undefined||options.confirmSameAccount!==undefined||options.allowUnknownExpiry!==undefined)throw new SecretError('credential_invalid');return null;
+      if(options.account!==undefined||options.sameAccount!==undefined||options.allowUnknownExpiry!==undefined)throw new SecretError('credential_invalid');return null;
     }
     if(options.allowNoExpiry!==undefined)throw new SecretError('credential_invalid');
     if(!selected)throw new SecretError('credential_invalid');
     if(selected.kind==='new')return {name:selected.name,row:null};
-    if(options.confirmSameAccount!==true)throw new SecretError('credential_account_confirmation');
+    if(options.sameAccount!==true)throw new SecretError('credential_account_confirmation');
     return {name:null,row:this.accounts.get(owner,provider,selected.id)};
   }
   private answer(row:CredentialRow):Credential {return this.#repository.answer(row.user_id,row.id)!;}
@@ -142,8 +139,7 @@ export class Credentials {
           if(target?.row&&!this.accounts.current(target.row))throw new SecretError('credential_conflict');
           const account=target?(target.row??this.accounts.add(owner,provider,target.name!,account=>this.store.source(provider as Provider,account,Date.now()))):null;
           const declared=identity.identityOrigin==='declared';
-          const pseudonym=declared?createHash('sha256').update('quotum/declared-account/v1\n'+owner+'\n'+provider+'\n'+randomUUID()).digest('hex').slice(0,24):identity.account;
-          source=account?.source_id??this.store.source(provider as Provider,pseudonym!,Date.now());
+          source=account?.source_id??this.store.source(provider as Provider,declared?declaredPseudonym(owner,provider,randomUUID()):identity.account!,Date.now());
           const provenance=this.db.prepare('SELECT kind,owner_id FROM source_identity WHERE source_id=?').get(source);
           if(provenance&&(provenance.kind!==(declared?'declared':'supplier')||declared&&provenance.owner_id!==owner))throw new SecretError('credential_account_mismatch');
           this.db.prepare('INSERT OR IGNORE INTO source_identity(source_id,kind,owner_id) VALUES (?,?,?)').run(source,declared?'declared':'supplier',declared?owner:null);

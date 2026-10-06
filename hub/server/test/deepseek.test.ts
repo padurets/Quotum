@@ -79,12 +79,12 @@ test('declared identity separates owners and accounts, rotation/reconnect preser
     await assert.rejects(h.create(),/declared_account_name_conflict/);
     const count=h.calls;
     await assert.rejects(h.credentials.replace(h.alice.id,a.id,'sk-'+ 'b'.repeat(32),{allowUnknownExpiry:true}),/credential_account_confirmation/);assert.equal(h.calls,count);
-    await assert.rejects(h.credentials.create(h.alice.id,'deepseek','sk-'+ 'a'.repeat(32),{account:{kind:'existing',id:other.accountId!},confirmSameAccount:true,allowUnknownExpiry:true}),/declared_account_not_found/);assert.equal(h.calls,count);
-    await assert.rejects(h.credentials.replace(h.alice.id,a.id,'sk-'+ 'b'.repeat(32),{confirmSameAccount:true}),/credential_expiry_confirmation/);
-    assert.equal((await h.credentials.replace(h.alice.id,a.id,'sk-'+ 'b'.repeat(32),{confirmSameAccount:true,allowUnknownExpiry:true})).sourceId,a.sourceId);
+    await assert.rejects(h.credentials.create(h.alice.id,'deepseek','sk-'+ 'a'.repeat(32),{account:{kind:'existing',id:other.accountId!},sameAccount:true,allowUnknownExpiry:true}),/declared_account_not_found/);assert.equal(h.calls,count);
+    await assert.rejects(h.credentials.replace(h.alice.id,a.id,'sk-'+ 'b'.repeat(32),{sameAccount:true}),/credential_expiry_confirmation/);
+    assert.equal((await h.credentials.replace(h.alice.id,a.id,'sk-'+ 'b'.repeat(32),{sameAccount:true,allowUnknownExpiry:true})).sourceId,a.sourceId);
     h.credentials.remove(h.alice.id,a.id);assert.equal(h.store.holds(h.alice.id,a.sourceId!),false);
     assert.equal(h.credentials.listAccounts(h.alice.id,'deepseek').accounts.find(r=>r.id===a.accountId)?.connected,false);
-    const back=await h.credentials.create(h.alice.id,'deepseek','sk-'+ 'c'.repeat(32),{account:{kind:'existing',id:a.accountId!},confirmSameAccount:true,allowUnknownExpiry:true});
+    const back=await h.credentials.create(h.alice.id,'deepseek','sk-'+ 'c'.repeat(32),{account:{kind:'existing',id:a.accountId!},sameAccount:true,allowUnknownExpiry:true});
     assert.equal(back.sourceId,a.sourceId);assert.equal(h.store.meters.readings(a.sourceId!,'balance:CNY',0,100).length,1);
     for(const name of ['','\u0000','sk-'+ 'a'.repeat(32)])await assert.rejects(h.create(h.alice.id,name),/credential_invalid/);
   }finally{h.close();}
@@ -92,7 +92,7 @@ test('declared identity separates owners and accounts, rotation/reconnect preser
 
 test('withdrawal invalidates pending existing creates, while explicit reconnect and additional bindings remain possible',async()=>{
   const h=harness();try {
-    const first=await h.create(),options={account:{kind:'existing' as const,id:first.accountId!},confirmSameAccount:true,allowUnknownExpiry:true};
+    const first=await h.create(),options={account:{kind:'existing' as const,id:first.accountId!},sameAccount:true,allowUnknownExpiry:true};
     h.delay();const pending=h.credentials.create(h.alice.id,'deepseek','sk-'+ 'b'.repeat(32),options);
     h.credentials.remove(h.alice.id,first.id);h.finish();await assert.rejects(pending,/credential_conflict/);
     assert.equal(h.credentials.list(h.alice.id).length,0);assert.equal(h.store.holds(h.alice.id,first.sourceId!),false);
@@ -106,7 +106,7 @@ test('withdrawal invalidates pending existing creates, while explicit reconnect 
 test('declared account creation replay compares identity rather than JSON property order',async()=>{
   const h=harness();try {
     const account=await h.create(),requestId='11111111-1111-4111-8111-111111111111',secret='sk-'+ 'b'.repeat(32);
-    const options={account:{kind:'existing' as const,id:account.accountId!},confirmSameAccount:true,allowUnknownExpiry:true,requestId};
+    const options={account:{kind:'existing' as const,id:account.accountId!},sameAccount:true,allowUnknownExpiry:true,requestId};
     const first=await h.credentials.create(h.alice.id,'deepseek',secret,options),calls=h.calls;
     const replay=await h.credentials.create(h.alice.id,'deepseek',secret,{...options,account:{id:account.accountId!,kind:'existing'}});
     assert.equal(replay.id,first.id);assert.equal(replay.replayed,true);assert.equal(h.calls,calls);
@@ -211,8 +211,8 @@ test('owner routes keep declared identity and expiry private, shared refresh is 
     assert.equal(malformed.statusCode,400);assert.equal(malformed.json().error,'credential_invalid');assert.equal(h.calls,reads);
   }
   assert.deepEqual((await call('GET','/api/source-accounts?provider=deepseek',undefined,h.bob.id)).json().accounts,[]);
-  const foreign=await call('POST','/api/credentials',{...input,account:{kind:'existing',id:dto.accountId},confirmSameAccount:true,allowUnknownExpiry:true},h.bob.id);assert.equal(foreign.statusCode,404);
-  assert.equal((await call('POST','/api/credentials/'+dto.id,{secret:input.secret,sourceId:dto.sourceId,confirmSameAccount:true,allowUnknownExpiry:true})).statusCode,400);
+  const foreign=await call('POST','/api/credentials',{...input,account:{kind:'existing',id:dto.accountId},sameAccount:true,allowUnknownExpiry:true},h.bob.id);assert.equal(foreign.statusCode,404);
+  assert.equal((await call('POST','/api/credentials/'+dto.id,{secret:input.secret,sourceId:dto.sourceId,sameAccount:true,allowUnknownExpiry:true})).statusCode,400);
   const board=h.directory.createBoard('Shared',h.alice.id,now);h.directory.addMember(board.id,h.bob.id,now);h.store.share(board.id,dto.sourceId,h.alice.id,now);
   const own=(await call('GET','/api/boards/'+board.id+'/shares')).json();assert.equal(own.mine[0].accountLabel,'PRIVATE_PERSONAL');
   const shared=await call('GET','/api/overview?board='+board.id,undefined,h.bob.id);

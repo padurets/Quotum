@@ -763,7 +763,11 @@ source holding atomically. A replacement cannot change the account. No-expiry ac
 requires explicit consent. DeepSeek has declared identity: each owner creates an
 immutable account UUID and private name, independent of keys. An owner/provider-scoped
 pseudonym determines the source. Same-account replacement requires an attestation;
-a different account needs a new connection. Removing the last key releases the holding
+a different account needs a new connection. Both declared connectors use the same
+`sameAccount` attestation and owner/provider/logical-UUID pseudonym generator. Named
+accounts additionally support explicit selection and reconnection; neither names nor
+keys identify an account. Existing source bindings are reused without recalculating
+their pseudonyms. Removing the last key releases the holding
 but preserves identity and retained history for explicit reconnection. A persisted
 last-binding deletion trigger advances its lifecycle revision. Unknown key expiry is
 stored separately from no expiry and requires its own acknowledgement. Owner account

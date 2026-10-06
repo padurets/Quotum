@@ -23,7 +23,7 @@ function fixture(initialOwner='u'){
     if(name==='react/jsx-runtime')return {jsx:(type:unknown,props:Node['props'])=>({type,props}),jsxs:(type:unknown,props:Node['props'])=>({type,props}),Fragment:'fragment'};
     if(name.endsWith('/http'))return {ApiError,call:(method:string,url:string,body:unknown)=>{calls.push({method,url,body});return new Promise((resolve,reject)=>reads.push({resolve,reject}));}};
     if(name.endsWith('/board'))return {useApp:()=>null,useTitles:()=>({}),page:{listen:(listener:typeof notify)=>{notify=listener;return()=>{};}}};
-    if(name.endsWith('/providers'))return {PROVIDERS:{openrouter:{name:'OpenRouter'},deepseek:{name:'DeepSeek'}}};
+    if(name.endsWith('/providers'))return {PROVIDERS:{openrouter:{name:'OpenRouter'},deepseek:{name:'DeepSeek'},zai:{name:'z.ai'}}};
     if(name.endsWith('/i18n'))return {t:(key:string)=>key};
     if(name.endsWith('/format'))return {stamp:()=>''};
     if(name==='./Kit')return {Field:field,ErrorLine:errorLine,Modal:modal};
@@ -33,7 +33,7 @@ function fixture(initialOwner='u'){
   }};
   runInNewContext(ts.transpileModule(readFileSync(new URL('../components/Connections.tsx',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
   const render=()=>{hooks.begin();const tree=context.exports.ConnectedAccounts({userId,trustedKeys:{available:true},onReplace:()=>{}});hooks.commit();return nodes(tree);};
-  const form=()=>{hooks.begin();const node=context.exports.ConnectSource({provider:'deepseek',userId,local:false,trustedKeys:{available:true},onClose:()=>{}}),tree=(node.type as (props:unknown)=>Node)(node.props);hooks.commit();return nodes(tree);};
+  const form=(provider='deepseek',replace:unknown=null)=>{hooks.begin();const node=context.exports.ConnectSource({provider,userId,replace,local:false,trustedKeys:{available:true},onClose:()=>{}}),tree=(node.type as (props:unknown)=>Node)(node.props);hooks.commit();return nodes(tree);};
   const reply={credentials:[{id:'c',provider:'openrouter',sourceId:null,hint:'abcd',lastError:null,expiresAt:null}]};
   return {reads,calls,reply,render,form,field,event:()=>notify({type:'hub',event:{type:'sourceAccess'}}),errors:()=>render().filter(n=>n.type===errorLine),rows:()=>render().filter(n=>typeof n.type==='function'&&n.props.name==='OpenRouter'),owner:(next:string)=>{userId=next;},unmount:()=>{for(const cleanup of cleanups)cleanup();cleanups.clear();},removing:()=>render().some(n=>n.type===modal)};
 }
@@ -59,7 +59,28 @@ test('the connection form keeps paging accounts and their attestations in the cu
   const saving=(f.form().find(n=>n.type==='form')!.props.onSubmit as (event:unknown)=>Promise<void>)({preventDefault:()=>{}});
   const post=f.calls.find(c=>c.method==='POST');assert.ok(post);
   assert.deepEqual(JSON.parse(JSON.stringify((post.body as {account:unknown}).account)),{kind:'existing',id:second});
+  assert.equal((post.body as {sameAccount:boolean}).sameAccount,true);
   f.reads[2].resolve({});await saving;
+  f.unmount();
+});
+
+for(const provider of ['deepseek','zai'])test(`${provider} replacement submits the shared same-account attestation and withdraws it on key changes`,async()=>{
+  const f=fixture(),record={id:'credential',provider,accountName:'Personal'};
+  const form=()=>f.form(provider,record),submit=()=> (form().find(n=>n.type==='form')!.props.onSubmit as (e:unknown)=>Promise<void>)({preventDefault:()=>{}});
+  const change=(node:Node,value:string|boolean)=>(node.props.onChange as (e:unknown)=>void)({target:{value,checked:value}});
+  const secret=()=>form().find(n=>n.type===f.field&&n.props.type==='password')!;
+  const checks=()=>form().filter(n=>n.type==='input'&&n.props.type==='checkbox');
+  form();change(secret(),'synthetic-first-key');await submit();assert.equal(f.calls.length,0);
+  for(const checkbox of checks())change(checkbox,true);
+  if(provider==='zai') {
+    const confirmation=submit();f.reads[0].reject(new ApiError(409,'credential_expiry_confirmation'));await confirmation;await flush();
+    assert.equal(checks().length,2);for(const checkbox of checks())change(checkbox,true);
+  }
+  const saving=submit(),post=f.calls.at(-1)!;
+  assert.equal(post.url,'/api/credentials/credential');
+  assert.deepEqual(JSON.parse(JSON.stringify(post.body)),{secret:'synthetic-first-key',sameAccount:true,allowUnknownExpiry:true});
+  f.reads.at(-1)!.resolve({});await saving;
+  const count=f.calls.length;change(secret(),'synthetic-second-key');await submit();assert.equal(f.calls.length,count,'a new key needs a new same-account confirmation');
   f.unmount();
 });
 
