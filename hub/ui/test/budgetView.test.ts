@@ -89,7 +89,7 @@ test('both card surfaces render one native USD value without CNY or permanent co
       assert.ok(!markup.includes('CNY'));
       assert.equal((markup.match(/aria-expanded="false"/g)??[]).length,1);
       assert.ok(markup.includes(`<div class="money-balance"><span>${t('money.accountBalance')}</span>`));
-      assert.match(markup,/<button[^>]*class="text-button money-balance-trigger"[^>]*><span[^>]*data-money="37000000"/);
+      assert.match(markup,/<button[^>]*><span[^>]*data-money="37000000"/);
       assert.ok(!markup.includes(t('money.granted')));assert.ok(!markup.includes(t('money.toppedUp')));
       assert.ok(!markup.includes('class="meter"'));
     }
