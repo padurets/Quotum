@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {createElement} from 'react';
+import {createElement,type ReactNode} from 'react';
+import * as React from 'react';
 import * as jsx from 'react/jsx-runtime';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {readFileSync} from 'node:fs';
@@ -17,6 +18,9 @@ import {deepSeekMeasurement} from '../../server/connectors/deepseek';
 import * as currency from '../../server/domain/currency';
 import {defaultCurrencyContext} from '../../server/domain/currency';
 import {Store} from '../../server/store/store';
+import * as statusMarks from '../components/StatusMark';
+
+Object.assign(globalThis,{React});
 
 const meter=(id:string,amount='0',unit:Meter['unit']='USD'):Meter=>({id,amount,unit,kind:'balance',limit:null,at:1,staleAfterMs:1000,stale:false,resetAt:null,minutes:null,scope:null,label:null});
 const key=(id:string):KeyPart=>({id,name:id,disabled:false,expiresAt:null,includeByok:false,at:1,staleAfterMs:1000,presence:'observed',missCount:0,periods:{day:'999000000',week:null,month:null},byokUsage:{total:'888000000',day:null,week:null,month:null}});
@@ -27,7 +31,7 @@ const dual=()=>card('deepseek',[
 ]);
 
 // Exercise the production card with a closed disclosure and no network or page clock.
-const fixture={exports:{} as {MoneyCard:(props:{source:Card;board:string;compact?:boolean})=>ReturnType<typeof createElement>},require:(name:string)=>{
+const fixture={exports:{} as {MoneyCard:(props:{source:Card;board:string;compact?:boolean})=>ReturnType<typeof createElement>;BalanceMark:(props:{source:Card})=>ReturnType<typeof createElement>|null},require:(name:string)=>{
   if(name==='react/jsx-runtime')return jsx;
   if(name==='../../server/domain/currency')return currency;
   if(name==='../../server/domain/meters')return meterDomain;
@@ -35,14 +39,38 @@ const fixture={exports:{} as {MoneyCard:(props:{source:Card;board:string;compact
   if(name==='../lib/format')return format;
   if(name==='../i18n')return {t};
   if(name==='../lib/moneyKeys')return {useShownKeys:(source:Card)=>({keys:source.keys??[],meters:source.meters??[],error:null})};
-  if(name==='./Popover')return {Popover:({trigger}:{trigger:string})=>createElement('button',{'aria-expanded':false},trigger)};
+  if(name==='./Popover')return {Popover:({trigger,triggerClass,label}:{trigger:ReactNode;triggerClass?:string;label:string})=>createElement('button',{'aria-expanded':false,className:triggerClass,'aria-label':label},trigger)};
+  if(name==='./StatusMark')return statusMarks;
   if(name==='./Kit')return {ErrorLine:()=>null};
   if(name==='../lib/board')return {useCurrencyContext:()=>defaultCurrencyContext};
+  if(name==='../lib/clock')return {useClock:()=>1};
   if(['../lib/board','../lib/clock','../lib/http','../lib/quota','./Meter'].includes(name))return {};
   throw new Error(name);
 }};
 runInNewContext(ts.transpileModule(readFileSync(new URL('../components/MoneyCard.tsx',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2023,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,fixture);
 const {MoneyCard}=fixture.exports;
+
+test('balance news uses the shared warning icon and status tones rather than a text badge',()=>{
+  for(const locale of ['en','ru'] as const) {
+    setLocale(locale);
+    const available=card('deepseek',[meter('balance:USD','37000000')]);
+    available.balanceStatus={at:1,staleAfterMs:1000,isAvailable:true,partial:false,issues:[]};
+    assert.equal(renderToStaticMarkup(createElement(fixture.exports.BalanceMark,{source:available})), '');
+    const cases:[Card,'warn'|'crit'][] = [
+      [{...available,balanceStatus:{...available.balanceStatus,partial:true,issues:['currency_missing' as const]}},'warn'],
+      [{...available,balanceStatus:{...available.balanceStatus,isAvailable:false}},'crit'],
+      [{...card('openrouter',[]),currencyUnavailable:true},'warn'],
+    ];
+    for(const [source,tone] of cases) {
+      const markup=renderToStaticMarkup(createElement(fixture.exports.BalanceMark,{source}));
+      assert.match(markup,new RegExp(`class="[^"]*tray-pill is-${tone}(?: |")`));
+      assert.match(markup,/<svg class="tray-icon"[^>]*width="13"[^>]*height="13"/);
+      assert.ok(markup.includes('m12 3 10 18H2Z'));
+      assert.ok(!markup.includes('>!</span>'));
+    }
+  }
+  setLocale('en');
+});
 
 test('budget cards select native USD and its own composition without accounting or phantom caps',()=>{
   const source=dual(),extra={...meter('key:k:cap','1000000'),kind:'cap' as const,limit:'9000000'};
