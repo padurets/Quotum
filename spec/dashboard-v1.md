@@ -773,7 +773,10 @@ part. Daily marks span the original day; no hourly distribution, lifetime counte
 quota forecast or top-up is inferred. Report byte leaves count toward the same history
 limits and use the existing staging and preparation scheduler. Report-only sources are
 selected by default in Spending; allowance and spending selections persist separately.
-Legacy explicit money selections remain available in both modes.
+Legacy explicit money selections remain available in both modes. A monthly spending
+cap is not selected by default in Balance. Cards and compact display its configured
+threshold and independently fresh enforcement status without a balance percentage
+scale; reported spending remains in analytics.
 
 Owner credential records and `sourceAccess` can include `expiryKnown`. Missing means
 true for older readers. A null expiry with false means unknown, not unlimited; saving

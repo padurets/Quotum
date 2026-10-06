@@ -1,5 +1,6 @@
 import type {Meter,KeyPart} from '../../server/domain/meters';
 import type {SourceAccess} from '../../server/secrets/credentials';
+import type {MonthlyLimit} from '../../server/domain/reports';
 import {countdownChangesAt} from './format';
 import {formatLocale} from '../i18n';
 
@@ -23,6 +24,9 @@ export function capChangesAt(meter:Meter,now:number):number|null {
   const staleAt=meter.at+meter.staleAfterMs+1;
   return meter.resetAt===null?staleAt:Math.min(staleAt,meter.resetAt);
 }
+
+export const monthlyLimitStale=(limit:MonthlyLimit|undefined,now:number)=>!limit?.value||limit.status!=='ok'||limit.valueAt===null||now>limit.valueAt+limit.staleAfterMs;
+export const monthlyLimitChangesAt=(limit:MonthlyLimit|undefined,now:number):number|null=>monthlyLimitStale(limit,now)?null:limit!.valueAt!+limit!.staleAfterMs+1;
 export function capPercent(meter:Meter):number|null {
   const limit=BigInt(meter.limit??'0');if(limit<=0n)return null;
   const basis=BigInt(meter.amount)*10_000n/limit;

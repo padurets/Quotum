@@ -606,10 +606,12 @@ and supplier retry deadlines persist through refresh, replacement and restart.
 Reported values travel through the existing history tiles in small byte leaves, with
 original daily bounds and value revisions. Current confirmation is a source projection,
 so quality-only changes need no history read and cannot mark an old cached value fresh.
-Cards and compact show monthly allowance and enforcement; analytics show reported
-costs and UTC calendar summaries. A known allowance requires confirmed monthly coverage
-and a fresh same-currency limit. These measurements never enter quota forecasts or
-notifications.
+Cards and compact show the configured monthly threshold and its current enforcement
+state, independently of cost coverage. A spending constraint has no balance percentage
+scale and is not selected as an account balance. Analytics show reported costs and UTC
+calendar summaries. The source projection retains a derived allowance only with
+confirmed monthly coverage and a fresh same-currency limit; it does not infer prepaid
+credits. These measurements never enter quota forecasts or notifications.
 
 ## Trusted connector keys
 

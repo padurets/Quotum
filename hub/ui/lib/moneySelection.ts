@@ -25,8 +25,7 @@ export function moneySelection(cards:readonly Card[],hidden:readonly string[],se
     const balance=card.meters?.find(m=>m.kind==='balance'&&m.unit===settings.unit);
     if(balance)return [[card.id,balance.id] as [string,string]];
     if(settings.view==='spending'&&card.reportQuality&&(card.reportQuality.some(q=>q.unit===settings.unit)||settings.unit==='USD'&&!card.reportQuality.length))return [[card.id,'costs'] as [string,string]];
-    const cap=card.meters?.find(m=>m.kind==='cap'&&m.unit===settings.unit&&m.id==='monthly');
-    return settings.view==='balance'&&cap?[[card.id,cap.id] as [string,string]]:[];
+    return [];
   });
   const admitted=ids.filter(([source])=>visible.has(source));
   return {selection:selectionOf(admitted.slice(0,MAX_METERS),settings.unit),omitted:Math.max(0,admitted.length-MAX_METERS),removed:ids.length-admitted.length};

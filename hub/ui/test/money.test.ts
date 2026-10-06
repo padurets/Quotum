@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {money,capPercent,capStale,capChangesAt,accessTone,accessChangesAt} from '../lib/money';
+import {money,capPercent,capStale,capChangesAt,monthlyLimitStale,monthlyLimitChangesAt,accessTone,accessChangesAt} from '../lib/money';
 import {setLocale} from '../i18n';
 import {archivedKeyGroups,moneySelection,readMoney,chooseMoney} from '../lib/moneySelection';
 import {moneyTotal,type MeterHistory} from '../lib/moneyView';
@@ -54,6 +54,17 @@ test('a selected cap stays fresh until its own deadline or earlier reset',()=>{
   assert.equal(capChangesAt(cap,100),800);assert.equal(capStale(cap,799),false);assert.equal(capStale(cap,800),true);assert.equal(capChangesAt(cap,800),null);
   const lifetime={...cap,resetAt:null};assert.equal(capChangesAt(lifetime,1100),1101);assert.equal(capStale(lifetime,1100),false);assert.equal(capStale(lifetime,1101),true);
 });
+test('monthly enforcement becomes unknown at its read deadline, independently of cost coverage',()=>{
+  const limit={status:'ok' as const,observedAt:100,error:null,value:{unit:'USD',amount:'0',enforcement:'enforcing' as const},valueAt:100,staleAfterMs:1000};
+  assert.equal(monthlyLimitStale(limit,1100),false);
+  assert.equal(monthlyLimitChangesAt(limit,1100),1101);
+  assert.equal(monthlyLimitStale(limit,1101),true);
+  assert.equal(monthlyLimitChangesAt(limit,1101),null);
+  for(const unknown of [undefined,{...limit,value:null},{...limit,valueAt:null},{...limit,status:'unavailable' as const}]){
+    assert.equal(monthlyLimitStale(unknown,100),true);
+    assert.equal(monthlyLimitChangesAt(unknown,100),null);
+  }
+});
 test('explicit card scales outside the bounded preview survive saving, reload and preview changes',()=>{
   const preview=[{id:'first'}],source='openrouter:fixture';
   assert.equal(keyShown(EMPTY_VIEW,source,'first',preview),true);
@@ -86,7 +97,7 @@ test('source access is an independent private slice and disappears with its line
 });
 
 test('reported-only sources default to Spending and mode choices preserve earlier explicit selections',()=>{
-  const reported={...card('report'),meters:[],reportQuality:[]};
+  const reported={...card('report'),meters:[{...meter('monthly','30000000'),kind:'cap' as const,limit:'100000000',scope:'monthly'}],reportQuality:[]};
   const legacy=readMoney({unit:'USD',view:'balance',selected:{USD:[['one','balance']]}});
   const spending=chooseMoney({...legacy,view:'spending'},'USD',[['report','costs']]);
   assert.deepEqual(moneySelection([card('one'),reported],[],spending).selection?.ids,[['report','costs']]);

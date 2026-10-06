@@ -360,10 +360,11 @@ Costs and Spend Limit GET methods. The server operator can decrypt stored access
 local desktop mode uses the app’s existing key protection. The selected methods do not
 report the key’s expiry, so saving it requires confirmation of an unknown deadline.
 
-The card and compact panel show the configured monthly limit, remaining allowance,
-any overspend and enforcement state. This allowance is a budget, not a prepaid balance
-or a promise that model requests will succeed. Inaccessible or unknown limits remain
-unknown, including a Spend Limit 404, while valid costs survive.
+The card and compact panel show the configured monthly limit and its enforcement
+state. This is an organization spending constraint, with no percentage scale or
+prepaid balance inferred from it. Inaccessible or unknown limits remain unknown,
+including a Spend Limit 404, while valid costs survive. These API methods do not
+report the credit balance or credit expiry dates.
 
 Choose a currency and **Spending** in analytics for reported daily costs and UTC calendar
 summaries (weeks begin on Monday). Repeated reports replace the same day; late data and

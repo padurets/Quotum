@@ -758,6 +758,8 @@ export const ru = {
   "refresh.updated_partially": "Обновлено частично",
   "refresh.row.updated_partially": "Обновлено частично",
   "money.monthlyLimit": "Месячный лимит расходов",
+  "money.configuredMonthlyLimit": "Настроенный месячный лимит",
+  "money.configuredLimitHint": "Это настроенное организацией ограничение расходов. Оно не сообщает остаток кредитов и даты их сгорания.",
   "money.allowance": "Остаток лимита",
   "money.overspend": "Превышение лимита",
   "money.enforcing": "Применяется",

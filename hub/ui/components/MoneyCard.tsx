@@ -1,7 +1,7 @@
 import type {Card,View} from '../lib/types';
 import type {KeyPart,Meter} from '../../server/domain/meters';
 import {useSourceAccess} from '../lib/board';
-import {money,keyName,capLeft,capPercent,capStale,capChangesAt,accessTone,accessChangesAt,ACCESS_WARNING_MS} from '../lib/money';
+import {money,keyName,capLeft,capPercent,capStale,capChangesAt,monthlyLimitStale,monthlyLimitChangesAt,accessTone,accessChangesAt,ACCESS_WARNING_MS} from '../lib/money';
 import {stamp,countdown,duration,countdownChangesAt,earliest} from '../lib/format';
 import {useClock} from '../lib/clock';
 import {t} from '../i18n';
@@ -46,7 +46,7 @@ export function KeyMetrics({part,meters,compact=false}:{part:KeyPart;meters:read
 }
 export function MoneyCard({source,board,view,compact=false}:{source:Card;board:string;view?:View;compact?:boolean}) {
   const balance=source.meters?.find(m=>m.id==='balance'),{keys,meters,error}=useShownKeys(source,view,board);
-  if(source.reportQuality!==undefined)return <BudgetCard source={source} compact={compact}/>;
+  if(source.reportQuality!==undefined&&!balance)return <BudgetCard source={source} compact={compact}/>;
   const unit=balance?.unit??'USD',formatted=money(balance?.amount,unit),amount=balance?.amount==null?formatted:formatted.slice(0,-unit.length-1);
   return <div className="money-body">
     <div className="money-balance" title={money(balance?.amount,unit,true)}><span>{t('money.accountBalance')}</span><span className="limit-value" data-money={balance?.amount}>{amount}{balance?.amount!=null&&<small>{unit}</small>}</span></div>
@@ -69,26 +69,29 @@ export function AccessMark({id}:{id:string}) {
   </>}><div className="tray-panel"><div className="tray-panel-head"><p className="tray-panel-lead">{lead}</p>{text&&<p className="tray-panel-when">{expiry}</p>}</div></div></Popover></span>;
 }
 
+function MonthlyLimitStatus({source}:{source:Card}) {
+  const limit=source.monthlyLimit;
+  const now=useClock(now=>monthlyLimitChangesAt(limit,now));
+  const stale=monthlyLimitStale(limit,now);
+  const enforcement=stale?'unknown':limit!.value!.enforcement;
+  const text=t(enforcement==='enforcing'?'money.enforcing':enforcement==='inactive'?'money.inactive':'money.enforcementUnknown');
+  return <span data-time="monthly-limit-status" title={stale?t('money.limitUnknown'):text}>
+    {stale&&<small className="key-status cap-stale" role="img" aria-label={t('money.limitUnknown')}/>}{text}
+  </span>;
+}
+
+/** A configured spending constraint is separate from an account's available funds. */
 function BudgetCard({source,compact}:{source:Card;compact:boolean}) {
-  const allowance=source.allowance,unit=allowance?.unit??'USD';
-  const remaining=allowance?.remaining??null,limit=allowance?.limit??null;
-  const percent=limit!==null&&BigInt(limit)>0n&&remaining!==null&&BigInt(remaining)<=BigInt(limit)?Number(BigInt(remaining)*10000n/BigInt(limit))/100:null;
-  const text=money(remaining,unit),value=remaining===null?text:text.slice(0,-unit.length-1);
-  const enforcement=allowance?.enforcement==='enforcing'?t('money.enforcing'):allowance?.enforcement==='inactive'?t('money.inactive'):t('money.enforcementUnknown');
-  const calendar=source.reportedSpending??[],month=calendar.find(c=>c.unit===unit)?.month;
-  const reason=calendar.some(c=>c.unit!==unit&&c.month.amount!==null)?t('money.currencyMismatch'):allowance?.stale?t('money.stale'):allowance&&remaining===null&&!month?.confirmed?t('money.lastKnown'):'';
-  const trouble=source.monthlyLimit?.status==='unavailable'||allowance?.stale;
-  const mark=trouble?<small className="key-status cap-stale" role="img" aria-label={t('money.limitUnknown')} title={t('money.limitUnknown')}/>:null;
-  const detail=[t('money.monthlyLimit'),money(limit,unit,true),enforcement,allowance?.overspend&&BigInt(allowance.overspend)>0n?t('money.overspend')+': '+money(allowance.overspend,unit,true):'',reason].filter(Boolean).join('\n');
+  const limit=source.monthlyLimit?.value,unit=limit?.unit??'USD';
+  const text=money(limit?.amount,unit),value=limit?text.slice(0,-unit.length-1):text;
+  const detail=t('money.configuredLimitHint');
   if(compact)return <div className="money-body"><div className="limits money-limits"><div className="compact-limit is-money">
-    <div className="compact-window-name"><span title={detail}>{t('money.monthlyLimit')}{mark}</span></div>
-    <small className="compact-reset" title={detail}>{enforcement}</small>
-    <MeterBar remaining={percent} label={t('money.monthlyLimit')}/>
-    <strong className="limit-value" title={detail}>{value}{remaining!==null&&<small>{unit}</small>}</strong>
+    <div className="compact-window-name"><span title={detail}>{t('money.configuredMonthlyLimit')}</span></div>
+    <small className="compact-reset"><MonthlyLimitStatus source={source}/></small>
+    <strong className="limit-value" title={detail}>{value}{limit&&<small>{unit}</small>}</strong>
   </div></div></div>;
   return <div className="money-body"><div className="limits money-limits"><div className="limit money-limit">
-    <div className="limit-top"><span className="limit-name" title={detail}>{t('money.allowance')}{mark}</span><span className="limit-value" title={detail}>{value}{remaining!==null&&<small>{unit}</small>}</span></div>
-    <MeterBar remaining={percent} label={t('money.monthlyLimit')}/>
-    <div className="limit-bottom"><span title={detail}>{limit===null?t('money.limitUnknown'):t('money.of',{amount:money(limit,unit)})}</span><span title={detail}>{enforcement}</span></div>
+    <div className="limit-top"><span className="limit-name" title={detail}>{t('money.configuredMonthlyLimit')}</span><span className="limit-value" title={detail}>{value}{limit&&<small>{unit}</small>}</span></div>
+    <div className="limit-bottom"><MonthlyLimitStatus source={source}/></div>
   </div></div></div>;
 }

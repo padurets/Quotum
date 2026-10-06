@@ -763,6 +763,8 @@ export const en = {
   "refresh.updated_partially": "Partially updated",
   "refresh.row.updated_partially": "Partially updated",
   "money.monthlyLimit": "Monthly spend limit",
+  "money.configuredMonthlyLimit": "Configured monthly limit",
+  "money.configuredLimitHint": "This is the organization's configured spending limit. It does not report the credit balance or credit expiry dates.",
   "money.allowance": "Remaining allowance",
   "money.overspend": "Over the limit",
   "money.enforcing": "Enforcing",
