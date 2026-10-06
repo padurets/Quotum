@@ -13,6 +13,8 @@ import {setLocale,t} from '../i18n';
 import type {Card} from '../lib/types';
 import type {KeyPart,Meter} from '../../server/domain/meters';
 import {deepSeekMeasurement} from '../../server/connectors/deepseek';
+import * as currency from '../../server/domain/currency';
+import {defaultCurrencyContext} from '../../server/domain/currency';
 import {Store} from '../../server/store/store';
 
 const meter=(id:string,amount='0',unit:Meter['unit']='USD'):Meter=>({id,amount,unit,kind:'balance',limit:null,at:1,staleAfterMs:1000,stale:false,resetAt:null,minutes:null,scope:null,label:null});
@@ -26,16 +28,18 @@ const dual=()=>card('deepseek',[
 // Exercise the production card with a closed disclosure and no network or page clock.
 const fixture={exports:{} as {MoneyCard:(props:{source:Card;board:string;compact?:boolean})=>ReturnType<typeof createElement>},require:(name:string)=>{
   if(name==='react/jsx-runtime')return jsx;
+  if(name==='../../server/domain/currency')return currency;
   if(name==='../lib/money')return money;
   if(name==='../lib/format')return format;
   if(name==='../i18n')return {t};
   if(name==='../lib/moneyKeys')return {useShownKeys:(source:Card)=>({keys:source.keys??[],meters:source.meters??[],error:null})};
   if(name==='./Popover')return {Popover:({trigger}:{trigger:string})=>createElement('button',{'aria-expanded':false},trigger)};
   if(name==='./Kit')return {ErrorLine:()=>null};
+  if(name==='../lib/board')return {useCurrencyContext:()=>defaultCurrencyContext};
   if(['../lib/board','../lib/clock','../lib/http','../lib/quota','./Meter'].includes(name))return {};
   throw new Error(name);
 }};
-runInNewContext(ts.transpileModule(readFileSync(new URL('../components/MoneyCard.tsx',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,fixture);
+runInNewContext(ts.transpileModule(readFileSync(new URL('../components/MoneyCard.tsx',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2023,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,fixture);
 const {MoneyCard}=fixture.exports;
 
 test('budget cards select native USD and its own composition without accounting or phantom caps',()=>{

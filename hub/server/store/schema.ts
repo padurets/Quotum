@@ -210,6 +210,19 @@ export const STEPS = [
     '$.balanceStatus.partial',json(CASE WHEN EXISTS(SELECT 1 FROM json_each(state.payload,'$.balanceStatus.issues') WHERE value<>'rate_unavailable') THEN 'true' ELSE 'false' END))
     WHERE json_type(payload,'$.balanceStatus.issues')='array';
   `,
+  // 13 — private currency definitions, display preferences and immutable rate bindings.
+  `
+  CREATE TABLE currency_definitions (
+    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL, symbol TEXT NOT NULL,
+    fraction_digits INTEGER NOT NULL, archived_at INTEGER);
+  CREATE TABLE currency_preferences (user_id TEXT PRIMARY KEY, currency_id TEXT NOT NULL);
+  ALTER TABLE exchange_rates ADD COLUMN owner_id TEXT NOT NULL DEFAULT '';
+  CREATE INDEX exchange_rates_by_owner ON exchange_rates(owner_id,reference_date);
+  CREATE TABLE currency_bindings (
+    owner_id TEXT NOT NULL, source_id TEXT NOT NULL, from_currency TEXT NOT NULL, target_currency TEXT NOT NULL,
+    observation_at INTEGER NOT NULL, through_at INTEGER NOT NULL, anchor TEXT NOT NULL, steps TEXT NOT NULL,
+    PRIMARY KEY(owner_id,source_id,from_currency,target_currency,observation_at,anchor)) WITHOUT ROWID;
+  `,
 ];
 
 export const SCHEMA_VERSION = STEPS.length;

@@ -598,7 +598,7 @@ Connecting a source preserves `unit: null` subscription analytics until currency
 
 Budget presentation separates current funds, scoped allowances, accounting over a
 period and balance composition. Dashboard and compact cards project the same catalogue
-roles into one Available balance in USD, followed by
+roles into one Available balance in the reader's display currency, followed by
 selected catalogue-supported key caps. Composition is grouped by currency in the
 balance disclosure. Counters, reported period totals and BYOK are accounting evidence,
 not additional funds or automatic card rows. Key properties and inventory quality
@@ -613,9 +613,10 @@ provider catalogue capabilities. Cards and historical meter semantics may carry:
 conversion?: {
   original: {meterId: string; amount: string; unit: string; at: number};
   rate: {
-    id: string; source: 'ecb'; base: string; date: number; fetchedAt: number;
+    id: string; source: string; base: string; date: number; fetchedAt: number;
     from: string; to: string;
   };
+  steps?: RateLeg[]; // The same rate fields for each composed leg.
 };
 ```
 
@@ -631,9 +632,53 @@ a current USD valuation; this does not alter provider `balanceStatus` or key hea
 
 Native observations commit before currency-service reads. Quotes have no credential or
 account inputs. Failure retains original measurements and leaves USD unknown or stale,
-never zero. Existing events carry these additive fields; no currency settings or native
+never zero. Existing events carry these additive fields; no currency settings form or native
 bridge command is added. Original foreign-currency history stays available through the
 measurement API, and existing development-layout converted history is retained.
+
+Reader snapshots may include `currencies`, and a private `currencies` event updates it:
+
+```ts
+{
+  target: {id, name, symbol, fractionDigits},
+  definitions: [{id, name, symbol, fractionDigits}],
+  revision?: string,
+  sources: {[sourceId]: [{from, at, anchor: string | null, steps: RateLeg[]}]}
+}
+```
+
+USD is the initial policy, not a fixed widget contract. Definitions and display
+preference belong to the authenticated reader, independently of the shared board.
+A personal currency identity is `personal:<24 hex digits>`; native ingest units are
+unchanged. Only the owner receives that definition and its fixed-rate paths. Public
+rate snapshots can be reused across users. Native cap percentages and non-monetary
+units are never replaced by currency values. Missing paths show unknown target amounts,
+not zero or amounts silently labelled with another currency.
+
+For money history, optional `currency=<id>` selects the reader's persisted display
+currency. `unit` and `meters` continue to select native/reference data. An inaccessible
+currency returns `404 currency_not_found`; a changed preference returns
+`409 currency_changed`. Conversion follows native accounting and retains coverage,
+interruption and immutable quote assignments. Private converted responses are kept
+outside the shared native tile cache. No `currency` parameter preserves the earlier
+native history response.
+
+Authenticated registry operations, also available in local mode:
+
+- `GET /api/currencies`: the reader's target and personal definitions.
+- `POST /api/currencies`: `{name, symbol, fractionDigits, base, rate}` creates a personal
+  currency; `base` is a standard currency and `rate` is a positive exact millionth string
+  of personal units per base unit. Name/symbol limits are 64/12 characters; precision is
+  0..6. The initial ratio defines a fixed nominal unit for display and historical views.
+- `POST /api/currencies/display`: `{currency: id}` changes the one display preference.
+- `GET /api/currencies/:id`: an accessible definition and its retained quotes.
+- `POST /api/currencies/:id/rates`: `{base, rate, date?}` adds an owner-only fixed-rate
+  version, effective at `date` or the current time. Future dates are rejected.
+
+The hub issues personal identities. Names or symbols never identify or merge currencies.
+Private operations use existing authentication and origin guards; errors carry only
+`invalid_currency` or `currency_not_found`. These operations support the future settings
+section without introducing provider-specific widgets or currency controls.
 
 A frame that cannot fit losslessly in the history budget returns `413 history_limit`.
 

@@ -182,8 +182,9 @@ and platform smoke checks still apply.
   native facts; shared services own rate integrations, cache, exact conversion and
   provenance. Widgets consume common presentation and formatting instead of choosing
   provider-specific currencies or fetching rates. USD is the current display policy.
-  When adding currency settings, put the user's display currency and personal currency
-  definitions in one user-scoped registry and preference used by every monetary widget.
+  The user's display currency and personal currency definitions use one user-scoped
+  registry and persisted preference consumed by every monetary widget; future settings
+  forms must use that same contract.
   Keep public reference rates separate from private user rates. Preserve original
   amounts and recorded conversion provenance; changing a display preference must not
   rewrite provider history or turn exchange movements into spending. Percentage quotas

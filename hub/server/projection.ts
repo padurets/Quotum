@@ -1,6 +1,7 @@
 import {level, sameWindow, type AttentionState, type Candidate} from './domain/attention.js';
 import {sourceHidden, isWindowHidden, titled} from './domain/presentation.js';
 import {balanceDescriptor, catalogue, monetaryOf, providerOf} from './domain/providers.js';
+import {DEFAULT_CURRENCY,type CurrencyContext} from './domain/currency.js';
 import {utcPeriods,type CalendarSpend} from './domain/meters.js';
 import type {Credentials,SourceAccess} from './secrets/credentials.js';
 import type {HubSources} from './hubSources.js';
@@ -42,7 +43,7 @@ export type BoardPart = {board: {id: string; name: string; personal: boolean}; v
 export type SourcePart = {card: Card; sessions: BoardSession[]; cadence: Cadence; refresh: Refresh};
 /** Where the recent pace of a source's weekly windows leads, by window id (server/forecasts.ts). */
 export type ForecastPart = Record<string, WindowForecast>;
-export type ReaderPart = {mine: string[]; boards: Board[]};
+export type ReaderPart = {mine: string[]; boards: Board[];currencies:CurrencyContext};
 export type HubPart = {resets: Partial<Record<ResetProvider, ResetStatus>>; trackers: TrackerHealth[]; past: Record<string, Announcement[]>};
 
 /** The whole board for one reader at once (spec: `snapshot`). */
@@ -112,9 +113,9 @@ export class Projection {
       card.meters=card.meters.filter(m=>!m.id.startsWith('key:')||preview.has(m.id.split(':')[1])).map(m=>({...m,stale:m.stale||now>m.at+m.staleAfterMs||m.kind==='cap'&&m.resetAt!==null&&m.resetAt<=now}));
       const credits=card.meters.find(m=>m.id==='credits'),usage=card.meters.find(m=>m.id==='usage');
       if(credits&&usage&&credits.unit===usage.unit)card.meters.push({...usage,id:'balance',kind:'balance',amount:(BigInt(credits.amount)-BigInt(usage.amount)).toString(),stale:credits.stale||usage.stale});
-      const originals=card.meters.filter(m=>m.kind==='balance'&&m.unit!=='USD'&&balanceDescriptor(card.provider,m.id));
-      for(const native of originals){const value=store.currencies.project(source.id,native,'USD',now);if(value)card.meters.push(value);}
-      const nativeUsd=card.meters.some(m=>m.unit==='USD'&&!m.conversion&&balanceDescriptor(card.provider,m.id)?.role==='total');
+      const originals=card.meters.filter(m=>m.kind==='balance'&&m.unit!==DEFAULT_CURRENCY&&balanceDescriptor(card.provider,m.id));
+      for(const native of originals){const value=store.currencies.project(source.id,native,DEFAULT_CURRENCY,now);if(value)card.meters.push(value);}
+      const nativeUsd=card.meters.some(m=>m.unit===DEFAULT_CURRENCY&&!m.conversion&&balanceDescriptor(card.provider,m.id)?.role==='total');
       if(!nativeUsd&&originals.some(m=>!m.stale&&balanceDescriptor(card.provider,m.id)?.role==='total'&&!card.meters!.some(v=>v.conversion?.original.meterId===m.id&&!v.stale)))card.currencyUnavailable=true;
       card.spending=monetaryOf(card.provider)?.spending==='counter'?store.meters.calendar(source.id,now,state.successAt??utcPeriods(now).day):null;
     }
@@ -181,6 +182,16 @@ export class Projection {
   mine(user: string, lineup: BoardSource[]): string[] {
     return lineup.filter(s => s.holders.includes(user)).map(s => s.id);
   }
+  currencyContext(user:string,lineup:BoardSource[],now:number):CurrencyContext {
+    const {store}=this.hub;
+    if(store.currencies.preference(user).id===DEFAULT_CURRENCY)return store.currencies.context(user);
+    const inputs=Object.fromEntries(lineup.map(source=>{
+      const meters=store.state(source.id).meters??[],points=meters.map(m=>({unit:m.unit,at:m.at,anchor:null as string|null}));
+      for(const native of meters){const value=store.currencies.project(source.id,native,DEFAULT_CURRENCY,now);if(value?.conversion)points.push({unit:value.conversion.original.unit,at:value.conversion.original.at,anchor:value.conversion.rate.id});}
+      return [source.id,points];
+    }));
+    return store.currencies.context(user,inputs);
+  }
   sourceAccess(user:string,lineup:BoardSource[],now:number):Record<string,SourceAccess> {
     return Object.fromEntries(lineup.flatMap(s=>{
       const access=this.hub.credentials?.access(user,s.id,now);return access?[[s.id,access]]:[];
@@ -211,6 +222,7 @@ export class Projection {
     return {
       providers: catalogue,
       sourceAccess:this.sourceAccess(user,lineup,now),
+      currencies:this.currencyContext(user,lineup,now),
       board: part.board,
       view: part.view,
       historyStart: this.hub.store.historyStart(now),

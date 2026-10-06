@@ -14,6 +14,7 @@ import {tell, type Touches} from '../touches.js';
 import {migrate} from './schema.js';
 import {MeterStore} from './meters.js';
 import type {MeterSelection} from '../domain/meterHistory.js';
+import {DEFAULT_CURRENCY} from '../domain/currency.js';
 import {providerOf} from '../domain/providers.js';
 import {CurrencyStore} from './currencies.js';
 import {importLegacyCurrencies} from './legacyCurrencies.js';
@@ -66,6 +67,7 @@ export class Store {
   readonly meters: MeterStore;
   readonly currencies:CurrencyStore;
   private monetaryRecords=new Set<(source:string)=>void>();
+  private currencyChanges=new Set<(owner:string)=>void>();
   /** When this database was made. */
   private readonly created: number;
   private observer: Touches | null = null;
@@ -75,6 +77,7 @@ export class Store {
     this.db = new DatabaseSync(file);
     migrate(this.db, now);
     this.currencies=new CurrencyStore(this.db);
+    this.currencies.onChange=owner=>{if(owner){for(const listener of this.currencyChanges)listener(owner);tell(this.observer,o=>o.touchUser(owner));}};
     importLegacyCurrencies(this.db,this.currencies);
     this.meters = new MeterStore(this.db,this.currencies);
     this.created = Number((this.db.prepare("SELECT value FROM meta WHERE key = 'historyStart'").get() as {value: string}).value);
@@ -98,6 +101,11 @@ export class Store {
     this.observer = observer;
   }
   onMonetaryRecord(listener:(source:string)=>void){this.monetaryRecords.add(listener);return()=>{this.monetaryRecords.delete(listener);};}
+  onCurrencyChange(listener:(owner:string)=>void){this.currencyChanges.add(listener);return()=>{this.currencyChanges.delete(listener);};}
+  currencyReaders(source:string):string[] {
+    return (this.db.prepare('SELECT user_id FROM holders WHERE source_id=? UNION SELECT m.user_id FROM shares s JOIN members m ON m.board_id=s.board_id WHERE s.source_id=?').all(source,source) as {user_id:string}[]).map(r=>r.user_id).filter(user=>this.currencies.preference(user).id!==DEFAULT_CURRENCY);
+  }
+  currencyReaderChanged(owner:string){tell(this.observer,o=>o.touchUser(owner));}
   currencyChanged(source:string,since:number){tell(this.observer,o=>{o.touchSources([source]);o.history(source,since);});}
 
   /** The boards a source shows on: the personal boards of its holders and the boards it is shared with. */

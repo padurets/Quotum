@@ -120,7 +120,7 @@ export class MeterStore {
   }
 
   cells(selection: MeterSelection, from: number, to: number, cell: number, groups=this.groups(selection,from,to)): MeterSeriesCells[] {
-    return groups.flatMap(group=>meterCells(group,selection.unit,from,to,cell));
+    return groups.flatMap(group=>selection.nativeCurrencies?[...new Set(group.readings.map(r=>r.unit))].flatMap(unit=>meterCells(group,unit,from,to,cell)):meterCells(group,selection.unit,from,to,cell));
   }
 
   prune(cutoff: number): boolean {

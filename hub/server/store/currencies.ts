@@ -1,25 +1,97 @@
-import {createHash} from 'node:crypto';
+import {createHash,randomBytes} from 'node:crypto';
 import type {DatabaseSync} from 'node:sqlite';
-import {conversionId,convertMoney,exchangeRatesOf,ratesCover,type ExchangeRates,type RateSnapshot,type Conversion} from '../domain/currency.js';
+import {DEFAULT_CURRENCY,defaultCurrency,defaultCurrencyContext,currencyDefinitionOf,isCurrency,ratePath,convertBy,conversionId,convertMoney,exchangeRatesOf,ratesCover,type ExchangeRates,type RateSnapshot,type Conversion,type CurrencyDefinition,type CurrencyContext,type CurrencyBinding,type RateLeg} from '../domain/currency.js';
 import {semanticsOf,validateMeter,type Meter,type Reading,type MeterSpan} from '../domain/meters.js';
 
 type ValueRow={at:number;previous_at:number|null;native_id:string;native_unit:string;native_amount:string;unit:string;amount:string;quote_id:string;semantics:string;stale_after_ms:number};
 
 /** Shared immutable quotes and derived values, separate from provider readings. */
 export class CurrencyStore {
+  onChange:((owner:string|null)=>void)|null=null;
+  private quoteEpoch=0;
+  private quoteLists=new Map<string,{epoch:number;quotes:RateSnapshot[]}>();
+  private snapshotCache=new Map<string,RateSnapshot>();
+  private definitionCache=new Map<string,CurrencyDefinition>();
   constructor(private readonly db:DatabaseSync){}
-  save(input:ExchangeRates):RateSnapshot {
-    const rates=exchangeRatesOf(input),basis={source:rates.source,base:rates.base,date:rates.date,rates:rates.rates};
-    const id=createHash('sha256').update(JSON.stringify(basis)).digest('hex').slice(0,24);
-    this.db.prepare('INSERT OR IGNORE INTO exchange_rates(id,source,reference_date,fetched_at,payload) VALUES (?,?,?,?,?)').run(id,rates.source,rates.date,rates.fetchedAt,JSON.stringify(rates));
-    return this.get(id)!;
+  definition(owner:string,id:string):CurrencyDefinition {
+    const key=owner+'\n'+id,cached=this.definitionCache.get(key);if(cached)return cached;
+    if(/^[A-Z]{3}$/.test(id)&&Intl.supportedValuesOf('currency').includes(id))return {id,name:id,symbol:id,fractionDigits:['JPY','KRW','CLP','VND'].includes(id)?0:2};
+    const row=this.db.prepare('SELECT id,name,symbol,fraction_digits FROM currency_definitions WHERE id=? AND owner_id=? AND archived_at IS NULL').get(id,owner) as {id:string;name:string;symbol:string;fraction_digits:number}|undefined;
+    if(!row)throw new Error('currency_not_found');const definition={id:row.id,name:row.name,symbol:row.symbol,fractionDigits:row.fraction_digits};this.definitionCache.set(key,definition);return definition;
   }
-  get(id:string):RateSnapshot|null {
-    const row=this.db.prepare('SELECT payload FROM exchange_rates WHERE id=?').get(id) as {payload:string}|undefined;
-    return row?{...exchangeRatesOf(JSON.parse(row.payload) as ExchangeRates),id}:null;
+  definitions(owner:string):CurrencyDefinition[] {
+    return [defaultCurrency,...(this.db.prepare('SELECT id,name,symbol,fraction_digits FROM currency_definitions WHERE owner_id=? AND archived_at IS NULL ORDER BY id').all(owner) as {id:string;name:string;symbol:string;fraction_digits:number}[]).map(r=>({id:r.id,name:r.name,symbol:r.symbol,fractionDigits:r.fraction_digits}))];
+  }
+  preference(owner:string):CurrencyDefinition {return this.definition(owner,String(this.db.prepare('SELECT currency_id FROM currency_preferences WHERE user_id=?').get(owner)?.currency_id??DEFAULT_CURRENCY));}
+  select(owner:string,id:string){this.definition(owner,id);this.db.prepare('INSERT OR REPLACE INTO currency_preferences VALUES (?,?)').run(owner,id);this.onChange?.(owner);}
+  create(owner:string,input:Omit<CurrencyDefinition,'id'>,base:string,rate:string,at:number):CurrencyDefinition {
+    if(!owner||!this.db.prepare('SELECT 1 FROM users WHERE id=?').get(owner)||!this.definition(owner,base)||! /^[A-Z]{3}$/.test(base)||this.definitions(owner).length>64)throw new Error('invalid_currency');
+    const definition=currencyDefinitionOf({...input,id:'personal:'+randomBytes(12).toString('hex')});
+    this.db.exec('SAVEPOINT personal_currency');
+    try {this.db.prepare('INSERT INTO currency_definitions VALUES (?,?,?,?,?,NULL)').run(definition.id,owner,definition.name,definition.symbol,definition.fractionDigits);
+      // A declared fixed unit has a timeless initial ratio; later versions are dated.
+      this.save({source:'manual',base,date:0,fetchedAt:at,validUntil:null,rates:{[base]:'1000000',[definition.id]:rate}},owner);
+      this.db.exec('RELEASE personal_currency');
+    }catch(error){this.db.exec('ROLLBACK TO personal_currency');this.db.exec('RELEASE personal_currency');throw error;}
+    this.onChange?.(owner);return definition;
+  }
+  rates(owner:string,id:string):RateSnapshot[] {
+    this.definition(owner,id);const scope=id.startsWith('personal:')?owner:'';
+    const rows=this.db.prepare('SELECT id FROM exchange_rates WHERE owner_id=? AND json_type(payload,?) IS NOT NULL ORDER BY reference_date DESC,fetched_at DESC LIMIT 128').all(scope,'$.rates."'+id+'"') as {id:string}[];
+    return rows.flatMap(row=>this.get(row.id,owner)??[]);
+  }
+  setRate(owner:string,id:string,base:string,rate:string,date:number,now:number):RateSnapshot {
+    this.definition(owner,id);this.definition(owner,base);
+    if(!id.startsWith('personal:')||! /^[A-Z]{3}$/.test(base)||date>now)throw new Error('invalid_currency');
+    const quote=this.save({source:'manual',base,date,fetchedAt:now,validUntil:null,rates:{[base]:'1000000',[id]:rate}},owner);this.onChange?.(owner);return quote;
+  }
+  binding(owner:string,from:string,target:string,at:number,anchor:string|null=null,source=''):RateLeg[]|null {
+    this.definition(owner,target);if(from===target)return [];
+    const row=this.db.prepare('SELECT steps FROM currency_bindings WHERE owner_id=? AND source_id=? AND from_currency=? AND target_currency=? AND observation_at<=? AND through_at>=? AND anchor=? ORDER BY observation_at DESC LIMIT 1').get(owner,source,from,target,at,at,anchor??'') as {steps:string}|undefined;
+    if(row)return JSON.parse(row.steps) as RateLeg[];
+    let cached=this.quoteLists.get(owner);
+    if(!cached||cached.epoch!==this.quoteEpoch){const quotes=(this.db.prepare("SELECT id FROM exchange_rates WHERE owner_id='' OR owner_id=? ORDER BY reference_date DESC,fetched_at DESC").all(owner) as {id:string}[]).flatMap(q=>this.get(q.id,owner)??[]);cached={epoch:this.quoteEpoch,quotes};this.quoteLists.set(owner,cached);}
+    const quotes=cached.quotes;
+    const path=ratePath(from,target,quotes,at,anchor);if(!path)return null;
+    const encoded=JSON.stringify(path),previous=this.db.prepare('SELECT observation_at,through_at,steps FROM currency_bindings WHERE owner_id=? AND source_id=? AND from_currency=? AND target_currency=? AND observation_at<? AND anchor=? ORDER BY observation_at DESC LIMIT 1').get(owner,source,from,target,at,anchor??'') as {observation_at:number;through_at:number;steps:string}|undefined;
+    if(previous?.steps===encoded)this.db.prepare('UPDATE currency_bindings SET through_at=? WHERE owner_id=? AND source_id=? AND from_currency=? AND target_currency=? AND observation_at=? AND anchor=?').run(at,owner,source,from,target,previous.observation_at,anchor??'');
+    else this.db.prepare('INSERT OR IGNORE INTO currency_bindings VALUES (?,?,?,?,?,?,?,?)').run(owner,source,from,target,at,at,anchor??'',encoded);
+    return path;
+  }
+  context(owner:string,inputs:Record<string,{unit:string;at:number;anchor?:string|null}[]>={}):CurrencyContext {
+    const target=this.preference(owner),definitions=this.definitions(owner);if(!definitions.some(d=>d.id===target.id))definitions.push(target);
+    if(target.id===DEFAULT_CURRENCY)return definitions.length===1?defaultCurrencyContext:{target,definitions,sources:{}};
+    const sources:CurrencyContext['sources']={};
+    for(const [source,points] of Object.entries(inputs)) {
+      const seen=new Set<string>(),bindings:CurrencyBinding[]=[];
+      for(const point of points){if(!isCurrency(point.unit))continue;const anchor=point.anchor??null,key=JSON.stringify([point.unit,point.at,anchor]);if(seen.has(key))continue;seen.add(key);
+        const steps=this.binding(owner,point.unit,target.id,point.at,anchor,source);if(steps)bindings.push({from:point.unit,at:point.at,anchor,steps});}
+      sources[source]=bindings;
+    }
+    const revision=String(this.db.prepare("SELECT value FROM meta WHERE key='currencyRatesRevision::public'").get()?.value??0)+':'+String(this.db.prepare('SELECT value FROM meta WHERE key=?').get('currencyRatesRevision:'+owner+':'+target.id)?.value??0);
+    return {target,definitions,revision,sources};
+  }
+  observationAt(owner:string,source:string,from:string,target:string,to:number):number|null {
+    const row=this.db.prepare('SELECT max(CASE WHEN through_at<=? THEN through_at ELSE observation_at END) at FROM currency_bindings WHERE owner_id=? AND source_id=? AND from_currency=? AND target_currency=? AND observation_at<=?').get(to,owner,source,from,target,to) as {at:number|null};return row.at;
+  }
+  value(owner:string,value:string,unit:string,target:string,at:number,anchor:string|null=null):{amount:string;steps:RateLeg[]}|null {
+    const steps=this.binding(owner,unit,target,at,anchor);try{return steps?{amount:convertBy(value,steps),steps}:null;}catch{return null;}
+  }
+  save(input:ExchangeRates,owner=''):RateSnapshot {
+    const rates=exchangeRatesOf(input);for(const unit of Object.keys(rates.rates))if(unit.startsWith('personal:'))this.definition(owner,unit);
+    const basis={owner,validUntil:rates.validUntil,source:rates.source,base:rates.base,date:rates.date,rates:rates.rates};
+    const id=createHash('sha256').update(JSON.stringify(basis)).digest('hex').slice(0,24);
+    const inserted=this.db.prepare('INSERT OR IGNORE INTO exchange_rates(id,source,reference_date,fetched_at,payload,owner_id) VALUES (?,?,?,?,?,?)').run(id,rates.source,rates.date,rates.fetchedAt,JSON.stringify(rates),owner);
+    if(inserted.changes){this.quoteEpoch++;const units=owner?Object.keys(rates.rates).filter(unit=>unit.startsWith('personal:')):['public'];for(const unit of units){const key='currencyRatesRevision:'+owner+':'+unit;this.db.prepare("INSERT INTO meta(key,value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1").run(key);}}
+    return this.get(id,owner)!;
+  }
+  get(id:string,owner=''):RateSnapshot|null {
+    const key=owner+'\n'+id,cached=this.snapshotCache.get(key);if(cached)return cached;
+    const row=this.db.prepare("SELECT payload FROM exchange_rates WHERE id=? AND (owner_id='' OR owner_id=?)").get(id,owner) as {payload:string}|undefined;
+    if(!row)return null;const parsed=exchangeRatesOf(JSON.parse(row.payload) as ExchangeRates),snapshot=Object.freeze({...parsed,rates:Object.freeze(parsed.rates),id});this.snapshotCache.set(key,snapshot);return snapshot;
   }
   latest(at:number):RateSnapshot|null {
-    const row=this.db.prepare('SELECT id FROM exchange_rates WHERE reference_date<=? AND reference_date>? ORDER BY reference_date DESC,fetched_at DESC LIMIT 1').get(at,at-7*86_400_000) as {id:string}|undefined;
+    const row=this.db.prepare("SELECT id FROM exchange_rates WHERE owner_id='' AND reference_date<=? AND reference_date>? ORDER BY reference_date DESC,fetched_at DESC LIMIT 1").get(at,at-7*86_400_000) as {id:string}|undefined;
     return row?this.get(row.id):null;
   }
   checked():number {return Number(this.db.prepare("SELECT value FROM meta WHERE key='exchangeRatesCheckedAt'").get()?.value??0);}
@@ -68,8 +140,10 @@ export class CurrencyStore {
     return (this.db.prepare('SELECT from_at,to_at,stale_after_ms,interrupted_at FROM meter_spans WHERE source_id=? AND meter_id=? AND from_at<=?').all(source,id,to) as {from_at:number;to_at:number;stale_after_ms:number;interrupted_at:number|null}[]).map(r=>({from:r.from_at,to:r.to_at,staleAfterMs:r.stale_after_ms,...(r.interrupted_at===null?{}:{interruptedAt:r.interrupted_at})}));
   }
   prune(cutoff:number) {
+    this.quoteEpoch++;this.quoteLists.clear();this.snapshotCache.clear();
+    this.db.prepare("DELETE FROM currency_bindings WHERE through_at<? AND observation_at<(SELECT max(observation_at) FROM currency_bindings b WHERE b.owner_id=currency_bindings.owner_id AND b.source_id=currency_bindings.source_id AND b.from_currency=currency_bindings.from_currency AND b.target_currency=currency_bindings.target_currency) AND NOT EXISTS(SELECT 1 FROM state,json_each(state.payload,'$.meters') m WHERE state.source_id=currency_bindings.source_id AND json_extract(m.value,'$.unit')=currency_bindings.from_currency AND json_extract(m.value,'$.at') BETWEEN currency_bindings.observation_at AND currency_bindings.through_at) AND NOT EXISTS(SELECT 1 FROM money_valuations v JOIN meter_spans s ON s.source_id=v.source_id AND s.meter_id=v.meter_id WHERE v.source_id=currency_bindings.source_id AND v.native_unit=currency_bindings.from_currency AND v.quote_id=currency_bindings.anchor AND s.to_at BETWEEN currency_bindings.observation_at AND currency_bindings.through_at)").run(cutoff);
     const changed=this.db.prepare('DELETE FROM money_valuations WHERE at<? AND at<(SELECT max(at) FROM money_valuations v WHERE v.source_id=money_valuations.source_id AND v.meter_id=money_valuations.meter_id AND v.at<?)').run(cutoff,cutoff).changes>0;
-    this.db.prepare('DELETE FROM exchange_rates WHERE reference_date<? AND id NOT IN(SELECT quote_id FROM money_valuations) AND reference_date<(SELECT max(reference_date) FROM exchange_rates)').run(cutoff);
+    this.db.prepare("DELETE FROM exchange_rates WHERE owner_id='' AND reference_date<? AND id NOT IN(SELECT quote_id FROM money_valuations) AND NOT EXISTS(SELECT 1 FROM currency_bindings b,json_each(b.steps) s WHERE json_extract(s.value,'$.id')=exchange_rates.id) AND reference_date<(SELECT max(reference_date) FROM exchange_rates)").run(cutoff);
     return changed;
   }
 }

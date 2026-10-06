@@ -3,7 +3,7 @@ import {locatedIn, meterStep, plottedAmount, semanticsOf, type ExceptionalStep, 
 import {drain, ordered, type Preparation} from './prepare.js';
 
 export const MAX_METERS = 32;
-export type MeterSelection = {unit: Unit; ids: [source: string, meter: string][]};
+export type MeterSelection = {unit: Unit; displayCurrency?:string;displayRevision?:string;nativeCurrencies?:boolean; ids: [source: string, meter: string][]};
 export type Accounting = {spending:'counter'|'unavailable';topups:'counter'|'unavailable'};
 export type MonetaryPolicy = {accounting?:Accounting;role?:'total'|'granted'|'toppedUp';pointMode?:'cell'|'observation'};
 export type MeterCellExtra = {pointOffsetMs?:number;openOffsetMs?:number;validUntil?:number;first?: string; open?: string | null; segment?: number; semantics?: MeterSemantics; steps?: ExceptionalStep[]; topupInternal?: string; topupSteps?: ExceptionalStep[]};

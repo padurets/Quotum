@@ -23,6 +23,9 @@ import {localRoutes} from './local.js';
 import {credentialRoutes} from './routes/credentials.js';
 import {Credentials, startSecrets, type SecretInputs} from './secrets/index.js';
 import type {HubSources} from './hubSources.js';
+import {displayHistory} from './currencies/history.js';
+import type {Chunk} from './domain/history.js';
+import {currencyRoutes} from './routes/currencies.js';
 import {sourceKeyRoutes} from './routes/sourceKeys.js';
 
 /**
@@ -164,7 +167,7 @@ export async function buildApp(hub: Hub) {
     return snapshot;
   });
 
-  app.get<{Querystring: {cell?: string; from?: string; to?: string; board?: string; meters?: string; unit?: string}}>('/api/history', (request, reply) => {
+  app.get<{Querystring: {cell?: string; from?: string; to?: string; board?: string; meters?: string; unit?: string;currency?:string}}>('/api/history', (request, reply) => {
     const access = guards.board(request, reply, request.query.board);
     if (!access) return reply;
     const now = Date.now();
@@ -185,10 +188,24 @@ export async function buildApp(hub: Hub) {
       try {meters=selectionOf(JSON.parse(request.query.meters??''),request.query.unit);} catch {return reply.code(400).send({error:'invalid_request'});}
       // A shared hidden source is not a history capability, even when its id is known.
       if (meters.ids.some(([source])=>!shown.has(source))) return reply.code(404).send({error:'not_found'});
+      if(request.query.currency!==undefined)meters={...meters,nativeCurrencies:true};
     }
     let chunks: string[];
     try {chunks=history.read(board, cell, from, to, now, shown, meters);}
     catch(error){if(error instanceof HistoryLimit)return reply.code(413).send({error:'history_limit'});throw error;}
+    if(request.query.currency!==undefined){
+      if(!meters)return reply.code(400).send({error:'invalid_request'});
+      try {store.currencies.definition(access.user.id,request.query.currency);}catch{return reply.code(404).send({error:'currency_not_found'});}
+      if(store.currencies.preference(access.user.id).id!==request.query.currency)return reply.code(409).send({error:'currency_changed'});
+      const observed=new Map<string,number[]>();
+      const transformed=displayHistory(chunks.map(json=>JSON.parse(json) as Chunk),store.currencies,access.user.id,request.query.currency,cell,(source,meter,until)=>{
+        const id=meter==='balance'?'usage':meter,key=source+'\n'+id;let times=observed.get(key);
+        if(!times){const rows=store.meters.readings(source,id,from,to),spans=store.meters.spans(source,id,from,to);times=[...rows.map(r=>r.at),...spans.map(s=>s.to)].sort((a,b)=>a-b);observed.set(key,times);}
+        let low=0,high=times.length;while(low<high){const middle=(low+high)>>>1;if(times[middle]<=until)low=middle+1;else high=middle;}return low?times[low-1]:null;
+      });
+      chunks=transformed.map(chunk=>JSON.stringify(chunk));
+      if(chunks.reduce((sum,json)=>sum+Buffer.byteLength(json),0)>16*1024*1024)return reply.code(413).send({error:'history_limit'});
+    }
     const meta = JSON.stringify({now, run: events.epoch, historyStart: store.historyStart(now), known: store.historyKnown(shown)});
     return reply.type('application/json').send(`${meta.slice(0, -1)},"chunks":[${chunks.join(',')}]}`);
   });
@@ -204,6 +221,7 @@ export async function buildApp(hub: Hub) {
   eventRoutes(app, directory, events, guards, !!hub.local);
   accountRoutes(app, hub, guards);
   sourceKeyRoutes(app,hub,guards);
+  currencyRoutes(app,hub,guards);
   await app.register(async scope => credentialRoutes(scope, hub.credentials!, guards));
   agentRoutes(app, hub);
   if (hub.local) localRoutes(app, hub, hub.local.key);

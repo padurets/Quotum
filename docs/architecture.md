@@ -582,7 +582,7 @@ values as stale and persist an exclusive interruption on their observation spans
 A same-value return starts a new span without inventing a changed reading. Accepted
 status time is the watermark even when numerical success is older.
 Budget cards and the compact panel use one typed presentation of current funds and
-selected allowances. A single Available balance section shows USD. Native USD takes
+selected allowances. A single Available balance section uses the reader's display currency. Native reference currency takes
 precedence over separate converted observations; the two are never summed. Composition
 opens from that label in a shared Popover. Key allowances appear separately, with their own scope, limit and reset;
 they do not add to account funds. Only catalogue-supported caps have scales. Lifetime
@@ -594,44 +594,57 @@ accounting basis, and key properties and inventory quality describe access and
 measurement reliability. New API fields do not automatically add card rows. The safe
 context archive is independent of this presentation.
 
-Currency conversion is a hub integration, independent of provider adapters. Adapters
-capture only native observations. The money transaction commits those observations
-before the shared `Currencies` service requests reference data; conversion failures
-cannot change provider authentication or discard a successful measurement. Native USD
-needs no rate request. The service selects one supported foreign total family when no
-native USD exists, never sums currencies or guesses between multiple foreign totals.
-The shared currency domain uses exact BigInt ratios for arbitrary supported currency
-pairs. Today the configured rate-source adapter is the fixed, credential-free ECB daily
-XML endpoint, with bounded bytes, timeout and no redirects. All returned currency quotes
-are stored once per immutable snapshot in `exchange_rates`, shared across accounts and
-restored after restart. Measurements trigger lazy refresh after twelve hours; a usable
-reference date must precede the observation and be less than seven days old. Failures
-use a still-valid cached quote and retry on later measurements after five minutes.
-There is no currency preference or rate poller.
+Currency behavior belongs to the shared money layer. Native adapters and `readings`
+keep reported amounts, units and observation times. `DEFAULT_CURRENCY` defines the
+initial USD reference and display policy once. A persisted preference selects each
+reader's display currency independently of the shared board. Standard currency identities
+are ISO codes; personal definitions use opaque `personal:<24 hex digits>` identities,
+with owner-only names, symbols and display precision. Percentage quotas and non-monetary
+counters keep their units. The settings section has no currency forms yet; authenticated
+currency operations already use the common registry and preference.
 
-This centralizes the existing USD integration; it does not yet provide user-defined
-currencies or a user-selected display currency. The currency domain accepts three-letter
-codes and ECB snapshots. The service, card projection and budget selection still select
-USD explicitly. There is no user-scoped currency registry, private rate namespace or
-persisted display preference; the chart's unit selection only selects native or already
-valued series. These boundaries distinguish the implemented integration from a complete
-user-configurable currency system.
+The currency domain accepts generic named rate sources, bases, effective times and
+validity. Source adapters own transport and supplier validation. The current public
+adapter is the fixed credential-free ECB XML read, with bounded bytes, timeout and no
+redirects. Public snapshots are shared; fixed personal rates belong to their owner.
+An initial personal ratio defines a timeless nominal unit, rather than a historical
+provider observation. Later dated versions preserve prior assignments. Exact BigInt
+arithmetic composes supported paths and rounds once, including conversion from the
+original CNY amount rather than a rounded USD intermediary. Neither provider keys nor
+account identifiers reach reference-data readers.
 
-`money_valuations` retains each changed USD estimate separately from native `readings`,
-including the exact original amount, meter, currency and observation time, and its
-immutable quote ID. Derived IDs are `fx:USD:<native meter ID>`; they are absent from the
-provider catalogue. Existing observation spans and retention preserve availability,
-including hard gaps. Projections and packed history carry a structured `conversion`
-with original measurement and rate provenance; financial scope and label keep their
-original meaning. The UI uses that metadata for ≈ and the disclosure of the original
-amount, rate source and reference date. Historical values use their recorded quote,
-never today's rate. Exchange movements do not become spending or top-up events.
-Without a usable quote, native observations remain saved and USD is unknown or stale;
-`currencyUnavailable` is a presentation condition separate from provider funds status.
-The additive database upgrade preserves development-layout estimates and imports those
-whose archived quote and native amount prove their conversion; unproven legacy history
-is retained without manufacturing provenance. Analytics offers USD for money while
-preserving subscription selection and non-currency units.
+One hub service captures no provider data itself. It subscribes to accepted native
+measurements and requests public references after native transactions and secret-buffer
+cleanup. Its cache, cancellation and lazy refresh are shared across accounts. Native
+reference-currency display needs no rate request; another selected currency requests
+references only when its path is missing. Provider authentication and accepted data are
+independent of conversion health. Missing or overflowing conversion remains unknown,
+with native cap percentages still available.
+
+`exchange_rates` preserves immutable snapshots in public or private owner namespaces.
+`money_valuations` retains the default public reference estimates separately from native
+facts. `currency_bindings` pins a reader/source/from/target/time/anchor path; identical
+assignments extend sparse ranges. Retention keeps needed predecessors and current
+observations, with referenced quotes. Changing a preference or receiving a later rate
+never overwrites original provider history or an already assigned historical path.
+The additive upgrade keeps earlier default estimates and legacy provenance.
+
+Reader snapshots and the private `currencies` event carry one target definition and
+source-specific bindings. Personal definitions and rates never enter shared card or
+history caches. The page preserves each source's binding slice so another source's
+measurement does not render its card. Dashboard, compact, key allowances and money
+analytics use the common presentation and formatter. Financial scope and label retain
+native meaning; conversion metadata identifies original values and the quote path.
+Caps derive their percentage from native numerator and denominator and convert their
+remaining amount once. Composition stays in the existing disclosure.
+
+Money history first computes native accounting and coverage, then applies the reader's
+currency outside the shared native tile cache. Original CNY provenance avoids repeated
+rounding. Exchange movements cannot create spending or top-up events; balance-only
+accounting stays unavailable. History requests validate board visibility and ownership
+of the selected currency. A price revision refreshes the selected monetary history when
+a previously missing path becomes available. Native reference mode keeps its existing
+request, packing and performance behavior. Subscription selection remains independent.
 
 Observation-mode money cells retain their actual sample offset, segment and exclusive
 validity, bounded by their fixed grid cell and span interruption/TTL. Composition can

@@ -325,7 +325,10 @@ desktop modes use the same encrypted credential protection described in [SECURIT
 
 The card and compact panel use the same budget layout as OpenRouter: one
 **Available balance** in USD, followed by any supported limits. DeepSeek has no limit
-scales. Reported USD takes precedence. When only CNY is reported, the shared hub currency service uses
+scales. USD is the initial shared display policy. The currency registry supports owner-scoped
+personal units and a persisted reader preference through the API; the settings form is
+not yet exposed. Reported reference currency takes precedence. When only CNY is reported,
+the shared hub currency service uses
 the [ECB daily reference rates](https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html)
 to record a separate USD estimate, marked **≈**. Click the balance label for its
 granted and topped-up composition; an estimate also gives its original CNY amount

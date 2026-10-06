@@ -16,7 +16,8 @@ export function parseEcb(xml:string,at:number):ExchangeRates {
   const result=exchangeRatesOf({source:'ecb',base:'EUR',date,fetchedAt:at,rates});
   if(!rates.USD||!ratesCover(result,at))throw new Error('invalid_exchange_rates');return result;
 }
-export type RatesReader=(signal:AbortSignal)=>Promise<ExchangeRates>;
+import type {RatesReader} from './sources.js';
+export type {RatesReader} from './sources.js';
 /** A public data-source adapter: fixed destination, no credentials or account inputs. */
 export function ecbReader(read:typeof fetch=fetch,now=Date.now):RatesReader {
   return async signal=>{
@@ -30,4 +31,4 @@ export function ecbReader(read:typeof fetch=fetch,now=Date.now):RatesReader {
   };
 }
 /** Tests and demos replace a source adapter; consumers still use the common service. */
-export const rateSources:ReadonlyMap<'ecb',RatesReader>=new Map([['ecb',ecbReader()]]);
+export {rateSources} from './sources.js';
