@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {deepSeek,deepSeekMeasurement} from '../connectors/deepseek.js';
 import {ConnectorTransport} from '../connectors/transport.js';
-import {convertMoney,conversionId,type ExchangeRates} from '../domain/currency.js';
+import {convertMoney,conversionId,ratePath,type RateSnapshot,type ExchangeRates} from '../domain/currency.js';
 import {parseEcb,ecbReader} from '../currencies/ecb.js';
 import {Currencies} from '../currencies/service.js';
 import {Store} from '../store/store.js';
@@ -22,6 +22,29 @@ const rates=()=>parseEcb(xml(),at);
 const row=(currency='CNY',total='110')=>({currency,total_balance:total,granted_balance:'10',topped_up_balance:'100'});
 const measurement=(time=at,rows=[row()])=>deepSeekMeasurement({is_available:true,balance_infos:rows},time);
 const native=(unit:string,amount='110000000'):Meter=>({id:'wallet',unit,amount,kind:'balance',at,staleAfterMs:60_000,stale:false,limit:null,resetAt:null,minutes:null,scope:'wallet-scope',label:'Wallet'});
+
+test('missing paths scan rate legs linearly rather than every pair of quote versions',()=>{
+  const target='personal:'+'1'.repeat(24),quotes:RateSnapshot[]=[];let reads=0;
+  for(let index=0;index<500;index++) {
+    const rates={USD:'1000000',[target]:String(2000000+index)};
+    quotes.push({id:String(index),source:'manual',base:'USD',date:0,fetchedAt:index,validUntil:null,get rates(){reads++;return rates;}});
+  }
+  assert.equal(ratePath('CNY',target,quotes,at),null);assert.ok(reads<quotes.length*10,`${reads} rate reads`);
+});
+
+test('retention removes unused private revisions while retaining nominal and pinned quotes',()=>{
+  const store=new Store(':memory:',at),directory=new Directory(store.db),owner=directory.createUser('rates@example.com','Owner','fixture',at);
+  try {
+    const target=store.currencies.create(owner.id,{name:'Points',symbol:'PT',fractionDigits:2},'USD','2000000',at);
+    const initial=store.currencies.binding(owner.id,'USD',target.id,1)!;
+    for(let index=1;index<=1000;index++)store.currencies.setRate(owner.id,target.id,'USD',String(2000000+index),index,at);
+    const pinned=store.currencies.binding(owner.id,'USD',target.id,500)!;
+    store.currencies.prune(2000);
+    assert.equal(store.db.prepare('SELECT count(*) n FROM exchange_rates WHERE owner_id=?').get(owner.id)?.n,3);
+    assert.ok(store.currencies.get(initial[0].id,owner.id));assert.ok(store.currencies.get(pinned[0].id,owner.id));
+    assert.deepEqual(store.currencies.binding(owner.id,'USD',target.id,500),pinned);
+  }finally{store.close();}
+});
 
 test('currency arithmetic handles arbitrary pairs, exact signs, zero and values above Number precision',()=>{
   const quote=rates();

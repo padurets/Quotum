@@ -23,7 +23,7 @@ export function MoneySettings({sources,hidden,series}:{sources:readonly Named[];
   const [loading,setLoading]=useState(true);
   const [archivePage,setArchivePage]=useState(0);
   const [membership,setMembership]=useState<{context:string;keys:string[]}|null>(null);
-  const selected=moneySelection(sources,hidden,prefs.money).selection?.ids??[];
+  const selected=moneySelection(sources,hidden,prefs.money,context).selection?.ids??[];
   const source=sources.find(s=>s.id===sourceId);
   const inCard=source?.keysCount===source?.keys?.length&&!!source?.keys;
   const page:KeyPage|null=inCard?{keys:source!.keys!,meters:source!.meters??[],total:source!.keysCount!,inventory:source!.inventory,next:null}:loaded;

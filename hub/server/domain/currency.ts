@@ -48,7 +48,19 @@ export function ratePath(from:string,to:string,snapshots:readonly RateSnapshot[]
   const usable=snapshots.filter(s=>ratesCover(s,at)).sort((a,b)=>(a.id===anchor?-1:b.id===anchor?1:0)||b.date-a.date||b.fetchedAt-a.fetchedAt);
   const leg=(s:RateSnapshot,a:string,b:string):RateLeg=>({id:s.id,source:s.source,base:s.base,date:s.date,fetchedAt:s.fetchedAt,from:s.rates[a],to:s.rates[b]});
   for(const s of usable)if(s.rates[from]&&s.rates[to])return [leg(s,from,to)];
-  for(const last of usable)if(last.rates[to])for(const first of usable)if(first.rates[from]){const bridge=Object.keys(first.rates).find(unit=>unit!==from&&unit!==to&&last.rates[unit]);if(bridge)return [leg(first,from,bridge),leg(last,bridge,to)];}
+  // Index the earliest eligible first leg for each bridge, preserving path priority.
+  const bridges=new Map<string,{snapshot:RateSnapshot;rank:number;order:number}>();
+  for(const [rank,snapshot] of usable.entries())if(snapshot.rates[from])for(const [order,unit] of Object.keys(snapshot.rates).entries()) {
+    if(unit!==from&&unit!==to&&!bridges.has(unit))bridges.set(unit,{snapshot,rank,order});
+  }
+  for(const last of usable)if(last.rates[to]) {
+    let selected:{unit:string;snapshot:RateSnapshot;rank:number;order:number}|null=null;
+    for(const unit of Object.keys(last.rates)) {
+      const first=bridges.get(unit);
+      if(first&&(!selected||first.rank<selected.rank||first.rank===selected.rank&&first.order<selected.order))selected={unit,...first};
+    }
+    if(selected)return [leg(selected.snapshot,from,selected.unit),leg(last,selected.unit,to)];
+  }
   return null;
 }
 export const currencySymbol=(unit:string,context:Pick<CurrencyContext,'definitions'>=defaultCurrencyContext)=>context.definitions.find(c=>c.id===unit)?.symbol??unit;

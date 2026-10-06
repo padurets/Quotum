@@ -22,6 +22,7 @@ import {ratePath,convertBy,exchangeRatesOf} from '../../server/domain/currency.j
 import {composeMeters} from '../../server/domain/meterHistory.js';
 import {displayHistory} from '../../server/currencies/history.js';
 import type {Meter} from '../../server/domain/meters.js';
+import {config} from '../../server/config.js';
 
 const date=Date.UTC(2026,9,6),at=date+12*3_600_000;
 const meter=(id='balance',amount='37000000',unit='USD'):Meter=>({id,unit,amount,kind:'balance',at,staleAfterMs:3_600_000,stale:false,limit:null,resetAt:null,minutes:null,scope:'account',label:null});
@@ -35,6 +36,15 @@ function fixture(file=':memory:') {
   return {store,directory,alice,bob,board,source,hub,projection:new Projection(hub)};
 }
 const personal=(h:ReturnType<typeof fixture>,owner:string,symbol:string,rate='2000000')=>h.store.currencies.create(owner,{name:'Personal',symbol,fractionDigits:2},'USD',rate,at);
+
+test('standard currency definitions preserve minor-unit precision in the common formatter',()=>{
+  const h=fixture();try {
+    for(const [id,digits,formatted] of [['KWD',3,'3.125 KWD'],['BHD',3,'3.125 BHD'],['TND',3,'3.125 TND'],['ISK',0,'3 ISK'],['UGX',0,'3 UGX']] as const) {
+      h.store.currencies.select(h.alice.id,id);const context=h.store.currencies.context(h.alice.id);
+      assert.equal(context.target.fractionDigits,digits);assert.equal(money('3125000',id,false,context),formatted);
+    }
+  }finally{h.store.close();}
+});
 
 test('a shared board keeps native facts common while funds, caps and formatting use each reader currency',()=>{
   const h=fixture();try {
@@ -86,6 +96,18 @@ test('reader preferences and sparse pinned paths survive restart and later quote
   }finally{store.close();rmSync(root,{recursive:true,force:true});}
 });
 
+test('retention preserves the pinned rate of a native predecessor serving a retained partial cell',async t=>{
+  const h=fixture(),target=personal(h,h.alice.id,'AP'),source=h.store.source('deepseek','3'.repeat(24),1);h.store.hold(source,h.alice.id,1);h.store.currencies.select(h.alice.id,target.id);
+  const observe=(time:number,total:string)=>{h.store.record(source,deepSeekMeasurement({is_available:true,balance_infos:[{currency:'USD',total_balance:total,granted_balance:'0',topped_up_balance:total}]},time));h.store.currencies.context(h.alice.id,{[source]:h.store.state(source).meters!.map(m=>({unit:m.unit,at:m.at}))});};
+  observe(1,'10');observe(30000,'11');h.store.currencies.setRate(h.alice.id,target.id,'USD','3000000',100000,100000);observe(120000,'12');observe(180000,'12');
+  h.store.currencies.setRate(h.alice.id,target.id,'USD','5000000',10000,190000);
+  const now=90000+config.retention.sampleDays*86400000;t.mock.method(Date,'now',()=>now);
+  const app=await buildApp(h.hub);t.after(async()=>{await app.close();h.store.close();});
+  const token=newSecret('qt_s');h.directory.createSession(token,h.alice.id,now,60000);const board=h.directory.boards(h.alice.id).find(b=>b.personal)!.id;
+  const read=async()=>{const r=await app.inject({method:'GET',url:'/api/history?board='+board+'&cell=60000&from=60000&to=120000&unit=USD&meters='+encodeURIComponent(JSON.stringify([[source,'balance:USD']]))+'&currency='+encodeURIComponent(target.id),headers:{cookie:'quotum_session='+token}});assert.equal(r.statusCode,200);return composeMeters(r.json().chunks,60000,60000,120000)[0];};
+  const before=await read();assert.equal(before.end,'22000000');h.store.prune(now);const after=await read();assert.equal(after.end,before.end);assert.equal(after.points[0].semantics?.conversion?.rate.id,before.points[0].semantics?.conversion?.rate.id);
+});
+
 test('foreign display transforms native accounting instead of inferring expenses from rate movement',()=>{
   const h=fixture();try {
     const c=personal(h,h.alice.id,'AP');h.store.currencies.select(h.alice.id,c.id);
@@ -105,6 +127,29 @@ test('the owner API changes one shared currency context and refuses another read
   const detail=await call(h.alice.id,'GET','/api/currencies/'+encodeURIComponent(id));assert.equal(detail.statusCode,200);assert.equal(detail.json().rates[0].rates[id],'2000000');assert.equal((await call(h.bob.id,'GET','/api/currencies/'+encodeURIComponent(id))).statusCode,404);
   const url='/api/history?board='+h.board.id+'&cell=60000&from='+at+'&to='+(at+60_000)+'&unit=USD&meters='+encodeURIComponent(JSON.stringify([[h.source,'balance']]))+'&currency='+encodeURIComponent(id);
   const history=await call(h.alice.id,'GET',url);assert.equal(history.statusCode,200);assert.equal(composeMeters(history.json().chunks,60_000,at,at+60_000)[0].end,'74000000');assert.equal((await call(h.bob.id,'GET',url)).statusCode,404);
+});
+
+test('a full reader history loads bindings by series and keeps repeated conversion semantics sparse',async t=>{
+  t.mock.method(Date,'now',()=>at);const h=fixture(),target=personal(h,h.alice.id,'PT');h.store.currencies.select(h.alice.id,target.id);
+  const from=at-480*60000,ids:[string,string][]=[];
+  for(let index=0;index<32;index++) {
+    const source=h.store.source('deepseek',(index+100).toString(16).padStart(24,'0'),from);h.store.hold(source,h.alice.id,from);ids.push([source,'balance:USD']);
+    for(let time=from+1;time<at;time+=300000)h.store.record(source,deepSeekMeasurement({is_available:true,balance_infos:[{currency:'USD',total_balance:'100',granted_balance:'10',topped_up_balance:'90'}]},time));
+    h.store.record(source,deepSeekMeasurement({is_available:true,balance_infos:[{currency:'USD',total_balance:'100',granted_balance:'10',topped_up_balance:'90'}]},at-1));
+  }
+  const app=await buildApp(h.hub);t.after(async()=>{await app.close();h.store.close();});
+  const token=newSecret('qt_s');h.directory.createSession(token,h.alice.id,at,60000);const board=h.directory.boards(h.alice.id).find(b=>b.personal)!.id;
+  const url='/api/history?board='+board+'&cell=60000&from='+from+'&to='+at+'&unit=USD&meters='+encodeURIComponent(JSON.stringify(ids))+'&currency='+encodeURIComponent(target.id);
+  const prepare=h.store.db.prepare.bind(h.store.db);let reads=0;
+  t.mock.method(h.store.db,'prepare',(...args:Parameters<typeof prepare>)=>{reads++;return prepare(...args);});
+  for(let repeat=0;repeat<2;repeat++) {
+    reads=0;const response=await app.inject({method:'GET',url,headers:{cookie:'quotum_session='+token}});assert.equal(response.statusCode,200);assert.ok(reads<300,`${reads} SQL preparations`);
+    const chunks=response.json().chunks,series=chunks.flatMap((chunk:{meterSeries?:{cells:unknown[][]}[]})=>chunk.meterSeries??[]);
+    assert.ok(series.reduce((count:number,s:{cells:unknown[][]})=>count+s.cells.length,0)>10000);
+    const metadata=series.reduce((count:number,s:{cells:unknown[][]})=>count+s.cells.filter(row=>(row[5] as {semantics?:unknown})?.semantics).length,0);
+    assert.ok(metadata<series.reduce((count:number,s:{cells:unknown[][]})=>count+s.cells.length,0)/2,`${metadata} repeated metadata records`);
+    for(const result of composeMeters(chunks,60000,from,at))assert.equal(result.end,'200000000');
+  }
 });
 
 test('a new price revision refreshes missing foreign history without changing default reference requests',()=>{

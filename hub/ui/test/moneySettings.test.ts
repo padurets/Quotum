@@ -1,5 +1,5 @@
 import * as currency from '../../server/domain/currency';
-import {defaultCurrencyContext} from '../../server/domain/currency';
+import {defaultCurrencyContext,type CurrencyContext} from '../../server/domain/currency';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -21,10 +21,11 @@ const nodes=(value:unknown):Node[]=>Array.isArray(value)?value.flatMap(nodes):va
 const flush=async()=>{for(let i=0;i<10;i++)await Promise.resolve();};
 const meter=(id:string,amount='1'):Meter=>({id,amount,kind:id.endsWith(':cap')?'cap':'balance',unit:'USD',at:1,staleAfterMs:1000,stale:false,limit:null,resetAt:null,minutes:null,scope:null,label:null});
 
-function fixture(selected:[string,string][]=[]) {
+function fixture(selected:[string,string][]=[],budget?:{source:Named;context:CurrencyContext}) {
   const hooks=preparationFixture();
-  let revision=1,prefs={money:readMoney({unit:'USD',selected:{USD:[['s','balance'],...selected]}})};
+  let revision=1,prefs={money:readMoney(budget?{unit:'USD'}:{unit:'USD',selected:{USD:[['s','balance'],...selected]}})};
   let source:Named={id:'s',title:'Account',provider:'openrouter',plan:'',successAt:revision,error:null,stale:false,windows:[],resets:null,owners:[],staleAfterMs:1000,measureIntervalMs:null,meters:[meter('balance')],keys:[],keysCount:20};
+  if(budget)source=budget.source;
   const reads:string[]=[];
   const call=async(_method:string,path:string):Promise<KeyPage>=>{
     reads.push(path);const query=new URL(path,'https://fixture.invalid').searchParams;
@@ -35,7 +36,7 @@ function fixture(selected:[string,string][]=[]) {
   const context={exports:{} as {MoneySettings:(props:{sources:Named[];hidden:string[];series:[]})=>Node},require:(name:string)=>{
     if(name==='react')return {useState:hooks.useState,useEffect:hooks.useLayoutEffect};
     if(name==='react/jsx-runtime')return {jsx:(type:unknown,props:Node['props'],key?:string)=>({type,props,key}),jsxs:(type:unknown,props:Node['props'],key?:string)=>({type,props,key}),Fragment:'fragment'};
-    if(name.endsWith('/board'))return {useBoardId:()=> 'b',useCurrencyContext:()=>defaultCurrencyContext};
+    if(name.endsWith('/board'))return {useBoardId:()=> 'b',useCurrencyContext:()=>budget?.context??defaultCurrencyContext};
     if(name.endsWith('/http'))return {ApiError,call};
     if(name.endsWith('/moneySelection'))return {moneySelection,archivedKeyGroups};
     if(name.endsWith('/prefs'))return {usePrefs:()=>prefs,setPrefs:(patch:typeof prefs)=>{prefs=patch;}};
@@ -55,8 +56,19 @@ function fixture(selected:[string,string][]=[]) {
   const settle=async()=>{render();await flush();return render();};
   const pager=()=>nodes(tree).find(n=>n.type===pages)!.props as {page:number;pages:number;next:boolean;previous:boolean;loading:boolean;onNext:()=>void;onPrevious:()=>void};
   const slots=()=>nodes(tree).filter(n=>typeof n.props.className==='string'&&n.props.className.includes('key-slot'));
-  return {settle,render,pager,slots,reads,switches:()=>nodes(tree).filter(n=>n.type===switchRow),refresh:()=>{revision++;source={...source,successAt:revision};}};
+  return {settle,render,pager,slots,reads,selection:()=>moneySelection([source],[],prefs.money,budget?.context).selection,switches:()=>nodes(tree).filter(n=>n.type===switchRow),refresh:()=>{revision++;source={...source,successAt:revision};}};
 }
+
+test('adding a native component preserves the implicit total in the reader currency',async()=>{
+  const definition={id:'CNY',name:'CNY',symbol:'CNY',fractionDigits:2};
+  const source:Named={id:'s',title:'Account',provider:'deepseek',plan:'',successAt:1,error:null,stale:false,windows:[],resets:null,owners:[],staleAfterMs:1000,measureIntervalMs:null,keys:[],keysCount:0,meters:['balance:CNY','granted:CNY','topped_up:CNY'].map(id=>({...meter(id),unit:'CNY'}))};
+  const f=fixture([],{source,context:{target:definition,definitions:[definition],sources:{}}});await f.settle();
+  assert.deepEqual(f.selection()?.ids,[['s','balance:CNY']]);
+  assert.equal(f.switches().find(n=>n.key==='balance:CNY')?.props.on,true);
+  const granted=f.switches().find(n=>n.key==='granted:CNY')!;
+  (granted.props.onChange as (on:boolean)=>void)(true);await f.settle();
+  assert.deepEqual(Array.from(f.selection()!.ids,([source,meter])=>[source,meter]),[['s','balance:CNY'],['s','granted:CNY']]);
+});
 
 test('the real settings keep ten slots when a selected live key moves off page',async()=>{
   const f=fixture();await f.settle();

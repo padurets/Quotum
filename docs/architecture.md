@@ -602,6 +602,8 @@ are ISO codes; personal definitions use opaque `personal:<24 hex digits>` identi
 with owner-only names, symbols and display precision. Percentage quotas and non-monetary
 counters keep their units. The settings section has no currency forms yet; authenticated
 currency operations already use the common registry and preference.
+Standard display precision comes from the runtime's currency metadata; personal
+definitions carry their owner's explicit precision.
 
 The currency domain accepts generic named rate sources, bases, effective times and
 validity. Source adapters own transport and supplier validation. The current public
@@ -628,6 +630,10 @@ assignments extend sparse ranges. Retention keeps needed predecessors and curren
 observations, with referenced quotes. Changing a preference or receiving a later rate
 never overwrites original provider history or an already assigned historical path.
 The additive upgrade keeps earlier default estimates and legacy provenance.
+Unused private rate versions follow the same retention policy as public references.
+The initial nominal definition, a predecessor for each rate pair, and every quote
+needed by retained assignments remain. Bindings serving a retained native predecessor
+survive even when the binding itself ends before retention.
 
 Reader snapshots and the private `currencies` event carry one target definition and
 source-specific bindings. Personal definitions and rates never enter shared card or
@@ -645,6 +651,10 @@ accounting stays unavailable. History requests validate board visibility and own
 of the selected currency. A price revision refreshes the selected monetary history when
 a previously missing path becomes available. Native reference mode keeps its existing
 request, packing and performance behavior. Subscription selection remains independent.
+Each authorized history read loads binding ranges by source and unit once, converts
+cells in memory, and commits sparse new assignments after transformation. Effective
+quote intervals cache successful and missing paths, while the bridge index avoids
+comparing every pair of historical versions. Converted semantics stay sparse too.
 
 Observation-mode money cells retain their actual sample offset, segment and exclusive
 validity, bounded by their fixed grid cell and span interruption/TTL. Composition can
@@ -658,6 +668,8 @@ Retention keeps original heartbeat endpoints as evidence while bounding observat
 points and coverage to the retained interval, including a cell crossing its edge.
 An opening prefix has its own offset after clipping, so known values survive from
 retention up to the primary observation without backfilling its unretained edge.
+Its own semantics preserve the quote and original amount independently of the
+primary point, through packing and reader conversion across chunk boundaries.
 
 Money history uses the same bounded tiles, cache and page loader. Its exact strings,
 historical cap semantics and original spending intervals stay separate from the window

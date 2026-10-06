@@ -6,7 +6,7 @@ export const MAX_METERS = 32;
 export type MeterSelection = {unit: Unit; displayCurrency?:string;displayRevision?:string;nativeCurrencies?:boolean; ids: [source: string, meter: string][]};
 export type Accounting = {spending:'counter'|'unavailable';topups:'counter'|'unavailable'};
 export type MonetaryPolicy = {accounting?:Accounting;role?:'total'|'granted'|'toppedUp';pointMode?:'cell'|'observation'};
-export type MeterCellExtra = {pointOffsetMs?:number;openOffsetMs?:number;validUntil?:number;first?: string; open?: string | null; segment?: number; semantics?: MeterSemantics; steps?: ExceptionalStep[]; topupInternal?: string; topupSteps?: ExceptionalStep[]};
+export type MeterCellExtra = {pointOffsetMs?:number;openOffsetMs?:number;openSemantics?:MeterSemantics;validUntil?:number;first?: string; open?: string | null; segment?: number; semantics?: MeterSemantics; steps?: ExceptionalStep[]; topupInternal?: string; topupSteps?: ExceptionalStep[]};
 export type MeterCell = [index: number, value: string, spentInternal: string|null, spentExceptional: string|null, coveredMs: number, extra?: MeterCellExtra];
 export type MeterSeriesCells = MonetaryPolicy & {source: string; meter: string; kind: MeterKind; unit: Unit; semantics: MeterSemantics | null; cells: MeterCell[]};
 export type MeterHistory = MonetaryPolicy & {sourceId: string; meterId: string; kind: MeterKind; unit: Unit; semantics: MeterSemantics | null; start: string | null; end: string | null; spent: string|null; unlocated: ExceptionalStep[]; topup: string|null; topupUnlocated: ExceptionalStep[]; coveredMs: number; points: {at: number; value: string; spent:string|null;validUntil?:number;segment: number; semantics: MeterSemantics | null; steps: ExceptionalStep[]}[]};
@@ -132,6 +132,7 @@ function observationCells(group:MeterGroup,unit:Unit,from:number,to:number,cell:
     const open=span.from<=openAt&&first&&first.unit===unit?plottedAmount(first):null;
     const extra:MeterCellExtra={segment:span.from,open,...(open!==null&&openAt>at?{openOffsetMs:openAt-at}:{}),...(pointAt===at?{}:{pointOffsetMs:pointAt-at}),...(validUntil===end?{}:{validUntil})};
     const next=semanticsOf(last);
+    if(open!==null&&first&&JSON.stringify(semanticsOf(first))!==JSON.stringify(next))extra.openSemantics=semanticsOf(first);
     if(JSON.stringify(next)!==JSON.stringify(semantics))extra.semantics=next;
     semantics=next;
     series.cells.push([index,plottedAmount(last),null,null,coverage(group.spans,Math.max(at,retainedFrom),end),extra]);
@@ -196,7 +197,7 @@ export function* composeMetersPrepared(chunks: readonly {from:number;meterSeries
       const observation=series.pointMode==='observation',pointAt=at+(observation?extra.pointOffsetMs??0:0);
       const validUntil=observation?extra.validUntil??at+cell:undefined;
       const openAt=at+(observation?extra.openOffsetMs??0:0);
-      if(observation&&pointAt>openAt&&extra.open!=null)points.push({at:openAt,value:extra.open,spent:null,segment,semantics,steps:[],validUntil:pointAt});
+      if(observation&&pointAt>openAt&&extra.open!=null)points.push({at:openAt,value:extra.open,spent:null,segment,semantics:extra.openSemantics??semantics,steps:[],validUntil:pointAt});
       points.push({at:pointAt,...(observation?{validUntil}:{}),value:row[1],spent:series.accounting?.spending==='unavailable'?null:(spent-previousSpent).toString(),segment,semantics,steps:series.accounting?.spending==='unavailable'?[]:extra.steps??[]});yield;
     }
     const first=rows[0][1].row,last=rows.at(-1)![1];

@@ -29,8 +29,8 @@ function nameOf(series:MeterHistory,title:string,context:import('../../server/do
   return [title,detail,series.kind==='cap'?t('money.cap'):series.meterId==='balance'?'':t('money.usage')].filter(Boolean).join(' — ');
 }
 function SelectionNotice() {
-  const sources=useNamed(),view=useServerView(),prefs=usePrefs();
-  const result=moneySelection(sources,view?.hidden??[],prefs.money);
+  const sources=useNamed(),view=useServerView(),prefs=usePrefs(),context=useCurrencyContext();
+  const result=moneySelection(sources,view?.hidden??[],prefs.money,context);
   const removed=result.removed||(prefs.money.removed??0);
   return <>{result.omitted>0&&<p className="drawer-note">{t('money.limit',{count:result.omitted})}</p>}{removed>0&&<p className="drawer-note">{t('money.removed',{count:removed})}</p>}</>;
 }

@@ -31,6 +31,29 @@ import type {Line} from '../lib/lines';
 
 const answer=(amount='110')=>({is_available:true,balance_infos:[{currency:'CNY',total_balance:amount,granted_balance:'10',topped_up_balance:'100'}]});
 
+test('FX openings preserve their own quote through HTTP, reader conversion and packed chunk boundaries',async t=>{
+  const store=new Store(':memory:',1),directory=new Directory(store.db),owner=directory.createUser('opening@fixture.example','Fixture','unused',1),board=directory.boards(owner.id)[0].id;
+  const source=store.source('deepseek','2'.repeat(24),1);store.hold(source,owner.id,1);store.currencies.select(owner.id,'CNY');
+  for(const [at,usd] of [[50000,'1000000'],[90000,'2000000']] as const) {
+    const measured=deepSeekMeasurement(answer(),at);store.record(source,measured);
+    const quote=store.currencies.save({source:'fixture',base:'EUR',date:0,fetchedAt:at,rates:{EUR:'1000000',USD:usd,CNY:'7000000'}});
+    for(const meter of measured.meters)store.currencies.record(source,meter,'USD',quote);
+  }
+  t.mock.method(Date,'now',()=>120000);
+  const app=await buildApp({store,directory,ingest:new Ingest(store,directory,new Duty(),new Cadence()),pairing:new Pairing(directory),resets:new ResetFeed(undefined,()=>{}),setup:new Setup(false,null),local:null});
+  t.after(async()=>{await app.close();store.close();});
+  const token=newSecret('qt_s');directory.createSession(token,owner.id,120000,60000);
+  for(const from of [0,60000]) {
+    const response=await app.inject({method:'GET',url:'/api/history?board='+board+'&cell=60000&from='+from+'&to=120000&unit=USD&meters='+encodeURIComponent(JSON.stringify([[source,'fx:USD:balance:CNY']]))+'&currency=CNY',headers:{cookie:'quotum_session='+token}});
+    assert.equal(response.statusCode,200);
+    const tile=new MeterTile(0,60000);for(const chunk of response.json().chunks)tile.merge(chunk.from,chunk.to,chunk.meterSeries);
+    const series=composeMeters([{from:60000,meterSeries:tile.chunk(60000,120000)}],60000,60000,120000)[0];
+    assert.equal(moneyPointAt(series,75000)?.value,'110000000');assert.equal(moneyPointAt(series,95000)?.value,'110000000');
+    assert.equal(moneyPointAt(series,75000)?.semantics?.conversion,undefined);assert.equal(moneyPointAt(series,95000)?.semantics?.conversion,undefined);
+    assert.equal(series.spent,null);assert.equal(series.topup,null);
+  }
+});
+
 test('a continuous opening value survives a partial retention cell through HTTP and packing',async t=>{
   const store=new Store(':memory:',1),directory=new Directory(store.db),M=60_000,cutoff=60_010;
   const now=cutoff+config.retention.sampleDays*86_400_000;t.mock.method(Date,'now',()=>now);

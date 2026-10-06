@@ -369,6 +369,7 @@ export class Events implements Touches {
 
     const mines = new Map<string, Frame[]>();
     const accesses=new Map<string,Frame[]>();
+    const currencies=new Map<string,Frame[]>();
     const lists = new Map<string, Frame[]>();
     for (const watched of this.watched.values()) {
       for (const sub of watched.subscribers) {
@@ -383,7 +384,8 @@ export class Events implements Touches {
           try {
             if (!mines.has(key)) mines.set(key, this.refreshMine(sub.user, watched.id, lineups));
             if (!lists.has(sub.user)) lists.set(sub.user, this.refreshBoards(sub.user));
-            own = [...mines.get(key)!, ...lists.get(sub.user)!,...this.refreshCurrencies(sub.user,watched.id,lineups,now)];
+            if (!currencies.has(key)) currencies.set(key,this.refreshCurrencies(sub.user,watched.id,lineups,now));
+            own = [...mines.get(key)!, ...lists.get(sub.user)!,...currencies.get(key)!];
           } catch (error) {
             // What was kept of them may be ahead of what they were sent: forgotten, it is sent whole next time.
             trouble(error);

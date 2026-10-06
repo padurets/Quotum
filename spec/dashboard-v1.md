@@ -594,6 +594,9 @@ from the grid edge to the primary point; a first or recovered sample cannot.
 The prefix may start at retention instead, with `openOffsetMs` relative to the grid
 edge (omitted means zero); its exclusive end is the primary point. A clipped prefix
 does not establish the value at the unretained grid edge.
+When its semantics differ from the primary point, `openSemantics` preserves the
+opening value's own financial metadata and conversion provenance. It is read and
+converted independently, including when it is the first cell of a requested chunk.
 Deadlines never exceed the fixed grid cell end, so later heartbeats cannot extend finished cells.
 The existing chart draws these actual anchors and reads raw pointer time; deadline
 endpoints are not samples. OpenRouter and percentage series retain cell placement.
@@ -676,6 +679,10 @@ currency returns `404 currency_not_found`; a changed preference returns
 interruption and immutable quote assignments. Private converted responses are kept
 outside the shared native tile cache. No `currency` parameter preserves the earlier
 native history response.
+Repeated converted semantics remain sparse. One authorized history read loads each
+binding group once, performs conversion in memory, and persists only new or extended
+assignment ranges. Missing paths are cached by owner, quote revision and effective
+interval; a newly available quote invalidates that result.
 
 Authenticated registry operations, also available in local mode:
 

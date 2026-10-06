@@ -125,8 +125,8 @@ export class MeterStore {
 
   prune(cutoff: number): boolean {
     this.contexts.prune(cutoff);
-    let changed = this.currencies.prune(cutoff);
-    changed = this.db.prepare('DELETE FROM readings WHERE at<? AND at<(SELECT max(at) FROM readings r WHERE r.source_id=readings.source_id AND r.meter_id=readings.meter_id AND r.at<?)').run(cutoff, cutoff).changes > 0 || changed;
+    let changed = this.db.prepare('DELETE FROM readings WHERE at<? AND at<(SELECT max(at) FROM readings r WHERE r.source_id=readings.source_id AND r.meter_id=readings.meter_id AND r.at<?)').run(cutoff, cutoff).changes > 0;
+    changed = this.currencies.prune(cutoff) || changed;
     // The last endpoint is evidence of an unchanged observation, even after the
     // current meter has been archived and its changed reading is much older.
     changed = this.db.prepare('DELETE FROM meter_spans WHERE min(coalesce(interrupted_at,9223372036854775807),to_at+stale_after_ms+1)<=? AND from_at<(SELECT max(from_at) FROM meter_spans s WHERE s.source_id=meter_spans.source_id AND s.meter_id=meter_spans.meter_id)').run(cutoff).changes > 0 || changed;
