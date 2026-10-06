@@ -90,7 +90,7 @@ const shown = (key: string, cell: Cell | TimedCell, render: (cell: Cell, time?: 
  * parts of their own.
  */
 const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange}) {
-  const {history, loading} = useHistory();
+  const {history, loading,error} = useHistory();
   const sources = useNamed(arrange.view.names);
   const lineup = useLineup();
   const forecasts = useForecastsOf(lineup);
@@ -235,7 +235,8 @@ const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange
         )}
       </div>
       {omitted>0&&<p className="drawer-note">{t('history.quotaOverflow',{count:omitted})}</p>}
-      {!history ? (
+      {error&&<p className="form-error">{t('money.historyLimit')}</p>}
+      {!history ? error?null:(
         <div className="panel-loading">{t('history.loading')}</div>
       ) : !lines.length ? (
         <p className="panel-empty">{t('forecast.empty')}</p>

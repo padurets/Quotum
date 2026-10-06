@@ -586,6 +586,8 @@ period visibility, time navigation and measurement-table rows are shared. Unknow
 allowances and unobserved intervals remain unknown. Cap-only sources have no native
 quota spending, plans, forecasts or agent-work attribution; those table cells are
 unavailable rather than zero.
+The shared chart and table explain a bounded-history refusal using the same message
+as monetary analytics, without leaving a loading or empty-selection message.
 Missing or stale measurements keep their last confirmed values at full opacity; the
 dot explains the status and shows the last observation time. Key inactivity keeps its
 distinct dot state. Freshness clocks update these small marks, not the whole limit row.

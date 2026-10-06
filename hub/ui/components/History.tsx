@@ -79,7 +79,7 @@ function HistorySettings({arrange, planAvailable, forecastAvailable, horizonNote
  * forecast's line goes when the table no longer says where its window leads.
  */
 const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange}) {
-  const {history, loading} = useHistory();
+  const {history, loading,error} = useHistory();
   const strip = useHistoryPlot();
   const registry = useRef<{token: number; seed: PlotLine[]; lines: PlotLine[]} | null>(null);
   const panel = useRef<HTMLElement>(null);
@@ -202,6 +202,7 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
       </div>
 
       {omitted>0&&<p className="drawer-note">{t('history.quotaOverflow',{count:omitted})}</p>}
+      {error&&<p className="form-error">{t('money.historyLimit')}</p>}
       <Chart
           lines={model?.visible ?? []}
           plans={model?.plans}
@@ -217,7 +218,7 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
           strip={model?.strip ?? null}
           prepared={prepared.ready && (panning !== null || answered)}
           modelContext={`${history?.board}:${prefs.kind}`}
-          empty={!history ? t('history.loading') : lines.length ? t('chart.empty') : null}
+          empty={!history ? error?null:t('history.loading') : lines.length ? t('chart.empty') : null}
           onSelect={setTimeRange}
           plot={plot}
           onBase={onBase}
@@ -239,7 +240,7 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
             <b>{line.current===null?'—':`${num(line.current)}%`}</b>
           </button>
         ))}
-        {!lines.length && <span className="legend-empty">{t('history.noLines')}</span>}
+        {!lines.length && !error && <span className="legend-empty">{t('history.noLines')}</span>}
       </div>
     </section>
   );

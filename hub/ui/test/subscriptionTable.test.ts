@@ -27,9 +27,9 @@ const cap:Card&{title:string}={id:'zai:fixture',provider:'zai',title:'Personal',
 const native:Card&{title:string}={...cap,id:'codex:fixture',provider:'codex',title:'Native',meters:undefined,windows:['session','weekly'].map((kind,i)=>({id:kind,kind:kind as Kind,label:null,remaining:70,used:30,resetAt:null,minutes:i?10080:300}))};
 const meters=cap.meters!.flatMap(m=>meterCells({source:cap.id,meter:m.id,readings:[{...m,previousAt:null}],spans:[{from:0,to:M,staleAfterMs:10*M}]},m.unit,0,M,M));
 const base:History={range:'24h',live:true,since:0,to:M,cellMs:M,historyStart:0,events:[],series:native.windows.map(w=>({sourceId:native.id,windowId:w.id,points:[[0,70,1]],consumed:2,coveredMs:M,remainingAtStart:72,remainingAtEnd:70,staleAfterMs:10*M,work:null})),meterSeries:composeMeters([{from:0,meterSeries:meters}],M,0,M),activity:{since:0,known:null,barMs:M,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}}};
-let history=base,kind:Kind='weekly',sources=[cap,native];
+let history:History|null=base,kind:Kind='weekly',sources=[cap,native],error:'history_limit'|null=null;
 const modules:Record<string,unknown>={react:React,'react/jsx-runtime':jsxRuntime,'../lib/format':format,'../lib/quota':quota,'../lib/forecast':forecast,'../lib/plan':plan,'../lib/work':work,'../lib/view':view,'../lib/subscription':subscription,'../lib/timeRange':timeRange,'../i18n':i18n,
-  '../lib/prefs':{usePrefs:()=>({kind}),usePref:()=>({unit:null})},'../lib/board':{useNamed:()=>sources,useLineup:()=>sources.map(s=>s.id),useForecastsOf:()=>[{},{}],useResetNews:()=>null},'../lib/clock':{hubNow:()=>M,useClock:()=>M},'../lib/history':{useHistory:()=>({history,loading:false})},'./Popover':{Popover:()=>null},'./MoneyAnalytics':{MoneyTable:()=>{throw new Error('a subscription reached the money table');}}};
+  '../lib/prefs':{usePrefs:()=>({kind}),usePref:()=>({unit:null})},'../lib/board':{useNamed:()=>sources,useLineup:()=>sources.map(s=>s.id),useForecastsOf:()=>[{},{}],useResetNews:()=>null},'../lib/clock':{hubNow:()=>M,useClock:()=>M},'../lib/history':{useHistory:()=>({history,loading:false,error})},'./Popover':{Popover:()=>null},'./MoneyAnalytics':{MoneyTable:()=>{throw new Error('a subscription reached the money table');}}};
 const context={exports:{} as {Forecast:typeof ForecastComponent},React,require:(name:string)=>modules[name]??{}};
 runInNewContext(ts.transpileModule(readFileSync(new URL('../components/Forecast.tsx',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
 const render=()=>renderToStaticMarkup(React.createElement(context.exports.Forecast,{arrange:{view:EMPTY_VIEW,owner:false,update:()=>{}}}));
@@ -55,4 +55,15 @@ test('the actual range table retains historical percentage edges when the curren
     assert.ok((cells.match(/>—</g)??[]).length>=3);assert.ok(!/>0%</.test(cells));
     history={...base,live:true};const current=row(render());assert.ok(!current.includes('60%'));
   }finally{history=base;sources=[cap,native];kind='weekly';}
+});
+
+test('the shared table explains a bounded-history refusal instead of leaving a loading message',()=>{
+  history=null;error='history_limit';
+  try {
+    for(const locale of ['en','ru'] as const) {
+      i18n.setLocale(locale);const html=render();
+      assert.ok(html.includes(i18n.t('money.historyLimit')));
+      assert.ok(!html.includes(i18n.t('history.loading')));
+    }
+  }finally{i18n.setLocale('en');history=base;error=null;}
 });
