@@ -69,11 +69,15 @@ function decide(db: DatabaseSync, current: SecretKey | null, previous: SecretKey
   }
   if (reset) {
     if (reset.from !== stored || reset.from === reset.to) throw new SecretError('secret_key_reset_conflict');
+    if (!Number.isSafeInteger(++generation)) throw new SecretError('secret_key_metadata_invalid');
     db.exec('DELETE FROM credentials');
     writeMeta();
     return answer('created');
   }
-  if (!rows.length) { writeMeta(); return answer('created'); }
+  if (!rows.length) {
+    if (kcv && !Number.isSafeInteger(++generation)) throw new SecretError('secret_key_metadata_invalid');
+    writeMeta(); return answer('created');
+  }
   if (!kcv) {
     // One bad first row does not prove that the key is wrong for this database.
     const first = rows.find(row => readable(current, row));

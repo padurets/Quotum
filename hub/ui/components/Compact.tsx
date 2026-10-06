@@ -8,7 +8,7 @@ import {windowName} from '../lib/quota';
 import {t, useLocale} from '../i18n';
 import {CardMark, ResetLine} from './SourceCard';
 import {PercentLimit} from './Meter';
-import {MoneyCard,QuotaCard} from './MoneyCard';
+import {MoneyCard,QuotaCard,BalanceMark} from './MoneyCard';
 import {providerOf} from '../../server/domain/providers';
 import {hasSubscriptionCaps} from '../lib/providers';
 import {quotaPeriods} from '../lib/subscription';
@@ -28,12 +28,12 @@ const Row = memo(function Row({id}: {id: string}) {
   const working = t('desktop.working', {count: sessions.filter(s => s.working).length});
   return <section className="card compact-card">
     <div className="card-head">
-      <CardMark source={card}/><div className="card-heading"><h2 title={title}>{title}</h2>
+      <CardMark source={card}/><BalanceMark source={card}/><div className="card-heading"><h2 title={title}>{title}</h2>
         {(card.meters||providerOf(card.provider))&&<small className="resource-type">{t(providerOf(card.provider)?.funding==='wallet'?'resource.budget':'resource.subscription')}</small>}
       </div>
       {sessions.length > 0 && <small className="compact-agents" title={t('desktop.total', {count: sessions.length})}>{working}</small>}
     </div>
-    {hasSubscriptionCaps(card.provider)?<QuotaCard source={card} ids={shownPeriods.map(w=>w.id)} compact/>:card.meters?.length?<MoneyCard source={card} board={board??''} view={view} compact/>:!windows.length&&<p className="compact-quality">{t('desktop.unavailable')}</p>}
+    {hasSubscriptionCaps(card.provider)?<QuotaCard source={card} ids={shownPeriods.map(w=>w.id)} compact/>:card.meters?<MoneyCard source={card} board={board??''} view={view} compact/>:!windows.length&&<p className="compact-quality">{t('desktop.unavailable')}</p>}
     {windows.map(w => <PercentLimit key={w.id} name={windowName(w)} remaining={w.remaining} reset={<ResetLine w={w} short/>} compact/>)}
   </section>;
 });

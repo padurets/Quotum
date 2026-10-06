@@ -555,12 +555,131 @@ crosses a UTC boundary. One atomic store write preserves those independent times
 Readings use signed integer millionths, with sparse value/semantic changes and
 continuous observation spans. Unchanged heartbeats extend freshness without another
 reading. Retention keeps one predecessor to distinguish a late increase from a reset.
+Safe provider context has its own sparse history alongside that ledger: DeepSeek funds
+availability, inventory completeness and observed key identities, and each key's
+properties, reported period usage, BYOK usage and supplier dates. Exact amounts stay
+as millionth strings; period totals retain their UTC day/week/month anchors and key
+page observation time. Unchanged context extends its observed span; changed context
+starts another. It is saved in the same transaction as numbers and state, independently
+of what the card displays. An upgrade seeds the last known safe values with their
+original timestamps. Retention keeps crossing spans and the latest baseline; it never
+makes a stale baseline fresh. Raw responses, credential data and supplier identifiers
+are not archived. Exchange rates and derived monetary values have their own shared
+archive, separate from provider facts.
+Future budget analytics can read these records without inventing
+spending or retroactively reconstructing overwritten period totals.
 A missing key is stale after one successful traversal and archived after two successive
 successful misses; partial traversals never confirm absence, and history is retained.
 A valid null limit explicitly ends the current cap, including in a partial round.
 Invalid money leaves stay distinct from null. The ledger retains the last confirmed
 span endpoint as evidence through archival and retention; reappearance uses that
 heartbeat time as its spending anchor.
+
+DeepSeek reports totals, granted credits and topped-up balances separately for CNY
+and USD. Stable catalogue descriptors identify total and component roles. Its
+balance-only policy makes spending and top-up events unavailable at the ledger,
+packed-cell, composition and UI boundaries; balance changes never become estimates.
+`balanceStatus` carries the supplier's availability boolean, partial issues and its own
+observation/freshness. Accepted empty or partial replies retain missing numerical
+values as stale and persist an exclusive interruption on their observation spans.
+A same-value return starts a new span without inventing a changed reading. Accepted
+status time is the watermark even when numerical success is older.
+Budget cards and the compact panel use one typed presentation of current funds and
+selected allowances. A single Available balance section uses the reader's display currency. Native reference currency takes
+precedence over separate converted observations; the two are never summed. Composition
+opens from the balance amount in a shared Popover. Key allowances appear separately, with their own scope, limit and reset;
+they do not add to account funds. Only catalogue-supported caps have scales. Lifetime
+credits never supply a wallet's percentage denominator. DeepSeek has no key-cap scales
+or spending summary. Each value keeps its own observation time and stale state.
+Additional observations have explicit purposes: balance components explain current
+funds, counters and reported period totals support analytics, BYOK retains a separate
+accounting basis, and key properties and inventory quality describe access and
+measurement reliability. New API fields do not automatically add card rows. The safe
+context archive is independent of this presentation.
+
+Currency behavior belongs to the shared money layer. Native adapters and `readings`
+keep reported amounts, units and observation times. `DEFAULT_CURRENCY` defines the
+initial USD reference and display policy once. A persisted preference selects each
+reader's display currency independently of the shared board. Standard currency identities
+are ISO codes; personal definitions use opaque `personal:<24 hex digits>` identities,
+with owner-only names, symbols and display precision. Percentage quotas and non-monetary
+counters keep their units. The settings section has no currency forms yet; authenticated
+currency operations already use the common registry and preference.
+Standard display precision comes from the runtime's currency metadata; personal
+definitions carry their owner's explicit precision.
+
+The currency domain accepts generic named rate sources, bases, effective times and
+validity. Source adapters own transport and supplier validation. The current public
+adapter is the fixed credential-free ECB XML read, with bounded bytes, timeout and no
+redirects. Public snapshots are shared; fixed personal rates belong to their owner.
+An initial personal ratio defines a timeless nominal unit, rather than a historical
+provider observation. Later dated versions preserve prior assignments. Exact BigInt
+arithmetic composes supported paths and rounds once, including conversion from the
+original CNY amount rather than a rounded USD intermediary. Neither provider keys nor
+account identifiers reach reference-data readers.
+
+One hub service captures no provider data itself. It subscribes to accepted native
+measurements and requests public references after native transactions and secret-buffer
+cleanup. Its cache, cancellation and lazy refresh are shared across accounts. Native
+reference-currency display needs no rate request; another selected currency requests
+references only when its path is missing. Provider authentication and accepted data are
+independent of conversion health. Missing or overflowing conversion remains unknown,
+with native cap percentages still available.
+
+`exchange_rates` preserves immutable snapshots in public or private owner namespaces.
+`money_valuations` retains the default public reference estimates separately from native
+facts. `currency_bindings` pins a reader/source/from/target/time/anchor path; identical
+assignments extend sparse ranges. Retention keeps needed predecessors and current
+observations, with referenced quotes. Changing a preference or receiving a later rate
+never overwrites original provider history or an already assigned historical path.
+The additive upgrade keeps earlier default estimates and legacy provenance.
+Unused private rate versions follow the same retention policy as public references.
+The initial nominal definition, a predecessor for each rate pair, and every quote
+needed by retained assignments remain. Bindings serving a retained native predecessor
+survive even when the binding itself ends before retention.
+The definition pins its initial quote explicitly; later zero-date versions are ordinary
+retained rate updates, rather than additional permanent definitions.
+
+Reader snapshots and the private `currencies` event carry one target definition and
+source-specific bindings. Personal definitions and rates never enter shared card or
+history caches. The page preserves each source's binding slice so another source's
+measurement does not render its card. Dashboard, compact, key allowances and money
+analytics use the common presentation and formatter. Financial scope and label retain
+native meaning; conversion metadata identifies original values and the quote path.
+Caps derive their percentage from native numerator and denominator and convert their
+remaining amount once. Composition stays in the existing disclosure.
+
+Money history first computes native accounting and coverage, then applies the reader's
+currency outside the shared native tile cache. Original CNY provenance avoids repeated
+rounding. Exchange movements cannot create spending or top-up events; balance-only
+accounting stays unavailable. History requests validate board visibility and ownership
+of the selected currency. A price revision refreshes the selected monetary history when
+a previously missing path becomes available. Native reference mode keeps its existing
+request, packing and performance behavior. Subscription selection remains independent.
+Each authorized history read loads binding ranges by source and unit once, converts
+cells in memory, and commits sparse new assignments after transformation. Effective
+quote intervals cache successful and missing paths, while the bridge index avoids
+comparing every pair of historical versions. Converted semantics stay sparse too.
+The reader loads the requested binding interval and its predecessors, with stable
+indexes for starts, endpoints and anchors. A native heartbeat need not change the
+amount to introduce a new valuation: its assigned price has its own point on the
+timeline. Multiple admitted valuations retain their individual timestamps through
+clipping and packing, without creating spending or rewriting native observations.
+
+Observation-mode money cells retain their actual sample offset, segment and exclusive
+validity, bounded by their fixed grid cell and span interruption/TTL. Composition can
+emit a confirmed opening prefix before an ordinary change in the same span, while
+new or recovered spans have no prefix. Packing preserves these fields and replaces
+the whole selected interval, including an empty response. The existing chart uses
+actual observation anchors and raw pointer time for these series. A deadline endpoint
+is geometry, never a measurement. Subscription and OpenRouter series retain their
+cell midpoint and snapped readout. No value carries into an unconfirmed next cell.
+Retention keeps original heartbeat endpoints as evidence while bounding observation
+points and coverage to the retained interval, including a cell crossing its edge.
+An opening prefix has its own offset after clipping, so known values survive from
+retention up to the primary observation without backfilling its unretained edge.
+Its own semantics preserve the quote and original amount independently of the
+primary point, through packing and reader conversion across chunk boundaries.
 
 Personal Global z.ai Coding Plan quotas are hub-measured subscription caps in
 `credits:zai`, separate from monetary counters. The adapter supports only the observed
@@ -641,7 +760,18 @@ tests inject their own adapter. Each credential belongs to its person and can be
 created, replaced, listed or removed only by that person's session. Create and replacement
 identify the account outside SQLite, then commit encrypted access and its verified
 source holding atomically. A replacement cannot change the account. No-expiry access
-requires explicit consent. Creation retries can use an owner-scoped UUID for 24 hours;
+requires explicit consent. DeepSeek has declared identity: each owner creates an
+immutable account UUID and private name, independent of keys. An owner/provider-scoped
+pseudonym determines the source. Same-account replacement requires an attestation;
+a different account needs a new connection. Both declared connectors use the same
+`sameAccount` attestation and owner/provider/logical-UUID pseudonym generator. Named
+accounts additionally support explicit selection and reconnection; neither names nor
+keys identify an account. Existing source bindings are reused without recalculating
+their pseudonyms. Removing the last key releases the holding
+but preserves identity and retained history for explicit reconnection. A persisted
+last-binding deletion trigger advances its lifecycle revision. Unknown key expiry is
+stored separately from no expiry and requires its own acknowledgement. Owner account
+pagination and sharing labels never enter shared source projections. Creation retries can use an owner-scoped UUID for 24 hours;
 a deletion leaves its replay tombstone. Deleting the last own access releases that
 person's holding, preserving others and history. Missing or broken access preserves
 last measurements and a neutral shared failure, with details only for its owner. Mutations require
@@ -667,7 +797,11 @@ followed by one LF or CRLF, from a regular file whose real path is outside the d
 directory. The two inputs are exclusive. HKDF-SHA256 derives separate encryption and
 check keys. AES-256-GCM binds each credential to its id, owner and provider, using a
 fresh 12-byte nonce per write. SQLite keeps only ciphertext and its tag, nonce and key
-generation. A full key check value in `meta` identifies the database's KEK; its first
+generation. Asynchronous credential operations capture and recheck the full current
+key check value and monotonic epoch inside the commit transaction. Real rotation,
+reset and replacement of an unused key advance the epoch, including empty-account
+resets and an A→B→A sequence; an old loaded key cannot submit new work.
+A full key check value in `meta` identifies the database's KEK; its first
 eight bytes are the diagnostic fingerprint. The KEK is never written to SQLite or its
 data directory. Input variables are removed after capture. The entry point protects
 Node reports and sets a private file mode before loading configuration or other hub

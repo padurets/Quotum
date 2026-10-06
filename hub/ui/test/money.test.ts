@@ -23,6 +23,10 @@ test('a selected live key on another page is not archived, and archived scales s
   const selected:[string,string][]=[['s','key:live:usage'],['s','key:gone:usage'],['s','key:gone:cap'],['other','key:else:cap']];
   assert.deepEqual(archivedKeyGroups('s',selected,new Set(['live']),[]),[{id:'gone',label:'gone',usage:'key:gone:usage',cap:'key:gone:cap'}]);
 });
+test('account balances, converted balances and counters cannot become archived key groups',()=>{
+  const ids=['balance','balance:CNY','granted:CNY','fx:USD:balance:CNY','fx:USD:granted:CNY','usage','credits','key:gone:usage','key:gone:cap'];
+  assert.deepEqual(archivedKeyGroups('s',ids.map(id=>['s',id]),new Set(),[]),[{id:'gone',label:'gone',usage:'key:gone:usage',cap:'key:gone:cap'}]);
+});
 test('access warnings begin exactly seven days before expiry, and expired access is critical',()=>{
   const now=Date.UTC(2026,9,4),expiry=now+8*86_400_000,warning=now+86_400_000;
   const access={expiresAt:expiry,error:null};

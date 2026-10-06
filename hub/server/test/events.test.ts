@@ -26,6 +26,26 @@ const ACCOUNT = 'a1b2c3d4e5f6a1b2c3d4e5f6';
 /** The page asks for events with this header (spec: `GET /api/events`). */
 const STREAM = {'quotum-stream': '1'};
 
+test('every subscription of one reader receives the same currency change',t=>{
+  const at=Date.now(),store=new Store(':memory:',at),directory=new Directory(store.db);
+  const user=directory.createUser('currency@example.com','Reader','fixture',at),board=directory.boards(user.id)[0];
+  const ingest=new Ingest(store,directory,new Duty(),new Cadence()),resets=new ResetFeed(undefined,()=>{}),events=new Events({store,directory,ingest,resets});events.attach();
+  t.after(()=>{events.close();store.close();});
+  const received:Frame[][]=[[],[]];
+  for(const [index,frames] of received.entries()) {
+    const secret='currency-session-'+index;directory.createSession(secret,user.id,at,MIN);
+    events.open({user:user.id,secret,board:board.id,kind:'stream',send:batch=>frames.push(...batch),end:()=>{}});
+    frames.length=0;
+  }
+  const target=store.currencies.create(user.id,{name:'Points',symbol:'PT',fractionDigits:2},'USD','2000000',at);
+  store.currencies.select(user.id,target.id);events.flush();
+  for(const frames of received)assert.equal(JSON.parse(frames.find(f=>f.type==='currencies')!.data).target.id,target.id);
+  assert.deepEqual(received[0],received[1]);
+  for(const frames of received)frames.length=0;
+  store.currencies.select(user.id,'USD');events.flush();
+  for(const frames of received)assert.equal(JSON.parse(frames.find(f=>f.type==='currencies')!.data).target.id,'USD');
+});
+
 /** A clock tests move by hand: timers run, in order, as it passes them. */
 class ManualClock implements Clock {
   private timers: {at: number; run: () => void}[] = [];

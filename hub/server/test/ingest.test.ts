@@ -110,7 +110,8 @@ test('a malformed batch is refused whole', () => {
   assert.equal(parsed.snapshots[0].windows[0].resetsAt, start + 5 * 86_400_000);
 });
 
-for(const provider of ['openrouter','zai'])test(`${provider} is dropped before its fields are parsed, without claiming a source`, () => {
+test('hub providers are dropped before their fields are parsed, without claiming a source', () => {
+ for(const provider of ['openrouter','deepseek','zai']) {
   const {store, ingest, token, board} = setup();
   const hub = {provider, account: 'invalid', observedAt: 'invalid', windows: false, active: 'invalid', error: {secret: 'ignored'}};
   const body = {...batch([snapshot(start, 5)]), snapshots: [snapshot(start, 5), hub], failures: [hub]};
@@ -128,6 +129,7 @@ for(const provider of ['openrouter','zai'])test(`${provider} is dropped before i
   assert.throws(() => parseBatch({...body, snapshots: [hub, null]}), /snapshot/);
   assert.throws(() => parseBatch({...body, failures: [{provider: 'unknown'}]}), /provider/);
   store.close();
+ }
 });
 
 test('a window keeps its kind and the scope label the agent gave, nothing else', () => {

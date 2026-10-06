@@ -735,7 +735,7 @@ export class HistoryStore {
 
 const keyOf = (lineup: string[]) => JSON.stringify([...lineup].sort());
 export const loader = new HistoryStore({
-  read: (board, cell, from, to, signal, meters, meta) => call<HistoryReply>('GET', `/api/history?board=${encodeURIComponent(board)}&cell=${cell}&from=${from}&to=${to}&meta=${encodeURIComponent(meta?.meta ?? '')}${meters ? '&unit='+encodeURIComponent(meters.unit)+'&meters='+encodeURIComponent(JSON.stringify(meters.ids)) : ''}`, undefined, 12_000, signal).then(reply => expandHistory(reply, meta)),
+  read: (board, cell, from, to, signal, meters, meta) => call<HistoryReply>('GET', `/api/history?board=${encodeURIComponent(board)}&cell=${cell}&from=${from}&to=${to}&meta=${encodeURIComponent(meta?.meta ?? '')}${meters ? '&unit='+encodeURIComponent(meters.unit)+'&meters='+encodeURIComponent(JSON.stringify(meters.ids))+(meters.displayCurrency?'&currency='+encodeURIComponent(meters.displayCurrency):'') : ''}`, undefined, 12_000, signal).then(reply => expandHistory(reply, meta)),
   now: hubNow,
   setTimeout: (run, ms) => setTimeout(run, ms),
   clearTimeout: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
@@ -757,7 +757,7 @@ export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>)
     }
     const board=state.board;
     if(board) {
-      const settings=prefs().money,result=moneySelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view.hidden,settings);
+      const settings=prefs().money,result=moneySelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view.hidden,settings,board.currencies);
       if(result.removed&&settings.unit&&settings.selected[settings.unit])setPrefs({money:{...settings,removed:result.removed,selected:{...settings.selected,[settings.unit]:result.selection!.ids}}});
       loader.setMeters(settings.unit?result.selection:subscriptionSelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view));
     }
@@ -790,7 +790,7 @@ if (typeof window !== 'undefined') {
   const chosen = () => {
     loader.choose(prefs().range, timeRange());
     const board=page.get().board;
-    if(board)loader.setMeters(prefs().money.unit?moneySelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view.hidden,prefs().money).selection:subscriptionSelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view));
+    if(board)loader.setMeters(prefs().money.unit?moneySelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view.hidden,prefs().money,board.currencies).selection:subscriptionSelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view));
   };
   onPrefs(chosen);
   onTimeRange(chosen);

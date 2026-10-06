@@ -54,7 +54,8 @@ export function useTimeAxis({
   right,
   onSelect,
   ready = true,
-  precise = false,
+  rawPointer = false,
+  precise = rawPointer,
   navigation = axisNavigation(null, timeRange(), prefs()),
 }: {
   from: number;
@@ -66,6 +67,7 @@ export function useTimeAxis({
   /** A time range dragged across the chart. */
   onSelect?: (range: TimeRange) => void;
   ready?: boolean;
+  rawPointer?:boolean;
   /** Cap bounds can start or end inside a grid cell. */
   precise?: boolean;
   navigation?: AxisNavigation;
@@ -475,5 +477,5 @@ export function useTimeAxis({
     animateProjection(visual, wanted.current.projection, SLIDE_MS, false);
   };
 
-  return {box, svg, width, scale, commitDrawing, visualGeometry, screenX: (at: number) => {if (animations.current.size) {const visible = visualGeometry(); return left + (at - visible.from) / (visible.to - visible.from) * (width - left - right);} const base = drawing.current; return pose.current.a * (left + (at - base.from) / Math.max(60_000, base.to - base.from) * (width - left - right)) + pose.current.b + pose.current.offset / scale;}, get held() {return finished.current !== null;}, hover: shifting || panning || folding || finished.current !== null || hover === null ? null : Math.floor(hover / cellMs) * cellMs, hoverAt: hover, drag, x, drawX, timeAt, clip, handlers, basis, active: panning !== null, panning: shifting || panning !== null || folding || finished.current !== null};
+  return {box, svg, width, scale, commitDrawing, visualGeometry, screenX: (at: number) => {if (animations.current.size) {const visible = visualGeometry(); return left + (at - visible.from) / (visible.to - visible.from) * (width - left - right);} const base = drawing.current; return pose.current.a * (left + (at - base.from) / Math.max(60_000, base.to - base.from) * (width - left - right)) + pose.current.b + pose.current.offset / scale;}, get held() {return finished.current !== null;}, hover: shifting || panning || folding || finished.current !== null || hover === null ? null : Math.floor(hover / cellMs) * cellMs, hoverAt: hover,rawHover: hover, drag, x, drawX, timeAt, clip, handlers, basis, active: panning !== null, panning: shifting || panning !== null || folding || finished.current !== null};
 }

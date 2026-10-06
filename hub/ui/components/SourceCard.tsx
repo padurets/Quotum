@@ -8,7 +8,7 @@ import {DEFAULT_PLAN, isValidPlan, planAt, planChangesAt, planNote, planTotal, t
 import {logoOf} from './logos';
 import {MeterBar,PercentLimit,ResetText} from './Meter';
 import {KeyScaleSettings} from './KeyScaleSettings';
-import {MoneyCard,QuotaCard,QuotaMark,AccessMark} from './MoneyCard';
+import {MoneyCard,QuotaCard,QuotaMark,AccessMark,BalanceMark} from './MoneyCard';
 import {cardId, colorOf, isWindowHidden, planOf, weeklyPlanOf, withColor, withHidden, withName, withPlan, withPlanned, withWindowHidden, type Arrange} from '../lib/view';
 import {CARD_COLORS, MIDDLE_STEP, PROVIDERS,hasSubscriptionCaps} from '../lib/providers';
 import {call} from '../lib/http';
@@ -454,7 +454,7 @@ function CardTray({source}: {source: Card}) {
   const resets = useResetsFor(source.provider);
   const access = useSourceAccess(source.id);
   const quotaIssue=source.quota&&!source.quota.complete;
-  const news=access||quotaIssue?<>{access&&<AccessMark id={source.id}/>}
+  const news=providerOf(source.provider)?.funding==='wallet'||source.balanceStatus||access||quotaIssue?<><BalanceMark source={source}/>{access&&<AccessMark id={source.id}/>}
     {quotaIssue&&<QuotaMark source={source}/>}</>:null;
   return <Tray resets={resets} news={news} current={!!source.resets?.available&&<FreeResets resets={source.resets}/>} sessions={sessions} />;
 }
@@ -493,7 +493,7 @@ export const SourceCard = memo(function SourceCard({id, arrange, boardId, person
         {visible.map(w => (
           <Limit key={w.id} w={w} measuredAt={source.successAt} weekly={weekly} />
         ))}
-        {!caps && !source.windows.length && !source.meters?.length && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
+        {!caps && !source.windows.length && !source.meters && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
         {!!periods.length && !shownPeriods.length && <AllHidden source={source} arrange={arrange} />}
       </div>
       <CardTray source={source} />

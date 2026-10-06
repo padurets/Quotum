@@ -1,6 +1,7 @@
 /** Explicit demo composition replaces the connector before the ordinary hub starts. */
 import {pathToFileURL} from 'node:url';
 import path from 'node:path';
+import {DEEPSEEK_SCENES,DEEPSEEK_KEY,deepSeekPayload,demoRates} from './deepseek.js';
 import {QUOTA_KEY,QUOTA_SCENES,quotaFixture} from './quotas.js';
 import {MONEY_KEY} from './money.js';
 import {readFileSync} from 'node:fs';
@@ -9,6 +10,11 @@ const load=(name:string)=>import(pathToFileURL(path.join(root,name)).href);
 const {connectors}=await load('connectors/registry.js') as typeof import('../server/connectors/registry.js');
 const {ConnectorTransport}=await load('connectors/transport.js') as typeof import('../server/connectors/transport.js');
 const {openRouter,decodeOpenRouter}=await load('connectors/openrouter.js') as typeof import('../server/connectors/openrouter.js');
+const {Limiter}=await load('session.js') as typeof import('../server/session.js');
+// Catalogue setup connects more than ten synthetic keys in one burst. Ordinary
+// hub limits are exercised by credentials.test.ts; this realm accepts fixture keys only.
+const blocked=Limiter.prototype.blocked;
+Limiter.prototype.blocked=function(key:string){return key.startsWith('user:')||key.startsWith('ip:')?false:blocked.call(this,key);};
 const {SecretError}=await load('secrets/crypto.js') as typeof import('../server/secrets/crypto.js');
 const workspace='550e8400-e29b-41d4-a716-446655440000';
 const secondWorkspace='550e8400-e29b-41d4-a716-446655440001';
@@ -41,6 +47,23 @@ transport.send=async(operation,secret,query={})=>{
   throw new SecretError('connector_destination_invalid');
 };
 (connectors as Map<string,import('../server/connectors/registry.js').Connector>).set('openrouter',openRouter(transport,()=>observed));
+const {deepSeek}=await load('connectors/deepseek.js') as typeof import('../server/connectors/deepseek.js');
+const deepTransport=new ConnectorTransport({host:'127.0.0.1',port:443,operations:{}}),deepCounts=new Map<number,number>();
+let deepObserved=Date.now();
+const initialAt=Date.now()-3*3_600_000;
+deepTransport.send=async(operation,secret)=>{
+  const index=DEEPSEEK_SCENES.findIndex((_,i)=>DEEPSEEK_KEY(i)===secret.toString('ascii'));
+  if(operation!=='balance'||index<0)throw new SecretError('credential_invalid');
+  const count=(deepCounts.get(index)??0)+1;deepCounts.set(index,count);
+  const scene=DEEPSEEK_SCENES[index].id;
+  if(count>1&&scene==='rejected')throw new SecretError('credential_rejected');
+  if(count>1&&scene==='stale')throw new SecretError('connector_failed');
+  deepObserved=count===1?initialAt:Date.now();
+  return deepSeekPayload(scene,count===1);
+};
+(connectors as Map<string,import('../server/connectors/registry.js').Connector>).set('deepseek',deepSeek(deepTransport,()=>deepObserved));
+const {rateSources}=await load('currencies/ecb.js') as typeof import('../server/currencies/ecb.js');
+(rateSources as Map<string,import('../server/currencies/ecb.js').RatesReader>).set('ecb',async()=>demoRates(Date.now()));
 const {zai,decodeZai}=await load('connectors/zai.js') as typeof import('../server/connectors/zai.js');
 const quotaTransport=new ConnectorTransport({host:'127.0.0.1',port:443,operations:{}}),quotaStart=Date.now();
 quotaTransport.send=async(_operation,secret)=>{

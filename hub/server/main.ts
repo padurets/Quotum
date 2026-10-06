@@ -14,6 +14,7 @@ import {Setup} from './setup.js';
 import {bootstrapLocal} from './local.js';
 import {Credentials, readInputs, resetIntent, SecretError, startSecrets} from './secrets/index.js';
 import {HubSources} from './hubSources.js';
+import {Currencies} from './currencies/service.js';
 
 /** One line of JSON on stdout about the hub itself: the desktop app reads these. */
 const say = (event: object) => console.log(JSON.stringify(event));
@@ -53,6 +54,7 @@ async function main() {
   const ingest = new Ingest(store, directory, new Duty(), new Cadence());
   const credentials=new Credentials(store,inputs.current,secretKey);
   const hubSources=new HubSources(store,credentials);
+  const currencies=new Currencies(store);
   const app = await buildApp({store, directory, resets, ingest, pairing: new Pairing(directory), setup, local: local && {key: local.key}, credentials,hubSources, secretSnapshot: {storageAtStart: inputs.storageAtStart, wasFileAtStart: inputs.wasFileAtStart}});
 
   let closing = false;
@@ -63,6 +65,7 @@ async function main() {
     clearInterval(pruning);
     resets.stop();
     hubSources.stop();
+    await currencies.stop();
     await app.close();
     store.close();
     process.exit(0);
@@ -111,6 +114,7 @@ async function main() {
   }
   resets.start();
   hubSources.start();
+  currencies.start();
 
   const prune = () => {
     const now = Date.now();

@@ -98,6 +98,13 @@ and platform smoke checks still apply.
   projections, errors or logs. Connectors use only their fixed HTTPS transport;
   provider clients inherit no `QUOTUM_*` variables. Never log a raw crypto or keyring
   error, whose contents may include secret bytes.
+- **Identity follows its evidence.** Supplier identity uses the provider's stable
+  account pseudonym and keeps mismatch checks on replacement and polling. Declared
+  identity uses the shared owner/provider/logical-UUID generator, never a key, name,
+  plan or balance. All declared replacements require `sameAccount` before provider
+  work; named account selection adds no second identity or consent mechanism. Reuse
+  persisted source bindings without recomputing their identity. Private account labels
+  and owner IDs never enter shared projections.
 - **The provider catalogue defines authority.** Known hub-measured providers are
   dropped from agent snapshots, failures and sessions before their other fields are
   parsed. Check-in replies preserve those elements' positions and tell the agent to
@@ -106,7 +113,10 @@ and platform smoke checks still apply.
   serialized as exact decimal strings. Counter spending, top-ups and cap remaining
   are separate from percentage windows; they never enter quota forecasts or native
   quota notifications. Historical cap semantics, exclusive quota validity bounds and uncertain spending intervals
-  survive history packing and retention.
+  survive history packing and retention. Catalogue balance roles and accounting
+  capabilities are authoritative: balance-only sources never infer spending or top-up
+  events. Accepted missing observations preserve values but end availability; actual
+  sample anchors and exclusive deadlines survive packing, drawing and readout.
 - **The protocol is a spec.** A change to what the agent sends or the hub answers goes
   into `spec/ingest-v1.md` in the same commit, including its Privacy section; a change to
   the events the hub tells its dashboard, into `spec/dashboard-v1.md`.
@@ -175,6 +185,26 @@ and platform smoke checks still apply.
 - Devices and provider accounts connect through My connections. Account settings hold
   profile and app settings. A widget's display switches live in its own settings;
   measurement tables do not change chart selections.
+- **Budget widgets share one semantic presentation.** Dashboard and compact use the
+  same budget view and renderer: one Available balance, supported scoped allowances
+  separately, and balance composition in the existing disclosure. Accounting totals
+  belong in analytics. Never add card rows just because a provider returns more fields;
+  each extra field needs a defined purpose, while safe financial observations are saved
+  at capture for later analytics. Only reported caps have scales, and lifetime credits
+  never become a wallet's percentage denominator. Totals, components and currency
+  representations are never added without evidence that they are independent funds.
+  Unknown, unsupported, stale and confirmed zero remain distinct.
+- **Currency behavior belongs to the shared money layer.** Provider adapters capture
+  native facts; shared services own rate integrations, cache, exact conversion and
+  provenance. Widgets consume common presentation and formatting instead of choosing
+  provider-specific currencies or fetching rates. USD is the current display policy.
+  The user's display currency and personal currency definitions use one user-scoped
+  registry and persisted preference consumed by every monetary widget; future settings
+  forms must use that same contract.
+  Keep public reference rates separate from private user rates. Preserve original
+  amounts and recorded conversion provenance; changing a display preference must not
+  rewrite provider history or turn exchange movements into spending. Percentage quotas
+  and non-monetary counters keep their own units.
 - **Times.** Say when as `stamp` in `hub/ui/lib/format.ts` does: "26 September 14:00",
   never "today" or "tomorrow", never seconds; under a heading that already gives the day,
   the time alone. Where how soon or how long ago matters more, and room is short (a mark,

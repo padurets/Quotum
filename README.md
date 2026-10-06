@@ -9,8 +9,8 @@
 
 Quotum shows how much of your coding-agent subscriptions is left — Claude Code, Codex
 and Antigravity — on every machine you work on, in one place: for you alone or for a
-whole team. It also shows OpenRouter balances and API-key caps, and personal z.ai subscription quotas. You host it yourself;
-the agent never reads provider tokens, and the hub encrypts the management key you
+whole team. It also shows OpenRouter balances and API-key caps, DeepSeek balances, and personal z.ai subscription quotas. You host it yourself;
+the agent never reads provider tokens, and the hub encrypts the dedicated provider key you
 explicitly connect.
 
 ![The Quotum dashboard](docs/dashboard.png)
@@ -312,6 +312,42 @@ licences) and as a bare binary (`quotum-cli-<platform>`, what the installers and
 [build provenance](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations)
 (`gh attestation verify <file> -R padurets/quotum`). **From source:**
 `cd agent && cargo build --release` (Rust 1.85 or newer) gives `target/release/quotum`.
+
+## Connecting DeepSeek
+
+In **My connections**, choose **Connect → DeepSeek** and enter a dedicated API key
+from [DeepSeek key settings](https://platform.deepseek.com/api_keys). Name the account
+privately, or explicitly reconnect an existing one. DeepSeek does not return an account
+ID: you declare the identity, and replacing a key requires confirmation that it belongs
+to the same account. Removing access preserves that identity and retained history.
+Another account needs a new connection. An ordinary API key may authorize model calls;
+Quotum uses only the fixed [balance read](https://api-docs.deepseek.com/api/get-user-balance/).
+Key expiry is unknown and saving it requires an explicit acknowledgement. Server and
+desktop modes use the same encrypted credential protection described in [SECURITY.md](SECURITY.md).
+
+The card and compact panel use the same budget layout as OpenRouter: one
+**Available balance** in USD, followed by any supported limits. DeepSeek has no limit
+scales. USD is the initial shared display policy. The currency registry supports owner-scoped
+personal units and a persisted reader preference through the API; the settings form is
+not yet exposed. Reported reference currency takes precedence. When only CNY is reported,
+the shared hub currency service uses
+the [ECB daily reference rates](https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html)
+to record a separate USD estimate, marked **≈**. Click the balance amount for its
+granted and topped-up composition; an estimate also gives its original CNY amount
+and rate date. Native observations are saved before a rate read; the shared, persisted
+rate cache contains no credentials or account information. Historical estimates keep
+their original rate. Without a usable rate, CNY is retained and USD stays unknown or stale.
+All original balances, estimates, rate provenance, funds status and safe provider
+context are retained within the history retention period. Choose **USD** in analytics;
+connecting an account keeps your existing subscription view. Totals are selected by
+default; components can be added in the chart's settings. The total is not added to its
+components. Reported USD and converted CNY are never summed. Spending and top-up events
+are **unavailable** because the endpoint has no spending counter; a balance change
+cannot establish spending. An omitted currency keeps its last value as stale and
+breaks its history until a valid observation returns. A failed request preserves the
+last valid reading. The supplier's insufficient-funds notice is separate from rejected
+access. Saved access and private account names remain owner-only on shared boards.
+Only holders may refresh the source.
 
 ## Connecting OpenRouter
 

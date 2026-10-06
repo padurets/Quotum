@@ -1,3 +1,4 @@
+import {defaultCurrencyContext,DEFAULT_CURRENCY,type CurrencyContext} from '../../server/domain/currency';
 import {useMemo} from 'react';
 import type {AppState} from './app';
 import {usePref} from './prefs';
@@ -25,6 +26,7 @@ export type HubResets = {resets: Resets; trackers: TrackerHealth[]; past: PastRe
 
 /** The board as the hub gives it to its reader (spec: `snapshot`). */
 export type Snapshot = {
+  currencies?:CurrencyContext;
   sourceAccess?:Record<string,SourceAccess>;
   board: BoardMeta;
   view: View;
@@ -53,6 +55,7 @@ export type HubEvent =
   | {type: 'forecast'; data: {id: string; forecast: SourceForecast}}
   | {type: 'mine'; data: {sources: string[]}}
   | {type:'sourceAccess';data:Record<string,SourceAccess>}
+  | {type:'currencies';data:CurrencyContext}
   | {type: 'boards'; data: {boards: Board[]}}
   | {type: 'history'; data: {sources: string[]; since: number}}
   | {type: 'resets'; data: HubResets};
@@ -60,6 +63,7 @@ export type HubEvent =
 export type ConnectionStatus = 'connecting' | 'live' | 'polling' | 'retrying' | 'paused';
 
 export type BoardState = {
+  currencies?:CurrencyContext;
   sourceAccess?:Record<string,SourceAccess>;
   id: string;
   meta: BoardMeta;
@@ -134,6 +138,10 @@ function normalizedSessions(sessions: LiveSession[]): LiveSession[] {
   });
 }
 
+function keepCurrencyContext(old:CurrencyContext|undefined,next:CurrencyContext):CurrencyContext {
+  const target=keep(old?.target,next.target),definitions=keep(old?.definitions,next.definitions),sources=keepEach(old?.sources,next.sources);
+  return old&&target===old.target&&definitions===old.definitions&&sources===old.sources&&next.revision===old.revision?old:{target,definitions,sources,...(next.revision?{revision:next.revision}:{})};
+}
 function snapshot(state: PageState, data: Snapshot): PageState {
   const old = state.board?.id === data.board.id ? state.board : null;
   const board: BoardState = {
@@ -152,6 +160,7 @@ function snapshot(state: PageState, data: Snapshot): PageState {
     forecast: keepEach(old?.forecast, data.forecast),
     mine: keep(old?.mine, data.mine),
     sourceAccess:keepEach(old?.sourceAccess,data.sourceAccess??{}),
+    currencies:keepCurrencyContext(old?.currencies,data.currencies??defaultCurrencyContext),
   };
   return {
     ...state,
@@ -209,6 +218,8 @@ function hub(state: PageState, event: HubEvent): PageState {
       return patch(state, board => set(board, 'forecast', event.data.id, event.data.forecast));
     case 'mine':
       return patch(state, board => (sameJson(board.mine, event.data.sources) ? board : {...board, mine: event.data.sources}));
+    case 'currencies':
+      return patch(state,board=>{const next=keepCurrencyContext(board.currencies,event.data);return next===board.currencies?board:{...board,currencies:next};});
     case 'sourceAccess':
       return patch(state,board=>{const next=keepEach(board.sourceAccess,event.data);return next===board.sourceAccess?board:{...board,sourceAccess:next};});
     case 'boards': {
@@ -281,7 +292,15 @@ export const useCard = (id: string) => usePage(s => s.board?.cards[id]);
 export const useSourceAccess=(id:string)=>usePage(s=>s.board?.sourceAccess?.[id]??null);
 const NO_ACCESS:Record<string,SourceAccess>={};
 export const useSourceAccesses=()=>usePage(s=>s.board?.sourceAccess??NO_ACCESS);
-export const useMoneyUnits=()=>usePage(s=>[...new Set(Object.values(s.board?.cards??{}).filter(c=>providerOf(c.provider)?.funding==='wallet').flatMap(c=>c.meters?.map(m=>m.unit)??[]))].sort(),shallowEqual);
+const NO_CURRENCY_BINDINGS:CurrencyContext['sources'][string]=[];
+export const currencyContextOf=(state:PageState)=>state.board?.currencies??defaultCurrencyContext;
+export function useCurrencyContext(source?:string):CurrencyContext {
+  const target=usePage(s=>currencyContextOf(s).target),definitions=usePage(s=>currencyContextOf(s).definitions);
+  const bindings=usePage(s=>source?currencyContextOf(s).sources[source]??NO_CURRENCY_BINDINGS:NO_CURRENCY_BINDINGS);
+  const revision=usePage(s=>source?undefined:currencyContextOf(s).revision);
+  return useMemo(()=>({target,definitions,sources:source?{[source]:bindings}:{},...(revision?{revision}:{})}),[target,definitions,source,bindings,revision]);
+}
+export const useMoneyUnits=()=>usePage(s=>[...new Set(Object.values(s.board?.cards??{}).filter(c=>providerOf(c.provider)?.funding==='wallet').flatMap(c=>c.meters?.map(m=>/^[A-Z]{3}$/.test(m.unit)?DEFAULT_CURRENCY:m.unit)??[]))].sort(),shallowEqual);
 /** The cards of these sources, in their order; the same list while each card is. */
 export const useCards = (ids: string[]) => usePage(s => ids.flatMap(id => s.board?.cards[id] ?? []), shallowEqual);
 export const useSessions = (id: string) => usePage(s => s.board?.sessions[id] ?? NONE);

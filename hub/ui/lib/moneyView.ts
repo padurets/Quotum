@@ -1,6 +1,11 @@
 import {cellStart} from '../../server/domain/history';
 import type {MeterHistory} from '../../server/domain/meterHistory';
 export type {MeterHistory};
+export function moneyPointAt(series:MeterHistory,at:number) {
+  const point=series.points.filter(p=>p.at<=at).at(-1);
+  if(series.pointMode==='observation'&&(!point||!Number.isSafeInteger(point.validUntil)||at>=point.validUntil!))return undefined;
+  return point;
+}
 /** Cap values belong to one fetched cell and its producer's exclusive bounds. */
 export function meterPointIn(series:MeterHistory,at:number,cell:number) {
   if(series.kind!=='cap')return series.points.filter(p=>p.at<=at).at(-1);

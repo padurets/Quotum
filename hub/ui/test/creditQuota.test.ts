@@ -145,7 +145,7 @@ test('cap readout requires its own fetched cell and exclusive producer bounds',(
 
 test('the actual chart caps geometry starts and ends at producer bounds without a bridge',()=>{
   const source=readFileSync(new URL('../components/Chart.tsx',import.meta.url),'utf8');
-  const start=source.indexOf('      if(line.capCells) {'),end=source.indexOf('} else if (incomingStrip && line.blocks)',start);
+  const start=source.indexOf('if(line.capCells) {'),end=source.indexOf('} else if (incomingStrip && line.blocks)',start);
   const code=source.slice(start,end)+'}';
   const context={line:{capCells:[{at:0,from:30000,to:120000,value:60},{at:180000,from:180000,to:204001,value:50}]},incomingStrip:null,drawFrom:0,drawNow:300000,x:(at:number)=>at/1000,y:(value:number)=>value,paths:[] as {line:string}[],latest:'known'};
   const js=ts.transpileModule('function* draw(){'+code+'}\nfor(const _ of draw()){}',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
@@ -170,7 +170,7 @@ test('actual pointer and chart tooltip retain time inside a cap cell through rea
   const chart=readFileSync(new URL('../components/Chart.tsx',import.meta.url),'utf8');
   const head=chart.slice(chart.indexOf('  const model = '),chart.indexOf('  const columnCount = '));
   const value=chart.split('\n').find(line=>line.includes('{columns.left && <strong>'))!.trim().slice(1,-1);
-  const position=chart.split('\n').find(line=>line.startsWith('  const hoverX = '))!;
+  const position=chart.slice(chart.indexOf('  const observationHover='),chart.indexOf('  const narrow = '));
   for(const [from,until,expected] of [[0,45000,null],[30000,60000,1200]] as const) {
     const row={...card.meters![0],amount:'800000000',at:from,resetAt:null,previousAt:null};
     const series=composeMeters([{from:0,meterSeries:meterCells({source:card.id,meter:row.id,readings:[row],spans:[{from,to:from,staleAfterMs:204000,holdUntil:until}]},row.unit,0,60000,60000)}],60000,0,60000)[0];

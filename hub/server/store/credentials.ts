@@ -5,6 +5,7 @@ import {secretCode, type SecretCode} from '../secrets/crypto.js';
 
 export const CREDENTIAL_ABILITIES = ['balance', 'usage', 'manage_keys', 'quota'] as const;
 export type CredentialAbility = (typeof CREDENTIAL_ABILITIES)[number];
+export type {ExpiryKind} from '../connectors/registry.js';
 export type CredentialRow = RecordIdentity & Sealed & {
   expiry_kind?: ExpiryKind; identity_origin?: IdentityOrigin;
   source_id: string | null; key_version: number; hint: string | null; abilities: string;
@@ -13,7 +14,7 @@ export type CredentialRow = RecordIdentity & Sealed & {
 export type Credential = {
   expiryKind?: ExpiryKind; identityOrigin?: IdentityOrigin;
   id: string; provider: string; sourceId: string | null; hint: string | null; abilities: CredentialAbility[];
-  createdAt: number; expiresAt: number | null; lastUsedAt: number | null; lastError: string | null; unreadable: boolean;
+  accountId?: string; accountName?: string; createdAt: number; expiresAt: number | null; lastUsedAt: number | null; lastError: string | null; unreadable: boolean;
 };
 
 /** Explicit owner projection; encrypted bytes never become an API or board payload. */
@@ -26,11 +27,19 @@ export function credentialAnswer(row: CredentialRow): Credential {
   return {expiryKind: row.expiry_kind ?? (row.expires_at === null ? 'none' : 'dated'), ...(row.identity_origin ? {identityOrigin: row.identity_origin} : {}), id: row.id, provider: row.provider, sourceId: row.source_id, hint: row.hint, abilities, createdAt: row.created_at, expiresAt: row.expires_at, lastUsedAt: row.last_used_at, lastError: secretCode(row.last_error), unreadable: !!row.unreadable};
 }
 
+type AccountRow=CredentialRow & {account_id?:string|null;account_name?:string|null};
+const ownerAnswer=(row:AccountRow):Credential=>({...credentialAnswer(row),...(row.account_id?{accountId:row.account_id,accountName:row.account_name??''}:{})});
+const joined='SELECT c.*,(SELECT kind FROM source_identity WHERE source_id=c.source_id) AS identity_origin,a.id AS account_id,a.name AS account_name FROM credentials c LEFT JOIN declared_accounts a ON a.source_id=c.source_id AND a.user_id=c.user_id';
+
 /** Only ciphertext reaches this repository. Ownership is in every mutation predicate. */
 export class CredentialStore {
   constructor(private readonly db: DatabaseSync) {}
   list(owner: string): Credential[] {
-    return (this.db.prepare('SELECT c.*, (SELECT kind FROM source_identity WHERE source_id=c.source_id) AS identity_origin FROM credentials c WHERE user_id = ? ORDER BY created_at, id').all(owner) as CredentialRow[]).map(credentialAnswer);
+    return (this.db.prepare(joined+' WHERE c.user_id=? ORDER BY c.created_at,c.id').all(owner) as AccountRow[]).map(ownerAnswer);
+  }
+  answer(owner:string,id:string):Credential|null {
+    const row=this.db.prepare(joined+' WHERE c.user_id=? AND c.id=?').get(owner,id) as AccountRow|undefined;
+    return row?ownerAnswer(row):null;
   }
   get(owner: string, id: string): CredentialRow | null {
     return this.db.prepare('SELECT c.*, (SELECT kind FROM source_identity WHERE source_id=c.source_id) AS identity_origin FROM credentials c WHERE user_id = ? AND id = ?').get(owner, id) as CredentialRow | undefined ?? null;

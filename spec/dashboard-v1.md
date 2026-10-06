@@ -95,7 +95,7 @@ change as it was.
 | `refresh` | `{id, refresh}` | A source's refresh availability, request or cooldown changed. |
 | `forecast` | `{id, forecast}` | Where the recent pace of the source's weekly windows leads, as the hub works it out, changed. |
 | `mine` | `{sources: string[]}` | Which sources of the board the reader's devices measure changed. |
-| `sourceAccess` | `{<source id>: {error, expiresAt, canRefresh, credentialIds}}` | The reader's own connector access changed, cleared when the holding or board access ends. |
+| `sourceAccess` | `{<source id>: {error, expiresAt, expiryKind, canRefresh, credentialIds}}` | The reader's own connector access changed, cleared when the holding or board access ends. |
 | `boards` | `{boards}` | The reader's boards changed: made, deleted, renamed, joined, left. |
 | `history` | `{sources: string[], since}` | History of these sources changed from `since`: a measurement or credited agent work (see [Reading history](#reading-history)); with `since` 0, all of the board's history reads otherwise: whose agents' work it shows, or under which names, changed (a card hidden or shown, someone joining or leaving, a project or a machine renamed). |
 | `resets` | `{resets, trackers, past}` | The reset trackers' news changed. |
@@ -126,7 +126,10 @@ is when the board's history begins as of the snapshot; `GET /api/history` tells 
 
 `providers` is the public code-owned catalogue: each entry has `id`, `name`, `color`,
 `logoAsset`, `order`, `measuredBy` (`client` or `hub`), `meterKinds`, `resets`, and either
-`clientId` or `connectorId`. It contains no credentials or user addresses. Readers use
+`clientId` or `connectorId`. Monetary entries additionally declare `spending` and
+`topups` (`counter` or `unavailable`) and `balances` descriptors with stable `meterId`,
+`unit` and `role` (`total`, `granted` or `toppedUp`) under `monetary`.
+It contains no credentials or user addresses. Readers use
 an unknown id itself as its name and a neutral icon and colour; an unknown capability
 does not imply quota notifications. Only providers with `window` capability contribute
 to the percentage attention state, including a client source awaiting its first window.
@@ -554,6 +557,10 @@ for the week and unlocated for the day. No spending is assigned a guessed time.
 
 Key parts contain an opaque id, name, disabled/expiry/BYOK scope metadata, observation
 and freshness, `presence` and `missCount`, and current provider day/week/month usage.
+They may also carry `createdAt`, `updatedAt` and `byokUsage: {total, day, week, month}`.
+Dates are supplier timestamps or null; BYOK amounts are exact millionth strings or
+null when unavailable. Current period projections clear out-of-period BYOK totals in
+the same way as ordinary usage totals. BYOK values do not alter wallet spending.
 A key missing from one successful traversal remains stale; two successive successful
 missing traversals archive it. Partial traversals do not confirm absence. A reappearance
 restores the same id and history. Inventory completeness describes a bounded traversal,
@@ -562,6 +569,10 @@ A confirmed unlimited key loses its current cap even during a partial traversal;
 an invalid cap remains unknown and preserves the last cap as stale. Historical readings
 survive removal. The last confirmed observation also survives archival and retention,
 so a returning key's spending interval begins at that observation.
+Safe provider context and reported period totals are retained in sparse internal
+history with their own observation times and UTC period anchors. This storage does
+not add board events or a new history capability. No raw response, raw key hash,
+creator/workspace id, connection label or credential enters that archive.
 
 `GET /api/history` additionally accepts `unit` and `meters`: a JSON array of at most
 32 logical `[sourceId, meterId]` pairs, sorted and deduplicated. Sources must be visible
@@ -572,7 +583,7 @@ also returns the board's native window series, so subscription quotas share its
 percentage analytics. Wallet-only selections omit native windows. This follows the
 provider catalogue's funding type, rather than the meter's stored unit.
 Each chunk may carry `meterSeries`, whose entries are
-`{source, meter, kind, unit, semantics, cells}`. Semantics is `{limit, resetAt, minutes,
+`{source, meter, kind, unit, semantics, cells, accounting?, role?, pointMode?}`. Semantics is `{limit, resetAt, minutes,
 scope, label}` as it actually held before the chunk, or null.
 
 A meter cell is `[index, value, spentInternal, spentExceptional, coveredMs, extra?]`.
@@ -596,11 +607,155 @@ carry-forward, including internal/trailing gaps. Other meter kinds keep their
 existing interpretation. Amounts remain strings throughout packing.
 Known cell spending and original steps compose once over the effective whole-cell
 range. OpenRouter balance spending comes from usage, and top-ups from credits.
+DeepSeek series have `accounting: {spending: "unavailable", topups: "unavailable"}`.
+Their two spending cell slots are null, exceptional/top-up steps are absent, and
+composed `spent`, `topup` and per-point `spent` are null. They keep numeric balance
+values, coverage and their catalogue role. Missing capability never becomes zero.
+The UI omits unsupported spending lines and explains unavailable table quantities.
+
+DeepSeek `pointMode: "observation"` cells additionally use `pointOffsetMs` (omitted
+means zero) and an exclusive absolute `validUntil` (omitted means fixed grid cell end).
+The actual point time is grid time plus offset. Normalized observation points always
+materialize a deadline. An accepted missing currency closes its availability at that
+observation, and a same-value recovery starts another segment at its actual time.
+An ordinary change in a continuous span can emit a separate confirmed opening prefix
+from the grid edge to the primary point; a first or recovered sample cannot.
+The prefix may start at retention instead, with `openOffsetMs` relative to the grid
+edge (omitted means zero); its exclusive end is the primary point. A clipped prefix
+does not establish the value at the unretained grid edge.
+When its semantics differ from the primary point, `openSemantics` preserves the
+opening value's own financial metadata and conversion provenance. It is read and
+converted independently, including when it is the first cell of a requested chunk.
+Reader conversion follows its recorded valuation timeline even when the native amount
+is unchanged. More than two admitted points in a cell use `observations: [{at, value,
+validUntil, semantics?}]`, with absolute times and exact strings. Missing point semantics
+inherit the cell's primary semantics. Packing retains each point independently.
+Deadlines never exceed the fixed grid cell end, so later heartbeats cannot extend finished cells.
+The existing chart draws these actual anchors and reads raw pointer time; deadline
+endpoints are not samples. OpenRouter and percentage series retain cell placement.
+Observation points and coverage stay within retention even in its first partial cell;
+older heartbeat endpoints remain internal evidence.
+Replacing a selected interval with empty series removes its old packed rows too.
+
+DeepSeek cards may carry `balanceStatus: {isAvailable, at, staleAfterMs, partial, issues}`.
+Issues are only `currency_invalid`, `currency_unknown`, `currency_duplicate`,
+`currency_missing` and `empty_balances`. The boolean is a supplier funds status, separate
+from authentication. Each currency's three exact strings are an atomic tuple; partial
+updates retain absent tuples as stale. Valid empty reads clear current request errors
+without renewing numerical freshness. `balanceStatus.at` is the accepted watermark.
+Currency totals never include their components again, and units never share an axis.
+Connecting a source preserves `unit: null` subscription analytics until currency selection.
+
+Budget presentation separates current funds, scoped allowances, accounting over a
+period and balance composition. Dashboard and compact cards project the same catalogue
+roles into one Available balance in the reader's display currency, followed by
+selected catalogue-supported key caps. Composition is grouped by currency in the
+balance disclosure. Counters, reported period totals and BYOK are accounting evidence,
+not additional funds or automatic card rows. Key properties and inventory quality
+describe access and measurement reliability. Each observation retains its own unit,
+scope, time and quality; absent, stale, unsupported and confirmed zero remain distinct.
+The hub's shared currency integration keeps native provider meters unchanged. When
+there is no native USD total and exactly one supported foreign total family, it records
+separate valuations identified as `fx:USD:<native meter ID>`. Derived meters are not
+provider catalogue capabilities. Cards and historical meter semantics may carry:
+
+```ts
+conversion?: {
+  original: {meterId: string; amount: string; unit: string; at: number};
+  rate: {
+    id: string; source: string; base: string; date: number; fetchedAt: number;
+    from: string; to: string;
+  };
+  steps?: RateLeg[]; // The same rate fields for each composed leg.
+};
+```
+
+Amounts and positive rate quotes are exact integer-millionth strings. `rate.date`
+is the UTC reference day; `fetchedAt` is acquisition time. `from` and `to` are quotes
+against the same `base`. Each estimate links to an immutable shared rate snapshot and
+keeps native financial scope and label. Packed cells preserve this structured metadata
+and observation anchors. Converted series have spending and top-up accounting
+`unavailable`; currency movements never become usage. Native USD is preferred even
+when retained as stale, and totals, components and different currencies are never
+summed. A card may carry `currencyUnavailable: true` when a fresh foreign total lacks
+a current USD valuation; this does not alter provider `balanceStatus` or key health.
+
+Native observations commit before currency-service reads. Quotes have no credential or
+account inputs. Failure retains original measurements and leaves USD unknown or stale,
+never zero. Existing events carry these additive fields; no currency settings form or native
+bridge command is added. Original foreign-currency history stays available through the
+measurement API, and existing development-layout converted history is retained.
+
+Reader snapshots may include `currencies`, and a private `currencies` event updates it:
+
+```ts
+{
+  target: {id, name, symbol, fractionDigits},
+  definitions: [{id, name, symbol, fractionDigits}],
+  revision?: string,
+  sources: {[sourceId]: [{from, at, anchor: string | null, steps: RateLeg[]}]}
+}
+```
+
+USD is the initial policy, not a fixed widget contract. Definitions and display
+preference belong to the authenticated reader, independently of the shared board.
+A personal currency identity is `personal:<24 hex digits>`; native ingest units are
+unchanged. Only the owner receives that definition and its fixed-rate paths. Public
+rate snapshots can be reused across users. Native cap percentages and non-monetary
+units are never replaced by currency values. Missing paths show unknown target amounts,
+not zero or amounts silently labelled with another currency.
+
+For money history, optional `currency=<id>` selects the reader's persisted display
+currency. `unit` and `meters` continue to select native/reference data. An inaccessible
+currency returns `404 currency_not_found`; a changed preference returns
+`409 currency_changed`. Conversion follows native accounting and retains coverage,
+interruption and immutable quote assignments. Private converted responses are kept
+outside the shared native tile cache. No `currency` parameter preserves the earlier
+native history response.
+Repeated converted semantics remain sparse. One authorized history read loads each
+binding group once, performs conversion in memory, and persists only new or extended
+assignment ranges. Missing paths are cached by owner, quote revision and effective
+interval; a newly available quote invalidates that result.
+
+Authenticated registry operations, also available in local mode:
+
+- `GET /api/currencies`: the reader's target and personal definitions.
+- `POST /api/currencies`: `{name, symbol, fractionDigits, base, rate}` creates a personal
+  currency; `base` is a standard currency and `rate` is a positive exact millionth string
+  of personal units per base unit. Name/symbol limits are 64/12 characters; precision is
+  0..6. The initial ratio defines a fixed nominal unit for display and historical views.
+- `POST /api/currencies/display`: `{currency: id}` changes the one display preference.
+- `GET /api/currencies/:id`: an accessible definition and its retained quotes.
+- `POST /api/currencies/:id/rates`: `{base, rate, date?}` adds an owner-only fixed-rate
+  version, effective at `date` or the current time. Future dates are rejected.
+
+The hub issues personal identities. Names or symbols never identify or merge currencies.
+Private operations use existing authentication and origin guards; errors carry only
+`invalid_currency` or `currency_not_found`. These operations support the future settings
+section without introducing provider-specific widgets or currency controls.
+
 A frame that cannot fit losslessly in the history budget returns `413 history_limit`.
 
-Connections use owner-only `POST /api/credentials` with `{provider, secret,
-allowNoExpiry?, allowUnknownExpiry?, requestId?}` and replacement with
-`{secret, allowNoExpiry?, allowUnknownExpiry?, sameAccount?}`. An access
+DeepSeek connections use owner-only `POST /api/credentials` with
+`{provider: "deepseek", secret, account: {kind: "new", name} | {kind: "existing", id},
+sameAccount?, allowUnknownExpiry?, requestId?}`. Existing account selection
+requires `sameAccount: true` before provider work. Replacement accepts only
+`{secret, sameAccount: true, allowUnknownExpiry?}`. Its API cannot verify the
+owner's identity declaration. Account names are normalized private labels, unique
+per owner/provider, independent of immutable UUIDs and keys. A new account creates a
+new source; last-key removal preserves identity and retained history for reconnection.
+`GET /api/source-accounts?provider=deepseek&limit=1..50&after=<UUID>` returns owner-only
+`{accounts: [{id, provider, name, sourceId, connected}], next}` in UUID order.
+`expiryKind: "unknown"` is distinct from `none` and `dated`. Saving unknown expiry requires
+`allowUnknownExpiry: true`; a missing consent returns
+`409 {error: "credential_expiry_confirmation", expiresAt: null, expiryKind: "unknown"}`.
+The owner credential DTO includes `accountId`, `accountName` and `expiryKind`.
+Creation replay binds owner, provider and account selector; changed targets conflict.
+A last-binding withdrawal revision and current encryption-key epoch invalidate pending
+creates, replacement and polls, including resets with no credentials.
+
+OpenRouter connections use owner-only `POST /api/credentials` with `{provider, secret,
+allowNoExpiry?, requestId?}` and replacement with `{secret, allowNoExpiry?}`. An access
 without expiry requires explicit `allowNoExpiry: true`; otherwise the hub returns
 `409 credential_expiry_confirmation` with `{expiresAt: null, expiryKind: "none"}`
 without writing. Replacement keeps owner, provider
@@ -630,14 +785,16 @@ the existing interval choices. Permanent access failures disable automatic retri
 until replacement, an available explicit refresh or restart.
 
 The reader-only `sourceAccess` map contains only their own bound credential ids,
-expiry and safe access error, plus whether the source can refresh. It never enters the
+`expiryKind`, expiry and safe access error, plus whether the source can refresh. It never enters the
 shared board cache. Other readers receive no entries. Shared card access failures are
 neutral `unmeasured`; management keys, hints, encrypted bytes, raw creator ids and raw key hashes
-are absent from every shared projection. Credential details remain owner-only.
+are absent from every shared projection. Credential details remain owner-only. The sharing picker's `mine` rows may include
+`accountLabel` for the reader's own declared accounts, joined through their holding;
+`shared` rows and public card names never inherit that label.
 
 ## Privacy
 
-Connector credential records, hints, abilities and key fingerprints are never part of
+Declared account IDs/names, connector credential records, hints, abilities and key fingerprints are never part of
 a board's state. A source failure whose code begins with `secret_key_` or `credential_`
 is projected as `unmeasured`, for its owner too; details remain in the owner's
 credential API. Snapshot, source delta, long poll and desktop attention use this same
