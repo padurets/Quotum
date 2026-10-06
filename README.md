@@ -332,7 +332,7 @@ personal units and a persisted reader preference through the API; the settings f
 not yet exposed. Reported reference currency takes precedence. When only CNY is reported,
 the shared hub currency service uses
 the [ECB daily reference rates](https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html)
-to record a separate USD estimate, marked **≈**. Click the balance label for its
+to record a separate USD estimate, marked **≈**. Click the balance amount for its
 granted and topped-up composition; an estimate also gives its original CNY amount
 and rate date. Native observations are saved before a rate read; the shared, persisted
 rate cache contains no credentials or account information. Historical estimates keep
