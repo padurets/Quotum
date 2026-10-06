@@ -567,7 +567,11 @@ so a returning key's spending interval begins at that observation.
 32 logical `[sourceId, meterId]` pairs, sorted and deduplicated. Sources must be visible
 on the board. `balance` resolves its internal counter pair without spending extra
 selection slots. Cache keys include the selection. Without these fields the existing
-window protocol is unchanged. Each chunk may carry `meterSeries`, whose entries are
+window protocol is unchanged. A selection containing a hub-measured subscription
+also returns the board's native window series, so subscription quotas share its
+percentage analytics. Wallet-only selections omit native windows. This follows the
+provider catalogue's funding type, rather than the meter's stored unit.
+Each chunk may carry `meterSeries`, whose entries are
 `{source, meter, kind, unit, semantics, cells}`. Semantics is `{limit, resetAt, minutes,
 scope, label}` as it actually held before the chunk, or null.
 

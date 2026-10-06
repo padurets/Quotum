@@ -30,6 +30,7 @@ export function subscriptionSelection(cards:readonly Card[],view:Pick<View,'hidd
   if(!shown.length)return undefined;
   const unit=shown.flatMap(c=>c.meters??[]).find(m=>m.kind==='cap')?.unit??'credits:zai';
   const ids=subscriptionIds(shown,view);
+  if(!ids.length)return undefined;
   return selectionOf(ids.slice(0,MAX_METERS),unit);
 }
 const subscriptionIds=(cards:readonly Card[],view:Pick<View,'hidden'|'windows'>)=>cards.filter(c=>hasSubscriptionCaps(c.provider)&&!view.hidden.includes(cardId(c.id))).flatMap(c=>QUOTA_IDS.filter(id=>!view.windows.includes(windowKey(c.id,id))).map(id=>[c.id,id] as [string,string]));

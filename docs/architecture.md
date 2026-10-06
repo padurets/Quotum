@@ -576,8 +576,12 @@ units and historical cap semantics remain unchanged.
 Subscription analytics project these caps into the ordinary five-hour and weekly
 percentage series, alongside client-measured windows. The page's history loader
 requests both cap periods with native window history; switching period does not
-create a separate credit mode or request. Each historical percentage uses that cell's
-own allowance and exclusive observation bounds. Source order, colours, legend keys,
+create a separate credit mode or request.
+Server history retains native window series when the selection includes a
+subscription source, using the provider catalogue's funding type. Wallet-only
+selections retain the money-mode optimization that skips native window reads.
+Each historical percentage uses that cell's own allowance and exclusive observation
+bounds. Source order, colours, legend keys,
 period visibility, time navigation and measurement-table rows are shared. Unknown
 allowances and unobserved intervals remain unknown. Cap-only sources have no native
 quota spending, plans, forecasts or agent-work attribution; those table cells are

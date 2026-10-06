@@ -184,6 +184,30 @@ test('HTTP consents and ownership are strict, with neutral shared failures and h
   }finally{await app.close();h.close();}
 });
 
+test('HTTP subscription history preserves native windows alongside caps while wallet history stays separate',async()=>{
+  const h=harness();
+  const app=await buildApp({store:h.store,directory:h.directory,credentials:h.credentials,ingest:new Ingest(h.store,h.directory,new Duty(),new Cadence()),pairing:new Pairing(h.directory),resets:new ResetFeed(undefined,()=>{}),setup:new Setup(false,null),local:null});
+  try {
+    const connected=await h.credentials.create(h.alice.id,'zai','fixture.secret',{allowUnknownExpiry:true});
+    const native=h.store.source('codex','111111111111111111111111',time),wallet=h.store.source('openrouter','222222222222222222222222',time);
+    h.store.hold(native,h.alice.id,time);h.store.hold(wallet,h.alice.id,time);
+    h.store.record(native,{observedAt:time,plan:'pro',staleAfterMs:300000,resets:null,windows:[{id:'weekly',kind:'weekly',label:null,minutes:10080,used:30,remaining:70,resetAt:time+7*86400000}]});
+    const token=newSecret('qt_s');h.directory.createSession(token,h.alice.id,Date.now(),60000);
+    const board=h.directory.boards(h.alice.id).find(b=>b.personal)!;
+    const url=`/api/history?board=${board.id}&cell=60000&from=${time}&to=${time+60000}`;
+    const call=(selection?:{unit:string;ids:string[][]})=>app.inject({method:'GET',url:url+(selection?'&unit='+encodeURIComponent(selection.unit)+'&meters='+encodeURIComponent(JSON.stringify(selection.ids)):''),headers:{cookie:'quotum_session='+token}});
+    const ordinary=await call();assert.equal(ordinary.statusCode,200);
+    const nativeRows=ordinary.json().chunks.flatMap((c:{series:unknown[]})=>c.series);assert.equal(nativeRows.length,1);
+    const mixed=await call({unit:'credits:zai',ids:[[connected.sourceId!,'quota:credit:5h'],[connected.sourceId!,'quota:credit:week']]});assert.equal(mixed.statusCode,200);
+    const chunks=mixed.json().chunks;
+    assert.deepEqual(chunks.flatMap((c:{series:unknown[]})=>c.series),nativeRows,'selecting subscription caps cannot remove other subscriptions');
+    assert.deepEqual(chunks.flatMap((c:{meterSeries:{meter:string}[]})=>c.meterSeries).map((s:{meter:string})=>s.meter).sort(),['quota:credit:5h','quota:credit:week']);
+    assert.equal(mixed.body.includes('fixture.secret'),false);
+    const money=await call({unit:'USD',ids:[[wallet,'balance']]});assert.equal(money.statusCode,200);
+    assert.deepEqual(money.json().chunks.flatMap((c:{series:unknown[]})=>c.series),[],'wallet-only reads keep their native-window optimization');
+  }finally{await app.close();h.close();}
+});
+
 test('quota hard boundaries survive restart, retention and cached history invalidation',()=>{
   const dir=mkdtempSync(path.join(tmpdir(),'quotum-quota-history-')),file=path.join(dir,'db.sqlite');
   let store=new Store(file,time);

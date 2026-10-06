@@ -77,6 +77,7 @@ test('common period visibility selects both quotas by default and uses no money 
   const view={...EMPTY_VIEW,windows:[`${zai.id}/${five.id}`]};
   assert.deepEqual(subscriptionSelection([zai],view)?.ids,[[zai.id,week.id]]);
   assert.deepEqual(subscriptionLinesOf(history,[zai],view,'session'),[]);
+  assert.equal(subscriptionSelection([zai],{...EMPTY_VIEW,windows:QUOTA_IDS.map(id=>`${zai.id}/${id}`)}),undefined,'hiding all cap periods preserves ordinary native history');
   assert.equal(subscriptionLinesOf(history,[zai],view,'weekly').length,1);
   const hidden={...EMPTY_VIEW,hidden:[`source:${zai.id}`]};
   assert.equal(subscriptionSelection([zai],hidden),undefined);assert.deepEqual(subscriptionLinesOf(history,[zai],hidden,'weekly'),[]);
