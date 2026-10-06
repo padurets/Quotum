@@ -2,12 +2,13 @@ import type {Store} from '../server/store/store.js';
 import type {Directory} from '../server/store/directory.js';
 import type {Stand} from './setup.js';
 import {deepSeekMeasurement} from '../server/connectors/deepseek.js';
+import {deepSeekUsd} from '../server/connectors/deepseekUsd.js';
 
 /** Consent, withdrawal/reset races and transient form replies are held by deepseek.test.ts and connections.test.ts. */
 export const DEEPSEEK_SCENES=[
-  {id:'cny',expect:['CNY','total-110','components','balance-only'],about:'CNY 110 with granted 10 and topped-up 100'},
+  {id:'cny',expect:['CNY','total-110','components','balance-only','usd-estimate'],about:'CNY 110 retained with a dated USD estimate'},
   {id:'usd',expect:['USD','balance-only'],about:'a USD wallet'},
-  {id:'dual',expect:['CNY','USD','separate-currencies'],about:'two currencies with independent totals'},
+  {id:'dual',expect:['CNY','USD','separate-currencies'],about:'two reported currencies, with native USD preferred'},
   {id:'zero',expect:['zero','unavailable-funds'],about:'a valid zero, not rejected access'},
   {id:'unavailable',expect:['positive','unavailable-funds'],about:'positive balance with a supplier availability warning'},
   {id:'partial',expect:['partial','stale-USD','hard-gap'],about:'valid CNY while USD is omitted'},
@@ -18,6 +19,7 @@ export const DEEPSEEK_SCENES=[
   {id:'work',expect:['named-account','unknown-expiry','sharing-label'],about:'another named account of the same owner'},
 ] as const;
 export const DEEPSEEK_KEY=(index:number)=>'sk-'+(index+100).toString(16).padStart(32,'0');
+export const demoUsdRate=(at:number)=>({date:Math.floor(at/86_400_000)*86_400_000,at,usdPerEur:'1000000',cnyPerEur:'7000000'});
 export const deepSeekTuple=(currency='CNY',total='110',granted='10',topup='100')=>({currency,total_balance:total,granted_balance:granted,topped_up_balance:topup});
 export function deepSeekPayload(id:string,initial=false) {
   const rows=id==='usd'?[deepSeekTuple('USD','37','7','30')]:id==='dual'||id==='partial'&&initial?[deepSeekTuple(),deepSeekTuple('USD','37','7','30')]:id==='zero'?[deepSeekTuple('USD','0','0','0')]:id==='empty'?[]:[deepSeekTuple()];
@@ -33,7 +35,7 @@ export async function seedDeepSeek(store:Store,directory:Directory,stand:Stand) 
     const created=await owner.post<{sourceId:string}>('/api/credentials',{provider:'deepseek',secret:DEEPSEEK_KEY(index),account:{kind:'new',name:scene.id==='cny'?'Personal':scene.id==='work'?'Work':scene.id},allowUnknownExpiry:true});
     const source=created.sourceId;ids.push(source);
     const record=(at:number,answer:unknown)=>{
-      const measured=deepSeekMeasurement(answer,at),staleAfterMs=scene.id==='stale'?60_000:3*3_600_000;
+      const measured=deepSeekUsd(deepSeekMeasurement(answer,at),demoUsdRate(at)),staleAfterMs=scene.id==='stale'?60_000:3*3_600_000;
       store.record(source,{...measured,staleAfterMs,meters:measured.meters.map(m=>({...m,staleAfterMs})),balanceStatus:{...measured.balanceStatus!,staleAfterMs}});
     };
     record(now-2*3_600_000,deepSeekPayload(scene.id,true));

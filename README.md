@@ -324,15 +324,18 @@ Key expiry is unknown and saving it requires an explicit acknowledgement. Server
 desktop modes use the same encrypted credential protection described in [SECURITY.md](SECURITY.md).
 
 The card and compact panel use the same budget layout as OpenRouter: one
-**Available balance** section with a separate amount for each currency, followed by
-any supported limits. DeepSeek has no limit scales. Click the balance label for
-its granted and topped-up breakdown, grouped by currency. All reported balances,
-funds status and safe provider context are retained for later budget analysis, within
-the history retention
-period. Choose **CNY** or **USD** explicitly in analytics;
+**Available balance** in USD, followed by any supported limits. DeepSeek has no limit
+scales. Reported USD takes precedence. When only CNY is reported, the connector uses
+the [ECB daily reference rates](https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html)
+to record a separate USD estimate, marked **≈**. Click the balance label for its
+granted and topped-up composition; an estimate also gives its original CNY amount
+and rate date. Rate reads contain no credentials or account information. Without a
+usable rate, the CNY observation is retained and USD stays unknown or stale.
+All original balances, estimates, rate provenance, funds status and safe provider
+context are retained within the history retention period. Choose **USD** in analytics;
 connecting an account keeps your existing subscription view. Totals are selected by
 default; components can be added in the chart's settings. The total is not added to its
-components, and currencies are never converted or summed. Spending and top-up events
+components. Reported USD and converted CNY are never summed. Spending and top-up events
 are **unavailable** because the endpoint has no spending counter; a balance change
 cannot establish spending. An omitted currency keeps its last value as stale and
 breaks its history until a valid observation returns. A failed request preserves the

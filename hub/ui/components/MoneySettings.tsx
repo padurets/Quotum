@@ -69,7 +69,7 @@ export function MoneySettings({sources,hidden,series}:{sources:readonly Named[];
   const total=(page?.total??source?.keysCount??0)+archived.length;
   const busy=!inCard&&loading;
   useEffect(()=>{if(archivePage>extraPages)setArchivePage(extraPages);},[archivePage,extraPages]);
-  const balances=(s:Named)=>(monetaryOf(s.provider)?.balances??[]).filter(d=>d.unit===unit).map(d=>row(s.id,d.meterId,balanceRoleLabel(d.role),!s.meters?.some(m=>m.id===d.meterId)));
+  const balances=(s:Named)=>(monetaryOf(s.provider)?.balances??[]).filter(d=>d.unit===unit).map(d=>row(s.id,d.meterId,('approximate' in d?'≈ ':'')+balanceRoleLabel(d.role),!s.meters?.some(m=>m.id===d.meterId)));
   return <>
     <div className="popover-title popover-section">{t('source.show')}</div>
     <p className="popover-note">{selected.length} / {MAX_METERS}</p>

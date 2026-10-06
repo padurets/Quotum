@@ -1,5 +1,5 @@
 import type {Provider} from './sources.js';
-import type {BalanceStatus, KeyPart, Meter, MeterMeasurement} from './meters.js';
+import type {BalanceStatus, KeyPart, Meter, MeterMeasurement,UsdRate} from './meters.js';
 
 /** A window's length as the agent classifies it (spec: Window `kind`). */
 export type Kind = 'session' | 'weekly' | 'other';
@@ -54,6 +54,7 @@ export type SourceState = {
   staleAfterMs: number | null;
   resets: FreeResets | null;
   balanceStatus?: BalanceStatus;
+  usdRate?:UsdRate;
   meters?: Meter[];
   keys?: KeyPart[];
   inventory?: {complete: boolean; observed: number; missing: number; error: string | null};

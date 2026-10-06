@@ -1,7 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {DEEPSEEK_SCENES,deepSeekPayload} from '../deepseek.js';
+import {DEEPSEEK_SCENES,deepSeekPayload,demoUsdRate} from '../deepseek.js';
 import {deepSeekMeasurement} from '../../server/connectors/deepseek.js';
+import {deepSeekUsd} from '../../server/connectors/deepseekUsd.js';
 import {Store} from '../../server/store/store.js';
 import {composeMeters} from '../../server/domain/meterHistory.js';
 import {balanceGroups} from '../../ui/lib/money.js';
@@ -12,14 +13,16 @@ test('every durable DeepSeek catalogue code is backed by actual parsed and retai
   for(const scene of DEEPSEEK_SCENES) {
     const store=new Store(':memory:',1);try {
       const id=store.source('deepseek','1'.repeat(24),1);
-      store.record(id,deepSeekMeasurement(deepSeekPayload(scene.id,true),1));
+      const record=(at:number,answer:unknown)=>store.record(id,deepSeekUsd(deepSeekMeasurement(answer,at),demoUsdRate(at)));
+      record(1,deepSeekPayload(scene.id,true));
       if(scene.id==='recovery') {
-        store.record(id,deepSeekMeasurement({is_available:true,balance_infos:[]},60_010));store.record(id,deepSeekMeasurement(deepSeekPayload(scene.id),60_020));
-      }else store.record(id,deepSeekMeasurement(deepSeekPayload(scene.id),60_001));
+        record(60_010,{is_available:true,balance_infos:[]});record(60_020,deepSeekPayload(scene.id));
+      }else record(60_001,deepSeekPayload(scene.id));
       if(scene.id==='stale'||scene.id==='rejected')store.fail(id,scene.id==='stale'?'connector_failed':'credential_rejected');
       const state=store.state(id),card:Card={...state,stale:false,owners:[],measureIntervalMs:null},groups=balanceGroups(card),seen=new Set<string>();
       for(const group of groups){seen.add(group.total.unit);if(group.components.length===2)seen.add('components');if(group.total.amount==='110000000')seen.add('total-110');if(group.total.amount==='0')seen.add('zero');if(BigInt(group.total.amount)>0n)seen.add('positive');}
       if(groups.length===2)seen.add('separate-currencies');
+      if(groups.some(g=>g.approximate&&g.total.unit==='USD'))seen.add('usd-estimate');
       if(state.balanceStatus?.isAvailable===false)seen.add('unavailable-funds');
       if(state.balanceStatus?.partial)seen.add('partial');
       if(state.meters?.some(m=>m.unit==='USD'&&m.stale))seen.add('stale-USD');

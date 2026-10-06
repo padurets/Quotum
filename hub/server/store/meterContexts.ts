@@ -7,6 +7,7 @@ import type {SourceState} from '../domain/quota.js';
 type Periods={day:string|null;week:string|null;month:string|null};
 export type MeterContextValue =
   | {type:'funds';isAvailable:boolean;partial:boolean;issues:BalanceStatus['issues']}
+  | {type:'usdRate';date:number;usdPerEur:string;cnyPerEur:string}
   | {type:'inventory';complete:boolean;error:string|null;keys:string[];uncapped:string[]}
   | {type:'key';id:string;unit:string|null;name:string|null;disabled:boolean;expiresAt:number|null;includeByok:boolean;createdAt:number|null;updatedAt:number|null;periodFrom:{day:number;week:number;month:number};periods:Periods;byokUsage:Periods&{total:string|null}};
 export type MeterContext = {from:number;to:number;staleAfterMs:number;value:MeterContextValue};
@@ -23,6 +24,7 @@ export class MeterContexts {
       const state=JSON.parse(row.payload) as SourceState;
       const units=new Map((state.meters??[]).map(m=>[m.id,m.unit]));
       if(state.balanceStatus)this.funds(row.source_id,state.balanceStatus);
+      if(state.usdRate)this.rate(row.source_id,state.usdRate);
       for(const key of state.keys??[])this.key(row.source_id,key,units.get(`key:${key.id}:usage`)??null);
     }
   }
@@ -39,6 +41,7 @@ export class MeterContexts {
 
   observe(source:string,provider:string,measurement:MeterMeasurement,status:BalanceStatus|undefined) {
     if(status)this.funds(source,status);
+    if(measurement.usdRate)this.rate(source,measurement.usdRate);
     if(provider==='openrouter'||measurement.keys.length) {
       const inventoryAt=Math.max(measurement.observedAt,measurement.inventoryAt??measurement.observedAt,...measurement.keys.map(k=>k.at));
       this.record(source,'inventory',inventoryAt,measurement.staleAfterMs,{type:'inventory',complete:measurement.inventoryComplete,error:secretCode(measurement.inventoryError),keys:measurement.keys.map(k=>k.id).sort(),uncapped:[...(measurement.uncapped??[])].sort()});
@@ -49,6 +52,9 @@ export class MeterContexts {
 
   private funds(source:string,status:BalanceStatus) {
     this.record(source,'funds',status.at,status.staleAfterMs,{type:'funds',isAvailable:status.isAvailable,partial:status.partial,issues:[...status.issues].sort()});
+  }
+  private rate(source:string,rate:NonNullable<SourceState['usdRate']>) {
+    this.record(source,'usdRate',rate.at,7*86_400_000,{type:'usdRate',date:rate.date,usdPerEur:exact(rate.usdPerEur)!,cnyPerEur:exact(rate.cnyPerEur)!});
   }
 
   private key(source:string,key:KeyPart,unit:string|null) {

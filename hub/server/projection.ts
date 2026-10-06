@@ -68,7 +68,7 @@ const DAY = 86_400_000;
 /** Credential failures are private even to other members of a source's shared board. */
 export function publicSourceState(state: SourceState): SourceState {
   const error = state.error?.startsWith('secret_key_') || state.error?.startsWith('credential_') ? 'unmeasured' : state.error;
-  return {id: state.id, provider: state.provider, plan: state.plan, successAt: state.successAt, error, windows: state.windows, staleAfterMs: state.staleAfterMs, resets: state.resets,...(state.balanceStatus?{balanceStatus:{isAvailable:state.balanceStatus.isAvailable,at:state.balanceStatus.at,staleAfterMs:state.balanceStatus.staleAfterMs,partial:state.balanceStatus.partial,issues:state.balanceStatus.issues}}:{}),...(state.meters?{meters:state.meters,keys:state.keys,inventory:state.inventory}:{})};
+  return {id: state.id, provider: state.provider, plan: state.plan, successAt: state.successAt, error, windows: state.windows, staleAfterMs: state.staleAfterMs, resets: state.resets,...(state.balanceStatus?{balanceStatus:{isAvailable:state.balanceStatus.isAvailable,at:state.balanceStatus.at,staleAfterMs:state.balanceStatus.staleAfterMs,partial:state.balanceStatus.partial,issues:state.balanceStatus.issues}}:{}),...(state.usdRate?{usdRate:{date:state.usdRate.date,at:state.usdRate.at,usdPerEur:state.usdRate.usdPerEur,cnyPerEur:state.usdRate.cnyPerEur}}:{}),...(state.meters?{meters:state.meters,keys:state.keys,inventory:state.inventory}:{})};
 }
 
 export class Projection {

@@ -561,7 +561,9 @@ starts another. It is saved in the same transaction as numbers and state, indepe
 of what the card displays. An upgrade seeds the last known safe values with their
 original timestamps. Retention keeps crossing spans and the latest baseline; it never
 makes a stale baseline fresh. Raw responses, credential data and supplier identifiers
-are not archived. Future budget analytics can read these records without inventing
+are not archived. DeepSeek's CNY-to-USD estimates also retain their reference date,
+acquisition time and exact USD/EUR and CNY/EUR quotes in that context history.
+Future budget analytics can read these records without inventing
 spending or retroactively reconstructing overwritten period totals.
 A missing key is stale after one successful traversal and archived after two successive
 successful misses; partial traversals never confirm absence, and history is retained.
@@ -580,9 +582,9 @@ values as stale and persist an exclusive interruption on their observation spans
 A same-value return starts a new span without inventing a changed reading. Accepted
 status time is the watermark even when numerical success is older.
 Budget cards and the compact panel use one typed presentation of current funds and
-selected allowances. A single Available balance section contains separate totals for
-each observed currency. Composition opens from that label in a shared Popover, grouped
-by currency. Key allowances appear separately, with their own scope, limit and reset;
+selected allowances. A single Available balance section shows USD. Native USD takes
+precedence over separate converted observations; the two are never summed. Composition
+opens from that label in a shared Popover. Key allowances appear separately, with their own scope, limit and reset;
 they do not add to account funds. Only catalogue-supported caps have scales. Lifetime
 credits never supply a wallet's percentage denominator. DeepSeek has no key-cap scales
 or spending summary. Each value keeps its own observation time and stale state.
@@ -591,6 +593,18 @@ funds, counters and reported period totals support analytics, BYOK retains a sep
 accounting basis, and key properties and inventory quality describe access and
 measurement reliability. New API fields do not automatically add card rows. The safe
 context archive is independent of this presentation.
+
+Only DeepSeek's CNY-only response needs conversion. Its connector reads the fixed ECB
+daily XML endpoint without credentials, rejects redirects and bounds time and bytes.
+Positive dated reference quotes are cached for twelve hours and must be less than
+seven days old. Existing source polls refresh them; there is no rate poller or currency
+preference. BigInt rational arithmetic records rounded millionths under separate
+`converted:*:USD` balance IDs, preserving the original CNY meters. Existing readings,
+spans, context history and retention keep both and their provenance without a new
+schema step. Converted semantics identify the estimate and rate date; cards show ≈,
+and history labels identify the estimate. A failed rate read retains valid CNY and
+interrupts a missing USD estimate without fabricating zero or spending. Analytics
+offers USD for money while preserving subscription selection and non-currency units.
 
 Observation-mode money cells retain their actual sample offset, segment and exclusive
 validity, bounded by their fixed grid cell and span interruption/TTL. Composition can

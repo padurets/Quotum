@@ -1,7 +1,7 @@
 export type {Refresh, RefreshRequest} from '../../server/domain/refresh';
 export {MEASURE_INTERVAL, type MeasureIntervalMs} from '../../server/domain/frequency';
 import type {MeasureIntervalMs} from '../../server/domain/frequency';
-import type {BalanceStatus,Meter,KeyPart,CalendarSpend} from '../../server/domain/meters';
+import type {BalanceStatus,Meter,KeyPart,CalendarSpend,UsdRate} from '../../server/domain/meters';
 /** A window's length as the agent classifies it. */
 export type Kind = 'session' | 'weekly' | 'other';
 
@@ -41,6 +41,7 @@ export type Card = {
   staleAfterMs: number | null;
   measureIntervalMs: MeasureIntervalMs;
   balanceStatus?:BalanceStatus;
+  usdRate?:UsdRate;
   meters?:Meter[];
   keys?:KeyPart[];
   keysCount?:number;

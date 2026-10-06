@@ -589,7 +589,7 @@ Replacing a selected interval with empty series removes its old packed rows too.
 
 DeepSeek cards may carry `balanceStatus: {isAvailable, at, staleAfterMs, partial, issues}`.
 Issues are only `currency_invalid`, `currency_unknown`, `currency_duplicate`,
-`currency_missing` and `empty_balances`. The boolean is a supplier funds status, separate
+`currency_missing`, `empty_balances` and `rate_unavailable`. The boolean is a supplier funds status, separate
 from authentication. Each currency's three exact strings are an atomic tuple; partial
 updates retain absent tuples as stale. Valid empty reads clear current request errors
 without renewing numerical freshness. `balanceStatus.at` is the accepted watermark.
@@ -598,13 +598,25 @@ Connecting a source preserves `unit: null` subscription analytics until currency
 
 Budget presentation separates current funds, scoped allowances, accounting over a
 period and balance composition. Dashboard and compact cards project the same catalogue
-roles into one Available balance section with independent currency values, followed by
+roles into one Available balance in USD, followed by
 selected catalogue-supported key caps. Composition is grouped by currency in the
 balance disclosure. Counters, reported period totals and BYOK are accounting evidence,
 not additional funds or automatic card rows. Key properties and inventory quality
 describe access and measurement reliability. Each observation retains its own unit,
 scope, time and quality; absent, stale, unsupported and confirmed zero remain distinct.
-No new event or stored amount is required by this presentation.
+For CNY-only observations the connector retains original meters and writes separately
+identified `converted:balance:USD`, `converted:granted:USD` and
+`converted:topped_up:USD` estimates. Their standard balance semantics use the label
+`≈ CNY → USD (ECB)` and scope `ecb:YYYY-MM-DD`, the reference date. Existing history
+packing preserves these semantics and balance-only accounting. Native USD remains the
+default when both native and converted readings are retained; they are never added.
+Cards may also carry `usdRate: {date, at, usdPerEur, cnyPerEur}`: UTC reference date,
+quote acquisition time and positive exact millionth quote strings. This safe metadata
+is retained atomically with amounts in the existing provider context archive. It contains
+no account or credential information. Missing rate data never turns retained CNY into
+USD zero. Existing events carry these additive fields; no currency settings or native
+bridge command is added. Previously selected CNY presentation becomes USD; the original
+CNY history remains available through the measurement API.
 
 A frame that cannot fit losslessly in the history budget returns `413 history_limit`.
 

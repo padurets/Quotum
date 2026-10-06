@@ -12,6 +12,8 @@ import {budgetView} from '../lib/money';
 import {setLocale,t} from '../i18n';
 import type {Card} from '../lib/types';
 import type {KeyPart,Meter} from '../../server/domain/meters';
+import {deepSeekMeasurement} from '../../server/connectors/deepseek';
+import {deepSeekUsd} from '../../server/connectors/deepseekUsd';
 
 const meter=(id:string,amount='0',unit:Meter['unit']='USD'):Meter=>({id,amount,unit,kind:'balance',limit:null,at:1,staleAfterMs:1000,stale:false,resetAt:null,minutes:null,scope:null,label:null});
 const key=(id:string):KeyPart=>({id,name:id,disabled:false,expiresAt:null,includeByok:false,at:1,staleAfterMs:1000,presence:'observed',missCount:0,periods:{day:'999000000',week:null,month:null},byokUsage:{total:'888000000',day:null,week:null,month:null}});
@@ -36,17 +38,17 @@ const fixture={exports:{} as {MoneyCard:(props:{source:Card;board:string;compact
 runInNewContext(ts.transpileModule(readFileSync(new URL('../components/MoneyCard.tsx',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,fixture);
 const {MoneyCard}=fixture.exports;
 
-test('budget funds retain currency totals and their own composition without accounting or phantom caps',()=>{
+test('budget cards select native USD and its own composition without accounting or phantom caps',()=>{
   const source=dual(),extra={...meter('key:k:cap','1000000'),kind:'cap' as const,limit:'9000000'};
   source.meters!.push(extra,{...meter('usage','999000000'),kind:'counter'},meter('extra','888000000'));
   const view=budgetView(source,[key('k')]);
   assert.equal(view.remaining.kind,'funds');assert.deepEqual(view.limits,[]);
   assert.deepEqual(view.remaining.values.map(({total,components})=>({amount:total.amount,unit:total.unit,parts:components.map(c=>c.meter.unit)})),[
-    {amount:'110000000',unit:'CNY',parts:['CNY','CNY']},{amount:'37000000',unit:'USD',parts:['USD','USD']},
+    {amount:'37000000',unit:'USD',parts:['USD','USD']},
   ]);
   const reordered=budgetView({...source,meters:[...source.meters!].reverse()});
   assert.deepEqual(reordered.remaining,view.remaining);
-  assert.deepEqual(view.remaining.values.map(g=>g.components.map(c=>c.role)),[['granted','toppedUp'],['granted','toppedUp']]);
+  assert.deepEqual(view.remaining.values.map(g=>g.components.map(c=>c.role)),[['granted','toppedUp']]);
 });
 
 test('selected key allowances stay separate from wallet funds and exclude key accounting totals',()=>{
@@ -70,20 +72,32 @@ test('unknown or mismatched observations cannot invent funds or a currency',()=>
   assert.deepEqual(budgetView(card('openrouter',[{...meter('balance','1'),kind:'counter'}])).remaining.values,[]);
 });
 
-test('both card surfaces render one funds heading with independent values and no permanent composition',()=>{
+test('both card surfaces render one native USD value without CNY or permanent composition',()=>{
   try {
     for(const locale of ['en','ru'] as const)for(const compact of [false,true]) {
       setLocale(locale);const source=dual();source.meters!.find(m=>m.id==='balance:USD')!.stale=true;
       const markup=renderToStaticMarkup(createElement(MoneyCard,{source,board:'',compact}));
       assert.equal(markup.split(t('money.accountBalance')).length-1,1);
-      assert.equal((markup.match(/data-money=/g)??[]).length,2);
+      assert.equal((markup.match(/data-money=/g)??[]).length,1);
       assert.match(markup,/class="limit-value is-stale" data-money="37000000"/);
-      assert.match(markup,/class="limit-value" data-money="110000000"/);
+      assert.ok(!markup.includes('CNY'));
       assert.equal((markup.match(/aria-expanded="false"/g)??[]).length,1);
       assert.ok(!markup.includes(t('money.granted')));assert.ok(!markup.includes(t('money.toppedUp')));
       assert.ok(!markup.includes('class="meter"'));
     }
   } finally {setLocale('en');}
+});
+
+test('CNY-only cards use a dated USD estimate with the same renderer',()=>{
+  const at=Date.UTC(2026,9,5),measured=deepSeekUsd(deepSeekMeasurement({is_available:true,balance_infos:[{currency:'CNY',total_balance:'110',granted_balance:'10',topped_up_balance:'100'}]},at),{date:at,at,usdPerEur:'1000000',cnyPerEur:'7000000'});
+  const source={...card('deepseek',measured.meters),usdRate:measured.usdRate};
+  for(const compact of [false,true]){
+    const markup=renderToStaticMarkup(createElement(MoneyCard,{source,board:'',compact}));
+    assert.equal((markup.match(/data-money=/g)??[]).length,1);assert.match(markup,/data-money="15714286"/);assert.ok(markup.includes('≈ '));assert.ok(markup.includes('ECB'));
+  }
+  const later={...source,meters:source.meters.map(m=>m.id==='balance:CNY'?{...m,amount:'142000000',at:at+1000}:m.id.startsWith('converted:')?{...m,stale:true}:m)};
+  const stale=renderToStaticMarkup(createElement(MoneyCard,{source:later,board:''}));
+  assert.ok(!stale.includes('142.000000 CNY'));assert.match(stale,/is-stale" data-money="15714286"/);
 });
 
 test('funds absence, a confirmed zero and a signed balance keep different card values',()=>{

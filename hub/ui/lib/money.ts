@@ -56,12 +56,16 @@ export function balanceGroups(source:Pick<Card,'provider'|'meters'>) {
     const total=source.meters?.find(m=>m.id===d.meterId&&m.unit===d.unit&&m.kind==='balance');
     if(!total)return [];
     const components=descriptors.flatMap(part=>{
-      if(part.unit!==d.unit||part.role==='total')return [];
+      if(part.unit!==d.unit||part.role==='total'||('approximate' in part)!==('approximate' in d))return [];
       const meter=source.meters?.find(m=>m.id===part.meterId&&m.unit===part.unit&&m.kind==='balance');
       return meter?[{meter,role:part.role}]:[];
     });
-    return [{total,components}];
+    return [{total,components,approximate:'approximate' in d}];
   });
+}
+export function usdBalance(source:Pick<Card,'provider'|'meters'>) {
+  const groups=balanceGroups(source).filter(g=>g.total.unit==='USD');
+  return groups.find(g=>!g.approximate)??groups[0];
 }
 type BudgetKey=Pick<KeyPart,'id'|'name'|'disabled'|'expiresAt'|'includeByok'|'presence'>;
 export type BudgetLimit={scope:{kind:'key';id:string};part:BudgetKey;meter:Meter};
@@ -79,6 +83,7 @@ export function budgetView(source:Pick<Card,'provider'|'meters'>,keys:readonly K
     const {id,name,disabled,expiresAt,includeByok,presence}=part;
     return meter?.kind==='cap'&&meter.limit!==null?[{scope:{kind:'key' as const,id},part:{id,name,disabled,expiresAt,includeByok,presence},meter}]:[];
   }):[];
-  return {remaining:{kind:'funds',values:balanceGroups(source)},limits};
+  const balance=usdBalance(source);
+  return {remaining:{kind:'funds',values:balance?[balance]:[]},limits};
 }
 export const balanceRoleLabel=(role:'total'|'granted'|'toppedUp')=>t(`money.${role}`);

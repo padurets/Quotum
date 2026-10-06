@@ -1,7 +1,7 @@
 /** Explicit demo composition replaces the connector before the ordinary hub starts. */
 import {pathToFileURL} from 'node:url';
 import path from 'node:path';
-import {DEEPSEEK_SCENES,DEEPSEEK_KEY,deepSeekPayload} from './deepseek.js';
+import {DEEPSEEK_SCENES,DEEPSEEK_KEY,deepSeekPayload,demoUsdRate} from './deepseek.js';
 import {MONEY_KEY} from './money.js';
 import {readFileSync} from 'node:fs';
 const root=path.resolve(process.cwd(),'dist','server');
@@ -60,5 +60,5 @@ deepTransport.send=async(operation,secret)=>{
   deepObserved=count===1?initialAt:Date.now();
   return deepSeekPayload(scene,count===1);
 };
-(connectors as Map<string,import('../server/connectors/registry.js').Connector>).set('deepseek',deepSeek(deepTransport,()=>deepObserved));
+(connectors as Map<string,import('../server/connectors/registry.js').Connector>).set('deepseek',deepSeek(deepTransport,()=>deepObserved,async()=>demoUsdRate(deepObserved)));
 await load('index.js');

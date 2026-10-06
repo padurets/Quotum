@@ -1,7 +1,7 @@
 import type {DatabaseSync} from 'node:sqlite';
 import {balanceDescriptor,monetaryOf} from '../domain/providers.js';
 import {amount} from '../domain/amount.js';
-import {balanceStatusOf,calendarSpending,spending,utcPeriods, sameMeter, validateMeter, type Meter, type MeterMeasurement, type MeterSpan, type Reading} from '../domain/meters.js';
+import {balanceStatusOf,calendarSpending,spending,utcPeriods, sameMeter, validateMeter,usdRateOf, type Meter, type MeterMeasurement, type MeterSpan, type Reading} from '../domain/meters.js';
 import type {SourceState} from '../domain/quota.js';
 import {MeterContexts} from './meterContexts.js';
 import {meterCells, type MeterGroup, type MeterSelection, type MeterSeriesCells} from '../domain/meterHistory.js';
@@ -16,6 +16,7 @@ export class MeterStore {
   constructor(private readonly db: DatabaseSync) {this.contexts=new MeterContexts(db);this.contexts.seed();}
 
   record(source: string, previous: SourceState, measurement: MeterMeasurement): {state: SourceState; since: number|null} {
+    if(measurement.usdRate)measurement={...measurement,usdRate:usdRateOf(measurement.usdRate)};
     const current = new Map((previous.meters ?? []).map(m => [m.id, {...m, stale: true}]));
     const ids = new Set<string>();
     const keyTimes = new Map(measurement.keys.map(key => [key.id, key.at]));
@@ -74,6 +75,7 @@ export class MeterStore {
       staleAfterMs: accountSuccess ? measurement.staleAfterMs : previous.staleAfterMs,
       error: accountSuccess||balanceStatus ? null : previous.error,
       ...(balanceStatus?{balanceStatus}:{}),
+      ...(measurement.usdRate?{usdRate:measurement.usdRate}:{}),
       meters: [...current.values()], keys: [...keys.values()].sort((a,b) => (a.name ?? '').localeCompare(b.name ?? '') || a.id.localeCompare(b.id)),
       inventory: {complete: measurement.inventoryComplete, observed: observed.size, missing: [...keys.values()].filter(k => k.presence === 'missing').length, error: measurement.inventoryError},
     };
