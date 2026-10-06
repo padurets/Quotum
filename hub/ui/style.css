@@ -389,8 +389,8 @@ td.muted, small.muted { color: var(--text-3); }
 .tray-pill svg { flex-shrink: 0; opacity: .8; }
 .tray-pill b { font-weight: 560; color: var(--text); }
 .tray-pill .tray-icon { stroke-width: 2.2; }
-.text-button.access-mark.is-warn { color: var(--warn); }
-.text-button.access-mark.is-crit { color: var(--crit); }
+.text-button.tray-pill.is-warn { color: var(--warn); }
+.text-button.tray-pill.is-crit { color: var(--crit); }
 /* The glow is on the icon itself, never on the button: a filter there would spoil the glass of its panel. */
 .text-button.reset-mark.is-accent { color: var(--reset); border-color: color-mix(in oklab, var(--reset) 28%, transparent); background: color-mix(in oklab, var(--reset) 7%, transparent); font-weight: 560; }
 .text-button.reset-mark.is-accent:hover, .text-button.reset-mark.is-accent[aria-expanded=true] { border-color: color-mix(in oklab, var(--reset) 45%, transparent); background: color-mix(in oklab, var(--reset) 13%, transparent); }

@@ -187,6 +187,10 @@ and platform smoke checks still apply.
   series from `hub/ui/lib/providers.ts`. Status colours (ok, warn, crit) are for status
   only: how much of a limit is left, a source or device in trouble, a destructive
   action; never decoration or a series.
+  Missing, partial, unsupported or invalid supplier quota replies use `warn`. Known
+  access failures (expired or revoked credentials, denied permission, unavailable
+  secret storage) use `crit`; an inactive key is neutral. Every tray mark receives
+  its status colour from the shared `.tray-pill` styles.
 
 ## Code and commits
 
