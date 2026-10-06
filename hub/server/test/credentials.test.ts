@@ -244,3 +244,13 @@ test('HTTP replacement accepts no-expiry keys in one submit',async t=>{
   assert.equal((await h.call('POST','/api/credentials/'+created.id,{secret:CANARY,allowNoExpiry:true})).statusCode,200);
   h.clean(response.body);
 });
+
+test('legacy and addition APIs share the same provider verification limit',async t=>{
+  const h=await harness();t.after(async()=>{await h.app.close();h.store.close();});
+  const identify=fixture.identify;let calls=0;
+  fixture.identify=async(...args)=>{calls++;return identify(...args);};t.after(()=>{fixture.identify=identify;});
+  for(let i=0;i<10;i++)assert.equal((await h.call('POST','/api/credentials',{provider:'test',secret:CANARY})).statusCode,201);
+  const operation=(await h.call('POST','/api/additions',{requestId:'22222222-2222-4222-8222-222222222222',boardId:null,item:{kind:'connection',provider:'test'}})).json();
+  assert.equal((await h.call('POST','/api/additions/'+operation.id+'/run',{secret:CANARY})).statusCode,429);
+  assert.equal(calls,10);
+});

@@ -12,7 +12,7 @@ import type {Pairing} from './pairing.js';
 import type {ResetFeed} from './resets.js';
 import type {Store} from './store/store.js';
 import type {Board, Directory, User} from './store/directory.js';
-import {CSP, currentUser, sameSite} from './session.js';
+import {CSP, currentUser, Limiter, sameSite} from './session.js';
 import type {Setup} from './setup.js';
 import {Events} from './events.js';
 import {Projection} from './projection.js';
@@ -217,8 +217,9 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
   accountRoutes(app, hub, guards);
   sourceKeyRoutes(app,hub,guards);
   await extend?.(app, hub, guards);
-  await app.register(async scope => credentialRoutes(scope, hub.credentials!, guards, additions, directory));
-  await app.register(async scope => additionRoutes(scope, hub, guards, additions));
+  const verificationAttempts=new Limiter(10,60_000);
+  await app.register(async scope => credentialRoutes(scope, hub.credentials!, guards, verificationAttempts, additions, directory));
+  await app.register(async scope => additionRoutes(scope, hub, guards, additions, verificationAttempts));
   agentRoutes(app, hub);
   if (hub.local) localRoutes(app, hub, hub.local.key);
 

@@ -882,6 +882,10 @@ view revision and are serialized per board by the authenticated shell. A stale s
 returns the current view and a visible conflict; it never silently reapplies an old
 full document over an Add or another window's edit. Add flushes this shell's pending
 save first, then patches only its requested visibility inside its transaction.
+Failed saves keep their unsent intent and a notice throughout settings navigation,
+with an explicit retry carrying the captured revision. Ending the authenticated shell
+drops unsent successors; a submitted Add continues when only its form closes, while an
+owner-scope change prevents further phases. No timer polls for those results.
 New boards start with analytics hidden. `enabledWhenEmpty` permits only the standard
 widgets explicitly added to an empty board; old views retain their previous defaults.
 What

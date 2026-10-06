@@ -420,6 +420,16 @@ export class Directory {
   prune(now: number) {
     const cutoff = now - 86_400_000;
     for (const table of ['sessions', 'invites', 'device_codes']) this.db.prepare(`DELETE FROM ${table} WHERE expires_at < ?`).run(cutoff);
+    this.pruneActions(now);
+  }
+
+  /** Runs during ordinary hub maintenance, even when an owner never opens recovery again. */
+  pruneActions(now: number) {
+    this.db.prepare("UPDATE board_additions SET state='expired',error='addition_expired',updated_at=expires_at,attempt_generation=attempt_generation+1,run_id=NULL,verify_until=NULL WHERE state IN ('ready','verifying','needs_input') AND expires_at<=?").run(now);
+    this.db.prepare("UPDATE board_additions SET state='needs_input',error='addition_interrupted',updated_at=?,attempt_generation=attempt_generation+1,run_id=NULL,verify_until=NULL WHERE state='verifying' AND verify_until<=?").run(now,now);
+    this.db.prepare('DELETE FROM board_additions WHERE updated_at<?').run(now-30*86_400_000);
+    this.db.prepare("UPDATE device_onboarding SET status='expired' WHERE status NOT IN ('complete','expired') AND expires_at<=?").run(now);
+    this.db.prepare('DELETE FROM device_onboarding WHERE created_at<?').run(now-30*86_400_000);
   }
 
   // ---------- device codes ----------

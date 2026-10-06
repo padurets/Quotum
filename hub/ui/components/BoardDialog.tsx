@@ -1,7 +1,7 @@
-import {useCallback, useEffect, useState} from 'react';
+import {useCallback, useEffect, useRef, useState} from 'react';
 import {PROVIDERS} from '../lib/providers';
-import {call} from '../lib/http';
-import type {Board} from '../lib/session';
+import {ApiError, call} from '../lib/http';
+import {rereadSession, type Board} from '../lib/session';
 import {useTitles} from '../lib/board';
 import {logoOf} from './logos';
 import {CopyField, ErrorLine} from './Kit';
@@ -25,10 +25,16 @@ export function SharesTab({board}: {board: Board}) {
   const titles = useTitles();
   const [shares, setShares] = useState<Shares | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const generation = useRef(0);
+  const failed = (failure: unknown) => {
+    if (failure instanceof ApiError && [401, 403, 404].includes(failure.status)) {setShares(null); rereadSession();}
+    setError(failure);
+  };
   const load = useCallback(() => {
-    call<Shares>('GET', `/api/boards/${encodeURIComponent(board.id)}/shares`).then(setShares, setError);
+    const own = ++generation.current;
+    call<Shares>('GET', `/api/boards/${encodeURIComponent(board.id)}/shares`).then(value => {if (own === generation.current) setShares(value);}, failure => {if (own === generation.current) failed(failure);});
   }, [board.id]);
-  useEffect(load, [load]);
+  useEffect(() => {setShares(null); load(); return () => {generation.current++;};}, [load]);
 
   const change = async (source: string, share: boolean) => {
     setError(null);
@@ -37,7 +43,7 @@ export function SharesTab({board}: {board: Board}) {
       await (share ? call('POST', path, {source}) : call('DELETE', `${path}/${encodeURIComponent(source)}`));
       load();
     } catch (failure) {
-      setError(failure);
+      failed(failure);
     }
   };
 

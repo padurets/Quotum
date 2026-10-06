@@ -140,10 +140,10 @@ export class BoardAdditions {
   }
   private recover() {
     const now=this.now();
-    this.store.db.prepare("UPDATE board_additions SET state='expired',error='addition_expired',updated_at=?,attempt_generation=attempt_generation+1,run_id=NULL,verify_until=NULL WHERE state IN ('ready','verifying','needs_input') AND expires_at<=?").run(now,now);
+    this.store.db.prepare("UPDATE board_additions SET state='expired',error='addition_expired',updated_at=expires_at,attempt_generation=attempt_generation+1,run_id=NULL,verify_until=NULL WHERE state IN ('ready','verifying','needs_input') AND expires_at<=?").run(now);
     this.store.db.prepare("UPDATE board_additions SET state='needs_input',error='addition_interrupted',updated_at=?,attempt_generation=attempt_generation+1,run_id=NULL,verify_until=NULL WHERE state='verifying' AND verify_until<=?").run(now,now);
   }
-  prune() {this.recover();this.store.db.prepare('DELETE FROM board_additions WHERE updated_at<?').run(this.now()-30*DAY);}
+  prune() {this.directory.pruneActions(this.now());}
 
   private answer(row: Row) {
     const item=JSON.parse(row.item) as AdditionItem,result=row.result?JSON.parse(row.result) as Result:undefined;

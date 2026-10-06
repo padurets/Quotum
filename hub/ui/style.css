@@ -998,6 +998,8 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .settings-nav a:hover, .settings-nav a[aria-current] { background: var(--hair); color: var(--text); }
 .settings-content { padding: 28px; display: flex; flex-direction: column; gap: 24px; min-width: 0; }
 .settings-content h2 { margin: 0; font-size: 19px; font-weight: 560; }
+.view-save-notice { margin: 16px 28px; padding: 16px; border: 1px solid var(--hair-2); border-radius: 12px; overflow-wrap: anywhere; }
+.view-save-notice > b { font-size: 13px; }
 .settings-content > .drawer-section:first-child { border-top: 0; padding-top: 0; }
 .settings-section-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .settings-danger { border-top: 1px solid var(--hair); padding-top: 24px; }

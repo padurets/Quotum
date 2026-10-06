@@ -139,10 +139,13 @@ export type Arrange = {
   owner: boolean;
   update: (change: (view: View) => View) => void;
   error?: unknown;
+  saveFailures?: {board: string; error: unknown; retryable: boolean}[];
+  retrySave?: (board: string) => Promise<void>;
+  dismissSave?: (board: string) => void;
 };
 
 type PendingView = {view: View; revision: number};
-type SavingView = {server: View; revision: number; draft?: View; pending?: PendingView; flight?: Promise<void>; error?: unknown};
+type SavingView = {server: View; revision: number; draft?: View; pending?: PendingView; failed?: PendingView; flight?: Promise<void>; error?: unknown};
 const flushers = new Set<(board: string) => Promise<void>>();
 /** Add waits for this person's pending layout before changing the same board. */
 export async function flushView(board: string) {for (const flush of flushers) await flush(board);}
@@ -152,7 +155,7 @@ export function useView(board: string, told: View | null, owner: boolean, revisi
   const entries = useRef(new Map<string, SavingView>());
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const alive = useRef(true);
-  const [, render] = useState(0);
+  const [version, render] = useState(0);
   const redraw = () => {if (alive.current) render(value => value + 1);};
   let entry = entries.current.get(board);
   if (!entry) {entry = {server: told ?? EMPTY, revision}; entries.current.set(board, entry);}
@@ -162,6 +165,7 @@ export function useView(board: string, told: View | null, owner: boolean, revisi
   }
   const view = entry.draft ?? entry.server;
   const flush = useCallback(async (id: string): Promise<void> => {
+    if (!alive.current) return;
     const state = entries.current.get(id); if (!state) return;
     if (state.flight) {await state.flight; if (state.pending) await flush(id); return;}
     const pending = state.pending;
@@ -177,6 +181,7 @@ export function useView(board: string, told: View | null, owner: boolean, revisi
         }
         if (!state.pending) state.draft = undefined;
       } catch (error) {
+        state.failed = state.pending ?? {view: state.draft ?? pending.view, revision: pending.revision};
         state.error = error; state.pending = undefined; state.draft = undefined;
         if (error instanceof ApiError && error.code === 'view_conflict') {
           const latest = error.data as {view?: View; revision?: number};
@@ -186,7 +191,18 @@ export function useView(board: string, told: View | null, owner: boolean, revisi
       } finally {state.flight = undefined; redraw();}
     })();
     await state.flight;
-    if (state.pending) await flush(id);
+    if (alive.current && state.pending) await flush(id);
+  }, []);
+  const retrySave = useCallback(async (id: string) => {
+    const state = entries.current.get(id);
+    if (!state?.failed || state.flight) return;
+    state.pending = state.failed; state.failed = undefined; state.error = undefined;
+    state.draft = state.pending.view; redraw();
+    await flush(id);
+  }, [flush]);
+  const dismissSave = useCallback((id: string) => {
+    const state = entries.current.get(id); if (!state) return;
+    state.failed = undefined; state.error = undefined; redraw();
   }, []);
   useEffect(() => {
     alive.current = true; flushers.add(flush);
@@ -202,7 +218,10 @@ export function useView(board: string, told: View | null, owner: boolean, revisi
       }
     };
     window.addEventListener('pagehide', leaving);
-    return () => {alive.current = false; flushers.delete(flush); clearTimeout(timer.current); window.removeEventListener('pagehide', leaving);};
+    return () => {
+      alive.current = false; flushers.delete(flush); clearTimeout(timer.current); window.removeEventListener('pagehide', leaving);
+      for (const state of entries.current.values()) {state.pending = undefined; state.failed = undefined; state.draft = undefined;}
+    };
   }, [flush]);
   const previous = useRef(board);
   useEffect(() => {
@@ -211,10 +230,13 @@ export function useView(board: string, told: View | null, owner: boolean, revisi
   const update = useCallback((change: (view: View) => View) => {
     const state = entries.current.get(board)!;
     const next = change(state.draft ?? state.server);
-    state.error = undefined; state.draft = next;
+    state.error = undefined; state.failed = undefined; state.draft = next;
     state.pending = {view: next, revision: state.pending?.revision ?? state.revision};
     redraw(); clearTimeout(timer.current);
     timer.current = setTimeout(() => {void flush(board).catch(() => {});}, SAVE_AFTER);
   }, [board, flush]);
-  return useMemo(() => ({view, owner, update, error: entry.error}), [view, owner, update, entry.error]);
+  return useMemo(() => ({view, owner, update, error: entry.error, retrySave, dismissSave,
+    saveFailures: [...entries.current].filter(([, state]) => state.error).map(([id, state]) => ({board: id, error: state.error,
+      retryable: !!state.failed && !(state.error instanceof ApiError && [400,401,403,404,409,413,428].includes(state.error.status))})),
+  }), [view, owner, update, entry.error, version, retrySave, dismissSave]);
 }

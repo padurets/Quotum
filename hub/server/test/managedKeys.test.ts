@@ -71,6 +71,9 @@ test('mount admission rejects same-volume and nested bind aliases, but accepts d
     assert.throws(()=>separateMount('/data/db','/keys',aliases),/secret_key_storage_unavailable/);
   }
   assert.throws(()=>separateMount('/data','/keys',mountsOf(common)),/secret_key_storage_unavailable/);
+  const stacked=mountsOf(common+'2 1 8:1 /volumes/data /data rw - ext4 disk rw\n3 1 8:1 /volumes/keys /keys rw - ext4 disk rw\n4 3 8:1 /volumes/data /keys rw - ext4 disk rw');
+  assert.throws(()=>separateMount('/data/db','/keys',stacked),/secret_key_storage_unavailable/);
+  assert.throws(()=>separateMount('/data/db','/keys',[...stacked].reverse()),/secret_key_storage_unavailable/);
   assert.equal(mountsOf('2 1 8:1 /volume\\040one /keys rw - ext4 disk rw')[0].root,'/volume one');
 });
 

@@ -15,7 +15,11 @@ export function mountsOf(text: string): Mount[] {
 }
 /** Mount roots, rather than device numbers alone, distinguish named volumes on one filesystem. */
 export function separateMount(data: string, keys: string, mounts: Mount[]) {
-  const mapping=(location:string)=>mounts.filter(mount=>within(mount.at,location)).sort((a,b)=>b.at.length-a.at.length)[0];
+  const mapping=(location:string)=>{
+    const candidates=mounts.filter(mount=>within(mount.at,location)).sort((a,b)=>b.at.length-a.at.length);
+    if(candidates.length>1&&candidates[0].at===candidates[1].at)throw new SecretError('secret_key_storage_unavailable');
+    return candidates[0];
+  };
   const dataMount=mapping(data),keyMount=mapping(keys);
   if(!dataMount||!keyMount||keyMount.at!==keys||dataMount.at===keyMount.at)throw new SecretError('secret_key_storage_unavailable');
   const backing=path.resolve(keyMount.root,path.relative(keyMount.at,keys));

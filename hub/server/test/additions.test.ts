@@ -112,3 +112,25 @@ test('device intents freeze an exact delivered subset and never share later acco
   assert.equal(onboarding.select(h.member.id,intent.id,device.id,[sources[0]],request).id,selection.id);
   assert.throws(()=>onboarding.select(h.member.id,intent.id,device.id,[sources[1]],randomUUID()),{message:'addition_conflict'});
 });
+
+test('verification cannot commit with a stale encryption key after concurrent rotation',async t=>{
+  const h=fixture();t.after(h.close);const create=h.reserve(),saved=await h.additions.run(h.member.id,create.id,KEY,()=>true);
+  const operation=h.reserve({kind:'replace',credentialId:saved.result!.credentialId!},h.member.id,null),late=deferred<ConnectorIdentity>(),started=deferred<void>();
+  h.connector.identify=async()=>{started.resolve();return late.promise;};
+  const running=h.additions.run(h.member.id,operation.id,KEY+'2',()=>true);await started.promise;
+  const previous=SecretKey.parse(Buffer.from(Buffer.alloc(32,7).toString('base64url'))),next=SecretKey.parse(Buffer.from(Buffer.alloc(32,8).toString('base64url')));
+  assert.equal(startSecrets(h.store.db,{current:next,previous,reset:null,storageAtStart:null,wasFileAtStart:false}).outcome,'rotated');
+  const row=h.store.db.prepare('SELECT * FROM credentials').get() as unknown as Parameters<SecretKey['use']>[0];
+  late.resolve(identity);const result=await running;assert.equal(result.state,'needs_input');assert.equal(result.error,'credential_conflict');
+  assert.deepEqual(h.store.db.prepare('SELECT * FROM credentials').get(),row);
+  next.use(row,bytes=>assert.equal(bytes.toString(),KEY));
+});
+
+test('ordinary maintenance removes old completed and expired addition and device receipts',async t=>{
+  const h=fixture();t.after(h.close);const completed=h.reserve({kind:'widget',widgetId:'history'},h.owner.id);
+  await h.additions.run(h.owner.id,completed.id,undefined,()=>true);h.reserve();
+  const onboarding=new DeviceOnboarding(h.store,h.directory,h.additions);onboarding.reserve(h.owner.id,randomUUID(),h.board.id);
+  h.directory.prune(Date.now()+40*86_400_000);
+  assert.equal((h.store.db.prepare('SELECT count(*) AS n FROM board_additions').get() as {n:number}).n,0);
+  assert.equal((h.store.db.prepare('SELECT count(*) AS n FROM device_onboarding').get() as {n:number}).n,0);
+});

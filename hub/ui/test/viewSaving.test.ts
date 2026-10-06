@@ -13,8 +13,9 @@ const settle=async()=>{for(let i=0;i<12;i++)await Promise.resolve();};
 function fixture() {
   const hooks=preparationFixture(),reads:{url:string;view:View;headers:Record<string,string>;resolve:(value:unknown)=>void;reject:(error:unknown)=>void}[]=[],events=new Map<string,()=>void>();
   const memo=(read:()=>unknown,deps:unknown[])=>{const box=hooks.useRef(undefined) as {current?:{deps:unknown[];value:unknown}};if(!box.current||deps.some((value,i)=>!Object.is(value,box.current!.deps[i])))box.current={deps,value:read()};return box.current.value;};
+  const cleanups=new Set<()=>void>();
   const context={exports:{} as {useView:(id:string,view:View,owner:boolean,revision:number)=>Arrange;flushView:(id:string)=>Promise<void>},setTimeout:()=>0,clearTimeout:()=>{},window:{addEventListener:(name:string,fn:()=>void)=>events.set(name,fn),removeEventListener:(name:string)=>events.delete(name)},fetch:()=>Promise.resolve({}),require:(name:string)=>{
-    if(name==='react')return {useRef:hooks.useRef,useState:hooks.useState,useEffect:hooks.useLayoutEffect,useMemo:memo,useCallback:(fn:unknown,deps:unknown[])=>memo(()=>fn,deps)};
+    if(name==='react')return {useRef:hooks.useRef,useState:hooks.useState,useEffect:(effect:()=>void|(()=>void),deps:unknown[])=>hooks.useLayoutEffect(()=>{const cleanup=effect();if(cleanup)cleanups.add(cleanup);return cleanup;},deps),useMemo:memo,useCallback:(fn:unknown,deps:unknown[])=>memo(()=>fn,deps)};
     if(name==='./http')return {ApiError,call:(_method:string,url:string,view:View,_timeout:number,_signal:unknown,headers:Record<string,string>)=>new Promise((resolve,reject)=>reads.push({url,view,headers,resolve,reject}))};
     if(name==='./plan')return {DEFAULT_PLAN:[],isValidPlan:()=>true};
     if(name==='./providers')return {PROVIDERS:{}};
@@ -23,7 +24,7 @@ function fixture() {
   }};
   runInNewContext(ts.transpileModule(readFileSync(new URL('../lib/view.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
   const render=(id='board',view=EMPTY,revision=4)=>{hooks.begin();const result=context.exports.useView(id,view,true,revision);hooks.commit();return result;};
-  return {render,reads,flush:context.exports.flushView};
+  return {render,reads,flush:context.exports.flushView,unmount:()=>{for(const cleanup of cleanups)cleanup();cleanups.clear();}};
 }
 
 test('queued changes serialize and use their own committed revision',async()=>{
@@ -54,4 +55,23 @@ test('a conflict drops the stale draft, rejects its flush and leaves subsequent 
   h.render('board',current,9).update(view=>({...view,colors:{source:'#abcdef'}}));const next=h.flush('board');
   assert.equal(h.reads[1].headers['If-Match'],'"9"');assert.deepEqual(h.reads[1].view.hidden,['history']);
   h.reads[1].resolve({view:h.reads[1].view,revision:10});await next;
+});
+
+test('a failed save stays recoverable across settings navigation and retries with its captured revision',async()=>{
+  const h=fixture();h.render('first',EMPTY,7).update(view=>({...view,names:{source:'unsent name'}}));
+  const saving=h.flush('first');h.render('',EMPTY,0);
+  h.reads[0].reject(new Error('network down'));await assert.rejects(saving,/network down/);
+  const notice=h.render('',EMPTY,0);
+  assert.equal(notice.saveFailures!.length,1);assert.equal(notice.saveFailures![0].board,'first');assert.equal(notice.saveFailures![0].retryable,true);
+  const retry=notice.retrySave!('first');assert.equal(h.reads[1].headers['If-Match'],'"7"');assert.equal(h.reads[1].view.names.source,'unsent name');
+  h.reads[1].resolve({view:h.reads[1].view,revision:8});await retry;
+  assert.equal(h.render('',EMPTY,0).saveFailures!.length,0);
+  assert.equal(h.render('first',EMPTY,7).view.names.source,'unsent name');
+});
+
+test('ending the owner shell prevents an unsent serial successor from moving to a later session',async()=>{
+  const h=fixture();h.render().update(view=>({...view,names:{source:'first'}}));const saving=h.flush('board');
+  h.render().update(view=>({...view,names:{source:'second'}}));h.unmount();
+  h.reads[0].resolve({view:h.reads[0].view,revision:5});await saving;assert.equal(h.reads.length,1);
+  await h.flush('board');assert.equal(h.reads.length,1);
 });

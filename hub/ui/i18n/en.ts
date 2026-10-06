@@ -8,7 +8,7 @@ import type {Message} from './types';
  */
 export const en = {
   "settings.profile": "Profile and security",
-  "settings.connections": "Provider connections",
+  "settings.connections": "My connections",
   "settings.interface": "Interface",
   "settings.application": "Application",
   "settings.back": "Back to {board}",
@@ -23,6 +23,9 @@ export const en = {
   "boardSettings.shared": "Board members see the data explicitly provided here. Provider keys and private connection details remain with their owners.",
   "boardSettings.leave": "Leave board",
   "boardSettings.leaveText": "You will lose access to this board. Your connections and measurements remain.",
+  "layout.saveFailed": "Changes to {board} could not be confirmed",
+  "layout.retrySave": "Retry saving",
+  "layout.unavailableBoard": "Unavailable board",
   "add.title": "Add widget",
   "add.action": "Add",
   "add.show": "Show card",
@@ -54,6 +57,8 @@ export const en = {
   "add.toBoard": "Add to a board",
   "add.chooseBoard": "Choose the destination board. Adding shared data asks for confirmation.",
   "add.replaced": "Key replaced",
+  "add.keyChanged": "Access changed after this replacement",
+  "add.keyChangedText": "This replacement completed earlier. The access was then replaced again or removed; replay preserves that later state.",
   "add.replacePreserved": "Replacing a key keeps the source, its history, board placements and display settings. The new key must belong to the same account.",
   "add.disconnectEffect": "Hiding a card only changes its display. Removing data from one board leaves other boards intact. Disconnecting removes your saved access; other holders and history are preserved.",
   "add.deviceDestination": "Connect a device for {board}, then choose the specific sources to provide.",

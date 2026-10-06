@@ -7,8 +7,7 @@ import {randomUUID} from 'node:crypto';
 import {currentUser} from '../session.js';
 import type {Directory} from '../store/directory.js';
 
-export async function credentialRoutes(app: FastifyInstance, credentials: Credentials, guards: Guards, additions?: BoardAdditions, directory?: Directory) {
-  const attempts = new Limiter(10, 60_000);
+export async function credentialRoutes(app: FastifyInstance, credentials: Credentials, guards: Guards, attempts: Limiter, additions?: BoardAdditions, directory?: Directory) {
   app.setErrorHandler((error: {statusCode?: number}, request, reply) => {
     const code = error instanceof AdditionError ? error.code==='addition_not_found'?'credential_not_found':error.code==='addition_conflict'?'credential_conflict':error.code==='addition_permission'?'credential_permission':'credential_failed' : error instanceof SecretError ? error.code : error.statusCode === 413 ? 'credential_invalid' : error.statusCode && error.statusCode < 500 ? 'credential_invalid' : 'credential_failed';
     const status = code === 'credential_not_found' ? request.method==='POST' && request.routeOptions.url==='/api/credentials' ? 409 : 404 : code === 'credential_cleanup_pending' ? 503 : ['secret_key_missing','secret_key_mismatch','credential_expiry_confirmation','credential_account_mismatch','credential_conflict'].includes(code) ? 409 : ['credential_invalid','credential_provider_unknown','credential_expired','credential_revoked','credential_wrong_type','credential_permission'].includes(code) ? 400 : 500;

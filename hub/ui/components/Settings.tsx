@@ -77,7 +77,7 @@ export function Settings({user, board, boards, local, trustedKeys, refresh, onAp
   return <SettingsFrame title={boardPath ? t('boardSettings.forBoard', {board: boardTitle(board!)}) : t('header.settings')} sections={visible} section={section} base={base} board={board}>
     {boardPath ? section === 'general' ? <General board={board!} /> : section === 'members' ? <MembersTab board={board!} userId={user.id} /> : <SharesTab board={board!} /> :
       section === 'profile' ? <><Profile user={user} onChanged={refresh} /><Password /></> :
-      section === 'connections' ? <ConnectionsPage userId={user.id} boards={boards} trustedKeys={trustedKeys} /> :
+      section === 'connections' ? <ConnectionsPage userId={user.id} boards={boards} trustedKeys={trustedKeys} local={local} /> :
       section === 'devices' ? <><h2>{t('connections.device')}</h2><ul className="connections-list"><Devices local={local} /></ul>{!local && <ConnectDevice />}</> :
       section === 'projects' ? <Projects /> : section === 'interface' ? <><p className="dialog-text">{t('settings.browserScope')}</p><Browser title={t('settings.interface')} /></> :
       section === 'application' && appState ? <>{capabilities.includes('measuring') && <Measuring state={appState} onState={onAppState} />}{capabilities.includes('app') && <AppSection state={appState} onState={onAppState} />}</> : null}

@@ -75,7 +75,6 @@ export class DeviceOnboarding {
     });
   }
   prune() {
-    this.store.db.prepare("UPDATE device_onboarding SET status='expired' WHERE status NOT IN ('complete','expired') AND expires_at<=?").run(Date.now());
-    this.store.db.prepare('DELETE FROM device_onboarding WHERE created_at<?').run(Date.now()-30*DAY);
+    this.directory.pruneActions(Date.now());
   }
 }

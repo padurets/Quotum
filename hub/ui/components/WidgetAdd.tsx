@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useRef, useState, type FormEvent} from 'react';
+import {createContext, useCallback, useContext, useEffect, useRef, useState, type FormEvent} from 'react';
 import {t, type Key} from '../i18n';
 import {ApiError, call} from '../lib/http';
 import {navigate, settingsHref} from '../lib/router';
@@ -21,8 +21,12 @@ type Catalogue = {operations?: Operation[]; board: Board; sources: Candidate[]; 
 type Item = {kind: 'sources'; sourceIds: string[]} | {kind: 'widget'; widgetId: WidgetId} | {kind: 'connection'; provider: string} | {kind: 'replace'; credentialId: string};
 type Operation = {id: string; boardId: string | null; item: Item; createdAt: number; state: 'ready' | 'verifying' | 'needs_input' | 'complete' | 'failed' | 'expired'; current?: {boardAccessible: boolean | null; sources?: {id: string; placement: string}[]; widget?: {id: string; placement: string}; credential?: {exists: boolean; revisionMatches: boolean}}; error?: string; warning?: string; result?: {sourceIds: string[]; credentialId?: string; connection?: 'created' | 'reused'; expiresAt?: number | null; replacementRequired?: boolean}};
 
+/** Form lifetime affects its UI; only the authenticated shell may end its submitted action. */
+export const AdditionScope = createContext<() => boolean>(() => false);
+
 /** A submit owns an immutable destination, even if its panel closes while it runs. */
 function useAddition() {
+  const currentScope = useContext(AdditionScope);
   const [operation, setOperation] = useState<Operation | null>(null), [error, setError] = useState<unknown>(null), [busy, setBusy] = useState(false);
   const generation = useRef(0), flight = useRef(false), current = useRef<Operation | null>(null);
   const request = useRef(crypto.randomUUID());
@@ -36,12 +40,13 @@ function useAddition() {
     const own = generation.current;
     try {
       if (boardId) await flushView(boardId);
+      if (!currentScope()) return;
       let reserved = current.current;
       if (!reserved) reserved = await call<Operation>('POST', '/api/additions', {requestId: request.current, boardId, item});
-      if (own !== generation.current) return;
-      accept(reserved);
+      if (!currentScope()) return;
+      if (own === generation.current) accept(reserved);
       const next = await call<Operation>('POST', '/api/additions/' + reserved.id + '/run', secret === undefined ? {} : {secret}, 30_000);
-      if (own !== generation.current) return;
+      if (!currentScope() || own !== generation.current) return;
       accept(next);
       if (next.error) setError(new ApiError(400, next.error));
     } catch (failure) { if (own === generation.current) setError(failure); }
@@ -121,13 +126,24 @@ function KeyForm({board, replace, personal, demo, available, onClose, onSaved, o
 }) {
   const [secret, setSecret] = useState('');
   const addition = useAddition();
+  const replacing = !!replace || initialOperation?.item.kind === 'replace';
   useEffect(() => {if (initialOperation) addition.restore(initialOperation);}, [initialOperation?.id]);
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    void addition.submit(personal || replace ? null : board!.id, replace ? {kind: 'replace', credentialId: replace.id} : {kind: 'connection', provider: 'openrouter'}, secret);
+    const item: Item = initialOperation?.item.kind === 'replace' ? {kind: 'replace', credentialId: initialOperation.item.credentialId} : replace ? {kind: 'replace', credentialId: replace.id} : {kind: 'connection', provider: 'openrouter'};
+    void addition.submit(personal || replacing ? null : board!.id, item, secret);
   };
   useEffect(() => {if (addition.operation?.state === 'complete') {setSecret(''); onSaved?.();}}, [addition.operation?.state]);
-  if (addition.operation?.state === 'complete') return replace ? <div className="addition-complete" role="status"><h3>{t('add.replaced')}</h3><p>{t('add.replacePreserved')}</p><button className="button" onClick={onClose}>{t('common.close')}</button></div> : <><Completion operation={addition.operation} board={board} personal={personal} onClose={onClose} />{personal && onAddToBoard && <div className="button-row"><button className="button" onClick={() => onAddToBoard(addition.operation!.result!.sourceIds[0])}>{t('add.toBoard')}</button></div>}</>;
+  if (addition.operation?.state === 'complete') {
+    if (addition.operation.item.kind === 'replace') {
+      const current = addition.operation.current?.credential;
+      const changed = current && (!current.exists || !current.revisionMatches);
+      return <div className="addition-complete" role="status"><h3>{t(changed ? 'add.keyChanged' : 'add.replaced')}</h3><p>{t(changed ? 'add.keyChangedText' : 'add.replacePreserved')}</p>
+        {addition.operation.warning && <ErrorLine error={new ApiError(503, addition.operation.warning)} />}
+        <button className="button" onClick={onClose}>{t('common.close')}</button></div>;
+    }
+    return <><Completion operation={addition.operation} board={board} personal={personal} onClose={onClose} />{personal && onAddToBoard && <div className="button-row"><button className="button" onClick={() => onAddToBoard(addition.operation!.result!.sourceIds[0])}>{t('add.toBoard')}</button></div>}</>;
+  }
   if (addition.operation && ['expired', 'failed'].includes(addition.operation.state)) return <div className="dialog-form"><ErrorLine error={addition.error} /><button className="button" onClick={() => {setSecret(''); addition.reset();}}>{t('add.startAgain')}</button></div>;
   return <form className="dialog-form" onSubmit={submit}>
     {demo && <DemoNotice />}
@@ -135,7 +151,7 @@ function KeyForm({board, replace, personal, demo, available, onClose, onSaved, o
     <p className="dialog-text">{t('add.keyRights')}</p>
     <a href="https://openrouter.ai/settings/management-keys" target="_blank" rel="noopener noreferrer">{t('sources.providerSettings')} ↗</a>
     {!personal && !board?.personal && <p className="sharing-disclosure">{t('add.disclosure', {board: boardTitle(board!)})}</p>}
-    {replace && <p className="dialog-text">{t('add.replacePreserved')}</p>}
+    {replacing && <p className="dialog-text">{t('add.replacePreserved')}</p>}
     {demo && <details className="demo-examples"><summary>{t('prototype.examples')}</summary><div className="button-row is-start">{demo.keys.map(key => <button type="button" className="button" key={key.label} disabled={addition.busy} onClick={() => setSecret(key.secret)}>{t(`prototype.${key.label}`)}</button>)}</div></details>}
     {demo && <label className="demo-loss"><input type="checkbox" disabled={addition.busy} onChange={event => {void call('POST', '/api/prototype/control', {lostReply: event.target.checked});}} />{t('prototype.lostReply')}</label>}
     <Field type="password" label={t('sources.key')} value={secret} autoComplete="new-password" data-1p-ignore="" data-lpignore="true" required maxLength={4096} autoFocus disabled={addition.busy} onChange={event => setSecret(event.target.value)} />
@@ -144,7 +160,7 @@ function KeyForm({board, replace, personal, demo, available, onClose, onSaved, o
     <ErrorLine error={addition.error} />
     {addition.busy && <p role="status" className="progress-line"><i className="spinner" />{t('add.verifying')}</p>}
     {addition.operation && !!addition.error && <button className="link-button" type="button" disabled={addition.busy} onClick={() => void addition.check()}>{t('add.checkResult')}</button>}
-    <div className="button-row"><button type="button" className="button" onClick={onClose}>{t('common.close')}</button><button className="button primary" disabled={!available || !secret || addition.busy}>{t(replace ? 'sources.replace' : personal ? 'sources.connect' : 'add.connectAndAdd')}</button></div>
+    <div className="button-row"><button type="button" className="button" onClick={onClose}>{t('common.close')}</button><button className="button primary" disabled={!available || !secret || addition.busy}>{t(replacing ? 'sources.replace' : personal ? 'sources.connect' : 'add.connectAndAdd')}</button></div>
     {addition.busy && <p className="drawer-note">{t('add.closePending')}</p>}
   </form>;
 }
@@ -258,17 +274,20 @@ export function WidgetAdd({board, local, trustedKeys, open, onOpenChange, initia
 
 type ConnectionDetails = Credential & {label: string; lastSuccessAt: number | null; placements: (Board & {visible: boolean})[]};
 
-export function ConnectionsPage({userId, boards, trustedKeys}: {userId: string; boards: Board[]; trustedKeys: Session['trustedKeys']}) {
+export function ConnectionsPage({userId, boards, trustedKeys, local}: {userId: string; boards: Board[]; trustedKeys: Session['trustedKeys']; local: boolean}) {
   const [connections, setConnections] = useState<ConnectionDetails[]>([]), [demo, setDemo] = useState<Demo | undefined>();
   const [connecting, setConnecting] = useState(false), [replace, setReplace] = useState<Credential | undefined>(), [error, setError] = useState<unknown>(null), [remove, setRemove] = useState<Credential | null>(null);
   const [adding, setAdding] = useState<Board | null>(null), [choosing, setChoosing] = useState(false), [selectedSource, setSelectedSource] = useState<string | undefined>();
   const [readAt, setReadAt] = useState<number | null>(null);
   const [recovered, setRecovered] = useState<Operation | undefined>();
+  const readGeneration = useRef(0), mounted = useRef(true);
   const read = useCallback(async (signal?: AbortSignal) => {
-    try {const reply = await call<{connections: ConnectionDetails[]; demo?: Demo}>('GET', '/api/connections', undefined, 12_000, signal); if (!signal?.aborted) {setConnections(reply.connections); setDemo(reply.demo); setReadAt(Date.now()); setError(null);}}
-    catch (failure) {if (!signal?.aborted) setError(failure);}
+    if (!mounted.current) return;
+    const own = ++readGeneration.current;
+    try {const reply = await call<{connections: ConnectionDetails[]; demo?: Demo}>('GET', '/api/connections', undefined, 12_000, signal); if (!signal?.aborted && mounted.current && own === readGeneration.current) {setConnections(reply.connections); setDemo(reply.demo); setReadAt(Date.now()); setError(null);}}
+    catch (failure) {if (!signal?.aborted && mounted.current && own === readGeneration.current) setError(failure);}
   }, [userId]);
-  useEffect(() => {const abort = new AbortController(); void read(abort.signal); return () => abort.abort();}, [read]);
+  useEffect(() => {mounted.current = true; const abort = new AbortController(); void read(abort.signal); return () => {mounted.current = false; readGeneration.current++; abort.abort();};}, [read]);
   const disconnect = async () => {
     try {await call('DELETE', '/api/credentials/' + remove!.id); setRemove(null); void read();}
     catch (failure) {setError(failure);}
@@ -292,7 +311,7 @@ export function ConnectionsPage({userId, boards, trustedKeys}: {userId: string; 
     </article>)}</section>)}
     {connecting && <section className="connection-editor"><h3>{t(replace ? 'sources.replace' : 'sources.connect')}</h3>{!recoveryBoard && recovered ? <ErrorLine error={new ApiError(403, 'addition_permission')} /> : <KeyForm key={recovered?.id ?? replace?.id ?? 'new'} board={recoveryBoard ?? boards.find(board => board.personal) ?? null} personal={!recovered?.boardId} initialOperation={recovered} replace={replace} demo={demo} available={trustedKeys?.available === true} onClose={() => {setConnecting(false); setRecovered(undefined);}} onSaved={() => void read()} onAddToBoard={sourceId => {setConnecting(false); setSelectedSource(sourceId); setChoosing(true);}} />}</section>}
     {choosing && <section className="connection-editor"><h3>{t('add.toBoard')}</h3><p className="dialog-text">{t('add.chooseBoard')}</p>{boards.map(board => <button className="popover-row" key={board.id} onClick={() => {setChoosing(false); setAdding(board);}}><span>{boardTitle(board)}</span></button>)}<button className="link-button" onClick={() => setChoosing(false)}>{t('common.cancel')}</button></section>}
-    {adding && <WidgetAdd board={adding} initialSourceId={selectedSource} local={false} trustedKeys={trustedKeys} open onOpenChange={open => {if (!open) {setAdding(null); void read();}}} trigger={boardTitle(adding)} />}
+    {adding && <WidgetAdd board={adding} initialSourceId={selectedSource} local={local} trustedKeys={trustedKeys} open onOpenChange={open => {if (!open) {setAdding(null); void read();}}} trigger={boardTitle(adding)} />}
     {remove && <Modal title={t('sources.remove')} onClose={() => setRemove(null)}><p className="dialog-text">{t('sources.removeText')}</p><p className="dialog-text">{t('add.disconnectEffect')}</p><ErrorLine error={error} /><div className="button-row"><button className="button" onClick={() => setRemove(null)}>{t('common.cancel')}</button><button className="button danger" onClick={() => void disconnect()}>{t('sources.remove')}</button></div></Modal>}
   </div>;
 }

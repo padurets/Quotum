@@ -11,7 +11,7 @@ const DAY=86_400_000;
 export const permanentAccess = (code:string) => ['credential_expired','credential_revoked','credential_wrong_type','credential_permission','credential_account_mismatch','credential_unreadable','secret_key_missing','secret_key_mismatch','credential_provider_unknown'].includes(code);
 export type SourceAccess = {error:SecretCode|null;expiresAt:number|null;canRefresh:boolean;credentialIds:string[]};
 type Options={allowNoExpiry?:boolean;requestId?:string};
-export type VerifiedAccess = {provider: string; identity: ConnectorIdentity; hint: string; seal(record: RecordIdentity): Sealed; dispose(): void};
+export type VerifiedAccess = {provider: string; identity: ConnectorIdentity; generation: number; hint: string; seal(record: RecordIdentity): Sealed; dispose(): void};
 
 /** Trusted keys are write-only; raw errors stop inside this service. */
 export class Credentials {
@@ -76,11 +76,12 @@ export class Credentials {
   async verify(provider:string,secret:unknown,signal?:AbortSignal):Promise<VerifiedAccess> {
     return this.boundaryAsync(async()=>{
       const connector=this.connector(provider),key=this.requireKey();
+      const generation=this.generation();
       if(typeof secret!=='string'||!/^[\x21-\x7e]{1,4096}$/.test(secret)||!connector.secretFormat(secret))throw new SecretError('credential_invalid');
       const bytes=Buffer.from(secret,'ascii');
       try {
         const identity=await connector.identify(bytes,signal);this.validate(connector,identity);
-        return {provider,identity,hint:bytes.subarray(-4).toString('ascii'),seal:record=>key.seal(record,bytes),dispose:()=>bytes.fill(0)};
+        return {provider,identity,generation,hint:bytes.subarray(-4).toString('ascii'),seal:record=>key.seal(record,bytes),dispose:()=>bytes.fill(0)};
       } catch(error) {bytes.fill(0);throw error;}
     });
   }
@@ -89,6 +90,8 @@ export class Credentials {
   commitVerified(owner:string,verified:VerifiedAccess,replace?:{id:string;revision:number}):{credential:Credential;connection:'created'|'reused'} {
     return this.boundary(()=>{
       if(!this.db.isTransaction)throw new SecretError('credential_failed');
+      const stored=this.db.prepare("SELECT value FROM meta WHERE key='secretKeyKcv'").get()?.value;
+      if(typeof stored!=='string'||!this.requireKey().matches(stored)||this.generation()!==verified.generation)throw new SecretError('credential_conflict');
       const {provider,identity}=verified;
       let row:CredentialRow;
       if(replace) {

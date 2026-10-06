@@ -1,4 +1,4 @@
-import {useEffect, useMemo, useState} from 'react';
+import {useEffect, useMemo, useRef, useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import '@fontsource-variable/geist';
 import '@fontsource-variable/geist-mono';
@@ -17,7 +17,7 @@ import {t, useLocale} from './i18n';
 import {Compact} from './components/Compact';
 import {Header, BoardActions} from './components/Header';
 import {Settings} from './components/Settings';
-import {WidgetAdd} from './components/WidgetAdd';
+import {AdditionScope, WidgetAdd} from './components/WidgetAdd';
 import {RefreshAll} from './components/RefreshAll';
 import {ErrorLine, SERVICE} from './components/Kit';
 import {SourceCard} from './components/SourceCard';
@@ -74,6 +74,9 @@ function Dashboard({
   refresh: () => Promise<void>;
   onSignedOut: () => void;
 }) {
+  const ownerScope = useRef(true);
+  const additionScope = useMemo(() => () => ownerScope.current, []);
+  useEffect(() => {ownerScope.current = true; return () => {ownerScope.current = false;};}, []);
   const path = usePath();
   const active = path === '/' || path === '/local';
   const boards = useBoards() ?? NO_BOARDS;
@@ -96,7 +99,9 @@ function Dashboard({
     const areas = {cards: [...lineup.map(cardId), AGENTS], analytics: ANALYTICS};
     return legacyLayout(serverView, areas, [...areas.cards, ...areas.analytics].filter(id => isHidden(serverView, id)));
   }, [serverView, lineup]);
-  const arrange = useView(useBoardId() ?? '', translated, role === 'owner', useViewRevision());
+  const snapshotMatches = useBoardId() === boardId;
+  const viewRevision = useViewRevision();
+  const arrange = useView(boardId, snapshotMatches ? translated : null, snapshotMatches && role === 'owner', snapshotMatches ? viewRevision : 0);
   const titles = useTitles(arrange.view.names);
   const prefs = usePrefs();
   const [adding, setAdding] = useState<Board | null>(null);
@@ -173,15 +178,17 @@ function Dashboard({
   );
 
   return (
-    <>
+    <AdditionScope.Provider value={additionScope}>
       <Header boards={boards} board={board} onBoard={selectBoard} user={user} onAccount={openSettings} onSignedOut={onSignedOut} local={local}
         actions={active && <BoardActions board={board} owner={arrange.owner} locked={prefs.locked} onLock={() => setPrefs({locked: !prefs.locked})}
         add={board && <WidgetAdd key={boardId} board={board} local={local} trustedKeys={trustedKeys} open={adding?.id === boardId} onOpenChange={open => setAdding(open ? board : null)} />}
         onSettings={local ? null : section => navigate(settingsHref('/boards/' + boardId + '/settings/' + section, boardId))}
         refresh={meta && <RefreshAll key={boardId} board={boardId} ids={lineup.filter(id => !isHidden(arrange.view, cardId(id)))} />} />} />
+      {arrange.saveFailures?.map(failure => <aside key={failure.board} className="view-save-notice" role="alert"><b>{t('layout.saveFailed', {board: boards.find(board => board.id === failure.board) ? boardTitle(boards.find(board => board.id === failure.board)!) : t('layout.unavailableBoard')})}</b><ErrorLine error={failure.error} />
+        <div className="button-row is-start">{failure.retryable && <button className="button" onClick={() => {void arrange.retrySave?.(failure.board).catch(() => {});}}>{t('layout.retrySave')}</button>}<button className="link-button" onClick={() => arrange.dismissSave?.(failure.board)}>{t('common.close')}</button></div>
+      </aside>)}
       {active ? <>
       <main>
-        <ErrorLine error={arrange.error} />
         {local && <AgentBanner />}
         {!meta ? (
           <div className="widgets" aria-hidden="true">
@@ -237,7 +244,7 @@ function Dashboard({
       </main>
       </> : <Settings user={user} board={board} boards={boards} local={local} trustedKeys={trustedKeys} refresh={refresh} onAppState={setAppState} />}
       {local && <TakeOver onState={setAppState} />}
-    </>
+    </AdditionScope.Provider>
   );
 }
 
