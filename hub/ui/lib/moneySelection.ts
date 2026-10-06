@@ -30,14 +30,16 @@ export function moneySelection(cards:readonly Card[],hidden:readonly string[],se
 }
 
 /** Membership is checked against the inventory, not against the visible page. */
+export const keyMeter=(meter:string)=>/^key:([^:]+):(usage|cap)$/.exec(meter);
+
 export function archivedKeyGroups(source:string,selected:readonly [string,string][],current:ReadonlySet<string>,history:readonly MeterHistory[]) {
   const groups=new Map<string,{id:string;label:string;usage:string|null;cap:string|null}>();
   for(const [owner,meter] of selected) {
-    if(owner!==source||meter==='balance')continue;
-    const key=meter.match(/^key:([^:]+):(usage|cap)$/),id=key?.[1]??meter;
+    const key=keyMeter(meter);if(owner!==source||!key)continue;
+    const id=key[1];
     if(current.has(id))continue;
     const saved=history.find(s=>s.sourceId===source&&s.meterId===meter);
-    const kind=key?.[2]==='cap'||saved?.kind==='cap'?'cap':'usage';
+    const kind=key[2]==='cap'?'cap':'usage';
     let group=groups.get(id);
     if(!group)groups.set(id,(group={id,label:saved?.semantics?.label??id,usage:null,cap:null}));
     group[kind]=meter;

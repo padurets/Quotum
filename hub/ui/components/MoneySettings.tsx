@@ -2,9 +2,8 @@ import {useEffect,useState} from 'react';
 import {DEFAULT_CURRENCY} from '../../server/domain/currency';
 import {useBoardId,useCurrencyContext,type Named} from '../lib/board';
 import {ApiError,call} from '../lib/http';
-import {archivedKeyGroups,moneySelection} from '../lib/moneySelection';
+import {archivedKeyGroups,keyMeter,moneySelection} from '../lib/moneySelection';
 import {usePrefs,setPrefs} from '../lib/prefs';
-import {balanceDescriptor} from '../../server/domain/providers';
 import {referenceBalance,balanceGroups,balanceRoleLabel,keyName} from '../lib/money';
 import type {MeterHistory} from '../lib/moneyView';
 import {MAX_METERS} from '../../server/domain/meterHistory';
@@ -27,7 +26,7 @@ export function KeyMoneySettings({sources,hidden,series}:{sources:readonly Named
   const source=sources.find(s=>s.id===sourceId);
   const inCard=source?.keysCount===source?.keys?.length&&!!source?.keys;
   const page:KeyPage|null=inCard?{keys:source!.keys!,meters:source!.meters??[],total:source!.keysCount!,inventory:source!.inventory,next:null}:loaded;
-  const selectedKeys=JSON.stringify([...new Set(selected.filter(([id,m])=>id===sourceId&&m!=='balance').map(([,m])=>m.match(/^key:([^:]+):/)?.[1]).filter((id):id is string=>!!id))].sort());
+  const selectedKeys=JSON.stringify([...new Set(selected.filter(([id])=>id===sourceId).map(([,m])=>keyMeter(m)?.[1]).filter((id):id is string=>!!id))].sort());
   const membershipContext=JSON.stringify([board,sourceId,source?.successAt,selectedKeys]);
   useEffect(()=>{
     const ids:string[]=JSON.parse(selectedKeys);
@@ -62,7 +61,7 @@ export function KeyMoneySettings({sources,hidden,series}:{sources:readonly Named
   };
   const membershipReady=inCard||selectedKeys==='[]'||membership?.context===membershipContext;
   const current=new Set(inCard?source?.keys?.map(k=>k.id):membership?.context===membershipContext?membership.keys:[]);
-  const archived=source&&membershipReady?archivedKeyGroups(source.id,selected.filter(([,meter])=>!balanceDescriptor(source.provider,meter)),current,series):[];
+  const archived=source&&membershipReady?archivedKeyGroups(source.id,selected,current,series):[];
   const free=KEYS_PER_PAGE-(page?.keys.length??0),extraPages=Math.ceil(Math.max(0,archived.length-free)/KEYS_PER_PAGE);
   const archivalIndex=Math.min(archivePage,extraPages);
   const archivedStart=archivalIndex?free+(archivalIndex-1)*KEYS_PER_PAGE:0;
@@ -105,7 +104,7 @@ export function KeyMoneySettings({sources,hidden,series}:{sources:readonly Named
         <div className="popover-title">{s.title}</div>
         {balances(s)}
         {!!s.keysCount&&<button className="popover-row" onClick={()=>choose(s.id)}><span>{t('money.keySeries',{count:s.keysCount})}</span><b>›</b></button>}
-        {!s.keysCount&&selected.some(([id,m])=>id===s.id&&!balanceDescriptor(s.provider,m))&&<button className="popover-row" onClick={()=>choose(s.id)}><span>{t('money.selectedDetails')}</span><b>›</b></button>}
+        {!s.keysCount&&selected.some(([id,m])=>id===s.id&&keyMeter(m))&&<button className="popover-row" onClick={()=>choose(s.id)}><span>{t('money.selectedDetails')}</span><b>›</b></button>}
       </div>)}</div>
     </>}
     <div className="popover-section"><button className="popover-row" onClick={()=>{const next={...prefs.money.selected};delete next[unit];setPrefs({money:{...prefs.money,selected:next}});}}>{t('money.resetSelection')}</button></div>
